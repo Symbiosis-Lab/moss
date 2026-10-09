@@ -13,8 +13,8 @@ use specta::Type;
 pub use moss_core::frontmatter_typed::SeriesField;
 pub use crate::build::render::{MissingReferenceOccurrence, PublishPreflightProjection, SourceRevision, SourceSpan};
 
-/// The event fields a page's meta line shows. Present exactly when the page
-/// has a `start` that parses; `end` is kept only when it parses too.
+/// Validated event facts shared by page metadata, listings and calendar files.
+/// Present when `start` parses; `end` must also parse and not precede it.
 #[derive(Debug, Clone)]
 pub struct EventFields {
     pub start: moss_core::event::EventTime,
@@ -27,6 +27,26 @@ pub struct EventFields {
     pub status: Option<String>,
     pub tickets: Option<String>,
     pub online: Option<String>,
+}
+
+impl EventFields {
+    pub fn from_frontmatter(fm: &moss_core::frontmatter_typed::FrontMatter) -> Option<Self> {
+        use moss_core::event::{check_end_after_start, EventTime};
+        let start_raw = fm.start.as_deref()?;
+        let start = EventTime::parse(start_raw).ok()?;
+        let end = fm.end.as_deref()
+            .filter(|end| check_end_after_start(start_raw, end).is_ok())
+            .and_then(|end| EventTime::parse(end).ok());
+        Some(Self {
+            when: start.sort_key(),
+            start,
+            end,
+            timezone: fm.timezone.as_deref().map(str::trim).filter(|z| !z.is_empty()).map(str::to_string),
+            status: fm.status.clone(),
+            tickets: fm.tickets.clone(),
+            online: fm.online.clone(),
+        })
+    }
 }
 
 /// Parsed markdown document with frontmatter and content.

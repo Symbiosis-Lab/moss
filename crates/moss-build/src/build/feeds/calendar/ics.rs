@@ -143,12 +143,6 @@ pub fn vevent_lines(e: &Event) -> Vec<String> {
     if let Some(v) = &e.online {
         l.push(format!("CONFERENCE;VALUE=URI:{v}"));
     }
-    // A number derived from the event's own fields, so an edited event carries a
-    // different SEQUENCE and a client that imported the file once can tell it
-    // changed. It is a fingerprint, not a counter: it is not ordered.
-    let fingerprint = crate::build::assets::paths::compute_binary_hash(l.join("\n").as_bytes());
-    let sequence = u32::from_str_radix(&fingerprint[..7], 16).expect("the fingerprint is 16 hex digits");
-    l.insert(3, format!("SEQUENCE:{sequence}"));
     l.push("END:VEVENT".to_string());
     l
 }

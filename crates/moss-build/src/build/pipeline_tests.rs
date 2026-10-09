@@ -7289,13 +7289,33 @@ fn event_pages_and_calendar_folders_declare_a_calendar_alternate_in_the_head() {
 }
 
 #[test]
-fn an_edited_event_gets_a_different_sequence() {
-    let seq = |title: &str| {
+fn event_exports_do_not_invent_a_revision_sequence_from_content() {
+    for title in ["Same", "Renamed"] {
         let (dir, _c) = event_site(&[("A.md", &format!("title: {title}\nuid: aaaa0001\nstart: 2026-11-01\n"))]);
-        assert_valid_ics(&staged(&dir, "events/a/event.ics")).into_iter().find(|l| l.starts_with("SEQUENCE:")).unwrap()
-    };
-    assert_eq!(seq("Same"), seq("Same"));
-    assert_ne!(seq("Same"), seq("Renamed"));
+        for path in ["events/a/event.ics", "events/calendar.ics"] {
+            let lines = assert_valid_ics(&staged(&dir, path));
+            assert!(lines.contains(&"UID:aaaa0001@example.test".to_string()));
+            assert!(lines.contains(&format!("SUMMARY:{title}")));
+            assert!(!lines.iter().any(|l| l.starts_with("SEQUENCE:")), "a content hash is not an ordered revision: {lines:?}");
+        }
+    }
+}
+
+#[test]
+fn invalid_event_ends_are_omitted_from_both_structured_data_and_calendars() {
+    for end in ["2026-11-09 13:00", "2026-11-09", "next friday"] {
+        let (dir, _c) = event_site(&[("A.md", &format!("title: A\nuid: aaaa0001\nstart: 2026-11-10 14:00\nend: {end}\ntimezone: America/New_York\n"))]);
+        let html = staged(&dir, "events/a/index.html");
+        let json = html.split("<script type=\"application/ld+json\">").skip(1)
+            .map(|s| serde_json::from_str::<serde_json::Value>(s.split("</script>").next().unwrap()).unwrap())
+            .find(|v| v["@type"] == "Event").expect("Event structured data");
+        assert_eq!(json["startDate"], "2026-11-10T14:00-05:00");
+        assert!(json.get("endDate").is_none(), "invalid end {end} reached structured data: {json}");
+        for path in ["events/a/event.ics", "events/calendar.ics"] {
+            let lines = assert_valid_ics(&staged(&dir, path));
+            assert!(!lines.iter().any(|l| l.starts_with("DTEND")), "invalid end {end}: {lines:?}");
+        }
+    }
 }
 
 /// A file the author keeps in the site folder at a generated calendar address is

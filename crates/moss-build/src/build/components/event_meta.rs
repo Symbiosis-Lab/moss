@@ -146,7 +146,8 @@ fn sep(lang: Language) -> Seg {
 /// The event's written time as runs: a date, a time of day when the start has
 /// one, and the end when it is after `start`.
 fn segments(start: EventTime, end: Option<EventTime>, lang: Language) -> Vec<Seg> {
-    // An `end` that is not after `start` adds nothing (the build warns about it).
+    // The event is already validated. Equal endpoints (or an all-day end on
+    // the start day) add no second date or clock time to the displayed range.
     let end = end.filter(|e| e.sort_key() > start.sort_key());
     let same_day = end.is_some_and(|e| e.day_key() == start.day_key());
     let mut out = long_date(start, lang);
