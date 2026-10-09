@@ -147,8 +147,7 @@ fn hero_slides_fill_captions_unscrimmed_pause_below_header_declarations() {
     let css = fs::read_to_string(site_css_path()).expect("site.css must exist");
     for needle in [
         r#".moss-hero:has(.moss-hero-content):not([data-fit="plate"]) .moss-hero-slide {"#,
-        r#"[data-hero-tone="light"]) > .moss-hero-captions {"#,
-        r#".moss-hero[data-mobile="overlay"]:not([data-hero-tone="light"]) .moss-hero-captions {"#,
+        r#".moss-hero:has(.moss-hero-content):not([data-hero-tone="light"]) .moss-hero-captions {"#,
         r#".moss-hero[data-header="over"] .moss-hero-pause {"#,
     ] {
         assert!(css.contains(needle), "site.css lost: {needle}");

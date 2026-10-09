@@ -93,7 +93,7 @@ for (const path of ["/end/", "/start/", "/images/"]) {
 }
 
 test("in-flow captions paint no scrim of their own; the hero's scrim and a text shadow carry them", async ({ page }) => {
-  for (const [path, size] of [["/start/", { width: 390, height: 844 }], ["/start/", { width: 1280, height: 800 }]] as const) {
+  for (const [path, size] of [["/start/", { width: 390, height: 844 }], ["/start/", { width: 1280, height: 800 }], ["/end/", { width: 1280, height: 800 }], ["/end/", { width: 390, height: 844 }]] as const) {
     await page.setViewportSize(size);
     await page.goto(path);
     const cs = await page.locator(".moss-hero-captions").evaluate((el) => getComputedStyle(el).backgroundImage);

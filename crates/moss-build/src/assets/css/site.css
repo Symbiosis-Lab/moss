@@ -6655,6 +6655,13 @@ article a:where(:not(.moss-btn)):focus {
 .moss-hero-captions a {
   color: inherit;
 }
+/* Legibility is painted once. A hero with content has its own bottom scrim
+   (`.moss-hero::before`); a second gradient here would end at the caption's
+   box and show as a step, or as a band over the content. Without that scrim
+   (no content, or a pale cover) the caption keeps its own. */
+.moss-hero:has(.moss-hero-content):not([data-hero-tone="light"]) .moss-hero-captions {
+  background: none;
+}
 
 /* Video backgrounds share the image sizing contract (kept in sync with
    .moss-hero img above — the template test pins that selector verbatim). */
@@ -7086,12 +7093,6 @@ article a:where(:not(.moss-btn)):focus {
     align-self: flex-start;
     inline-size: min(36rem, 100%);
   }
-  /* In the stack the hero's own bottom scrim carries legibility; a second
-     gradient here would stop at the content's top edge and show as a band.
-     A pale cover has no hero scrim, so it keeps this one. */
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]):not([data-align="end"]):not([data-hero-tone="light"]) > .moss-hero-captions {
-    background: none;
-  }
 
   /* With captions the pause control stays at the bottom end: leave it room
      beside end-aligned content. */
@@ -7269,11 +7270,6 @@ article a:where(:not(.moss-btn)):focus {
   .moss-hero[data-mobile="overlay"] .moss-hero-captions {
     padding: 2.5rem 5% 1rem;
     background: linear-gradient(to top, rgba(0, 0, 0, 0.5), transparent);
-  }
-  /* The hero's own scrim covers the stack (see the wide rule); only a pale
-     cover, which has none, keeps the caption's gradient. */
-  .moss-hero[data-mobile="overlay"]:not([data-hero-tone="light"]) .moss-hero-captions {
-    background: none;
   }
   .moss-hero[data-mobile="overlay"] .moss-hero-captions > .moss-hero-caption {
     color: #ffffff;
