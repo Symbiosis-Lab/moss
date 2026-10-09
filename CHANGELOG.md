@@ -44,6 +44,7 @@ All notable changes to moss will be documented here.
 ### Fixed
 
 - A page with `breadcrumb: label` and a `date:` or `byline:` keeps its date row and byline under the title. The parent-section link above the title used to push them above it.
+- The guide's folder-embed options were written as `sort:date|date-asc|weight|title` and similar, which read as separators between options. They are now listed one by one, with a complete example.
 - The home page's `##` and `###` sections get the same `#` permalink anchors as every other page, so a section of the home page can be linked to. The page's level-1 title and the `:::hero` title stay unanchored, and `[site] heading_anchors = false` still turns the anchors off everywhere.
 - A `:::grid` card's link is now named by its title alone. Its cover image repeated the title as alt text, so a screen reader read the title twice.
 - A `:::grid` with five or six columns lays out that many columns. Before, any count above four silently fell to one column; a count above six now builds at six with a build warning.
