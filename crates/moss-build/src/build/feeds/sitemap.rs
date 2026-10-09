@@ -12,6 +12,41 @@ pub struct SitemapEntry {
     pub lastmod: Option<String>,
 }
 
+/// Whether a raw `.html` file carries a `<meta name="robots">` whose content has
+/// a `noindex` or `none` token. Raw pages are copied through unparsed, so the
+/// file is the only place that says. Only the first 8 KiB is read: a robots
+/// meta belongs in `<head>`, and a cut-off tail is not an error.
+pub(crate) fn declares_noindex(path: &std::path::Path) -> bool {
+    use lol_html::{element, HtmlRewriter, Settings};
+    use std::io::Read;
+
+    let mut head = Vec::new();
+    if std::fs::File::open(path).and_then(|f| f.take(8192).read_to_end(&mut head)).is_err() {
+        return false;
+    }
+    let found = std::cell::Cell::new(false);
+    let mut rewriter = HtmlRewriter::new(
+        Settings {
+            element_content_handlers: vec![element!("meta[name]", |el| {
+                let robots = el.get_attribute("name").is_some_and(|n| n.eq_ignore_ascii_case("robots"));
+                let blocks = el.get_attribute("content").is_some_and(|c| {
+                    c.split(|ch: char| ch == ',' || ch.is_whitespace())
+                        .any(|t| t.eq_ignore_ascii_case("noindex") || t.eq_ignore_ascii_case("none"))
+                });
+                if robots && blocks {
+                    found.set(true);
+                }
+                Ok(())
+            })],
+            ..Settings::default()
+        },
+        |_: &[u8]| {},
+    );
+    let _ = rewriter.write(&head);
+    let _ = rewriter.end();
+    found.get()
+}
+
 /// Escape special XML characters in text content.
 fn escape_xml(s: &str) -> String {
     s.replace('&', "&amp;")

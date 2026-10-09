@@ -33,6 +33,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A raw `.html` page that declares `<meta name="robots" content="noindex">` is no longer listed in `sitemap.xml`, which contradicted the page's own instruction to search engines. Raw pages without it stay listed.
 - The places explorer opens fitted to the places it shows, and its Fit all places button returns to that view, instead of opening on the whole world. A site whose places sit in one region now opens on that region; a single place opens at a regional zoom, and places spread across the globe still open on the world view.
 - Embedded map controls appear on hover or keyboard focus, keeping the map clear at rest. Touch controls and the fullscreen exit remain visible.
 

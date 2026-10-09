@@ -2978,7 +2978,9 @@ pub fn generate_blocking_content_for_build(
         // already fixes.
         sitemap_pages.extend(project_structure.html_files.iter().filter_map(|f| {
             let sp = ServedPath::from_source(&resolve_path_with_overrides(&f.path, &dir_overrides)).ok()?;
-            sp.as_str().ends_with(".html").then(|| sp.as_str().to_string())
+            let listed = sp.as_str().ends_with(".html")
+                && !crate::build::feeds::sitemap::declares_noindex(&Path::new(source_path).join(&f.path));
+            listed.then(|| sp.as_str().to_string())
         }));
         sitemap_pages.extend(
             project_structure.notebook_files.iter()
