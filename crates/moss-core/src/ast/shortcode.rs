@@ -244,6 +244,12 @@ pub struct HeroShortcode {
     /// rendering. With `extra_images`, this is the first slide and the
     /// reduced-motion/static fallback.
     pub image: Option<Url>,
+    /// Alt text the author wrote on the primary slide's embed
+    /// (`![alt](path)` on a leading body line of the fence). Empty for a bare
+    /// filename, a wikilink embed, or an `image=` hero, where the picture is
+    /// decorative.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub image_alt: String,
     /// Remaining background slides (2026-07-27 multi-image hero): every
     /// consecutive leading body media line after the first. Non-empty →
     /// the hero renders an ambient crossfade (one slide visible at a

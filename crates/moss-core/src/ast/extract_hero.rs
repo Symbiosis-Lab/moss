@@ -270,6 +270,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 } else {
                     Some(Url::unresolved(path.trim().to_string()))
                 },
+                image_alt: String::new(),
                 extra_images: Vec::new(),
                 attrs: attrs_str.to_string(),
                 classes,
@@ -299,6 +300,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 } else {
                     Some(Url::unresolved(path.trim().to_string()))
                 },
+                image_alt: String::new(),
                 extra_images: Vec::new(),
                 attrs: attrs_str.to_string(),
                 classes,
@@ -326,6 +328,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
     let run = hero_media_run(&lines);
 
     let mut image_path: Option<String> = None;
+    let mut image_alt = String::new();
     let mut image_attrs = String::new();
     let mut extra_images: Vec<Url> = Vec::new();
     for &k in &run.media {
@@ -334,6 +337,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
         };
         if image_path.is_none() {
             image_path = Some(m.path);
+            image_alt = m.alt;
             // Frame-level media attrs (object-fit/position) come from the
             // primary slide and apply to every slide.
             image_attrs = m.attrs;
@@ -354,6 +358,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
     (
         HeroShortcode {
             image: image_path.map(Url::unresolved),
+            image_alt,
             extra_images,
             attrs: image_attrs,
             classes,
