@@ -129,6 +129,9 @@ const PHASE_BUDGETS_MS: &[(&str, u64)] = &[
     // Loop B: HTML emission for every page (blocking.rs). Measured ~5-7s on
     // the same 216-page vault.
     ("render_html_pages", 20_000),
+    ("render_homepage", 2_000),
+    // Background sharing-card generation; diagnostic budget, not a preview deadline.
+    ("render_sharing_cards", 20_000),
     // Stage 5a shadow-mode: facade hashing + DepGraph build + cache diff over
     // all documents. In-memory hashing/diffing only (no I/O beyond a small
     // JSON cache load/save), so this should stay far under render_html_pages

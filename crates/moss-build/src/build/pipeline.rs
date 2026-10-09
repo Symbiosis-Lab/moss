@@ -1499,7 +1499,7 @@ fn build_inner(
     // When the typed-AST migration completes (Phase 4+), this evolves to
     // `Vec<moss_core::ast::Document>`.
     let exits_after_build = matches!(search_freshness, crate::build::feeds::search_lane::Freshness::Now);
-    let (mut site_result, mut background_ctx, documents, carry_verification) = generate_blocking_content_for_build(root, project_structure, &stage_dir, services, progress_sender, emit_source_lines, site_config, &mut pending, exits_after_build)?;
+    let (mut site_result, mut background_ctx, documents, carry_verification) = generate_blocking_content_for_build(root, project_structure, &stage_dir, services, progress_sender, emit_source_lines, site_config, &mut pending, exits_after_build, true)?;
     log::debug!(target: "timing", "[build] staging: generate_blocking_content: {:?}", build_start.elapsed());
 
     // Places-explorer data file (`_moss/places.<hash>.json`), gated on the
@@ -1868,6 +1868,9 @@ fn build_inner(
     let bg_handle = {
         // Clone what we need before consuming background_ctx by video dispatch.
         let image_items_empty = background_ctx.image_items.is_empty();
+        let og_requests = std::mem::take(&mut background_ctx.og_requests);
+        let og_output = background_ctx.staging_dir.clone();
+        let og_session = services.and_then(|s| s.session.clone());
         let video_items_empty = background_ctx.video_items.is_empty();
         // The asset walk reads the same context the image and video workers do;
         // clone it here, before the video dispatch below consumes the original.
@@ -1928,6 +1931,17 @@ fn build_inner(
 
         let register_workers = |tx: tokio::sync::mpsc::Sender<crate::build::coordinator::EmitMessage>,
                                 workers: &mut tokio::task::JoinSet<Result<(), crate::build::background::BuildError>>| {
+            if !og_requests.is_empty() {
+                let tx_cards = tx.clone();
+                workers.spawn(async move {
+                    tokio::task::spawn_blocking(move || {
+                        crate::build::page::og_card::deferred::render_requests(
+                            og_requests, &og_output, tx_cards,
+                            || og_session.as_ref().is_some_and(|s| s.cancel.is_cancelled()),
+                        )
+                    }).await.map_err(crate::build::background::BuildError::from)?
+                });
+            }
             // Worker 1: Image conversion.
             // dispatch_image_conversions internally spawns its own async tasks in GUI
             // mode (via tauri::async_runtime::spawn) and runs synchronously in headless

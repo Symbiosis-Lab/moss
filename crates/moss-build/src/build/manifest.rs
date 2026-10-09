@@ -92,9 +92,9 @@ pub enum HashBucket {
     /// Source-derived page artifacts: HTML, CSS, JS, XML, JSON, SVG.
     /// Tracking: `blocking_keys` (HTML-page ordering for stale-cleanup).
     Files,
-    /// Generated image outputs produced during the blocking phase (e.g., OG card PNGs).
-    /// Tracking: `image_outputs` (stale-cleanup) + `blocking_keys` (HTML ordering).
-    /// Distinct from `ImageVariants`: OG cards block rendering and enter `blocking_keys`;
+    /// Generated sharing images (e.g., OG card PNGs), including deferred cards.
+    /// Tracking: `image_outputs` (stale-cleanup) + `blocking_keys` (cleanup ownership).
+    /// Distinct from `ImageVariants`: OG cards enter `blocking_keys` for cleanup;
     /// background `.webp` variants do not.
     ImageOutputs,
     /// Background-phase generated image variants (e.g., `.webp` from `run_image_conversion`).
@@ -802,7 +802,7 @@ impl PendingManifest {
                 self.blocking_keys.insert(rel_path);
             }
             HashBucket::ImageOutputs => {
-                // OG cards: image_outputs (stale-cleanup) + blocking_keys (HTML ordering).
+                // OG cards: image_outputs (stale-cleanup) + blocking_keys (cleanup ownership).
                 self.inner.image_outputs.insert(rel_path.clone());
                 self.blocking_keys.insert(rel_path);
             }

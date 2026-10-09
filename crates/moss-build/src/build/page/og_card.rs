@@ -154,6 +154,7 @@ pub struct OgSink<'a> {
     previous_files: &'a std::collections::HashMap<String, String>,
     filename_covers: &'a crate::build::page::cover::FilenameCovers,
     cards: Vec<CardOutput>,
+    requests: Option<Vec<deferred::CardRequest>>,
 }
 
 impl<'a> OgSink<'a> {
@@ -161,28 +162,49 @@ impl<'a> OgSink<'a> {
         previous_files: &'a std::collections::HashMap<String, String>,
         filename_covers: &'a crate::build::page::cover::FilenameCovers,
     ) -> Self {
-        Self { previous_files, filename_covers, cards: Vec::new() }
+        Self { previous_files, filename_covers, cards: Vec::new(), requests: None }
+    }
+
+    pub fn deferred(
+        previous_files: &'a std::collections::HashMap<String, String>,
+        filename_covers: &'a crate::build::page::cover::FilenameCovers,
+    ) -> Self {
+        Self { requests: Some(Vec::new()), ..Self::new(previous_files, filename_covers) }
     }
 
     pub fn filename_covers(&self) -> &'a crate::build::page::cover::FilenameCovers {
         self.filename_covers
     }
 
-    /// Render (or carry) one card and record its receipt, returning the served
-    /// path for the `og:image` tag.
+    /// Render, carry, or plan a card, returning its `og:image` path.
+    /// Build callers settle planned title cards before the manifest seals.
     pub fn render(
         &mut self,
         inputs: &CardInputs,
         output_root: &Path,
     ) -> Result<&ServedPath, CardError> {
+        // Plates retain the synchronous decode/fallback contract in og_choice.
+        if inputs.plate.is_none() {
+            if let Some(requests) = self.requests.as_mut() {
+                let (served_path, _) = card_identity(inputs)?;
+                if let Some(entry) = self.previous_files.get(served_path.as_str())
+                    .filter(|_| output_present(&served_path.to_disk(output_root))) {
+                    self.cards.push(CardOutput::Carried { served_path, entry: entry.clone() });
+                    return Ok(self.cards.last().expect("just pushed").served_path());
+                }
+                requests.push(deferred::CardRequest::new(inputs, served_path));
+                return Ok(&requests.last().expect("just pushed").served_path);
+            }
+        }
         let out = render_card(inputs, output_root, self.previous_files)?;
         self.cards.push(out);
         Ok(self.cards.last().expect("just pushed").served_path())
     }
 
-    pub fn into_cards(self) -> Vec<CardOutput> {
-        self.cards
+    pub fn into_parts(self) -> (Vec<CardOutput>, Vec<deferred::CardRequest>) {
+        (self.cards, self.requests.unwrap_or_default())
     }
+
 }
 
 /// What a card call produced — a manifest receipt, never a promise the caller
@@ -242,24 +264,7 @@ pub fn render_card(
     output_root: &Path,
     previous_files: &std::collections::HashMap<String, String>,
 ) -> Result<CardOutput, CardError> {
-    // Validate colors before any work. Hex strings are interpolated raw into
-    // SVG attributes, so reject anything that could break out of the quote.
-    for (name, value) in [
-        ("bg_color", inputs.bg_color),
-        ("fg_color", inputs.fg_color),
-        ("accent_color", inputs.accent_color),
-    ] {
-        if !is_valid_hex_color(value) {
-            return Err(CardError::Svg(format!("invalid color for {}: {}", name, value)));
-        }
-    }
-
-    // Resolved ONCE and passed down: the cache key and the font chain must
-    // describe the same card, and they are the same fact.
-    let script = card_script(inputs.lang, inputs.title);
-    let hash = content_hash(inputs, script);
-    let served_path = ServedPath::for_og_card(&hash)
-        .map_err(|e| CardError::Svg(format!("served path: {}", e)))?;
+    let (served_path, script) = card_identity(inputs)?;
     let disk_path = served_path.to_disk(output_root);
 
     // Idempotency: reuse the on-disk card only when the previous manifest can
@@ -308,6 +313,29 @@ pub fn render_card(
 
     Ok(CardOutput::Rendered { served_path, bytes })
 }
+
+fn card_identity(inputs: &CardInputs) -> Result<(ServedPath, Option<CardScript>), CardError> {
+    // Validate colors before any work. Hex strings are interpolated raw into
+    // SVG attributes, so reject anything that could break out of the quote.
+    for (name, value) in [
+        ("bg_color", inputs.bg_color),
+        ("fg_color", inputs.fg_color),
+        ("accent_color", inputs.accent_color),
+    ] {
+        if !is_valid_hex_color(value) {
+            return Err(CardError::Svg(format!("invalid color for {}: {}", name, value)));
+        }
+    }
+
+    // The cache key and the font chain must describe the same card.
+    let script = card_script(inputs.lang, inputs.title);
+    let hash = content_hash(inputs, script);
+    ServedPath::for_og_card(&hash)
+        .map(|path| (path, script))
+        .map_err(|e| CardError::Svg(format!("served path: {}", e)))
+}
+
+pub mod deferred;
 
 fn content_hash(inputs: &CardInputs, script: Option<CardScript>) -> String {
     let mut h = Sha256::new();

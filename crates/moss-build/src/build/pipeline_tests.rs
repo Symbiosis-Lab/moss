@@ -410,6 +410,27 @@ fn test_build_creates_output_directory() {
     assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn title_cards_do_not_block_preview_and_settle_in_pipeline_seal() {
+    let folder = TempDir::new().unwrap();
+    let root = crate::vault::paths::VaultRoot::resolve(folder.path());
+    let project = scan_folder(root.as_str()).unwrap();
+    let port = crate::build::ports::port_of_this_build(None, None);
+    // The current-thread runtime cannot poll the background workers until this
+    // synchronous call returns, so this checks ordering without a timer.
+    let result = run(&root, None, None, &port, None, None, &project, None,
+        crate::build::render::IncrementalGates::default(),
+        crate::build::feeds::search_lane::Freshness::Now, &test_cache_keys()).unwrap();
+    let stage = crate::moss_paths::MossPaths::new(root.path()).staging_dir();
+    let html = std::fs::read_to_string(stage.join("index.html")).unwrap();
+    assert!(html.contains("_moss/og/"), "preview HTML names its sharing card");
+    assert!(!stage.join("_moss/og").exists(), "preview must precede card rasterization");
+    let (sealed, _) = result.bg_handle.unwrap().await_completion().await.unwrap();
+    let cards: Vec<_> = sealed.image_outputs().iter().filter(|path| path.starts_with("_moss/og/")).collect();
+    assert_eq!(cards.len(), 1, "the pipeline must include its planned card in the seal");
+    assert!(stage.join(cards[0]).exists());
+}
+
 #[test]
 fn test_build_empty_folder_returns_true() {
     let (test_dir, _cleanup) = create_test_dir();

@@ -43,6 +43,8 @@ use super::runtime::{
 /// 4. Background task converts videos and emits `asset_ready` events
 #[derive(Debug, Clone)]
 pub struct BackgroundContext {
+    /// Title-only sharing cards planned during HTML rendering.
+    pub og_requests: Vec<crate::build::page::og_card::deferred::CardRequest>,
     /// Videos that need MOV→MP4 conversion
     pub video_items: Vec<String>,
     /// Images that need WebP variant generation
@@ -135,6 +137,7 @@ impl BackgroundContext {
     #[cfg(test)]
     pub(crate) fn for_test() -> Self {
         Self {
+            og_requests: Vec::new(),
             video_items: Vec::new(),
             image_items: Vec::new(),
             source_path: String::new(),
@@ -683,6 +686,7 @@ mod tests {
     #[test]
     fn test_background_context_creation() {
         let ctx = BackgroundContext {
+            og_requests: Vec::new(),
             video_items: vec![],
             image_items: Vec::new(),
             source_path: "/test".to_string(),

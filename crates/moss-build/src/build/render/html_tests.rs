@@ -31,6 +31,7 @@ fn render_for_build(
         site_config,
         &mut pending,
         exits_after_build,
+        false,
     )
     .expect("generate_blocking_content_for_build should succeed");
     crate::build::emit::slots::write_as_rendered(&output_dir, pending.take_unwritten_pages()).unwrap();
@@ -7189,7 +7190,7 @@ mod og_url_tests {
             !html.contains(r#"og:image:width" content="1200""#),
             "no auto-card means no og:image:width 1200 should be emitted"
         );
-        let cards = og_outputs.into_cards();
+        let (cards, _) = og_outputs.into_parts();
         assert!(
             cards.is_empty(),
             "no auto-card PNG should be tracked when frontmatter cover wins, got: {:?}",

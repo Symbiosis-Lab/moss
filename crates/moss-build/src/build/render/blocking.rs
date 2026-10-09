@@ -262,7 +262,7 @@ pub fn generate_blocking_content(
     // ("just render the site") never quietly changed under existing callers.
     let output = generate_blocking_content_for_build(
         root, project_structure, output_dir, services, progress_sender, emit_source_lines,
-        site_config, pending, false,
+        site_config, pending, false, false,
     )?;
     // No slot pass follows this entry point, so its pages are written as rendered.
     crate::build::emit::slots::write_as_rendered(output_dir, pending.take_unwritten_pages())?;
@@ -277,7 +277,8 @@ pub fn generate_blocking_content(
 /// `spawn_native_process_sync`'s background task instead. The only caller
 /// that needs this distinction is `pipeline::run`; every other caller wants
 /// [`generate_blocking_content`]'s plain default. Unlike that one, it leaves the
-/// rendered pages in `pending` for the slot pass to write.
+/// rendered pages in `pending` for the slot pass to write. `defer_title_cards`
+/// plans sharing cards for the background phase; standalone callers pass false.
 pub fn generate_blocking_content_for_build(
     root: &crate::vault::paths::VaultRoot,
     project_structure: &ProjectStructure,
@@ -288,8 +289,10 @@ pub fn generate_blocking_content_for_build(
     mut site_config: SiteConfig,
     pending: &mut PendingManifest,
     exits_after_build: bool,
+    defer_title_cards: bool,
 ) -> Result<BlockingContentOutput, BuildStopped> {
     let total_start = std::time::Instant::now();
+    let mut og_requests = Vec::new();
 
     // `pending` is pre-seeded with previous_hashes by the caller (PendingManifest::new).
     // Pattern A artifact registrations route through:
@@ -1773,6 +1776,7 @@ pub fn generate_blocking_content_for_build(
             url_sp: ServedPath,
             html: String,
             og_cards: Vec<crate::build::page::og_card::CardOutput>,
+            og_requests: Vec<crate::build::page::og_card::deferred::CardRequest>,
             source_mapping: Option<(String, ServedPath)>,
             /// This page's title/date, registered into `SiteHashes::page_meta`
             /// alongside `source_mapping` (same `Some` condition — both come
@@ -1906,7 +1910,11 @@ pub fn generate_blocking_content_for_build(
                 let url_sp = ServedPath::from_source(&doc.url_path)
                     .map_err(|e| format!("Failed to construct article URL path: {}", e))?;
                 let output_file_path = output_dir.join(url_sp.as_str());
-                let mut og_outputs = crate::build::page::og_card::OgSink::new(&previous_hashes.files, &filename_covers);
+                let mut og_outputs = if defer_title_cards {
+                    crate::build::page::og_card::OgSink::deferred(&previous_hashes.files, &filename_covers)
+                } else {
+                    crate::build::page::og_card::OgSink::new(&previous_hashes.files, &filename_covers)
+                };
                 // `is_homepage` used to be hardcoded false here, so only the
                 // site-default-locale home (rendered separately below, never
                 // reaching this generic loop) carried `data-page="home"` —
@@ -1960,10 +1968,12 @@ pub fn generate_blocking_content_for_build(
                     });
                 }
 
+                let (og_cards, og_requests) = og_outputs.into_parts();
                 Ok(RenderedPage {
                     url_sp,
                     html: html_page,
-                    og_cards: og_outputs.into_cards(),
+                    og_cards,
+                    og_requests,
                     source_mapping,
                     page_meta,
                     carried_previous,
@@ -2001,6 +2011,7 @@ pub fn generate_blocking_content_for_build(
                 for card in &page.og_cards {
                     card.register(pending);
                 }
+                og_requests.extend(page.og_requests);
                 pending.register_unwritten_page(&page.url_sp, page.html);
                 // Register source→output mapping so the file watcher's rename-hint
                 // resolver can find the output path without re-deriving slug rules.
@@ -2498,12 +2509,19 @@ pub fn generate_blocking_content_for_build(
             // verbatim instead of re-running folder_embed's card synthesis.
             homepage_carry_proof.as_ref().expect("homepage carry has proof").register_all(pending);
         } else {
-            let mut homepage_og_outputs = crate::build::page::og_card::OgSink::new(&previous_hashes.files, &filename_covers);
+            let _phase_home = PhaseTrace::start("render_homepage");
+            let mut homepage_og_outputs = if defer_title_cards {
+                crate::build::page::og_card::OgSink::deferred(&previous_hashes.files, &filename_covers)
+            } else {
+                crate::build::page::og_card::OgSink::new(&previous_hashes.files, &filename_covers)
+            };
             let index_html = render_page(&render_context,
                 homepage_doc, homepage_doc.is_some(), Some(&mut homepage_og_outputs),
             )?;
             // Site 14b: register the homepage's OG cards from their receipts.
-            for card in homepage_og_outputs.into_cards() {
+            let (cards, requests) = homepage_og_outputs.into_parts();
+            og_requests.extend(requests);
+            for card in cards {
                 card.register(pending);
             }
 
@@ -3277,6 +3295,7 @@ pub fn generate_blocking_content_for_build(
     // canonical_dir is set to None here; build.rs sets it during rebuilds.
     // Thread ffmpeg_bin_path from scan so build.rs doesn't re-download
     let background_ctx = BackgroundContext {
+        og_requests,
         video_items,
         image_items,
         source_path: source_path.to_string(),
