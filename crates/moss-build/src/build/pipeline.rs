@@ -340,7 +340,7 @@ type NotebookReceipt = (crate::build::served_path::ServedPath, String);
 /// # JupyterLite Lazy Download
 ///
 /// JupyterLite (~20MB WASM + JS + CSS) is only downloaded when notebooks are
-/// first encountered. Once cached at `~/.moss/assets/jupyterlite/`, subsequent
+/// first encountered. Once cached at `~/.moss/assets/jupyterlite-<archive-digest>/content/`, subsequent
 /// builds reuse the cached copy. This is triggered here (not during scan) so
 /// the scan phase stays fast and network-free.
 ///

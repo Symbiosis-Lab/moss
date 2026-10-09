@@ -19,7 +19,7 @@
 //!   No download, no processing — just categorization. This keeps the scan fast.
 //!
 //! - **Background phase**: If any notebooks were detected:
-//!   1. Download JupyterLite assets if not cached (`~/.moss/assets/jupyterlite/`)
+//!   1. Download JupyterLite assets if not cached (`~/.moss/assets/jupyterlite-<archive-digest>/content/`)
 //!   2. Copy JupyterLite assets to `<output>/jupyter/` (once, shared across notebooks)
 //!   3. For each `.ipynb`: copy to output + generate a thin viewer HTML wrapper
 //!   4. Emit progress events for the UI

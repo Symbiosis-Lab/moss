@@ -37,6 +37,8 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- Concurrent builds no longer leave the notebook app with missing files in its cached bundle. Incomplete caches are rebuilt automatically.
+
 - Expanding a map to fullscreen keeps it responsive and preserves its image quality. Zooming in or moving to a denser display still requests sharper detail.
 
 - Media with `screen` width stays inside the text column in vertical layouts instead of extending into its padding.
