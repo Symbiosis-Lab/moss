@@ -271,6 +271,14 @@ fn resolve_by_route(
     }
 }
 
+/// Whether a destination names an address outside this tree: a scheme and
+/// host, a protocol-relative `//host`, or a non-path scheme. Mirrors the
+/// external short-circuit in `classify_reference`, which the page-graph route
+/// does not call.
+fn is_external_destination(text: &str) -> bool {
+    ["http://", "https://", "//", "mailto:", "tel:", "data:"].iter().any(|p| text.starts_with(p))
+}
+
 /// Split a reference's `?query`/`#anchor` suffix off its path (earliest of
 /// the two wins, mirroring `ast::resolve_urls::split_path_suffix`). Both
 /// halves are opaque; a rewrite reattaches `suffix` verbatim.
@@ -344,6 +352,13 @@ fn plan_one_ref(
     expanded_moves: &[ResolvedMove],
     addresses: &Addresses,
 ) -> Result<Option<String>, String> {
+    // A destination with a scheme and host (or a protocol-relative `//host`)
+    // names another site's address. Its tail is not a path in this tree, so
+    // no matching below may read it: `https://…/events/2026/11/20` would
+    // otherwise find the page at `events/2019/11/20.md` by its file stem.
+    if is_external_destination(raw_text) {
+        return Ok(None);
+    }
     let (base_text, suffix) = split_ref_suffix(raw_text);
     let wiki = form == DestForm::Wiki;
     // `/` is the site's front door whatever file is served there.
@@ -405,6 +420,21 @@ fn plan_one_ref(
         None if synthetic_auto_index => None,
         None => exact_of(dirname(from_source_pre), &t),
     };
+    // A markdown path that names no file exactly (from the page, from the
+    // root, or as an address) was found by the resolver's suffix or stem
+    // fallback: `/archive/events/2019/11/20.md` finds `events/2019/11/20.md`
+    // there, though the build serves the link as broken. Such a link is
+    // left as authored, like any other unresolved one. A destination with a
+    // scheme or host is decided by the host check above, never here.
+    if route == RefRoute::PageGraph
+        && !wiki
+        && base_text.trim_start_matches('/').contains('/')
+        && !is_external_destination(raw_text)
+        && exact.is_none()
+        && !synthetic_auto_index
+    {
+        return Ok(None);
+    }
     let resolves_post = resolve_by_route(route, raw_text, from_source_post, ctx_post, graph_post).as_deref()
         == Some(map_t.as_str());
     let unchanged = match &exact {

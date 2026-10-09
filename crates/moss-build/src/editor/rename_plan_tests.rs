@@ -1758,3 +1758,51 @@ fn a_link_to_a_redirect_source_is_left_alone() {
     do_move(&root, "events.md", "archive/events.md");
     assert_eq!(r(&root, "index.md"), "[a](/old-events/) [b](/old-events)\n");
 }
+
+// ── Links that name another host ─────────────────────────────────────────
+
+#[test]
+fn external_link_whose_path_tail_matches_a_moved_page_is_left_byte_identical() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "events/2019/11/20.md", "# Show\n");
+    w(root, "events/2019/11/notes.md", "[Near](./20.md)\n");
+    w(root, "index.md", "[Tickets](https://tickets.example.org/events/2026/11/20) and [Root](/events/2019/11/20/)\n");
+    fs::create_dir_all(root.join("events/2019-2020")).unwrap();
+
+    do_move(root, "events/2019/11/20.md", "events/2019-2020/2019-11-20.md");
+
+    let index = r(root, "index.md");
+    assert!(index.contains("[Tickets](https://tickets.example.org/events/2026/11/20)"), "{index}");
+    assert!(index.contains("[Root](/events/2019-2020/2019-11-20/)"), "{index}");
+    assert!(!r(root, "events/2019/11/notes.md").contains("(./20.md)"), "relative link must follow the file");
+}
+
+#[test]
+fn root_relative_path_that_only_ends_in_the_moved_page_is_not_rewritten() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "events/2019/11/20.md", "# Show\n");
+    w(root, "index.md", "[Gone](/archive/events/2019/11/20.md) and [Also](archive/events/2019/11/20.md)\n");
+    fs::create_dir_all(root.join("events/2019-2020")).unwrap();
+
+    do_move(root, "events/2019/11/20.md", "events/2019-2020/2019-11-20.md");
+
+    assert_eq!(
+        r(root, "index.md"),
+        "[Gone](/archive/events/2019/11/20.md) and [Also](archive/events/2019/11/20.md)\n"
+    );
+}
+
+#[test]
+fn one_segment_external_link_is_left_byte_identical_when_a_moved_page_shares_its_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "events/2019/11/20.md", "# Show\n");
+    w(root, "index.md", "[Tickets](https://tickets.example.org/20)\n");
+    fs::create_dir_all(root.join("events/2019-2020")).unwrap();
+
+    do_move(root, "events/2019/11/20.md", "events/2019-2020/2019-11-20.md");
+
+    assert_eq!(r(root, "index.md"), "[Tickets](https://tickets.example.org/20)\n");
+}
