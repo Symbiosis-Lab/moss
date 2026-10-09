@@ -345,6 +345,8 @@ A page's own `weight:` is an integer that `sort: weight` orders by — lower fir
 
 A section can show a shorter name in the nav bar than its title: `nav_label: Reading` on a page titled "Course of Reading". The nav bar and the footer links (`footer: true`) use it; the page's own heading, the browser tab title, listing cards, breadcrumbs and feeds keep the title. A blank `nav_label` is ignored.
 
+`url:` sets where a page is published, relative to its folder: `url: share/ID` publishes at `share/id/`. A `/` is kept as a path separator, each part is cleaned up on its own, and `..` parts are dropped.
+
 `series:` on a folder index turns on prev/next chrome for its children: `true` follows the folder's own order, a list of wikilinks declares an explicit sequence, `false` turns it off. Set `series: false` on a page inside the folder instead, and that one page drops out of the reading order — no prev/next of its own, and it stops being any sibling's prev or next. Declaring `sort:` as an explicit list, or as `sort: weight`, turns `series` on by default.
 
 Show a capped feed on the homepage by pointing at that folder:
