@@ -3948,3 +3948,18 @@ fn header_over_marks_only_the_first_of_two_opening_heroes() {
     assert!(first.contains(r#"data-header="over""#), "got: {first}");
     assert!(!parsed.html_content.contains("data-header"), "got: {}", parsed.html_content);
 }
+
+#[test]
+fn alt_only_with_a_placement_keeps_the_width_and_drops_the_caption() {
+    let page = render_markdown_to_html("![A lake|page|](p.jpg)\n");
+    assert!(page.contains(r#"alt="A lake""#), "got: {page}");
+    assert!(page.contains(r#"data-width="page""#), "got: {page}");
+    assert!(!page.contains("figcaption"), "got: {page}");
+    assert!(!page.contains('|'), "got: {page}");
+
+    let percent = render_markdown_to_html("![A lake|55%|](p.jpg)\n");
+    assert!(percent.contains(r#"alt="A lake""#), "got: {percent}");
+    assert!(percent.contains("width:55%"), "got: {percent}");
+    assert!(!percent.contains("figcaption"), "got: {percent}");
+    assert!(!percent.contains('|'), "got: {percent}");
+}

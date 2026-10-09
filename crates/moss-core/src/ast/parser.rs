@@ -1010,17 +1010,25 @@ fn try_promote_to_figure(
     // bracket text, so the two can differ. A refusal hands the paragraph back
     // untouched.
     let italic_at = italic_caption_index(&inlines);
-    if alt_only && italic_at.is_none() {
+    // Alt only with a placement (`![Description|page|](x.jpg)`) is a figure with
+    // no caption, because the placement needs a figure to hold it.
+    let placed = inlines.iter().any(|i| {
+        matches!(i, Inline::Image { alt, is_wikilink: false, .. }
+            if !crate::media::extract_placement_from_alias(alt).0.is_empty())
+    });
+    if alt_only && italic_at.is_none() && !placed {
         return Err(inlines);
     }
-    try_promote_image_only(inlines, events, para_start, italic_at)
+    let captionless = alt_only && italic_at.is_none();
+    try_promote_image_only(inlines, events, para_start, italic_at, captionless)
 }
 
 /// Trim a bare trailing `|` from the bracket text of a lone standard image:
 /// `![A lake|](p.jpg)` has alt text `A lake` and no caption. Returns whether
-/// the pipe was there. Wikilink embeds keep their own pipe grammar, and a
-/// pipe whose left side is a placement (`![55%|](p.jpg)`) is left to the
-/// placement parser.
+/// the pipe was there. The text before the pipe may still carry a placement
+/// (`![A lake|page|](p.jpg)`), which the figure promotion reads from the alt
+/// the same way it reads `![A lake|page](p.jpg)`. Wikilink embeds keep their
+/// own pipe grammar.
 fn strip_alt_only_pipe(inlines: &mut [Inline]) -> bool {
     let mut images = inlines.iter_mut().filter_map(|i| match i {
         Inline::Image { alt, is_wikilink, .. } => Some((alt, *is_wikilink)),
@@ -1037,17 +1045,20 @@ fn strip_alt_only_pipe(inlines: &mut [Inline]) -> bool {
 }
 
 /// The alt text a bracket text means when it ends in a bare `|`: `A lake|`
-/// is `A lake`. `None` when there is no trailing pipe, when the pipe is
-/// escaped (`\|`), or when the text before it is a placement (`55%|`), which
-/// is a media attribute and not alt text. Shared by the standalone-image
-/// parser and the `:::gallery` line parser, so both read the form one way.
+/// is `A lake`, and `A lake|page|` is `A lake|page` (the placement is still
+/// in it, for the caller to read). `None` when there is no trailing pipe, when
+/// the pipe is escaped (`\|`), or when the text before it is only a placement
+/// (`55%|`), which is a media attribute and not alt text. Shared by the
+/// standalone-image parser and the `:::gallery` line parser, so both read the
+/// form one way.
 pub(crate) fn alt_only_text(bracket_text: &str) -> Option<&str> {
     let head = bracket_text.trim_end().strip_suffix('|')?;
     if head.ends_with('\\') {
         return None;
     }
     let head = head.trim();
-    if !crate::media::extract_placement_from_alias(head).0.is_empty() {
+    let (placement, rest) = crate::media::extract_placement_from_alias(head);
+    if !placement.is_empty() && rest.is_empty() {
         return None;
     }
     Some(head)
@@ -1095,6 +1106,7 @@ fn try_promote_image_only(
     events: &[Event<'_>],
     para_start: usize,
     italic_at: Option<usize>,
+    captionless: bool,
 ) -> Result<Block, Vec<Inline>> {
     let mut image_count = 0;
     for inline in &inlines[..italic_at.unwrap_or(inlines.len())] {
@@ -1248,7 +1260,7 @@ fn try_promote_image_only(
     let has_italic_caption = italic_caption.is_some();
     let caption = if has_italic_caption {
         italic_caption
-    } else if alt_text.is_empty() {
+    } else if captionless || alt_text.is_empty() {
         None
     } else {
         Some(build_caption_inlines(
