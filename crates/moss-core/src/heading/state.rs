@@ -203,11 +203,14 @@ pub fn hero_at_top_owns_title(body_markdown: &str) -> bool {
     crate::ast::extract_hero::hero_body_has_overlay_content(args, &body)
 }
 
-/// True when the body already supplies the page's `<h1>`, so moss must not
-/// add a visible one: an ATX level-1 heading (`# Title`, not `##` or `#tag`)
-/// anywhere outside a code fence, or a `:::hero` at the top that carries its
-/// own heading ([`hero_at_top_owns_title`]). "Anywhere", not "first line": a
-/// page that opens with an image and then `# Title` has its title already.
+/// True when the body supplies a real heading: an ATX level-1 heading
+/// (`# Title`, not `##` or `#tag`) anywhere outside a code fence, including
+/// one inside a `:::hero` block. "Anywhere", not "first line": a page that
+/// opens with an image and then `# Title` has its title already. Prose in a
+/// hero is not a heading, so this is false for a hero of only an image and a
+/// link. Callers that also treat an opening hero as filling the title slot
+/// combine this with [`hero_at_top_owns_title`] themselves, because the
+/// visible-title decision and the hidden-heading decision differ.
 pub fn body_supplies_title(body_markdown: &str) -> bool {
     let mut fence: Option<&str> = None;
     for line in body_markdown.lines().map(str::trim_start) {
@@ -228,7 +231,7 @@ pub fn body_supplies_title(body_markdown: &str) -> bool {
             return true;
         }
     }
-    hero_at_top_owns_title(body_markdown)
+    false
 }
 
 /// Compute the full heading state for a page.
@@ -305,6 +308,8 @@ mod tests {
         assert!(body_supplies_title("\n<!-- note -->\n\n# Title"));
         assert!(body_supplies_title("![cover](c.jpg)\n\n# Title\n\ntext"));
         assert!(body_supplies_title(":::hero\n# Overlay\n:::\n\ntext"));
+        assert!(!body_supplies_title(":::hero {image=cover.jpg}\nA link to read\n:::\n\ntext"));
+        assert!(!body_supplies_title(":::hero {.plate}\n![cover](cover.jpg)\n\n[Read the posts](/posts/)\n:::\n"));
         assert!(!body_supplies_title("## Title\n\ntext"));
         assert!(!body_supplies_title("## Title\n\n### Sub"));
         assert!(!body_supplies_title("#hashtag"));
