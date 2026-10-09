@@ -7264,7 +7264,7 @@ article a:where(:not(.moss-btn)):focus {
   margin-block: var(--moss-space-md) var(--moss-space-lg);
   margin-inline: 0;
   /* Reset derived values here so nested grids use their own count. Counts
-     outside the built-in 1–4 range still accept an authored ratio. */
+     outside the built-in 1–6 range still accept an authored ratio. */
   --_grid-count: initial;
   --_grid-template: var(--moss-grid-ratio, repeat(var(--_grid-count), minmax(0, 1fr)));
   --_grid-authored-track: calc(
@@ -7299,6 +7299,8 @@ article a:where(:not(.moss-btn)):focus {
 .moss-grid[data-columns="2"] { --_grid-count: 2; }
 .moss-grid[data-columns="3"] { --_grid-count: 3; }
 .moss-grid[data-columns="4"] { --_grid-count: 4; }
+.moss-grid[data-columns="5"] { --_grid-count: 5; }
+.moss-grid[data-columns="6"] { --_grid-count: 6; }
 
 /* Grid card styling */
 .moss-grid-card {

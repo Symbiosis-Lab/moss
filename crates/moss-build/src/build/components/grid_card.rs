@@ -106,7 +106,11 @@ fn render_item(
         (Some(url), Some(ct)) => {
             let (cover_path, attrs_str) = moss_core::media::split_pipe(url);
             let cover_attrs = moss_core::media::parse_media_attrs(attrs_str);
-            cover::render_cover_html(cover_path, ct, &format!("{} cover", props.title), "moss-card-cover", &cover_attrs, true, media_lookup, eager)
+            // The link is named by its title (aria-label below), so a cover
+            // with a title is decorative. Without a title the link has no name,
+            // and the cover supplies one.
+            let cover_alt = if props.title.trim().is_empty() { "cover" } else { "" };
+            cover::render_cover_html(cover_path, ct, cover_alt, "moss-card-cover", &cover_attrs, true, media_lookup, eager)
         }
         _ if list_has_covers => {
             // The description is markdown (`ChildItemProps::description`'s
@@ -170,9 +174,17 @@ fn render_item(
         .map(|d| format!(r#"<p class="moss-card-description">{}</p>"#, render_description_html_in_link(d)))
         .unwrap_or_default();
 
+    // The link's accessible name is the title alone: meta, description and the
+    // cover's quote are not part of it. An empty title leaves the link unnamed.
+    let label_attr = if props.title.trim().is_empty() {
+        String::new()
+    } else {
+        format!(r#" aria-label="{}""#, html_escape(&props.title))
+    };
     format!(
-        r#"<a href="{}" class="moss-card"{}>{}<div class="moss-card-content">{}<span class="moss-card-meta">{}</span><span class="moss-card-title">{}</span>{}</div></a>"#,
+        r#"<a href="{}" class="moss-card"{}{}>{}<div class="moss-card-content">{}<span class="moss-card-meta">{}</span><span class="moss-card-title">{}</span>{}</div></a>"#,
         html_escape(&props.url),
+        label_attr,
         cover_color_attrs,
         cover_html,
         kicker_html,

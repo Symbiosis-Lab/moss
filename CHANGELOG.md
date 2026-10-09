@@ -41,6 +41,8 @@ All notable changes to moss will be documented here.
 ### Fixed
 
 - The home page's `##` and `###` sections get the same `#` permalink anchors as every other page, so a section of the home page can be linked to. The page's level-1 title and the `:::hero` title stay unanchored, and `[site] heading_anchors = false` still turns the anchors off everywhere.
+- A `:::grid` card's link is now named by its title alone. Its cover image repeated the title as alt text, so a screen reader read the title twice.
+- A `:::grid` with five or six columns lays out that many columns. Before, any count above four silently fell to one column; a count above six now builds at six with a build warning.
 - Empty-folder and text-page previews no longer wait for title-only social sharing images to render. Their images finish in the background before publishing; composed image covers retain their existing render and fallback behavior.
 - A hero image can carry alt text from an `alt` key: `:::hero {image=cover.jpg alt="…"}` sets the picture's `alt`, including for the `image=` form that had no way to describe it. A hero without `alt` keeps the text written on its embed, or `alt=""` when there is none, which is correct for a decorative hero.
 - A page listed in the nav bar keeps a level-1 heading for screen readers. Its visible title stays in the nav bar, and the heading is visually hidden, the way folder pages already do it. A body that opens with its own `# H1` is unchanged.

@@ -1382,7 +1382,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
             },
             DataAttr {
                 name: "data-columns",
-                values: &["1", "2", "3", "4"],
+                values: &["1", "2", "3", "4", "5", "6"],
                 default: "",
                 description: "How many cards sit on one line of the grid, from `:::grid N`. Collapses to a single column below 768px — the default (horizontal) inline axis is viewport width, which shrinks too far for N side-by-side cards to stay readable; vertical typesetting counters this in its own partial, since there the inline axis is height instead. A ratio (`:::grid 2 1:2`) arrives as the custom property `--moss-grid-ratio` on the element, so it stays overridable at every width. Under `data-scroll`, this instead reads as how many cards fit in view at once — the row scrolls rather than wraps, and does not collapse.",
             },

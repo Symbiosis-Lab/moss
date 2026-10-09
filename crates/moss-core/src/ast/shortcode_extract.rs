@@ -203,6 +203,11 @@ fn cols_alias_warning(shortcode_name: &str) -> String {
     )
 }
 
+/// Most columns a `:::grid` can lay out. The site stylesheet has a column
+/// rule for each count from 1 to this value; a larger count would match no
+/// rule and collapse to one column without a word.
+pub const MAX_GRID_COLUMNS: u32 = 6;
+
 /// Parse a `:::grid` block.
 ///
 /// Args parsing supports both:
@@ -302,6 +307,12 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
         .collect();
     if used_cols_alias {
         fragment.warnings.push(cols_alias_warning("grid"));
+    }
+    if columns > MAX_GRID_COLUMNS {
+        fragment.warnings.push(format!(
+            "shortcode `:::grid` asks for {columns} columns, but the layout supports up to {MAX_GRID_COLUMNS}; this grid uses {MAX_GRID_COLUMNS}."
+        ));
+        columns = MAX_GRID_COLUMNS;
     }
 
     (

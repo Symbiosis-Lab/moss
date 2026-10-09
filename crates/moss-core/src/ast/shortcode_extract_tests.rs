@@ -2974,3 +2974,24 @@ fn a_gallery_rename_span_covers_exactly_the_destination() {
         assert_eq!(&line[span.value.clone()], dest, "{line:?} -> {span:?}");
     }
 }
+
+#[test]
+fn grid_column_count_is_capped_at_the_stylesheet_maximum_with_a_warning() {
+    let at_max = extract_shortcodes(":::grid 6\nA\n+++\nB\n:::\n");
+    assert!(at_max.warnings.is_empty(), "{:?}", at_max.warnings);
+    match &at_max.extracted[0].shortcode {
+        Shortcode::Grid(grid) => assert_eq!(grid.columns, MAX_GRID_COLUMNS),
+        _ => panic!("expected a grid"),
+    }
+
+    let over = extract_shortcodes(":::grid 9\nA\n+++\nB\n:::\n");
+    match &over.extracted[0].shortcode {
+        Shortcode::Grid(grid) => assert_eq!(grid.columns, MAX_GRID_COLUMNS),
+        _ => panic!("expected a grid"),
+    }
+    assert!(
+        over.warnings.iter().any(|w| w.contains("9 columns")),
+        "{:?}",
+        over.warnings
+    );
+}

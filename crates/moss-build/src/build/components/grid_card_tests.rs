@@ -701,7 +701,7 @@ fn a_card_takes_its_band_color_from_the_covers_color_override() {
     let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
     // The colour rides on the outer <a>, not on .moss-card-content.
     assert!(
-        html.contains(r#"<a href="/research/" class="moss-card" data-cover-color style="--item-cover-color: hsla(203, 73%, 14%, 1)">"#),
+        html.contains(r#"<a href="/research/" class="moss-card" aria-label="Research" data-cover-color style="--item-cover-color: hsla(203, 73%, 14%, 1)">"#),
         "outer <a> must carry the band colour, got: {html}"
     );
     // A cover with no override, no root and no cache yields no colour at all.
@@ -845,4 +845,36 @@ fn keeps_arabic_count_in_horizontal_cjk() {
         !html.contains("十二篇"),
         "CJK numeral should only appear in vertical CJK"
     );
+}
+
+#[test]
+fn test_card_link_is_named_by_title_and_cover_is_decorative() {
+    let props = ChildItemProps {
+        title: "Lantern Walk".to_string(),
+        url: "walks/lantern/".to_string(),
+        description: Some("A short evening route.".to_string()),
+        cover: Some("https://example.com/lantern.jpg".to_string()),
+        ..blank()
+    };
+
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+
+    // The cover sits inside the link; the link's name is the title.
+    assert!(html.contains(r#"alt="""#), "cover alt should be empty: {html}");
+    assert!(html.contains(r#"<a href="walks/lantern/" class="moss-card" aria-label="Lantern Walk">"#), "{html}");
+}
+
+#[test]
+fn test_card_without_title_keeps_a_name_on_the_cover() {
+    let props = ChildItemProps {
+        title: String::new(),
+        url: "walks/untitled/".to_string(),
+        cover: Some("https://example.com/untitled.jpg".to_string()),
+        ..blank()
+    };
+
+    let html = render_item_with_typesetting(&props, None, Language::En, None, None, false, false);
+
+    assert!(!html.contains("aria-label"), "an untitled card must not get an empty label: {html}");
+    assert!(html.contains(r#"alt="cover""#), "cover needs a non-empty alt: {html}");
 }
