@@ -183,7 +183,7 @@ model (dark mode, quiet chrome, `@layer` rules), see
 
 - **Starting a new site** → read `moss guide example`
   for the canonical folder shape and file content to copy.
-- **Authoring or styling a site** → read `moss guide authoring`.
+- **Authoring or styling a site** → read `moss guide authoring` (hero, gallery, captions, definition lists and listings are there too).
 - **Building a plugin** (deploy, syndicate, comments — anything needing the
   network or an external API) → read `moss guide plugins`.
 - **Converting an existing site** (a URL, or local files) into moss → read

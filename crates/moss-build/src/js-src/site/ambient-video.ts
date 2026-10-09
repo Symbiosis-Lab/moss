@@ -105,9 +105,10 @@ export function initAmbientVideos(): void {
  * `data-active` moves to the next slide (wrapping) and that video starts; the
  * stylesheet shows the slide and caption whose `data-slide` matches it.
  *
- * The pause checkbox (`.moss-hero-pause input`) stops the advance while it is
- * checked: the current video pauses, and unchecking resumes it. Under reduced
- * motion nothing starts, and the stylesheet pins slide 0 and its caption.
+ * The script adds the pause button (`.moss-hero-pause`) itself. While it is
+ * pressed the advance stops and the current video pauses; pressing it again
+ * resumes. Under reduced motion no button is added and nothing starts, and the
+ * stylesheet pins slide 0 and its caption.
  */
 const heroSequenceWired = new WeakSet<HTMLElement>();
 
