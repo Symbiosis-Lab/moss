@@ -751,23 +751,10 @@ pub fn generate_blocking_content_for_build(
                     // above the loop, over the whole folder, never here.
                     let folder_lang = folder_languages.get(&folder_of(&file_info.path)).copied();
 
-                    // The root's elected home file, decided by `home_file_winners`
-                    // (computed once, above this parallel loop) rather than by
-                    // this file's own `doc.kind`/`doc.url_path` — those are only
-                    // settled by the demotion pass AFTER this call returns (see
-                    // that pass's comment below), so re-deriving "is this the
-                    // home page" from them here would be reading a value that
-                    // isn't final yet. The winner set already answers it: no `/`
-                    // means root-level, and membership means this file won its
-                    // folder's home slot.
-                    let is_root_home = !file_info.path.contains('/')
-                        && home_file_winners.contains(&file_info.path);
-
                     let page_context = PageContext {
                         has_content_folders: project_structure.has_content_folders,
                         seta_url: Some(&seta_url_for_build),
                         folder_lang,
-                        is_homepage: is_root_home,
                     };
 
                     let mut doc = match process_markdown_file(&file_info.path, resolved_content, root_folder_name, &page_map, emit_source_lines, site_lang, site_id.as_deref(), site_config.markdown(), Some(&event_level_image_lookup), Some(&external_url_map), Some(&content_graph), page_context) {

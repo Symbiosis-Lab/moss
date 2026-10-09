@@ -417,7 +417,7 @@ fn nav_page_hides_injected_article_title_from_view() {
         None,
         None,
         None,
-        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, is_homepage: false },
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None },
     )
     .expect("should parse");
     assert!(
@@ -448,7 +448,7 @@ fn non_nav_article_still_injects_title() {
         None,
         None,
         None,
-        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, is_homepage: false },
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None },
     )
     .expect("should parse");
     assert!(
@@ -477,7 +477,7 @@ fn nav_false_restores_article_title() {
         None,
         None,
         None,
-        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, is_homepage: false },
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None },
     )
     .expect("should parse");
     assert!(
@@ -504,7 +504,7 @@ fn nav_page_with_leading_image_then_h1_has_one_h1() {
         None,
         None,
         None,
-        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, is_homepage: false },
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None },
     )
     .expect("should parse");
     assert_eq!(
@@ -531,7 +531,7 @@ fn nav_page_keeps_authored_body_h1() {
         None,
         None,
         None,
-        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, is_homepage: false },
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None },
     )
     .expect("should parse");
     assert!(
@@ -997,17 +997,12 @@ fn homepage_body_h1_is_kept_verbatim_no_injection() {
     );
 }
 
-/// The home page (`process_markdown_file`'s `is_homepage: true`, the same
-/// fact that makes `build/render/html.rs` emit `<body data-page="home">`)
-/// suppresses every heading's `#` permalink anchor, not only level 1's. A
-/// reader lands on the home page by visiting the site, never by a deep link
-/// into one of its sections, so a `## Section` there gets no anchor either
-/// — contrast with `ordinary_page_heading_keeps_h2_permalink_anchor` below,
-/// where the identical body renders WITH the anchor because `is_homepage`
-/// is false.
+/// The home page gets the same section permalinks as any other page: each
+/// `##` section has an id and a `#` anchor, so a reader can link to it. The
+/// page's `# Title` (level 1) is never anchored, on the home page or elsewhere.
 #[test]
-fn homepage_heading_suppresses_h2_permalink_anchor() {
-    let md = "---\n---\n## Section\n\nhome body\n";
+fn homepage_sections_keep_permalink_anchors_and_title_has_none() {
+    let md = "---\n---\n# Hero Title\n\n## First\n\nbody\n\n## Second\n\nbody\n";
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
         "index.md",
@@ -1021,17 +1016,27 @@ fn homepage_heading_suppresses_h2_permalink_anchor() {
         None,
         None,
         None,
-        PageContext { has_content_folders: false, seta_url: None, folder_lang: None, is_homepage: true },
+        PageContext { has_content_folders: false, seta_url: None, folder_lang: None },
     )
     .expect("should parse");
     assert!(
-        doc.html_content.contains("<h2 id=\"section\">Section</h2>"),
-        "home page H2 must keep its id, just not the permalink anchor, got: {}",
+        doc.html_content.contains(
+            "<h2 id=\"first\">First<a class=\"moss-heading-anchor\" href=\"#first\" aria-label=\"Permalink to this section\"></a></h2>"
+        ),
+        "home page H2 must keep its permalink anchor, got: {}",
         doc.html_content
     );
     assert!(
-        !doc.html_content.contains("moss-heading-anchor"),
-        "home page headings must carry no permalink anchor at any level, got: {}",
+        doc.html_content.contains(
+            "<h2 id=\"second\">Second<a class=\"moss-heading-anchor\" href=\"#second\" aria-label=\"Permalink to this section\"></a></h2>"
+        ),
+        "second home page H2 must keep its permalink anchor, got: {}",
+        doc.html_content
+    );
+    assert_eq!(
+        doc.html_content.matches("moss-heading-anchor").count(),
+        2,
+        "only the two sections are anchored; the level-1 title is not, got: {}",
         doc.html_content
     );
 }
@@ -1787,7 +1792,7 @@ fn test_pipeline_sets_features_inline_apply_when_shortcode_present() {
         None,
         None,
         None,
-        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, is_homepage: false },
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None },
     )
     .expect("pipeline should succeed");
     assert!(doc.features.inline_apply, "inline_apply flag must be set");
@@ -3534,7 +3539,7 @@ fn per_page_language_apply_in_zh_hans_subdir() {
         None,
         None,
         None,
-        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, is_homepage: false },
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None },
     )
     .expect("should parse");
     assert!(
@@ -3577,7 +3582,7 @@ fn per_page_language_subscribe_in_zh_hans_subdir() {
         None,
         None,
         None,
-        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, is_homepage: false },
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None },
     )
     .expect("should parse");
     assert!(
@@ -3616,7 +3621,7 @@ fn per_page_language_apply_en_page_in_zh_hans_site() {
         None,
         None,
         None,
-        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, is_homepage: false },
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None },
     )
     .expect("should parse");
     assert!(

@@ -336,8 +336,8 @@ impl Default for SiteMarkdown<'_> {
 /// that half). Folded into one struct, `SiteMarkdown`'s own shape, so the
 /// next fact `process_markdown_file` needs changes this type instead of
 /// every call site — the four fields here replaced four positional
-/// parameters that a single addition (`is_homepage`) had just touched
-/// across every caller. `#[derive(Default)]`'s all-`false`/`None` answer
+/// parameters that a single later addition had just touched across every
+/// caller. `#[derive(Default)]`'s all-`false`/`None` answer
 /// matches every existing test call's old positional defaults exactly.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PageContext<'a> {
@@ -361,17 +361,6 @@ pub struct PageContext<'a> {
     /// file's directory; tests pass `None`, matching the old rung-4
     /// behavior of "no folder signal available".
     pub folder_lang: Option<crate::i18n::Language>,
-    /// This file is the root's elected home file — the caller's
-    /// `home_file_winners` set, restricted to the root (no `/` in
-    /// `file_path`), computed BEFORE this per-file call so it is never
-    /// wrong for the eventual winner even though non-winner demotion runs
-    /// after this function returns (see the comment on that demotion in
-    /// `blocking.rs`). Feeds `PipelineHooks::is_homepage`, which suppresses
-    /// every heading's `#` permalink anchor on the home page — a reader
-    /// never deep-links into one of its sections the way they do an
-    /// article's. Tests default to `false`, matching every page but the
-    /// home page.
-    pub is_homepage: bool,
 }
 
 /// Processes a markdown file with frontmatter into a ParsedDocument.
@@ -808,7 +797,6 @@ pub fn process_markdown_file(
         media_lookup,
         permalink_section_label: crate::i18n::t(doc_lang, "permalink_section"),
         heading_anchors: site.heading_anchors,
-        is_homepage: page.is_homepage,
         vertical: crate::build::render::config::effective_typesetting(
             frontmatter.typesetting.as_deref(),
             site.typesetting,
@@ -1824,8 +1812,6 @@ pub fn render_markdown_to_html_with(
         media_lookup,
         permalink_section_label: crate::i18n::t(crate::i18n::Language::En, "permalink_section"),
         heading_anchors,
-        // A fragment has no page, so it is never the home page.
-        is_homepage: false,
         // A fragment has no page, so no typesetting of its own.
         vertical: false,
     };
@@ -1955,18 +1941,6 @@ struct PipelineHooks<'a> {
     /// when false, headings render without the trailing `#` permalink
     /// anchor.
     heading_anchors: bool,
-    /// This render is the site's home page (`doc.url_path == "index.html"`
-    /// for the root's elected home file — the same fact `body_attrs` reads
-    /// to emit `data-page="home"` in `build/render/html.rs`). Computed by
-    /// the caller from `home_file_winners`, before per-file demotion runs,
-    /// so it is never wrong for the winner. `false` in the fragment-render
-    /// path (`render_markdown_to_html_with`), which has no page of its own.
-    ///
-    /// A home page's `#` permalinks are dead weight: a reader lands there
-    /// by visiting the site, never by a deep link into one of its sections,
-    /// so every heading on it — not only level 1 — renders with no anchor.
-    /// Consumed by `emit_heading_anchors` below.
-    is_homepage: bool,
     /// The page's effective typesetting is vertical. Handed to the delegated
     /// `DefaultHooks`, where it only changes body images' `sizes=`.
     vertical: bool,
@@ -1995,7 +1969,7 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
     }
 
     fn emit_heading_anchors(&self, level: u8) -> bool {
-        self.heading_anchors && level != 1 && !self.is_homepage
+        self.heading_anchors && level != 1
     }
 
     /// The single place grid rendering is bound to the asset snapshot.
