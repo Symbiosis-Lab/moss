@@ -2571,6 +2571,59 @@ fn scan_folder_prunes_nested_moss_sites() {
     );
 }
 
+/// `share/<id>/` holding a pre-built app (raw files, no markdown) is that app's
+/// storage: a parent holding only apps (`deep/`, `deep/mid/`) gets no listing page
+/// of nothing, while a folder with a page beneath it, or with a kept folder
+/// beneath it (`share/empty/`, whose breadcrumb links up), still does.
+#[test]
+fn folder_holding_only_a_prebuilt_app_gets_no_index_page() {
+    let dir = tempfile::Builder::new().prefix("moss_scan_stub").tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join("index.md"), "# home").unwrap();
+    fs::create_dir_all(root.join("share/abc/icons")).unwrap();
+    for f in ["index.html", "app.js", "style.css", "sw.js"] {
+        fs::write(root.join("share/abc").join(f), "x").unwrap();
+    }
+    fs::write(root.join("share/abc/icons/a.png"), "x").unwrap();
+    fs::create_dir_all(root.join("share/empty")).unwrap();
+    fs::create_dir_all(root.join("deep/mid/app")).unwrap();
+    fs::write(root.join("deep/mid/app/index.html"), "x").unwrap();
+    fs::create_dir_all(root.join("notes/2026")).unwrap();
+    fs::create_dir_all(root.join("mixed/app")).unwrap();
+    fs::write(root.join("mixed/app/index.html"), "x").unwrap();
+    fs::write(root.join("mixed/page.md"), "# page").unwrap();
+    fs::write(root.join("notes/2026/entry.md"), "# entry").unwrap();
+
+    let ps = scan_folder(root.to_str().unwrap()).expect("scan should succeed");
+
+    assert!(
+        !ps.dirs.iter().any(|d| d == "share/abc" || d == "deep" || d == "deep/mid"),
+        "an app-only folder must not get an index page: {:?}",
+        ps.dirs
+    );
+    assert!(
+        ps.dirs.iter().any(|d| d == "share") && ps.dirs.iter().any(|d| d == "share/empty"),
+        "a kept folder's parent keeps its listing so the breadcrumb link does not 404: {:?}",
+        ps.dirs
+    );
+    assert!(
+        ["notes", "notes/2026", "mixed"].iter().all(|k| ps.dirs.iter().any(|d| d == k)),
+        "folders with a page beneath keep their index: {:?}",
+        ps.dirs
+    );
+}
+
+/// A passthrough entry naming a single file is not an app beneath its folder:
+/// `share/` still lists whatever it lists.
+#[test]
+fn exact_file_passthrough_does_not_drop_the_folder_index() {
+    let roots: std::collections::HashSet<String> = ["share/x.html".to_string()].into();
+    assert!(!crate::build::scan::classify::holds_only_prebuilt_apps("share", &roots, &[]));
+    let apps: std::collections::HashSet<String> = ["share/x/".to_string()].into();
+    assert!(crate::build::scan::classify::holds_only_prebuilt_apps("share", &apps, &[]));
+    assert!(!crate::build::scan::classify::holds_only_prebuilt_apps("share", &apps, &["share/p.md"]));
+}
+
 /// The scan rewrites the shared hash index from what it saw, but the parse cache
 /// records each page's hash in the same file. A scan that dropped those made every
 /// build re-hash every unchanged page; it must hand them on as recorded while the

@@ -275,7 +275,7 @@ pub fn is_in_passthrough(relative_path: &str, passthrough_roots: &HashSet<String
 /// storage — where the editor drops a page's images — so it is not a section:
 /// no listing page, no listing row, no nav entry.
 ///
-/// Asked once, in the scan, so `ProjectStructure.dirs` already means "the
+/// Asked once, in the scan (together with [`holds_only_prebuilt_apps`]), so `ProjectStructure.dirs` already means "the
 /// directories that get an index page" by the time the render reads it.
 ///
 /// This decides the index-page seed ONLY. The media pipelines run off
@@ -294,6 +294,21 @@ pub fn gets_index_page(
     // `compute_passthrough_roots`).
     !is_in_passthrough(&format!("{relative_path}/"), passthrough_roots)
         && !moss_core::attachment::is_attachment_dir(attachment_folder, relative_path)
+}
+
+/// Whether `dir` only carries pre-built apps: a passthrough subtree lives
+/// beneath it and no page (`page_paths`: markdown and notebooks) does. Such a
+/// folder has nothing of its own to list — the app is the content — so it gets
+/// no index page. Exact-file passthrough roots (no trailing `/`) are not apps
+/// beneath a folder and do not count.
+pub fn holds_only_prebuilt_apps(
+    dir: &str,
+    passthrough_roots: &HashSet<String>,
+    page_paths: &[&str],
+) -> bool {
+    let prefix = format!("{dir}/");
+    passthrough_roots.iter().any(|r| r.ends_with('/') && r.starts_with(&prefix))
+        && !page_paths.iter().any(|p| p.starts_with(&prefix))
 }
 
 /// Each scanned directory that gets a folder-index page, paired with the

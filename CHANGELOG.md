@@ -34,6 +34,7 @@ All notable changes to moss will be documented here.
 ### Fixed
 
 - A page or folder whose file name is stored decomposed (the Unicode form macOS and iCloud write, such as `e` plus a combining accent) now gets the same address as the same name written composed, instead of losing its accents (`cafe-au-lait` versus `café-au-lait`), so links written either way reach it. An address that was published without its accents for a decomposed name now carries them.
+- A folder that holds only a pre-built web app (such as `share/<id>/` with its own `index.html`, scripts and icons, and no pages) no longer gets a pointless empty listing page at `/share/` or a `qr/share.svg` beside it; the app is still served as before.
 - A raw `.html` page that declares `<meta name="robots" content="noindex">` is no longer listed in `sitemap.xml`, which contradicted the page's own instruction to search engines. Raw pages without it stay listed.
 - The places explorer opens fitted to the places it shows, and its Fit all places button returns to that view, instead of opening on the whole world. A site whose places sit in one region now opens on that region; a single place opens at a regional zoom, and places spread across the globe still open on the world view.
 - Embedded map controls appear on hover or keyboard focus, keeping the map clear at rest. Touch controls and the fullscreen exit remain visible.
