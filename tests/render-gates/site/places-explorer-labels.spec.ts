@@ -11,15 +11,15 @@
  * (Tokyo, Osaka) under their own gazetteer names — one matching its city
  * (the positive own-place case), one not (the negative case) — so this gate
  * exercises the rule against the real embedded pack rather than a stub.
- * Both run against the DEFAULT world-cover camera, with no custom pan/zoom
- * needed: each work's own coordinate is EXACTLY its real city's own pack
- * coordinate, so the two project to the identical screen point at any
- * camera whatsoever — the own-place rule's own "covering" check (within a
- * small, zoom-independent pixel radius of that shared point) is exercised
- * the same way regardless of what else is in view. Every other assertion
- * here (budget, collision, re-placement, aria-hidden) also runs against
- * that same default camera, which already shows hundreds of the pack's own
- * real labels with no further fixture data needed.
+ * World-cover checks use an explicit z=1 camera because opening the fixture
+ * fits its two nearby places as tiles load. Each work's own coordinate is
+ * EXACTLY its real city's own pack coordinate, so they project to the same
+ * screen point at every camera. This exercises the own-place rule's
+ * "covering" check (within a small, zoom-independent pixel radius of that
+ * shared point), regardless of what else is in view. Every world-cover
+ * assertion here (budget, collision, re-placement, aria-hidden) uses that
+ * explicit camera; default-opening behavior remains covered by boot and
+ * cards gates.
  *
  * Run via:
  *   npx playwright test -c playwright/places-explorer-labels.config.ts
@@ -80,9 +80,14 @@ function assertNoCrossOverlap(as: Box[], bs: Box[], context: string): void {
 
 const VISIBLE_LABELS = ".moss-places-label:not([hidden])";
 
+function worldCameraSearch(): string {
+  const center = pattersonProject(0, 0);
+  return `?p=patterson&z=1&x=${center.x}&y=${center.y}`;
+}
+
 for (const theme of ["light", "dark"] as const) {
   test(`at rest, labels render, never overlap each other, a marker, the controls or the card row, and stay aria-hidden — ${theme}`, async ({ page }) => {
-    await page.goto("places/", { waitUntil: "domcontentloaded" });
+    await page.goto(`places/${worldCameraSearch()}`, { waitUntil: "domcontentloaded" });
     await page.evaluate((t) => localStorage.setItem("moss-theme", t), theme);
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.reload({ waitUntil: "domcontentloaded" });
@@ -113,10 +118,7 @@ for (const theme of ["light", "dark"] as const) {
 }
 
 test("the world view fills the minimum label budget without exceeding the area budget", async ({ page }) => {
-  // Opening now fits the site's two nearby places; this budget fixture needs
-  // the world view, with enough collision-free candidates to fill it.
-  const center = pattersonProject(0, 0);
-  await gotoReady(page, `?p=patterson&z=1&x=${center.x}&y=${center.y}`);
+  await gotoReady(page, worldCameraSearch());
   const viewportBox = (await page.locator(".moss-places-viewport").boundingBox())!;
   const AREA_BUDGET_PX2 = 45000;
   const MIN_COUNT = 5;
@@ -128,7 +130,7 @@ test("the world view fills the minimum label budget without exceeding the area b
 });
 
 test("after a zoom, the label set is re-placed and stays collision-free", async ({ page }) => {
-  await gotoReady(page);
+  await gotoReady(page, worldCameraSearch());
   const before = await boxesOf(page.locator(VISIBLE_LABELS));
 
   await page.locator('[data-control="zoom-in"]').click();
