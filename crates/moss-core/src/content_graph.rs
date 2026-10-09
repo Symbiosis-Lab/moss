@@ -151,8 +151,8 @@ fn lang_tree_match(candidate: &str, from_lang: Option<&str>) -> u8 {
 /// - `"image.png"` -> `"image"`
 /// - `"视频/视频.md"` -> `"视频/视频"`  (non-ASCII passes through)
 pub fn generate_slug(relative_path: &str) -> String {
-    // Normalize separators
-    let normalized = relative_path.replace('\\', "/");
+    // Compose (NFC) first: macOS/iCloud names are decomposed and a combining mark is not alphanumeric.
+    let normalized = relative_path.nfc().collect::<String>().replace('\\', "/");
 
     // Strip extension only when the last `.` lives inside the trailing
     // segment AND has at least one character before it. This preserves the
@@ -1302,6 +1302,18 @@ mod tests {
     }
 
     // generate_slug tests
+    #[test]
+    fn generate_slug_gives_nfd_and_nfc_spellings_the_same_slug() {
+        // macOS/iCloud write file names decomposed (NFD); links are composed.
+        assert_eq!(
+            generate_slug("caf\u{0065}\u{0301}-au-lait.md"),
+            generate_slug("caf\u{00e9}-au-lait.md")
+        );
+        assert_eq!(generate_slug("caf\u{0065}\u{0301}-au-lait.md"), "caf\u{00e9}-au-lait");
+        // Hangul syllable written as jamo (NFD) keeps its letters.
+        assert_eq!(generate_slug("\u{1112}\u{1161}\u{11ab}.md"), generate_slug("\u{d55c}.md"));
+    }
+
     #[test]
     fn test_generate_slug_strips_extension() {
         assert_eq!(generate_slug("posts/hello.md"), "posts/hello");

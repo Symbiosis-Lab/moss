@@ -14,7 +14,7 @@ use std::collections::HashSet;
 /// upcoming, whatever their `date`.
 fn is_upcoming(doc: &ParsedDocument, now: chrono::NaiveDateTime) -> bool {
     let Some(ev) = &doc.event else { return false };
-    let last = ev.end.filter(|e| e.sort_key() > ev.start.sort_key()).unwrap_or(ev.start);
+    let last = ev.end.unwrap_or(ev.start);
     if last.is_all_day() {
         last.day_key() >= now.format("%Y-%m-%d").to_string()
     } else {
@@ -119,5 +119,20 @@ mod tests {
         let now = chrono::NaiveDate::from_ymd_opt(2026, 10, 8).unwrap().and_hms_opt(9, 0, 0).unwrap();
         assert!(is_upcoming(&all_day_event(EventTime::Date(2026, 10, 8)), now), "last day is today");
         assert!(!is_upcoming(&all_day_event(EventTime::Date(2026, 10, 7)), now), "last day was yesterday");
+    }
+
+    #[test]
+    fn timed_event_with_an_inclusive_end_day_stays_upcoming_that_evening() {
+        let doc = ParsedDocument {
+            event: EventFields::from_frontmatter(&moss_core::frontmatter_typed::FrontMatter {
+                start: Some("2026-10-08 14:00".into()),
+                end: Some("2026-10-08".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
+        assert!(is_upcoming(&doc, day.and_hms_opt(20, 0, 0).unwrap()));
+        assert!(!is_upcoming(&doc, day.succ_opt().unwrap().and_hms_opt(0, 0, 0).unwrap()));
     }
 }

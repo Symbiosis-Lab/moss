@@ -1,7 +1,7 @@
 /**
  * Render gate: the places explorer's camera — cover has no empty band at
- * any aspect ratio, a zoom round trip leaves the map crisp (the world
- * layer's compositing promotion is demoted again on settle), and the
+ * any aspect ratio, a zoom round trip leaves the map crisp without
+ * permanently promoting the world subtree, and the
  * zoom/reset controls follow their own rounded shape.
  *
  *   npx playwright test -c playwright/places-explorer-camera.config.ts

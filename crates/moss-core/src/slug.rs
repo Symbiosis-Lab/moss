@@ -9,6 +9,8 @@
 //! UID generation and duplicate-slug deduplication remain in moss-build
 //! pending a planned byte-slicing audit.
 
+use unicode_normalization::UnicodeNormalization;
+
 /// Converts a string to a URL-safe slug.
 ///
 /// - Lowercases ASCII
@@ -19,7 +21,11 @@
 /// - Caps at 100 chars
 /// - Falls back to `"untitled"` for empty results
 pub fn generate_slug(text: &str) -> String {
+    // Compose first (NFC): a decomposed name from macOS/iCloud would otherwise
+    // lose its combining marks and get a different URL than its composed twin.
     let result = text
+        .nfc()
+        .collect::<String>()
         .to_lowercase()
         .replace([' ', '_'], "-")
         .replace('&', "and")
@@ -59,22 +65,44 @@ pub fn normalize_separators(s: &str) -> String {
 /// Apply slug rules to every separator-delimited segment of a path.
 ///
 /// `News/Sub Section` → `news/sub-section`. Backslash separators are normalized
-/// first (`News\Sub Section` → the same result). Empty segments are skipped.
+/// first (`News\Sub Section` → the same result). Empty segments and segments
+/// made only of dots (`.`, `..`) are dropped, so the result can never climb
+/// out of the folder it is joined onto.
 pub fn slugify_path_segments(path: &str) -> String {
     if path.is_empty() {
         return String::new();
     }
     normalize_separators(path)
         .split('/')
-        .filter(|s| !s.is_empty())
+        .filter(|s| !s.trim_matches('.').is_empty())
         .map(generate_slug)
         .collect::<Vec<_>>()
         .join("/")
 }
 
+/// Slug a frontmatter `url:` value: [`slugify_path_segments`], or `untitled`
+/// when nothing survives (`..`, `/`).
+pub fn slugify_url_override(url: &str) -> String {
+    let slug = slugify_path_segments(url);
+    if slug.is_empty() { generate_slug("") } else { slug }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nfd_and_nfc_spellings_give_the_same_slug() {
+        assert_eq!(generate_slug("cafe\u{0301} au lait"), "caf\u{00e9}-au-lait");
+        assert_eq!(slugify_path_segments("Dossier-e\u{0301}te\u{0301}/x"), slugify_path_segments("Dossier-\u{e9}t\u{e9}/x"));
+    }
+
+    #[test]
+    fn path_segments_drop_dot_and_empty_parts() {
+        assert_eq!(slugify_path_segments("../a//./B"), "a/b");
+        assert_eq!(slugify_path_segments(".."), "");
+        assert_eq!(slugify_url_override(".."), "untitled");
+    }
 
     #[test]
     fn ascii_lowercased_and_hyphenated() {

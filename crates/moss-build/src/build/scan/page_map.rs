@@ -663,7 +663,7 @@ pub(super) fn page_map_entry(
             if dir.is_empty() {
                 None
             } else {
-                Some((dir.to_string(), crate::build::markdown::generate_slug(url_override)))
+                Some((dir.to_string(), moss_core::slug::slugify_url_override(url_override)))
             }
         })
     } else {

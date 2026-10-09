@@ -135,30 +135,28 @@ fn event_of(doc: &ParsedDocument, site_url: &SiteUrl, problems: &mut Problems) -
     if !doc.is_public_page() {
         return None;
     }
-    let start_raw = raw_str(doc, "start")?;
     let page = doc.source_path.clone().unwrap_or_else(|| doc.url_path.clone());
-    let Ok(start) = EventTime::parse(start_raw) else {
-        problems.bad_start.push(page);
+    let Some(ev) = doc.event.as_ref() else {
+        if raw_str(doc, "start").is_some() {
+            problems.bad_start.push(page);
+        }
         return None;
     };
-    let end = raw_str(doc, "end").and_then(|e| {
-        let parsed = EventTime::parse(e).ok().filter(|_| moss_core::event::check_end_after_start(start_raw, e).is_ok());
-        if parsed.is_none() {
-            problems.bad_end.push(page.clone());
-        }
-        parsed
-    });
-    let zone_name = raw_str(doc, "timezone");
+    let (start, end) = (ev.start, ev.end);
+    if raw_str(doc, "end").is_some() && end.is_none() {
+        problems.bad_end.push(page.clone());
+    }
+    let zone_name = ev.timezone.as_deref();
     let tzid = zone_name.filter(|z| zone::load(z).is_some()).map(str::to_string);
     if let (Some(name), None) = (zone_name, &tzid) {
         problems.bad_zone.push(format!("`{name}` ({page})"));
     }
-    let status = match raw_str(doc, "status") {
+    let status = match ev.status.as_deref().map(str::trim) {
         Some("cancelled") => Some("CANCELLED"),
         Some("postponed") => Some("TENTATIVE"),
         _ => None,
     };
-    let online = raw_str(doc, "online").and_then(|o| {
+    let online = ev.online.as_deref().map(str::trim).filter(|o| !o.is_empty()).and_then(|o| {
         let url = online_url(o);
         if url.is_none() {
             problems.bad_online.push(page.clone());

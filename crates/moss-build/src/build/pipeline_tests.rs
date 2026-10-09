@@ -6862,6 +6862,47 @@ fn the_sitemap_lists_static_pages_and_notebooks_but_never_stubs() {
     }
 }
 
+/// A raw `.html` file is copied through unparsed, so the sitemap has to read
+/// its own robots meta: a page that tells crawlers `noindex` is not listed,
+/// whichever way its meta tag is written. Markdown `listed: false` stays out.
+#[test]
+fn the_sitemap_leaves_out_html_pages_that_declare_noindex() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::write(test_dir.join("hidden.md"), "---\ntitle: Hidden\nlisted: false\n---\n\nHidden.\n").unwrap();
+    let pages = [
+        ("music.html", "<!doctype html><html><head><title>Music</title></head><body>m</body></html>"),
+        ("about.html", "<html><head><meta name=\"description\" content=\"about robots and noindex\"></head></html>"),
+        ("commented.html", "<html><head><!-- <meta name=\"robots\" content=\"noindex\"> --></head></html>"),
+        ("scales.html", "<!DOCTYPE html>\n<html><head>\n<META NAME=\"Robots\" CONTENT=\"NoIndex, nofollow\">\n</head></html>"),
+        ("closed.html", "<html><head><meta name=\"robots\" content=\"none\"></head></html>"),
+    ];
+    for (name, html) in pages {
+        fs::write(test_dir.join(name), html).unwrap();
+    }
+    // Only the first 8 KiB is read: a meta past it is not seen, one inside it is.
+    let noindex = "<meta name=\"robots\" content=\"noindex\">";
+    let padded = |pad: usize| format!("<html><head>{}{noindex}</head></html>", " ".repeat(pad));
+    fs::write(test_dir.join("too-late.html"), padded(9000)).unwrap();
+    fs::write(test_dir.join("just-inside.html"), padded(8000)).unwrap();
+    fs::create_dir_all(test_dir.join("share/abc123")).unwrap();
+    fs::write(
+        test_dir.join("share/abc123/index.html"),
+        "<html><head><meta content='noindex' name='robots'></head><body>x</body></html>",
+    )
+    .unwrap();
+
+    build_test_at_site_url(folder_path).expect("build");
+    let sitemap = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/sitemap.xml")).unwrap();
+    for kept in ["music", "about", "commented", "too-late"] {
+        assert!(sitemap.contains(&format!("/{kept}</loc>")), "the sitemap must list {kept}\n{sitemap}");
+    }
+    for out in ["scales", "closed", "just-inside", "share/abc123/", "hidden/"] {
+        assert!(!sitemap.contains(&format!("/{out}</loc>")), "the sitemap must not list {out}\n{sitemap}");
+    }
+}
+
 /// A warm build of an unchanged site writes no page to the stage: the render
 /// leaves its pages in memory, the slot pass is their one writer, and it skips
 /// a stage file its staged-link record vouches already holds the page's final
@@ -7269,13 +7310,33 @@ fn event_pages_and_calendar_folders_declare_a_calendar_alternate_in_the_head() {
 }
 
 #[test]
-fn an_edited_event_gets_a_different_sequence() {
-    let seq = |title: &str| {
+fn event_exports_do_not_invent_a_revision_sequence_from_content() {
+    for title in ["Same", "Renamed"] {
         let (dir, _c) = event_site(&[("A.md", &format!("title: {title}\nuid: aaaa0001\nstart: 2026-11-01\n"))]);
-        assert_valid_ics(&staged(&dir, "events/a/event.ics")).into_iter().find(|l| l.starts_with("SEQUENCE:")).unwrap()
-    };
-    assert_eq!(seq("Same"), seq("Same"));
-    assert_ne!(seq("Same"), seq("Renamed"));
+        for path in ["events/a/event.ics", "events/calendar.ics"] {
+            let lines = assert_valid_ics(&staged(&dir, path));
+            assert!(lines.contains(&"UID:aaaa0001@example.test".to_string()));
+            assert!(lines.contains(&format!("SUMMARY:{title}")));
+            assert!(!lines.iter().any(|l| l.starts_with("SEQUENCE:")), "a content hash is not an ordered revision: {lines:?}");
+        }
+    }
+}
+
+#[test]
+fn invalid_event_ends_are_omitted_from_both_structured_data_and_calendars() {
+    for end in ["2026-11-09 13:00", "2026-11-09", "next friday"] {
+        let (dir, _c) = event_site(&[("A.md", &format!("title: A\nuid: aaaa0001\nstart: 2026-11-10 14:00\nend: {end}\ntimezone: America/New_York\n"))]);
+        let html = staged(&dir, "events/a/index.html");
+        let json = html.split("<script type=\"application/ld+json\">").skip(1)
+            .map(|s| serde_json::from_str::<serde_json::Value>(s.split("</script>").next().unwrap()).unwrap())
+            .find(|v| v["@type"] == "Event").expect("Event structured data");
+        assert_eq!(json["startDate"], "2026-11-10T14:00-05:00");
+        assert!(json.get("endDate").is_none(), "invalid end {end} reached structured data: {json}");
+        for path in ["events/a/event.ics", "events/calendar.ics"] {
+            let lines = assert_valid_ics(&staged(&dir, path));
+            assert!(!lines.iter().any(|l| l.starts_with("DTEND")), "invalid end {end}: {lines:?}");
+        }
+    }
 }
 
 /// A file the author keeps in the site folder at a generated calendar address is
