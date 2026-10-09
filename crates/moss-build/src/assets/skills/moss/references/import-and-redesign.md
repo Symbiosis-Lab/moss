@@ -60,11 +60,14 @@ Choose the candidates yourself: eight to twelve of the best sites of the same ki
 Strongest tier, with everything above in hand. Write `<Site> design/vision.md`:
 
 - **The direction in one sentence:** the original's own aesthetic, doubled down. The owner chose that direction, and the redesign makes it more itself rather than swapping it for a fashionable one.
+- **The original's signature elements:** what a returning visitor recognises first (a lead photograph, a mark, a colour, a way of setting dates). The vision keeps each one, refined, unless it says why not; a redesign that drops the thing people know the site by has changed its direction, not doubled down on it.
 - **Three to five moves that amplify it**, and what to drop.
 - **The best practice it keeps whatever the direction:** content before decoration; every top task one step from the home page; real text, never text in images; WCAG 2.2 AA contrast and visible keyboard focus; readable at phone width; light pages (few font files, images sized for their slot); and dark mode, if the design has one, designed rather than inverted.
 - **The fate of every lost widget:** a link to the hosted page, an embed, a contact route, or nothing, with the reason.
 
 Put the system (type scale, palette for light and dark, spacing, image treatment, and the layout of each kind of page) in `<Site> design/DESIGN.md`, in the DESIGN.md format listed under [Design references](#design-references): tokens in its front matter, rationale in prose. Its tokens map onto moss's `--moss-*` tokens in step 5, and its linter checks contrast.
+
+End `DESIGN.md` with a **decision register**: every decision the build must keep, numbered (S1, R1, L1…) and each stated so a screenshot can confirm it. Include the decisions that live only in the prototype's stylesheet, which are the easiest to lose: how rules group content (which run edge to edge to separate chapters and which stay inset to separate items), what aligns to what, which rhythm separates sections. After the prototype is built, read its stylesheet once more for any such decision the register lacks.
 
 Then build the vision as a hand-written static prototype in `<Site> design/vision/`: the home page, one listing and one item page, at full fidelity, with real content. It is the target and is not constrained by moss. Keep it to plain HTML and CSS so its rules can move into the theme. First write its shared stylesheet from DESIGN.md yourself, or have one task do it from DESIGN.md alone. Then give each page to its own small task, with the stylesheet, the page's structure from `vision.md` and the content file it draws from. Look at every screenshot yourself before the prototype becomes the target.
 
@@ -88,7 +91,7 @@ What keeps the surface friendly:
 
 ## 6. Iterate toward the vision
 
-Each round, one small task screenshots the moss build and the prototype at the same widths. Then one small task per page answers a checklist you wrote from `vision.md`: named yes/no questions such as "does the next concert show its date in large numerals?" and "is the nav one line at 390 px?", each answered with the screenshot region as evidence. Collect every "no" in `<Site> design/gaps.md`, and give each gap one home yourself:
+Each round, one small task screenshots the moss build and the prototype at the same widths. Then one small task per page answers the decision register as a checklist, one yes/no question per decision, plus any questions you add from `vision.md`, such as "does the next concert show its date in large numerals?" and "is the nav one line at 390 px?", each answered with the screenshot region as evidence. Measure what can be measured rather than judging it by eye: a rule's start and end pixels, a column's left edge, `scrollWidth` at phone width. "Close to the prototype" is not an answer; a page can look close while a register decision is gone. Collect every "no" in `<Site> design/gaps.md`, and give each gap one home yourself:
 
 | The gap | Its fix |
 |---|---|
