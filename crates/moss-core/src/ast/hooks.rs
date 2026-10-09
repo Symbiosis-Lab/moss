@@ -280,9 +280,13 @@ pub trait RenderHooks {
                     out.push_str(&item_style);
                     out.push_str(r#"><a class="moss-gallery-link" href=""#);
                     out.push_str(&escape_attr(&src_str));
-                    out.push_str(r#"" data-title=""#);
-                    out.push_str(&escape_attr(&item.alt));
                     out.push('"');
+                    // `![alt|](…)` has no visible title, so the viewer shows no caption.
+                    if !item.alt_only {
+                        out.push_str(r#" data-title=""#);
+                        out.push_str(&escape_attr(&item.alt));
+                        out.push('"');
+                    }
                     // Without alt text the link has no name of its own, so it
                     // is announced as "link" alone.
                     if item.alt.is_empty() {
@@ -1439,6 +1443,7 @@ mod tests {
             items: vec![GalleryItem {
                 src: Url::resolved("a.jpg", UrlKind::Asset),
                 alt: String::new(),
+                alt_only: false,
                 attrs: String::new(),
             }],
             ..Default::default()
@@ -1472,6 +1477,7 @@ mod tests {
             items: vec![GalleryItem {
                 src: Url::resolved("a.jpg", UrlKind::Asset),
                 alt: String::new(),
+                alt_only: false,
                 attrs: String::new(),
             }],
             ..Default::default()
@@ -1504,6 +1510,7 @@ mod tests {
         let item = |src: &str| GalleryItem {
             src: Url::resolved(src, UrlKind::Asset),
             alt: String::new(),
+            alt_only: false,
             attrs: String::new(),
         };
         let sc = Shortcode::Gallery(GalleryShortcode {
@@ -1533,6 +1540,7 @@ mod tests {
             items: vec![GalleryItem {
                 src: Url::resolved("missing.jpg", UrlKind::Asset),
                 alt: String::new(),
+                alt_only: false,
                 attrs: String::new(),
             }],
             ..Default::default()
@@ -1555,6 +1563,7 @@ mod tests {
             items: vec![GalleryItem {
                 src: Url::resolved("flat.jpg", UrlKind::Asset),
                 alt: String::new(),
+                alt_only: false,
                 attrs: String::new(),
             }],
             ..Default::default()
@@ -1573,6 +1582,7 @@ mod tests {
             items: vec![GalleryItem {
                 src: Url::resolved("a.jpg", UrlKind::Asset),
                 alt: String::new(),
+                alt_only: false,
                 attrs: String::new(),
             }],
             ..Default::default()
@@ -1582,6 +1592,39 @@ mod tests {
         assert!(!out.contains("data-layout"), "got: {out}");
         assert!(!out.contains("--ar"), "got: {out}");
         assert!(out.contains(r#"<div class="moss-gallery-item"><a class="moss-gallery-link""#), "got: {out}");
+    }
+
+    #[test]
+    fn gallery_alt_only_item_has_no_data_title_and_keeps_its_alt() {
+        let sc = Shortcode::Gallery(GalleryShortcode {
+            items: vec![GalleryItem {
+                src: Url::resolved("a.jpg", UrlKind::Asset),
+                alt: "Two dancers".to_string(),
+                alt_only: true,
+                attrs: String::new(),
+            }],
+            ..Default::default()
+        });
+        let html = render_shortcode_html(&sc);
+        assert!(!html.contains("data-title"), "got: {html}");
+        assert!(!html.contains("Open image"), "got: {html}");
+        assert!(html.contains(r#"alt="Two dancers""#), "got: {html}");
+    }
+
+    #[test]
+    fn gallery_plain_alt_item_keeps_data_title_and_no_fallback_label() {
+        let sc = Shortcode::Gallery(GalleryShortcode {
+            items: vec![GalleryItem {
+                src: Url::resolved("a.jpg", UrlKind::Asset),
+                alt: "Two dancers".to_string(),
+                alt_only: false,
+                attrs: String::new(),
+            }],
+            ..Default::default()
+        });
+        let html = render_shortcode_html(&sc);
+        assert!(html.contains(r#"data-title="Two dancers""#), "got: {html}");
+        assert!(!html.contains("aria-label"), "got: {html}");
     }
 
     #[test]
@@ -1646,6 +1689,7 @@ mod tests {
             items: vec![GalleryItem {
                 src: Url::resolved(src, UrlKind::Asset),
                 alt: "photo".to_string(),
+                alt_only: false,
                 attrs: String::new(),
             }],
             ..Default::default()

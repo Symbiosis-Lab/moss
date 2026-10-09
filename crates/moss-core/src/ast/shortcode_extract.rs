@@ -1049,9 +1049,14 @@ fn parse_gallery_body(args: &str, body: &str) -> (GalleryShortcode, Vec<String>)
     let mut items: Vec<GalleryItem> = Vec::new();
     for line in body.lines() {
         if let Some(it) = gallery_item_span(line) {
+            let (alt, alt_only) = match super::parser::alt_only_text(&it.alt) {
+                Some(head) => (head.to_string(), true),
+                None => (it.alt, false),
+            };
             items.push(GalleryItem {
                 src: Url::unresolved(it.path),
-                alt: it.alt,
+                alt,
+                alt_only,
                 attrs: it.attrs,
             });
         }

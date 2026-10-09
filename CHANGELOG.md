@@ -7,7 +7,7 @@ All notable changes to moss will be documented here.
 ### New
 
 - A `:::hero` with slide captions and words no longer draws them over each other: the caption sits directly above the words (side by side with `align=end` on a wide screen), and in a stacked phone hero it is a credit line under the picture. The pause button stays at the bottom end when captions are present. `--moss-hero-max-height` now also sets the height of a `mobile=overlay` hero on a phone, so `100svh` fills the first screen.
-- An image's bracket text ending in a bare `|` is its alt text only: `![Two dancers face each other on a pink stage|](x.jpg)` renders the image with that alt text and no figcaption, so alt text can be given without a visible caption. Wikilink embeds (`![[x.jpg|…]]`) are unchanged.
+- An image's bracket text ending in a bare `|` is its alt text only: `![Two dancers face each other on a pink stage|](x.jpg)` renders the image with that alt text and no figcaption, so alt text can be given without a visible caption. Wikilink embeds (`![[x.jpg|…]]`) are unchanged. The same form works inside `:::gallery`, where it used to leak the `|` into the alt text and the viewer caption.
 - `:::hero {header=over}` on a page's opening hero lays the site header over the photo: the header is transparent with light type, and the hero starts at the top of the page under it. Other heroes ignore the option.
 - `:::gallery rows` lays a gallery out as justified rows: each row fills the width and every photo keeps its proportions, with `--moss-gallery-row-height` setting the row height.
 - `breadcrumb: label` on the home page shows each page's parent section as a small link above its title, in place of the header trail.

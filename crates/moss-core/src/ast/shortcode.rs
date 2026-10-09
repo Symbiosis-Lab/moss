@@ -142,6 +142,11 @@ pub struct GalleryItem {
     pub src: Url,
     /// Alt text (from `![alt](...)` syntax). Empty if author used bare path.
     pub alt: String,
+    /// `![alt|](...)`: the alt text is the whole story, so the item has no
+    /// visible title in the full-screen viewer. Without this flag the viewer
+    /// would caption the item with its alt text.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub alt_only: bool,
     /// Pipe-suffix media attributes verbatim (e.g. "cover top",
     /// "1.5:1 contain"). Empty if no pipe in the source.
     /// The renderer parses this via `moss_core::media::parse_media_attrs`.
@@ -607,11 +612,13 @@ mod tests {
                 GalleryItem {
                     src: Url::unresolved("a.jpg"),
                     alt: "A".to_string(),
+                    alt_only: false,
                     attrs: String::new(),
                 },
                 GalleryItem {
                     src: Url::unresolved("b.jpg"),
                     alt: "B".to_string(),
+                    alt_only: false,
                     attrs: "cover top".to_string(),
                 },
             ],
@@ -645,6 +652,7 @@ mod tests {
             items: vec![GalleryItem {
                 src: Url::unresolved("p.png"),
                 alt: "Photo".to_string(),
+                alt_only: false,
                 attrs: "1:1 contain".to_string(),
             }],
             width: None,

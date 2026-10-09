@@ -1029,15 +1029,28 @@ fn strip_alt_only_pipe(inlines: &mut [Inline]) -> bool {
     let (Some((alt, false)), None) = (images.next(), images.next()) else {
         return false;
     };
-    let Some(head) = alt.trim_end().strip_suffix('|') else {
+    let Some(head) = alt_only_text(alt) else {
         return false;
     };
-    let head = head.trim().to_string();
-    if !crate::media::extract_placement_from_alias(&head).0.is_empty() {
-        return false;
-    }
-    *alt = head;
+    *alt = head.to_string();
     true
+}
+
+/// The alt text a bracket text means when it ends in a bare `|`: `A lake|`
+/// is `A lake`. `None` when there is no trailing pipe, when the pipe is
+/// escaped (`\|`), or when the text before it is a placement (`55%|`), which
+/// is a media attribute and not alt text. Shared by the standalone-image
+/// parser and the `:::gallery` line parser, so both read the form one way.
+pub(crate) fn alt_only_text(bracket_text: &str) -> Option<&str> {
+    let head = bracket_text.trim_end().strip_suffix('|')?;
+    if head.ends_with('\\') {
+        return None;
+    }
+    let head = head.trim();
+    if !crate::media::extract_placement_from_alias(head).0.is_empty() {
+        return None;
+    }
+    Some(head)
 }
 
 /// Whether the image's trailing pipe was written `\|`. pulldown-cmark hands an

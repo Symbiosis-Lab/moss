@@ -666,6 +666,31 @@ fn extracts_gallery_with_markdown_image_syntax() {
 }
 
 #[test]
+fn gallery_alt_only_pipe_is_stripped_from_the_alt_text() {
+    let md = ":::gallery\n![A lake at dusk|](p.jpg)\n![A plain alt](q.jpg)\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Gallery(args) => {
+            assert_eq!(args.items[0].alt, "A lake at dusk");
+            assert!(args.items[0].alt_only);
+            assert_eq!(args.items[1].alt, "A plain alt");
+            assert!(!args.items[1].alt_only);
+        }
+        _ => panic!("expected Gallery"),
+    }
+}
+
+#[test]
+fn gallery_placement_before_a_pipe_stays_a_media_attribute() {
+    let md = ":::gallery\n![55%|](p.jpg)\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Gallery(args) => assert!(!args.items[0].alt_only),
+        _ => panic!("expected Gallery"),
+    }
+}
+
+#[test]
 fn extracts_gallery_with_pipe_attrs() {
     let md = ":::gallery\nphoto.jpg|cover top\n:::\n";
     let result = extract_shortcodes(md);

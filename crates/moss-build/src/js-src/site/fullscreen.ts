@@ -19,6 +19,7 @@ interface MediaItem {
   type: "image" | "video" | "interactive";
   src: string;
   title: string;
+  alt: string;
   articleUrl: string;
 }
 
@@ -47,10 +48,15 @@ interface MediaItem {
       groups.set(key, group);
       const index = group.items.length;
       group.triggers.push(trigger);
+      // The viewer image's alt comes from the thumbnail's alt. An alt-only
+      // gallery item has no title, so its caption stays empty while its
+      // picture keeps the description.
+      const thumbAlt = trigger.querySelector("img")?.alt;
       group.items.push({
         type: (trigger.dataset.type as MediaItem["type"]) || "image",
         src: trigger.dataset.src || (trigger as HTMLAnchorElement).href || "",
         title: trigger.dataset.title || "",
+        alt: thumbAlt || trigger.dataset.title || "",
         articleUrl: trigger.dataset.article || "",
       });
 
@@ -114,12 +120,16 @@ interface MediaItem {
       default:
         if (image) {
           image.src = item.src;
-          image.alt = item.title;
+          image.alt = item.alt;
           image.hidden = false;
         }
     }
 
-    if (titleEl) titleEl.textContent = item.title;
+    if (titleEl) {
+      titleEl.textContent = item.title;
+      // An alt-only gallery item has no title; an empty <p> would still leave its margin.
+      titleEl.hidden = item.title === "";
+    }
     if (articleLink) {
       articleLink.href = item.articleUrl;
       articleLink.hidden = !item.articleUrl;
