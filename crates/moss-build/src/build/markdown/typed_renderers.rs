@@ -252,16 +252,31 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
         extra_hrefs.truncate(5);
     }
 
+    // An all-video hero is a sequence: each slide plays once (see
+    // `synthesize_sequence_video_html`), and nothing rotates on a timer.
+    let sequence = !extra_hrefs.is_empty()
+        && resolved_image.as_deref().is_some_and(hero_href_is_video)
+        && extra_hrefs.iter().all(|h| hero_href_is_video(h));
+
     let img_part = match (&resolved_image, media_lookup) {
         (Some(href), _) if hero_href_is_video(href) => {
             let empty_snapshot = moss_core::asset_snapshot::AssetSnapshot::new();
             let assets = media_assets.unwrap_or(&empty_snapshot);
-            moss_core::render::video::synthesize_video_html(
-                &hero_video_params(),
-                &moss_core::media::Placement::default(),
-                href,
-                assets,
-            )
+            if sequence {
+                moss_core::render::video::synthesize_sequence_video_html(
+                    &moss_core::media::Placement::default(),
+                    href,
+                    assets,
+                    true,
+                )
+            } else {
+                moss_core::render::video::synthesize_video_html(
+                    &hero_video_params(),
+                    &moss_core::media::Placement::default(),
+                    href,
+                    assets,
+                )
+            }
         }
         (Some(href), Some(_lookup)) => {
             // Route through synthesizer: gives dims, LQIP, optional
@@ -332,7 +347,26 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
 
     // Multi-image hero: wrap every slide (primary first) and mark the
     // section with data-slides so site.css drives the crossfade. A single
-    // image keeps today's exact byte shape.
+    // image keeps today's exact byte shape. An all-video hero is a sequence
+    // instead: no timed rotation, and a script advances it as each video ends.
+    let slide_count = 1 + extra_hrefs.len();
+    let captions: Vec<(usize, &String)> = args
+        .slide_captions
+        .iter()
+        .take(slide_count)
+        .enumerate()
+        .filter(|(_, c)| !c.trim().is_empty())
+        .collect();
+    // Slide indices are emitted only when something addresses a slide by
+    // index (a sequence, or a caption), so other heroes keep their bytes.
+    let indexed = sequence || !captions.is_empty();
+    let slide_attr = |i: usize| {
+        if indexed {
+            format!(r#" data-slide="{i}""#)
+        } else {
+            String::new()
+        }
+    };
     let (img_part, slides_attr) = if extra_hrefs.is_empty() || resolved_image.is_none() {
         (img_part, String::new())
     } else {
@@ -340,7 +374,8 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
         // fill IT (the image box), never the whole section — which is what
         // keeps the mobile stacked layout's text below the image safe.
         let mut slides = format!(
-            r#"<div class="moss-hero-slides"><div class="moss-hero-slide">{img_part}</div>"#
+            r#"<div class="moss-hero-slides"><div class="moss-hero-slide"{}>{img_part}</div>"#,
+            slide_attr(0)
         );
         // The primary's frame-level style (object-fit/position pipe attrs)
         // applies to every IMAGE slide so the crossfade set renders
@@ -351,17 +386,29 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
         } else {
             Some(style.trim_start().to_string())
         };
-        for href in &extra_hrefs {
+        for (i, href) in extra_hrefs.iter().enumerate() {
             if hero_href_is_video(href) {
                 let empty_snapshot = moss_core::asset_snapshot::AssetSnapshot::new();
                 let assets = media_assets.unwrap_or(&empty_snapshot);
-                let synth = moss_core::render::video::synthesize_video_html(
-                    &hero_video_params(),
-                    &moss_core::media::Placement::default(),
-                    href,
-                    assets,
-                );
-                slides.push_str(&format!(r#"<div class="moss-hero-slide">{synth}</div>"#));
+                let synth = if sequence {
+                    moss_core::render::video::synthesize_sequence_video_html(
+                        &moss_core::media::Placement::default(),
+                        href,
+                        assets,
+                        false,
+                    )
+                } else {
+                    moss_core::render::video::synthesize_video_html(
+                        &hero_video_params(),
+                        &moss_core::media::Placement::default(),
+                        href,
+                        assets,
+                    )
+                };
+                slides.push_str(&format!(
+                    r#"<div class="moss-hero-slide"{}>{synth}</div>"#,
+                    slide_attr(i + 1)
+                ));
                 continue;
             }
             let opts = moss_core::render::image::ImageRenderOptions {
@@ -391,17 +438,47 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
                     )
                 }
             };
-            slides.push_str(&format!(r#"<div class="moss-hero-slide">{synth}</div>"#));
+            slides.push_str(&format!(
+                r#"<div class="moss-hero-slide"{}>{synth}</div>"#,
+                slide_attr(i + 1)
+            ));
         }
         slides.push_str("</div>");
         // Moving content needs a pause control (WCAG 2.2.2). A checkbox
         // keeps it script-free: site.css reads `:checked` to stop the slides.
-        slides.push_str(&format!(
-            r#"<label class="moss-hero-pause"><input type="checkbox" aria-label="{}"><span aria-hidden="true"></span></label>"#,
-            html_escape(crate::i18n::t(lang, "hero_pause"))
-        ));
-        (slides, format!(r#" data-slides="{}""#, extra_hrefs.len() + 1))
+        // A sequence has no timer for the checkbox to stop; its script adds
+        // the one control the sequence needs, so none is emitted here.
+        if !sequence {
+            slides.push_str(&format!(
+                r#"<label class="moss-hero-pause"><input type="checkbox" aria-label="{}"><span aria-hidden="true"></span></label>"#,
+                html_escape(crate::i18n::t(lang, "hero_pause"))
+            ));
+        }
+        let slides_attr = if sequence {
+            " data-sequence".to_string()
+        } else {
+            format!(r#" data-slides="{}""#, extra_hrefs.len() + 1)
+        };
+        (slides, slides_attr)
     };
+
+    // Slide captions sit after the slides, one per slide that has one. The
+    // container is shared, so the stylesheet can stack them in one grid cell.
+    let captions_html = if captions.is_empty() {
+        String::new()
+    } else {
+        let items: String = captions
+            .iter()
+            .map(|(i, text)| {
+                format!(
+                    r#"<p class="moss-hero-caption" data-slide="{i}">{}</p>"#,
+                    crate::build::render::credits::render_display_row(text)
+                )
+            })
+            .collect();
+        format!(r#"<div class="moss-hero-captions" aria-live="polite">{items}</div>"#)
+    };
+    let img_part = format!("{img_part}{captions_html}");
 
     // A caption goes BELOW the hero, as a sibling of the `<section>`, never
     // inside it. Two reasons, both structural rather than stylistic. The
@@ -539,6 +616,87 @@ mod tests {
         assert_eq!(html.matches(r#"<div class="moss-hero-slides">"#).count(), 1, "got: {html}");
         assert_eq!(html.matches(r#"<div class="moss-hero-slide">"#).count(), 3, "got: {html}");
         assert!(html.contains(r#"src="a.jpg""#) && html.contains(r#"src="c.jpg""#), "got: {html}");
+    }
+
+    #[test]
+    fn hero_slide_captions_render_per_slide_with_its_index() {
+        let args = moss_core::ast::HeroShortcode {
+            image: Some(moss_core::ast::Url::resolved("a.jpg", moss_core::ast::UrlKind::Asset)),
+            extra_images: vec![
+                moss_core::ast::Url::resolved("b.jpg", moss_core::ast::UrlKind::Asset),
+                moss_core::ast::Url::resolved("c.jpg", moss_core::ast::UrlKind::Asset),
+            ],
+            slide_captions: vec!["*Title* · Studio · 2024".to_string(), String::new(), "Second".to_string()],
+            ..Default::default()
+        };
+        let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None, crate::i18n::Language::En);
+        assert!(
+            html.contains(r#"<div class="moss-hero-captions" aria-live="polite"><p class="moss-hero-caption" data-slide="0"><em>Title</em> · Studio · 2024</p><p class="moss-hero-caption" data-slide="2">Second</p></div>"#),
+            "got: {html}"
+        );
+        assert!(!html.contains(r#"<p class="moss-hero-caption" data-slide="1">"#), "got: {html}");
+        assert!(html.contains(r#"<div class="moss-hero-slide" data-slide="2">"#), "got: {html}");
+        assert!(!html.contains(r#"data-sequence"#), "got: {html}");
+    }
+
+    #[test]
+    fn hero_without_slide_captions_is_unchanged() {
+        let args = moss_core::ast::HeroShortcode {
+            image: Some(moss_core::ast::Url::resolved("a.jpg", moss_core::ast::UrlKind::Asset)),
+            extra_images: vec![moss_core::ast::Url::resolved("b.jpg", moss_core::ast::UrlKind::Asset)],
+            ..Default::default()
+        };
+        let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None, crate::i18n::Language::En);
+        assert!(!html.contains("moss-hero-captions"), "got: {html}");
+        assert!(!html.contains("data-slide="), "got: {html}");
+        assert!(html.contains(r#"<div class="moss-hero-slide">"#), "got: {html}");
+    }
+
+    #[test]
+    fn all_video_hero_is_a_sequence_with_no_rotation() {
+        let args = moss_core::ast::HeroShortcode {
+            image: Some(moss_core::ast::Url::resolved("a.mp4", moss_core::ast::UrlKind::Asset)),
+            extra_images: vec![moss_core::ast::Url::resolved("b.mp4", moss_core::ast::UrlKind::Asset)],
+            slide_captions: vec!["One".to_string(), "Two".to_string()],
+            ..Default::default()
+        };
+        let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None, crate::i18n::Language::En);
+        assert!(html.contains(" data-sequence>"), "got: {html}");
+        assert!(!html.contains("data-slides"), "got: {html}");
+        assert!(!html.contains("animation"), "got: {html}");
+        assert!(!html.contains("moss-hero-pause"), "a sequence has one pause control, the video's: {html}");
+        assert!(html.contains(r#"<div class="moss-hero-slide" data-slide="1">"#), "got: {html}");
+        assert!(html.contains(r#"data-slide="1">Two</p>"#), "got: {html}");
+    }
+
+    #[test]
+    fn sequence_videos_play_once_and_only_the_first_autoplays() {
+        let args = moss_core::ast::HeroShortcode {
+            image: Some(moss_core::ast::Url::resolved("a.mp4", moss_core::ast::UrlKind::Asset)),
+            extra_images: vec![moss_core::ast::Url::resolved("b.mp4", moss_core::ast::UrlKind::Asset)],
+            ..Default::default()
+        };
+        let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None, crate::i18n::Language::En);
+        assert!(!html.contains("loop"), "got: {html}");
+        assert_eq!(html.matches(" autoplay").count(), 1, "got: {html}");
+        assert!(html.contains(r#"muted playsinline preload="none""#), "got: {html}");
+    }
+
+    #[test]
+    fn image_rotation_captions_share_their_slides_index() {
+        let args = moss_core::ast::HeroShortcode {
+            image: Some(moss_core::ast::Url::resolved("a.jpg", moss_core::ast::UrlKind::Asset)),
+            extra_images: vec![
+                moss_core::ast::Url::resolved("b.jpg", moss_core::ast::UrlKind::Asset),
+                moss_core::ast::Url::resolved("c.jpg", moss_core::ast::UrlKind::Asset),
+            ],
+            slide_captions: vec!["One".to_string(), String::new(), "Three".to_string()],
+            ..Default::default()
+        };
+        let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None, crate::i18n::Language::En);
+        assert!(html.contains(r#" data-slides="3""#), "got: {html}");
+        assert!(html.contains(r#"<div class="moss-hero-slide" data-slide="0">"#), "got: {html}");
+        assert!(html.contains(r#"<p class="moss-hero-caption" data-slide="2">Three</p>"#), "got: {html}");
     }
 
     #[test]

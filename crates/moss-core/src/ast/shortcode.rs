@@ -261,6 +261,12 @@ pub struct HeroShortcode {
     /// don't).
     /// Empty for `image=`-attribute and directive-line heroes.
     pub extra_images: Vec<Url>,
+    /// Caption of each slide, in slide order (`image`, then `extra_images`):
+    /// the slide embed's pipe text when that text is not media attributes.
+    /// Empty when no slide carries one, and for `image=` and directive-line
+    /// heroes, whose pipe is the frame's attributes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slide_captions: Vec<String>,
     /// Pipe-suffix media attributes verbatim (e.g. "cover top",
     /// "1.5:1 contain"). Empty if no pipe in the source.
     pub attrs: String,

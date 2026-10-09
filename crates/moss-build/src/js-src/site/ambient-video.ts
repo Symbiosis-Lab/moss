@@ -92,8 +92,104 @@ function wrapAndInit(video: HTMLVideoElement): void {
  * times (idempotent wrapper guard).
  */
 export function initAmbientVideos(): void {
+  initHeroSequences();
   const videos = document.querySelectorAll<HTMLVideoElement>("video[data-loop]");
   if (!videos.length) return;
 
   videos.forEach(wrapAndInit);
+}
+
+/**
+ * Hero sequences: an all-video hero (`.moss-hero[data-sequence]`) plays its
+ * slides one after another. Each video plays once. When it ends, the hero's
+ * `data-active` moves to the next slide (wrapping) and that video starts; the
+ * stylesheet shows the slide and caption whose `data-slide` matches it.
+ *
+ * The pause checkbox (`.moss-hero-pause input`) stops the advance while it is
+ * checked: the current video pauses, and unchecking resumes it. Under reduced
+ * motion nothing starts, and the stylesheet pins slide 0 and its caption.
+ */
+const heroSequenceWired = new WeakSet<HTMLElement>();
+
+export function initHeroSequences(root: ParentNode = document): void {
+  root
+    .querySelectorAll<HTMLElement>(".moss-hero[data-sequence]")
+    .forEach(wireHeroSequence);
+}
+
+function wireHeroSequence(hero: HTMLElement): void {
+  if (heroSequenceWired.has(hero)) return;
+  heroSequenceWired.add(hero);
+
+  const videos = Array.from(
+    hero.querySelectorAll<HTMLElement>(".moss-hero-slide[data-slide]"),
+  )
+    .sort((a, b) => Number(a.dataset.slide) - Number(b.dataset.slide))
+    .map((slide) => slide.querySelector("video"))
+    .filter((video): video is HTMLVideoElement => video !== null);
+  if (videos.length < 2) return;
+
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    for (const video of videos) {
+      video.removeAttribute("autoplay");
+      video.pause();
+    }
+    return;
+  }
+
+  const current = (): number => {
+    const index = Number(hero.dataset.active ?? "0");
+    return Number.isInteger(index) && index >= 0 && index < videos.length ? index : 0;
+  };
+
+  const start = (index: number): void => {
+    videos[index].preload = "auto";
+    // A rejected play() (autoplay blocked) leaves this slide's poster showing.
+    void Promise.resolve(videos[index].play()).catch(() => {});
+  };
+
+  const advance = (from: number): void => {
+    const next = (from + 1) % videos.length;
+    videos[from].pause();
+    videos[from].currentTime = 0;
+    hero.dataset.active = String(next);
+    start(next);
+  };
+
+  const pause = sequencePauseButton(hero);
+  let paused = false;
+
+  videos.forEach((video, index) => {
+    video.addEventListener("ended", () => {
+      if (current() !== index || paused) return;
+      advance(index);
+    });
+  });
+
+  pause.addEventListener("click", () => {
+    paused = !paused;
+    pause.setAttribute("aria-pressed", String(paused));
+    pause.setAttribute("aria-label", paused ? PLAY_SEQUENCE_LABEL : PAUSE_SEQUENCE_LABEL);
+    pause.textContent = paused ? PLAY_ICON : PAUSE_ICON;
+    if (paused) {
+      videos[current()].pause();
+    } else {
+      start(current());
+    }
+  });
+}
+
+const PAUSE_SEQUENCE_LABEL = "Pause the videos";
+const PLAY_SEQUENCE_LABEL = "Play the videos";
+
+/** The sequence's one pause control: a button the script adds, styled as `.moss-hero-pause`. */
+function sequencePauseButton(hero: HTMLElement): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "moss-hero-pause";
+  button.setAttribute("aria-label", PAUSE_SEQUENCE_LABEL);
+  button.setAttribute("aria-pressed", "false");
+  button.textContent = PAUSE_ICON;
+  hero.appendChild(button);
+  return button;
 }

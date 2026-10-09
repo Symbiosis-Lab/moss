@@ -1,0 +1,144 @@
+/**
+ * Tests for the all-video hero sequence driver in ambient-video.ts.
+ *
+ * Covers:
+ * - `ended` on the active slide moves data-active to the next slide and starts it
+ * - the last slide wraps to the first
+ * - `ended` on a slide that is not active does nothing
+ * - the pause checkbox stops the advance; unchecking resumes the current slide
+ * - reduced motion removes autoplay and starts nothing
+ * - a rejected play() is swallowed and does not advance
+ */
+
+import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
+import { initHeroSequences } from "../ambient-video";
+
+function mockMatchMedia(reducedMotion: boolean) {
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches:
+        query === "(prefers-reduced-motion: reduce)" ? reducedMotion : false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
+}
+
+function buildSequence(count: number) {
+  const slides = Array.from(
+    { length: count },
+    (_, i) =>
+      `<div class="moss-hero-slide" data-slide="${i}"><video autoplay muted playsinline preload="metadata"></video></div>`,
+  ).join("");
+  document.body.innerHTML =
+    `<section class="moss-hero" data-sequence>${slides}` +
+    `</section>`;
+  const hero = document.querySelector<HTMLElement>(".moss-hero")!;
+  const videos = Array.from(hero.querySelectorAll<HTMLVideoElement>("video"));
+  for (const video of videos) {
+    video.play = vi.fn().mockResolvedValue(undefined);
+    video.pause = vi.fn();
+  }
+  return { hero, videos };
+}
+
+function pauseControl(hero: HTMLElement): HTMLButtonElement {
+  return hero.querySelector<HTMLButtonElement>(".moss-hero-pause")!;
+}
+
+function ended(video: HTMLVideoElement) {
+  video.dispatchEvent(new Event("ended"));
+}
+
+describe("initHeroSequences — normal motion", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+    mockMatchMedia(false);
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = "";
+    vi.restoreAllMocks();
+  });
+
+  test("ended on the active slide advances data-active and starts the next video", () => {
+    const { hero, videos } = buildSequence(3);
+    initHeroSequences();
+    ended(videos[0]);
+    expect(hero.dataset.active).toBe("1");
+    expect(videos[1].play).toHaveBeenCalled();
+    expect(videos[0].pause).toHaveBeenCalled();
+  });
+
+  test("the last slide wraps back to the first", () => {
+    const { hero, videos } = buildSequence(3);
+    initHeroSequences();
+    ended(videos[0]);
+    ended(videos[1]);
+    expect(hero.dataset.active).toBe("2");
+    ended(videos[2]);
+    expect(hero.dataset.active).toBe("0");
+    expect(videos[0].play).toHaveBeenCalled();
+  });
+
+  test("ended on a slide that is not active does nothing", () => {
+    const { hero, videos } = buildSequence(3);
+    initHeroSequences();
+    ended(videos[2]);
+    expect(hero.dataset.active ?? "0").toBe("0");
+    expect(videos[0].pause).not.toHaveBeenCalled();
+  });
+
+  test("the sequence gets exactly one pause control; it stops the advance and resumes the current slide", () => {
+    const { hero, videos } = buildSequence(3);
+    initHeroSequences();
+    expect(hero.querySelectorAll(".moss-hero-pause").length).toBe(1);
+    pauseControl(hero).click();
+    expect(pauseControl(hero).getAttribute("aria-pressed")).toBe("true");
+    expect(videos[0].pause).toHaveBeenCalled();
+    ended(videos[0]);
+    expect(hero.dataset.active ?? "0").toBe("0");
+    pauseControl(hero).click();
+    expect(pauseControl(hero).getAttribute("aria-pressed")).toBe("false");
+    expect(videos[0].play).toHaveBeenCalled();
+    ended(videos[0]);
+    expect(hero.dataset.active).toBe("1");
+  });
+
+  test("a rejected play() is swallowed and the sequence stops on that slide", async () => {
+    const { hero, videos } = buildSequence(2);
+    videos[1].play = vi.fn().mockRejectedValue(new Error("autoplay blocked"));
+    initHeroSequences();
+    ended(videos[0]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(hero.dataset.active).toBe("1");
+    expect(videos[1].play).toHaveBeenCalled();
+  });
+});
+
+describe("initHeroSequences — reduced motion", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+    mockMatchMedia(true);
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = "";
+    vi.restoreAllMocks();
+  });
+
+  test("removes autoplay and starts no video", () => {
+    const { videos } = buildSequence(3);
+    initHeroSequences();
+    for (const video of videos) {
+      expect(video.hasAttribute("autoplay")).toBe(false);
+      expect(video.play).not.toHaveBeenCalled();
+    }
+  });
+});

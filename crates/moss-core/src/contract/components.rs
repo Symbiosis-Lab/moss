@@ -1228,6 +1228,17 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         description: "Text content slot inside `.moss-hero` — text laid ON the image. For text ABOUT the image, see `.moss-hero-caption`.",
     },
     ComponentEntry {
+        class: "moss-hero-captions",
+        kind: "standalone",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<div class="moss-hero-captions" aria-live="polite"><p class="moss-hero-caption" data-slide="1">Slide 2 credit</p></div>"#,
+        example_markdown: "",
+        status: Status::Confirmed,
+        since: "0",
+        description: "Shared wrapper for the per-slide captions of a multi-slide hero, after the slides and outside the `<section>`. Each slide's caption is a `.moss-hero-caption` carrying `data-slide`; the container is `aria-live=\"polite\"` so a slide change is announced.",
+    },
+    ComponentEntry {
         class: "moss-parent-label",
         kind: "standalone",
         parent: "",

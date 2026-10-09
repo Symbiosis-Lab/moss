@@ -683,6 +683,7 @@ mod tests {
                 mobile: None,
                 align: None,
                 caption: String::new(),
+                slide_captions: Vec::new(),
             }))]);
         let snap = empty_snapshot();
         let graph = empty_graph();

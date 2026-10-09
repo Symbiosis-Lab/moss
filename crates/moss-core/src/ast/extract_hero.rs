@@ -284,6 +284,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 mobile,
                 align,
                 caption,
+                slide_captions: Vec::new(),
             },
             false,
             overlay_warnings,
@@ -314,6 +315,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 mobile,
                 align,
                 caption,
+                slide_captions: Vec::new(),
             },
             false,
             overlay_warnings,
@@ -335,16 +337,25 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
     let mut image_alt = String::new();
     let mut image_attrs = String::new();
     let mut extra_images: Vec<Url> = Vec::new();
+    let mut slide_captions: Vec<String> = Vec::new();
     for &k in &run.media {
         let Some(m) = hero_media_line_span(lines[k]) else {
             continue;
         };
+        // A pipe made only of media keywords (`cover top`) is attributes; any
+        // other pipe text is that slide's caption.
+        let (slide_attrs, caption) = if is_media_attrs_pipe(&m.attrs) {
+            (m.attrs, String::new())
+        } else {
+            (String::new(), m.attrs.trim().to_string())
+        };
+        slide_captions.push(caption);
         if image_path.is_none() {
             image_path = Some(m.path);
             image_alt = m.alt;
             // Frame-level media attrs (object-fit/position) come from the
             // primary slide and apply to every slide.
-            image_attrs = m.attrs;
+            image_attrs = slide_attrs;
         } else {
             extra_images.push(Url::unresolved(m.path));
         }
@@ -372,10 +383,43 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
             mobile,
             align,
             caption,
+            slide_captions: if slide_captions.iter().any(|c| !c.is_empty()) {
+                slide_captions
+            } else {
+                Vec::new()
+            },
         },
         used_priority_3,
         overlay_warnings,
     )
+}
+
+/// Whether a slide's pipe text is media attributes (`cover top`, `color=#333`)
+/// rather than a caption: every word must be a keyword the attribute parser
+/// reads. One unknown word makes the whole pipe a caption, so a caption never
+/// loses words to the keyword parser.
+fn is_media_attrs_pipe(pipe: &str) -> bool {
+    let tokens: Vec<&str> = pipe.split_whitespace().collect();
+    let mut i = 0;
+    while i < tokens.len() {
+        if i + 1 < tokens.len()
+            && crate::media::Position::from_keyword(&format!("{} {}", tokens[i], tokens[i + 1]))
+                .is_some()
+        {
+            i += 2;
+            continue;
+        }
+        let token = tokens[i];
+        let known = crate::media::Fit::from_keyword(token).is_some()
+            || crate::media::Position::from_keyword(token).is_some()
+            || crate::media::AlignSide::from_keyword(token).is_some()
+            || token.strip_prefix("color=").is_some_and(|v| !v.is_empty());
+        if !known {
+            return false;
+        }
+        i += 1;
+    }
+    true
 }
 
 /// Parse a hero overlay's raw markdown source into `Vec<Block>`.

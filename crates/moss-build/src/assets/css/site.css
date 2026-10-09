@@ -6586,6 +6586,34 @@ article a:where(:not(.moss-btn)):focus {
   line-height: 1.5;
 }
 
+/* Slide captions are words over the picture, not a credit line below it, so
+   they reset the credit rules above. They stack in one grid cell: a hidden
+   caption keeps its place, and the container is as tall as the tallest one.
+   The scrim keeps white text readable over a bright or moving frame. z-index 3
+   puts them above the overlay panel (2). */
+.moss-hero-captions {
+  position: absolute;
+  inset-block-end: 0;
+  inset-inline-start: 0;
+  z-index: 3;
+  display: grid;
+  max-inline-size: min(36rem, 100%);
+  padding: 2.5rem 5% 1rem;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.5), transparent);
+}
+.moss-hero-captions > .moss-hero-caption {
+  grid-area: 1 / 1;
+  margin: 0;
+  max-inline-size: none;
+  padding: 0;
+  color: #ffffff;
+  font-size: var(--moss-size-md);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.moss-hero-captions a {
+  color: inherit;
+}
+
 /* Video backgrounds share the image sizing contract (kept in sync with
    .moss-hero img above — the template test pins that selector verbatim). */
 .moss-hero video {
@@ -6771,6 +6799,39 @@ article a:where(:not(.moss-btn)):focus {
 .moss-hero[data-slides="4"] .moss-hero-slide { animation: moss-hero-fade-4 28s ease-in-out infinite; }
 .moss-hero[data-slides="5"] .moss-hero-slide { animation: moss-hero-fade-5 35s ease-in-out infinite; }
 .moss-hero[data-slides="6"] .moss-hero-slide { animation: moss-hero-fade-6 42s ease-in-out infinite; }
+/* A caption fades in with its slide: same keyframes and delay, so the words
+   change when the picture does. */
+.moss-hero[data-slides] .moss-hero-caption:not([data-slide="0"]) { opacity: 0; }
+.moss-hero[data-slides] .moss-hero-caption[data-slide="1"] { animation-delay: 7s; }
+.moss-hero[data-slides] .moss-hero-caption[data-slide="2"] { animation-delay: 14s; }
+.moss-hero[data-slides] .moss-hero-caption[data-slide="3"] { animation-delay: 21s; }
+.moss-hero[data-slides] .moss-hero-caption[data-slide="4"] { animation-delay: 28s; }
+.moss-hero[data-slides] .moss-hero-caption[data-slide="5"] { animation-delay: 35s; }
+.moss-hero[data-slides="2"] .moss-hero-caption { animation: moss-hero-fade-2 14s ease-in-out infinite; }
+.moss-hero[data-slides="3"] .moss-hero-caption { animation: moss-hero-fade-3 21s ease-in-out infinite; }
+.moss-hero[data-slides="4"] .moss-hero-caption { animation: moss-hero-fade-4 28s ease-in-out infinite; }
+.moss-hero[data-slides="5"] .moss-hero-caption { animation: moss-hero-fade-5 35s ease-in-out infinite; }
+.moss-hero[data-slides="6"] .moss-hero-caption { animation: moss-hero-fade-6 42s ease-in-out infinite; }
+/* An all-video hero is a sequence, not a timed rotation: one slide and its
+   caption show, picked by data-active (a script sets it as each video ends;
+   without it, slide 0). */
+.moss-hero[data-sequence] .moss-hero-slide { opacity: 0; }
+.moss-hero[data-sequence] .moss-hero-slide:not(:first-child) { position: absolute; inset: 0; }
+.moss-hero[data-sequence] .moss-hero-caption { display: none; }
+.moss-hero[data-sequence]:not([data-active]) .moss-hero-slide[data-slide="0"],
+.moss-hero[data-sequence][data-active="0"] .moss-hero-slide[data-slide="0"],
+.moss-hero[data-sequence][data-active="1"] .moss-hero-slide[data-slide="1"],
+.moss-hero[data-sequence][data-active="2"] .moss-hero-slide[data-slide="2"],
+.moss-hero[data-sequence][data-active="3"] .moss-hero-slide[data-slide="3"],
+.moss-hero[data-sequence][data-active="4"] .moss-hero-slide[data-slide="4"],
+.moss-hero[data-sequence][data-active="5"] .moss-hero-slide[data-slide="5"] { opacity: 1; }
+.moss-hero[data-sequence]:not([data-active]) .moss-hero-caption[data-slide="0"],
+.moss-hero[data-sequence][data-active="0"] .moss-hero-caption[data-slide="0"],
+.moss-hero[data-sequence][data-active="1"] .moss-hero-caption[data-slide="1"],
+.moss-hero[data-sequence][data-active="2"] .moss-hero-caption[data-slide="2"],
+.moss-hero[data-sequence][data-active="3"] .moss-hero-caption[data-slide="3"],
+.moss-hero[data-sequence][data-active="4"] .moss-hero-caption[data-slide="4"],
+.moss-hero[data-sequence][data-active="5"] .moss-hero-caption[data-slide="5"] { display: block; }
 /* The per-count `animation:` shorthand implies delay 0s, but the nth-child
    delay longhands above win on specificity (0,4,0 vs 0,3,0) regardless of
    source order. */
@@ -6809,6 +6870,16 @@ article a:where(:not(.moss-btn)):focus {
     animation-play-state: paused;
   }
 }
+/* Captions freeze with their slides: the same pause triggers as above. */
+.moss-hero[data-slides]:has(.moss-hero-pause input:checked) .moss-hero-caption,
+.moss-hero[data-slides]:has(:focus-visible:not(.moss-hero-pause input)) .moss-hero-caption {
+  animation-play-state: paused;
+}
+@media (hover: hover) {
+  .moss-hero[data-slides]:hover .moss-hero-caption {
+    animation-play-state: paused;
+  }
+}
 .moss-hero-pause {
   position: absolute;
   inset-block: auto 0.5rem;
@@ -6822,6 +6893,11 @@ article a:where(:not(.moss-btn)):focus {
   background: rgba(0, 0, 0, 0.4);
   color: #fff;
   opacity: 0.7;
+  /* The sequence control is a button; reset the browser's button chrome. */
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
 }
 .moss-hero[data-align="end"] .moss-hero-pause {
   inset-inline: 0.5rem auto;
@@ -6876,6 +6952,14 @@ article a:where(:not(.moss-btn)):focus {
 @media (prefers-reduced-motion: reduce) {
   .moss-hero[data-slides] .moss-hero-slide { animation: none; }
   .moss-hero[data-slides] .moss-hero-slide:not(:first-child) { opacity: 0; }
+  .moss-hero[data-slides] .moss-hero-caption { animation: none; }
+  .moss-hero[data-slides] .moss-hero-caption:not([data-slide="0"]) { opacity: 0; }
+  /* A sequence has no timer, but its videos are still motion: pin slide 0 and
+     its caption, whatever data-active says. */
+  .moss-hero[data-sequence] .moss-hero-slide:not([data-slide="0"]),
+  .moss-hero[data-sequence] .moss-hero-caption:not([data-slide="0"]) { display: none; }
+  .moss-hero[data-sequence] .moss-hero-slide[data-slide="0"] { opacity: 1; }
+  .moss-hero[data-sequence] .moss-hero-caption[data-slide="0"] { display: block; }
   .moss-hero-pause { display: none; }
 }
 

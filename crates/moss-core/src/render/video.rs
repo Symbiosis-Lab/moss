@@ -115,6 +115,59 @@ pub fn synthesize_video_html(
     src: &str,
     assets: &AssetSnapshot,
 ) -> String {
+    video_embed(params, placement, src, assets, None)
+}
+
+/// Synthesize one slide of an all-video hero sequence.
+///
+/// The slide plays once: no `loop`, no `data-loop`, so `ended` fires and the
+/// hero can move on. Only the first slide autoplays; the others wait with
+/// `preload="none"` until the hero starts them. A progressive ladder adds a
+/// 640-wide rung for phones when the source is at least that wide.
+pub fn synthesize_sequence_video_html(
+    placement: &Placement,
+    src: &str,
+    assets: &AssetSnapshot,
+    first: bool,
+) -> String {
+    video_embed(&TitleParams::default(), placement, src, assets, Some(first))
+}
+
+/// The 640-wide HLS rung as a phone-only `<source>`, or nothing.
+///
+/// Only sequence slides get one, and only when the ladder wrote that rung:
+/// the source must be at least 640 wide. The ladder names its rungs by index
+/// (`v{i}.m4s`), so the index is the rung's position in `VIDEO_LADDER`. A
+/// missing file would fall through to the next `<source>`, so a rung dropped
+/// by the bitrate clamp costs nothing but the lighter file.
+fn phone_rung_source(src: &str, assets: &AssetSnapshot, sequence: bool) -> String {
+    if !sequence {
+        return String::new();
+    }
+    match assets.dims(&PathBuf::from(src)) {
+        Some((w, _)) if w >= 640 => {}
+        _ => return String::new(),
+    }
+    let Some(idx) = crate::asset_paths::VIDEO_LADDER.iter().position(|r| r.width == 640) else {
+        return String::new();
+    };
+    let master = crate::asset_paths::to_hls_master(src);
+    let Some(dir) = master.strip_suffix(crate::asset_paths::HLS_MASTER_NAME) else {
+        return String::new();
+    };
+    format!(
+        r#"<source media="(max-width: 600px)" src="{}" type="video/mp4">"#,
+        html_escape_attr(&format!("{dir}v{idx}.m4s"))
+    )
+}
+
+fn video_embed(
+    params: &TitleParams,
+    placement: &Placement,
+    src: &str,
+    assets: &AssetSnapshot,
+    sequence: Option<bool>,
+) -> String {
     let place = placement_attrs(placement);
     let align = place.align_suffix();
     // .mov → .mp4 source-extension swap (idempotent for .mp4 / .webm).
@@ -159,13 +212,14 @@ pub fn synthesize_video_html(
     // Ambient loop branch: `![[clip.mp4|loop]]` → autoplay + ambient set,
     // no controls, data-loop JS/CSS hook. Default branch keeps controls.
     let is_loop = params.get("loop").is_some();
-    let (playback, data_loop) = if is_loop {
-        (
+    let (playback, data_loop) = match sequence {
+        Some(true) => (r#"autoplay muted playsinline preload="metadata""#.to_string(), ""),
+        Some(false) => (r#"muted playsinline preload="none""#.to_string(), ""),
+        None if is_loop => (
             format!("autoplay {}", AMBIENT_PLAYBACK_ATTRS),
             r#" data-loop"#,
-        )
-    } else {
-        (r#"controls playsinline preload="metadata""#.to_string(), "")
+        ),
+        None => (r#"controls playsinline preload="metadata""#.to_string(), ""),
     };
 
     let label = params.label_attr("aria-label");
@@ -174,9 +228,11 @@ pub fn synthesize_video_html(
         // Ladder form. `src` is deliberately absent — a <video> carrying it
         // ignores its <source> children — and the progressive MP4 is last so a
         // browser with neither native HLS nor hls.js still plays something.
+        let phone = phone_rung_source(src, assets, sequence.is_some());
         return format!(
-            r#"<video class="moss-embed moss-embed-video{align}" data-type="video"{dw}{data_loop}{label} data-placeholder-src="{orig}" poster="{thumb}" data-thumb-src="{thumb}" {playback}{w}{h}{size}><source src="{hls}" type="{HLS_MIME}"><source src="{src}" type="video/mp4"></video>"#,
+            r#"<video class="moss-embed moss-embed-video{align}" data-type="video"{dw}{data_loop}{label} data-placeholder-src="{orig}" poster="{thumb}" data-thumb-src="{thumb}" {playback}{w}{h}{size}><source src="{hls}" type="{HLS_MIME}">{phone}<source src="{src}" type="video/mp4"></video>"#,
             align = align,
+            phone = phone,
             dw = place.data_width_attr,
             size = place.size_style_attr,
             data_loop = data_loop,
@@ -601,5 +657,41 @@ mod tests {
         let p = params_with(&[("kind", "video")]);
         let out = synthesize_video_html(&p, &Placement::default(), "clip.mp4", &empty_snapshot());
         assert!(out.contains(r#"data-type="video""#), "missing data-type=video on default branch, got: {}", out);
+    }
+}
+
+#[cfg(test)]
+mod phone_rung_tests {
+    use super::*;
+    use crate::asset_snapshot::VariantKindSet;
+
+    fn snapshot(width: u32, hls: bool) -> AssetSnapshot {
+        let mut s = AssetSnapshot::new();
+        s.dimensions.insert("clip.mp4".into(), (width, 720));
+        if hls {
+            s.variants.insert("clip".into(), VariantKindSet { webp: false, avif: false, hls: true });
+        }
+        s
+    }
+
+    #[test]
+    fn sequence_slide_gets_the_640_phone_rung_before_the_progressive_file() {
+        let html = synthesize_sequence_video_html(&Placement::default(), "clip.mp4", &snapshot(1280, true), false);
+        assert!(
+            html.contains(r#"<source media="(max-width: 600px)" src="clip.hls/v2.m4s" type="video/mp4"><source src="clip.mp4" type="video/mp4"></video>"#),
+            "got: {html}"
+        );
+    }
+
+    #[test]
+    fn plain_video_embed_gets_no_phone_rung() {
+        let html = synthesize_video_html(&TitleParams::default(), &Placement::default(), "clip.mp4", &snapshot(1280, true));
+        assert!(!html.contains("max-width: 600px"), "got: {html}");
+    }
+
+    #[test]
+    fn sequence_slide_from_a_source_narrower_than_640_gets_no_phone_rung() {
+        let html = synthesize_sequence_video_html(&Placement::default(), "clip.mp4", &snapshot(320, true), true);
+        assert!(!html.contains("max-width"), "got: {html}");
     }
 }
