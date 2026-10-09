@@ -679,13 +679,13 @@ fn test_css_nav_split_name_alone_on_row_one_then_links_and_toggles() {
     assert!(
         links.contains("order: 1")
             && links.contains("flex: 1 1 0")
-            && links.contains("justify-content: space-between"),
-        "split links open row 2 and spread across it, got: {}",
+            && links.contains("justify-content: flex-start"),
+        "split links open row 2 packed at the start edge, got: {}",
         links
     );
     assert!(
-        icons.contains("order: 2"),
-        "icons must follow links so they land at row 2's end edge, got: {}",
+        icons.contains("order: 2") && icons.contains("margin-inline-start: auto"),
+        "icons must follow links and push to row 2's end edge, got: {}",
         icons
     );
 }

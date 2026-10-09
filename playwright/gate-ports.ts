@@ -104,6 +104,7 @@ const GATE_PORT_KEYS = [
   'bridge-capture',
   'contents-ruler',
   'nav-split-order',
+  'nav-split-pack',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

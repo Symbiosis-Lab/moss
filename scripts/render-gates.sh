@@ -54,6 +54,7 @@ GATES_BUILD=(
   ui-accent-seam
   nav-toggle-cluster
   nav-split-order
+  nav-split-pack
   header-hit-areas
   lightbox-github-shapes
   grid-card-no-cover

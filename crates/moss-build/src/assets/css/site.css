@@ -2345,14 +2345,24 @@ header:has(+ .moss-hero) .main-nav {
   flex: 1 1 100%;
 }
 
+/* The name has row 1 to itself here, so it wraps inside it. The base rule's
+   flex-shrink: 0 keeps it at its one-line width, `.main-nav a` sets nowrap on
+   it, and .nav-left's overflow: clip then cuts the rest off. */
+.nav-content[data-nav-split] .site-name {
+  flex-shrink: 1;
+  min-inline-size: 0;
+  white-space: normal;
+}
+
 .nav-content[data-nav-split] .nav-links {
   order: 1;
   flex: 1 1 0;
-  justify-content: space-between;
+  justify-content: flex-start;
 }
 
 .nav-content[data-nav-split] .nav-icons {
   order: 2;
+  margin-inline-start: auto;
 }
 
 /* Same box as .nav-search-btn (search.css): a 2.25rem pill, transparent at

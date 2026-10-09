@@ -3152,3 +3152,74 @@ precision = "city"
 `,
   },
 };
+
+export const NAV_SPLIT_PACK_GATE: ScratchSiteSpec = {
+  name: "nav-split-pack-gate",
+  files: {
+    "index.md": `---
+title: Nav Split Pack Gate Site With An Exceptionally Long Name That Must Wrap Rather Than Clip
+uid: "nso00101"
+---
+
+# Nav Split Order Gate Site
+
+Scratch site for the split-masthead row render gate.
+`,
+    "Essays.md": `---
+title: Essays
+uid: "nso00102"
+nav: true
+---
+
+# Essays
+`,
+    "FieldNotes.md": `---
+title: Field Notes
+uid: "nso00103"
+nav: true
+---
+
+# Field Notes
+`,
+    "Photographs.md": `---
+title: Photographs
+uid: "nso00104"
+nav: true
+---
+
+# Photographs
+`,
+    "places/index.md": `---
+title: Places
+uid: "nso00201"
+---
+
+Every place this site names.
+`,
+    "kyoto.md": `---
+title: Kyoto
+uid: "nso00202"
+location: Kyoto
+---
+
+# Kyoto
+
+A located page, so the places root has a place to list.
+`,
+    ".moss/config.toml": `schema_version = 6
+
+[site]
+lang = "en"
+
+[terms.places]
+type = "place"
+fields = ["location"]
+title = "Places"
+`,
+    ".moss/places.toml": `["Kyoto"]
+lat = 35.0116
+lng = 135.7681
+precision = "city"
+`,
+  },
+};
