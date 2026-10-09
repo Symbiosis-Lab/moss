@@ -3015,3 +3015,106 @@ fn children_more_target_with_an_ampersand_resolves_to_its_page() {
         out
     );
 }
+
+fn trips_folder_note() -> ParsedDocument {
+    ParsedDocument {
+        url_path: "notes/trips/index.html".to_string(),
+        source_path: Some("notes/Trips/Trips.md".to_string()),
+        label: "Trips".to_string(),
+        title: "Trips".to_string(),
+        clean_stem: "trips".to_string(),
+        kind: PageKind::Folder,
+        direct_children_sort: Some(ResolvedSort {
+            axis: SortAxis::Date,
+            explicit_order: None,
+            series_default: false,
+        }),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn folder_note_can_embed_its_own_folder_by_name() {
+    // `notes/Trips/Trips/` does not exist, so `Trips/` falls back to the note's
+    // parent folder and lists `notes/Trips/`.
+    let docs = vec![
+        trips_folder_note(),
+        make_doc("notes/trips/lisbon.html", "Lisbon", Some("2026-01-02")),
+        make_doc("notes/trips/kyoto.html", "Kyoto", Some("2026-01-01")),
+    ];
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams::default();
+    let marker = moss_core::resolve::embed_renderer::folder_list::emit_marker(
+        "Trips/",
+        "notes/Trips/Trips.md",
+        &params,
+    );
+    let out = resolve_markers(
+        &marker,
+        "notes/Trips/Trips.md",
+        &docs,
+        &test_project(),
+        &std::collections::HashMap::new(),
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(!out.contains("moss-embed-missing"), "got: {}", out);
+    assert!(out.contains("Lisbon") && out.contains("Kyoto"), "got: {}", out);
+}
+
+#[test]
+fn folder_note_self_name_prefers_a_real_subfolder_of_that_name() {
+    // A real `notes/Trips/Trips/` folder keeps the folder-relative meaning.
+    let docs = vec![
+        trips_folder_note(),
+        make_folder_doc("notes/trips/trips/index.html", "Trips"),
+        make_doc("notes/trips/trips/inner.html", "Inner", Some("2026-01-03")),
+        make_doc("notes/trips/lisbon.html", "Lisbon", Some("2026-01-02")),
+    ];
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams::default();
+    let marker = moss_core::resolve::embed_renderer::folder_list::emit_marker(
+        "Trips/",
+        "notes/Trips/Trips.md",
+        &params,
+    );
+    let out = resolve_markers(
+        &marker,
+        "notes/Trips/Trips.md",
+        &docs,
+        &test_project(),
+        &std::collections::HashMap::new(),
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(out.contains("Inner"), "got: {}", out);
+    assert!(!out.contains("Lisbon"), "got: {}", out);
+}
+
+#[test]
+fn unresolved_folder_embed_names_the_resolved_path_it_tried() {
+    // `Gone` is not the note's own folder name, so no fallback applies and the
+    // missing folder is reported at the path it was resolved to beside the note.
+    let docs = vec![trips_folder_note()];
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams::default();
+    let marker = moss_core::resolve::embed_renderer::folder_list::emit_marker(
+        "Gone/",
+        "notes/Trips/Trips.md",
+        &params,
+    );
+    let out = resolve_markers(
+        &marker,
+        "notes/Trips/Trips.md",
+        &docs,
+        &test_project(),
+        &std::collections::HashMap::new(),
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(out.contains("moss-embed-missing"), "got: {}", out);
+    assert!(out.contains("notes/Trips/Gone/"), "got: {}", out);
+}

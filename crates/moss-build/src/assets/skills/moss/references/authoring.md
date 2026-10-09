@@ -174,7 +174,7 @@ A width token after the pipe sets the band an image is laid out in: `![[harbor.j
 
 An image followed on the next line by one italic line becomes a figure: the bracket text is its alt text and the italic line is the visible caption, as in `![Harbour from the east pier](harbour.jpg)` then `*Dusk, 14 May*`. A caption-only image, `![Dusk, 14 May](harbour.jpg)`, keeps `alt=""` so the text is read once.
 
-A folder embed takes comma-separated options after the pipe: `limit:N`, `sort:date|date-asc|weight|title`, `style:list|summary|grid`, `group:year|none`, `depth:all` (every descendant, not just the direct children), `covers:only` (only pages that have a cover) and `more:<folder>` (where the "More" link points). `style:list` is the compact dated index; `style:summary` is rows with covers and descriptions.
+A folder embed takes comma-separated options after the pipe: `limit:N`, `sort:date|date-asc|weight|title`, `style:list|summary|grid`, `group:year|none`, `depth:all` (every descendant, not just the direct children), `covers:only` (only pages that have a cover) and `more:<folder>` (where the "More" link points). `style:list` is the compact dated index; `style:summary` is rows with covers and descriptions. A folder note can list its own folder as `![[<FolderName>/]]`: when the relative target is missing beside the note and starts with the note's own folder name, it is read from the note's parent folder, so `![[Opera/]]` in `work/Opera/Opera.md` lists `work/Opera/`.
 
 moss warns and you lose enhancement (LQIP, WebP encode, thumbnails, dimensions)
 if you use raw HTML tags for media that moss owns.

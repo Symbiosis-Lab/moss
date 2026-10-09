@@ -205,6 +205,40 @@ fn resolve_folder_id(path: &str, from: &str) -> String {
     parts.join("/")
 }
 
+/// A folder note (`work/Opera/Opera.md`) may list its own folder by name, as
+/// `![[Opera/]]`. Read beside the note, that target is `work/Opera/Opera/`,
+/// which usually does not exist. When the folder-relative target is missing
+/// and its first segment is the note's own folder name, return a `from` path
+/// anchored in the note's parent folder, so the target means `work/Opera/`.
+/// An existing folder-relative target keeps its meaning.
+fn folder_note_parent_from(
+    path: &str,
+    from: &str,
+    ctx: &moss_core::resolve::reference::ReferenceContext<'_>,
+) -> Option<String> {
+    use moss_core::resolve::reference::{classify_reference, ReferenceKind};
+    if path.starts_with('/') {
+        return None;
+    }
+    let note = Path::new(from);
+    let own_dir = note.parent()?.to_str()?;
+    let own_name = Path::new(own_dir).file_name()?.to_str()?;
+    if note.file_stem()?.to_str()? != own_name {
+        return None;
+    }
+    if path.trim_end_matches('/').split('/').next()? != own_name {
+        return None;
+    }
+    let parent_dir = Path::new(own_dir).parent()?.to_str()?;
+    let parent_from = if parent_dir.is_empty() {
+        "_.md".to_string()
+    } else {
+        format!("{parent_dir}/_.md")
+    };
+    let missing = |f: &str| matches!(classify_reference(path, f, true, ctx).kind, ReferenceKind::NotFound);
+    (missing(from) && !missing(&parent_from)).then_some(parent_from)
+}
+
 /// Auto-detect children rendering style and grouping.
 ///
 /// Checks whether children have "rich" metadata (covers or descriptions)
@@ -1171,20 +1205,6 @@ fn render_one(
     if parsed.style.as_deref() == Some("map") && !parsed.path.ends_with('/') {
         return Ok(maps::render(parsed, ordinal, all_docs, place_maps));
     }
-    let folder_id = resolve_folder_id(parsed.path, from);
-    // `folder_id` is case-preserving (e.g. "Resources/cities-heat-map-app"),
-    // while `ParsedDocument.url_path` is slugified — lowercased and
-    // punctuation-rewritten via `moss_core::slug::slugify_path_segments`
-    // (`&` becomes `and`, other punctuation becomes `-`; the folder's own
-    // URL is made by the same function, so the lookup must use it too).
-    // Compute the slugified form for URL-space lookups (target_doc match,
-    // folder_prefix filter, "more" href). Keep `folder_id` for source-side
-    // lookups (e.g. `project.html_files` carries raw on-disk paths).
-    let folder_id_slug = if folder_id.is_empty() {
-        String::new()
-    } else {
-        moss_core::slug::slugify_path_segments(&folder_id)
-    };
     // Route the three-branch decision through moss-core's `classify_reference`:
     // `dir_has_markdown_index` → FolderListing (Branch 1), else
     // `dir_has_static_index` → FolderIndexIframe (Branch 2), else NotFound.
@@ -1199,6 +1219,22 @@ fn render_one(
         assets: &no_assets,
         folders: &folder_idx,
         urls: &no_urls,
+    };
+    let parent_from = folder_note_parent_from(parsed.path, from, &ctx);
+    let from = parent_from.as_deref().unwrap_or(from);
+    let folder_id = resolve_folder_id(parsed.path, from);
+    // `folder_id` is case-preserving (e.g. "Resources/cities-heat-map-app"),
+    // while `ParsedDocument.url_path` is slugified — lowercased and
+    // punctuation-rewritten via `moss_core::slug::slugify_path_segments`
+    // (`&` becomes `and`, other punctuation becomes `-`; the folder's own
+    // URL is made by the same function, so the lookup must use it too).
+    // Compute the slugified form for URL-space lookups (target_doc match,
+    // folder_prefix filter, "more" href). Keep `folder_id` for source-side
+    // lookups (e.g. `project.html_files` carries raw on-disk paths).
+    let folder_id_slug = if folder_id.is_empty() {
+        String::new()
+    } else {
+        moss_core::slug::slugify_path_segments(&folder_id)
     };
     let classified = moss_core::resolve::reference::classify_reference(parsed.path, from, true, &ctx);
     use moss_core::resolve::reference::ReferenceKind;
@@ -1221,7 +1257,7 @@ fn render_one(
                 Some(d) => Some(d),
                 // Unreachable: dir_has_markdown_index ⇒ this find succeeds. Keep
                 // the missing-div fallback so a future predicate drift is safe.
-                None => return Err(not_found(parsed.path)),
+                None => return Err(not_found(&folder_id)),
             }
         }
         ReferenceKind::FolderIndexIframe => {
@@ -1240,7 +1276,7 @@ fn render_one(
                 return Ok(iframe);
             }
             // Defensive: predicate said iframe but the synthesizer declined.
-            return Err(not_found(parsed.path));
+            return Err(not_found(&folder_id));
         }
         _ => {
             // Branch 3: no folder doc and no static index. One more shape is
@@ -1260,7 +1296,13 @@ fn render_one(
                     || (!folder_id_slug.is_empty() && d.url_path.starts_with(&under))
             });
             if !has_members {
-                return Err(format!("No pages under {}", parsed.path));
+                // Show the resolved folder, keeping a site-absolute target's leading slash.
+                let shown = if parsed.path.starts_with('/') {
+                    format!("/{folder_id}")
+                } else {
+                    folder_id.clone()
+                };
+                return Err(format!("No pages under {shown}/"));
             }
             None
         }
@@ -1529,8 +1571,8 @@ fn render_one(
     })
 }
 
-fn not_found(path: &str) -> String {
-    format!("Folder not found: {path}")
+fn not_found(folder_id: &str) -> String {
+    format!("Folder not found: /{folder_id}/")
 }
 
 /// Resolve a `children_more:` reference to the page it names. Mirrors
