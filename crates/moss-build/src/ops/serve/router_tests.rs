@@ -1259,20 +1259,50 @@ async fn old_current_image_waits_for_hidden_cloud_original() {
     let original = assets.join("cover.jpg");
     std::fs::write(&stub, b"cloud placeholder").unwrap();
     let state = Arc::new(std::sync::RwLock::new(current));
-    let (port, shutdown) = start_server(ServeConfig::new(state, 60760)).await.unwrap();
+    let mut config = ServeConfig::new(state, 60760);
+    config.is_evicted = signal_hidden_original_request;
+    let (port, shutdown) = start_server(config).await.unwrap();
     let url = format!("http://localhost:{port}/assets/cover.webp");
-    let arrival = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(250));
-        std::fs::remove_file(stub).unwrap();
-        std::fs::write(original, b"arrived original").unwrap();
+    let request_url = url.clone();
+    let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+    let request = std::thread::spawn(move || {
+        let result = ureq::get(&request_url).timeout(std::time::Duration::from_secs(5)).call();
+        let _ = completed_tx.send(());
+        result
     });
-    let response = ureq::get(&url).timeout(std::time::Duration::from_secs(5)).call().unwrap();
+    let marker = assets.join(".original-request-seen");
+    let started = std::time::Instant::now();
+    while !marker.exists() && started.elapsed() < std::time::Duration::from_secs(2) {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(marker.exists(), "the server must classify the hidden original before it arrives");
+    assert_eq!(
+        completed_rx.recv_timeout(std::time::Duration::from_millis(30)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout),
+        "the request remains pending while the selected original is still in the cloud",
+    );
+    // Keep the fixture continuously available: don't script a state with
+    // neither the original nor its hidden cloud stub.
+    let pending = assets.join("cover.jpg.pending");
+    std::fs::write(&pending, b"arrived original").unwrap();
+    std::fs::rename(&pending, &original).unwrap();
+    std::fs::remove_file(stub).unwrap();
+    let response = request.join().unwrap().unwrap();
     assert_eq!(response.status(), 200);
     let mut bytes = Vec::new();
     std::io::Read::read_to_end(&mut response.into_reader(), &mut bytes).unwrap();
     assert_eq!(bytes, b"arrived original");
-    arrival.join().unwrap();
     let _ = shutdown.send(());
+}
+
+#[cfg(target_os = "macos")]
+fn signal_hidden_original_request(path: &std::path::Path) -> bool {
+    if path.file_name().is_some_and(|name| name == "cover.jpg") {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::write(parent.join(".original-request-seen"), b"seen");
+        }
+    }
+    crate::build::icloud::is_evicted(path)
 }
 
 #[cfg(target_os = "macos")]
