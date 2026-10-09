@@ -467,6 +467,10 @@ pub(crate) fn prepend_parent_label(
 /// finds the real title instead of falling through to prepend (which would
 /// land the date row and byline above the cover image).
 ///
+/// A `breadcrumb: label` link above the title is stepped past the same way,
+/// and kept in place, so the date row and byline still follow the title
+/// rather than landing above the link.
+///
 /// With no title block the fragment is prepended, which puts it at the top of
 /// `<article>` — under a hero, since the hero is hoisted out of the body and
 /// rendered above `<main>`. That is where a byline belongs on a page whose
@@ -477,21 +481,41 @@ pub(crate) fn splice_after_title_block(html_body: &str, fragment: &str) -> Strin
         return html_body.to_string();
     }
     let (prefix, body) = split_empty_folder_title_prefix(html_body);
-    if !body.trim_start().starts_with("<h1") {
+    let (label, titled) = split_parent_label_prefix(body);
+    if !titled.trim_start().starts_with("<h1") {
         return format!("{}{}{}", prefix, fragment, body);
     }
-    let Some((before, after)) = body.split_once("</h1>") else {
+    let Some((before, after)) = titled.split_once("</h1>") else {
         return format!("{}{}{}", prefix, fragment, body);
     };
 
     let mut result = String::with_capacity(html_body.len() + fragment.len() + 1);
     result.push_str(prefix);
+    result.push_str(label);
     result.push_str(before);
     result.push_str("</h1>");
     result.push('\n');
     result.push_str(fragment);
     result.push_str(after);
     result
+}
+
+/// Steps past the `breadcrumb: label` link that [`prepend_parent_label`] puts
+/// above the title, so the title block behind it is still found. Returns
+/// `("", body)` when the body does not open with that link.
+fn split_parent_label_prefix(body: &str) -> (&str, &str) {
+    const LABEL_OPEN: &str = "<a class=\"moss-parent-label\"";
+    if !body.starts_with(LABEL_OPEN) {
+        return ("", body);
+    }
+    let Some(close) = body.find("</a>") else {
+        return ("", body);
+    };
+    let mut end = close + "</a>".len();
+    if body[end..].starts_with('\n') {
+        end += 1;
+    }
+    body.split_at(end)
 }
 
 /// Splits off a leading `.moss-collection-cover-row` > `-cover-body` wrapper

@@ -3528,6 +3528,34 @@ mod children_field_tests {
         assert!(!html.contains("breadcrumb-separator"), "label mode draws no header trail");
     }
 
+    #[test]
+    fn breadcrumb_label_keeps_the_date_and_byline_under_the_title() {
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+        homepage.breadcrumb = Some(moss_core::frontmatter_typed::BreadcrumbSetting::Label);
+        let folder = make_doc("Opera", "opera/index.html");
+        let mut page = make_doc("Persona", "opera/persona.html");
+        page.html_content = "<h1 class=\"moss-article-title\">Persona</h1>\n<p>Body</p>".to_string();
+        page.date = Some("2026-03-01".to_string());
+        page.byline = vec!["Cast Member".to_string()];
+
+        let all_docs = vec![homepage, folder, page.clone()];
+        let html = render_page(Some(&page), &all_docs, false);
+
+        let label = html
+            .find(r#"<a class="moss-parent-label" href="/opera/">Opera</a>"#)
+            .expect("the parent label is rendered");
+        let title = html
+            .find(r#"<h1 class="moss-article-title">Persona</h1>"#)
+            .expect("the title is rendered");
+        let date = html.find(r#"<div class="date-line">"#).expect("the date row is rendered");
+        let byline = html.find(r#"<div class="moss-byline">"#).expect("the byline is rendered");
+        assert!(
+            label < title && title < date && date < byline,
+            "expected label < title < date-line < byline. Got: {html}"
+        );
+    }
+
     /// The published site carries none of it. The annotations exist for the
     /// editor preview only; `emit_source_lines: false` is the shipped shape.
     #[test]
