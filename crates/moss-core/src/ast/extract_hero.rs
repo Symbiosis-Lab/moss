@@ -135,7 +135,22 @@ pub fn extract_hero(doc: &mut Document, hooks: &dyn RenderHooks) -> Option<HeroE
     // Hero is hoisted out of the body to the article template's hero slot.
     // The slot IS in the preview DOM and clickable, so we pass source_line
     // so the rendered section carries data-source-range for click-to-source.
-    hooks.render_shortcode(&mut html, hero_shortcode, hero_source_line);
+    // `header=over` lays the header over the page's opening hero only. Every
+    // hero left in the body keeps the header band, so the option is dropped
+    // from all of them, and from the extracted one unless it opens the page.
+    for block in doc.blocks.iter_mut() {
+        if let Block::Shortcode(Shortcode::Hero(later)) = block {
+            later.header = None;
+        }
+    }
+    let cleared;
+    let render_target = if hero_idx != 0 && hero_args.header.is_some() {
+        cleared = Shortcode::Hero(HeroShortcode { header: None, ..hero_args.clone() });
+        &cleared
+    } else {
+        hero_shortcode
+    };
+    hooks.render_shortcode(&mut html, render_target, hero_source_line);
 
     Some(HeroExtraction {
         html,
@@ -261,6 +276,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
     // The `alt` key is the only way to describe an `image=` or directive-form
     // hero picture; on a body embed it overrides the embed's own `![alt]`.
     let alt_attr = parsed.get("alt").unwrap_or_default().to_string();
+    let header = parsed.get("header").map(str::to_string);
 
     // Priority 1: `image=` attribute.
     if let Some(image_value) = parsed.get("image") {
@@ -285,6 +301,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 align,
                 caption,
                 slide_captions: Vec::new(),
+                header: header.clone(),
             },
             false,
             overlay_warnings,
@@ -316,6 +333,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 align,
                 caption,
                 slide_captions: Vec::new(),
+                header: header.clone(),
             },
             false,
             overlay_warnings,
@@ -388,6 +406,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
             } else {
                 Vec::new()
             },
+            header,
         },
         used_priority_3,
         overlay_warnings,

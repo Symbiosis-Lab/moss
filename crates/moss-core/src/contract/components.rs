@@ -1196,6 +1196,12 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 description: "Moves the overlay panel to the INLINE-END edge (right in LTR, left in RTL) instead of the default start. Emitted **only** for `:::hero {align=end}`. For a portrait subject in a wide frame the crop cannot move the subject sideways — the image already spans the full width — so when the subject sits at the start edge, this moves the words to the other end instead. At >= 48rem only: below the mobile breakpoint under `mobile=overlay` the panel is already full width, so this has no visible effect there, and it does nothing to a hero with no overlay text.",
             },
             DataAttr {
+                name: "data-header",
+                values: &["over"],
+                default: "",
+                description: "Emitted **only** for `:::hero {header=over}` on the hero that opens the page. The site header is laid over this hero instead of sitting in a band above it: the header is absolutely positioned with a transparent background and light text, and a soft top wash sits on the photo. Heroes further down the page ignore the option. The selector is `header:has(+ .moss-hero[data-header=\"over\"])`.",
+            },
+            DataAttr {
                 name: "data-captioned",
                 values: &[],
                 default: "",

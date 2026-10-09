@@ -1830,6 +1830,48 @@ header:has(+ .moss-hero) .main-nav {
   margin-block-end: 0;
 }
 
+/* header=over (`:::hero {header=over}` on the page's opening hero): the header
+   leaves the flow so the hero starts at the page top, under it. */
+header:has(+ .moss-hero[data-header="over"]) {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline: 0;
+  z-index: 3;
+  /* No band: the photo is the header's background. */
+  background: transparent;
+  border-block-end: none;
+  /* Light text, the same white the hero overlay text uses. */
+  color: #ffffff;
+}
+
+/* Nav links and the site name set their own colour from the base sheet, which
+   would stay dark over the photo; they take the header's light colour back.
+   The opened mobile panel sits on the page background, so its links keep the
+   base colour. */
+header:has(+ .moss-hero[data-header="over"]) :where(a, button, .site-name):not(.mobile-open *) {
+  color: inherit;
+}
+
+/* Focus rings sit on the photo, so they use the light header colour rather
+   than the accent, which can fall below contrast on a dark image. The opened
+   mobile panel keeps the accent ring, since it sits on the page background. */
+header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.mobile-open *) {
+  outline-color: #ffffff;
+}
+
+/* A soft dark wash across the top of the photo keeps the light nav legible
+   over a pale image. */
+.moss-hero[data-header="over"]::after {
+  content: "";
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline: 0;
+  block-size: 6rem;
+  background: linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0));
+  pointer-events: none;
+  z-index: 1;
+}
+
 /* nav-left: single-row flex; breadcrumb segments (below) shrink with ellipsis
    before anything else. Never wraps to a second line internally (that would
    produce a 3-row nav: site-name+partial-breadcrumb / rest-of-breadcrumb /

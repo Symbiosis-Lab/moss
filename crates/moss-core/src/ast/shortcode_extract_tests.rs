@@ -2995,3 +2995,26 @@ fn grid_column_count_is_capped_at_the_stylesheet_maximum_with_a_warning() {
         over.warnings
     );
 }
+
+#[test]
+fn hero_header_over_attr_is_parsed() {
+    let md = ":::hero {image=hero.jpg header=over}\n# Title\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Hero(args) => {
+            assert_eq!(args.header.as_deref(), Some("over"));
+        }
+        other => panic!("expected Hero, got {other:?}"),
+    }
+}
+
+#[test]
+fn hero_header_unknown_value_warns_and_is_ignored() {
+    let md = ":::hero {image=hero.jpg header=under}\n# Title\n:::\n";
+    let result = extract_shortcodes(md);
+    assert!(
+        result.warnings.iter().any(|w| w.contains("header=under")),
+        "expected an unrecognized-header warning, got {:?}",
+        result.warnings
+    );
+}

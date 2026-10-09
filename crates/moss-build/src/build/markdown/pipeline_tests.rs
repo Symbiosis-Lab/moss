@@ -3911,3 +3911,40 @@ fn bare_trailing_pipe_renders_alt_without_a_figcaption() {
     assert!(html.contains(r#"alt="Two dancers face each other on a pink stage""#), "got: {html}");
     assert!(!html.contains("figcaption"), "got: {html}");
 }
+
+#[test]
+fn hero_header_over_marks_only_the_opening_hero() {
+    let opening = render_hero_with_graph(
+        ":::hero {image=h.jpg header=over}\n# Title\n:::\n\nBody.\n",
+        &["h.jpg"],
+    );
+    assert!(opening.contains(r#"data-header="over""#), "got: {opening}");
+
+    let later = render_hero_with_graph(
+        "Intro.\n\n:::hero {image=h.jpg header=over}\n# Title\n:::\n",
+        &["h.jpg"],
+    );
+    assert!(!later.contains("data-header"), "got: {later}");
+}
+
+#[test]
+fn header_over_is_not_applied_to_a_later_hero_after_a_plain_opening_hero() {
+    let parsed = parse_with_graph(
+        ":::hero {image=h.jpg}\n# Title\n:::\n\nIntro.\n\n:::hero {image=h.jpg header=over}\n# Later\n:::\n",
+        &["h.jpg"],
+    );
+    let opening = parsed.hero_html.expect("opening hero");
+    assert!(!opening.contains("data-header"), "got: {opening}");
+    assert!(!parsed.html_content.contains("data-header"), "got: {}", parsed.html_content);
+}
+
+#[test]
+fn header_over_marks_only_the_first_of_two_opening_heroes() {
+    let parsed = parse_with_graph(
+        ":::hero {image=h.jpg header=over}\n# A\n:::\n\n:::hero {image=h.jpg header=over}\n# B\n:::\n",
+        &["h.jpg"],
+    );
+    let first = parsed.hero_html.expect("first hero");
+    assert!(first.contains(r#"data-header="over""#), "got: {first}");
+    assert!(!parsed.html_content.contains("data-header"), "got: {}", parsed.html_content);
+}

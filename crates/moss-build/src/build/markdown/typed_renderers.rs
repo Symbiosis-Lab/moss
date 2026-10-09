@@ -155,6 +155,13 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
     } else {
         String::new()
     };
+    // `:::hero {header=over}`: the CSS lays the site header over this hero,
+    // selected as `header:has(+ .moss-hero[data-header="over"])`.
+    let header_attr = if args.header.as_deref() == Some("over") {
+        r#" data-header="over""#
+    } else {
+        ""
+    };
     // A pale hero photo needs a stronger legibility scrim than a mid-tone or
     // dark one — the same gradient that carries white type over a dusk photo
     // washes out over a watercolour. Classify from the scan-cached dominant
@@ -505,9 +512,9 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
 
     if args.overlay.is_empty() {
         format!(
-            "<section {}{}{}{}{}{}{}{}>{}</section>{}",
+            "<section {}{}{}{}{}{}{}{}{}>{}</section>{}",
             class_attr, slides_attr, width_attr, source_range_attr, mobile_attr,
-            mobile_style_attr, plate_attr, caption_attr, img_part, caption_html
+            mobile_style_attr, plate_attr, caption_attr, header_attr, img_part, caption_html
         )
     } else {
         // Phase 4 PR4.5 (2026-05-28): overlay is now typed `Vec<Block>`.
@@ -534,7 +541,7 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
         // are preserved.
         let collapsed = moss_core::ast::hooks::collapse_tag_adjacent_newlines(&html_content);
         format!(
-            "<section {}{}{}{}{}{}{}{}{}{}>{}<div class=\"moss-hero-content\"{}>{}</div></section>{}",
+            "<section {}{}{}{}{}{}{}{}{}{}{}>{}<div class=\"moss-hero-content\"{}>{}</div></section>{}",
             class_attr,
             slides_attr,
             width_attr,
@@ -545,6 +552,7 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
             tone_attr,
             plate_attr,
             caption_attr,
+            header_attr,
             img_part,
             panel_style_attr,
             collapsed.trim(),
@@ -627,6 +635,7 @@ mod tests {
                 moss_core::ast::Url::resolved("c.jpg", moss_core::ast::UrlKind::Asset),
             ],
             slide_captions: vec!["*Title* · Studio · 2024".to_string(), String::new(), "Second".to_string()],
+            header: None,
             ..Default::default()
         };
         let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None, crate::i18n::Language::En);
@@ -658,6 +667,7 @@ mod tests {
             image: Some(moss_core::ast::Url::resolved("a.mp4", moss_core::ast::UrlKind::Asset)),
             extra_images: vec![moss_core::ast::Url::resolved("b.mp4", moss_core::ast::UrlKind::Asset)],
             slide_captions: vec!["One".to_string(), "Two".to_string()],
+            header: None,
             ..Default::default()
         };
         let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None, crate::i18n::Language::En);
@@ -691,6 +701,7 @@ mod tests {
                 moss_core::ast::Url::resolved("c.jpg", moss_core::ast::UrlKind::Asset),
             ],
             slide_captions: vec!["One".to_string(), String::new(), "Three".to_string()],
+            header: None,
             ..Default::default()
         };
         let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None, crate::i18n::Language::En);
@@ -1081,6 +1092,17 @@ mod tests {
         let resolver = |s: &str| s.to_string();
         let html = render_hero_html_typed(&args, &resolver, None, None, None, crate::i18n::Language::En);
         assert!(!html.contains("data-mobile"), "got: {html}");
+    }
+
+    #[test]
+    fn render_hero_header_over_emits_data_header() {
+        let args = moss_core::ast::HeroShortcode {
+            header: Some("over".to_string()),
+            ..Default::default()
+        };
+        let resolver = |s: &str| s.to_string();
+        let html = render_hero_html_typed(&args, &resolver, None, None, None, crate::i18n::Language::En);
+        assert!(html.contains(r#"data-header="over""#), "got: {html}");
     }
 
     #[test]

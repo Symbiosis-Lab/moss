@@ -309,6 +309,11 @@ pub struct HeroShortcode {
     /// (image full-width at natural ratio, text block below).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mobile: Option<String>,
+    /// Opt-in header treatment (`:::hero {header=over}`): the site header is
+    /// laid over this hero instead of sitting in a band above it. Honoured
+    /// only for the hero that opens the page; see `extract_hero`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
     /// Which inline edge the overlay panel sits at. `Some("end")` moves it
     /// to the END of the inline axis — right in LTR, left in RTL — instead
     /// of the default start. For a portrait subject in a wide frame, the

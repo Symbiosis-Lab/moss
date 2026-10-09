@@ -137,6 +137,14 @@ fn parse_shortcode_block(
                     ));
                 }
             }
+            if let Some(ref v) = sc.header {
+                if v != "over" {
+                    warns.warnings.push(format!(
+                        "shortcode `:::hero` has unrecognized `header={v}`. \
+                         Only `header=over` is recognized. The attribute is ignored."
+                    ));
+                }
+            }
             (Some(Shortcode::Hero(sc)), warns)
         }
         "grid" => {
