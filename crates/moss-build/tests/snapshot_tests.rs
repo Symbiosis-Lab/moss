@@ -2376,6 +2376,12 @@ fn date_line(html: &str) -> &str {
     &rest[..rest.find(r#"<div class="font-anchor""#).expect("meta line has the size control")]
 }
 
+/// The text a reader sees in `html`, with the tags dropped.
+fn visible_text(html: &str) -> String {
+    let re = regex::Regex::new(r"<[^>]*>").unwrap();
+    re.replace_all(html, "").into_owned()
+}
+
 /// A page with `start` shows its event facts in the ordinary meta line under
 /// the title, in place of the posted date; a dated article is unchanged.
 #[test]
@@ -2386,7 +2392,7 @@ fn event_page_shows_event_facts_in_the_meta_line() {
     let concert = page("events/concert");
     let line = date_line(&concert);
     assert!(
-        line.contains(r#"<time class="moss-event-time" datetime="2026-11-01T14:00">Sunday, November 1, 2026, 2:00–4:00 PM</time>"#),
+        line.contains(r#"<time class="moss-event-time" datetime="2026-11-01T14:00"><span class="moss-when-weekday">Sunday</span>, <span class="moss-when-month">November</span> <span class="moss-when-day">1</span>, <span class="moss-when-year">2026</span>, <span class="moss-when-time">2:00–4:00 PM</span></time>"#),
         "{line}"
     );
     assert!(line.contains(r#"<span class="moss-event-place">Town Hall</span>"#), "{line}");
@@ -2401,11 +2407,12 @@ fn event_page_shows_event_facts_in_the_meta_line() {
         cancelled.find("moss-event-status").unwrap() < cancelled.find("moss-event-time").unwrap(),
         "the status is read before the struck time: {cancelled}"
     );
-    assert!(cancelled.contains("Sunday, March 14, 2027, 7:30 PM"), "{cancelled}");
+    assert!(visible_text(&cancelled).contains("Sunday, March 14, 2027, 7:30 PM"), "{cancelled}");
 
     let festival = date_line(&page("events/festival")).to_string();
     assert!(
-        festival.contains(r#"datetime="2026-12-04">Friday, December 4, 2026 – Sunday, December 6, 2026</time>"#),
+        festival.contains(r#"datetime="2026-12-04">"#)
+            && visible_text(&festival).contains("Friday, December 4, 2026 – Sunday, December 6, 2026"),
         "{festival}"
     );
 

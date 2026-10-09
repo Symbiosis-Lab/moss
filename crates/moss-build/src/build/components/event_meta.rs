@@ -39,7 +39,7 @@ pub fn render(doc: &ParsedDocument, lang: Language, emit_source_lines: bool, cal
     html.push_str(&format!(
         r#"<time class="moss-event-time" datetime="{}">{}</time>"#,
         start.sort_key(),
-        html_escape(&format_range(start, end, lang)),
+        time_parts(start, end, lang),
     ));
     // A resolved place already has its own linked line under the meta line.
     if doc.place_line.is_none() && !doc.location.is_empty() {
@@ -182,22 +182,11 @@ fn segments(start: EventTime, end: Option<EventTime>, lang: Language) -> Vec<Seg
     out
 }
 
-fn format_range(start: EventTime, end: Option<EventTime>, lang: Language) -> String {
-    segments(start, end, lang)
-        .into_iter()
-        .map(|s| match s {
-            Seg::Text(t) | Seg::Part(_, t) => t,
-        })
-        .collect()
-}
-
-/// The same written time as [`render`] puts in the page's meta line, as a
-/// `<time>` whose pieces (`moss-when-weekday`, `-day`, `-month`, `-year`,
-/// `-time`) sit in their own spans so a theme can lay a listing's date out as
-/// it likes. `datetime` is the start as written; the visible text is the same
-/// words the page shows.
-pub fn render_when(start: EventTime, end: Option<EventTime>, lang: Language) -> String {
-    let mut html = format!(r#"<time class="moss-when" datetime="{}">"#, start.sort_key());
+/// The written time as inner HTML: each part in its `moss-when-*` span, the
+/// punctuation as bare text. Shared by the page's meta line and listings, so
+/// both show the same words in the same pieces.
+fn time_parts(start: EventTime, end: Option<EventTime>, lang: Language) -> String {
+    let mut html = String::new();
     for seg in segments(start, end, lang) {
         match seg {
             Seg::Text(t) => html.push_str(&html_escape(&t)),
@@ -206,8 +195,16 @@ pub fn render_when(start: EventTime, end: Option<EventTime>, lang: Language) -> 
             }
         }
     }
-    html.push_str("</time>");
     html
+}
+
+/// The same written time as [`render`] puts in the page's meta line, as a
+/// `<time>` whose pieces (`moss-when-weekday`, `-day`, `-month`, `-year`,
+/// `-time`) sit in their own spans so a theme can lay a listing's date out as
+/// it likes. `datetime` is the start as written; the visible text is the same
+/// words the page shows.
+pub fn render_when(start: EventTime, end: Option<EventTime>, lang: Language) -> String {
+    format!(r#"<time class="moss-when" datetime="{}">{}</time>"#, start.sort_key(), time_parts(start, end, lang))
 }
 
 #[cfg(test)]

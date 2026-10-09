@@ -16,11 +16,36 @@ fn doc(start: &str, end: Option<&str>) -> ParsedDocument {
     }
 }
 
-fn time_text(d: &ParsedDocument, lang: Language) -> String {
+fn time_element(d: &ParsedDocument, lang: Language) -> String {
     let html = render(d, lang, false, None).unwrap();
-    let from = html.find("\">").unwrap() + 2;
-    let from = html[from..].find("\">").unwrap() + from + 2;
-    html[from..html.find("</time>").unwrap()].to_string()
+    let from = html.find(r#"<time class="moss-event-time""#).unwrap();
+    let to = from + html[from..].find("</time>").unwrap() + "</time>".len();
+    html[from..to].to_string()
+}
+
+fn time_text(d: &ParsedDocument, lang: Language) -> String {
+    let element = time_element(d, lang);
+    let inner = &element[element.find('>').unwrap() + 1..element.len() - "</time>".len()];
+    let mut text = String::new();
+    let mut in_tag = false;
+    for c in inner.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => text.push(c),
+            _ => {}
+        }
+    }
+    text
+}
+
+#[test]
+fn the_page_time_carries_the_listing_date_parts() {
+    let d = doc("2026-11-01 14:00", Some("2026-11-01 16:00"));
+    let element = time_element(&d, Language::En);
+    assert!(element.contains(r#"<span class="moss-when-day">1</span>"#), "{element}");
+    assert!(element.contains(r#"<span class="moss-when-time">2:00–4:00 PM</span>"#), "{element}");
+    assert_eq!(time_text(&d, Language::En), "Sunday, November 1, 2026, 2:00–4:00 PM");
 }
 
 #[test]
