@@ -68,7 +68,7 @@ pub(crate) fn repair_staged_html(
     // something other than moss) is asked of its live CAS blob here too,
     // rather than being dropped from the manifest on the strength of a stage
     // path this generation was never going to read from anyway.
-    let object_store = crate::build::cache::ObjectStore::new(mp.cache_objects());
+    let object_store = crate::build::cache::ObjectStore::for_site(mp);
     let lost = crate::build::ship::drop_absent_outputs(stage_dir, sealed, Some(&object_store));
     let verdict = crate::build::ship::ShipVerdict::after_presence_pass(sealed, entries, lost.len());
     unshippable.extend(lost);

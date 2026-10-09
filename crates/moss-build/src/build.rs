@@ -907,14 +907,35 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // `mut`: content-producing process hooks (e.g. Matters import) may write
     // files into the source folder; we re-scan + rebind after the hook await
     // so the SAME build renders them (B13). See the post-hook re-scan below.
+    let scan_failure = |failure: scan::scan::ScanFailure| {
+        let evidence = cloud_ledger::InputEvidence::new(config.source());
+        evidence.require(config.source(), cloud_ledger::InputRole::DirectoryStructure);
+        evidence.read_error(config.source(), failure.to_string());
+        crate::system::build_records::records().install_publish_preflight(
+            &folder_path, types::PublishPreflightProjection {
+                build_generation, missing_references: Vec::new(), unresolved_inputs: evidence.unresolved_structural(),
+            },
+        );
+        if matches!(&failure, scan::scan::ScanFailure::Storage(unavailable) if unavailable.pending.is_some()) {
+            cloud_readiness::raise_gate_for_a_deferred_build(
+                &folder_path, 0, &[], config.progress.as_ref(), &failure.to_string(),
+            );
+        } else {
+            // A terminal scan error supersedes the previous deferred attempt.
+            // The host reports the actual failure; it must not inherit a stale
+            // cloud waiting latch or announce a usable generation.
+            cloud_readiness::take_gate(&folder_path);
+        }
+        format!("Failed to scan folder: {}", failure)
+    };
     let (mut project_info, mut project_structure) = {
-        let ps = scan::scan::scan_folder_with_dedup_emit(
+        let ps = scan::scan::scan_folder_with_dedup_emit_with_error(
             &folder_path,
             config.host.metadata_dedup.as_deref(),
             config.host.scan_events.as_ref(),
             config.defers_image_placeholders(),
         )
-        .map_err(|e| format!("Failed to scan folder: {}", e))?;
+        .map_err(&scan_failure)?;
         let pi = ProjectInfo::from_structure(&ps, &config.root);
         (pi, ps)
     };
@@ -1021,7 +1042,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // snapshot and left every imported page one generation behind.
     if wait_process && !skip_plugins && !skip_process {
         let _rescan_trace = PhaseTrace::start("scan_after_process_hooks");
-        match scan::scan::scan_folder_with_dedup_emit(
+        match scan::scan::scan_folder_with_dedup_emit_with_error(
             &folder_path,
             config.host.metadata_dedup.as_deref(),
             None,
@@ -1031,13 +1052,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                 project_info = ProjectInfo::from_structure(&ps, &config.root);
                 project_structure = ps;
             }
-            Err(e) => {
-                log::warn!(
-                    target: "build",
-                    "Re-scan after process hooks failed: {}; rendering pre-import snapshot",
-                    e
-                );
-            }
+            Err(failure) => return Err(scan_failure(failure)),
         }
     }
 

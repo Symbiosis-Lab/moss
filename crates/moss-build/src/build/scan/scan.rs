@@ -702,9 +702,10 @@ fn extract_media_metadata_cached(
         let modified_clone = modified.clone();
         // Capture FFmpeg bin_path string so we can reconstruct inside closure.
         let ffmpeg_bin = ffmpeg.map(|f| f.bin_path().to_string());
-        // Capture cache paths for reconstruction inside the closure.
-        let objects_dir = objects.root().to_path_buf();
-        let transforms_dir = transform_cache.root().to_path_buf();
+        // Owned clones retain site identity and local replica access after
+        // this borrowed scan context leaves the singleflight closure.
+        let objects = objects.clone();
+        let transform_cache = transform_cache.clone();
         let hash_clone = hash.clone();
 
         let (result, shared) = dedup.do_work(&dedup_key, move || {
@@ -719,15 +720,7 @@ fn extract_media_metadata_cached(
                 ffmpeg_mgr.as_ref(),
             );
 
-            // Store the result in the transform cache for next time.
-            // Reconstruct cache infrastructure from paths because ObjectStore/TransformCache
-            // are borrowed from the enclosing scope and cannot be captured by reference in
-            // a FnOnce + Send closure. These types are stateless path wrappers, so
-            // reconstruction is safe — from the two paths captured above, not derived from
-            // one another, so this stays correct even if the store and the transform cache
-            // ever stop being siblings on disk.
-            let objects = ObjectStore::new(objects_dir);
-            let transform_cache = TransformCache::new(transforms_dir, ObjectStore::new(objects.root().to_path_buf()));
+            // The cloned stores preserve their site and publication ownership.
             write_cached_meta(&objects, &transform_cache, &hash_clone, size, &CachedMediaMeta::from(&meta));
 
             meta
@@ -929,15 +922,90 @@ pub fn scan_folder_with_dedup_emit(
     // passes `false` to extract them synchronously so the built HTML is complete.
     defer_placeholders: bool,
 ) -> Result<ProjectStructure, String> {
+    scan_folder_with_dedup_emit_with_error(folder_path, metadata_dedup, emitter, defer_placeholders)
+        .map_err(|failure| failure.to_string())
+}
+
+#[derive(Debug)]
+pub enum ScanFailure {
+    Message(String),
+    Storage(crate::build::cloud_readiness::storage::Unavailable),
+}
+
+impl std::fmt::Display for ScanFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ScanFailure::Message(message) => f.write_str(message),
+            ScanFailure::Storage(failure) => write!(f, "{failure}"),
+        }
+    }
+}
+
+fn collect_source_walk(path: &Path) -> Result<crate::build::cloud_readiness::storage::StorageValue, crate::build::cloud_readiness::StorageFailure> {
+    use crate::build::cloud_readiness::{StorageFailure, StorageOperation};
+    #[cfg(test)]
+    crate::build::cloud_readiness::storage::test_probe(path, StorageOperation::RootMetadata)?;
+    let metadata = std::fs::metadata(path).map_err(|e| StorageFailure::new(Some(path.to_path_buf()), StorageOperation::RootMetadata, e))?;
+    if !metadata.is_dir() {
+        return Err(StorageFailure::new(Some(path.to_path_buf()), StorageOperation::RootMetadata,
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "Path is not a directory")));
+    }
+    let mut nested_boundaries = Vec::new();
+    let mut entries = Vec::new();
+    for entry in WalkDir::new(path).into_iter().filter_entry(|e| match left_out_of_site(e) {
+        None => true,
+        Some(LeftOut::NestedSite) => { nested_boundaries.push(e.path().to_path_buf()); false }
+        Some(LeftOut::AgentInstructions) => {
+            log::info!("Skipping {}: agent instructions are tooling, not a page", e.file_name().to_string_lossy());
+            false
+        }
+        Some(LeftOut::ExcludedDir) => false,
+        Some(LeftOut::HiddenFile) => {
+            log::info!("Skipping {}: a dot-prefixed file is not published", e.file_name().to_string_lossy());
+            false
+        }
+    }) {
+        let entry = entry.map_err(StorageFailure::from_walkdir)?;
+        #[cfg(test)]
+        crate::build::cloud_readiness::storage::test_probe(entry.path(), StorageOperation::WalkEntry)?;
+        let metadata = if entry.file_type().is_file() {
+            Some(entry.metadata().map_err(|e| StorageFailure::from_walkdir_operation(e, StorageOperation::EntryMetadata))?)
+        } else { None };
+        entries.push((entry, metadata));
+    }
+    Ok(crate::build::cloud_readiness::storage::StorageValue::Walk { entries, nested_boundaries })
+}
+
+/// Typed counterpart to [`scan_folder_with_dedup_emit`]. Storage failures stay
+/// structured until the caller chooses its user-facing error boundary.
+pub fn scan_folder_with_dedup_emit_with_error(
+    folder_path: &str,
+    metadata_dedup: Option<&crate::build::cache::Singleflight<MediaMetadata>>,
+    emitter: Option<&ScanEventEmitter>,
+    defer_placeholders: bool,
+) -> Result<ProjectStructure, ScanFailure> {
     let path = Path::new(folder_path);
 
-    if !path.exists() {
-        return Err(format!("Folder does not exist: {}", folder_path));
-    }
-
-    if !path.is_dir() {
-        return Err(format!("Path is not a directory: {}", folder_path));
-    }
+    let root = path.to_path_buf();
+    let session = crate::system::folder_session::registry().get(folder_path);
+    let snapshot = crate::build::cloud_readiness::storage::await_operation(
+        path,
+        crate::build::cloud_readiness::storage::OperationPolicy::SourceWalk,
+        crate::build::cloud_readiness::INTERACTIVE_DEADLINE,
+        &|| session.as_ref().is_some_and(|s| s.cancel.is_cancelled()),
+        &|| log::info!("Waiting for the source directory to become available: {}", folder_path),
+        std::sync::Arc::new(move || collect_source_walk(&root)),
+    ).map_err(|unavailable| {
+        if unavailable.pending.is_none() && unavailable.failure.operation() == crate::build::cloud_readiness::StorageOperation::RootMetadata {
+            if unavailable.failure.io_error().is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
+                return ScanFailure::Message(format!("Folder does not exist: {}", folder_path));
+            }
+        }
+        ScanFailure::Storage(unavailable)
+    })?;
+    let crate::build::cloud_readiness::storage::StorageValue::Walk { entries, nested_boundaries } = &*snapshot else {
+        unreachable!("source-walk requests return a walk snapshot");
+    };
 
     // Lazy FFmpeg resolution: only download/detect when the first video file is found.
     // Avoids ~5-10s download on builds with no video files (Task 4).
@@ -988,38 +1056,7 @@ pub fn scan_folder_with_dedup_emit(
 
     let scan_walk_start = std::time::Instant::now();
 
-    // Nested moss sites pruned by the walk below, reported once after it.
-    let mut nested_boundaries: Vec<std::path::PathBuf> = Vec::new();
-
-    // Walk through the directory recursively, reading what `left_out_of_site`
-    // keeps. A skipped agent file is logged because it sits in plain sight in
-    // the author's folder, so its absence from the built site has to be
-    // explainable from the log.
-    for entry in WalkDir::new(path)
-        .into_iter()
-        .filter_entry(|e| match left_out_of_site(e) {
-            None => true,
-            Some(LeftOut::NestedSite) => {
-                nested_boundaries.push(e.path().to_path_buf());
-                false
-            }
-            Some(LeftOut::AgentInstructions) => {
-                log::info!("Skipping {}: agent instructions are tooling, not a page", e.file_name().to_string_lossy());
-                false
-            }
-            Some(LeftOut::ExcludedDir) => false,
-            Some(LeftOut::HiddenFile) => {
-                log::info!("Skipping {}: a dot-prefixed file is not published", e.file_name().to_string_lossy());
-                false
-            }
-        }) {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(e) => {
-                return Err(format!("Failed to scan site entry: {}", e));
-            }
-        };
-
+    for (entry, metadata) in entries {
         // Skip directories, only process files — but first record the
         // directory path so empty/childless folders still get an index page.
         // The WalkDir `filter_entry` above already pruned excluded dirs
@@ -1064,14 +1101,7 @@ pub fn scan_folder_with_dedup_emit(
             Err(_) => moss_core::slug::normalize_separators(&file_path.to_string_lossy()),
         };
 
-        // Get file metadata
-        let metadata = match entry.metadata() {
-            Ok(meta) => meta,
-            Err(e) => {
-                log::warn!("Failed to read metadata for {}: {}", relative_path, e);
-                continue;
-            }
-        };
+        let metadata = metadata.as_ref().expect("file metadata is collected with the complete walk");
 
         let size = metadata.len();
         let mtime_secs = metadata.modified()

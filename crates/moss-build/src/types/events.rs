@@ -212,6 +212,11 @@ pub use crate::types::event_payloads::{
     ThresholdPromptKind, UpdateAvailable, UpdateCheckResult, UpdateDownloadProgress,
 };
 
+/// Terminal result of an actual structural read; consumers retry their full
+/// operation for the current candidate instead of accepting cached entries.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Type, PartialEq, Eq)]
+pub enum SourceStructureOutcome { Ready, Failed }
+
 #[derive(Clone, Debug, Serialize, Type)]
 #[serde(tag = "kind", content = "payload")]
 pub enum MossEvent {
@@ -222,6 +227,9 @@ pub enum MossEvent {
     AssetsSettled(AssetsSettled),
     VideoConversionProgress(VideoConversionProgress),
     BuildComplete(BuildComplete),
+    /// A previously deferred source walk or editor listing settled. This is
+    /// independent of build completion and byte-download admission.
+    SourceStructureSettled { folder_path: String, path: String, outcome: SourceStructureOutcome },
     /// `current` now points at this generation. `BuildComplete` says the build
     /// finished; this says the result is what a preview would load. They are
     /// not the same instant, and the gap between them is where a UI can

@@ -5,6 +5,61 @@ use std::fs;
 use std::path::Path;
 
 #[test]
+fn walkdir_failure_keeps_path_errno_and_opaque_operation() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("vanished");
+    let error = walkdir::WalkDir::new(&missing).into_iter().next().unwrap().unwrap_err();
+    let failure = crate::build::cloud_readiness::StorageFailure::from_walkdir(error);
+
+    assert_eq!(failure.path(), Some(missing.as_path()));
+    assert_eq!(
+        failure.operation(),
+        crate::build::cloud_readiness::StorageOperation::WalkEntry,
+        "WalkDir does not identify which internal syscall failed"
+    );
+    assert_eq!(failure.raw_os_error(), Some(libc::ENOENT));
+}
+
+#[cfg(unix)]
+#[test]
+fn walkdir_non_io_failure_keeps_original_cause() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    symlink(".", dir.path().join("loop")).unwrap();
+    let error = walkdir::WalkDir::new(dir.path())
+        .follow_links(true)
+        .into_iter()
+        .find_map(Result::err)
+        .expect("symlink loop yields a WalkDir error");
+    let failure = crate::build::cloud_readiness::StorageFailure::from_walkdir(error);
+
+    assert_eq!(failure.operation(), crate::build::cloud_readiness::StorageOperation::WalkEntry);
+    assert!(failure.source().downcast_ref::<walkdir::Error>().is_some());
+}
+
+#[test]
+fn walkdir_entry_metadata_failure_keeps_child_path_and_operation() {
+    let dir = tempfile::tempdir().unwrap();
+    let child = dir.path().join("child.md");
+    fs::write(&child, "# child").unwrap();
+    let entry = walkdir::WalkDir::new(dir.path())
+        .into_iter()
+        .find_map(|entry| entry.ok().filter(|entry| entry.path() == child))
+        .unwrap();
+    fs::remove_file(&child).unwrap();
+    let error = entry.metadata().unwrap_err();
+    let failure = crate::build::cloud_readiness::StorageFailure::from_walkdir_operation(
+        error,
+        crate::build::cloud_readiness::StorageOperation::EntryMetadata,
+    );
+
+    assert_eq!(failure.path(), Some(child.as_path()));
+    assert_eq!(failure.operation(), crate::build::cloud_readiness::StorageOperation::EntryMetadata);
+    assert_eq!(failure.raw_os_error(), Some(libc::ENOENT));
+}
+
+#[test]
 fn test_file_extension_categorization() {
     let md_extensions = vec!["md", "markdown", "mdown", "mkd"];
     for ext in md_extensions {
@@ -2645,4 +2700,39 @@ fn a_dot_prefixed_page_is_not_published() {
     let names: Vec<String> = result.markdown_files.iter().map(|f| f.path.clone()).collect();
     assert!(names.iter().any(|p| p.ends_with("shown.md")), "{names:?}");
     assert!(!names.iter().any(|p| p.contains(".draft")), "{names:?}");
+}
+
+#[test]
+fn availability_scan_recovers_root_metadata_without_false_absence() {
+    use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
+    let dir = tempfile::Builder::new().prefix("scan-ready-").tempdir().unwrap();
+    fs::write(dir.path().join("one.md"), "# one").unwrap();
+    let _fault = TestFault::install(dir.path(), dir.path(), StorageOperation::RootMetadata, 1, std::time::Duration::from_secs(3));
+    let result = scan_folder(dir.path().to_str().unwrap()).unwrap();
+    assert_eq!(result.markdown_files.len(), 1);
+}
+
+#[test]
+fn availability_scan_recovers_opaque_walk_as_a_complete_candidate() {
+    use crate::build::cloud_readiness::{StorageOperation, storage::TestFault};
+    let dir = tempfile::Builder::new().prefix("scan-ready-").tempdir().unwrap();
+    let child = dir.path().join("second.md");
+    fs::write(dir.path().join("first.md"), "# first").unwrap();
+    fs::write(&child, "# second").unwrap();
+    let _fault = TestFault::install(dir.path(), &child, StorageOperation::WalkEntry, 1, std::time::Duration::from_secs(3));
+    let result = scan_folder(dir.path().to_str().unwrap()).unwrap();
+    assert_eq!(result.markdown_files.len(), 2);
+}
+
+#[test]
+fn availability_scan_timeout_returns_no_partial_candidate() {
+    use crate::build::cloud_readiness::{StorageOperation, storage::TestFault, Settled};
+    let dir = tempfile::Builder::new().prefix("scan-ready-").tempdir().unwrap();
+    let child = dir.path().join("second.md");
+    fs::write(dir.path().join("first.md"), "# first").unwrap();
+    fs::write(&child, "# second").unwrap();
+    let _fault = TestFault::install(dir.path(), &child, StorageOperation::WalkEntry, 1000, std::time::Duration::from_millis(20));
+    let result = scan_folder_with_dedup_emit_with_error(dir.path().to_str().unwrap(), None, None, false);
+    let ScanFailure::Storage(error) = result.unwrap_err() else { panic!("not a contextual storage stop") };
+    assert_eq!(error.pending, Some(Settled::TimedOut));
 }
