@@ -154,7 +154,7 @@ The explicit entry makes the source HTML win only the root `index.html` output c
 
 A file in the site folder that is not a page — a script, a data file, a stylesheet a page links itself — reaches the built site at the same path: `closing.js` beside `index.md` is served at `/closing.js`, byte for byte. Images and videos go through moss's media conversion instead, the same as an embed's. A folder is passthrough when it holds its own `index.html`, or when `[build].passthrough` names it (`passthrough = ["index.html", "demo"]`; a leading `!` opts out a folder moss detected). Its videos are copied byte for byte and it gets no folder listing page, but its images are still re-encoded in place, at their own size and path (a lighter JPEG, a palette PNG), so an app that needs a pixel-exact image cannot rely on passthrough for it. Markdown inside it is still rendered as pages.
 
-A raw `.html` page is listed in `sitemap.xml` unless its `<head>` (first 8 KiB) holds `<meta name="robots" content="noindex">` (or `none`); `listed: false` is the frontmatter equivalent for a Markdown page.
+A raw `.html` page is listed in `sitemap.xml` unless its first 8 KiB holds `<meta name="robots" content="noindex">` (or `none`); `listed: false` is the frontmatter equivalent for a Markdown page.
 
 Where a file goes follows what owns it. `.moss/theme/` is the site's theme, for every page moss generates: its `style.css` and `script.js` load on each of them, and whatever sits beside them ships with the theme under `/_moss/theme/`. A source-owned HTML document owns its own scripts and assets instead, so keep them beside it as ordinary files, or in a passthrough folder, and link them by path. One page's script put in the theme would travel with the theme to every page and tie that page to the theme's mount path.
 
@@ -344,6 +344,8 @@ sort: [intro, setup, advanced]
 A page's own `weight:` is an integer that `sort: weight` orders by — lower first, and pages with no weight follow after the weighted ones, tied among themselves by stem.
 
 A section can show a shorter name in the nav bar than its title: `nav_label: Reading` on a page titled "Course of Reading". The nav bar and the footer links (`footer: true`) use it; the page's own heading, the browser tab title, listing cards, breadcrumbs and feeds keep the title. A blank `nav_label` is ignored.
+
+`url:` sets where a page is published, relative to its folder: `url: share/ID` publishes at `share/id/`. A `/` is kept as a path separator, each part is cleaned up on its own, and `..` parts are dropped.
 
 `series:` on a folder index turns on prev/next chrome for its children: `true` follows the folder's own order, a list of wikilinks declares an explicit sequence, `false` turns it off. Set `series: false` on a page inside the folder instead, and that one page drops out of the reading order — no prev/next of its own, and it stops being any sibling's prev or next. Declaring `sort:` as an explicit list, or as `sort: weight`, turns `series` on by default.
 

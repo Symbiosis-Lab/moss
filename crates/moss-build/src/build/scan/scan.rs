@@ -1464,6 +1464,19 @@ pub fn scan_folder_with_dedup_emit_with_error(
     // Narrow `dirs` to what it is FOR — see `classify::gets_index_page`.
     let attachment_folder = crate::build::site_config::load_attachment_folder(folder_path);
     dirs.retain(|d| crate::build::scan::classify::gets_index_page(d, &passthrough_roots, &attachment_folder));
+    // Skip the listing of a folder that only carries a pre-built app (see
+    // `classify::holds_only_prebuilt_apps`). Empty and asset-only folders keep
+    // theirs: `folder_index_plan_tests` pins that.
+    let page_paths: Vec<&str> = markdown_files.iter().chain(&notebook_files).map(|f| f.path.as_str()).collect();
+    // An app-only folder still keeps its listing while a kept folder sits
+    // beneath it, since that folder's breadcrumb links up to it.
+    let app_only: Vec<bool> = dirs.iter().map(|d| crate::build::scan::classify::holds_only_prebuilt_apps(d, &passthrough_roots, &page_paths)).collect();
+    let kept: Vec<String> = dirs.iter().zip(&app_only).filter(|(_, a)| !**a).map(|(d, _)| d.clone()).collect();
+    let mut flags = app_only.into_iter();
+    dirs.retain(|d| {
+        let app_only = flags.next().unwrap_or(false);
+        !app_only || kept.iter().any(|k| k.starts_with(&format!("{d}/")))
+    });
 
     let structure = ProjectStructure {
         root_path: folder_path.to_string(),

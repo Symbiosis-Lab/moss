@@ -14,8 +14,8 @@ pub struct SitemapEntry {
 
 /// Whether a raw `.html` file carries a `<meta name="robots">` whose content has
 /// a `noindex` or `none` token. Raw pages are copied through unparsed, so the
-/// file is the only place that says. Only the first 8 KiB is read: a robots
-/// meta belongs in `<head>`, and a cut-off tail is not an error.
+/// file is the only place that says. Only the first 8 KiB is read: a
+/// cut-off tail is not an error.
 pub(crate) fn declares_noindex(path: &std::path::Path) -> bool {
     use lol_html::{element, HtmlRewriter, Settings};
     use std::io::Read;

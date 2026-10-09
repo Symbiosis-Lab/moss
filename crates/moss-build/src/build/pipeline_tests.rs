@@ -6860,6 +6860,11 @@ fn the_sitemap_leaves_out_html_pages_that_declare_noindex() {
     for (name, html) in pages {
         fs::write(test_dir.join(name), html).unwrap();
     }
+    // Only the first 8 KiB is read: a meta past it is not seen, one inside it is.
+    let noindex = "<meta name=\"robots\" content=\"noindex\">";
+    let padded = |pad: usize| format!("<html><head>{}{noindex}</head></html>", " ".repeat(pad));
+    fs::write(test_dir.join("too-late.html"), padded(9000)).unwrap();
+    fs::write(test_dir.join("just-inside.html"), padded(8000)).unwrap();
     fs::create_dir_all(test_dir.join("share/abc123")).unwrap();
     fs::write(
         test_dir.join("share/abc123/index.html"),
@@ -6869,10 +6874,10 @@ fn the_sitemap_leaves_out_html_pages_that_declare_noindex() {
 
     build_test_at_site_url(folder_path).expect("build");
     let sitemap = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/sitemap.xml")).unwrap();
-    for kept in ["music", "about", "commented"] {
+    for kept in ["music", "about", "commented", "too-late"] {
         assert!(sitemap.contains(&format!("/{kept}</loc>")), "the sitemap must list {kept}\n{sitemap}");
     }
-    for out in ["scales", "closed", "share/abc123/", "hidden/"] {
+    for out in ["scales", "closed", "just-inside", "share/abc123/", "hidden/"] {
         assert!(!sitemap.contains(&format!("/{out}</loc>")), "the sitemap must not list {out}\n{sitemap}");
     }
 }
