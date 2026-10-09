@@ -7600,6 +7600,53 @@ a.moss-grid-card:hover {
   }
 }
 
+/* Justified rows (`:::gallery rows`). Flex wraps the items into rows, and
+   each item's flex-grow equals its ratio, so the widths stay in proportion
+   and every item in a row gets the same height. */
+.moss-gallery[data-layout="rows"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--moss-gallery-gap, 6px);
+}
+
+/* Basis is the row height scaled by the item's ratio, so a wide photo takes
+   more of the row than a portrait at the same height. --ar is set inline on
+   each item by the emitter. */
+.moss-gallery[data-layout="rows"] > .moss-gallery-item {
+  flex: var(--ar) 1 calc(var(--ar) * var(--moss-gallery-row-height, 16rem));
+}
+
+/* The picture is inline by default, which leaves a descender gap under the
+   image and makes items in one row differ in height. */
+.moss-gallery[data-layout="rows"] .moss-gallery-item picture {
+  display: block;
+}
+
+.moss-gallery[data-layout="rows"] .moss-gallery-item img {
+  width: 100%;
+  height: auto;
+  aspect-ratio: var(--ar);
+  object-fit: cover;
+  display: block;
+}
+
+/* A zero-width trailing item that takes the slack in the last row, so its
+   photos keep the row height instead of stretching across the full width. */
+.moss-gallery[data-layout="rows"]::after {
+  content: '';
+  flex-grow: 1e9;
+  /* Flex puts a gap before the filler too. Cancelling it lets the filler fit on
+     a row the photos fill exactly; otherwise it wraps and adds an empty line. */
+  margin-left: calc(var(--moss-gallery-gap, 6px) * -1);
+}
+
+/* At phone width a 16rem row holds one photo; 9rem holds about two. */
+@media (max-width: 600px) {
+  .moss-gallery[data-layout="rows"] {
+    --moss-gallery-row-height: 9rem;
+  }
+}
+
 /* The image's link: opens the full-screen viewer (fullscreen.js), or the
    full-size image where the script has not run. Block so the link is exactly
    as tall as the picture it wraps. */

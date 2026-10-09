@@ -1007,11 +1007,26 @@ pub(crate) fn gallery_item_span(line: &str) -> Option<MediaLineSpan> {
 /// `cols=` alias warning, when that key was written).
 fn parse_gallery_body(args: &str, body: &str) -> (GalleryShortcode, Vec<String>) {
     let attrs = split_positional_classes_width_and_per_line(args);
-    let columns = attrs
+    let mut warnings = Vec::new();
+    // `rows` is a layout word, not a count: `:::gallery rows` is justified rows.
+    let (rows, count_text) = match attrs.positional.strip_prefix("rows") {
+        Some(rest) if rest.is_empty() || rest.starts_with(char::is_whitespace) => {
+            (true, rest.trim())
+        }
+        _ => (false, attrs.positional.as_str()),
+    };
+    if rows && (attrs.per_line.is_some() || !count_text.is_empty()) {
+        warnings.push(
+            "`:::gallery rows` lays out justified rows, so the column count is ignored"
+                .to_string(),
+        );
+    }
+    let count = attrs
         .per_line
         .as_deref()
-        .or(if attrs.positional.is_empty() { None } else { Some(attrs.positional.as_str()) })
+        .or(if count_text.is_empty() { None } else { Some(count_text) })
         .and_then(|v| v.parse::<u32>().ok());
+    let columns = if rows { None } else { count };
     let mut items: Vec<GalleryItem> = Vec::new();
     for line in body.lines() {
         if let Some(it) = gallery_item_span(line) {
@@ -1022,7 +1037,6 @@ fn parse_gallery_body(args: &str, body: &str) -> (GalleryShortcode, Vec<String>)
             });
         }
     }
-    let mut warnings = Vec::new();
     if attrs.used_cols_alias {
         warnings.push(cols_alias_warning("gallery"));
     }
@@ -1032,6 +1046,7 @@ fn parse_gallery_body(args: &str, body: &str) -> (GalleryShortcode, Vec<String>)
             classes: attrs.classes,
             items,
             width: attrs.width,
+            rows,
         },
         warnings,
     )

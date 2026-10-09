@@ -125,6 +125,18 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Track widths for a `:::grid`, as a `grid-template-columns` value. moss sets it on the element when the author writes a ratio (`:::grid 2 1:2` → `2fr 1fr`); the fallback is the even split for whatever `data-columns` says, and a ratio-less grid with no `data-columns` falls back to `initial`. It is a property rather than an inline `grid-template-columns` on purpose: an inline declaration beats every stylesheet rule, so a theme rule could never override it if it arrived inline. A theme setting this custom property by hand overrides the author's ratio at every width, same as any other cascade value.",
     },
     CustomProp {
+        name: "--moss-gallery-row-height",
+        owner: "moss-gallery",
+        default: "16rem",
+        description: "Height of each row in a `:::gallery rows` (the justified layout). Every photo in a row is scaled to this height, so the row's widths fill the container and each photo keeps its proportions. Set it on the gallery or on an ancestor; a narrow screen (600px and under) overrides it with 9rem so a row holds about two photos.",
+    },
+    CustomProp {
+        name: "--moss-gallery-gap",
+        owner: "moss-gallery",
+        default: "6px",
+        description: "Space between photos in a `:::gallery rows` block, on both the row and the column axis. The grid layout keeps its own gap; this only applies to the justified rows.",
+    },
+    CustomProp {
         name: "--moss-grid-scroll-peek",
         owner: "moss-grid",
         default: "2.5rem",

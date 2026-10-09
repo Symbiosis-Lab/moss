@@ -129,6 +129,10 @@ pub struct GalleryShortcode {
     /// a width — the emitter omits `data-width` so the HTML stays sparse.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<String>,
+    /// `:::gallery rows` — lay the items out as justified rows (each row fills
+    /// the width and every photo keeps its proportions) instead of the grid.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rows: bool,
 }
 
 /// One image in a [`GalleryShortcode`].
@@ -601,6 +605,7 @@ mod tests {
                 },
             ],
             width: None,
+            rows: false,
         });
         match &sc {
             Shortcode::Gallery(args) => {
@@ -632,6 +637,7 @@ mod tests {
                 attrs: "1:1 contain".to_string(),
             }],
             width: None,
+            rows: false,
         });
         let s = serde_json::to_string(&sc).expect("serialize");
         let back: Shortcode = serde_json::from_str(&s).expect("deserialize");

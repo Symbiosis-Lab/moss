@@ -228,6 +228,9 @@ pub trait RenderHooks {
                     out.push_str(w);
                     out.push('"');
                 }
+                if args.rows {
+                    out.push_str(r#" data-layout="rows""#);
+                }
                 out.push('>');
                 // Phase 4 PR1 (2026-05-27): every gallery item routes
                 // through `render::image::synthesize_image_html` with
@@ -262,7 +265,20 @@ pub trait RenderHooks {
                     // The link is what the shared full-screen viewer binds to
                     // (`fullscreen.js` reads `href` and `data-title`); without
                     // the script it is a plain link to the full-size image.
-                    out.push_str(r#"<div class="moss-gallery-item"><a class="moss-gallery-link" href=""#);
+                    // The row layout sizes each item by its ratio. Unknown or zero
+                    // dimensions fall back to 1.5, not the 800x600 placeholder.
+                    let item_style = if args.rows {
+                        let ar = match crate::render::image::lookup_dims(assets_for_synth, &src_str) {
+                            Some((w, h)) if w > 0 && h > 0 => f64::from(w) / f64::from(h),
+                            _ => 1.5,
+                        };
+                        format!(r#" style="--ar: {ar:.3}""#)
+                    } else {
+                        String::new()
+                    };
+                    out.push_str(r#"<div class="moss-gallery-item""#);
+                    out.push_str(&item_style);
+                    out.push_str(r#"><a class="moss-gallery-link" href=""#);
                     out.push_str(&escape_attr(&src_str));
                     out.push_str(r#"" data-title=""#);
                     out.push_str(&escape_attr(&item.alt));
@@ -1476,6 +1492,96 @@ mod tests {
             "count-less gallery must stay on the auto-fill rule, got: {html}"
         );
         assert!(!html.contains("--moss-gallery-columns"), "got: {html}");
+    }
+
+    /// `:::gallery rows` marks the container and gives each item its image's
+    /// aspect ratio, read from the snapshot; the CSS sizes items from `--ar`.
+    #[test]
+    fn gallery_rows_sets_layout_and_item_aspect_ratio() {
+        let mut snap = AssetSnapshot::new();
+        snap.dimensions.insert(PathBuf::from("a.jpg"), (1600, 900));
+        snap.dimensions.insert(PathBuf::from("b.jpg"), (900, 1200));
+        let item = |src: &str| GalleryItem {
+            src: Url::resolved(src, UrlKind::Asset),
+            alt: String::new(),
+            attrs: String::new(),
+        };
+        let sc = Shortcode::Gallery(GalleryShortcode {
+            rows: true,
+            items: vec![item("a.jpg"), item("b.jpg")],
+            ..Default::default()
+        });
+        let mut out = String::new();
+        DefaultHooks::with_snapshot(&snap).render_shortcode(&mut out, &sc, None);
+        assert!(out.contains(r#"data-layout="rows""#), "got: {out}");
+        assert!(
+            out.contains(r#"<div class="moss-gallery-item" style="--ar: 1.778"><a"#),
+            "got: {out}"
+        );
+        assert!(
+            out.contains(r#"<div class="moss-gallery-item" style="--ar: 0.750"><a"#),
+            "got: {out}"
+        );
+    }
+
+    /// Without dimensions in the snapshot the ratio is 1.5, not the 800x600
+    /// placeholder that the image synthesizer uses for the `<img>` itself.
+    #[test]
+    fn gallery_rows_unknown_dimensions_fall_back_to_ratio_1_5() {
+        let sc = Shortcode::Gallery(GalleryShortcode {
+            rows: true,
+            items: vec![GalleryItem {
+                src: Url::resolved("missing.jpg", UrlKind::Asset),
+                alt: String::new(),
+                attrs: String::new(),
+            }],
+            ..Default::default()
+        });
+        let mut out = String::new();
+        DefaultHooks::new().render_shortcode(&mut out, &sc, None);
+        assert!(out.contains(r#"data-layout="rows""#), "got: {out}");
+        assert!(
+            out.contains(r#"<div class="moss-gallery-item" style="--ar: 1.500"><a"#),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn gallery_rows_zero_width_falls_back_to_ratio_1_5() {
+        let mut snap = AssetSnapshot::new();
+        snap.dimensions.insert(PathBuf::from("flat.jpg"), (0, 900));
+        let sc = Shortcode::Gallery(GalleryShortcode {
+            rows: true,
+            items: vec![GalleryItem {
+                src: Url::resolved("flat.jpg", UrlKind::Asset),
+                alt: String::new(),
+                attrs: String::new(),
+            }],
+            ..Default::default()
+        });
+        let mut out = String::new();
+        DefaultHooks::with_snapshot(&snap).render_shortcode(&mut out, &sc, None);
+        assert!(
+            out.contains(r#"<div class="moss-gallery-item" style="--ar: 1.500"><a"#),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn gallery_without_rows_has_no_layout_hook_or_ratio() {
+        let sc = Shortcode::Gallery(GalleryShortcode {
+            items: vec![GalleryItem {
+                src: Url::resolved("a.jpg", UrlKind::Asset),
+                alt: String::new(),
+                attrs: String::new(),
+            }],
+            ..Default::default()
+        });
+        let mut out = String::new();
+        DefaultHooks::new().render_shortcode(&mut out, &sc, None);
+        assert!(!out.contains("data-layout"), "got: {out}");
+        assert!(!out.contains("--ar"), "got: {out}");
+        assert!(out.contains(r#"<div class="moss-gallery-item"><a class="moss-gallery-link""#), "got: {out}");
     }
 
     #[test]

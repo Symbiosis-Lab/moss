@@ -559,6 +559,40 @@ fn extracts_gallery_with_columns_arg() {
     assert!(result.warnings.is_empty(), "positional form should not warn: {:?}", result.warnings);
 }
 
+// ---- Gallery `rows` ----
+
+#[test]
+fn gallery_rows_positional_sets_rows_without_columns() {
+    let md = ":::gallery rows\na.jpg\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Gallery(g) => {
+            assert!(g.rows);
+            assert_eq!(g.columns, None);
+        }
+        other => panic!("expected Gallery, got {other:?}"),
+    }
+    assert!(result.warnings.is_empty(), "rows alone should not warn: {:?}", result.warnings);
+}
+
+#[test]
+fn gallery_rows_with_a_count_warns_and_ignores_the_count() {
+    let md = ":::gallery rows 3\na.jpg\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Gallery(g) => {
+            assert!(g.rows);
+            assert_eq!(g.columns, None, "the count is ignored with rows");
+        }
+        other => panic!("expected Gallery, got {other:?}"),
+    }
+    assert!(
+        result.warnings.iter().any(|w| w.contains("rows") && w.contains("column count")),
+        "expected a rows/count warning, got {:?}",
+        result.warnings
+    );
+}
+
 // ---- Gallery `per-line` (renamed from `cols`) ----
 
 #[test]
