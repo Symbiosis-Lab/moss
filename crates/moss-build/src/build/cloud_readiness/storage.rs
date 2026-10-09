@@ -105,11 +105,27 @@ impl fmt::Display for StorageFailure {
         };
         match &self.path {
             Some(path) if self.operation == StorageOperation::ReadDirOpen
-                && self.io_error().is_some_and(|error| error.kind() == io::ErrorKind::NotADirectory) =>
+                && self.io_error().is_some_and(is_not_directory) =>
                 write!(f, "'{}' is not a directory ({operation}: {})", path.display(), self.source),
             Some(path) => write!(f, "{operation} at '{}': {}", path.display(), self.source),
             None => write!(f, "{operation}: {}", self.source),
         }
+    }
+}
+
+fn is_not_directory(error: &io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        error.raw_os_error() == Some(libc::ENOTDIR)
+    }
+    #[cfg(windows)]
+    {
+        // Win32 ERROR_DIRECTORY: the directory name is invalid.
+        error.raw_os_error() == Some(267)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        false
     }
 }
 
@@ -462,7 +478,11 @@ fn wait_for_operation(
             // A late subscriber cannot certify a new source candidate from a
             // walk that began before its request. Dedup lasts through the old
             // native call; the next queued operation supplies a fresh receipt.
-            if state.started_at.is_none_or(|at| at < requested_at) {
+            let stale = match state.started_at {
+                Some(at) => at < requested_at,
+                None => true,
+            };
+            if stale {
                 state.waiters -= 1;
                 drop(state);
                 let Some(fresh) = pool.structural_operation(key.clone(), attempt.clone()) else {

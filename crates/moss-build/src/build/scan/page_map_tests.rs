@@ -331,6 +331,53 @@ mod build_page_map_tests {
     }
 
     #[test]
+    fn slash_url_override_on_an_index_cascades_to_children_with_the_same_prefix() {
+        let dir = setup_temp_dir(&[
+            ("Sec/Old/index.md", "---\nurl: a/B\n---\n# Old"),
+            ("Sec/Old/child.md", "# Child"),
+        ]);
+        let files = vec![make_file("Sec/Old/index.md"), make_file("Sec/Old/child.md")];
+        let winners =
+            compute_home_file_winners(&files, "mysite", &std::collections::HashMap::new());
+        let (map, _) = build_page_map(
+            &files,
+            dir.path(),
+            "mysite",
+            &winners,
+            &std::collections::HashMap::new(),
+        );
+
+        assert_eq!(map.get("Sec/Old/index.md").unwrap(), "sec/a/b/index.html");
+        assert_eq!(map.get("Sec/Old/child.md").unwrap(), "sec/a/b/child/index.html");
+    }
+
+    #[test]
+    fn slash_url_override_on_a_nested_index_cascades_to_its_children() {
+        let dir = setup_temp_dir(&[
+            ("top/index.md", "---\nurl: Alpha\n---\n# Top"),
+            ("top/mid/index.md", "---\nurl: a/B\n---\n# Mid"),
+            ("top/mid/leaf.md", "# Leaf"),
+        ]);
+        let files = vec![
+            make_file("top/index.md"),
+            make_file("top/mid/index.md"),
+            make_file("top/mid/leaf.md"),
+        ];
+        let winners =
+            compute_home_file_winners(&files, "mysite", &std::collections::HashMap::new());
+        let (map, _) = build_page_map(
+            &files,
+            dir.path(),
+            "mysite",
+            &winners,
+            &std::collections::HashMap::new(),
+        );
+
+        assert_eq!(map.get("top/mid/index.md").unwrap(), "alpha/a/b/index.html");
+        assert_eq!(map.get("top/mid/leaf.md").unwrap(), "alpha/a/b/leaf/index.html");
+    }
+
+    #[test]
     fn nested_url_overrides_cascade_to_leaf() {
         // a/index.md url: alpha → alpha/index.html (from compute_url_path, own segment)
         // a/b/index.md url: beta → alpha/beta/index.html (own segment from compute_url_path,

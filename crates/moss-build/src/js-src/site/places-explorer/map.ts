@@ -19,11 +19,9 @@
  * cost was really about the FILTER's own parameters (a spike here halving
  * blur radii changed nothing in WebKit); it was about a LIVE, filtered element sitting inside a transformed subtree. This file
  * now builds that layer as a fixed-pixel canvas instead (`raster.ts`'s
- * `splitMapSvg`/`rasterizeOrFallback`), composited once and then only ever
- * moved by the SAME transform, with the world's own box permanently
- * promoted to its own compositor layer (`places-explorer.css`) rather than
- * only for the span of a gesture — nothing left for either engine to
- * re-invalidate on a pan or a zoom click. `tiles.ts`'s `TileLayer` does the
+ * `splitMapSvg`/`rasterizeOrFallback`), moved by the camera transform
+ * without forcing the entire subtree into one compositor layer.
+ * `tiles.ts`'s `TileLayer` does the
  * same for each regional tile, baking its lighting and band shadows once
  * when that tile is decoded.
  *

@@ -299,14 +299,8 @@ test("zooming in and resetting back to cover leaves the map crisp at the coast",
   const before = await page.screenshot({ clip, scale: "css" });
   const transformBefore = await page.locator(".moss-places-world").evaluate((el) => (el as HTMLElement).style.transform);
 
-  // A real pinch — not the zoom capsule — is what exercises the bug: the
-  // capsule's own click handler always calls applyCamera(true) directly
-  // (never mid-gesture), so it never promotes the world layer to its own
-  // compositing layer in the first place and could not catch a regression
-  // here. A pinch spans many real pointermove frames between pointerdown
-  // and pointerup, each one unsettled (data-gesture present, will-change
-  // active) until the final settle — the actual window the blur bug lived
-  // in. Symmetric spread-then-pinch (10..100..10px half-distance) returns
+  // Exercise unsettled camera updates before the final settle. Symmetric
+  // spread-then-pinch (10..100..10px half-distance) returns
   // the same distance ratio product (telescoping to 1), so the camera lands
   // back on the same zoom without any explicit reset.
   await page.locator(".moss-places-viewport").evaluate((el) => {
@@ -330,8 +324,8 @@ test("zooming in and resetting back to cover leaves the map crisp at the coast",
   });
   await page.waitForTimeout(150);
 
-  const stillCompositing = await page.locator(".moss-places-world").evaluate((el) => el.hasAttribute("data-gesture"));
-  expect(stillCompositing, "the world layer must demote out of compositing once the camera settles").toBe(false);
+  await expect(page.locator(".moss-places-world"), "the camera must not flatten regional detail into a permanently promoted world layer")
+    .not.toHaveCSS("will-change", /transform/);
 
   // The camera itself must also land back on very nearly the same
   // transform — belt and braces alongside the pixel sample below: a

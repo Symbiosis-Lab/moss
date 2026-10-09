@@ -890,6 +890,20 @@ mod tests {
     }
 
     #[test]
+    fn a_multi_segment_url_colliding_with_a_real_page_is_numbered_in_place() {
+        // `url: share/id` against a real `share/id.md`.
+        let mut docs = vec![
+            make_test_doc("Real", "share/id/index.html"),
+            make_test_doc("Override", "share/id/index.html"),
+        ];
+
+        resolve_duplicate_slugs_with_lang(&mut docs, crate::i18n::Language::En);
+
+        assert_eq!(docs[0].url_path, "share/id/index.html");
+        assert_eq!(docs[1].url_path, "share/id-2/index.html");
+    }
+
+    #[test]
     fn test_resolve_duplicate_slugs_with_duplicates() {
         let mut docs = vec![
             make_test_doc("Hello World", "hello.html"),

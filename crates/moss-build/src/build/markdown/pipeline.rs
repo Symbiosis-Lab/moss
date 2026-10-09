@@ -528,6 +528,7 @@ pub fn process_markdown_file(
     // Normalize legacy `series: [list]` form into `sort: List + series: Flag(true)`.
     // Task 5: defensive conversion for future authors who might write the old form.
     frontmatter.normalize();
+    let event = crate::build::types::EventFields::from_frontmatter(&frontmatter);
 
     // Translate the deprecated `sidebar:` field for both simplified and YAML
     // paths. Runs after frontmatter is fully parsed so it sees the final state
@@ -1416,25 +1417,7 @@ pub fn process_markdown_file(
         editor: frontmatter.editor.unwrap_or_default(),
         jury: frontmatter.jury.unwrap_or_default(),
         location: frontmatter.location.unwrap_or_default(),
-        event: frontmatter.start.as_deref().and_then(|s| moss_core::event::EventTime::parse(s).ok()).map(|start| {
-            let text = |k: &str| {
-                raw_frontmatter
-                    .get(k)
-                    .and_then(|v| v.as_str())
-                    .map(str::trim)
-                    .filter(|v| !v.is_empty())
-                    .map(str::to_string)
-            };
-            crate::build::types::EventFields {
-                when: start.sort_key(),
-                start,
-                end: frontmatter.end.as_deref().and_then(|e| moss_core::event::EventTime::parse(e).ok()),
-                timezone: text("timezone"),
-                status: frontmatter.status.clone(),
-                tickets: frontmatter.tickets.clone(),
-                online: frontmatter.online.clone(),
-            }
-        }),
+        event,
         author_page: frontmatter.author_page,
         tag_page: frontmatter.tag_page,
         editor_page: frontmatter.editor_page,

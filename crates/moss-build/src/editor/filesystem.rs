@@ -771,7 +771,10 @@ mod tests {
         assert!(error.contains("is not a directory"), "{error}");
         let unavailable = list_directory_counted(file.to_str().unwrap(), dir.path().to_str().unwrap(), false).unwrap_err();
         assert_eq!(unavailable.pending, None);
-        assert_eq!(unavailable.failure.io_error().unwrap().kind(), std::io::ErrorKind::NotADirectory);
+        #[cfg(unix)]
+        assert_eq!(unavailable.failure.raw_os_error(), Some(libc::ENOTDIR));
+        #[cfg(windows)]
+        assert_eq!(unavailable.failure.raw_os_error(), Some(267));
     }
 
     #[test]
