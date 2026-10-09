@@ -58,6 +58,9 @@ pub struct Takeover {
     /// they are about to be recorded as an editor rather than an author.
     pub field: Option<String>,
     pub files: Vec<NewFile>,
+    /// Proven directory emptiness; unknown when enumeration fails.
+    #[serde(default)]
+    pub folder_empty: Option<bool>,
 }
 
 /// The recipe for `url` (site-relative, no leading slash, trailing slash
@@ -79,6 +82,7 @@ pub fn takeover_for(
     if key.is_empty() {
         return Some(Takeover {
             kind: TakeoverKind::RootHome,
+            folder_empty: folder_empty(project_root, project_root),
             display: root_name.to_string(),
             field: None,
             files: vec![home_note(project_root, root_name)],
@@ -108,6 +112,7 @@ pub fn takeover_for(
         });
         return Some(Takeover {
             kind: TakeoverKind::TermPage,
+            folder_empty: None,
             display: site.display.clone(),
             field: Some(field),
             files,
@@ -129,7 +134,7 @@ pub fn takeover_for(
         let home = folder.url_note(key).unwrap_or_else(|| {
             home_note_in(&folder.dir, &folder.name, serde_json::json!({ "home": true, "listed": false }))
         });
-        return Some(Takeover { kind: TakeoverKind::FolderHome, display: title, field: None, files: vec![home] });
+        return Some(Takeover { folder_empty: Some(false), kind: TakeoverKind::FolderHome, display: title, field: None, files: vec![home] });
     }
     if generated
         && !key.contains('/')
@@ -143,6 +148,7 @@ pub fn takeover_for(
         let stem = Path::new(root_home).file_stem()?.to_str()?;
         return Some(Takeover {
             kind: TakeoverKind::LangHome,
+            folder_empty: None,
             display: moss_core::home::endonym(key).unwrap_or(key).to_string(),
             field: None,
             files: vec![NewFile {
@@ -159,10 +165,22 @@ pub fn takeover_for(
     let (dir, name) = (dir?, name?);
     Some(Takeover {
         kind: TakeoverKind::FolderHome,
+        folder_empty: folder_empty(Path::new(&dir), project_root),
         display: name.clone(),
         field: None,
         files: vec![home_note(Path::new(&dir), &name)],
     })
+}
+
+/// A failed listing is never proof that an author's folder is empty. Files
+/// still in cloud storage count as entries without reading their contents.
+pub fn folder_empty(folder: &Path, project_root: &Path) -> Option<bool> {
+    let entries = crate::editor::filesystem::list_directory_inner(
+        &folder.to_string_lossy(), &project_root.to_string_lossy(), false,
+    ).map_err(|error| {
+        log::warn!("[folder_empty] directory enumeration unavailable: {error}");
+    }).ok()?;
+    Some(entries.iter().all(|entry| crate::build::scan::classify::is_os_metadata_file(&entry.name)))
 }
 
 /// A subfolder's home in one more language, when the language is a filename
@@ -203,7 +221,7 @@ fn translated_folder_home(map: &ArticleMap, project_root: &Path, folder_url: &st
         Some(Some(stem)) if moss_core::home::is_index_stem(stem) => vec![translation],
         Some(_) => return None,
     };
-    Some(Takeover { kind: TakeoverKind::FolderHome, display: name, field: None, files })
+    Some(Takeover { folder_empty: Some(false), kind: TakeoverKind::FolderHome, display: name, field: None, files })
 }
 
 /// The top-level directory a namespace's files live in, and whether it
@@ -670,3 +688,7 @@ mod tests {
         assert_eq!(serde_json::Value::Object(f.frontmatter.clone()), serde_json::json!({ "author_page": "A/B" }));
     }
 }
+
+#[cfg(test)]
+#[path = "takeover_empty_tests.rs"]
+mod empty_tests;
