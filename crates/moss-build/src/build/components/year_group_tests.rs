@@ -131,6 +131,30 @@ fn test_render_sorts_within_year() {
 }
 
 #[test]
+fn undated_rows_follow_every_dated_row_in_both_directions() {
+    let row = |date: Option<&str>, title: &str| ArticleListItemProps {
+        date_display: date.map(|_| "2025 · 01".to_string()).unwrap_or_default(),
+        date_raw: date.map(|d| d.to_string()),
+        url: format!("{title}.html"),
+        title: title.to_string(),
+        url_path: String::new(),
+        place: None,
+        when_html: None,
+    };
+    let articles = vec![
+        row(None, "Loose Note"),
+        row(Some("2024-03-01T00:00:00Z"), "March Concert"),
+        row(Some("2025-11-17T00:00:00Z"), "November Gala"),
+    ];
+    for ascending in [false, true] {
+        let html = render(&articles, false, crate::i18n::Language::En, None, ascending);
+        let pos = |title: &str| html.find(title).unwrap();
+        assert!(pos("Loose Note") > pos("March Concert"), "ascending={ascending}: {html}");
+        assert!(pos("Loose Note") > pos("November Gala"), "ascending={ascending}: {html}");
+    }
+}
+
+#[test]
 fn test_render_sorts_by_precise_datetime() {
     // Test that articles in the same month are sorted by exact datetime
     let articles = vec![
