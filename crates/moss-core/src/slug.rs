@@ -9,6 +9,8 @@
 //! UID generation and duplicate-slug deduplication remain in moss-build
 //! pending a planned byte-slicing audit.
 
+use unicode_normalization::UnicodeNormalization;
+
 /// Converts a string to a URL-safe slug.
 ///
 /// - Lowercases ASCII
@@ -19,7 +21,11 @@
 /// - Caps at 100 chars
 /// - Falls back to `"untitled"` for empty results
 pub fn generate_slug(text: &str) -> String {
+    // Compose first (NFC): a decomposed name from macOS/iCloud would otherwise
+    // lose its combining marks and get a different URL than its composed twin.
     let result = text
+        .nfc()
+        .collect::<String>()
         .to_lowercase()
         .replace([' ', '_'], "-")
         .replace('&', "and")
@@ -75,6 +81,12 @@ pub fn slugify_path_segments(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nfd_and_nfc_spellings_give_the_same_slug() {
+        assert_eq!(generate_slug("cafe\u{0301} au lait"), "caf\u{00e9}-au-lait");
+        assert_eq!(slugify_path_segments("Dossier-e\u{0301}te\u{0301}/x"), slugify_path_segments("Dossier-\u{e9}t\u{e9}/x"));
+    }
 
     #[test]
     fn ascii_lowercased_and_hyphenated() {
