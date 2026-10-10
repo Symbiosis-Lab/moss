@@ -137,3 +137,24 @@ fn header_tokens_are_read_by_moss_rules() {
     assert!(css.contains(".main-nava:not(.mobile-open*){color:var(--moss-header-ink,"), "nav ink: {css}");
     assert!(css.contains("body>header.site-name{color:var(--moss-header-ink,"), "site name ink: {css}");
 }
+
+/// A page whose body is only its opening hero keeps `<main id="main-content">`
+/// (the skip link targets it) and its hidden `<h1>`, but no empty
+/// `<article class="container">`, whose margin left blank page above the footer.
+#[test]
+fn a_hero_only_home_renders_no_empty_article() {
+    let site = Site::new();
+    site.write(".moss/config.toml", b"[site]\ndomain = \"example.com\"\n");
+    write_png(&site, "poster.png", [48, 96, 160]);
+    site.write("index.md", b"---\ntitle: Home\n---\n\n:::hero\n![](/poster.png)\n\nOverlay words\n:::\n");
+    site.write("about.md", b"---\ntitle: About\nlisted: false\n---\n\nSome body text.\n");
+    let out = site.build();
+
+    let home = read(&out, "index.html");
+    assert!(home.contains(r#"<main id="main-content""#), "main landmark kept:\n{home}");
+    assert!(home.contains(r#"<h1 class="moss-folder-title visually-hidden""#) && home.contains(">Home</h1>"), "heading kept:\n{home}");
+    assert!(!home.contains("<article"), "empty article:\n{home}");
+
+    let about = read(&out, "about/index.html");
+    assert!(about.contains(r#"<article class="container""#), "a page with text keeps its article:\n{about}");
+}

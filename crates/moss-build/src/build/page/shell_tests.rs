@@ -2475,6 +2475,8 @@ fn both_templates_carry_the_share_qr_attribute() {
     for kind in [ShellType::Article, ShellType::Page] {
         let vars = ShellVars {
             share_qr_attr: r#" data-share-qr="/qr/posts-a.svg""#.to_string(),
+            // A page with no body at all has no article to carry it.
+            homepage_content: "<p>Body.</p>".to_string(),
             ..test_vars()
         };
         let out = ShellProcessor::new().process(kind, vars);

@@ -3296,7 +3296,11 @@ title: Home
 uid: "tfh00001"
 ---
 
-Hello.
+:::hero
+![](/poster.png)
+
+Overlay words
+:::
 `,
     "about.md": `---
 title: About

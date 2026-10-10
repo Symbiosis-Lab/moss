@@ -289,6 +289,21 @@ pub struct ShellVars {
     pub robots_meta: Option<String>,
 }
 
+impl ShellVars {
+    /// A Page with nothing after its hero (a home made only of an opening
+    /// hero): no text beyond the visually hidden page heading, and no comments. The heading stays, directly in
+    /// `<main>`, so the page keeps its `<h1>`.
+    fn has_no_body(&self) -> bool {
+        let body = self.homepage_content.trim();
+        let only_hidden_title = body
+            .strip_prefix(r#"<h1 class="moss-folder-title visually-hidden""#)
+            .is_some_and(|rest| rest.find("</h1>").is_some_and(|i| rest[i + 5..].trim().is_empty()));
+        // The share attributes are dropped with the article: they let a reader
+        // quote the page's text onto a card, and there is none to quote.
+        (body.is_empty() || only_hidden_title) && self.comments_attr.is_empty()
+    }
+}
+
 /// Shell processor for centralized template variable replacement
 pub struct ShellProcessor {
     registry: ShellRegistry,
@@ -312,7 +327,11 @@ impl ShellProcessor {
         // template text (no user-derived value is in the string yet), so the
         // combined result is still pure template — safe for the single
         // substitution pass below.
-        let fragment = self.registry.get_shell(shell_type);
+        let fragment = if shell_type == ShellType::Page && vars.has_no_body() {
+            PAGE_CONTENT_NO_BODY
+        } else {
+            self.registry.get_shell(shell_type)
+        };
         let template = SHELL_TEMPLATE.replace("{main_content}", fragment);
 
         // Preview flag for the chrome post-passes; read before the map takes `body_attrs`.
@@ -652,6 +671,9 @@ const MOSS_MARK_SVG: &str = include_str!("../../../icons/mark-small.svg");
 pub const ARTICLE_CONTENT: &str = include_str!("../../assets/templates/article-content.html");
 /// `<main>` content fragment for Page pages (homepage / folders / nav pages).
 pub const PAGE_CONTENT: &str = include_str!("../../assets/templates/page-content.html");
+/// The same fragment for a Page with nothing after its hero: `<main>` stays (the
+/// skip link targets it) but there is no empty `<article class="container">`.
+pub const PAGE_CONTENT_NO_BODY: &str = include_str!("../../assets/templates/page-content-no-body.html");
 pub const DEFAULT_FAVICON: &str = include_str!("../../../icons/icon.svg");
 
 // `pub(crate)` for one item: `tests::blanked`, the CSS reader the stylesheet
