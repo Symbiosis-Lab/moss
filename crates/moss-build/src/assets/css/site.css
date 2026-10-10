@@ -6680,6 +6680,62 @@ article a:where(:not(.moss-btn)):focus {
 .moss-hero-captions a {
   color: inherit;
 }
+
+/* The clip indicator of a sequence hero (added by the script): one thin bar
+   per clip, in the caption's colour, directly above the caption at its inline
+   start. The bar is the look; the button is the target (34 x 24px, the bar
+   2px tall inside it). The first grid row is the indicator, the caption takes
+   the second. The current clip's bar is lit and fills as the clip plays. */
+.moss-hero-indicator {
+  grid-area: 1 / 1;
+  display: flex;
+  color: #ffffff;
+}
+.moss-hero-captions:has(.moss-hero-indicator) > .moss-hero-caption {
+  grid-row: 2;
+}
+.moss-hero-indicator-segment {
+  position: relative;
+  inline-size: 2.125rem;
+  block-size: 1.5rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.moss-hero-indicator-segment::before,
+.moss-hero-indicator-segment::after {
+  content: "";
+  position: absolute;
+  inset-block-start: calc(50% - 1px);
+  inset-inline: 3px;
+  block-size: 2px;
+  background: currentColor;
+}
+.moss-hero-indicator-segment::before {
+  opacity: 0.4;
+  transition: opacity 0.8s ease;
+}
+.moss-hero-indicator-segment[aria-current="true"]::before {
+  opacity: 0.7;
+}
+.moss-hero-indicator-segment::after {
+  transform: scaleX(var(--moss-hero-progress, 0));
+  transform-origin: left center;
+  transition: transform 0.25s linear;
+}
+:dir(rtl) .moss-hero-indicator-segment::after {
+  transform-origin: right center;
+}
+.moss-hero-indicator-segment:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .moss-hero-indicator-segment::before,
+  .moss-hero-indicator-segment::after { transition: none; }
+}
 /* Legibility is painted once. A hero with content has its own bottom scrim
    (`.moss-hero::before`); a second gradient here would end at the caption's
    box and show as a step, or as a band over the content. Without that scrim
@@ -7213,6 +7269,9 @@ article a:where(:not(.moss-btn)):focus {
   .moss-hero:has(.moss-hero-content):not([data-mobile="overlay"]) .moss-hero-captions > .moss-hero-caption {
     color: var(--moss-color-muted);
     text-shadow: none;
+  }
+  .moss-hero:has(.moss-hero-content):not([data-mobile="overlay"]) .moss-hero-indicator {
+    color: var(--moss-color-muted);
   }
 
   /* Stacked layout: reduce the section's bottom margin — the text block

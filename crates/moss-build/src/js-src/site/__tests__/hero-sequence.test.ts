@@ -157,3 +157,70 @@ describe("initHeroSequences — reduced motion", () => {
     }
   });
 });
+
+describe("the clip indicator", () => {
+  beforeEach(() => {
+    mockMatchMedia(false);
+  });
+  afterEach(() => {
+    document.body.innerHTML = "";
+    vi.restoreAllMocks();
+  });
+
+  const segments = (hero: HTMLElement) =>
+    Array.from(hero.querySelectorAll<HTMLButtonElement>(".moss-hero-indicator-segment"));
+
+  test("one labelled button per clip, the first aria-current", () => {
+    const { hero } = buildSequence(3);
+    initHeroSequences();
+    const segs = segments(hero);
+    expect(segs).toHaveLength(3);
+    expect(segs[1].getAttribute("aria-label")).toBe("Clip 2 of 3");
+    expect(segs[0].getAttribute("aria-current")).toBe("true");
+    expect(segs[1].hasAttribute("aria-current")).toBe(false);
+  });
+
+  test("a click jumps to that clip, plays it and moves the marker and aria-current", () => {
+    const { hero, videos } = buildSequence(3);
+    initHeroSequences();
+    segments(hero)[2].click();
+    expect(currentSlide(hero)).toBe(2);
+    expect(videos[2].play).toHaveBeenCalled();
+    expect(videos[0].pause).toHaveBeenCalled();
+    expect(segments(hero)[2].getAttribute("aria-current")).toBe("true");
+    expect(segments(hero)[0].hasAttribute("aria-current")).toBe(false);
+  });
+
+  test("while paused a jump shows the chosen clip without playing it", () => {
+    const { hero, videos } = buildSequence(3);
+    initHeroSequences();
+    togglePause(hero);
+    segments(hero)[1].click();
+    expect(currentSlide(hero)).toBe(1);
+    expect(videos[1].play).not.toHaveBeenCalled();
+    expect(pauseControl(hero).checked).toBe(true);
+  });
+
+  test("the natural advance moves aria-current too", () => {
+    const { hero, videos } = buildSequence(3);
+    initHeroSequences();
+    ended(videos[0]);
+    expect(segments(hero)[1].getAttribute("aria-current")).toBe("true");
+  });
+
+  test("the playing segment's progress follows the video's time", () => {
+    const { hero, videos } = buildSequence(2);
+    initHeroSequences();
+    Object.defineProperty(videos[0], "duration", { value: 10 });
+    videos[0].currentTime = 4;
+    videos[0].dispatchEvent(new Event("timeupdate"));
+    expect(segments(hero)[0].style.getPropertyValue("--moss-hero-progress")).toBe("0.4");
+  });
+
+  test("reduced motion adds no indicator", () => {
+    mockMatchMedia(true);
+    const { hero } = buildSequence(3);
+    initHeroSequences();
+    expect(segments(hero)).toHaveLength(0);
+  });
+});

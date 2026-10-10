@@ -3253,6 +3253,21 @@ Body text.
       "end.md": hero("header=over align=end mobile=overlay"),
       "start.md": hero("header=over mobile=overlay"),
       "stacked.md": hero("header=over"),
+      "c.mp4": syntheticTestClip(640, 360),
+      "three.md": `---
+title: Three
+uid: "hcs00004"
+---
+
+:::hero {header=over mobile=overlay}
+![[a.mp4|*Title one* · Venue · 2018]]
+![[b.mp4|*Title two* · Venue · 2025]]
+![[c.mp4|*Title three* · Venue · 2026]]
+[See the work →](/work/)
+:::
+
+Body text.
+`,
       "s1.svg": HERO_LANDSCAPE_SVG,
       "s2.svg": HERO_LANDSCAPE_SVG,
       "images.md": `---

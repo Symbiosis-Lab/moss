@@ -71,6 +71,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Cap on hero media block size on desktop (height horizontally, width under vertical typesetting). `none` removes the crop entirely rather than raising it — the image renders at its own intrinsic size instead of a taller band; to make the band taller, give this a longer length (e.g. `120vb`) instead. Note the wrapper has its own cap — `.moss-hero { max-block-size: min(80vb, 800px) }` reads the same property, so setting it once lifts both. It is also the minimum height of a `mobile=overlay` hero on a phone, so `100svh` makes that hero fill the first screen.",
     },
     CustomProp {
+        name: "--moss-hero-progress",
+        owner: "moss-hero-indicator-segment",
+        default: "0",
+        description: "How far the playing clip of a sequence hero has played, 0 to 1. Set by the script on each indicator segment from the video's time; the segment's bar fills by that fraction. Read-only for a theme: restyle the bar, do not set this.",
+    },
+    CustomProp {
         name: "--moss-hero-object-position",
         owner: "moss-hero",
         default: "top",

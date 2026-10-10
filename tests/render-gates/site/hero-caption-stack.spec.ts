@@ -155,3 +155,83 @@ test("a pale cover has no hero scrim, so the captions keep their own gradient", 
     expect(before).toBe("none");
   }
 });
+
+// ── Clip indicator of a sequence hero ────────────────────────────────────────
+const SEGMENT = ".moss-hero-indicator-segment";
+
+for (const path of ["/end/", "/start/", "/stacked/", "/three/"]) {
+  for (const size of SIZES) {
+    test(`the clip indicator overlaps nothing (${path}, ${size.name})`, async ({ page }) => {
+      await page.setViewportSize({ width: size.width, height: size.height });
+      await page.goto(path);
+      await page.locator(SEGMENT).first().waitFor({ state: "attached", timeout: 5000 });
+      const n = await page.locator(SEGMENT).count();
+      expect(n).toBe(path === "/three/" ? 3 : 2);
+      const group = (await page.locator(".moss-hero-indicator").boundingBox())!;
+      const b = await boxes(page);
+      expect(overlap(group, b.caption), "indicator vs caption").toBe(false);
+      expect(overlap(group, b.content), "indicator vs content").toBe(false);
+      if (b.pause) expect(overlap(group, b.pause), "indicator vs pause").toBe(false);
+      const header = await page.locator("header").first().boundingBox();
+      if (header) expect(overlap(group, header), "indicator vs header").toBe(false);
+      // Above the caption, at its inline start.
+      expect(group.y + group.height).toBeLessThanOrEqual(b.caption.y + 1);
+      const seg = (await page.locator(SEGMENT).first().boundingBox())!;
+      expect(seg.width).toBeGreaterThanOrEqual(24);
+      expect(seg.height).toBeGreaterThanOrEqual(24);
+      expect(Math.abs(seg.x - b.caption.x)).toBeLessThan(8);
+    });
+  }
+}
+
+test("the segments are labelled and the playing one is aria-current", async ({ page }) => {
+  await page.goto("/three/");
+  const segs = page.locator(SEGMENT);
+  await expect(segs).toHaveCount(3);
+  await expect(segs.nth(1)).toHaveAttribute("aria-label", /^Clip 2 of 3: Title two/);
+  await expect(segs.nth(0)).toHaveAttribute("aria-current", "true");
+  await expect(segs.nth(1)).not.toHaveAttribute("aria-current", "true");
+});
+
+test("clicking segment 3 plays clip 3, shows caption 3 and moves aria-current", async ({ page }) => {
+  await page.goto("/three/");
+  const segs = page.locator(SEGMENT);
+  await segs.nth(2).click();
+  await expect(page.locator('.moss-hero-slide[data-slide="2"]')).toHaveAttribute("data-current", "");
+  await expect(page.locator('.moss-hero-caption[data-slide="2"]')).toBeVisible();
+  await expect(page.locator('.moss-hero-caption[data-slide="0"]')).toBeHidden();
+  await expect(segs.nth(2)).toHaveAttribute("aria-current", "true");
+  await expect(segs.nth(0)).not.toHaveAttribute("aria-current", "true");
+  await expect
+    .poll(() => page.locator('.moss-hero-slide[data-slide="2"] video').evaluate((v: HTMLVideoElement) => !v.paused))
+    .toBe(true);
+});
+
+test("the keyboard jumps too, and a paused sequence stays paused on the chosen clip", async ({ page }) => {
+  await page.goto("/three/");
+  const segs = page.locator(SEGMENT);
+  await segs.nth(1).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator('.moss-hero-slide[data-slide="1"]')).toHaveAttribute("data-current", "");
+  await page.locator(".moss-hero-pause").click();
+  await segs.nth(2).focus();
+  await page.keyboard.press("Space");
+  await expect(page.locator('.moss-hero-slide[data-slide="2"]')).toHaveAttribute("data-current", "");
+  await expect(segs.nth(2)).toHaveAttribute("aria-current", "true");
+  expect(await page.locator('.moss-hero-slide[data-slide="2"] video').evaluate((v: HTMLVideoElement) => v.paused)).toBe(true);
+  await expect(page.locator(".moss-hero-pause input")).toBeChecked();
+});
+
+test("the playing segment's bar fills from the video's time", async ({ page }) => {
+  await page.goto("/three/");
+  await expect
+    .poll(() => page.locator(SEGMENT).first().evaluate((el) => Number(el.style.getPropertyValue("--moss-hero-progress"))))
+    .toBeGreaterThan(0);
+});
+
+test("reduced motion: no indicator (nothing plays, so nothing to jump between)", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/three/");
+  await page.waitForLoadState("load");
+  await expect(page.locator(SEGMENT)).toHaveCount(0);
+});
