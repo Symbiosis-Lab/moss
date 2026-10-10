@@ -17,10 +17,19 @@ fn hero_block(image_url: Option<&str>, overlay: Vec<Block>) -> Block {
         width: None,
         mobile: None,
         align: None,
-        caption: String::new(),
+        caption: Vec::new(),
         slide_captions: Vec::new(),
         header: None,
     }))
+}
+
+/// The text of a caption that parsed to one plain run, for comparing against
+/// the author's words.
+fn caption_text(caption: &[Inline]) -> &str {
+    match caption {
+        [Inline::Text(t)] => t,
+        other => panic!("a plain caption is one text run, got {other:?}"),
+    }
 }
 
 /// A caption belongs to the hero, not to whichever of the three syntaxes
@@ -31,17 +40,17 @@ fn caption_is_read_from_every_hero_syntax() {
     let cap = "Cover: the memorial wall (photo: A. Photographer)";
 
     let (attr_form, _, _) = parse_hero(&format!("{{image=cover.jpg caption=\"{cap}\"}}"), "", &cfg);
-    assert_eq!(attr_form.caption, cap);
+    assert_eq!(caption_text(&attr_form.caption), cap);
     assert_eq!(attr_form.overlay_text, "", "a caption is not overlay text");
 
     let (directive_form, _, _) = parse_hero(&format!("./cover.jpg {{caption=\"{cap}\"}}"), "", &cfg);
-    assert_eq!(directive_form.caption, cap);
+    assert_eq!(caption_text(&directive_form.caption), cap);
 
     let (body_form, _, _) = parse_hero(&format!("{{caption=\"{cap}\"}}"), "![[cover.jpg]]\n", &cfg);
-    assert_eq!(body_form.caption, cap);
+    assert_eq!(caption_text(&body_form.caption), cap);
 
     let (plain, _, _) = parse_hero("{image=cover.jpg}", "", &cfg);
-    assert_eq!(plain.caption, "", "no caption written, none invented");
+    assert!(plain.caption.is_empty(), "no caption written, none invented");
 }
 
 #[test]

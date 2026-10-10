@@ -30,7 +30,7 @@
 
 use super::document::Document;
 use super::hooks::RenderHooks;
-use super::node::Block;
+use super::node::{Block, Inline};
 use super::parser::{parse_fragment_with_config, ParseConfig};
 use crate::resolve::md_extract::{AssetPathSpan, MediaLineSpan, PathContainer};
 use super::shortcode::{HeroShortcode, Shortcode};
@@ -272,7 +272,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
     let align = parsed.get("align").map(str::to_string);
     // Read once, for all three image-source branches below — a caption belongs
     // to the hero, not to whichever syntax named its image.
-    let caption = parsed.get("caption").unwrap_or_default().trim().to_string();
+    let caption = parse_caption_inlines(parsed.get("caption").unwrap_or_default().trim(), config);
     // The `alt` key is the only way to describe an `image=` or directive-form
     // hero picture; on a body embed it overrides the embed's own `![alt]`.
     let alt_attr = parsed.get("alt").unwrap_or_default().to_string();
@@ -355,7 +355,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
     let mut image_alt = String::new();
     let mut image_attrs = String::new();
     let mut extra_images: Vec<Url> = Vec::new();
-    let mut slide_captions: Vec<String> = Vec::new();
+    let mut slide_captions: Vec<Vec<Inline>> = Vec::new();
     for &k in &run.media {
         let Some(m) = hero_media_line_span(lines[k]) else {
             continue;
@@ -363,9 +363,9 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
         // A pipe made only of media keywords (`cover top`) is attributes; any
         // other pipe text is that slide's caption.
         let (slide_attrs, caption) = if is_media_attrs_pipe(&m.attrs) {
-            (m.attrs, String::new())
+            (m.attrs, Vec::new())
         } else {
-            (String::new(), m.attrs.trim().to_string())
+            (String::new(), parse_caption_inlines(m.attrs.trim(), config))
         };
         slide_captions.push(caption);
         if image_path.is_none() {
@@ -457,6 +457,19 @@ fn parse_overlay_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Diag
         return (Vec::new(), Diagnostics::default());
     }
     fragment_parts(parse_fragment_with_config(raw, config))
+}
+
+/// A caption is one line of inline markdown. Anything that does not parse to
+/// a single paragraph (a heading-like line, a list marker) is kept as plain
+/// text, so it renders as the author wrote it.
+fn parse_caption_inlines(raw: &str, config: &ParseConfig) -> Vec<Inline> {
+    if raw.is_empty() {
+        return Vec::new();
+    }
+    match parse_fragment_with_config(raw, config).blocks.as_slice() {
+        [Block::Paragraph(children)] => children.clone(),
+        _ => vec![Inline::Text(raw.to_string())],
+    }
 }
 
 /// File extensions recognized as media for hero body-image fallback.

@@ -579,7 +579,7 @@ mod tests {
             width: None,
             mobile: None,
             align: None,
-            caption: String::new(),
+            caption: Vec::new(),
             slide_captions: Vec::new(),
             header: None,
         }))]);

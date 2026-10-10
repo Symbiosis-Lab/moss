@@ -141,6 +141,15 @@ where
             for block in &mut args.overlay {
                 visit_urls_in_block(block, callback);
             }
+            // Captions are inline markdown too; a link in one is a body link.
+            for inline in &mut args.caption {
+                visit_urls_in_inline(inline, callback);
+            }
+            for caption in &mut args.slide_captions {
+                for inline in caption {
+                    visit_urls_in_inline(inline, callback);
+                }
+            }
         }
         Shortcode::Grid(args) => {
             // Phase 4 PR4.5 (2026-05-28): cells are now typed Vec<Block>;

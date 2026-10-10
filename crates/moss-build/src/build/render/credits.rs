@@ -275,14 +275,6 @@ fn render_rows(
 /// is not a good enough reason for a second. When the row does not render as
 /// one plain paragraph, its literal text is escaped instead.
 ///
-/// Public under the name `render_display_row` for the one other place moss
-/// shows a short authored line that may carry a link: a hero's
-/// `caption="…"`. A cover credit and a colophon credit are the same kind of
-/// text and must not diverge in what markdown they accept.
-pub(crate) fn render_display_row(row: &str) -> String {
-    render_row(row)
-}
-
 fn render_row(row: &str) -> String {
     let html = crate::build::markdown::render_markdown_to_html(row);
     let trimmed = html.trim();

@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::node::Block;
+use super::node::{Block, Inline};
 use super::url::Url;
 
 /// A typed shortcode block.
@@ -269,9 +269,11 @@ pub struct HeroShortcode {
     /// Caption of each slide, in slide order (`image`, then `extra_images`):
     /// the slide embed's pipe text when that text is not media attributes.
     /// Empty when no slide carries one, and for `image=` and directive-line
-    /// heroes, whose pipe is the frame's attributes.
+    /// heroes, whose pipe is the frame's attributes. Parsed inline markdown,
+    /// so links in a caption go through the same URL resolution as body links;
+    /// an empty entry means that slide has no caption.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub slide_captions: Vec<String>,
+    pub slide_captions: Vec<Vec<Inline>>,
     /// Pipe-suffix media attributes verbatim (e.g. "cover top",
     /// "1.5:1 contain"). Empty if no pipe in the source.
     pub attrs: String,
@@ -341,11 +343,11 @@ pub struct HeroShortcode {
     /// carrying a cover credit («封面：…（拍攝：…）») has somewhere to put it
     /// that is not on top of the subject.
     ///
-    /// A display string, rendered as inline markdown by the host — the same
-    /// treatment `byline:` / `colophon:` rows get — so a credit can be a link.
+    /// Parsed inline markdown, so a credit can be a link and that link goes
+    /// through the same URL resolution as a body link.
     /// Empty when the author wrote no caption.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub caption: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub caption: Vec<Inline>,
 }
 
 /// Arguments for [`Shortcode::Apply`].

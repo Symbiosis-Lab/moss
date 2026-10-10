@@ -711,6 +711,14 @@ where
             for block in &mut args.overlay {
                 walk_images_in_block(block, f);
             }
+            for inline in &mut args.caption {
+                walk_images_in_inline(inline, f);
+            }
+            for caption in &mut args.slide_captions {
+                for inline in caption {
+                    walk_images_in_inline(inline, f);
+                }
+            }
         }
         Shortcode::Grid(args) => {
             for cell_blocks in &mut args.cells {
@@ -852,6 +860,15 @@ where
         Shortcode::Hero(args) => {
             for block in &mut args.overlay {
                 walk_links_in_block(block, f);
+            }
+            // Captions are inline markdown: their links are body links.
+            for inline in &mut args.caption {
+                walk_links_in_inline(inline, f);
+            }
+            for caption in &mut args.slide_captions {
+                for inline in caption {
+                    walk_links_in_inline(inline, f);
+                }
             }
         }
         Shortcode::Grid(args) => {

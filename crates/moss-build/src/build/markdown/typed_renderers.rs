@@ -357,12 +357,12 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
     // image keeps today's exact byte shape. An all-video hero is a sequence
     // instead: no timed rotation, and a script advances it as each video ends.
     let slide_count = 1 + extra_hrefs.len();
-    let captions: Vec<(usize, &String)> = args
+    let captions: Vec<(usize, &Vec<moss_core::ast::Inline>)> = args
         .slide_captions
         .iter()
         .take(slide_count)
         .enumerate()
-        .filter(|(_, c)| !c.trim().is_empty())
+        .filter(|(_, c)| !c.is_empty())
         .collect();
     // Slide indices are emitted only when something addresses a slide by
     // index (a sequence, or a caption), so other heroes keep their bytes.
@@ -469,6 +469,9 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
         (slides, slides_attr)
     };
 
+    // Captions render with the overlay's hooks: they are inline markdown from
+    // the same document, so their links and images take the body's path.
+    let caption_hooks = moss_core::ast::DefaultHooks::hero_overlay(media_assets);
     // Slide captions sit after the slides, one per slide that has one. The
     // container is shared, so the stylesheet can stack them in one grid cell.
     let captions_html = if captions.is_empty() {
@@ -479,7 +482,7 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
             .map(|(i, text)| {
                 format!(
                     r#"<p class="moss-hero-caption" data-slide="{i}">{}</p>"#,
-                    crate::build::render::credits::render_display_row(text)
+                    moss_core::ast::render::render_inlines_html(&caption_hooks, text)
                 )
             })
             .collect();
@@ -505,7 +508,7 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
             " data-captioned".to_string(),
             format!(
                 r#"<p class="moss-hero-caption">{}</p>"#,
-                crate::build::render::credits::render_display_row(&args.caption)
+                moss_core::ast::render::render_inlines_html(&caption_hooks, &args.caption)
             ),
         )
     };
@@ -566,6 +569,14 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
 mod tests {
     use super::*;
 
+    /// A caption as the parser hands it to the renderer: one paragraph of inlines.
+    fn caption_inlines(md: &str) -> Vec<moss_core::ast::Inline> {
+        match moss_core::ast::parse(md).blocks.as_slice() {
+            [moss_core::ast::Block::Paragraph(children)] => children.clone(),
+            other => panic!("a caption is one paragraph, got {other:?}"),
+        }
+    }
+
     /// A cover credit has to survive as text below the picture. Printing it
     /// over the photograph — the only thing the overlay could do with it —
     /// makes it unreadable and, for a photographer's name, wrong. So the
@@ -575,7 +586,7 @@ mod tests {
     fn hero_caption_renders_below_the_image_not_over_it() {
         let args = moss_core::ast::HeroShortcode {
             image: Some(moss_core::ast::Url::resolved("cover.jpg", moss_core::ast::UrlKind::Asset)),
-            caption: "封面：河灣渡口老市場清晨開市前的剪影（拍攝：陳遠山）".to_string(),
+            caption: caption_inlines("封面：河灣渡口老市場清晨開市前的剪影（拍攝：陳遠山）"),
             ..Default::default()
         };
         let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None, crate::i18n::Language::En);
@@ -597,7 +608,17 @@ mod tests {
     fn hero_caption_renders_inline_markdown() {
         let args = moss_core::ast::HeroShortcode {
             image: Some(moss_core::ast::Url::resolved("cover.jpg", moss_core::ast::UrlKind::Asset)),
-            caption: "Photo by [A. Photographer](https://example.com)".to_string(),
+            // Resolved here, as the URL pass would have done before rendering.
+            caption: vec![
+                moss_core::ast::Inline::Text("Photo by ".to_string()),
+                moss_core::ast::Inline::Link {
+                    url: moss_core::ast::Url::resolved("https://example.com", moss_core::ast::UrlKind::External),
+                    title: None,
+                    children: vec![moss_core::ast::Inline::Text("A. Photographer".to_string())],
+                    is_wikilink: false,
+                    has_pothole: false,
+                },
+            ],
             ..Default::default()
         };
         let html = render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None, crate::i18n::Language::En);
@@ -634,7 +655,7 @@ mod tests {
                 moss_core::ast::Url::resolved("b.jpg", moss_core::ast::UrlKind::Asset),
                 moss_core::ast::Url::resolved("c.jpg", moss_core::ast::UrlKind::Asset),
             ],
-            slide_captions: vec!["*Title* · Studio · 2024".to_string(), String::new(), "Second".to_string()],
+            slide_captions: vec![caption_inlines("*Title* · Studio · 2024"), Vec::new(), caption_inlines("Second")],
             header: None,
             ..Default::default()
         };
@@ -666,7 +687,7 @@ mod tests {
         let args = moss_core::ast::HeroShortcode {
             image: Some(moss_core::ast::Url::resolved("a.mp4", moss_core::ast::UrlKind::Asset)),
             extra_images: vec![moss_core::ast::Url::resolved("b.mp4", moss_core::ast::UrlKind::Asset)],
-            slide_captions: vec!["One".to_string(), "Two".to_string()],
+            slide_captions: vec![caption_inlines("One"), caption_inlines("Two")],
             header: None,
             ..Default::default()
         };
@@ -700,7 +721,7 @@ mod tests {
                 moss_core::ast::Url::resolved("b.jpg", moss_core::ast::UrlKind::Asset),
                 moss_core::ast::Url::resolved("c.jpg", moss_core::ast::UrlKind::Asset),
             ],
-            slide_captions: vec!["One".to_string(), String::new(), "Three".to_string()],
+            slide_captions: vec![caption_inlines("One"), Vec::new(), caption_inlines("Three")],
             header: None,
             ..Default::default()
         };

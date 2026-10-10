@@ -785,6 +785,15 @@ fn push_source_line_attr(out: &mut String, source_line: Option<usize>) {
     }
 }
 
+/// Render a run of inline markdown on its own, outside any document: a hero
+/// caption. Footnote markers in it are not numbered, because a caption has no
+/// endnote section of its own.
+pub fn render_inlines_html<H: RenderHooks + ?Sized>(hooks: &H, inlines: &[Inline]) -> String {
+    let mut out = String::new();
+    render_inlines(hooks, &mut out, inlines, &mut FootnoteCtx::default());
+    out
+}
+
 pub(super) fn render_inlines<H: RenderHooks + ?Sized>(
     hooks: &H,
     out: &mut String,
