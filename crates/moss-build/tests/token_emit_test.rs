@@ -130,7 +130,7 @@ fn hero_phone_overlay_floor_and_caption_stack_declarations() {
         "mobile overlay floor must honour --moss-hero-max-height"
     );
     assert!(
-        css.contains(r#".moss-hero:has(.moss-hero-content):not([data-fit="plate"]):not([data-align="end"]) > .moss-hero-captions {"#),
+        css.contains(r#".moss-hero[data-overlay]:not([data-align="end"]) > .moss-hero-captions {"#),
         "wide captions must join the flex stack unless align=end"
     );
     assert!(
@@ -146,7 +146,7 @@ fn hero_phone_overlay_floor_and_caption_stack_declarations() {
 fn hero_slides_fill_captions_unscrimmed_pause_below_header_declarations() {
     let css = fs::read_to_string(site_css_path()).expect("site.css must exist");
     for needle in [
-        r#".moss-hero:has(.moss-hero-content):not([data-fit="plate"]) .moss-hero-slide {"#,
+        r#".moss-hero[data-overlay] .moss-hero-slide {"#,
         r#".moss-hero:has(.moss-hero-content):not([data-hero-tone="light"]) .moss-hero-captions {"#,
         r#".moss-hero[data-header="over"] .moss-hero-pause {"#,
     ] {

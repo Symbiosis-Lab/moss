@@ -1875,12 +1875,15 @@ header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.mobile-open *) 
 
 /* A soft dark wash across the top of the photo keeps the light nav legible
    over a pale image. */
+.moss-hero[data-header="over"] {
+  --moss-hero-wash-size: 6rem;
+}
 .moss-hero[data-header="over"]::after {
   content: "";
   position: absolute;
   inset-block-start: 0;
   inset-inline: 0;
-  block-size: 6rem;
+  block-size: var(--moss-hero-wash-size);
   background: linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0));
   pointer-events: none;
   z-index: 1;
@@ -6865,11 +6868,11 @@ article a:where(:not(.moss-btn)):focus {
 .moss-hero[data-slides] .moss-hero-slide:nth-child(4) { animation-delay: 21s; }
 .moss-hero[data-slides] .moss-hero-slide:nth-child(5) { animation-delay: 28s; }
 .moss-hero[data-slides] .moss-hero-slide:nth-child(6) { animation-delay: 35s; }
-.moss-hero[data-slides="2"] .moss-hero-slide { animation: moss-hero-fade-2 14s ease-in-out infinite; }
-.moss-hero[data-slides="3"] .moss-hero-slide { animation: moss-hero-fade-3 21s ease-in-out infinite; }
-.moss-hero[data-slides="4"] .moss-hero-slide { animation: moss-hero-fade-4 28s ease-in-out infinite; }
-.moss-hero[data-slides="5"] .moss-hero-slide { animation: moss-hero-fade-5 35s ease-in-out infinite; }
-.moss-hero[data-slides="6"] .moss-hero-slide { animation: moss-hero-fade-6 42s ease-in-out infinite; }
+.moss-hero[data-slides="2"] :is(.moss-hero-slide, .moss-hero-caption) { animation: moss-hero-fade-2 14s ease-in-out infinite; }
+.moss-hero[data-slides="3"] :is(.moss-hero-slide, .moss-hero-caption) { animation: moss-hero-fade-3 21s ease-in-out infinite; }
+.moss-hero[data-slides="4"] :is(.moss-hero-slide, .moss-hero-caption) { animation: moss-hero-fade-4 28s ease-in-out infinite; }
+.moss-hero[data-slides="5"] :is(.moss-hero-slide, .moss-hero-caption) { animation: moss-hero-fade-5 35s ease-in-out infinite; }
+.moss-hero[data-slides="6"] :is(.moss-hero-slide, .moss-hero-caption) { animation: moss-hero-fade-6 42s ease-in-out infinite; }
 /* A caption fades in with its slide: same keyframes and delay, so the words
    change when the picture does. */
 .moss-hero[data-slides] .moss-hero-caption:not([data-slide="0"]) { opacity: 0; }
@@ -6878,11 +6881,6 @@ article a:where(:not(.moss-btn)):focus {
 .moss-hero[data-slides] .moss-hero-caption[data-slide="3"] { animation-delay: 21s; }
 .moss-hero[data-slides] .moss-hero-caption[data-slide="4"] { animation-delay: 28s; }
 .moss-hero[data-slides] .moss-hero-caption[data-slide="5"] { animation-delay: 35s; }
-.moss-hero[data-slides="2"] .moss-hero-caption { animation: moss-hero-fade-2 14s ease-in-out infinite; }
-.moss-hero[data-slides="3"] .moss-hero-caption { animation: moss-hero-fade-3 21s ease-in-out infinite; }
-.moss-hero[data-slides="4"] .moss-hero-caption { animation: moss-hero-fade-4 28s ease-in-out infinite; }
-.moss-hero[data-slides="5"] .moss-hero-caption { animation: moss-hero-fade-5 35s ease-in-out infinite; }
-.moss-hero[data-slides="6"] .moss-hero-caption { animation: moss-hero-fade-6 42s ease-in-out infinite; }
 /* An all-video hero is a sequence, not a timed rotation: only the slide and
    caption marked `data-current` show. The renderer marks slide 0 (no script,
    reduced motion); the script moves the marker as each video ends. */
@@ -6918,22 +6916,12 @@ article a:where(:not(.moss-btn)):focus {
    unchecked), and so does hover, but only where hover is real: on touch it
    would stay stuck after a tap. Block-end inline-end corner, opposite the
    default panel (inline-start with `align=end`). */
-.moss-hero[data-slides]:has(.moss-hero-pause input:checked) .moss-hero-slide,
-.moss-hero[data-slides]:has(:focus-visible:not(.moss-hero-pause input)) .moss-hero-slide {
+.moss-hero[data-slides]:has(.moss-hero-pause input:checked) :is(.moss-hero-slide, .moss-hero-caption),
+.moss-hero[data-slides]:has(:focus-visible:not(.moss-hero-pause input)) :is(.moss-hero-slide, .moss-hero-caption) {
   animation-play-state: paused;
 }
 @media (hover: hover) {
-  .moss-hero[data-slides]:hover .moss-hero-slide {
-    animation-play-state: paused;
-  }
-}
-/* Captions freeze with their slides: the same pause triggers as above. */
-.moss-hero[data-slides]:has(.moss-hero-pause input:checked) .moss-hero-caption,
-.moss-hero[data-slides]:has(:focus-visible:not(.moss-hero-pause input)) .moss-hero-caption {
-  animation-play-state: paused;
-}
-@media (hover: hover) {
-  .moss-hero[data-slides]:hover .moss-hero-caption {
+  .moss-hero[data-slides]:hover :is(.moss-hero-slide, .moss-hero-caption) {
     animation-play-state: paused;
   }
 }
@@ -6961,10 +6949,10 @@ article a:where(:not(.moss-btn)):focus {
     inset-block: 0.5rem auto;
   }
   /* header=over puts the site header's controls on the picture's top edge
-     (its dark wash is 6rem tall); the control sits just below them. The bottom
+     (its dark wash, `--moss-hero-wash-size`, is that tall); the control sits just below them. The bottom
      corner is under the full-width panel, so it is not an option here. */
   .moss-hero[data-header="over"] .moss-hero-pause {
-    inset-block-start: 6rem;
+    inset-block-start: var(--moss-hero-wash-size);
   }
 }
 .moss-hero-pause:is(:hover, :has(input:focus-visible)) {
@@ -7010,9 +6998,8 @@ article a:where(:not(.moss-btn)):focus {
 /* Ambient motion is atmosphere, not information: honor reduced motion by
    pinning the first slide. Nothing moves, so the control goes too. */
 @media (prefers-reduced-motion: reduce) {
-  .moss-hero[data-slides] .moss-hero-slide { animation: none; }
+  .moss-hero[data-slides] :is(.moss-hero-slide, .moss-hero-caption) { animation: none; }
   .moss-hero[data-slides] .moss-hero-slide:not(:first-child) { opacity: 0; }
-  .moss-hero[data-slides] .moss-hero-caption { animation: none; }
   .moss-hero[data-slides] .moss-hero-caption:not([data-slide="0"]) { opacity: 0; }
   .moss-hero-pause { display: none; }
 }
@@ -7027,7 +7014,7 @@ article a:where(:not(.moss-btn)):focus {
    exactly 768px. `:not([data-fit="plate"])`: a plate's own rules promise
    never to crop or upscale, which this would break. */
 @media (width >= 48rem) {
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) {
+  .moss-hero[data-overlay] {
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
@@ -7036,15 +7023,15 @@ article a:where(:not(.moss-btn)):focus {
   }
 
   /* `align=end` moves the panel to the inline-end (flex-end resolves per direction). */
-  .moss-hero[data-align="end"]:has(.moss-hero-content):not([data-fit="plate"]) {
+  .moss-hero[data-overlay][data-align="end"] {
     align-items: flex-end;
   }
 
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) > picture,
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) > img,
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) > video,
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) > .moss-ambient-video,
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) > .moss-hero-slides {
+  .moss-hero[data-overlay] > picture,
+  .moss-hero[data-overlay] > img,
+  .moss-hero[data-overlay] > video,
+  .moss-hero[data-overlay] > .moss-ambient-video,
+  .moss-hero[data-overlay] > .moss-hero-slides {
     position: absolute;
     inset: 0;
     inline-size: 100%;
@@ -7052,9 +7039,9 @@ article a:where(:not(.moss-btn)):focus {
     z-index: -1; /* not 0/auto: that still paints above flow content */
   }
 
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) img,
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) video,
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) .moss-ambient-video video[data-loop] {
+  .moss-hero[data-overlay] img,
+  .moss-hero[data-overlay] video,
+  .moss-hero[data-overlay] .moss-ambient-video video[data-loop] {
     max-block-size: none;
     object-position: var(--moss-hero-object-position, top);
   }
@@ -7063,11 +7050,11 @@ article a:where(:not(.moss-btn)):focus {
      the first slide stays in flow at the video's own 16:9 height, which falls
      short of a taller hero (`--moss-hero-max-height: 100svh`) and leaves a band
      with no picture. The later slides are already absolute. */
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) .moss-hero-slide {
+  .moss-hero[data-overlay] .moss-hero-slide {
     position: absolute;
     inset: 0;
   }
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) .moss-hero-slide :is(picture, img, video, .moss-ambient-video) {
+  .moss-hero[data-overlay] .moss-hero-slide :is(picture, img, video, .moss-ambient-video) {
     inline-size: 100%;
     block-size: 100%;
     object-fit: cover;
@@ -7084,7 +7071,7 @@ article a:where(:not(.moss-btn)):focus {
   /* Captions join the same bottom stack, directly above the content, so the
      two can never overlap. Only `align=end` keeps them apart sideways (caption
      bottom-start, content bottom-end), which is why that case stays absolute. */
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]):not([data-align="end"]) > .moss-hero-captions {
+  .moss-hero[data-overlay]:not([data-align="end"]) > .moss-hero-captions {
     position: static;
     flex: none;
     align-self: flex-start;
@@ -7207,19 +7194,24 @@ article a:where(:not(.moss-btn)):focus {
     font-size: var(--moss-size-sm);
   }
 
-  /* Stacked: the slide captions are a credit line between the picture and the
-     text block, in flow, page colours, no scrim. The overlay block below puts
-     them back over the picture (same specificity, later). */
+  /* Captions are in flow in both phone layouts (stacked and overlay): an item
+     of the hero's column, so they cannot land on the content. */
   .moss-hero:has(.moss-hero-content) .moss-hero-captions {
     position: static;
     flex: none;
     max-inline-size: none;
+  }
+  .moss-hero:has(.moss-hero-content) .moss-hero-captions > .moss-hero-caption {
+    font-size: var(--moss-size-sm);
+  }
+  /* Stacked only: a credit line between the picture and the text block, in
+     page colours with no scrim. Overlay keeps the base caption look. */
+  .moss-hero:has(.moss-hero-content):not([data-mobile="overlay"]) .moss-hero-captions {
     padding: var(--moss-space-sm) var(--moss-container-padding) 0;
     background: none;
   }
-  .moss-hero:has(.moss-hero-content) .moss-hero-captions > .moss-hero-caption {
+  .moss-hero:has(.moss-hero-content):not([data-mobile="overlay"]) .moss-hero-captions > .moss-hero-caption {
     color: var(--moss-color-muted);
-    font-size: var(--moss-size-sm);
     text-shadow: none;
   }
 
@@ -7260,17 +7252,6 @@ article a:where(:not(.moss-btn)):focus {
 
   .moss-hero[data-mobile="overlay"]::before {
     content: '';
-  }
-
-  /* Captions sit in the bottom stack, directly above the content, over the
-     picture with the scrim: in flow, so they cannot meet the content. */
-  .moss-hero[data-mobile="overlay"] .moss-hero-captions {
-    padding: 2.5rem 5% 1rem;
-    background: linear-gradient(to top, rgba(0, 0, 0, 0.5), transparent);
-  }
-  .moss-hero[data-mobile="overlay"] .moss-hero-captions > .moss-hero-caption {
-    color: #ffffff;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   }
 
   .moss-hero[data-mobile="overlay"] .moss-hero-content {

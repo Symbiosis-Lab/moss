@@ -141,6 +141,9 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
     } else {
         ""
     };
+    // Words laid over the picture (not on a plate, which is never cropped or
+    // covered): the stylesheet's grow-to-fit overlay layout keys on this.
+    let overlay_attr = if is_plate { "" } else { " data-overlay" };
     let source_range_attr = match source_line {
         Some(n) => format!(r#" data-source-range="{n}-{n}""#),
         None => String::new(),
@@ -546,7 +549,7 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
         // are preserved.
         let collapsed = moss_core::ast::hooks::collapse_tag_adjacent_newlines(&html_content);
         format!(
-            "<section {}{}{}{}{}{}{}{}{}{}{}>{}<div class=\"moss-hero-content\"{}>{}</div></section>{}",
+            "<section {}{}{}{}{}{}{}{}{}{}{}{}>{}<div class=\"moss-hero-content\"{}>{}</div></section>{}",
             class_attr,
             slides_attr,
             width_attr,
@@ -558,6 +561,7 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
             plate_attr,
             caption_attr,
             header_attr,
+            overlay_attr,
             img_part,
             panel_style_attr,
             collapsed.trim(),
@@ -682,6 +686,22 @@ mod tests {
         assert!(!html.contains("moss-hero-captions"), "got: {html}");
         assert!(!html.contains("data-slide="), "got: {html}");
         assert!(html.contains(r#"<div class="moss-hero-slide">"#), "got: {html}");
+    }
+
+    #[test]
+    fn a_hero_with_words_over_a_picture_is_marked_data_overlay_but_a_plate_is_not() {
+        let overlay = vec![moss_core::ast::Block::Paragraph(vec![moss_core::ast::Inline::Text("Words".to_string())])];
+        let render = |classes: &str| {
+            let args = moss_core::ast::HeroShortcode {
+                image: Some(moss_core::ast::Url::resolved("a.jpg", moss_core::ast::UrlKind::Asset)),
+                overlay: overlay.clone(),
+                classes: classes.to_string(),
+                ..Default::default()
+            };
+            render_hero_html_typed(&args, &|s: &str| s.to_string(), None, None, None, crate::i18n::Language::En)
+        };
+        assert!(render("").contains(" data-overlay"));
+        assert!(!render("plate").contains("data-overlay"));
     }
 
     #[test]

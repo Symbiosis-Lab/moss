@@ -1202,6 +1202,12 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 description: "Emitted **only** for `:::hero {header=over}` on the hero that opens the page. The site header is laid over this hero instead of sitting in a band above it: the header is absolutely positioned with a transparent background and light text, and a soft top wash sits on the photo. Heroes further down the page ignore the option. The selector is `header:has(+ .moss-hero[data-header=\"over\"])`.",
             },
             DataAttr {
+                name: "data-overlay",
+                values: &[],
+                default: "",
+                description: "Present when the hero has words laid over its picture (`.moss-hero-content`) and is not a plate. The grow-to-fit overlay layout keys on it: media fills the frame behind the words, every slide fills the slides box, and slide captions join the bottom stack above the words.",
+            },
+            DataAttr {
                 name: "data-captioned",
                 values: &[],
                 default: "",

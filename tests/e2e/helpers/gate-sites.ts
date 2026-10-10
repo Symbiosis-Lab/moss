@@ -1124,7 +1124,7 @@ Scratch site; the assertions run against the probe page.
 </head>
 <body>
   <!-- Pale cover, overlaid. No scrim; dark type. -->
-  <section class="moss-hero" data-hero-tone="light" id="light-hero">
+  <section class="moss-hero" data-overlay data-hero-tone="light" id="light-hero">
     <img src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==" alt="">
     <div class="moss-hero-content">
       <h2 id="light-heading">Pale cover heading</h2>
@@ -1133,7 +1133,7 @@ Scratch site; the assertions run against the probe page.
   </section>
 
   <!-- No tone attribute: moss's default. Scrim on, white type. -->
-  <section class="moss-hero" id="dark-hero">
+  <section class="moss-hero" data-overlay id="dark-hero">
     <img src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==" alt="">
     <div class="moss-hero-content">
       <h2 id="dark-heading">Default heading</h2>
@@ -1141,7 +1141,7 @@ Scratch site; the assertions run against the probe page.
   </section>
 
   <!-- Pale cover in mobile overlay mode: still on the picture, so still dark. -->
-  <section class="moss-hero" data-hero-tone="light" data-mobile="overlay" id="light-overlay-hero">
+  <section class="moss-hero" data-overlay data-hero-tone="light" data-mobile="overlay" id="light-overlay-hero">
     <img src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==" alt="">
     <div class="moss-hero-content">
       <h2 id="light-overlay-heading">Overlay heading</h2>
@@ -1150,7 +1150,7 @@ Scratch site; the assertions run against the probe page.
 
   <!-- Pale cover, stacked on mobile with a cover tint: text is BELOW the image
        on the darkened band, so it must stay white. -->
-  <section class="moss-hero" data-hero-tone="light" data-cover-color
+  <section class="moss-hero" data-overlay data-hero-tone="light" data-cover-color
            style="--item-cover-color: hsla(203, 73%, 14%, 1)" id="light-stacked-hero">
     <img src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==" alt="">
     <div class="moss-hero-content">
