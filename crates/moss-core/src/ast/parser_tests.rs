@@ -2404,3 +2404,48 @@ fn alt_only_with_a_placement_is_a_figure_with_no_caption() {
         other => panic!("expected Figure, got {other:?}"),
     }
 }
+
+#[test]
+fn escaped_pipe_after_markup_or_alone_is_literal_not_alt_only() {
+    // The pipe is escaped, so the bracket text keeps it and the image is
+    // captioned from it. pulldown's events alone cannot tell these from
+    // `![*em*|](x)`: both end in an `End(Emphasis)` then a lone `|`.
+    for src in ["![*em*\\|](x.jpg)\n", "![\\|](x.jpg)\n"] {
+        match first_block(src) {
+            Block::Figure { image, caption, .. } => {
+                let cap = caption.unwrap_or_else(|| panic!("{src:?} lost its caption"));
+                assert!(crate::ast::inlines_to_plain_text(&cap).ends_with('|'), "{src:?}: {cap:?}");
+                assert!(matches!(&image, Inline::Image { alt, .. } if alt.ends_with('|')), "{src:?}: {image:?}");
+            }
+            other => panic!("{src:?}: expected Figure, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn bare_pipe_after_markup_is_alt_only() {
+    match first_block("![a *b*|](x.jpg)\n") {
+        Block::Paragraph(children) => {
+            assert!(
+                children.iter().any(|i| matches!(i, Inline::Image { alt, .. } if alt == "a b")),
+                "{children:?}"
+            );
+        }
+        other => panic!("expected Paragraph, got {other:?}"),
+    }
+}
+
+#[test]
+fn inline_image_in_prose_keeps_its_trailing_pipe() {
+    // The alt-only form is the standalone image; inside a sentence the pipe
+    // stays part of the alt, as the authoring guide says.
+    match first_block("see ![icon|](x.png) here\n") {
+        Block::Paragraph(children) => {
+            assert!(
+                children.iter().any(|i| matches!(i, Inline::Image { alt, .. } if alt == "icon|")),
+                "{children:?}"
+            );
+        }
+        other => panic!("expected Paragraph, got {other:?}"),
+    }
+}
