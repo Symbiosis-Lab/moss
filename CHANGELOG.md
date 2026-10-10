@@ -49,6 +49,8 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A link in a hero caption is underlined in the caption's colour, at rest and on hover and focus, as links in the body are. Before, the caption links had neither an underline nor a colour of their own, so nothing marked them as links (WCAG 1.4.1).
+
 - An ordinary page whose body opens with a `:::hero` holding only an image and a link (no heading) now gets its title as a visually hidden `<h1>`; it used to get no `<h1>` at all. Home, folder and article pages now share one title decision.
 - The alt-only form `![Description|](x.jpg)` follows one rule everywhere. An escaped pipe keeps its literal `|` whatever comes before it (`![*em*\|](x.jpg)` and `![\|](x.jpg)` are captioned, not alt-only), and an image inside a sentence keeps its trailing pipe in its alt text (`see ![icon|](x.png) here`), as the guide says: only an image on a line of its own is alt only.
 - A link in a `:::hero` caption resolves like a link in the body: a `[text](page.md)` or `[[Page|label]]` to a page in a subfolder gets the page's real address instead of a relative guess, and a link to a missing page produces the same build warning. Hero captions and the `caption="…"` attribute are parsed as inline markdown into the page AST, so the URL passes that visit body links now reach them.

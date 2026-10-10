@@ -153,3 +153,20 @@ fn hero_slides_fill_captions_unscrimmed_pause_below_header_declarations() {
         assert!(css.contains(needle), "site.css lost: {needle}");
     }
 }
+
+/// A caption link is drawn in the caption's own colour, so the underline is the
+/// only cue that it is a link (WCAG 1.4.1). The base `a` rule removes underlines,
+/// so the caption rule has to put one back.
+#[test]
+fn hero_caption_links_are_underlined() {
+    let css = fs::read_to_string(site_css_path()).expect("site.css must exist");
+    let start = css
+        .find(".moss-hero-captions a {")
+        .expect("site.css must style .moss-hero-captions a");
+    let rule = &css[start..];
+    let rule = &rule[..rule.find('}').expect("the caption link rule must close")];
+    assert!(
+        rule.contains("text-decoration: underline;"),
+        "caption links must be underlined, found: {rule}"
+    );
+}

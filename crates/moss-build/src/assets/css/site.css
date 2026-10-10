@@ -6677,8 +6677,18 @@ article a:where(:not(.moss-btn)):focus {
   font-size: var(--moss-size-md);
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
 }
+/* A caption link keeps the caption's colour, so the underline is what marks it
+   as a link (WCAG 1.4.1). Same line as the article links: 1px, 2px offset. The
+   line thickens on hover and focus. */
 .moss-hero-captions a {
   color: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.moss-hero-captions a:hover,
+.moss-hero-captions a:focus-visible {
+  text-decoration-thickness: 2px;
 }
 
 /* The clip indicator of a sequence hero (added by the script): one thin bar
