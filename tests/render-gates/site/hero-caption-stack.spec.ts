@@ -34,14 +34,12 @@ for (const path of ["/end/", "/start/", "/stacked/"]) {
     test(`caption, content and pause do not overlap (${path}, ${size.name})`, async ({ page }) => {
       await page.setViewportSize({ width: size.width, height: size.height });
       await page.goto(path);
-      await page.locator(".moss-hero-pause").waitFor({ state: "attached", timeout: 5000 }).catch(() => {});
       const b = await boxes(page);
       expect(b.caption.width).toBeGreaterThan(0);
       expect(overlap(b.caption, b.content), "caption vs content").toBe(false);
-      if (b.pause) {
-        expect(overlap(b.pause, b.caption), "pause vs caption").toBe(false);
-        expect(overlap(b.pause, b.content), "pause vs content").toBe(false);
-      }
+      expect(b.pause, "the pause control is rendered").not.toBeNull();
+      expect(overlap(b.pause!, b.caption), "pause vs caption").toBe(false);
+      expect(overlap(b.pause!, b.content), "pause vs content").toBe(false);
     });
   }
 }
@@ -109,12 +107,51 @@ test("phone, header=over: the pause control is never under the header's buttons"
   await page.setViewportSize({ width: 390, height: 844 });
   for (const path of ["/end/", "/start/", "/stacked/"]) {
     await page.goto(path);
-    await page.locator(".moss-hero-pause").waitFor({ state: "attached", timeout: 5000 });
     const pause = (await page.locator(".moss-hero-pause").boundingBox())!;
     const buttons = page.locator("header button, header a");
     for (let i = 0; i < (await buttons.count()); i++) {
       const b = await buttons.nth(i).boundingBox();
       if (b && b.width > 0) expect(overlap(pause, b), `${path} pause vs header control ${i}`).toBe(false);
     }
+  }
+});
+
+// ── The sequence advances, honours reduced motion, and a pale cover keeps a scrim ──
+
+test("a sequence moves to the next clip and caption when a video ends", async ({ page }) => {
+  await page.goto("/start/");
+  const hero = page.locator(".moss-hero");
+  await expect(page.locator('.moss-hero-caption[data-slide="0"]')).toBeVisible();
+  await page.locator('.moss-hero-slide[data-slide="0"] video').evaluate((v: HTMLVideoElement) => {
+    v.currentTime = Math.max(0, v.duration - 0.3);
+  });
+  await expect(page.locator('.moss-hero-caption[data-slide="1"]')).toBeVisible({ timeout: 10000 });
+  await expect(page.locator('.moss-hero-caption[data-slide="0"]')).toBeHidden();
+  await expect(page.locator('.moss-hero-slide[data-slide="1"]')).toHaveAttribute("data-current", "");
+  await expect(page.locator('.moss-hero-slide[data-slide="0"]')).not.toHaveAttribute("data-current", "");
+  await expect(hero).toBeVisible();
+});
+
+test("reduced motion: the first clip and caption stay, nothing plays, no pause control", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/start/");
+  await page.waitForLoadState("load");
+  await expect(page.locator('.moss-hero-caption[data-slide="0"]')).toBeVisible();
+  await expect(page.locator('.moss-hero-caption[data-slide="1"]')).toBeHidden();
+  await expect(page.locator(".moss-hero-pause")).toBeHidden();
+  for (const v of await page.locator(".moss-hero video").all()) {
+    expect(await v.evaluate((el: HTMLVideoElement) => el.paused)).toBe(true);
+  }
+});
+
+test("a pale cover has no hero scrim, so the captions keep their own gradient", async ({ page }) => {
+  for (const size of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(size);
+    await page.goto("/start/");
+    await page.locator(".moss-hero").evaluate((el) => (el.dataset.heroTone = "light"));
+    const bg = await page.locator(".moss-hero-captions").evaluate((el) => getComputedStyle(el).backgroundImage);
+    expect(bg, `${size.width}`).toContain("linear-gradient");
+    const before = await page.locator(".moss-hero").evaluate((el) => getComputedStyle(el, "::before").content);
+    expect(before).toBe("none");
   }
 });
