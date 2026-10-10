@@ -6942,11 +6942,6 @@ article a:where(:not(.moss-btn)):focus {
   background: rgba(0, 0, 0, 0.4);
   color: #fff;
   opacity: 0.7;
-  /* The sequence control is a button; reset the browser's button chrome. */
-  border: 0;
-  padding: 0;
-  font: inherit;
-  cursor: pointer;
 }
 /* Content at the end puts the control at the start, unless captions live
    there: then it stays at the end corner. */

@@ -105,10 +105,10 @@ export function initAmbientVideos(): void {
  * `data-active` moves to the next slide (wrapping) and that video starts; the
  * stylesheet shows the slide and caption whose `data-slide` matches it.
  *
- * The script adds the pause button (`.moss-hero-pause`) itself. While it is
- * pressed the advance stops and the current video pauses; pressing it again
- * resumes. Under reduced motion no button is added and nothing starts, and the
- * stylesheet pins slide 0 and its caption.
+ * The pause control is the server-rendered `.moss-hero-pause` checkbox: while
+ * it is checked the advance stops and the current video pauses; unchecking
+ * resumes. Under reduced motion nothing starts, the stylesheet hides the
+ * control, and it pins slide 0 and its caption.
  */
 const heroSequenceWired = new WeakSet<HTMLElement>();
 
@@ -157,7 +157,7 @@ function wireHeroSequence(hero: HTMLElement): void {
     start(next);
   };
 
-  const pause = sequencePauseButton(hero);
+  const pause = hero.querySelector<HTMLInputElement>(".moss-hero-pause input");
   let paused = false;
 
   videos.forEach((video, index) => {
@@ -167,11 +167,9 @@ function wireHeroSequence(hero: HTMLElement): void {
     });
   });
 
-  pause.addEventListener("click", () => {
-    paused = !paused;
-    pause.setAttribute("aria-pressed", String(paused));
-    pause.setAttribute("aria-label", paused ? PLAY_SEQUENCE_LABEL : PAUSE_SEQUENCE_LABEL);
-    pause.textContent = paused ? PLAY_ICON : PAUSE_ICON;
+  // The server-rendered pause checkbox (the same control a rotation has).
+  pause?.addEventListener("change", () => {
+    paused = pause.checked;
     if (paused) {
       videos[current()].pause();
     } else {
@@ -180,17 +178,3 @@ function wireHeroSequence(hero: HTMLElement): void {
   });
 }
 
-const PAUSE_SEQUENCE_LABEL = "Pause the videos";
-const PLAY_SEQUENCE_LABEL = "Play the videos";
-
-/** The sequence's one pause control: a button the script adds, styled as `.moss-hero-pause`. */
-function sequencePauseButton(hero: HTMLElement): HTMLButtonElement {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "moss-hero-pause";
-  button.setAttribute("aria-label", PAUSE_SEQUENCE_LABEL);
-  button.setAttribute("aria-pressed", "false");
-  button.textContent = PAUSE_ICON;
-  hero.appendChild(button);
-  return button;
-}

@@ -38,7 +38,7 @@ function buildSequence(count: number) {
   ).join("");
   document.body.innerHTML =
     `<section class="moss-hero" data-sequence>${slides}` +
-    `</section>`;
+    `<label class="moss-hero-pause"><input type="checkbox" aria-label="Pause"><span></span></label></section>`;
   const hero = document.querySelector<HTMLElement>(".moss-hero")!;
   const videos = Array.from(hero.querySelectorAll<HTMLVideoElement>("video"));
   for (const video of videos) {
@@ -48,8 +48,15 @@ function buildSequence(count: number) {
   return { hero, videos };
 }
 
-function pauseControl(hero: HTMLElement): HTMLButtonElement {
-  return hero.querySelector<HTMLButtonElement>(".moss-hero-pause")!;
+function pauseControl(hero: HTMLElement): HTMLInputElement {
+  return hero.querySelector<HTMLInputElement>(".moss-hero-pause input")!;
+}
+
+/** Tick the pause checkbox the way a click does: toggle, then fire `change`. */
+function togglePause(hero: HTMLElement) {
+  const input = pauseControl(hero);
+  input.checked = !input.checked;
+  input.dispatchEvent(new Event("change"));
 }
 
 function ended(video: HTMLVideoElement) {
@@ -95,17 +102,17 @@ describe("initHeroSequences — normal motion", () => {
     expect(videos[0].pause).not.toHaveBeenCalled();
   });
 
-  test("the sequence gets exactly one pause control; it stops the advance and resumes the current slide", () => {
+  test("the sequence's one pause checkbox stops the advance and resumes the current slide", () => {
     const { hero, videos } = buildSequence(3);
     initHeroSequences();
     expect(hero.querySelectorAll(".moss-hero-pause").length).toBe(1);
-    pauseControl(hero).click();
-    expect(pauseControl(hero).getAttribute("aria-pressed")).toBe("true");
+    togglePause(hero);
+    expect(pauseControl(hero).checked).toBe(true);
     expect(videos[0].pause).toHaveBeenCalled();
     ended(videos[0]);
     expect(hero.dataset.active ?? "0").toBe("0");
-    pauseControl(hero).click();
-    expect(pauseControl(hero).getAttribute("aria-pressed")).toBe("false");
+    togglePause(hero);
+    expect(pauseControl(hero).checked).toBe(false);
     expect(videos[0].play).toHaveBeenCalled();
     ended(videos[0]);
     expect(hero.dataset.active).toBe("1");

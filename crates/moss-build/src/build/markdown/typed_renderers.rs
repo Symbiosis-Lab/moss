@@ -452,15 +452,13 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
         }
         slides.push_str("</div>");
         // Moving content needs a pause control (WCAG 2.2.2). A checkbox
-        // keeps it script-free: site.css reads `:checked` to stop the slides.
-        // A sequence has no timer for the checkbox to stop; its script adds
-        // the one control the sequence needs, so none is emitted here.
-        if !sequence {
-            slides.push_str(&format!(
-                r#"<label class="moss-hero-pause"><input type="checkbox" aria-label="{}"><span aria-hidden="true"></span></label>"#,
-                html_escape(crate::i18n::t(lang, "hero_pause"))
-            ));
-        }
+        // keeps it script-free for a rotation: site.css reads `:checked` to
+        // stop the slides. A sequence has no timer for CSS to stop; its script
+        // listens to the same checkbox's `change` and holds the current video.
+        slides.push_str(&format!(
+            r#"<label class="moss-hero-pause"><input type="checkbox" aria-label="{}"><span aria-hidden="true"></span></label>"#,
+            html_escape(crate::i18n::t(lang, "hero_pause"))
+        ));
         let slides_attr = if sequence {
             " data-sequence".to_string()
         } else {
@@ -695,7 +693,7 @@ mod tests {
         assert!(html.contains(" data-sequence>"), "got: {html}");
         assert!(!html.contains("data-slides"), "got: {html}");
         assert!(!html.contains("animation"), "got: {html}");
-        assert!(!html.contains("moss-hero-pause"), "a sequence has one pause control, the video's: {html}");
+        assert_eq!(html.matches("moss-hero-pause").count(), 1, "a sequence has one pause control: {html}");
         assert!(html.contains(r#"<div class="moss-hero-slide" data-slide="1">"#), "got: {html}");
         assert!(html.contains(r#"data-slide="1">Two</p>"#), "got: {html}");
     }
