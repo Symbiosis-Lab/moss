@@ -3065,7 +3065,7 @@ fn test_breadcrumb_label_on_home_gives_a_folder_page_its_parent_and_no_header_tr
         compute_breadcrumb_segments(doc, &documents, "My Site", true, false).is_none(),
         "label on the home page takes the trail out of the header"
     );
-    let parent = parent_label_segment(doc, &documents, "My Site")
+    let parent = parent_label_segment(doc, &documents, home_breadcrumb_setting(&documents))
         .expect("a page inside a folder gets the parent label");
     assert_eq!(parent.title, "Opera");
     assert_eq!(parent.url, "/opera/");
@@ -3079,9 +3079,9 @@ fn test_breadcrumb_label_gives_no_parent_to_home_folder_note_or_top_level_page()
         make_doc_with_breadcrumb("about.html", "About", None),
     ];
 
-    assert!(parent_label_segment(&documents[0], &documents, "My Site").is_none());
-    assert!(parent_label_segment(&documents[1], &documents, "My Site").is_none());
-    assert!(parent_label_segment(&documents[2], &documents, "My Site").is_none());
+    assert!(parent_label_segment(&documents[0], &documents, home_breadcrumb_setting(&documents)).is_none());
+    assert!(parent_label_segment(&documents[1], &documents, home_breadcrumb_setting(&documents)).is_none());
+    assert!(parent_label_segment(&documents[2], &documents, home_breadcrumb_setting(&documents)).is_none());
 }
 
 #[test]
@@ -3092,7 +3092,7 @@ fn test_breadcrumb_page_false_hides_the_parent_label_under_home_label() {
         make_doc_with_breadcrumb("opera/botez.html", "Botez", Some(BreadcrumbSetting::Off)),
     ];
 
-    assert!(parent_label_segment(&documents[2], &documents, "My Site").is_none());
+    assert!(parent_label_segment(&documents[2], &documents, home_breadcrumb_setting(&documents)).is_none());
 }
 
 #[test]
@@ -3105,5 +3105,5 @@ fn test_breadcrumb_true_on_home_keeps_the_header_trail_and_adds_no_parent_label(
     let doc = &documents[2];
 
     assert!(compute_breadcrumb_segments(doc, &documents, "My Site", true, false).is_some());
-    assert!(parent_label_segment(doc, &documents, "My Site").is_none());
+    assert!(parent_label_segment(doc, &documents, home_breadcrumb_setting(&documents)).is_none());
 }

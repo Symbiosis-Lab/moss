@@ -1690,6 +1690,7 @@ pub fn generate_blocking_content_for_build(
                 head_alternates: page_rss_link.as_deref(),
             },
             show_rss_in_footer, emit_source_lines, has_sidebar_layout,
+            home_breadcrumb: crate::build::components::nav::home_breadcrumb_setting(&documents),
         },
         content_graph: Some(&content_graph), dir_overrides: &dir_overrides,
         site_url: &site_url, output_dir: Some(output_dir), source_root: source_path_buf, shared: &shared,

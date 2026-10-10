@@ -414,26 +414,22 @@ pub(crate) fn inject_article_title_h1(html_body: &str, title: &str, emit_source_
     }
 }
 
-/// Put the parent-section link (`breadcrumb: label`) above the title that
-/// `inject_article_title_h1` placed at the head of `plan`. A plan that does not
-/// open with that heading (its layout hides the title, or it has none) gets no
-/// link: the link is there to name the title it sits above.
+/// Put the parent-section link (`breadcrumb: label`) above the finished
+/// title block of `content`. Content that does not open with the injected
+/// title heading (its layout hides the title, or it has none) gets no link: the
+/// link is there to name the title it sits above. Call it after the date row
+/// and byline are spliced in, so those never have to step past the link.
 pub(crate) fn prepend_parent_label(
-    plan: &mut crate::build::markdown::body_plan::BodyPlan,
+    content: &mut String,
     parent: &crate::build::components::nav::BreadcrumbSegment,
 ) {
-    use crate::build::markdown::body_plan::BodySegment;
-    let opens_title = matches!(
-        plan.segments.first(),
-        Some(BodySegment::Html(html)) if html.starts_with("<h1 class=\"moss-article-title\"")
-    );
-    if opens_title {
+    if content.starts_with("<h1 class=\"moss-article-title\"") {
         let link = format!(
             "<a class=\"moss-parent-label\" href=\"{}\">{}</a>\n",
             html_escape(&parent.url),
             html_escape(&parent.title),
         );
-        plan.prepend_html(link);
+        content.insert_str(0, &link);
     }
 }
 
@@ -467,10 +463,6 @@ pub(crate) fn prepend_parent_label(
 /// finds the real title instead of falling through to prepend (which would
 /// land the date row and byline above the cover image).
 ///
-/// A `breadcrumb: label` link above the title is stepped past the same way,
-/// and kept in place, so the date row and byline still follow the title
-/// rather than landing above the link.
-///
 /// With no title block the fragment is prepended, which puts it at the top of
 /// `<article>` — under a hero, since the hero is hoisted out of the body and
 /// rendered above `<main>`. That is where a byline belongs on a page whose
@@ -481,41 +473,21 @@ pub(crate) fn splice_after_title_block(html_body: &str, fragment: &str) -> Strin
         return html_body.to_string();
     }
     let (prefix, body) = split_empty_folder_title_prefix(html_body);
-    let (label, titled) = split_parent_label_prefix(body);
-    if !titled.trim_start().starts_with("<h1") {
+    if !body.trim_start().starts_with("<h1") {
         return format!("{}{}{}", prefix, fragment, body);
     }
-    let Some((before, after)) = titled.split_once("</h1>") else {
+    let Some((before, after)) = body.split_once("</h1>") else {
         return format!("{}{}{}", prefix, fragment, body);
     };
 
     let mut result = String::with_capacity(html_body.len() + fragment.len() + 1);
     result.push_str(prefix);
-    result.push_str(label);
     result.push_str(before);
     result.push_str("</h1>");
     result.push('\n');
     result.push_str(fragment);
     result.push_str(after);
     result
-}
-
-/// Steps past the `breadcrumb: label` link that [`prepend_parent_label`] puts
-/// above the title, so the title block behind it is still found. Returns
-/// `("", body)` when the body does not open with that link.
-fn split_parent_label_prefix(body: &str) -> (&str, &str) {
-    const LABEL_OPEN: &str = "<a class=\"moss-parent-label\"";
-    if !body.starts_with(LABEL_OPEN) {
-        return ("", body);
-    }
-    let Some(close) = body.find("</a>") else {
-        return ("", body);
-    };
-    let mut end = close + "</a>".len();
-    if body[end..].starts_with('\n') {
-        end += 1;
-    }
-    body.split_at(end)
 }
 
 /// Splits off a leading `.moss-collection-cover-row` > `-cover-body` wrapper
@@ -1831,32 +1803,32 @@ mod tests {
     // --- splice_after_title_block ---
 
     #[test]
-    fn prepend_parent_label_sits_before_the_injected_title() {
+    fn prepend_parent_label_sits_before_the_title() {
         let parent = crate::build::components::nav::BreadcrumbSegment {
             title: "Opera & Co".to_string(),
             url: "/opera/".to_string(),
             is_current: false,
         };
-        let mut plan = crate::build::markdown::body_plan::BodyPlan::opaque(
-            inject_article_title_h1("", "Botez", false, false),
-        );
-        prepend_parent_label(&mut plan, &parent);
+        let mut content = inject_article_title_h1("", "Botez", false, false);
+        prepend_parent_label(&mut content, &parent);
         assert_eq!(
-            plan.to_html(),
+            content,
             "<a class=\"moss-parent-label\" href=\"/opera/\">Opera &amp; Co</a>\n<h1 class=\"moss-article-title\">Botez</h1>\n"
         );
     }
 
     #[test]
-    fn prepend_parent_label_skips_a_body_with_no_injected_title() {
+    fn prepend_parent_label_skips_content_with_no_visible_title() {
         let parent = crate::build::components::nav::BreadcrumbSegment {
             title: "Opera".to_string(),
             url: "/opera/".to_string(),
             is_current: false,
         };
-        let mut plan = crate::build::markdown::body_plan::BodyPlan::opaque("<p>Body</p>".to_string());
-        prepend_parent_label(&mut plan, &parent);
-        assert_eq!(plan.to_html(), "<p>Body</p>");
+        for body in ["<p>Body</p>".to_string(), inject_article_title_h1("", "Hidden", false, true)] {
+            let mut content = body.clone();
+            prepend_parent_label(&mut content, &parent);
+            assert_eq!(content, body);
+        }
     }
 
     #[test]

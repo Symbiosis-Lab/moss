@@ -34,6 +34,8 @@ pub(super) struct PageChromeContext<'a, 'd> {
     pub show_rss_in_footer: bool,
     pub emit_source_lines: bool,
     pub has_sidebar_layout: bool,
+    /// The home page's `breadcrumb:` value, read once per build.
+    pub home_breadcrumb: Option<moss_core::frontmatter_typed::BreadcrumbSetting>,
 }
 
 impl PageChromeContext<'_, '_> {

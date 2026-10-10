@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::build::components::nav::{compute_breadcrumb_segments, is_nav_bar_item_doc, parent_label_segment};
+use crate::build::components::nav::{compute_breadcrumb_segments, home_breadcrumb_setting, is_nav_bar_item_doc, parent_label_segment};
 use crate::build::facade::debug_hash;
 use crate::build::types::ParsedDocument;
 use crate::i18n::Language;
@@ -162,6 +162,7 @@ pub fn breadcrumb_ancestor_descendants(
         Some(p) => p.to_string(),
         None => return Vec::new(),
     };
+    let home_setting = home_breadcrumb_setting(documents);
     documents
         .iter()
         .filter(|d| d.url_path != folder.url_path && d.url_path.starts_with(&prefix))
@@ -172,7 +173,7 @@ pub fn breadcrumb_ancestor_descendants(
         // alone would have said no.
         .filter(|d| {
             compute_breadcrumb_segments(d, documents, "", has_content_folders, d.is_place_namespace_root).is_some()
-                || parent_label_segment(d, documents, "").is_some()
+                || parent_label_segment(d, documents, home_setting).is_some()
         })
         .map(|d| crate::build::facade::PageKey::for_document(d).cache_key().into_owned())
         .collect()

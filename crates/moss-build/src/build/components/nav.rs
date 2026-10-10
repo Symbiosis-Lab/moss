@@ -656,24 +656,26 @@ pub fn compute_breadcrumb_segments(
 pub fn parent_label_segment(
     doc: &ParsedDocument,
     all_docs: &[ParsedDocument],
-    site_title: &str,
+    home_setting: Option<BreadcrumbSetting>,
 ) -> Option<BreadcrumbSegment> {
-    if home_breadcrumb_setting(all_docs) != Some(BreadcrumbSetting::Label) {
+    if home_setting != Some(BreadcrumbSetting::Label) {
         return None;
     }
     if doc.breadcrumb == Some(BreadcrumbSetting::Off) {
         return None;
     }
-    let mut segments = trail_segments(doc, all_docs, site_title)?;
-    // [site name, parent folder, ..., current page]: a parent exists from three on.
-    if segments.len() < 3 {
+    let (_, mut tail) = trail_tail(doc, all_docs)?;
+    // [parent folder, ..., current page]: a parent exists from two on.
+    if tail.len() < 2 {
         return None;
     }
-    let parent = segments.len() - 2;
-    segments.into_iter().nth(parent)
+    let parent = tail.len() - 2;
+    tail.into_iter().nth(parent)
 }
 
-fn home_breadcrumb_setting(all_docs: &[ParsedDocument]) -> Option<BreadcrumbSetting> {
+/// The home page's `breadcrumb:` value, which decides the setting for the site.
+/// Read once per build, not per page.
+pub(crate) fn home_breadcrumb_setting(all_docs: &[ParsedDocument]) -> Option<BreadcrumbSetting> {
     all_docs
         .iter()
         .find(|d| d.url_path == "index.html")
@@ -687,6 +689,23 @@ fn trail_segments(
     all_docs: &[ParsedDocument],
     site_title: &str,
 ) -> Option<Vec<BreadcrumbSegment>> {
+    let (home_url, tail) = trail_tail(doc, all_docs)?;
+    // First segment: site name linking (language-specific) home
+    let mut segments = vec![BreadcrumbSegment {
+        title: site_title.to_string(),
+        url: home_url,
+        is_current: false,
+    }];
+    segments.extend(tail);
+    Some(segments)
+}
+
+/// The trail below the site name — each folder above the page, then the page —
+/// with the URL the site name links to (a translation root, else `/`).
+fn trail_tail(
+    doc: &ParsedDocument,
+    all_docs: &[ParsedDocument],
+) -> Option<(String, Vec<BreadcrumbSegment>)> {
     // Parse URL path into folder parts
     let parts: Vec<&str> = doc.url_path.split('/').collect();
     let folder_parts = &parts[..parts.len() - 1];
@@ -720,13 +739,6 @@ fn trail_segments(
     }
 
     let mut segments = Vec::new();
-
-    // First segment: site name linking (language-specific) home
-    segments.push(BreadcrumbSegment {
-        title: site_title.to_string(),
-        url: home_url.clone(),
-        is_current: false,
-    });
 
     // Determine the lang prefix for reconstructing full paths (if translation root was stripped)
     let lang_prefix = if home_url != "/" {
@@ -797,7 +809,7 @@ fn trail_segments(
         }
     }
 
-    Some(segments)
+    Some((home_url, segments))
 }
 
 #[cfg(test)]

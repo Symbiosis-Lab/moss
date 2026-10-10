@@ -371,6 +371,7 @@ fn generate_html_inner<'d>(
             documents: all_docs, project, layout: layout_config, site_lang,
             assets: ChromeAssets { paths: path_resolver, scripts: &shared.scripts, has_user_css, has_user_js, head_alternates },
             show_rss_in_footer, emit_source_lines, has_sidebar_layout,
+            home_breadcrumb: crate::build::components::nav::home_breadcrumb_setting(all_docs),
         },
         content_graph, dir_overrides, site_url, output_dir, source_root, shared,
     };
@@ -564,10 +565,6 @@ pub(super) fn render_page<'d>(
                 media_lookup,
                 resolved_typesetting,
             );
-            // Only the parent segment is read, so the site name passed is unused.
-            if let Some(parent) = crate::build::components::nav::parent_label_segment(doc, all_docs, "") {
-                crate::build::markdown::html_post::prepend_parent_label(&mut body, &parent);
-            }
             // Done before any cover-wrap below reads `body`, so a claimed
             // leaf's `split_at_lede` sees the locator as part of the body
             // it is splitting, same as any other segment, rather than
@@ -1291,6 +1288,14 @@ pub(super) fn render_page<'d>(
         // does not need before the piece.
         if let Some(d) = doc {
             credits::push_colophon(&mut homepage_content, &d.colophon, emit_source_lines);
+        }
+    }
+    // The `breadcrumb: label` link is chrome around the finished title block,
+    // so it goes on last: the date row and byline splices above see the title
+    // at the head of the content and need not step past anything.
+    if let Some(d) = doc {
+        if let Some(parent) = crate::build::components::nav::parent_label_segment(d, all_docs, context.chrome.home_breadcrumb) {
+            crate::build::markdown::html_post::prepend_parent_label(&mut homepage_content, &parent);
         }
     }
     // Calendar links that close the body: a folder's download and subscribe
