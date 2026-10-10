@@ -191,6 +191,18 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Background behind card content when the card carries `data-cover-color`. moss does not set this itself: it publishes each card's colour from the cover image's dominant colour as `--item-cover-color` and paints with `var(--moss-cover-color, var(--item-cover-color))`, so a theme that sets `--moss-cover-color` (on `:root`, or on `.moss-card`) wins over the extracted tint — set it to `transparent` to opt out of the tint entirely. The same `--item-cover-color` is published on a `.moss-grid-card` whose cell opens with an image, where moss paints nothing, so a hand-built cell can wear the same band with `background: var(--moss-cover-color, var(--item-cover-color))`.",
     },
     CustomProp {
+        name: "--moss-header-bg",
+        owner: "body > header",
+        default: "transparent",
+        description: "Background of the site header's band. Unset, the header has none. A page whose opening hero says `header=over` keeps its header transparent over the photo whatever this is set to, so a theme that only sets this token never needs to know about `header=over`. Set it on `:root`, with its dark-mode pair under `:root[data-theme=\"dark\"]`.",
+    },
+    CustomProp {
+        name: "--moss-header-ink",
+        owner: "body > header",
+        default: "var(--moss-color-text-secondary)",
+        description: "Colour of the nav links in the header, and of the site name beside them (whose own default is `var(--moss-color-text)`). Hover and the current page keep the accent colour, and the opened phone menu, which sits on the page background rather than on the band, keeps its own. Under `header=over` the links take the light colour of the photo whatever this is set to. Use it with `--moss-header-bg` so the text stays readable on the band.",
+    },
+    CustomProp {
         name: "--moss-bg",
         owner: "moss-card",
         default: "var(--moss-color-bg, #fff)",

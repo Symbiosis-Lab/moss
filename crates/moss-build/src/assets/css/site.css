@@ -798,6 +798,13 @@ header {
   padding-block-end: var(--moss-space-sm);
 }
 
+/* The site header's band. Transparent unless a theme sets --moss-header-bg, so
+   a theme that wants a coloured band states it with one token instead of a
+   `body > header` rule that would also beat the `header=over` rule below. */
+body > header {
+  background: var(--moss-header-bg, transparent);
+}
+
 /* Chrome clearance is NOT applied here. The moss app shell insets its
    preview iframe below the floating titlebar, so the previewed document never
    paints under the chrome and needs no compensating padding. site.css therefore
@@ -1783,6 +1790,13 @@ footer.container:has(> .moss-subscribe)::before {
   white-space: nowrap;
 }
 
+/* --moss-header-ink: the nav links' colour on the header band. Not applied
+   inside the opened phone menu, which sits on the page background rather than
+   on the band. Hover and active (below) keep the accent. */
+.main-nav a:not(.mobile-open *) {
+  color: var(--moss-header-ink, var(--moss-color-text-secondary));
+}
+
 .main-nav a:hover {
   color: var(--moss-color-ui-accent);
 }
@@ -1986,6 +2000,12 @@ header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.mobile-open *) 
   margin: 0 0.3em 0 0;
   position: relative;
   top: -0.1em;
+}
+
+/* The site name in the header takes the same --moss-header-ink as the links
+   (the floating nav island's trail sits on the page, not the band). */
+body > header .site-name {
+  color: var(--moss-header-ink, var(--moss-color-text));
 }
 
 .site-name:hover {

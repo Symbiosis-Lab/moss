@@ -47,6 +47,10 @@ are its supported configuration surface — they are the difference between
 reconfiguring a component and fighting it. Re-declaring `grid-template-columns`
 on an internal class breaks on the next release; setting `--moss-card-min` does
 not.
+Two of them replace selectors themes used to write by hand: `--moss-header-bg`
+and `--moss-header-ink` paint the header band and its nav links and site name
+(a `header=over` hero still wins on its own page). Set them on `:root`, with
+dark-mode pairs.
 
 **Read the rule you are displacing.** `moss describe --css <selector>` prints
 every shipped rule mentioning that selector, across all of moss's stylesheets,

@@ -67,6 +67,7 @@ GATES_BUILD=(
   hero-caption-stack
   content-width-escape
   hero-tone
+  theme-floor-hooks
   hero-overlay-legibility
   heading-anchor
   footnote-target

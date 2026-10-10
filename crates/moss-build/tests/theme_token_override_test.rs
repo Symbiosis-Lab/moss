@@ -121,3 +121,19 @@ fn a_theme_token_is_not_shadowed_by_an_inline_declaration() {
     );
     assert!(css.contains("var(--moss-hero-panel-bg,var(--item-hero-panel-bg"), "panel rule: {css}");
 }
+
+/// A theme states a header band and its link colour with tokens, not with
+/// selectors that have to outrank moss's own rules. These are the rules that
+/// read the tokens; the render gate `theme-floor-hooks` checks what they paint.
+#[test]
+fn header_tokens_are_read_by_moss_rules() {
+    let site = Site::new();
+    site.write(".moss/config.toml", b"[site]\ndomain = \"example.com\"\n");
+    site.write("index.md", b"---\ntitle: Home\n---\n\nBody.\n");
+    let out = site.build();
+    let css = moss_css(&out).replace(' ', "");
+
+    assert!(css.contains("body>header{background:var(--moss-header-bg,transparent)}"), "header band: {css}");
+    assert!(css.contains(".main-nava:not(.mobile-open*){color:var(--moss-header-ink,"), "nav ink: {css}");
+    assert!(css.contains("body>header.site-name{color:var(--moss-header-ink,"), "site name ink: {css}");
+}

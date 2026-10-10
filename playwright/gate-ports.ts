@@ -106,6 +106,7 @@ const GATE_PORT_KEYS = [
   'contents-ruler',
   'nav-split-order',
   'nav-split-pack',
+  'theme-floor-hooks',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

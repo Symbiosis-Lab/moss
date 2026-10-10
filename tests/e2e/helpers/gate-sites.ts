@@ -3274,3 +3274,58 @@ Body text.
     },
   };
 }
+
+// ── Theme floor hooks ────────────────────────────────────────────────────────
+// A theme that states its design with tokens alone: a coloured header band with
+// its own link colour, and plain cards on the page. Nothing here is a class
+// selector, so the pages show what moss does with the tokens. The home page is
+// only its opening hero (nothing listed under it: the other pages are
+// `listed: false`), and `about` joins the footer so there is a footer to
+// measure the gap to. Served by playwright/theme-floor-hooks.config.ts.
+const POSTER_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR4nGMwSFiAFTEMLQkAlntMAXEm5KkAAAAASUVORK5CYII=",
+  "base64",
+);
+
+export const THEME_FLOOR_HOOKS_GATE: ScratchSiteSpec = {
+  name: "theme-floor-hooks-gate",
+  files: {
+    "poster.png": POSTER_PNG,
+    "index.md": `---
+title: Home
+uid: "tfh00001"
+---
+
+Hello.
+`,
+    "about.md": `---
+title: About
+uid: "tfh00002"
+listed: false
+footer: true
+---
+
+Some body text.
+`,
+    "over.md": `---
+title: Over
+uid: "tfh00003"
+listed: false
+---
+
+:::hero {header=over}
+![](/poster.png)
+
+Overlay words
+:::
+
+Body text.
+`,
+    ".moss/config.toml": CONFIG_TOML,
+    ".moss/theme/style.css": `:root {
+  --moss-header-bg: rgb(200, 0, 0);
+  --moss-header-ink: rgb(0, 0, 255);
+}
+`,
+  },
+};

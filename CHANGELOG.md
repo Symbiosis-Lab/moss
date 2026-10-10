@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### New
 
+- `--moss-header-bg` and `--moss-header-ink` set the site header's band colour and the colour of its nav links and site name, so a theme no longer writes `body > header` and `.main-nav a` rules that also beat the `header=over` hero; a `header=over` page stays transparent with light links.
 - A `:::hero` with slide captions and words no longer draws them over each other: the caption sits directly above the words (side by side with `align=end` on a wide screen), and in a stacked phone hero it is a credit line under the picture. The pause button stays at the bottom end when captions are present. `--moss-hero-max-height` now also sets the height of a `mobile=overlay` hero on a phone, so `100svh` fills the first screen.
 - Slide captions on a hero with words no longer paint a dark gradient of their own on top of the hero's bottom shading (it showed as a rectangular step beside `align=end` words).
 - A multi-slide hero taller than its videos' own shape (`--moss-hero-max-height: 100svh`) now fills the whole frame with every slide instead of leaving a band with no picture at the bottom; its captions no longer paint a second shadow that showed as a band; and on a phone with `header=over` the pause button sits below the header's buttons instead of under them.
