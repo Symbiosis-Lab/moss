@@ -209,8 +209,8 @@ pub fn hero_at_top_owns_title(body_markdown: &str) -> bool {
 /// opens with an image and then `# Title` has its title already. Prose in a
 /// hero is not a heading, so this is false for a hero of only an image and a
 /// link. Callers that also treat an opening hero as filling the title slot
-/// combine this with [`hero_at_top_owns_title`] themselves, because the
-/// visible-title decision and the hidden-heading decision differ.
+/// combine this with [`hero_at_top_owns_title`] through [`title_outcome`]
+/// rather than themselves.
 pub fn body_supplies_title(body_markdown: &str) -> bool {
     let mut fence: Option<&str> = None;
     for line in body_markdown.lines().map(str::trim_start) {
@@ -236,6 +236,53 @@ pub fn body_supplies_title(body_markdown: &str) -> bool {
 
 /// Compute the full heading state for a page.
 pub fn compute(input: HeadingInputs<'_>) -> HeadingState {
+    let mut state = resolve(input);
+    state.visible &= !hero_at_top_owns_title(input.body_markdown);
+    state
+}
+
+/// What a page does about its title: the single answer every renderer reads,
+/// so no call site combines [`body_supplies_title`] and
+/// [`hero_at_top_owns_title`] on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TitleOutcome {
+    /// Inject the title as a visible `<h1>`.
+    Visible,
+    /// Inject it visually hidden: the page needs one top-level heading, but
+    /// the nav bar or an opening hero already stands in for the visible title.
+    Hidden,
+    /// Inject nothing: the body already supplies the page's heading.
+    None,
+}
+
+/// Decide the title outcome for a page that gets a title at all.
+///
+/// - `hidden_by_chrome`: the page's title is shown elsewhere (a nav item).
+/// - `body_heading_replaces_title`: a real body `# Heading` replaces the
+///   injected one. False for plain article pages, which keep the injected
+///   title above an authored heading (Obsidian-style inline title); an opening
+///   hero that draws a heading always replaces it.
+pub fn title_outcome(body_markdown: &str, hidden_by_chrome: bool, body_heading_replaces_title: bool) -> TitleOutcome {
+    let hero = hero_at_top_owns_title(body_markdown);
+    if body_supplies_title(body_markdown) && (body_heading_replaces_title || hero) {
+        TitleOutcome::None
+    } else if hero || hidden_by_chrome {
+        TitleOutcome::Hidden
+    } else {
+        TitleOutcome::Visible
+    }
+}
+
+/// [`title_outcome`] for an article page: [`TitleOutcome::None`] when the file
+/// gets no injected title at all (index/folder, slot file, empty `title:`).
+pub fn article_title_outcome(input: HeadingInputs<'_>, is_nav_item: bool) -> TitleOutcome {
+    if !resolve(input).visible {
+        return TitleOutcome::None;
+    }
+    title_outcome(input.body_markdown, is_nav_item, is_nav_item)
+}
+
+fn resolve(input: HeadingInputs<'_>) -> HeadingState {
     let path = std::path::Path::new(input.file_path);
 
     // Resolve text + source from frontmatter.title before all other rules.
@@ -279,10 +326,7 @@ pub fn compute(input: HeadingInputs<'_>) -> HeadingState {
         home::is_home_file(&filename_lower, parent_name) || input.is_home_override;
 
     let empty_title = source == HeadingSource::Title && text.is_empty();
-    let hero_at_top = hero_at_top_owns_title(input.body_markdown);
-
-    let visible =
-        is_markdown && !is_index_file && !empty_title && !hero_at_top && !input.slot_only;
+    let visible = is_markdown && !is_index_file && !empty_title && !input.slot_only;
 
     HeadingState { visible, text, source }
 }
@@ -300,6 +344,18 @@ mod tests {
             is_home_override: false,
             slot_only: false,
         }
+    }
+
+    #[test]
+    fn title_outcome_cases() {
+        use TitleOutcome::*;
+        let link_hero = ":::hero {image=x.jpg}\n[Go](/a/)\n:::\n";
+        assert_eq!(title_outcome("text", false, false), Visible);
+        assert_eq!(title_outcome("text", true, true), Hidden);
+        assert_eq!(title_outcome(link_hero, false, false), Hidden);
+        assert_eq!(title_outcome(":::hero\n# T\n:::\n", false, false), None);
+        assert_eq!(title_outcome("# T\n", true, true), None);
+        assert_eq!(title_outcome("# T\n", false, false), Visible);
     }
 
     #[test]

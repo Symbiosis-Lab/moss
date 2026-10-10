@@ -20,6 +20,7 @@
 
 use crate::build::types::ParsedDocument;
 use moss_core::PageKind;
+use moss_core::heading::TitleOutcome;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -1125,14 +1126,15 @@ pub fn process_markdown_file(
     // pre-2026-05-28 frontmatter-synthesis hack (`title: ""` injected by the
     // now-deleted `render_footer_pages_from_disk`).
     let is_slot_only = crate::build::footer::is_excluded_from_pages(file_path);
-    let heading = moss_core::heading::compute(moss_core::heading::HeadingInputs {
+    let heading_inputs = moss_core::heading::HeadingInputs {
         file_path,
         frontmatter_title: frontmatter.title.as_deref(),
         body_markdown: &markdown_content_raw,
         root_folder_name: Some(root_folder_name),
         is_home_override: is_index_by_home_override,
         slot_only: is_slot_only,
-    });
+    };
+    let heading = moss_core::heading::compute(heading_inputs);
 
     // Chrome label cascade — `state.text` (from compute(): `title:` else
     // filename/folder name) when non-empty, filename otherwise (state.text is
@@ -1170,7 +1172,7 @@ pub fn process_markdown_file(
     // `is_index_file && is_root_level` stands in for `url_path == "index.html"`
     // (the form `is_nav_bar_item_doc` uses at the render sites). It is EXACT for
     // every page this gate can actually affect: the gate below also requires
-    // `heading.visible`, which moss-core sets to false for all index/folder
+    // an injected title, which moss-core withholds from all index/folder
     // pages — so only non-index articles reach it, and for an article both this
     // proxy and `url_path == "index.html"` are always false. The two forms can
     // only disagree on index pages (e.g. a root index with a `url:` override),
@@ -1195,15 +1197,13 @@ pub fn process_markdown_file(
     // passed through untouched here. A nav page's visible title is dropped
     // because the nav bar already shows it, but the heading stays as a
     // visually hidden `<h1>` for screen readers, unless the body supplies its
-    // own title (the same predicate the folder path uses).
-    if heading.visible {
-        // A pure prepend, so it becomes a leading segment — no flat copy to
-        // drift from the pieces it was built from.
-        if !is_nav_page {
-            body_plan.prepend_html(inject_article_title_h1("", &heading.text, emit_source_lines, false));
-        } else if !moss_core::heading::body_supplies_title(&markdown_content) {
-            body_plan.prepend_html(inject_article_title_h1("", &heading.text, emit_source_lines, true));
-        }
+    // own title. `article_title_outcome` makes that one decision, including an
+    // opening hero that stands in for the title.
+    match moss_core::heading::article_title_outcome(heading_inputs, is_nav_page) {
+        TitleOutcome::None => {}
+        outcome => body_plan.prepend_html(inject_article_title_h1(
+            "", &heading.text, emit_source_lines, outcome == TitleOutcome::Hidden,
+        )),
     }
 
     // Look up pre-computed url_path from PageMap, falling back to inline computation

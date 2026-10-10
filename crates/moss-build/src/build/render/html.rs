@@ -206,18 +206,12 @@ fn no_cover_folder_heading(
     has_content_folders: bool,
     emit_source_fm: bool,
 ) -> String {
-    // Three outcomes: a real heading in the body or the opening hero supplies
-    // the title (nothing added); otherwise the title is visually hidden for a
-    // nav item, or for a page whose opening hero fills the masthead slot in
-    // place of a visible title; otherwise it is visible as before.
-    if moss_core::heading::body_supplies_title(&doc.content) {
-        String::new()
-    } else if crate::build::components::nav::is_nav_bar_item_doc(doc, has_content_folders)
-        || moss_core::heading::hero_at_top_owns_title(&doc.content)
-    {
-        crate::build::components::folder_title::render(h1_text, emit_source_fm, true)
-    } else {
-        crate::build::components::folder_title::render(h1_text, emit_source_fm, false)
+    use moss_core::heading::TitleOutcome;
+    let nav = crate::build::components::nav::is_nav_bar_item_doc(doc, has_content_folders);
+    match moss_core::heading::title_outcome(&doc.content, nav, true) {
+        TitleOutcome::None => String::new(),
+        TitleOutcome::Hidden => crate::build::components::folder_title::render(h1_text, emit_source_fm, true),
+        TitleOutcome::Visible => crate::build::components::folder_title::render(h1_text, emit_source_fm, false),
     }
 }
 
@@ -491,7 +485,7 @@ pub(super) fn render_page<'d>(
                 // The home injects no visible title of its own, but a page
                 // needs one top-level heading: when the body supplies none,
                 // add the folder-index heading, visually hidden.
-                if !moss_core::heading::body_supplies_title(&doc.content) {
+                if moss_core::heading::title_outcome(&doc.content, true, true) != moss_core::heading::TitleOutcome::None {
                     let h1 = crate::build::components::folder_title::render(&doc.label, emit_source_lines, true);
                     content = format!("{h1}\n{content}");
                 }

@@ -123,3 +123,42 @@ fn plain_folder_page_without_a_heading_keeps_its_visible_title() {
     let html = folder_page_html("Some notes about the harbor.");
     assert_eq!(h1s(&html), vec!["moss-folder-title|Field Notes"], "{html}");
 }
+
+fn article_html(article_body: &str, nav: bool) -> String {
+    let tmp = std::env::temp_dir().join(format!("moss_article_h1_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&tmp).unwrap();
+    let _cleanup = Cleanup(tmp.clone());
+    write(&tmp, ".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\n");
+    write(&tmp, "index.md", "---\ntitle: Harbor Notes\n---\n\nWelcome.\n");
+    let nav_line = if nav { "nav: true\n" } else { "" };
+    write(&tmp, "posts/story.md", &format!("---\ntitle: The Story\n{nav_line}---\n\n{article_body}\n"));
+    write(&tmp, "posts/other.md", "---\ntitle: Other\n---\n\nHello.\n");
+    let result = build_sync(&tmp.to_string_lossy());
+    assert!(result.is_ok(), "build failed: {result:?}");
+    fs::read_to_string(tmp.join(".moss/build.nosync/staging/posts/story/index.html")).unwrap()
+}
+
+#[test]
+fn article_whose_hero_holds_only_an_image_and_a_link_gets_a_visually_hidden_h1() {
+    let html = article_html(":::hero {image=cover.jpg}\n[A link](/posts/other/)\n:::\n\nHello.", false);
+    assert_eq!(h1s(&html), vec!["moss-article-title visually-hidden|The Story"], "{html}");
+}
+
+#[test]
+fn plain_article_keeps_its_visible_title() {
+    let html = article_html("Hello.", false);
+    assert_eq!(h1s(&html), vec!["moss-article-title|The Story"], "{html}");
+}
+
+#[test]
+fn article_whose_hero_draws_a_heading_adds_none() {
+    let html = article_html(":::hero\n# Overlay\n:::\n\nHello.", false);
+    assert!(!html.contains("moss-article-title"), "{html}");
+    assert_eq!(h1s(&html).len(), 1, "{html}");
+}
+
+#[test]
+fn nav_article_whose_hero_holds_only_a_link_gets_a_visually_hidden_h1() {
+    let html = article_html(":::hero {image=cover.jpg}\n[A link](/posts/other/)\n:::\n\nHello.", true);
+    assert_eq!(h1s(&html), vec!["moss-article-title visually-hidden|The Story"], "{html}");
+}
