@@ -1402,6 +1402,36 @@ fn a_ladder_already_in_staging_reaches_this_build_s_markup() {
     );
 }
 
+/// A definition's embed is dispatched like a blockquote's: the video element
+/// lands inside the `<dd>`, not as a broken image.
+#[test]
+fn a_definition_holds_a_video_embed_as_a_video() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+
+    fs::write(test_dir.join("index.md"), "# Test\n\nCredits\n: ![[clip.mp4]]\n").unwrap();
+    fs::write(test_dir.join("clip.mp4"), "fake video data").unwrap();
+
+    let services = BuildServices::headless();
+    let result = build_test(
+        folder_path,
+        None,
+        None,
+        None,
+        Some(&services),
+        &ResolvedSlots::empty(),
+    );
+    assert!(result.is_ok(), "Build should succeed: {:?}", result);
+
+    let html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
+    let definition = html
+        .split("<dd")
+        .nth(1)
+        .and_then(|rest| rest.split("</dd>").next())
+        .unwrap_or_else(|| panic!("no <dd> in output:\n{html}"));
+    assert!(definition.contains("<video"), "video embed missing from <dd>; got:\n{html}");
+}
+
 /// Build twice, the second time over a staging tree holding a ladder that the
 /// first build's manifest names as `recorded_dir`/`file`. Returns the second
 /// build's page and whether the ladder is still in staging.

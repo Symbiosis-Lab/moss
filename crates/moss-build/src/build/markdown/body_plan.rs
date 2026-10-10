@@ -68,7 +68,7 @@ pub struct BodyPlan {
     /// the question `html_prefix_is_balanced` existed to answer never arises.
     pub lede_segments: usize,
     /// How many LEADING segments come before the body's first text block (a
-    /// paragraph, list or blockquote) — see [`first_text_block`]. `0` when
+    /// paragraph, list, definition list or blockquote) — see [`first_text_block`]. `0` when
     /// the first segment already opens with one, which is also the fallback
     /// for a body with no text block at all: nothing to skip past, so an
     /// insertion lands at the very front, same place moss has always put a
@@ -359,8 +359,8 @@ pub fn lede_end(blocks: &[Block]) -> usize {
     blocks.len()
 }
 
-/// Index into `blocks` of the body's first text block — a paragraph, list
-/// or blockquote — the place-map locator's insertion point (see
+/// Index into `blocks` of the body's first text block — a paragraph, list,
+/// definition list or blockquote — the place-map locator's insertion point (see
 /// `render::credits`). `None` when the body has none: every block is a
 /// heading, a rule, or media (a figure, a table, a code block, or a
 /// shortcode like `:::grid`/`:::gallery`).
@@ -373,7 +373,10 @@ pub fn lede_end(blocks: &[Block]) -> usize {
 /// time, so there is nothing here for it to reach.
 pub fn first_text_block(blocks: &[Block]) -> Option<usize> {
     blocks.iter().position(|block| {
-        matches!(block, Block::Paragraph(_) | Block::List { .. } | Block::BlockQuote(_))
+        matches!(
+            block,
+            Block::Paragraph(_) | Block::List { .. } | Block::DefinitionList(_) | Block::BlockQuote(_)
+        )
     })
 }
 

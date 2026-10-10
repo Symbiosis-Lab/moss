@@ -349,6 +349,13 @@ fn first_text_block_skips_leading_media_and_a_rule() {
 }
 
 #[test]
+fn first_text_block_is_a_leading_definition_list() {
+    // A definition list is prose, so it is the locator's insertion point
+    // rather than being skipped as if it were media.
+    assert_eq!(first_text_block_of("Term\n: Its definition.\n"), Some(0));
+}
+
+#[test]
 fn first_text_block_is_a_leading_list() {
     assert_eq!(first_text_block_of("- one\n- two\n"), Some(0));
 }

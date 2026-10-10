@@ -148,7 +148,9 @@ fn dispatch_in_block_children(
         match &mut blocks[i] {
             Block::BlockQuote(children)
             | Block::Callout { children, .. }
-            | Block::FootnoteDefinition { children, .. } => {
+            | Block::FootnoteDefinition { children, .. }
+            | Block::DefinitionList(children)
+            | Block::DefinitionDefinition(children) => {
                 dispatch_in_block_children(children, snapshot, graph, source_path, result);
             }
             Block::List { items, .. } => {
@@ -584,7 +586,10 @@ mod tests {
                     ..
                 }
             ),
-            Block::BlockQuote(children) | Block::Callout { children, .. } => {
+            Block::BlockQuote(children)
+            | Block::Callout { children, .. }
+            | Block::DefinitionList(children)
+            | Block::DefinitionDefinition(children) => {
                 children.iter().any(block_has_wikilink_image)
             }
             Block::List { items, .. } => items
