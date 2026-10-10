@@ -7833,9 +7833,9 @@ a.moss-grid-card:hover {
 
 /* Basis is the row height scaled by the item's ratio, so a wide photo takes
    more of the row than a portrait at the same height. --ar is set inline on
-   each item by the emitter. */
+   each item by the emitter; the 1.5 fallback covers an item without dimensions. */
 .moss-gallery[data-layout="rows"] > .moss-gallery-item {
-  flex: var(--ar) 1 calc(var(--ar) * var(--moss-gallery-row-height, 16rem));
+  flex: var(--ar, 1.5) 1 calc(var(--ar, 1.5) * var(--moss-gallery-row-height, 16rem));
 }
 
 /* The picture is inline by default, which leaves a descender gap under the
@@ -7847,7 +7847,7 @@ a.moss-grid-card:hover {
 .moss-gallery[data-layout="rows"] .moss-gallery-item img {
   width: 100%;
   height: auto;
-  aspect-ratio: var(--ar);
+  aspect-ratio: var(--ar, 1.5);
   object-fit: cover;
   display: block;
 }

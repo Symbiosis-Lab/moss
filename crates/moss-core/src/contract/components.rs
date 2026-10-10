@@ -1487,6 +1487,12 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 default: "",
                 description: "Column count, from `:::gallery N` — the author names it rather than moss inferring it. Where `:::grid` collapses to a single column below 48rem, a gallery uses `auto-fill` below 48rem to keep as many tracks as clear 88px: N becomes a maximum rather than a mandate, and a gallery that already fits stays at its authored count. A wall of thumbnails should thin out on a phone; a grid of cards should not.",
             },
+            DataAttr {
+                name: "data-layout",
+                values: &["rows"],
+                default: "",
+                description: "`rows` from `:::gallery rows`: justified rows where each item's flex-grow is its image ratio and every item in a row shares one height. Absent for the default grid.",
+            },
         ],
         example_html: r#"<div class="moss-gallery" data-width="page">
   <div class="moss-gallery-item">...</div>

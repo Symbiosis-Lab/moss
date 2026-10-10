@@ -3847,3 +3847,11 @@ fn external_card_favicon_resets_image_margins_and_uses_logical_gap() {
     assert!(!rule.contains("margin-right"), "physical margin leaked into favicon rule: {rule}");
     assert!(!rule.contains("margin-block"), "block margin leaked into favicon rule: {rule}");
 }
+
+#[test]
+fn gallery_rows_uses_ratio_fallback_wherever_it_reads_ar() {
+    // An item the emitter gave no dimensions has no --ar; a bare var(--ar)
+    // makes the declaration invalid and the item collapses.
+    assert!(DEFAULT_CSS.contains("var(--ar, 1.5)"));
+    assert!(!DEFAULT_CSS.contains("var(--ar)"), "a bare var(--ar) has no fallback");
+}
