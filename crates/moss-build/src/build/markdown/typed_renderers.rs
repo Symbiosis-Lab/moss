@@ -367,9 +367,12 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
     // Slide indices are emitted only when something addresses a slide by
     // index (a sequence, or a caption), so other heroes keep their bytes.
     let indexed = sequence || !captions.is_empty();
+    // A sequence shows the slide (and caption) marked `data-current`; slide 0
+    // starts marked so the page works before, or without, the script.
+    let current_attr = |i: usize| if sequence && i == 0 { " data-current" } else { "" };
     let slide_attr = |i: usize| {
         if indexed {
-            format!(r#" data-slide="{i}""#)
+            format!(r#" data-slide="{i}"{}"#, current_attr(i))
         } else {
             String::new()
         }
@@ -479,7 +482,8 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
             .iter()
             .map(|(i, text)| {
                 format!(
-                    r#"<p class="moss-hero-caption" data-slide="{i}">{}</p>"#,
+                    r#"<p class="moss-hero-caption" data-slide="{i}"{}>{}</p>"#,
+                    current_attr(*i),
                     moss_core::ast::render::render_inlines_html(&caption_hooks, text)
                 )
             })
@@ -696,6 +700,10 @@ mod tests {
         assert_eq!(html.matches("moss-hero-pause").count(), 1, "a sequence has one pause control: {html}");
         assert!(html.contains(r#"<div class="moss-hero-slide" data-slide="1">"#), "got: {html}");
         assert!(html.contains(r#"data-slide="1">Two</p>"#), "got: {html}");
+        // Slide 0 and its caption start as the current ones, so the page works without the script.
+        assert!(html.contains(r#"<div class="moss-hero-slide" data-slide="0" data-current>"#), "got: {html}");
+        assert!(html.contains(r#"<p class="moss-hero-caption" data-slide="0" data-current>One</p>"#), "got: {html}");
+        assert_eq!(html.matches("data-current").count(), 2, "got: {html}");
     }
 
     #[test]

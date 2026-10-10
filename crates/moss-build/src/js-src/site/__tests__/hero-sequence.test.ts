@@ -2,7 +2,7 @@
  * Tests for the all-video hero sequence driver in ambient-video.ts.
  *
  * Covers:
- * - `ended` on the active slide moves data-active to the next slide and starts it
+ * - `ended` on the active slide moves data-current to the next slide and starts it
  * - the last slide wraps to the first
  * - `ended` on a slide that is not active does nothing
  * - the pause checkbox stops the advance; unchecking resumes the current slide
@@ -11,7 +11,7 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
-import { initHeroSequences } from "../ambient-video";
+import { initHeroSequences } from "../hero-sequence";
 
 function mockMatchMedia(reducedMotion: boolean) {
   Object.defineProperty(window, "matchMedia", {
@@ -34,7 +34,7 @@ function buildSequence(count: number) {
   const slides = Array.from(
     { length: count },
     (_, i) =>
-      `<div class="moss-hero-slide" data-slide="${i}"><video autoplay muted playsinline preload="metadata"></video></div>`,
+      `<div class="moss-hero-slide" data-slide="${i}"${i === 0 ? " data-current" : ""}><video autoplay muted playsinline preload="metadata"></video></div>`,
   ).join("");
   document.body.innerHTML =
     `<section class="moss-hero" data-sequence>${slides}` +
@@ -59,6 +59,14 @@ function togglePause(hero: HTMLElement) {
   input.dispatchEvent(new Event("change"));
 }
 
+/** Which slide carries the `data-current` marker, and that its caption agrees. */
+function currentSlide(hero: HTMLElement): number {
+  const slides = Array.from(hero.querySelectorAll(".moss-hero-slide"));
+  const marked = slides.filter((slide) => slide.hasAttribute("data-current"));
+  expect(marked).toHaveLength(1);
+  return slides.indexOf(marked[0]);
+}
+
 function ended(video: HTMLVideoElement) {
   video.dispatchEvent(new Event("ended"));
 }
@@ -74,11 +82,11 @@ describe("initHeroSequences — normal motion", () => {
     vi.restoreAllMocks();
   });
 
-  test("ended on the active slide advances data-active and starts the next video", () => {
+  test("ended on the active slide advances data-current and starts the next video", () => {
     const { hero, videos } = buildSequence(3);
     initHeroSequences();
     ended(videos[0]);
-    expect(hero.dataset.active).toBe("1");
+    expect(currentSlide(hero)).toBe(1);
     expect(videos[1].play).toHaveBeenCalled();
     expect(videos[0].pause).toHaveBeenCalled();
   });
@@ -88,9 +96,9 @@ describe("initHeroSequences — normal motion", () => {
     initHeroSequences();
     ended(videos[0]);
     ended(videos[1]);
-    expect(hero.dataset.active).toBe("2");
+    expect(currentSlide(hero)).toBe(2);
     ended(videos[2]);
-    expect(hero.dataset.active).toBe("0");
+    expect(currentSlide(hero)).toBe(0);
     expect(videos[0].play).toHaveBeenCalled();
   });
 
@@ -98,7 +106,7 @@ describe("initHeroSequences — normal motion", () => {
     const { hero, videos } = buildSequence(3);
     initHeroSequences();
     ended(videos[2]);
-    expect(hero.dataset.active ?? "0").toBe("0");
+    expect(currentSlide(hero)).toBe(0);
     expect(videos[0].pause).not.toHaveBeenCalled();
   });
 
@@ -110,12 +118,12 @@ describe("initHeroSequences — normal motion", () => {
     expect(pauseControl(hero).checked).toBe(true);
     expect(videos[0].pause).toHaveBeenCalled();
     ended(videos[0]);
-    expect(hero.dataset.active ?? "0").toBe("0");
+    expect(currentSlide(hero)).toBe(0);
     togglePause(hero);
     expect(pauseControl(hero).checked).toBe(false);
     expect(videos[0].play).toHaveBeenCalled();
     ended(videos[0]);
-    expect(hero.dataset.active).toBe("1");
+    expect(currentSlide(hero)).toBe(1);
   });
 
   test("a rejected play() is swallowed and the sequence stops on that slide", async () => {
@@ -124,7 +132,7 @@ describe("initHeroSequences — normal motion", () => {
     initHeroSequences();
     ended(videos[0]);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(hero.dataset.active).toBe("1");
+    expect(currentSlide(hero)).toBe(1);
     expect(videos[1].play).toHaveBeenCalled();
   });
 });

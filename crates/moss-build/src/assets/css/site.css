@@ -6883,26 +6883,12 @@ article a:where(:not(.moss-btn)):focus {
 .moss-hero[data-slides="4"] .moss-hero-caption { animation: moss-hero-fade-4 28s ease-in-out infinite; }
 .moss-hero[data-slides="5"] .moss-hero-caption { animation: moss-hero-fade-5 35s ease-in-out infinite; }
 .moss-hero[data-slides="6"] .moss-hero-caption { animation: moss-hero-fade-6 42s ease-in-out infinite; }
-/* An all-video hero is a sequence, not a timed rotation: one slide and its
-   caption show, picked by data-active (a script sets it as each video ends;
-   without it, slide 0). */
-.moss-hero[data-sequence] .moss-hero-slide { opacity: 0; }
+/* An all-video hero is a sequence, not a timed rotation: only the slide and
+   caption marked `data-current` show. The renderer marks slide 0 (no script,
+   reduced motion); the script moves the marker as each video ends. */
 .moss-hero[data-sequence] .moss-hero-slide:not(:first-child) { position: absolute; inset: 0; }
-.moss-hero[data-sequence] .moss-hero-caption { display: none; }
-.moss-hero[data-sequence]:not([data-active]) .moss-hero-slide[data-slide="0"],
-.moss-hero[data-sequence][data-active="0"] .moss-hero-slide[data-slide="0"],
-.moss-hero[data-sequence][data-active="1"] .moss-hero-slide[data-slide="1"],
-.moss-hero[data-sequence][data-active="2"] .moss-hero-slide[data-slide="2"],
-.moss-hero[data-sequence][data-active="3"] .moss-hero-slide[data-slide="3"],
-.moss-hero[data-sequence][data-active="4"] .moss-hero-slide[data-slide="4"],
-.moss-hero[data-sequence][data-active="5"] .moss-hero-slide[data-slide="5"] { opacity: 1; }
-.moss-hero[data-sequence]:not([data-active]) .moss-hero-caption[data-slide="0"],
-.moss-hero[data-sequence][data-active="0"] .moss-hero-caption[data-slide="0"],
-.moss-hero[data-sequence][data-active="1"] .moss-hero-caption[data-slide="1"],
-.moss-hero[data-sequence][data-active="2"] .moss-hero-caption[data-slide="2"],
-.moss-hero[data-sequence][data-active="3"] .moss-hero-caption[data-slide="3"],
-.moss-hero[data-sequence][data-active="4"] .moss-hero-caption[data-slide="4"],
-.moss-hero[data-sequence][data-active="5"] .moss-hero-caption[data-slide="5"] { display: block; }
+.moss-hero[data-sequence] .moss-hero-slide:not([data-current]) { opacity: 0; }
+.moss-hero[data-sequence] .moss-hero-caption:not([data-current]) { display: none; }
 /* The per-count `animation:` shorthand implies delay 0s, but the nth-child
    delay longhands above win on specificity (0,4,0 vs 0,3,0) regardless of
    source order. */
@@ -7028,12 +7014,6 @@ article a:where(:not(.moss-btn)):focus {
   .moss-hero[data-slides] .moss-hero-slide:not(:first-child) { opacity: 0; }
   .moss-hero[data-slides] .moss-hero-caption { animation: none; }
   .moss-hero[data-slides] .moss-hero-caption:not([data-slide="0"]) { opacity: 0; }
-  /* A sequence has no timer, but its videos are still motion: pin slide 0 and
-     its caption, whatever data-active says. */
-  .moss-hero[data-sequence] .moss-hero-slide:not([data-slide="0"]),
-  .moss-hero[data-sequence] .moss-hero-caption:not([data-slide="0"]) { display: none; }
-  .moss-hero[data-sequence] .moss-hero-slide[data-slide="0"] { opacity: 1; }
-  .moss-hero[data-sequence] .moss-hero-caption[data-slide="0"] { display: block; }
   .moss-hero-pause { display: none; }
 }
 

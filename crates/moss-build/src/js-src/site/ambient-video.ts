@@ -19,6 +19,8 @@
  * the Rust synthesizer stays HTML-only and the JS owns the interactive layer.
  */
 
+import { initHeroSequences } from "./hero-sequence";
+
 const PAUSE_LABEL = "Pause video";
 const PLAY_LABEL = "Play video";
 const PAUSE_ICON = "⏸";
@@ -98,83 +100,3 @@ export function initAmbientVideos(): void {
 
   videos.forEach(wrapAndInit);
 }
-
-/**
- * Hero sequences: an all-video hero (`.moss-hero[data-sequence]`) plays its
- * slides one after another. Each video plays once. When it ends, the hero's
- * `data-active` moves to the next slide (wrapping) and that video starts; the
- * stylesheet shows the slide and caption whose `data-slide` matches it.
- *
- * The pause control is the server-rendered `.moss-hero-pause` checkbox: while
- * it is checked the advance stops and the current video pauses; unchecking
- * resumes. Under reduced motion nothing starts, the stylesheet hides the
- * control, and it pins slide 0 and its caption.
- */
-const heroSequenceWired = new WeakSet<HTMLElement>();
-
-export function initHeroSequences(root: ParentNode = document): void {
-  root
-    .querySelectorAll<HTMLElement>(".moss-hero[data-sequence]")
-    .forEach(wireHeroSequence);
-}
-
-function wireHeroSequence(hero: HTMLElement): void {
-  if (heroSequenceWired.has(hero)) return;
-  heroSequenceWired.add(hero);
-
-  const videos = Array.from(
-    hero.querySelectorAll<HTMLElement>(".moss-hero-slide[data-slide]"),
-  )
-    .sort((a, b) => Number(a.dataset.slide) - Number(b.dataset.slide))
-    .map((slide) => slide.querySelector("video"))
-    .filter((video): video is HTMLVideoElement => video !== null);
-  if (videos.length < 2) return;
-
-  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    for (const video of videos) {
-      video.removeAttribute("autoplay");
-      video.pause();
-    }
-    return;
-  }
-
-  const current = (): number => {
-    const index = Number(hero.dataset.active ?? "0");
-    return Number.isInteger(index) && index >= 0 && index < videos.length ? index : 0;
-  };
-
-  const start = (index: number): void => {
-    videos[index].preload = "auto";
-    // A rejected play() (autoplay blocked) leaves this slide's poster showing.
-    void Promise.resolve(videos[index].play()).catch(() => {});
-  };
-
-  const advance = (from: number): void => {
-    const next = (from + 1) % videos.length;
-    videos[from].pause();
-    videos[from].currentTime = 0;
-    hero.dataset.active = String(next);
-    start(next);
-  };
-
-  const pause = hero.querySelector<HTMLInputElement>(".moss-hero-pause input");
-  let paused = false;
-
-  videos.forEach((video, index) => {
-    video.addEventListener("ended", () => {
-      if (current() !== index || paused) return;
-      advance(index);
-    });
-  });
-
-  // The server-rendered pause checkbox (the same control a rotation has).
-  pause?.addEventListener("change", () => {
-    paused = pause.checked;
-    if (paused) {
-      videos[current()].pause();
-    } else {
-      start(current());
-    }
-  });
-}
-
