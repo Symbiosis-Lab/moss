@@ -6146,7 +6146,7 @@ article a:where(:not(.moss-btn)):focus {
   opacity: 0.85;
 }
 [data-cover-color] .moss-card-content .moss-card-kicker {
-  color: rgba(255, 255, 255, 0.75);
+  color: color-mix(in srgb, var(--moss-cover-ink, #fff) 75%, transparent);
 }
 
 .moss-card-meta {
@@ -6184,13 +6184,15 @@ article a:where(:not(.moss-btn)):focus {
   color: var(--moss-color-accent);
 }
 
-/* When content has dominant color background, use white text */
+/* When content has dominant color background, use white text — or the theme's
+   --moss-cover-ink, which a theme that clears --moss-cover-color sets to its
+   own text colour. The muted lines derive from it by opacity. */
 [data-cover-color] .moss-card-content .moss-card-title {
-  color: #fff;
+  color: var(--moss-cover-ink, #fff);
 }
 
 [data-cover-color] .moss-card-content .moss-card-meta {
-  color: rgba(255, 255, 255, 0.7);
+  color: color-mix(in srgb, var(--moss-cover-ink, #fff) 70%, transparent);
 }
 
 /* Description on a dominant-color (covered) card: the content band sets
@@ -6198,7 +6200,7 @@ article a:where(:not(.moss-btn)):focus {
    var(--moss-color-text-secondary) (dark) and would otherwise render
    dark-on-dark. Whiten it to match the title/meta overrides above. */
 [data-cover-color] .moss-card-content .moss-card-description {
-  color: rgba(255, 255, 255, 0.85);
+  color: color-mix(in srgb, var(--moss-cover-ink, #fff) 85%, transparent);
 }
 
 /* Cover color background: applied when parent card carries a dominant color
@@ -6210,7 +6212,7 @@ article a:where(:not(.moss-btn)):focus {
    build/render/grid_cells.rs — the selector is gated on the same attribute. */
 [data-cover-color] .moss-card-content {
     background: var(--moss-cover-color, var(--item-cover-color));
-    color: #fff;
+    color: var(--moss-cover-ink, #fff);
 }
 
 /* Child summary — full-width text-dominant summary for children lists.
@@ -6308,10 +6310,10 @@ article a:where(:not(.moss-btn)):focus {
 /* List-layout cards with a cover color: restore white text for meta and kicker
    (beats the 0-3-0 list muted overrides above). */
 .moss-cards[data-layout="list"] [data-cover-color] .moss-card-meta {
-  color: rgba(255, 255, 255, 0.70);
+  color: color-mix(in srgb, var(--moss-cover-ink, #fff) 70%, transparent);
 }
 .moss-cards[data-layout="list"] [data-cover-color] .moss-card-kicker {
-  color: rgba(255, 255, 255, 0.75);
+  color: color-mix(in srgb, var(--moss-cover-ink, #fff) 75%, transparent);
 }
 
 .moss-card-description {
@@ -7199,7 +7201,7 @@ article a:where(:not(.moss-btn)):focus {
   }
 
   [data-cover-color] .moss-hero-content {
-    color: #fff;
+    color: var(--moss-cover-ink, #fff);
   }
 
   /* Stacked mobile: the text block sits BELOW the image on the page

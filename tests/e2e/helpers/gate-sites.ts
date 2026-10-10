@@ -3325,10 +3325,32 @@ Overlay words
 
 Body text.
 `,
+    "one.md": `---
+title: One
+uid: "tfh00004"
+listed: false
+cover: /poster.png
+description: A short line.
+---
+
+Body.
+`,
+    "cards.md": `---
+title: Cards
+uid: "tfh00005"
+listed: false
+---
+
+:::grid 1
+[[one]]
+:::
+`,
     ".moss/config.toml": CONFIG_TOML,
     ".moss/theme/style.css": `:root {
   --moss-header-bg: rgb(200, 0, 0);
   --moss-header-ink: rgb(0, 0, 255);
+  --moss-cover-color: transparent;
+  --moss-cover-ink: var(--moss-color-text);
 }
 `,
   },

@@ -191,6 +191,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Background behind card content when the card carries `data-cover-color`. moss does not set this itself: it publishes each card's colour from the cover image's dominant colour as `--item-cover-color` and paints with `var(--moss-cover-color, var(--item-cover-color))`, so a theme that sets `--moss-cover-color` (on `:root`, or on `.moss-card`) wins over the extracted tint — set it to `transparent` to opt out of the tint entirely. The same `--item-cover-color` is published on a `.moss-grid-card` whose cell opens with an image, where moss paints nothing, so a hand-built cell can wear the same band with `background: var(--moss-cover-color, var(--item-cover-color))`.",
     },
     CustomProp {
+        name: "--moss-cover-ink",
+        owner: "moss-card",
+        default: "#fff",
+        description: "Text colour on a card's tinted content band (title, and the kicker, meta and description derived from it at 75%, 70% and 85% opacity), and on the text block of a hero stacked below its image on a phone. Pairs with `--moss-cover-color`: `--moss-cover-color: transparent; --moss-cover-ink: var(--moss-color-text)` gives plain cards on the page background with readable text and no class selectors. Set it on `:root`, or on `.moss-card` for one scope.",
+    },
+    CustomProp {
         name: "--moss-header-bg",
         owner: "body > header",
         default: "transparent",

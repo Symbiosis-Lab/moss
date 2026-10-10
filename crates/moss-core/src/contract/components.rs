@@ -422,7 +422,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "1",
-        description: "Text content slot inside a grid-layout `.moss-card` (kicker + title + meta). A card with a cover has a tinted content band (`--moss-cover-color`) with white title, meta and description. A theme that clears that band's background must also set the card's text colours, or the text is white on the page.",
+        description: "Text content slot inside a grid-layout `.moss-card` (kicker + title + meta). A card with a cover has a tinted content band (`--moss-cover-color`) with white title, meta and description (`--moss-cover-ink`). A theme that clears that band with `--moss-cover-color: transparent` sets `--moss-cover-ink` to its own text colour, or the text is white on the page.",
     },
     ComponentEntry {
         class: "moss-card-row",

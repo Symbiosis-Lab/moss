@@ -138,6 +138,23 @@ fn header_tokens_are_read_by_moss_rules() {
     assert!(css.contains("body>header.site-name{color:var(--moss-header-ink,"), "site name ink: {css}");
 }
 
+/// A theme that clears the cover tint states its card text colour with one
+/// token; the muted lines derive from it, so one token recolours all four.
+#[test]
+fn cover_ink_token_is_read_by_moss_rules() {
+    let site = Site::new();
+    site.write(".moss/config.toml", b"[site]\ndomain = \"example.com\"\n");
+    site.write("index.md", b"---\ntitle: Home\n---\n\nBody.\n");
+    let out = site.build();
+    let css = moss_css(&out).replace(' ', "");
+
+    assert!(css.contains("[data-cover-color].moss-card-content.moss-card-title{color:var(--moss-cover-ink,#fff)}"), "card title: {css}");
+    for line in ["kicker", "meta", "description"] {
+        let rule = format!("[data-cover-color].moss-card-content.moss-card-{line}{{color:color-mix(insrgb,var(--moss-cover-ink,#fff)");
+        assert!(css.contains(&rule), "card {line}: {css}");
+    }
+}
+
 /// A page whose body is only its opening hero keeps `<main id="main-content">`
 /// (the skip link targets it) and its hidden `<h1>`, but no empty
 /// `<article class="container">`, whose margin left blank page above the footer.

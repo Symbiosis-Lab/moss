@@ -56,4 +56,13 @@ test.describe("theme floor hooks", () => {
     await page.goto("/about/");
     expect(await page.locator("main > article.container").count()).toBe(1);
   });
+
+  test("clearing the cover tint with --moss-cover-ink gives readable plain cards", async ({ page }) => {
+    await page.goto("/cards/");
+    const bodyText = await css(page, "body", "color");
+    expect(await css(page, ".moss-card-content", "backgroundColor")).toBe("rgba(0, 0, 0, 0)");
+    expect(await css(page, ".moss-card-title", "color")).toBe(bodyText);
+    // The muted description derives from the ink, so it is not the white it was.
+    expect(await css(page, ".moss-card-description", "color")).not.toMatch(/255, 255, 255|srgb 1 1 1/);
+  });
 });
