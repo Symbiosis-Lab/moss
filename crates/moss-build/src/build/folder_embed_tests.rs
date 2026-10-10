@@ -3209,3 +3209,46 @@ fn unresolved_folder_embed_names_the_resolved_path_it_tried() {
     assert!(out.contains("moss-embed-missing"), "got: {}", out);
     assert!(out.contains("notes/Trips/Gone/"), "got: {}", out);
 }
+
+#[test]
+fn own_name_embed_in_a_non_index_note_excludes_its_host_page() {
+    // `work/Opera/Opera.md` is a plain page here (the folder index is
+    // `index.md`). Its `![[Opera/]]` falls back to the folder `work/Opera/`,
+    // and the listing must still leave out the page that hosts the embed.
+    let index = ParsedDocument {
+        url_path: "work/opera/index.html".to_string(),
+        source_path: Some("work/Opera/index.md".to_string()),
+        label: "Opera".to_string(),
+        title: "Opera".to_string(),
+        clean_stem: "opera".to_string(),
+        kind: PageKind::Folder,
+        ..Default::default()
+    };
+    let mut host = make_doc("work/opera/opera.html", "HostNote", Some("2026-01-04"));
+    host.source_path = Some("work/Opera/Opera.md".to_string());
+    let docs = vec![
+        index,
+        host,
+        make_doc("work/opera/a.html", "SiblingA", Some("2026-01-03")),
+        make_doc("work/opera/b.html", "SiblingB", Some("2026-01-02")),
+    ];
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams::default();
+    let marker = moss_core::resolve::embed_renderer::folder_list::emit_marker(
+        "Opera/",
+        "work/Opera/Opera.md",
+        &params,
+    );
+    let out = resolve_markers(
+        &marker,
+        "work/Opera/Opera.md",
+        &docs,
+        &test_project(),
+        &std::collections::HashMap::new(),
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(out.contains("SiblingA") && out.contains("SiblingB"), "got: {}", out);
+    assert!(!out.contains("HostNote"), "host page listed itself: {}", out);
+}

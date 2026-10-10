@@ -46,6 +46,7 @@ All notable changes to moss will be documented here.
 ### Fixed
 
 - A link in a `:::hero` caption resolves like a link in the body: a `[text](page.md)` or `[[Page|label]]` to a page in a subfolder gets the page's real address instead of a relative guess, and a link to a missing page produces the same build warning. Hero captions and the `caption="…"` attribute are parsed as inline markdown into the page AST, so the URL passes that visit body links now reach them.
+- A note that embeds its own folder by name (`![[Opera/]]`) no longer lists itself when it is not the folder's index page.
 - A page with `breadcrumb: label` and a `date:` or `byline:` keeps its date row and byline under the title. The parent-section link above the title used to push them above it.
 - A year-grouped list, such as a `style:list` folder embed sorted by date, puts undated pages after every dated page, newest first or oldest first. Before, they led the list, which contradicted the summary style and the series order.
 - The guide's folder-embed options were written as `sort:date|date-asc|weight|title` and similar, which read as separators between options. They are now listed one by one, with a complete example.

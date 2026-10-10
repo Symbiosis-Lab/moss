@@ -229,14 +229,9 @@ fn folder_note_parent_from(
     if path.trim_end_matches('/').split('/').next()? != own_name {
         return None;
     }
-    let parent_dir = Path::new(own_dir).parent()?.to_str()?;
-    let parent_from = if parent_dir.is_empty() {
-        "_.md".to_string()
-    } else {
-        format!("{parent_dir}/_.md")
-    };
-    let missing = |f: &str| matches!(classify_reference(path, f, true, ctx).kind, ReferenceKind::NotFound);
-    (missing(from) && !missing(&parent_from)).then_some(parent_from)
+    let parent_from = Path::new(own_dir).parent()?.join("_.md").to_str()?.to_string();
+    let target_missing = matches!(classify_reference(path, from, true, ctx).kind, ReferenceKind::NotFound);
+    target_missing.then_some(parent_from)
 }
 
 /// Auto-detect children rendering style and grouping.
@@ -1220,12 +1215,11 @@ fn render_one(
         folders: &folder_idx,
         urls: &no_urls,
     };
-    // The note being rendered, before the own-name fallback below may repoint
-    // `from` at the parent folder's `_.md`.
-    let note_from = from;
-    let parent_from = folder_note_parent_from(parsed.path, from, &ctx);
-    let from = parent_from.as_deref().unwrap_or(from);
-    let folder_id = resolve_folder_id(parsed.path, from);
+    // `from` is always the page hosting the embed. Only the target is read
+    // from a different anchor when a folder note embeds its own folder by name.
+    let own_name_anchor = folder_note_parent_from(parsed.path, from, &ctx);
+    let resolve_from = own_name_anchor.as_deref().unwrap_or(from);
+    let folder_id = resolve_folder_id(parsed.path, resolve_from);
     // `folder_id` is case-preserving (e.g. "Resources/cities-heat-map-app"),
     // while `ParsedDocument.url_path` is slugified — lowercased and
     // punctuation-rewritten via `moss_core::slug::slugify_path_segments`
@@ -1239,7 +1233,7 @@ fn render_one(
     } else {
         moss_core::slug::slugify_path_segments(&folder_id)
     };
-    let classified = moss_core::resolve::reference::classify_reference(parsed.path, from, true, &ctx);
+    let classified = moss_core::resolve::reference::classify_reference(parsed.path, resolve_from, true, &ctx);
     use moss_core::resolve::reference::ReferenceKind;
 
     let target_doc: Option<&ParsedDocument> = match classified.kind {
@@ -1494,16 +1488,15 @@ fn render_one(
     // Suppress the More link when the embed is on the folder's own index page
     // (self-referential listing). A "More →" link pointing to the page the
     // user is already reading is meaningless. Compares the note being rendered
-    // (`note_from`, not the own-name fallback's parent `_.md`) against the
-    // resolved folder, so a self-named embed like `![[Opera/]]` from
+    // (`from`) against the resolved folder, so a self-named embed like `![[Opera/]]` from
     // `Opera/Opera.md` counts too. `is_index_source` keeps README.md and
     // self-named home files handled alongside index.md. The directory is
     // slugified because `folder_id_slug` is lowercased.
-    let note_dir = std::path::Path::new(note_from)
+    let note_dir = std::path::Path::new(from)
         .parent()
         .and_then(|p| p.to_str())
         .unwrap_or("");
-    let is_self_listing = is_index_source(note_from, all_docs)
+    let is_self_listing = is_index_source(from, all_docs)
         && moss_core::slug::slugify_path_segments(note_dir) == folder_id_slug;
 
     // An explicit target — `children_more:` frontmatter or the embed's own
