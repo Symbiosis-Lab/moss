@@ -155,6 +155,27 @@ fn undated_rows_follow_every_dated_row_in_both_directions() {
 }
 
 #[test]
+fn undated_rows_with_one_title_order_by_url_path_whatever_the_input_order() {
+    // Two pages can share a title. The url path settles the tie, so the
+    // build's output does not depend on the order files were read from disk.
+    let row = |url_path: &str| ArticleListItemProps {
+        date_display: String::new(),
+        date_raw: None,
+        url: format!("{url_path}.html"),
+        title: "Untitled".to_string(),
+        url_path: url_path.to_string(),
+        place: None,
+        when_html: None,
+    };
+    let (first, second) = (row("alpha/untitled"), row("beta/untitled"));
+    for input in [vec![first.clone(), second.clone()], vec![second.clone(), first.clone()]] {
+        let html = render(&input, false, crate::i18n::Language::En, None, false);
+        let pos = |url: &str| html.find(url).unwrap();
+        assert!(pos("alpha/untitled.html") < pos("beta/untitled.html"), "{html}");
+    }
+}
+
+#[test]
 fn test_render_sorts_by_precise_datetime() {
     // Test that articles in the same month are sorted by exact datetime
     let articles = vec![

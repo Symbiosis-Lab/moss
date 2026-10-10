@@ -66,20 +66,9 @@ fn render_internal(
     typesetting: Option<&str>,
     ascending: bool,
 ) -> String {
-    // Dated rows go newest first (oldest first under `ascending`) through the
-    // one date-axis comparator, so two rows on the same date fall in the
-    // order the folder's series links walk. Undated rows go last in either
-    // direction, ordered by their display string and then title — that
-    // tiebreak is unaffected by direction, same as `cmp_date_axis`'s own
-    // undated-entries arm.
+    // Shared date-axis order, the same comparator folder listings use.
     let mut sorted_articles = articles.to_vec();
-    sorted_articles.sort_by(|a, b| match (&a.date_raw, &b.date_raw) {
-        (Some(_), Some(_)) => moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key(), ascending),
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, None) => b.date_display.cmp(&a.date_display)
-            .then_with(|| moss_core::sort::cmp_labels(&a.title, &b.title)),
-    });
+    sorted_articles.sort_by(|a, b| moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key(), ascending));
 
     // Group by year
     let mut current_year: Option<i32> = None;
