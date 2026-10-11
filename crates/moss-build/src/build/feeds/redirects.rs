@@ -63,8 +63,8 @@ pub fn detect_renames(
 /// leading slash).
 ///
 /// The one set two different stub sources must both check before emitting: a
-/// detected rename here, or a term namespace-move stub from
-/// `terms::kind_move_stubs`. Skipping the check silently buries a real page,
+/// detected rename here, or a term redirect from `terms::kind_move_stubs` or
+/// `terms::claim_stubs`. Skipping the check silently buries a real page,
 /// because the manifest is last-write-wins and a stub emitted after the
 /// page's own write simply replaces it with a meta-refresh. `pages` matters
 /// here as much as `articles`: a namespace ROOT stub (e.g. `authors/`) lands
@@ -176,8 +176,8 @@ pub fn pretty_url_to_fs_path(pretty_url: &str) -> String {
 /// What the table needs beyond the persisted history and the article map.
 #[derive(Default)]
 pub struct TableInputs {
-    /// Term-kind namespace moves, `(old, new)`: recomputed every build, stored nowhere.
-    pub kind_moves: Vec<(String, String)>,
+    /// Term redirects, `(old, new)`: namespace moves and claimed terms' generated addresses; recomputed every build, stored nowhere.
+    pub term_stubs: Vec<(String, String)>,
     /// The site resolved a real (non-loopback) URL: only then does the build
     /// serve the generator's former paths and ship `_moss/redirects.json`.
     pub has_deployed_url: bool,
@@ -276,7 +276,7 @@ pub fn emit_redirect_table(
         candidates.extend(table::FORMER_PATHS.iter().map(|(from, to)| trusted(from, to)));
     }
     candidates.extend(merged.iter().map(|(from, to)| trusted(from, to)));
-    candidates.extend(inputs.kind_moves.iter().map(|(from, to)| trusted(from, to)));
+    candidates.extend(inputs.term_stubs.iter().map(|(from, to)| trusted(from, to)));
     candidates.extend(
         inputs.declared.iter().map(|(from, to)| Candidate { from: from.clone(), to: to.clone(), declared: true }),
     );

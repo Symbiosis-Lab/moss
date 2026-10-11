@@ -96,9 +96,12 @@ fn a_declared_field_claim_makes_the_page_the_persons_page() {
         ("people/ada.md", "---\ntitle: Ada Example\nconductor_page: true\n---\n\nAbout Ada.\n"),
     ]);
 
+    let stub = fs::read_to_string(out.join("performers/ada-example/index.html"))
+        .expect("the generated address forwards to the claiming page");
+    assert!(stub.contains("url=/people/ada/"), "the stub points at the claiming page:\n{stub}");
     assert!(
-        !out.join("performers/ada-example/index.html").exists(),
-        "a claimed term must not also get a generated page"
+        !stub.contains("moss-term-role") && !stub.contains("Spring Concert"),
+        "the generated address is a redirect, not a second listing:\n{stub}"
     );
     let claimed = fs::read_to_string(out.join("people/ada/index.html")).expect("the claiming page is built");
     assert!(claimed.contains("Spring Concert"), "the claiming page hosts the listing:\n{claimed}");

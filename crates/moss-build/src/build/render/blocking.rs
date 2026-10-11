@@ -2607,8 +2607,10 @@ pub fn generate_blocking_content_for_build(
     // keeps serving its old `authors/<slug>/` URL: those moves are recomputed
     // from the kinds table every build and stored nowhere, so they ride in
     // beside the persisted rename history.
+    let term_stubs =
+        [crate::build::terms::kind_move_stubs(&term_index), crate::build::terms::claim_stubs(&term_index)].concat();
     let table_inputs = crate::build::feeds::redirects::TableInputs {
-        kind_moves: crate::build::terms::kind_move_stubs(&term_index),
+        term_stubs,
         has_deployed_url: site_url.is_deployed(),
         declared: site_config.declared_redirects.clone(),
     };
