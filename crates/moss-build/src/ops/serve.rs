@@ -114,7 +114,9 @@ use std::sync::Arc;
 pub struct HeadlessServe {
     /// Forwarded to [`ownership::acquire_for_site_dir`] via [`ServeConfig`].
     /// `ops::run_headless_build` sets it from `--watch` (standing by makes no
-    /// sense for a one-shot build that would just exit right after).
+    /// sense for a one-shot build that would just exit right after). A host
+    /// that sets it hands the process to standby: Ctrl-C while standing by
+    /// ends the whole process, so only a command-line host may set it.
     pub standby_on_conflict: bool,
     /// Forwarded to [`ServeConfig`]: `ops::run_headless_build` holds the same
     /// `Arc` across every call this process makes here, so a `/__moss/yield`

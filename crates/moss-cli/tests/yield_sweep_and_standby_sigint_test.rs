@@ -108,7 +108,8 @@ async fn ctrl_c_while_standing_by_exits_promptly_and_leaves_the_owner_alone() {
     let owner = moss_build::ops::serve::ownership::find_live_owner(&site).await.expect("A owns the folder");
     assert_eq!(owner.pid, a.child.id());
 
-    let mut b = spawn_served_build(&site, moss_home.path(), &["--watch", "--no-plugins"]);
+    // B starts with SIGINT ignored, as any job backgrounded by a non-interactive shell does.
+    let mut b = spawn_served_build_sigint_ignored(&site, moss_home.path(), &["--watch", "--no-plugins"]);
     wait_for_line(&b.stderr, "standing by", Duration::from_secs(30))
         .unwrap_or_else(|| panic!("B never stood by:\n{}", joined(&b.stderr)));
 
@@ -127,6 +128,65 @@ async fn ctrl_c_while_standing_by_exits_promptly_and_leaves_the_owner_alone() {
     let still = moss_build::ops::serve::ownership::find_live_owner(&site).await.expect("A must still own the folder");
     assert_eq!(still.pid, a.child.id(), "no owner record may be written by the process that stood by");
     assert!(matches!(a.child.try_wait(), Ok(None)), "A must still be live");
+
+    unsafe { std::env::remove_var("MOSS_HOME") };
+}
+
+/// A yielded `--watch` process stands by for the new owner it found, and
+/// Ctrl-C must still stop it there: its wait runs with no other handler
+/// listening, so a plain await would swallow the signal.
+#[tokio::test]
+async fn ctrl_c_while_a_yielded_process_stands_by_for_its_successor_exits() {
+    let _guard = MOSS_HOME_ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (moss_home, _root, site) = fresh_site();
+    unsafe { std::env::set_var("MOSS_HOME", moss_home.path()) };
+
+    // A starts with SIGINT ignored, as a backgrounded job does, so the wait below must install its own handler.
+    let mut a = spawn_served_build_sigint_ignored(&site, moss_home.path(), &["--watch", "--no-plugins"]);
+    a.wait_for_access_line(Duration::from_secs(60));
+    wait_for_line(&a.stderr, "seal+persist", Duration::from_secs(60))
+        .unwrap_or_else(|| panic!("A never sealed its first build:\n{}", joined(&a.stderr)));
+
+    let mut b = spawn_served_build(&site, moss_home.path(), &["--watch", "--no-plugins"]);
+    wait_for_line(&b.stderr, "standing by", Duration::from_secs(30))
+        .unwrap_or_else(|| panic!("B never stood by:\n{}", joined(&b.stderr)));
+
+    let outcome = moss_build::ops::serve::ownership::request_yield(&site).await.expect("yield request");
+    assert_eq!(outcome, moss_build::ops::serve::ownership::YieldOutcome::Accepted);
+    wait_for_line(&a.stderr, "Yielding ownership", Duration::from_secs(10))
+        .unwrap_or_else(|| panic!("A never printed its yielded line:\n{}", joined(&a.stderr)));
+
+    // B claims the folder; A, now yielded, stands by for B to leave.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let successor = loop {
+        if let Some(owner) = moss_build::ops::serve::ownership::find_live_owner(&site).await {
+            if owner.pid == b.child.id() {
+                break owner;
+            }
+        }
+        assert!(Instant::now() < deadline, "B never took the folder; B stderr:\n{}", joined(&b.stderr));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    wait_for_line(&a.stderr, "standing by", Duration::from_secs(30))
+        .unwrap_or_else(|| panic!("yielded A never stood by for B:\n{}", joined(&a.stderr)));
+
+    let status = Command::new("kill")
+        .args(["-INT", &a.child.id().to_string()])
+        .stdout(Stdio::null())
+        .status()
+        .expect("kill -INT");
+    assert!(status.success());
+    let a_exited = wait_for_exit(&mut a.child, Duration::from_secs(5)).is_some();
+
+    let still_b = moss_build::ops::serve::ownership::find_live_owner(&site).await;
+    let b_port: u16 = successor.url.rsplit(':').next().unwrap().trim_end_matches('/').parse().unwrap();
+    let b_serves = get(b_port, "/").starts_with("HTTP/1.0 200");
+    let _ = b.child.kill();
+    let _ = b.child.wait();
+
+    assert!(a_exited, "yielded A ignored Ctrl-C while standing by for B; stderr:\n{}", joined(&a.stderr));
+    assert_eq!(still_b.map(|o| o.pid), Some(successor.pid), "B must still own the folder");
+    assert!(b_serves, "B must still serve after A left");
 
     unsafe { std::env::remove_var("MOSS_HOME") };
 }

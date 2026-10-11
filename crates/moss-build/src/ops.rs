@@ -449,7 +449,11 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
                                     Some(owner) => {
                                         cli_eprintln!("{}", serve::ownership::preview_ready_line(&owner.url));
                                         cli_eprintln!("{}", serve::ownership::standing_by_message(&owner));
-                                        serve::ownership::wait_for_owner_to_leave(folder).await;
+                                        if serve::ownership::wait_for_owner_to_leave_or_interrupt(folder).await {
+                                            cli_eprintln!("Stopping...");
+                                            cli_eprintln!("Stopped");
+                                            break;
+                                        }
                                     }
                                     None => {
                                         cli_eprintln!("no other moss claimed the folder; serving again");
