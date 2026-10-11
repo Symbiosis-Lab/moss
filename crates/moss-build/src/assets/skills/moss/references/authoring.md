@@ -272,7 +272,7 @@ Extract repeated blocks to a partial file and transclude with `![[partial-name]]
 
 Name-list fields are listable dimensions, not just metadata. Every value generates a page listing what carries it: `author: 趙雲` gives `/authors/趙雲/`, `tags: [城市]` gives `/tags/城市/`. Nothing to set up, and a link to a term page never 404s.
 
-Five fields work this way: `author:`, `tags:`, `editor:`, `jury:`, `location:`. Out of the box `author:` feeds `/authors/` and `tags:` feeds `/tags/`; `editor:`, `jury:` and `location:` feed nothing until a site says where they go.
+Any field a `[terms.<key>]` block names in its `fields` list is a name-list field for that site, so you can invent the dimension you need. Five built-in fields need no declaration: `author:`, `tags:`, `editor:`, `jury:`, `location:`. Out of the box `author:` feeds `/authors/` and `tags:` feeds `/tags/`; `editor:`, `jury:` and `location:` feed nothing until a site says where they go.
 
 A **term kind** is one namespace fed by one or more of those fields. Declare one in `.moss/config.toml`:
 
@@ -284,9 +284,27 @@ title = "People"
 
 Now all three fields feed one namespace: someone who wrote one piece and edited another has a single page at `/people/<name>/`, not two. That page lists their works in sections — "Author", then "Editor", then "Jury", in the order `fields` gives — so the listing says what each credit was. A person reached through only one of the fields gets a plain listing with no section headings.
 
+A declared field takes its value the way `author:` does: one name as a string, or a list of names. For example, a concert site that credits people by role:
+
+```toml
+[terms.performers]
+fields = ["conductor", "soloist"]
+title = "Performers"
+```
+
+```yaml
+---
+title: Spring Concert
+conductor: Ada Example
+soloist: [Ben Sample, Ada Example]
+---
+```
+
+Here `/performers/ada-example/` lists the Spring Concert under "Conductor" and "Soloist", the label being the field's own name with its first letter capitalized. A declared field has no translated label, so it reads as written.
+
 Naming a field in a declared kind takes it out of its built-in namespace: with the block above, `author:` no longer feeds `/authors/`. The old `/authors/<name>/` URLs keep working, and so does the bare `/authors/` root itself — moss emits a redirect to the new page for as long as the field belongs elsewhere. That redirect never lands on a real page: if you have hand-authored content living at the old address, moss leaves it alone rather than burying it under a meta-refresh.
 
-Any real page can take a generated one's place. `author_page: 趙雲` — or `true`, meaning "the name is my title" — makes that page the author's page: its body is the bio, its `url:` is wherever you want it, and the works listing attaches below. Every field has its claim: `tag_page:`, `editor_page:`, `jury_page:`, `place_page:`. Any of a kind's claims takes over that kind's page, so in the `people` example above a bio page claims with whichever credit fits. Term mentions site-wide then link there instead of at the generated URL. Claiming adds that listing below, and also gives the page's own `cover:` a visible place in the body — beside the title, the same layout a folder-index page claiming the same term already uses. An unclaimed leaf's `cover:` only ever reaches share/OG metadata; it never becomes a visible image in the body.
+Any real page can take a generated one's place. `author_page: 趙雲` — or `true`, meaning "the name is my title" — makes that page the author's page: its body is the bio, its `url:` is wherever you want it, and the works listing attaches below. Every field has its claim: `tag_page:`, `editor_page:`, `jury_page:`, `place_page:`. A declared field claims with `<field>_page:` the same way, so `conductor_page: true` on a page called Ada Example makes that page the page for `conductor:` names. Any of a kind's claims takes over that kind's page, so in the `people` example above a bio page claims with whichever credit fits. Term mentions site-wide then link there instead of at the generated URL. Claiming adds that listing below, and also gives the page's own `cover:` a visible place in the body — beside the title, the same layout a folder-index page claiming the same term already uses. An unclaimed leaf's `cover:` only ever reaches share/OG metadata; it never becomes a visible image in the body.
 
 Two things that surprise people:
 

@@ -102,7 +102,7 @@ pub fn takeover_for(
             .and_then(|with_members| kind.fields.iter().find(|f| with_members.contains(f)))
             .or_else(|| kind.fields.first())?
             .clone();
-        let claim_key = crate::build::terms::claim_field_key(&field)?;
+        let claim_key = crate::build::terms::claim_field_key(&field);
         let folder = namespace_folder(map, project_root, ns, &kind.title);
         let mut files = folder.url_note(ns).into_iter().collect::<Vec<_>>();
         files.push(NewFile {

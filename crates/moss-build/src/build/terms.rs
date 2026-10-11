@@ -25,7 +25,7 @@ use crate::build::scan::article_map::to_pretty_url;
 use crate::build::types::ParsedDocument;
 
 mod kinds;
-pub use kinds::{term_kinds, TermKind, BUILTIN_DEFAULT_FIELDS};
+pub use kinds::{declared_name_list_fields, term_kinds, TermKind, BUILTIN_DEFAULT_FIELDS};
 // The editor's chip-completion readout of a finished build's kinds table —
 // a pure reader of `ArticleMap`, never a deriver. Sibling file for the same
 // reason `kinds.rs` and `rollup.rs` are: it grows from a different concern
@@ -237,52 +237,54 @@ impl TermIndex {
     }
 }
 
-/// This doc's values for a name-list field (`author`, `tags`, `editor`,
-/// `jury`), or an empty slice for a field name this build doesn't
-/// recognize. The one accessor every name-list-field consumer in this
-/// module goes through, so a schema addition needs exactly one new arm —
-/// pinned by `every_name_list_field_has_a_real_accessor_arm`, which fails on
-/// a wildcard silently standing in for a real one.
-fn field_names<'a>(doc: &'a ParsedDocument, field: &str) -> &'a [String] {
+/// This doc's values for a name-list field. A name outside the five built-ins
+/// is site-declared, read from the page's own frontmatter like `author:`.
+fn field_names(doc: &ParsedDocument, field: &str) -> Vec<String> {
     match field {
-        "author" => &doc.author,
+        "author" => doc.author.clone(),
         // Frontmatter tags only — inline #hashtags are prose, not
         // cataloguing (see `fm_tags` on ParsedDocument).
-        "tags" => doc.fm_tags.as_deref().unwrap_or(&[]),
-        "editor" => &doc.editor,
-        "jury" => &doc.jury,
-        "location" => &doc.location,
-        _ => &[],
+        "tags" => doc.fm_tags.clone().unwrap_or_default(),
+        "editor" => doc.editor.clone(),
+        "jury" => doc.jury.clone(),
+        "location" => doc.location.clone(),
+        declared => raw_frontmatter_value(doc, declared)
+            .and_then(|v| moss_core::frontmatter_union::normalize_name_list(&v).ok())
+            .unwrap_or_default(),
     }
 }
 
-/// This doc's term-page claim for a name-list field (`author_page`,
-/// `tag_page`, `editor_page`, `jury_page`), or `None` for a field name this
-/// build doesn't recognize. Companion to [`field_names`].
-fn term_claim_of<'a>(doc: &'a ParsedDocument, field: &str) -> Option<&'a moss_core::terms::TermClaim> {
+/// A raw frontmatter value as the YAML value the shared normalizers take.
+fn raw_frontmatter_value(doc: &ParsedDocument, key: &str) -> Option<serde_yaml::Value> {
+    let value = doc.raw_frontmatter.get(key)?;
+    serde_json::from_value(value.clone()).ok()
+}
+
+/// This doc's term-page claim for a name-list field, or `None`. Companion to
+/// [`field_names`].
+fn term_claim_of(doc: &ParsedDocument, field: &str) -> Option<moss_core::terms::TermClaim> {
     match field {
-        "author" => doc.author_page.as_ref(),
-        "tags" => doc.tag_page.as_ref(),
-        "editor" => doc.editor_page.as_ref(),
-        "jury" => doc.jury_page.as_ref(),
-        "location" => doc.place_page.as_ref(),
-        _ => None,
+        "author" => doc.author_page.clone(),
+        "tags" => doc.tag_page.clone(),
+        "editor" => doc.editor_page.clone(),
+        "jury" => doc.jury_page.clone(),
+        "location" => doc.place_page.clone(),
+        declared => {
+            let key = claim_field_key(declared);
+            let value = raw_frontmatter_value(doc, &key)?;
+            moss_core::frontmatter_union::normalize_term_claim(&value).ok().flatten()
+        }
     }
 }
 
-/// The frontmatter key a page claims this field's term page with. Almost
-/// always `<field>_page`; `tags` is the one irregular pair, because the
-/// field is plural and a claim is of one tag (`tag_page`). Anything that
-/// WRITES a claim goes through here rather than concatenating the suffix,
-/// which is how `tags_page` — a key nothing reads — got written once.
-pub fn claim_field_key(field: &str) -> Option<&'static str> {
+/// The frontmatter key a page claims this field's term page with. `<field>_page`,
+/// except `tags` (`tag_page`) and `location` (`place_page`). Anything that writes
+/// a claim goes through here, not by concatenating the suffix.
+pub fn claim_field_key(field: &str) -> String {
     match field {
-        "author" => Some("author_page"),
-        "tags" => Some("tag_page"),
-        "editor" => Some("editor_page"),
-        "jury" => Some("jury_page"),
-        "location" => Some("place_page"),
-        _ => None,
+        "tags" => "tag_page".to_string(),
+        "location" => "place_page".to_string(),
+        other => format!("{other}_page"),
     }
 }
 
@@ -949,9 +951,19 @@ pub fn kind_move_stubs(index: &TermIndex) -> Vec<(String, String)> {
 /// moss-core's component table; the copy is `term_role_<field>` in
 /// `i18n::strings`.
 pub fn term_role_heading(lang: crate::i18n::Language, field: &str) -> String {
+    let label = match field {
+        "author" | "tags" | "editor" | "jury" | "location" => {
+            crate::i18n::t(lang, &format!("term_role_{}", field)).to_string()
+        }
+        // A declared field has no translated label: its name, capitalized.
+        declared => {
+            let mut chars = declared.chars();
+            chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+        }
+    };
     format!(
         "<h2 class=\"moss-term-role\">{}</h2>",
-        crate::build::media::cover::html_escape(crate::i18n::t(lang, &format!("term_role_{}", field)))
+        crate::build::media::cover::html_escape(&label)
     )
 }
 
@@ -1599,7 +1611,7 @@ mod tests {
 
     #[test]
     fn every_name_list_field_has_a_real_accessor_arm() {
-        // Companion to A2's name_list_fields_is_exactly_the_four_name_list_fields:
+        // Companion to the name-list flag test in moss-core's schema_fields_tests:
         // that test pins the SET; this one pins that `field_names` has a real
         // arm for each member of it, so a `_ => &[]` wildcard could not pass
         // as a match for a name the set still yields.
@@ -1609,7 +1621,7 @@ mod tests {
         d.editor = vec!["Kane".to_string()];
         d.jury = vec!["Kaneda".to_string()];
         d.location = vec!["Kyoto".to_string()];
-        for field in moss_core::schema_fields::name_list_fields() {
+        for field in ["author", "tags", "editor", "jury", "location"] {
             assert!(
                 !field_names(&d, field).is_empty(),
                 "field_names(doc, \"{field}\") returned an empty slice — a wildcard arm \
@@ -1804,16 +1816,15 @@ mod tests {
         // derivation reads, and the frontmatter key a caller writes to claim
         // its term page. `tags`/`tag_page` is the pair that does not follow
         // the suffix rule, and the only way to know is to look it up.
-        for field in moss_core::schema_fields::name_list_fields() {
-            let key = claim_field_key(field)
-                .unwrap_or_else(|| panic!("name-list field `{field}` has no claim key"));
+        for field in ["author", "tags", "editor", "jury", "location"] {
+            let key = claim_field_key(field);
             assert!(
                 moss_core::schema_fields::BUILTIN_FIELDS.iter().any(|f| f.name == key),
                 "claim key `{key}` for `{field}` is not a declared schema field"
             );
         }
-        assert_eq!(claim_field_key("tags"), Some("tag_page"), "the irregular pair");
-        assert_eq!(claim_field_key("byline"), None, "not a name-list field");
+        assert_eq!(claim_field_key("tags"), "tag_page", "the irregular pair");
+        assert_eq!(claim_field_key("conductor"), "conductor_page", "a declared field follows the suffix rule");
     }
 
     // ── task A10: kind-move redirect stubs ───────────────────────────────

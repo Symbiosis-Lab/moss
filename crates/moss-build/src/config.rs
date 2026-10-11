@@ -200,9 +200,9 @@ impl ConfigFile {
     /// Every `[terms.<key>]` table, plus a built-in `RawKind` for each of
     /// `authors`/`tags` that NO declared table already used — the one
     /// unified config read `build::terms::term_kinds` turns into
-    /// `TermKind`s. Raw here: `fields` is not yet filtered through
-    /// `moss_core::schema_fields::name_list_fields()`, and `title` is not
-    /// yet resolved — both happen exactly once, in `term_kinds`, not here.
+    /// `TermKind`s. Raw here: `fields` is not yet checked against the
+    /// built-in schema, and `title` is not yet resolved — both happen exactly
+    /// once, in `term_kinds`, not here.
     ///
     /// A declared `[terms.authors]` or `[terms.tags]` table IS that kind —
     /// its own `fields` and `title` win outright, not just its own
@@ -309,8 +309,8 @@ pub struct RawKind {
     /// URL namespace / pseudo-folder prefix (`authors`, `tags`, or a
     /// declared key like `people`).
     pub key: String,
-    /// Frontmatter field names as configured, not yet checked against
-    /// `moss_core::schema_fields::name_list_fields()`.
+    /// Frontmatter field names as configured, not yet checked by
+    /// `build::terms::term_kinds`.
     pub fields: Vec<String>,
     /// Explicit `title` from the table, when the author set one. `None` for
     /// the two built-ins (their title comes from `i18n::term_root_title`)
