@@ -147,7 +147,7 @@ fn event_of(doc: &ParsedDocument, site_url: &SiteUrl, problems: &mut Problems) -
         problems.bad_end.push(page.clone());
     }
     let zone_name = ev.timezone.as_deref();
-    let tzid = zone_name.filter(|z| zone::load(z).is_some()).map(str::to_string);
+    let tzid = zone_name.filter(|z| zone::is_known(z)).map(str::to_string);
     if let (Some(name), None) = (zone_name, &tzid) {
         problems.bad_zone.push(format!("`{name}` ({page})"));
     }
@@ -247,7 +247,7 @@ impl CalendarPlan {
             let Some(page) = page_output(doc) else { continue };
             let Some(path) = ServedPath::for_event_ics(&page) else { continue };
             dirs_with_events.extend(ancestor_dirs(page.as_str()).map(str::to_string));
-            if event.tzid.is_none() && !event.start.is_all_day() && raw_str(doc, "timezone").is_none() {
+            if event.tzid.is_none() && !event.start.is_all_day() && doc.event.as_ref().is_some_and(|ev| ev.timezone.is_none()) {
                 floating += 1;
             }
             parsed.insert(doc.url_path.as_str(), event.clone());

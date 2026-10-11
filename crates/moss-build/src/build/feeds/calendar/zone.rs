@@ -12,6 +12,12 @@ pub fn load(name: &str) -> Option<TimeZone> {
     TimeZone::get(name).ok()
 }
 
+/// Whether `name` is an IANA zone name a `timezone:` value may carry. Both a
+/// page's own `timezone:` and a cascaded one pass this check.
+pub fn is_known(name: &str) -> bool {
+    load(name).is_some()
+}
+
 /// A UTC offset in seconds: `+HHMM`, or `+HH:MM` when `colon`. Seconds are
 /// appended only when non-zero, as `+HHMMSS` or `+HH:MM:SS`.
 fn format_offset(seconds: i32, colon: bool) -> String {

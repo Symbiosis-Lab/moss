@@ -13,6 +13,23 @@
 
 use crate::build::types::ParsedDocument;
 
+/// Every key cascade carries. `apply_cascade_values` has an arm for each one; the
+/// test `test_cascade_keys_match_the_arms` holds the two in step.
+const CASCADE_KEYS: &[&str] = &[
+    "nav",
+    "breadcrumb",
+    "footer",
+    "children",
+    "children_style",
+    "children_group",
+    "children_depth",
+    "tags",
+    "description",
+    "content_width",
+    "sort",
+    "timezone",
+];
+
 /// Apply frontmatter cascade: parent pages push values to descendants.
 ///
 /// Documents with a `cascade` field propagate key-value pairs to all descendant
@@ -28,6 +45,7 @@ pub(crate) fn apply_cascade(docs: &mut Vec<ParsedDocument>) {
             .iter()
             .filter_map(|doc| {
                 doc.cascade.as_ref().map(|c| {
+                    report_cascade_values(doc, c);
                     let folder_prefix = if doc.url_path == "index.html" {
                         // Root index cascades to everything
                         String::new()
@@ -79,6 +97,32 @@ pub(crate) fn apply_cascade(docs: &mut Vec<ParsedDocument>) {
             }
 
             apply_cascade_values(doc, cascade);
+        }
+    }
+}
+
+/// Report what in a source page's cascade cannot take effect. This runs once per
+/// source page, not once per descendant: an unknown key has no effect, and a
+/// `timezone:` that is not a zone name is not applied to any event.
+fn report_cascade_values(doc: &ParsedDocument, cascade: &std::collections::BTreeMap<String, serde_yaml::Value>) {
+    let page = doc.source_path.as_deref().unwrap_or(doc.url_path.as_str());
+    for key in cascade.keys().filter(|k| !CASCADE_KEYS.contains(&k.as_str())) {
+        log::warn!(
+            "[{page}] cascade key \"{key}\" is not a key cascade carries ({}); it has no effect",
+            CASCADE_KEYS.join(", ")
+        );
+    }
+    if let Some(value) = cascade.get("timezone") {
+        // A blank value is absent, as a page's own blank `timezone:` is.
+        let text = value.as_str().map(str::trim);
+        if text != Some("") && !text.is_some_and(crate::build::feeds::calendar::zone::is_known) {
+            let shown = value.as_str().map_or_else(
+                || serde_yaml::to_string(value).unwrap_or_default().trim().to_string(),
+                str::to_string,
+            );
+            log::warn!(
+                "`timezone:` is not a time zone name (use Area/City), so these events' calendar times are floating: `{shown}` (cascaded from {page})"
+            );
         }
     }
 }
@@ -174,6 +218,18 @@ fn apply_cascade_values(
                 if doc.sort.is_none() {
                     if let Ok(v) = serde_yaml::from_value::<moss_core::sort::SortField>(value.clone()) {
                         doc.sort = Some(v);
+                    }
+                }
+            }
+            "timezone" => {
+                // Only an event that names no zone of its own takes the folder's, and
+                // only a zone name; `report_cascade_values` reports the rest.
+                if let Some(event) = doc.event.as_mut().filter(|e| e.timezone.is_none()) {
+                    if let Ok(v) = serde_yaml::from_value::<String>(value.clone()) {
+                        let zone = v.trim();
+                        if crate::build::feeds::calendar::zone::is_known(zone) {
+                            event.timezone = Some(zone.to_string());
+                        }
                     }
                 }
             }
@@ -497,9 +553,11 @@ mod tests {
         );
     }
 
-    /// Unknown cascade keys are silently ignored.
+    /// An unknown cascade key has no effect, and the build reports it once per source page.
     #[test]
-    fn test_unknown_cascade_keys_ignored() {
+    fn test_unknown_cascade_key_has_no_effect_and_is_reported() {
+        // The first call installs the capturing logger, so it must run before the warning.
+        crate::build::cache::tests::logged_count(log::Level::Warn, "");
         let mut parent = make_doc("Docs", "docs/index.html");
         let mut cascade = HashMap::new();
         cascade.insert(
@@ -519,7 +577,53 @@ mod tests {
 
         // Known key should still work
         assert_eq!(docs[1].nav, Some(true));
-        // Unknown key should not cause a panic or error
+        // The unknown key is not applied to any field...
+        assert_eq!(docs[1].description, None);
+        // ...and is reported, not dropped without a word.
+        assert_eq!(
+            crate::build::cache::tests::logged_count(log::Level::Warn, "cascade key \"unknown_field\""),
+            1
+        );
+    }
+
+    /// A valid sample value for each key in `CASCADE_KEYS`.
+    fn sample_for(key: &str) -> serde_yaml::Value {
+        match key {
+            "nav" | "footer" | "children" => serde_yaml::Value::Bool(true),
+            "breadcrumb" => serde_yaml::Value::Bool(false),
+            "children_style" | "children_group" | "children_depth" | "description" => {
+                serde_yaml::Value::String("summary".to_string())
+            }
+            "tags" => serde_yaml::to_value(vec!["docs"]).unwrap(),
+            "content_width" => serde_yaml::Value::String("wide".to_string()),
+            "sort" => serde_yaml::Value::String("title".to_string()),
+            "timezone" => serde_yaml::Value::String("Europe/Oslo".to_string()),
+            other => panic!("CASCADE_KEYS names `{other}` but the test has no sample value for it"),
+        }
+    }
+
+    /// Cascading a key changes an event page exactly when the key is in `CASCADE_KEYS`.
+    #[test]
+    fn test_cascade_keys_match_the_arms() {
+        for key in CASCADE_KEYS {
+            let mut parent = make_doc("Events", "events/index.html");
+            parent.cascade = Some(HashMap::from([(key.to_string(), sample_for(key))]));
+            let mut docs = vec![parent, make_event_doc("Concert", "events/concert/index.html")];
+            let before = format!("{:?}", docs[1]);
+            apply_cascade(&mut docs);
+            assert_ne!(format!("{:?}", docs[1]), before, "`{key}` is in CASCADE_KEYS but changes nothing");
+        }
+        // Keys cascade does not carry, including the ones excluded on purpose, change nothing.
+        for key in ["colour", "typesetting", "sidebar", "draft", "listed", "start"] {
+            for value in [serde_yaml::Value::Bool(true), serde_yaml::Value::String("wide".to_string())] {
+                let mut parent = make_doc("Events", "events/index.html");
+                parent.cascade = Some(HashMap::from([(key.to_string(), value)]));
+                let mut docs = vec![parent, make_event_doc("Concert", "events/concert/index.html")];
+                let before = format!("{:?}", docs[1]);
+                apply_cascade(&mut docs);
+                assert_eq!(format!("{:?}", docs[1]), before, "`{key}` is not in CASCADE_KEYS but changes the page");
+            }
+        }
     }
 
     /// Empty cascade map is harmless.
@@ -666,6 +770,99 @@ mod tests {
             docs[1].content_width,
             None,
             "Invalid content_width value should be ignored"
+        );
+    }
+
+    /// An event page: `start:` parsed into `event`, no zone of its own.
+    fn make_event_doc(title: &str, url_path: &str) -> ParsedDocument {
+        let mut doc = make_doc(title, url_path);
+        doc.event = crate::build::types::EventFields::from_frontmatter(
+            &moss_core::frontmatter_typed::FrontMatter {
+                start: Some("2026-11-01 19:00".to_string()),
+                ..Default::default()
+            },
+        );
+        doc
+    }
+
+    fn folder_with_timezone(zone: &str) -> ParsedDocument {
+        let mut parent = make_doc("Events", "events/index.html");
+        let mut cascade = HashMap::new();
+        cascade.insert("timezone".to_string(), serde_yaml::to_value(zone).unwrap());
+        parent.cascade = Some(cascade);
+        parent
+    }
+
+    /// A folder's `timezone:` cascade fills in the zone of each event beneath it.
+    #[test]
+    fn test_cascade_timezone_sets_event_zone() {
+        let mut docs = vec![
+            folder_with_timezone("Europe/Oslo"),
+            make_event_doc("Concert", "events/concert/index.html"),
+        ];
+        apply_cascade(&mut docs);
+
+        assert_eq!(
+            docs[1].event.as_ref().and_then(|e| e.timezone.as_deref()),
+            Some("Europe/Oslo"),
+        );
+    }
+
+    /// A zone the event sets itself is kept over the folder's.
+    #[test]
+    fn test_cascade_timezone_does_not_override_own_zone() {
+        let mut own = make_event_doc("Tour", "events/tour/index.html");
+        own.event.as_mut().unwrap().timezone = Some("Asia/Tokyo".to_string());
+
+        let mut docs = vec![folder_with_timezone("Europe/Oslo"), own];
+        apply_cascade(&mut docs);
+
+        assert_eq!(
+            docs[1].event.as_ref().and_then(|e| e.timezone.as_deref()),
+            Some("Asia/Tokyo"),
+        );
+    }
+
+    /// A descendant that is not an event stays an event-less page.
+    #[test]
+    fn test_cascade_timezone_leaves_non_event_pages_alone() {
+        let mut docs = vec![
+            folder_with_timezone("Europe/Oslo"),
+            make_doc("About", "events/about/index.html"),
+        ];
+        apply_cascade(&mut docs);
+
+        assert!(docs[1].event.is_none());
+    }
+
+    /// A blank cascaded zone counts as absent: not applied, and not reported.
+    #[test]
+    fn test_cascade_timezone_blank_counts_as_absent() {
+        crate::build::cache::tests::logged_count(log::Level::Warn, "");
+        let mut docs = vec![
+            folder_with_timezone("   "),
+            make_event_doc("Concert", "events/concert/index.html"),
+        ];
+        apply_cascade(&mut docs);
+
+        assert_eq!(docs[1].event.as_ref().and_then(|e| e.timezone.as_deref()), None);
+        assert_eq!(crate::build::cache::tests::logged_count(log::Level::Warn, "`   ` (cascaded from"), 0);
+    }
+
+    /// A cascaded zone that is not a zone name is not applied, and is reported with its page.
+    #[test]
+    fn test_cascade_timezone_malformed_is_not_applied_and_reported() {
+        crate::build::cache::tests::logged_count(log::Level::Warn, "");
+        let mut docs = vec![
+            folder_with_timezone("not a zone"),
+            make_event_doc("Concert", "events/concert/index.html"),
+        ];
+        apply_cascade(&mut docs);
+
+        assert_eq!(docs[1].event.as_ref().and_then(|e| e.timezone.as_deref()), None);
+        assert_eq!(
+            crate::build::cache::tests::logged_count(log::Level::Warn, "`not a zone` (cascaded from events/index.html)"),
+            1
         );
     }
 }

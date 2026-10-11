@@ -7105,6 +7105,26 @@ fn a_timed_event_with_a_zone_writes_tzid_and_a_vtimezone() {
 }
 
 #[test]
+fn a_folder_timezone_cascade_gives_its_events_a_zone() {
+    let (test_dir, _c) = create_test_dir();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::create_dir_all(test_dir.join("Events")).unwrap();
+    fs::write(
+        test_dir.join("Events/index.md"),
+        "---\ntitle: Events\ncascade:\n  timezone: Europe/Oslo\n---\n\nWhat is on.\n",
+    )
+    .unwrap();
+    fs::write(
+        test_dir.join("Events/concert.md"),
+        "---\ntitle: Concert\nuid: conc0001\nstart: 2026-11-01 19:00\n---\n\nBody.\n",
+    )
+    .unwrap();
+    build_test_sealed_at(test_dir.to_str().unwrap(), Some("https://example.test")).expect("build");
+    let lines = assert_valid_ics(&staged(&test_dir, "events/concert/event.ics"));
+    assert!(lines.contains(&"DTSTART;TZID=Europe/Oslo:20261101T190000".to_string()), "{lines:?}");
+}
+
+#[test]
 fn an_all_day_multi_day_event_ends_the_day_after_its_inclusive_end() {
     let (dir, _c) = event_site(&[("Festival.md", "title: Festival\nuid: fest0001\nstart: 2026-11-01\nend: 2026-11-03\n")]);
     let lines = assert_valid_ics(&staged(&dir, "events/festival/event.ics"));
