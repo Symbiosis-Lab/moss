@@ -51,12 +51,8 @@ pub fn render(doc: &ParsedDocument, lang: Language, emit_source_lines: bool, cal
     if let Some(link) = ev.tickets.as_deref().and_then(|u| tickets_link(u, lang, None)) {
         html.push_str(&link);
     }
-    if let Some(url) = ev.online.as_deref().map(str::trim).filter(|u| is_web_url(u)) {
-        html.push_str(&format!(
-            r#"<a class="moss-event-link moss-event-online" href="{}">{}</a>"#,
-            html_escape(url),
-            t(lang, "event_online"),
-        ));
+    if let Some(link) = ev.online.as_deref().and_then(|u| online_link(u, lang, None)) {
+        html.push_str(&link);
     }
     if let Some(href) = calendar_href {
         html.push_str(&format!(
@@ -79,6 +75,19 @@ fn is_web_url(u: &str) -> bool {
 /// passes the event's title, which is read after the label for assistive
 /// technology.
 pub(crate) fn tickets_link(url: &str, lang: Language, label_suffix: Option<&str>) -> Option<String> {
+    action_link(url, lang, label_suffix, "moss-event-tickets", "event_tickets")
+}
+
+/// The Online link for an event's `online:` address, or `None` when the
+/// address is not http or https. The label suffix works as for
+/// [`tickets_link`].
+pub(crate) fn online_link(url: &str, lang: Language, label_suffix: Option<&str>) -> Option<String> {
+    action_link(url, lang, label_suffix, "moss-event-online", "event_online")
+}
+
+/// One of the event's action links: an http or https address, labelled by
+/// `label_key`, with the `event_tickets_for` suffix when a title is given.
+fn action_link(url: &str, lang: Language, label_suffix: Option<&str>, class: &str, label_key: &str) -> Option<String> {
     let url = url.trim();
     if !is_web_url(url) {
         return None;
@@ -92,9 +101,9 @@ pub(crate) fn tickets_link(url: &str, lang: Language, label_suffix: Option<&str>
         })
         .unwrap_or_default();
     Some(format!(
-        r#"<a class="moss-event-link moss-event-tickets" href="{}">{}{}</a>"#,
+        r#"<a class="moss-event-link {class}" href="{}">{}{}</a>"#,
         html_escape(url),
-        t(lang, "event_tickets"),
+        t(lang, label_key),
         suffix,
     ))
 }

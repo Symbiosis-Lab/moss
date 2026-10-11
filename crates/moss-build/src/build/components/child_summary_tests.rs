@@ -2,6 +2,7 @@ use super::*;
 
 fn article_props(title: &str, url: &str) -> ChildItemProps {
     ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: title.to_string(),
@@ -22,6 +23,7 @@ fn article_props(title: &str, url: &str) -> ChildItemProps {
 
 fn folder_props(title: &str, url: &str, count: usize) -> ChildItemProps {
     ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: title.to_string(),
@@ -181,6 +183,7 @@ fn test_render_folder_card_full() {
 #[test]
 fn test_render_card_escapes_html() {
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "<script>alert('xss')</script>".to_string(),
@@ -390,6 +393,7 @@ fn renders_permalink_star_inside_kicker_when_external_url_overrides_href() {
     // (kicker stays inside the card body next to the title) and
     // the ★ reads as part of the kicker line: "Publisher · 2024 ★".
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "Article Title".to_string(),
@@ -451,6 +455,7 @@ fn omits_permalink_when_kicker_is_none_even_with_external_url() {
     // (whole card → external URL); no ★. The archive URL stays
     // reachable via direct URL.
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "Article Title".to_string(),
@@ -495,6 +500,7 @@ fn cjk_date_keeps_separate_meta_inside_card() {
     // and date stay on the same line instead of splitting across
     // the card boundary.
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "Article".to_string(),
@@ -543,6 +549,7 @@ fn omits_permalink_when_no_external_url() {
     // Ordinary (non-linkblog) cards have a single URL — no second
     // anchor, no wrapper.
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "Local Post".to_string(),
@@ -585,6 +592,7 @@ fn renders_kicker_above_title_horizontal() {
     // is absorbed into the kicker as "{kicker} · {YYYY}" and the
     // separate meta slot is suppressed (no duplication).
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "Notes on writing".to_string(),
@@ -637,6 +645,7 @@ fn renders_kicker_above_title_horizontal() {
 #[test]
 fn kicker_absorbing_the_date_still_shows_the_place() {
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "Notes on writing".to_string(),
@@ -679,6 +688,7 @@ fn vertical_head_order_matches_horizontal() {
     // title — so the brow leads the card in both directions; the
     // page's writing mode does the rotation, not the markup.
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "在公開場合寫作".to_string(),
@@ -727,6 +737,7 @@ fn vertical_head_order_matches_horizontal() {
 #[test]
 fn vertical_typesetting_still_sets_the_meta_line_with_a_place_appended() {
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "在公開場合寫作".to_string(),
@@ -764,6 +775,7 @@ fn vertical_typesetting_still_sets_the_meta_line_with_a_place_appended() {
 #[test]
 fn meta_renders_date_when_axis_is_date() {
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "Hello".into(),
@@ -796,6 +808,7 @@ fn meta_renders_date_when_axis_is_date() {
 #[test]
 fn meta_shows_the_resolved_place_next_to_the_date() {
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "Lecture".into(),
@@ -852,6 +865,7 @@ fn meta_never_shows_a_place_beside_a_folders_count() {
 #[test]
 fn meta_collapses_when_axis_is_title() {
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "Project".into(),
@@ -884,6 +898,7 @@ fn meta_collapses_when_axis_is_title() {
 #[test]
 fn meta_collapses_when_axis_is_weight() {
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "Intro".into(),
@@ -1043,6 +1058,21 @@ fn event_summary_card_with_tickets_links_title_and_carries_its_own_tickets_link(
     let tickets_at = html.find(r#"<a class="moss-event-link moss-event-tickets""#).unwrap();
     let description_at = html.find(r#"<p class="moss-card-description">"#).unwrap();
     assert!(title_at < tickets_at && description_at < tickets_at, "got: {html}");
+    assert_eq!(crate::build::components::child_list::max_anchor_depth(&html), 1, "got: {html}");
+}
+
+#[test]
+fn event_summary_card_with_only_online_links_title_and_carries_its_online_link() {
+    let props = ChildItemProps {
+        online: Some("https://example.test/live".to_string()),
+        ..event_summary_props(None)
+    };
+    let html = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Date);
+    assert!(html.starts_with(r#"<div class="moss-card">"#), "got: {html}");
+    assert!(
+        html.contains(r#"<a class="moss-event-link moss-event-online" href="https://example.test/live">Online<span class="visually-hidden"> for Spring Gala</span></a>"#),
+        "got: {html}"
+    );
     assert_eq!(crate::build::components::child_list::max_anchor_depth(&html), 1, "got: {html}");
 }
 

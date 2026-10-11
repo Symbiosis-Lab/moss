@@ -188,6 +188,9 @@ pub struct ChildItemProps {
     /// An event's `tickets:` address. A card with a web address here gets its
     /// own Tickets link and its title is the page link (`event_card_links`).
     pub tickets: Option<String>,
+    /// An event's `online:` address. Like `tickets`, a web address here gives
+    /// the card its own Online link after Tickets (`event_card_links`).
+    pub online: Option<String>,
 }
 
 impl ChildItemProps {
@@ -238,7 +241,7 @@ pub(crate) fn leaf_meta(date_text: &str, when_html: Option<&str>, place: Option<
     match credits {
         None => base,
         Some(c) if base.is_empty() => c.to_string(),
-        Some(c) => format!("{} · {}", base, c),
+        Some(c) => format!(r#"{}<span class="moss-event-sep"> · </span>{}"#, base, c),
     }
 }
 
@@ -415,31 +418,43 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         }),
         credits: doc.card_credits.clone(),
         tickets: doc.event.as_ref().and_then(|e| e.tickets.clone()),
+        online: doc.event.as_ref().and_then(|e| e.online.clone()),
     }
 }
 
-/// The links of an event card whose page has a web `tickets:` address. Such a
-/// card is not one anchor: its title links to the page, and the Tickets link
-/// sits beside it. Every card kind (summary, grid, list row) builds its
-/// markup from these two strings, so the shape is decided here once.
+/// The links of an event card whose page has a web `tickets:` or `online:`
+/// address. Such a card is not one anchor: its title links to the page, and
+/// the action links sit beside it. Every card kind (summary, grid, list row)
+/// builds its markup from these two strings, so the shape is decided here once.
 pub(crate) struct EventCardLinks {
     /// `<a class="moss-card-link">` around the escaped title.
     pub title: String,
-    /// The Tickets link, whose accessible name also names the event.
-    pub tickets: String,
+    /// The Tickets and Online links, in that order, each naming the event for
+    /// assistive technology.
+    pub actions: String,
 }
 
-/// `None` for every card without a web `tickets:` address; those keep their
-/// whole-card anchor and render byte-identically to before.
+/// `None` for every card without a web `tickets:` or `online:` address; those
+/// keep their whole-card anchor and render byte-identically to before.
 pub(crate) fn event_card_links(props: &ChildItemProps, lang: crate::i18n::Language) -> Option<EventCardLinks> {
-    let tickets = super::event_meta::tickets_link(props.tickets.as_deref()?, lang, Some(&props.title))?;
+    let tickets = props
+        .tickets
+        .as_deref()
+        .and_then(|u| super::event_meta::tickets_link(u, lang, Some(&props.title)));
+    let online = props
+        .online
+        .as_deref()
+        .and_then(|u| super::event_meta::online_link(u, lang, Some(&props.title)));
+    if tickets.is_none() && online.is_none() {
+        return None;
+    }
     Some(EventCardLinks {
         title: format!(
             r#"<a class="moss-card-link" href="{}">{}</a>"#,
             html_escape(&props.url),
             html_escape(&props.title),
         ),
-        tickets,
+        actions: format!("{}{}", tickets.unwrap_or_default(), online.unwrap_or_default()),
     })
 }
 
@@ -464,13 +479,13 @@ pub(crate) fn max_anchor_depth(html: &str) -> usize {
 
 /// The opening element, title markup and closing element of a list row. An
 /// ordinary row is one anchor around its whole text; an event row keeps the
-/// same flex box as a `<div>`, links only its title, and carries the Tickets
-/// link after the title.
+/// same flex box as a `<div>`, links only its title, and carries its action
+/// links after the title.
 fn row_parts(props: &ChildItemProps, event: Option<&EventCardLinks>, row_class: &str, title_class: &str) -> (String, String, &'static str) {
     match event {
         Some(links) => (
             format!(r#"<div class="{row_class}">"#),
-            format!(r#"<span class="{title_class}">{}</span>{}"#, links.title, links.tickets),
+            format!(r#"<span class="{title_class}">{}</span>{}"#, links.title, links.actions),
             "</div>",
         ),
         None => (

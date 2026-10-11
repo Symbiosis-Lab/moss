@@ -393,7 +393,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0.16",
-        description: "The title link of an event card whose page has `tickets:`, which then is not one whole-card anchor. Its `::after` stretches over the card, so the card is still one click target; the card carries `position: relative`.",
+        description: "The title link of an event card whose page has `tickets:` or `online:`, which then is not one whole-card anchor. Its `::after` stretches over the card, so the card is still one click target; the card carries `position: relative`.",
     },
     ComponentEntry {
         class: "moss-card-cover",
@@ -2597,7 +2597,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0.16",
-        description: "The `online` link, which also carries `.moss-event-link`.",
+        description: "The `online` link, which also carries `.moss-event-link`. An event card with `online:` in a listing carries one too, after its Tickets link.",
     },
     ComponentEntry {
         class: "moss-event-sep",

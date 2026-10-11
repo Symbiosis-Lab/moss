@@ -207,6 +207,7 @@ fn test_render_no_date_omits_date_span() {
 #[test]
 fn test_render_child_article() {
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "My Article".to_string(),
@@ -237,6 +238,7 @@ fn test_render_child_article() {
 #[test]
 fn render_child_shows_the_resolved_place_next_to_a_leafs_date() {
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "Lecture".to_string(),
@@ -274,6 +276,7 @@ fn leaf_meta_with_no_date_or_place_is_the_credits_alone() {
 fn render_child_puts_the_listed_names_after_the_date_and_place() {
     let credits = r#"<span class="moss-card-credits"><span class="moss-credit">Ada Example<span class="moss-credit-role">, conductor</span></span></span>"#;
     let props = ChildItemProps {
+        online: None,
         credits: Some(credits.to_string()),
         tickets: None,
         title: "Lecture".to_string(),
@@ -291,8 +294,19 @@ fn render_child_puts_the_listed_names_after_the_date_and_place() {
         when_html: None,
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
-    let expected = format!(r#"<span class="moss-prefix-link-prefix date">1924 · 10 · Cambridge · {credits}</span>"#);
+    let expected = format!(r#"<span class="moss-prefix-link-prefix date">1924 · 10 · Cambridge<span class="moss-event-sep"> · </span>{credits}</span>"#);
     assert!(html.contains(&expected), "{html}");
+}
+
+/// The separator before an event's credits is a span, as the one before its
+/// place is, so a theme can drop it.
+#[test]
+fn leaf_meta_separates_credits_from_an_event_time_with_a_span() {
+    let credits = r#"<span class="moss-card-credits">c</span>"#;
+    assert_eq!(
+        leaf_meta("", Some("<time>x</time>"), None, Some(credits)),
+        format!(r#"<time>x</time><span class="moss-event-sep"> · </span>{credits}"#)
+    );
 }
 
 /// An event's listing row puts its place after the `<time>` as its own span,
@@ -305,6 +319,7 @@ fn render_child_wraps_an_event_place_in_its_own_span() {
         crate::i18n::Language::En,
     );
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "Opening".to_string(),
@@ -329,11 +344,43 @@ fn render_child_wraps_an_event_place_in_its_own_span() {
     assert!(!html.contains("</time> · "), "bare separator text must not remain: {html}");
 }
 
+/// An event row whose page has only `online:` keeps its title as the link and
+/// carries the Online link after it, with no anchor around the whole row.
+#[test]
+fn render_child_event_row_with_only_online_links_title_and_carries_its_online_link() {
+    let props = ChildItemProps {
+        online: Some("https://example.test/live".to_string()),
+        credits: None,
+        tickets: None,
+        title: "Spring Gala".to_string(),
+        url: "spring-gala.html".to_string(),
+        date_display: None,
+        date_raw: Some("2026-11-01".to_string()),
+        child_count: None,
+        description: None,
+        cover: None,
+        cover_type: None,
+        kicker: None,
+        permalink: None,
+        url_path: String::new(),
+        place: None,
+        when_html: None,
+    };
+    let html = render_child(&props, crate::i18n::Language::En, None);
+    assert!(html.contains(r#"<a class="moss-card-link" href="spring-gala.html">Spring Gala</a>"#), "{html}");
+    assert!(
+        html.contains(r#"<a class="moss-event-link moss-event-online" href="https://example.test/live">Online<span class="visually-hidden"> for Spring Gala</span></a>"#),
+        "{html}"
+    );
+    assert_eq!(max_anchor_depth(&html), 1, "{html}");
+}
+
 /// A folder's count is not a date — its own `location:` (e.g. a self-named
 /// work folder) must never leak into the count slot.
 #[test]
 fn render_child_never_shows_a_place_beside_a_folders_count() {
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "Kyoto Walk".to_string(),
@@ -364,6 +411,7 @@ fn render_child_never_shows_a_place_beside_a_folders_count() {
 #[test]
 fn flat_row_shows_year_for_month_precision_date() {
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "June Entry".to_string(),
@@ -393,6 +441,7 @@ fn flat_row_shows_year_for_month_precision_date() {
 #[test]
 fn flat_row_passes_through_display_only_date_as_is() {
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "Display Only".to_string(),
@@ -420,6 +469,7 @@ fn flat_row_passes_through_display_only_date_as_is() {
 #[test]
 fn flat_row_shows_bare_year_for_year_precision_date() {
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "1793 Entry".to_string(),
@@ -449,6 +499,7 @@ fn flat_row_shows_bare_year_for_year_precision_date() {
 #[test]
 fn folder_count_uses_chinese_numerals_in_vertical_cjk() {
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "書".to_string(),
@@ -475,6 +526,7 @@ fn folder_count_uses_chinese_numerals_in_vertical_cjk() {
 fn test_render_child_folder_without_description() {
     // Folders WITHOUT description: count in prefix slot (like date for articles)
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "Tutorials".to_string(),
@@ -505,6 +557,7 @@ fn test_render_child_folder_without_description() {
 fn test_render_child_folder_with_description() {
     // Folders WITH description: title + count suffix on first line, description below
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "Tutorials".to_string(),
@@ -536,6 +589,7 @@ fn test_render_child_folder_with_description() {
 #[test]
 fn test_render_child_folder_escapes_html() {
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "<b>Bold</b> & \"Quoted\"".to_string(),
@@ -561,6 +615,7 @@ fn test_render_child_folder_escapes_html() {
 #[test]
 fn test_render_child_article_no_date() {
     let props = ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: "Dateless Article".to_string(),
@@ -878,6 +933,7 @@ fn with_place_ignores_a_blank_place() {
 
 fn event_row_props(tickets: Option<&str>) -> ChildItemProps {
     ChildItemProps {
+        online: None,
         credits: None,
         tickets: tickets.map(str::to_string),
         title: "Spring Gala".to_string(),

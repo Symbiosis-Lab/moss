@@ -17,7 +17,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.minimal` | instance | Bare co-class on a minimal year group, alongside the prefixed name. Retained because themes in the wild key on it. |
 | `.moss-cards-minimal-year-group--summary` | container | BEM modifier on `.moss-cards-minimal-year-group`. Applied to year groups that should render in collapsed summary form (e.g. past years on a blog index). |
 | `.moss-card` | instance | v1 collapsed shape — single canonical instance class inside `.moss-cards`. Layout-specific styling targets `.moss-cards[data-layout=X] .moss-card`. Tag is `<a>` for ordinary cards and `<div>` for linkblog cards (`[data-linkblog]`). |
-| `.moss-card-link` | instance | The title link of an event card whose page has `tickets:`, which then is not one whole-card anchor. Its `::after` stretches over the card, so the card is still one click target; the card carries `position: relative`. |
+| `.moss-card-link` | instance | The title link of an event card whose page has `tickets:` or `online:`, which then is not one whole-card anchor. Its `::after` stretches over the card, so the card is still one click target; the card carries `position: relative`. |
 | `.moss-card-cover` | instance | Cover media slot inside `.moss-card`. Gets `.moss-card-no-cover` modifier when no image is present, or `data-cover="quote"` when a sibling card in the same listing has a cover and this one doesn't. |
 | `.moss-card-no-cover` | instance | Modifier applied to `.moss-card-cover` when no cover media is available. |
 | `.moss-card-content` | instance | Text content slot inside a grid-layout `.moss-card` (kicker + title + meta). A card with a cover has a tinted content band (`--moss-cover-color`) with white title, meta and description (`--moss-cover-ink`). A theme that clears that band with `--moss-cover-color: transparent` sets `--moss-cover-ink` to its own text colour, or the text is white on the page. |
@@ -149,7 +149,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-event-link` | instance | A `tickets` (label Tickets) or `online` (label Online) link; only http and https addresses are linked. |
 | `.moss-event-calendar` | instance | The "Add to calendar" link to the event's `.ics` file, after the tickets and online links. Carries `.moss-event-link` too. |
 | `.moss-event-tickets` | instance | The `tickets` link, which also carries `.moss-event-link`. An event card with `tickets:` in a listing carries one too, after its meta. |
-| `.moss-event-online` | instance | The `online` link, which also carries `.moss-event-link`. |
+| `.moss-event-online` | instance | The `online` link, which also carries `.moss-event-link`. An event card with `online:` in a listing carries one too, after its Tickets link. |
 | `.moss-event-sep` | instance | The separator between an event's time and its place in a listing row or card. |
 | `.moss-when` | container | An event's time in a listing item (list row, card, grid card), in place of the compact date: a `<time>` whose `datetime` is the start as written, venue-local. The visible text is the same words the event page shows (localized to the page language). Each piece sits in its own span so a theme can lay the date out as it likes, for instance a large day numeral. The same spans appear inside an event page's `.moss-event-time`. |
 | `.moss-when-weekday` | instance | The weekday name. |

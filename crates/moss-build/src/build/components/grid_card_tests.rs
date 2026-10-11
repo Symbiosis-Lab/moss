@@ -3,6 +3,7 @@ use super::*;
 /// A card with nothing filled in — every test names only what it is about.
 fn blank() -> ChildItemProps {
     ChildItemProps {
+        online: None,
         credits: None,
         tickets: None,
         title: String::new(),
@@ -957,6 +958,42 @@ fn test_card_without_title_keeps_a_name_on_the_cover() {
 
     assert!(!html.contains("aria-label"), "an untitled card must not get an empty label: {html}");
     assert!(html.contains(r#"alt="cover""#), "cover needs a non-empty alt: {html}");
+}
+
+#[test]
+fn event_grid_card_with_only_online_links_title_and_carries_its_online_link() {
+    let props = ChildItemProps {
+        credits: None,
+        title: "Spring Gala".to_string(),
+        url: "spring-gala.html".to_string(),
+        online: Some("https://example.test/live".to_string()),
+        ..blank()
+    };
+    let html = render_item_with_typesetting(&props, None, crate::i18n::Language::En, None, None, false, false);
+    assert!(html.starts_with(r#"<div class="moss-card">"#), "got: {html}");
+    assert_eq!(html.matches(r#"<a class="moss-card-link""#).count(), 1, "got: {html}");
+    assert!(
+        html.contains(r#"<a class="moss-event-link moss-event-online" href="https://example.test/live">Online<span class="visually-hidden"> for Spring Gala</span></a>"#),
+        "got: {html}"
+    );
+    assert_eq!(crate::build::components::child_list::max_anchor_depth(&html), 1, "got: {html}");
+}
+
+#[test]
+fn event_grid_card_with_both_links_puts_tickets_before_online() {
+    let props = ChildItemProps {
+        credits: None,
+        title: "Spring Gala".to_string(),
+        url: "spring-gala.html".to_string(),
+        tickets: Some("https://example.test/tickets".to_string()),
+        online: Some("https://example.test/live".to_string()),
+        ..blank()
+    };
+    let html = render_item_with_typesetting(&props, None, crate::i18n::Language::En, None, None, false, false);
+    let tickets_at = html.find(r#"<a class="moss-event-link moss-event-tickets""#).unwrap();
+    let online_at = html.find(r#"<a class="moss-event-link moss-event-online""#).unwrap();
+    assert!(tickets_at < online_at, "got: {html}");
+    assert_eq!(crate::build::components::child_list::max_anchor_depth(&html), 1, "got: {html}");
 }
 
 #[test]

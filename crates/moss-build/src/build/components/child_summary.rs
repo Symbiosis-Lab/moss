@@ -112,9 +112,10 @@ pub fn render_with_sort(
         _ => String::new(),
     };
 
-    // An event with `tickets:` is not one anchor (see `event_card_links`):
-    // its title is the page link and it carries its own Tickets link. Linkblog
-    // cards keep their own per-part anchors and do not take this shape.
+    // An event with `tickets:` or `online:` is not one anchor (see
+    // `event_card_links`): its title is the page link and it carries its own
+    // action links. Linkblog cards keep their own per-part anchors and do not
+    // take this shape.
     let event_links = if is_linkblog { None } else { event_card_links(props, lang) };
 
     // Title: wrapped in an anchor for linkblog cards (so it stays
@@ -156,9 +157,9 @@ pub fn render_with_sort(
             body.push_str(&desc_inner);
         }
     }
-    // Tickets last: a reader meets when, then what, then the action.
+    // Actions last: a reader meets when, then what, then the action.
     if let Some(links) = &event_links {
-        body.push_str(&links.tickets);
+        body.push_str(&links.actions);
     }
 
     let cover_type = CoverType::resolve(props.cover.as_deref(), props.cover_type);

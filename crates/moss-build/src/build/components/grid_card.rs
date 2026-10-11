@@ -175,18 +175,18 @@ fn render_item(
         .map(|d| format!(r#"<p class="moss-card-description">{}</p>"#, render_description_html_in_link(d)))
         .unwrap_or_default();
 
-    // An event with `tickets:` is a `<div>` whose title is the page link, with
-    // its own Tickets link after the meta (see `event_card_links`). Otherwise
-    // the card is one link, whose accessible name is the title alone: meta,
-    // description and the cover's quote are not part of it. An empty title
-    // leaves the link unnamed.
+    // An event with `tickets:` or `online:` is a `<div>` whose title is the
+    // page link, with its own action links after the meta (see
+    // `event_card_links`). Otherwise the card is one link, whose accessible
+    // name is the title alone: meta, description and the cover's quote are not
+    // part of it. An empty title leaves the link unnamed.
     let event = event_card_links(props, lang);
-    let (open, close, title_html, tickets_html) = match &event {
+    let (open, close, title_html, actions_html) = match &event {
         Some(links) => (
             format!(r#"<div class="moss-card"{}>"#, cover_color_attrs),
             "</div>",
             format!(r#"<span class="moss-card-title">{}</span>"#, links.title),
-            links.tickets.as_str(),
+            links.actions.as_str(),
         ),
         None => {
             let label_attr = if props.title.trim().is_empty() {
@@ -211,7 +211,7 @@ fn render_item(
         count_text,
         title_html,
         description_html,
-        tickets_html,
+        actions_html,
         close,
     )
 }
