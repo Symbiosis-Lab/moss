@@ -74,7 +74,7 @@ mod tests {
     use crate::vault::places::Gazetteer;
 
     fn place_kind(key: &str) -> TermKind {
-        TermKind { key: key.to_string(), fields: vec!["location".to_string()], title: "Places".to_string(), is_place: true, parents: Default::default(), explorer: None, line: None }
+        TermKind { cards: false, key: key.to_string(), fields: vec!["location".to_string()], title: "Places".to_string(), is_place: true, parents: Default::default(), explorer: None, line: None }
     }
 
     fn gaz(toml_str: &str) -> Gazetteer {
@@ -128,6 +128,7 @@ mod tests {
     #[test]
     fn a_non_place_kind_is_never_filled() {
         let mut kinds = vec![TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["author".to_string()],
             title: "People".to_string(),

@@ -573,6 +573,7 @@ fn a_places_toml_only_edit_full_renders_via_surface_changed_and_moves_membership
     let h = Harness::new();
 
     let places_kind = |parent_of_kyoto: &str| crate::build::terms::TermKind {
+        cards: false,
         key: "places".to_string(),
         fields: vec!["location".to_string()],
         title: "Places".to_string(),

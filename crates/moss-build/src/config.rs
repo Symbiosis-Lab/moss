@@ -239,7 +239,8 @@ impl ConfigFile {
                 let kind_type = table.get("type").and_then(|v| v.as_str()).map(str::to_string);
                 let explorer = table.get("explorer").and_then(|v| v.as_bool());
                 let line = table.get("line").and_then(|v| v.as_bool());
-                declared.push(RawKind { key: key.clone(), fields, title, kind_type, explorer, line });
+                let cards = table.get("cards").cloned();
+                declared.push(RawKind { key: key.clone(), fields, title, kind_type, explorer, line, cards });
             }
         }
         let declared_keys: std::collections::HashSet<&str> =
@@ -259,7 +260,7 @@ impl ConfigFile {
                 },
                 title: None,
                 kind_type: None,
-                explorer: None, line: None,
+                explorer: None, line: None, cards: None,
             });
         }
         kinds.extend(declared);
@@ -330,6 +331,10 @@ pub struct RawKind {
     /// `[terms.<key>] line`, unvalidated and gated on `kind_type` the same
     /// way as `explorer`: `term_kinds` keeps it only for the place-typed kind.
     pub line: Option<bool>,
+    /// `[terms.<key>] cards`, unvalidated: the raw TOML value, so that
+    /// `build::terms::term_kinds` is the one place that reports a value that
+    /// is not a bool. `None` when the key is absent and for the two built-ins.
+    pub cards: Option<toml::Value>,
 }
 
 #[cfg(test)]

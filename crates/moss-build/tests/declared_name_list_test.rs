@@ -120,3 +120,66 @@ fn an_undeclared_site_gets_no_performer_pages_and_keeps_author_pages() {
     let page = fs::read_to_string(out.join("concerts/spring/index.html")).unwrap();
     assert!(!page.contains("Conductor"), "an undeclared field gets no section:\n{page}");
 }
+
+const CARDS_CONFIG: &str = "schema_version = 6\n\n[site]\nlang = \"en\"\n\n[terms.performers]\nfields = [\"conductor\", \"soloist\"]\ntitle = \"Performers\"\ncards = true\n";
+
+const CREDITS_MARKUP: &str = r#"<span class="moss-card-credits"><span class="moss-credit">Ada Example<span class="moss-credit-role">, conductor</span></span><span class="moss-event-sep"> · </span><span class="moss-credit">Ben Sample<span class="moss-credit-role">, soloist</span></span></span>"#;
+
+/// Three listing folders, one per card form: a folder of described, dated
+/// pages lists summary cards, a dated folder lists the same card at its
+/// date-led layout, and a folder of bare pages with no body lists grid cards.
+fn cards_site(config: &str) -> (Cleanup, PathBuf) {
+    build_site("cards", &[
+        (".moss/config.toml", config),
+        ("index.md", "---\ntitle: Home\n---\n\nHi.\n"),
+        ("described/index.md", "---\ntitle: Described\n---\n\nDescribed.\n"),
+        ("described/spring.md", "---\ntitle: Spring Gala\ndate: 2026-10-01\ndescription: A rich card.\nconductor: Ada Example\nsoloist: [Ben Sample]\n---\n\nSpring.\n"),
+        ("dated/index.md", "---\ntitle: Dated\n---\n\nDated.\n"),
+        ("dated/autumn.md", "---\ntitle: Autumn Gala\ndate: 2026-10-01\nconductor: Ada Example\nsoloist: [Ben Sample]\n---\n\nAutumn.\n"),
+        ("bare/index.md", "---\ntitle: Bare\n---\n\nBare.\n"),
+        ("bare/winter.md", "---\ntitle: Winter Gala\nconductor: Ada Example\nsoloist: [Ben Sample]\n---\n"),
+    ])
+}
+
+#[test]
+fn a_kind_with_cards_puts_its_names_on_summary_grid_and_list_cards() {
+    let (_guard, out) = cards_site(CARDS_CONFIG);
+    for folder in ["described", "dated", "bare"] {
+        let page = fs::read_to_string(out.join(folder).join("index.html")).unwrap();
+        assert!(page.contains(CREDITS_MARKUP), "{folder} lists its names on its cards:\n{page}");
+    }
+    // The bare folder's leaves have no date and no place, so the credits are
+    // the meta's whole content, with no separator in front of them.
+    let bare = fs::read_to_string(out.join("bare/index.html")).unwrap();
+    assert!(
+        bare.contains(r#"<span class="moss-card-meta"><span class="moss-card-credits">"#),
+        "a dateless placeless card's meta opens on the credits:\n{bare}"
+    );
+}
+
+#[test]
+fn credited_names_and_roles_are_escaped() {
+    let config = "schema_version = 6\n\n[site]\nlang = \"en\"\n\n[terms.performers]\nfields = [\"conductor\", \"guest&co\"]\ncards = true\n";
+    let (_guard, out) = build_site("escape", &[
+        (".moss/config.toml", config),
+        ("index.md", "---\ntitle: Home\n---\n\nHi.\n"),
+        ("bare/index.md", "---\ntitle: Bare\n---\n\nBare.\n"),
+        ("bare/gala.md", "---\ntitle: Gala\nconductor: \"Ann & <Bo>\"\n\"guest&co\": Cy\n---\n"),
+    ]);
+    let bare = fs::read_to_string(out.join("bare/index.html")).unwrap();
+    assert!(bare.contains("Ann &amp; &lt;Bo&gt;"), "the name is escaped:\n{bare}");
+    assert!(bare.contains(r#"<span class="moss-credit-role">, guest&amp;co</span>"#), "the role is escaped:\n{bare}");
+    assert!(!bare.contains("<Bo>"), "no raw angle brackets from a name:\n{bare}");
+}
+
+#[test]
+fn a_kind_without_cards_puts_no_names_on_cards() {
+    let (_guard, out) = cards_site(&CARDS_CONFIG.replace("cards = true\n", ""));
+    for folder in ["described", "dated", "bare"] {
+        let page = fs::read_to_string(out.join(folder).join("index.html")).unwrap();
+        assert!(!page.contains("moss-card-credits"), "{folder} carries no credits:\n{page}");
+        assert!(!page.contains("moss-credit"), "{folder} carries no credits:\n{page}");
+    }
+    let dated = fs::read_to_string(out.join("dated/index.html")).unwrap();
+    assert!(dated.contains("moss-card-meta\">2026 · 10</div>"), "the card keeps its plain date:\n{dated}");
+}

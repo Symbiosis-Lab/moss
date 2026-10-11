@@ -1004,6 +1004,7 @@ mod tests {
         .unwrap();
         let gaz = crate::vault::places::parse_gazetteer(&table);
         let mut kinds = vec![crate::build::terms::TermKind {
+            cards: false,
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),

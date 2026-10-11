@@ -38,6 +38,8 @@ pub struct ArticleListItemProps {
     /// An event's written time as a `<time>` with its parts in spans
     /// (`event_meta::render_when`); shown in place of `date_display`.
     pub when_html: Option<String>,
+    /// The page's listed names, pre-rendered (`ChildItemProps::credits`).
+    pub credits: Option<String>,
 }
 
 impl ArticleListItemProps {
@@ -111,7 +113,7 @@ pub fn render(
     // before the empty check below: a bare-year row under a `minimal` month
     // prefix can have no month text at all, and a place is still worth a row
     // on its own rather than vanishing alongside the empty date.
-    let date_display = leaf_meta(&date_display, props.when_html.as_deref(), props.place.as_deref());
+    let date_display = leaf_meta(&date_display, props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref());
 
     // An empty prefix means a year-only date under its own year heading, and
     // no place either; emit no span at all rather than one that lays out as
@@ -179,6 +181,10 @@ pub struct ChildItemProps {
     /// An event's written time as a `<time>` with its parts in spans
     /// (`event_meta::render_when`); shown in place of `date_display`.
     pub when_html: Option<String>,
+    /// The names a term kind with `cards = true` lists on this page, as one
+    /// pre-rendered `moss-card-credits` span (`terms::roles`). Shown in a
+    /// leaf's meta after its date and place; `None` for a folder.
+    pub credits: Option<String>,
     /// An event's `tickets:` address. A card with a web address here gets its
     /// own Tickets link and its title is the page link (`event_card_links`).
     pub tickets: Option<String>,
@@ -222,11 +228,17 @@ fn with_place_html(date_html: &str, place: Option<&str>) -> String {
 }
 
 /// A leaf's date-and-place text: the event's `<time>` when it has one, else
-/// the plain date. The one choice between the two, for every listing form.
-pub(crate) fn leaf_meta(date_text: &str, when_html: Option<&str>, place: Option<&str>) -> String {
-    match when_html {
+/// the plain date, then the page's listed names when a term kind shows them
+/// on cards. The one choice between the two, for every listing form.
+pub(crate) fn leaf_meta(date_text: &str, when_html: Option<&str>, place: Option<&str>, credits: Option<&str>) -> String {
+    let base = match when_html {
         Some(h) => with_event_place(h, place),
         None => with_place(date_text, place),
+    };
+    match credits {
+        None => base,
+        Some(c) if base.is_empty() => c.to_string(),
+        Some(c) => format!("{} · {}", base, c),
     }
 }
 
@@ -255,18 +267,21 @@ fn with_event_place(time_html: &str, place: Option<&str>) -> String {
 /// `count_label` is `None` for a leaf (no count at all) and `Some` for a
 /// folder (always shown, with or without a date of its own) — a folder's
 /// place only ever shows beside ITS OWN date, never beside a bare count.
+/// `credits` is a leaf's listed names; a folder never shows them, so the
+/// count arm ignores it.
 pub(crate) fn meta_text(
     date_display: Option<&str>,
     when_html: Option<&str>,
     place: Option<&str>,
     count_label: Option<&str>,
+    credits: Option<&str>,
 ) -> String {
     match count_label {
         Some(count) => match date_display {
             Some(date) => format!("{} · {}", with_place(date, place), html_escape(count)),
             None => html_escape(count),
         },
-        None => leaf_meta(date_display.unwrap_or(""), when_html, place),
+        None => leaf_meta(date_display.unwrap_or(""), when_html, place, credits),
     }
 }
 
@@ -398,6 +413,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         when_html: doc.event.as_ref().map(|e| {
             crate::build::components::event_meta::render_when(e.start, e.end, doc.lang)
         }),
+        credits: doc.card_credits.clone(),
         tickets: doc.event.as_ref().and_then(|e| e.tickets.clone()),
     }
 }
@@ -481,7 +497,7 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
 
     if let Some(count) = props.child_count {
         let count_label = crate::i18n::article_count_label(lang, count, typesetting);
-        let count_text = meta_text(props.date_display.as_deref(), None, props.place.as_deref(), Some(&count_label));
+        let count_text = meta_text(props.date_display.as_deref(), None, props.place.as_deref(), Some(&count_label), None);
 
         if let Some(ref desc) = props.description {
             // Folder WITH description: title + count suffix, description below
@@ -506,7 +522,7 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
         // it has. Same compact form grid cards use. The page's resolved
         // place, if any, goes right next to it — see `with_place`.
         let date = date_formatters::format_compact_date(date_raw, lang, typesetting);
-        let date = leaf_meta(&date, props.when_html.as_deref(), props.place.as_deref());
+        let date = leaf_meta(&date, props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref());
         let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
         format!(
             r#"<div class="moss-card">{}<span class="moss-prefix-link-prefix date">{}</span>{}{}</div>"#,
@@ -516,7 +532,7 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
         // Article with a display date but no raw date. `date_display` is
         // already the compact "year · month"/"year" form —
         // `props_for_document` formatted it with `format_compact_date`.
-        let date = leaf_meta(date_display, props.when_html.as_deref(), props.place.as_deref());
+        let date = leaf_meta(date_display, props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref());
         let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
         format!(
             r#"<div class="moss-card">{}<span class="moss-prefix-link-prefix date">{}</span>{}{}</div>"#,

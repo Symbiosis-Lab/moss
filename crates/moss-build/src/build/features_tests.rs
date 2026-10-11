@@ -2379,6 +2379,7 @@ fn site_config_with_kinds(kinds: Vec<TermKind>) -> SiteConfig {
 
 fn place_kind(explorer: Option<bool>) -> TermKind {
     TermKind {
+        cards: false,
         key: "places".to_string(),
         fields: vec!["location".to_string()],
         title: "Places".to_string(),

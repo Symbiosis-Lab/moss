@@ -1094,6 +1094,7 @@ pub(super) fn render_page<'d>(
                 .map(|d| {
                     let (date_display, date_raw, _explicit) = components::extract_date_from_doc(d, &project.root_path);
                     components::ArticleListItemProps {
+                        credits: None,
                         date_display,
                         date_raw,
                         url: crate::build::scan::article_map::to_pretty_url(&d.url_path),

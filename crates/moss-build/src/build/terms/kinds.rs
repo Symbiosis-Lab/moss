@@ -67,6 +67,15 @@ pub struct TermKind {
     /// place line; `None` means the default, on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<bool>,
+    /// `[terms.<key>] cards = true`: every listing card for a page with values
+    /// in this kind's fields shows those names in its meta. Read by
+    /// `build::terms::roles::set_card_credits`; `false` for a value that is
+    /// not a bool, with a diagnostic from `term_kinds`.
+    ///
+    /// `skip_serializing_if` for the same reason as `is_place`: an unset
+    /// default must not add a key to every serialized kind.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cards: bool,
 }
 
 impl TermKind {
@@ -205,7 +214,19 @@ pub fn term_kinds(cfg: &crate::config::ConfigFile, lang: crate::i18n::Language) 
             // toward an unrecognized `type`.
             let explorer = is_place.then_some(kind.explorer).flatten();
             let line = is_place.then_some(kind.line).flatten();
-            TermKind { key: kind.key, fields, title, is_place, parents: Default::default(), explorer, line }
+            let cards = match kind.cards {
+                None => false,
+                Some(toml::Value::Boolean(on)) => on,
+                Some(other) => {
+                    crate::build::cli_output::log_warn_problem!(
+                        "[terms.{}] cards must be true or false, not {}; ignoring",
+                        kind.key,
+                        other
+                    );
+                    false
+                }
+            };
+            TermKind { key: kind.key, fields, title, is_place, parents: Default::default(), explorer, line, cards }
         })
         .collect()
 }
@@ -335,6 +356,22 @@ mod tests {
         let kinds = term_kinds(&cfg, crate::i18n::Language::En);
         let places = kinds.iter().find(|k| k.key == "places").expect("places kind present");
         assert!(!places.is_place, "an unrecognized type is ignored, not a panic");
+    }
+
+    #[test]
+    fn cards_true_turns_the_kind_on_and_a_non_bool_is_a_diagnostic() {
+        let _ = crate::build::cli_output::take_cli_problems();
+        let on = crate::config::ConfigFile::parse("[terms.performers]\nfields = [\"conductor\"]\ncards = true\n")
+            .unwrap();
+        let kinds = term_kinds(&on, crate::i18n::Language::En);
+        assert!(kinds.iter().find(|k| k.key == "performers").unwrap().cards);
+        assert_eq!(crate::build::cli_output::take_cli_problems(), 0, "a bool is not a problem");
+
+        let bad = crate::config::ConfigFile::parse("[terms.performers]\nfields = [\"conductor\"]\ncards = \"yes\"\n")
+            .unwrap();
+        let kinds = term_kinds(&bad, crate::i18n::Language::En);
+        assert!(!kinds.iter().find(|k| k.key == "performers").unwrap().cards, "a non-bool is off");
+        assert_eq!(crate::build::cli_output::take_cli_problems(), 1, "a non-bool is one diagnostic");
     }
 
     #[test]

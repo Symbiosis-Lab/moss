@@ -91,22 +91,23 @@ pub fn render_with_sort(
         // `date:`, if any, is exactly that.
         (Some(count), _) => {
             let count_label = crate::i18n::article_count_label(lang, count, typesetting);
-            let text = child_list::meta_text(props.date_display.as_deref(), None, props.place.as_deref(), Some(&count_label));
+            let text = child_list::meta_text(props.date_display.as_deref(), None, props.place.as_deref(), Some(&count_label), None);
             format!(r#"<div class="moss-card-meta">{}</div>"#, text)
         }
         (None, axis) if axis.shows_date() && date_merged_into_kicker => {
             // The kicker carries the year; the meta slot keeps the event's
-            // time (when it has one) and the place, and is never empty.
-            let text = child_list::leaf_meta("", props.when_html.as_deref(), props.place.as_deref());
+            // time (when it has one), the place and the listed names, and is
+            // never empty.
+            let text = child_list::leaf_meta("", props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref());
             if text.is_empty() {
                 String::new()
             } else {
                 format!(r#"<div class="moss-card-meta">{}</div>"#, text)
             }
         }
-        (None, axis) if axis.shows_date() && (props.date_display.is_some() || props.when_html.is_some()) => {
+        (None, axis) if axis.shows_date() && (props.date_display.is_some() || props.when_html.is_some() || props.credits.is_some()) => {
             let date = props.date_display.as_deref().unwrap_or("");
-            format!(r#"<div class="moss-card-meta">{}</div>"#, child_list::leaf_meta(date, props.when_html.as_deref(), props.place.as_deref()))
+            format!(r#"<div class="moss-card-meta">{}</div>"#, child_list::leaf_meta(date, props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref()))
         }
         _ => String::new(),
     };

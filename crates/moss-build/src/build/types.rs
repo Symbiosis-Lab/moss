@@ -301,6 +301,14 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub place_names: Option<String>,
+    /// The names this page shows on listing cards, pre-rendered as one
+    /// `moss-card-credits` span: every term kind with `cards = true`, its
+    /// fields in order, each name with its role. `None` when no such kind
+    /// names this page. Set by `build::terms::roles::set_card_credits` once
+    /// per build; `props_for_document` copies it into the card props.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub card_credits: Option<String>,
     /// True for a folder-index page sitting exactly at a place-typed term
     /// namespace root — an authored `places/index.md` with no `place_page:`
     /// claim, or a synthetic one when no such file exists. An authored page
@@ -752,21 +760,6 @@ pub struct PageFeatures {
     /// this page. Read from the typed AST
     /// (`moss_core::ast::has_shortcode_recursive`).
     pub galleries: bool,
-}
-
-impl PageFeatures {
-    /// Merge two feature sets, taking the OR of each flag. Used to aggregate
-    /// per-page flags into a per-build summary.
-    pub fn union(self, other: Self) -> Self {
-        Self {
-            inline_subscribe: self.inline_subscribe || other.inline_subscribe,
-            inline_apply: self.inline_apply || other.inline_apply,
-            callouts: self.callouts || other.callouts,
-            footnotes: self.footnotes || other.footnotes,
-            scroll_rows: self.scroll_rows || other.scroll_rows,
-            galleries: self.galleries || other.galleries,
-        }
-    }
 }
 
 /// Which optional asset partials this build ships — the site-level union of

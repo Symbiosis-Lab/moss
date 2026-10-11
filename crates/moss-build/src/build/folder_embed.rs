@@ -599,6 +599,7 @@ pub(crate) fn generate_children(
                     url_path: item.url_path.clone(),
                     place: item.place.clone(),
                     when_html: item.when_html.clone(),
+                    credits: item.credits.clone(),
                 })
                 .collect();
             let ascending = matches!(parent_axis, moss_core::sort::SortAxis::DateAsc);
@@ -691,6 +692,7 @@ fn render_minimal_year_section(
                 url_path: a.url_path.clone(),
                 place: a.place.clone(),
                 when_html: a.when_html.clone(),
+                credits: a.credits.clone(),
             };
             components::child_list::render(&props, true, false, lang, typesetting)
         })

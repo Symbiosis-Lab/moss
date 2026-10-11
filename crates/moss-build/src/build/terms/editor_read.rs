@@ -71,6 +71,7 @@ mod tests {
 
     fn kind(key: &str, fields: &[&str]) -> TermKind {
         TermKind {
+            cards: false,
             key: key.to_string(),
             fields: fields.iter().map(|f| f.to_string()).collect(),
             title: key.to_string(),

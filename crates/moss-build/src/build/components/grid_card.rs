@@ -98,6 +98,7 @@ fn render_item(
         props.when_html.as_deref(),
         props.place.as_deref(),
         count_label.as_deref(),
+        props.credits.as_deref(),
     );
 
     let cover_type = CoverType::resolve(props.cover.as_deref(), props.cover_type);

@@ -276,6 +276,7 @@ fn namespace_kind(map: &ArticleMap, ns: &str, site_lang: Language) -> Option<cra
         .iter()
         .find(|(key, _)| *key == ns)
         .map(|(key, field)| crate::build::terms::TermKind {
+            cards: false,
             key: key.to_string(),
             fields: vec![field.to_string()],
             title: crate::i18n::term_root_title(site_lang, key).to_string(),
@@ -530,6 +531,7 @@ mod tests {
     fn declared_people_map() -> ArticleMap {
         let mut m = ArticleMap::default();
         m.kinds = vec![crate::build::terms::TermKind {
+            cards: false,
             key: "people".into(),
             fields: vec!["author".into(), "editor".into(), "jury".into()],
             title: "People".into(),
@@ -579,6 +581,7 @@ mod tests {
         std::fs::create_dir(dir.path().join("authors")).unwrap();
         let mut m = ArticleMap::default();
         m.kinds = vec![crate::build::terms::TermKind {
+            cards: false,
             key: "authors".into(),
             fields: Vec::new(),
             title: "作者".into(),

@@ -2,6 +2,7 @@ use super::*;
 
 fn make_article(title: &str, date_raw: Option<&str>, url: &str) -> ArticleListItemProps {
     ArticleListItemProps {
+        credits: None,
         date_display: date_raw
             .map(|d| super::super::date::format_date_string(d))
             .unwrap_or_default(),

@@ -1380,6 +1380,7 @@ pub fn process_markdown_file(
     };
 
     Ok(ParsedDocument {
+        card_credits: None,
         label,
         nav_label,
         title,

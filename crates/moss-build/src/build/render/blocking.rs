@@ -1181,6 +1181,9 @@ pub fn generate_blocking_content_for_build(
         // before the incremental content hash is taken, so a claim moving
         // invalidates the line's link for free.
         crate::build::terms::set_place_lines(&mut documents, &term_index, site_lang);
+        // The names a `cards = true` kind shows on listing cards: the same
+        // per-page reading, before the same incremental hash.
+        crate::build::terms::set_card_credits(&mut documents, &site_config.term_kinds);
         log::debug!(target: "timing", "[reduce] derive_terms: {:?}", reduce_start.elapsed());
 
         // Places-explorer handshake, part 1: `places.<hash>.json`'s hash,

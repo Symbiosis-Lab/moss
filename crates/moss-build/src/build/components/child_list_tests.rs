@@ -4,6 +4,7 @@ use crate::i18n::Language;
 #[test]
 fn test_render_basic_article() {
     let props = ArticleListItemProps {
+        credits: None,
         date_display: "2025 · 11".to_string(),
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
@@ -26,6 +27,7 @@ fn test_render_basic_article() {
 #[test]
 fn render_shows_the_resolved_place_next_to_the_date() {
     let props = ArticleListItemProps {
+        credits: None,
         date_display: "2025 · 11".to_string(),
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
@@ -47,6 +49,7 @@ fn render_shows_the_resolved_place_next_to_the_date() {
 #[test]
 fn render_omits_the_place_when_no_date_is_shown() {
     let props = ArticleListItemProps {
+        credits: None,
         date_display: "2025 · 11".to_string(),
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
@@ -62,6 +65,7 @@ fn render_omits_the_place_when_no_date_is_shown() {
 #[test]
 fn test_render_escapes_html_in_title() {
     let props = ArticleListItemProps {
+        credits: None,
         date_display: "2025 · 11".to_string(),
         date_raw: None,
         url: "post.html".to_string(),
@@ -79,6 +83,7 @@ fn test_render_escapes_html_in_title() {
 #[test]
 fn test_render_escapes_html_in_url() {
     let props = ArticleListItemProps {
+        credits: None,
         date_display: "2025 · 11".to_string(),
         date_raw: None,
         url: "post.html?a=1&b=2".to_string(),
@@ -95,6 +100,7 @@ fn test_render_escapes_html_in_url() {
 #[test]
 fn test_render_minimal_shows_month_only() {
     let props = ArticleListItemProps {
+        credits: None,
         date_display: "2025 · 11".to_string(),
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
@@ -113,6 +119,7 @@ fn test_render_minimal_shows_month_only() {
 #[test]
 fn test_render_minimal_fallback_without_raw_date() {
     let props = ArticleListItemProps {
+        credits: None,
         date_display: "2025-11-17".to_string(),
         date_raw: None,
         url: "post.html".to_string(),
@@ -132,6 +139,7 @@ fn test_render_uses_prefix_link_classes() {
     // TDD: The article item should use shared prefix-link classes
     // for consistent styling with series-nav component
     let props = ArticleListItemProps {
+        credits: None,
         date_display: "2025 · 11".to_string(),
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
@@ -164,6 +172,7 @@ fn test_render_uses_prefix_link_classes() {
 #[test]
 fn test_render_no_date_omits_date_span() {
     let props = ArticleListItemProps {
+        credits: None,
         date_display: "2025 · 11".to_string(),
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
@@ -198,6 +207,7 @@ fn test_render_no_date_omits_date_span() {
 #[test]
 fn test_render_child_article() {
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "My Article".to_string(),
         url: "/blog/my-article/".to_string(),
@@ -227,6 +237,7 @@ fn test_render_child_article() {
 #[test]
 fn render_child_shows_the_resolved_place_next_to_a_leafs_date() {
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "Lecture".to_string(),
         url: "/lectures/1924.html".to_string(),
@@ -249,6 +260,41 @@ fn render_child_shows_the_resolved_place_next_to_a_leafs_date() {
     );
 }
 
+/// A dateless, placeless leaf's meta is the credits alone: no separator
+/// before them. Deleting the empty-base arm of `leaf_meta` makes this fail.
+#[test]
+fn leaf_meta_with_no_date_or_place_is_the_credits_alone() {
+    let credits = r#"<span class="moss-card-credits">X</span>"#;
+    assert_eq!(leaf_meta("", None, None, Some(credits)), credits);
+}
+
+/// A term kind's names on cards come after the date and place, in the same
+/// meta slot, and the row's date span carries them.
+#[test]
+fn render_child_puts_the_listed_names_after_the_date_and_place() {
+    let credits = r#"<span class="moss-card-credits"><span class="moss-credit">Ada Example<span class="moss-credit-role">, conductor</span></span></span>"#;
+    let props = ChildItemProps {
+        credits: Some(credits.to_string()),
+        tickets: None,
+        title: "Lecture".to_string(),
+        url: "/lectures/1924.html".to_string(),
+        date_display: None,
+        date_raw: Some("1924-10-01".to_string()),
+        child_count: None,
+        description: None,
+        cover: None,
+        cover_type: None,
+        kicker: None,
+        permalink: None,
+        url_path: String::new(),
+        place: Some("Cambridge".to_string()),
+        when_html: None,
+    };
+    let html = render_child(&props, crate::i18n::Language::En, None);
+    let expected = format!(r#"<span class="moss-prefix-link-prefix date">1924 · 10 · Cambridge · {credits}</span>"#);
+    assert!(html.contains(&expected), "{html}");
+}
+
 /// An event's listing row puts its place after the `<time>` as its own span,
 /// behind a separator span; a non-event row keeps the bare text.
 #[test]
@@ -259,6 +305,7 @@ fn render_child_wraps_an_event_place_in_its_own_span() {
         crate::i18n::Language::En,
     );
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "Opening".to_string(),
         url: "/events/opening.html".to_string(),
@@ -287,6 +334,7 @@ fn render_child_wraps_an_event_place_in_its_own_span() {
 #[test]
 fn render_child_never_shows_a_place_beside_a_folders_count() {
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "Kyoto Walk".to_string(),
         url: "/works/kyoto-walk/".to_string(),
@@ -316,6 +364,7 @@ fn render_child_never_shows_a_place_beside_a_folders_count() {
 #[test]
 fn flat_row_shows_year_for_month_precision_date() {
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "June Entry".to_string(),
         url: "/writings/journal/june.html".to_string(),
@@ -344,6 +393,7 @@ fn flat_row_shows_year_for_month_precision_date() {
 #[test]
 fn flat_row_passes_through_display_only_date_as_is() {
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "Display Only".to_string(),
         url: "/writings/display-only.html".to_string(),
@@ -370,6 +420,7 @@ fn flat_row_passes_through_display_only_date_as_is() {
 #[test]
 fn flat_row_shows_bare_year_for_year_precision_date() {
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "1793 Entry".to_string(),
         url: "/writings/journal/year.html".to_string(),
@@ -398,6 +449,7 @@ fn flat_row_shows_bare_year_for_year_precision_date() {
 #[test]
 fn folder_count_uses_chinese_numerals_in_vertical_cjk() {
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "書".to_string(),
         url: "/書/".to_string(),
@@ -423,6 +475,7 @@ fn folder_count_uses_chinese_numerals_in_vertical_cjk() {
 fn test_render_child_folder_without_description() {
     // Folders WITHOUT description: count in prefix slot (like date for articles)
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "Tutorials".to_string(),
         url: "/tutorials/".to_string(),
@@ -452,6 +505,7 @@ fn test_render_child_folder_without_description() {
 fn test_render_child_folder_with_description() {
     // Folders WITH description: title + count suffix on first line, description below
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "Tutorials".to_string(),
         url: "/tutorials/".to_string(),
@@ -482,6 +536,7 @@ fn test_render_child_folder_with_description() {
 #[test]
 fn test_render_child_folder_escapes_html() {
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "<b>Bold</b> & \"Quoted\"".to_string(),
         url: "/test/?a=1&b=2".to_string(),
@@ -506,6 +561,7 @@ fn test_render_child_folder_escapes_html() {
 #[test]
 fn test_render_child_article_no_date() {
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "Dateless Article".to_string(),
         url: "/blog/dateless/".to_string(),
@@ -533,6 +589,7 @@ fn test_render_child_article_no_date() {
 fn test_render_no_date_ignores_minimal_flag() {
     // When no_date is true, the minimal flag is irrelevant
     let props = ArticleListItemProps {
+        credits: None,
         date_display: "2025 · 11".to_string(),
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
@@ -759,27 +816,27 @@ fn props_for_document_has_no_place_when_the_page_names_none() {
 
 #[test]
 fn meta_text_is_a_leafs_date_and_place() {
-    assert_eq!(meta_text(Some("1924 · 05"), None, Some("Cambridge"), None), "1924 · 05 · Cambridge");
+    assert_eq!(meta_text(Some("1924 · 05"), None, Some("Cambridge"), None, None), "1924 · 05 · Cambridge");
 }
 
 #[test]
 fn meta_text_is_a_bare_folders_count_alone_even_with_a_place() {
     // A folder with no date of its own: its `location:` (if any) is not a
     // date to sit beside — only the count shows.
-    assert_eq!(meta_text(None, None, Some("Kyoto"), Some("2 articles")), "2 articles");
+    assert_eq!(meta_text(None, None, Some("Kyoto"), Some("2 articles"), None), "2 articles");
 }
 
 #[test]
 fn meta_text_is_a_dated_folders_date_and_place_then_its_count() {
     assert_eq!(
-        meta_text(Some("1928 · 10"), None, Some("Cambridge"), Some("6 articles")),
+        meta_text(Some("1928 · 10"), None, Some("Cambridge"), Some("6 articles"), None),
         "1928 · 10 · Cambridge · 6 articles"
     );
 }
 
 #[test]
 fn meta_text_is_a_dated_folders_date_then_count_with_no_place() {
-    assert_eq!(meta_text(Some("1928 · 10"), None, None, Some("6 articles")), "1928 · 10 · 6 articles");
+    assert_eq!(meta_text(Some("1928 · 10"), None, None, Some("6 articles"), None), "1928 · 10 · 6 articles");
 }
 
 // ── `with_place`: the one owner of "date text plus resolved place" ────────
@@ -821,6 +878,7 @@ fn with_place_ignores_a_blank_place() {
 
 fn event_row_props(tickets: Option<&str>) -> ChildItemProps {
     ChildItemProps {
+        credits: None,
         tickets: tickets.map(str::to_string),
         title: "Spring Gala".to_string(),
         url: "spring-gala.html".to_string(),

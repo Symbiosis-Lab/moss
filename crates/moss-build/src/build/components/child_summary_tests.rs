@@ -2,6 +2,7 @@ use super::*;
 
 fn article_props(title: &str, url: &str) -> ChildItemProps {
     ChildItemProps {
+        credits: None,
         tickets: None,
         title: title.to_string(),
         url: url.to_string(),
@@ -21,6 +22,7 @@ fn article_props(title: &str, url: &str) -> ChildItemProps {
 
 fn folder_props(title: &str, url: &str, count: usize) -> ChildItemProps {
     ChildItemProps {
+        credits: None,
         tickets: None,
         title: title.to_string(),
         url: url.to_string(),
@@ -48,6 +50,7 @@ fn an_event_card_wraps_its_place_after_the_time() {
         crate::i18n::Language::En,
     );
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         place: Some("Example Hall".to_string()),
         when_html: Some(when),
@@ -178,6 +181,7 @@ fn test_render_folder_card_full() {
 #[test]
 fn test_render_card_escapes_html() {
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "<script>alert('xss')</script>".to_string(),
         url: "/test/?a=1&b=2".to_string(),
@@ -386,6 +390,7 @@ fn renders_permalink_star_inside_kicker_when_external_url_overrides_href() {
     // (kicker stays inside the card body next to the title) and
     // the ★ reads as part of the kicker line: "Publisher · 2024 ★".
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "Article Title".to_string(),
         url: "https://outlet.example/article".to_string(),
@@ -446,6 +451,7 @@ fn omits_permalink_when_kicker_is_none_even_with_external_url() {
     // (whole card → external URL); no ★. The archive URL stays
     // reachable via direct URL.
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "Article Title".to_string(),
         url: "https://outlet.example/article".to_string(),
@@ -489,6 +495,7 @@ fn cjk_date_keeps_separate_meta_inside_card() {
     // and date stay on the same line instead of splitting across
     // the card boundary.
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "Article".to_string(),
         url: "https://outlet.example/".to_string(),
@@ -536,6 +543,7 @@ fn omits_permalink_when_no_external_url() {
     // Ordinary (non-linkblog) cards have a single URL — no second
     // anchor, no wrapper.
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "Local Post".to_string(),
         url: "/posts/local/".to_string(),
@@ -577,6 +585,7 @@ fn renders_kicker_above_title_horizontal() {
     // is absorbed into the kicker as "{kicker} · {YYYY}" and the
     // separate meta slot is suppressed (no duplication).
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "Notes on writing".to_string(),
         url: "/posts/notes/".to_string(),
@@ -628,6 +637,7 @@ fn renders_kicker_above_title_horizontal() {
 #[test]
 fn kicker_absorbing_the_date_still_shows_the_place() {
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "Notes on writing".to_string(),
         url: "/posts/notes/".to_string(),
@@ -669,6 +679,7 @@ fn vertical_head_order_matches_horizontal() {
     // title — so the brow leads the card in both directions; the
     // page's writing mode does the rotation, not the markup.
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "在公開場合寫作".to_string(),
         url: "/posts/notes/".to_string(),
@@ -716,6 +727,7 @@ fn vertical_head_order_matches_horizontal() {
 #[test]
 fn vertical_typesetting_still_sets_the_meta_line_with_a_place_appended() {
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "在公開場合寫作".to_string(),
         url: "/posts/notes/".to_string(),
@@ -752,6 +764,7 @@ fn vertical_typesetting_still_sets_the_meta_line_with_a_place_appended() {
 #[test]
 fn meta_renders_date_when_axis_is_date() {
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "Hello".into(),
         url: "/h/".into(),
@@ -783,6 +796,7 @@ fn meta_renders_date_when_axis_is_date() {
 #[test]
 fn meta_shows_the_resolved_place_next_to_the_date() {
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "Lecture".into(),
         url: "/lectures/1924/".into(),
@@ -816,6 +830,7 @@ fn meta_shows_the_resolved_place_next_to_the_date() {
 #[test]
 fn meta_never_shows_a_place_beside_a_folders_count() {
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         place: Some("Kyoto".into()),
         when_html: None,
@@ -837,6 +852,7 @@ fn meta_never_shows_a_place_beside_a_folders_count() {
 #[test]
 fn meta_collapses_when_axis_is_title() {
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "Project".into(),
         url: "/p/".into(),
@@ -868,6 +884,7 @@ fn meta_collapses_when_axis_is_title() {
 #[test]
 fn meta_collapses_when_axis_is_weight() {
     let props = ChildItemProps {
+        credits: None,
         tickets: None,
         title: "Intro".into(),
         url: "/i/".into(),
@@ -996,6 +1013,7 @@ fn non_event_summary_card_is_unchanged_by_the_event_time() {
 
 fn event_summary_props(tickets: Option<&str>) -> ChildItemProps {
     ChildItemProps {
+        credits: None,
         tickets: tickets.map(str::to_string),
         date_display: None,
         date_raw: None,
@@ -1006,6 +1024,7 @@ fn event_summary_props(tickets: Option<&str>) -> ChildItemProps {
 #[test]
 fn event_summary_card_with_tickets_links_title_and_carries_its_own_tickets_link() {
     let props = ChildItemProps {
+        credits: None,
         description: Some("Doors open at seven.".to_string()),
         ..event_summary_props(Some("https://example.test/tickets"))
     };

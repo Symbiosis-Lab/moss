@@ -24,6 +24,8 @@ use regex::Regex;
 use crate::build::scan::article_map::to_pretty_url;
 use crate::build::types::ParsedDocument;
 
+mod roles;
+pub use roles::{set_card_credits, term_role_heading, term_role_label};
 mod kinds;
 pub use kinds::{declared_name_list_fields, term_kinds, TermKind, BUILTIN_DEFAULT_FIELDS};
 // The editor's chip-completion readout of a finished build's kinds table —
@@ -877,27 +879,6 @@ pub fn render_term_sections<'a>(
     )
 }
 
-/// The `<h2>` above one field's group on a term page — "Editor" over the
-/// pages that named this person through `editor:`. The class is in
-/// moss-core's component table; the copy is `term_role_<field>` in
-/// `i18n::strings`.
-pub fn term_role_heading(lang: crate::i18n::Language, field: &str) -> String {
-    let label = match field {
-        "author" | "tags" | "editor" | "jury" | "location" => {
-            crate::i18n::t(lang, &format!("term_role_{}", field)).to_string()
-        }
-        // A declared field has no translated label: its name, capitalized.
-        declared => {
-            let mut chars = declared.chars();
-            chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
-        }
-    };
-    format!(
-        "<h2 class=\"moss-term-role\">{}</h2>",
-        crate::build::media::cover::html_escape(&label)
-    )
-}
-
 fn claimed_key(doc: &ParsedDocument, kinds: &[TermKind], index: &TermIndex) -> Option<String> {
     let mut found: Option<String> = None;
     for kind in kinds {
@@ -945,8 +926,8 @@ mod tests {
     /// kinds table (task A4).
     fn both_kinds() -> Vec<TermKind> {
         vec![
-            TermKind { key: AUTHOR_NS.to_string(), fields: vec!["author".to_string()], title: "Authors".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
-            TermKind { key: TAGS_NS.to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: AUTHOR_NS.to_string(), fields: vec!["author".to_string()], title: "Authors".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: TAGS_NS.to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
         ]
     }
 
@@ -981,6 +962,7 @@ mod tests {
     fn place_namespace_roots_are_the_bare_keys_whose_kind_is_place() {
         let kinds = vec![
             TermKind {
+                cards: false,
                 key: "places".to_string(),
                 fields: vec!["location".to_string()],
                 title: "Places".to_string(),
@@ -988,6 +970,7 @@ mod tests {
                 parents: Default::default(), explorer: None, line: None,
             },
             TermKind {
+                cards: false,
                 key: TAGS_NS.to_string(),
                 fields: vec!["tags".to_string()],
                 title: "Tags".to_string(),
@@ -1011,6 +994,7 @@ mod tests {
     #[test]
     fn a_real_index_at_the_place_root_is_flagged_a_deeper_one_is_not() {
         let kinds = vec![TermKind {
+            cards: false,
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
@@ -1202,6 +1186,7 @@ mod tests {
     #[test]
     fn claim_through_jury_page_hosts_the_listing() {
         let kinds = vec![TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["jury".to_string()],
             title: "People".to_string(),
@@ -1219,6 +1204,7 @@ mod tests {
     #[test]
     fn claim_through_place_page_hosts_the_listing() {
         let kinds = vec![TermKind {
+            cards: false,
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
@@ -1237,6 +1223,7 @@ mod tests {
 
     fn places_kind_with_parents(parents: &[(&str, &str)]) -> TermKind {
         TermKind {
+            cards: false,
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
@@ -1337,6 +1324,7 @@ mod tests {
             parents.insert(key, parent_name);
         }
         let kinds = vec![TermKind {
+            cards: false,
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
@@ -1385,6 +1373,7 @@ mod tests {
         // recorded for it — the emptiness check the render layer applies is
         // the only guard, replacing the dropped `is_place` gate.
         let kinds = vec![TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["jury".to_string()],
             title: "People".to_string(),
@@ -1492,6 +1481,7 @@ mod tests {
     #[test]
     fn members_by_field_records_which_field_a_member_came_through() {
         let kinds = vec![TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string()],
             title: "People".to_string(),
@@ -1520,6 +1510,7 @@ mod tests {
     #[test]
     fn term_sections_keeps_a_trailing_group_for_hand_authored_also_in() {
         let kinds = vec![TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["author".to_string()],
             title: "People".to_string(),
@@ -1569,6 +1560,7 @@ mod tests {
         // no fields. A real `authors/` directory on that site is an ordinary
         // folder and keeps its own name.
         let off = vec![TermKind {
+            cards: false,
             key: "authors".to_string(),
             fields: Vec::new(),
             title: "作者".to_string(),
@@ -1583,6 +1575,7 @@ mod tests {
 
         // The same kind, switched on and in use, does title its root.
         let on = vec![TermKind {
+            cards: false,
             key: "authors".to_string(),
             fields: vec!["author".to_string()],
             title: "作者".to_string(),
@@ -1602,6 +1595,7 @@ mod tests {
         // put "Author" over the derived half. develop renders one flat list,
         // and every such site's output is byte-identical or it is not.
         let kinds = vec![TermKind {
+            cards: false,
             key: "authors".to_string(),
             fields: vec!["author".to_string()],
             title: "Authors".to_string(),
@@ -1625,6 +1619,7 @@ mod tests {
         // plain listing with no heading, which is what keeps a single-field
         // kind byte-identical to any other folder index.
         let kinds = vec![TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string(), "jury".to_string()],
             title: "People".to_string(),
@@ -1642,6 +1637,7 @@ mod tests {
     #[test]
     fn two_fields_with_members_split_into_labelled_groups_in_kind_order() {
         let kinds = vec![TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string(), "jury".to_string()],
             title: "People".to_string(),
@@ -1671,6 +1667,7 @@ mod tests {
     #[test]
     fn a_generated_term_page_reads_the_same_sections_its_claimed_twin_would() {
         let kinds = vec![TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["author".to_string(), "jury".to_string()],
             title: "People".to_string(),
@@ -1702,6 +1699,7 @@ mod tests {
         // the claiming document, and the index — and both render it here, so
         // the same kind cannot come out headed differently on the two.
         let kinds = vec![TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string()],
             title: "People".to_string(),
@@ -1764,9 +1762,10 @@ mod tests {
     /// the built-in loses the field, the declared kind gains it.
     fn author_moved_to_people() -> Vec<TermKind> {
         vec![
-            TermKind { key: "authors".to_string(), fields: Vec::new(), title: "Authors".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
-            TermKind { key: "tags".to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: "authors".to_string(), fields: Vec::new(), title: "Authors".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: "tags".to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
             TermKind {
+                cards: false,
                 key: "people".to_string(),
                 fields: vec!["author".to_string(), "editor".to_string()],
                 title: "People".to_string(),
@@ -1840,9 +1839,10 @@ mod tests {
     #[test]
     fn a_moved_tags_namespace_root_also_gets_a_redirect() {
         let moved = vec![
-            TermKind { key: "authors".to_string(), fields: vec!["author".to_string()], title: "Authors".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
-            TermKind { key: "tags".to_string(), fields: Vec::new(), title: "Tags".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: "authors".to_string(), fields: vec!["author".to_string()], title: "Authors".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: "tags".to_string(), fields: Vec::new(), title: "Tags".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
             TermKind {
+                cards: false,
                 key: "topics".to_string(),
                 fields: vec!["tags".to_string()],
                 title: "Topics".to_string(),
@@ -1867,12 +1867,13 @@ mod tests {
         // — the pairs only ever existed while the config said so.
         let reverted = vec![
             TermKind {
+                cards: false,
                 key: "authors".to_string(),
                 fields: vec!["author".to_string()],
                 title: "Authors".to_string(),
                 is_place: false, parents: Default::default(), explorer: None, line: None,
             },
-            TermKind { key: "tags".to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: "tags".to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
         ];
         let mut docs = vec![doc("posts/a/index.html", "A")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -1885,6 +1886,7 @@ mod tests {
         // `[terms] author = false` empties the built-in with no declared kind
         // taking the field. Those pages are gone, not relocated.
         let off = vec![TermKind {
+            cards: false,
             key: "authors".to_string(),
             fields: Vec::new(),
             title: "Authors".to_string(),
@@ -1901,6 +1903,7 @@ mod tests {
     #[test]
     fn a_member_named_through_two_fields_of_one_kind_lists_only_once() {
         let kinds = vec![TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string()],
             title: "People".to_string(),
@@ -1976,6 +1979,7 @@ mod tests {
         // stopped linking, even though derive_terms itself already handled
         // the move correctly.
         let kinds = vec![TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["author".to_string()],
             title: "People".to_string(),

@@ -2767,6 +2767,7 @@ fn a_caption_with_marker_breaking_characters_reaches_the_page_intact() {
 #[test]
 fn pseudo_folder_place_embed_lists_its_derived_members() {
     let kind = crate::build::terms::TermKind {
+        cards: false,
         key: "places".to_string(),
         fields: vec!["location".to_string()],
         title: "Places".to_string(),
@@ -2797,6 +2798,7 @@ fn pseudo_folder_place_embed_lists_its_derived_members() {
 #[test]
 fn place_map_embed_emits_svg_with_placement_and_caption() {
     let kind = crate::build::terms::TermKind {
+        cards: false,
         key: "places".to_string(),
         fields: vec!["location".to_string()],
         title: "Places".to_string(),
@@ -2835,6 +2837,7 @@ fn place_map_embed_emits_svg_with_placement_and_caption() {
 #[test]
 fn pseudo_folder_rollup_ancestor_embed_lists_its_descendants() {
     let kind = crate::build::terms::TermKind {
+        cards: false,
         key: "places".to_string(),
         fields: vec!["location".to_string()],
         title: "Places".to_string(),

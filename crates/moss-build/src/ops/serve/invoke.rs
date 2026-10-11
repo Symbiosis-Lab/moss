@@ -1145,6 +1145,7 @@ mod tests {
 
         let mut map = crate::build::scan::article_map::ArticleMap::new();
         map.kinds = vec![crate::build::terms::TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["author".to_string()],
             title: "People".to_string(),

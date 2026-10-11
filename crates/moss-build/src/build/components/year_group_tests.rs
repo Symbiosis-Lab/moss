@@ -17,6 +17,7 @@ fn test_render_empty_list_chinese() {
 #[test]
 fn test_render_single_article() {
     let articles = vec![ArticleListItemProps {
+        credits: None,
         date_display: "2025 · 11".to_string(),
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
@@ -35,6 +36,7 @@ fn test_render_single_article() {
 #[test]
 fn test_render_minimal_mode() {
     let articles = vec![ArticleListItemProps {
+        credits: None,
         date_display: "2025 · 11".to_string(),
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
@@ -61,6 +63,7 @@ fn test_render_minimal_mode() {
 fn test_render_groups_by_year() {
     let articles = vec![
         ArticleListItemProps {
+            credits: None,
             date_display: "2025 · 11".to_string(),
             date_raw: Some("2025-11-17T00:00:00Z".to_string()),
             url: "post1.html".to_string(),
@@ -70,6 +73,7 @@ fn test_render_groups_by_year() {
             when_html: None,
         },
         ArticleListItemProps {
+            credits: None,
             date_display: "2024 · 12".to_string(),
             date_raw: Some("2024-12-01T00:00:00Z".to_string()),
             url: "post2.html".to_string(),
@@ -79,6 +83,7 @@ fn test_render_groups_by_year() {
             when_html: None,
         },
         ArticleListItemProps {
+            credits: None,
             date_display: "2025 · 01".to_string(),
             date_raw: Some("2025-01-15T00:00:00Z".to_string()),
             url: "post3.html".to_string(),
@@ -104,6 +109,7 @@ fn test_render_groups_by_year() {
 fn test_render_sorts_within_year() {
     let articles = vec![
         ArticleListItemProps {
+            credits: None,
             date_display: "2025 · 01".to_string(),
             date_raw: Some("2025-01-15T00:00:00Z".to_string()),
             url: "jan.html".to_string(),
@@ -113,6 +119,7 @@ fn test_render_sorts_within_year() {
             when_html: None,
         },
         ArticleListItemProps {
+            credits: None,
             date_display: "2025 · 11".to_string(),
             date_raw: Some("2025-11-17T00:00:00Z".to_string()),
             url: "nov.html".to_string(),
@@ -140,6 +147,7 @@ fn undated_rows_follow_every_dated_row_in_both_directions() {
         url_path: String::new(),
         place: None,
         when_html: None,
+        credits: None,
     };
     let articles = vec![
         row(None, "Loose Note"),
@@ -166,6 +174,7 @@ fn undated_rows_with_one_title_order_by_url_path_whatever_the_input_order() {
         url_path: url_path.to_string(),
         place: None,
         when_html: None,
+        credits: None,
     };
     let (first, second) = (row("alpha/untitled"), row("beta/untitled"));
     for input in [vec![first.clone(), second.clone()], vec![second.clone(), first.clone()]] {
@@ -180,6 +189,7 @@ fn test_render_sorts_by_precise_datetime() {
     // Test that articles in the same month are sorted by exact datetime
     let articles = vec![
         ArticleListItemProps {
+            credits: None,
             date_display: "2025 · 11".to_string(),
             date_raw: Some("2025-11-04T15:28:10.481Z".to_string()),
             url: "first.html".to_string(),
@@ -189,6 +199,7 @@ fn test_render_sorts_by_precise_datetime() {
             when_html: None,
         },
         ArticleListItemProps {
+            credits: None,
             date_display: "2025 · 11".to_string(),
             date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
             url: "fourth.html".to_string(),
@@ -198,6 +209,7 @@ fn test_render_sorts_by_precise_datetime() {
             when_html: None,
         },
         ArticleListItemProps {
+            credits: None,
             date_display: "2025 · 11".to_string(),
             date_raw: Some("2025-11-11T00:34:33.978Z".to_string()),
             url: "second.html".to_string(),
@@ -207,6 +219,7 @@ fn test_render_sorts_by_precise_datetime() {
             when_html: None,
         },
         ArticleListItemProps {
+            credits: None,
             date_display: "2025 · 11".to_string(),
             date_raw: Some("2025-11-13T01:06:40.170Z".to_string()),
             url: "third.html".to_string(),
@@ -233,6 +246,7 @@ fn test_render_sorts_by_precise_datetime() {
 fn test_render_handles_mixed_parseable_and_unparseable_dates() {
     let articles = vec![
         ArticleListItemProps {
+            credits: None,
             date_display: "2025 · 11".to_string(),
             date_raw: Some("2025-11-17T00:00:00Z".to_string()),
             url: "post1.html".to_string(),
@@ -242,6 +256,7 @@ fn test_render_handles_mixed_parseable_and_unparseable_dates() {
             when_html: None,
         },
         ArticleListItemProps {
+            credits: None,
             date_display: "Unknown".to_string(),
             date_raw: None,
             url: "post2.html".to_string(),
@@ -270,6 +285,7 @@ fn test_render_handles_mixed_parseable_and_unparseable_dates() {
 #[test]
 fn vertical_cjk_rows_still_group_by_year() {
     let article = |display: &str, raw: &str, title: &str| ArticleListItemProps {
+        credits: None,
         date_display: display.to_string(),
         date_raw: Some(raw.to_string()),
         url: format!("/{title}/"),
@@ -305,6 +321,7 @@ fn vertical_cjk_rows_still_group_by_year() {
 fn horizontal_rows_keep_arabic_headings_and_drop_the_bare_year_prefix() {
     let articles = vec![
         ArticleListItemProps {
+            credits: None,
             date_display: "2025 · 11".to_string(),
             date_raw: Some("2025-11-17".to_string()),
             url: "/a/".to_string(),
@@ -314,6 +331,7 @@ fn horizontal_rows_keep_arabic_headings_and_drop_the_bare_year_prefix() {
             when_html: None,
         },
         ArticleListItemProps {
+            credits: None,
             date_display: "2025".to_string(),
             date_raw: Some("2025".to_string()),
             url: "/b/".to_string(),

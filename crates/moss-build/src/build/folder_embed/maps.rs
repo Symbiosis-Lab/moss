@@ -140,6 +140,7 @@ mod tests {
     fn article_and_place_maps_share_a_unique_svg_sequence() {
         let (mut docs, maps) = fixture("![[story|style:map]]\n\n![[/places/kyoto/|style:map]]\n\n![[/places/kyoto/|style:map]]", "other.md");
         let kind = crate::build::terms::TermKind {
+            cards: false,
             key: "places".into(), fields: vec!["location".into()], title: "Places".into(),
             is_place: true, parents: Default::default(), explorer: None, line: None,
         };
