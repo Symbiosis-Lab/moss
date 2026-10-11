@@ -99,3 +99,34 @@ fn end_before_start_is_treated_as_no_end() {
     let d = doc("2026-11-01 14:00", Some("2026-11-01 09:00"));
     assert_eq!(time_text(&d, Language::En), "Sunday, November 1, 2026, 2:00 PM");
 }
+
+#[test]
+fn the_separator_before_a_clock_time_is_its_own_span() {
+    let d = doc("2026-11-01 14:00", Some("2026-11-01 16:00"));
+    let element = time_element(&d, Language::En);
+    assert!(
+        element.contains(r#"<span class="moss-when-year">2026</span><span class="moss-when-sep">, </span><span class="moss-when-time">"#),
+        "{element}"
+    );
+}
+
+#[test]
+fn a_date_only_event_has_no_separator_span() {
+    let d = doc("2026-11-01", None);
+    assert!(!time_element(&d, Language::En).contains("moss-when-sep"));
+}
+
+#[test]
+fn both_date_to_time_separators_of_a_timed_multi_day_range_are_spans() {
+    let d = doc("2026-11-01 14:00", Some("2026-11-03 16:00"));
+    let element = time_element(&d, Language::En);
+    assert_eq!(element.matches(r#"<span class="moss-when-sep">"#).count(), 2, "{element}");
+    assert!(
+        element.contains(r#"<span class="moss-when-time">2:00 PM</span> – <span class="moss-when-weekday">Tuesday</span>"#),
+        "{element}"
+    );
+    assert!(
+        element.contains(r#"<span class="moss-when-year">2026</span><span class="moss-when-sep">, </span><span class="moss-when-time">4:00 PM</span>"#),
+        "{element}"
+    );
+}

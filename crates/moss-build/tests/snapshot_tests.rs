@@ -2392,7 +2392,7 @@ fn event_page_shows_event_facts_in_the_meta_line() {
     let concert = page("events/concert");
     let line = date_line(&concert);
     assert!(
-        line.contains(r#"<time class="moss-event-time" datetime="2026-11-01T14:00"><span class="moss-when-weekday">Sunday</span>, <span class="moss-when-month">November</span> <span class="moss-when-day">1</span>, <span class="moss-when-year">2026</span>, <span class="moss-when-time">2:00–4:00 PM</span></time>"#),
+        line.contains(r#"<time class="moss-event-time" datetime="2026-11-01T14:00"><span class="moss-when-weekday">Sunday</span>, <span class="moss-when-month">November</span> <span class="moss-when-day">1</span>, <span class="moss-when-year">2026</span><span class="moss-when-sep">, </span><span class="moss-when-time">2:00–4:00 PM</span></time>"#),
         "{line}"
     );
     assert!(line.contains(r#"<span class="moss-event-place">Town Hall</span>"#), "{line}");
@@ -2444,7 +2444,7 @@ fn upcoming_group_orders_events_by_when_and_marks_the_time() {
         assert!(html.contains(r#"<section class="moss-cards-group" data-group="upcoming">"#), "{page}");
         assert!(html.contains(r#"<section class="moss-cards-group" data-group="earlier">"#), "{page}");
         assert!(
-            html.contains(r#"<time class="moss-when" datetime="2099-03-01T19:30"><span class="moss-when-weekday">Sunday</span>, <span class="moss-when-month">March</span> <span class="moss-when-day">1</span>, <span class="moss-when-year">2099</span>, <span class="moss-when-time">7:30–10:00 PM</span></time><span class="moss-event-sep"> · </span><span class="moss-event-place">Grand Hall</span>"#),
+            html.contains(r#"<time class="moss-when" datetime="2099-03-01T19:30"><span class="moss-when-weekday">Sunday</span>, <span class="moss-when-month">March</span> <span class="moss-when-day">1</span>, <span class="moss-when-year">2099</span><span class="moss-when-sep">, </span><span class="moss-when-time">7:30–10:00 PM</span></time><span class="moss-event-sep"> · </span><span class="moss-event-place">Grand Hall</span>"#),
             "{page}"
         );
     }

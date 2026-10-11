@@ -154,6 +154,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-when-day` | instance | The day of the month (`1日` in Chinese). |
 | `.moss-when-year` | instance | The year (`2026年` in Chinese). |
 | `.moss-when-time` | instance | The time of day, with the end when `end` is later the same day. Absent for an all-day event. |
+| `.moss-when-sep` | instance | The separator between an event's date and its clock time; hide it to set the time on a line of its own. |
 | `.moss-cards-group` | container | A run of listing items under `children_group: upcoming` (or `group:upcoming` on an embed). An empty run is not emitted. Computed when the site is built. |
 | `.moss-byline` | container | Credit block under the page title, below `.date-line` when there is one. Emitted from the `byline` frontmatter field on every page kind — articles, folder indexes, the homepage and plain pages alike — one `.moss-byline-row` per authored line. On a page moss gives no title of its own (the homepage, a `home: true` folder page, a plain page) it sits under the author's own opening `<h1>`, or at the top of the page content when the body has none. Absent when the field is. |
 | `.moss-byline-row` | instance | One credit line. Its content is the author's text rendered as inline markdown, so a row may contain links or emphasis. moss does not know which part is a role and which is a name — style the whole row. |

@@ -99,8 +99,9 @@ pub(crate) fn tickets_link(url: &str, lang: Language, label_suffix: Option<&str>
     ))
 }
 
-/// A run of the written time. `Part` runs are the pieces a theme may lay out
-/// on their own (a large day numeral, a small weekday); `Text` is punctuation.
+/// A run of the written time. A `Part` is a piece a theme may style on its own
+/// (a large day numeral, a small weekday), and that includes the one separator
+/// before a clock time; `Text` is the remaining punctuation.
 enum Seg {
     Text(String),
     Part(&'static str, String),
@@ -158,11 +159,17 @@ fn clock(h: u8, m: u8, lang: Language, meridiem: bool) -> String {
     }
 }
 
+/// The separator between a date and its clock time: a comma in English, a
+/// space in Chinese. A `Part`, so a theme can hide it.
 fn sep(lang: Language) -> Seg {
-    text(match lang {
-        Language::En => ", ",
-        Language::ZhHans | Language::ZhHant => " ",
-    })
+    Seg::Part(
+        "sep",
+        match lang {
+            Language::En => ", ",
+            Language::ZhHans | Language::ZhHant => " ",
+        }
+        .to_string(),
+    )
 }
 
 /// The event's written time as runs: a date, a time of day when the start has
@@ -206,7 +213,9 @@ fn segments(start: EventTime, end: Option<EventTime>, lang: Language) -> Vec<Seg
 }
 
 /// The written time as inner HTML: each part in its `moss-when-*` span, the
-/// punctuation as bare text. Shared by the page's meta line and listings, so
+/// punctuation as bare text. The one exception is the separator before the
+/// clock time, `moss-when-sep`, so a theme that sets the time on its own line
+/// can hide it. Shared by the page's meta line and listings, so
 /// both show the same words in the same pieces.
 fn time_parts(start: EventTime, end: Option<EventTime>, lang: Language) -> String {
     let mut html = String::new();
