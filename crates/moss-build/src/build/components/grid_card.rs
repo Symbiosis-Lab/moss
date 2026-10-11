@@ -14,7 +14,7 @@
 
 use std::path::Path;
 
-use super::child_list::ChildItemProps;
+use super::child_list::{event_card_links, ChildItemProps};
 use crate::i18n::{self, Language};
 use crate::build::media::cover::{self, html_escape, CoverType};
 use crate::build::page::meta::render_description_html_in_link;
@@ -174,23 +174,44 @@ fn render_item(
         .map(|d| format!(r#"<p class="moss-card-description">{}</p>"#, render_description_html_in_link(d)))
         .unwrap_or_default();
 
-    // The link's accessible name is the title alone: meta, description and the
-    // cover's quote are not part of it. An empty title leaves the link unnamed.
-    let label_attr = if props.title.trim().is_empty() {
-        String::new()
-    } else {
-        format!(r#" aria-label="{}""#, html_escape(&props.title))
+    // An event with `tickets:` is a `<div>` whose title is the page link, with
+    // its own Tickets link after the meta (see `event_card_links`). Otherwise
+    // the card is one link, whose accessible name is the title alone: meta,
+    // description and the cover's quote are not part of it. An empty title
+    // leaves the link unnamed.
+    let event = event_card_links(props, lang);
+    let (open, close, title_html, tickets_html) = match &event {
+        Some(links) => (
+            format!(r#"<div class="moss-card"{}>"#, cover_color_attrs),
+            "</div>",
+            format!(r#"<span class="moss-card-title">{}</span>"#, links.title),
+            links.tickets.as_str(),
+        ),
+        None => {
+            let label_attr = if props.title.trim().is_empty() {
+                String::new()
+            } else {
+                format!(r#" aria-label="{}""#, html_escape(&props.title))
+            };
+            (
+                format!(r#"<a href="{}" class="moss-card"{}{}>"#, html_escape(&props.url), label_attr, cover_color_attrs),
+                "</a>",
+                format!(r#"<span class="moss-card-title">{}</span>"#, html_escape(&props.title)),
+                "",
+            )
+        }
     };
+
     format!(
-        r#"<a href="{}" class="moss-card"{}{}>{}<div class="moss-card-content">{}<span class="moss-card-meta">{}</span><span class="moss-card-title">{}</span>{}</div></a>"#,
-        html_escape(&props.url),
-        label_attr,
-        cover_color_attrs,
+        r#"{}{}<div class="moss-card-content">{}<span class="moss-card-meta">{}</span>{}{}{}</div>{}"#,
+        open,
         cover_html,
         kicker_html,
         count_text,
-        html_escape(&props.title),
+        title_html,
         description_html,
+        tickets_html,
+        close,
     )
 }
 

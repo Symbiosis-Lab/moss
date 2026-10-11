@@ -198,6 +198,7 @@ fn test_render_no_date_omits_date_span() {
 #[test]
 fn test_render_child_article() {
     let props = ChildItemProps {
+        tickets: None,
         title: "My Article".to_string(),
         url: "/blog/my-article/".to_string(),
         date_display: Some("2025 · 11".to_string()),
@@ -226,6 +227,7 @@ fn test_render_child_article() {
 #[test]
 fn render_child_shows_the_resolved_place_next_to_a_leafs_date() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Lecture".to_string(),
         url: "/lectures/1924.html".to_string(),
         date_display: None,
@@ -257,6 +259,7 @@ fn render_child_wraps_an_event_place_in_its_own_span() {
         crate::i18n::Language::En,
     );
     let props = ChildItemProps {
+        tickets: None,
         title: "Opening".to_string(),
         url: "/events/opening.html".to_string(),
         date_display: None,
@@ -284,6 +287,7 @@ fn render_child_wraps_an_event_place_in_its_own_span() {
 #[test]
 fn render_child_never_shows_a_place_beside_a_folders_count() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Kyoto Walk".to_string(),
         url: "/works/kyoto-walk/".to_string(),
         date_display: None,
@@ -312,6 +316,7 @@ fn render_child_never_shows_a_place_beside_a_folders_count() {
 #[test]
 fn flat_row_shows_year_for_month_precision_date() {
     let props = ChildItemProps {
+        tickets: None,
         title: "June Entry".to_string(),
         url: "/writings/journal/june.html".to_string(),
         date_display: None,
@@ -339,6 +344,7 @@ fn flat_row_shows_year_for_month_precision_date() {
 #[test]
 fn flat_row_passes_through_display_only_date_as_is() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Display Only".to_string(),
         url: "/writings/display-only.html".to_string(),
         date_display: Some("1793 · 06".to_string()),
@@ -364,6 +370,7 @@ fn flat_row_passes_through_display_only_date_as_is() {
 #[test]
 fn flat_row_shows_bare_year_for_year_precision_date() {
     let props = ChildItemProps {
+        tickets: None,
         title: "1793 Entry".to_string(),
         url: "/writings/journal/year.html".to_string(),
         date_display: None,
@@ -391,6 +398,7 @@ fn flat_row_shows_bare_year_for_year_precision_date() {
 #[test]
 fn folder_count_uses_chinese_numerals_in_vertical_cjk() {
     let props = ChildItemProps {
+        tickets: None,
         title: "書".to_string(),
         url: "/書/".to_string(),
         date_display: None,
@@ -415,6 +423,7 @@ fn folder_count_uses_chinese_numerals_in_vertical_cjk() {
 fn test_render_child_folder_without_description() {
     // Folders WITHOUT description: count in prefix slot (like date for articles)
     let props = ChildItemProps {
+        tickets: None,
         title: "Tutorials".to_string(),
         url: "/tutorials/".to_string(),
         date_display: None,
@@ -443,6 +452,7 @@ fn test_render_child_folder_without_description() {
 fn test_render_child_folder_with_description() {
     // Folders WITH description: title + count suffix on first line, description below
     let props = ChildItemProps {
+        tickets: None,
         title: "Tutorials".to_string(),
         url: "/tutorials/".to_string(),
         date_display: None,
@@ -472,6 +482,7 @@ fn test_render_child_folder_with_description() {
 #[test]
 fn test_render_child_folder_escapes_html() {
     let props = ChildItemProps {
+        tickets: None,
         title: "<b>Bold</b> & \"Quoted\"".to_string(),
         url: "/test/?a=1&b=2".to_string(),
         date_display: None,
@@ -495,6 +506,7 @@ fn test_render_child_folder_escapes_html() {
 #[test]
 fn test_render_child_article_no_date() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Dateless Article".to_string(),
         url: "/blog/dateless/".to_string(),
         date_display: None,
@@ -805,4 +817,47 @@ fn with_place_escapes_an_unsafe_place_name() {
 #[test]
 fn with_place_ignores_a_blank_place() {
     assert_eq!(with_place("2025", Some("   ")), "2025");
+}
+
+fn event_row_props(tickets: Option<&str>) -> ChildItemProps {
+    ChildItemProps {
+        tickets: tickets.map(str::to_string),
+        title: "Spring Gala".to_string(),
+        url: "spring-gala.html".to_string(),
+        date_display: Some("2026 · 11".to_string()),
+        date_raw: None,
+        child_count: None,
+        description: None,
+        cover: None,
+        cover_type: None,
+        kicker: None,
+        permalink: None,
+        url_path: String::new(),
+        place: None,
+        when_html: None,
+    }
+}
+
+#[test]
+fn event_row_with_tickets_links_title_and_carries_its_own_tickets_link() {
+    let props = event_row_props(Some("https://example.test/tickets"));
+    let html = render_child(&props, Language::En, None);
+    assert_eq!(
+        html,
+        r#"<div class="moss-card"><div class="moss-prefix-link"><span class="moss-prefix-link-prefix date">2026 · 11</span><span class="moss-prefix-link-title"><a class="moss-card-link" href="spring-gala.html">Spring Gala</a></span><a class="moss-event-link moss-event-tickets" href="https://example.test/tickets">Tickets<span class="visually-hidden"> for Spring Gala</span></a></div></div>"#
+    );
+    let title_at = html.find(r#"<a class="moss-card-link""#).unwrap();
+    let tickets_at = html.find(r#"<a class="moss-event-link moss-event-tickets""#).unwrap();
+    assert!(title_at < tickets_at, "got: {html}");
+    assert_eq!(max_anchor_depth(&html), 1, "got: {html}");
+}
+
+#[test]
+fn event_row_without_tickets_keeps_its_whole_row_anchor() {
+    let props = event_row_props(None);
+    let html = render_child(&props, Language::En, None);
+    assert_eq!(
+        html,
+        r#"<div class="moss-card"><a href="spring-gala.html" class="moss-prefix-link"><span class="moss-prefix-link-prefix date">2026 · 11</span><span class="moss-prefix-link-title">Spring Gala</span></a></div>"#
+    );
 }

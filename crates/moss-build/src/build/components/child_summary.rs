@@ -4,7 +4,7 @@
 //! The meta slot is sort-driven: it surfaces a date on Date-axis listings
 //! and is omitted entirely on Weight/Title axes (no empty div).
 
-use super::child_list::{self, ChildItemProps};
+use super::child_list::{self, event_card_links, ChildItemProps};
 use super::date::extract_year;
 use crate::build::media::cover::{self, html_escape, CoverType};
 use crate::build::page::meta::render_description_html_in_link;
@@ -111,6 +111,11 @@ pub fn render_with_sort(
         _ => String::new(),
     };
 
+    // An event with `tickets:` is not one anchor (see `event_card_links`):
+    // its title is the page link and it carries its own Tickets link. Linkblog
+    // cards keep their own per-part anchors and do not take this shape.
+    let event_links = if is_linkblog { None } else { event_card_links(props, lang) };
+
     // Title: wrapped in an anchor for linkblog cards (so it stays
     // clickable now that the outer card is a `<div>`, not an `<a>`);
     // bare `<h3>` for ordinary cards (outer card-anchor handles the
@@ -121,6 +126,8 @@ pub fn render_with_sort(
             html_escape(&props.url),
             html_escape(&props.title),
         )
+    } else if let Some(links) = &event_links {
+        format!(r#"<h3 class="moss-card-title">{}</h3>"#, links.title)
     } else {
         format!(r#"<h3 class="moss-card-title">{}</h3>"#, html_escape(&props.title))
     };
@@ -147,6 +154,10 @@ pub fn render_with_sort(
         } else {
             body.push_str(&desc_inner);
         }
+    }
+    // Tickets last: a reader meets when, then what, then the action.
+    if let Some(links) = &event_links {
+        body.push_str(&links.tickets);
     }
 
     let cover_type = CoverType::resolve(props.cover.as_deref(), props.cover_type);
@@ -187,6 +198,12 @@ pub fn render_with_sort(
     if is_linkblog {
         format!(
             r#"<div class="moss-card" data-linkblog><div class="moss-card-row"><div class="moss-card-body">{}</div>{}</div></div>"#,
+            body,
+            cover_html,
+        )
+    } else if event_links.is_some() {
+        format!(
+            r#"<div class="moss-card"><div class="moss-card-row"><div class="moss-card-body">{}</div>{}</div></div>"#,
             body,
             cover_html,
         )

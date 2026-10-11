@@ -3,6 +3,7 @@ use super::*;
 /// A card with nothing filled in — every test names only what it is about.
 fn blank() -> ChildItemProps {
     ChildItemProps {
+        tickets: None,
         title: String::new(),
         url: String::new(),
         date_display: None,
@@ -22,6 +23,7 @@ fn blank() -> ChildItemProps {
 #[test]
 fn test_render_item_english() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Posts".to_string(),
         url: "posts/".to_string(),
         child_count: Some(5),
@@ -35,6 +37,7 @@ fn test_render_item_english() {
 #[test]
 fn test_render_item_chinese() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Posts".to_string(),
         url: "posts/".to_string(),
         child_count: Some(5),
@@ -48,6 +51,7 @@ fn test_render_item_chinese() {
 #[test]
 fn test_render_item_with_cover() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Travel".to_string(),
         url: "travel/".to_string(),
         child_count: Some(3),
@@ -62,6 +66,7 @@ fn test_render_item_with_cover() {
 #[test]
 fn test_render_item_escapes_html() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Code & Tips".to_string(),
         url: "code/".to_string(),
         child_count: Some(2),
@@ -92,12 +97,14 @@ fn test_render_list_empty() {
 fn test_render_list_multiple() {
     let cards = vec![
         ChildItemProps {
+            tickets: None,
             title: "Posts".to_string(),
             url: "posts/".to_string(),
             child_count: Some(5),
             ..blank()
         },
         ChildItemProps {
+            tickets: None,
             title: "Projects".to_string(),
             url: "projects/".to_string(),
             child_count: Some(3),
@@ -123,6 +130,7 @@ fn test_render_list_multiple() {
 #[test]
 fn test_render_item_with_subtitle_override() {
     let props = ChildItemProps {
+        tickets: None,
         title: "My Article".to_string(),
         url: "posts/my-article/".to_string(),
         date_display: Some("2025 · 06".to_string()),
@@ -147,6 +155,7 @@ fn test_render_item_with_subtitle_override() {
 #[test]
 fn grid_card_shows_the_resolved_place_next_to_the_date() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Lecture".to_string(),
         url: "lectures/1924/".to_string(),
         date_display: Some("1924".to_string()),
@@ -167,6 +176,7 @@ fn grid_card_shows_the_resolved_place_next_to_the_date() {
 #[test]
 fn grid_card_never_shows_a_place_beside_a_folders_count() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Kyoto Walk".to_string(),
         url: "works/kyoto-walk/".to_string(),
         child_count: Some(2),
@@ -185,6 +195,7 @@ fn grid_card_never_shows_a_place_beside_a_folders_count() {
 #[test]
 fn test_render_item_cover_uses_img_tag() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Travel".to_string(),
         url: "travel/".to_string(),
         child_count: Some(3),
@@ -207,6 +218,7 @@ fn test_render_item_cover_uses_img_tag() {
 #[test]
 fn test_render_item_no_cover_no_img() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Drafts".to_string(),
         url: "drafts/".to_string(),
         child_count: Some(2),
@@ -236,18 +248,21 @@ fn test_render_item_no_cover_no_img() {
 fn coverless_card_in_covered_list_gets_quote_slot() {
     let cards = vec![
         ChildItemProps {
+            tickets: None,
             title: "First".to_string(),
             url: "first/".to_string(),
             cover: Some("cover1.jpg".to_string()),
             ..blank()
         },
         ChildItemProps {
+            tickets: None,
             title: "Second".to_string(),
             url: "second/".to_string(),
             cover: Some("cover2.jpg".to_string()),
             ..blank()
         },
         ChildItemProps {
+            tickets: None,
             title: "A Letter".to_string(),
             url: "letter/".to_string(),
             description: Some("Dear friend, the rain has stopped.".to_string()),
@@ -302,12 +317,14 @@ fn coverless_card_in_covered_list_gets_quote_slot() {
 fn coverless_card_without_description_shows_title_in_quote_slot() {
     let cards = vec![
         ChildItemProps {
+            tickets: None,
             title: "Has Cover".to_string(),
             url: "has-cover/".to_string(),
             cover: Some("cover.jpg".to_string()),
             ..blank()
         },
         ChildItemProps {
+            tickets: None,
             title: "Untitled Note".to_string(),
             url: "note/".to_string(),
             ..blank()
@@ -346,6 +363,7 @@ fn coverless_card_without_description_shows_title_in_quote_slot() {
 #[test]
 fn coverless_card_in_coverless_list_keeps_no_cover_placeholder() {
     let cards = vec![ChildItemProps {
+        tickets: None,
         title: "Plain".to_string(),
         url: "plain/".to_string(),
         description: Some("A description.".to_string()),
@@ -377,6 +395,7 @@ fn coverless_card_in_coverless_list_keeps_no_cover_placeholder() {
 #[test]
 fn test_render_item_cover_img_has_alt() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Travel".to_string(),
         url: "travel/".to_string(),
         child_count: Some(3),
@@ -394,6 +413,7 @@ fn test_render_item_cover_img_has_alt() {
 #[test]
 fn file_card_renders_description_under_title() {
     let props = ChildItemProps {
+        tickets: None,
         title: "My Article".to_string(),
         url: "posts/my-article/".to_string(),
         // A file/article card.
@@ -436,6 +456,7 @@ fn file_card_renders_description_under_title() {
 #[test]
 fn folder_card_renders_description_under_title_beside_its_count() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Travel".to_string(),
         url: "travel/".to_string(),
         child_count: Some(3), // folder card
@@ -458,6 +479,7 @@ fn folder_card_renders_description_under_title_beside_its_count() {
 #[test]
 fn file_card_without_description_has_no_description_element() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Posts".to_string(),
         url: "posts/".to_string(),
         date_display: Some(String::new()),
@@ -474,6 +496,7 @@ fn file_card_without_description_has_no_description_element() {
 #[test]
 fn file_card_blank_description_is_not_rendered() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Posts".to_string(),
         url: "posts/".to_string(),
         description: Some("   ".to_string()),
@@ -490,6 +513,7 @@ fn file_card_blank_description_is_not_rendered() {
 #[test]
 fn file_card_escapes_description() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Posts".to_string(),
         url: "posts/".to_string(),
         description: Some("Tips & tricks <b>".to_string()),
@@ -508,6 +532,7 @@ fn file_card_escapes_description() {
 #[test]
 fn test_render_item_with_video_cover() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Demos".to_string(),
         url: "demos/".to_string(),
         child_count: Some(2),
@@ -533,6 +558,7 @@ fn test_render_item_with_video_cover() {
 #[test]
 fn test_render_item_with_iframe_cover() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Widgets".to_string(),
         url: "widgets/".to_string(),
         child_count: Some(1),
@@ -557,6 +583,7 @@ fn test_render_item_with_iframe_cover() {
 #[test]
 fn test_render_item_cover_type_defaults_to_image() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Photos".to_string(),
         url: "photos/".to_string(),
         child_count: Some(5),
@@ -579,6 +606,7 @@ fn test_render_item_cover_type_defaults_to_image() {
 fn first_card_in_list_gets_eager_loading() {
     let cards = vec![
         ChildItemProps {
+            tickets: None,
             title: "First".to_string(),
             url: "first/".to_string(),
             child_count: Some(5),
@@ -586,6 +614,7 @@ fn first_card_in_list_gets_eager_loading() {
             ..blank()
         },
         ChildItemProps {
+            tickets: None,
             title: "Second".to_string(),
             url: "second/".to_string(),
             child_count: Some(3),
@@ -625,6 +654,7 @@ fn first_card_in_list_gets_eager_loading() {
 #[test]
 fn single_card_list_gets_eager_loading() {
     let cards = vec![ChildItemProps {
+        tickets: None,
         title: "Only".to_string(),
         url: "only/".to_string(),
         child_count: Some(1),
@@ -653,12 +683,14 @@ fn single_card_list_gets_eager_loading() {
 fn first_card_with_cover_gets_eager_even_if_not_first_overall() {
     let cards = vec![
         ChildItemProps {
+            tickets: None,
             title: "NoCover".to_string(),
             url: "no-cover/".to_string(),
             child_count: Some(5),
             ..blank()
         },
         ChildItemProps {
+            tickets: None,
             title: "WithCover".to_string(),
             url: "with-cover/".to_string(),
             child_count: Some(3),
@@ -692,6 +724,7 @@ fn first_card_with_cover_gets_eager_even_if_not_first_overall() {
 #[test]
 fn a_card_takes_its_band_color_from_the_covers_color_override() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Research".to_string(),
         url: "/research/".to_string(),
         child_count: Some(3),
@@ -715,6 +748,7 @@ fn a_card_takes_its_band_color_from_the_covers_color_override() {
 #[test]
 fn test_render_item_pipe_encoded_cover_strips_attrs_from_src() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Travel".to_string(),
         url: "travel/".to_string(),
         child_count: Some(3),
@@ -737,6 +771,7 @@ fn test_render_item_pipe_encoded_cover_strips_attrs_from_src() {
 #[test]
 fn test_render_item_pipe_encoded_cover_adds_style() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Travel".to_string(),
         url: "travel/".to_string(),
         child_count: Some(3),
@@ -754,6 +789,7 @@ fn test_render_item_pipe_encoded_cover_adds_style() {
 #[test]
 fn test_render_item_cover_without_pipe_no_style() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Travel".to_string(),
         url: "travel/".to_string(),
         child_count: Some(3),
@@ -771,6 +807,7 @@ fn test_render_item_cover_without_pipe_no_style() {
 #[test]
 fn renders_kicker_above_title() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Essays".to_string(),
         url: "/essays/".to_string(),
         child_count: Some(12),
@@ -793,6 +830,7 @@ fn renders_kicker_above_title() {
 #[test]
 fn formats_count_as_chinese_numeral_in_vertical_cjk() {
     let props = ChildItemProps {
+        tickets: None,
         title: "文集".to_string(),
         url: "/essays/".to_string(),
         child_count: Some(12),
@@ -814,6 +852,7 @@ fn formats_count_as_chinese_numeral_in_vertical_cjk() {
 #[test]
 fn keeps_arabic_count_in_horizontal_western() {
     let props = ChildItemProps {
+        tickets: None,
         title: "Essays".to_string(),
         url: "/essays/".to_string(),
         child_count: Some(12),
@@ -830,6 +869,7 @@ fn keeps_arabic_count_in_horizontal_western() {
 #[test]
 fn keeps_arabic_count_in_horizontal_cjk() {
     let props = ChildItemProps {
+        tickets: None,
         title: "文集".to_string(),
         url: "/essays/".to_string(),
         child_count: Some(12),
@@ -877,4 +917,46 @@ fn test_card_without_title_keeps_a_name_on_the_cover() {
 
     assert!(!html.contains("aria-label"), "an untitled card must not get an empty label: {html}");
     assert!(html.contains(r#"alt="cover""#), "cover needs a non-empty alt: {html}");
+}
+
+#[test]
+fn event_grid_card_with_tickets_links_title_and_carries_its_own_tickets_link() {
+    let props = ChildItemProps {
+        title: "Spring Gala".to_string(),
+        url: "spring-gala.html".to_string(),
+        description: Some("Doors open at seven.".to_string()),
+        tickets: Some("https://example.test/tickets".to_string()),
+        ..blank()
+    };
+    let html = render_item_with_typesetting(&props, None, crate::i18n::Language::En, None, None, false, false);
+    assert!(html.starts_with(r#"<div class="moss-card">"#), "got: {html}");
+    assert!(html.ends_with("</div>"), "got: {html}");
+    assert_eq!(html.matches(r#"<a class="moss-card-link""#).count(), 1, "got: {html}");
+    assert!(
+        html.contains(r#"<a class="moss-card-link" href="spring-gala.html">Spring Gala</a>"#),
+        "got: {html}"
+    );
+    assert!(
+        html.contains(r#"<a class="moss-event-link moss-event-tickets" href="https://example.test/tickets">Tickets<span class="visually-hidden"> for Spring Gala</span></a>"#),
+        "got: {html}"
+    );
+    let title_at = html.find(r#"<a class="moss-card-link""#).unwrap();
+    let tickets_at = html.find(r#"<a class="moss-event-link moss-event-tickets""#).unwrap();
+    let description_at = html.find(r#"<p class="moss-card-description">"#).unwrap();
+    assert!(title_at < description_at && description_at < tickets_at, "got: {html}");
+    assert_eq!(crate::build::components::child_list::max_anchor_depth(&html), 1, "got: {html}");
+}
+
+#[test]
+fn event_grid_card_without_tickets_keeps_its_whole_card_anchor() {
+    let props = ChildItemProps {
+        title: "Spring Gala".to_string(),
+        url: "spring-gala.html".to_string(),
+        ..blank()
+    };
+    let html = render_item_with_typesetting(&props, None, crate::i18n::Language::En, None, None, false, false);
+    assert_eq!(
+        html,
+        r#"<a href="spring-gala.html" class="moss-card" aria-label="Spring Gala"><div class="moss-card-cover moss-card-no-cover"></div><div class="moss-card-content"><span class="moss-card-meta"></span><span class="moss-card-title">Spring Gala</span></div></a>"#
+    );
 }

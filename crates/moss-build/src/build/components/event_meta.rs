@@ -48,18 +48,15 @@ pub fn render(doc: &ParsedDocument, lang: Language, emit_source_lines: bool, cal
             html_escape(&doc.location.join(", ")),
         ));
     }
-    for (url, key, class) in [
-        (&ev.tickets, "event_tickets", "moss-event-tickets"),
-        (&ev.online, "event_online", "moss-event-online"),
-    ] {
-        if let Some(url) = url.as_deref().map(str::trim).filter(|u| is_web_url(u)) {
-            html.push_str(&format!(
-                r#"<a class="moss-event-link {}" href="{}">{}</a>"#,
-                class,
-                html_escape(url),
-                t(lang, key),
-            ));
-        }
+    if let Some(link) = ev.tickets.as_deref().and_then(|u| tickets_link(u, lang, None)) {
+        html.push_str(&link);
+    }
+    if let Some(url) = ev.online.as_deref().map(str::trim).filter(|u| is_web_url(u)) {
+        html.push_str(&format!(
+            r#"<a class="moss-event-link moss-event-online" href="{}">{}</a>"#,
+            html_escape(url),
+            t(lang, "event_online"),
+        ));
     }
     if let Some(href) = calendar_href {
         html.push_str(&format!(
@@ -75,6 +72,31 @@ pub fn render(doc: &ParsedDocument, lang: Language, emit_source_lines: bool, cal
 fn is_web_url(u: &str) -> bool {
     let l = u.to_ascii_lowercase();
     l.starts_with("https://") || l.starts_with("http://")
+}
+
+/// The Tickets link for an event's `tickets:` address, or `None` when the
+/// address is not http or https. The event page passes `None`. A listing card
+/// passes the event's title, which is read after the label for assistive
+/// technology.
+pub(crate) fn tickets_link(url: &str, lang: Language, label_suffix: Option<&str>) -> Option<String> {
+    let url = url.trim();
+    if !is_web_url(url) {
+        return None;
+    }
+    let suffix = label_suffix
+        .map(|title| {
+            format!(
+                r#"<span class="visually-hidden">{}</span>"#,
+                html_escape(&t(lang, "event_tickets_for").replace("{}", title)),
+            )
+        })
+        .unwrap_or_default();
+    Some(format!(
+        r#"<a class="moss-event-link moss-event-tickets" href="{}">{}{}</a>"#,
+        html_escape(url),
+        t(lang, "event_tickets"),
+        suffix,
+    ))
 }
 
 /// A run of the written time. `Part` runs are the pieces a theme may lay out

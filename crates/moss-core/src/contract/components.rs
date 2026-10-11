@@ -385,6 +385,17 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         description: "v1 collapsed shape — single canonical instance class inside `.moss-cards`. Layout-specific styling targets `.moss-cards[data-layout=X] .moss-card`. Tag is `<a>` for ordinary cards and `<div>` for linkblog cards (`[data-linkblog]`).",
     },
     ComponentEntry {
+        class: "moss-card-link",
+        kind: "instance",
+        parent: "moss-card",
+        data_attrs: &[],
+        example_html: r#"<a class="moss-card-link" href="...">Spring Gala</a>"#,
+        example_markdown: "",
+        status: Status::Confirmed,
+        since: "0.16",
+        description: "The title link of an event card whose page has `tickets:`, which then is not one whole-card anchor. Its `::after` stretches over the card, so the card is still one click target; the card carries `position: relative`.",
+    },
+    ComponentEntry {
         class: "moss-card-cover",
         kind: "instance",
         parent: "moss-card",
@@ -2542,7 +2553,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0.16",
-        description: "The `tickets` link, which also carries `.moss-event-link`.",
+        description: "The `tickets` link, which also carries `.moss-event-link`. An event card with `tickets:` in a listing carries one too, after its meta.",
     },
     ComponentEntry {
         class: "moss-event-online",

@@ -179,6 +179,9 @@ pub struct ChildItemProps {
     /// An event's written time as a `<time>` with its parts in spans
     /// (`event_meta::render_when`); shown in place of `date_display`.
     pub when_html: Option<String>,
+    /// An event's `tickets:` address. A card with a web address here gets its
+    /// own Tickets link and its title is the page link (`event_card_links`).
+    pub tickets: Option<String>,
 }
 
 impl ChildItemProps {
@@ -395,6 +398,70 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         when_html: doc.event.as_ref().map(|e| {
             crate::build::components::event_meta::render_when(e.start, e.end, doc.lang)
         }),
+        tickets: doc.event.as_ref().and_then(|e| e.tickets.clone()),
+    }
+}
+
+/// The links of an event card whose page has a web `tickets:` address. Such a
+/// card is not one anchor: its title links to the page, and the Tickets link
+/// sits beside it. Every card kind (summary, grid, list row) builds its
+/// markup from these two strings, so the shape is decided here once.
+pub(crate) struct EventCardLinks {
+    /// `<a class="moss-card-link">` around the escaped title.
+    pub title: String,
+    /// The Tickets link, whose accessible name also names the event.
+    pub tickets: String,
+}
+
+/// `None` for every card without a web `tickets:` address; those keep their
+/// whole-card anchor and render byte-identically to before.
+pub(crate) fn event_card_links(props: &ChildItemProps, lang: crate::i18n::Language) -> Option<EventCardLinks> {
+    let tickets = super::event_meta::tickets_link(props.tickets.as_deref()?, lang, Some(&props.title))?;
+    Some(EventCardLinks {
+        title: format!(
+            r#"<a class="moss-card-link" href="{}">{}</a>"#,
+            html_escape(&props.url),
+            html_escape(&props.title),
+        ),
+        tickets,
+    })
+}
+
+/// The deepest `<a>` nesting in `html`, for tests that assert a card holds no
+/// anchor inside another.
+#[cfg(test)]
+pub(crate) fn max_anchor_depth(html: &str) -> usize {
+    let (mut depth, mut deepest) = (0usize, 0usize);
+    let mut rest = html;
+    while let Some(i) = rest.find('<') {
+        rest = &rest[i..];
+        if rest.starts_with("<a ") {
+            depth += 1;
+            deepest = deepest.max(depth);
+        } else if rest.starts_with("</a>") {
+            depth = depth.saturating_sub(1);
+        }
+        rest = &rest[1..];
+    }
+    deepest
+}
+
+/// The opening element, title markup and closing element of a list row. An
+/// ordinary row is one anchor around its whole text; an event row keeps the
+/// same flex box as a `<div>`, links only its title, and carries the Tickets
+/// link after the title.
+fn row_parts(props: &ChildItemProps, event: Option<&EventCardLinks>, row_class: &str, title_class: &str) -> (String, String, &'static str) {
+    match event {
+        Some(links) => (
+            format!(r#"<div class="{row_class}">"#),
+            format!(r#"<span class="{title_class}">{}</span>{}"#, links.title, links.tickets),
+            "</div>",
+        ),
+        None => (
+            format!(r#"<a href="{}" class="{row_class}">"#, html_escape(&props.url)),
+            format!(r#"<span class="{title_class}">{}</span>"#, html_escape(&props.title)),
+            "</a>",
+        ),
     }
 }
 
@@ -409,8 +476,8 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
 ///   [`meta_text`].
 /// - For articles without date: renders title only
 pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typesetting: Option<&str>) -> String {
-    let escaped_url = html_escape(&props.url);
-    let escaped_title = html_escape(&props.title);
+    let event = event_card_links(props, lang);
+    let event = event.as_ref();
 
     if let Some(count) = props.child_count {
         let count_label = crate::i18n::article_count_label(lang, count, typesetting);
@@ -418,16 +485,18 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
 
         if let Some(ref desc) = props.description {
             // Folder WITH description: title + count suffix, description below
+            let (open, title, close) = row_parts(props, event, "moss-prefix-link moss-folder-link", "moss-prefix-link-title");
             format!(
-                r#"<div class="moss-card moss-folder-item"><a href="{}" class="moss-prefix-link moss-folder-link"><span class="moss-prefix-link-title">{}</span><span class="moss-prefix-link-suffix">{}</span></a><p class="moss-folder-description">{}</p></div>"#,
-                escaped_url, escaped_title, count_text,
+                r#"<div class="moss-card moss-folder-item">{}{}<span class="moss-prefix-link-suffix">{}</span>{}<p class="moss-folder-description">{}</p></div>"#,
+                open, title, count_text, close,
                 crate::build::page::meta::render_description_html(desc)
             )
         } else {
             // Folder WITHOUT description: count in prefix slot
+            let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
             format!(
-                r#"<div class="moss-card"><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-prefix">{}</span><span class="moss-prefix-link-title">{}</span></a></div>"#,
-                escaped_url, count_text, escaped_title
+                r#"<div class="moss-card">{}<span class="moss-prefix-link-prefix">{}</span>{}{}</div>"#,
+                open, count_text, title, close
             )
         }
     } else if let Some(ref date_raw) = props.date_raw {
@@ -438,24 +507,27 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
         // place, if any, goes right next to it — see `with_place`.
         let date = date_formatters::format_compact_date(date_raw, lang, typesetting);
         let date = leaf_meta(&date, props.when_html.as_deref(), props.place.as_deref());
+        let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
         format!(
-            r#"<div class="moss-card"><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-prefix date">{}</span><span class="moss-prefix-link-title">{}</span></a></div>"#,
-            escaped_url, date, escaped_title
+            r#"<div class="moss-card">{}<span class="moss-prefix-link-prefix date">{}</span>{}{}</div>"#,
+            open, date, title, close
         )
     } else if let Some(ref date_display) = props.date_display {
         // Article with a display date but no raw date. `date_display` is
         // already the compact "year · month"/"year" form —
         // `props_for_document` formatted it with `format_compact_date`.
         let date = leaf_meta(date_display, props.when_html.as_deref(), props.place.as_deref());
+        let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
         format!(
-            r#"<div class="moss-card"><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-prefix date">{}</span><span class="moss-prefix-link-title">{}</span></a></div>"#,
-            escaped_url, date, escaped_title
+            r#"<div class="moss-card">{}<span class="moss-prefix-link-prefix date">{}</span>{}{}</div>"#,
+            open, date, title, close
         )
     } else {
         // Article without any date
+        let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
         format!(
-            r#"<div class="moss-card"><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-title">{}</span></a></div>"#,
-            escaped_url, escaped_title
+            r#"<div class="moss-card">{}{}{}</div>"#,
+            open, title, close
         )
     }
 }

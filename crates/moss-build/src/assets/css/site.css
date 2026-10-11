@@ -6161,6 +6161,30 @@ article a:where(:not(.moss-btn)):focus {
   display: none;
 }
 
+/* Event card with `tickets:` (see child_list::event_card_links): the title is
+ * the one link, stretched over the whole card by its ::after, and the card's
+ * own Tickets link sits above that stretch. */
+.moss-card:has(.moss-card-link) {
+  position: relative;
+}
+.moss-card-link {
+  color: inherit;
+  text-decoration: none;
+}
+.moss-card-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.moss-card-link:focus-visible::after {
+  outline: 2px solid var(--moss-color-accent);
+  outline-offset: -2px;
+}
+.moss-card .moss-event-tickets {
+  position: relative;
+  z-index: 1;
+}
+
 /* Linkblog permalink: `★` lives INSIDE the `.moss-card-kicker` div
  * for linkblog cards (those with `external_url:`). Reads as part of
  * the kicker line: "Publisher · 2024 ★". The semantic is "canonical

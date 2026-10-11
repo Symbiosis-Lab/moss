@@ -296,6 +296,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         "weekday_5" => match lang { Language::En => "Saturday", Language::ZhHans => "星期六", Language::ZhHant => "星期六" },
         "weekday_6" => match lang { Language::En => "Sunday", Language::ZhHans => "星期日", Language::ZhHant => "星期日" },
         "event_tickets" => match lang { Language::En => "Tickets", Language::ZhHans => "购票", Language::ZhHant => "購票" },
+        "event_tickets_for" => match lang { Language::En => " for {}", Language::ZhHans => "：{}", Language::ZhHant => "：{}" },
         "event_online" => match lang { Language::En => "Online", Language::ZhHans => "线上参加", Language::ZhHant => "線上參加" },
         "event_status_cancelled" => match lang { Language::En => "Cancelled", Language::ZhHans => "已取消", Language::ZhHant => "已取消" },
         "event_status_postponed" => match lang { Language::En => "Postponed", Language::ZhHans => "已延期", Language::ZhHant => "已延期" },

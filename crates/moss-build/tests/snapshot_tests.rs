@@ -2423,7 +2423,7 @@ fn event_page_shows_event_facts_in_the_meta_line() {
 
 /// Titles of the listing items in `html`, in document order.
 fn listing_titles(html: &str) -> Vec<String> {
-    let re = regex::Regex::new(r#"moss-prefix-link-title">([^<]*)<"#).unwrap();
+    let re = regex::Regex::new(r#"moss-prefix-link-title">(?:<a [^>]*>)?([^<]*)<"#).unwrap();
     re.captures_iter(html).map(|c| c[1].to_string()).collect()
 }
 
