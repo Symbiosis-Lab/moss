@@ -3,12 +3,17 @@
 use crate::build::incremental_gates::IncrementalGates;
 
 /// Resolve a logo path from frontmatter to a root-relative URL.
-/// Absolute paths and HTTP URLs pass through unchanged.
+/// HTTP URLs pass through unchanged. A local path has its `.` and `..`
+/// segments resolved (`./assets/x.png` → `/assets/x.png`) so the URL and the
+/// media lookup key both name the file in its plain form.
 pub(super) fn resolve_logo_url(path: &str) -> String {
-    if path.starts_with('/') || path.starts_with("http://") || path.starts_with("https://") {
-        path.to_string()
-    } else {
-        format!("/{}", path) // allow:served-path-url-construct (user logo path from [site].logo frontmatter, not a framework asset)
+    if path.starts_with("http://") || path.starts_with("https://") {
+        return path.to_string();
+    }
+    match moss_core::content_graph::join_written("", path) {
+        Some(clean) => format!("/{clean}"), // allow:served-path-url-construct (user logo path from [site].logo frontmatter, not a framework asset)
+        None if path.starts_with('/') => path.to_string(),
+        None => format!("/{path}"), // allow:served-path-url-construct (user logo path from [site].logo frontmatter, not a framework asset)
     }
 }
 

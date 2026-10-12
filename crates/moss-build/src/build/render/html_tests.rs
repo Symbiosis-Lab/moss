@@ -3753,6 +3753,65 @@ mod children_field_tests {
         );
     }
 
+    /// A logo written as `./assets/mark.png` in frontmatter is resolved the way
+    /// the homepage's layout resolves it, so its address has no `/./` segment
+    /// and the size lookup finds the file.
+    #[test]
+    fn a_logo_written_with_a_dot_slash_finds_its_size_and_has_no_dot_segment() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("assets")).unwrap();
+        image::RgbaImage::new(24, 8).save(dir.path().join("assets/mark.png")).unwrap();
+        let dimensions = image::image_dimensions(dir.path().join("assets/mark.png")).unwrap();
+        let mut project = make_project();
+        project.image_files.push(crate::types::content::MediaMetadata {
+            is_animated: false,
+            path: "assets/mark.png".to_string(),
+            file_type: "png".to_string(),
+            size: 0,
+            modified: None,
+            dimensions: Some(dimensions),
+            dominant_color: None,
+            lqip_data_uri: None,
+        });
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+        homepage.logo = Some("./assets/mark.png".to_string());
+        homepage.html_content = "<p>Welcome.</p>".to_string();
+        let all_docs = vec![homepage.clone()];
+        let layout = make_layout().with_logo(crate::build::render::config::resolve_logo_url("./assets/mark.png"));
+        let html = generate_html(
+            Some(&homepage),
+            &all_docs,
+            &project,
+            &layout,
+            true,
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            false,
+            None,
+            false,
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &localhost_url(),
+            true,
+            false,
+            "favicon.svg",
+            None,
+            std::path::Path::new(""),
+        )
+        .expect("generate_html should succeed");
+        assert!(
+            html.contains(
+                r#"<img class="site-logo" src="/assets/mark.png" width="24" height="8" alt="" aria-hidden="true">"#
+            ),
+            "a `./` logo must lose its `/./` and gain its size. Got: {html}"
+        );
+    }
+
     /// The other half of the one rule: `description:` is metadata on every page
     /// kind, so a folder index prints none of it as page text.
     #[test]
