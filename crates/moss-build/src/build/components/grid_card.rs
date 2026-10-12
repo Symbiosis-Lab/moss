@@ -241,6 +241,9 @@ pub fn render_list_with_typesetting<C: std::borrow::Borrow<ChildItemProps>>(
     sort_axis: moss_core::sort::SortAxis,
     is_embed: bool,
     placement: &moss_core::media::Placement,
+    // The page already has its one eager image elsewhere: no card here is
+    // marked eager, not even the first covered one.
+    lazy_cards: bool,
 ) -> String {
     if cards.is_empty() {
         return String::new();
@@ -251,7 +254,7 @@ pub fn render_list_with_typesetting<C: std::borrow::Borrow<ChildItemProps>>(
     // quote slot — see `render_item`'s `list_has_covers` doc.
     let has_covers = cards.iter().any(|c| c.borrow().cover.is_some());
 
-    let mut found_first_cover = false;
+    let mut found_first_cover = lazy_cards;
     let items: String = cards
         .iter()
         .map(|c| {

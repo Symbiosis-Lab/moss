@@ -36,7 +36,7 @@ use maps::place_map_with_placement;
 use std::path::Path;
 
 use moss_core::asset_snapshot::AssetSnapshot;
-use moss_core::resolve::embed_renderer::folder_list::{marker_decode, MARKER_END, MARKER_FOLDER_LIST};
+use moss_core::resolve::embed_renderer::folder_list::{marker_decode, LAZY_CARDS_TOKEN, MARKER_END, MARKER_FOLDER_LIST};
 use moss_core::resolve::embed_renderer::Sizing;
 use moss_core::resolve::title_params::TitleParams;
 use moss_core::sort::{ResolvedSort, SortAxis};
@@ -87,6 +87,8 @@ struct ParsedMarker<'a> {
     placement: moss_core::media::Placement,
     /// Caption for the listing, rendered on the figure that wraps it.
     caption: Option<String>,
+    /// The card grid's covers all load lazily (see `FolderEmbedParams::lazy_cards`).
+    lazy_cards: bool,
 }
 
 fn warn_map_fallback_once(path: &str, reason: &str) {
@@ -145,6 +147,8 @@ fn parse_marker_body(body: &str) -> Option<ParsedMarker<'_>> {
             }
         } else if tok == "scope_default_tree" {
             out.scope_default_tree = true;
+        } else if tok == LAZY_CARDS_TOKEN {
+            out.lazy_cards = true;
         } else if tok == "exclude_nav" {
             out.exclude_nav = true;
         }
@@ -390,6 +394,7 @@ pub(crate) fn generate_children(
     math: bool,
     is_embed: bool,
     placement: &moss_core::media::Placement,
+    lazy_cards: bool,
 ) -> String {
     if folder_docs.is_empty() {
         return String::new();
@@ -490,6 +495,7 @@ pub(crate) fn generate_children(
             parent_axis,
             is_embed,
             placement,
+            lazy_cards,
         );
     }
 
@@ -1458,6 +1464,7 @@ fn render_one(
             math,
             is_embed,
             &container_placement,
+            parsed.lazy_cards,
         )
     };
     // A page that won a term claim splits its listing by the field each
@@ -1653,6 +1660,9 @@ pub fn synthesize_children_marker(
         // caption out of; both are body-embed vocabulary.
         placement: Default::default(),
         caption: None,
+        // The page's own listing shares the page's one eager slot with its
+        // hero or leading image.
+        lazy_cards: doc.body_claims_eager,
     };
     // Always emit an absolute path (leading /) so resolve_folder_id doesn't
     // interpret the path as relative to from_md_path's parent directory.

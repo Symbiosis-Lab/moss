@@ -9,6 +9,11 @@ use crate::sort::SortAxis;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FolderEmbedParams {
+    /// Internal, never typed by an author: the card grid's covers all load
+    /// lazily. Set when the page's one eager image is elsewhere on the page.
+    /// The pothole grammar has no key for it, so `![[/|lazy_cards]]` is a
+    /// caption, not this flag.
+    pub lazy_cards: bool,
     pub limit: Option<usize>,
     pub sort: Option<SortAxis>,
     pub style: Option<String>,   // "list" | "summary" | "grid"
@@ -208,6 +213,30 @@ fn is_size_token(tok: &str) -> bool {
 /// current document's location.
 pub const MARKER_FOLDER_LIST: &str = "<!--MOSS_MARKER_FOLDER_LIST:";
 pub const MARKER_END: &str = "-->";
+/// The bare marker token that makes a card grid load every cover lazily; see
+/// [`FolderEmbedParams::lazy_cards`].
+pub const LAZY_CARDS_TOKEN: &str = "lazy_cards";
+
+/// Mark every folder-list marker in `html` as lazy-carded, in place of the
+/// marker text only. Used by the page planner, which owns the one eager slot.
+pub fn mark_cards_lazy(html: &str) -> String {
+    let mut out = String::with_capacity(html.len() + 16);
+    let mut rest = html;
+    while let Some(start) = rest.find(MARKER_FOLDER_LIST) {
+        let after = &rest[start..];
+        let Some(end) = after.find(MARKER_END) else { break };
+        let marker = &after[..end];
+        out.push_str(&rest[..start]);
+        out.push_str(marker);
+        if !marker.contains(&format!("|{LAZY_CARDS_TOKEN}")) {
+            out.push('|');
+            out.push_str(LAZY_CARDS_TOKEN);
+        }
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    out
+}
 
 /// Percent-encode the characters that would otherwise end a marker field or
 /// the marker itself.
@@ -297,6 +326,9 @@ pub fn emit_marker(path: &str, from: &str, params: &FolderEmbedParams) -> String
     }
     if let Some(n) = params.limit {
         parts.push(format!("limit={}", n));
+    }
+    if params.lazy_cards {
+        parts.push(LAZY_CARDS_TOKEN.to_string());
     }
     if params.scope_default_tree {
         parts.push("scope_default_tree".to_string());

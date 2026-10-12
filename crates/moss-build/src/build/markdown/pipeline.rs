@@ -1066,15 +1066,38 @@ pub fn process_markdown_file(
     //    Emitted in segments, byte-identical to `render_document`
     //    when re-joined, so the render phase gets typed grid cells and a lede
     //    boundary instead of having to re-parse this HTML.
-    // A partial (footer, slot page) is injected into every page, so its image
-    // must not take the one eager slot of any of them.
+    // The page's one eager slot: a hero keeps it, otherwise the opening content
+    // does (see `body_plan::opening_content`). A partial (footer, slot page) is
+    // injected into every page, so it claims none.
     let opening = if hero_extraction.is_none() && !injects_into_every_page {
-        super::body_plan::leading_image(&doc.blocks)
-            .map(|r| r as *const moss_core::ast::ResolvedUrl as usize)
+        super::body_plan::opening_content(&doc.blocks)
     } else {
         None
     };
-    pipeline_hooks.leading_image.set(opening);
+    let body_claims_eager = hero_extraction.is_some() || opening.is_some();
+    let entitled_embed = match opening {
+        Some(super::body_plan::Opening::Embed(index)) => Some(index),
+        _ => None,
+    };
+    pipeline_hooks.leading_image.set(match opening {
+        Some(super::body_plan::Opening::Image(image)) => {
+            Some(image as *const moss_core::ast::ResolvedUrl as usize)
+        }
+        _ => None,
+    });
+    // Every folder embed except the entitled one loads its cards lazily, wherever
+    // it sits: in a grid cell, a callout, a list item, or inline in a paragraph.
+    // Only the marker text changes; the blocks keep their place.
+    for (index, block) in doc.blocks.iter_mut().enumerate() {
+        if Some(index) == entitled_embed {
+            continue;
+        }
+        moss_core::ast::visit_block_raw_html_mut(block, |html| {
+            if super::body_plan::is_folder_embed(html) {
+                *html = moss_core::resolve::embed_renderer::folder_list::mark_cards_lazy(html);
+            }
+        });
+    }
     let mut body_plan = super::body_plan::render_segmented(&doc, &pipeline_hooks);
 
     // Subscribe-form presence: read from the typed AST (descends into
@@ -1468,6 +1491,7 @@ pub fn process_markdown_file(
         translation_key: frontmatter.translation_key,
         translations: vec![],
         hero_html,
+        body_claims_eager,
         hero_image_url,
         body_cover_path,
         hero_overlay_text,
@@ -1956,7 +1980,7 @@ struct PipelineHooks<'a> {
     /// The page's effective typesetting is vertical. Handed to the delegated
     /// `DefaultHooks`, where it only changes body images' `sizes=`.
     vertical: bool,
-    /// Address of the page's opening image node (`body_plan::leading_image`),
+    /// Address of the page's opening image node (`body_plan::opening_content`),
     /// the one body image rendered with `loading="eager"`. The body is rendered
     /// from the document it was parsed into and is never cloned, so the address
     /// names that one node. `None` on a page with a `:::hero` (its image is the

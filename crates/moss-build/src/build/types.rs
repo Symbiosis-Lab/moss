@@ -451,6 +451,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub hero_html: Option<String>,
+    /// The page's one eager image is its hero or its opening body content, so
+    /// its own children listing loads lazily. Set by the body planner.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub body_claims_eager: bool,
     /// Hero image URL — populated at hoisting time from `HeroShortcode.image`
     /// (post-resolution). `None` when the hero had no `image=` attribute
     /// (text-only overlay) or the page has no hero. Feeds the homepage-hero

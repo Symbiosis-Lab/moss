@@ -2237,6 +2237,7 @@ pub fn generate_blocking_content_for_build(
                 None,
                 site_config.math, false,
                 &Default::default(),
+                false,
             );
             // The generated half of the same split the claimed term page gets
             // in `folder_embed`, through the same function: a term no page

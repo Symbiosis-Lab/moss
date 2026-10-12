@@ -212,6 +212,10 @@ All notable changes to moss will be documented here.
 - A build phase that runs well past its internal timing budget — not unusual on a large site's `build` phase — now logs a WARN performance note instead of an `[ERROR]` line. Before, a successful build of a large site could print an `[ERROR]` line purely for taking a while, reading as a failed build to anyone scanning the log even though the site was generated fine and the build's own problem count never counted it.
 - A very wide image inside a grid card no longer gets the article margin that pushed it below its neighbours.
 - A page placed at the root of a place term (for example `places/index.md`) now keeps the map that root would otherwise show, with the page's own title and content leading it — before, writing that page silently replaced the map with no warning that it was gone. Set `map: false` on that page to turn the map off instead.
+- An article that opens with a picture loads that picture first: its opening image is eager with a high fetch priority, as a hero already was, so on a slow connection the largest thing on the page is no longer found late. Later pictures stay lazy.
+- The site logo in the header carries its image's size, so the header no longer shifts when the logo arrives.
+- A site logo written as `./assets/logo.png` in the home page's frontmatter now gets its size too, and its address is the plain `/assets/logo.png` instead of `/./assets/logo.png`. Only the attribute changes; the file is served from the same address as before.
+- A page with a hero and a folder listing below it has one high-priority image, the hero. The listing's cover images load lazily, so they no longer compete with the hero on a slow connection. A page without a hero gives that slot to whichever comes first in its opening content, a picture or a folder listing; a listing that opens the page keeps its first cover eager.
 
 ### Changed
 

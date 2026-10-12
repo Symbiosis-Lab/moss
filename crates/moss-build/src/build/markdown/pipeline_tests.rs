@@ -4136,3 +4136,212 @@ fn footer_partial_image_never_loads_eagerly() {
     assert_eq!(imgs.len(), 2, "{}", doc.html_content);
     assert!(imgs.iter().all(|img| is_lazy(img)), "partial images must stay lazy: {}", doc.html_content);
 }
+
+// ---- one eager image per page, including folder embeds ----
+
+fn parse_page_with_graph(
+    md: &str,
+    lookup: &crate::build::media::dimensions::MediaDimensionLookup,
+) -> crate::build::types::ParsedDocument {
+    let mut b = moss_core::content_graph::ContentGraphBuilder::new();
+    b.add_file("journal/a.md", "a");
+    let graph = b.build();
+    // Production resolves folder embeds into markers before parsing the page.
+    let handlers = crate::build::embed_handlers::builtin_marker_handlers(
+        std::path::PathBuf::from("."),
+        Language::En,
+    );
+    let resolved = moss_core::resolve::resolve_content_with_handlers_and_snapshot(
+        "test.md",
+        md,
+        &graph,
+        &|_| None,
+        &handlers,
+        &moss_core::asset_snapshot::AssetSnapshot::new(),
+    );
+    process_markdown_file(
+        "test.md",
+        &resolved.content_markdown,
+        "site",
+        &HashMap::new(),
+        false,
+        Language::En,
+        None,
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
+        Some(lookup),
+        None,
+        Some(&graph),
+        PageContext::default(),
+    )
+    .expect("should parse")
+}
+
+/// The journal that `![[journal/|style:grid]]` embeds: two dated articles,
+/// each with a cover unless `covers` is false.
+fn journal_docs_with(covers: bool) -> Vec<crate::build::types::ParsedDocument> {
+    let article = |path: &str, label: &str, date: &str, cover: &str| {
+        crate::build::types::ParsedDocument {
+            url_path: path.to_string(),
+            label: label.to_string(),
+            title: label.to_string(),
+            clean_stem: label.to_lowercase(),
+            date: Some(date.to_string()),
+            kind: moss_core::PageKind::Article,
+            cover: covers.then(|| cover.to_string()),
+            ..Default::default()
+        }
+    };
+    vec![
+        crate::build::folder_embed::tests::make_folder_doc("journal/index.html", "Journal"),
+        article("journal/a.html", "Alpha", "2025-02-01", "a.jpg"),
+        article("journal/b.html", "Beta", "2025-01-01", "b.jpg"),
+    ]
+}
+
+/// The page's HTML with its folder embeds resolved against `docs`, as the
+/// build emits it.
+fn resolved_body_in(
+    doc: &crate::build::types::ParsedDocument,
+    lookup: &crate::build::media::dimensions::MediaDimensionLookup,
+    docs: &[crate::build::types::ParsedDocument],
+) -> String {
+    crate::build::folder_embed::resolve_markers(
+        &doc.html_content,
+        "test.md",
+        docs,
+        &crate::build::folder_embed::tests::test_project(),
+        &HashMap::new(),
+        Language::En,
+        None,
+        Some(lookup),
+        false,
+    )
+}
+
+fn resolved_body(
+    doc: &crate::build::types::ParsedDocument,
+    lookup: &crate::build::media::dimensions::MediaDimensionLookup,
+) -> String {
+    resolved_body_in(doc, lookup, &journal_docs_with(true))
+}
+
+fn eager_count(html: &str) -> usize {
+    html.matches(r#"loading="eager""#).count()
+}
+
+fn lookup_with_covers() -> crate::build::media::dimensions::MediaDimensionLookup {
+    lookup_for(&["harbour.jpg", "a.jpg", "b.jpg"])
+}
+
+#[test]
+fn hero_and_folder_embed_leave_one_eager_image_the_heros() {
+    let lookup = lookup_with_covers();
+    let doc = parse_page_with_graph(
+        ":::hero\n![Cover](harbour.jpg)\n# Title\n:::\n\nIntro.\n\n![[journal/|style:grid]]\n",
+        &lookup,
+    );
+    assert!(doc.html_content.contains("lazy_cards"), "the embed's cards must be marked lazy");
+    let hero = doc.hero_html.as_deref().expect("source declares a :::hero block");
+    let body = resolved_body(&doc, &lookup);
+    assert_eq!(eager_count(hero), 1, "the hero keeps its eager image: {hero}");
+    assert_eq!(eager_count(&body), 0, "the embed's covers must not be eager: {body}");
+}
+
+#[test]
+fn hero_and_folder_embed_inside_a_grid_cell_leave_one_eager_image() {
+    let lookup = lookup_with_covers();
+    let doc = parse_page_with_graph(
+        ":::hero\n![Cover](harbour.jpg)\n# Title\n:::\n\n:::grid 2\n![[journal/|style:grid]]\n+++\nPlain text\n:::\n",
+        &lookup,
+    );
+    let hero = doc.hero_html.as_deref().expect("source declares a :::hero block");
+    let body = resolved_body(&doc, &lookup);
+    assert_eq!(eager_count(hero), 1, "the hero keeps its eager image: {hero}");
+    assert_eq!(eager_count(&body), 0, "a nested embed's covers must not be eager: {body}");
+}
+
+#[test]
+fn hero_and_inline_folder_embed_leave_one_eager_image() {
+    let lookup = lookup_with_covers();
+    let doc = parse_page_with_graph(
+        ":::hero\n![Cover](harbour.jpg)\n# Title\n:::\n\nSee the journal ![[journal/|style:grid]] for more.\n",
+        &lookup,
+    );
+    let hero = doc.hero_html.as_deref().expect("source declares a :::hero block");
+    let body = resolved_body(&doc, &lookup);
+    assert!(doc.html_content.contains("lazy_cards"), "an inline embed's cards must be marked lazy");
+    assert_eq!(eager_count(hero), 1, "the hero keeps its eager image: {hero}");
+    assert_eq!(eager_count(&body), 0, "an inline embed's covers must not be eager: {body}");
+}
+
+#[test]
+fn folder_embed_after_a_paragraph_gets_the_eager_slot() {
+    // Pins existing behaviour: this passes without the change too, since the
+    // embed's first cover was already eager. It guards that the change does not
+    // take the slot from the page's opening embed.
+    let lookup = lookup_with_covers();
+    let doc = parse_page_with_graph("A paragraph.\n\n![[journal/|style:grid]]\n", &lookup);
+    assert!(!doc.html_content.contains("lazy_cards"), "the opening embed is not lazy");
+    let body = resolved_body(&doc, &lookup);
+    assert_eq!(eager_count(&body), 1, "the first cover is the page's eager image: {body}");
+}
+
+#[test]
+fn leading_image_before_a_folder_embed_keeps_the_only_eager_slot() {
+    let lookup = lookup_with_covers();
+    let doc = parse_page_with_graph(
+        "![Harbour](harbour.jpg)\n\nText here.\n\n![[journal/|style:grid]]\n",
+        &lookup,
+    );
+    let imgs = img_tags(&doc.html_content);
+    assert!(is_eager(imgs[0]), "the leading image is eager: {}", doc.html_content);
+    assert_eq!(eager_count(&doc.html_content), 1, "{}", doc.html_content);
+    let body = resolved_body(&doc, &lookup);
+    assert_eq!(eager_count(&body), 1, "only the leading image is eager: {body}");
+    assert!(
+        img_tags(&body).iter().filter(|img| is_eager(img)).all(|img| img.contains("harbour.jpg")),
+        "the eager image must be the leading one: {body}"
+    );
+}
+
+#[test]
+fn only_the_first_folder_embed_of_a_page_is_eager() {
+    let lookup = lookup_with_covers();
+    let doc = parse_page_with_graph(
+        "![[journal/|style:grid]]\n\nSome text.\n\n![[journal/|style:grid]]\n",
+        &lookup,
+    );
+    let body = resolved_body(&doc, &lookup);
+    assert_eq!(eager_count(&body), 1, "two embeds, one eager cover: {body}");
+}
+
+#[test]
+fn an_opening_embed_without_covers_takes_the_slot_and_the_page_has_no_eager_image() {
+    let lookup = lookup_with_covers();
+    let doc = parse_page_with_graph(
+        "A paragraph.\n\n![[journal/|style:grid]]\n\nMore text.\n\n![[journal/|style:grid]]\n",
+        &lookup,
+    );
+    assert_eq!(
+        doc.html_content.matches("lazy_cards").count(),
+        1,
+        "only the later embed is lazy: {}",
+        doc.html_content
+    );
+    let body = resolved_body_in(&doc, &lookup, &journal_docs_with(false));
+    assert_eq!(eager_count(&body), 0, "no cover, no eager image: {body}");
+}
+
+#[test]
+fn an_author_cannot_turn_on_the_lazy_flag_from_the_embed_options() {
+    // Pins existing behaviour: `lazy_cards` is not a pothole key, so it is
+    // caption text and the first embed keeps the page's eager slot. This
+    // passes without the change too.
+    let lookup = lookup_with_covers();
+    let doc = parse_page_with_graph(
+        "A paragraph.\n\n![[journal/|style:grid|lazy_cards]]\n",
+        &lookup,
+    );
+    let body = resolved_body(&doc, &lookup);
+    assert_eq!(eager_count(&body), 1, "a typed flag must not take the slot away: {body}");
+}

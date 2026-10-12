@@ -254,7 +254,7 @@ fn test_generate_children_empty() {
         None,
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
     assert_eq!(result, "");
 }
@@ -284,7 +284,7 @@ fn test_generate_children_list_no_group() {
         None,
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     assert!(result.contains("Article A"));
@@ -318,7 +318,7 @@ fn test_generate_children_summary_no_group() {
         None,
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     assert!(result.contains("Article A"));
@@ -367,7 +367,7 @@ fn test_generate_children_folders_before_articles() {
         None,
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     let folder_pos = result.find("Tutorials").expect("Should contain Tutorials");
@@ -410,7 +410,7 @@ fn test_generate_children_folder_sorted_by_latest_date() {
         None,
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     let pos_a = result.find("Folder A").unwrap();
@@ -476,7 +476,7 @@ fn test_generate_children_pre_sorted_card_style() {
         None,
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     // Should use summary rendering — identified by `data-layout="list"`
@@ -529,7 +529,7 @@ fn test_generate_children_pre_sorted_preserves_order() {
         None,
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     let pos_older = result
@@ -581,7 +581,7 @@ fn test_generate_children_summary_has_divider_between_folders_and_articles() {
         None,
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     // Should have a divider between folder and article sections
@@ -625,7 +625,7 @@ fn test_generate_children_summary_no_divider_when_only_articles() {
         None,
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
     assert!(
         !result.contains("moss-child-section-divider"),
@@ -666,7 +666,7 @@ fn test_year_group_triggered_by_multi_year() {
         None,
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     // Should contain moss-cards-minimal-year-group sections
@@ -723,7 +723,7 @@ fn test_no_year_group_for_single_year() {
         None,
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     // Should NOT contain moss-cards-minimal-year-group
@@ -764,7 +764,7 @@ fn test_year_group_with_summary_style() {
         None,
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     // Should contain moss-cards-minimal-year-group--summary sections for ALL year groups (2025 and 2016)
@@ -891,7 +891,7 @@ fn test_generate_children_renders_frontmatter_description_as_safe_inline_html() 
         None,
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     // A card is a reader-facing HTML surface: markdown renders as real markup
@@ -940,7 +940,7 @@ fn test_generate_children_renders_content_extracted_description_as_safe_inline_h
         None,
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     // Content-extracted descriptions get the same safe-HTML rendering as an
@@ -969,7 +969,7 @@ fn card_description_renders_markdown_and_never_nests_an_anchor_while_meta_stays_
     for style in ["summary", "grid"] {
         let html = generate_children(
             &docs, &docs, &project, style, "none", Language::En, false,
-            &std::collections::HashMap::new(), None, None, None, true, false, &Default::default(),
+            &std::collections::HashMap::new(), None, None, None, true, false, &Default::default(), false,
         );
         assert!(
             html.contains("<em>emph</em> <strong>bold</strong> <code>code</code> a link"),
@@ -1022,7 +1022,7 @@ fn test_generate_children_grid_style_renders_collection_grid() {
         None,
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     // Should render as data-layout="grid", not data-layout="list"
@@ -1090,7 +1090,7 @@ fn test_generate_children_grid_leaf_description_renders_below_title() {
         None,
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     // Description renders as a paragraph below the title...
@@ -1142,7 +1142,7 @@ fn test_generate_children_grid_folder_shows_count_and_description() {
         None,
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     assert!(
@@ -1183,7 +1183,7 @@ fn test_generate_children_grid_childless_folder_renders_description() {
         None,
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     assert!(
@@ -1233,7 +1233,7 @@ fn test_generate_children_grid_sorts_date_descending() {
         None,
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     // Find the positions of each title in the output — date-desc = Gamma, Beta, Alpha

@@ -1998,7 +1998,7 @@ fn year_groups_under_non_date_axis_skip_resort() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     // Year sections must appear.
@@ -2081,7 +2081,7 @@ fn date_asc_year_groups_lead_with_the_oldest_year() {
         Some(moss_core::sort::SortAxis::DateAsc),
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     let pos_1924 = out.find("<h2>1924</h2>").expect("1924 heading present");
@@ -2179,7 +2179,7 @@ fn a_dated_subfolder_sorts_by_its_own_date_and_shows_it_in_its_meta() {
         Some(moss_core::sort::SortAxis::DateAsc),
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     let pos_1924 = out.find(r#"href="/lectures/cambridge-1924""#).expect("1924 lecture present");
@@ -2229,7 +2229,7 @@ fn year_groups_skip_resort_keeps_folders_flat_above() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     // Sections exist for the articles.
@@ -2282,7 +2282,7 @@ fn no_group_skip_resort_stays_flat() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     assert!(
@@ -2361,7 +2361,7 @@ fn skip_resort_summary_still_separates_folders_from_articles() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     // Both folders must precede both articles.
@@ -2430,7 +2430,7 @@ fn skip_resort_summary_year_still_groups_by_year() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     assert!(
@@ -2485,7 +2485,7 @@ fn undated_grid_puts_folders_first_then_folds_case() {
         Some(moss_core::sort::SortAxis::Title),
         true,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     let order: Vec<&str> = ["Zebra", "Alpha", "mao", "Scarly"]
@@ -3254,4 +3254,38 @@ fn own_name_embed_in_a_non_index_note_excludes_its_host_page() {
     );
     assert!(out.contains("SiblingA") && out.contains("SiblingB"), "got: {}", out);
     assert!(!out.contains("HostNote"), "host page listed itself: {}", out);
+}
+
+/// A folder page's own children listing is a second listing on the page, so
+/// it shares the page's one eager slot with its hero or opening content: once
+/// the body has claimed it, the rendered cards carry no `loading="eager"`.
+#[test]
+fn children_listing_is_lazy_only_when_the_body_already_claimed_eager() {
+    let mut folder = make_folder_doc("journal/index.html", "Journal");
+    folder.children_style = Some(moss_core::Resolved::frontmatter("grid".to_string()));
+    let mut alpha = make_doc("journal/a.html", "Alpha", Some("2025-02-01"));
+    alpha.cover = Some("a.jpg".to_string());
+    let docs = vec![folder.clone(), alpha];
+    let render_listing = |claimed: bool| {
+        let doc = ParsedDocument { body_claims_eager: claimed, ..folder.clone() };
+        let marker = super::synthesize_children_marker(&doc, "journal", "journal/index.md");
+        let out = resolve_markers(
+            &marker,
+            "journal/index.md",
+            &docs,
+            &test_project(),
+            &std::collections::HashMap::new(),
+            crate::i18n::Language::En,
+            None,
+            None,
+            true,
+        );
+        (marker, out)
+    };
+    let (claimed_marker, claimed_out) = render_listing(true);
+    assert!(claimed_marker.contains("lazy_cards"), "{claimed_marker}");
+    assert!(!claimed_out.contains(r#"loading="eager""#), "{claimed_out}");
+    let (open_marker, open_out) = render_listing(false);
+    assert!(!open_marker.contains("lazy_cards"), "{open_marker}");
+    assert!(open_out.contains(r#"loading="eager""#), "{open_out}");
 }

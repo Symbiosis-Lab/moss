@@ -94,7 +94,7 @@ fn test_render_list_empty() {
         None,
         moss_core::sort::SortAxis::Title,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
     assert!(html.is_empty());
 }
@@ -129,7 +129,7 @@ fn test_render_list_multiple() {
         None,
         moss_core::sort::SortAxis::Title,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
     assert!(html.contains("5 articles"));
     assert!(html.contains("3 articles"));
@@ -294,7 +294,7 @@ fn coverless_card_in_covered_list_gets_quote_slot() {
         None,
         moss_core::sort::SortAxis::Title,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     let letter_start = html
@@ -357,7 +357,7 @@ fn coverless_card_without_description_shows_title_in_quote_slot() {
         None,
         moss_core::sort::SortAxis::Title,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
 
     let note_start = html.find(r#"href="note/""#).expect("note card present");
@@ -397,7 +397,7 @@ fn coverless_card_in_coverless_list_keeps_no_cover_placeholder() {
         None,
         moss_core::sort::SortAxis::Title,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
     assert!(
         html.contains("moss-card-no-cover"),
@@ -661,7 +661,7 @@ fn first_card_in_list_gets_eager_loading() {
         None,
         moss_core::sort::SortAxis::Title,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
     // First card's img should have loading="eager" (fetchpriority added later by placeholder.rs)
     let first_card_pos = html.find("cover1.jpg").unwrap();
@@ -701,7 +701,7 @@ fn single_card_list_gets_eager_loading() {
         None,
         moss_core::sort::SortAxis::Title,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
     assert!(
         html.contains(r#"loading="eager""#),
@@ -740,7 +740,7 @@ fn first_card_with_cover_gets_eager_even_if_not_first_overall() {
         None,
         moss_core::sort::SortAxis::Title,
         false,
-        &Default::default(),
+        &Default::default(), false,
     );
     // The first card with a cover should get eager loading
     assert!(

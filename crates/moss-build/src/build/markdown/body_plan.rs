@@ -382,18 +382,39 @@ fn is_text_block(block: &Block) -> bool {
     )
 }
 
-/// The page's opening image: the first image among the top-level blocks that
-/// comes before the second text block (see [`first_text_block`] for what counts
-/// as text). Headings, rules, figures without an image, and shortcodes such as
-/// `:::grid` or `:::gallery` are neither text nor the opening image, so an image
-/// that follows them still counts. `None` when the first two text blocks come
-/// before any image.
+/// Whether a raw HTML node is a folder-embed marker. The one predicate every
+/// folder-embed decision in the page planner goes through.
+pub fn is_folder_embed(html: &str) -> bool {
+    html.contains(moss_core::resolve::embed_renderer::folder_list::MARKER_FOLDER_LIST)
+}
+
+/// The opening content that holds the page's eager slot.
+pub enum Opening<'a> {
+    /// An image node, returned as the node itself so the render can tell it
+    /// apart from a repeat of the same file elsewhere on the page.
+    Image(&'a moss_core::ast::ResolvedUrl),
+    /// A folder embed, by its index in `blocks`.
+    Embed(usize),
+}
+
+/// The page's opening content that is entitled to the one eager slot: the
+/// first image or folder embed among the top-level blocks that comes before the
+/// second text block (see [`first_text_block`] for what counts as text).
+/// Headings, rules, figures without an image, and shortcodes such as `:::grid`
+/// or `:::gallery` are neither text nor opening content, so content after them
+/// still counts. `None` when the first two text blocks come before any of it.
 ///
-/// Returns the node itself, so the render can tell this image apart from a
-/// repeat of the same file elsewhere on the page.
-pub fn leading_image(blocks: &[Block]) -> Option<&moss_core::ast::ResolvedUrl> {
+/// A folder embed takes the slot even when none of its cards has a cover. The
+/// page then has no eager image, which costs nothing: a lazy cover only gives
+/// up a head start.
+pub fn opening_content(blocks: &[Block]) -> Option<Opening<'_>> {
     let mut text_blocks = 0;
-    for block in blocks {
+    for (index, block) in blocks.iter().enumerate() {
+        if let Block::Other(html) = block {
+            if is_folder_embed(html) {
+                return Some(Opening::Embed(index));
+            }
+        }
         let image = match block {
             Block::Figure { image, .. } => Some(image),
             Block::Paragraph(inlines) => inlines
@@ -406,7 +427,7 @@ pub fn leading_image(blocks: &[Block]) -> Option<&moss_core::ast::ResolvedUrl> {
             ..
         }) = image
         {
-            return Some(resolved);
+            return Some(Opening::Image(resolved));
         }
         if is_text_block(block) {
             text_blocks += 1;
