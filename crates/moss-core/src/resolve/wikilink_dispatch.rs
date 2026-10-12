@@ -449,11 +449,23 @@ fn dispatch_embed_form(
                 // grammar has no claim on it. Every pothole that means
                 // something today therefore still means it: `|My Widget`
                 // stays an iframe title, `|640x360` stays sizing.
+                // A video's `loop` flag comes out of the text before it is
+                // judged a caption: `loop|100%|A caption` captions "A caption".
+                let mut caption_loops = false;
                 let caption: Option<String> = match parsed.alias {
-                    Some(rest)
-                        if !placement.is_empty() && !alias_is_sizing(synth_kind, rest) =>
-                    {
-                        Some(rest.to_string())
+                    Some(rest) if !placement.is_empty() => {
+                        let (has_loop, text) = match synth_kind {
+                            SynthKind::Video => take_video_loop(rest),
+                            _ => (false, rest.to_string()),
+                        };
+                        if has_loop && !text.is_empty() && !alias_is_sizing(synth_kind, &text) {
+                            caption_loops = true;
+                            Some(text)
+                        } else if !alias_is_sizing(synth_kind, rest) {
+                            Some(rest.to_string())
+                        } else {
+                            None
+                        }
                     }
                     _ => None,
                 };
@@ -475,7 +487,10 @@ fn dispatch_embed_form(
                     placement: element_placement.clone(),
                     ..parsed
                 };
-                let params = build_synth_params(synth_kind, &parsed, &pothole);
+                let mut params = build_synth_params(synth_kind, &parsed, &pothole);
+                if caption_loops {
+                    params.insert("loop", "1");
+                }
                 let html = match synth_kind {
                     SynthKind::Video => crate::render::video::synthesize_video_html(
                         &params,
@@ -842,6 +857,22 @@ fn build_image_media_attrs(
     }
 
     media
+}
+
+/// Split a video's `loop` flag from the text around it, for deciding what is
+/// left to be a caption. `loop` is a flag only as a whole `|` segment (any
+/// case, surrounding whitespace ignored); the word inside a caption ("The
+/// Möbius loop") is caption text. `alias_is_sizing` and `build_synth_params`
+/// keep their looser caption-less reading (the first `loop` word anywhere) so
+/// existing output cannot change.
+fn take_video_loop(text: &str) -> (bool, String) {
+    let is_loop = |t: &str| t.trim().eq_ignore_ascii_case("loop");
+    let segments: Vec<&str> = text.split('|').collect();
+    if !segments.iter().any(|seg| is_loop(seg)) {
+        return (false, text.to_string());
+    }
+    let kept: Vec<&str> = segments.into_iter().filter(|seg| !is_loop(seg)).collect();
+    (true, kept.join("|"))
 }
 
 /// Whether a kind's own alias grammar claims `rest` as sizing sugar rather

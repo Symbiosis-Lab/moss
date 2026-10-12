@@ -615,3 +615,69 @@ fn a_removal_carries_the_recorded_source_when_there_is_one() {
     assert_eq!(by_path["docs/a.pdf"].source.as_deref(), Some("docs/a.pdf"));
     assert_eq!(by_path["feed.xml"].source, None);
 }
+
+/// A video that used to ship an adaptive ladder and now ships none (its own
+/// bitrate is too low for the widest rung its size allows): the ladder files
+/// are generated renditions with no recorded source, while the video and its
+/// source are both still there. Pins what the removal gate is told.
+#[test]
+fn a_ladder_dropped_from_a_video_that_is_still_published_is_not_an_unexplained_removal() {
+    let prev = snapshot(&sealed_with_assets(
+        &[],
+        &[("clips/demo.hls/master.m3u8", &b"M"[..]), ("clips/demo.hls/v0.m4s", &b"V"[..])],
+        &["clips/demo.mp4"],
+        &[],
+    ));
+    let cur = sealed_with_assets(&[], &[], &["clips/demo.mp4"], &[]);
+
+    assert_eq!(removed_of(&prev, &cur), []);
+}
+
+/// Only the ladder's own file names are renditions. An author's file in the
+/// same directory is still an address that went offline.
+#[test]
+fn an_authors_file_in_a_ladder_directory_is_still_a_removal() {
+    let prev = snapshot(&sealed_with_assets(&[], &[("clips/demo.hls/notes.html", &b"N"[..])], &["clips/demo.mp4"], &[]));
+    let cur = sealed_with_assets(&[], &[], &["clips/demo.mp4"], &[]);
+
+    assert_eq!(removed_of(&prev, &cur), [("clips/demo.hls/notes.html".to_string(), RemovalReason::Unexplained)]);
+}
+
+/// The ladder directory is the LAST `.hls/`: a ladder-shaped file under a
+/// nested `a.hls/b.hls/` belongs to `a.hls/b`, not to the video `a`.
+#[test]
+fn a_ladder_shaped_file_in_a_nested_hls_folder_is_still_a_removal() {
+    let prev = snapshot(&sealed_with_assets(&[], &[("a.hls/b.hls/master.m3u8", &b"M"[..])], &["a.mp4"], &[]));
+    let cur = sealed_with_assets(&[], &[], &["a.mp4"], &[]);
+
+    assert_eq!(removed_of(&prev, &cur), [("a.hls/b.hls/master.m3u8".to_string(), RemovalReason::Unexplained)]);
+}
+
+/// A video served under another extension keeps `<stem>.hls` as its ladder
+/// directory, so its dropped ladder is just as much a rendition.
+#[test]
+fn a_webm_video_that_loses_its_ladder_is_not_a_removal() {
+    let prev = snapshot(&sealed_with_assets(&[], &[("clips/demo.hls/master.m3u8", &b"M"[..])], &["clips/demo.webm"], &[]));
+    let cur = sealed_with_assets(&[], &[], &["clips/demo.webm"], &[]);
+
+    assert_eq!(removed_of(&prev, &cur), []);
+}
+
+/// A ladder that loses one rung is as much a regenerated rendition as one
+/// that vanished whole, so the master staying published changes nothing.
+#[test]
+fn a_ladder_that_loses_only_its_top_rung_is_not_a_removal() {
+    let prev = snapshot(&sealed_with_assets(
+        &[],
+        &[
+            ("clips/demo.hls/master.m3u8", &b"M"[..]),
+            ("clips/demo.hls/v1.m3u8", &b"P"[..]),
+            ("clips/demo.hls/v1.m4s", &b"S"[..]),
+        ],
+        &["clips/demo.mp4"],
+        &[],
+    ));
+    let cur = sealed_with_assets(&[], &[("clips/demo.hls/master.m3u8", &b"M"[..])], &["clips/demo.mp4"], &[]);
+
+    assert_eq!(removed_of(&prev, &cur), []);
+}

@@ -595,11 +595,13 @@ pub fn display_size(width: u32, height: u32, sar: f64) -> (u32, u32) {
 /// there is no other way to clear the floor.
 pub const MIN_BITS_PER_PIXEL_PER_FRAME: f64 = 0.045;
 
-/// The minimum multiple a clamped rung's effective bitrate must clear over the
-/// rung already kept below it, in [`video_ladder_rungs_within`]'s near-duplicate
-/// check — matching the 1.5-2x spacing [`VIDEO_LADDER`]'s own doc cites from
-/// Apple's authoring spec. A clamp landing under this multiple offers a player
-/// nothing worth switching to, so the rung is dropped rather than kept.
+/// The minimum multiple a clamped top rung's bitrate must clear over the rung
+/// below it for [`video_ladder_rungs_within`] to keep a ladder at all —
+/// matching the 1.5-2x spacing [`VIDEO_LADDER`]'s own doc cites from Apple's
+/// authoring spec. A clamp under this multiple offers a player nothing worth
+/// switching to, so the source gets no ladder (a single rung) rather than a
+/// thinner one: the constant decides whether there is a ladder, not how many
+/// rungs it has.
 pub const LADDER_MIN_RUNG_SPACING: f64 = 1.5;
 
 /// The video delivery ladder, lowest rung first.
@@ -714,16 +716,19 @@ impl SourceBitrate {
 ///    (98 MB) does not look any better muxed at the table's 1100 kbps 960x540
 ///    rung; it just becomes a 123 MB file exactly as soft as the original.
 ///    Every width-eligible rung at or below `source_bitrate`'s figure is kept
-///    unchanged; the first rung that exceeds it is kept once more, with its
-///    bitrate clamped down to that figure (floored to a whole kbps), and
-///    nothing above it survives — UNLESS the clamp lands within 1.5x of the
-///    rung already kept below it, [`VIDEO_LADDER`]'s own minimum spacing,
-///    making it a near-duplicate offering a player nothing worth switching
-///    to; then it is dropped instead. A source leaner than the bottom rung
-///    has nothing to compare against, so its clamped bottom rung is kept
-///    regardless — and, being the only rung left, a caller reads that result
-///    the same way it already reads an empty-but-for-width one: not a
-///    ladder, just the progressive file.
+///    unchanged. If that is all of them the table ladder stands. Otherwise
+///    the next rung is the only one that can be clamped down to that figure
+///    (floored to a whole kbps), and the result is a ladder only if that
+///    rung is the widest the source's width allows AND, above the bottom
+///    rung, the clamp stays within [`LADDER_MIN_RUNG_SPACING`] of the rung
+///    below it. In every other case the result is a single rung — the bottom
+///    one, clamped to the source's figure when the source is leaner than it
+///    — which a caller reads as not a ladder, just the progressive file. A
+///    player uses the ladder instead of that file, so a ladder whose best
+///    picture is narrower than the file would shrink it for everyone: a
+///    16:9 source 1280 wide keeps its ladder from about 1650 kbps (1.5 x the
+///    1100 kbps rung below its top rung), a 1080p one from about 3000 kbps
+///    (1.5 x 2000).
 /// 2. **The per-file byte budget**, checked against each rung's EFFECTIVE
 ///    bitrate (the clamp above, when one applied) rather than the table's — that is what
 ///    ffmpeg will actually be asked for, and so what the file will actually
@@ -765,27 +770,35 @@ pub fn video_ladder_rungs_within(
     let capped: Vec<VideoRung> = match source_bitrate.for_clamp() {
         None => width_rungs.to_vec(),
         Some(source_kbps) => {
-            let mut out: Vec<VideoRung> = Vec::new();
-            for r in width_rungs {
-                if (r.video_kbps as f64) <= source_kbps {
-                    out.push(*r);
-                    continue;
+            // Leading width-eligible rungs the source can fill unchanged.
+            let kept = width_rungs.iter().take_while(|r| (r.video_kbps as f64) <= source_kbps).count();
+            if kept == width_rungs.len() {
+                width_rungs.to_vec()
+            } else {
+                // The next rung is the only one that can be clamped to the
+                // source's bitrate. A player uses the ladder INSTEAD of the
+                // progressive file, so a ladder whose best rung is narrower
+                // than that file shows every viewer a smaller picture than
+                // the file it replaced: keep the ladder only when that
+                // clamped rung is the widest the source's width allows, and
+                // (above the bottom rung) clears the minimum spacing.
+                let next = width_rungs[kept];
+                let clamped = VideoRung { video_kbps: source_kbps.floor() as u32, ..next };
+                let reaches_width = kept + 1 == width_rungs.len();
+                let spaced = kept == 0
+                    || (clamped.video_kbps as f64) >= LADDER_MIN_RUNG_SPACING * width_rungs[kept - 1].video_kbps as f64;
+                if reaches_width && spaced {
+                    let mut out = width_rungs[..kept].to_vec();
+                    out.push(clamped);
+                    out
+                } else if kept == 0 {
+                    // Leaner than the bottom rung: it ships alone, clamped.
+                    vec![clamped]
+                } else {
+                    // One rung: callers read it as "just the progressive file".
+                    vec![width_rungs[0]]
                 }
-                let clamped_kbps = source_kbps.floor() as u32;
-                let keep = match out.last() {
-                    // Leaner than the bottom rung: nothing to compare
-                    // against, so the clamped bottom rung is kept regardless.
-                    None => true,
-                    Some(prev) => (clamped_kbps as f64) >= LADDER_MIN_RUNG_SPACING * prev.video_kbps as f64,
-                };
-                if keep {
-                    out.push(VideoRung { video_kbps: clamped_kbps, ..*r });
-                }
-                // Every rung above this one would only fail the same
-                // comparison harder — the table is strictly ascending.
-                break;
             }
-            out
         }
     };
 
@@ -877,6 +890,9 @@ pub enum AudioGroup {
 }
 
 impl AudioGroup {
+    /// Every group, so a reader of the naming scheme need not retype them.
+    pub const ALL: [AudioGroup; 2] = [AudioGroup::Lean, AudioGroup::Clean];
+
     /// The short token used both as the ffmpeg variant name and as the
     /// filename infix, so a file on disk says which group it belongs to.
     pub const fn as_str(&self) -> &'static str {
@@ -993,6 +1009,32 @@ pub fn hls_members(rungs: &[VideoRung]) -> Vec<String> {
         out.push(format!("{}.m4s", g.as_str()));
     }
     out
+}
+
+/// The video stem a ladder file belongs to: `clips/demo.hls/v0.m4s` is
+/// `Some("clips/demo")`. `None` unless the path is exactly one of the file names
+/// [`hls_members`] can produce (master playlist, `v<N>` rung playlist or
+/// segment file, an audio group's playlist or segment file) directly inside a
+/// `<stem>.hls` directory — the last `.hls/` in the path, so a folder an author
+/// happens to name `x.hls` or a stray file beside the ladder is not one.
+pub fn hls_ladder_file_stem(path: &str) -> Option<&str> {
+    let (stem, name) = path.rsplit_once(".hls/")?;
+    let is_member = name == HLS_MASTER_NAME
+        || AudioGroup::ALL.iter().any(|g| {
+            name.strip_prefix(g.as_str())
+                .is_some_and(|ext| ext == ".m3u8" || ext == ".m4s")
+        })
+        || name
+            .strip_prefix('v')
+            .and_then(|rest| rest.strip_suffix(".m3u8").or_else(|| rest.strip_suffix(".m4s")))
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    is_member.then_some(stem)
+}
+
+/// Every path a video with this stem can be served under (`<stem>.mp4`,
+/// `<stem>.webm`, ...): the stem plus each extension [`video_stem`] strips.
+pub fn video_served_paths(stem: &str) -> impl Iterator<Item = String> + '_ {
+    ALL_VIDEO_SUFFIXES.iter().map(move |suffix| format!("{stem}{suffix}"))
 }
 
 /// The distinct audio rendition groups a set of rungs needs, in ladder order.
@@ -1523,17 +1565,17 @@ mod tests {
         assert_eq!((at_100_mib.last().unwrap().width, at_100_mib.last().unwrap().height), (768, 432));
     }
 
-    /// The feature this function exists for, pinned exactly: a 903.47 s,
-    /// 1280x720 source whose own video stream measures 600 kbps. Re-encoding
-    /// its would-be 960x540 rung at the table's 1100 kbps cannot improve a
-    /// picture the source never had, so that rung is dropped; the 768x432 rung
-    /// below it is kept but clamped to 600 kbps, comfortably clear of the
-    /// 1.5x-of-365 near-duplicate floor (600 >= 547.5), and nothing survives
-    /// above it.
+    /// The clamp where it still produces a ladder: a 903.47 s, 768-wide
+    /// source whose own video stream measures 600 kbps. Re-encoding the
+    /// 768x432 rung at the table's 730 kbps cannot improve a picture the
+    /// source never had, so that rung is kept but clamped to 600 kbps,
+    /// comfortably clear of the 1.5x-of-365 near-duplicate floor
+    /// (600 >= 547.5). It is the widest rung the source's width allows, so
+    /// the ladder still reaches the source's own picture size.
     #[test]
     fn video_ladder_rungs_within_clamps_the_top_rung_to_the_sources_own_video_kbps() {
         let source = SourceBitrate { video_kbps: Some(600.0), total_kbps: None };
-        let got = video_ladder_rungs_within((1280, 720), 903.47, 150 * MIB, source);
+        let got = video_ladder_rungs_within((768, 432), 903.47, 150 * MIB, source);
         assert_eq!(
             got,
             vec![
@@ -1548,11 +1590,11 @@ mod tests {
 
     /// The container total is only the fallback: with the video stream's own
     /// bitrate unknown, the same clamp still applies off the container total,
-    /// and the pinned real case above comes out identically.
+    /// and the case above comes out identically.
     #[test]
     fn video_ladder_rungs_within_falls_back_to_total_kbps_when_video_kbps_is_unknown() {
         let source = SourceBitrate { video_kbps: None, total_kbps: Some(600.0) };
-        let got = video_ladder_rungs_within((1280, 720), 903.47, 150 * MIB, source);
+        let got = video_ladder_rungs_within((768, 432), 903.47, 150 * MIB, source);
         assert_eq!(
             got,
             vec![
@@ -1574,27 +1616,76 @@ mod tests {
         assert_eq!(got, VIDEO_LADDER.to_vec(), "{got:?}");
     }
 
-    /// The 1.5x-or-drop rule: a 150 kbps source would clamp the 365 kbps rung
-    /// down to 150, but 150 is under 1.5x the 145 kbps rung already kept
-    /// (217.5), so it would be a near-duplicate — dropped, leaving only the
-    /// bottom two rungs.
+    /// The 1.5x-or-drop rule: a 1094.9 kbps source would clamp the 960x540
+    /// rung down to 1094, under 1.5x the 730 kbps rung already kept (1095), so
+    /// it would be a near-duplicate and is dropped. That leaves the ladder
+    /// short of the source's 960 px width, so it is no ladder at all: one
+    /// rung, the progressive file plays.
     #[test]
     fn video_ladder_rungs_within_drops_a_clamp_that_would_duplicate_the_rung_below() {
+        let source = SourceBitrate { video_kbps: Some(1094.9), total_kbps: None };
+        let got = video_ladder_rungs_within((960, 540), 100.0, 150 * MIB, source);
+        assert_eq!(got, vec![VIDEO_LADDER[0]], "{got:?}");
+    }
+
+    /// A lean, high-resolution source (a screen recording: 1280 wide at
+    /// 150 kbps) would get a ladder stopping at 416x234, and a player uses
+    /// the ladder instead of the progressive file, so every viewer would see
+    /// a picture a third the size of the file. Exactly one rung means no
+    /// ladder.
+    #[test]
+    fn video_ladder_rungs_within_leaves_no_ladder_when_the_clamp_stops_short_of_the_source_width() {
         let source = SourceBitrate { video_kbps: Some(150.0), total_kbps: None };
-        let got = video_ladder_rungs_within((1280, 720), 100.0, 150 * MIB, source);
-        assert_eq!(got, vec![VIDEO_LADDER[0], VIDEO_LADDER[1]], "{got:?}");
+        let got = video_ladder_rungs_within((1280, 720), 91.5, 150 * MIB, source);
+        assert_eq!(got, vec![VIDEO_LADDER[0]], "{got:?}");
+    }
+
+    /// The middle of the range, and the widest consequence of the rule: a
+    /// 1280-wide source at 1200 kbps (a common phone or camera 720p file)
+    /// gets NO ladder. The clamped 1280x720 rung would be 1200 kbps, under
+    /// 1.5 x the 1100 kbps rung below it (1650), so the ladder would stop at
+    /// 960 px and shrink the picture; one rung means the plain file plays.
+    #[test]
+    fn video_ladder_rungs_within_gives_a_1280_wide_source_at_1200_kbps_no_ladder() {
+        let source = SourceBitrate { video_kbps: Some(1200.0), total_kbps: None };
+        let got = video_ladder_rungs_within((1280, 720), 91.5, 150 * MIB, source);
+        assert_eq!(got, vec![VIDEO_LADDER[0]], "{got:?}");
+    }
+
+    /// A source leaner than the bottom rung ships that rung alone, clamped,
+    /// whether or not its width allows more rungs.
+    #[test]
+    fn video_ladder_rungs_within_a_source_under_the_bottom_rung_clamps_it_at_any_width() {
+        let source = SourceBitrate { video_kbps: Some(20.0), total_kbps: None };
+        for (width, height) in [(320, 180), (1280, 720)] {
+            let got = video_ladder_rungs_within((width, height), 100.0, 150 * MIB, source);
+            assert_eq!(got, vec![VideoRung { video_kbps: 20, ..VIDEO_LADDER[0] }], "{width}: {got:?}");
+        }
+    }
+
+    /// The boundary that still ladders: a 1280-wide source at 1700 kbps keeps
+    /// all six rungs, the top one clamped from 2000 to 1700 (1700 >= 1.5 x
+    /// 1100), because the clamp reaches the source's width.
+    #[test]
+    fn video_ladder_rungs_within_keeps_the_full_ladder_when_the_clamp_reaches_the_source_width() {
+        let source = SourceBitrate { video_kbps: Some(1700.0), total_kbps: None };
+        let got = video_ladder_rungs_within((1280, 720), 91.5, 150 * MIB, source);
+        assert_eq!(got.len(), 6, "{got:?}");
+        assert_eq!(got[..5], VIDEO_LADDER[..5]);
+        assert_eq!(got[5], VideoRung { video_kbps: 1700, ..VIDEO_LADDER[5] });
     }
 
     /// The boundary the `>=` in the near-duplicate check is for: a clamp
     /// landing at EXACTLY `LADDER_MIN_RUNG_SPACING` of the rung below must be
     /// KEPT, not dropped. 730 kbps (the 768x432 rung, kept unclamped below a
     /// 1095.9 kbps source) times 1.5 is exactly 1095 — and floor(1095.9) is
-    /// exactly that. A `>` in place of `>=` would drop this rung instead.
+    /// exactly that. A `>` in place of `>=` would drop this rung instead. The
+    /// source is 960 wide so the clamped 960x540 rung is its widest.
     #[test]
     fn video_ladder_rungs_within_keeps_a_clamp_exactly_at_the_min_spacing() {
         assert_eq!(LADDER_MIN_RUNG_SPACING * VIDEO_LADDER[3].video_kbps as f64, 1095.0, "sanity: the tie is exact");
         let source = SourceBitrate { video_kbps: Some(1095.9), total_kbps: None };
-        let got = video_ladder_rungs_within((1280, 720), 60.0, 150 * MIB, source);
+        let got = video_ladder_rungs_within((960, 540), 60.0, 150 * MIB, source);
         assert_eq!(
             got,
             vec![
@@ -1630,7 +1721,7 @@ mod tests {
         assert!(hls_file_bytes(600, 1000.0) <= budget as f64, "sanity: the clamped figure fits");
 
         let source = SourceBitrate { video_kbps: Some(600.0), total_kbps: None };
-        let got = video_ladder_rungs_within((1280, 720), 1000.0, budget, source);
+        let got = video_ladder_rungs_within((768, 432), 1000.0, budget, source);
         assert_eq!(
             got,
             vec![
@@ -1680,6 +1771,25 @@ mod tests {
         let budget = ((cheap_video_bytes + costly_audio_bytes) / 2.0) as u64;
         assert!(cheap_video_bytes <= budget as f64, "the cheaper file fits");
         assert!(costly_audio_bytes > budget as f64, "the pricier one alone exceeds the same budget");
+    }
+
+    #[test]
+    fn hls_ladder_file_stem_accepts_only_the_ladders_own_file_names() {
+        let rungs = &VIDEO_LADDER[..];
+        for name in hls_members(rungs) {
+            assert_eq!(hls_ladder_file_stem(&format!("clips/demo.hls/{name}")), Some("clips/demo"), "{name}");
+        }
+        for path in [
+            "clips/demo.hls/notes.html",
+            "clips/demo.hls/sub/v0.m4s",
+            "clips/demo.hls/v.m4s",
+            "clips/demo.hls/vx.m3u8",
+            "clips/demo.hls/ahi.txt",
+            "clips/demo/master.m3u8",
+        ] {
+            assert_eq!(hls_ladder_file_stem(path), None, "{path}");
+        }
+        assert_eq!(hls_ladder_file_stem("a.hls/b.hls/master.m3u8"), Some("a.hls/b"));
     }
 
     #[test]

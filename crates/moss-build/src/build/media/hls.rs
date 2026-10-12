@@ -558,11 +558,10 @@ mod hls_tests;
 /// `Ok(None)` means no ladder was produced and none is owed: the source fills
 /// fewer than two rungs — too narrow for a second rung, so long that even its
 /// bottom rung's file only clears `config.hls_max_file_mb` by shipping alone,
-/// or so lean in its own video bitrate that its would-be second rung clamps to
-/// within `asset_paths::LADDER_MIN_RUNG_SPACING` of the bottom one and gets
-/// dropped rather than kept as a near-duplicate — a ratio check, not a floor;
-/// nothing here compares the clamp against the bottom rung's own value
-/// (`video_ladder_rungs_within` never returns fewer than one).
+/// or so lean in its own video bitrate that the clamp stops short of the
+/// widest rung its width allows (`video_ladder_rungs_within` then leaves only
+/// the bottom rung, because a ladder narrower than the progressive file would
+/// replace it with a smaller picture).
 /// That is the honest resolution of "`EncodePlan::KeepOriginal` cannot survive HLS" —
 /// segmenting is mandatory, so shipping the source bytes as a ladder is not
 /// available, but *not building one* is: a ladder is a choice between rungs,

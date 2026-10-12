@@ -8,7 +8,7 @@
 use super::*;
 use crate::build::cache::{ObjectStore, TransformCache, TransformEntry, TransformRecord};
 use crate::build::media::ffmpeg::{
-    real_ffmpeg, synthesise, synthesise_high_bitrate, synthesise_silent, synthesise_with_silent_audio_track,
+    real_ffmpeg, synthesise_high_bitrate, synthesise_silent, synthesise_with_silent_audio_track,
 };
 use moss_core::asset_paths::{AudioGroup, VIDEO_LADDER};
 
@@ -456,7 +456,7 @@ fn produce_ladder_links_a_self_consistent_ladder_and_reuses_it_under_a_new_name(
     };
     let dir = tempfile::tempdir().expect("tempdir");
     let source = dir.path().join("holiday.mov");
-    if !synthesise(&bin, &source, "1280x720") {
+    if !synthesise_high_bitrate(&bin, &source, "1280x720", 4) {
         eprintln!("skipping: could not synthesise a source");
         return;
     }
@@ -1107,8 +1107,10 @@ fn produce_ladder_honors_a_tiny_per_file_budget() {
 /// real encode: a rung must never be encoded ABOVE the source's own video
 /// bitrate. A source deliberately capped to 120 kbps — under the table's
 /// 145k rung, let alone its 365k one — must come out of `produce_ladder`
-/// with its would-be 416x234 rung clamped down near the source's own figure,
-/// leaving only two rungs (width alone would have kept all six), and the
+/// with its would-be 416x234 rung clamped down near the source's own figure.
+/// The source is 416 wide, so that clamped rung is the widest it can have and
+/// the ladder keeps both rungs; a wider lean source gets no ladder at all
+/// (see `a_lean_source_wider_than_its_clamped_ladder_gets_no_ladder`). The
 /// encoder must receive that effective bitrate rather than the table's
 /// 145k. The real encode still verifies the output census; on Unix a
 /// forwarding executable also captures the arguments actually dispatched.
@@ -1123,7 +1125,7 @@ fn produce_ladder_never_encodes_a_rung_above_the_sources_own_bitrate() {
     let ok = std::process::Command::new(&bin)
         .args([
             "-hide_banner", "-loglevel", "error", "-y",
-            "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=30:duration=3",
+            "-f", "lavfi", "-i", "testsrc=size=416x234:rate=30:duration=3",
             "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
             "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
             "-b:v", "120k", "-maxrate", "120k", "-bufsize", "240k",
@@ -1194,8 +1196,8 @@ fn produce_ladder_never_encodes_a_rung_above_the_sources_own_bitrate() {
         .count();
     assert_eq!(
         rung_count, 2,
-        "width alone would have kept all 6 table rungs; the source's own ~{source_kbps} kbps \
-         must leave only the bottom rung and one clamped rung above it: {entries:?}"
+        "the source's own ~{source_kbps} kbps must leave the bottom rung and one clamped \
+         rung above it: {entries:?}"
     );
 
     // A short VBV-capped encode can spend its initial buffer, and fMP4 adds
@@ -1236,7 +1238,8 @@ fn produce_ladder_never_encodes_a_rung_above_the_sources_own_bitrate() {
 /// re-encodes it once — different oids, and (per
 /// `produce_ladder_never_encodes_a_rung_above_the_sources_own_bitrate`'s own
 /// pin for this exact source shape) a narrower ladder than the legacy
-/// record's 6 rungs.
+/// record's 6 rungs. The source is 416 wide, so the clamp reaches its width
+/// and a ladder survives.
 #[test]
 fn produce_ladder_re_encodes_a_legacy_record_when_the_source_bitrate_would_clamp_it() {
     let Some(bin) = real_ffmpeg() else {
@@ -1248,7 +1251,7 @@ fn produce_ladder_re_encodes_a_legacy_record_when_the_source_bitrate_would_clamp
     let ok = std::process::Command::new(&bin)
         .args([
             "-hide_banner", "-loglevel", "error", "-y",
-            "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=30:duration=3",
+            "-f", "lavfi", "-i", "testsrc=size=416x234:rate=30:duration=3",
             "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
             "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
             "-b:v", "150k", "-maxrate", "150k", "-bufsize", "300k",
@@ -1320,6 +1323,52 @@ fn produce_ladder_re_encodes_a_legacy_record_when_the_source_bitrate_would_clamp
         entries.iter().all(|(_, e)| !fabricated_oids.contains(&e.oid)),
         "none of the legacy record's placeholder blobs were reused — the clamp made them stale"
     );
+}
+
+/// A lean source wider than the rung its bitrate allows gets no ladder: the
+/// ladder would be played instead of the progressive file and show a smaller
+/// picture than it. A 1280-wide source capped to 150 kbps is the measured case.
+#[test]
+fn a_lean_source_wider_than_its_clamped_ladder_gets_no_ladder() {
+    let Some(bin) = real_ffmpeg() else {
+        eprintln!("skipping: ffmpeg not on PATH");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("lean-wide.mp4");
+    let ok = std::process::Command::new(&bin)
+        .args([
+            "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=30:duration=3",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-b:v", "150k", "-maxrate", "150k", "-bufsize", "300k",
+        ])
+        .arg(&source)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !ok {
+        eprintln!("skipping: could not synthesise a low-bitrate source");
+        return;
+    }
+    let dir_t = dir.path();
+    let transforms = TransformCache::new(dir_t.join("transforms"), ObjectStore::new(dir_t.join("objects")));
+    let staging = dir_t.join("staging");
+    std::fs::create_dir_all(&staging).unwrap();
+    let got = produce_ladder(
+        &FFmpegManager::from_bin_path(bin),
+        &source,
+        "oid-lean-wide",
+        &staging.join("lean-wide.hls"),
+        dir_t,
+        &transforms,
+        &VideoCompressionConfig::default(),
+        None,
+        None,
+        None,
+    )
+    .expect("produce_ladder");
+    assert!(got.is_none(), "a one-rung result is the progressive file alone: {got:?}");
 }
 
 /// A source too narrow for a second rung gets no ladder, and no ffmpeg run.

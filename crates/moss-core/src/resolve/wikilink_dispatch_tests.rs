@@ -1042,6 +1042,44 @@ fn a_pothole_with_no_placement_keeps_meaning_exactly_what_it_did() {
     assert!(!html.contains("figcaption"), "got: {html}");
 }
 
+#[test]
+fn a_looping_video_takes_a_caption_when_loop_is_its_own_segment() {
+    for alias in ["loop|100%|A caption", "100%|loop|A caption", "100%|A caption|loop", "100%| LOOP |A caption"] {
+        let html = expect_figure(dispatch_embed("clip.mp4", Some(alias)));
+        assert!(
+            html.starts_with(r#"<figure class="moss-embed-figure" style="width:100%">"#),
+            "{alias}: {html}"
+        );
+        assert!(html.contains("<figcaption>A caption</figcaption>"), "{alias}: {html}");
+        assert!(html.contains("data-loop"), "{alias}: {html}");
+        assert!(html.contains(" loop"), "{alias}: {html}");
+        assert!(!html.contains("controls"), "{alias}: {html}");
+    }
+}
+
+#[test]
+fn a_caption_that_contains_the_word_loop_keeps_its_text_and_does_not_loop() {
+    for caption in ["A loop of rope", "The Möbius loop", "Loop the loop", "loop A caption", "A caption loop"] {
+        let html = expect_figure(dispatch_embed("clip.mp4", Some(&format!("100%|{caption}"))));
+        assert!(html.contains(&format!("<figcaption>{caption}</figcaption>")), "{caption}: {html}");
+        assert!(html.contains("controls"), "{caption}: {html}");
+        assert!(!html.contains("data-loop"), "{caption}: {html}");
+    }
+}
+
+#[test]
+fn loop_without_a_caption_renders_as_it_always_did() {
+    for alias in ["loop", "640x360 loop", "100%|loop", "loop|100%"] {
+        let html = expect_bare(dispatch_embed("clip.mp4", Some(alias)));
+        assert!(html.contains("data-loop"), "{alias}: {html}");
+        assert!(!html.contains("figcaption"), "{alias}: {html}");
+    }
+    // No placement: still a label, no figure.
+    let html = expect_bare(dispatch_embed("clip.mp4", Some("loop A label")));
+    assert!(html.contains(r#"aria-label="A label""#), "got: {html}");
+    assert!(html.contains("data-loop"), "got: {html}");
+}
+
 // --- External URL dispatch ---
 
 #[test]

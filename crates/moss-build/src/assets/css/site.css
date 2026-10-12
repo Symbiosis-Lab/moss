@@ -4663,6 +4663,15 @@ article .moss-cards-container.moss-align-right:not([data-width]) {
   max-width: 50%;
 }
 
+/* An un-floated captioned embed would keep the browser's default 40px side
+ * margins on a `<figure>`, pushing a full-width one 40px past the text
+ * column. Zero them the way a captioned image does: full width sits flush,
+ * a narrower one is centred. */
+article .moss-embed-figure:not(.moss-align-left):not(.moss-align-right):not([data-width]) {
+  margin-inline: auto;
+  max-width: 100%;
+}
+
 /* `.moss-cards-container` carries `container-type: inline-size` (below, so
  * `.moss-cards` can use `@container` instead of `@media`), which makes its
  * own inline-size intrinsically indeterminate for layout purposes:
@@ -8579,13 +8588,15 @@ article video {
   width: 100%;
 }
 
-/* The <video> itself — fills the container, maintains aspect ratio */
+/* The <video> itself — fills the container. `auto 16 / 9` takes the video's
+   own shape once its poster or metadata is known and holds 16:9 only until
+   then, so a clip that is not 16:9 is not cropped by `object-fit: cover`. */
 .moss-ambient-video video[data-loop],
 article video[data-loop] {
   display: block;
   width: 100%;
   height: auto;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: auto 16 / 9;
   border-radius: 6px;
   background: var(--moss-color-surface);
   object-fit: cover;

@@ -40,6 +40,8 @@ moss transcodes `.mov` files to `.mp4` (H.264 + AAC) in the background. The prev
 
 The standard form also embeds audio (`![](track.mp3)`), PDF, HTML and 3D model files that are in your site, each giving the same player as its wikilink, and a YouTube, Vimeo or CodePen address (`![](https://www.youtube.com/watch?v=…)`) gives the same player as `![[https://www.youtube.com/watch?v=…]]`. A size in the alt text works as it does after the pipe (`![400](demo.mov)` matches `![[demo.mov|400]]`), and plain alt text becomes the player's accessible label, as the text after the pipe does for `![[demo.mov|a label]]`.
 
+A video takes a caption when a width is written before it: `![[demo.mp4|100%|Caption]]` shows the player with the caption beneath. Add `loop` as its own `|` segment to make it a silent looping clip that keeps the caption: `![[demo.mp4|loop|100%|Caption]]`. Inside the caption text the word is just a word, so `![[demo.mp4|100%|A loop of rope]]` stays as written.
+
 ## Display control
 
 Control how media displays with pipe syntax — append a fit/position keyword, a size, or a [caption](#captions) after a `|`:

@@ -1967,13 +1967,17 @@ pub(crate) fn synthesise_high_bitrate(bin: &str, dest: &Path, size: &str, durati
 /// Synthesise a short test video with NO audio stream at all — distinct from
 /// a quiet one: [`probe_source`]'s `has_audio` is a stream-presence check,
 /// not a loudness measurement, and this is the only one of the three
-/// synthesisers that leaves it false.
+/// synthesisers that leaves it false. Forced to a high video bitrate like
+/// [`synthesise_high_bitrate`], so the source's own bitrate never narrows the
+/// ladder a test is about.
 pub(crate) fn synthesise_silent(bin: &str, dest: &Path, size: &str) -> bool {
     std::process::Command::new(bin)
         .args([
             "-hide_banner", "-loglevel", "error", "-y",
             "-f", "lavfi", "-i", &format!("testsrc=size={}:rate=30:duration=4", size),
             "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-b:v", "8000k", "-minrate", "8000k", "-maxrate", "8000k", "-bufsize", "8000k",
+            "-x264-params", "nal-hrd=cbr:force-cfr=1",
         ])
         .arg(dest)
         .status()
@@ -1984,7 +1988,7 @@ pub(crate) fn synthesise_silent(bin: &str, dest: &Path, size: &str) -> bool {
 /// Synthesise a short test video whose audio stream is present but carries
 /// silence (`anullsrc`, not [`synthesise`]'s `sine`) — the source `has_audio`
 /// must still read true for, unlike [`synthesise_silent`]'s no-stream-at-all
-/// case.
+/// case. Forced to a high video bitrate like [`synthesise_high_bitrate`].
 pub(crate) fn synthesise_with_silent_audio_track(bin: &str, dest: &Path, size: &str) -> bool {
     std::process::Command::new(bin)
         .args([
@@ -1992,6 +1996,8 @@ pub(crate) fn synthesise_with_silent_audio_track(bin: &str, dest: &Path, size: &
             "-f", "lavfi", "-i", &format!("testsrc=size={}:rate=30:duration=4", size),
             "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono:duration=4",
             "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-b:v", "8000k", "-minrate", "8000k", "-maxrate", "8000k", "-bufsize", "8000k",
+            "-x264-params", "nal-hrd=cbr:force-cfr=1",
             "-c:a", "aac", "-shortest",
         ])
         .arg(dest)

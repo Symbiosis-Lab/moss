@@ -630,6 +630,21 @@ fn vanished_outputs<'a>(baseline: &'a PublishedSnapshot, current: &SealedManifes
         .collect()
 }
 
+/// A video's ladder file (its master playlist, a rung's playlist or segment
+/// file, an audio group's) is a regenerated rendition, never an address an
+/// author hands out. While the video itself is still published, whatever name
+/// it is served under, losing the file only means the video is served without
+/// that rendition, so it is not a removed address. That holds whether or not
+/// the ladder's master playlist is still published: a ladder that lost one rung
+/// is as much a regenerated rendition as one that vanished whole. Only the
+/// ladder's own file names count; an author's file in the same directory is
+/// still reported.
+fn is_ladder_of_published_video(out: &str, current: &SealedManifest) -> bool {
+    moss_core::asset_paths::hls_ladder_file_stem(out).is_some_and(|stem| {
+        moss_core::asset_paths::video_served_paths(stem).any(|p| current.files().contains_key(&p))
+    })
+}
+
 /// Public addresses the baseline served that `current` does not, each with
 /// why, sorted by path. An old address the new build still serves (a redirect
 /// stub, an alias) is therefore not removed; anything under `_moss/` is not a
@@ -669,7 +684,7 @@ pub fn removed_addresses(
 
     let mut removed: Vec<RemovedAddress> = vanished_outputs(baseline, current)
         .into_iter()
-        .filter(|(out, _)| is_public_address(out))
+        .filter(|(out, _)| is_public_address(out) && !is_ladder_of_published_video(out, current))
         .map(|(out, is_page)| {
             let recorded = if is_page { page_sources.get(out) } else { asset_sources.as_ref().and_then(|m| m.get(out)) };
             let reason = match recorded {
