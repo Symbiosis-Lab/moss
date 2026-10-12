@@ -784,12 +784,24 @@ pub struct DefaultHooks<'a> {
     vertical: bool,
     /// Overrides [`RenderHooks::gallery_link_template`] when set.
     gallery_link_template: Option<&'a str>,
+    /// Body images emitted by [`RenderHooks::render_image`] load eagerly
+    /// (`loading="eager" fetchpriority="high"`). Set per call by the caller
+    /// that knows the image is the page's opening one; see
+    /// [`DefaultHooks::eager_image`].
+    eager_image: bool,
 }
 
 impl<'a> DefaultHooks<'a> {
     /// Mark the page as vertically typeset; only body images' `sizes=` reads it.
     pub fn vertical(mut self, vertical: bool) -> Self {
         self.vertical = vertical;
+        self
+    }
+
+    /// Load the body images this instance renders eagerly. The caller decides
+    /// which image that is; this only carries the decision.
+    pub fn eager_image(mut self, eager: bool) -> Self {
+        self.eager_image = eager;
         self
     }
 
@@ -960,6 +972,7 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
             // source. Hero/GalleryThumb/FolderCardCover route through their
             // own `ImageContext` variants, never this method.
             scroll_shape: true,
+            eager: self.eager_image,
             ..Default::default()
         };
         let html = crate::render::image::synthesize_image_html(

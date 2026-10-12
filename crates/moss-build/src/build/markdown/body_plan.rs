@@ -372,12 +372,50 @@ pub fn lede_end(blocks: &[Block]) -> usize {
 /// parser already promotes that syntax to its own `Block::Callout` at parse
 /// time, so there is nothing here for it to reach.
 pub fn first_text_block(blocks: &[Block]) -> Option<usize> {
-    blocks.iter().position(|block| {
-        matches!(
-            block,
-            Block::Paragraph(_) | Block::List { .. } | Block::DefinitionList(_) | Block::BlockQuote(_)
-        )
-    })
+    blocks.iter().position(is_text_block)
+}
+
+fn is_text_block(block: &Block) -> bool {
+    matches!(
+        block,
+        Block::Paragraph(_) | Block::List { .. } | Block::DefinitionList(_) | Block::BlockQuote(_)
+    )
+}
+
+/// The page's opening image: the first image among the top-level blocks that
+/// comes before the second text block (see [`first_text_block`] for what counts
+/// as text). Headings, rules, figures without an image, and shortcodes such as
+/// `:::grid` or `:::gallery` are neither text nor the opening image, so an image
+/// that follows them still counts. `None` when the first two text blocks come
+/// before any image.
+///
+/// Returns the node itself, so the render can tell this image apart from a
+/// repeat of the same file elsewhere on the page.
+pub fn leading_image(blocks: &[Block]) -> Option<&moss_core::ast::ResolvedUrl> {
+    let mut text_blocks = 0;
+    for block in blocks {
+        let image = match block {
+            Block::Figure { image, .. } => Some(image),
+            Block::Paragraph(inlines) => inlines
+                .iter()
+                .find(|inline| matches!(inline, moss_core::ast::Inline::Image { .. })),
+            _ => None,
+        };
+        if let Some(moss_core::ast::Inline::Image {
+            src: moss_core::ast::Url::Resolved(resolved),
+            ..
+        }) = image
+        {
+            return Some(resolved);
+        }
+        if is_text_block(block) {
+            text_blocks += 1;
+            if text_blocks == 2 {
+                return None;
+            }
+        }
+    }
+    None
 }
 
 /// The nearest heading's text before index `i` in `blocks` — the accessible

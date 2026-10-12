@@ -3963,3 +3963,176 @@ fn alt_only_with_a_placement_keeps_the_width_and_drops_the_caption() {
     assert!(!percent.contains("figcaption"), "got: {percent}");
     assert!(!percent.contains('|'), "got: {percent}");
 }
+
+// ---- the page's opening image loads eagerly ----
+
+/// A media lookup that knows each path at 1200x800, so body images take the
+/// snapshot path (`<picture>`, dimensions, `loading=`) rather than the bare
+/// fallback that carries no loading attribute.
+fn lookup_for(paths: &[&str]) -> crate::build::media::dimensions::MediaDimensionLookup {
+    let images: Vec<crate::types::content::MediaMetadata> = paths
+        .iter()
+        .map(|p| crate::types::content::MediaMetadata {
+            is_animated: false,
+            path: p.to_string(),
+            file_type: "jpg".to_string(),
+            size: 0,
+            modified: None,
+            dimensions: Some((1200, 800)),
+            dominant_color: None,
+            lqip_data_uri: None,
+        })
+        .collect();
+    crate::build::media::dimensions::MediaDimensionLookup::new(&images, &[], &HashMap::new(), None)
+}
+
+fn parse_with_lookup(
+    md: &str,
+    lookup: &crate::build::media::dimensions::MediaDimensionLookup,
+) -> crate::build::types::ParsedDocument {
+    let empty_map = HashMap::new();
+    process_markdown_file(
+        "test.md",
+        md,
+        "site",
+        &empty_map,
+        false,
+        Language::En,
+        None,
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
+        Some(lookup),
+        None,
+        None,
+        PageContext::default(),
+    )
+    .expect("should parse")
+}
+
+/// Every `<img …>` tag in an HTML fragment, in document order.
+fn img_tags(html: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = html;
+    while let Some(start) = rest.find("<img ") {
+        let after = &rest[start..];
+        let end = after.find('>').map_or(after.len(), |e| e + 1);
+        out.push(&after[..end]);
+        rest = &after[end..];
+    }
+    out
+}
+
+fn is_eager(img: &str) -> bool {
+    img.contains(r#"loading="eager""#) && img.contains(r#"fetchpriority="high""#)
+}
+
+fn is_lazy(img: &str) -> bool {
+    img.contains(r#"loading="lazy""#) && !img.contains("fetchpriority")
+}
+
+#[test]
+fn leading_body_image_loads_eagerly_and_later_images_stay_lazy() {
+    let lookup = lookup_for(&["harbour.jpg", "second.jpg"]);
+    let doc = parse_with_lookup(
+        "![Harbour](harbour.jpg)\n\nSome text.\n\n![Second](second.jpg)\n",
+        &lookup,
+    );
+    let imgs = img_tags(&doc.html_content);
+    assert_eq!(imgs.len(), 2, "expected two body images: {}", doc.html_content);
+    assert!(is_eager(imgs[0]), "leading image must load eagerly: {}", imgs[0]);
+    assert!(is_lazy(imgs[1]), "later image must stay lazy: {}", imgs[1]);
+}
+
+#[test]
+fn body_image_after_two_text_blocks_is_not_the_leading_image() {
+    let lookup = lookup_for(&["late.jpg"]);
+    let doc = parse_with_lookup("First paragraph.\n\nSecond paragraph.\n\n![Late](late.jpg)\n", &lookup);
+    let imgs = img_tags(&doc.html_content);
+    assert_eq!(imgs.len(), 1, "{}", doc.html_content);
+    assert!(is_lazy(imgs[0]), "image below two text blocks must stay lazy: {}", imgs[0]);
+}
+
+#[test]
+fn body_image_stays_lazy_when_a_hero_already_loads_eagerly() {
+    let lookup = lookup_for(&["harbour.jpg", "second.jpg"]);
+    let doc = parse_with_lookup(
+        ":::hero\n![Cover](harbour.jpg)\n# Title\n:::\n\n![Second](second.jpg)\n",
+        &lookup,
+    );
+    let hero = doc.hero_html.as_deref().expect("source declares a :::hero block");
+    let hero_imgs = img_tags(hero);
+    assert_eq!(hero_imgs.len(), 1, "{hero}");
+    assert!(is_eager(hero_imgs[0]), "hero image must stay eager: {}", hero_imgs[0]);
+    let imgs = img_tags(&doc.html_content);
+    assert_eq!(imgs.len(), 1, "{}", doc.html_content);
+    assert!(is_lazy(imgs[0]), "body image must stay lazy beside a hero: {}", imgs[0]);
+}
+
+#[test]
+fn grid_cell_image_neither_loads_eagerly_nor_takes_the_leading_slot() {
+    let lookup = lookup_for(&["harbour.jpg", "cell.jpg"]);
+    let doc = parse_with_lookup(
+        ":::grid 2\n![Cell](cell.jpg)\n+++\nPlain text\n:::\n\n![Harbour](harbour.jpg)\n",
+        &lookup,
+    );
+    let imgs = img_tags(&doc.html_content);
+    assert_eq!(imgs.len(), 2, "{}", doc.html_content);
+    assert!(is_lazy(imgs[0]), "grid cell image must stay lazy: {}", imgs[0]);
+    assert!(is_eager(imgs[1]), "the body image after the grid is the opening image: {}", imgs[1]);
+}
+
+#[test]
+fn body_image_sharing_a_grid_cells_file_name_takes_the_eager_slot() {
+    let lookup = lookup_for(&["cell.jpg"]);
+    let doc = parse_with_lookup(
+        ":::grid 2\n![Cell](cell.jpg)\n+++\nPlain text\n:::\n\n![Body](cell.jpg)\n",
+        &lookup,
+    );
+    let imgs = img_tags(&doc.html_content);
+    assert_eq!(imgs.len(), 2, "{}", doc.html_content);
+    assert!(is_lazy(imgs[0]), "grid cell must stay lazy: {}", imgs[0]);
+    assert!(is_eager(imgs[1]), "the body image is the opening image: {}", imgs[1]);
+}
+
+#[test]
+fn a_page_of_five_images_has_exactly_one_eager_image() {
+    let names = ["a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg"];
+    let lookup = lookup_for(&names);
+    let md: String = names
+        .iter()
+        .map(|n| format!("![{n}]({n})\n\nSome text about {n}.\n\n"))
+        .collect();
+    let doc = parse_with_lookup(&md, &lookup);
+    let imgs = img_tags(&doc.html_content);
+    assert_eq!(imgs.len(), 5, "{}", doc.html_content);
+    assert!(is_eager(imgs[0]), "the first image is eager: {}", imgs[0]);
+    assert_eq!(
+        imgs.iter().filter(|img| img.contains(r#"loading="eager""#)).count(),
+        1,
+        "{}",
+        doc.html_content
+    );
+}
+
+#[test]
+fn footer_partial_image_never_loads_eagerly() {
+    let lookup = lookup_for(&["harbour.jpg", "second.jpg"]);
+    let empty_map = HashMap::new();
+    let doc = process_markdown_file(
+        "footer.md",
+        "![Harbour](harbour.jpg)\n\nSome footer text.\n\n![Second](second.jpg)\n",
+        "site",
+        &empty_map,
+        false,
+        Language::En,
+        None,
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
+        Some(&lookup),
+        None,
+        None,
+        PageContext::default(),
+    )
+    .expect("should parse");
+    let imgs = img_tags(&doc.html_content);
+    assert_eq!(imgs.len(), 2, "{}", doc.html_content);
+    assert!(imgs.iter().all(|img| is_lazy(img)), "partial images must stay lazy: {}", doc.html_content);
+}

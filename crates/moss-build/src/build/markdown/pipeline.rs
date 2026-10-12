@@ -802,6 +802,7 @@ pub fn process_markdown_file(
             frontmatter.typesetting.as_deref(),
             site.typesetting,
         ) == Some("vertical"),
+        leading_image: std::cell::Cell::new(None),
     };
 
     // 0. Parse markdown into the typed AST. Sees `:::shortcode` blocks
@@ -1065,6 +1066,15 @@ pub fn process_markdown_file(
     //    Emitted in segments, byte-identical to `render_document`
     //    when re-joined, so the render phase gets typed grid cells and a lede
     //    boundary instead of having to re-parse this HTML.
+    // A partial (footer, slot page) is injected into every page, so its image
+    // must not take the one eager slot of any of them.
+    let opening = if hero_extraction.is_none() && !injects_into_every_page {
+        super::body_plan::leading_image(&doc.blocks)
+            .map(|r| r as *const moss_core::ast::ResolvedUrl as usize)
+    } else {
+        None
+    };
+    pipeline_hooks.leading_image.set(opening);
     let mut body_plan = super::body_plan::render_segmented(&doc, &pipeline_hooks);
 
     // Subscribe-form presence: read from the typed AST (descends into
@@ -1815,6 +1825,7 @@ pub fn render_markdown_to_html_with(
         heading_anchors,
         // A fragment has no page, so no typesetting of its own.
         vertical: false,
+        leading_image: std::cell::Cell::new(None),
     };
 
     moss_core::ast::render_document(&doc, &pipeline_hooks)
@@ -1945,6 +1956,13 @@ struct PipelineHooks<'a> {
     /// The page's effective typesetting is vertical. Handed to the delegated
     /// `DefaultHooks`, where it only changes body images' `sizes=`.
     vertical: bool,
+    /// Address of the page's opening image node (`body_plan::leading_image`),
+    /// the one body image rendered with `loading="eager"`. The body is rendered
+    /// from the document it was parsed into and is never cloned, so the address
+    /// names that one node. `None` on a page with a `:::hero` (its image is the
+    /// eager one), on a partial that is injected into every page, and on the
+    /// fragment paths.
+    leading_image: std::cell::Cell<Option<usize>>,
 }
 
 impl<'a> PipelineHooks<'a> {
@@ -1958,6 +1976,7 @@ impl<'a> PipelineHooks<'a> {
         .vertical(self.vertical)
         .with_gallery_link_template(crate::i18n::t(self.lang, "gallery_open_image"))
     }
+
 }
 
 impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
@@ -2020,7 +2039,8 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
         img_style: Option<&str>,
         width: Option<&str>,
     ) {
-        let inner = self.asset_bound_hooks();
+        let node = src as *const moss_core::ast::ResolvedUrl as usize;
+        let inner = self.asset_bound_hooks().eager_image(self.leading_image.get() == Some(node));
         <moss_core::ast::DefaultHooks<'_> as moss_core::ast::RenderHooks>::render_image(
             &inner, out, src, alt, title, img_style, width,
         );
