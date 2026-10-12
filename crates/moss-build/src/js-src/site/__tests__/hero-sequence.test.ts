@@ -224,3 +224,61 @@ describe("the clip indicator", () => {
     expect(segments(hero)).toHaveLength(0);
   });
 });
+
+describe("warming the next clip", () => {
+  function timeUpdate(video: HTMLVideoElement, currentTime: number, duration = 8) {
+    Object.defineProperty(video, "duration", { configurable: true, value: duration });
+    Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: currentTime });
+    video.dispatchEvent(new Event("timeupdate"));
+  }
+
+  beforeEach(() => mockMatchMedia(false));
+
+  test("raises the next clip's preload at 3 s left, not before, without playing it", () => {
+    const { hero, videos } = buildSequence(2);
+    videos[1].preload = "none";
+    initHeroSequences(hero.parentElement!);
+    timeUpdate(videos[0], 4.9);
+    expect(videos[1].preload).toBe("none");
+    timeUpdate(videos[0], 5);
+    expect(videos[1].preload).toBe("auto");
+    expect(videos[1].play).not.toHaveBeenCalled();
+  });
+
+  test("writes the preload once, however many updates fall in the window", () => {
+    const { hero, videos } = buildSequence(2);
+    videos[1].preload = "none";
+    const writes = vi.fn();
+    const real = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "preload")!;
+    Object.defineProperty(videos[1], "preload", {
+      configurable: true,
+      get: () => real.get!.call(videos[1]),
+      set: (v: string) => {
+        writes(v);
+        real.set!.call(videos[1], v);
+      },
+    });
+    initHeroSequences(hero.parentElement!);
+    timeUpdate(videos[0], 5);
+    timeUpdate(videos[0], 6);
+    timeUpdate(videos[0], 7);
+    expect(writes).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not warm while paused", () => {
+    const { hero, videos } = buildSequence(2);
+    videos[1].preload = "none";
+    initHeroSequences(hero.parentElement!);
+    togglePause(hero);
+    timeUpdate(videos[0], 7);
+    expect(videos[1].preload).toBe("none");
+  });
+
+  test("a clip shorter than 3 s warms its successor at its start", () => {
+    const { hero, videos } = buildSequence(2);
+    videos[1].preload = "none";
+    initHeroSequences(hero.parentElement!);
+    timeUpdate(videos[0], 0, 2);
+    expect(videos[1].preload).toBe("auto");
+  });
+});

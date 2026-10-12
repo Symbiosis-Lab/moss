@@ -3371,3 +3371,34 @@ listed: false
 `,
   },
 };
+
+// ── Short hero clips sharpen, and idle ones do not load ──────────────────────
+// Two 8 s 1280x720 clips in an all-video hero. Whether the playing clip climbs
+// the ladder, and whether the second clip's media requests wait for its turn,
+// are facts about a real hls.js player on a real network stack. Served by
+// playwright/hls-short-clip.config.ts. A function for the same reason as
+// `videoEmbedShapeGate`: it shells out to ffmpeg.
+export function hlsShortClipGate(): ScratchSiteSpec {
+  return {
+    name: "hls-short-clip-gate",
+    files: {
+      "a.mp4": syntheticTestClip(1280, 720, { seconds: 8, source: "testsrc2", rich: true }),
+      "b.mp4": syntheticTestClip(1280, 720, { seconds: 8, source: "testsrc", rich: true }),
+      "index.md": `---
+title: Short clips
+uid: "hsc00101"
+---
+
+:::hero
+![[a.mp4]]
+![[b.mp4]]
+# Two clips
+:::
+
+Body text.
+`,
+      ".moss/config.toml": CONFIG_TOML,
+      ".moss/theme/style.css": null,
+    },
+  };
+}

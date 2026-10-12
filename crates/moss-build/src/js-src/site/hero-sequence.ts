@@ -16,6 +16,9 @@
  * it is checked the advance stops and the current video pauses; unchecking
  * resumes. Under reduced motion nothing starts and the stylesheet hides it.
  */
+/** Seconds before a clip ends at which the next one starts loading. */
+const WARM_SECONDS = 3;
+
 const heroSequenceWired = new WeakSet<HTMLElement>();
 
 export function initHeroSequences(root: ParentNode = document): void {
@@ -54,7 +57,6 @@ function wireHeroSequence(hero: HTMLElement): void {
   };
 
   const start = (index: number): void => {
-    videos[index].preload = "auto";
     // A rejected play() (autoplay blocked) leaves this slide's poster showing.
     void Promise.resolve(videos[index].play()).catch(() => {});
   };
@@ -92,7 +94,15 @@ function wireHeroSequence(hero: HTMLElement): void {
       advance(index);
     });
     video.addEventListener("timeupdate", () => {
-      if (current() === index) indicator.progress(index, video.currentTime / video.duration);
+      if (current() !== index) return;
+      indicator.progress(index, video.currentTime / video.duration);
+      // A waiting clip does not load (`preload="none"`), so the next one is
+      // warmed shortly before its turn rather than showing a still while it
+      // starts. Raising `preload` is the one load signal; playing it is not.
+      const next = videos[(index + 1) % videos.length];
+      if (!paused && video.duration - video.currentTime <= WARM_SECONDS && next.preload !== "auto") {
+        next.preload = "auto";
+      }
     });
   });
 

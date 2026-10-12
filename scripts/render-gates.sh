@@ -78,6 +78,7 @@ GATES_BUILD=(
   edge-clamp
   vertical-nav-chrome
   video-embed-shape
+  hls-short-clip
   place-map-tokens
   place-map-align
   place-map-route

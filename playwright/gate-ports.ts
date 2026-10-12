@@ -107,6 +107,7 @@ const GATE_PORT_KEYS = [
   'nav-split-order',
   'nav-split-pack',
   'theme-floor-hooks',
+  'hls-short-clip',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

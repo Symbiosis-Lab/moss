@@ -51,6 +51,8 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- Short background videos now sharpen to the quality the connection supports. A clip of a few seconds used to be fully buffered at the quality the player guessed before it had measured anything, then looped from that buffer without ever improving, so a hero could stay at 360p on a fast connection. In browsers that play adaptive video through a script rather than natively, such a clip is now fetched again once at the better quality; a slow connection keeps the lower quality and uninterrupted playback. A video that starts later on the same page begins from the connection speed already measured.
+- A video that is not playing no longer downloads: a video marked `preload="none"` (the later clips of a hero that plays clips in sequence, or one in an article) now waits for the reader or the sequence to play it before fetching any video data, in browsers that play adaptive video through a script.
 - A link in a hero caption is underlined in the caption's colour, at rest and on hover and focus, as links in the body are. Before, the caption links had neither an underline nor a colour of their own, so nothing marked them as links (WCAG 1.4.1).
 
 - An ordinary page whose body opens with a `:::hero` holding only an image and a link (no heading) now gets its title as a visually hidden `<h1>`; it used to get no `<h1>` at all. Home, folder and article pages now share one title decision.
