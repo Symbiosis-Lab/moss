@@ -71,13 +71,6 @@ fn hero_href_is_video(href: &str) -> bool {
     )
 }
 
-/// Ambient-loop params for hero background videos.
-fn hero_video_params() -> moss_core::resolve::title_params::TitleParams {
-    let mut p = moss_core::resolve::title_params::TitleParams::default();
-    p.params.insert("loop".to_string(), "1".to_string());
-    p
-}
-
 /// Render the typed [`HeroShortcode`] AST node to HTML.
 ///
 /// Mirrors [`render_hero_html`] but reads from the typed-AST representation
@@ -280,8 +273,7 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
                     true,
                 )
             } else {
-                moss_core::render::video::synthesize_video_html(
-                    &hero_video_params(),
+                moss_core::render::video::synthesize_hero_video_html(
                     &moss_core::media::Placement::default(),
                     href,
                     assets,
@@ -411,8 +403,7 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
                         false,
                     )
                 } else {
-                    moss_core::render::video::synthesize_video_html(
-                        &hero_video_params(),
+                    moss_core::render::video::synthesize_hero_video_html(
                         &moss_core::media::Placement::default(),
                         href,
                         assets,
@@ -1179,6 +1170,71 @@ mod tests {
         let resolver = |s: &str| s.to_string();
         let html = render_hero_html_typed(&args, &resolver, None, None, None, crate::i18n::Language::En);
         assert!(!html.contains("data-align"), "got: {html}");
+    }
+
+    /// A lookup whose registry holds `clip.poster.jpg`, as it does once an
+    /// earlier build cut the still.
+    fn lookup_with_poster(registry: &crate::types::assets::AssetRegistry) -> crate::build::media::dimensions::MediaDimensionLookup {
+        registry.set_pending("clip.poster.jpg".to_string(), None, None);
+        registry.set_ready("clip.poster.jpg".to_string());
+        crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &std::collections::HashMap::new(), Some(registry))
+    }
+
+    fn hero_html(args: &moss_core::ast::HeroShortcode, lookup: &crate::build::media::dimensions::MediaDimensionLookup) -> String {
+        render_hero_html_typed(args, &|s: &str| s.to_string(), Some(lookup), None, None, crate::i18n::Language::En)
+    }
+
+    fn media(href: &str) -> moss_core::ast::Url {
+        moss_core::ast::Url::resolved(href, moss_core::ast::UrlKind::Asset)
+    }
+
+    #[test]
+    fn a_hero_ambient_video_takes_the_full_size_poster() {
+        let registry = crate::types::assets::AssetRegistry::new();
+        let lookup = lookup_with_poster(&registry);
+        let args = moss_core::ast::HeroShortcode { image: Some(media("clip.mp4")), ..Default::default() };
+        let html = hero_html(&args, &lookup);
+        assert!(html.contains(r#"poster="clip.poster.jpg""#), "got: {html}");
+        assert!(!html.contains(r#"poster="clip.thumb.jpg""#), "got: {html}");
+    }
+
+    #[test]
+    fn a_hero_rotations_video_slide_takes_the_full_size_poster() {
+        let registry = crate::types::assets::AssetRegistry::new();
+        let lookup = lookup_with_poster(&registry);
+        let args = moss_core::ast::HeroShortcode {
+            image: Some(media("a.jpg")),
+            extra_images: vec![media("clip.mp4")],
+            ..Default::default()
+        };
+        let html = hero_html(&args, &lookup);
+        assert!(html.contains(r#"poster="clip.poster.jpg""#), "got: {html}");
+    }
+
+    #[test]
+    fn every_slide_of_a_hero_sequence_takes_the_full_size_poster() {
+        let registry = crate::types::assets::AssetRegistry::new();
+        let lookup = lookup_with_poster(&registry);
+        // The same clip twice: the first slide is the primary, the second an
+        // extra, and the two are rendered by different call sites.
+        let args = moss_core::ast::HeroShortcode {
+            image: Some(media("clip.mp4")),
+            extra_images: vec![media("clip.mp4")],
+            ..Default::default()
+        };
+        let html = hero_html(&args, &lookup);
+        assert!(html.contains("data-sequence"), "got: {html}");
+        assert_eq!(html.matches(r#"poster="clip.poster.jpg""#).count(), 2, "got: {html}");
+    }
+
+    #[test]
+    fn a_hero_names_no_poster_the_build_has_not_cut() {
+        let registry = crate::types::assets::AssetRegistry::new();
+        let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &std::collections::HashMap::new(), Some(&registry));
+        let args = moss_core::ast::HeroShortcode { image: Some(media("clip.mp4")), ..Default::default() };
+        let html = hero_html(&args, &lookup);
+        assert!(html.contains(r#"poster="clip.thumb.jpg""#), "got: {html}");
+        assert!(!html.contains("poster.jpg"), "got: {html}");
     }
 
     #[test]

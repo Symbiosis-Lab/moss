@@ -1402,6 +1402,32 @@ fn a_ladder_already_in_staging_reaches_this_build_s_markup() {
     );
 }
 
+/// A hero poster left in staging by a previous build is named by THIS build's
+/// hero, from a registry that starts empty. Same ordering invariant as the
+/// ladder's: `register_existing_posters` must run before the lookup copies the
+/// registry into its snapshot, or every hero keeps the 800-pixel thumbnail.
+#[test]
+fn a_hero_poster_already_in_staging_reaches_this_build_s_hero() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+
+    fs::write(test_dir.join("index.md"), "# Test\n\n:::hero\n![[clip.mp4]]\n:::\n").unwrap();
+    fs::write(test_dir.join("clip.mp4"), "fake video data").unwrap();
+    let staging = test_dir.join(".moss/build.nosync/staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::write(staging.join("clip.poster.jpg"), "fake poster").unwrap();
+
+    let services = BuildServices::headless();
+    let result = build_test(folder_path, None, None, None, Some(&services), &ResolvedSlots::empty());
+    assert!(result.is_ok(), "Build should succeed: {:?}", result);
+
+    let html = fs::read_to_string(staging.join("index.html")).unwrap();
+    assert!(
+        html.contains(r#"poster="/clip.poster.jpg""#),
+        "a staged poster must reach the hero's markup; got:\n{html}"
+    );
+}
+
 /// A definition's embed is dispatched like a blockquote's: the video element
 /// lands inside the `<dd>`, not as a broken image.
 #[test]
@@ -2296,9 +2322,10 @@ fn test_run_video_conversion_singleflight_dedup_headless() {
             .in_flight_videos
             .do_work(&test_oid, || VideoConversionOutcome {
                 error: None,
-                poster: false,
+                thumb_linked: false,
                 mp4_oid: None,
                 thumb_oid: None,
+                hero_poster_oid: None,
                 hls_entries: Vec::new(),
             });
     assert!(result.is_some());
@@ -2310,9 +2337,10 @@ fn test_run_video_conversion_singleflight_dedup_headless() {
             .in_flight_videos
             .do_work(&test_oid, || VideoConversionOutcome {
                 error: None,
-                poster: false,
+                thumb_linked: false,
                 mp4_oid: None,
                 thumb_oid: None,
+                hero_poster_oid: None,
                 hls_entries: Vec::new(),
             });
     assert!(result2.is_some());

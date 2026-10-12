@@ -1111,7 +1111,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "![[clip.mp4]]",
         status: Status::Confirmed,
         since: "0",
-        description: "Co-class alongside `.moss-embed` on every video element — not collapsed away by Phase 1c the way the other kind co-classes were. The default CSS keys off `[data-type=video]` rather than this class, so it is a hook for themes, not a style dependency.",
+        description: "Co-class alongside `.moss-embed` on every video element — not collapsed away by Phase 1c the way the other kind co-classes were. The default CSS keys off `[data-type=video]` rather than this class, so it is a hook for themes, not a style dependency. Its `poster` is the video's 800-pixel thumbnail (`clip.thumb.jpg`); inside a `:::hero` it is `clip.poster.jpg` instead, the same frame at the video's own size (up to 1920x1080), once the build has cut it, because a hero shows the poster across the whole window until the video plays.",
     },
     ComponentEntry {
         class: "moss-embed-pdf",

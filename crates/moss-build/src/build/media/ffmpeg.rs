@@ -1049,6 +1049,17 @@ pub(crate) fn thumbnail_seek_secs(duration_secs: f64) -> f64 {
     }
 }
 
+/// The frame a hero poster is cut at: the video's display size fitted into the
+/// top ladder rung's box, so at most 1920x1080 and never enlarged, with both
+/// sides even like every other frame the ladder makes.
+pub(crate) fn poster_frame(display: (u32, u32)) -> (u32, u32) {
+    asset_paths::VIDEO_LADDER[asset_paths::VIDEO_LADDER.len() - 1].fitted_frame(display)
+}
+
+/// ffmpeg's `-q:v` for a hero poster (2 best, 31 worst). A 1920x1080 still
+/// measured about 90 to 250 KB (footage and a grainy test pattern).
+pub(crate) const POSTER_JPEG_QUALITY: &str = "5";
+
 /// Manager for FFmpeg operations.
 ///
 /// Provides methods for video conversion and thumbnail generation.
@@ -1775,6 +1786,49 @@ impl FFmpegManager {
         registry: Option<&ChildProcessRegistry>,
         cancel_flag: Option<&AtomicBool>,
     ) -> Result<bool, String> {
+        self.extract_still(video, output, "scale=800:-1", &[], registry, cancel_flag)
+    }
+
+    /// Generates a hero's poster: the thumbnail's frame (same
+    /// [`thumbnail_seek_secs`]) at the video's display size fitted into the
+    /// top ladder rung's box ([`poster_frame`]), square pixels, JPEG at
+    /// [`POSTER_JPEG_QUALITY`]. Returns as [`Self::generate_thumbnail`] does.
+    pub fn generate_poster(
+        &self,
+        video: &Path,
+        output: &Path,
+        registry: Option<&ChildProcessRegistry>,
+        cancel_flag: Option<&AtomicBool>,
+    ) -> Result<bool, String> {
+        // Cancelled before the probe, so a stale run does not spawn ffprobe.
+        if cancel_flag.map_or(false, |f| f.load(Ordering::SeqCst)) {
+            return Err("Cancelled".to_string());
+        }
+        let (w, h) = poster_frame(self.probe_source(video)?.display());
+        let vf = format!("scale={w}:{h},setsar=1");
+        self.extract_still(
+            video,
+            output,
+            &vf,
+            &["-q:v", POSTER_JPEG_QUALITY],
+            registry,
+            cancel_flag,
+        )
+    }
+
+    /// One JPEG still of `video` at [`thumbnail_seek_secs`] of its duration,
+    /// through the filter `vf`; `quality` is extra encoder arguments. The one
+    /// owner of the seek, the pixel format and the 0-byte check, so a still
+    /// that is not the thumbnail cannot drift from it.
+    fn extract_still(
+        &self,
+        video: &Path,
+        output: &Path,
+        vf: &str,
+        quality: &[&str],
+        registry: Option<&ChildProcessRegistry>,
+        cancel_flag: Option<&AtomicBool>,
+    ) -> Result<bool, String> {
         // Check cancellation before starting
         if cancel_flag.map_or(false, |f| f.load(Ordering::SeqCst)) {
             return Err("Cancelled".to_string());
@@ -1794,15 +1848,9 @@ impl FFmpegManager {
         let duration = self.get_duration(video).unwrap_or(0.0);
         let seek = format!("{:.3}", thumbnail_seek_secs(duration));
 
-        let args: Vec<&str> = vec![
-            "-i",
-            video_str,
-            "-ss",
-            &seek,
-            "-vframes",
-            "1",
-            "-vf",
-            "scale=800:-1",
+        let mut args: Vec<&str> = vec!["-i", video_str, "-ss", &seek, "-vframes", "1", "-vf", vf];
+        args.extend_from_slice(quality);
+        args.extend_from_slice(&[
             // JPEG is full-range YUV; without this the mjpeg encoder warns
             // "Non full-range YUV is non-standard" and some builds refuse a
             // testsrc-style source outright under strict compliance.
@@ -1810,7 +1858,7 @@ impl FFmpegManager {
             "yuvj420p",
             "-y",
             output_str,
-        ];
+        ]);
 
         let result = spawn_ffmpeg_tracked(
             Path::new(&self.bin_path),

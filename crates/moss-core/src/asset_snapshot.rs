@@ -79,6 +79,11 @@ pub struct VariantKindSet {
     /// (the iframe-bridge swaps `src`, and the multi-source form has no `src`
     /// to swap). See `render::video`.
     pub hls: bool,
+    /// A full-size poster still exists for this video (`<stem>.poster.jpg`),
+    /// found on disk or delivered by a previous encode. A hero asks before it
+    /// names that URL, and falls back to the thumbnail when it is not there:
+    /// like the ladder, the file appears one build after the encode that made it.
+    pub poster: bool,
 }
 
 impl AssetSnapshot {
@@ -120,6 +125,12 @@ impl AssetSnapshot {
     pub fn has_hls_for_source(&self, src: &PathBuf) -> bool {
         let stem = path_strip_extension(src);
         self.variants.get(&stem).map_or(false, |v| v.hls)
+    }
+
+    /// True if the source video has a full-size hero poster on disk.
+    pub fn has_poster_for_source(&self, src: &PathBuf) -> bool {
+        let stem = path_strip_extension(src);
+        self.variants.get(&stem).map_or(false, |v| v.poster)
     }
 
     /// True if the source asset has a registered AVIF variant.
@@ -185,7 +196,7 @@ mod tests {
         // Variants are keyed by stem, not source path — see module docs.
         s.variants.insert(
             "photo".into(),
-            VariantKindSet { webp: true, avif: false, hls: false },
+            VariantKindSet { webp: true, avif: false, hls: false, poster: false },
         );
 
         assert_eq!(s.dims(&"photo.jpg".into()), Some((1024, 768)));
@@ -220,7 +231,7 @@ mod tests {
         let stem = path_strip_extension(&"assets/photo.jpg".into());
         s.variants.insert(
             stem,
-            VariantKindSet { webp: true, avif: false, hls: false },
+            VariantKindSet { webp: true, avif: false, hls: false, poster: false },
         );
         // Looking up by the source path (with .jpg) should find the variant.
         assert!(s.has_webp_for_source(&"assets/photo.jpg".into()));

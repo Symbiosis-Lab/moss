@@ -268,6 +268,16 @@ impl AssetRegistry {
                 continue;
             }
 
+            // A hero poster is `<stem>.poster.jpg`: match the whole suffix, or
+            // the one-extension strip below would key it as `<stem>.poster`.
+            if let Some(stem) = moss_core::asset_paths::poster_stem(url) {
+                by_stem
+                    .entry(moss_core::asset_snapshot::variant_key(stem))
+                    .or_default()
+                    .poster = true;
+                continue;
+            }
+
             let url_path = PathBuf::from(url);
             let ext = url_path
                 .extension()
@@ -295,6 +305,18 @@ impl AssetRegistry {
 #[cfg(test)]
 mod asset_registry_tests {
     use super::*;
+
+    /// A `<stem>.poster.jpg` marks the video's own stem, not `<stem>.poster`.
+    #[test]
+    fn a_hero_poster_marks_its_videos_stem() {
+        let r = AssetRegistry::new();
+        r.set_ready("/v/clip.poster.jpg".to_string());
+        r.set_ready("/v/other.thumb.jpg".to_string());
+        let variants = r.iter_registered_variants();
+        assert!(variants.get(&std::path::PathBuf::from("v/clip")).is_some_and(|v| v.poster));
+        assert!(!variants.get(&std::path::PathBuf::from("v/other")).is_some_and(|v| v.poster));
+        assert!(!variants.contains_key(&std::path::PathBuf::from("v/clip.poster")));
+    }
 
     /// The bridge between a registered URL and the emitter's question "does
     /// this video have a ladder?". A dotted filename used to defeat the match

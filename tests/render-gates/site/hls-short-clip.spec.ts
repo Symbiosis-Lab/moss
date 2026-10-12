@@ -1,6 +1,6 @@
 /**
  * Short hero clips played through hls.js (the path Chromium takes: Media Source
- * Extensions, no native HLS). Four claims a jsdom test cannot make:
+ * Extensions, no native HLS). Six claims a jsdom test cannot make:
  *
  *  - on a fast link the playing clip climbs the ladder to its top rung, even
  *    though the clip is short enough to be buffered whole at the first rung
@@ -9,7 +9,16 @@
  *    sequence warms it, 3 s before its turn;
  *  - when it does play, it starts from what the first clip measured (the top
  *    rung on a fast link), not from hls.js's default guess;
- *  - on a slow link the clip stays on a low rung and is never refetched higher.
+ *  - on a slow link the clip stays on a low rung and is never refetched higher;
+ *  - where the browser reports its own link speed (`navigator.connection`), the
+ *    first request is already for the top rung instead of hls.js's guess;
+ *  - when that figure is wrong (the real link is far slower), the clip gives up the
+ *    optimistic start and plays on a low rung rather than stalling on the top one.
+ *
+ * Headless Chromium reports a `downlink` of its own (9.1 Mbps on the machine
+ * this was written on), which would start every clip on a high rung and hide
+ * what the first four tests are about, so those run with the API absent and
+ * only the last one reports a link.
  *
  * Unit tests pin the decisions (`hls-player.test.ts`); this pins that they are
  * wired to a real hls.js and a real network stack.
@@ -53,11 +62,46 @@ function watchMedia(page: Page, clip: string) {
   return seen;
 }
 
+/** Replace what the page sees as `navigator.connection` (`undefined` is a browser without the API). */
+async function reportConnection(page: Page, connection: { downlink: number; saveData: boolean } | undefined) {
+  await page.addInitScript((value) => {
+    Object.defineProperty(navigator, "connection", { get: () => value, configurable: true });
+  }, connection);
+}
+
+/**
+ * Media only, and only for the byte range asked for, delivered at `kbps`.
+ * Playwright's route is used rather than CDP throttling because the browser
+ * cache would answer a throttled reload without touching the network, and the
+ * static server ignores `Range`, which would double every rung's download.
+ */
+async function throttleMedia(page: Page, kbps: number) {
+  await page.route("**/*.m4s", async (route) => {
+    const res = await route.fetch();
+    const full = await res.body();
+    const range = /bytes=(\d+)-(\d*)/.exec(route.request().headers()["range"] ?? "");
+    const start = range ? Number(range[1]) : 0;
+    const end = range && range[2] ? Number(range[2]) + 1 : full.length;
+    const body = full.subarray(start, end);
+    await new Promise((resolve) => setTimeout(resolve, (body.length * 8) / kbps));
+    await route.fulfill({
+      status: range ? 206 : 200,
+      headers: {
+        ...res.headers(),
+        "content-length": String(body.length),
+        ...(range ? { "content-range": `bytes ${start}-${end - 1}/${full.length}` } : {}),
+      },
+      body,
+    });
+  });
+}
+
 const heightOf = (page: Page, index: number) =>
   page.evaluate((i) => document.querySelectorAll("video")[i].videoHeight, index);
 
 test.describe("short hero clips through hls.js", () => {
   test.beforeEach(async ({ page }) => {
+    await reportConnection(page, undefined);
     const html = await (await page.request.get("/")).text();
     expect(html, "the page does not reference a ladder: was the site built twice?").toContain("data-hls");
   });
@@ -103,29 +147,7 @@ test.describe("short hero clips through hls.js", () => {
     test.setTimeout(60_000);
     await page.setViewportSize({ width: 1440, height: 900 });
     const kbps = 300;
-    // Media only, and only for the byte range asked for, delivered at `kbps`.
-    // Playwright's route is used rather than CDP throttling because the
-    // browser cache would answer a throttled reload without touching the
-    // network, and the static server ignores `Range`, which would double
-    // every rung's download.
-    await page.route("**/*.m4s", async (route) => {
-      const res = await route.fetch();
-      const full = await res.body();
-      const range = /bytes=(\d+)-(\d*)/.exec(route.request().headers()["range"] ?? "");
-      const start = range ? Number(range[1]) : 0;
-      const end = range && range[2] ? Number(range[2]) + 1 : full.length;
-      const body = full.subarray(start, end);
-      await new Promise((resolve) => setTimeout(resolve, (body.length * 8) / kbps));
-      await route.fulfill({
-        status: range ? 206 : 200,
-        headers: {
-          ...res.headers(),
-          "content-length": String(body.length),
-          ...(range ? { "content-range": `bytes ${start}-${end - 1}/${full.length}` } : {}),
-        },
-        body,
-      });
-    });
+    await throttleMedia(page, kbps);
     const media = watchMedia(page, "a");
     await page.goto("/");
     const ladder = await rungs(page, "a");
@@ -148,5 +170,33 @@ test.describe("short hero clips through hls.js", () => {
     expect(Math.max(...heights), "the clip sharpened past what 300 kbps carries").toBeLessThanOrEqual(
       ladder[first].height,
     );
+  });
+
+  test("a browser that reports its link speed starts the first clip on the top rung", async ({ page }) => {
+    await reportConnection(page, { downlink: 10, saveData: false });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const media = watchMedia(page, "a");
+    await page.goto("/");
+    const ladder = await rungs(page, "a");
+    await expect.poll(() => media.length, { timeout: 10_000 }).toBeGreaterThan(0);
+    expect(media[0].media, "the first request was not for the top rung").toBe(ladder.at(-1)!.media);
+  });
+
+  test("a browser that overstates the link: the clip still plays within 20 s, on a low rung", async ({ page }) => {
+    test.setTimeout(60_000);
+    await reportConnection(page, { downlink: 10, saveData: false });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await throttleMedia(page, 300);
+    const media = watchMedia(page, "a");
+    const startedAt = Date.now();
+    await page.goto("/");
+    const ladder = await rungs(page, "a");
+    const played = () => page.evaluate(() => document.querySelectorAll("video")[0].currentTime);
+    await expect.poll(played, { timeout: 20_000, intervals: [250] }).toBeGreaterThan(0);
+    const toFirstFrame = Date.now() - startedAt;
+    const height = await heightOf(page, 0);
+    console.log(`[hls-short-clip] wrong 10 Mbps on 300 kbps: first frame after ${toFirstFrame} ms, rungs requested ${media.map((m) => m.media).join(" ")}, height ${height}`);
+    expect(height).toBeGreaterThan(0);
+    expect(height, "still on the top rung").toBeLessThan(ladder.at(-1)!.height);
   });
 });

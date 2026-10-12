@@ -1739,7 +1739,7 @@ mod tests {
         let mut snap = AssetSnapshot::new();
         snap.variants.insert(
             PathBuf::from("photos/cat"),
-            VariantKindSet { webp: true, avif: false, hls: false },
+            VariantKindSet { webp: true, avif: false, hls: false, poster: false },
         );
 
         let sc = gallery_with_one_item(src);
@@ -1827,7 +1827,7 @@ mod tests {
         snap.dimensions.insert(PathBuf::from(src), (1920, 1080));
         snap.variants.insert(
             PathBuf::from("hero"),
-            VariantKindSet { webp: true, avif: false, hls: false },
+            VariantKindSet { webp: true, avif: false, hls: false, poster: false },
         );
 
         let sc = hero_with_image(src);
@@ -1862,7 +1862,7 @@ mod tests {
         snap.dimensions.insert(PathBuf::from(src), (2400, 316));
         snap.variants.insert(
             PathBuf::from("scroll"),
-            VariantKindSet { webp: true, avif: false, hls: false },
+            VariantKindSet { webp: true, avif: false, hls: false, poster: false },
         );
         let sc = Shortcode::Hero(HeroShortcode {
             image: Some(Url::resolved(src, UrlKind::Asset)),
@@ -1905,7 +1905,7 @@ mod tests {
         snap.dimensions.insert(PathBuf::from(src), (800, 600));
         snap.variants.insert(
             PathBuf::from("photos/cat"),
-            VariantKindSet { webp: true, avif: false, hls: false },
+            VariantKindSet { webp: true, avif: false, hls: false, poster: false },
         );
 
         let hooks = DefaultHooks::with_snapshot(&snap);
@@ -2097,7 +2097,7 @@ mod tests {
         snap.dimensions.insert(PathBuf::from(src), (2400, 1200));
         snap.variants.insert(
             PathBuf::from("photos/cat"),
-            VariantKindSet { webp: true, avif: false, hls: false },
+            VariantKindSet { webp: true, avif: false, hls: false, poster: false },
         );
         let grid = || {
             Shortcode::Grid(GridShortcode {

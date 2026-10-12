@@ -1648,7 +1648,7 @@ pub fn diff_settled_assets(
     // the previous manifest didn't (new or re-encoded). asset_type is taken
     // from the bucket the path lives in — authoritative, not an extension guess:
     // image_outputs → "image"; video_outputs → "video", refined to "thumbnail"
-    // for the poster frame (`.thumb.jpg`). These strings match the canonical
+    // for the poster frames (`.thumb.jpg`, `.poster.jpg`). These strings match the canonical
     // asset_type the real-time AssetReady path emits and iframe-bridge swaps on.
     let is_settled = |path: &str| {
         let new_entry = sealed.files.get(path);
@@ -1662,7 +1662,7 @@ pub fn diff_settled_assets(
     }
     for path in &sealed.video_outputs {
         if is_settled(path) {
-            let asset_type = if path.ends_with(".thumb.jpg") { "thumbnail" } else { "video" };
+            let asset_type = if moss_core::asset_paths::is_video_still(path) { "thumbnail" } else { "video" };
             changed.push(SettledAsset { path: path.clone(), asset_type: asset_type.to_string() });
         }
     }

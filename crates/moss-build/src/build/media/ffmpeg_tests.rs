@@ -1159,3 +1159,16 @@ fn a_10_bit_or_ac3_source_that_fits_the_top_rung_is_encoded_not_passed_through()
     clip.web_playable = is_web_playable(true, Some("h264"), Some("yuv420p"), &["ac3".to_string()]);
     assert!(matches!(plan_video_encode(&clip, &config), EncodePlan::Encode { .. }));
 }
+
+#[test]
+fn a_poster_is_the_display_size_fitted_into_the_top_rung_and_never_enlarged() {
+    assert_eq!(poster_frame((1920, 1080)), (1920, 1080));
+    // Under the box: left as it is.
+    assert_eq!(poster_frame((1280, 720)), (1280, 720));
+    // Portrait: the height binds, the width follows the source's shape.
+    assert_eq!(poster_frame((1080, 1920)), (608, 1080));
+    // Over the box: fitted down.
+    assert_eq!(poster_frame((3840, 2160)), (1920, 1080));
+    // A declared pixel aspect ratio is part of the shape.
+    assert_eq!(poster_frame(asset_paths::display_size(1350, 1080, 64.0 / 45.0)), (1920, 1080));
+}

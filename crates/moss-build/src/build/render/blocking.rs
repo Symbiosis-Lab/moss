@@ -572,6 +572,7 @@ pub fn generate_blocking_content_for_build(
         .filter(|_| !project_structure.video_files.is_empty())
     {
         crate::build::media::hls::register_existing_ladders(output_dir, reg);
+        crate::build::media::video::register_existing_posters(output_dir, reg);
     }
     let event_level_image_lookup = crate::build::media::dimensions::MediaDimensionLookup::new(
         &project_structure.image_files,

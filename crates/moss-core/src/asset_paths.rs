@@ -100,6 +100,34 @@ pub fn to_thumb_if_video(source: &str) -> Option<String> {
     video_stem_opt(source).map(|stem| format!("{stem}.thumb.jpg"))
 }
 
+/// Suffix of a video's hero poster: the thumbnail's frame at the video's own size.
+pub const POSTER_SUFFIX: &str = ".poster.jpg";
+
+/// A video source's hero poster path (`.poster.jpg`). A hero fills the window,
+/// so it shows this instead of the 800-pixel [`to_thumb`] while the video starts.
+///
+/// # Examples
+/// ```
+/// # use moss_core::asset_paths::to_poster;
+/// assert_eq!(to_poster("../clip.mp4"), "../clip.poster.jpg");
+/// ```
+pub fn to_poster(source: &str) -> String {
+    format!("{}{POSTER_SUFFIX}", video_stem(source))
+}
+
+/// Whether a served path is a video's still image: its `.thumb.jpg` thumbnail
+/// or its `.poster.jpg` hero poster.
+pub fn is_video_still(path: &str) -> bool {
+    path.ends_with(".thumb.jpg") || path.ends_with(POSTER_SUFFIX)
+}
+
+/// The video stem a hero poster is named after: `a/clip.poster.jpg` is
+/// `Some("a/clip")`. The registry strips one extension and would otherwise key
+/// the file as `a/clip.poster`.
+pub fn poster_stem(url: &str) -> Option<&str> {
+    url.strip_suffix(POSTER_SUFFIX).filter(|stem| !stem.is_empty())
+}
+
 /// Converts an image source path to its WebP output path.
 ///
 /// - `.jpg` / `.JPG` / `.jpeg` / `.JPEG` → `.webp`
@@ -1102,6 +1130,23 @@ mod tests {
     #[test]
     fn test_to_thumb_space() {
         assert_eq!(to_thumb("./Morning Mist.MOV"), "./Morning Mist.thumb.jpg");
+    }
+
+    // ── to_poster tests ────────────────────────────────────────────
+
+    #[test]
+    fn to_poster_swaps_any_video_extension_and_poster_stem_inverts_it() {
+        assert_eq!(to_poster("clip.mov"), "clip.poster.jpg");
+        assert_eq!(to_poster("videos/冬日之歌.MP4"), "videos/冬日之歌.poster.jpg");
+        assert_eq!(poster_stem("videos/clip.poster.jpg"), Some("videos/clip"));
+        assert_eq!(poster_stem("videos/clip.thumb.jpg"), None);
+        assert_eq!(poster_stem(".poster.jpg"), None);
+    }
+
+    #[test]
+    fn a_video_still_is_a_thumbnail_or_a_hero_poster() {
+        assert!(is_video_still("v/clip.thumb.jpg") && is_video_still("v/clip.poster.jpg"));
+        assert!(!is_video_still("v/clip.jpg") && !is_video_still("v/clip.mp4"));
     }
 
     // ── to_thumb_if_video tests ────────────────────────────────────
