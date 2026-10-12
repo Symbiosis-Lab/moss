@@ -9,7 +9,7 @@
  */
 import { test, expect, Page } from "@playwright/test";
 
-const css = (page: Page, sel: string, prop: "color" | "backgroundColor") =>
+const css = (page: Page, sel: string, prop: "color" | "backgroundColor" | "borderBlockEndColor") =>
   page.evaluate(
     ([s, p]) => getComputedStyle(document.querySelector(s)!)[p as "color"],
     [sel, prop] as const,
@@ -24,6 +24,7 @@ test.describe("theme floor hooks", () => {
     await page.goto("/about/");
     expect(await css(page, "body > header", "backgroundColor")).toBe("rgb(200, 0, 0)");
     expect(await css(page, "body > header .site-name", "color")).toBe("rgb(0, 0, 255)");
+    expect(await css(page, ".nav-content", "borderBlockEndColor")).toBe("rgba(0, 0, 0, 0)");
   });
 
   test("a header=over page stays transparent with light links", async ({ page }) => {

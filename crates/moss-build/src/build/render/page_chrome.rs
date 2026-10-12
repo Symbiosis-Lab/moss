@@ -4,7 +4,9 @@ use crate::build::assets::paths::PathResolver;
 use crate::build::components::nav::{NavigationBuilder, compute_breadcrumb_segments};
 use crate::build::emit::scripts::ScriptAssets;
 use crate::build::page::layout::LayoutConfig;
+use crate::build::page::meta::escape_html_attr;
 use crate::build::page::shell::ShellVars;
+use crate::build::served_path::served_address;
 use crate::build::types::ParsedDocument;
 use crate::i18n::Language;
 use crate::types::content::ProjectStructure;
@@ -109,6 +111,10 @@ impl PageChromeContext<'_, '_> {
         let mut body_attrs = String::new();
         if self.emit_source_lines { body_attrs.push_str(" data-moss-preview"); }
         if is_homepage { body_attrs.push_str(r#" data-page="home""#); }
+        // The page's published address, spelled as the sitemap and links spell
+        // it. A page with no document is the synthetic homepage.
+        let address = served_address(doc.map(|d| d.url_path.as_str()).unwrap_or("index.html"));
+        body_attrs.push_str(&format!(r#" data-path="{}""#, escape_html_attr(&address)));
         let homepage = self.project.homepage_file.as_ref()
             .and_then(|_| self.documents.iter().find(|d| d.url_path == "index.html"));
         // Generated indexes have always read root analytics even when the

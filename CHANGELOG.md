@@ -6,6 +6,8 @@ All notable changes to moss will be documented here.
 
 ### New
 
+- Every page's `<body>` carries `data-path` with its published address (`/` on the front page, `/contact/`, `/zh-hans/about/`), so a theme styles one page with `body[data-path="/contact/"]` and a section with `body[data-path^="/work/"]`, without guessing at the page's markup. `data-page="home"` is unchanged.
+- `--moss-header-rule` sets the colour of the hairline under the header's navigation; set it to `transparent` on a header with a `--moss-header-bg` band, where the hairline used to draw inside the band and a theme had to write a `.nav-content` selector to remove it.
 - `--moss-header-bg` and `--moss-header-ink` set the site header's band colour and the colour of its nav links and site name, so a theme no longer writes `body > header` and `.main-nav a` rules that also beat the `header=over` hero; a `header=over` page stays transparent with light links.
 - A home page whose body is only its opening hero no longer renders an empty `<article class="container">` that left about 64px of blank page above the footer; `<main id="main-content">` stays and the page keeps its hidden `<h1>`.
 - `--moss-cover-ink` sets the text colour on a card's tinted band (default white), so `--moss-cover-color: transparent; --moss-cover-ink: var(--moss-color-text)` gives plain readable cards without class selectors.
