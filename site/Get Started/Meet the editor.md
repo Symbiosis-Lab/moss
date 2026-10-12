@@ -15,7 +15,7 @@ The editor keeps your site folder above the page you are writing. The path at th
 The breadcrumb at the top doubles as a file tree, with controls of its own for finding and creating pages.
 
 - Click the site root in the breadcrumb to expand the file tree, then click a page to open it. [▶](#scene=tree)<noscript><img width="520" height="520" loading="lazy" src="../assets/guides/choose-page-source.png" alt="The real moss file tree expanded from the breadcrumb, with The Tyger selected"></noscript>
-- Click **New Page** above the tree to add a page beside the current one. [▶](#scene=create-page)
+- Click the new-page button, a page with a plus at the top right of the editor, to add a page beside the current one. [▶](#scene=create-page)
 - Open its **▾** and choose **New Folder**, type a name, and press Return to create it. [▶](#scene=new-folder)
 - Or choose a saved template under **From template** to create a page seeded with its content. [▶](#scene=from-template)
 - Double-click the tree's bottom border to collapse it; double-click again to reopen it. [▶](#scene=collapse-tree)

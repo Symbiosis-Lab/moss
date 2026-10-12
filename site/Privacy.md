@@ -46,13 +46,13 @@ If you turn on the analytics dashboard, your site's stats sync from our server t
 
 If moss hits an error, it can send a crash report to our own server so we can fix the bug. It's the only thing moss reports automatically, and it does not track how you use the app. We strip personal data: your IP isn't stored (we mask it before it reaches our error tracker) and file paths are scrubbed. You can turn this off any time in **moss → Settings → Crash reporting**, and we delete crash reports after 90 days.
 
-![[crash report.gif|Toggle crash report]]
+![[crash report.mp4|loop|100%|Toggle crash report]]
 
 ## Support logs
 
 If you use **"Send Logs"** to report a problem, moss uploads your recent app log (scrubbed of personal data) and gives you a log number to quote when you tell us about the error, so we can fix it quickly. We delete these logs after 30 days.
 
-![[send logs.gif|Send logs manually]]
+![[send logs.mp4|loop|100%|Send logs manually]]
 
 
 ## Where your data is processed

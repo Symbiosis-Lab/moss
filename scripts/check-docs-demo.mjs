@@ -3,7 +3,7 @@
 // both Chromium and WebKit. Usage:
 //   PLAYWRIGHT_MODULE=/path/to/node_modules/playwright/index.mjs node scripts/check-docs-demo.mjs <preview-url>
 
-import { loadPlaywright } from './site-check-harness.mjs';
+import { loadPlaywright } from './landing-harness.mjs';
 import { travelDurationMs, holdAfterResultMs } from '../site/ui/demo/driver.js';
 import { findMarkdownFiles, findSceneLinks, SITE_DIR } from './check-demo-scenes.mjs';
 
@@ -24,8 +24,6 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 const CHECKED_PAGES = [
   { path: '/get-started/editor/', source: 'site/Get Started/Meet the editor.md' },
   { path: '/zh-hant/開始使用/editor/', source: 'site/zh-hant/開始使用/認識編輯器.md' },
-  { path: '/get-started/', source: 'site/Get Started/Get Started.md' },
-  { path: '/zh-hant/開始使用/', source: 'site/zh-hant/開始使用/開始使用.md' },
 ];
 
 // The markers each page carries (in source order) come from the same page→scene-link walk

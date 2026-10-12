@@ -13,7 +13,7 @@ translationKey: docs-start-domain
 
 Your site already lives online. This page gives it your own address, so people reach it at a name you choose instead of a longer default one. moss helps you find a name, buy it, and set it up.
 
-![[custom domain.gif]]
+![[custom domain.mp4|loop]]
 
 A moss subscription is required to buy an address. moss will let you know if you don't have one yet.
 

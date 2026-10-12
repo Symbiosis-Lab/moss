@@ -13,16 +13,16 @@ translationKey: docs-author-shortcodes-gallery
 :::grid 2 {.sc-demo}
 ```markdown
 :::gallery
-![](/assets/animations/new folder.gif)
-![](/assets/animations/editing.gif)
-![](/assets/animations/first time publish.gif)
+![](/assets/animations/new folder.png)
+![](/assets/animations/editing.png)
+![](/assets/animations/first time publish.png)
 :::
 ```
 +++
 ::::gallery
-![](/assets/animations/new folder.gif)
-![](/assets/animations/editing.gif)
-![](/assets/animations/first time publish.gif)
+![](/assets/animations/new folder.png)
+![](/assets/animations/editing.png)
+![](/assets/animations/first time publish.png)
 ::::
 :::
 
@@ -33,16 +33,16 @@ Pass a number after `gallery` to set the column count.
 :::grid 2 {.sc-demo}
 ```markdown
 :::gallery 3
-![](/assets/animations/new folder.gif)
-![](/assets/animations/editing.gif)
-![](/assets/animations/first time publish.gif)
+![](/assets/animations/new folder.png)
+![](/assets/animations/editing.png)
+![](/assets/animations/first time publish.png)
 :::
 ```
 +++
 ::::gallery 3
-![](/assets/animations/new folder.gif)
-![](/assets/animations/editing.gif)
-![](/assets/animations/first time publish.gif)
+![](/assets/animations/new folder.png)
+![](/assets/animations/editing.png)
+![](/assets/animations/first time publish.png)
 ::::
 :::
 

@@ -155,7 +155,7 @@ node scripts/check-docs-demo.mjs http://127.0.0.1:PORT/
 node scripts/record-scene.mjs my-scene
 ```
 
-Both launch Playwright through `site-check-harness.mjs`'s `loadPlaywright()` (`PLAYWRIGHT_MODULE` to point at an existing install) and, for `record-scene.mjs`'s unscripted server mode, `resolveBaseURL()`.
+Both launch Playwright through `landing-harness.mjs`'s `loadPlaywright()` (`PLAYWRIGHT_MODULE` to point at an existing install) and, for `record-scene.mjs`'s unscripted server mode, `resolveBaseURL()`.
 
 ## Landing animation checks
 

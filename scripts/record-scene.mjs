@@ -21,7 +21,7 @@
 import { writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve, relative } from 'node:path';
-import { resolveBaseURL, loadPlaywright } from './site-check-harness.mjs';
+import { resolveBaseURL, loadPlaywright } from './landing-harness.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const SITE_UI_DIR = resolve(ROOT, 'site/ui');

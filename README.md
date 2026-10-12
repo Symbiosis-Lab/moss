@@ -6,7 +6,7 @@
 
 moss turns a folder of markdown into a website. The folder on your disk is the site: there is no database, no CMS and no project to configure. Write in any editor, and moss builds the pages, the navigation, the styling and dark mode, then publishes them.
 
-<img src="site/assets/animations/new%20folder.gif" width="720" alt="A folder of markdown files becomes a website in the moss app">
+<img src="assets/new-folder.gif" width="720" alt="A folder of markdown files becomes a website in the moss app">
 
 ## Why moss
 

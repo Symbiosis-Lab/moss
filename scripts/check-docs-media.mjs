@@ -134,16 +134,11 @@ async function auditPage(page, url) {
 const report = { bases: bases.map(String), engines: engineNames, pages: [] };
 const failures = [];
 
-// Root cause (see the commit/report this script ships with): the Get Started
-// gifs were never compressed — up to 8.4MB each, ~23MB on one page — so on a
-// realistic mobile connection they can take over a minute to finish loading,
-// which reads as "the screenshots don't work" even though every byte
-// eventually arrives. This budget is deliberately generous (it does not
-// force a "loads in N seconds on 3G" target, which would need visible
-// quality loss on the densest recording) but it does catch a regression back
-// to an unoptimized, multi-megabyte source.
-const MAX_GIF_BYTES = 4.5 * 1024 * 1024;
-const MAX_PAGE_GIF_BYTES = 12 * 1024 * 1024;
+// A walkthrough video replaced each screenshot gif. Two things made a video worse than the gif it
+// replaced, and neither shows up as a failed request: a rendition narrower than the box it is drawn
+// in (an adaptive ladder that stopped at 416 px was played in a 680 px box), and a box of a
+// different shape from the picture, which crops it.
+const VIDEO_SHAPE_TOLERANCE = 0.02;
 // Console errors/failed requests unrelated to media are still recorded in the
 // raw report above, but they are not this script's concern and would
 // otherwise make it red for a reason that has nothing to do with images,
@@ -181,12 +176,13 @@ for (const base of bases) {
             if (isImg) {
               if (item.httpStatus !== null && item.httpStatus !== 200) failures.push({ engine: engineName, url, src: item.src, problem: `HTTP ${item.httpStatus}` });
               else if (!item.complete || item.naturalWidth === 0 || item.naturalHeight === 0) failures.push({ engine: engineName, url, src: item.src, problem: `Image did not decode (complete=${item.complete}, naturalWidth=${item.naturalWidth}, naturalHeight=${item.naturalHeight})` });
-              if (/\.gif$/i.test(item.src) && item.contentLength && item.contentLength > MAX_GIF_BYTES) {
-                failures.push({ engine: engineName, url, src: item.src, problem: `Screenshot gif is ${(item.contentLength / 1024 / 1024).toFixed(2)}MB, over the ${(MAX_GIF_BYTES / 1024 / 1024).toFixed(1)}MB budget` });
-              }
             }
             if (isVideo && (item.videoWidth === 0 || item.videoHeight === 0)) {
               failures.push({ engine: engineName, url, src: item.src, problem: `Video has no decoded frame (videoWidth=${item.videoWidth}, videoHeight=${item.videoHeight})` });
+            } else if (isVideo) {
+              if (item.videoWidth < item.rect.width) failures.push({ engine: engineName, url, src: item.src, problem: `Video is upscaled: a ${item.videoWidth}px-wide picture drawn ${item.rect.width}px wide` });
+              const shape = (item.rect.width / item.rect.height) / (item.videoWidth / item.videoHeight);
+              if (Math.abs(shape - 1) > VIDEO_SHAPE_TOLERANCE) failures.push({ engine: engineName, url, src: item.src, problem: `Video is cropped: a ${item.videoWidth}x${item.videoHeight} picture in a ${item.rect.width}x${item.rect.height} box` });
             }
             if (isDemo) {
               // <moss-ui-demo> owns an internal iframe; a zero-size or hidden
@@ -195,16 +191,6 @@ for (const base of bases) {
           }
           for (const err of result.consoleErrors) if (isMediaRelated(err)) failures.push({ engine: engineName, url, problem: `Console error: ${err}` });
           for (const req of result.failedRequests) if (isMediaRelated(req.url)) failures.push({ engine: engineName, url, problem: `Failed request: ${req.url} (${req.failure})` });
-          // A page's screenshots load roughly concurrently once a scroll brings
-          // them all near-viewport (native `loading="lazy"` isn't one-at-a-time),
-          // so the real budget users feel is the page's TOTAL gif payload, not
-          // any single file — measured directly: on a throttled ~400kbps profile
-          // the pre-fix "Get Started" page (~21MB of gifs) was still not fully
-          // loaded after 185+ seconds. This does not chase a "fast on 3G" target
-          // (out of reach without visible quality loss on the densest recording);
-          // it catches a regression back toward that total.
-          const pageGifBytes = result.media.filter(m => m.tag === 'img' && /\.gif$/i.test(m.src || '')).reduce((sum, m) => sum + (m.contentLength || 0), 0);
-          if (pageGifBytes > MAX_PAGE_GIF_BYTES) failures.push({ engine: engineName, url, problem: `Page's total screenshot gif payload is ${(pageGifBytes / 1024 / 1024).toFixed(2)}MB, over the ${(MAX_PAGE_GIF_BYTES / 1024 / 1024).toFixed(1)}MB budget` });
         } finally {
           await page.close();
         }
