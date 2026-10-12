@@ -60,6 +60,9 @@ pub struct NavigationBuilder<'a> {
     current_lang_tag: String,
     /// Optional logo path (e.g., "/assets/logo.svg")
     logo_path: Option<String>,
+    /// Snapshot the logo's intrinsic size is read from. `None` leaves the
+    /// logo without `width`/`height`.
+    assets: Option<&'a moss_core::asset_snapshot::AssetSnapshot>,
     /// Whether the site has content subfolders (organized mode vs flat mode)
     has_content_folders: bool,
     /// Whether this build has a live search index (`LayoutConfig::assets.search` —
@@ -98,6 +101,7 @@ impl<'a> NavigationBuilder<'a> {
             current_lang: lang,
             current_lang_tag: lang.as_bcp47_attr().to_string(),
             logo_path: None,
+            assets: None,
             has_content_folders,
             has_search: false,
             fm_breadcrumb: false,
@@ -155,6 +159,12 @@ impl<'a> NavigationBuilder<'a> {
         self
     }
 
+    /// Read the logo's intrinsic size from this snapshot.
+    pub fn with_asset_snapshot(mut self, assets: &'a moss_core::asset_snapshot::AssetSnapshot) -> Self {
+        self.assets = Some(assets);
+        self
+    }
+
     /// Set the site logo path (rendered before site name in nav).
     pub fn with_logo(mut self, logo_path: String) -> Self {
         self.logo_path = Some(logo_path);
@@ -200,11 +210,21 @@ impl<'a> NavigationBuilder<'a> {
     /// through one shape-defining seam. Byte shape is preserved exactly:
     /// `<img class="site-logo" src="..." alt="" aria-hidden="true">`.
     fn logo_html(&self) -> String {
+        // Without a snapshot the logo is synthesized with an empty one, so its
+        // size is unknown and the bare shape comes out.
+        let empty;
+        let assets = match self.assets {
+            Some(assets) => assets,
+            None => {
+                empty = moss_core::asset_snapshot::AssetSnapshot::new();
+                &empty
+            }
+        };
         self.logo_path.as_ref().map(|path| {
             moss_core::render::image::synthesize_image_html(
                 path,
                 "",
-                &moss_core::asset_snapshot::AssetSnapshot::new(),
+                assets,
                 moss_core::render::image::ImageContext::SiteLogo,
                 &moss_core::render::image::ImageRenderOptions {
                     // Editor preview: name the `logo:` field — only when this

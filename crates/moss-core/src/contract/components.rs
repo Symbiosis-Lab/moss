@@ -2829,11 +2829,11 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         kind: "instance",
         parent: "site-name",
         data_attrs: &[],
-        example_html: r#"<img class="site-logo" src="…" alt="" aria-hidden="true">"#,
+        example_html: r#"<img class="site-logo" src="…" width="…" height="…" alt="" aria-hidden="true">"#,
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "Optional logo image inside the site-name link. Decorative by construction (`alt=\"\"` + `aria-hidden`), because the adjacent text already names the site.",
+        description: "Optional logo image inside the site-name link. Decorative by construction (`alt=\"\"` + `aria-hidden`), because the adjacent text already names the site. A raster logo carries its intrinsic `width` and `height`, so the header does not move when it loads; an SVG logo carries neither.",
     },
     ComponentEntry {
         class: "breadcrumb-label",

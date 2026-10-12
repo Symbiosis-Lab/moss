@@ -3697,6 +3697,62 @@ mod children_field_tests {
         );
     }
 
+    /// A site whose `logo:` names a raster file renders the logo with that
+    /// file's size, so the header does not move when the image arrives.
+    #[test]
+    fn a_raster_site_logo_renders_with_its_width_and_height() {
+        let dir = tempfile::TempDir::new().unwrap();
+        image::RgbaImage::new(24, 8).save(dir.path().join("mark.png")).unwrap();
+        let dimensions = image::image_dimensions(dir.path().join("mark.png")).unwrap();
+        let mut project = make_project();
+        project.image_files.push(crate::types::content::MediaMetadata {
+            is_animated: false,
+            path: "mark.png".to_string(),
+            file_type: "png".to_string(),
+            size: 0,
+            modified: None,
+            dimensions: Some(dimensions),
+            dominant_color: None,
+            lqip_data_uri: None,
+        });
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+        homepage.html_content = "<p>Welcome.</p>".to_string();
+        let all_docs = vec![homepage.clone()];
+        let layout = make_layout().with_logo("/mark.png".to_string());
+        let html = generate_html(
+            Some(&homepage),
+            &all_docs,
+            &project,
+            &layout,
+            true,
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            false,
+            None,
+            false,
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &localhost_url(),
+            true,
+            false,
+            "favicon.svg",
+            None,
+            std::path::Path::new(""),
+        )
+        .expect("generate_html should succeed");
+        assert!(
+            html.contains(
+                r#"<img class="site-logo" src="/mark.png" width="24" height="8" alt="" aria-hidden="true">"#
+            ),
+            "the logo must carry the file's size. Got: {html}"
+        );
+    }
+
     /// The other half of the one rule: `description:` is metadata on every page
     /// kind, so a folder index prints none of it as page text.
     #[test]

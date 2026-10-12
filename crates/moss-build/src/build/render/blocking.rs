@@ -1694,6 +1694,7 @@ pub fn generate_blocking_content_for_build(
             },
             show_rss_in_footer, emit_source_lines, has_sidebar_layout,
             home_breadcrumb: crate::build::components::nav::home_breadcrumb_setting(&documents),
+            media_lookup: &shared.media_lookup,
         },
         content_graph: Some(&content_graph), dir_overrides: &dir_overrides,
         site_url: &site_url, output_dir: Some(output_dir), source_root: source_path_buf, shared: &shared,
@@ -2827,7 +2828,8 @@ pub fn generate_blocking_content_for_build(
             project_structure.has_content_folders,
         )
         .with_search(layout_config.assets.search)
-        .with_header_mode(layout_config.header);
+        .with_header_mode(layout_config.header)
+        .with_asset_snapshot(shared.media_lookup.asset_snapshot());
         let nav_builder = if let Some(ref logo) = layout_config.logo_path {
             nav_builder.with_logo(logo.clone())
         } else {

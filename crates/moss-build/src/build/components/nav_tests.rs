@@ -3107,3 +3107,85 @@ fn test_breadcrumb_true_on_home_keeps_the_header_trail_and_adds_no_parent_label(
     assert!(compute_breadcrumb_segments(doc, &documents, "My Site", true, false).is_some());
     assert!(parent_label_segment(doc, &documents, home_breadcrumb_setting(&documents)).is_none());
 }
+
+/// The header's HTML for a logo at `logo`, with `snapshot` (when given) as the
+/// build's asset snapshot.
+fn logo_header_html(snapshot: Option<&moss_core::asset_snapshot::AssetSnapshot>, logo: &str) -> String {
+    let documents: Vec<crate::build::types::ParsedDocument> = Vec::new();
+    let mut nav = NavigationBuilder::new(
+        &documents,
+        "My Site",
+        None,
+        crate::i18n::Language::En,
+        false,
+    )
+    .with_logo(logo.to_string());
+    if let Some(snapshot) = snapshot {
+        nav = nav.with_asset_snapshot(snapshot);
+    }
+    nav.generate_navigation()
+}
+
+fn media_entry(path: &str, dimensions: Option<(u32, u32)>) -> crate::types::content::MediaMetadata {
+    crate::types::content::MediaMetadata {
+        is_animated: false,
+        path: path.to_string(),
+        file_type: path.rsplit('.').next().unwrap_or("").to_string(),
+        size: 0,
+        modified: None,
+        dimensions,
+        dominant_color: None,
+        lqip_data_uri: None,
+    }
+}
+
+#[test]
+fn site_logo_carries_the_intrinsic_size_of_a_raster_file() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("mark.png");
+    image::RgbaImage::new(24, 8).save(&path).unwrap();
+    let dimensions = image::image_dimensions(&path).unwrap();
+    let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(
+        &[media_entry("mark.png", Some(dimensions))],
+        &[],
+        &std::collections::HashMap::new(),
+        None,
+    );
+    let html = logo_header_html(Some(lookup.asset_snapshot()), "/mark.png");
+    assert!(
+        html.contains(
+            r#"<img class="site-logo" src="/mark.png" width="24" height="8" alt="" aria-hidden="true">"#
+        ),
+        "logo must carry the file's size: {html}"
+    );
+}
+
+#[test]
+fn site_logo_missing_from_the_manifest_keeps_the_bare_shape() {
+    let html = logo_header_html(None, "/missing.png");
+    assert!(
+        html.contains(r#"<img class="site-logo" src="/missing.png" alt="" aria-hidden="true">"#),
+        "an unknown logo must not gain dimensions: {html}"
+    );
+}
+
+#[test]
+fn svg_site_logo_keeps_the_bare_shape() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("mark.svg");
+    std::fs::write(&path, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="8"/>"#).unwrap();
+    // The scanner records no size for an svg, so the manifest has no entry for it.
+    let dimensions = crate::build::scan::scan::extract_image_dimensions(&path);
+    assert_eq!(dimensions, None);
+    let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(
+        &[media_entry("mark.svg", dimensions)],
+        &[],
+        &std::collections::HashMap::new(),
+        None,
+    );
+    let html = logo_header_html(Some(lookup.asset_snapshot()), "/mark.svg");
+    assert!(
+        html.contains(r#"<img class="site-logo" src="/mark.svg" alt="" aria-hidden="true">"#),
+        "an svg logo keeps today's output: {html}"
+    );
+}

@@ -36,6 +36,8 @@ pub(super) struct PageChromeContext<'a, 'd> {
     pub has_sidebar_layout: bool,
     /// The home page's `breadcrumb:` value, read once per build.
     pub home_breadcrumb: Option<moss_core::frontmatter_typed::BreadcrumbSetting>,
+    /// The build's media lookup, for the logo's intrinsic size.
+    pub media_lookup: &'a crate::build::media::dimensions::MediaDimensionLookup,
 }
 
 impl PageChromeContext<'_, '_> {
@@ -77,7 +79,8 @@ impl PageChromeContext<'_, '_> {
         let mut nav = NavigationBuilder::new(
             self.documents, &site_title, doc.map(|d| d.url_path.as_str()),
             if generated { ui_lang } else { self.site_lang }, self.project.has_content_folders,
-        ).with_search(self.layout.assets.search).with_header_mode(self.layout.header);
+        ).with_search(self.layout.assets.search).with_header_mode(self.layout.header)
+            .with_asset_snapshot(self.media_lookup.asset_snapshot());
         if !generated {
             nav = nav.with_source_fm(self.emit_source_lines, self.emit_source_lines && logo_is_own_field);
         }

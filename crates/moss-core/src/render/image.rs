@@ -304,7 +304,9 @@ pub fn synthesize_image_html(
     // `class="site-logo"`, no `<picture>`, no LQIP, no `loading="lazy"` —
     // the logo is above-the-fold; CSS handles sizing
     // (`.site-logo { height: 1.8em }`). Attribute order
-    // (`class`, `src`, `alt`, `aria-hidden`) is part of the byte shape.
+    // (`class`, `src`, `alt`, `aria-hidden`) is part of the byte shape, with
+    // `width`/`height` between `src` and `alt` when the snapshot knows the
+    // logo's size, so the header does not move when the image arrives.
     if matches!(context, ImageContext::SiteLogo) {
         // `extra_attrs` rides directly after `class` (the editor preview's
         // `data-source-fm="logo"` annotation); `None` keeps the byte shape.
@@ -312,10 +314,14 @@ pub fn synthesize_image_html(
             .extra_attrs
             .map(|a| format!(" {a}"))
             .unwrap_or_default();
+        let dim_attrs = lookup_dims(assets, src)
+            .map(|(w, h)| format!(r#" width="{w}" height="{h}""#))
+            .unwrap_or_default();
         return format!(
-            r#"<img class="site-logo"{} src="{}" alt="{}" aria-hidden="true">"#,
+            r#"<img class="site-logo"{} src="{}"{} alt="{}" aria-hidden="true">"#,
             extra,
             html_escape(src),
+            dim_attrs,
             html_escape(alt),
         );
     }

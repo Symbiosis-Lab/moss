@@ -366,6 +366,7 @@ fn generate_html_inner<'d>(
             assets: ChromeAssets { paths: path_resolver, scripts: &shared.scripts, has_user_css, has_user_js, head_alternates },
             show_rss_in_footer, emit_source_lines, has_sidebar_layout,
             home_breadcrumb: crate::build::components::nav::home_breadcrumb_setting(all_docs),
+            media_lookup: &shared.media_lookup,
         },
         content_graph, dir_overrides, site_url, output_dir, source_root, shared,
     };
