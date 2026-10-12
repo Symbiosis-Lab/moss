@@ -1665,6 +1665,15 @@ fn build_inner(
     // changing the durable build baseline or promoting `current`.
     let publishable = !focused_pending;
     if waiting {
+        let source_kind = match &request.source {
+            crate::system::folder_session::PreviewSource::Unresolved => "unresolved",
+            crate::system::folder_session::PreviewSource::File(_) => "file",
+            crate::system::folder_session::PreviewSource::Generated => "generated",
+        };
+        log::info!(
+            "[diag] preview-wait: waiting url={} source={} prior_route={} pending_inputs={}",
+            request.url_path, source_kind, prior_route, cloud_outstanding
+        );
         super::cloud_readiness::mark_gated(folder_path);
         emit_cloud_gate(true, &project_structure.evicted_paths, cloud_outstanding);
     } else if super::cloud_readiness::take_gate(folder_path) {
