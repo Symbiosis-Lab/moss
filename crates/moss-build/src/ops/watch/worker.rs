@@ -138,6 +138,28 @@ impl RebuildRequest {
     }
 }
 
+/// Chain `incoming` onto `held`. The two requests describe consecutive states
+/// of the same folder, so `a→b` followed by `b→c` is `a→c`, and a rename that
+/// is undone (`a→b` then `b→a`) leaves no pair. Any other pair is appended
+/// unless already held.
+fn compose_rename_pairs(
+    mut held: Vec<(String, String)>,
+    incoming: Vec<(String, String)>,
+) -> Vec<(String, String)> {
+    for (x, y) in incoming {
+        if let Some(i) = held.iter().position(|(_, to)| *to == x) {
+            if held[i].0 == y {
+                held.remove(i);
+            } else {
+                held[i].1 = y;
+            }
+        } else if !held.contains(&(x.clone(), y.clone())) {
+            held.push((x, y));
+        }
+    }
+    held
+}
+
 /// Coalesce two requests into one.
 ///
 /// The trigger is merged by [`BuildTrigger::merge`], NOT degraded to `Full`.
@@ -148,8 +170,11 @@ impl RebuildRequest {
 /// holding both paths would have. It was also the dominant rebuild on a busy
 /// vault: a full reparse and 223-page render where one markdown file changed.
 ///
-/// Rename pairs are still dropped in favor of the manifest diff surfacing the
-/// structural change, and the admission gate still only widens: the union is
+/// Rename pairs are kept, the occupant's followed by the incoming ones without
+/// repeats: the manifest diff alone reports a rename as a delete plus a create,
+/// so dropping a pair here would lose the rename. A pair made stale by a later
+/// rename is discarded when the rebuild resolves it against the manifests. The
+/// admission gate still only widens: the union is
 /// suppressible iff BOTH sides were (their path sets union); one unconditional
 /// side makes the whole request unconditional. Suppress-when-unsure would eat
 /// a real change.
@@ -165,11 +190,8 @@ pub fn merge_requests(occupant: RebuildRequest, incoming: RebuildRequest) -> Reb
         }
         _ => None,
     };
-    RebuildRequest {
-        gate_paths,
-        trigger: occupant.trigger.merge(incoming.trigger),
-        rename_pairs: Vec::new(),
-    }
+    let rename_pairs = compose_rename_pairs(occupant.rename_pairs, incoming.rename_pairs);
+    RebuildRequest { gate_paths, trigger: occupant.trigger.merge(incoming.trigger), rename_pairs }
 }
 
 /// Shared handle to one folder's request slot. Producers enqueue/poke through

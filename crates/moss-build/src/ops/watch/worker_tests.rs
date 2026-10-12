@@ -70,12 +70,12 @@ fn merging_preserves_the_narrowest_honest_trigger() {
     );
 
     // A structural side wins — a create/remove anywhere in the union makes the
-    // union structural — and rename pairs are still dropped, the manifest diff
-    // being what surfaces the structural change downstream.
+    // union structural — and rename pairs are kept, since the manifest diff
+    // alone would report the rename as a delete plus a create.
     let merged = merge_requests(with_pairs(&[("a.md", "b.md")]), content_only("c.md"));
     assert!(matches!(merged.trigger, BuildTrigger::Structural(_)), "got {:?}", merged.trigger);
     assert_eq!(paths(&merged.trigger), vec![std::path::PathBuf::from("c.md")]);
-    assert!(merged.rename_pairs.is_empty());
+    assert_eq!(merged.rename_pairs, vec![("a.md".to_string(), "b.md".to_string())]);
 
     // `Full` carries no paths and therefore no evidence, so it absorbs both
     // sides in either order — the one place over-approximating is still right.
@@ -138,13 +138,15 @@ fn restore_preserves_a_deferred_request_and_merges_late_arrivals() {
     handle.restore(req.clone());
     assert_eq!(handle.take(), Some(req.clone()));
     // Deferred with a new arrival in between: merged, not lost.
-    handle.enqueue(content_only("c.md"));
+    handle.enqueue(with_pairs(&[("c.md", "d.md"), ("a.md", "b.md")]));
     handle.restore(req);
     let merged = handle.take().expect("restore onto an occupied slot must merge, not drop");
-    // Structural (from the deferred rename) over content-only (the arrival),
-    // with the arrival's path carried — not the `Full` this used to degrade to.
     assert!(matches!(merged.trigger, BuildTrigger::Structural(_)), "got {:?}", merged.trigger);
-    assert!(merged.rename_pairs.is_empty(), "pairs are dropped in favor of the manifest diff");
+    assert_eq!(
+        merged.rename_pairs,
+        vec![("a.md".to_string(), "b.md".to_string()), ("c.md".to_string(), "d.md".to_string())],
+        "the deferred request's pairs, then the arrival's, without repeats"
+    );
 }
 
 /// BLOCKER regression (phase 1b review): admission clears `rebuild_pending`
@@ -703,4 +705,22 @@ async fn a_completed_admission_records_finish_time_and_duration() {
 
     handle.request_shutdown();
     worker.await.unwrap();
+}
+
+#[test]
+fn merged_rename_pairs_chain_instead_of_piling_up() {
+    let pairs = |r: &RebuildRequest| r.rename_pairs.clone();
+    let p = |a: &str, b: &str| (a.to_string(), b.to_string());
+
+    let chained = merge_requests(with_pairs(&[("a", "b")]), with_pairs(&[("b", "c")]));
+    assert_eq!(pairs(&chained), vec![p("a", "c")]);
+
+    let undone = merge_requests(with_pairs(&[("a", "b")]), with_pairs(&[("b", "a")]));
+    assert!(pairs(&undone).is_empty());
+
+    let repeated = merge_requests(with_pairs(&[("a", "b")]), with_pairs(&[("a", "b")]));
+    assert_eq!(pairs(&repeated), vec![p("a", "b")]);
+
+    let unrelated = merge_requests(with_pairs(&[("a", "b")]), with_pairs(&[("c", "d")]));
+    assert_eq!(pairs(&unrelated), vec![p("a", "b"), p("c", "d")]);
 }

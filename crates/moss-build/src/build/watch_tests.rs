@@ -4021,3 +4021,129 @@ fn every_page_extension_is_a_page_to_the_pump() {
         assert!(source_asset_request_paths(root, EventKind::Create(CreateKind::File), &[page]).is_empty(), "{name}");
     }
 }
+
+fn manifest(pages: &[(&str, &str)], lingering: &[&str]) -> SiteHashes {
+    let mut h = SiteHashes::new();
+    for (src, out) in pages {
+        h.insert((*out).into(), "hash".into());
+        h.source_to_output.insert((*src).into(), (*out).into());
+    }
+    for out in lingering {
+        h.insert((*out).into(), "hash".into());
+    }
+    h
+}
+
+fn pairs_of(list: &[(&str, &str)]) -> Vec<(String, String)> {
+    list.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+}
+
+/// Renamed and then renamed back: the earlier pair's new source is gone and
+/// its output still lingers in `files` until the generation is sealed. The
+/// preview must not be told to follow the page that no longer exists.
+#[test]
+fn a_rename_and_its_reversal_move_nothing() {
+    let prev = manifest(&[("a.md", "a/index.html")], &[]);
+    let new = manifest(&[("a.md", "a/index.html")], &["b/index.html"]);
+    let pairs = pairs_of(&[("a.md", "b.md"), ("b.md", "a.md")]);
+
+    let event = build_rebuild_event_with_renames(&new, &prev, &pairs);
+    let moved = event.as_ref().and_then(|e| e.moved_output_paths.as_ref());
+    assert!(moved.is_none(), "no output moved, got {moved:?}");
+    assert!(event.is_none_or(|e| e.source_renames.is_none()), "stale pairs must not be reported as renames");
+}
+
+/// Renamed twice in one window: neither pair is resolvable (the first one's
+/// new source is gone, the second one's old source was never in the previous
+/// manifest), so the event reports the net result as a delete plus a create.
+#[test]
+fn a_chain_of_renames_reports_a_delete_and_a_create_not_a_move() {
+    let prev = manifest(&[("a.md", "a/index.html")], &[]);
+    let new = manifest(&[("c.md", "c/index.html")], &["b/index.html"]);
+    let pairs = pairs_of(&[("a.md", "b.md"), ("b.md", "c.md")]);
+
+    let event = build_rebuild_event_with_renames(&new, &prev, &pairs).expect("the net change emits an event");
+    assert_eq!(event.moved_output_paths, None);
+    assert_eq!(event.source_renames, None);
+    assert_eq!(event.source_creates, Some(vec!["c.md".to_string()]));
+    assert_eq!(event.source_deletes, Some(vec!["a.md".to_string()]));
+}
+
+#[test]
+fn a_stale_pair_does_not_hide_a_real_create_or_delete() {
+    let prev = manifest(&[("gone.md", "gone/index.html"), ("kept.md", "kept/index.html")], &[]);
+    let new = manifest(&[("kept.md", "kept/index.html"), ("fresh.md", "fresh/index.html")], &[]);
+    // `gone.md` was deleted and `fresh.md` created, but the pairs name an
+    // intermediate source neither manifest holds.
+    let pairs = pairs_of(&[("gone.md", "middle.md"), ("middle.md", "fresh.md")]);
+
+    let event = build_rebuild_event_with_renames(&new, &prev, &pairs).expect("event");
+    assert_eq!(event.source_deletes, Some(vec!["gone.md".to_string()]));
+    assert_eq!(event.source_creates, Some(vec!["fresh.md".to_string()]));
+    assert_eq!(event.source_renames, None);
+}
+
+/// A page renamed to a non-page extension has no output on the new side, but
+/// the rename is still the file's identity: it is echoed as a rename and the
+/// vanished page is not also reported as deleted.
+#[test]
+fn a_page_renamed_to_a_non_page_extension_is_a_rename_not_a_delete() {
+    let prev = manifest(&[("a.md", "a/index.html")], &[]);
+    let new = manifest(&[("other.md", "other/index.html")], &[]);
+    let pairs = pairs_of(&[("a.md", "a.txt")]);
+
+    let event = build_rebuild_event_with_renames(&new, &prev, &pairs).expect("event");
+    assert_eq!(event.source_renames, Some(pairs.clone()));
+    assert_eq!(event.source_deletes, None);
+    assert_eq!(event.moved_output_paths, None);
+}
+
+#[test]
+fn a_non_page_renamed_to_a_page_extension_is_a_rename_not_a_create() {
+    let prev = manifest(&[("other.md", "other/index.html")], &[]);
+    let new = manifest(&[("other.md", "other/index.html"), ("a.md", "a/index.html")], &[]);
+    let pairs = pairs_of(&[("a.txt", "a.md")]);
+
+    let event = build_rebuild_event_with_renames(&new, &prev, &pairs).expect("event");
+    assert_eq!(event.source_renames, Some(pairs.clone()));
+    assert_eq!(event.source_creates, None);
+    assert_eq!(event.moved_output_paths, None);
+}
+
+/// Before the manifest carried `source_to_output`, outputs are found by the
+/// stem guess; a rename between such manifests still moves the output.
+#[test]
+fn a_legacy_manifest_resolves_a_rename_through_the_stem_guess() {
+    let mut prev = SiteHashes::new();
+    prev.insert("a/index.html".into(), "hash".into());
+    let mut new = SiteHashes::new();
+    new.insert("b/index.html".into(), "hash".into());
+    let pairs = pairs_of(&[("a.md", "b.md")]);
+
+    let event = build_rebuild_event_with_renames(&new, &prev, &pairs).expect("event");
+    assert_eq!(event.moved_output_paths, Some(vec![("a/index.html".to_string(), "b/index.html".to_string())]));
+}
+
+/// A page that owns no output (a footer slot) is recorded only in the source
+/// hashes. Renaming it is still a rename, not a delete plus a create.
+#[test]
+fn a_renamed_page_that_owns_no_output_is_still_reported_as_a_rename() {
+    let meta = |hash: &str| SourceMetadata {
+        hash: hash.into(),
+        size: 1,
+        mtime: 0,
+        mtime_nanos: None,
+        ctime: None,
+        inode: None,
+    };
+    let mut prev = manifest(&[("other.md", "other/index.html")], &[]);
+    prev.sources.insert("footer.md".into(), meta("h"));
+    let mut new = manifest(&[("other.md", "other/index.html")], &[]);
+    new.sources.insert("footer2.md".into(), meta("h"));
+    let pairs = pairs_of(&[("footer.md", "footer2.md")]);
+
+    let event = build_rebuild_event_with_renames(&new, &prev, &pairs).expect("event");
+    assert_eq!(event.source_renames, Some(pairs.clone()));
+    assert_eq!(event.source_creates, None);
+    assert_eq!(event.source_deletes, None);
+}
