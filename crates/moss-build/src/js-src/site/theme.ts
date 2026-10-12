@@ -407,6 +407,45 @@ import "./nav/hint-place";
 import "./nav/nav-island";
 
 // ==========================================================================
+// Image placeholder: moss paints every content image with an inline
+// low-quality background-image until the real file arrives. Nothing removed
+// it, so behind a transparent PNG or in the letterbox of an object-fit:
+// contain image it stayed visible as a blurred smear. Cleared once the image
+// has loaded; an image that failed keeps it, since then it is all there is.
+// ==========================================================================
+
+function clearPlaceholder(img: HTMLImageElement): void {
+  img.style.removeProperty("background-image");
+  img.style.removeProperty("background-size");
+}
+
+/** Clears the placeholder of every image that has already loaded. Run at
+ * startup and after a preview morph, which can restore the inline style on an
+ * image that is complete, so no `load` event will follow. */
+export function clearLoadedPlaceholders(root: ParentNode = document): void {
+  root
+    .querySelectorAll<HTMLImageElement>('img[style*="background-image"]')
+    .forEach((img) => {
+      if (img.complete && img.naturalWidth > 0) clearPlaceholder(img);
+    });
+}
+
+// Capture phase: `load` does not bubble, but it reaches a capturing listener on
+// document, so one listener covers every image, including ones added later.
+document.addEventListener(
+  "load",
+  (event: Event) => {
+    const img = event.target;
+    if (img instanceof HTMLImageElement && img.style.backgroundImage !== "") {
+      clearPlaceholder(img);
+    }
+  },
+  true,
+);
+document.addEventListener("DOMContentLoaded", () => clearLoadedPlaceholders());
+document.addEventListener("moss-morph-patched", () => clearLoadedPlaceholders());
+
+// ==========================================================================
 // Vertical typesetting: remap wheel/trackpad to horizontal scroll
 // In writing-mode: vertical-rl, content overflows horizontally but browsers
 // don't automatically map wheel events to horizontal scrolling.

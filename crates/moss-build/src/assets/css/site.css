@@ -1817,9 +1817,8 @@ footer.container:has(> .moss-subscribe)::before {
    When overflow: site-name + toggle on row 1, nav-links on row 2 */
 .nav-content {
   /* The header rule, on the block-end edge: below the strip across the page,
-     to its LEFT under vertical-rl. One spelling lays out both. The token sets
-     the rule's colour, and `transparent` hides it. */
-  border-block-end: 1px solid var(--moss-header-rule, var(--moss-border-light));
+     to its LEFT under vertical-rl. One spelling lays out both. */
+  border-block-end: 1px solid var(--moss-border-light);
   padding-block-end: var(--moss-space-md);
   display: flex;
   flex-wrap: wrap;
@@ -8497,13 +8496,6 @@ article picture[data-aspect="scroll"] {
   display: block;
   max-inline-size: 100%;
   margin-block: calc(var(--moss-read-line) * 1.25);
-}
-
-/* The article-body margin above would push a wide image down inside a grid
-   card, out of line with its neighbours' images (`.moss-grid-card img` is
-   flush at the top of the cell). */
-.moss-grid-card picture[data-aspect="scroll"] {
-  margin-block: 0;
 }
 
 /* No upscale past natural size (`inline-size: auto`, the same never-

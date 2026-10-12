@@ -33,13 +33,26 @@ kind of design call — a page whose whole shape differs from the default: a
 front page that is one full-bleed image, a section index laid out as a poster
 wall. Three moves, in order:
 
-**Scope to a declared attribute.** `moss describe --json` reports `scope_attributes`: the attributes moss guarantees it sets, on which element, with which values. Scope to those rather than to something merely unique to this page today. To style one page or one section, scope to `data-path`, the page's published address: `body[data-path="/contact/"]` matches that page and `body[data-path^="/work/"]` every page under `/work/`. A selector written on a page's address must be updated if the page is renamed, because the address changes with it.
+**Scope to a declared attribute.** `moss describe --json` reports
+`scope_attributes`: the attributes moss guarantees it sets, on which element,
+with which values. Scope to those rather than to something merely unique to
+this page today.
 
 ```css
 body[data-page="home"] .moss-hero { --moss-hero-object-position: center; }
 ```
 
-**Set the component's custom properties.** A component's declared properties are its supported configuration surface — they are the difference between reconfiguring a component and fighting it. Re-declaring `grid-template-columns` on an internal class breaks on the next release; setting `--moss-card-min` does not. These replace selectors themes used to write by hand: `--moss-header-bg` and `--moss-header-ink` paint the header band and its nav links and site name (a `header=over` hero still wins on its own page), `--moss-header-rule` sets the hairline under the navigation (`transparent` hides it on a banded header), and `--moss-cover-color: transparent; --moss-cover-ink: var(--moss-color-text)` gives plain cards on the page background with readable text. Set them on `:root`, with dark-mode pairs.
+**Set the component's custom properties.** A component's declared properties
+are its supported configuration surface — they are the difference between
+reconfiguring a component and fighting it. Re-declaring `grid-template-columns`
+on an internal class breaks on the next release; setting `--moss-card-min` does
+not.
+Three of them replace selectors themes used to write by hand: `--moss-header-bg`
+and `--moss-header-ink` paint the header band and its nav links and site name
+(a `header=over` hero still wins on its own page), and
+`--moss-cover-color: transparent; --moss-cover-ink: var(--moss-color-text)`
+gives plain cards on the page background with readable text. Set them on
+`:root`, with dark-mode pairs.
 
 **Read the rule you are displacing.** `moss describe --css <selector>` prints
 every shipped rule mentioning that selector, across all of moss's stylesheets,

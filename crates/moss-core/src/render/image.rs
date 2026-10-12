@@ -240,7 +240,8 @@ pub struct ImageRenderOptions<'a> {
     /// Whether to tag an extreme-aspect source `data-aspect="scroll"`
     /// (`asset_paths::is_scroll_shape`) for the default handscroll/hanging-
     /// scroll presentation in site.css / vertical.css. Set by body-image
-    /// callers (`MarkdownInline`/`MarkdownStandalone`) only — Hero,
+    /// caller (`MarkdownInline`) only, and ignored
+    /// inside a grid card (`grid_cell_sizes` set) — Hero,
     /// GalleryThumb and FolderCardCover already have their own dedicated
     /// extreme-aspect handling (`data-fit="plate"`, fixed crop boxes) and
     /// must not also pick up the body-image default.
@@ -384,8 +385,12 @@ pub fn synthesize_image_html(
     // every non-favicon context. The wrapping `<figure class="moss-image">`
     // and optional `<figcaption>` are the only context-dependent
     // structure. Compute the inner first, then wrap if requested.
-    let sizes_value = sizes_for(src, assets, &context, options);
-    let inner = synthesize_inner(src, alt, assets, options, &sizes_value);
+    // The scroll decision is made once, here, and handed to both the `sizes=`
+    // table and the inner emitter, so the `<img>`'s `data-aspect`, its
+    // container and its `sizes=` cannot disagree about the same source.
+    let scroll = scroll_treatment(src, assets, options);
+    let sizes_value = sizes_for(src, assets, &context, options, scroll);
+    let inner = synthesize_inner(src, alt, assets, options, &sizes_value, scroll);
 
     match context {
         ImageContext::MarkdownStandalone {
@@ -532,6 +537,7 @@ fn synthesize_inner(
     assets: &AssetSnapshot,
     options: &ImageRenderOptions<'_>,
     sizes_value: &str,
+    scroll: bool,
 ) -> String {
     // Phase B (Task 12): a webp SOURCE is already webp — to_webp(src) == src, so
     // a `<picture><source srcset=to_webp(src)>` would emit a `<source>` byte-
@@ -548,14 +554,8 @@ fn synthesize_inner(
     // pipeline sites keep `false` (canonical rationale + the EXIF-orientation
     // agreement live on `asset_paths::ladder_rungs`). base_url == src: the served
     // base webp IS the source (`to_webp(src) == src`).
-    // Computed once here — not re-derived inside `render_img_tag`, nor a
-    // second time for the `<picture>`-wrapping decisions below — so the
-    // `<img>`'s own `data-aspect` and its container's can never disagree
-    // about the same source. `asset_paths::is_scroll_shape` on a `None`
-    // (unknown dims) lookup is `false` by construction (`is_some_and`), so
-    // an unknown-dims source never gets a scroll container either.
-    let scroll =
-        options.scroll_shape && lookup_dims(assets, src).is_some_and(|(w, h)| is_scroll_shape(w, h));
+    // `scroll` arrives from the caller, decided once (`scroll_treatment`), so
+    // the `<img>`'s own `data-aspect` and its container's cannot disagree.
 
     if is_webp_source(src) {
         let img_tag = match resolve_ladder(assets, src, lookup_animated(assets, src)) {
@@ -714,6 +714,16 @@ fn is_webp_source(src: &str) -> bool {
         .is_some_and(|(_, ext)| is_webp_source_ext(ext))
 }
 
+/// Whether a body image gets the handscroll/hanging-scroll treatment: the one
+/// decision behind both its `data-aspect="scroll"` tag and its `sizes=` value.
+/// A grid card is a small fixed slot where the image should simply be fitted,
+/// so an image inside one (`grid_cell_sizes` set) never scrolls.
+fn scroll_treatment(src: &str, assets: &AssetSnapshot, options: &ImageRenderOptions<'_>) -> bool {
+    options.scroll_shape
+        && options.grid_cell_sizes.is_none()
+        && lookup_dims(assets, src).is_some_and(|(w, h)| is_scroll_shape(w, h))
+}
+
 /// The `sizes=` value for the srcset ladder — the one place it is decided.
 /// Non-body contexts are fixed. A body image takes, on a vertical page, its
 /// grid cell's scope (a definite box) else the column height × its aspect —
@@ -724,6 +734,7 @@ fn sizes_for<'s>(
     assets: &AssetSnapshot,
     context: &ImageContext<'_>,
     options: &ImageRenderOptions<'s>,
+    scroll: bool,
 ) -> std::borrow::Cow<'s, str> {
     use std::borrow::Cow;
     // A body image tagged `data-aspect="scroll"` renders at up to its own
@@ -732,12 +743,8 @@ fn sizes_for<'s>(
     // `sizes_vertical_body` assume below — checked before either context
     // or the vertical branch decides, for the same reason `SIZES_HERO_PLATE`
     // is checked before `SIZES_FULL_BLEED`'s own viewport-relative value.
-    if options.scroll_shape {
-        if let Some((w, h)) = lookup_dims(assets, src) {
-            if is_scroll_shape(w, h) {
-                return Cow::Borrowed(ctx_sizes::SIZES_SCROLL);
-            }
-        }
+    if scroll {
+        return Cow::Borrowed(ctx_sizes::SIZES_SCROLL);
     }
     let data_width = match context {
         ImageContext::MarkdownStandalone { width, .. } => *width,
