@@ -138,6 +138,22 @@ fn header_tokens_are_read_by_moss_rules() {
     assert!(css.contains("body>header.site-name{color:var(--moss-header-ink,"), "site name ink: {css}");
 }
 
+/// The hairline under the navigation takes its colour from a token, so a theme
+/// that gives the header a band removes the rule with one declaration on `:root`.
+#[test]
+fn header_rule_token_colours_the_navigation_hairline() {
+    let site = Site::new();
+    site.write(".moss/config.toml", b"[site]\ndomain = \"example.com\"\n");
+    site.write("index.md", b"---\ntitle: Home\n---\n\nBody.\n");
+    let out = site.build();
+    let css = moss_css(&out).replace(' ', "");
+
+    assert!(
+        css.contains("border-block-end:1pxsolidvar(--moss-header-rule,var(--moss-border-light))"),
+        "navigation hairline: {css}"
+    );
+}
+
 /// A theme that clears the cover tint states its card text colour with one
 /// token; the muted lines derive from it, so one token recolours all four.
 #[test]

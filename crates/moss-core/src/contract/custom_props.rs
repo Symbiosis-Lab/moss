@@ -215,6 +215,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Colour of the nav links in the header, and of the site name beside them (whose own default is `var(--moss-color-text)`). Hover and the current page keep the accent colour, and the opened phone menu, which sits on the page background rather than on the band, keeps its own. Under `header=over` the links take the light colour of the photo whatever this is set to. Use it with `--moss-header-bg` so the text stays readable on the band.",
     },
     CustomProp {
+        name: "--moss-header-rule",
+        owner: "body > header",
+        default: "var(--moss-border-light)",
+        description: "Colour of the hairline under the header's navigation. Set it to `transparent` when `--moss-header-bg` gives the header a band, since the band's own edge already divides it from the page; the hairline would otherwise draw inside the band.",
+    },
+    CustomProp {
         name: "--moss-bg",
         owner: "moss-card",
         default: "var(--moss-color-bg, #fff)",
@@ -345,6 +351,12 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         name: "data-page",
         values: &["home"],
         description: "Present as `home` on the front page of EVERY language the site publishes, not just the site-default locale's — a multilingual site's `zh-hans/` front page carries this exactly like the default-locale one at the root. Scope front-page-only rules to `body[data-page=\"home\"]` rather than to something merely unique to your homepage today — a hero that fills the screen, a suppressed footer, a different nav treatment.",
+    },
+    ScopeAttr {
+        selector: "body",
+        name: "data-path",
+        values: &[],
+        description: "The page's published address, with a leading and trailing slash, exactly as the sitemap and links spell it: `/` on the front page, `/contact/` for a page at that address, `/zh-hans/about/` for a language edition. It is the address as moss writes it, so a folder named `Film & Sound` is `/film-and-sound/`, and characters outside ASCII appear as written, not percent-encoded. Scope one page with `body[data-path=\"/contact/\"]` and a whole section with `body[data-path^=\"/work/\"]`. A selector on an address breaks when the page is renamed, because the address changes with it.",
     },
     ScopeAttr {
         selector: "html",

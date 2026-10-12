@@ -3199,8 +3199,32 @@ mod children_field_tests {
         let html = render_page(Some(&homepage), &all_docs, true);
 
         assert!(
-            html.contains(r#"<body data-page="home">"#),
-            "homepage should carry data-page=\"home\""
+            html.contains(r#"<body data-page="home" data-path="/">"#),
+            "homepage should carry data-page=\"home\" and its address"
+        );
+    }
+
+    /// `data-path` is the page's published address, so a theme can scope one
+    /// inner page (or a section) without guessing at its markup. The language
+    /// prefix is part of the address, as it is in the sitemap and in links.
+    #[test]
+    fn an_inner_page_says_its_published_address_on_its_body_tag() {
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+        let article = make_doc("My Article", "articles/my-article/index.html");
+        let all_docs = vec![homepage, article.clone()];
+        let html = render_page(Some(&article), &all_docs, false);
+        assert!(
+            html.contains(r#"<body data-path="/articles/my-article/">"#),
+            "an inner page's body carries its address. Got: {html}"
+        );
+
+        let mut localized = make_doc("Localized", "zh-hans/about/index.html");
+        localized.lang = Language::ZhHans;
+        let html = render_page(Some(&localized), &all_docs, false);
+        assert!(
+            html.contains(r#"<body data-path="/zh-hans/about/">"#),
+            "a language-prefixed page keeps the prefix in its address. Got: {html}"
         );
     }
 

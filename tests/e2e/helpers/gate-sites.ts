@@ -3364,6 +3364,7 @@ listed: false
     ".moss/theme/style.css": `:root {
   --moss-header-bg: rgb(200, 0, 0);
   --moss-header-ink: rgb(0, 0, 255);
+  --moss-header-rule: transparent;
   --moss-cover-color: transparent;
   --moss-cover-ink: var(--moss-color-text);
 }
