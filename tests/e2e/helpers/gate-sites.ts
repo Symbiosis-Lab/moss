@@ -3381,6 +3381,7 @@ listed: false
 export function hlsShortClipGate(): ScratchSiteSpec {
   return {
     name: "hls-short-clip-gate",
+    builds: 2, // the first build encodes the ladders; the second's pages reference them
     files: {
       "a.mp4": syntheticTestClip(1280, 720, { seconds: 8, source: "testsrc2", rich: true }),
       "b.mp4": syntheticTestClip(1280, 720, { seconds: 8, source: "testsrc", rich: true }),

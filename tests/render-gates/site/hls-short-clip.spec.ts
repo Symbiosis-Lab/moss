@@ -57,6 +57,11 @@ const heightOf = (page: Page, index: number) =>
   page.evaluate((i) => document.querySelectorAll("video")[i].videoHeight, index);
 
 test.describe("short hero clips through hls.js", () => {
+  test.beforeEach(async ({ page }) => {
+    const html = await (await page.request.get("/")).text();
+    expect(html, "the page does not reference a ladder: was the site built twice?").toContain("data-hls");
+  });
+
   test("the playing clip climbs to the top rung on a fast link", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/");
