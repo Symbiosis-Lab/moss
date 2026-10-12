@@ -504,7 +504,7 @@ fn markdown_has_callout(markdown: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::node::Inline;
+    use super::super::node::{CalloutKind, Inline};
     use super::super::url::{Url, UrlKind};
     use super::*;
 
@@ -1005,6 +1005,63 @@ mod tests {
             _ => {}
         });
         assert_eq!(seen, vec!["fig.png".to_string(), "credit".to_string()]);
+    }
+
+    #[test]
+    fn raw_html_walker_reaches_nodes_nested_in_lists_callouts_captions_and_links() {
+        let mut blocks = vec![
+            Block::List {
+                ordered: false,
+                start: None,
+                items: vec![vec![Block::Other("<li-raw>".into())]],
+                item_source_lines: vec![],
+            },
+            Block::Callout {
+                kind: CalloutKind::Note,
+                fold: None,
+                title: None,
+                children: vec![Block::Other("<callout-raw>".into())],
+            },
+            Block::Figure {
+                image: Inline::Image {
+                    src: Url::unresolved("fig.png"),
+                    alt: "".into(),
+                    title: None,
+                    is_wikilink: false,
+                    wikilink_pothole: None,
+                },
+                caption: Some(vec![Inline::Other("<caption-raw>".into())]),
+                width: None,
+                align: None,
+                class_names: Vec::new(),
+                img_style: None,
+                italic_caption: false,
+            },
+            Block::Paragraph(vec![
+                Inline::Link {
+                    url: Url::unresolved("x"),
+                    title: None,
+                    children: vec![Inline::Other("<link-raw>".into())],
+                    is_wikilink: false,
+                    has_pothole: false,
+                },
+                Inline::Emphasis(vec![Inline::Other("<em-raw>".into())]),
+            ]),
+        ];
+        let mut seen: Vec<String> = Vec::new();
+        for block in &mut blocks {
+            visit_block_raw_html_mut(block, |html| seen.push(html.clone()));
+        }
+        assert_eq!(
+            seen,
+            vec![
+                "<li-raw>".to_string(),
+                "<callout-raw>".to_string(),
+                "<caption-raw>".to_string(),
+                "<link-raw>".to_string(),
+                "<em-raw>".to_string(),
+            ]
+        );
     }
 
     #[test]
