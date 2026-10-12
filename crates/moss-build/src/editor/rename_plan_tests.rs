@@ -1806,3 +1806,74 @@ fn one_segment_external_link_is_left_byte_identical_when_a_moved_page_shares_its
 
     assert_eq!(r(root, "index.md"), "[Tickets](https://tickets.example.org/20)\n");
 }
+
+fn sorted(mut pairs: Vec<(String, String)>) -> Vec<(String, String)> {
+    pairs.sort();
+    pairs
+}
+
+fn pair(a: &str, b: &str) -> (String, String) {
+    (a.to_string(), b.to_string())
+}
+
+fn plan_for(root: &Path, old_rel: &str, new_rel: &str) -> RenamePlan {
+    let old = root.join(old_rel).to_string_lossy().to_string();
+    let new = root.join(new_rel).to_string_lossy().to_string();
+    plan_moves(root, &[(old, new)]).expect("plan")
+}
+
+#[test]
+fn plan_lists_a_single_file_move_as_one_pair() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(tmp.path()).unwrap();
+    w(&root, "a.md", "# A\n");
+    w(&root, "other.md", "# Other\n");
+
+    let plan = plan_for(&root, "a.md", "b.md");
+    assert_eq!(plan.file_moves, vec![pair("a.md", "b.md")]);
+}
+
+#[test]
+fn plan_lists_every_file_under_a_moved_folder_including_its_home_page() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(tmp.path()).unwrap();
+    w(&root, "posts/posts.md", "# Posts\n");
+    w(&root, "posts/first.md", "# First\n");
+    w(&root, "posts/deep/second.md", "# Second\n");
+    w(&root, "unrelated.md", "# Unrelated\n");
+
+    let plan = plan_for(&root, "posts", "essays");
+    assert_eq!(plan.moves.len(), 1);
+    assert_eq!(
+        sorted(plan.file_moves),
+        vec![
+            pair("posts/deep/second.md", "essays/deep/second.md"),
+            pair("posts/first.md", "essays/first.md"),
+            pair("posts/posts.md", "essays/essays.md"),
+        ]
+    );
+}
+
+#[test]
+fn undo_file_moves_reports_the_reverse_pairs_before_the_undo_runs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(tmp.path()).unwrap();
+    w(&root, "posts/posts.md", "# Posts\n");
+    w(&root, "posts/first.md", "# First\n");
+    w(&root, "posts/deep/second.md", "# Second\n");
+
+    let applied = do_move(&root, "posts", "essays");
+    let reverse = undo_file_moves(&root, &applied).expect("reverse pairs");
+    assert!(root.join("essays/essays.md").exists(), "nothing has been undone yet");
+    assert_eq!(
+        sorted(reverse),
+        vec![
+            pair("essays/deep/second.md", "posts/deep/second.md"),
+            pair("essays/essays.md", "posts/posts.md"),
+            pair("essays/first.md", "posts/first.md"),
+        ]
+    );
+
+    undo_applied(&root, &applied).expect("undo");
+    assert!(root.join("posts/posts.md").exists());
+}

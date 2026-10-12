@@ -46,7 +46,7 @@ use crate::editor::ref_rewrite::{
 use path_list_folder_index::{collect_dirs, PathListFolderIndex};
 use served_address::Addresses;
 
-pub use apply::{apply_planned_moves, undo_applied};
+pub use apply::{apply_planned_moves, undo_applied, undo_file_moves};
 
 // ── Public, serializable plan/apply/undo types ──────────────────────────────
 // Derives mirror `FileReferenceHit` (ref_scan.rs): the desktop passes these
@@ -83,6 +83,10 @@ pub struct PlannedEdit {
 pub struct RenamePlan {
     pub moves: Vec<PlannedMove>,
     pub edits: Vec<PlannedEdit>,
+    /// Root-relative `(old, new)` of every file whose path changes, including
+    /// each file under a moved folder and its carried home page.
+    #[serde(default)]
+    pub file_moves: Vec<(String, String)>,
 }
 
 /// One edit actually written by [`apply_planned_moves`], with its position
@@ -196,6 +200,19 @@ fn expand_with_home_carry(top_level: &[ResolvedMove], files: &[String]) -> Vec<R
         });
     }
     out
+}
+
+/// What a batch of moves does to a file list: the moves with home carries
+/// added, the list afterwards (same order), and each changed `(before, after)`.
+struct MovedFiles { expanded: Vec<ResolvedMove>, post: Vec<String>, pairs: Vec<(String, String)> }
+
+/// The one rule for which files a batch of moves relocates and where they land,
+/// for planning (the tree now) and undoing (the tree the forward moves left).
+fn moved_files(top_level: &[ResolvedMove], files: &[String]) -> MovedFiles {
+    let expanded = expand_with_home_carry(top_level, files);
+    let post: Vec<String> = files.iter().map(|p| map_path(p, &expanded)).collect();
+    let pairs = files.iter().zip(&post).filter(|(a, b)| a != b).map(|(a, b)| (a.clone(), b.clone())).collect();
+    MovedFiles { expanded, post, pairs }
 }
 
 // ── Which entry the BUILD uses for this reference ──────────────────────────
@@ -699,8 +716,7 @@ pub fn plan_moves(project_root: &Path, moves: &[(String, String)]) -> Result<Ren
     }
 
     let pre_files = walk_all_files(&canonical_root);
-    let expanded = expand_with_home_carry(&resolved, &pre_files);
-    let post_files: Vec<String> = pre_files.iter().map(|p| map_path(p, &expanded)).collect();
+    let MovedFiles { expanded, post: post_files, pairs: file_moves } = moved_files(&resolved, &pre_files);
 
     let idx_pre = Indexes::build(&pre_files);
     let urls_pre = NoUrlIndex;
@@ -775,6 +791,7 @@ pub fn plan_moves(project_root: &Path, moves: &[(String, String)]) -> Result<Ren
     Ok(RenamePlan {
         moves: resolved.into_iter().map(|m| PlannedMove { old_path: m.old, new_path: m.new, is_dir: m.is_dir }).collect(),
         edits,
+        file_moves,
     })
 }
 

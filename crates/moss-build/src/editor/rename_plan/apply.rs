@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use super::{
-    expand_with_home_carry, map_path, walk_all_files, AppliedEdit, PlannedEdit, RenameApplyResult, RenamePlan,
+    map_path, moved_files, walk_all_files, MovedFiles, AppliedEdit, PlannedEdit, RenameApplyResult, RenamePlan,
     ResolvedMove, SkippedFile, UndoResult,
 };
 use crate::editor::ref_rewrite::{apply_edits, Edit};
@@ -199,6 +199,28 @@ pub fn undo_applied(project_root: &Path, applied: &RenameApplyResult) -> Result<
     undo_applied_with(project_root, applied, &|path, text| std::fs::write(path, text))
 }
 
+/// The files [`undo_applied`] will move, as `(current, restored)` root-relative
+/// paths, worked out before anything is moved. A directory move lists every
+/// file under it, and a self-named home page appears under the name it will
+/// get back.
+pub fn undo_file_moves(project_root: &Path, applied: &RenameApplyResult) -> Result<Vec<(String, String)>, String> {
+    let canonical_root =
+        std::fs::canonicalize(project_root).map_err(|e| format!("Cannot canonicalize root: {}", e))?;
+    Ok(reverse_moved_files(&canonical_root, applied).pairs)
+}
+
+/// The reverse move-set, built from the CURRENT (post-apply, pre-undo) file
+/// list so the folder-note carry prediction sees the state the forward apply
+/// actually left behind.
+fn reverse_moved_files(canonical_root: &Path, applied: &RenameApplyResult) -> MovedFiles {
+    let reversed_top: Vec<ResolvedMove> = applied
+        .moves
+        .iter()
+        .map(|m| ResolvedMove { old: m.new_path.clone(), new: m.old_path.clone(), is_dir: m.is_dir })
+        .collect();
+    moved_files(&reversed_top, &walk_all_files(canonical_root))
+}
+
 /// [`undo_applied`] with the page writer passed in.
 fn undo_applied_with(
     project_root: &Path,
@@ -207,17 +229,7 @@ fn undo_applied_with(
 ) -> Result<UndoResult, String> {
     let canonical_root =
         std::fs::canonicalize(project_root).map_err(|e| format!("Cannot canonicalize root: {}", e))?;
-
-    // The reverse move-set, built from the CURRENT (post-apply, pre-undo)
-    // file list so the folder-note carry prediction sees the state the
-    // forward apply actually left behind.
-    let current_files = walk_all_files(&canonical_root);
-    let reversed_top: Vec<ResolvedMove> = applied
-        .moves
-        .iter()
-        .map(|m| ResolvedMove { old: m.new_path.clone(), new: m.old_path.clone(), is_dir: m.is_dir })
-        .collect();
-    let expanded_reverse = expand_with_home_carry(&reversed_top, &current_files);
+    let MovedFiles { expanded: expanded_reverse, .. } = reverse_moved_files(&canonical_root, applied);
 
     for mv in applied.moves.iter().rev() {
         let cur_abs = canonical_root.join(&mv.new_path);
