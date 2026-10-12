@@ -9,7 +9,7 @@ A one-page site with a synthetic `clip.mp4` (2s, 320x240, generated with ffmpeg 
 - `input/` — source site, as a user would author it.
 - `expected/` — build output from `moss build input` with `--no-plugins`. Canonical snapshot; tests diff against this.
 
-`clip.mp4`'s bytes are not asserted (the snapshot suite compares non-HTML/CSS/JS/SVG/TXT/JSON/XML files by presence only — see `snapshot_tests.rs`'s `is_content_compared`), so its content doesn't need to stay in sync with what a real build's video pipeline (ffmpeg transcode, thumbnail, HLS ladder) produces on a given machine. Only `index.html`'s markup is pinned, and only what a single first build emits: no `width=`/`height=` (dimension probing lands on a later build) and no HLS `<source>` ladder (built off a later, cached transform pass) — both are deliberately absent from `expected/index.html` for that reason, not omissions to fix.
+`clip.mp4`'s bytes are not asserted (the snapshot suite compares non-HTML/CSS/JS/SVG/TXT/JSON/XML files by presence only — see `snapshot_tests.rs`'s `is_content_compared`), so its content doesn't need to stay in sync with what a real build's video pipeline (ffmpeg transcode, thumbnail, HLS ladder) produces on a given machine. The 320x240 clip fills the first two ladder boxes (240 px tall is more than the 234 px box of the second), so `expected/clip.hls/` holds its two-rung ladder; those files are present-only too. Only `index.html`'s markup is pinned, and only what a single first build emits: no `width=`/`height=` (dimension probing lands on a later build) and no HLS `<source>` ladder (built off a later, cached transform pass) — both are deliberately absent from `expected/index.html` for that reason, not omissions to fix.
 
 ## Regenerating `expected/`
 

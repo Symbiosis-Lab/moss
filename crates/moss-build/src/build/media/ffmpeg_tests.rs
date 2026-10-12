@@ -194,6 +194,8 @@ fn source(duration_secs: f64, width: u32, total_kbps: Option<f64>, web: bool) ->
     SourceVideo {
         duration_secs,
         width,
+        height: width * 9 / 16,
+        sar: 1.0,
         fps: 30.0,
         total_kbps,
         video_kbps: None,
@@ -214,10 +216,11 @@ fn plan_puts_a_short_video_on_its_top_rung() {
         other => panic!("expected Encode, got {other:?}"),
     };
     assert_eq!((rung.width, rung.video_kbps), (1280, 2000));
-    // Shorter is not higher any more: both land on the same rung.
+    // Shorter is not higher beyond the table: a clip whose budget holds the
+    // 1080p rung gets that rung's 4000 kbps.
     assert_eq!(
-        plan_video_encode(&source(60.0, 1920, Some(2150.0), true), &config),
-        EncodePlan::Encode { rung }
+        plan_video_encode(&source(60.0, 1920, Some(9000.0), true), &config),
+        EncodePlan::Encode { rung: moss_core::asset_paths::VIDEO_LADDER[6] }
     );
 }
 
@@ -229,7 +232,7 @@ fn plan_re_encodes_a_small_file_that_is_too_fat_to_stream() {
     let config = VideoCompressionConfig::default();
     assert!(matches!(
         plan_video_encode(&source(30.0, 3840, Some(24_000.0), true), &config),
-        EncodePlan::Encode { rung } if rung.width == 1280
+        EncodePlan::Encode { rung } if rung.width == 1920
     ));
 }
 
@@ -314,10 +317,10 @@ fn plan_lets_the_size_budget_pull_a_long_video_down_a_rung() {
     let config = VideoCompressionConfig::default();
     let short = plan_video_encode(&source(120.0, 1920, Some(9000.0), true), &config);
     let long = plan_video_encode(&source(1800.0, 1920, Some(9000.0), true), &config);
-    assert!(matches!(short, EncodePlan::Encode { rung } if rung.width == 1280));
+    assert!(matches!(short, EncodePlan::Encode { rung } if rung.width == 1920));
     match long {
         EncodePlan::Encode { rung } => {
-            assert!(rung.width < 1280, "expected a lower rung, got {}", rung.width);
+            assert!(rung.width < 1920, "expected a lower rung, got {}", rung.width);
             assert!(moss_core::asset_paths::VIDEO_LADDER.contains(&rung));
         }
         other => panic!("expected Encode, got {other:?}"),
@@ -911,6 +914,11 @@ fn test_to_params_equality() {
 }
 
 #[test]
+fn to_params_carries_a_frame_version_so_pre_fit_encodes_are_rebuilt() {
+    assert_eq!(VideoCompressionConfig::default().to_params()["frame"], 2);
+}
+
+#[test]
 fn to_params_carries_the_ladder_so_editing_a_rung_invalidates_the_cache() {
     // Delivery policy moved out of this struct and into a const table. Nothing
     // in the config changes when a rung is edited, so without the ladder in the
@@ -969,7 +977,7 @@ fn pair(args: &[String], flag: &str) -> Option<String> {
 #[test]
 fn test_two_pass_first_args_include_threads_cap() {
     let config = VideoCompressionConfig::default();
-    let args = build_two_pass_first_args("in.mov", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, &config, "/tmp/passlog", "/dev/null");
+    let args = build_two_pass_first_args("in.mov", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, (1280, 720), &config, "/tmp/passlog", "/dev/null");
     assert_eq!(
         pair(&args, "-threads").as_deref(),
         Some(config.encode_threads.to_string().as_str())
@@ -990,8 +998,8 @@ fn test_both_passes_carry_identical_rate_control() {
     // lists come from `common_encode_args`, so this is a guard on that
     // sharing, not on anyone's diligence.
     let config = VideoCompressionConfig::default();
-    let first = build_two_pass_first_args("in.mov", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, &config, "/tmp/passlog", "/dev/null");
-    let second = build_two_pass_second_args("in.mov", "out.mp4", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, &config, "/tmp/passlog");
+    let first = build_two_pass_first_args("in.mov", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, (1280, 720), &config, "/tmp/passlog", "/dev/null");
+    let second = build_two_pass_second_args("in.mov", "out.mp4", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, (1280, 720), &config, "/tmp/passlog");
     for flag in [
         "-b:v", "-maxrate", "-bufsize", "-g", "-preset", "-vf", "-c:v", "-pix_fmt", "-profile:v",
     ] {
@@ -1009,7 +1017,7 @@ fn test_encode_args_cap_the_peak_not_just_the_average() {
     // `-b:v` alone is an average: a high-motion passage can borrow bits from a
     // still one and burst far above it. A viewer's buffer drains on the peak.
     let config = VideoCompressionConfig::default();
-    let args = build_two_pass_second_args("in.mov", "out.mp4", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, &config, "/tmp/passlog");
+    let args = build_two_pass_second_args("in.mov", "out.mp4", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, (1280, 720), &config, "/tmp/passlog");
     assert_eq!(pair(&args, "-b:v").as_deref(), Some("2000k"));
     assert_eq!(
         pair(&args, "-maxrate").as_deref(),
@@ -1031,7 +1039,7 @@ fn test_encode_args_bound_the_keyframe_interval() {
     // stall or a seek restarts at the preceding keyframe, so that default
     // costs up to 8s of re-fetched video on the link least able to afford it.
     let config = VideoCompressionConfig::default();
-    let args = build_two_pass_second_args("in.mov", "out.mp4", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, &config, "/tmp/passlog");
+    let args = build_two_pass_second_args("in.mov", "out.mp4", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, (1280, 720), &config, "/tmp/passlog");
     assert_eq!(pair(&args, "-g").as_deref(), Some("60"));
     assert!(
         !args.contains(&"-sc_threshold".to_string()),
@@ -1046,7 +1054,7 @@ fn test_encode_args_pin_a_universally_decodable_pixel_format() {
     // Safari and most TVs will not decode. The level is deliberately NOT
     // pinned — x264 derives it, and pinning can only raise it.
     let config = VideoCompressionConfig::default();
-    let args = build_two_pass_second_args("in.mov", "out.mp4", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, &config, "/tmp/passlog");
+    let args = build_two_pass_second_args("in.mov", "out.mp4", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, (1280, 720), &config, "/tmp/passlog");
     assert_eq!(pair(&args, "-pix_fmt").as_deref(), Some("yuv420p"));
     assert_eq!(pair(&args, "-profile:v").as_deref(), Some("high"));
     assert!(!args.contains(&"-level".to_string()));
@@ -1055,7 +1063,7 @@ fn test_encode_args_pin_a_universally_decodable_pixel_format() {
 #[test]
 fn test_two_pass_second_args_include_threads_cap() {
     let config = VideoCompressionConfig::default();
-    let args = build_two_pass_second_args("in.mov", "out.mp4", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, &config, "/tmp/passlog");
+    let args = build_two_pass_second_args("in.mov", "out.mp4", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, (1280, 720), &config, "/tmp/passlog");
     assert_eq!(
         pair(&args, "-threads").as_deref(),
         Some(config.encode_threads.to_string().as_str())
@@ -1082,4 +1090,72 @@ fn test_to_params_excludes_encode_threads() {
         config.to_params(),
         VideoCompressionConfig::default().to_params()
     );
+}
+
+#[test]
+fn the_progressive_encode_scales_to_the_sources_fitted_frame_with_square_pixels() {
+    let config = VideoCompressionConfig::default();
+    let rung = moss_core::asset_paths::VIDEO_LADDER[5];
+    let args = build_two_pass_second_args("in.mov", "out.mp4", rung, 30.0, (1600, 678), &config, "/tmp/passlog");
+    let vf = &args[args.iter().position(|a| a == "-vf").unwrap() + 1];
+    assert_eq!(vf, "scale=1280:542,setsar=1");
+    let slow = build_two_pass_second_args("in.mov", "out.mp4", rung, 60.0, (1600, 678), &config, "/tmp/passlog");
+    assert!(slow.iter().any(|a| a == "scale=1280:542,setsar=1,fps=30"));
+}
+
+#[test]
+fn a_source_is_planned_by_its_display_size_not_its_coded_width() {
+    // 1200 coded px of 4:1 pixels is a 4800-wide picture: it fills every box,
+    // so it is not "already within" the top rung however small its coded width.
+    let mut wide = source(60.0, 1200, Some(1000.0), true);
+    wide.height = 1080;
+    wide.sar = 4.0;
+    assert_eq!(wide.display(), (4800, 1080));
+    assert!(matches!(plan_video_encode(&wide, &VideoCompressionConfig::default()), EncodePlan::Encode { .. }));
+}
+
+#[test]
+fn ffprobe_sample_aspect_ratio_text_parses_to_a_pixel_ratio() {
+    assert!((parse_sar(Some("64:45")) - 64.0 / 45.0).abs() < 1e-9);
+    assert_eq!(parse_sar(Some("1:1")), 1.0);
+    assert_eq!(parse_sar(Some("0:1")), 1.0, "0:1 is how ffprobe says none declared");
+    assert_eq!(parse_sar(Some("N/A")), 1.0);
+    assert_eq!(parse_sar(Some("3:0")), 1.0);
+    assert_eq!(parse_sar(None), 1.0);
+}
+
+#[test]
+fn a_display_matrix_rotation_swaps_the_shape_only_for_quarter_turns() {
+    for q in ["90", "-90", "270", "-270", "90.0"] {
+        assert!(is_quarter_turn(Some(q)), "{q}");
+    }
+    for h in ["0", "180", "-180", "N/A"] {
+        assert!(!is_quarter_turn(Some(h)), "{h}");
+    }
+    assert!(!is_quarter_turn(None));
+}
+
+#[test]
+fn only_8_bit_420_h264_with_aac_or_no_audio_ships_as_is() {
+    let aac = vec!["aac".to_string()];
+    assert!(is_web_playable(true, Some("h264"), Some("yuv420p"), &aac));
+    assert!(is_web_playable(true, Some("h264"), Some("yuvj420p"), &[]), "silent is fine");
+    assert!(!is_web_playable(true, Some("h264"), Some("yuv420p10le"), &aac), "10-bit");
+    assert!(!is_web_playable(true, Some("h264"), Some("yuv444p"), &aac));
+    assert!(!is_web_playable(true, Some("h264"), None, &aac), "unknown pixel format");
+    assert!(!is_web_playable(true, Some("h264"), Some("yuv420p"), &["ac3".to_string()]));
+    assert!(!is_web_playable(true, Some("hevc"), Some("yuv420p"), &aac));
+    assert!(!is_web_playable(false, Some("h264"), Some("yuv420p"), &aac));
+}
+
+#[test]
+fn a_10_bit_or_ac3_source_that_fits_the_top_rung_is_encoded_not_passed_through() {
+    let config = VideoCompressionConfig::default();
+    let aac = vec!["aac".to_string()];
+    let mut clip = source(60.0, 1920, Some(3000.0), true);
+    assert_eq!(plan_video_encode(&clip, &config), EncodePlan::KeepOriginal, "control: a clean 1080p file passes");
+    clip.web_playable = is_web_playable(true, Some("h264"), Some("yuv420p10le"), &aac);
+    assert!(matches!(plan_video_encode(&clip, &config), EncodePlan::Encode { .. }));
+    clip.web_playable = is_web_playable(true, Some("h264"), Some("yuv420p"), &["ac3".to_string()]);
+    assert!(matches!(plan_video_encode(&clip, &config), EncodePlan::Encode { .. }));
 }

@@ -369,7 +369,7 @@ pub(crate) fn convert_single_video(
             // Recorded here rather than with the MP4's own outputs: four
             // early returns sit between this point and that write, and a
             // ladder that reached the object store without reaching the record
-            // is seventeen blobs re-encoded on every build. `record_ladder`,
+            // is a ladder's blobs re-encoded on every build. `record_ladder`,
             // not `record_transforms`: see its own doc for why a plain merge
             // would strand a shrunk ladder's dropped rung keys.
             record_ladder(transforms, source_oid, source_file, entries);
@@ -2513,7 +2513,7 @@ pub(crate) mod tests {
         std::fs::write(vault.join(item), source_bytes).unwrap();
 
         let mut staged = vec![asset_paths::to_mp4(item), asset_paths::to_thumb(item)];
-        let rungs = asset_paths::video_ladder_rungs(640);
+        let rungs = asset_paths::video_ladder_rungs((640, 360));
         if ladder {
             staged.extend(asset_paths::hls_outputs(item, rungs));
         }
@@ -2792,6 +2792,8 @@ pub(crate) mod tests {
             .unwrap_or_else(|| panic!("{rung_count} is not a real rung count"));
         let source = SourceFacts {
             width: asset_paths::VIDEO_LADDER[rung_count - 1].width,
+            height: asset_paths::VIDEO_LADDER[rung_count - 1].height,
+            sar: 1.0,
             duration_secs: 60.0,
             video_kbps: None,
             total_kbps: None,
@@ -3165,7 +3167,7 @@ pub(crate) mod tests {
     }
 
     /// `video_output_keys`' full `VIDEO_LADDER` table is a candidate set, not
-    /// a promise every video has all 17 files — a narrower ladder (fewer
+    /// a promise every video has every file of the full table — a narrower ladder (fewer
     /// rungs, clamped by the source's own bitrate or the per-file budget) is
     /// an everyday outcome, not damage. The names above a real ladder's own
     /// width must never reach `emit_video_outputs_via_channel`'s existence
@@ -3566,7 +3568,7 @@ pub(crate) mod tests {
         remove_stale_dirs(&staging, &compute_expected_dirs(view), &crate::build::lifecycle::permit_for_test());
 
         let master_key = asset_paths::to_hls_master(&item1);
-        let master_bytes = synthetic_master(asset_paths::video_ladder_rungs(640));
+        let master_bytes = synthetic_master(asset_paths::video_ladder_rungs((640, 360)));
         for key in &untouched {
             let abs = staging.join(key);
             assert!(

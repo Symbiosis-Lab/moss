@@ -481,10 +481,13 @@ pub fn to_webp_rung(source: &str, width: u32) -> String {
     format!("{stem}.w{width}.webp")
 }
 
-/// One rung of the video delivery ladder: a resolution, a frame rate and the
+/// One rung of the video delivery ladder: a bounding box, a frame rate and the
 /// video bitrate that pairs with them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VideoRung {
+    /// The box the picture must fit inside, not the frame it is encoded at: a
+    /// source of another shape is scaled down to fit it, aspect preserved
+    /// ([`VideoRung::fitted_frame`]).
     pub width: u32,
     pub height: u32,
     pub fps: u32,
@@ -507,6 +510,45 @@ impl VideoRung {
     pub const fn total_kbps(&self) -> u32 {
         self.video_kbps + self.audio_kbps
     }
+
+    /// The frame (width, height) a source of `display` size is encoded at for
+    /// this rung: the display size scaled down to fit the box, aspect kept,
+    /// both sides even, never enlarged (the one exception is the 2-pixel floor:
+    /// a display under 2 px on a side still yields a 2-pixel side, since an
+    /// encoded frame cannot be smaller). Square pixels are the caller's job
+    /// (`setsar=1`), since the numbers here are already display pixels.
+    ///
+    /// A 1600x678 source in the 1280x720 box is 1280x542; a 1080x1920 portrait
+    /// source is 406x720. Computed here, once, so the ffmpeg filter graph, the
+    /// progressive encode and the tests all read the same numbers instead of
+    /// each leaving the arithmetic to a filter expression.
+    pub fn fitted_frame(&self, display: (u32, u32)) -> (u32, u32) {
+        let (dw, dh) = (display.0.max(1) as f64, display.1.max(1) as f64);
+        let scale = (self.width as f64 / dw).min(self.height as f64 / dh).min(1.0);
+        // Round to the nearest even number when shrinking; when the source
+        // already fits, round down so an odd side is trimmed, not enlarged.
+        let even = |v: f64, cap: u32| {
+            let half = if scale < 1.0 { (v / 2.0).round() } else { (v / 2.0).floor() };
+            ((half as u32) * 2).clamp(2, (cap & !1).max(2))
+        };
+        (even(dw * scale, self.width), even(dh * scale, self.height))
+    }
+
+    /// Whether fitting `display` into this box would not enlarge it — the
+    /// source is at least as large as the box on whichever axis binds.
+    pub const fn fits_within(&self, display: (u32, u32)) -> bool {
+        self.width <= display.0 || self.height <= display.1
+    }
+}
+
+/// A source's display size: its coded width stretched by its sample aspect
+/// ratio, over its height. An unknown or non-positive ratio counts as square
+/// pixels. A source that declares 64:45 pixels at 1350x1080 is a 1920x1080
+/// picture, and that — not the coded 1350 — is what a rung's box is compared
+/// against.
+pub fn display_size(width: u32, height: u32, sar: f64) -> (u32, u32) {
+    let sar = if sar.is_finite() && sar > 0.0 { sar } else { 1.0 };
+    ((width as f64 * sar).round() as u32, height)
 }
 
 /// The least bits per pixel per frame that still yields a watchable picture.
@@ -547,6 +589,11 @@ pub const LADDER_MIN_RUNG_SPACING: f64 = 1.5;
 /// [`MIN_BITS_PER_PIXEL_PER_FRAME`]; `video_ladder_rungs_clear_the_quality_floor`
 /// is what keeps that true when someone edits a number here.
 ///
+/// The 1920x1080 rung is the ceiling: a full-screen background video on a
+/// high-density display needs about 1920 px across, and a ladder that stopped
+/// at 720p served it soft. At 4000 kbps it clears the quality floor at 0.064
+/// bits per pixel per frame, twice the rung below it.
+///
 /// The **top rung is also the delivery ceiling**. There is deliberately no
 /// second `max_video_bitrate_kbps` knob beside this table: two independent
 /// statements of how good the best version gets would overlap. The
@@ -557,29 +604,33 @@ pub const LADDER_MIN_RUNG_SPACING: f64 = 1.5;
 /// past what the source itself can supply. The ceiling still holds in the
 /// sense that matters: nothing this crate builds ever asks libx264 for more
 /// than this table's top rung.
-pub const VIDEO_LADDER: [VideoRung; 6] = [
+pub const VIDEO_LADDER: [VideoRung; 7] = [
     VideoRung { width: 320, height: 180, fps: 15, video_kbps: 45, audio_kbps: 32, audio_channels: 1 },
     VideoRung { width: 416, height: 234, fps: 30, video_kbps: 145, audio_kbps: 32, audio_channels: 1 },
     VideoRung { width: 640, height: 360, fps: 30, video_kbps: 365, audio_kbps: 192, audio_channels: 2 },
     VideoRung { width: 768, height: 432, fps: 30, video_kbps: 730, audio_kbps: 192, audio_channels: 2 },
     VideoRung { width: 960, height: 540, fps: 30, video_kbps: 1100, audio_kbps: 192, audio_channels: 2 },
     VideoRung { width: 1280, height: 720, fps: 30, video_kbps: 2000, audio_kbps: 192, audio_channels: 2 },
+    VideoRung { width: 1920, height: 1080, fps: 30, video_kbps: 4000, audio_kbps: 192, audio_channels: 2 },
 ];
 
-/// The rungs worth encoding for a source of this width.
+/// The rungs worth encoding for a source of this display size
+/// ([`display_size`]).
 ///
-/// Truncated from the **top only**: `take_while` drops rungs wider than the
-/// source, exactly as [`ladder_rungs`] does for images. Never truncate from the
+/// A rung is offered when fitting the source into its box would not enlarge
+/// it ([`VideoRung::fits_within`]). Truncated from the **top only**:
+/// `take_while` drops rungs bigger than the source, exactly as
+/// [`ladder_rungs`] does for images. Never truncate from the
 /// bottom — the bottom rung is the entire point of the ladder, and a
 /// low-bitrate source still downscales to it.
 ///
-/// A source narrower than every rung keeps the bottom one, so the result is
-/// never empty; encoding a 200 px clip at 320 px wastes a little, and having no
-/// rung at all would be a video that cannot be delivered.
-pub fn video_ladder_rungs(source_width: u32) -> &'static [VideoRung] {
+/// A source smaller than every box keeps the bottom rung, so the result is
+/// never empty; having no rung at all would be a video that cannot be
+/// delivered (the frame is still never enlarged past the source).
+pub fn video_ladder_rungs(display: (u32, u32)) -> &'static [VideoRung] {
     let n = VIDEO_LADDER
         .iter()
-        .take_while(|r| r.width <= source_width)
+        .take_while(|r| r.fits_within(display))
         .count()
         .max(1);
     &VIDEO_LADDER[..n]
@@ -626,7 +677,7 @@ impl SourceBitrate {
     }
 }
 
-/// The rungs worth encoding for a source of `source_width` px and
+/// The rungs worth encoding for a source of `display` size and
 /// `duration_secs` seconds, narrowed twice over from [`VIDEO_LADDER`]:
 ///
 /// 1. **The source's own bitrate.** Re-encoding a rung above what the source
@@ -677,12 +728,12 @@ impl SourceBitrate {
 /// clamping — which only ever lowers `video_kbps`, never `audio_kbps` —
 /// cannot undo that.
 pub fn video_ladder_rungs_within(
-    source_width: u32,
+    display: (u32, u32),
     duration_secs: f64,
     max_file_bytes: u64,
     source_bitrate: SourceBitrate,
 ) -> Vec<VideoRung> {
-    let width_rungs = video_ladder_rungs(source_width);
+    let width_rungs = video_ladder_rungs(display);
     let capped: Vec<VideoRung> = match source_bitrate.for_clamp() {
         None => width_rungs.to_vec(),
         Some(source_kbps) => {
@@ -777,8 +828,8 @@ pub fn video_ladder_fingerprint() -> String {
 /// The single rung a progressive (non-ladder) encode targets: the best one this
 /// source can fill. The progressive MP4 **is** the ladder's top rung for that
 /// source, which is why no separate ceiling constant exists.
-pub fn video_top_rung(source_width: u32) -> VideoRung {
-    let rungs = video_ladder_rungs(source_width);
+pub fn video_top_rung(display: (u32, u32)) -> VideoRung {
+    let rungs = video_ladder_rungs(display);
     rungs[rungs.len() - 1]
 }
 
@@ -876,7 +927,7 @@ pub const HLS_MASTER_NAME: &str = "master.m3u8";
 ///
 /// Exact, where asking "does this stem contain a dot?" was not: a video named
 /// `2024.05.trip.mov` reads as a rung playlist under that question and its
-/// ladder is silently never offered, leaving seventeen encoded files on every
+/// ladder is silently never offered, leaving a ladder's encoded files on every
 /// build that no page ever references.
 pub fn hls_master_stem(url: &str) -> Option<&str> {
     hls_dir_stem(url.strip_suffix(HLS_MASTER_NAME)?.strip_suffix('/')?)
@@ -1214,8 +1265,8 @@ mod tests {
     /// someone lowered a rung's bitrate or raised its resolution in isolation.
     #[test]
     fn hls_outputs_writes_one_audio_rendition_per_group_not_per_rung() {
-        // The whole point of rendition groups: six rungs, but audio stored
-        // twice. Muxing per rung would store it six times and degrade it in
+        // The whole point of rendition groups: seven rungs, but audio stored
+        // twice. Muxing per rung would store it seven times and degrade it in
         // lockstep with the picture.
         let outs = hls_outputs("clip.mov", &VIDEO_LADDER);
         assert_eq!(outs[0], "clip.hls/master.m3u8", "master comes first");
@@ -1224,7 +1275,7 @@ mod tests {
             1 + VIDEO_LADDER.len() * 2 + 2 * 2,
             "master + playlist/segment per rung + playlist/segment per audio group"
         );
-        assert_eq!(outs.len(), 17, "the measured file count for the full ladder");
+        assert_eq!(outs.len(), 19, "7 rungs x2 + 2 renditions x2 + master");
         let audio: Vec<_> = outs.iter().filter(|o| o.contains("/a")).collect();
         assert_eq!(audio.len(), 4, "two groups, a playlist and a segment each");
     }
@@ -1242,7 +1293,7 @@ mod tests {
     fn hls_outputs_shrink_with_a_truncated_ladder() {
         // A narrow source gets fewer rungs, and if every surviving rung shares
         // one audio group only that group is written.
-        let rungs = video_ladder_rungs(320);
+        let rungs = video_ladder_rungs((320, 180));
         assert_eq!(rungs.len(), 1);
         let outs = hls_outputs("clip.mov", rungs);
         assert_eq!(outs, vec![
@@ -1391,11 +1442,11 @@ mod tests {
     /// gets the bottom one — an empty ladder is a video that cannot be played.
     #[test]
     fn video_ladder_truncates_from_the_top_and_never_to_nothing() {
-        assert_eq!(video_ladder_rungs(1920).len(), VIDEO_LADDER.len());
-        assert_eq!(video_ladder_rungs(1280).len(), VIDEO_LADDER.len());
-        assert_eq!(video_ladder_rungs(640).len(), 3);
-        assert_eq!(video_ladder_rungs(200).len(), 1);
-        assert_eq!(video_ladder_rungs(200)[0], VIDEO_LADDER[0]);
+        assert_eq!(video_ladder_rungs((1920, 1080)).len(), VIDEO_LADDER.len());
+        assert_eq!(video_ladder_rungs((1280, 720)).len(), VIDEO_LADDER.len() - 1);
+        assert_eq!(video_ladder_rungs((640, 360)).len(), 3);
+        assert_eq!(video_ladder_rungs((200, 112)).len(), 1);
+        assert_eq!(video_ladder_rungs((200, 112))[0], VIDEO_LADDER[0]);
     }
 
     // ── video_ladder_rungs_within ──────────────────────────────────
@@ -1406,7 +1457,7 @@ mod tests {
     /// container total — is today's pre-clamp behavior: the per-file budget is
     /// the only narrowing, exactly as this function worked before the clamp
     /// existed. The real bug this budget alone exists for: a 903.47 s,
-    /// 1280-wide source's ladder had every rung fit the WIDTH, but the top two
+    /// 1280x720 source's ladder had every rung fit the source, but the top two
     /// rungs' single files measured 221,843,463 and 122,579,638 bytes —
     /// 515 MB for the whole ladder against a hosting cap meant to bound one
     /// upload. A 150 MiB cap must drop only the top rung (its file measured
@@ -1418,17 +1469,17 @@ mod tests {
     fn video_ladder_rungs_within_is_the_table_ladder_when_no_bitrate_is_known() {
         let duration = 903.47;
         let unknown = SourceBitrate::default();
-        let at_150_mib = video_ladder_rungs_within(1280, duration, 150 * MIB, unknown);
+        let at_150_mib = video_ladder_rungs_within((1280, 720), duration, 150 * MIB, unknown);
         assert_eq!(at_150_mib.len(), 5, "{at_150_mib:?}");
         assert_eq!((at_150_mib.last().unwrap().width, at_150_mib.last().unwrap().height), (960, 540));
 
-        let at_100_mib = video_ladder_rungs_within(1280, duration, 100 * MIB, unknown);
+        let at_100_mib = video_ladder_rungs_within((1280, 720), duration, 100 * MIB, unknown);
         assert_eq!(at_100_mib.len(), 4, "{at_100_mib:?}");
         assert_eq!((at_100_mib.last().unwrap().width, at_100_mib.last().unwrap().height), (768, 432));
     }
 
     /// The feature this function exists for, pinned exactly: a 903.47 s,
-    /// 1280-wide source whose own video stream measures 600 kbps. Re-encoding
+    /// 1280x720 source whose own video stream measures 600 kbps. Re-encoding
     /// its would-be 960x540 rung at the table's 1100 kbps cannot improve a
     /// picture the source never had, so that rung is dropped; the 768x432 rung
     /// below it is kept but clamped to 600 kbps, comfortably clear of the
@@ -1437,7 +1488,7 @@ mod tests {
     #[test]
     fn video_ladder_rungs_within_clamps_the_top_rung_to_the_sources_own_video_kbps() {
         let source = SourceBitrate { video_kbps: Some(600.0), total_kbps: None };
-        let got = video_ladder_rungs_within(1280, 903.47, 150 * MIB, source);
+        let got = video_ladder_rungs_within((1280, 720), 903.47, 150 * MIB, source);
         assert_eq!(
             got,
             vec![
@@ -1456,7 +1507,7 @@ mod tests {
     #[test]
     fn video_ladder_rungs_within_falls_back_to_total_kbps_when_video_kbps_is_unknown() {
         let source = SourceBitrate { video_kbps: None, total_kbps: Some(600.0) };
-        let got = video_ladder_rungs_within(1280, 903.47, 150 * MIB, source);
+        let got = video_ladder_rungs_within((1280, 720), 903.47, 150 * MIB, source);
         assert_eq!(
             got,
             vec![
@@ -1474,7 +1525,7 @@ mod tests {
     #[test]
     fn video_ladder_rungs_within_keeps_the_table_ladder_for_a_high_bitrate_source() {
         let source = SourceBitrate { video_kbps: Some(5000.0), total_kbps: None };
-        let got = video_ladder_rungs_within(1920, 60.0, 150 * MIB, source);
+        let got = video_ladder_rungs_within((1920, 1080), 60.0, 150 * MIB, source);
         assert_eq!(got, VIDEO_LADDER.to_vec(), "{got:?}");
     }
 
@@ -1485,7 +1536,7 @@ mod tests {
     #[test]
     fn video_ladder_rungs_within_drops_a_clamp_that_would_duplicate_the_rung_below() {
         let source = SourceBitrate { video_kbps: Some(150.0), total_kbps: None };
-        let got = video_ladder_rungs_within(1280, 100.0, 150 * MIB, source);
+        let got = video_ladder_rungs_within((1280, 720), 100.0, 150 * MIB, source);
         assert_eq!(got, vec![VIDEO_LADDER[0], VIDEO_LADDER[1]], "{got:?}");
     }
 
@@ -1498,7 +1549,7 @@ mod tests {
     fn video_ladder_rungs_within_keeps_a_clamp_exactly_at_the_min_spacing() {
         assert_eq!(LADDER_MIN_RUNG_SPACING * VIDEO_LADDER[3].video_kbps as f64, 1095.0, "sanity: the tie is exact");
         let source = SourceBitrate { video_kbps: Some(1095.9), total_kbps: None };
-        let got = video_ladder_rungs_within(1280, 60.0, 150 * MIB, source);
+        let got = video_ladder_rungs_within((1280, 720), 60.0, 150 * MIB, source);
         assert_eq!(
             got,
             vec![
@@ -1519,7 +1570,7 @@ mod tests {
     #[test]
     fn video_ladder_rungs_within_a_source_leaner_than_the_bottom_rung_keeps_one_clamped_rung() {
         let source = SourceBitrate { video_kbps: Some(20.0), total_kbps: None };
-        let got = video_ladder_rungs_within(1280, 100.0, 150 * MIB, source);
+        let got = video_ladder_rungs_within((1280, 720), 100.0, 150 * MIB, source);
         assert_eq!(got, vec![VideoRung { video_kbps: 20, ..VIDEO_LADDER[0] }], "{got:?}");
     }
 
@@ -1534,7 +1585,7 @@ mod tests {
         assert!(hls_file_bytes(600, 1000.0) <= budget as f64, "sanity: the clamped figure fits");
 
         let source = SourceBitrate { video_kbps: Some(600.0), total_kbps: None };
-        let got = video_ladder_rungs_within(1280, 1000.0, budget, source);
+        let got = video_ladder_rungs_within((1280, 720), 1000.0, budget, source);
         assert_eq!(
             got,
             vec![
@@ -1552,8 +1603,8 @@ mod tests {
     /// the width already did: same result as [`video_ladder_rungs`] alone.
     #[test]
     fn video_ladder_rungs_within_keeps_the_full_ladder_for_a_short_clip() {
-        let got = video_ladder_rungs_within(1280, 10.0, 150 * MIB, SourceBitrate::default());
-        assert_eq!(got, video_ladder_rungs(1280), "10s at any real bitrate is nowhere near 150 MiB");
+        let got = video_ladder_rungs_within((1920, 1080), 10.0, 150 * MIB, SourceBitrate::default());
+        assert_eq!(got, video_ladder_rungs((1920, 1080)), "10s at any real bitrate is nowhere near 150 MiB");
         assert_eq!(got.len(), VIDEO_LADDER.len());
     }
 
@@ -1562,7 +1613,7 @@ mod tests {
     /// `.max(1)` rule [`video_ladder_rungs`] applies for width.
     #[test]
     fn video_ladder_rungs_within_never_returns_empty_for_a_very_long_video() {
-        let got = video_ladder_rungs_within(1280, 20_000.0, 1, SourceBitrate::default());
+        let got = video_ladder_rungs_within((1280, 720), 20_000.0, 1, SourceBitrate::default());
         assert_eq!(got.len(), 1);
         assert_eq!(got[0], VIDEO_LADDER[0]);
     }
@@ -1588,9 +1639,107 @@ mod tests {
 
     #[test]
     fn video_top_rung_is_the_best_the_source_can_fill() {
-        assert_eq!(video_top_rung(1920).width, 1280);
-        assert_eq!(video_top_rung(640).width, 640);
-        assert_eq!(video_top_rung(100).width, 320);
+        assert_eq!(video_top_rung((3840, 2160)).width, 1920);
+        assert_eq!(video_top_rung((1920, 1080)).width, 1920);
+        assert_eq!(video_top_rung((1280, 720)).width, 1280);
+        assert_eq!(video_top_rung((640, 360)).width, 640);
+        assert_eq!(video_top_rung((100, 56)).width, 320);
+    }
+
+    const BOX_720: VideoRung = VIDEO_LADDER[5];
+    const BOX_360: VideoRung = VIDEO_LADDER[2];
+
+    #[test]
+    fn a_rung_is_a_box_the_sources_own_shape_is_fitted_into() {
+        // Wide: the width binds, the height follows the source, not the box.
+        assert_eq!(BOX_720.fitted_frame((1600, 678)), (1280, 542));
+        // Portrait: the height binds.
+        let (w, h) = BOX_720.fitted_frame((1080, 1920));
+        assert_eq!(h, 720);
+        assert!(w == 404 || w == 406, "{w}");
+        // A declared pixel aspect ratio is part of the shape.
+        assert_eq!(BOX_720.fitted_frame(display_size(1350, 1080, 64.0 / 45.0)), (1280, 720));
+        // Unknown ratio (0 or negative) means square pixels.
+        assert_eq!(display_size(640, 480, 0.0), (640, 480));
+        assert_eq!(BOX_360.fitted_frame(display_size(640, 480, 0.0)), (480, 360));
+    }
+
+    #[test]
+    fn a_fitted_frame_is_even_and_never_larger_than_the_source_or_the_box() {
+        assert_eq!(BOX_720.fitted_frame((640, 360)), (640, 360), "never upscaled");
+        assert_eq!(BOX_720.fitted_frame((641, 361)), (640, 360), "an odd side is trimmed, not enlarged");
+        for src in [(1601, 677), (1919, 1081), (333, 1999), (4000, 100)] {
+            let (w, h) = BOX_720.fitted_frame(src);
+            assert!(w % 2 == 0 && h % 2 == 0 && w >= 2 && h >= 2, "{src:?} -> {w}x{h}");
+            assert!(w <= BOX_720.width && h <= BOX_720.height, "{src:?} -> {w}x{h}");
+        }
+    }
+
+    #[test]
+    fn the_1080_box_is_offered_only_to_a_source_that_fills_it_on_some_axis() {
+        // 1620x1080 fills the box's height: it is delivered at its own size.
+        let rungs = video_ladder_rungs((1620, 1080));
+        assert_eq!(rungs.len(), VIDEO_LADDER.len());
+        assert_eq!(rungs[rungs.len() - 1].fitted_frame((1620, 1080)), (1620, 1080));
+        // 1600x678 is under 1920 across and 1080 tall: it tops out at 720.
+        let rungs = video_ladder_rungs((1600, 678));
+        assert_eq!(rungs.len(), VIDEO_LADDER.len() - 1);
+        assert_eq!(rungs[rungs.len() - 1].width, 1280);
+    }
+
+    #[test]
+    fn a_long_1080p_source_loses_the_1080_rung_to_the_per_file_budget() {
+        // 4000 kbps for 40 minutes is ~1.2 GB; under the default 150 MiB
+        // per-file cap that rung (and only the rungs the budget cannot hold)
+        // goes, while a 2-minute clip keeps all seven.
+        let cap = 150 * MIB;
+        let long = video_ladder_rungs_within((1920, 1080), 2400.0, cap, SourceBitrate::default());
+        assert!(long.len() < VIDEO_LADDER.len(), "{long:?}");
+        assert!(long.iter().all(|r| r.width < 1920));
+        let short = video_ladder_rungs_within((1920, 1080), 120.0, cap, SourceBitrate::default());
+        assert_eq!(short.len(), VIDEO_LADDER.len());
+    }
+
+    /// The ladder (frame @ bitrate) a source of each shape gets, with its own
+    /// video bitrate clamping the top rung: a 16:9 source, a 3:2 one filling
+    /// the 1080 box's height, and a wide cinema crop filling its width.
+    #[test]
+    fn the_ladder_a_source_gets_follows_its_own_shape_and_bitrate() {
+        let ladder = |disp: (u32, u32), kbps: f64| -> String {
+            video_ladder_rungs_within(disp, 60.0, 150 * MIB, SourceBitrate { video_kbps: Some(kbps), total_kbps: None })
+                .iter()
+                .map(|r| {
+                    let (w, h) = r.fitted_frame(disp);
+                    format!("{w}x{h}@{}", r.video_kbps)
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert_eq!(
+            ladder((1920, 1080), 3670.0),
+            "320x180@45 416x234@145 640x360@365 768x432@730 960x540@1100 1280x720@2000 1920x1080@3670"
+        );
+        assert_eq!(
+            ladder((1620, 1080), 4680.0),
+            "270x180@45 352x234@145 540x360@365 648x432@730 810x540@1100 1080x720@2000 1620x1080@4000"
+        );
+        assert_eq!(
+            ladder((1920, 812), 3000.0),
+            "320x136@45 416x176@145 640x270@365 768x324@730 960x406@1100 1280x542@2000 1920x812@3000"
+        );
+    }
+
+    #[test]
+    fn a_frame_is_floored_at_two_pixels_the_one_exception_to_never_enlarged() {
+        assert_eq!(BOX_720.fitted_frame((1, 1)), (2, 2));
+        // A zero side (an old cache record with no height) stays total.
+        assert_eq!(BOX_720.fitted_frame((1920, 0)).0, 1280);
+    }
+
+    #[test]
+    fn a_portrait_source_is_eligible_by_its_height() {
+        // 1080 px across is under the 1280 box, but 1920 px tall fills it.
+        assert_eq!(video_ladder_rungs((1080, 1920)).len(), VIDEO_LADDER.len());
     }
 
     #[test]

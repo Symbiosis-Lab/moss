@@ -137,6 +137,10 @@ impl VideoCompressionConfig {
             // keep serving renditions encoded under the old table. The table's
             // own contents are therefore part of the key.
             "ladder": asset_paths::video_ladder_fingerprint(),
+            // 2: the frame is the source's shape fitted into the rung's box
+            // with square pixels; 1 forced a fixed 16:9 frame. Nothing in the
+            // table changed when this did, so the key must say so.
+            "frame": 2,
         })
     }
 }
@@ -161,7 +165,13 @@ pub enum EncodingResult {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceVideo {
     pub duration_secs: f64,
+    /// Coded width and height, as stored (rotation applied: a phone clip
+    /// recorded upright reports its upright size here).
     pub width: u32,
+    pub height: u32,
+    /// Sample (pixel) aspect ratio, width over height of one pixel; 1.0 when
+    /// the source declares none. See [`SourceVideo::display`].
+    pub sar: f64,
     pub fps: f64,
     /// Whether the source carries an audio stream at all. A ladder that maps
     /// `a:0` on a silent source fails the entire encode.
@@ -185,6 +195,49 @@ pub struct SourceVideo {
     /// A codec every target browser decodes, in a container they all open. The
     /// container alone does not prove this: HEVC-in-mp4 does not play in Firefox.
     pub web_playable: bool,
+}
+
+/// ffprobe's `sample_aspect_ratio` text ("64:45"); `0:1`, `N/A` or anything
+/// unparseable means the source declares none, i.e. square pixels.
+pub(crate) fn parse_sar(v: Option<&str>) -> f64 {
+    v.and_then(|v| {
+        let (n, d) = v.split_once(':')?;
+        let (n, d) = (n.parse::<f64>().ok()?, d.parse::<f64>().ok()?);
+        (n > 0.0 && d > 0.0).then_some(n / d)
+    })
+    .unwrap_or(1.0)
+}
+
+/// Whether a display-matrix rotation (degrees, either sign) turns the picture
+/// a quarter turn, swapping its width and height.
+pub(crate) fn is_quarter_turn(rotation: Option<&str>) -> bool {
+    rotation
+        .and_then(|v| v.parse::<f64>().ok())
+        .is_some_and(|deg| (deg.rem_euclid(180.0) - 90.0).abs() < 1.0)
+}
+
+/// Whether the file can ship as-is: a container and video codec every target
+/// browser opens, 8-bit 4:2:0 pixels (10-bit and HDR phone footage does not
+/// play everywhere), and audio that is AAC or absent. Anything else is
+/// re-encoded, which normalises it.
+pub(crate) fn is_web_playable(
+    container_ok: bool,
+    video_codec: Option<&str>,
+    pix_fmt: Option<&str>,
+    audio_codecs: &[String],
+) -> bool {
+    container_ok
+        && video_codec.is_some_and(|c| matches!(c, "h264" | "vp8" | "vp9" | "av1"))
+        && pix_fmt.is_some_and(|p| matches!(p, "yuv420p" | "yuvj420p"))
+        && audio_codecs.iter().all(|a| a == "aac")
+}
+
+impl SourceVideo {
+    /// The shape the viewer sees: coded width stretched by the pixel aspect
+    /// ratio, over the height. What a rung's box is compared against.
+    pub fn display(&self) -> (u32, u32) {
+        asset_paths::display_size(self.width, self.height, self.sar)
+    }
 }
 
 /// How to encode (or not encode) a video.
@@ -228,7 +281,7 @@ pub fn plan_video_encode(source: &SourceVideo, config: &VideoCompressionConfig) 
         config.max_size_mb as f64 * 1024.0 * 1024.0 * config.target_fill_percentage;
     let budget_kbps = (budget_bytes * 8.0 / 1024.0) / source.duration_secs.max(0.001);
 
-    let rungs = video_ladder_rungs(source.width);
+    let rungs = video_ladder_rungs(source.display());
     let rung = rungs
         .iter()
         .rev()
@@ -243,7 +296,8 @@ pub fn plan_video_encode(source: &SourceVideo, config: &VideoCompressionConfig) 
     // that bitrate measured as a smear, so a 30 fps original is not that rung
     // however small its file is.
     let already_within = source.web_playable
-        && source.width <= rung.width
+        && source.display().0 <= rung.width
+        && source.display().1 <= rung.height
         && source.fps <= rung.fps as f64 + 0.5
         && source.total_kbps.is_some_and(|kbps| kbps <= rung.total_kbps() as f64);
 
@@ -808,16 +862,22 @@ fn common_encode_args(
     input: &str,
     rung: VideoRung,
     source_fps: f64,
+    display: (u32, u32),
     config: &VideoCompressionConfig,
 ) -> Vec<String> {
     // Downsample the frame rate only when the source is faster than the rung
     // asks for. Forcing 30 on a 24 fps source would duplicate frames and spend
     // bitrate on them; MIN_BITS_PER_PIXEL_PER_FRAME is computed against the
     // rung's fps, so arriving under it is the safe direction.
+    //
+    // The frame is the source's display size fitted into the rung's box, as
+    // explicit even numbers with square pixels, so a source of another shape
+    // keeps it and a declared pixel aspect ratio is baked into the picture.
+    let (w, h) = rung.fitted_frame(display);
     let vf = if source_fps > rung.fps as f64 {
-        format!("scale='min({},iw)':-2,fps={}", rung.width, rung.fps)
+        format!("scale={w}:{h},setsar=1,fps={}", rung.fps)
     } else {
-        format!("scale='min({},iw)':-2", rung.width)
+        format!("scale={w}:{h},setsar=1")
     };
     let bitrate_kbps = rung.video_kbps;
     vec![
@@ -872,11 +932,12 @@ pub(crate) fn build_two_pass_first_args(
     input: &str,
     rung: VideoRung,
     source_fps: f64,
+    display: (u32, u32),
     config: &VideoCompressionConfig,
     passlogfile: &str,
     null_output: &str,
 ) -> Vec<String> {
-    let mut args = common_encode_args(input, rung, source_fps, config);
+    let mut args = common_encode_args(input, rung, source_fps, display, config);
     args.extend([
         "-pass".into(),
         "1".into(),
@@ -902,10 +963,11 @@ pub(crate) fn build_two_pass_second_args(
     output: &str,
     rung: VideoRung,
     source_fps: f64,
+    display: (u32, u32),
     config: &VideoCompressionConfig,
     passlogfile: &str,
 ) -> Vec<String> {
-    let mut args = common_encode_args(input, rung, source_fps, config);
+    let mut args = common_encode_args(input, rung, source_fps, display, config);
     args.extend([
         "-pass".into(),
         "2".into(),
@@ -1167,7 +1229,7 @@ impl FFmpegManager {
             EncodePlan::Encode { rung } => rung,
         };
 
-        let top = asset_paths::video_top_rung(probe.width);
+        let top = asset_paths::video_top_rung(probe.display());
         if rung.width < top.width {
             log::info!(
                 "{} is {:.0} minutes, so the {} MB budget places it at {}x{} rather than {}x{}",
@@ -1211,6 +1273,7 @@ impl FFmpegManager {
                 output,
                 rung,
                 probe.fps,
+                probe.display(),
                 config,
                 &temp_dir,
                 probe.duration_secs,
@@ -1263,6 +1326,7 @@ impl FFmpegManager {
                     output,
                     lower,
                     probe.fps,
+                    probe.display(),
                     config,
                     &temp_dir_retry,
                     probe.duration_secs,
@@ -1309,6 +1373,7 @@ impl FFmpegManager {
         output: &Path,
         rung: VideoRung,
         source_fps: f64,
+        display: (u32, u32),
         config: &VideoCompressionConfig,
         temp_dir: &Path,
         duration_secs: f64,
@@ -1327,6 +1392,7 @@ impl FFmpegManager {
             input,
             rung,
             source_fps,
+            display,
             config,
             &passlogfile,
             duration_secs,
@@ -1345,6 +1411,7 @@ impl FFmpegManager {
             output,
             rung,
             source_fps,
+            display,
             config,
             &passlogfile,
             duration_secs,
@@ -1368,6 +1435,7 @@ impl FFmpegManager {
         input: &Path,
         rung: VideoRung,
         source_fps: f64,
+        display: (u32, u32),
         config: &VideoCompressionConfig,
         passlogfile: &Path,
         duration_secs: f64,
@@ -1385,7 +1453,7 @@ impl FFmpegManager {
         };
 
         let args =
-            build_two_pass_first_args(input_str, rung, source_fps, config, passlogfile_str, null_output);
+            build_two_pass_first_args(input_str, rung, source_fps, display, config, passlogfile_str, null_output);
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
 
         let output = spawn_ffmpeg_streaming(
@@ -1417,6 +1485,7 @@ impl FFmpegManager {
         output: &Path,
         rung: VideoRung,
         source_fps: f64,
+        display: (u32, u32),
         config: &VideoCompressionConfig,
         passlogfile: &Path,
         duration_secs: f64,
@@ -1429,7 +1498,7 @@ impl FFmpegManager {
         let passlogfile_str = passlogfile.to_str().ok_or("Invalid passlogfile path")?;
 
         let args =
-            build_two_pass_second_args(input_str, output_str, rung, source_fps, config, passlogfile_str);
+            build_two_pass_second_args(input_str, output_str, rung, source_fps, display, config, passlogfile_str);
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
 
         let output = spawn_ffmpeg_streaming(
@@ -1486,7 +1555,11 @@ impl FFmpegManager {
                 // Every stream, not just `v:0`: whether the source HAS audio
                 // decides the ladder's `-map a:0`, and mapping an audio stream
                 // that is not there fails the whole encode.
-                "-show_entries", "stream=codec_type,codec_name,width,r_frame_rate,bit_rate",
+                "-show_entries", "stream=codec_type,codec_name,pix_fmt,width,height,sample_aspect_ratio,r_frame_rate,bit_rate",
+                // Display-matrix rotation (phone clips): ffmpeg turns the
+                // picture upright when it decodes, so the shape to plan
+                // against is the rotated one.
+                "-show_entries", "stream_side_data=rotation",
                 "-show_entries", "format=duration,bit_rate",
                 // Section wrappers stay ON: `bit_rate` appears in BOTH the
                 // stream and the format section, and they mean different
@@ -1536,7 +1609,21 @@ impl FFmpegManager {
             .filter(|d| *d > 0.0)
             .ok_or_else(|| format!("ffprobe reported no duration for {}", input.display()))?;
 
-        let width = stream("width").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+        let (mut width, mut height) = (
+            stream("width").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0),
+            stream("height").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0),
+        );
+        let sar = parse_sar(stream("sample_aspect_ratio").as_deref());
+        let quarter_turn = is_quarter_turn(stream("rotation").as_deref());
+        let sar = if quarter_turn { 1.0 / sar } else { sar };
+        if quarter_turn {
+            std::mem::swap(&mut width, &mut height);
+        }
+        // A video stream with no size cannot be planned or scaled: fitting a
+        // zero side would "succeed" on a 2-pixel-tall frame.
+        if width == 0 || height == 0 {
+            return Err(format!("ffprobe reported no video size for {}", input.display()));
+        }
 
         // "30000/1001" — a rational, not a decimal.
         let fps = stream("r_frame_rate")
@@ -1565,17 +1652,28 @@ impl FFmpegManager {
             .extension()
             .and_then(|e| e.to_str())
             .is_some_and(|e| matches!(e.to_lowercase().as_str(), "mp4" | "m4v" | "webm"));
-        let codec_ok = stream("codec_name")
-            .is_some_and(|c| matches!(c.as_str(), "h264" | "vp8" | "vp9" | "av1"));
+        let audio_codecs: Vec<String> = blocks
+            .iter()
+            .filter(|b| is_kind(b, "audio"))
+            .filter_map(|b| field_in(b, "codec_name"))
+            .collect();
+        let web_playable = is_web_playable(
+            container_ok,
+            stream("codec_name").as_deref(),
+            stream("pix_fmt").as_deref(),
+            &audio_codecs,
+        );
 
         Ok(SourceVideo {
             duration_secs,
             width,
+            height,
+            sar,
             fps,
             total_kbps,
             video_kbps,
             has_audio,
-            web_playable: container_ok && codec_ok,
+            web_playable,
         })
     }
 

@@ -1950,7 +1950,7 @@ async fn a_rebuild_storm_enters_the_encoder_once_and_stops_on_its_own() {
     let ffprobe = temp.path().join("ffprobe");
     std::fs::write(
         &ffprobe,
-        "#!/bin/sh\ncase \"$*\" in *nokey=1*) echo 10; exit 0;; esac\nprintf '[STREAM]\\ncodec_type=video\\ncodec_name=prores\\nwidth=320\\nr_frame_rate=30/1\\n[/STREAM]\\n[FORMAT]\\nduration=10\\nbit_rate=90000000\\n[/FORMAT]\\n'\n",
+        "#!/bin/sh\ncase \"$*\" in *nokey=1*) echo 10; exit 0;; esac\nprintf '[STREAM]\\ncodec_type=video\\ncodec_name=prores\\nwidth=320\\nheight=180\\nr_frame_rate=30/1\\n[/STREAM]\\n[FORMAT]\\nduration=10\\nbit_rate=90000000\\n[/FORMAT]\\n'\n",
     )
     .unwrap();
     std::fs::set_permissions(&ffprobe, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -2201,7 +2201,7 @@ async fn a_cache_sweep_during_a_detached_encode_keeps_what_it_already_stored() {
     let ffprobe = temp.path().join("ffprobe");
     std::fs::write(
         &ffprobe,
-        "#!/bin/sh\ncase \"$*\" in *nokey=1*) echo 10; exit 0;; esac\nprintf '[STREAM]\\ncodec_type=video\\ncodec_name=prores\\nwidth=320\\nr_frame_rate=30/1\\n[/STREAM]\\n[FORMAT]\\nduration=10\\nbit_rate=90000000\\n[/FORMAT]\\n'\n",
+        "#!/bin/sh\ncase \"$*\" in *nokey=1*) echo 10; exit 0;; esac\nprintf '[STREAM]\\ncodec_type=video\\ncodec_name=prores\\nwidth=320\\nheight=180\\nr_frame_rate=30/1\\n[/STREAM]\\n[FORMAT]\\nduration=10\\nbit_rate=90000000\\n[/FORMAT]\\n'\n",
     )
     .unwrap();
     std::fs::set_permissions(&ffprobe, std::fs::Permissions::from_mode(0o755)).unwrap();

@@ -133,19 +133,22 @@ pub fn synthesize_sequence_video_html(
     video_embed(&TitleParams::default(), placement, src, assets, Some(first))
 }
 
-/// The 640-wide HLS rung as a phone-only `<source>`, or nothing.
+/// The ladder's third-row file as a phone-only `<source>`, or nothing.
 ///
-/// Only sequence slides get one, and only when the ladder wrote that rung:
-/// the source must be at least 640 wide. The ladder names its rungs by index
-/// (`v{i}.m4s`), so the index is the rung's position in `VIDEO_LADDER`. A
-/// missing file would fall through to the next `<source>`, so a rung dropped
-/// by the bitrate clamp costs nothing but the lighter file.
+/// That row is a 640x360 box; the file's frame follows the source's own shape
+/// (a 4:3 clip gets 480x360). Only sequence slides get one, only when the
+/// source is at least 640 wide, and never for a portrait source: its frame in
+/// that box is a narrow strip (202x360 for a 9:16 clip) that a phone would
+/// enlarge. The ladder names its rungs by index (`v{i}.m4s`), so the index is
+/// the rung's position in `VIDEO_LADDER`. A missing file would fall through
+/// to the next `<source>`, so a rung dropped by the bitrate clamp costs
+/// nothing but the lighter file.
 fn phone_rung_source(src: &str, assets: &AssetSnapshot, sequence: bool) -> String {
     if !sequence {
         return String::new();
     }
     match assets.dims(&PathBuf::from(src)) {
-        Some((w, _)) if w >= 640 => {}
+        Some((w, h)) if w >= 640 && w >= h => {}
         _ => return String::new(),
     }
     let Some(idx) = crate::asset_paths::VIDEO_LADDER.iter().position(|r| r.width == 640) else {
@@ -693,5 +696,13 @@ mod phone_rung_tests {
     fn sequence_slide_from_a_source_narrower_than_640_gets_no_phone_rung() {
         let html = synthesize_sequence_video_html(&Placement::default(), "clip.mp4", &snapshot(320, true), true);
         assert!(!html.contains("max-width"), "got: {html}");
+    }
+
+    #[test]
+    fn sequence_slide_from_a_portrait_source_gets_no_phone_rung() {
+        let mut s = snapshot(1080, true);
+        s.dimensions.insert("clip.mp4".into(), (1080, 1920));
+        let html = synthesize_sequence_video_html(&Placement::default(), "clip.mp4", &s, false);
+        assert!(!html.contains("max-width"), "its row-3 frame is a 360px-tall strip: {html}");
     }
 }

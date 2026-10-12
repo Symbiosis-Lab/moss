@@ -9,7 +9,7 @@
 //! them too, and both files reach them the same way, through `super::`.
 
 use moss_core::asset_paths::{
-    hls_members, rung_list_fingerprint, video_ladder_fingerprint, video_ladder_rungs_by_count,
+    display_size, rung_list_fingerprint, video_ladder_rungs_by_count,
     video_ladder_rungs_within, SourceBitrate, VideoRung, HLS_MASTER_NAME,
 };
 
@@ -17,6 +17,12 @@ use crate::build::cache::{TransformCache, TransformRecord};
 use crate::build::media::ffmpeg::{SourceVideo, VideoCompressionConfig};
 
 use super::{transform_name, HLS_TRANSFORM_PREFIX, KEYFRAME_SECONDS, SEGMENT_SECONDS};
+
+/// Bump when the bytes a rung's encode produces change for the same inputs.
+/// 2: rungs are frames fitted to the source's own shape with square pixels;
+/// version 1 ladders (and the unversioned ones before them) forced every rung
+/// to a fixed 16:9 frame, so they are rebuilt once.
+const LADDER_FORMAT: u32 = 2;
 
 /// The source facts [`video_ladder_rungs_within`] needs, captured once at
 /// encode time and carried inside `ladder_params`'s `"source"` field so a
@@ -29,6 +35,12 @@ use super::{transform_name, HLS_TRANSFORM_PREFIX, KEYFRAME_SECONDS, SEGMENT_SECO
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct SourceFacts {
     pub(crate) width: u32,
+    /// Height and pixel aspect ratio: with `width` they give the display
+    /// size that decides which rungs the source fills. A record from before
+    /// these existed reads back as height 0 / square pixels, which still
+    /// answers by width alone — and misses anyway, on [`LADDER_FORMAT`].
+    pub(crate) height: u32,
+    pub(crate) sar: f64,
     pub(crate) duration_secs: f64,
     pub(crate) video_kbps: Option<f64>,
     pub(crate) total_kbps: Option<f64>,
@@ -47,6 +59,8 @@ impl SourceFacts {
     pub(crate) fn from_probe(probe: &SourceVideo) -> Self {
         Self {
             width: probe.width,
+            height: probe.height,
+            sar: probe.sar,
             duration_secs: probe.duration_secs,
             video_kbps: probe.video_kbps,
             total_kbps: probe.total_kbps,
@@ -61,16 +75,22 @@ impl SourceFacts {
     pub(crate) fn effective_rungs(&self, config: &VideoCompressionConfig) -> Vec<VideoRung> {
         let max_file_bytes = u64::from(config.hls_max_file_mb) * 1024 * 1024;
         video_ladder_rungs_within(
-            self.width,
+            self.display(),
             self.duration_secs,
             max_file_bytes,
             SourceBitrate { video_kbps: self.video_kbps, total_kbps: self.total_kbps },
         )
     }
 
+    pub(crate) fn display(&self) -> (u32, u32) {
+        display_size(self.width, self.height, self.sar)
+    }
+
     fn to_json(self) -> serde_json::Value {
         serde_json::json!({
             "width": self.width,
+            "height": self.height,
+            "sar": self.sar,
             "duration_secs": self.duration_secs,
             "video_kbps": self.video_kbps,
             "total_kbps": self.total_kbps,
@@ -81,6 +101,8 @@ impl SourceFacts {
     fn from_json(v: &serde_json::Value) -> Option<Self> {
         Some(Self {
             width: v.get("width")?.as_u64()? as u32,
+            height: v.get("height").and_then(serde_json::Value::as_u64).unwrap_or(0) as u32,
+            sar: v.get("sar").and_then(serde_json::Value::as_f64).unwrap_or(1.0),
             duration_secs: v.get("duration_secs")?.as_f64()?,
             video_kbps: v.get("video_kbps").and_then(serde_json::Value::as_f64),
             total_kbps: v.get("total_kbps").and_then(serde_json::Value::as_f64),
@@ -91,11 +113,9 @@ impl SourceFacts {
 
 /// The rung table a cached ladder's own file census names — its `video/hls/
 /// v*.m3u8` keys counted, then bounds-checked against the real table lengths
-/// (2..=6, [`video_ladder_rungs_by_count`]). `None` for a record with no
-/// ladder keys, too few to be a real ladder, or (in principle) more than the
-/// table can produce. The one place `cached_ladder` and `legacy_cached_
-/// ladder` both open with this exact census, so the two readings of "how
-/// many rungs does this record claim" can't drift apart from each other.
+/// (2..=the table length, [`video_ladder_rungs_by_count`]). `None` for a record
+/// with no ladder keys, too few to be a real ladder, or (in principle) more than the
+/// table can produce.
 fn record_table_rungs(record: &TransformRecord) -> Option<&'static [VideoRung]> {
     let rung_prefix = format!("{HLS_TRANSFORM_PREFIX}v");
     let rung_count = record
@@ -107,8 +127,8 @@ fn record_table_rungs(record: &TransformRecord) -> Option<&'static [VideoRung]> 
 }
 
 /// A cached ladder, or nothing — never a partial one, and never a LEGACY-form
-/// one (a record from before this crate started keying on effective rungs;
-/// see `legacy_cached_ladder`, `produce_ladder`'s own migration path for that).
+/// one (a record from before this crate started keying on effective rungs: it
+/// carries no `"source"` block, so it misses and is encoded afresh).
 ///
 /// The rung count is read back out of the record rather than re-derived from
 /// the source, because the record is the only thing that knows which table the
@@ -124,7 +144,7 @@ fn record_table_rungs(record: &TransformRecord) -> Option<&'static [VideoRung]> 
 /// SAME length are the same rungs; a length mismatch alone is therefore
 /// enough to catch a budget or table edit that would change this ladder. If
 /// the record's `video/hls*` entries are not exactly that census — a rung
-/// evicted, a blob swept, a table edited — it is a miss, because seventeen
+/// evicted, a blob swept, a table edited — it is a miss, because a ladder's
 /// files that reference each other are only valid together.
 pub(super) fn cached_ladder(
     transforms: &TransformCache,
@@ -154,78 +174,6 @@ pub(super) fn cached_ladder(
         .map(|name| transforms.find_cached_output(source_oid, &transform_name(name), &params, crate::build::cache::RecordMode::Wait))
         .collect();
     Some((members, oids?, params))
-}
-
-/// `produce_ladder`'s own fallback for a ladder recorded before this crate
-/// started keying on effective rungs. `cached_ladder` cannot recognize one —
-/// its params carry no `"source"` block to recompute against — so this
-/// re-examines it with the probe `produce_ladder`'s miss path already has to
-/// take, costing nothing extra.
-///
-/// Every such record also predates the source-bitrate clamp, so it was
-/// encoded at the table's own (unclamped) bitrates. A hit here requires
-/// TODAY's clamp to agree that no clamp would apply — `effective ==
-/// table_rungs` EXACTLY, not merely the same length — AND the encoder
-/// settings and table fingerprint it was recorded under to still match
-/// today's. Either check failing means the cached bytes are provably wrong
-/// for today's policy, so this returns `None` and the ordinary encode path
-/// re-encodes it once, this time under the new keying — every build after
-/// this one needs no more probing.
-///
-/// Added 2026-09-24, migration-only: it earns its keep only while records
-/// from before this rekeying are still out there. Delete it the next time
-/// the ladder cache key's shape changes again (a migration path for a shape
-/// this one doesn't recognize would need rewriting anyway), or once every
-/// site has been rebuilt at least once by a release that carries it —
-/// whichever comes first; either point means every remaining record has
-/// already migrated to the new form and `cached_ladder` alone is enough.
-pub(super) fn legacy_cached_ladder(
-    transforms: &TransformCache,
-    source_oid: &str,
-    config: &VideoCompressionConfig,
-    probe: &SourceVideo,
-) -> Option<(Vec<String>, Vec<String>, serde_json::Value)> {
-    let record = transforms.get_with(source_oid, crate::build::cache::RecordMode::Wait)?;
-    let table_rungs = record_table_rungs(&record)?;
-    // Unconditionally the full table, not `super::ladder_members`: every
-    // record old enough to land here predates the fix that lets a silent
-    // source's ladder cache successfully at all, so one could never have
-    // reached this record in the first place — the audio-group files were
-    // always part of what a legacy write actually produced.
-    let members = hls_members(table_rungs);
-    if record.transforms.keys().filter(|k| k.starts_with(HLS_TRANSFORM_PREFIX)).count() != members.len() {
-        return None;
-    }
-
-    let legacy = &record.transforms.get(&transform_name(HLS_MASTER_NAME))?.params;
-    let settings_match = legacy.get("preset") == Some(&serde_json::json!(config.preset))
-        && legacy.get("segment_seconds") == Some(&serde_json::json!(SEGMENT_SECONDS))
-        && legacy.get("keyframe_seconds") == Some(&serde_json::json!(KEYFRAME_SECONDS))
-        && legacy.get("ladder") == Some(&serde_json::json!(video_ladder_fingerprint()));
-    if !settings_match {
-        return None;
-    }
-
-    let source = SourceFacts::from_probe(probe);
-    if source.effective_rungs(config) != table_rungs {
-        // Today's clamp (or a table edit) would produce something other than
-        // the table's own bitrates — the legacy bytes, encoded at those
-        // unclamped bitrates, are wrong under today's policy.
-        return None;
-    }
-
-    let oids: Vec<String> = members
-        .iter()
-        .map(|name| record.transforms.get(&transform_name(name)).map(|e| e.oid.clone()))
-        .collect::<Option<Vec<_>>>()?;
-    // Blob liveness — the same check `find_cached_output` makes, done by hand
-    // because this path already bypassed it: a field-by-field comparison that
-    // ignores `max_file_mb`/`cap`, not the exact equality that function needs.
-    for oid in &oids {
-        transforms.objects().ready_blob(oid)?;
-    }
-
-    Some((members, oids, ladder_params(config, table_rungs, source)))
 }
 
 /// The transform-cache key for one ladder member: what shapes its bytes — the
@@ -258,6 +206,7 @@ pub(crate) fn ladder_params(
         "preset": config.preset,
         "segment_seconds": SEGMENT_SECONDS,
         "keyframe_seconds": KEYFRAME_SECONDS,
+        "format": LADDER_FORMAT,
         "rungs": rung_list_fingerprint(rungs),
         "source": source.to_json(),
     })
@@ -285,6 +234,7 @@ pub(crate) enum LegacyShape {
 
 #[cfg(test)]
 pub(crate) fn legacy_form_params(config: &VideoCompressionConfig, shape: LegacyShape) -> serde_json::Value {
+    use moss_core::asset_paths::video_ladder_fingerprint;
     let mut params = serde_json::json!({
         "ladder": video_ladder_fingerprint(),
         "preset": config.preset,

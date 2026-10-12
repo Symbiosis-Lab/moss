@@ -6,7 +6,8 @@
 //! correctness rests on, and every one of them was a real finding:
 //!
 //! - Two `agroup`s in one `-var_stream_map` compose at all.
-//! - The file count is `2N + 2G + 1` — 17 for six rungs and two renditions.
+//! - The file count is `2N + 2G + 1` — 17 for the six rungs a 1280x720 source gets (the
+//!   1080p row is offered only to a source that fills it) and two renditions.
 //! - `hls_members()` is the truth: exactly the files that appear on disk, and
 //!   none of them — nor anything inside them — mentions the video's name.
 //! - Every rung segments on the same boundary. With a flat `-g 60` the 15 fps
@@ -17,7 +18,13 @@
 //! optional runtime dependency moss downloads, not a build requirement.
 
 use moss_build::build::media::hls::{build_hls_args, patch_master};
-use moss_core::asset_paths::{hls_members, VIDEO_LADDER};
+use moss_core::asset_paths::{hls_members, video_ladder_rungs, VideoRung};
+
+/// The ladder a 1280x720 source gets: the synthetic source below stops at the
+/// 720p box, so the 1080p row is not offered to it.
+fn ladder_720() -> &'static [VideoRung] {
+    video_ladder_rungs((1280, 720))
+}
 
 fn ffmpeg() -> Option<String> {
     let out = std::process::Command::new("ffmpeg").arg("-version").output().ok()?;
@@ -59,7 +66,8 @@ fn the_ladder_encodes_and_hls_members_names_exactly_what_lands_on_disk() {
     let args = build_hls_args(
         src.to_str().unwrap(),
         out_dir.to_str().unwrap(),
-        &VIDEO_LADDER,
+        ladder_720(),
+        (1280, 720),
         30.0,
         true,
         "ultrafast",
@@ -78,7 +86,7 @@ fn the_ladder_encodes_and_hls_members_names_exactly_what_lands_on_disk() {
         .collect();
     on_disk.sort();
 
-    let mut promised: Vec<String> = hls_members(&VIDEO_LADDER);
+    let mut promised: Vec<String> = hls_members(ladder_720());
     promised.sort();
 
     assert_eq!(
@@ -122,7 +130,8 @@ fn every_rung_segments_on_the_same_boundary_despite_mixed_frame_rates() {
     let args = build_hls_args(
         src.to_str().unwrap(),
         out_dir.to_str().unwrap(),
-        &VIDEO_LADDER,
+        ladder_720(),
+        (1280, 720),
         30.0,
         true,
         "ultrafast",
@@ -146,7 +155,7 @@ fn every_rung_segments_on_the_same_boundary_despite_mixed_frame_rates() {
             .unwrap_or_else(|| panic!("no #EXTINF in {name}"))
     };
     let base = first_of("v1.m3u8");
-    for i in 0..VIDEO_LADDER.len() {
+    for i in 0..ladder_720().len() {
         let d = first_of(&format!("v{i}.m3u8"));
         assert!(
             (d - base).abs() < 0.25,
@@ -172,7 +181,8 @@ fn the_master_playlist_declares_the_lowest_rung_first_and_binds_each_group() {
     let args = build_hls_args(
         src.to_str().unwrap(),
         out_dir.to_str().unwrap(),
-        &VIDEO_LADDER,
+        ladder_720(),
+        (1280, 720),
         30.0,
         true,
         "ultrafast",
@@ -186,7 +196,7 @@ fn the_master_playlist_declares_the_lowest_rung_first_and_binds_each_group() {
         .success());
 
     let raw = std::fs::read_to_string(out_dir.join("master.m3u8")).unwrap();
-    let master = patch_master(&raw, &VIDEO_LADDER);
+    let master = patch_master(&raw, ladder_720());
 
     assert!(
         master.contains("#EXT-X-INDEPENDENT-SEGMENTS"),
@@ -202,7 +212,7 @@ fn the_master_playlist_declares_the_lowest_rung_first_and_binds_each_group() {
         .lines()
         .filter(|l| l.starts_with("#EXT-X-STREAM-INF"))
         .collect();
-    assert_eq!(variants.len(), VIDEO_LADDER.len(), "no spurious audio-only variant");
+    assert_eq!(variants.len(), ladder_720().len(), "no spurious audio-only variant");
     assert!(
         variants[0].contains("RESOLUTION=320x180") && variants[0].contains("group_alo"),
         "lowest rung first, on the lean rendition — a starved viewer who \
@@ -236,7 +246,7 @@ fn the_master_playlist_declares_the_lowest_rung_first_and_binds_each_group() {
     // then over-selects on the link this ladder exists for.
     let raw_variants: Vec<&str> =
         raw.lines().filter(|l| l.starts_with("#EXT-X-STREAM-INF")).collect();
-    for (i, rung) in VIDEO_LADDER.iter().enumerate() {
+    for (i, rung) in ladder_720().iter().enumerate() {
         assert_eq!(
             declared(variants[i]),
             declared(raw_variants[i]) + rung.audio_kbps * 1000,
@@ -272,7 +282,7 @@ fn encode_ladder_writes_its_census_and_patches_the_master() {
         std::path::Path::new(&bin),
         &src,
         &out_dir,
-        moss_core::asset_paths::video_ladder_rungs(probe.width),
+        moss_core::asset_paths::video_ladder_rungs(probe.display()),
         &probe,
         &moss_build::build::media::ffmpeg::VideoCompressionConfig::default(),
         None,
@@ -298,4 +308,209 @@ fn encode_ladder_writes_its_census_and_patches_the_master() {
         master.contains("#EXT-X-INDEPENDENT-SEGMENTS"),
         "the master is patched on the way out"
     );
+}
+
+/// A 3:2 source of 3 s, optionally declaring a pixel aspect ratio.
+fn make_non_16x9_source(dir: &std::path::Path, bin: &str, vf: &str, name: &str) -> Option<std::path::PathBuf> {
+    let src = dir.join(name);
+    let ok = std::process::Command::new(bin)
+        .args([
+            "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=1200x800:rate=30:duration=3",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+            "-vf", vf,
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-shortest",
+        ])
+        .arg(&src)
+        .status()
+        .ok()?;
+    ok.success().then_some(src)
+}
+
+/// What ffprobe reports for a rung file: (width, height, sample aspect ratio).
+fn probe_rung(path: &std::path::Path) -> (u32, u32, String) {
+    let out = std::process::Command::new("ffprobe")
+        .args(["-v", "error", "-select_streams", "v:0",
+               "-show_entries", "stream=width,height,sample_aspect_ratio",
+               "-of", "csv=p=0"])
+        .arg(path)
+        .output()
+        .expect("run ffprobe");
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let mut f = text.split(',');
+    let w = f.next().unwrap().parse().unwrap();
+    let h = f.next().unwrap().parse().unwrap();
+    (w, h, f.next().unwrap_or("").to_string())
+}
+
+/// Every rung of a ladder built from a non-16:9 source keeps the source's
+/// display shape with square pixels, and the master's `RESOLUTION` is the
+/// frame the rung file really has. Run once with square pixels and once with
+/// a source that declares a non-square pixel aspect ratio.
+#[test]
+fn rungs_keep_the_sources_shape_with_square_pixels() {
+    let Some(bin) = ffmpeg() else {
+        eprintln!("skipping: ffmpeg not on PATH");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cases = [
+        // coded 1200x800 square pixels: 3:2
+        ("setsar=1", "square.mp4", 1.5),
+        // coded 1200x800 declaring 3:4 pixels: displayed 900x800, 9:8
+        ("setsar=3/4", "anamorphic.mp4", 1.125),
+    ];
+    for (vf, name, display_aspect) in cases {
+        let Some(src) = make_non_16x9_source(dir.path(), &bin, vf, name) else {
+            eprintln!("skipping: could not synthesise a source");
+            return;
+        };
+        let mgr = moss_build::build::media::ffmpeg::FFmpegManager::from_bin_path(bin.clone());
+        let probe = mgr.probe_source(&src).expect("probe");
+        let (dw, dh) = probe.display();
+        assert!((dw as f64 / dh as f64 - display_aspect).abs() < 0.01, "{name}: display {dw}x{dh}");
+
+        let out_dir = dir.path().join(format!("out-{name}"));
+        let rungs = moss_core::asset_paths::video_ladder_rungs(probe.display());
+        moss_build::build::media::hls::encode_ladder(
+            std::path::Path::new(&bin),
+            &src,
+            &out_dir,
+            rungs,
+            &probe,
+            &moss_build::build::media::ffmpeg::VideoCompressionConfig::default(),
+            None,
+            None,
+            None,
+        )
+        .expect("encode_ladder");
+
+        let master = std::fs::read_to_string(out_dir.join("master.m3u8")).unwrap();
+        let resolutions: Vec<&str> = master
+            .lines()
+            .filter(|l| l.starts_with("#EXT-X-STREAM-INF"))
+            .map(|l| l.split("RESOLUTION=").nth(1).unwrap().split(',').next().unwrap())
+            .collect();
+        assert_eq!(resolutions.len(), rungs.len());
+        for (i, rung) in rungs.iter().enumerate() {
+            let (w, h) = rung.fitted_frame(probe.display());
+            assert_eq!(resolutions[i], format!("{w}x{h}"), "{name}: master RESOLUTION for rung {i}");
+
+            // The rung's init segment sits in v{i}.m4s; ffprobe reads it.
+            let (pw, ph, sar) = probe_rung(&out_dir.join(format!("v{i}.m4s")));
+            assert_eq!((pw, ph), (w, h), "{name}: rung {i} file frame");
+            assert!(sar == "1:1" || sar == "N/A" || sar.is_empty(), "{name}: rung {i} SAR {sar}");
+            assert!(
+                (pw as f64 / ph as f64 - display_aspect).abs() < 2.0 / ph as f64 + 0.01,
+                "{name}: rung {i} is {pw}x{ph}, not {display_aspect}:1"
+            );
+            assert!(pw <= rung.width && ph <= rung.height);
+        }
+    }
+}
+
+/// A phone clip is stored sideways with a display matrix; ffmpeg turns it
+/// upright when it decodes, so the shape to plan against is the turned one.
+#[test]
+fn a_rotated_source_is_probed_at_its_upright_shape() {
+    let Some(bin) = ffmpeg() else {
+        eprintln!("skipping: ffmpeg not on PATH");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let Some(src) = make_non_16x9_source(dir.path(), &bin, "setsar=1", "flat.mp4") else {
+        eprintln!("skipping: could not synthesise a source");
+        return;
+    };
+    let turned = dir.path().join("turned.mp4");
+    let ok = std::process::Command::new(&bin)
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-display_rotation", "90", "-i"])
+        .arg(&src)
+        .args(["-c", "copy"])
+        .arg(&turned)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !ok {
+        eprintln!("skipping: this ffmpeg cannot write a display matrix");
+        return;
+    }
+    let mgr = moss_build::build::media::ffmpeg::FFmpegManager::from_bin_path(bin.clone());
+    let probe = mgr.probe_source(&turned).expect("probe");
+    assert_eq!(probe.display(), (800, 1200));
+}
+
+/// A source that fills the 1080p box gets a seventh rung delivered at its own
+/// size, with square pixels.
+#[test]
+fn a_1080p_source_gets_a_1920x1080_top_rung() {
+    let Some(bin) = ffmpeg() else {
+        eprintln!("skipping: ffmpeg not on PATH");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("hd.mp4");
+    let made = std::process::Command::new(&bin)
+        .args([
+            "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "testsrc=size=1920x1080:rate=30:duration=3",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-shortest",
+        ])
+        .arg(&src)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !made {
+        eprintln!("skipping: could not synthesise a source");
+        return;
+    }
+    let mgr = moss_build::build::media::ffmpeg::FFmpegManager::from_bin_path(bin.clone());
+    let probe = mgr.probe_source(&src).expect("probe");
+    let rungs = video_ladder_rungs(probe.display());
+    assert_eq!(rungs.len(), moss_core::asset_paths::VIDEO_LADDER.len());
+    let out_dir = dir.path().join("out");
+    moss_build::build::media::hls::encode_ladder(
+        std::path::Path::new(&bin),
+        &src,
+        &out_dir,
+        rungs,
+        &probe,
+        &moss_build::build::media::ffmpeg::VideoCompressionConfig::default(),
+        None,
+        None,
+        None,
+    )
+    .expect("encode_ladder");
+    let top = rungs.len() - 1;
+    assert_eq!(probe_rung(&out_dir.join(format!("v{top}.m4s"))), (1920, 1080, "1:1".to_string()));
+    let master = std::fs::read_to_string(out_dir.join("master.m3u8")).unwrap();
+    assert!(master.contains("RESOLUTION=1920x1080"), "{master}");
+}
+
+/// A file with no video stream has no size to plan against; the probe fails
+/// like any other failed probe instead of handing an encode a zero side.
+#[test]
+fn a_probe_of_a_file_with_no_video_size_is_an_error() {
+    let Some(bin) = ffmpeg() else {
+        eprintln!("skipping: ffmpeg not on PATH");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let audio = dir.path().join("tone.m4a");
+    let made = std::process::Command::new(&bin)
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "aac"])
+        .arg(&audio)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !made {
+        eprintln!("skipping: could not synthesise a source");
+        return;
+    }
+    let mgr = moss_build::build::media::ffmpeg::FFmpegManager::from_bin_path(bin.clone());
+    let err = mgr.probe_source(&audio).expect_err("no video size");
+    assert!(err.contains("no video size"), "{err}");
 }

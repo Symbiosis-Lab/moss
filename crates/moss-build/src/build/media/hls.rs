@@ -1,7 +1,7 @@
 //! HLS ladder muxing: one ffmpeg invocation that writes every rung.
 //!
 //! One invocation and one decode. The source is decoded once and fanned out
-//! with `split`, so six rungs cost far less than six encodes — measured on a
+//! with `split`, so a ladder's rungs cost far less than one encode each — measured on a
 //! 10 s 720p clip against a single hardened progressive encode of the same
 //! source: **1.65x wall time, 1.32x CPU, 2.16x storage**. (The plan carried
 //! 2.1x / 2.6x / 2.4x, measured with five muxed rungs before the audio split;
@@ -68,10 +68,17 @@ fn audio_settings(rungs: &[VideoRung], group: AudioGroup) -> (u32, u32) {
 /// `out_dir` is the ladder's own directory, e.g. `/site/assets/clip.hls`;
 /// every name inside it is constant, which is what makes a cached ladder
 /// relocatable — see [`moss_core::asset_paths::to_hls_dir`].
+///
+/// `display` is the source's display size ([`SourceVideo::display`]). Each
+/// rung's frame is that shape fitted into the rung's box with square pixels
+/// ([`VideoRung::fitted_frame`]), written as explicit numbers: a source of
+/// another aspect ratio keeps it, and a pixel aspect ratio it declares is
+/// baked into the picture instead of carried through as anamorphic video.
 pub fn build_hls_args(
     input: &str,
     out_dir: &str,
     rungs: &[VideoRung],
+    display: (u32, u32),
     source_fps: f64,
     has_audio: bool,
     preset: &str,
@@ -87,7 +94,8 @@ pub fn build_hls_args(
     }
     filter.push(';');
     for (i, rung) in rungs.iter().enumerate() {
-        filter.push_str(&format!("[s{i}]scale={}:{}", rung.width, rung.height));
+        let (w, h) = rung.fitted_frame(display);
+        filter.push_str(&format!("[s{i}]scale={w}:{h},setsar=1"));
         if source_fps > rung.fps as f64 {
             filter.push_str(&format!(",fps={}", rung.fps));
         }
@@ -235,12 +243,13 @@ pub fn patch_master(master: &str, rungs: &[VideoRung]) -> String {
 /// — and the renditions are CBR, so it lands within a few percent.
 fn declare_audio_in_bandwidth(master: &str, rungs: &[VideoRung]) -> String {
     let mut out = String::with_capacity(master.len() + 64);
-    for line in master.lines() {
+    let mut lines = master.lines().peekable();
+    while let Some(line) = lines.next() {
         // No `AUDIO=` means no separate rendition, and then ffmpeg's figure is
         // already the whole variant.
         let rung = line
             .starts_with("#EXT-X-STREAM-INF")
-            .then(|| attr(line, "AUDIO").and(rung_of(line, rungs)))
+            .then(|| attr(line, "AUDIO").and(lines.peek().and_then(|uri| rung_of(uri, rungs))))
             .flatten();
         match rung {
             Some(r) => out.push_str(&add_bitrate(line, u64::from(r.audio_kbps) * 1000)),
@@ -251,12 +260,12 @@ fn declare_audio_in_bandwidth(master: &str, rungs: &[VideoRung]) -> String {
     out
 }
 
-/// The rung a variant line describes. `RESOLUTION` identifies it: no two rungs
-/// in the ladder share a frame size.
-fn rung_of<'a>(line: &str, rungs: &'a [VideoRung]) -> Option<&'a VideoRung> {
-    let (w, h) = attr(line, "RESOLUTION")?.split_once('x')?;
-    let (w, h) = (w.parse::<u32>().ok()?, h.parse::<u32>().ok()?);
-    rungs.iter().find(|r| r.width == w && r.height == h)
+/// The rung a variant describes, read off its playlist name (`v{i}.m3u8`, the
+/// rung's position). The frame size cannot identify it: frames are fitted to
+/// the source, so no table of sizes lists them.
+fn rung_of<'a>(uri: &str, rungs: &'a [VideoRung]) -> Option<&'a VideoRung> {
+    let i = uri.trim().strip_prefix('v')?.strip_suffix(".m3u8")?.parse::<usize>().ok()?;
+    rungs.get(i)
 }
 
 /// One attribute's value, unquoted.
@@ -486,6 +495,7 @@ pub fn encode_ladder(
         source.to_str().ok_or("Invalid input path")?,
         dir_str,
         rungs,
+        probe.display(),
         probe.fps,
         probe.has_audio,
         &config.preset,
@@ -541,7 +551,7 @@ mod hls_tests;
 /// every file into staging, and hand back the transform entries.
 ///
 /// The worker calls only this. Splitting it the other way — the worker
-/// orchestrating seventeen files while `hls.rs` owns only the command line —
+/// orchestrating a ladder's files while `hls.rs` owns only the command line —
 /// would put the naming scheme in two places, and the master playlist's
 /// references are exactly what a naming disagreement breaks.
 ///
@@ -565,7 +575,7 @@ mod hls_tests;
 ///
 /// Caching is per file rather than per ladder. Each output is content-addressed
 /// under its own transform name (`video/hls/v0.m3u8`), which needs no new cache
-/// machinery, and a partial ladder is treated as a miss: seventeen files that
+/// machinery, and a partial ladder is treated as a miss: a ladder's files that
 /// reference each other are only valid all together.
 ///
 /// `ladder_dir` is the video's own `<stem>.hls` directory in staging. Every
@@ -587,70 +597,61 @@ pub(crate) fn produce_ladder(
     let objects = transforms.objects();
 
     // The cache is consulted before the source is touched. A cached ladder is
-    // seventeen finished files and nothing about them needs re-reading the
+    // a ladder's finished files and nothing about them needs re-reading the
     // source — and on an evicted cloud vault, probing first would turn a build
     // that has everything it needs into a download.
     let (members, oids, params) = if let Some(hit) = cached_ladder(transforms, source_oid, config) {
         hit
     } else {
         let probe = ffmpeg.probe_source(source_file)?;
-        // A ladder recorded before this crate started keying on EFFECTIVE
-        // rungs (see `ladder_params`) has no source facts for `cached_ladder`
-        // to recompute against, so it read as a miss above. This is its one
-        // chance to be recognized without a SECOND probe — it reuses the one
-        // the fresh-encode path below needs regardless.
-        if let Some(hit) = legacy_cached_ladder(transforms, source_oid, config, &probe) {
-            hit
-        } else {
-            let width_rungs = video_ladder_rungs(probe.width);
-            let source = SourceFacts::from_probe(&probe);
-            let rungs = source.effective_rungs(config);
-            if rungs.len() < width_rungs.len() {
-                // The reader who needs this line is the one wondering why a
-                // long video's top quality is missing: width alone would have
-                // kept more rungs, so either the source's own bitrate or the
-                // per-file budget is why it didn't — not necessarily which.
-                log::info!(
-                    "HLS ladder for {}: kept {} of {} width-eligible rungs (narrowed by the \
-                     source's own bitrate and/or the {} MiB per-file budget)",
-                    source_file.display(),
-                    rungs.len(),
-                    width_rungs.len(),
-                    config.hls_max_file_mb,
-                );
-            }
-            if rungs.len() < 2 {
-                return Ok(None);
-            }
-            // `hls_members` is the one owner of the naming scheme: the scratch
-            // names, the staging names and the cache keys are all this same
-            // list, narrowed by `ladder_members` to drop the audio group a
-            // silent source's encode never writes. The scratch directory can
-            // be named anything, because nothing inside the ladder refers to
-            // the directory it sits in.
-            let members = ladder_members(&rungs, probe.has_audio);
-            let scratch = temp_dir.join(format!("hls-{}", uuid::Uuid::new_v4()));
-            let result = encode_ladder(
-                Path::new(ffmpeg.bin_path()),
-                source_file,
-                &scratch,
-                &rungs,
-                &probe,
-                config,
-                progress,
-                registry,
-                cancel_flag,
+        let width_rungs = video_ladder_rungs(probe.display());
+        let source = SourceFacts::from_probe(&probe);
+        let rungs = source.effective_rungs(config);
+        if rungs.len() < width_rungs.len() {
+            // The reader who needs this line is the one wondering why a
+            // long video's top quality is missing: size alone would have
+            // kept more rungs, so either the source's own bitrate or the
+            // per-file budget is why it didn't — not necessarily which.
+            log::info!(
+                "HLS ladder for {}: kept {} of {} size-eligible rungs (narrowed by the \
+                 source's own bitrate and/or the {} MiB per-file budget)",
+                source_file.display(),
+                rungs.len(),
+                width_rungs.len(),
+                config.hls_max_file_mb,
             );
-            let stored: Result<Vec<String>, String> = result.and_then(|_written| {
-                members
-                    .iter()
-                    .map(|name| objects.store_file(&scratch.join(name), crate::build::cache::RecordMode::Wait))
-                    .collect()
-            });
-            // allow:unlink ladder scratch this call created under cache/tmp
-            let _ = crate::build::io_utils::remove_output_dir_all(&scratch);
-            (members, stored?, ladder_params(config, &rungs, source))
         }
+        if rungs.len() < 2 {
+            return Ok(None);
+        }
+        // `hls_members` is the one owner of the naming scheme: the scratch
+        // names, the staging names and the cache keys are all this same
+        // list, narrowed by `ladder_members` to drop the audio group a
+        // silent source's encode never writes. The scratch directory can
+        // be named anything, because nothing inside the ladder refers to
+        // the directory it sits in.
+        let members = ladder_members(&rungs, probe.has_audio);
+        let scratch = temp_dir.join(format!("hls-{}", uuid::Uuid::new_v4()));
+        let result = encode_ladder(
+            Path::new(ffmpeg.bin_path()),
+            source_file,
+            &scratch,
+            &rungs,
+            &probe,
+            config,
+            progress,
+            registry,
+            cancel_flag,
+        );
+        let stored: Result<Vec<String>, String> = result.and_then(|_written| {
+            members
+                .iter()
+                .map(|name| objects.store_file(&scratch.join(name), crate::build::cache::RecordMode::Wait))
+                .collect()
+        });
+        // allow:unlink ladder scratch this call created under cache/tmp
+        let _ = crate::build::io_utils::remove_output_dir_all(&scratch);
+        (members, stored?, ladder_params(config, &rungs, source))
     };
     Ok(Some(link_members(objects, ladder_dir, &members, oids, &params)?))
 }
@@ -718,13 +719,10 @@ pub(crate) enum LadderHeal {
     /// A complete cached ladder was found and relinked.
     Healed,
     /// The record holds `video/hls/` keys, but this no-probe path can't
-    /// vouch for them — a legacy-form record (no `source` facts to recompute
-    /// against, see `cached_ladder`'s doc), or any other reason `cached_
-    /// ladder` misses while ladder keys are still there. The caller must NOT
-    /// read the item as fine: it needs a real dispatch, where `produce_
-    /// ladder`'s own legacy-migration path (which may probe) gets a chance
-    /// to recognize or re-encode it — a second migration path here would
-    /// just be the same logic written twice.
+    /// vouch for them — a record keyed before the current ladder format, or
+    /// any other reason `cached_ladder` misses while ladder keys are still
+    /// there. The caller must NOT read the item as fine: it needs a real
+    /// dispatch, where `produce_ladder` probes the source and re-encodes it.
     NeedsDispatch,
 }
 
@@ -758,7 +756,7 @@ pub(crate) const HLS_TRANSFORM_PREFIX: &str = "video/hls/";
 /// says nothing about which video it belongs to beyond the record it sits in.
 /// Not `pub`: the child module `cache` reaches it via `super::transform_name`
 /// (Rust privacy already grants a submodule access to its parent's private
-/// items), so `cached_ladder`/`legacy_cached_ladder` build the same keys this
+/// items), so `cached_ladder` builds the same keys this
 /// module's own `link_members` does — one naming scheme, not two.
 fn transform_name(member: &str) -> String {
     format!("{HLS_TRANSFORM_PREFIX}{member}")
@@ -766,7 +764,7 @@ fn transform_name(member: &str) -> String {
 
 mod cache;
 pub(crate) use cache::{ladder_params, SourceFacts};
-use cache::{cached_ladder, legacy_cached_ladder};
+use cache::cached_ladder;
 // Test-only: video.rs's own staging-heal test needs the same real legacy
 // shapes hls_tests.rs's migration tests do — see `cache::legacy_form_params`.
 #[cfg(test)]
