@@ -59,7 +59,21 @@ pub(crate) fn sniff_dimensions(path: &Path) -> image::ImageResult<(u32, u32)> {
 /// `encode_sized_raster`) apply it themselves right after, since not every
 /// caller does (LQIP/dominant-color extraction never has).
 pub(crate) fn sniff_decode(path: &Path) -> image::ImageResult<image::DynamicImage> {
-    let mut reader = open_sniffed(path).map_err(image::ImageError::IoError)?;
+    decode_capped(open_sniffed(path).map_err(image::ImageError::IoError)?)
+}
+
+/// [`sniff_decode`] for bytes already in memory, such as a download. The same
+/// content sniffing and the same [`DECODE_ALLOC_CEILING`].
+pub(crate) fn sniff_decode_bytes(bytes: &[u8]) -> image::ImageResult<image::DynamicImage> {
+    let reader = ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(image::ImageError::IoError)?;
+    decode_capped(reader)
+}
+
+fn decode_capped<R: std::io::BufRead + std::io::Seek>(
+    mut reader: ImageReader<R>,
+) -> image::ImageResult<image::DynamicImage> {
     let mut limits = image::Limits::default();
     limits.max_alloc = Some(DECODE_ALLOC_CEILING);
     reader.limits(limits);

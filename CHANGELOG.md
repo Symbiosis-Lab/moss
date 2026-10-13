@@ -77,6 +77,7 @@ All notable changes to moss will be documented here.
 
 - `moss build --serve` now prints the same "Reading … · n of m" lines as a plain build while a plugin reads files in the background; it used to stay silent until the text arrived.
 - An embed written as `![[url|Title|420x620]]` now gets both its title and its size, and an embed with no title gets a default name (YouTube video, Vimeo video, CodePen, or the page's site), so screen readers can announce it.
+- `moss import` keeps a site's own icon when the original serves it as WebP, JPEG or GIF, converting it to PNG, instead of falling back to the moss icon.
 - A link to a folder written with `./` or `../` (`[Reports](../reports/)`) now resolves like any other link to that folder; it used to be reported as an unresolved link.
 - A video whose file name has a space or a non-ASCII character (`new folder.mp4`, `封面.mp4`) now plays through its streaming ladder and gets its size, and a hero video its full-size still. The build made all three, but the page looked them up by the name as it appears in a URL (`new%20folder`), found nothing, and fell back to the plain file with no size.
 - A site that had published a streaming ladder for a video that now gets none is no longer refused its next publish for "removing" the ladder's files; the video is served as the plain MP4.
