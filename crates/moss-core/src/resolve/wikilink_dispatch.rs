@@ -1043,19 +1043,8 @@ fn build_synth_params(
                 None if is_label_text(alias) => params.insert("label", alias),
                 None => {}
             },
-            SynthKind::Iframe => match Sizing::parse(alias) {
-                Some(Sizing::Width(w)) => {
-                    params.insert("width", w.to_css());
-                }
-                Some(Sizing::Box(w, h)) => {
-                    params.insert("width", w.to_css());
-                    params.insert("height", h.to_css());
-                }
-                None => {
-                    // Non-sizing alias text → iframe accessible name.
-                    params.insert("title", alias);
-                }
-            },
+            // Non-sizing parts are the iframe's accessible name.
+            SynthKind::Iframe => crate::resolve::title_params::apply_frame_alias(alias, &mut params),
             // Audio never sizes, but a size spelling (`400`, `640x360`) is
             // still not text to announce.
             SynthKind::Audio => {

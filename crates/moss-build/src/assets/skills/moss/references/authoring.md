@@ -216,7 +216,7 @@ Embed a video or pen by URL. The standard form makes the same player as the wiki
 ![640x360](https://www.youtube.com/watch?v=abc)
 ```
 
-The wiki spelling is `![[https://www.youtube.com/watch?v=dQw4w9WgXcQ|640x360]]`. YouTube, Vimeo, and CodePen get provider-aware players; only the wiki form turns another https page URL into a generic iframe.
+The wiki spelling is `![[https://www.youtube.com/watch?v=dQw4w9WgXcQ|640x360]]`. YouTube, Vimeo, and CodePen get provider-aware players; only the wiki form turns another https page URL into a generic iframe. Give a frame a title and a size together as `![[https://example.test/form|Sign-up form|420x620]]`; a frame without a title gets a default name: the player's for YouTube, Vimeo and CodePen, or the site's for any other page.
 
 ## Content structure
 

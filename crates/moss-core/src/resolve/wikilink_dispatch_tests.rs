@@ -526,6 +526,29 @@ fn dispatch_model_extension_routes_to_synth() {
 }
 
 #[test]
+fn dispatch_local_iframe_title_and_size_split() {
+    // `![[widget.html|Sign-up form|420x620]]` shares the alias rule with the
+    // URL form: the size part sets width/height and the rest is the title.
+    let graph = build_graph(&["widget.html"]);
+    let emit = dispatch_wikilink_embed(
+        "widget.html",
+        Some("Sign-up form|420x620"),
+        true,
+        &graph,
+        "index.md",
+        &empty_snapshot(),
+    );
+    match emit.output {
+        EmitKind::Html(s) => {
+            assert!(s.contains(r#"title="Sign-up form""#), "got: {}", s);
+            assert!(s.contains(r#"width="420px""#), "got: {}", s);
+            assert!(s.contains(r#"height="620px""#), "got: {}", s);
+        }
+        other => panic!("expected Html, got: {:?}", other),
+    }
+}
+
+#[test]
 fn dispatch_iframe_alias_carries_title() {
     // `![[widget.html|Embedded Widget]]` — non-sizing alias text
     // surfaces on the iframe as the `title=` accessible name. The
