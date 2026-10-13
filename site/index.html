@@ -1811,6 +1811,21 @@ const reachToward = (from, want) => {
   const to = legToward(from, want, true), next = stepToward(from, want);
   return to === from && mobileLayout() && next !== from && joinAt(from, next).wash && Math.min(from, next) !== SHIPS ? next : to;
 };
+// A join the morph cannot make (no GPU, or a print not yet taken) used to pop: the stage changed scene
+// between two frames. With the print of the scene being left in hand, that print is laid over the
+// canvas's own place first and thinned away while the live scene stands beneath, which needs no GPU.
+let dissolvesRun = 0;
+function dissolveFrom(print) {
+  if (!print || reduce) return;
+  const veil = document.createElement('canvas');
+  veil.width = print.width; veil.height = print.height;
+  veil.getContext('2d').drawImage(print, 0, 0);
+  veil.setAttribute('aria-hidden', 'true');
+  veil.style.cssText = `position:absolute;left:${printRect.x}px;top:${printRect.y}px;width:${printRect.w}px;height:${printRect.h}px;z-index:6;pointer-events:none;`;
+  cell.append(veil); dissolvesRun++;
+  const gone = () => veil.remove();
+  veil.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 360, easing: 'ease-out' }).finished.then(gone, gone);
+}
 const passThrough = (from, to) => { for (let s = stepToward(from, to); s !== to; s = stepToward(s, to)) { sceneClasses(s); groundAt(s); } };
 // A scene change: one mechanism at a time, and never two at once. The target is
 // read whole off the scroll position, so a jump is not a queue of joins to walk
@@ -1845,7 +1860,7 @@ async function runJoin() {
         // wash is a cut, and so is a boundary whose print never arrived; a wash
         // that runs may be re-pointed or turned around inside.
         if (reach !== shown) { shown = await pour(reach); }
-        else { passThrough(shown, to); shown = to; }
+        else { dissolveFrom(sheets[shown]); passThrough(shown, to); shown = to; }
       }
       if (target === SHARE && xfAt() >= 1) { standAtTerminalClose(); break; }
       still(shown);
@@ -3741,7 +3756,7 @@ window.__onHand = sheets;
 window.__restY = restY;   // the rests' own geometry, so a rest check reads it rather than keeping a second copy
 window.__targetAt = targetAt;   // what a rested position names, read the same way the wash reads it
 window.__plateBounds = plateBounds;   // the region a scattered/dragged plate must stay inside, the same formula the drag clamp and the initial scatter both read
-window.__state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +(mobileLayout() ? progressAt() : restProgress()).toFixed(3), travel, view: +pos().toFixed(1), primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg });
+window.__state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, dissolves: dissolvesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +(mobileLayout() ? progressAt() : restProgress()).toFixed(3), travel, view: +pos().toFixed(1), primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg });
 // window.__s3 is defined with the rest of scene 3's own script, above.
 // How the print pipeline is doing: captures started, how many are drawing now,
 // the most that ever drew at once, and how old the print on hand is.

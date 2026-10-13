@@ -56,11 +56,14 @@ for (const engine of [chromium, webkit]) {
         await page.evaluate(() => { sheets[2] = null; const real = capture; capture = async () => { capture = real; throw new Error('injected capture failure'); }; });
         await page.waitForFunction(() => printable && !!sheets[2], null, { timeout: 30000 });
       }
-      const washesBefore = await page.evaluate(() => __state().washes);
+      const washesBefore = await page.evaluate(() => __state().washes), dissolvesBefore = await page.evaluate(() => __state().dissolves);
       const after = await cross(page, 1);
       assert(!after.running && after.shown === 2 && after.target === 2,
         `${engine.name()}: ${failure} left the art behind the scroll: ${JSON.stringify({ shown: after.shown, target: after.target, running: after.running })}`);
       // a dead canvas must not be raised over the live scene: the art would vanish for the crossing
+      // a join the morph cannot make dissolves from the print of the scene it leaves, not a pop
+      if (failure === 'lost context') assert(after.dissolves > dissolvesBefore,
+        `${engine.name()}: a join cut for want of the GPU popped instead of dissolving: ${JSON.stringify({ dissolves: after.dissolves, dissolvesBefore })}`);
       if (failure === 'lost context') assert(after.cover === 0, `${engine.name()}: the wash cover rose over a lost GPU context: ${after.cover}`);
       if (failure === 'restored context' || failure === 'failed capture') assert(after.washes > washesBefore && after.cover > .5,
         `${engine.name()}: after a ${failure} the join was still cut, not washed: ${JSON.stringify({ washes: after.washes, washesBefore, cover: after.cover })}`);
