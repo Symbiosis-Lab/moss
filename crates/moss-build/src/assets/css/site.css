@@ -1003,6 +1003,14 @@ footer.container > :last-child {
   margin-block-end: 0;
 }
 
+/* The reading measure is for article prose. A footer's paragraphs fill the
+   footer's own width, so a theme's wider footer is not cut back to the
+   article column, and the same footer does not change width between pages
+   with different `content_width`. */
+footer.container p {
+  max-inline-size: none;
+}
+
 /* A page whose footer has nothing to show — no footer.md, no `footer: true`
    links, no feed link, no subscribe form, no plugin footer HTML — gets no
    `<footer>` element at all (`build::enhance::strip_empty_footer`), so its

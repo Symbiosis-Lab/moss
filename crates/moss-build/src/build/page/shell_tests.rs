@@ -1169,6 +1169,27 @@ fn test_css_footer_container_provides_default_chrome() {
     );
 }
 
+/// Footer paragraphs fill the footer's own width. The reading measure caps
+/// every `p` at `--moss-content-width`, and that token follows the page's
+/// `content_width`, so without this rule a footer paragraph's width changed
+/// from page to page. The article paragraph rule must keep the cap.
+#[test]
+fn test_css_footer_paragraph_is_not_measure_capped() {
+    let footer_p = get_css_rule(DEFAULT_CSS, "footer.container p")
+        .expect("footer.container p CSS rule should exist");
+    assert!(
+        footer_p.contains("max-inline-size: none"),
+        "the site footer's paragraphs should lift the reading-measure cap, got: {}",
+        footer_p
+    );
+    let body_p = get_css_rule(DEFAULT_CSS, "p").expect("p CSS rule should exist");
+    assert!(
+        body_p.contains("max-inline-size: var(--moss-content-width)"),
+        "the body p rule must keep the reading-measure cap, got: {}",
+        body_p
+    );
+}
+
 #[test]
 fn test_css_footer_subscribe_flex_container() {
     // Regression guard for the footer subscribe-form layout, keyed on the
