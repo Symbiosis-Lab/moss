@@ -247,7 +247,7 @@ async function invokeLifecycle(pluginName, hook, trigger, taskId, lifecycle) {
 *
 * @example
 * const task = await startTask("Importing 42 articles", {
-*   hook: "import",
+*   hook: "process",
 *   trigger: "onboarding_flow",
 * });
 * for (let i = 0; i < articles.length; i++) {
@@ -258,7 +258,7 @@ async function invokeLifecycle(pluginName, hook, trigger, taskId, lifecycle) {
 * @category Messaging
 */
 async function startTask(label, options = {}) {
-	const hook = options.hook ?? "import";
+	const hook = options.hook ?? "process";
 	const trigger = options.trigger ?? "background";
 	const hasProgress = options.hasProgress ?? true;
 	const cancellable = options.cancellable ?? false;

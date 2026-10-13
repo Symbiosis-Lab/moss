@@ -337,6 +337,17 @@ pub(crate) fn show_render(mp: &MossPaths, publishable: bool) -> (u64, Option<Pat
     (seq, Some(staging))
 }
 
+/// Whether `render` is still the newest render admitted for this folder: the
+/// test a detached background read makes between files, so a build that
+/// superseded it is the one that asks for the rebuild. `None` (no render was
+/// minted) cannot be told apart from newest, and counts as it.
+pub(crate) fn is_latest_render(mp: &MossPaths, render: Option<u64>) -> bool {
+    match render {
+        Some(render) => lock_for(mp).state().next_render == render,
+        None => true,
+    }
+}
+
 /// Reveal a render whose required outputs became ready after its initial
 /// preview decision. A detached tail may do this only while the render it
 /// belongs to is still the newest admitted render.

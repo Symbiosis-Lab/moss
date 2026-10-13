@@ -43,6 +43,7 @@ use crate::build::watch::{
 use crate::types::events::MossEvent;
 
 pub mod cadence;
+pub mod derive_folders;
 pub mod headless;
 pub mod reconcile;
 pub mod supervision;
@@ -519,6 +520,14 @@ async fn handle_debounced_batch(
         emit(MossEvent::RawFileCreated { paths: raw_creates });
     }
     // ── END RAW CREATE PASS ───────────────────────────────────────────────────
+
+    // ── DERIVE FOLDER PASS ────────────────────────────────────────────────────
+    // Stubs for files that just arrived in a folder shown as pages, and the
+    // folder decisions that follow a rename. Before the rebuild filter below
+    // because a plugin's file type is not one the build itself watches for.
+    // Not a build step: a scan must not resurrect a stub the author deleted.
+    derive_folders::react_detached(folder_path, &events);
+    // ── END DERIVE FOLDER PASS ────────────────────────────────────────────────
 
     // The OS admits it dropped events. FSEvents raises `kMustScanSubDirs` when
     // its buffer overflows, and a mass cloud materialization — 724 files

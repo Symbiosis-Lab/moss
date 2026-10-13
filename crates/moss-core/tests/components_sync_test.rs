@@ -42,7 +42,10 @@ fn css_files(dir: &std::path::Path) -> Vec<PathBuf> {
 }
 
 /// Classes moss emits that are deliberately NOT part of the site contract.
-const EMITTER_ALLOWLIST: &[(&str, &str)] = &[];
+const EMITTER_ALLOWLIST: &[(&str, &str)] = &[(
+    "visually-hidden",
+    "a utility from the base layer of site.css, shared with theme markup; not a moss-* component",
+)];
 
 /// This crate's own emitter root.
 const EMITTER_ROOT: &str = "src";

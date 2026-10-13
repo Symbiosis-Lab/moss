@@ -9324,4 +9324,29 @@ body[data-moss-preview] .moss-service-inactive {
   cursor: not-allowed;
 }
 
+/* ── Derived text ──────────────────────────────────────────────── */
+/* `![[file.ext#fragment]]` stands for text a plugin reads out of the file.
+   When the text is ready it is plain page content and none of this applies.
+   Until then a pending block holds the place with a faint grid; a skipped
+   block says, in a plain note, why no text will appear. */
+.moss-derived {
+  margin-block: 1.5em;
+  border-radius: 4px;
+}
+.moss-derived--pending {
+  min-block-size: 12rem;
+  background-color: var(--moss-color-surface);
+  background-image:
+    linear-gradient(var(--moss-border-light) 1px, transparent 1px),
+    linear-gradient(90deg, var(--moss-border-light) 1px, transparent 1px);
+  background-size: 10px 10px;
+}
+.moss-derived--skipped {
+  padding: 0.75em 1em;
+  color: var(--moss-text-secondary);
+  background: var(--moss-color-surface);
+  border: 1px solid var(--moss-border-medium);
+  border-inline-start: 3px solid var(--moss-border-strong);
+}
+
 } /* @layer shortcodes */

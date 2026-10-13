@@ -191,6 +191,10 @@ For the exact per-type attribute vocabulary (data-loop, data-type, sizing
 tokens, etc.) run `moss describe --json`, or see `mosspub.com/docs/reference`
 — those reflect the running binary.
 
+### Text from a file
+
+When an installed plugin can read a kind of file (a PDF, a deck), `![[report.pdf#text]]` puts the text it derived into the page as ordinary markdown, with a placeholder while it is still being read and a plain note if the file could not be read. The fragment name (`text` here) is the plugin's; `moss import --status` and the plugin's manifest list what it offers. A page whose only content is such embeds is a **stub**: `moss import <folder> --allow-plugins` writes one beside each file in a folder, containing `inferred: [title]` in its frontmatter (the page takes its title from the first embedded file, and a `title:` you write wins) and the embeds the plugin's layout asks for. Write your own text above or below them; a stub is never overwritten. `moss expand <page> --allow-plugins` replaces each line holding only an embed with the text it stands for, when the page should keep the text without the source file. `--allow-plugins` is needed whenever the plugin came with the folder rather than being allowed in the app; without it import and expand stop and say so.
+
 ### External media embeds
 
 Embed a video or pen by URL. The standard form makes the same player as the wiki form for a YouTube, Vimeo or CodePen address; any other `![](https://…)` stays a plain image:

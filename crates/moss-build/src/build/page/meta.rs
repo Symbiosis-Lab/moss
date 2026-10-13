@@ -513,8 +513,12 @@ fn first_paragraph_excerpt(content: &str, strip_callout_marker: bool, math: bool
     // Consolidating onto the real parser (rather than hand-patching a parallel
     // scanner) keeps the excerpt view and the rendered view from drifting:
     // the shortcode grammar has one source of truth.
+    //
+    // A derived-text block with no text (pending, declined, failed) is a status
+    // note, not prose; as an HTML block it would surface as escaped markup.
+    let content = moss_core::resolve::embeds::derived::without_status_blocks(content);
     let processed =
-        moss_core::ast::shortcode_extract::extract_shortcodes(content).markdown_with_placeholders;
+        moss_core::ast::shortcode_extract::extract_shortcodes(&content).markdown_with_placeholders;
 
     let mut paragraphs: Vec<String> = Vec::new();
     let mut current_lines: Vec<&str> = Vec::new();

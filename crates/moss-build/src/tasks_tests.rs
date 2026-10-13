@@ -422,7 +422,6 @@ fn task_id_deserializes_inside_command_arg_shape() {
 #[test]
 fn plugin_hook_maps_to_task_kind_1_to_1() {
     let cases = [
-        (PluginHook::Import, TaskKind::Import),
         (PluginHook::Publish, TaskKind::Publish),
         (PluginHook::Deploy, TaskKind::Deploy),
         (PluginHook::Syndicate, TaskKind::Syndicate),
@@ -446,7 +445,7 @@ fn router_covers_every_cell() {
     use PluginHook::*;
     use TriggerContext::*;
 
-    let hooks = [Import, Publish, Deploy, Syndicate, Process];
+    let hooks = [Publish, Deploy, Syndicate, Process];
     let triggers = [OnboardingFlow, SettingsManual, Background, ManualOne];
 
     let mut seen = 0;
@@ -465,25 +464,13 @@ fn router_covers_every_cell() {
             seen += 1;
         }
     }
-    assert_eq!(seen, 20, "router must cover every (hook, trigger) pair");
+    assert_eq!(seen, 16, "router must cover every (hook, trigger) pair");
 }
 
 /// Spot-check specific router rows from the Layer 2 table.
 #[test]
 fn router_spot_checks_match_layer2_table() {
     let cases = [
-        (
-            PluginHook::Import,
-            TriggerContext::OnboardingFlow,
-            TaskScope::ActionPanel,
-            TaskTone::Ambient,
-        ),
-        (
-            PluginHook::Import,
-            TriggerContext::SettingsManual,
-            TaskScope::Workspace,
-            TaskTone::Narrated,
-        ),
         (
             PluginHook::Publish,
             TriggerContext::Background,
@@ -549,7 +536,7 @@ fn awaiting_preserves_scope_across_all_rows() {
     use PluginHook::*;
     use TriggerContext::*;
 
-    let hooks = [Import, Publish, Deploy, Syndicate, Process];
+    let hooks = [Publish, Deploy, Syndicate, Process];
     let triggers = [OnboardingFlow, SettingsManual, Background, ManualOne];
 
     for &hook in &hooks {

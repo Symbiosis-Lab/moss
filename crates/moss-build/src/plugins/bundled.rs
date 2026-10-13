@@ -196,8 +196,15 @@ fn compute_installed_hash(plugin_name: &str, plugin_dir: &Path) -> Option<String
 /// as a match.
 pub fn code_hash(plugin_dir: &Path, manifest: &PluginManifest) -> Option<String> {
     let manifest_bytes = fs::read(plugin_dir.join("manifest.json")).ok()?;
-    let entry_bytes = fs::read(plugin_dir.join(&manifest.entry)).ok()?;
-    Some(hash_code(&manifest_bytes, &manifest.entry, &entry_bytes))
+    // A derivation-only plugin has no code beyond the manifest. A pinned
+    // download carries its hash there; a `path` binary is only named, so its
+    // content joins the hash and changing it asks for consent again.
+    let entry_bytes = match &manifest.entry {
+        Some(entry) => fs::read(plugin_dir.join(entry)).ok()?,
+        None => Vec::new(),
+    };
+    let binaries = crate::system::derive::binary::local_binary_hashes(plugin_dir, manifest);
+    Some(hash_code(&manifest_bytes, manifest.entry.as_deref().unwrap_or(""), &entry_bytes, &binaries))
 }
 
 /// [`code_hash`] of the copy this binary ships under `plugin_name`, or
@@ -208,15 +215,22 @@ pub fn code_hash(plugin_dir: &Path, manifest: &PluginManifest) -> Option<String>
 pub fn bundled_code_hash(plugin_name: &str) -> Option<String> {
     let manifest = read_bundled_manifest(plugin_name)?;
     let manifest_bytes = bundled_file(plugin_name, "manifest.json")?;
-    let entry_bytes = bundled_file(plugin_name, &manifest.entry)?;
-    Some(hash_code(manifest_bytes, &manifest.entry, entry_bytes))
+    let entry = manifest.entry.as_deref().unwrap_or("");
+    let entry_bytes = if entry.is_empty() { &[][..] } else { bundled_file(plugin_name, entry)? };
+    Some(hash_code(manifest_bytes, entry, entry_bytes, &[]))
 }
 
-fn hash_code(manifest_bytes: &[u8], entry: &str, entry_bytes: &[u8]) -> String {
+fn hash_code(manifest_bytes: &[u8], entry: &str, entry_bytes: &[u8], local_binaries: &[String]) -> String {
     let mut hasher = Sha256::new();
     for (name, bytes) in [("manifest.json", manifest_bytes), (entry, entry_bytes)] {
         hasher.update(name.as_bytes());
         hasher.update(bytes);
+    }
+    // Absent for every plugin without a local binary, so those hashes are
+    // exactly what they were.
+    for binary in local_binaries {
+        hasher.update(b"local-binary");
+        hasher.update(binary.as_bytes());
     }
     format!("{:x}", hasher.finalize())
 }

@@ -67,8 +67,8 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         },
         CliCommandInfo {
             name: "import",
-            args: "<url> [<folder>] [-r|--recursive]  |  --list <file> [<folder>] [-r|--recursive]",
-            description: "Import a URL (or batch of URLs) into a project folder as markdown.",
+            args: "<url> [<folder>] [-r|--recursive]  |  --list <file> [<folder>] [-r|--recursive]  |  <folder> [--with <derivation-id>] [--allow-plugins]  |  --status [<site>] [--json] [--allow-plugins]",
+            description: "Import a URL (or batch of URLs) into a project folder as markdown. Given an existing folder instead, show the files in it that an installed plugin can turn into pages (for example documents): records the choice in .moss/config.toml and writes a page beside each file, never overwriting one; `--with` picks a derivation when several accept the folder. A plugin the site carries runs only if allowed, as in a build: without `--allow-plugins` a plugin not yet allowed in the app is refused with the same sentence a build prints, and nothing is written. `--status` lists every folder holding such files with its decision (undecided, show, keep), file count, pages still missing and files a plugin declined; `--json` prints {\"folders\": [{folder, derivation_id, noun_one, noun_other, count, decision, stubs_missing, skipped: [{file, reason, message}], failed: [{file, message}]}]}.",
         },
         CliCommandInfo {
             name: "agents",
@@ -84,6 +84,11 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
             name: "rename",
             args: "<old_path> <new_path>",
             description: "Rename a file or folder and rewrite every [[wikilink]] and [text](link) that points at it, project-wide. Scriptable, so it is the safe way to bulk-rename (e.g. localizing filenames) without breaking links. `mv` is an alias.",
+        },
+        CliCommandInfo {
+            name: "expand",
+            args: "<page.md|folder> [--dry-run] [--allow-plugins]",
+            description: "Write embeds out as text. Each line holding only a `![[file.ext#fragment]]` embed of a file a plugin derives text from (once its text has been derived; missing text is derived first) or only a `![[note]]` / `![[note#heading]]` transclusion is replaced with the text it stands for, so the page can be edited as plain markdown. Embeds whose text is not available (skipped, unreadable, unresolved) are left as written, frontmatter is kept byte for byte, and a file is written only when something changed. --dry-run reports without writing. A plugin that derives the text must be allowed, as in a build: without `--allow-plugins` one not yet allowed in the app is refused with the same sentence a build prints.",
         },
         CliCommandInfo {
             name: "doctor",
@@ -110,7 +115,7 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
 
 /// The subcommands that parse `--help` themselves; [`help_for`] declines
 /// them so their per-mode usage stays authoritative.
-const OWN_HELP: [&str; 7] = ["list", "doctor", "rename", "domain", "env", "import", "history"];
+const OWN_HELP: [&str; 8] = ["list", "doctor", "rename", "expand", "domain", "env", "import", "history"];
 
 /// Render `moss <cmd> --help` from the table `moss describe` already publishes.
 ///

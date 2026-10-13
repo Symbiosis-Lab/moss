@@ -63,10 +63,7 @@ pub fn run(args: &[String], binary_version: &'static str) -> i32 {
 
 /// Plugin hook table — one entry per `Capability` variant in
 /// `plugins/types.rs` that is independently dispatched to a plugin's own
-/// export. `Capability::Import` is deliberately absent: it exists for
-/// onboarding-catalog filtering and legacy-manifest migration, but a plugin
-/// that declares it still implements `process(ctx)` — there is no separate
-/// `import` export moss ever calls.
+/// export.
 ///
 /// Arity rules:
 /// - "single": at most one plugin may be active for this hook per project
@@ -121,8 +118,8 @@ fn manifest_fields() -> Vec<ManifestFieldInfo> {
         ManifestFieldInfo {
             name: "entry",
             r#type: "string",
-            required: true,
-            description: "Entry point JavaScript file path, relative to the plugin directory.",
+            required: false,
+            description: "Entry point JavaScript file path, relative to the plugin directory. Required unless the plugin declares only contributes.derivations, which run a pinned binary and need no script.",
         },
         ManifestFieldInfo {
             name: "capabilities",
@@ -212,7 +209,7 @@ fn manifest_fields() -> Vec<ManifestFieldInfo> {
             name: "contributes",
             r#type: "object",
             required: false,
-            description: "Contributions (deploy targets, frontmatter fields, embed renderers, job descriptors, stack declarations), VS Code style. Each contribution may carry a setup block — needs (host-checked preconditions like \"stack\"), settings (fields moss draws, the Field vocabulary), credentials, and check (the plugin implements the check_setup hook). A stack contribution carries its own artifact pin (id, version, sources) instead of a setup block.",
+            description: "Contributions (deploy targets, frontmatter fields, embed renderers, job descriptors, stack declarations, derivations), VS Code style. Each contribution may carry a setup block — needs (host-checked preconditions like \"stack\"), settings (fields moss draws, the Field vocabulary), credentials, and check (the plugin implements the check_setup hook). A stack contribution carries its own artifact pin (id, version, sources) instead of a setup block. A derivation (contributes.derivations[id]) names the file extensions it accepts, the fragments it produces, and a pinned one-shot binary that turns a file into markdown fragments an author embeds as ![[file.ext#fragment]].",
         },
         ManifestFieldInfo {
             name: "min_moss_version",

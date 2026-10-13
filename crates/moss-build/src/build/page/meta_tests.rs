@@ -2478,3 +2478,16 @@ fn json_ld_blocks_cannot_be_broken_out_of_by_page_text() {
         assert!(v.to_string().contains(hostile), "the text survives the escaping");
     }
 }
+
+#[test]
+fn a_derived_text_placeholder_is_not_description_material() {
+    for block in [
+        "<div class=\"moss-derived moss-derived--skipped\" role=\"note\">The text of this file couldn't be read.</div>",
+        "<div class=\"moss-derived moss-derived--pending\" role=\"status\"><span class=\"moss-derived__label\">Reading\u{2026}</span></div>",
+    ] {
+        let page = format!("{block}\n\nThe real opening paragraph.\n");
+        assert_eq!(extract_description(&page, true), "The real opening paragraph.");
+        let only = format!("{block}\n");
+        assert_eq!(extract_description(&only, true), "");
+    }
+}

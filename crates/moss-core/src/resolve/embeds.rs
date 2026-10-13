@@ -13,6 +13,9 @@ use crate::heading::anchor::obsidian_heading_anchor;
 
 use super::{Diagnostic, DiagnosticKind};
 
+pub mod derived;
+pub mod expand;
+
 /// Maximum recursion depth for nested embeds.
 ///
 /// Public because every consumer that walks the embed relation has to stop at
@@ -141,43 +144,22 @@ fn resolve_embeds_inner(
                 Some(file_content) => {
                     let body = strip_frontmatter(&file_content);
 
-                    let section = if let Some(anchor) = heading_anchor {
-                        if let Some(block_id) = anchor.strip_prefix('^') {
-                            // Block reference: find paragraph containing ^block_id
-                            match extract_block_section(body, block_id) {
-                                Some(section) => section,
-                                None => {
-                                    diagnostics.push(Diagnostic {
-                                        message: format!(
-                                            "Block reference '^{block_id}' not found in '{file_path}'"
-                                        ),
-                                        source_path: from_path.to_string(),
-                                        reference: target.to_string(),
-                                        kind: DiagnosticKind::Other,
-                                    });
-                                    body.to_string()
-                                }
+                    let section = select_section(body, heading_anchor).unwrap_or_else(|| {
+                        let anchor = heading_anchor.unwrap_or_default();
+                        let message = match anchor.strip_prefix('^') {
+                            Some(block_id) => {
+                                format!("Block reference '^{block_id}' not found in '{file_path}'")
                             }
-                        } else {
-                            // Heading reference
-                            match extract_heading_section(body, anchor) {
-                                Some(section) => section,
-                                None => {
-                                    diagnostics.push(Diagnostic {
-                                        message: format!(
-                                            "Heading '#{anchor}' not found in '{file_path}'"
-                                        ),
-                                        source_path: from_path.to_string(),
-                                        reference: target.to_string(),
-                                        kind: DiagnosticKind::Other,
-                                    });
-                                    body.to_string()
-                                }
-                            }
-                        }
-                    } else {
+                            None => format!("Heading '#{anchor}' not found in '{file_path}'"),
+                        };
+                        diagnostics.push(Diagnostic {
+                            message,
+                            source_path: from_path.to_string(),
+                            reference: target.to_string(),
+                            kind: DiagnosticKind::Other,
+                        });
                         body.to_string()
-                    };
+                    });
 
                     // Recurse into the inlined content.
                     visited.insert(file_path.to_string());
@@ -228,6 +210,16 @@ fn parse_embed_marker(line: &str) -> Option<&str> {
     Some(target)
 }
 
+/// The file and `#anchor` of an embed as written (`file.ext#anchor|params`):
+/// the params after `|` are dropped first. An empty anchor stays `Some("")`.
+pub fn split_embed_target(inner: &str) -> (&str, Option<&str>) {
+    let without_params = inner.split_once('|').map_or(inner, |(target, _)| target);
+    match without_params.split_once('#') {
+        Some((file, anchor)) => (file, Some(anchor)),
+        None => (without_params, None),
+    }
+}
+
 /// Split a target string into (file_path, optional heading_anchor).
 ///
 /// `"guide.md#getting-started"` => `("guide.md", Some("getting-started"))`
@@ -250,12 +242,25 @@ fn split_target(target: &str) -> (&str, Option<&str>) {
 /// A transcluded page whose frontmatter is simplified used to have its field
 /// lines rendered as prose inside the embedding page — this saw a YAML block or
 /// nothing.
-fn strip_frontmatter(content: &str) -> &str {
+pub(super) fn strip_frontmatter(content: &str) -> &str {
     match crate::frontmatter::frontmatter_span(content) {
         // Char-aligned: `body` is a line-boundary offset from the splitter.
         #[allow(clippy::string_slice)]
         Some(span) => &content[span.body..],
         None => content,
+    }
+}
+
+/// The part of `body` an embed's `#anchor` selects: the whole body without
+/// one, the block for `^id`, the heading section otherwise. `None` when the
+/// anchor names something `body` does not have.
+pub(super) fn select_section(body: &str, anchor: Option<&str>) -> Option<String> {
+    match anchor {
+        None => Some(body.to_string()),
+        Some(a) => match a.strip_prefix('^') {
+            Some(block_id) => extract_block_section(body, block_id),
+            None => extract_heading_section(body, a),
+        },
     }
 }
 

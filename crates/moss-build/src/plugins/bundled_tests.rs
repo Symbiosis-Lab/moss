@@ -754,7 +754,7 @@ fn the_code_hash_is_exactly_the_code_and_the_bundle_s_is_exactly_the_bundle() {
     fs::write(dir.join("config.toml"), "token = \"x\"").unwrap();
     assert_eq!(code_hash(&dir, &manifest).unwrap(), shipped, "the plugin's own data files are not its code");
 
-    let entry = dir.join(&manifest.entry);
+    let entry = dir.join(manifest.entry.as_deref().unwrap());
     let mut body = fs::read(&entry).unwrap();
     body.extend_from_slice(b"\n// edited by hand");
     fs::write(&entry, body).unwrap();

@@ -118,7 +118,6 @@ export async function reportError(
  * @category Messaging
  */
 export type PluginHook =
-  | "import"
   | "publish"
   | "deploy"
   | "syndicate"
@@ -224,9 +223,9 @@ export interface AdvisoryProposal {
 /** @category Messaging */
 export interface StartTaskOptions {
   /**
-   * Hook the task belongs to. Defaults to "import" — the most common
-   * onboarding case. Plugins should pass an explicit hook for non-import
-   * work (e.g., a syndicator passes "syndicate").
+   * Hook the task belongs to. Defaults to "process" — work done on the
+   * site's files before generation. Plugins should pass an explicit hook for
+   * anything else (e.g., a syndicator passes "syndicate").
    */
   hook?: PluginHook;
   /**
@@ -403,7 +402,7 @@ async function invokeLifecycle(
  *
  * @example
  * const task = await startTask("Importing 42 articles", {
- *   hook: "import",
+ *   hook: "process",
  *   trigger: "onboarding_flow",
  * });
  * for (let i = 0; i < articles.length; i++) {
@@ -417,7 +416,7 @@ export async function startTask(
   label: string,
   options: StartTaskOptions = {}
 ): Promise<TaskHandle> {
-  const hook: PluginHook = options.hook ?? "import";
+  const hook: PluginHook = options.hook ?? "process";
   const trigger: TriggerContext = options.trigger ?? "background";
   const hasProgress = options.hasProgress ?? true;
   const cancellable = options.cancellable ?? false;

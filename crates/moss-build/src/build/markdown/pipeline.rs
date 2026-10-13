@@ -362,6 +362,10 @@ pub struct PageContext<'a> {
     /// file's directory; tests pass `None`, matching the old rung-4
     /// behavior of "no folder signal available".
     pub folder_lang: Option<crate::i18n::Language>,
+    /// The first embedded derived file's `title` fact. Becomes the page's
+    /// title only when the page lists `title` under `inferred:` and sets no
+    /// `title:` of its own.
+    pub derived_title: Option<&'a str>,
 }
 
 /// Processes a markdown file with frontmatter into a ParsedDocument.
@@ -519,6 +523,13 @@ pub fn process_markdown_file(
     // Task 5: defensive conversion for future authors who might write the old form.
     frontmatter.normalize();
     let event = crate::build::types::EventFields::from_frontmatter(&frontmatter);
+    // `inferred: [title]` takes the title from the first embedded derived file
+    // that has one — only when the page sets none of its own.
+    if frontmatter.title.is_none()
+        && frontmatter.inferred.as_ref().is_some_and(|fields| fields.iter().any(|f| f == "title"))
+    {
+        frontmatter.title = page.derived_title.map(str::to_string);
+    }
 
     // Translate the deprecated `sidebar:` field for both simplified and YAML
     // paths. Runs after frontmatter is fully parsed so it sees the final state

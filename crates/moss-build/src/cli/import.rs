@@ -13,6 +13,9 @@ use crate::vault::import::scrape::service::{ScrapeConfig, DEFAULT_MAX_PAGES};
 
 /// Top-level dispatcher for `moss import …`. Returns a process exit code.
 pub fn run(args: &[String]) -> i32 {
+    if let Some(code) = super::import_folder::dispatch(args) {
+        return code;
+    }
     let parsed = match parse_args(args) {
         Ok(p) => p,
         Err(msg) => {
@@ -430,6 +433,8 @@ fn is_remote_url(arg: &str) -> bool {
 fn print_usage() {
     eprintln!("Usage: moss import <url|file> [<folder>] [-r|--recursive]");
     eprintln!("       moss import --list <file> [<folder>] [-r|--recursive]");
+    eprintln!("       moss import <folder> [--with <derivation-id>]");
+    eprintln!("       moss import --status [<site>] [--json]");
     eprintln!();
     eprintln!("Imports your own content — published on the web or saved as a file —");
     eprintln!("as markdown into <folder> (default: current directory).");
@@ -467,6 +472,8 @@ fn print_usage() {
     eprintln!("file (a PDF, an image, ...), in which case it is counted as \"linked");
     eprintln!("file(s) unreachable\" instead, same as a non-HTML response that was");
     eprintln!("actually fetched.");
+    eprintln!();
+    eprintln!("{}", super::import_folder::USAGE);
     eprintln!();
     eprintln!("The vault copy is canonical; the source URL is recorded in `origin`");
     eprintln!("frontmatter as provenance, not as a claim that the content also lives");

@@ -51,8 +51,7 @@ your first publish costs a version bump.
 
 ## What the plugin does
 
-`capabilities` lists what your plugin does. Three of the five map to an exported
-function of the same name; two do not, which is easy to get wrong.
+`capabilities` lists what your plugin does. Three of the four map to an exported function of the same name; `login` does not, which is easy to get wrong.
 
 | Capability | Hook | What the user sees |
 |---|---|---|
@@ -60,7 +59,6 @@ function of the same name; two do not, which is easy to get wrong.
 | `syndicate` | `syndicate(ctx)` | a channel that publishes after a deploy |
 | `process` | `process(ctx)` | nothing directly — runs at scan time |
 | `login` | none | a connection row in the plugin's settings. moss calls your `login` export out of band via `connect_account`, not as a build hook |
-| `import` | none | a label on the task moss shows while pulling your posts in. There is no `import` export — the word is reserved in JavaScript — so declaring it alone runs nothing |
 
 Deploy plugins may also export `configure_domain(ctx)` to handle custom-domain
 setup (DNS records, verification). It is an optional hook, not a capability.
@@ -90,6 +88,63 @@ just the contribution. `jobs` supplies the words moss uses when it reports your
 hook's progress — moss owns the pixels, you supply the verb and noun.
 
 A `contributes.embed_renderers` key is no longer recognized. It was parsed but never consumed by any build path, so a plugin declaring one got nothing; moss silently ignores the key now instead of parsing it into a no-op.
+
+### Derivations: a file type that becomes text
+
+A plugin can teach moss to read a kind of file the author keeps in the folder (a PDF, a spreadsheet, a slide deck) and hand back markdown. No JavaScript is involved: the manifest pins a one-shot binary, and moss runs it once per file.
+
+```json
+"contributes": {
+  "derivations": {
+    "doc-pages": {
+      "accepts": ["pdf"],
+      "noun": { "one": "document", "other": "documents" },
+      "fragments": { "text": "markdown" },
+      "stub": ["#text", ""],
+      "run": {
+        "binary": "docread",
+        "artifact": [
+          { "kind": "download", "platform": "darwin-arm64", "url": "https://example.com/docread-1.2.0-macos.tar.gz", "sha256": "68e4…", "archive_format": "tar.gz" },
+          { "kind": "path", "platform": "linux-x64", "binary": "/usr/local/bin/docread" }
+        ]
+      }
+    }
+  }
+}
+```
+
+A plugin that declares only derivations has no script, so `entry` may be omitted.
+
+| Field | Meaning |
+|---|---|
+| `accepts` | Lowercase extensions without the dot. If two plugins accept one extension, the plugin whose name sorts first wins and the other is reported |
+| `noun` | `one` and `other`, for counting the files in a sentence ("3 documents") |
+| `fragments` | The named pieces the binary may return. The only type is `"markdown"`. An author embeds a piece with `![[report.pdf#text]]` |
+| `stub` | The lines of the placeholder page written for each file: empty, or `#<fragment name>`. `["#text", ""]` is the text, then the file itself |
+| `run.binary` | A plain file name: where the executable sits inside a downloaded archive |
+| `run.artifact` | Sources for the binary, like a stack's. A `download` needs a `sha256` and is refused without one; a `path` source names a binary you already have, which is how you develop one |
+
+The binary reads one JSON object on stdin, `{"path": "<absolute path of the input file>"}`, and prints exactly one JSON object on stdout. It either derived the file:
+
+```json
+{ "kind": "derived", "fragments": { "text": "## Section\n\nBody." }, "facts": { "title": "Annual report" } }
+```
+
+or looked at the file and chose not to, which is a result and not an error:
+
+```json
+{ "kind": "skip", "reason": "encrypted", "message": "This document is password protected, so its text cannot be read." }
+```
+
+`message` is shown to readers in place of the text and to the author in `moss import --status`, so write it for them. `facts.title` is optional; a page that asks for it (`inferred: [title]` in its frontmatter) takes its title from the first ready derivation it embeds. A fragment name the manifest does not declare is a failure. A non-zero exit, output that is not one JSON object, or output past 32 MiB is a failure too, reported with the last line the binary wrote to stderr.
+
+**Time and sandbox.** Each file gets ten minutes (`MOSS_DERIVE_TIMEOUT_SECS` changes it). Up to half the machine's cores, between one and four, run at once. On macOS the binary runs under `sandbox-exec` with the network denied and writes allowed only inside a scratch directory that is also its `TMPDIR` and `HOME`; it cannot signal other processes or send Apple events. Its environment holds only `PATH`, `LANG` and `LC_*`, so exported tokens never reach it. Other platforms get the scratch directory and the environment filter but no sandbox yet, so the pinned hash is the protection there. The binary may read anything the user can, because it must read its input and its own libraries.
+
+**Be deterministic.** moss caches the answer by the input file's content, the plugin version, and a fingerprint of the manifest's `run` and `fragments` (plus the binary's own content for a `path` source). The same bytes must give the same output: no timestamps, no random ids, no reading other files. Changing the input, shipping a new plugin version, re-pinning the binary or changing `fragments` re-derives; nothing else does. A `skip` is cached like a result, a failure never is, since the cause is usually the machine (a missing binary, a timeout) and a retry may succeed.
+
+**The text is untrusted.** It comes out of a file someone else wrote, so moss escapes raw HTML and its own authoring syntax (`[[links]]`, `$math$`, `{shortcodes}`, `#tags`) in it. Return plain markdown: headings, lists, tables, emphasis and links survive; markup meant for moss does not, and derived text is never scanned for embeds.
+
+**The author's side.** The user has to allow the plugin before moss runs it, like any plugin, and a folder-borne plugin needs `--allow-plugins` on the command line. `moss import <folder> --allow-plugins` writes a stub beside each file in the folder and records the choice; `moss import --status` reports every folder, how many files and stubs, and the files the binary skipped; `moss expand <page>` writes embeds out as text so the page can be kept without the source file.
 
 ## Configuration
 
@@ -172,13 +227,12 @@ What is coming:
 "contributes": {
   "channel": {
     "display_name": "Matters",
-    "imports": true,
     "login": true
   }
 }
 ```
 
-`contributes.deploy_target` replaces the `deploy` capability. `contributes.channel` replaces `syndicate`, `login` and `import`: syndication is what a channel *is*, so it needs no flag; `imports` says existing posts can be pulled back into the folder; and `login` says the user connects an account, which is you exporting `login` for moss to invoke. `login` was called `requires_login` before 2026-08-30 and both spellings still read.
+`contributes.deploy_target` replaces the `deploy` capability. `contributes.channel` replaces `syndicate` and `login`: syndication is what a channel *is*, so it needs no flag, and `login` says the user connects an account, which is you exporting `login` for moss to invoke. `login` was called `requires_login` before 2026-08-30 and both spellings still read.
 
 ```json
 "contributes": {

@@ -905,6 +905,9 @@ pub struct PipelineRunOutput {
     /// the seal tail hands to `lifecycle::promote`. `None` for a build that
     /// stopped before it rendered.
     pub render_seq: Option<u64>,
+    /// The derived-text blocks this render showed without text: files still
+    /// being read (a publish waits them out) and files whose read failed.
+    pub unready_derivations: crate::system::derive::site::UnreadyReport,
 }
 
 /// Resolves all native/plugin slot content after marked HTML and article-map
@@ -935,7 +938,7 @@ pub fn run(
     search_freshness: crate::build::feeds::search_lane::Freshness,
     cache_keys: &crate::build::ports::CacheKeyInputs,
 ) -> Result<PipelineRunOutput, BuildStopped> {
-    run_leased(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, None)
+    run_leased(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, None, None)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -955,6 +958,9 @@ pub(crate) fn run_leased(
     incremental: crate::build::render::IncrementalGates,
     search_freshness: crate::build::feeds::search_lane::Freshness,
     cache_keys: &crate::build::ports::CacheKeyInputs,
+    // The plugins' derivations for this build, `None` when plugins are off or
+    // none declares one.
+    derived: Option<std::sync::Arc<crate::system::derive::site::DerivedSite>>,
     // The caller's `lifecycle::CacheWriteLease`, carried into the background
     // handle so it drops when the workers have joined.
     cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
@@ -966,7 +972,7 @@ pub(crate) fn run_leased(
     }
 
     // Use inner function pattern to ensure build state is cleared on ALL exit paths
-    let result = build_inner(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, cache_lease);
+    let result = build_inner(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, derived, cache_lease);
 
     // Clear build state after build completes (success or error)
     if let Some(svc) = services {
@@ -1019,6 +1025,7 @@ fn build_inner(
     incremental: crate::build::render::IncrementalGates,
     search_freshness: crate::build::feeds::search_lane::Freshness,
     cache_keys: &crate::build::ports::CacheKeyInputs,
+    derived: Option<std::sync::Arc<crate::system::derive::site::DerivedSite>>,
     cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
     // `BuildStopped`, not `String`: the gate verdict is emitted from inside this
     // function, so the error type must be able to say "not yet" for the caller
@@ -1477,6 +1484,7 @@ fn build_inner(
         term_kinds: kinds,
         place_maps,
         incremental,
+        derivations: derived.clone(),
     };
     log::debug!(target: "timing", "[build] staging: config_reads (1 parse) took {:?}", t_config.elapsed());
     // Construct PendingManifest seeded with previous_hashes (carry-forward).
@@ -1632,6 +1640,7 @@ fn build_inner(
             // build's generation over whatever the user opens next.
             publishable: false,
             render_seq: None,
+            unready_derivations: Default::default(),
         });
     }
 
@@ -1938,6 +1947,16 @@ fn build_inner(
         // copy_deferred_assets; the video worker reads it when emitting BuildComplete.
         let skipped_symlinks_for_assets = services.map(|s| s.skipped_symlinks.clone());
 
+        // Derived text the render left as a placeholder (adopt mode): read in
+        // the background, then ask for a rebuild that renders it from the cache.
+        let derive_job = derived.as_ref().and_then(|d| d.take_background_job(&paths, render_seq));
+        // The reads store into the object cache after this build's lease is
+        // gone; their own keeps a cache GC off the blobs until the rebuild
+        // has registered them.
+        let derive_lease = derive_job.as_ref().map(|_| crate::build::lifecycle::detached_cache_lease(&paths));
+        let reporter_for_derive = services.map(|s| s.reporter.clone());
+        let session_for_derive = services.and_then(|s| s.session.clone());
+
         let register_workers = |tx: tokio::sync::mpsc::Sender<crate::build::coordinator::EmitMessage>,
                                 workers: &mut tokio::task::JoinSet<Result<(), crate::build::background::BuildError>>| {
             if !og_requests.is_empty() {
@@ -2028,6 +2047,26 @@ fn build_inner(
                     .map_err(crate::build::background::BuildError::from)
                 });
             }
+            // Derived text (adopt mode only, so a watcher is registered to
+            // receive the rebuild): detached like the video encode, so the
+            // placeholder generation seals now instead of after every read.
+            // The finished reads trigger the rebuild that renders the text.
+            if let Some(job) = derive_job {
+                if let Some(ref s) = session_for_derive {
+                    s.begin_ui_bound();
+                }
+                let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                if let Some(s) = &session_for_derive {
+                    s.bridge_to_atomic(cancel.clone());
+                }
+                tokio::task::spawn_blocking(move || {
+                    let _derive_lease = derive_lease;
+                    job.run(reporter_for_derive.as_deref(), &cancel);
+                    if let Some(s) = session_for_derive {
+                        s.end_ui_bound();
+                    }
+                });
+            }
             // No search worker: a generation-free worker is never
             // awaited by a seal, so the previous build's index cannot land on
             // this build's critical path. Its output is adopted from a receipt.
@@ -2060,6 +2099,7 @@ fn build_inner(
         home_ready,
         publishable,
         render_seq,
+        unready_derivations: derived.as_ref().map(|d| d.unready()).unwrap_or_default(),
     })
 }
 

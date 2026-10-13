@@ -821,6 +821,18 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "inferred",
+        field_type: FieldType::Array,
+        widget: Widget::TagInput,
+        items_type: Some(FieldType::String),
+        score: 99,
+        description: "Fields this page takes from the files it embeds when it does not set them itself. `title` takes the first embedded file's derived title; a title written in the page always wins.",
+        label: Some("Inferred"),
+        label_key: "chip.inferred.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "review_of",
         field_type: FieldType::String,
         widget: Widget::TextInput,

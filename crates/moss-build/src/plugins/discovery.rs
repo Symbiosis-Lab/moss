@@ -3,7 +3,7 @@
 use super::types::*;
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The set of installed channels read from `[channels.<id>]` tables in `.moss/config.toml`.
 /// Presence of a key = installed. Value holds per-channel settings (may be empty).
@@ -109,14 +109,36 @@ pub fn get_channels_config(project_path: &str) -> Result<ChannelsConfig, String>
 /// cap came to overwrite `main.bundle.js` on builds that never asked for a
 /// plugin at all.
 pub fn discover_installed_plugins(project_path: &str) -> Result<Vec<Plugin>, String> {
+    let InstalledPlugins { loaded, refused } = scan_installed_plugins(project_path)?;
+    for (path, reason) in refused {
+        // Counted as well as logged: a plugin that does not load means
+        // its content is missing from this build, so `--strict` must
+        // fail on it and the CLI must print it — a consent refusal
+        // that only reached the log file exited 0 with a page missing.
+        // Other plugins still load.
+        crate::build::cli_output::log_warn_problem!(target: "plugin", "⚠️ Plugin at {:?} will not run: {}", path, reason);
+    }
+    Ok(loaded)
+}
+
+/// What a scan of `.moss/plugins/` found: the plugins that load, and for each
+/// one that does not, its folder and the loader's reason (a consent refusal,
+/// a withdrawal, a missing entry point, …).
+pub struct InstalledPlugins {
+    pub loaded: Vec<Plugin>,
+    pub refused: Vec<(PathBuf, String)>,
+}
+
+/// [`discover_installed_plugins`] that reports the plugins that do not load
+/// instead of logging them, for a command that must stop on them.
+pub fn scan_installed_plugins(project_path: &str) -> Result<InstalledPlugins, String> {
     let plugins_dir = Path::new(project_path).join(".moss").join("plugins");
+    let mut found = InstalledPlugins { loaded: Vec::new(), refused: Vec::new() };
 
     // If plugins directory doesn't exist, return empty list (not an error)
     if !plugins_dir.exists() {
-        return Ok(Vec::new());
+        return Ok(found);
     }
-
-    let mut plugins = Vec::new();
 
     // Scan plugins directory for subdirectories
     let entries = fs::read_dir(&plugins_dir)
@@ -133,19 +155,12 @@ pub fn discover_installed_plugins(project_path: &str) -> Result<Vec<Plugin>, Str
 
         // Try to load plugin from this directory
         match load_plugin(&path) {
-            Ok(plugin) => plugins.push(plugin),
-            Err(e) => {
-                // Counted as well as logged: a plugin that does not load means
-                // its content is missing from this build, so `--strict` must
-                // fail on it and the CLI must print it — a consent refusal
-                // that only reached the log file exited 0 with a page missing.
-                // Other plugins still load.
-                crate::build::cli_output::log_warn_problem!(target: "plugin", "⚠️ Plugin at {:?} will not run: {}", path, e);
-            }
+            Ok(plugin) => found.loaded.push(plugin),
+            Err(e) => found.refused.push((path, e)),
         }
     }
 
-    Ok(plugins)
+    Ok(found)
 }
 
 /// Load a single plugin from a directory
@@ -179,10 +194,11 @@ pub fn load_plugin(plugin_dir: &Path) -> Result<Plugin, String> {
         return Err(refusal);
     }
 
-    // Validate entry point exists
-    let entry_path = plugin_dir.join(&manifest.entry);
-    if !entry_path.exists() {
-        return Err(format!("Entry point '{}' not found", manifest.entry));
+    // Validate entry point exists (a derivation-only plugin has none)
+    if let Some(entry) = &manifest.entry {
+        if !plugin_dir.join(entry).exists() {
+            return Err(format!("Entry point '{entry}' not found"));
+        }
     }
 
     // Plugins are always active once discovered
@@ -602,7 +618,7 @@ mod tests {
             manifest: crate::plugins::types::PluginManifest {
                 name: name.into(),
                 version: "0.0.1".into(),
-                entry: "plugin.js".into(),
+                entry: Some("plugin.js".into()),
                 config,
                 ..Default::default()
             },

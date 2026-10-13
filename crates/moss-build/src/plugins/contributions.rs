@@ -13,6 +13,7 @@
 //! `setup.credentials`, the parallel `config_*` maps, `requires_stack` — parse
 //! as aliases that fold into this one shape, in [`PluginManifest::parse`].
 
+pub mod derivation;
 pub mod settings;
 pub mod stack;
 
@@ -69,6 +70,11 @@ pub struct PluginContributes {
     /// only the *need*, not an artifact pin; see [`PluginManifest::stack_id`].
     #[serde(default)]
     pub stack: Option<stack::StackContribution>,
+
+    /// File types this plugin turns into embeddable fragments by running a
+    /// pinned one-shot binary, keyed by a plugin-local derivation id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derivations: Option<std::collections::BTreeMap<String, derivation::DerivationContribution>>,
 }
 
 /// Job descriptors contributed by a plugin (§8).
@@ -111,30 +117,19 @@ pub struct ContributedFrontmatter {
     pub fields: HashMap<String, moss_core::schema::FieldDefinition>,
 }
 
-/// A channel the plugin adds — somewhere the user's writing goes, and
-/// possibly comes back from.
+/// A channel the plugin adds — somewhere the user's writing goes.
 ///
-/// Syndication is what a channel *is*, so it needs no flag. `imports` and
-/// `login` each name an export the plugin also provides, and
-/// [`ContributionReadiness`] says what the user must arrange first — a channel
-/// that needs a token declares it the same way a deploy target does.
+/// Syndication is what a channel *is*, so it needs no flag. `login` names an
+/// export the plugin also provides, and [`ContributionReadiness`] says what
+/// the user must arrange first — a channel that needs a token declares it the
+/// same way a deploy target does.
 ///
-/// A consequence worth stating outright: **an import-only channel is not
-/// expressible.** Any `channel` folds to `Capability::Syndicate`, so moss will
-/// dispatch `syndicate(ctx)` to a plugin that declared `{"imports": true}`
-/// meaning "pull my old posts in", and the missing export fails at publish
-/// time. That follows from the ADR's own definition rather than from an
-/// oversight — if a real plugin wants import without syndication, the answer is
-/// a separate contribution, not a third flag on this one.
+/// An old manifest's `imports` key is ignored: nothing ever dispatched on it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChannelContribution {
     /// Name shown to the user; defaults to the plugin's display name.
     #[serde(default)]
     pub display_name: Option<String>,
-
-    /// Writing can also be pulled from this channel into the folder.
-    #[serde(default)]
-    pub imports: bool,
 
     /// The user connects an account: the plugin exports `login`, which moss
     /// invokes via `connect_account`. This is what folds to
@@ -285,7 +280,7 @@ impl PluginContributes {
                 display_name: t.display_name.as_deref(),
                 readiness: &t.readiness,
             }),
-            Capability::Syndicate | Capability::Login | Capability::Import => {
+            Capability::Syndicate | Capability::Login => {
                 self.channel.as_ref().map(|c| ContributionRef {
                     display_name: c.display_name.as_deref(),
                     readiness: &c.readiness,
@@ -477,6 +472,17 @@ impl PluginManifest {
         if let Some(stack) = manifest.contributes.as_ref().and_then(|c| c.stack.as_ref()) {
             stack.validate().map_err(serde_json::Error::custom)?;
         }
+        manifest.entry = manifest.entry.filter(|e| !e.trim().is_empty());
+        let has_derivations =
+            manifest.contributes.as_ref().is_some_and(|c| c.derivations.as_ref().is_some_and(|d| !d.is_empty()));
+        if manifest.entry.is_none() && !has_derivations {
+            return Err(serde_json::Error::custom("manifest needs an `entry` unless it declares derivations"));
+        }
+        if let Some(derivations) = manifest.contributes.as_ref().and_then(|c| c.derivations.as_ref()) {
+            for (id, derivation) in derivations {
+                derivation.validate(id).map_err(serde_json::Error::custom)?;
+            }
+        }
         manifest.fold_legacy_surfaces();
         manifest.fold_contributions_into_capabilities();
         Ok(manifest)
@@ -497,6 +503,7 @@ impl PluginManifest {
             processor: None,
             jobs: None,
             stack: None,
+            derivations: None,
         });
         for capability in &self.capabilities {
             match capability {
@@ -508,9 +515,6 @@ impl PluginManifest {
                 }
                 Capability::Syndicate => {
                     contributes.channel.get_or_insert_with(Default::default);
-                }
-                Capability::Import => {
-                    contributes.channel.get_or_insert_with(Default::default).imports = true;
                 }
                 Capability::Login => {
                     contributes.channel.get_or_insert_with(Default::default).login = true;
@@ -693,9 +697,6 @@ impl PluginManifest {
             derived.push(Capability::Syndicate);
             if channel.login {
                 derived.push(Capability::Login);
-            }
-            if channel.imports {
-                derived.push(Capability::Import);
             }
         }
         if contributes.deploy_target.is_some() {
@@ -1037,10 +1038,10 @@ mod tests {
         let m = PluginManifest::parse(
             r#"{"name":"matters","version":"1.0.0","entry":"main.js",
                 "capabilities":["process"],
-                "contributes":{"channel":{"imports":true,"login":true}}}"#,
+                "contributes":{"channel":{"login":true}}}"#,
         )
         .unwrap();
-        for c in [Capability::Syndicate, Capability::Login, Capability::Import, Capability::Process]
+        for c in [Capability::Syndicate, Capability::Login, Capability::Process]
         {
             assert!(m.capabilities.contains(&c), "{c:?}");
         }
@@ -1204,7 +1205,7 @@ mod tests {
     fn a_channel_declares_the_same_setup_block_a_deploy_target_does() {
         let m = PluginManifest::parse(
             r#"{"name":"matters","version":"1.0.0","entry":"main.js",
-                "contributes":{"channel":{"display_name":"Matters","imports":true,
+                "contributes":{"channel":{"display_name":"Matters",
                     "login":true,
                     "setup":{"check":true,
                              "settings":[{"key":"tok","type":"secret","label":"Matters token"}]}}}}"#,
@@ -1215,11 +1216,10 @@ mod tests {
         assert_eq!(setup.applicable_secrets(&config(&[])).len(), 1);
         // Same block, whichever of the channel's capabilities asks for it.
         assert!(m.setup_for(&Capability::Login).is_some());
-        assert!(m.setup_for(&Capability::Import).is_some());
         // A capability no contribution grants is gated on nothing.
         assert!(m.setup_for(&Capability::Deploy).is_none());
         // And the name resolves off the same match, from the same contribution.
-        assert_eq!(m.display_name_for(&Capability::Import), Some("Matters"));
+        assert_eq!(m.display_name_for(&Capability::Login), Some("Matters"));
         assert_eq!(m.display_name_for(&Capability::Deploy), None);
     }
 
@@ -1239,7 +1239,7 @@ mod tests {
                        "when":{"provider":"pinata"}},
                       {"key":"w3_token","type":"secret","label":"web3.storage token",
                        "when":{"provider":"web3storage"}}]}},
-                  "channel":{"imports":true,"login":true,"setup":{"settings":[
+                  "channel":{"login":true,"setup":{"settings":[
                       {"key":"matters_token","type":"secret","label":"Matters token"}]}}}}"#,
         )
         .unwrap();
@@ -1317,7 +1317,7 @@ mod tests {
     fn the_old_requires_login_spelling_still_connects() {
         let m = PluginManifest::parse(
             r#"{"name":"matters","version":"1.0.0","entry":"main.js",
-                "contributes":{"channel":{"requires_login":true,"imports":true}}}"#,
+                "contributes":{"channel":{"requires_login":true}}}"#,
         )
         .unwrap();
         assert!(m.capabilities.contains(&Capability::Login));

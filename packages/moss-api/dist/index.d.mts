@@ -26,7 +26,8 @@ interface ProjectInfo {
 interface PluginManifest {
   name: string;
   version: string;
-  entry: string;
+  /** Omit only for a plugin that declares nothing but `contributes.derivations`. */
+  entry?: string;
   category: PluginCategory;
   global_name?: string;
   icon?: string;
@@ -35,6 +36,46 @@ interface PluginManifest {
 }
 /** @category Plugin manifest */
 type PluginCategory = "generator" | "deployer" | "syndicator" | "enhancer" | "processor";
+/**
+ * A pinned binary source, as a stack declares it. A `download` source must
+ * carry a `sha256`.
+ *
+ * @category Plugin manifest
+ */
+type ArtifactSource = {
+  kind: "path";
+  platform?: string;
+  binary: string;
+} | {
+  kind: "download";
+  platform?: string;
+  url: string;
+  sha256: string;
+  archive_format: string;
+  executable?: string;
+};
+/**
+ * `contributes.derivations[id]`: a file type the plugin turns into embeddable
+ * fragments by running a pinned one-shot binary.
+ *
+ * @category Plugin manifest
+ */
+interface DerivationContribution {
+  /** Lowercase file extensions without the dot. */
+  accepts: string[];
+  noun: {
+    one: string;
+    other: string;
+  };
+  /** Fragments the binary may produce, by name. Only "markdown" exists. */
+  fragments: Record<string, "markdown">;
+  /** Placeholder lines: each is empty or `#<fragment name>`. */
+  stub?: string[];
+  run: {
+    binary: string;
+    artifact: ArtifactSource[];
+  };
+}
 //#endregion
 //#region src/types/messages.d.ts
 /**
@@ -107,7 +148,7 @@ declare function reportError(error: string, context?: string, fatal?: boolean): 
  * do NOT pick the surface (the router owns that).
  * @category Messaging
  */
-type PluginHook = "import" | "publish" | "deploy" | "syndicate" | "process";
+type PluginHook = "publish" | "deploy" | "syndicate" | "process";
 /**
  * `TriggerContext` mirrors the closed Rust enum. Tells the router *why*
  * the task was invoked so it can pick a surface that matches the user's
@@ -196,9 +237,9 @@ interface AdvisoryProposal {
 /** @category Messaging */
 interface StartTaskOptions {
   /**
-   * Hook the task belongs to. Defaults to "import" — the most common
-   * onboarding case. Plugins should pass an explicit hook for non-import
-   * work (e.g., a syndicator passes "syndicate").
+   * Hook the task belongs to. Defaults to "process" — work done on the
+   * site's files before generation. Plugins should pass an explicit hook for
+   * anything else (e.g., a syndicator passes "syndicate").
    */
   hook?: PluginHook;
   /**
@@ -320,7 +361,7 @@ interface TaskHandle {
  *
  * @example
  * const task = await startTask("Importing 42 articles", {
- *   hook: "import",
+ *   hook: "process",
  *   trigger: "onboarding_flow",
  * });
  * for (let i = 0; i < articles.length; i++) {
@@ -2069,4 +2110,4 @@ declare function showToast(options: ToastOptions | string): Promise<void>;
  */
 declare function dismissToast(id: string): Promise<void>;
 //#endregion
-export { AddressKind, AdvisoryAction, AdvisoryAppOp, AdvisoryProposal, AdvisoryScope, AdvisorySeverity, ArchType, ArticleInfo, BaseContext, BrowserCloseReason, BrowserHandle, CompleteMessage, ConfigureDomainContext, Cookie, DeployAddress, DeployContext, DeploymentInfo, DnsRecord, DnsTarget, DownloadOptions, DownloadResult, ErrorMessage, EscapeSpec, ExecuteOptions, ExecuteResult, FetchOptions, FetchResult, GetOptions, HookResult, HookToast, KeyAlgorithm, KeyInfo, LegacySetupVerdict, LogMessage, MultipartFilePart, MultipartPostOptions, MultipartTextField, OSType, PlatformInfo, PlatformKey, PluginCategory, PluginHook, PluginManifest, PluginMessage, PostOptions, ProcessContext, ProgressMessage, ProjectFileEntry, ProjectInfo, SetupBlocker, SetupContext, SetupField, SetupForm, SetupVerdict, SiteFileInfo, SocialArticleData, SocialComment, SocialDataFile, StartTaskOptions, SyndicateContext, TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, TaskHandle, TauriCore, ToastAction, ToastOptions, ToastType, ToastVariant, TriggerContext, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startTask, writeFile, writePluginFile };
+export { AddressKind, AdvisoryAction, AdvisoryAppOp, AdvisoryProposal, AdvisoryScope, AdvisorySeverity, ArchType, ArticleInfo, ArtifactSource, BaseContext, BrowserCloseReason, BrowserHandle, CompleteMessage, ConfigureDomainContext, Cookie, DeployAddress, DeployContext, DeploymentInfo, DerivationContribution, DnsRecord, DnsTarget, DownloadOptions, DownloadResult, ErrorMessage, EscapeSpec, ExecuteOptions, ExecuteResult, FetchOptions, FetchResult, GetOptions, HookResult, HookToast, KeyAlgorithm, KeyInfo, LegacySetupVerdict, LogMessage, MultipartFilePart, MultipartPostOptions, MultipartTextField, OSType, PlatformInfo, PlatformKey, PluginCategory, PluginHook, PluginManifest, PluginMessage, PostOptions, ProcessContext, ProgressMessage, ProjectFileEntry, ProjectInfo, SetupBlocker, SetupContext, SetupField, SetupForm, SetupVerdict, SiteFileInfo, SocialArticleData, SocialComment, SocialDataFile, StartTaskOptions, SyndicateContext, TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, TaskHandle, TauriCore, ToastAction, ToastOptions, ToastType, ToastVariant, TriggerContext, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startTask, writeFile, writePluginFile };

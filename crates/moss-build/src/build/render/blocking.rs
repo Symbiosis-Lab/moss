@@ -585,6 +585,16 @@ pub fn generate_blocking_content_for_build(
     // packaged for moss-core's synthesizer to consume.
     let asset_snapshot = event_level_image_lookup.asset_snapshot();
 
+    // Derived text (`![[file.ext#fragment]]`): collect what the site's pages
+    // ask the plugins' derivations to read and get it ready — read now in
+    // await mode, queued for the background worker in adopt mode. Only a feed
+    // for parallelism: what a publish must wait out is counted from the blocks
+    // the render actually shows (`DerivedSite::unready`).
+    if let Some(derived) = site_config.derivations.as_deref() {
+        let pages: Vec<String> = project_structure.markdown_files.iter().map(|f| f.path.clone()).collect();
+        derived.prepare(derived.demands(&pages, &content_graph), progress_sender);
+    }
+
     // Source-path → hash of the bytes this build actually read, for the pages
     // it actually read. Absent means "skipped" (parse-cache hit, Stage-5b
     // carry, iCloud deferral), which `register_page_source` turns into a
@@ -713,7 +723,26 @@ pub fn generate_blocking_content_for_build(
                     // Phase 0 Task F1: thread the AssetSnapshot through. The
                     // snapshot is built once above the loop and reused for every
                     // markdown file in this build.
-                    let mut resolve_result = moss_core::resolve::resolve_content_with_handlers_and_snapshot(
+                    let derived_site = site_config.derivations.as_deref();
+                    // Whether any block of this page rendered without text, so
+                    // its parse is not replayed once the text exists.
+                    let shows_unready = std::cell::Cell::new(false);
+                    let read_derived = |path: &str, fragment: &str| {
+                        let state = derived_site.map_or(moss_core::resolve::embeds::derived::DerivedFragment::Pending, |d| d.read(path, fragment));
+                        if matches!(
+                            state,
+                            moss_core::resolve::embeds::derived::DerivedFragment::Pending
+                                | moss_core::resolve::embeds::derived::DerivedFragment::Failed { .. }
+                        ) {
+                            shows_unready.set(true);
+                        }
+                        state
+                    };
+                    let derivations = derived_site.map(|d| moss_core::resolve::embeds::derived::Derivations {
+                        table: d.table(),
+                        reader: &read_derived,
+                    });
+                    let mut resolve_result = moss_core::resolve::resolve_content_with_derivations(
                         &file_info.path,
                         &content,
                         &content_graph,
@@ -727,8 +756,12 @@ pub fn generate_blocking_content_for_build(
                         },
                         &resolve_marker_handlers,
                         asset_snapshot,
+                        derivations.as_ref(),
                     );
                     md_resolve_ns.fetch_add(t_resolve.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                    if shows_unready.get() {
+                        parse_session.withhold(&file_info.path);
+                    }
 
                     let t_process = std::time::Instant::now();
                     // This phase only ever raises advisory diagnostics —
@@ -755,6 +788,7 @@ pub fn generate_blocking_content_for_build(
                         has_content_folders: project_structure.has_content_folders,
                         seta_url: Some(&seta_url_for_build),
                         folder_lang,
+                        derived_title: resolve_result.derived_title.as_deref(),
                     };
 
                     let mut doc = match process_markdown_file(&file_info.path, resolved_content, root_folder_name, &page_map, emit_source_lines, site_lang, site_id.as_deref(), site_config.markdown(), Some(&event_level_image_lookup), Some(&external_url_map), Some(&content_graph), page_context) {

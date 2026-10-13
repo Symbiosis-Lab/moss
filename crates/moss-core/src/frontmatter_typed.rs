@@ -422,6 +422,8 @@ pub struct FrontMatter {
     /// Folder paths where this article also appears in lists
     #[serde(alias = "also")]
     pub also_in: Option<Vec<String>>,
+    /// Fields taken from embedded files' derived facts when not set here
+    pub inferred: Option<Vec<String>>,
     /// Language override (e.g., "en", "zh-hans", "zh-hant")
     pub lang: Option<String>,
     /// Translation key for linking arbitrary files as translations
@@ -1108,6 +1110,16 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                         frontmatter.also_in = Some(items);
                     }
                 }
+                "inferred" => {
+                    let items: Vec<String> = value
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    if !items.is_empty() {
+                        frontmatter.inferred = Some(items);
+                    }
+                }
                 "tags" => {
                     let items: Vec<String> = value
                         .split(',')
@@ -1275,6 +1287,14 @@ mod project_typed_tests {
             m.insert(serde_yaml::Value::String((*k).to_string()), v.clone());
         }
         m
+    }
+
+    #[test]
+    fn a_year_alone_is_a_valid_date_though_yaml_reads_it_as_an_integer() {
+        let fm: FrontMatter = serde_yaml::from_str("title: Kept\ndate: 2018\nstart: 2019\n").expect("parse");
+        assert_eq!(fm.date.as_deref(), Some("2018"));
+        assert_eq!(fm.start.as_deref(), Some("2019"));
+        assert_eq!(fm.title.as_deref(), Some("Kept"));
     }
 
     #[test]

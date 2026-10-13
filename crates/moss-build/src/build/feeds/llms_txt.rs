@@ -164,7 +164,7 @@ pub fn generate_llms_txt(
         out.push_str(&format!("## {}\n\n", doc.label));
         // Strip raw HTML <style>/<script> blocks (tags + contents) before
         // trimming so leftover blank lines at the edges are removed too.
-        let stripped = strip_html_blocks(&doc.content);
+        let stripped = strip_html_blocks(&moss_core::resolve::embeds::derived::without_status_blocks(&doc.content));
         let body = stripped.trim();
         if !body.is_empty() {
             out.push_str(body);
@@ -211,6 +211,15 @@ mod tests {
         let result = generate_llms_txt(&docs, "My Site", Some("A great site"));
         assert!(result.starts_with("# My Site\n\n> A great site\n\n"));
         assert!(result.contains("## Getting Started\n\nWelcome to moss."));
+    }
+
+    #[test]
+    fn test_derived_status_blocks_are_left_out() {
+        let content = "Intro.\n\n<div class=\"moss-derived moss-derived--pending\" role=\"status\"><span class=\"visually-hidden\">Reading…</span></div>\n\nOutro.";
+        let docs = vec![create_test_document("Doc", content, None, None, None)];
+        let result = generate_llms_txt(&docs, "Site", None);
+        assert!(result.contains("Intro.") && result.contains("Outro."));
+        assert!(!result.contains("moss-derived"), "{result}");
     }
 
     #[test]

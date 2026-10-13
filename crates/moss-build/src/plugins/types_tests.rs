@@ -185,7 +185,7 @@ fn test_get_icon_path_with_manifest_icon() {
         manifest: PluginManifest {
             name: "test-plugin".to_string(),
             version: "1.0.0".to_string(),
-            entry: "main.js".to_string(),
+            entry: Some("main.js".to_string()),
             capabilities: vec![Capability::Syndicate],
             icon: Some("custom-icon.svg".to_string()),
             ..Default::default()
@@ -212,7 +212,7 @@ fn test_get_icon_path_convention_icon_svg() {
         manifest: PluginManifest {
             name: "test-plugin".to_string(),
             version: "1.0.0".to_string(),
-            entry: "main.js".to_string(),
+            entry: Some("main.js".to_string()),
             capabilities: vec![Capability::Syndicate], // No manifest icon
             domain: None,
             ..Default::default()
@@ -238,7 +238,7 @@ fn test_get_icon_path_convention_icon_png() {
         manifest: PluginManifest {
             name: "test-plugin".to_string(),
             version: "1.0.0".to_string(),
-            entry: "main.js".to_string(),
+            entry: Some("main.js".to_string()),
             capabilities: vec![Capability::Syndicate],
             ..Default::default()
         },
@@ -263,7 +263,7 @@ fn test_get_icon_path_convention_logo_svg() {
         manifest: PluginManifest {
             name: "test-plugin".to_string(),
             version: "1.0.0".to_string(),
-            entry: "main.js".to_string(),
+            entry: Some("main.js".to_string()),
             capabilities: vec![Capability::Syndicate],
             ..Default::default()
         },
@@ -286,7 +286,7 @@ fn test_get_icon_path_no_icon() {
         manifest: PluginManifest {
             name: "test-plugin".to_string(),
             version: "1.0.0".to_string(),
-            entry: "main.js".to_string(),
+            entry: Some("main.js".to_string()),
             capabilities: vec![Capability::Syndicate],
             ..Default::default()
         },
@@ -313,7 +313,7 @@ fn test_get_icon_path_manifest_takes_precedence() {
         manifest: PluginManifest {
             name: "test-plugin".to_string(),
             version: "1.0.0".to_string(),
-            entry: "main.js".to_string(),
+            entry: Some("main.js".to_string()),
             capabilities: vec![Capability::Syndicate],
             icon: Some("my-icon.svg".to_string()),
             ..Default::default()
@@ -442,7 +442,7 @@ fn test_plugin_manifest_has_capability() {
     let manifest = PluginManifest {
         name: "test".to_string(),
         version: "1.0.0".to_string(),
-        entry: "main.js".to_string(),
+        entry: Some("main.js".to_string()),
         capabilities: vec![Capability::Process, Capability::Syndicate],
         ..Default::default()
     };
@@ -450,7 +450,6 @@ fn test_plugin_manifest_has_capability() {
     assert!(manifest.has_capability(&Capability::Process));
     assert!(manifest.has_capability(&Capability::Syndicate));
     assert!(!manifest.has_capability(&Capability::Deploy));
-    assert!(!manifest.has_capability(&Capability::Import));
 }
 
 #[test]
@@ -725,29 +724,17 @@ fn contributes_jobs_round_trips_as_a_bare_map() {
     assert_eq!(d.noun, "posts");
 }
 
-// ── PluginHook / TriggerContext / Capability::Import ──────────────────
+// ── PluginHook / TriggerContext ───────────────────────────────────────
 //
 // Foundational types for PanelTask. These tests pin the
 // serde wire format (JSON-side spelling) so the closed enums stay
 // stable across the router (T1), the matters manifest, and bindings.ts.
 
 #[test]
-fn capability_import_round_trips_as_lowercase_string() {
-    let cap = Capability::Import;
-    let json = serde_json::to_string(&cap).unwrap();
-    assert_eq!(json, "\"import\"");
-
-    let parsed: Capability = serde_json::from_str("\"import\"").unwrap();
-    assert_eq!(parsed, Capability::Import);
-    assert_eq!(parsed.hook_name(), "import");
-}
-
-#[test]
 fn plugin_hook_serializes_all_variants_lowercase() {
     // Exhaustive over every PluginHook variant — if a variant is added,
     // this match fails to compile until it's listed here.
     let cases = [
-        (PluginHook::Import, "\"import\""),
         (PluginHook::Publish, "\"publish\""),
         (PluginHook::Deploy, "\"deploy\""),
         (PluginHook::Syndicate, "\"syndicate\""),
@@ -844,7 +831,7 @@ fn a_contributed_deploy_target_is_a_deploy_capability() {
 }
 
 #[test]
-fn a_contributed_channel_carries_login_and_import() {
+fn a_contributed_channel_carries_login() {
     let json = r#"{
         "name": "matters",
         "version": "0.1.0",
@@ -852,7 +839,6 @@ fn a_contributed_channel_carries_login_and_import() {
         "contributes": {
             "channel": {
                 "display_name": "Matters",
-                "imports": true,
                 "login": true
             }
         }
@@ -862,7 +848,6 @@ fn a_contributed_channel_carries_login_and_import() {
 
     assert!(manifest.has_capability(&Capability::Syndicate));
     assert!(manifest.has_capability(&Capability::Login));
-    assert!(manifest.has_capability(&Capability::Import));
 }
 
 #[test]
@@ -881,7 +866,6 @@ fn a_channel_that_needs_no_account_gains_no_login() {
         !manifest.has_capability(&Capability::Login),
         "login is what the user has to do, not something every channel needs"
     );
-    assert!(!manifest.has_capability(&Capability::Import));
 }
 
 #[test]

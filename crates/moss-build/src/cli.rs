@@ -34,6 +34,11 @@ pub mod domain;
 // Argument parsing for `moss import`, over the engine in
 // `vault::import::scrape::run`.
 pub mod import;
+// `moss import <folder>` / `--status`: show a folder's files as pages and report
+// where each folder stands, over `vault::derive_*`.
+pub mod import_folder;
+// `moss expand`: write embeds out as text.
+pub mod expand;
 // `moss deploy --prebuilt` over the shared driver in `deploy::prebuilt`; the
 // app's own deploy mode calls the same one with a Tauri sink instead of a
 // printing one (track C4c).

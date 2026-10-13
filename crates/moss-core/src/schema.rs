@@ -350,7 +350,8 @@ mod tests {
         // (`start`/`end`/`timezone`/`status`/`tickets`/`online` added 2026-10 — the
         // event fields; see moss_core::event.)
         // (`nav_label` added 2026-10 — a shorter nav-bar name than `title`.)
-        assert_eq!(schema.frontmatter.fields.len(), 57);
+        // (`inferred` added 2026-10 — fields taken from embedded files' derived facts.)
+        assert_eq!(schema.frontmatter.fields.len(), 58);
     }
 
     #[test]

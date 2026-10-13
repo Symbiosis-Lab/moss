@@ -89,6 +89,9 @@ pub struct ResolveResult {
     pub block_ids: Vec<String>,
     /// (target_path, source_path) pairs for embed dependency tracking.
     pub embed_deps: Vec<(String, String)>,
+    /// The first ready derived embed's `title` fact, for pages that infer
+    /// their title from what they embed.
+    pub derived_title: Option<String>,
 }
 
 /// Resolve all Obsidian syntax in a markdown file, producing clean standard markdown.
@@ -136,31 +139,22 @@ pub fn resolve_content_with_handlers(
     file_reader: &dyn Fn(&str) -> Option<String>,
     handlers: &embeds::MarkerHandlers<'_>,
 ) -> ResolveResult {
-    // Default-empty snapshot for callers that don't yet thread asset data.
-    // Phase 0 Task F1: the snapshot-aware variant exists below and is the
-    // entry point production code should migrate to as Phase 1 lights up
-    // consumption.
-    let empty_snapshot = AssetSnapshot::new();
-    resolve_content_with_handlers_and_snapshot(
+    resolve_content_with_derivations(
         source_path,
         raw_markdown,
         graph,
         file_reader,
         handlers,
-        &empty_snapshot,
+        &AssetSnapshot::new(),
+        None,
     )
 }
 
-/// Variant of [`resolve_content_with_handlers`] that additionally threads
-/// an [`AssetSnapshot`] through the resolve pipeline.
-///
-/// **Phase 0**: the snapshot is threaded but **not yet consumed** by any
-/// resolver — Stage 1 still emits markdown without reading variants/dims.
-/// Phase 1 wires the consumption side in moss-core's synthesizer. The
-/// signature exists now so moss-build's build pipeline can populate the
-/// snapshot (from `MediaDimensionLookup` + `AssetRegistry`) and prove the
-/// threading path before consumers depend on it.
-pub fn resolve_content_with_handlers_and_snapshot(
+/// [`resolve_content_with_handlers`] plus an [`AssetSnapshot`] and derivations:
+/// embeds of an `(extension, fragment)` pair in `derivations.table` splice what
+/// the reader says instead of rendering a viewer. With `None` it is the plain
+/// handler variant.
+pub fn resolve_content_with_derivations(
     source_path: &str,
     raw_markdown: &str,
     graph: &ContentGraph,
@@ -168,6 +162,7 @@ pub fn resolve_content_with_handlers_and_snapshot(
     handlers: &embeds::MarkerHandlers<'_>,
     // Phase 0: threaded but not yet consumed. Phase 1 wires up reads.
     _assets: &AssetSnapshot,
+    derivations: Option<&embeds::derived::Derivations<'_>>,
 ) -> ResolveResult {
     // Step 1: Separate frontmatter from body.
     let (frontmatter, body) = split_frontmatter(raw_markdown);
@@ -201,7 +196,7 @@ pub fn resolve_content_with_handlers_and_snapshot(
     // `resolve_embeds` would never see them (it scans markdown lines,
     // not rendered HTML). Pre-converting both shapes here mirrors the
     // earlier layering.
-    let body = lower_transclusion_and_folder_wikilinks(body, graph, source_path);
+    let body = lower_transclusion_and_folder_wikilinks(body, graph, source_path, derivations);
 
     // Step 3: Resolve markdown transclusion embeds. The inlined body of
     // each embedded `.md` file is appended verbatim — its wikilinks (if
@@ -211,7 +206,7 @@ pub fn resolve_content_with_handlers_and_snapshot(
     let embed_result = embeds::resolve_embeds(&body, source_path, file_reader);
     let mut diagnostics = diagnostics;
     diagnostics.extend(embed_result.diagnostics);
-    let embed_deps = embed_result.embed_deps;
+    let mut embed_deps = embed_result.embed_deps;
 
     // Step 3.5: Resolve Deferred markers (notebook, table, plugins). All
     // built-in handlers emit pure HTML (`<iframe>`, `<table>`); plugin
@@ -219,6 +214,18 @@ pub fn resolve_content_with_handlers_and_snapshot(
     // Skipped cheaply if handlers is empty.
     let deferred_result = embeds::resolve_deferred_markers(&embed_result.content, handlers);
     diagnostics.extend(deferred_result.diagnostics);
+
+    // Step 3.6: splice derived text. After the passes above so the text is
+    // never scanned for embed markers; it still flows through block refs and
+    // the one markdown pipeline like a transcluded note.
+    let (deferred_content, derived_title) = match derivations {
+        Some(d) => {
+            let spliced = embeds::derived::splice_markers(&deferred_result.content, source_path, d);
+            embed_deps.extend(spliced.deps);
+            (spliced.content, spliced.title)
+        }
+        None => (deferred_result.content, None),
+    };
 
     // Step 4.6 (DELETED, Phase 4 PR7a-stage1b 2026-05-28):
     // `markdown_links::resolve_markdown_links` is gone. The typed AST
@@ -239,7 +246,7 @@ pub fn resolve_content_with_handlers_and_snapshot(
     // callout HTML (and additively handles foldable +/- suffixes and
     // Obsidian aliases). See investigation notes referenced in the
     // PR7a commit message for the byte-shape parity proof.
-    let (block_result, block_ids) = block_refs::transform_block_refs(&deferred_result.content);
+    let (block_result, block_ids) = block_refs::transform_block_refs(&deferred_content);
 
     // Step 6: Resolve frontmatter wikilinks + rejoin with resolved body.
     let content_markdown = match frontmatter {
@@ -257,6 +264,7 @@ pub fn resolve_content_with_handlers_and_snapshot(
         diagnostics,
         block_ids,
         embed_deps,
+        derived_title,
     }
 }
 
@@ -289,6 +297,7 @@ fn lower_transclusion_and_folder_wikilinks(
     body: &str,
     graph: &ContentGraph,
     source_path: &str,
+    derivations: Option<&embeds::derived::Derivations<'_>>,
 ) -> String {
     let mut output_lines: Vec<String> = Vec::with_capacity(body.lines().count() + 1);
     // The mask is byte-length- and line-preserving, so an offset in a masked
@@ -368,7 +377,12 @@ fn lower_transclusion_and_folder_wikilinks(
                 };
                 (format!("{dest}|{alt}"), token, remainder)
             };
-            match lower_embed(&inner, graph, source_path) {
+            match lower_embed(&inner, graph, source_path, derivations) {
+                // Derived text is spliced in place of a whole line, so an
+                // embed sharing its line with anything else stays as written.
+                Some(replacement) if embeds::derived::parse_marker(&replacement).is_some() && line.trim() != token => {
+                    rewritten.push_str(token)
+                }
                 Some(replacement) => rewritten.push_str(&replacement),
                 None => rewritten.push_str(token),
             }
@@ -415,19 +429,13 @@ fn standard_embed_images(line: &str) -> HashMap<usize, (String, String, usize)> 
 /// What one embed (`target|pothole`, the content of `![[…]]`) lowers to, or
 /// `None` when it stays as the author wrote it: an empty or unresolvable
 /// target, or a kind the later dispatcher renders itself.
-fn lower_embed(inner: &str, graph: &ContentGraph, source_path: &str) -> Option<String> {
-    // Pothole-aware: the older resolver dropped pothole text for the
-    // marker (params live in the marker's heading-anchor /
-    // query suffix). Today the marker only cares about the
-    // `file#section` shape.
-    let inner_no_pothole = match inner.split_once('|') {
-        Some((f, _)) => f,
-        None => inner,
-    };
-    let (file_part, anchor) = match inner_no_pothole.split_once('#') {
-        Some((file, anchor)) => (file, Some(anchor)),
-        None => (inner_no_pothole, None),
-    };
+pub(in crate::resolve) fn lower_embed(
+    inner: &str,
+    graph: &ContentGraph,
+    source_path: &str,
+    derivations: Option<&embeds::derived::Derivations<'_>>,
+) -> Option<String> {
+    let (file_part, anchor) = embeds::split_embed_target(inner);
 
     let pothole_raw = inner.split_once('|').map_or("", |(_, params)| params);
     let params = embed_renderer::folder_list::classify_folder_segments(pothole_raw);
@@ -472,11 +480,12 @@ fn lower_embed(inner: &str, graph: &ContentGraph, source_path: &str) -> Option<S
     else {
         return None;
     };
-    let ext = target_path
-        .rsplit('.')
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
+    let ext = embeds::derived::extension_of(&target_path);
+    // A fragment some derivation declares for this extension: the text the
+    // plugin derived, not a viewer. Other fragments (`#page=3`) fall through.
+    if let Some(marker) = embeds::derived::claim_marker(&target_path, anchor, derivations) {
+        return Some(marker);
+    }
     // Markdown transclusion: `![[note.md]]` →
     // `<!-- moss-embed:note.md[#anchor] -->`.
     if ext == "md" || ext == "markdown" {
@@ -736,7 +745,7 @@ mod tests {
     #[test]
     fn article_map_projection_respects_inert_regions() {
         let input = "`![[#|style:map]]`\n\n```md\n![[note|style:map]]\n```\n\n![[#|style:map]]";
-        let output = lower_transclusion_and_folder_wikilinks(input, &test_graph(), "note.md");
+        let output = lower_transclusion_and_folder_wikilinks(input, &test_graph(), "note.md", None);
         assert_eq!(output.matches("MOSS_MARKER_FOLDER_LIST").count(), 1);
         assert!(output.contains("`![[#|style:map]]`"));
         assert!(output.contains("![[note|style:map]]"));
@@ -759,7 +768,7 @@ mod tests {
     // ----- lower_transclusion_and_folder_wikilinks: inert regions -----
 
     fn lower(body: &str) -> String {
-        lower_transclusion_and_folder_wikilinks(body, &test_graph(), "index.md")
+        lower_transclusion_and_folder_wikilinks(body, &test_graph(), "index.md", None)
     }
 
     #[test]

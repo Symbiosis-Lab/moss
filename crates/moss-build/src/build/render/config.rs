@@ -124,6 +124,9 @@ pub struct SiteConfig {
     /// resolved at the entry point (by design, the render phase reads neither the
     /// build trigger nor the environment). See [`IncrementalGates`].
     pub incremental: IncrementalGates,
+    /// The plugins' derivations (`![[file.ext#fragment]]`), `None` when plugins
+    /// are off or none declares one.
+    pub derivations: Option<std::sync::Arc<crate::system::derive::site::DerivedSite>>,
 }
 
 impl SiteConfig {
@@ -170,6 +173,7 @@ impl Default for SiteConfig {
             term_kinds: Vec::new(),
             place_maps: None,
             incremental: IncrementalGates::default(),
+            derivations: None,
         }
     }
 }

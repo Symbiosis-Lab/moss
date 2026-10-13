@@ -392,6 +392,9 @@ pub fn refuse_publish(folder_path: &str) -> Result<(), String> {
             return Err(in_flight_refusal_text(unfulfilled.len()));
         }
     }
+    if let Some(pending) = records.pending_derivations(folder_path).filter(|n| *n > 0) {
+        return Err(derivations_refusal_text(pending));
+    }
     if let Some(refusal) = removal_gate::refusal_for(folder_path) {
         return Err(refusal);
     }
@@ -432,6 +435,17 @@ pub(crate) fn refusal_text(count: usize) -> String {
         "Nothing published — {subject}. A published site can't show a broken file. \
          Fix these, then publish again."
     )
+}
+
+/// The refusal for text a render showed as a placeholder because the file was
+/// still being read. Reads as "wait": nothing is broken.
+pub(crate) fn derivations_refusal_text(count: usize) -> String {
+    let subject = if count == 1 {
+        "1 file is still being read".to_string()
+    } else {
+        format!("{count} files are still being read")
+    };
+    format!("Nothing published — {subject}. Publish again in a moment.")
 }
 
 /// The refusal for this build's own in-flight media — see the second rule on

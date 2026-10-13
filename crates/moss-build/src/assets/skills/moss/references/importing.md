@@ -45,3 +45,11 @@ A single saved page â€” a `.mhtml`/`.mht` web-archive or a plain `.html` file â€
   over HTTP (e.g. `python3 -m http.server`) and run
   `moss import http://localhost:8000/ <folder> --recursive`, then do the cleanup
   steps above.
+
+## Files already in the site
+
+Files a plugin knows how to unpack (documents, say) can be shown as pages without leaving the site folder. `moss import <folder> --allow-plugins` finds the installed derivation that accepts files in that folder, records the choice under `[derive]` in `.moss/config.toml`, and writes a **stub** beside each file: a page made of `![[file.ext#fragment]]` embeds of its own source file, laid out by the plugin's manifest, with `inferred: [title]` in its frontmatter so the page takes its title from the file. An existing page of the same name is never overwritten, and a file another page already embeds gets none. If several derivations accept the folder, pick one with `--with <derivation-id>`; a plugin's manifest decides what a page contains.
+
+Pass `--allow-plugins` at this first step if the plugin came with the folder and has not been allowed in the moss app: without it the command stops and prints the same refusal a build would, so the flag is not discovered after a long build. Files added to a folder you showed as pages get their stub while the preview or watcher runs; a stub you delete stays deleted, because a build never writes one.
+
+`moss import --status [<site>] [--json] [--allow-plugins]` lists each folder holding such files with its decision (undecided, show, keep), file count, pages still missing, files a plugin declined (with its reason) and files it could not read. To keep a folder's files as plain files, set `"<folder>/" = false` under `[derive]`. `moss expand <page|folder>` writes embeds out as text, for a page that should survive without its source file. Renaming a folder with `moss rename` keeps its decision.

@@ -69,13 +69,14 @@ fn render(s: &Site, md: &str) -> String {
     );
     let snap = moss_core::asset_snapshot::AssetSnapshot::new();
     let root = s.root.clone();
-    let resolved = moss_core::resolve::resolve_content_with_handlers_and_snapshot(
+    let resolved = moss_core::resolve::resolve_content_with_derivations(
         PAGE,
         md,
         &s.graph,
         &|p| std::fs::read_to_string(root.join(p)).ok(),
         &handlers,
         &snap,
+        None,
     );
     process_markdown_file(
         PAGE,

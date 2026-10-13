@@ -295,6 +295,14 @@ fn value_matches_def(value: &serde_yaml::Value, def: &crate::schema::FieldDefini
             None => true,
         };
     }
+    // Mirrors deserialize_string_lenient: a year alone is a valid date, and
+    // YAML reads `date: 2018` as an integer.
+    if def.field_type == FieldType::String
+        && def.format.as_deref() == Some("date")
+        && (value.is_i64() || value.is_u64())
+    {
+        return true;
+    }
     value_matches_type(value, &def.field_type)
 }
 
@@ -480,6 +488,20 @@ mod tests {
             .filter(|d| d.severity == Severity::Error && d.message.contains("title"))
             .collect();
         assert_eq!(missing.len(), 1);
+    }
+
+    #[test]
+    fn a_year_alone_is_a_valid_date() {
+        let schema = builtin_schema();
+        let fm = make_fm(&[
+            ("title", str_val("Test")),
+            ("date", serde_yaml::Value::Number(serde_yaml::Number::from(2018))),
+        ]);
+        let wrong: Vec<_> = validate_frontmatter(&fm, &schema)
+            .into_iter()
+            .filter(|d| d.severity == Severity::Error && d.message.contains("date"))
+            .collect();
+        assert!(wrong.is_empty(), "{wrong:?}");
     }
 
     #[test]

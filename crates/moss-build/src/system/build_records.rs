@@ -96,6 +96,10 @@ pub struct BuildRecords {
     /// This seal's own still-pending promises the link audit caught dead —
     /// see `link_audit::dead_links_among_promises` and `refuse_publish`.
     promised_dead_links: FolderSlot<Vec<DeadLink>>,
+    /// How many embedded files the last render of this folder showed as a
+    /// placeholder because their text was still being read. A publish waits
+    /// for zero: a placeholder is not something to put on the web.
+    pending_derivations: FolderSlot<usize>,
     /// The merged redirect map (`feeds::redirects::merge_redirects`'s result)
     /// the last build of this folder emitted stubs from. Redirect-stub bytes
     /// are a pure function of this map, so an unchanged map means the stub
@@ -185,6 +189,17 @@ impl BuildRecords {
     /// the same distinction the preflight projection draws.
     pub fn promised_dead_links(&self, folder_path: &str) -> Option<Vec<DeadLink>> {
         self.promised_dead_links.get(&Self::key(folder_path))
+    }
+
+    /// Always called by a render, zero included, so a rebuild that finds the
+    /// text clears the refusal.
+    pub fn record_pending_derivations(&self, folder_path: &str, count: usize) {
+        self.pending_derivations.record(Self::key(folder_path), count);
+    }
+
+    /// `None` means no render has recorded an answer yet.
+    pub fn pending_derivations(&self, folder_path: &str) -> Option<usize> {
+        self.pending_derivations.get(&Self::key(folder_path))
     }
 
     /// Always called, including with an empty `Vec`: a rebuild that restores

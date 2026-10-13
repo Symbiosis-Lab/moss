@@ -1025,6 +1025,10 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // than what was reused. See `ports::CacheKeyInputs`.
     let cache_keys = sample_cache_keys();
 
+    // Derivations come from the same admitted plugins the hooks above ran
+    // from, read after them: a hook may have installed one.
+    let derived_site = crate::system::derive::site::DerivedSite::load(!skip_plugins, std::path::Path::new(&folder_path));
+
     // --- RE-SCAN after content-producing process hooks ---
     // Process hooks (e.g. the Matters import) may have written .md / asset files
     // into the source folder. Re-scan + rebind so the SAME build renders them,
@@ -1173,7 +1177,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
         })
     };
 
-    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, unresolved_inputs, cancelled, home_ready: _home_ready, publishable, render_seq } = {
+    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, unresolved_inputs, cancelled, home_ready: _home_ready, publishable, render_seq, unready_derivations } = {
         // moss's own generator, always. A plugin could replace it wholesale
         // through the `generate` capability until that capability was
         // retired: three months, no implementation, and the branch had
@@ -1201,6 +1205,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
             let search_freshness = search_lane::Freshness::of(config.exits_after_build);
             let slot_resolver = make_slot_resolver(folder_path.clone(), cached_domain_config.clone(), ps.clone());
             let cache_keys_owned = cache_keys.clone();
+            let derived_owned = derived_site.clone();
             let (services, port_owned) = (services.clone(), port_owned.clone());
             // Bridge the current build.summary collector (if any) onto the
             // spawn_blocking closure's own OS thread: spawn_blocking does not
@@ -1211,7 +1216,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
             async move {
                 tokio::task::spawn_blocking(move || {
                     let _blocking_scope = crate::build::phase::enter_blocking_scope(phase_collector_for_blocking);
-                    pipeline::run_leased(&root_owned, Some(&state_owned), reporter_owned.as_deref(), &port_owned, Some(&services), Some(slot_resolver), &ps, site_url_override, incremental, search_freshness, &cache_keys_owned, Some(lease))
+                    pipeline::run_leased(&root_owned, Some(&state_owned), reporter_owned.as_deref(), &port_owned, Some(&services), Some(slot_resolver), &ps, site_url_override, incremental, search_freshness, &cache_keys_owned, derived_owned, Some(lease))
                 }).await.map_err(|e| BuildStopped::from(format!("Build task panicked: {}", e)))?
             }
         };
@@ -1263,6 +1268,15 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
             unresolved_inputs,
         },
     );
+
+    // Beside the other seal-time gate records: how many derived-text blocks
+    // this render showed as a placeholder (a publish waits for zero), counted
+    // from what it rendered. Written on every build, zero included, so a
+    // rebuild that finds the text clears the refusal. A build that stopped
+    // because the folder closed rendered nothing to count.
+    if !cancelled {
+        crate::system::build_records::records().record_pending_derivations(&folder_path, unready_derivations.pending);
+    }
 
     // And which structural sources this build had to carry forward rather
     // than read. Same unconditional-write reasoning as the preflight projection:

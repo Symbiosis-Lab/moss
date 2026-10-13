@@ -177,6 +177,7 @@ fn build_test_full_with_gates(
             home_ready: _home_ready,
             publishable: _publishable,
             render_seq: _render_seq,
+            unready_derivations: _unready,
         } = run(
             &root,
             site_dir_state,

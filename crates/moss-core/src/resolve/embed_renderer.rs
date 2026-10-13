@@ -91,6 +91,13 @@ pub const MARKER_IPYNB: &str = "moss-embed-ipynb";
 /// (a pure renderer).
 pub const MARKER_TABLE: &str = "moss-embed-table";
 
+/// Marker prefix for an embed of a file's derived text (`![[report.pdf#text]]`).
+///
+/// Format: `<!-- moss-derived:PATH#FRAGMENT -->`. Emitted by `resolve.rs`'s
+/// pre-pass for a pair some derivation declares, and replaced by the derived
+/// markdown (or a placeholder block) in the splice step.
+pub const MARKER_DERIVED: &str = "moss-derived";
+
 // Re-export folder_list marker constants for convenience.
 pub use folder_list::{MARKER_END, MARKER_FOLDER_LIST};
 

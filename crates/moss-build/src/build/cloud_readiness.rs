@@ -489,7 +489,7 @@ pub fn probe_input(path: &Path) -> std::io::Result<Found> {
 }
 
 /// [`probe_input`] for the callers that want text. `Ok(None)` is `InCloud`.
-fn probe_input_to_string(path: &Path) -> std::io::Result<Option<String>> {
+pub(crate) fn probe_input_to_string(path: &Path) -> std::io::Result<Option<String>> {
     match probe_input(path)? {
         Found::Bytes(bytes) => String::from_utf8(bytes)
             .map(Some)

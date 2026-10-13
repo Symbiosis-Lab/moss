@@ -219,7 +219,10 @@ pub(crate) fn bundle_source_for_project(
         let plugin_dir = crate::plugins::plugin_dir(&project_path, plugin_name);
         let plugin = crate::plugins::discovery::load_plugin(&plugin_dir)
             .map_err(|e| format!("load plugin '{plugin_name}': {e}"))?;
-        let entry = plugin.path.join(&plugin.manifest.entry);
+        let Some(entry) = &plugin.manifest.entry else {
+            return Err(format!("plugin '{plugin_name}' has no script to run"));
+        };
+        let entry = plugin.path.join(entry);
         // Sync ~100 KB read inside an async dispatch; acceptable, noted.
         let bundle = std::fs::read_to_string(&entry)
             .map_err(|e| format!("read bundle {}: {e}", entry.display()))?;
@@ -1150,7 +1153,7 @@ mod tests {
             manifest: PluginManifest {
                 name: name.to_string(),
                 version: "1.0.0".to_string(),
-                entry: "main.js".to_string(),
+                entry: Some("main.js".to_string()),
                 capabilities: vec![Capability::Syndicate],
                 contributes: Some(PluginContributes {
                     frontmatter: None,
@@ -1159,6 +1162,7 @@ mod tests {
                     processor: None,
                     jobs: Some(ContributedJobs { descriptors }),
                     stack: None,
+                    derivations: None,
                 }),
                 ..Default::default()
             },
