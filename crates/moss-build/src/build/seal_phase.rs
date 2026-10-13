@@ -110,6 +110,10 @@ pub(crate) struct PendingSeal {
     pub session: Option<Arc<FolderSession>>,
     pub cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
     pub build_root_identity: Option<crate::build::lifecycle::root_identity::RootIdentity>,
+    /// This build settled media its own pages could not yet name (see
+    /// `media::promise`). The long-lived arm has already enqueued the rebuild; the
+    /// one-shot arm reads this to run a second pass.
+    pub media_rerender_owed: bool,
 }
 
 /// One debounce lane per open folder (`.moss` directory), keyed the same way
@@ -204,6 +208,7 @@ async fn run_materialize_phase(req: PendingSeal) {
         session,
         cache_lease,
         build_root_identity,
+        media_rerender_owed: _,
     } = req;
     let mut sealed = sealed;
     let mut verdict = verdict;

@@ -57,8 +57,8 @@
         <article class="container">
             <h1 class="moss-folder-title visually-hidden">Video embed demo</h1>
 <p>A lone embed gets its own player.</p>
-<video class="moss-embed moss-embed-video" data-type="video" src="/clip.mp4" data-placeholder-src="/clip.mp4" poster="/clip.thumb.jpg" data-thumb-src="/clip.thumb.jpg" controls playsinline preload="metadata"></video><p>An embed that shares its paragraph with other text still gets its own player, not a broken image.</p>
-<p><video class="moss-embed moss-embed-video" data-type="video" src="/clip.mp4" data-placeholder-src="/clip.mp4" poster="/clip.thumb.jpg" data-thumb-src="/clip.thumb.jpg" controls playsinline preload="metadata"></video><br />
+<video class="moss-embed moss-embed-video" data-type="video" data-placeholder-src="/clip.mp4" poster="/clip.thumb.jpg" data-thumb-src="/clip.thumb.jpg" controls playsinline preload="metadata"><source src="/clip.hls/master.m3u8" type="application/vnd.apple.mpegurl"><source src="/clip.mp4" type="video/mp4"></video><p>An embed that shares its paragraph with other text still gets its own player, not a broken image.</p>
+<p><video class="moss-embed moss-embed-video" data-type="video" data-placeholder-src="/clip.mp4" poster="/clip.thumb.jpg" data-thumb-src="/clip.thumb.jpg" controls playsinline preload="metadata"><source src="/clip.hls/master.m3u8" type="application/vnd.apple.mpegurl"><source src="/clip.mp4" type="video/mp4"></video><br />
 A caption on the next line.</p>
 
         </article>
@@ -74,10 +74,11 @@ A caption on the next line.</p>
         </a>
     </div>
 
-    <script src="/_moss/js/theme.55a91c581481dbd4.js" data-share-card="/_moss/js/share-card.f7eb5dfe01ffd623.js"></script>
+    <script src="/_moss/js/theme.55a91c581481dbd4.js" data-share-card="/_moss/js/share-card.f7eb5dfe01ffd623.js" data-hls="/_moss/js/hls.e2d959c3de567aec.js"></script>
     <script src="/_moss/js/preview.78d7d648255fdf2d.js"></script>
     <script src="/_moss/js/heading-anchor.12724b8107ea6263.js"></script>
     <script src="/_moss/js/math-copy.8c1e446c594b2033.js"></script>
+    <script src="/_moss/js/hls-boot.f7f7bc1febff9c77.js"></script>
     
 </body>
 </html>

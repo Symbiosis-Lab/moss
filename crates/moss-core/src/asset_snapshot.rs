@@ -82,7 +82,8 @@ pub struct VariantKindSet {
     /// A full-size poster still exists for this video (`<stem>.poster.jpg`),
     /// found on disk or delivered by a previous encode. A hero asks before it
     /// names that URL, and falls back to the thumbnail when it is not there:
-    /// like the ladder, the file appears one build after the encode that made it.
+    /// like the ladder, a page can name it only in a render that follows the
+    /// encode that made it.
     pub poster: bool,
 }
 

@@ -790,8 +790,9 @@ pub(crate) fn prune_orphaned_webp_before_ship(
 ///
 /// `sealed` must be the FINAL manifest — call this after every pass that can
 /// drop an entry (`degrade::repair_staged_html`), never before. The permit is
-/// `lifecycle::final_build_permit`, minted where the caller proves nothing
-/// reads `stage_dir` again.
+/// `lifecycle::final_build_permit`, minted where the caller proves no server
+/// and no other build reads `stage_dir`; a second pass of the same one-shot
+/// build starts from this manifest and so loses nothing it needs.
 pub(crate) fn reclaim_staging_now(
     stage_dir: &std::path::Path,
     sealed: &crate::build::manifest::SealedManifest,

@@ -963,13 +963,13 @@ fn finish_run(
     // CLI stderr summary (headless only)
     if services.reporter.is_terminal() {
         if advisories.is_empty() {
-            eprintln!("Video conversion complete ({} videos)", total);
+            crate::cli_eprintln!("Video conversion complete ({} videos)", total);
         } else {
-            eprintln!("Video conversion complete ({} videos, {} advisories)", total, advisories.len());
+            crate::cli_eprintln!("Video conversion complete ({} videos, {} advisories)", total, advisories.len());
             for a in &advisories {
                 match &a.item {
-                    Some(f) => eprintln!("  Advisory: {}: {}", f, a.what),
-                    None => eprintln!("  Advisory: {}", a.what),
+                    Some(f) => crate::cli_eprintln!("  Advisory: {}: {}", f, a.what),
+                    None => crate::cli_eprintln!("  Advisory: {}", a.what),
                 }
             }
         }
@@ -1085,7 +1085,7 @@ pub(crate) fn run_video_conversion(
 
     // CLI stderr output (headless only)
     if is_headless {
-        eprintln!("Converting {} video(s)...", total);
+        crate::cli_eprintln!("Converting {} video(s)...", total);
         log::info!("Starting headless video conversion for {} video(s)", total);
     }
 
@@ -1249,7 +1249,7 @@ pub(crate) fn run_video_conversion(
                     advisories: vec![],
                 });
                 if is_headless {
-                    eprintln!("  [{}/{}] Downloading from iCloud: {}", current, total, filename);
+                    crate::cli_eprintln!("  [{}/{}] Downloading from iCloud: {}", current, total, filename);
                 }
             };
             let superseded_or_cancelled =
@@ -1426,7 +1426,7 @@ pub(crate) fn run_video_conversion(
                     .and_then(|o| o.error.as_deref())
                     .unwrap_or("unknown error");
                 if is_headless && !was_shared {
-                    eprintln!("  [{}/{}] Failed: {} ({})", current, total, filename, err_detail);
+                    crate::cli_eprintln!("  [{}/{}] Failed: {} ({})", current, total, filename, err_detail);
                 }
                 log::error!("Conversion failed for {}: {}", filename, err_detail);
                 // Shipped for a shared waiter too: the leader wrote ITS output
@@ -1451,7 +1451,7 @@ pub(crate) fn run_video_conversion(
             // now, with the files on disk: a <video> advances past a failed
             // <source> only until HAVE_METADATA, after which the chosen resource
             // is final (incident 8690101ac), so the emitter learns about a rung
-            // on the build AFTER the one that encoded it. The master playlist
+            // only in a render that follows the one that encoded it. The master playlist
             // marks the stem as laddered; the rest are registered to resolve.
             let mut delivered = vec![Delivery {
                 url: relative_mp4.clone(),
@@ -1475,7 +1475,7 @@ pub(crate) fn run_video_conversion(
             delivered.extend(hls_deliveries(&mapped_source, &outcome.hls_entries));
 
             if !was_shared && is_headless {
-                eprintln!("  [{}/{}] Done: {}", current, total, filename);
+                crate::cli_eprintln!("  [{}/{}] Done: {}", current, total, filename);
                 log::info!("[{}/{}] Converted successfully: {}", current, total, filename);
             }
 
@@ -1939,8 +1939,9 @@ impl VideoStore {
     }
 }
 
-/// Register the hero posters an earlier build left in `staging`, so this
-/// build's hero markup can name them. Read off disk before the lookup folds the
+/// Register the hero posters an earlier pass left in `staging`, so this
+/// render's hero markup can name them (a one-shot build's second pass, a warm
+/// build, a watch rebuild). Read off disk before the lookup folds the
 /// registry into its snapshot, for the same reason `hls::register_existing_ladders`
 /// is: the snapshot is built once, and a poster registered after that line is
 /// invisible for the rest of the build. Returns how many it found.

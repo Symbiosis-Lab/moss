@@ -71,9 +71,11 @@
 //! - The iframe-bridge's transcode-pending hydration swaps `src`, and the
 //!   ladder form has no `src` to swap. So the ladder form is emitted only once
 //!   the ladder is already **built and registered** — never merely planned.
-//!   moss renders HTML before the video worker runs, so a video's first build
-//!   ships the single-src form with live hydration and the ladder appears on
-//!   the next build, off the transform cache. That ordering is also what keeps
+//!   moss renders HTML before the video worker runs, so a render that precedes
+//!   the encode ships the single-src form with live hydration, and the ladder
+//!   appears in the render that follows it: the watch loop's re-render when
+//!   the media settles, or, for `moss build` and `moss deploy`, the second pass
+//!   the build runs itself before it exits. That ordering is also what keeps
 //!   the never-404 rule. A `<video>` does advance past a failed
 //!   `<source>` (that is what the MP4 last-resort below relies on), but only
 //!   before `readyState` reaches HAVE_METADATA; after that the resource is

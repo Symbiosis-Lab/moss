@@ -1879,7 +1879,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
     let cancel_flag: Option<&std::sync::atomic::AtomicBool> = Some(&*local_cancel);
 
     if is_headless {
-        eprintln!("Compressing {} image(s)...", total);
+        crate::cli_eprintln!("Compressing {} image(s)...", total);
         log::info!("Starting headless image conversion for {} image(s)", total);
     }
 
@@ -2135,7 +2135,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
         match convert_result {
             Ok(outcome) => {
                 if is_headless && outcome.webp_oid.is_some() {
-                    eprintln!(
+                    crate::cli_eprintln!(
                         "  [{}/{}] Done: {} ({} → {} bytes)",
                         index + 1, total, filename, outcome.original_size, outcome.webp_size
                     );
@@ -2272,7 +2272,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             // negative form.
             Err(e) => {
                 if is_headless {
-                    eprintln!("  [{}/{}] Failed: {}: {}", index + 1, total, filename, e);
+                    crate::cli_eprintln!("  [{}/{}] Failed: {}: {}", index + 1, total, filename, e);
                 }
                 log::warn!("Image conversion failed for {}: {}", filename, e);
                 ItemStep::base_failed(&rel_source_str, &relative_webp, registered_rungs(), e)
@@ -2354,17 +2354,17 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
 
     if is_headless {
         if advisories.is_empty() {
-            eprintln!("Image conversion complete ({} images)", total);
+            crate::cli_eprintln!("Image conversion complete ({} images)", total);
         } else {
-            eprintln!(
+            crate::cli_eprintln!(
                 "Image conversion complete ({} images, {} advisories)",
                 total,
                 advisories.len()
             );
             for a in &advisories {
                 match &a.item {
-                    Some(f) => eprintln!("  Advisory: {}: {}", f, a.what),
-                    None => eprintln!("  Advisory: {}", a.what),
+                    Some(f) => crate::cli_eprintln!("  Advisory: {}: {}", f, a.what),
+                    None => crate::cli_eprintln!("  Advisory: {}", a.what),
                 }
             }
         }

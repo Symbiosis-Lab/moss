@@ -231,8 +231,11 @@ impl SweepPermit {
 
 /// The permit for a one-shot build's reclaim of its own staging, after its
 /// seal: that caller drops the runtime as soon as the tail returns, so no
-/// server and no later build will read staging in this process again. Minted
-/// at exactly that call site (`staging_unlink_invariant_test` pins it).
+/// server and no other build reads staging afterwards. The one reader left is
+/// the same process's own second pass (`build::drive_passes`), which starts
+/// from the manifest this seal just wrote; the sweep keeps every file that
+/// manifest names, so that pass finds exactly what it would after a restart.
+/// Minted at exactly that call site (`staging_unlink_invariant_test` pins it).
 pub(crate) fn final_build_permit(mp: &MossPaths) -> SweepPermit {
     SweepPermit { _record: lock_for(mp), encode_outputs: Default::default() }
 }

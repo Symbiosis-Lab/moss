@@ -772,12 +772,13 @@ pub(crate) use cache::{legacy_form_params, LegacyShape};
 /// Register every ladder already present in `staging`, returning how many.
 ///
 /// A ladder is registered during video conversion, which runs *after* the HTML
-/// is rendered. The app gets away with that: one `AssetRegistry` is shared
-/// across rebuilds via `app.manage`, so the emitter picks a ladder up on the
-/// rebuild after the one that encoded it. `moss build` does not — it gets a
-/// fresh registry per process and then exits, so without this it would emit
-/// ladder markup on *no* build, ever, however many times it ran. Seventeen
-/// files per video, encoded and uploaded and referenced by nothing.
+/// is rendered, so the render that follows the encode has to learn of it some
+/// other way. The app shares one `AssetRegistry` across rebuilds, but `moss
+/// build` gets a fresh registry per process, so without this it would emit
+/// ladder markup on *no* render, ever: seventeen files per video, encoded and
+/// uploaded and referenced by nothing. This is how the second pass of a
+/// one-shot build (`build::media::promise`) and every warm build find the
+/// ladders already on disk.
 ///
 /// Read off disk rather than out of the transform cache, and the trade is one
 /// build of latency for never being wrong. The cache knows a ladder exists

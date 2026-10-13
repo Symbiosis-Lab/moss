@@ -398,7 +398,7 @@ fn run_notebook_processing(
     let is_headless = services.map_or(true, |s| s.reporter.is_terminal());
 
     if is_headless {
-        eprintln!("Processing {} notebook(s)...", total);
+        crate::cli_eprintln!("Processing {} notebook(s)...", total);
     }
 
     // Step 1: Resolve JupyterLite assets (download if not cached)
@@ -430,7 +430,7 @@ fn run_notebook_processing(
         Err(e) => {
             log::warn!("JupyterLite assets not available: {}. Notebooks will be copied without viewer.", e);
             if is_headless {
-                eprintln!("Warning: JupyterLite not available: {}", e);
+                crate::cli_eprintln!("Warning: JupyterLite not available: {}", e);
             }
             // Fallback: copy .ipynb files as-is without JupyterLite
             let mut fallback_paths = Vec::new();
@@ -715,7 +715,7 @@ fn run_notebook_processing(
         }
 
         if is_headless {
-            eprintln!("[{}/{}] Done: {}", i + 1, total, item.source_path);
+            crate::cli_eprintln!("[{}/{}] Done: {}", i + 1, total, item.source_path);
         }
 
         // Emit progress
@@ -799,7 +799,7 @@ fn run_notebook_processing(
     }
 
     if is_headless {
-        eprintln!(
+        crate::cli_eprintln!(
             "Notebook processing complete ({} notebook{})",
             total,
             if total == 1 { "" } else { "s" }

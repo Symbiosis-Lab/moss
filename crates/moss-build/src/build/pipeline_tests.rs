@@ -1382,8 +1382,8 @@ fn a_ladder_already_in_staging_reaches_this_build_s_markup() {
         fs::write(ladder.join(member), "fake ladder member").unwrap();
     }
 
-    // Fresh registry, as `moss build` gets: one process, one registry, no
-    // rebuild afterwards to pick the ladder up.
+    // Fresh registry, as a one-shot build's pass gets it: the ladder is not
+    // in the registry, only on disk, and nothing re-registers it later.
     let services = BuildServices::headless();
     let result = build_test(
         folder_path,
@@ -2037,7 +2037,7 @@ async fn a_rebuild_storm_enters_the_encoder_once_and_stops_on_its_own() {
             .unwrap();
             let sealed: SealedManifest = test_utils::drain_into_sealed(rx, previous.clone()).await;
             let settled = crate::build::diff_settled_assets(&previous, sealed.site_hashes_view());
-            crate::build::trigger_media_settle_rerender(&folder, &settled, Some(&previous));
+            crate::build::media::promise::trigger_media_settle_rerender(&folder, &settled, Some(&previous));
             (sealed.site_hashes_view().clone(), handle.take().is_some())
         }
     };

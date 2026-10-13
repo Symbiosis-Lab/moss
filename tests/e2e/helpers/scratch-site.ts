@@ -83,12 +83,6 @@ export interface ScratchSiteSpec {
    * being reachable; the codes just need a host to point at.
    */
   siteUrl?: string;
-  /**
-   * How many times to build. Default 1. A video ladder is encoded after the
-   * pages are rendered and only a later build's pages reference it, so a gate
-   * whose subject is the ladder needs two.
-   */
-  builds?: number;
 }
 
 /** Scaffold, build, and return the directory to serve. */
@@ -138,14 +132,12 @@ export function buildScratchSite(spec: ScratchSiteSpec): string {
   }
   try {
     console.log(`${tag} building scratch site …`);
-    for (let pass = 0; pass < (spec.builds ?? 1); pass++) {
-      execSync(`"${MOSS_BIN}" build "${siteDir}" --no-plugins`, {
-        cwd: siteDir,
-        stdio: "pipe",
-        timeout: 120_000,
-        env: buildEnv(spec, siteDir),
-      });
-    }
+    execSync(`"${MOSS_BIN}" build "${siteDir}" --no-plugins`, {
+      cwd: siteDir,
+      stdio: "pipe",
+      timeout: 120_000,
+      env: buildEnv(spec, siteDir),
+    });
     const builtDir = findBuiltDir(siteDir);
     if (!builtDir) {
       throw new Error(`${tag} no build output under ${siteDir}/.moss/build/ after a build`);
