@@ -1,24 +1,23 @@
 //! HLS ladder muxing: one ffmpeg invocation that writes every rung.
 //!
 //! One invocation and one decode. The source is decoded once and fanned out
-//! with `split`, so a ladder's rungs cost far less than one encode each — measured on a
-//! 10 s 720p clip against a single hardened progressive encode of the same
-//! source: **1.65x wall time, 1.32x CPU, 2.16x storage**. (The plan carried
-//! 2.1x / 2.6x / 2.4x, measured with five muxed rungs before the audio split;
-//! CPU came down because the progressive path is two-pass and decodes twice,
-//! while the ladder is single-pass and decodes once.)
+//! with `split`, so a ladder's rungs cost far less than one encode each.
 //!
-//! # Why single-pass here when the progressive encode is two-pass
+//! # Each rung aims at a quality; its rate is a cap
 //!
-//! A rung's job is to be *predictable*, not to be the smallest file at a given
-//! quality. `BANDWIDTH` in the master playlist is a promise the player makes
-//! switching decisions against, and VBV-capped single-pass (`-b:v` = `-maxrate`,
-//! `-bufsize` at 2x) delivers a bounded sustained rate that the declaration can
-//! be honest about. Capped CRF / QVBR spends fewer bytes on simple content, but
-//! its peak is not known until after the encode, so `BANDWIDTH` would have to be
-//! measured and back-patched — and a rung that undershoots its declaration is a
-//! rung the player declines to use on a link that could have carried it. Fixed
-//! bitrate per rung, stated as a choice.
+//! Every rung follows the progressive encode's rule
+//! ([`ffmpeg::rate_control_args`]): aim at a picture quality, bounded by the
+//! rung's rate. A picture that needs the rate is held to it; one that does not
+//! spends what it needs. The seven rungs of a 91-second 1708x1080 screen
+//! recording average 30 to 530 kbps under ceilings of 45 to 4000.
+//!
+//! `BANDWIDTH` in the master playlist is the promise a player switches on, and
+//! a rung no longer has a rate known before it is encoded. So the figures are
+//! measured: [`patch_master`] reads each rung's own segment list
+//! ([`segment_rates`]) and declares its peak rate and its average. ffmpeg does the same from
+//! 7.1 on; before that it declares the rate ceiling plus a tenth, which would
+//! price a lean rung at its ceiling and have a player on a slow link decline
+//! a rung it could carry.
 //!
 //! # Segment alignment across mixed frame rates
 //!
@@ -39,9 +38,13 @@ use moss_core::asset_paths::{
 
 use crate::build::cache::{TransformCache, TransformEntry};
 use crate::build::media::ffmpeg::{
-    spawn_ffmpeg_streaming, FFmpegManager, SourceVideo, VideoCompressionConfig,
+    self, spawn_ffmpeg_streaming, FFmpegManager, SourceVideo, VideoCompressionConfig,
 };
 use crate::types::runtime::ChildProcessRegistry;
+
+mod master;
+use master::attr;
+pub use master::{patch_master, segment_rates};
 
 /// Target segment length. Six seconds is the common VOD choice: long enough
 /// that per-segment overhead is small, short enough that a player switching
@@ -120,12 +123,9 @@ pub fn build_hls_args(
             format!("[v{i}]"),
             format!("-c:v:{i}"),
             "libx264".into(),
-            format!("-b:v:{i}"),
-            format!("{}k", rung.video_kbps),
-            format!("-maxrate:v:{i}"),
-            format!("{}k", rung.video_kbps),
-            format!("-bufsize:v:{i}"),
-            format!("{}k", rung.video_kbps.saturating_mul(2)),
+        ]);
+        args.extend(ffmpeg::rate_control_args(&format!(":v:{i}"), rung.video_kbps));
+        args.extend([
             format!("-g:v:{i}"),
             gop.clone(),
             format!("-keyint_min:v:{i}"),
@@ -198,125 +198,6 @@ pub fn build_hls_args(
         format!("{out_dir}/%v.m3u8"),
     ]);
     args
-}
-
-const INDEPENDENT_SEGMENTS: &str = "#EXT-X-INDEPENDENT-SEGMENTS";
-
-/// The two things ffmpeg leaves wrong in a master playlist for this shape.
-///
-/// `EXT-X-INDEPENDENT-SEGMENTS` is missing. It asserts that every segment
-/// starts with a keyframe, which `-g`/`-keyint_min`/`-sc_threshold 0` above
-/// guarantee. It belongs in a VOD multivariant playlist and ffmpeg's
-/// `independent_segments` flag declines to emit it here ("whenever applicable"
-/// — measured: not emitted for this fmp4 + rendition-group shape), so it is
-/// inserted after the version line rather than left missing.
-///
-/// `BANDWIDTH` is understated — see [`declare_audio_in_bandwidth`].
-///
-/// The tag doubles as the mark of an already-patched master, which is what
-/// keeps this idempotent now that it also rewrites numbers: a second pass
-/// would otherwise charge every variant for its audio twice.
-pub fn patch_master(master: &str, rungs: &[VideoRung]) -> String {
-    if master.lines().any(|l| l.trim() == INDEPENDENT_SEGMENTS) {
-        return master.to_string();
-    }
-    add_independent_segments(&declare_audio_in_bandwidth(master, rungs))
-}
-
-/// Fold each variant's audio rendition into the bandwidth it advertises.
-///
-/// ffmpeg measures a variant from its own video segments and stops there, so a
-/// variant that plays a *separate* audio rendition is advertised at the price
-/// of its picture alone. Measured on this ladder's shape: the 320x180 rung
-/// declared `BANDWIDTH=49669` while the 32 kbps rendition it names cost another
-/// ~35,000 bps — understated by 42%.
-///
-/// RFC 8216 §4.3.4.2 requires the figure to cover every Rendition the variant
-/// will use, and it is the only thing a player selects on. The error is worst
-/// at the bottom of the ladder, which is the one place accuracy decides whether
-/// a starved viewer sees a picture at all: splitting audio into a lean group
-/// and a clean one exists so a player can tell the lean rungs are cheap, and it
-/// cannot tell that if the price it reads leaves the audio out.
-///
-/// The rung's *target* audio rate is added rather than the rendition's measured
-/// one. That keeps this a pure transform of the master — no second file to read
-/// — and the renditions are CBR, so it lands within a few percent.
-fn declare_audio_in_bandwidth(master: &str, rungs: &[VideoRung]) -> String {
-    let mut out = String::with_capacity(master.len() + 64);
-    let mut lines = master.lines().peekable();
-    while let Some(line) = lines.next() {
-        // No `AUDIO=` means no separate rendition, and then ffmpeg's figure is
-        // already the whole variant.
-        let rung = line
-            .starts_with("#EXT-X-STREAM-INF")
-            .then(|| attr(line, "AUDIO").and(lines.peek().and_then(|uri| rung_of(uri, rungs))))
-            .flatten();
-        match rung {
-            Some(r) => out.push_str(&add_bitrate(line, u64::from(r.audio_kbps) * 1000)),
-            None => out.push_str(line),
-        }
-        out.push('\n');
-    }
-    out
-}
-
-/// The rung a variant describes, read off its playlist name (`v{i}.m3u8`, the
-/// rung's position). The frame size cannot identify it: frames are fitted to
-/// the source, so no table of sizes lists them.
-fn rung_of<'a>(uri: &str, rungs: &'a [VideoRung]) -> Option<&'a VideoRung> {
-    let i = uri.trim().strip_prefix('v')?.strip_suffix(".m3u8")?.parse::<usize>().ok()?;
-    rungs.get(i)
-}
-
-/// One attribute's value, unquoted.
-///
-/// Attributes are comma-separated but a quoted value may itself hold a comma
-/// (`CODECS="avc1.42c00c,mp4a.40.2"`), so splitting on commas yields fragments.
-/// Matching the key exactly is enough to ignore them — a fragment carries no
-/// `KEY=` this asks for — and it keeps `BANDWIDTH` from matching
-/// `AVERAGE-BANDWIDTH`, which a substring search would.
-fn attr<'a>(line: &'a str, key: &str) -> Option<&'a str> {
-    line.split(',').find_map(|field| {
-        let (k, v) = field.split_once('=')?;
-        (k.rsplit(':').next()? == key).then(|| v.trim_matches('"'))
-    })
-}
-
-/// Add `extra` bps to both bandwidth declarations on a variant line, leaving
-/// every other attribute — a comma-bearing quoted one included — byte-identical.
-fn add_bitrate(line: &str, extra: u64) -> String {
-    let bumped = |field: &str| -> Option<String> {
-        let (k, v) = field.split_once('=')?;
-        matches!(k.rsplit(':').next(), Some("BANDWIDTH" | "AVERAGE-BANDWIDTH"))
-            .then(|| v.parse::<u64>().ok())
-            .flatten()
-            .map(|n| format!("{k}={}", n + extra))
-    };
-    line.split(',')
-        .map(|f| bumped(f).unwrap_or_else(|| f.to_string()))
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-fn add_independent_segments(master: &str) -> String {
-    let mut out = String::with_capacity(master.len() + INDEPENDENT_SEGMENTS.len() + 1);
-    let mut inserted = false;
-    for line in master.lines() {
-        out.push_str(line);
-        out.push('\n');
-        if !inserted && line.starts_with("#EXT-X-VERSION") {
-            out.push_str(INDEPENDENT_SEGMENTS);
-            out.push('\n');
-            inserted = true;
-        }
-    }
-    if !inserted {
-        // No version line to anchor to; the tag still has to precede the
-        // variants, so it goes directly after #EXTM3U.
-        let anchored = format!("#EXTM3U\n{INDEPENDENT_SEGMENTS}\n");
-        return out.replacen("#EXTM3U\n", &anchored, 1);
-    }
-    out
 }
 
 /// The files that count as `ladder_dir`'s HLS ladder — read from its own
@@ -469,7 +350,8 @@ fn ladder_members(rungs: &[VideoRung], has_audio: bool) -> Vec<String> {
 /// decide whether a ladder is warranted — [`produce_ladder`] owns that, so the
 /// rule lives in one place instead of being checked here and there.
 ///
-/// The master playlist is rewritten on the way out to carry
+/// The master playlist is rewritten on the way out: each variant declares
+/// what its segments measure plus the audio it plays, and the playlist carries
 /// `EXT-X-INDEPENDENT-SEGMENTS`, which ffmpeg will not emit for this shape.
 #[allow(clippy::too_many_arguments)]
 pub fn encode_ladder(
@@ -525,7 +407,9 @@ pub fn encode_ladder(
     let master_path = out_dir.join(HLS_MASTER_NAME);
     let master = std::fs::read_to_string(&master_path)
         .map_err(|e| format!("Failed to read master playlist: {}", e))?;
-    let patched = patch_master(&master, rungs);
+    let patched = patch_master(&master, rungs, |playlist| {
+        segment_rates(&std::fs::read_to_string(out_dir.join(playlist)).ok()?)
+    });
     if patched != master {
         // The encode that just finished wrote this file into its own scratch
         // directory; the object store copies it out afterwards. Never a vault

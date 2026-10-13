@@ -111,11 +111,10 @@ pub struct AssetsSettled {
 /// Fine-grained video conversion progress for real-time UI updates.
 ///
 /// Emitted during background video conversion to show per-video progress
-/// with phase information (analyzing vs encoding) and fraction complete.
+/// with the fraction complete.
 ///
 /// The overall_fraction formula for video `i` (0-based) of N total:
 ///   overall = (i + video_fraction) / N
-/// Pass 1 stays at fraction 0.0 (it's fast). Pass 2 streams 0.0 -> 1.0.
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
 pub struct VideoConversionProgress {
     /// Filename of the video being converted (e.g., "clip.mov")
@@ -124,7 +123,9 @@ pub struct VideoConversionProgress {
     pub current_video: u32,
     /// Total number of videos to convert
     pub total_videos: u32,
-    /// Conversion phase: "analyzing" | "encoding"
+    /// Conversion phase, always "encoding". Kept because the desktop app's
+    /// event contract carries it; the "analyzing" value it also handles was
+    /// the first pass of a two-pass encode that no longer exists.
     pub phase: String,
     /// Progress fraction within current video (0.0..1.0)
     pub video_fraction: f64,
@@ -708,21 +709,6 @@ mod tests {
         assert!(json.contains("\"phase\":\"encoding\""));
         assert!(json.contains("\"video_fraction\":0.75"));
         assert!(json.contains("\"overall_fraction\":0.35"));
-    }
-
-    #[test]
-    fn test_video_conversion_progress_analyzing_phase() {
-        let progress = VideoConversionProgress {
-            filename: "intro.mov".to_string(),
-            current_video: 1,
-            total_videos: 3,
-            phase: "analyzing".to_string(),
-            video_fraction: 0.0,
-            overall_fraction: 0.0,
-        };
-        assert_eq!(progress.phase, "analyzing");
-        assert_eq!(progress.video_fraction, 0.0);
-        assert_eq!(progress.overall_fraction, 0.0);
     }
 
     #[test]

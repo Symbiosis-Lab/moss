@@ -19,10 +19,12 @@ use crate::build::media::ffmpeg::{SourceVideo, VideoCompressionConfig};
 use super::{transform_name, HLS_TRANSFORM_PREFIX, KEYFRAME_SECONDS, SEGMENT_SECONDS};
 
 /// Bump when the bytes a rung's encode produces change for the same inputs.
+/// 3: every rung aims at a picture quality under its rate, and the master
+/// declares what each rung measures; version 2 ladders aimed at the rate.
 /// 2: rungs are frames fitted to the source's own shape with square pixels;
 /// version 1 ladders (and the unversioned ones before them) forced every rung
-/// to a fixed 16:9 frame, so they are rebuilt once.
-const LADDER_FORMAT: u32 = 2;
+/// to a fixed 16:9 frame. Each bump rebuilds existing ladders once.
+pub(super) const LADDER_FORMAT: u32 = 3;
 
 /// The source facts [`video_ladder_rungs_within`] needs, captured once at
 /// encode time and carried inside `ladder_params`'s `"source"` field so a

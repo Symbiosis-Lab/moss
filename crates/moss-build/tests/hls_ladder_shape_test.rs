@@ -17,7 +17,7 @@
 //! Skipped when ffmpeg is absent rather than failing: the encoder is an
 //! optional runtime dependency moss downloads, not a build requirement.
 
-use moss_build::build::media::hls::{build_hls_args, patch_master};
+use moss_build::build::media::hls::{build_hls_args, patch_master, segment_rates};
 use moss_core::asset_paths::{hls_members, video_ladder_rungs, VideoRung};
 
 /// The ladder a 1280x720 source gets: the synthetic source below stops at the
@@ -196,7 +196,7 @@ fn the_master_playlist_declares_the_lowest_rung_first_and_binds_each_group() {
         .success());
 
     let raw = std::fs::read_to_string(out_dir.join("master.m3u8")).unwrap();
-    let master = patch_master(&raw, ladder_720());
+    let master = patch_master(&raw, ladder_720(), |_| None);
 
     assert!(
         master.contains("#EXT-X-INDEPENDENT-SEGMENTS"),
@@ -513,4 +513,70 @@ fn a_probe_of_a_file_with_no_video_size_is_an_error() {
     let mgr = moss_build::build::media::ffmpeg::FFmpegManager::from_bin_path(bin.clone());
     let err = mgr.probe_source(&audio).expect_err("no video size");
     assert!(err.contains("no video size"), "{err}");
+}
+
+/// A rung's rate is a ceiling, and the master playlist advertises what the
+/// rung actually costs. A player switches on that figure, so a lean rung
+/// declared at its ceiling would be refused by a link that could carry it.
+/// True on any ffmpeg: before 7.1 it writes the ceiling plus a tenth, and the
+/// declaration is replaced with what the rung's segments measure.
+#[test]
+fn a_simple_picture_is_advertised_at_what_it_costs_not_at_its_rungs_rate() {
+    let Some(bin) = ffmpeg() else {
+        eprintln!("skipping: ffmpeg not on PATH");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    // Slowly drifting gradients: an encoder told to spend a rate on them can,
+    // and one told to reach a quality needs a small fraction of it.
+    let src = dir.path().join("drift.mp4");
+    let made = std::process::Command::new(&bin)
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi"])
+        .args(["-i", "gradients=size=1280x720:rate=30:speed=0.01", "-t", "8"])
+        .args(["-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p"])
+        .arg(&src)
+        .status()
+        .is_ok_and(|s| s.success());
+    if !made {
+        eprintln!("skipping: could not synthesise a source");
+        return;
+    }
+    let out_dir = dir.path().join("out");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let rungs = ladder_720();
+    let args = build_hls_args(
+        src.to_str().unwrap(),
+        out_dir.to_str().unwrap(),
+        rungs,
+        (1280, 720),
+        30.0,
+        false,
+        "ultrafast",
+        2,
+    );
+    assert!(std::process::Command::new(&bin)
+        .args(["-hide_banner", "-loglevel", "error"])
+        .args(&args)
+        .status()
+        .expect("run ffmpeg")
+        .success());
+
+    let raw = std::fs::read_to_string(out_dir.join("master.m3u8")).unwrap();
+    let master = patch_master(&raw, rungs, |playlist| {
+        segment_rates(&std::fs::read_to_string(out_dir.join(playlist)).ok()?)
+    });
+    let top = rungs.len() - 1;
+    let lines: Vec<&str> = master.lines().collect();
+    let declared: u64 = lines
+        .iter()
+        .zip(lines.iter().skip(1))
+        .find(|(_, uri)| uri.trim() == format!("v{top}.m3u8"))
+        .and_then(|(inf, _)| inf.split(',').find_map(|f| f.strip_prefix("#EXT-X-STREAM-INF:BANDWIDTH=")))
+        .and_then(|v| v.parse().ok())
+        .expect("the top variant declares BANDWIDTH first");
+    let ceiling = u64::from(rungs[top].video_kbps) * 1000;
+    assert!(
+        declared < ceiling / 2,
+        "the top rung is advertised at {declared} bps against a {ceiling} bps ceiling"
+    );
 }

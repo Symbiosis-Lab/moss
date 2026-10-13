@@ -386,17 +386,6 @@ async fn test_get_or_download_in_async_context_does_not_panic() {
 // ===========================================
 // Size-Constrained Video Compression Tests
 // ===========================================
-// TDD: Tests written first, implementation follows.
-//
-// Algorithm: Adaptive CRF + Two-Pass Fallback
-// - First attempt: High-quality CRF (18) with slow preset
-// - Check size: If ≤ limit → done
-// - If over: Calculate bitrate for target size, use two-pass encoding
-//
-// References:
-// - CRF Guide: https://slhck.info/video/2017/02/24/crf-guide.html
-// - Rate Control: https://slhck.info/video/2017/03/01/rate-control.html
-// - Bitrate calculation: https://www.mux.com/articles/change-video-bitrate-with-ffmpeg
 
 #[test]
 fn test_video_compression_config_defaults() {
@@ -407,6 +396,10 @@ fn test_video_compression_config_defaults() {
 
     // Slower preset = better compression ratio
     assert_eq!(config.preset, "slow");
+
+    // A rung's rate ceiling may fill 97% of the budget, leaving room for
+    // container overhead.
+    assert_eq!(config.target_fill_percentage, 0.97);
 }
 
 #[test]
@@ -488,20 +481,6 @@ fn test_resolve_ffprobe_prefers_sibling() {
 }
 
 #[test]
-fn test_needs_size_constraint() {
-    // Helper to determine if a video needs size-constrained encoding
-    // Video over the limit should return true
-    let config = VideoCompressionConfig::default();
-    let max_bytes = config.max_size_mb as u64 * 1024 * 1024;
-
-    // 150MB file exceeds 100MB limit
-    assert!(150 * 1024 * 1024 > max_bytes);
-
-    // 50MB file is within 100MB limit
-    assert!(50 * 1024 * 1024 <= max_bytes);
-}
-
-#[test]
 fn test_convert_with_config_fails_gracefully() {
     // Test that convert_to_mp4_with_config handles errors gracefully.
     // Pre-seed ffprobe (get_duration runs first) to a nonexistent path so the
@@ -579,32 +558,6 @@ fn test_copy_video_fallback_nonexistent_source() {
     assert!(result.is_err(), "Should fail for nonexistent source");
 }
 
-// ===========================================
-// NEW: Video Processing Improvements Tests (TDD)
-// ===========================================
-// Test that videos target 95-98MB within 100MB limit
-// Test that corrupted videos are detected and retried
-// Test that thumbnails are generated at 800px width
-
-#[test]
-fn test_video_compression_config_has_target_fill_percentage() {
-    let config = VideoCompressionConfig::default();
-
-    // Should have target_fill_percentage field set to 97%
-    assert_eq!(config.target_fill_percentage, 0.97);
-}
-
-#[test]
-fn test_calculate_target_size_fills_budget() {
-    let config = VideoCompressionConfig::default();
-
-    // For 100MB limit with 97% fill target
-    let target_bytes =
-        (config.max_size_mb as f64 * 1024.0 * 1024.0 * config.target_fill_percentage) as u64;
-
-    // Should target ~97MB (101,711,667 bytes)
-    assert!(target_bytes >= 100_000_000 && target_bytes <= 102_000_000);
-}
 
 #[test]
 fn test_validate_encoded_video_detects_missing_file() {
@@ -710,20 +663,6 @@ fn a_clip_shorter_than_one_second_still_gets_a_poster() {
     assert!(size > 0, "poster must not be a 0-byte file");
 }
 
-#[test]
-fn test_two_pass_encode_uses_unique_temp_dir() {
-    // Test that two-pass encoding creates unique temp directory for pass logs
-    // This prevents conflicts when multiple videos encode simultaneously
-
-    // The temp directory should be created in the cache directory
-    // and should use a unique identifier (like UUID)
-
-    // This test documents the requirement for unique working directories
-    // Implementation will create temp_dir in convert_to_mp4_with_config
-
-    assert!(true, "Unique temp directory requirement documented");
-}
-
 // ===========================================
 // FFmpeg stderr time parsing tests (TDD)
 // ===========================================
@@ -791,7 +730,7 @@ fn test_parse_ffmpeg_time_three_digit_milliseconds() {
 
 /// A trimmed-down but real capture: two `\r`-joined progress ticks (ffmpeg's
 /// actual overwrite-in-place framing) followed by the substantive failure
-/// lines a real two-pass mux failure produced on a live vault — a moov-atom
+/// lines a real mux failure produced on a live vault — a moov-atom
 /// reopen failure mid-mux, reproduced verbatim from a captured `moss.log`.
 fn captured_stderr_fixture() -> String {
     [
@@ -887,9 +826,10 @@ fn test_to_params_default_config() {
     assert_eq!(params["preset"], "slow");
     assert_eq!(params["max_size_mb"], 100);
     assert!(params["ladder"].as_str().unwrap().starts_with("320x180@15/45+32x1"));
-    assert!(
-        params.get("crf").is_none(),
-        "crf keyed the cache but steered nothing: the CRF path had no callers"
+    assert_eq!(
+        params["crf"],
+        VIDEO_QUALITY_CRF,
+        "a file encoded to hit its rung's rate must not stay a cache hit"
     );
 }
 
@@ -974,56 +914,24 @@ fn pair(args: &[String], flag: &str) -> Option<String> {
         .map(|w| w[1].clone())
 }
 
-#[test]
-fn test_two_pass_first_args_include_threads_cap() {
+fn encode_args() -> (VideoCompressionConfig, Vec<String>) {
     let config = VideoCompressionConfig::default();
-    let args = build_two_pass_first_args("in.mov", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, (1280, 720), &config, "/tmp/passlog", "/dev/null");
-    assert_eq!(
-        pair(&args, "-threads").as_deref(),
-        Some(config.encode_threads.to_string().as_str())
-    );
-    // existing shape preserved:
-    assert_eq!(pair(&args, "-pass").as_deref(), Some("1"));
-    assert_eq!(pair(&args, "-preset").as_deref(), Some(config.preset.as_str()));
-    assert_eq!(pair(&args, "-b:v").as_deref(), Some("2000k"));
-    assert!(args.contains(&"-an".to_string()));
-    assert_eq!(args.last().map(String::as_str), Some("/dev/null"));
+    let args = build_encode_args("in.mov", "out.mp4", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, (1280, 720), &config);
+    (config, args)
 }
 
 #[test]
-fn test_both_passes_carry_identical_rate_control() {
-    // Pass 1's statistics only describe the encode they were measured against.
-    // If a flag that changes bit allocation appears on one pass and not the
-    // other, pass 2 is steered by a description of a different encode. Both
-    // lists come from `common_encode_args`, so this is a guard on that
-    // sharing, not on anyone's diligence.
-    let config = VideoCompressionConfig::default();
-    let first = build_two_pass_first_args("in.mov", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, (1280, 720), &config, "/tmp/passlog", "/dev/null");
-    let second = build_two_pass_second_args("in.mov", "out.mp4", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, (1280, 720), &config, "/tmp/passlog");
-    for flag in [
-        "-b:v", "-maxrate", "-bufsize", "-g", "-preset", "-vf", "-c:v", "-pix_fmt", "-profile:v",
-    ] {
-        assert_eq!(
-            pair(&first, flag),
-            pair(&second, flag),
-            "{flag} differs between the two passes"
-        );
-        assert!(pair(&first, flag).is_some(), "{flag} missing from pass 1");
-    }
-}
-
-#[test]
-fn test_encode_args_cap_the_peak_not_just_the_average() {
-    // `-b:v` alone is an average: a high-motion passage can borrow bits from a
-    // still one and burst far above it. A viewer's buffer drains on the peak.
-    let config = VideoCompressionConfig::default();
-    let args = build_two_pass_second_args("in.mov", "out.mp4", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, (1280, 720), &config, "/tmp/passlog");
-    assert_eq!(pair(&args, "-b:v").as_deref(), Some("2000k"));
+fn the_encode_aims_at_a_quality_and_the_rung_only_caps_it() {
+    // Aiming at the rung's rate spends it whether the picture needs it or
+    // not. The rate still bounds the peak, which is what a viewer's buffer
+    // drains on.
+    let (_, args) = encode_args();
     assert_eq!(
-        pair(&args, "-maxrate").as_deref(),
-        Some("2000k"),
-        "maxrate must equal b:v, or the stated ceiling bounds nothing but the average"
+        pair(&args, "-crf"),
+        Some(VIDEO_QUALITY_CRF.to_string())
     );
+    assert_eq!(pair(&args, "-b:v"), None, "a target rate is spent even on a still picture");
+    assert_eq!(pair(&args, "-maxrate").as_deref(), Some("2000k"));
     assert_eq!(
         pair(&args, "-bufsize").as_deref(),
         Some("4000k"),
@@ -1031,6 +939,7 @@ fn test_encode_args_cap_the_peak_not_just_the_average() {
          roughly this much (measured 2020 kbps under a 1500 kbps cap); a 1x \
          buffer bought ~4% less peak for ~10% less delivered bitrate."
     );
+    assert_eq!(pair(&args, "-pass"), None, "one pass: there is no average rate to hit");
 }
 
 #[test]
@@ -1038,8 +947,7 @@ fn test_encode_args_bound_the_keyframe_interval() {
     // x264's default is 250 frames (8.3s at 30fps). Every recovery from a
     // stall or a seek restarts at the preceding keyframe, so that default
     // costs up to 8s of re-fetched video on the link least able to afford it.
-    let config = VideoCompressionConfig::default();
-    let args = build_two_pass_second_args("in.mov", "out.mp4", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, (1280, 720), &config, "/tmp/passlog");
+    let (_, args) = encode_args();
     assert_eq!(pair(&args, "-g").as_deref(), Some("60"));
     assert!(
         !args.contains(&"-sc_threshold".to_string()),
@@ -1053,29 +961,71 @@ fn test_encode_args_pin_a_universally_decodable_pixel_format() {
     // A 10-bit HDR clip off an iPhone encodes to yuv420p10le by default, which
     // Safari and most TVs will not decode. The level is deliberately NOT
     // pinned — x264 derives it, and pinning can only raise it.
-    let config = VideoCompressionConfig::default();
-    let args = build_two_pass_second_args("in.mov", "out.mp4", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, (1280, 720), &config, "/tmp/passlog");
+    let (_, args) = encode_args();
     assert_eq!(pair(&args, "-pix_fmt").as_deref(), Some("yuv420p"));
     assert_eq!(pair(&args, "-profile:v").as_deref(), Some("high"));
     assert!(!args.contains(&"-level".to_string()));
 }
 
 #[test]
-fn test_two_pass_second_args_include_threads_cap() {
-    let config = VideoCompressionConfig::default();
-    let args = build_two_pass_second_args("in.mov", "out.mp4", moss_core::asset_paths::VIDEO_LADDER[5], 30.0, (1280, 720), &config, "/tmp/passlog");
+fn test_encode_args_carry_the_thread_cap_the_rungs_audio_and_faststart() {
+    let (config, args) = encode_args();
     assert_eq!(
         pair(&args, "-threads").as_deref(),
         Some(config.encode_threads.to_string().as_str())
     );
-    // existing shape preserved:
-    assert_eq!(pair(&args, "-pass").as_deref(), Some("2"));
     assert_eq!(pair(&args, "-preset").as_deref(), Some(config.preset.as_str()));
     assert_eq!(pair(&args, "-c:a").as_deref(), Some("aac"));
     assert_eq!(pair(&args, "-b:a").as_deref(), Some("192k"));
     assert_eq!(pair(&args, "-ac").as_deref(), Some("2"));
     assert_eq!(pair(&args, "-movflags").as_deref(), Some("+faststart"));
     assert_eq!(args.last().map(String::as_str), Some("out.mp4"));
+}
+
+/// The rule the argument test above pins, checked on a real encode: a picture
+/// that needs little comes out far under its rung's rate. Measured on this
+/// clip, an encode aimed at the 2000 kbps rate delivers 2026 kbps and one
+/// aimed at the quality 203.
+#[test]
+fn a_simple_picture_is_encoded_far_under_its_rungs_rate() {
+    const SECONDS: u32 = 8;
+    let Some(bin) = real_ffmpeg() else {
+        eprintln!("skipping: no ffmpeg available");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    // Slowly drifting colour gradients: easy to encode well, and smooth
+    // enough that an encoder told to spend more always can.
+    let source = dir.path().join("drift.mov");
+    let made = std::process::Command::new(&bin)
+        .args(["-y", "-f", "lavfi", "-i", "gradients=size=1280x720:rate=30:speed=0.01"])
+        .args(["-t", &SECONDS.to_string(), "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "12"])
+        .arg(&source)
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !made {
+        eprintln!("skipping: could not synthesise a source");
+        return;
+    }
+
+    // The claim does not depend on the preset; the fastest keeps the test quick.
+    let config = VideoCompressionConfig { preset: "ultrafast".to_string(), ..Default::default() };
+    let manager = FFmpegManager::from_bin_path(bin);
+    let output = dir.path().join("drift.mp4");
+    let result = manager
+        .convert_to_mp4_with_config(&source, &output, &config, None, None, None)
+        .expect("encode");
+    let EncodingResult::Encoded { size_bytes } = result else {
+        panic!("a .mov source is encoded, not kept: {result:?}");
+    };
+    let rung = moss_core::asset_paths::VIDEO_LADDER[5];
+    let kbps = size_bytes as f64 * 8.0 / f64::from(SECONDS) / 1000.0;
+    assert!(
+        kbps < rung.video_kbps as f64 / 2.0,
+        "the file runs at {kbps:.0} kbps against a {} kbps rung: the rung's \
+         rate was spent, not merely allowed",
+        rung.video_kbps
+    );
 }
 
 #[test]
@@ -1096,10 +1046,10 @@ fn test_to_params_excludes_encode_threads() {
 fn the_progressive_encode_scales_to_the_sources_fitted_frame_with_square_pixels() {
     let config = VideoCompressionConfig::default();
     let rung = moss_core::asset_paths::VIDEO_LADDER[5];
-    let args = build_two_pass_second_args("in.mov", "out.mp4", rung, 30.0, (1600, 678), &config, "/tmp/passlog");
+    let args = build_encode_args("in.mov", "out.mp4", rung, 30.0, (1600, 678), &config);
     let vf = &args[args.iter().position(|a| a == "-vf").unwrap() + 1];
     assert_eq!(vf, "scale=1280:542,setsar=1");
-    let slow = build_two_pass_second_args("in.mov", "out.mp4", rung, 60.0, (1600, 678), &config, "/tmp/passlog");
+    let slow = build_encode_args("in.mov", "out.mp4", rung, 60.0, (1600, 678), &config);
     assert!(slow.iter().any(|a| a == "scale=1280:542,setsar=1,fps=30"));
 }
 

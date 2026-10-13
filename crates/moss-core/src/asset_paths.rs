@@ -510,7 +510,7 @@ pub fn to_webp_rung(source: &str, width: u32) -> String {
 }
 
 /// One rung of the video delivery ladder: a bounding box, a frame rate and the
-/// video bitrate that pairs with them.
+/// most video bitrate a picture that size may spend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VideoRung {
     /// The box the picture must fit inside, not the frame it is encoded at: a
@@ -519,6 +519,9 @@ pub struct VideoRung {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
+    /// A ceiling, not a target: an encode aims at a picture quality and this
+    /// bounds what it may spend getting there. A file can weigh less than this
+    /// rate times its duration, never more than a short buffer's worth over.
     pub video_kbps: u32,
     /// Audio bitrate for this rung, kbps. Audio sits in the rung rather than
     /// in a separate config knob because it is not independent of the picture:
@@ -533,8 +536,8 @@ pub struct VideoRung {
 }
 
 impl VideoRung {
-    /// Total kbps a viewer must sustain for this rung, video plus audio.
-    /// Container overhead is a few percent on top and is not counted here.
+    /// The most a viewer must sustain for this rung, video plus audio, in
+    /// kbps. Container overhead is a few percent on top and is not counted.
     pub const fn total_kbps(&self) -> u32 {
         self.video_kbps + self.audio_kbps
     }
@@ -626,7 +629,9 @@ pub const LADDER_MIN_RUNG_SPACING: f64 = 1.5;
 ///
 /// The **top rung is also the delivery ceiling**. There is deliberately no
 /// second `max_video_bitrate_kbps` knob beside this table: two independent
-/// statements of how good the best version gets would overlap. The
+/// statements of how much the best version may spend would overlap. (How good
+/// a picture each encode aims for under these rates is the encoder's setting,
+/// in moss-build.) The
 /// hosting-budget knobs that narrow a source's ladder (`max_size_mb`,
 /// `hls_max_file_mb`) pick a LOWER rung off this table; the HLS ladder's own
 /// source-bitrate clamp ([`video_ladder_rungs_within`]) goes one step further
@@ -666,18 +671,18 @@ pub fn video_ladder_rungs(display: (u32, u32)) -> &'static [VideoRung] {
     &VIDEO_LADDER[..n]
 }
 
-/// Estimated size, in bytes, of the single file an HLS rung writes for a
-/// track running at `kbps` over `duration_secs` — `-hls_flags single_file`
+/// The most the single file an HLS rung writes can weigh, in bytes, for a
+/// track capped at `kbps` over `duration_secs` — `-hls_flags single_file`
 /// makes a rung's video, and each audio group, exactly one file apiece, so
-/// that file's size is just its bitrate times the whole video's duration.
+/// that file is bounded by its rate ceiling times the whole video's duration.
 ///
-/// The 5% margin above the raw `kbps * duration` figure is measured, not
-/// guessed: the two production numbers this budget exists to keep under a
-/// cap were 221,843,463 bytes (1280x720, 2000 kbps) and 122,579,638 bytes
-/// (960x540, 1100 kbps) for a 903.47 s source — 98–99% of the VBV-capped
-/// target in both cases. Overshooting the estimate would silently let an
-/// over-cap file through; undershooting it by more than the measured slack
-/// would drop a rung that actually would have fit.
+/// An upper bound, not a prediction: a rung aims at a picture quality and a
+/// simple picture comes out far under its ceiling. The budget still has to
+/// assume the ceiling, because how far under is not known before the encode.
+/// The 5% margin is measured on footage that does run at the ceiling: the two
+/// production files this budget exists to keep under a cap were 221,843,463
+/// bytes (1280x720, 2000 kbps) and 122,579,638 bytes (960x540, 1100 kbps) for
+/// a 903.47 s source, 98–99% of the ceiling in both cases.
 fn hls_file_bytes(kbps: u32, duration_secs: f64) -> f64 {
     (kbps as f64) * 1000.0 / 8.0 * duration_secs * 1.05
 }
@@ -730,8 +735,8 @@ impl SourceBitrate {
 ///    1100 kbps rung below its top rung), a 1080p one from about 3000 kbps
 ///    (1.5 x 2000).
 /// 2. **The per-file byte budget**, checked against each rung's EFFECTIVE
-///    bitrate (the clamp above, when one applied) rather than the table's — that is what
-///    ffmpeg will actually be asked for, and so what the file will actually
+///    bitrate (the clamp above, when one applied) rather than the table's — that is the
+///    ceiling ffmpeg will actually be given, and so the most the file can
 ///    weigh. A rung the table's own bitrate would have pushed over budget can
 ///    still fit once clamped.
 ///

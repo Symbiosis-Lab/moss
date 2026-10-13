@@ -304,13 +304,10 @@ fn produce_hero_poster(
     Ok(oid.filter(|_| linked))
 }
 
-/// The ladder's slice of one video's progress bar. Measured on the ladder's own
-/// fixture, it costs about 1.65x the two-pass MP4 wall, and it runs first.
-const HLS_PROGRESS_SHARE: f64 = 0.6;
-
-/// Within the MP4's own slice, `run_two_pass_encode` gives pass 1 — the
-/// analysis pass — the first 0.3.
-const MP4_ANALYSIS_SHARE: f64 = 0.3;
+/// The ladder's slice of one video's progress bar; it runs first. Measured on
+/// 30 seconds of 1080p, the ladder took 76% of the encode time for film
+/// footage and 64% for a screen recording.
+const HLS_PROGRESS_SHARE: f64 = 0.7;
 
 /// Outcome of converting a single video file.
 ///
@@ -554,7 +551,7 @@ pub(crate) fn convert_single_video(
         if mp4_valid {
             // The defect is scoped to the thumbnail alone — the video's own
             // bytes already validate — so only the thumbnail entry is
-            // evicted and regenerated. Re-encoding the MP4 (two-pass, ~30s)
+            // evicted and regenerated. Re-encoding the MP4 (~30s)
             // over a thumbnail-only defect (a ~2s ffmpeg call) would be real,
             // avoidable cost for every site that already has a bad thumbnail
             // cached.
@@ -632,9 +629,9 @@ pub(crate) fn convert_single_video(
 
     let mut kept_original = false;
     match conversion_result {
-        Ok(crate::build::media::ffmpeg::EncodingResult::TwoPassSuccess { size_bytes }) => {
+        Ok(crate::build::media::ffmpeg::EncodingResult::Encoded { size_bytes }) => {
             let size_mb = size_bytes as f64 / 1024.0 / 1024.0;
-            log::info!("Converted with two-pass ({:.1} MB): {}", size_mb, filename);
+            log::info!("Converted ({:.1} MB): {}", size_mb, filename);
         }
         Ok(crate::build::media::ffmpeg::EncodingResult::KeptOriginal) => {
             kept_original = true;
@@ -1152,7 +1149,7 @@ pub(crate) fn run_video_conversion(
     let hash_index_path = vid_paths.cache_hash_index();
     let mut hash_index = HashIndex::load(&hash_index_path);
 
-    // This run's own scratch: its temps and two-pass logs, never another run's
+    // This run's own scratch: its temps, never another run's
     // or an image batch's. Removed when the run returns.
     let scratch = crate::build::io_utils::ScratchDir::new(&vid_paths.cache_tmp(), &format!("video-{epoch}"));
     let temp_dir = scratch.path().to_path_buf();
@@ -1358,21 +1355,12 @@ pub(crate) fn run_video_conversion(
                     // Fires in both modes; a headless build's reporter discards.
                     let reporter = services.reporter.as_ref();
                     let progress_callback = |fraction: f64| {
-                        // Only the MP4's first pass analyses; everything before it
-                        // is the ladder encoding, and everything after is pass 2.
-                        let analysis_end =
-                            HLS_PROGRESS_SHARE + (1.0 - HLS_PROGRESS_SHARE) * MP4_ANALYSIS_SHARE;
-                        let phase = if (HLS_PROGRESS_SHARE..analysis_end).contains(&fraction) {
-                            "analyzing"
-                        } else {
-                            "encoding"
-                        };
                         let overall_fraction = (index as f64 + fraction) / total as f64;
                         reporter.report(&PipelineEvent::VideoProgress {
                             filename: filename.clone(),
                             current_video: current,
                             total_videos: total,
-                            phase: phase.to_string(),
+                            phase: "encoding".to_string(),
                             video_fraction: fraction,
                             overall_fraction,
                         });
@@ -2266,7 +2254,7 @@ pub(crate) fn dispatch_video_conversions(
             // The core seal must not wait for this encode — PROVIDED someone
             // will notice when it finishes. `tx` is the manifest
             // coordinator's sender; holding it open across a multi-minute
-            // two-pass encode is what used to block `seal+persist` behind
+            // encode is what used to block `seal+persist` behind
             // one slow video. Every video this build isn't re-encoding has
             // already registered its output above (skip_paths unchanged,
             // carry_forward_paths mid-re-encode), so dropping `tx` early
@@ -3411,8 +3399,8 @@ pub(crate) mod tests {
 
     /// Every run and image batch writes its temps in its own scratch directory
     /// and removes only that. A video run used to wipe the shared `cache/tmp`
-    /// on entry, taking an image batch's temps — or the temps and two-pass logs
-    /// of the run it had just joined — mid-write.
+    /// on entry, taking an image batch's temps — or the temps of the run it
+    /// had just joined — mid-write.
     #[tokio::test]
     async fn a_video_run_removes_its_own_scratch_and_no_one_elses() {
         let tmp = portable_tmpdir();
@@ -4592,7 +4580,7 @@ pub(crate) mod tests {
     /// nothing about the fix ever invalidated it. A cache hit must validate
     /// the poster the same way it already validates the MP4, and regenerate
     /// it — without touching an MP4 that still validates: a poster-only
-    /// defect does not owe the video a fresh two-pass encode.
+    /// defect does not owe the video a fresh encode.
     ///
     /// The seeded blob is non-empty garbage, not literally 0 bytes: a
     /// LITERAL 0-byte blob never reaches this code at all —
@@ -4605,7 +4593,7 @@ pub(crate) mod tests {
     /// The source is named `.mov`: `plan_video_encode`'s `web_playable` gate
     /// only recognises `mp4`/`m4v`/`webm` containers, so a `.mov` source can
     /// never take the `KeepOriginal` path — any real re-encode always runs a
-    /// genuine two-pass libx264 encode and so always produces DIFFERENT
+    /// genuine libx264 encode and so always produces DIFFERENT
     /// bytes (a different oid) than the raw source bytes seeded as the
     /// cached MP4 below. That is what makes "the MP4 oid is unchanged" a
     /// sound proxy here for "the MP4 was not re-encoded" — with an mp4/m4v/

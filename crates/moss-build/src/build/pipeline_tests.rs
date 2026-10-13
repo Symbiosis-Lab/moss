@@ -1956,20 +1956,16 @@ async fn a_rebuild_storm_enters_the_encoder_once_and_stops_on_its_own() {
     let cached: Vec<String> = (0..10).map(|i| format!("videos/cached-{i}.mov")).collect();
     let mut names = vec![slow];
     names.extend(cached.iter().map(String::as_str));
-    // The encoder: a poster frame is written at once; the mp4 encode's first
-    // pass marks its entry and blocks until the test releases it, and the
-    // second pass writes the mp4.
+    // The encoder: a poster frame is written at once; the mp4 encode marks
+    // its entry, blocks until the test releases it, and then writes the mp4.
     let (temp, ctx) = vault_with_videos(
         &names,
         "#!/bin/sh\n\
-         out=''; thumb=''; pass=''; prev=''\n\
-         for a in \"$@\"; do out=\"$a\"; [ \"$a\" = -vframes ] && thumb=1; [ \"$prev\" = -pass ] && pass=\"$a\"; prev=\"$a\"; done\n\
+         out=''; thumb=''\n\
+         for a in \"$@\"; do out=\"$a\"; [ \"$a\" = -vframes ] && thumb=1; done\n\
          if [ -n \"$thumb\" ]; then printf poster > \"$out\"; exit 0; fi\n\
-         if [ \"$pass\" = 1 ]; then\n\
-           echo entered >> '{temp}/entered'\n\
-           n=0; while [ ! -f '{temp}/release' ] && [ -d '{temp}' ] && [ $n -lt 1500 ]; do sleep 0.02; n=$((n+1)); done\n\
-           exit 0\n\
-         fi\n\
+         echo entered >> '{temp}/entered'\n\
+         n=0; while [ ! -f '{temp}/release' ] && [ -d '{temp}' ] && [ $n -lt 1500 ]; do sleep 0.02; n=$((n+1)); done\n\
          printf 'encoded mp4' > \"$out\"\n",
     );
     // A 320-wide ProRes source: one ladder rung (no HLS), and not web-playable,
@@ -2211,18 +2207,17 @@ async fn a_cache_sweep_during_a_detached_encode_keeps_what_it_already_stored() {
     use crate::ops::watch::worker;
     use std::os::unix::fs::PermissionsExt;
 
-    // The first video encodes at once; the second blocks in its first pass.
+    // The first video encodes at once; the second blocks before it writes.
     let (temp, ctx) = vault_with_videos(
         &["videos/first.mov", "videos/second.mov"],
         "#!/bin/sh\n\
-         out=''; thumb=''; pass=''; prev=''; input=''\n\
-         for a in \"$@\"; do out=\"$a\"; [ \"$a\" = -vframes ] && thumb=1; [ \"$prev\" = -pass ] && pass=\"$a\"; [ \"$prev\" = -i ] && input=\"$a\"; prev=\"$a\"; done\n\
+         out=''; thumb=''; prev=''; input=''\n\
+         for a in \"$@\"; do out=\"$a\"; [ \"$a\" = -vframes ] && thumb=1; [ \"$prev\" = -i ] && input=\"$a\"; prev=\"$a\"; done\n\
          if [ -n \"$thumb\" ]; then printf poster > \"$out\"; exit 0; fi\n\
-         case \"$input\" in *second*) if [ \"$pass\" = 1 ]; then\n\
+         case \"$input\" in *second*)\n\
            echo entered >> '{temp}/entered'\n\
            n=0; while [ ! -f '{temp}/release' ] && [ -d '{temp}' ] && [ $n -lt 1500 ]; do sleep 0.02; n=$((n+1)); done\n\
-         fi;; esac\n\
-         [ \"$pass\" = 1 ] && exit 0\n\
+         ;; esac\n\
          printf 'encoded mp4' > \"$out\"\n",
     );
     let ffprobe = temp.path().join("ffprobe");

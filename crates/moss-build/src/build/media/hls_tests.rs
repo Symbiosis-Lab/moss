@@ -53,17 +53,21 @@ fn keyframe_cadence_is_seconds_not_frames() {
 }
 
 #[test]
-fn every_rung_is_vbv_capped_at_its_own_bitrate() {
-    // `-b:v` alone is an average a high-motion passage can burst far above.
-    // BANDWIDTH in the master playlist is a promise the player switches on, so
-    // the sustained rate has to be bounded.
+fn every_rung_aims_at_a_quality_capped_at_its_own_bitrate() {
+    // A rung's rate is a bound, not a target: aimed at, it is spent on a
+    // picture that does not need it. The bound stays because a high-motion
+    // passage can otherwise burst far above what the link was promised.
     let a = args();
     for (i, rung) in VIDEO_LADDER.iter().enumerate() {
         let val = |flag: String| {
             let at = a.iter().position(|x| *x == flag).unwrap();
             a[at + 1].clone()
         };
-        assert_eq!(val(format!("-b:v:{i}")), format!("{}k", rung.video_kbps));
+        assert_eq!(
+            val(format!("-crf:v:{i}")),
+            crate::build::media::ffmpeg::VIDEO_QUALITY_CRF.to_string()
+        );
+        assert!(!a.contains(&format!("-b:v:{i}")), "a target rate is spent even on a still picture");
         assert_eq!(val(format!("-maxrate:v:{i}")), format!("{}k", rung.video_kbps));
         assert_eq!(
             val(format!("-bufsize:v:{i}")),
@@ -91,8 +95,7 @@ fn a_clamped_rung_is_encoded_at_its_effective_not_table_bitrate() {
         let at = a.iter().position(|x| x == flag).expect(flag);
         a[at + 1].clone()
     };
-    assert_eq!(val("-b:v:3"), "600k", "the clamped figure, not the table's 730k");
-    assert_eq!(val("-maxrate:v:3"), "600k");
+    assert_eq!(val("-maxrate:v:3"), "600k", "the clamped figure, not the table's 730k");
     assert_eq!(val("-bufsize:v:3"), "1200k", "2x the clamped figure");
 }
 
@@ -136,8 +139,8 @@ fn the_lowest_rung_is_declared_first() {
 
 #[test]
 fn one_decode_feeds_every_rung() {
-    // `split` is why six rungs cost 1.32x the CPU of one two-pass encode
-    // rather than six times it.
+    // `split` is why a ladder's rungs share one decode of the source instead
+    // of paying for one each.
     let a = args();
     let f = &a[a.iter().position(|x| x == "-filter_complex").unwrap() + 1];
     assert!(f.starts_with(&format!("[0:v]split={}", VIDEO_LADDER.len())), "one decode, fanned out: {f}");
@@ -204,7 +207,7 @@ fn independent_segments_tag_is_inserted_after_the_version_line() {
     // fmp4 + rendition-group shape, measured. The keyframe settings above are
     // what make the assertion true, so it is added rather than left missing.
     let master = "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MEDIA:TYPE=AUDIO\n";
-    let out = patch_master(master, &VIDEO_LADDER);
+    let out = patch_master(master, &VIDEO_LADDER, |_| None);
     assert_eq!(
         out,
         "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n#EXT-X-MEDIA:TYPE=AUDIO\n"
@@ -212,20 +215,19 @@ fn independent_segments_tag_is_inserted_after_the_version_line() {
 }
 
 #[test]
-fn patching_a_master_twice_changes_nothing_the_second_time() {
-    // Not a nicety: the second pass would charge every variant for its audio a
-    // second time. The tag is what marks the master as already patched.
-    let master = format!(
-        "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-STREAM-INF:BANDWIDTH=45000,\
-         RESOLUTION=320x180,CODECS=\"avc1.42c00c,mp4a.40.2\",AUDIO=\"group_alo\"\nv0.m3u8\n"
-    );
-    let once = patch_master(&master, &VIDEO_LADDER);
-    assert_eq!(patch_master(&once, &VIDEO_LADDER), once, "idempotent");
+fn a_master_that_already_says_its_segments_are_independent_still_gets_its_figures() {
+    // An ffmpeg that does emit the tag for this shape must not skip the rest:
+    // the tag is not added twice, and the audio is still charged.
+    let master = "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n\
+                  #EXT-X-STREAM-INF:BANDWIDTH=45000,RESOLUTION=320x180,AUDIO=\"group_alo\"\nv0.m3u8\n";
+    let out = patch_master(master, &VIDEO_LADDER, |_| None);
+    assert_eq!(out.matches("#EXT-X-INDEPENDENT-SEGMENTS").count(), 1, "{out}");
+    assert!(out.contains("BANDWIDTH=77000,"), "45k + 32k lean: {out}");
 }
 
 #[test]
 fn independent_segments_tag_still_precedes_variants_without_a_version_line() {
-    let out = patch_master("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nv0.m3u8\n", &VIDEO_LADDER);
+    let out = patch_master("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nv0.m3u8\n", &VIDEO_LADDER, |_| None);
     assert!(
         out.find("#EXT-X-INDEPENDENT-SEGMENTS").unwrap()
             < out.find("#EXT-X-STREAM-INF").unwrap(),
@@ -240,7 +242,7 @@ fn a_variants_bandwidth_grows_by_the_audio_rendition_it_names() {
     // cost another ~35,000. A player selects on this number and nothing else.
     let line = "#EXT-X-STREAM-INF:BANDWIDTH=49669,AVERAGE-BANDWIDTH=49601,\
                 RESOLUTION=320x180,CODECS=\"avc1.42c00c,mp4a.40.2\",AUDIO=\"group_alo\"";
-    let out = patch_master(&format!("#EXTM3U\n#EXT-X-VERSION:7\n{line}\nv0.m3u8\n"), &VIDEO_LADDER);
+    let out = patch_master(&format!("#EXTM3U\n#EXT-X-VERSION:7\n{line}\nv0.m3u8\n"), &VIDEO_LADDER, |_| None);
     assert!(out.contains("BANDWIDTH=81669"), "45k rung + 32k audio: {out}");
     assert!(out.contains("AVERAGE-BANDWIDTH=81601"), "{out}");
     // Everything else survives byte-for-byte, including the comma inside CODECS.
@@ -254,7 +256,7 @@ fn each_rung_is_charged_for_its_own_group_not_a_shared_one() {
     let master = "#EXTM3U\n#EXT-X-VERSION:7\n\
         #EXT-X-STREAM-INF:BANDWIDTH=45000,RESOLUTION=320x180,AUDIO=\"group_alo\"\nv0.m3u8\n\
         #EXT-X-STREAM-INF:BANDWIDTH=365000,RESOLUTION=640x360,AUDIO=\"group_ahi\"\nv2.m3u8\n";
-    let out = patch_master(master, &VIDEO_LADDER);
+    let out = patch_master(master, &VIDEO_LADDER, |_| None);
     assert!(out.contains("BANDWIDTH=77000"), "45k + 32k lean: {out}");
     assert!(out.contains("BANDWIDTH=557000"), "365k + 192k clean: {out}");
 }
@@ -265,7 +267,120 @@ fn a_silent_ladder_keeps_the_bandwidth_ffmpeg_measured() {
     // the whole variant and adding to it would overstate the price.
     let master = "#EXTM3U\n#EXT-X-VERSION:7\n\
                   #EXT-X-STREAM-INF:BANDWIDTH=45000,RESOLUTION=320x180\nv0.m3u8\n";
-    assert!(patch_master(master, &VIDEO_LADDER).contains("BANDWIDTH=45000,"));
+    assert!(patch_master(master, &VIDEO_LADDER, |_| None).contains("BANDWIDTH=45000,"));
+}
+
+const RUNG_PLAYLIST: &str = "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:6\n\
+    #EXT-X-MAP:URI=\"v6.m4s\",BYTERANGE=\"848@0\"\n\
+    #EXTINF:6.000000,\n#EXT-X-BYTERANGE:150000@848\nv6.m4s\n\
+    #EXTINF:6.000000,\n#EXT-X-BYTERANGE:600000@150848\nv6.m4s\n\
+    #EXTINF:2.000000,\n#EXT-X-BYTERANGE:50000@750848\nv6.m4s\n#EXT-X-ENDLIST\n";
+
+#[test]
+fn a_rungs_rates_are_its_heaviest_run_of_segments_and_its_whole_file_over_its_duration() {
+    // 600,000 bytes over 6 s is the peak; 800,000 bytes over 14 s the average.
+    // The init segment's byte range is not media and is not counted, and the
+    // 2 s tail is too short to be a run of its own.
+    assert_eq!(segment_rates(RUNG_PLAYLIST), Some((800_000, 457_143)));
+    assert_eq!(segment_rates("#EXTM3U\n#EXT-X-ENDLIST\n"), None);
+}
+
+#[test]
+fn a_short_last_segment_holding_one_keyframe_does_not_set_the_peak() {
+    // A 12.2 s clip cut at 6 s ends on 0.2 s holding a 100 kB keyframe: 4 Mbps
+    // on its own, against a rung that runs at 200 kbps. Measured with the
+    // segment before it, as RFC 8216 measures a peak, it is 323 kbps.
+    let playlist = "#EXTM3U\n#EXT-X-TARGETDURATION:6\n\
+        #EXTINF:6.000000,\n#EXT-X-BYTERANGE:150000@848\n\
+        #EXTINF:6.000000,\n#EXT-X-BYTERANGE:150000@150848\n\
+        #EXTINF:0.200000,\n#EXT-X-BYTERANGE:100000@300848\n#EXT-X-ENDLIST\n";
+    assert_eq!(segment_rates(playlist), Some((322_581, 262_295)));
+}
+
+#[test]
+fn a_clip_shorter_than_half_a_segment_peaks_at_its_average() {
+    let playlist = "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:2.000000,\n#EXT-X-BYTERANGE:50000@848\n";
+    assert_eq!(segment_rates(playlist), Some((200_000, 200_000)));
+}
+
+#[test]
+fn a_variant_declared_at_its_ceiling_is_redeclared_at_what_it_measures_plus_its_audio() {
+    // What ffmpeg before 7.1 writes for a rung capped at 4000 kbps: the
+    // ceiling plus a tenth, and no average. A player on a 2 Mbps link would
+    // decline this rung, which peaks at 800 kbps.
+    let master = "#EXTM3U\n#EXT-X-VERSION:7\n\
+        #EXT-X-STREAM-INF:BANDWIDTH=4400000,RESOLUTION=1708x1080,CODECS=\"avc1.640032,mp4a.40.2\",AUDIO=\"group_ahi\"\n\
+        v6.m3u8\n";
+    let out = patch_master(master, &VIDEO_LADDER, |uri| (uri == "v6.m3u8").then(|| segment_rates(RUNG_PLAYLIST)).flatten());
+    assert!(
+        out.contains("#EXT-X-STREAM-INF:BANDWIDTH=992000,AVERAGE-BANDWIDTH=649143,RESOLUTION=1708x1080"),
+        "800k peak and 457k average, each plus the 192k audio: {out}"
+    );
+    assert!(out.contains(r#"CODECS="avc1.640032,mp4a.40.2",AUDIO="group_ahi""#), "{out}");
+}
+
+#[test]
+fn a_variant_that_already_carries_an_average_has_both_figures_replaced() {
+    let master = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=4400000,AVERAGE-BANDWIDTH=4000000,RESOLUTION=1708x1080\nv6.m3u8\n";
+    let out = patch_master(master, &VIDEO_LADDER, |_| segment_rates(RUNG_PLAYLIST));
+    assert!(out.contains("#EXT-X-STREAM-INF:BANDWIDTH=800000,AVERAGE-BANDWIDTH=457143,RESOLUTION=1708x1080\nv6.m3u8\n"), "{out}");
+}
+
+/// The encode itself redeclares the master, whatever the encoder wrote: here
+/// a stand-in for an ffmpeg older than 7.1, which declares a variant at its
+/// rate ceiling plus a tenth however little the rung weighs.
+#[cfg(unix)]
+#[test]
+fn encode_ladder_declares_each_rung_at_what_its_segments_measure() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out_dir = dir.path().join("clip.hls");
+    let rung_playlist = |name: &str| RUNG_PLAYLIST.replace("v6.m4s", name);
+    // The last argument is `<out_dir>/%v.m3u8`; the stand-in writes the
+    // master and both rung playlists beside it.
+    let script = format!(
+        "#!/bin/sh\nfor a in \"$@\"; do last=\"$a\"; done\nd=$(dirname \"$last\")\n\
+         cat > \"$d/master.m3u8\" <<'M'\n#EXTM3U\n#EXT-X-VERSION:7\n\
+         #EXT-X-STREAM-INF:BANDWIDTH=49500,RESOLUTION=320x180\nv0.m3u8\n\
+         #EXT-X-STREAM-INF:BANDWIDTH=159500,RESOLUTION=416x234\nv1.m3u8\nM\n\
+         cat > \"$d/v0.m3u8\" <<'P'\n{}P\ncat > \"$d/v1.m3u8\" <<'P'\n{}P\n",
+        rung_playlist("v0.m4s"),
+        rung_playlist("v1.m4s"),
+    );
+    let bin = dir.path().join("ffmpeg");
+    std::fs::write(&bin, script).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let probe = SourceVideo {
+        duration_secs: 14.0,
+        width: 416,
+        height: 234,
+        sar: 1.0,
+        fps: 30.0,
+        has_audio: false,
+        total_kbps: None,
+        video_kbps: None,
+        web_playable: false,
+    };
+
+    encode_ladder(
+        &bin,
+        Path::new("clip.mov"),
+        &out_dir,
+        &VIDEO_LADDER[..2],
+        &probe,
+        &VideoCompressionConfig::default(),
+        None,
+        None,
+        None,
+    )
+    .expect("encode");
+
+    let master = std::fs::read_to_string(out_dir.join(HLS_MASTER_NAME)).unwrap();
+    assert_eq!(
+        master.matches("BANDWIDTH=800000,AVERAGE-BANDWIDTH=457143,").count(),
+        2,
+        "both rungs peak at 800 kbps and average 457: {master}"
+    );
 }
 
 // ── produce_ladder: cache, links and the naming contract ───────────
@@ -836,9 +951,44 @@ fn cached_ladder_hits_a_new_form_record_with_no_probe_needed() {
     assert!(oids.iter().all(|o| o == &oid));
 }
 
-/// A ladder keyed before rungs were fitted to the source's shape (no `format`
-/// in its params) holds fixed 16:9 frames; it must be a miss, so the next build
-/// re-encodes it once.
+/// A full ladder record for `source_oid` in `transforms`, every member keyed
+/// by `params`. The blobs are placeholders: these tests ask whether a record
+/// is a hit, never what its files hold.
+fn seed_ladder_record(transforms: &TransformCache, scratch: &Path, source_oid: &str, params: &serde_json::Value) {
+    let blob = scratch.join("blob");
+    std::fs::write(&blob, b"ladder file").unwrap();
+    let oid = transforms.objects().store_file(&blob, crate::build::cache::RecordMode::Request).unwrap();
+    let mut record = TransformRecord {
+        source_oid: source_oid.to_string(),
+        source_size: 0,
+        transforms: std::collections::HashMap::new(),
+    };
+    for name in hls_members(&VIDEO_LADDER) {
+        record
+            .transforms
+            .insert(format!("video/hls/{name}"), TransformEntry { oid: oid.clone(), size: 1, params: params.clone() });
+    }
+    transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
+}
+
+/// A ladder from the format before today's is a miss, so the next build
+/// re-encodes it once (format 2 aimed every rung at its rate).
+#[test]
+fn cached_ladder_misses_a_ladder_from_the_previous_format() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let transforms = TransformCache::new(
+        dir.path().join("transforms"),
+        ObjectStore::new(dir.path().join("objects")),
+    );
+    let config = VideoCompressionConfig::default();
+    let mut params = ladder_params(&config, &VIDEO_LADDER, wide_unclamped_source());
+    seed_ladder_record(&transforms, dir.path(), "oid-current", &params);
+    assert!(cached_ladder(&transforms, "oid-current", &config).is_some(), "today's key is a hit");
+    params["format"] = serde_json::json!(cache::LADDER_FORMAT - 1);
+    seed_ladder_record(&transforms, dir.path(), "oid-previous", &params);
+    assert!(cached_ladder(&transforms, "oid-previous", &config).is_none());
+}
+
 #[test]
 fn cached_ladder_misses_a_record_keyed_before_aspect_fitted_frames() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -852,20 +1002,7 @@ fn cached_ladder_misses_a_record_keyed_before_aspect_fitted_frames() {
     // ...and its stored source facts predate height and pixel aspect ratio.
     let facts = params["source"].as_object_mut().unwrap();
     assert!(facts.remove("height").is_some() && facts.remove("sar").is_some());
-    let blob = dir.path().join("blob");
-    std::fs::write(&blob, b"ladder file").unwrap();
-    let oid = transforms.objects().store_file(&blob, crate::build::cache::RecordMode::Request).unwrap();
-    let mut record = TransformRecord {
-        source_oid: "oid-old-frames".to_string(),
-        source_size: 0,
-        transforms: std::collections::HashMap::new(),
-    };
-    for name in hls_members(&VIDEO_LADDER) {
-        record
-            .transforms
-            .insert(format!("video/hls/{name}"), TransformEntry { oid: oid.clone(), size: 1, params: params.clone() });
-    }
-    transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
+    seed_ladder_record(&transforms, dir.path(), "oid-old-frames", &params);
 
     assert!(cached_ladder(&transforms, "oid-old-frames", &config).is_none());
     // The no-probe heal path must not relink it either: it asks for a real
@@ -1201,8 +1338,8 @@ fn produce_ladder_never_encodes_a_rung_above_the_sources_own_bitrate() {
     );
 
     // A short VBV-capped encode can spend its initial buffer, and fMP4 adds
-    // container bytes. Its file size cannot prove which average bitrate was
-    // requested. Keep the real output check and inspect the dispatched flags.
+    // container bytes. Its file size cannot prove which cap was requested.
+    // Keep the real output check and inspect the dispatched flags.
     let top_m4s_size = entries
         .iter()
         .find(|(n, _)| n == "video/hls/v1.m4s")
@@ -1219,8 +1356,7 @@ fn produce_ladder_never_encodes_a_rung_above_the_sources_own_bitrate() {
             args[at + 1]
         };
         let clamped_kbps = source_kbps.floor() as u32;
-        assert_eq!(value("-b:v:1"), format!("{clamped_kbps}k"), "the actual encode must receive the source clamp");
-        assert_eq!(value("-maxrate:v:1"), format!("{clamped_kbps}k"));
+        assert_eq!(value("-maxrate:v:1"), format!("{clamped_kbps}k"), "the actual encode must receive the source clamp");
         assert_eq!(value("-bufsize:v:1"), format!("{}k", clamped_kbps * 2));
     }
 }
@@ -1450,7 +1586,7 @@ fn master_patching_folds_audio_into_bandwidth_for_a_non_16_9_ladder() {
          #EXT-X-STREAM-INF:BANDWIDTH=45000,RESOLUTION={w0}x{h0},AUDIO=\"group_alo\"\nv0.m3u8\n\
          #EXT-X-STREAM-INF:BANDWIDTH=365000,RESOLUTION={w2}x{h2},AUDIO=\"group_ahi\"\nv2.m3u8\n"
     );
-    let out = patch_master(&master, &VIDEO_LADDER);
+    let out = patch_master(&master, &VIDEO_LADDER, |_| None);
     assert!(out.contains("BANDWIDTH=77000"), "45k + 32k lean: {out}");
     assert!(out.contains("BANDWIDTH=557000"), "365k + 192k clean: {out}");
 }

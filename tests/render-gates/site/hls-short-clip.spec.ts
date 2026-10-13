@@ -144,7 +144,14 @@ test.describe("short hero clips through hls.js", () => {
   test("a slow link keeps the low rung: nothing is refetched higher", async ({ page }) => {
     test.setTimeout(60_000);
     await page.setViewportSize({ width: 1440, height: 900 });
-    const kbps = 300;
+    // Slow against a 2 Mbps top rung, and fast enough that the first piece of
+    // the rung hls.js starts on (about 390 kB) arrives inside its 10 s wait
+    // for a first byte: this throttle holds a whole response back and then
+    // delivers it at once, so a slower link reads as a dead one and hls.js
+    // retries the same rung instead of stepping down. hls.js picks that start
+    // from the declared figures, which are measured rather than the rungs'
+    // ceilings, so it starts higher than it did when 300 kbps was enough.
+    const kbps = 400;
     await throttleMedia(page, kbps);
     const media = watchMedia(page, "a");
     await page.goto("/");
@@ -165,7 +172,7 @@ test.describe("short hero clips through hls.js", () => {
       media.filter((m) => rank(m.media) > first).map((m) => m.media),
       "a rung above the one the clip started on was fetched on a slow link",
     ).toEqual([]);
-    expect(Math.max(...heights), "the clip sharpened past what 300 kbps carries").toBeLessThanOrEqual(
+    expect(Math.max(...heights), `the clip sharpened past what ${kbps} kbps carries`).toBeLessThanOrEqual(
       ladder[first].height,
     );
   });
