@@ -272,6 +272,7 @@ All notable changes to moss will be documented here.
 - A site logo written as `./assets/logo.png` in the home page's frontmatter now gets its size too, and its address is the plain `/assets/logo.png` instead of `/./assets/logo.png`. Only the attribute changes; the file is served from the same address as before.
 - A page with a hero and a folder listing below it has one high-priority image, the hero. The listing's cover images load lazily, so they no longer compete with the hero on a slow connection. A page without a hero gives that slot to whichever comes first in its opening content, a picture or a folder listing; a listing that opens the page keeps its first cover eager.
 - `sitemap.xml` lists a static `.html` page and a notebook viewer at the address the site serves them at, ending in `.html`, instead of an address without the extension that returned 404.
+- A page that stands for a person or other term and has a cover now has one heading in its markup, not an empty one before its title.
 
 ### Changed
 

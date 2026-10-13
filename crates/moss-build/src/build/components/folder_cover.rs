@@ -15,11 +15,10 @@ use crate::build::media::cover::{self, CoverType};
 ///      `folder_title::render(label)` — the single page heading for SEO and
 ///      a11y outline. Shared with the no-cover folder-index path
 ///      (`render/html.rs`) and the synthetic folder-index path
-///      (`render/blocking.rs`). A caller whose own shell already carries a
-///      visible title — a claimed leaf page, whose `<h1>` is the head of
-///      `content` rather than a separate `label` — passes `""`: the emitted
-///      `<h1 class="moss-folder-title"></h1>` is empty and collapsed by
-///      `.moss-folder-title:empty` in site.css, so exactly one title shows.
+///      (`render/blocking.rs`). A caller whose `content` already opens with
+///      the page's own `<h1>` (a claimed leaf page) passes `None`: no heading
+///      is emitted here, so the markup carries one `<h1>`, not an empty one
+///      ahead of it.
 ///   2. The page content (markdown body). The caller may prepend the page's
 ///      `byline:` rows to `content` so they land between the h1 and the body,
 ///      inside the cover body column.
@@ -29,15 +28,15 @@ use crate::build::media::cover::{self, CoverType};
 /// h1 is added by the caller in `render/html.rs` so this helper stays purely
 /// a cover-layout component.
 ///
-/// `label` is the plain-text chrome label (typically `doc.label`, or `""` —
-/// see above); HTML escaping happens inside `folder_title::render`, so do not
-/// pre-escape. `alt_label` names the page for the cover image's `alt` text
-/// SEPARATELY from `label` — a claimed leaf still has a real name even when it
-/// passes `""` for the (already-shown-elsewhere) visible title, and the alt
-/// text must keep saying who or what the picture is of.
+/// `label` is the plain-text chrome label (typically `doc.label`), or `None`
+/// when `content` supplies the page's heading itself; HTML escaping happens
+/// inside `folder_title::render`, so do not pre-escape. `alt_label` names the
+/// page for the cover image's `alt` text SEPARATELY from `label` — a claimed
+/// leaf passes `None` for the visible title, and the alt text must still say
+/// who or what the picture is of.
 pub fn render(
     cover: Option<&str>,
-    label: &str,
+    label: Option<&str>,
     alt_label: &str,
     content: &str,
     cover_type: CoverType,
@@ -73,7 +72,10 @@ pub fn render(
             } else {
                 cover_html
             };
-            let folder_title_h1 = super::folder_title::render(label, emit_source_fm, false);
+            let folder_title_h1 = match label {
+                Some(label) => super::folder_title::render(label, emit_source_fm, false),
+                None => String::new(),
+            };
             format!(
                 r#"<div class="moss-collection-cover-row">{}<div class="moss-collection-cover-body">{}{}</div></div>"#,
                 cover_html,

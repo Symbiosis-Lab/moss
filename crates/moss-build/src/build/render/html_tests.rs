@@ -5049,18 +5049,86 @@ mod children_field_tests {
              gets, not a bare row: {}",
             html
         );
-        assert!(
-            html.contains(r#"<h1 class="moss-folder-title"></h1>"#),
-            "the folder-cover component's own title slot must be passed an \
-             empty label and collapse (site.css `.moss-folder-title:empty`) \
-             — the claiming leaf's visible heading is its own, not a second \
-             one from this component: {}",
-            html
+        let column = cover_body_column(&html);
+        assert_eq!(
+            column.matches("<h1").count(),
+            1,
+            "a claiming leaf page with a cover must carry exactly one <h1> in its \
+             cover column, its own title; an empty folder-title <h1> ahead of it \
+             is a second, blank heading in the page's outline: {}",
+            column
         );
         assert!(
             html.contains(r#"<h1 class="moss-article-title">Ada Lin</h1>"#),
             "the page's own heading must survive, inside the cover column: {}",
             html
+        );
+    }
+
+    /// The text of a claimed leaf's cover column: from its opening tag to the
+    /// first `</div></div>` after it, which closes the column and the row.
+    fn cover_body_column(html: &str) -> &str {
+        let start = html
+            .find(r#"<div class="moss-collection-cover-body">"#)
+            .expect("the cover column must be rendered");
+        let rest = &html[start..];
+        &rest[..rest.find("</div></div>").unwrap_or(rest.len())]
+    }
+
+    /// A claiming leaf whose body has no heading of its own (a hero with no
+    /// `# H1`, or a page with `title:` left empty) gets no title from the
+    /// pipeline. Its cover column must still hold one heading, the page's
+    /// title, visually hidden, rather than none.
+    #[test]
+    fn test_claimed_leaf_page_with_cover_and_headingless_body_keeps_one_heading() {
+        let mut claimant = make_doc("Ada Lin", "people/ada-lin/index.html");
+        claimant.cover = Some("ada.png".to_string());
+        claimant.term_listing = Some("people/ada-lin".to_string());
+        claimant.html_content =
+            "<div class=\"moss-hero\"><a href=\"/concerts/\">Read</a></div>\n<p>Ada Lin content</p>".to_string();
+
+        let all_docs = vec![claimant.clone()];
+        let project = make_project();
+        let layout = make_layout();
+
+        let html = generate_html(
+            Some(&claimant),
+            &all_docs,
+            &project,
+            &layout,
+            false,
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            false,
+            None,
+            false,
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &localhost_url(),
+            true,
+            false,
+            "favicon.svg",
+            None,
+            std::path::Path::new(""),
+        )
+        .expect("generate_html should succeed");
+
+        let column = cover_body_column(&html);
+        assert_eq!(
+            column.matches("<h1").count(),
+            1,
+            "a claiming leaf with a cover and no heading in its body must still \
+             carry one <h1> in the cover column, the page's title, visually hidden: {}",
+            column
+        );
+        assert!(
+            column.contains(r#"<h1 class="moss-folder-title visually-hidden">Ada Lin</h1>"#),
+            "the heading must be the page's title: {}",
+            column
         );
     }
 

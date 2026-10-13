@@ -689,7 +689,7 @@ pub(super) fn render_page<'d>(
                     // Byline between the folder title and the body, in-column.
                     let cover_row_html = components::folder_cover::render(
                         resolved_cover.as_deref(),
-                        h1_text,
+                        Some(h1_text),
                         h1_text,
                         &format!("{}{}", folder_byline, lead),
                         cover_type,
@@ -735,20 +735,32 @@ pub(super) fn render_page<'d>(
                 // fix now applies here too). `folder_cover::render` takes an
                 // empty label rather than `h1_text`: this shell's own visible
                 // `<h1>` is already the head of `lead` (the pipeline-injected
-                // article title, or the author's own body `# H1`), so an
-                // empty `<h1 class="moss-folder-title">` is emitted and
-                // immediately collapsed by `.moss-folder-title:empty` in
-                // site.css — one visible title, not two.
+                // article title, or the author's own body `# H1`), and an
+                // empty label emits no heading of its own, so the page keeps
+                // exactly one `<h1>`.
                 if term_listing.is_some() {
                     if let Some(c) = doc.cover.as_deref() {
                         let (resolved, cover_attrs) = resolve_page_cover(c, &path_resolver);
                         let cover_type = crate::build::media::cover::detect_cover_type(&resolved, doc.cover_type.as_deref());
                         let (lead, trailer) = body.split_at_lede();
+                        // A body with no heading of its own (a hero with no
+                        // `# H1`, or an empty `title:`) gets none from the
+                        // pipeline, so the column supplies the page's title,
+                        // visually hidden, to keep one `<h1>` on the page.
+                        let lead = if lead.contains("<h1") || trailer.contains("<h1") {
+                            lead
+                        } else {
+                            format!(
+                                "{}{}",
+                                components::folder_title::render(&doc.title, emit_source_lines, true),
+                                lead,
+                            )
+                        };
                         content = format!(
                             "{}{}",
                             components::folder_cover::render(
                                 Some(&resolved),
-                                "",
+                                None,
                                 &doc.title,
                                 &lead,
                                 cover_type,

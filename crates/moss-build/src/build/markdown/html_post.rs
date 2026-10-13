@@ -456,12 +456,11 @@ pub(crate) fn prepend_parent_label(
 /// anchored: no leading `<h1`, no title block.
 ///
 /// A claimed leaf's own cover (`folder_cover::render`) wraps that same
-/// leading `<h1>` behind an EMPTY, CSS-collapsed `<h1 class="moss-folder-title">`
-/// inside `.moss-collection-cover-row` > `-cover-body` — so the body no
-/// longer literally starts with the real title. [`split_empty_folder_title_prefix`]
-/// steps past exactly that placeholder first, so the anchored test still
-/// finds the real title instead of falling through to prepend (which would
-/// land the date row and byline above the cover image).
+/// leading `<h1>` inside `.moss-collection-cover-row` > `-cover-body` — so the
+/// body no longer literally starts with the real title. [`split_cover_body_prefix`]
+/// steps past that wrapper first, so the anchored test still finds the real
+/// title instead of falling through to prepend (which would land the date row
+/// and byline above the cover image).
 ///
 /// With no title block the fragment is prepended, which puts it at the top of
 /// `<article>` — under a hero, since the hero is hoisted out of the body and
@@ -472,7 +471,7 @@ pub(crate) fn splice_after_title_block(html_body: &str, fragment: &str) -> Strin
     if fragment.is_empty() {
         return html_body.to_string();
     }
-    let (prefix, body) = split_empty_folder_title_prefix(html_body);
+    let (prefix, body) = split_cover_body_prefix(html_body);
     if !body.trim_start().starts_with("<h1") {
         return format!("{}{}{}", prefix, fragment, body);
     }
@@ -490,18 +489,15 @@ pub(crate) fn splice_after_title_block(html_body: &str, fragment: &str) -> Strin
     result
 }
 
-/// Splits off a leading `.moss-collection-cover-row` > `-cover-body` wrapper
-/// up through its collapsed, empty `<h1 class="moss-folder-title">` — the
-/// exact shape `folder_cover::render` emits for a claimed leaf's own cover.
-/// Returns `("", html_body)` unchanged for every other caller: a folder
-/// index's own non-empty title never matches this, nor does an ordinary
-/// article's `<h1>` with no cover wrapper.
-fn split_empty_folder_title_prefix(html_body: &str) -> (&str, &str) {
+/// Splits off a leading `.moss-collection-cover-row` > `-cover-body` opening
+/// up to where the page's own `<h1>` begins — the shape `folder_cover::render`
+/// emits for a claimed leaf's own cover, which has no heading of its own.
+/// Returns `("", html_body)` unchanged for every other caller.
+fn split_cover_body_prefix(html_body: &str) -> (&str, &str) {
     let leading_ws = html_body.len() - html_body.trim_start().len();
     let rest = &html_body[leading_ws..];
     const ROW_OPEN: &str = "<div class=\"moss-collection-cover-row\">";
     const BODY_OPEN: &str = "<div class=\"moss-collection-cover-body\">";
-    const TITLE_OPEN: &str = "<h1 class=\"moss-folder-title\"";
     if !rest.starts_with(ROW_OPEN) {
         return ("", html_body);
     }
@@ -510,17 +506,8 @@ fn split_empty_folder_title_prefix(html_body: &str) -> (&str, &str) {
     let Some(body_rel) = rest.find(BODY_OPEN) else {
         return ("", html_body);
     };
-    let after_body_open = body_rel + BODY_OPEN.len();
-    let tail = &rest[after_body_open..];
-    if !tail.starts_with(TITLE_OPEN) {
-        return ("", html_body);
-    }
-    let Some(gt) = tail[TITLE_OPEN.len()..].find('>') else {
-        return ("", html_body);
-    };
-    let tag_end = TITLE_OPEN.len() + gt + 1; // just past the opening tag's '>'
-    if tail[tag_end..].starts_with("</h1>") {
-        let split_at = leading_ws + after_body_open + tag_end + "</h1>".len();
+    let split_at = leading_ws + body_rel + BODY_OPEN.len();
+    if html_body[split_at..].starts_with("<h1") {
         (&html_body[..split_at], &html_body[split_at..])
     } else {
         ("", html_body)
@@ -1881,9 +1868,8 @@ mod tests {
     }
 
     /// A claimed leaf's own cover wraps its title: `folder_cover::render`
-    /// puts an EMPTY `<h1 class="moss-folder-title">` first (collapsed by
-    /// `.moss-folder-title:empty`), then the page's real `<h1>`, inside
-    /// `.moss-collection-cover-body`. The fragment must land after the REAL
+    /// puts the page's real `<h1>` first inside `.moss-collection-cover-body`
+    /// and emits no heading of its own. The fragment must land after the REAL
     /// title, still inside that column — not before the whole cover row,
     /// which is what the old anchored "starts with h1" test did here (the
     /// body starts with `<div`, not `<h1`).
@@ -1893,7 +1879,6 @@ mod tests {
             r#"<div class="moss-collection-cover-row">"#,
             r#"<div class="moss-collection-cover"><img src="ada.png" /></div>"#,
             r#"<div class="moss-collection-cover-body">"#,
-            r#"<h1 class="moss-folder-title"></h1>"#,
             r#"<h1 class="moss-article-title">Ada Lin</h1>"#,
             r#"<p>Body.</p></div></div>"#,
         );
@@ -1905,7 +1890,6 @@ mod tests {
                 r#"<div class="moss-collection-cover-row">"#,
                 r#"<div class="moss-collection-cover"><img src="ada.png" /></div>"#,
                 r#"<div class="moss-collection-cover-body">"#,
-                r#"<h1 class="moss-folder-title"></h1>"#,
                 r#"<h1 class="moss-article-title">Ada Lin</h1>"#,
                 "\n",
                 r#"<div class="date-line">2026-04</div>"#,
@@ -1914,21 +1898,48 @@ mod tests {
         );
     }
 
-    /// The `data-source-fm="title"` editor-preview variant of the empty
-    /// placeholder must be recognized too, not just the bare tag.
+    /// A cover column whose title is a non-empty `moss-folder-title` (a folder
+    /// index's own title, rendered through the same cover component) takes the
+    /// fragment after that title, inside the column, the same as a claimed
+    /// leaf's article title — not above the whole cover row.
     #[test]
-    fn splice_after_title_block_recognizes_empty_folder_title_with_source_fm() {
+    fn splice_after_title_block_lands_after_a_folder_title_inside_cover_column() {
+        let body = concat!(
+            r#"<div class="moss-collection-cover-row">"#,
+            r#"<div class="moss-collection-cover"><img src="travel.png" /></div>"#,
+            r#"<div class="moss-collection-cover-body">"#,
+            r#"<h1 class="moss-folder-title">Travel</h1>"#,
+            r#"<p>Body.</p></div></div>"#,
+        );
+        let out = splice_after_title_block(body, "<div>D</div>");
+        assert_eq!(
+            out,
+            concat!(
+                r#"<div class="moss-collection-cover-row">"#,
+                r#"<div class="moss-collection-cover"><img src="travel.png" /></div>"#,
+                r#"<div class="moss-collection-cover-body">"#,
+                r#"<h1 class="moss-folder-title">Travel</h1>"#,
+                "\n",
+                r#"<div>D</div>"#,
+                r#"<p>Body.</p></div></div>"#,
+            )
+        );
+    }
+
+    /// The editor-preview `data-source-fm="title"` on the page's real title
+    /// must not stop the fragment from landing after it inside the column.
+    #[test]
+    fn splice_after_title_block_handles_source_fm_title_in_cover_column() {
         let body = concat!(
             r#"<div class="moss-collection-cover-row">"#,
             r#"<div class="moss-collection-cover"></div>"#,
             r#"<div class="moss-collection-cover-body">"#,
-            r#"<h1 class="moss-folder-title" data-source-fm="title"></h1>"#,
-            r#"<h1 class="moss-article-title">Ada Lin</h1>"#,
+            r#"<h1 class="moss-article-title" data-source-fm="title">Ada Lin</h1>"#,
             r#"<p>Body.</p></div></div>"#,
         );
         let out = splice_after_title_block(body, "<div>D</div>");
         assert!(
-            out.contains("<h1 class=\"moss-article-title\">Ada Lin</h1>\n<div>D</div><p>Body.</p>"),
+            out.contains("<h1 class=\"moss-article-title\" data-source-fm=\"title\">Ada Lin</h1>\n<div>D</div><p>Body.</p>"),
             "got: {}",
             out
         );
