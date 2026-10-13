@@ -7,8 +7,6 @@ description: "Send your writing to readers by email: turn on the newsletter, add
 translationKey: docs-start-newsletter
 ---
 
-# Send a newsletter
-
 > Already have readers? Email your latest post straight to their inbox, from your own site.
 
 A newsletter lets you send a post to readers by email, straight from your site. Turn it on once, add your readers, then send any post you like.

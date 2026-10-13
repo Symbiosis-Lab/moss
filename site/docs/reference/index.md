@@ -6,8 +6,6 @@ description: The moss contract — frontmatter fields, CSS tokens, component cla
 translationKey: docs-reference
 ---
 
-# Reference
-
 The contract for building with moss: exact field names, class names, and commands. For prose writing, see [Writing](/docs/writing/). For styling, start with [[Write a theme|Write a theme]] and come here for the precise names.
 
 - [[frontmatter|Frontmatter]] — every page metadata field.

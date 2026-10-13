@@ -6,8 +6,6 @@ weight: 10
 description: Pull your Matters.town articles into a moss folder and turn them into your own website.
 ---
 
-# Import from Matters
-
 > Already write on Matters? Bring your posts in, and moss turns them into a website that's yours.
 
 Your writing on Matters becomes your own website. You add Matters once, log in, and moss copies your posts over — cover images, the pictures inside, comment and like counts. Nothing on Matters changes.

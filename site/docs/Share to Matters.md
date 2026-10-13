@@ -7,8 +7,6 @@ description: After you publish a post, share it back to your Matters profile in 
 translationKey: docs-start-syndicate
 ---
 
-# Share to Matters
-
 > Wrote something new? Send it to your Matters profile too, and keep a link back to your own site.
 
 ![[publish-fanout.html]]

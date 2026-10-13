@@ -7,8 +7,6 @@ title: How moss works
 url: how-moss-works
 ---
 
-# How moss works
-
 moss turns a folder into a website. There's no project to set up and no build to configure. You point moss at a folder, and it mirrors that folder as a site.
 
 ## Folders and files become pages
