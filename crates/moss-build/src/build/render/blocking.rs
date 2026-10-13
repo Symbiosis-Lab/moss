@@ -360,31 +360,9 @@ pub fn generate_blocking_content_for_build(
             }
         }
     }
-    if favicon.has_raster_pngs {
-        // Site 2 (Pattern A): register each rasterized PNG in the manifest.
-        // The actual bytes were written synchronously by `generate_favicons`;
-        // re-hash via ctx.emit using SHA-256. Fall back to apply_message on
-        // read error so stale cleanup still preserves the path.
-        for size in [16u32, 32, 180] {
-            let rel = format!("assets/favicon-{}.png", size);
-            let abs = output_dir.join(&rel);
-            match fs::read(&abs) {
-                Ok(bytes) => {
-                    let sp = ServedPath::from_source(&rel)
-                        .map_err(|e| format!("Failed to construct favicon PNG path: {}", e))?;
-                    BuildContext::for_render(output_dir, pending)
-                        .emit(&sp, &bytes, HashBucket::Files)
-                        .map_err(|e| format!("Failed to emit favicon PNG: {}", e))?;
-                }
-                Err(e) => {
-                    log::warn!("could not hash {}: {}", rel, e);
-                    pending.apply_message(rel, "favicon-png", HashBucket::Files, None);
-                }
-            }
-        }
-    }
+    register_favicon_pngs(output_dir, &favicon.raster_sizes, pending)?;
     let favicon_filename = favicon.filename;
-    let favicon_has_raster_pngs = favicon.has_raster_pngs;
+    let favicon_raster_sizes = favicon.raster_sizes;
 
     // Build ContentGraph once for Obsidian-style fuzzy path resolution.
     let content_graph = crate::build::scan::scan::build_content_graph(project_structure);
@@ -1715,7 +1693,7 @@ pub fn generate_blocking_content_for_build(
     let mut page_paths = PathResolver::new().with_css_version(&css_version)
         .with_js_version(shared.scripts.hash("theme"))
         .with_favicon_filename(&favicon_filename)
-        .with_favicon_has_raster_pngs(favicon_has_raster_pngs)
+        .with_favicon_raster_sizes(favicon_raster_sizes.clone())
         .with_dir_overrides(dir_overrides.clone());
     if let Some(v) = user_css_version.as_deref() { page_paths = page_paths.with_user_css_version(v); }
     if let Some(v) = user_js_version.as_deref() { page_paths = page_paths.with_user_js_version(v); }
@@ -3212,19 +3190,17 @@ pub fn generate_blocking_content_for_build(
                 r#"<link rel="icon" type="{}" href="/assets/{}">"#,
                 mime, favicon_filename
             );
-            if favicon_has_raster_pngs {
-                tags.push('\n');
-                tags.push_str(
-                    r#"<link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png">"#,
-                );
-                tags.push('\n');
-                tags.push_str(
-                    r#"<link rel="icon" type="image/png" sizes="16x16" href="/assets/favicon-16.png">"#,
-                );
+            for size in [32u32, 16] {
+                if favicon_raster_sizes.contains(&size) {
+                    tags.push('\n');
+                    tags.push_str(&format!(
+                        r#"<link rel="icon" type="image/png" sizes="{size}x{size}" href="/assets/favicon-{size}.png">"#
+                    ));
+                }
             }
             Some(tags)
         };
-        let apple_touch_icon: Option<String> = if favicon_has_raster_pngs {
+        let apple_touch_icon: Option<String> = if favicon_raster_sizes.contains(&180) {
             Some(
                 r#"<link rel="apple-touch-icon" sizes="180x180" href="/assets/favicon-180.png">"#
                     .to_string(),
@@ -3385,20 +3361,52 @@ pub(super) struct ResolvedFavicon {
     /// Locked in by tests so a refactor can't silently disable the fallback.
     #[cfg_attr(not(test), allow(dead_code))]
     pub used_default: bool,
-    /// True when the favicon source was an SVG and we successfully rasterized
-    /// PNG sizes (16/32/180) under `assets/favicon-<size>.png`. False for
-    /// .png/.ico user favicons (we don't upscale rasters) or when
-    /// rasterization failed (logged warning, SVG still works).
-    pub has_raster_pngs: bool,
+    /// The sizes of `assets/favicon-<size>.png` written beside the favicon:
+    /// every size in `SIZES` for an SVG favicon, the sizes that fit a supplied
+    /// PNG, or none. The pages link exactly these.
+    pub raster_sizes: Vec<u32>,
+}
+
+/// Registers the favicon PNGs that `resolve_favicon` wrote in the build's
+/// manifest. Only the sizes it reports as written are registered.
+fn register_favicon_pngs(
+    output_dir: &Path,
+    sizes: &[u32],
+    pending: &mut PendingManifest,
+) -> Result<(), String> {
+    // Site 2 (Pattern A): register each rasterized PNG in the manifest.
+    // The actual bytes were written synchronously by `generate_favicons`;
+    // re-hash via ctx.emit using SHA-256. Fall back to apply_message on
+    // read error so stale cleanup still preserves the path.
+    for &size in sizes {
+        let rel = format!("assets/favicon-{}.png", size);
+        let abs = output_dir.join(&rel);
+        match fs::read(&abs) {
+            Ok(bytes) => {
+                let sp = ServedPath::from_source(&rel)
+                    .map_err(|e| format!("Failed to construct favicon PNG path: {}", e))?;
+                BuildContext::for_render(output_dir, pending)
+                    .emit(&sp, &bytes, HashBucket::Files)
+                    .map_err(|e| format!("Failed to emit favicon PNG: {}", e))?;
+            }
+            Err(e) => {
+                log::warn!("could not hash {}: {}", rel, e);
+                pending.apply_message(rel, "favicon-png", HashBucket::Files, None);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Resolve the site's favicon: copy the user's `assets/favicon.{svg,png,ico}`
 /// if present, otherwise write moss's default logo as `assets/favicon.svg`.
 ///
 /// When the resolved favicon is an SVG (user-provided or moss default), also
-/// rasterize PNG sizes 16/32/180 into the same `assets/` folder. The 180px
-/// PNG doubles as the apple-touch-icon. .png/.ico user favicons are passed
-/// through unchanged (no upscaling).
+/// rasterize PNG sizes 16/32/180 into the same `assets/` folder. A supplied
+/// PNG gets the sizes that fit its shorter side, never upscaled; an ICO is
+/// copied as before, since its decoder is not built in. The
+/// 180px PNG doubles as the apple-touch-icon. The supplied file itself is
+/// always copied unchanged and stays the primary icon.
 ///
 /// Returns the filename (relative to `assets/`) for use by the template,
 /// plus the relative path and content hash so the caller can register the
@@ -3478,28 +3486,43 @@ pub(super) fn resolve_favicon(
     // browsers, the apple-touch-icon, and bundled-SPA `<link rel="icon">` tags.
     // Fail-open: if rasterization fails (bad SVG, OOM, etc.) we log a warning
     // and continue with just the SVG.
-    let has_raster_pngs = if filename == "favicon.svg" {
+    // A supplied PNG is decoded (capped, by content) and resized into the same
+    // sizes. An ICO is not decoded (its decoder is not built in), so it stays
+    // as written above and links alone, as before. So does a PNG that does not
+    // decode or is too small: that is not an error.
+    let raster_sizes: Vec<u32> = if filename == "favicon.svg" {
         let svg_source = favicon_dest_dir.join("favicon.svg");
         match crate::build::site_meta::favicon::generate_favicons(
             &svg_source,
             &favicon_dest_dir,
         ) {
-            Ok(_) => true,
+            Ok(sizes) => sizes,
             Err(e) => {
                 log::warn!(
                     "Failed to rasterize favicon PNGs: {}. Continuing with SVG only.",
                     e
                 );
-                false
+                Vec::new()
+            }
+        }
+    } else if let Ok(img) = crate::build::media::decode::sniff_decode(&favicon_dest_dir.join(&filename)) {
+        match crate::build::site_meta::favicon::generate_favicons_from_raster(&img, &favicon_dest_dir) {
+            Ok(sizes) => sizes,
+            Err(e) => {
+                log::warn!(
+                    "Failed to resize favicon {} into PNG sizes: {}. Continuing with the original only.",
+                    filename,
+                    e
+                );
+                Vec::new()
             }
         }
     } else {
-        // .png/.ico user favicons already serve as the raster fallback.
-        false
+        Vec::new()
     };
 
     // A raster trio left by an earlier default-SVG build is not removed here:
-    // the pages read `has_raster_pngs`, never the directory, so a leftover
+    // the pages read `raster_sizes`, never the directory, so a leftover
     // file ships no `<link>` tag (2026-09-14), and the permitted
     // staging sweep removes it once no manifest names it.
 
@@ -3508,7 +3531,7 @@ pub(super) fn resolve_favicon(
         relative_path,
         content_hash,
         used_default,
-        has_raster_pngs,
+        raster_sizes,
     })
 }
 
@@ -3581,5 +3604,110 @@ mod favicon_tests {
 
         assert!(!result.used_default);
         assert_eq!(result.filename, "favicon.png");
+    }
+
+    /// Writes a solid-colour PNG favicon of the given size into a fresh source
+    /// tree and returns the tree (kept alive by the caller) and output dir.
+    fn png_favicon_site(w: u32, h: u32) -> (TempDir, TempDir) {
+        let source = TempDir::new().expect("source tempdir");
+        let output = TempDir::new().expect("output tempdir");
+        let assets = source.path().join("assets");
+        fs::create_dir_all(&assets).unwrap();
+        image::RgbaImage::from_pixel(w, h, image::Rgba([200, 30, 30, 255]))
+            .save(assets.join("favicon.png"))
+            .unwrap();
+        (source, output)
+    }
+
+    #[test]
+    fn wide_png_favicon_gets_square_sizes_centred_on_transparent() {
+        let (source, output) = png_favicon_site(240, 180);
+
+        let result = resolve_favicon(source.path(), output.path()).expect("resolve");
+
+        assert_eq!(result.filename, "favicon.png", "the supplied PNG is still the primary icon");
+        assert_eq!(result.raster_sizes, vec![16, 32, 180], "a 240x180 PNG has a 180 shorter side");
+        for size in [16u32, 32, 180] {
+            let path = output.path().join(format!("assets/favicon-{size}.png"));
+            let img = image::open(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display())).to_rgba8();
+            assert_eq!(img.dimensions(), (size, size), "{size}px output must be square");
+            // 240x180 fits the square at full width, so the band is 3/4 of the
+            // height, centred: transparent above and below, opaque across it.
+            let band_h = size * 3 / 4;
+            let top = (size - band_h) / 2;
+            let bottom = top + band_h;
+            if top > 0 {
+                assert_eq!(img.get_pixel(size / 2, top - 1)[3], 0, "{size}px: row above the band must be transparent");
+            }
+            assert_eq!(img.get_pixel(size / 2, top)[3], 255, "{size}px: first band row must be opaque");
+            assert_eq!(img.get_pixel(size / 2, bottom - 1)[3], 255, "{size}px: last band row must be opaque");
+            if bottom < size {
+                assert_eq!(img.get_pixel(size / 2, bottom)[3], 0, "{size}px: row below the band must be transparent");
+            }
+            assert_eq!(img.get_pixel(0, size / 2)[3], 255, "{size}px: the picture spans the full width");
+        }
+    }
+
+    #[test]
+    fn mid_size_png_favicon_gets_16_and_32_but_no_180() {
+        let (source, output) = png_favicon_site(64, 64);
+
+        let result = resolve_favicon(source.path(), output.path()).expect("resolve");
+
+        assert_eq!(result.raster_sizes, vec![16, 32], "a 64px source must not claim a 180px icon");
+        assert!(output.path().join("assets/favicon-16.png").exists());
+        assert!(output.path().join("assets/favicon-32.png").exists());
+        assert!(!output.path().join("assets/favicon-180.png").exists(), "180 must not be upscaled from 64");
+    }
+
+    /// A 32-179px source writes 16 and 32 only. Registration must follow the
+    /// sizes written: a hash for a 180 file that does not exist is a placeholder
+    /// entry, and the build logs "could not hash" for every such size.
+    #[test]
+    fn manifest_registers_only_the_favicon_sizes_written() {
+        let (source, output) = png_favicon_site(64, 64);
+        let result = resolve_favicon(source.path(), output.path()).expect("resolve");
+        let mut pending = PendingManifest::new(SiteHashes::default());
+
+        register_favicon_pngs(output.path(), &result.raster_sizes, &mut pending).expect("register");
+
+        let files = pending.files();
+        assert!(files.contains_key("assets/favicon-16.png"));
+        assert!(files.contains_key("assets/favicon-32.png"));
+        assert!(
+            !files.contains_key("assets/favicon-180.png"),
+            "a size that was not written must not get a manifest entry"
+        );
+    }
+
+    // The next two pin behaviour that must not change: a source that is too
+    // small, or that does not decode, is copied and linked alone, with no
+    // error. They pass before and after the resize step exists.
+
+    #[test]
+    fn small_png_favicon_keeps_copy_only_behaviour() {
+        let (source, output) = png_favicon_site(20, 20);
+
+        let result = resolve_favicon(source.path(), output.path()).expect("resolve");
+
+        assert_eq!(result.filename, "favicon.png");
+        assert!(result.raster_sizes.is_empty());
+        assert!(output.path().join("assets/favicon.png").exists());
+        assert!(!output.path().join("assets/favicon-16.png").exists(), "a 20px source is too small for any size");
+    }
+
+    #[test]
+    fn corrupt_png_favicon_is_copied_without_failing_the_build() {
+        let source = TempDir::new().expect("source tempdir");
+        let output = TempDir::new().expect("output tempdir");
+        let assets = source.path().join("assets");
+        fs::create_dir_all(&assets).unwrap();
+        fs::write(assets.join("favicon.png"), b"\x89PNG\r\n\x1a\nnot really a png").unwrap();
+
+        let result = resolve_favicon(source.path(), output.path()).expect("a corrupt favicon must not fail the build");
+
+        assert_eq!(result.filename, "favicon.png");
+        assert!(result.raster_sizes.is_empty());
+        assert!(!output.path().join("assets/favicon-16.png").exists());
     }
 }

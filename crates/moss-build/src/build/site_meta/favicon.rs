@@ -1,8 +1,11 @@
-//! Rasterize an SVG favicon to PNGs at standard sizes (16, 32, 180).
+//! Rasterize a favicon (SVG, or a supplied PNG) to PNGs at the standard sizes
+//! in [`SIZES`] (16, 32, 180).
 
 use std::path::{Path, PathBuf};
 
-const SIZES: &[u32] = &[16, 32, 180];
+/// The one size list: every favicon raster moss writes is one of these,
+/// named `assets/favicon-<size>.png`.
+pub(crate) const SIZES: &[u32] = &[16, 32, 180];
 
 /// moss's paper: the value `site.css` uses and the one the app-icon plate is
 /// filled with, so the mark meets one background wherever it is given one.
@@ -40,12 +43,6 @@ fn paper() -> tiny_skia::Color {
 /// fill are both built from it.
 const PAPER_RGB: [u8; 3] = [0xfa, 0xf8, 0xf5];
 
-
-pub struct FaviconAssets {
-    pub png_16: PathBuf,
-    pub png_32: PathBuf,
-    pub png_180: PathBuf,                // apple-touch-icon
-}
 
 /// The `viewBox` `icon.svg` ships with on disk. Never rescaled there — see
 /// that file's own header — because `mark.css` carries a hand-measured
@@ -191,8 +188,51 @@ fn embeds_a_raster_image(svg: &str) -> bool {
     false
 }
 
-pub fn generate_favicons(source_svg: &Path, output_root: &Path) -> Result<FaviconAssets, FaviconError> {
-    let mut paths = Vec::with_capacity(SIZES.len());
+/// A raster favicon shorter than this is too small to make any of the sizes
+/// from without looking soft, so it keeps the copy-only behaviour.
+const RASTER_MIN_SHORTER_SIDE: u32 = 32;
+
+/// Writes one size of the set. Encoded in memory and written through
+/// `io_utils`, rather than `save_png(path)`: that does its own `File::create`
+/// (an `O_TRUNC` open) which fails `EDEADLK` against a cloud-evicted folder.
+fn write_size_png(output_root: &Path, size: u32, png: &[u8]) -> Result<(), FaviconError> {
+    let out_path = output_root.join(format!("favicon-{}.png", size));
+    crate::build::io_utils::write_output(&out_path, png).map_err(FaviconError::Io)
+}
+
+/// Makes the square sizes of an author-supplied PNG icon. Each size is the
+/// picture fitted inside the square and centred on transparency, and no size
+/// above the source's shorter side is written. Returns the sizes written
+/// (empty when the source is too small).
+pub fn generate_favicons_from_raster(
+    source: &image::DynamicImage,
+    output_root: &Path,
+) -> Result<Vec<u32>, FaviconError> {
+    let shorter = source.width().min(source.height());
+    let mut written = Vec::new();
+    if shorter < RASTER_MIN_SHORTER_SIDE {
+        return Ok(written);
+    }
+    for &size in SIZES.iter().filter(|&&s| s <= shorter) {
+        let fitted = source.resize(size, size, image::imageops::FilterType::Lanczos3).to_rgba8();
+        let mut canvas = image::RgbaImage::new(size, size);
+        let x = i64::from((size - fitted.width()) / 2);
+        let y = i64::from((size - fitted.height()) / 2);
+        image::imageops::overlay(&mut canvas, &fitted, x, y);
+        let mut png = Vec::new();
+        canvas
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .map_err(|e| FaviconError::Encode(e.to_string()))?;
+        write_size_png(output_root, size, &png)?;
+        written.push(size);
+    }
+    Ok(written)
+}
+
+/// Rasterizes an SVG favicon at every size in [`SIZES`]. Returns the sizes
+/// written, which is all of them.
+pub fn generate_favicons(source_svg: &Path, output_root: &Path) -> Result<Vec<u32>, FaviconError> {
+    let mut written = Vec::with_capacity(SIZES.len());
     let svg = std::fs::read_to_string(source_svg).map_err(FaviconError::Io)?;
 
     let embeds_bitmap = embeds_a_raster_image(&svg);
@@ -228,23 +268,12 @@ pub fn generate_favicons(source_svg: &Path, output_root: &Path) -> Result<Favico
             &mut pixmap.as_mut(),
         );
 
-        // Encode to memory and write through `io_utils`, rather than
-        // `pixmap.save_png(&out_path)`. `save_png` does its own `File::create`
-        // — an `O_TRUNC` open that a grep for `fs::write` would never find, and
-        // that fails `EDEADLK` against a cloud-evicted destination.
-        // Third-party APIs that take a path and write it themselves are the
-        // blind spot in any call-site-shaped audit.
         let png = pixmap.encode_png().map_err(|e| FaviconError::Encode(e.to_string()))?;
-        let out_path = output_root.join(format!("favicon-{}.png", size));
-        crate::build::io_utils::write_output(&out_path, &png).map_err(FaviconError::Io)?;
-        paths.push(out_path);
+        write_size_png(output_root, size, &png)?;
+        written.push(size);
     }
 
-    Ok(FaviconAssets {
-        png_16: paths[0].clone(),
-        png_32: paths[1].clone(),
-        png_180: paths[2].clone(),
-    })
+    Ok(written)
 }
 
 #[derive(Debug)]
@@ -412,11 +441,12 @@ mod tests {
         )
         .unwrap();
 
-        let assets = generate_favicons(&svg_path, dir.path()).expect("generate");
+        let sizes = generate_favicons(&svg_path, dir.path()).expect("generate");
 
-        assert_png(&assets.png_16, 16);
-        assert_png(&assets.png_32, 32);
-        assert_png(&assets.png_180, 180);
+        assert_eq!(sizes, SIZES);
+        for &size in SIZES {
+            assert_png(&dir.path().join(format!("favicon-{size}.png")), size);
+        }
     }
 
     /// Every raster is opaque, and the two grounds it can meet are why: iOS
@@ -436,18 +466,18 @@ mod tests {
         )
         .unwrap();
 
-        let assets = generate_favicons(&svg_path, dir.path()).expect("generate");
+        generate_favicons(&svg_path, dir.path()).expect("generate");
 
         let read = |p: &Path| {
             tiny_skia::Pixmap::decode_png(&std::fs::read(p).expect("read png")).expect("decode png")
         };
         for (label, path) in [
-            ("16", &assets.png_16),
-            ("32", &assets.png_32),
-            ("180", &assets.png_180),
+            ("16", dir.path().join("favicon-16.png")),
+            ("32", dir.path().join("favicon-32.png")),
+            ("180", dir.path().join("favicon-180.png")),
         ] {
             assert!(
-                read(path).pixels().iter().all(|p| p.alpha() == 255),
+                read(&path).pixels().iter().all(|p| p.alpha() == 255),
                 "favicon-{} must be fully opaque; a transparent pixel means the paper plate was not filled",
                 label
             );

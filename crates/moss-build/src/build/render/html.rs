@@ -353,7 +353,12 @@ fn generate_html_inner<'d>(
         };
         let pr = pr.with_js_version(shared.scripts.hash("theme"));
         pr.with_favicon_filename(favicon_filename)
-            .with_favicon_has_raster_pngs(favicon_has_raster_pngs)
+            // This entry point takes one flag for the whole SVG-style set.
+            .with_favicon_raster_sizes(if favicon_has_raster_pngs {
+                crate::build::site_meta::favicon::SIZES.to_vec()
+            } else {
+                Vec::new()
+            })
             .with_dir_overrides(dir_overrides.clone())
     };
 

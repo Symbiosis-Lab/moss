@@ -76,6 +76,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A site's own PNG icon now gets the small tab sizes (from 32 px) and the home-screen icon (from 180 px) made from it, as an SVG icon already did.
 - `moss build --serve` now prints the same "Reading … · n of m" lines as a plain build while a plugin reads files in the background; it used to stay silent until the text arrived.
 - An embed written as `![[url|Title|420x620]]` now gets both its title and its size, and an embed with no title gets a default name (YouTube video, Vimeo video, CodePen, or the page's site), so screen readers can announce it.
 - `moss import` keeps a site's own icon when the original serves it as WebP, JPEG or GIF, converting it to PNG, instead of falling back to the moss icon.
