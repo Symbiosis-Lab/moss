@@ -200,10 +200,19 @@ impl BuildReporter for StdoutReporter {
                 task,
                 current,
                 total,
+                message,
                 completed,
                 advisories,
-                ..
             } => {
+                // A derive tick already carries its wording (`report_progress`
+                // in `system/derive/site.rs`), so print that line, not a count.
+                // Zero is silent there too, matching the no-listener path.
+                if task == "derive" {
+                    if *current > 0 {
+                        cli_eprintln!("{}", message);
+                    }
+                    return;
+                }
                 for line in background_progress_lines(task, *current, *total, *completed, advisories) {
                     cli_eprintln!("{}", line);
                 }

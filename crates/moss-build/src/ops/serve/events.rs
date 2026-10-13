@@ -274,7 +274,7 @@ pub fn shows_on_terminal(event: &crate::build::progress::PipelineEvent) -> bool 
     use crate::build::progress::PipelineEvent;
     matches!(event, PipelineEvent::PluginProgress(_) | PipelineEvent::PluginNeedsConnection { .. })
         || matches!(event, PipelineEvent::BackgroundProgress { task, advisories, .. }
-            if task == "addresses" && !advisories.is_empty())
+            if task == "derive" || (task == "addresses" && !advisories.is_empty()))
 }
 
 pub struct CarrierReporter;
@@ -353,5 +353,39 @@ mod removal_announcement_tests {
         let mut announced = HashSet::new();
         removal_announcement(&mut announced, Path::new("/a"), &lost());
         assert!(removal_announcement(&mut announced, Path::new("/b"), &[]).is_none());
+    }
+}
+
+#[cfg(test)]
+mod shows_on_terminal_tests {
+    use super::shows_on_terminal;
+    use crate::build::progress::PipelineEvent;
+
+    fn tick(task: &str) -> PipelineEvent {
+        PipelineEvent::BackgroundProgress {
+            task: task.into(),
+            current: 3,
+            total: 12,
+            message: "Reading PDFs \u{b7} 3 of 12".into(),
+            completed: false,
+            advisories: vec![],
+        }
+    }
+
+    /// Under `--serve` a plugin deriving text from files is silent unless its
+    /// progress reaches the terminal.
+    #[test]
+    fn a_derive_tick_shows_on_the_terminal() {
+        assert!(shows_on_terminal(&tick("derive")));
+    }
+
+    #[test]
+    fn an_addresses_tick_without_advisories_stays_off_the_terminal() {
+        assert!(!shows_on_terminal(&tick("addresses")));
+    }
+
+    #[test]
+    fn other_background_tasks_stay_off_the_terminal() {
+        assert!(!shows_on_terminal(&tick("images")));
     }
 }

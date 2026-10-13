@@ -72,6 +72,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- `moss build --serve` now prints the same "Reading … · n of m" lines as a plain build while a plugin reads files in the background; it used to stay silent until the text arrived.
 - A link to a folder written with `./` or `../` (`[Reports](../reports/)`) now resolves like any other link to that folder; it used to be reported as an unresolved link.
 - A site that had published a streaming ladder for a video that now gets none (its bitrate is too low for the widest picture its size allows) is no longer refused its next publish for "removing" the ladder's files; the video is served as the plain MP4.
 - Short background videos now sharpen to the quality the connection supports. A clip of a few seconds used to be fully buffered at the quality the player guessed before it had measured anything, then looped from that buffer without ever improving, so a hero could stay at 360p on a fast connection. In browsers that play adaptive video through a script rather than natively, such a clip is now fetched again once at the better quality; a slow connection keeps the lower quality and uninterrupted playback. A video that starts later on the same page begins from the connection speed already measured.
