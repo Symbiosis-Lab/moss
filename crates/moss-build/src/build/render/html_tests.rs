@@ -1612,6 +1612,45 @@ mod auto_folder_index_tests {
             if zh_synthetic { "get" } else { "skip" }
         );
     }
+
+    /// A folder index marked `nav: true` with no body heading shows its title.
+    #[test]
+    fn nav_folder_index_shows_visible_folder_title() {
+        let (test_dir, _cleanup) = create_test_dir("nav_folder_visible_title");
+
+        fs::write(test_dir.join("index.md"), "# My Site").unwrap();
+        let folder = test_dir.join("Projects");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("index.md"), "---\nnav: true\n---\n\nWelcome.\n").unwrap();
+        fs::write(
+            folder.join("First Project.md"),
+            "---\ntitle: First Project\ndate: 2024-01-01\n---\nA project.",
+        )
+        .unwrap();
+
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        fs::create_dir_all(&output_dir).unwrap();
+        let project_structure =
+            scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
+        generate_blocking_content(
+            &crate::vault::paths::VaultRoot::resolve(&test_dir),
+            &project_structure,
+            &output_dir,
+            None,
+            None,
+            true,
+            SiteConfig::default(),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
+        )
+        .expect("generate_blocking_content should succeed");
+
+        let content = fs::read_to_string(output_dir.join("projects").join("index.html"))
+            .expect("folder index should be rendered");
+        assert!(
+            content.contains(r#"<h1 class="moss-folder-title" data-source-fm="title">Projects</h1>"#),
+            "nav folder must show a visible folder title, got:\n{content}"
+        );
+    }
 }
 
 // (removed) comments_attr_tests asserted the three-way `data-comments` logic
@@ -6299,49 +6338,22 @@ fn folder_index_without_cover_prepends_folder_title_h1() {
 }
 
 #[test]
-fn no_cover_folder_heading_hidden_for_nav_folder() {
-    // A folder index that is a nav item (nav: true) hides its folder title —
-    // the nav bar already shows it — but keeps the `<h1>` for screen readers.
-    let doc = crate::build::types::ParsedDocument {
-        nav: Some(true),
-        ..Default::default()
-    };
+fn no_cover_folder_heading_shows_visible_title() {
+    let doc = crate::build::types::ParsedDocument::default();
     assert_eq!(
-        super::no_cover_folder_heading(&doc, "Projects", true, false),
-        r#"<h1 class="moss-folder-title visually-hidden">Projects</h1>"#
-    );
-}
-
-#[test]
-fn no_cover_folder_heading_present_for_non_nav_folder() {
-    // A non-nav folder index (nested, nav: None) keeps its moss-folder-title.
-    let doc = crate::build::types::ParsedDocument {
-        nav: None,
-        is_root_level: false,
-        ..Default::default()
-    };
-    assert!(
-        super::no_cover_folder_heading(&doc, "Projects", true, false)
-            .contains(r#"<h1 class="moss-folder-title">Projects</h1>"#),
-        "non-nav folder index must keep its title"
+        super::no_cover_folder_heading(&doc, "Projects", false),
+        r#"<h1 class="moss-folder-title">Projects</h1>"#
     );
 }
 
 #[test]
 fn no_cover_folder_heading_empty_when_body_opens_with_h1() {
-    // The body's own `# Title` is already the page's h1, nav folder or not.
-    for nav in [Some(true), None] {
-        let doc = crate::build::types::ParsedDocument {
-            nav,
-            content: "# Projects\n\nBody.".to_string(),
-            ..Default::default()
-        };
-        assert_eq!(
-            super::no_cover_folder_heading(&doc, "Projects", true, false),
-            "",
-            "nav = {nav:?}"
-        );
-    }
+    // The body's own `# Title` is already the page's h1.
+    let doc = crate::build::types::ParsedDocument {
+        content: "# Projects\n\nBody.".to_string(),
+        ..Default::default()
+    };
+    assert_eq!(super::no_cover_folder_heading(&doc, "Projects", false), "");
 }
 
 // home_file_winner_tests have been moved to page_map.rs

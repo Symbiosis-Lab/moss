@@ -191,10 +191,9 @@ pub fn generate_html_collect_og<'d>(
 ///   then both the visible title and the heading landmark: nothing is
 ///   emitted, for nav and non-nav folders alike,
 /// - the body opens with a `:::hero` that carries its own heading: nothing is
-///   emitted, since the hero already supplies the `<h1>`, or
-/// - the folder renders as a nav item, so the nav bar shows its title: the
-///   title is still emitted, visually hidden, because a page with no `<h1>`
-///   leaves screen-reader navigation with no heading landmark.
+///   emitted, since the hero already supplies the `<h1>`.
+///
+/// A nav folder shows its title like any other folder.
 ///
 /// Covered folder indexes bypass this helper entirely (they render the label
 /// inside the cover via `folder_cover::render`), and synthetic folder indexes
@@ -203,12 +202,10 @@ pub fn generate_html_collect_og<'d>(
 fn no_cover_folder_heading(
     doc: &crate::build::types::ParsedDocument,
     h1_text: &str,
-    has_content_folders: bool,
     emit_source_fm: bool,
 ) -> String {
     use moss_core::heading::TitleOutcome;
-    let nav = crate::build::components::nav::is_nav_bar_item_doc(doc, has_content_folders);
-    match moss_core::heading::title_outcome(&doc.content, nav, true) {
+    match moss_core::heading::title_outcome(&doc.content, true) {
         TitleOutcome::None => String::new(),
         TitleOutcome::Hidden => crate::build::components::folder_title::render(h1_text, emit_source_fm, true),
         TitleOutcome::Visible => crate::build::components::folder_title::render(h1_text, emit_source_fm, false),
@@ -486,7 +483,7 @@ pub(super) fn render_page<'d>(
                 // The home injects no visible title of its own, but a page
                 // needs one top-level heading: when the body supplies none,
                 // add the folder-index heading, visually hidden.
-                if moss_core::heading::title_outcome(&doc.content, true, true) != moss_core::heading::TitleOutcome::None {
+                if moss_core::heading::title_outcome(&doc.content, true) != moss_core::heading::TitleOutcome::None {
                     let h1 = crate::build::components::folder_title::render(&doc.label, emit_source_lines, true);
                     content = format!("{h1}\n{content}");
                 }
@@ -703,10 +700,10 @@ pub(super) fn render_page<'d>(
                     content = format!("{}{}", cover_row_html, trailer);
                 } else {
                     // No-cover branch: prepend the <h1 class="moss-folder-title">
-                    // unless this folder is a nav item — the nav bar already
-                    // shows its title. An explorer root gets a hidden one
-                    // instead (no byline), bypassing `no_cover_folder_heading`'s
-                    // own nav/hero dedup below — that guards a second VISIBLE
+                    // unless the body or an opening hero already supplies the
+                    // heading. An explorer root gets a hidden one instead (no
+                    // byline), bypassing `no_cover_folder_heading`'s own
+                    // body/hero dedup below — that guards a second VISIBLE
                     // title, moot for a hidden one.
                     let heading = if is_explorer_root {
                         crate::build::components::folder_title::render(h1_text, emit_source_lines, true)
@@ -716,7 +713,6 @@ pub(super) fn render_page<'d>(
                             no_cover_folder_heading(
                                 doc,
                                 h1_text,
-                                project.has_content_folders,
                                 emit_source_lines,
                             ),
                             folder_byline,

@@ -249,7 +249,7 @@ pub enum TitleOutcome {
     /// Inject the title as a visible `<h1>`.
     Visible,
     /// Inject it visually hidden: the page needs one top-level heading, but
-    /// the nav bar or an opening hero already stands in for the visible title.
+    /// an opening hero already stands in for the visible title.
     Hidden,
     /// Inject nothing: the body already supplies the page's heading.
     None,
@@ -257,16 +257,15 @@ pub enum TitleOutcome {
 
 /// Decide the title outcome for a page that gets a title at all.
 ///
-/// - `hidden_by_chrome`: the page's title is shown elsewhere (a nav item).
 /// - `body_heading_replaces_title`: a real body `# Heading` replaces the
 ///   injected one. False for plain article pages, which keep the injected
 ///   title above an authored heading (Obsidian-style inline title); an opening
 ///   hero that draws a heading always replaces it.
-pub fn title_outcome(body_markdown: &str, hidden_by_chrome: bool, body_heading_replaces_title: bool) -> TitleOutcome {
+pub fn title_outcome(body_markdown: &str, body_heading_replaces_title: bool) -> TitleOutcome {
     let hero = hero_at_top_owns_title(body_markdown);
     if body_supplies_title(body_markdown) && (body_heading_replaces_title || hero) {
         TitleOutcome::None
-    } else if hero || hidden_by_chrome {
+    } else if hero {
         TitleOutcome::Hidden
     } else {
         TitleOutcome::Visible
@@ -275,11 +274,14 @@ pub fn title_outcome(body_markdown: &str, hidden_by_chrome: bool, body_heading_r
 
 /// [`title_outcome`] for an article page: [`TitleOutcome::None`] when the file
 /// gets no injected title at all (index/folder, slot file, empty `title:`).
+///
+/// On a nav page (`is_nav_item`) a `#` heading in the body replaces the
+/// injected title, so only the body heading shows. On any other page both show.
 pub fn article_title_outcome(input: HeadingInputs<'_>, is_nav_item: bool) -> TitleOutcome {
     if !resolve(input).visible {
         return TitleOutcome::None;
     }
-    title_outcome(input.body_markdown, is_nav_item, is_nav_item)
+    title_outcome(input.body_markdown, is_nav_item)
 }
 
 fn resolve(input: HeadingInputs<'_>) -> HeadingState {
@@ -350,12 +352,12 @@ mod tests {
     fn title_outcome_cases() {
         use TitleOutcome::*;
         let link_hero = ":::hero {image=x.jpg}\n[Go](/a/)\n:::\n";
-        assert_eq!(title_outcome("text", false, false), Visible);
-        assert_eq!(title_outcome("text", true, true), Hidden);
-        assert_eq!(title_outcome(link_hero, false, false), Hidden);
-        assert_eq!(title_outcome(":::hero\n# T\n:::\n", false, false), None);
-        assert_eq!(title_outcome("# T\n", true, true), None);
-        assert_eq!(title_outcome("# T\n", false, false), Visible);
+        assert_eq!(title_outcome("text", false), Visible);
+        assert_eq!(title_outcome("text", true), Visible);
+        assert_eq!(title_outcome(link_hero, false), Hidden);
+        assert_eq!(title_outcome(":::hero\n# T\n:::\n", false), None);
+        assert_eq!(title_outcome("# T\n", true), None);
+        assert_eq!(title_outcome("# T\n", false), Visible);
     }
 
     #[test]

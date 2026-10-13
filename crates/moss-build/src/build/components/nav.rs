@@ -482,7 +482,7 @@ pub struct NavFacts {
 /// Does this document render as an item in the top navigation bar?
 ///
 /// Single source of truth for "is a top-nav item": `generate_navigation`,
-/// `has_nav_items`, and title-injection suppression all consult this. NOT the
+/// `has_nav_items`, and the nav body-heading rule all consult this. NOT the
 /// same question as `is_listing_nav_item` (article-listing exclusion), which
 /// intentionally diverges in flat mode.
 ///

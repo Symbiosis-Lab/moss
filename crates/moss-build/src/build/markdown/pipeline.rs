@@ -343,8 +343,8 @@ impl Default for SiteMarkdown<'_> {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PageContext<'a> {
     /// Project-level signal (true when the site has content subfolders).
-    /// Feeds `is_nav_bar_item` so a root-level nav page suppresses its
-    /// auto-injected article title.
+    /// Feeds `is_nav_bar_item`, which decides only whether a root-level nav
+    /// page with a body `# Heading` gets no injected title.
     pub has_content_folders: bool,
     /// Pre-resolved seta base URL for subscribe form `action=` attributes.
     /// When `Some`, overrides the production default
@@ -1210,9 +1210,9 @@ pub fn process_markdown_file(
     // membership check below and for auto-navigation downstream.
     let is_root_level = !file_path.contains('/');
 
-    // A page that appears in the top nav bar already shows its title there, so
-    // we suppress the auto-injected body heading — the nav owns the title
-    // surface for that page. The title still drives the nav label and chrome.
+    // A nav page shows its title like any other page. The one exception is a
+    // body that opens with its own `# Heading`: that heading is the title, so
+    // no title is injected above it. `is_nav_page` decides only that rule.
     // `is_index_file && is_root_level` stands in for `url_path == "index.html"`
     // (the form `is_nav_bar_item_doc` uses at the render sites). It is EXACT for
     // every page this gate can actually affect: the gate below also requires
@@ -1238,11 +1238,8 @@ pub fn process_markdown_file(
     // and the body H1, exactly like Obsidian with inline-title on.
     // Index/folder pages inject `<h1 class="moss-folder-title">` downstream
     // (render/html.rs, render/blocking.rs) from `doc.title`; the body is
-    // passed through untouched here. A nav page's visible title is dropped
-    // because the nav bar already shows it, but the heading stays as a
-    // visually hidden `<h1>` for screen readers, unless the body supplies its
-    // own title. `article_title_outcome` makes that one decision, including an
-    // opening hero that stands in for the title.
+    // passed through untouched here. `article_title_outcome` makes the title
+    // decision, including an opening hero that stands in for the title.
     match moss_core::heading::article_title_outcome(heading_inputs, is_nav_page) {
         TitleOutcome::None => {}
         outcome => body_plan.prepend_html(inject_article_title_h1(

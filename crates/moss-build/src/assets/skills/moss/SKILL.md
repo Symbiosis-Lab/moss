@@ -91,7 +91,7 @@ declarations that fight each other.
   also write a body `# Heading` repeating the title — it renders as well, so
   the title would show twice. One exception: a `:::hero` block at the very
   top of the body takes over the title slot itself, so a heading written
-  inside it does not duplicate anything. Nothing else does this — a
+  inside it does not duplicate anything. A page in the navigation shows its title too. Nothing else does this — a
   `:::grid` or any other block opening the page still leaves the
   auto-injected title in place, so a heading after it shows the title twice
   the same as if the grid weren't there.
