@@ -12,6 +12,8 @@ import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
 const CLICKABLE_WITHIN_MS = 12000;
 const VIEWPORTS = [['desktop', { width: 1440, height: 900 }], ['phone', { width: 390, height: 844, isMobile: true, hasTouch: true }]];
 const engines = (process.env.LANDING_ENGINES || 'chromium,webkit').split(',');
+// Reduced motion takes different code paths in the page's scroll controller, so it gets its own rows.
+const ROWS = [['desktop', 'wheel', 'no-preference'], ['desktop', 'wheel', 'reduce'], ['desktop', 'jump', 'no-preference'], ['desktop', 'jump', 'reduce'], ['phone', 'jump', 'no-preference']];
 
 const server = await resolveBaseURL(process.argv[2], { root: fileURLToPath(new URL('../site/', import.meta.url)) });
 const playwright = await loadPlaywright();
@@ -21,10 +23,11 @@ try {
   for (const engineName of engines) {
     const browser = await playwright[engineName].launch();
     try {
-      for (const [vpName, viewport] of VIEWPORTS) {
-        for (const how of vpName === 'phone' ? ['jump'] : ['wheel', 'jump']) {
-          const label = `${engineName} ${vpName} ${how}`;
-          const context = await browser.newContext(viewport);
+      for (const [vpName, how, motion] of ROWS) {
+        const viewport = VIEWPORTS.find(([name]) => name === vpName)[1];
+        {
+          const label = `${engineName} ${vpName} ${how}${motion === 'reduce' ? ' reduced-motion' : ''}`;
+          const context = await browser.newContext({ ...viewport, reducedMotion: motion });
           const page = await context.newPage();
           const requested = [];
           context.on('request', request => { if (/\/releases\//.test(request.url())) requested.push(request.url()); });
@@ -34,18 +37,24 @@ try {
           seen.add(href);
           if (how === 'jump') await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
           else {
+            // A person's wheel is separate gestures (two notches, then a pause), and the page moves one
+            // scene per gesture. One endless stream of events is a single gesture and proves nothing.
             await page.mouse.move(viewport.width / 2, viewport.height / 2);
-            for (let i = 0; i < 150 && await page.evaluate(() => scrollY < document.documentElement.scrollHeight - innerHeight - 2); i++) {
-              await page.mouse.wheel(0, 400); await page.waitForTimeout(120);
+            for (let g = 0; g < 14 && await page.evaluate(() => !document.querySelector('#five').classList.contains('on')); g++) {
+              await page.mouse.wheel(0, 100); await page.waitForTimeout(100); await page.mouse.wheel(0, 100); await page.waitForTimeout(1300);
             }
           }
           const t0 = Date.now();
           try {
+            // While polling, note any moment the close is visibly there (opacity >= .5) yet the button
+            // is not what a click would reach: a button a person can see must work.
             await page.waitForFunction(() => {
               const a = document.querySelector('#downloads a[data-platform="macos"]');
               const r = a.getBoundingClientRect();
               const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
-              return hit && a.contains(hit) && r.bottom <= innerHeight && r.top >= 0;
+              const reachable = !!hit && a.contains(hit) && r.bottom <= innerHeight && r.top >= 0;
+              if (!reachable && +getComputedStyle(document.querySelector('#five')).opacity >= .5) window.__visibleButDead = (window.__visibleButDead || 0) + 1;
+              return reachable;
             }, null, { timeout: CLICKABLE_WITHIN_MS, polling: 100 });
           } catch {
             const covered = await page.evaluate(() => {
@@ -56,9 +65,12 @@ try {
             console.error(`FAIL ${label}: macOS button not clickable ${CLICKABLE_WITHIN_MS}ms after reaching the close; covered by ${covered}`);
             failed = true; await context.close(); continue;
           }
+          const dead = await page.evaluate(() => window.__visibleButDead || 0);
+          if (dead) { console.error(`FAIL ${label}: the close was visible for ${dead * 100}ms while the button could not be clicked`); failed = true; }
           // A disk image answers a click with a download; cancel it rather than pull 40 MB.
           const download = page.waitForEvent('download', { timeout: 10000 }).catch(() => null);
-          await page.locator('#downloads a[data-platform="macos"]').click({ timeout: 5000 });
+          try { await page.locator('#downloads a[data-platform="macos"]').click({ timeout: 5000 }); }
+          catch (error) { console.error(`FAIL ${label}: click failed: ${error.message.split('\n')[0]}`); failed = true; await context.close(); continue; }
           const file = await download;
           if (file) await file.cancel();
           if (!file || !/\.dmg$/.test(file.suggestedFilename()) || requested[0] !== href) {
