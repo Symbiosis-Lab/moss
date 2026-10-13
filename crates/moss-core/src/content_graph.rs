@@ -277,7 +277,7 @@ pub struct ContentGraph {
     /// Directories the scan marked as getting an auto-generated folder-index
     /// page (no `index.md` of their own): normalized key -> original-case
     /// directory. Consulted only after both file-backed folder-note checks
-    /// miss, inside `resolve_path`'s `folder_note` closure — so a `[[Folder]]`
+    /// miss, in [`folder_home`](Self::folder_home) — so a `[[Folder]]`
     /// wikilink can resolve to that folder's SYNTHETIC index, the same page
     /// the renderer's auto-index loop emits. Registered by the host (once,
     /// alongside the scan) via [`ContentGraphBuilder::register_auto_index_dir`]
@@ -402,6 +402,22 @@ impl ContentGraph {
         PAGE_EXTENSIONS.iter().find_map(|ext| self.path_index.get(&format!("{key}.{ext}"))).map(|&i| self.files[i].clone())
     }
 
+    /// The folder `base`'s home page (normalized path), or its registered synthetic
+    /// index when no file backs it. Home election follows `home::detect_home_file_in_folder`.
+    fn folder_home(&self, base: &str) -> Option<String> {
+        let leaf = base.rsplit('/').next().unwrap_or(base);
+        let home = crate::home::INDEX_STEMS
+            .iter()
+            .chain([&leaf])
+            .find_map(|stem| self.path_index.get(&format!("{base}/{stem}.md")));
+        if let Some(&idx) = home {
+            return Some(self.files[idx].clone());
+        }
+        self.auto_index_dirs
+            .get(base)
+            .map(|orig_case_dir| format!("{orig_case_dir}/index.md"))
+    }
+
     /// The file at index `idx` as `written` spells it, and whether the case
     /// matches: of case twins, the one spelled exactly, else the kept one.
     fn spelled_as(&self, idx: usize, written: &str) -> (String, bool) {
@@ -478,6 +494,16 @@ impl ContentGraph {
             return Some(page);
         }
         let norm_ref = normalize_path(reference);
+        // A folder the author wrote with a `.`/`..` segment or a trailing slash.
+        // Any other path keeps the order below, so `audits/reports` still finds
+        // `audits/reports.pdf` before the folder, and `recipes` still prefers
+        // `recipes/recipes.md` to the folder's home.
+        let dotted = reference.split(['/', '\\']).any(|seg| seg == "." || seg == "..");
+        if dotted || reference.ends_with('/') {
+            if let Some(home) = self.folder_home(&joined) {
+                return Some(home);
+            }
+        }
         let parts: Vec<&str> = joined.split('/').collect();
         let (name, dir) = parts.split_last()?;
         if ref_ext.is_some() || !norm_ref.contains('/') {
@@ -623,24 +649,7 @@ impl ContentGraph {
             }
         }
 
-        // 5. Folder note: the page the build elects as the folder's home by
-        // name (`home::detect_home_file_in_folder`): an index stem in priority
-        // order, then the self-named note, as `.md` only. The build publishes
-        // an `index.mdown` as an ordinary page, never as the folder's.
-        let folder_note = |base: &str| -> Option<String> {
-            let leaf = base.rsplit('/').next().unwrap_or(base);
-            let home = crate::home::INDEX_STEMS.iter().chain([&leaf]).find_map(|stem| self.path_index.get(&format!("{base}/{stem}.md")));
-            if let Some(&idx) = home {
-                return Some(self.files[idx].clone());
-            }
-            // No file backs this folder: the synthetic index page the
-            // renderer generates for it, if the scan registered one, at
-            // `<original-case dir>/index.md` so headings keep the author's case.
-            self.auto_index_dirs
-                .get(base)
-                .map(|orig_case_dir| format!("{orig_case_dir}/index.md"))
-        };
-
+        // 5. Folder note (see `folder_home`).
         // 5a. Language-tree-scoped folder note: a bare folder reference like
         // `docs/` written inside a `zh-hans/` page should resolve to the
         // same-language `zh-hans/docs/index.md`, not the root `docs/index.md`.
@@ -649,14 +658,14 @@ impl ContentGraph {
         if let Some(lang) = from_lang {
             if crate::home::lang_tree_prefix(&norm_ref).is_none() {
                 let scoped = format!("{}/{}", lang, norm_ref);
-                if let Some(found) = folder_note(&scoped) {
+                if let Some(found) = self.folder_home(&scoped) {
                     return Some(found);
                 }
             }
         }
 
         // 5b. Folder note in the reference's own namespace (root fallback).
-        if let Some(found) = folder_note(&norm_ref) {
+        if let Some(found) = self.folder_home(&norm_ref) {
             return Some(found);
         }
 
@@ -889,6 +898,72 @@ mod tests {
             g.resolve_path("projects", ""),
             Some("projects/index.md".into())
         );
+    }
+
+    // A folder written with `./` or `../` resolves against the linking page's
+    // own folder, like the same folder written without dots.
+    fn dotted_folder_graph() -> ContentGraph {
+        ContentGraph::from_paths(&[
+            "reports/index.md",
+            "audits/dept-a/index.md",
+            "audits/dept-a/a-2017.md",
+            "audits/dept-b/index.md",
+            "page2.md",
+        ])
+    }
+
+    #[test]
+    fn dotted_folder_dot_slash_from_page_resolves() {
+        let g = dotted_folder_graph();
+        assert_eq!(g.resolve_path("./reports/", "page2.md"), Some("reports/index.md".into()));
+        assert_eq!(g.resolve_path("reports/", "page2.md"), Some("reports/index.md".into()));
+        assert_eq!(g.resolve_path("reports", "page2.md"), Some("reports/index.md".into()));
+    }
+
+    #[test]
+    fn dotted_folder_climbing_from_nested_page_resolves() {
+        let g = dotted_folder_graph();
+        assert_eq!(g.resolve_path("../../reports/", "audits/dept-b/index.md"), Some("reports/index.md".into()));
+        assert_eq!(g.resolve_path("../../reports", "audits/dept-b/index.md"), Some("reports/index.md".into()));
+    }
+
+    #[test]
+    fn dotted_folder_sibling_from_nested_page_resolves() {
+        let g = dotted_folder_graph();
+        assert_eq!(g.resolve_path("../dept-a/", "audits/dept-b/index.md"), Some("audits/dept-a/index.md".into()));
+        // A dotted file path already resolved this way, so the folder does too.
+        assert_eq!(g.resolve_path("../dept-a/a-2017.md", "audits/dept-b/index.md"), Some("audits/dept-a/a-2017.md".into()));
+    }
+
+    #[test]
+    fn dotted_folder_climbing_above_root_stays_unresolved() {
+        let g = dotted_folder_graph();
+        assert_eq!(g.resolve_path("../../../reports/", "audits/dept-b/index.md"), None);
+    }
+
+    #[test]
+    fn dotted_folder_missing_folder_stays_unresolved() {
+        let g = dotted_folder_graph();
+        assert_eq!(g.resolve_path("../dept-c/", "audits/dept-b/index.md"), None);
+    }
+
+    #[test]
+    fn dotted_folder_wrong_depth_does_not_fall_back_to_root() {
+        let g = dotted_folder_graph();
+        assert_eq!(g.resolve_path("../reports/", "audits/dept-b/index.md"), None);
+    }
+
+    #[test]
+    fn dotted_folder_plain_path_keeps_same_named_asset() {
+        let g = ContentGraph::from_paths(&["audits/reports.pdf", "audits/reports/index.md", "index.md"]);
+        // No dots and no trailing slash: the extensionless asset search decides, as before.
+        assert_eq!(g.resolve_path("audits/reports", "index.md"), Some("audits/reports.pdf".into()));
+    }
+
+    #[test]
+    fn dotted_folder_dot_segment_names_folder_over_same_named_asset() {
+        let g = ContentGraph::from_paths(&["audits/reports.pdf", "audits/reports/index.md", "index.md"]);
+        assert_eq!(g.resolve_path("./audits/reports/", "index.md"), Some("audits/reports/index.md".into()));
     }
 
     // 7a. Folder-note resolution prefers the source's language tree.

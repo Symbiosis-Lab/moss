@@ -52,7 +52,8 @@
         "crates/moss-build/src/build/place_map/svg.rs": 1000,
         "crates/moss-build/src/build/place_map/geometry.rs": 1000,
         "crates/moss-build/src/build/components/color_extract.rs": 900,
-        "crates/moss-build/src/build/components/nav.rs": 900
+        "crates/moss-build/src/build/components/nav.rs": 900,
+        "crates/moss-core/src/content_graph.rs": 900
       },
       "oversized": {
         "crates/moss-core/src/asset_paths.rs": "Every output-path derivation for images and videos in one file by design, so a naming change is made in one place and the synthesizers, the build and the preview bridge cannot disagree; the video ladder's rung table and HLS file naming are most of it — retires by moving the HLS ladder naming into a sibling file, which nothing here currently plans.",
