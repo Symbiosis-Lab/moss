@@ -191,6 +191,8 @@ For the exact per-type attribute vocabulary (data-loop, data-type, sizing
 tokens, etc.) run `moss describe --json`, or see `mosspub.com/docs/reference`
 — those reflect the running binary.
 
+A picture can sit beside the running text: `![[photo.jpg|align-left 40%]]` floats it to the left at 40% of the column and the text runs around it; `align-right` does the same on the other side, and with no percentage the float takes at most half the column. It works for an image, a captioned figure, an embed and a folder listing. Below 48rem the float is dropped and the picture takes the full width, so nothing needs a theme rule for phones.
+
 ### Text from a file
 
 When an installed plugin can read a kind of file (a PDF, a deck), `![[report.pdf#text]]` puts the text it derived into the page as ordinary markdown, with a placeholder while it is still being read and a plain note if the file could not be read. The fragment name (`text` here) is the plugin's; `moss import --status` and the plugin's manifest list what it offers. A page whose only content is such embeds is a **stub**: `moss import <folder> --allow-plugins` writes one beside each file in a folder, containing `inferred: [title]` in its frontmatter (the page takes its title from the first embedded file, and a `title:` you write wins) and the embeds the plugin's layout asks for. Write your own text above or below them; a stub is never overwritten. `moss expand <page> --allow-plugins` replaces each line holding only an embed with the text it stands for, when the page should keep the text without the source file. `--allow-plugins` is needed whenever the plugin came with the folder rather than being allowed in the app; without it import and expand stop and say so.
@@ -255,6 +257,8 @@ Separate a grid's cells with a line that holds only `+++`. A grid takes one to s
 
 `:::grid N {scroll}` (2026-09-21) keeps a grid's row on one line and lets the reader drag it sideways instead of it wrapping — `N` becomes how many cards fit in view at once, with a slice of the next one showing as the cue to keep going. Reach for it on a "related articles" or "more like this" strip where reading order matters more than seeing every card at once; add `label="…"` to give the row an accessible name when the surrounding heading doesn't already say what it is. Skip it when every card must be visible without scrolling and use the plain wrapping grid instead.
 
+A grid is also how two things sit side by side, because a cell takes any markdown, not only a card: headings, paragraphs, lists, images. `:::grid 2 1:2` gives a narrow column and a wide one (an address beside a text, a note beside a picture); the ratio has one part per column. Cells start level at the top and have no box or border, and at 768px and narrower the grid becomes one column in the order you wrote the cells. Three defaults were chosen for cards and show in a prose cell: a picture in a cell is cropped to a square with rounded corners (set `--moss-grid-image-ratio: auto` and `--moss-grid-image-radius: 0` on the grid's class to show it whole), a cell's paragraphs sit 8px apart, not a paragraph's usual distance, and a cell holding nothing but a link becomes a card. Keep the page's first heading and its `byline:` outside the grid: the byline is printed at the top of the article, so a heading moved into a cell ends up below it. Reach for it before any theme rule that floats, absolutely positions or places by `:nth-of-type` to get columns. Use the ratio for a one-off; when the theme needs to change the columns at a breakpoint, write `:::grid 2 {.your-class}` with no ratio and set `grid-template-columns` on the class, because the ratio is written on the element and wins over the stylesheet. (2026-10-13: a builder looking for a side column searched this guide for "sidebar" and "column", found only the child rail, and wrote eight float-and-offset rules that a grid replaces.)
+
 A set of photos meant to be seen together is a `:::gallery` block with one image per line, written as `![](a.jpg)`, `![[a.jpg]]`, or a bare file name; `:::gallery N` sets how many columns it has. `:::gallery rows` lays the photos out in justified rows that fill the width and keep each photo's proportions, and `--moss-gallery-row-height` sets the row height. Each photo opens full screen in moss's own viewer, where the arrow keys step through that gallery's photos and Escape closes it. A photo with no alt text gets the link name "Open image 2 of 5", so write the description in the alt text whenever the picture needs one. The bare `|` form works in a gallery too: `![Two dancers on a pink stage|](a.jpg)` gives the photo that alt text with no title in the viewer. A gallery is a set a reader goes through, unlike the hero rotation, whose interchangeable moods of one subject give no sign of which one is showing, and unlike `:::grid`, whose cells are cards that link to pages.
 
 A `:::grid` cell holding nothing but a page reference becomes one of two different things depending on the `!`. `![[page.md]]` is a transclusion — it inlines that page's markdown as the cell's own content, same as a partial anywhere else in a body. `[[page]]` or `[[page|Custom Title]]`, alone in the cell, becomes a **card** instead: the page's own cover, title and description, styled the same way a folder listing cards its children. The cover comes from the page's `cover:` frontmatter (an empty box if it has none), the title is the page's own (`|Custom Title` overrides it), and the text is the page's `description:` field or, when that is empty, its first `byline:` row — never an excerpt pulled from the body, so a page with neither shows a card with no text under its title. (Folder listings in list and summary styles are different: they use `description:`, then the first `byline:` row, then an excerpt from the body.) A folder shown as a card shows its folder note's `description:` in a paragraph under its title, with its page count beside the title, so a folder of folders reads like a contents page. A card's cover is cropped to a fixed box by default (`4 / 3`), same as any other photograph; a cover with lettering or a full-frame subject wants to be shown whole instead, which is a scope override (rung 4), not a per-card frontmatter switch — set `--moss-card-cover-ratio` to the image's own ratio and `--moss-card-cover-fit: contain` on `.moss-card-cover` (or a narrower scope) rather than cropping it.
@@ -262,6 +266,30 @@ A `:::grid` cell holding nothing but a page reference becomes one of two differe
 ### Partials
 
 Extract repeated blocks to a partial file and transclude with `![[partial-name]]`. Partials are content reuse, not styling — they live outside the styling rungs. Two limits: a partial file is also a page, published at its own address like any other page, and `draft: true` or `listed: false` hides it from listings without removing that address; a dot-prefixed file name keeps it out of the build, but then the embed does not resolve either. An embed expands only when it is the only thing on its line, so `![[partial-name]]` written inside a sentence is left unexpanded and its text does not appear — put the embed on a line of its own.
+
+### Footer
+
+A `footer.md` at the top of the site is the footer. Its markdown renders as written inside the page's `<footer>`, on every page, and replaces the row of links moss otherwise builds from pages marked `footer: true`. Shortcodes work there as they do in a page, so footer columns are a grid, and the theme only sets their widths:
+
+```
+:::grid 3
+## Visit
+
+12 Harbor Lane
+
++++
+## Write
+
+hello@example.com
+
++++
+## Follow
+
+[Newsletter](https://example.com)
+:::
+```
+
+A heading in a footer cell gets no permalink mark. The grid's columns are equal and become one column at 768px; for other widths, or a different arrangement on a phone, give the grid a class (`:::grid 4 {.footer-cols}`) and set `grid-template-columns` on it in the theme. The footer sits in the page column; a width word (`wide`, `page`, `screen`) does not widen it, so a full-width footer band is theme CSS. moss's own one-line colophon is a separate element after `</footer>`, not part of it. A site in several languages can keep one `footer.md` per language folder. (2026-10-13: a rebuilt site's theme carried 24 rules placing footer columns by `:nth-of-type` because nothing here said a footer could hold a grid; written as a grid, every one of them went.)
 
 ### Term kinds
 
