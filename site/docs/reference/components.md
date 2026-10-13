@@ -288,7 +288,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.latest-sidebar` | standalone | Sidebar listing the most recent entries. A `<nav>` because it is a navigational aid, not part of the page's argument. |
 | `.sidebar-more` | instance | Link from the latest-entries sidebar to the full listing. |
 | `.active` | instance | Bare state co-class marking the currently-selected item in a set — the current page in `.nav-links`, the current size in `.font-pill`. Style it scoped to its container (`.nav-links .active`), never on its own. |
-| `.has-sidebar-layout` | instance | Marks a page laid out with a sidebar, so the main column can reserve room for it without the sidebar having rendered yet. |
+| `.has-sidebar-layout` | instance | Set on the `<html>` element of every page when any page of the site sets `sidebar`. No shipped stylesheet reads it; it is a hook for a theme that wants to change page-wide layout on a site that uses sidebars. The page that renders a sidebar also puts `has-sidebar` on its `<main>`, which is what the shipped sidebar layout is keyed to. |
 | `.wikilink` | instance | Marks a link that came from `[[wikilink]]` syntax rather than a markdown link, so a theme can distinguish internal cross-references from ordinary links. |
 | `.moss-term-role` | instance | Section heading on a term page (e.g. /people/<name>/) for one name-list field's group of works, when the kind names more than one field. |
 | `.moss-place-children` | instance | Direct child places on a place page, each with its roll-up-inclusive member count. Absent for a leaf place with no children, and for every non-place term. |

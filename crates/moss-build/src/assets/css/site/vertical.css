@@ -412,7 +412,7 @@ body[data-typesetting="vertical"] .moss-table-scroll {
    `writing-mode: horizontal-tb` on the description regardless of the card's
    own vertical-rl — the legacy multi-line-truncation box lays out along the
    PHYSICAL horizontal axis no matter what. Undone here for every card shape
-   that class reaches (:::cards grid and list layouts, :::grid cells), not
+   that class reaches (folder-listing grid and list layouts, :::grid cells), not
    just list below: core cannot scope the ellipsis away from vertical
    typesetting itself, because core CSS never references `data-typesetting`
    at all (gates_change_what_ships/gates_are_independent rely on that for

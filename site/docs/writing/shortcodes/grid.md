@@ -248,10 +248,10 @@ Sidebar with call-outs or metadata.
 }
 ```
 
-The grid container renders as `<div class="moss-grid two-col-split">`. Your class sits alongside the built-in `moss-grid` and can override `grid-template-columns`.
+The grid container renders as `<div class="moss-grid two-col-split">`. Your class sits alongside the built-in `moss-grid` and can set `grid-template-columns`.
 
-**Avoid this.** Passing a ratio (`:::grid 2 2:1 {.two-col-split}`) emits an inline `style="grid-template-columns:2fr 1fr"` on the container. Inline styles beat stylesheet rules, so your `@media` query has no effect without `!important` on every property — a maintenance trap once the pattern spreads.
+**A written ratio is a default, not a lock.** Passing a ratio (`:::grid 2 2:1 {.two-col-split}`) writes the custom property `--moss-grid-ratio` on the container (`style="--moss-grid-ratio:minmax(0, 2fr) minmax(0, 1fr)"`), not an inline `grid-template-columns`. A class rule that sets `grid-template-columns` overrides it, including inside `@media`, with no `!important`. A class rule that sets `--moss-grid-ratio` does not: the container's own inline value wins for that property, so change `grid-template-columns` instead.
 
-**Rule of thumb.** Use the ratio form (`:::grid 2 2:1`) for one-off layouts where responsive overrides are not needed. Use a named class when you need `@media` behaviour or the same shape on multiple pages.
+**Rule of thumb.** Use the ratio form (`:::grid 2 2:1`) for one-off layouts. Use a named class with no ratio when the same shape repeats on several pages, so the columns live in one place.
 
 See [[components|component classes]] for the full list of component class names you can target.

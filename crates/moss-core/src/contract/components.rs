@@ -230,7 +230,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-list-axis",
                 values: &["date", "weight", "title"],
                 default: "title",
-                description: "Sort axis for the listing (mirrors the folder's `sort:` frontmatter). Drives `--moss-card-min` density tuning and decides whether each `.moss-card-meta` slot is filled (date axis) or omitted (weight/title axes).",
+                description: "Sort axis for the listing (mirrors the folder's `sort:` frontmatter). Drives `--moss-card-min` density tuning and decides what a page's `.moss-card-meta` slot holds. In the list and summary layouts it is filled only on the date axis and omitted on weight and title; in the grid layout a dated page shows its date on every axis. A folder's card always shows its article count, on every axis.",
             },
             DataAttr {
                 name: "data-list-has-covers",
@@ -4190,11 +4190,11 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         kind: "instance",
         parent: "",
         data_attrs: &[],
-        example_html: r#"<main class="has-sidebar-layout">…</main>"#,
+        example_html: r#"<html class="has-sidebar-layout">…</html>"#,
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "Marks a page laid out with a sidebar, so the main column can reserve room for it without the sidebar having rendered yet.",
+        description: "Set on the `<html>` element of every page when any page of the site sets `sidebar`. No shipped stylesheet reads it; it is a hook for a theme that wants to change page-wide layout on a site that uses sidebars. The page that renders a sidebar also puts `has-sidebar` on its `<main>`, which is what the shipped sidebar layout is keyed to.",
     },
     ComponentEntry {
         class: "wikilink",

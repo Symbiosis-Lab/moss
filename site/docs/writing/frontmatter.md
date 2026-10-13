@@ -89,7 +89,7 @@ These fields control how a [[structure#^folder-page|folder page]] displays its c
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `children` | boolean | `true` | Show child page list on section pages |
-| `children_style` | string | `"list"` | `"list"`, `"summary"`, `"card"`, or `"minimal"` |
+| `children_style` | string | (none) | How child pages are rendered. When absent, moss picks from the children: `summary` if most of them have a cover or a description (or all but three do), otherwise `list` if any child has a date, otherwise `grid`. Values: `"list"`, `"summary"`, `"grid"` |
 | `children_group` | string | `"none"` | Group by `"year"`, `"none"`, or `"upcoming"` |
 | `children_depth` | string | `"direct"` | `"direct"` (immediate children) or `"all"` (all descendants) |
 | `children_source` | string | (none) | Wikilink to folder whose children to show instead |

@@ -927,10 +927,10 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         field_type: FieldType::String,
         widget: Widget::Select,
         enum_values: Some(&["list", "summary", "grid"]),
-        default_json: Some("\"list\""),
+        default_json: None,
         // Frequency=3, Importance=3 → score=70
         score: 70,
-        description: "How child pages are rendered",
+        description: "How child pages are rendered. When absent, moss picks from the children: `summary` if most of them have a cover or a description (or all but three do), otherwise `list` if any child has a date, otherwise `grid`",
         label: Some("Child Layout"),
         label_key: "chip.children_style.label",
         group: "Child Styles",

@@ -128,7 +128,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-grid-ratio",
         owner: "moss-grid",
         default: "repeat(N, minmax(0, 1fr))",
-        description: "Track widths for a `:::grid`, as a `grid-template-columns` value. moss sets it on the element when the author writes a ratio (`:::grid 2 1:2` → `2fr 1fr`); the fallback is the even split for whatever `data-columns` says, and a ratio-less grid with no `data-columns` falls back to `initial`. It is a property rather than an inline `grid-template-columns` on purpose: an inline declaration beats every stylesheet rule, so a theme rule could never override it if it arrived inline. A theme setting this custom property by hand overrides the author's ratio at every width, same as any other cascade value.",
+        description: "Track widths for a `:::grid`, as a `grid-template-columns` value. moss sets it on the element when the author writes a ratio (`:::grid 2 1:2` → `minmax(0, 1fr) minmax(0, 2fr)`: one part for the first column, two for the second); the fallback is the even split for whatever `data-columns` says, and a ratio-less grid with no `data-columns` falls back to `initial`. It is a property rather than an inline `grid-template-columns` on purpose: an inline declaration beats every stylesheet rule, so a theme rule could never override it if it arrived inline. A theme setting this custom property by hand overrides the author's ratio at every width, same as any other cascade value.",
     },
     CustomProp {
         name: "--moss-gallery-row-height",
@@ -176,7 +176,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-card-cover-ratio",
         owner: "moss-card-cover",
         default: "4 / 3",
-        description: "Aspect ratio of card cover images. Same reasoning as `--moss-grid-image-ratio`, for `:::cards` rather than `:::grid`. `aspect-ratio` has no logical spelling, so vertical typesetting overrides this to the transposed `3 / 4` in `site/vertical.css` rather than expressing the ratio once.",
+        description: "Aspect ratio of card cover images. Same reasoning as `--moss-grid-image-ratio`, for the cards of a folder listing rather than the cells of a `:::grid`. `aspect-ratio` has no logical spelling, so vertical typesetting overrides this to the transposed `3 / 4` in `site/vertical.css` rather than expressing the ratio once.",
     },
     CustomProp {
         name: "--moss-card-cover-fit",

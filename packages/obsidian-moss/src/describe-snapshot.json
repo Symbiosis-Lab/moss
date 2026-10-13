@@ -494,7 +494,7 @@
             "title"
           ],
           "default": "title",
-          "description": "Sort axis for the listing (mirrors the folder's `sort:` frontmatter). Drives `--moss-card-min` density tuning and decides whether each `.moss-card-meta` slot is filled (date axis) or omitted (weight/title axes)."
+          "description": "Sort axis for the listing (mirrors the folder's `sort:` frontmatter). Drives `--moss-card-min` density tuning and decides what a page's `.moss-card-meta` slot holds. In the list and summary layouts it is filled only on the date axis and omitted on weight and title; in the grid layout a dated page shows its date on every axis. A folder's card always shows its article count, on every axis."
         },
         {
           "name": "data-list-has-covers",
@@ -3767,11 +3767,11 @@
       "kind": "instance",
       "parent": "",
       "data_attrs": [],
-      "example_html": "<main class=\"has-sidebar-layout\">…</main>",
+      "example_html": "<html class=\"has-sidebar-layout\">…</html>",
       "example_markdown": "",
       "status": "confirmed",
       "since": "0",
-      "description": "Marks a page laid out with a sidebar, so the main column can reserve room for it without the sidebar having rendered yet.",
+      "description": "Set on the `<html>` element of every page when any page of the site sets `sidebar`. No shipped stylesheet reads it; it is a hook for a theme that wants to change page-wide layout on a site that uses sidebars. The page that renders a sidebar also puts `has-sidebar` on its `<main>`, which is what the shipped sidebar layout is keyed to.",
       "authorable": false
     },
     {
@@ -3828,7 +3828,7 @@
       "name": "--moss-grid-ratio",
       "owner": "moss-grid",
       "default": "repeat(N, minmax(0, 1fr))",
-      "description": "Track widths for a `:::grid`, as a `grid-template-columns` value. moss sets it on the element when the author writes a ratio (`:::grid 2 1:2` → `2fr 1fr`); the fallback is the even split for whatever `data-columns` says, and a ratio-less grid with no `data-columns` falls back to `initial`. It is a property rather than an inline `grid-template-columns` on purpose: an inline declaration beats every stylesheet rule, including the mobile collapse, so a ratio grid stayed multi-column on a phone. A theme setting this by hand overrides the author's ratio at every width — the mobile collapse still wins, because that rule does not read the property."
+      "description": "Track widths for a `:::grid`, as a `grid-template-columns` value. moss sets it on the element when the author writes a ratio (`:::grid 2 1:2` → `minmax(0, 1fr) minmax(0, 2fr)`: one part for the first column, two for the second); the fallback is the even split for whatever `data-columns` says, and a ratio-less grid with no `data-columns` falls back to `initial`. It is a property rather than an inline `grid-template-columns` on purpose: an inline declaration beats every stylesheet rule, so a theme rule could never override it if it arrived inline. A theme setting this custom property by hand overrides the author's ratio at every width, same as any other cascade value."
     },
     {
       "name": "--moss-grid-image-ratio",
@@ -3852,7 +3852,7 @@
       "name": "--moss-card-cover-ratio",
       "owner": "moss-card-cover",
       "default": "4 / 3",
-      "description": "Aspect ratio of card cover images. Same reasoning as `--moss-grid-image-ratio`, for `:::cards` rather than `:::grid`."
+      "description": "Aspect ratio of card cover images. Same reasoning as `--moss-grid-image-ratio`, for the cards of a folder listing rather than the cells of a `:::grid`. `aspect-ratio` has no logical spelling, so vertical typesetting overrides this to the transposed `3 / 4` in `site/vertical.css` rather than expressing the ratio once."
     },
     {
       "name": "--moss-card-cover-fit",
@@ -4263,13 +4263,12 @@
       "name": "children_style",
       "type": "string",
       "widget": "select",
-      "default": "\"list\"",
       "enum_values": [
         "list",
         "summary",
         "grid"
       ],
-      "description": "How child pages are rendered",
+      "description": "How child pages are rendered. When absent, moss picks from the children: `summary` if most of them have a cover or a description (or all but three do), otherwise `list` if any child has a date, otherwise `grid`",
       "group": "Child Styles",
       "skip_schema": false
     },
