@@ -167,11 +167,11 @@ pub fn synthesize_sequence_video_html(
 /// the box's index in the table is its file's. A missing file would fall
 /// through to the next `<source>`, so a rung the size budget dropped costs
 /// nothing but the lighter file.
-fn phone_rung_source(src: &str, assets: &AssetSnapshot, sequence: bool) -> String {
+fn phone_rung_source(src: &str, source_key: &PathBuf, assets: &AssetSnapshot, sequence: bool) -> String {
     if !sequence {
         return String::new();
     }
-    let display = match assets.dims(&PathBuf::from(src)) {
+    let display = match assets.dims(source_key) {
         Some((w, h)) if w >= h => (w, h),
         _ => return String::new(),
     };
@@ -205,6 +205,12 @@ fn video_embed(
     // data layer is the single source of truth for the served URL.
     let converted_src = to_mp4(src);
 
+    // The build records what it made for a video under the video's file
+    // path, and `src` is a root-relative URL: `/new%20folder.mp4` for
+    // `new folder.mp4`. Every lookup below goes by the path; every URL
+    // written keeps `src`.
+    let source_key = crate::asset_snapshot::variant_key(crate::resolve::fuzzy_path::percent_decode_path(src));
+
     // Thumbnail path — used for both `poster` (initial frame before
     // transcode lands) and `data-thumb-src` (iframe-bridge swap target
     // when `moss-asset-ready` fires). Mirrors the regex behaviour at
@@ -217,7 +223,7 @@ fn video_embed(
     // that is not there would be a broken image under the playing video.
     // `data-thumb-src` stays the thumbnail either way; it is the preview
     // bridge's swap target, not a display choice.
-    let poster = if hero && assets.has_poster_for_source(&PathBuf::from(src)) {
+    let poster = if hero && assets.has_poster_for_source(&source_key) {
         to_poster(src)
     } else {
         thumb.clone()
@@ -242,7 +248,7 @@ fn video_embed(
             String::new(),
         )
     } else {
-        match assets.dims(&PathBuf::from(src)) {
+        match assets.dims(&source_key) {
             Some((w, h)) if w > 0 && h > 0 => (
                 format!(r#" width="{}""#, w),
                 format!(r#" height="{}""#, h),
@@ -266,11 +272,11 @@ fn video_embed(
 
     let label = params.label_attr("aria-label");
 
-    if assets.has_hls_for_source(&PathBuf::from(src)) {
+    if assets.has_hls_for_source(&source_key) {
         // Ladder form. `src` is deliberately absent — a <video> carrying it
         // ignores its <source> children — and the progressive MP4 is last so a
         // browser with neither native HLS nor hls.js still plays something.
-        let phone = phone_rung_source(src, assets, sequence.is_some());
+        let phone = phone_rung_source(src, &source_key, assets, sequence.is_some());
         return format!(
             r#"<video class="moss-embed moss-embed-video{align}" data-type="video"{dw}{data_loop}{label} data-placeholder-src="{orig}" poster="{poster}" data-thumb-src="{thumb}" {playback}{w}{h}{size}><source src="{hls}" type="{HLS_MIME}">{phone}<source src="{src}" type="video/mp4"></video>"#,
             align = align,
@@ -756,6 +762,29 @@ mod phone_rung_tests {
         s.dimensions.insert("clip.mp4".into(), (1080, 1920));
         let html = synthesize_sequence_video_html(&Placement::default(), "clip.mp4", &s, false);
         assert!(!html.contains("max-width"), "its row-3 frame is a 360px-tall strip: {html}");
+    }
+}
+
+#[cfg(test)]
+mod encoded_name_tests {
+    use super::*;
+    use crate::asset_snapshot::VariantKindSet;
+
+    /// An embed's `src` arrives URL-encoded (`new%20folder.mp4`) while the
+    /// build records a video's ladder, poster and size under its file name
+    /// (`new folder`). Looked up by the encoded form, a video whose name has
+    /// a space or any non-ASCII character never got its ladder or its size.
+    #[test]
+    fn a_video_whose_name_has_a_space_finds_its_ladder_poster_and_size() {
+        let mut s = AssetSnapshot::new();
+        s.dimensions.insert("new folder.mp4".into(), (1280, 720));
+        s.variants.insert("new folder".into(), VariantKindSet { webp: false, avif: false, hls: true, poster: true });
+        // Root-relative, as a page's embed arrives.
+        let html = synthesize_sequence_video_html(&Placement::default(), "/new%20folder.mp4", &s, true);
+        assert!(html.contains(r#"<source src="/new%20folder.hls/master.m3u8""#), "{html}");
+        assert!(html.contains(r#"poster="/new%20folder.poster.jpg""#), "{html}");
+        assert!(html.contains(r#"src="/new%20folder.hls/v2.m4s""#), "the phone file: {html}");
+        assert!(html.contains(r#"width="1280""#), "{html}");
     }
 }
 
