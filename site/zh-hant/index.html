@@ -472,6 +472,8 @@
 
 <script>document.documentElement.classList.add('js'); history.scrollRestoration = 'manual';</script>
 <script src="landing-i18n.js"></script>
+<!-- Mirrors the beacon moss injects into rendered pages; these pages are copied verbatim, so it is repeated here. -->
+<script id="moss-beacon">(function(){document.addEventListener('DOMContentLoaded',function(){if(location.hostname!=='mosspub.com')return;var b='https://api.mosspub.com/api/sites/landing/beacon';var u=new URLSearchParams(location.search);var s=function(d){fetch(b,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d),keepalive:true}).catch(function(){})}; s({path:location.pathname,referrer:document.referrer||null,screen_bucket:innerWidth<768?'mobile':innerWidth<1024?'tablet':'desktop',utm_source:u.get('utm_source'),utm_medium:u.get('utm_medium')}); document.querySelectorAll('[data-track]').forEach(function(el){el.addEventListener('click',function(){s({path:location.pathname,event:el.getAttribute('data-track')})})})});})()</script>
 </head>
 <body>
 
@@ -540,22 +542,22 @@
     <section class="scene" id="c1"><div class="scene-text">
       <h2>隨處寫作，<br>隨處發布。</h2>
       <p class="lede">青苔將你的資料夾發布成網站。在本機資料夾裡寫 Markdown，用任何雲端硬碟協作。按一下就能預覽，再按一下就能發布到任何地方。</p>
-      <div class="btns"><a class="moss-btn" data-role="primary" href="#beta">申請封閉測試</a><a class="moss-btn" data-role="secondary" href="/zh-hant/開始使用/">開始使用 →</a></div>
+      <div class="btns"><a class="moss-btn" data-role="primary" data-track="cta-beta" href="#beta">申請封閉測試</a><a class="moss-btn" data-role="secondary" data-track="cta-get-started" href="/zh-hant/開始使用/">開始使用 →</a></div>
     </div></section>
     <section class="scene" id="c2"><div class="scene-text">
       <h2>柔軟如人，<br>強大如機器。</h2>
       <p class="lede">所有資料都保存在本機檔案中，你慣用的編輯器、程式助理都能直接使用。直覺的介面，讓你的網站始終易讀、好維護。</p>
-      <div class="btns"><a class="moss-btn" data-role="secondary" href="/zh-hant/開始使用/editor/">青苔編輯器 →</a><a class="moss-btn" data-role="secondary" href="/zh-hant/開始使用/design/">編寫主題 →</a></div>
+      <div class="btns"><a class="moss-btn" data-role="secondary" data-track="cta-editor" href="/zh-hant/開始使用/editor/">青苔編輯器 →</a><a class="moss-btn" data-role="secondary" data-track="cta-theme" href="/zh-hant/開始使用/design/">編寫主題 →</a></div>
     </div></section>
     <section class="scene" id="c3"><div class="scene-text">
       <h2 id="c3-h2">廣如網路，<br>輕如資料夾。</h2>
       <p class="lede">從文章、影片到 JavaScript 作品與 Jupyter 筆記本，青苔會最佳化檔案並打包成網站。</p>
-      <div class="btns"><a class="moss-btn" data-role="secondary" href="/zh-hant/開始使用/links/">媒體檔案類型 →</a><a class="moss-btn" data-role="secondary" href="https://github.com/Symbiosis-Lab/moss/issues/new?title=Media%20type%20request%3A%20&amp;labels=enhancement">申請檔案支援</a></div>
+      <div class="btns"><a class="moss-btn" data-role="secondary" data-track="cta-media-types" href="/zh-hant/開始使用/links/">媒體檔案類型 →</a><a class="moss-btn" data-role="secondary" data-track="cta-request-types" href="https://github.com/Symbiosis-Lab/moss/issues/new?title=Media%20type%20request%3A%20&amp;labels=enhancement">申請檔案支援</a></div>
     </div></section>
     <section class="scene" id="c4"><div class="scene-text">
       <h2>用你的方式，<br>發布到你的網路。</h2>
       <p class="lede">選擇網站代管服務，將同一份內容同步到多個管道。自行編寫外掛，或從外掛目錄安裝，連接電子報、IPFS 與 Nostr。</p>
-      <div class="btns"><a class="moss-btn" data-role="secondary" href="/zh-hant/開始使用/extend/">編寫外掛 →</a><a class="moss-btn" data-role="secondary" href="https://github.com/Symbiosis-Lab/moss-registry">青苔外掛目錄</a></div>
+      <div class="btns"><a class="moss-btn" data-role="secondary" data-track="cta-plugin" href="/zh-hant/開始使用/extend/">編寫外掛 →</a><a class="moss-btn" data-role="secondary" data-track="cta-registry" href="https://github.com/Symbiosis-Lab/moss-registry">青苔外掛目錄</a></div>
     </div></section>
     <section class="scene" id="c5" aria-hidden="true"><div class="edge"></div></section>
   </div>
@@ -572,7 +574,7 @@
     <p class="closing-lede">網路不只用來瀏覽，也用來創作。這裡是你的網路發布器。</p>
     <div id="install">
       <div id="downloads" aria-label="下載青苔">
-        <div class="download-choice"><a class="moss-btn" data-role="primary" data-platform="macos" href="https://github.com/Symbiosis-Lab/moss/releases/latest/download/moss.dmg">macOS</a><small class="availability">macOS 12 或更新版本</small></div>
+        <div class="download-choice"><a class="moss-btn" data-role="primary" data-platform="macos" data-track="download-macos" href="https://github.com/Symbiosis-Lab/moss/releases/latest/download/moss.dmg">macOS</a><small class="availability">macOS 12 或更新版本</small></div>
         <div class="download-choice"><button class="moss-btn" data-role="secondary" data-platform="windows" type="button" disabled>Windows</button><small class="availability">即將推出</small></div>
         <div class="download-choice"><button class="moss-btn" data-role="secondary" data-platform="linux" type="button" disabled>Linux</button><small class="availability">即將推出</small></div>
       </div>
@@ -584,7 +586,7 @@
     </div>
     <section id="beta" aria-labelledby="beta-title" tabindex="-1">
       <div><h3 id="beta-title">一起打磨青苔</h3><p>接收不定期的更新消息，並免費試用青苔的預設網站代管服務。</p></div>
-      <p class="static-signup-note">啟用 JavaScript 即可申請封閉測試。</p><form id="beta-form" class="signup" data-subscription="beta"><label class="sr-only" for="beta-email">你的電子郵件地址</label><div class="input-row"><input id="beta-email" name="email" type="email" autocomplete="email" placeholder="你的電子郵件地址" required><button type="submit">申請封閉測試</button></div><p class="form-status" role="status" aria-live="polite"></p></form>
+      <p class="static-signup-note">啟用 JavaScript 即可申請封閉測試。</p><form id="beta-form" class="signup" data-subscription="beta"><label class="sr-only" for="beta-email">你的電子郵件地址</label><div class="input-row"><input id="beta-email" name="email" type="email" autocomplete="email" placeholder="你的電子郵件地址" required><button type="submit" data-track="subscribe-submit">申請封閉測試</button></div><p class="form-status" role="status" aria-live="polite"></p></form>
     </section>
     <footer id="footer">
       <nav aria-label="頁尾"><a href="/zh-hant/privacy/">隱私權</a><span aria-hidden="true">·</span><a href="https://symbiosis-lab.org/">Symbiosis Lab</a><span aria-hidden="true">·</span><span>2026</span><a class="github-link" href="https://github.com/Symbiosis-Lab/moss" aria-label="在 GitHub 查看青苔"><img src="assets/platforms/github.svg" alt=""></a></nav>

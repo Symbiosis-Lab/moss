@@ -17,6 +17,7 @@ const CHECKS = [
   'generate-landing-locales.test.mjs',
   'check-landing-url-boundaries.mjs',
   'check-landing-cold-bottom.mjs',
+  'check-landing-beacon.mjs',
   'check-landing-download.mjs',
   'check-landing-desktop-pace.mjs',
   'check-landing-desktop-scroll.mjs',

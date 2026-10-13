@@ -472,6 +472,8 @@
 
 <script>document.documentElement.classList.add('js'); history.scrollRestoration = 'manual';</script>
 <script src="landing-i18n.js"></script>
+<!-- Mirrors the beacon moss injects into rendered pages; these pages are copied verbatim, so it is repeated here. -->
+<script id="moss-beacon">(function(){document.addEventListener('DOMContentLoaded',function(){if(location.hostname!=='mosspub.com')return;var b='https://api.mosspub.com/api/sites/landing/beacon';var u=new URLSearchParams(location.search);var s=function(d){fetch(b,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d),keepalive:true}).catch(function(){})}; s({path:location.pathname,referrer:document.referrer||null,screen_bucket:innerWidth<768?'mobile':innerWidth<1024?'tablet':'desktop',utm_source:u.get('utm_source'),utm_medium:u.get('utm_medium')}); document.querySelectorAll('[data-track]').forEach(function(el){el.addEventListener('click',function(){s({path:location.pathname,event:el.getAttribute('data-track')})})})});})()</script>
 </head>
 <body>
 
@@ -540,22 +542,22 @@
     <section class="scene" id="c1"><div class="scene-text">
       <h2>Write anywhere.<br>Publish everywhere.</h2>
       <p class="lede">Write in your folder with Markdown files. Collaborate through any cloud drive. One click to preview, another to publish anywhere.</p>
-      <div class="btns"><a class="moss-btn" data-role="primary" href="#beta">Request beta access</a><a class="moss-btn" data-role="secondary" href="/get-started/">Get started →</a></div>
+      <div class="btns"><a class="moss-btn" data-role="primary" data-track="cta-beta" href="#beta">Request beta access</a><a class="moss-btn" data-role="secondary" data-track="cta-get-started" href="/get-started/">Get started →</a></div>
     </div></section>
     <section class="scene" id="c2"><div class="scene-text">
       <h2>Friendly for human.<br>Powerful for machines.</h2>
       <p class="lede">Everything lives in local files, ready for your favorite editor or coding agent. Instant previews and an intuitive interface make your site pleasant to use and effortless to maintain.</p>
-      <div class="btns"><a class="moss-btn" data-role="secondary" href="/get-started/editor/">moss editor →</a><a class="moss-btn" data-role="secondary" href="/get-started/design/">Writing a theme →</a></div>
+      <div class="btns"><a class="moss-btn" data-role="secondary" data-track="cta-editor" href="/get-started/editor/">moss editor →</a><a class="moss-btn" data-role="secondary" data-track="cta-theme" href="/get-started/design/">Writing a theme →</a></div>
     </div></section>
     <section class="scene" id="c3"><div class="scene-text">
       <h2 id="c3-h2">As light as your folder.<br>As vast as the internet.</h2>
       <p class="lede">moss optimizes and packages your files into a website, from prose and video to JavaScript sketches and Jupyter notebooks.</p>
-      <div class="btns"><a class="moss-btn" data-role="secondary" href="/get-started/links/">Media types →</a><a class="moss-btn" data-role="secondary" href="https://github.com/Symbiosis-Lab/moss/issues/new?title=Media%20type%20request%3A%20&amp;labels=enhancement">Request new types</a></div>
+      <div class="btns"><a class="moss-btn" data-role="secondary" data-track="cta-media-types" href="/get-started/links/">Media types →</a><a class="moss-btn" data-role="secondary" data-track="cta-request-types" href="https://github.com/Symbiosis-Lab/moss/issues/new?title=Media%20type%20request%3A%20&amp;labels=enhancement">Request new types</a></div>
     </div></section>
     <section class="scene" id="c4"><div class="scene-text">
       <h2>Publish to your internet,<br>your way.</h2>
       <p class="lede">Choose your host and sync the same content to multiple channels. Write your own plugin or install one from the registry, from email newsletters to IPFS and Nostr.</p>
-      <div class="btns"><a class="moss-btn" data-role="secondary" href="/get-started/extend/">Writing a plugin →</a><a class="moss-btn" data-role="secondary" href="https://github.com/Symbiosis-Lab/moss-registry">moss registry</a></div>
+      <div class="btns"><a class="moss-btn" data-role="secondary" data-track="cta-plugin" href="/get-started/extend/">Writing a plugin →</a><a class="moss-btn" data-role="secondary" data-track="cta-registry" href="https://github.com/Symbiosis-Lab/moss-registry">moss registry</a></div>
     </div></section>
     <section class="scene" id="c5" aria-hidden="true"><div class="edge"></div></section>
   </div>
@@ -572,7 +574,7 @@
     <p class="closing-lede">The internet is not only for browsing; it's also for creating.<br>Meet your internet publisher.</p>
     <div id="install">
       <div id="downloads" aria-label="Download moss">
-        <div class="download-choice"><a class="moss-btn" data-role="primary" data-platform="macos" href="https://github.com/Symbiosis-Lab/moss/releases/latest/download/moss.dmg">macOS</a><small class="availability">macOS 12 or later</small></div>
+        <div class="download-choice"><a class="moss-btn" data-role="primary" data-platform="macos" data-track="download-macos" href="https://github.com/Symbiosis-Lab/moss/releases/latest/download/moss.dmg">macOS</a><small class="availability">macOS 12 or later</small></div>
         <div class="download-choice"><button class="moss-btn" data-role="secondary" data-platform="windows" type="button" disabled>Windows</button><small class="availability">Coming soon</small></div>
         <div class="download-choice"><button class="moss-btn" data-role="secondary" data-platform="linux" type="button" disabled>Linux</button><small class="availability">Coming soon</small></div>
       </div>
@@ -584,7 +586,7 @@
     </div>
     <section id="beta" aria-labelledby="beta-title" tabindex="-1">
       <div><h3 id="beta-title">Help shape moss.</h3><p>Receive occasional updates and try moss’s default hosting service for free.</p></div>
-      <p class="static-signup-note">Enable JavaScript to request beta access.</p><form id="beta-form" class="signup" data-subscription="beta"><label class="sr-only" for="beta-email">Your email</label><div class="input-row"><input id="beta-email" name="email" type="email" autocomplete="email" placeholder="Your email" required><button type="submit">Request access</button></div><p class="form-status" role="status" aria-live="polite"></p></form>
+      <p class="static-signup-note">Enable JavaScript to request beta access.</p><form id="beta-form" class="signup" data-subscription="beta"><label class="sr-only" for="beta-email">Your email</label><div class="input-row"><input id="beta-email" name="email" type="email" autocomplete="email" placeholder="Your email" required><button type="submit" data-track="subscribe-submit">Request access</button></div><p class="form-status" role="status" aria-live="polite"></p></form>
     </section>
     <footer id="footer">
       <nav aria-label="Footer"><a href="/privacy/">Privacy</a><span aria-hidden="true">·</span><a href="https://symbiosis-lab.org/">Symbiosis Lab</a><span aria-hidden="true">·</span><span>2026</span><a class="github-link" href="https://github.com/Symbiosis-Lab/moss" aria-label="moss on GitHub"><img src="assets/platforms/github.svg" alt=""></a></nav>
