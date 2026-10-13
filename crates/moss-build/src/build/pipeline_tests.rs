@@ -6907,7 +6907,7 @@ fn the_sitemap_lists_static_pages_and_notebooks_but_never_stubs() {
             assert!(staging.join(stub).is_file(), "premise, {build}: {stub} is published");
         }
         let sitemap = fs::read_to_string(staging.join("sitemap.xml")).unwrap();
-        for listed in ["https://example.com/demo/sketch<", "https://example.com/analysis<"] {
+        for listed in ["https://example.com/demo/sketch.html<", "https://example.com/analysis.html<"] {
             assert!(sitemap.contains(listed), "{build}: the sitemap must list {listed}\n{sitemap}");
         }
         for unlisted in ["old-essay", "subscribe/"] {
@@ -6949,10 +6949,10 @@ fn the_sitemap_leaves_out_html_pages_that_declare_noindex() {
 
     build_test_at_site_url(folder_path).expect("build");
     let sitemap = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/sitemap.xml")).unwrap();
-    for kept in ["music", "about", "commented", "too-late"] {
+    for kept in ["music.html", "about.html", "commented.html", "too-late.html"] {
         assert!(sitemap.contains(&format!("/{kept}</loc>")), "the sitemap must list {kept}\n{sitemap}");
     }
-    for out in ["scales", "closed", "just-inside", "share/abc123/", "hidden/"] {
+    for out in ["scales.html", "closed.html", "just-inside.html", "share/abc123/", "hidden/"] {
         assert!(!sitemap.contains(&format!("/{out}</loc>")), "the sitemap must not list {out}\n{sitemap}");
     }
 }
