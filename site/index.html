@@ -3031,8 +3031,9 @@ addEventListener('pointerdown', () => { demoInUse = false; aimed = null; widenSn
 // null when there is none.
 const ONWARD_QUIET_MS = 60, ONWARD_MIN_PX = 24, NOTCH_PX = 40;
 let stood = scrollY, carried = null, wheelOpen = false, wheelSum = 0, wheelQuiet = 0;
-// A key or a click takes the page elsewhere, so a carry in progress has nothing left to finish.
-function endCarry() { carried = null; document.documentElement.classList.remove('carried'); }
+// A key or a click takes the page elsewhere, so an instant carry in progress has nothing left to
+// finish. A smooth carry is left to drivePicture as it always was.
+function endCarry() { if (!reduce) return; carried = null; document.documentElement.classList.remove('carried'); }
 // One swipe moves at most one scene. A swipe's momentum is the browser's, and so is the snap
 // point it picks: the one nearest where the momentum would carry the page. scroll-snap-stop asks
 // it to stop at the first, but Safari's momentum passes it: scene 1 stands a third of a screen
@@ -3331,7 +3332,7 @@ function drivePicture(now) {
   // and one that stopped elsewhere is put back on it; an instant scroll is never slow to start.
   if (carried != null) {
     const rest = reduce ? carried : nearestRest(), there = Math.abs(scrollY - restY(rest)) <= 1;
-    if (mobileLayout() || (there && !(reduce && real))) endCarry();
+    if (mobileLayout() || (there && !(reduce && real))) { carried = null; document.documentElement.classList.remove('carried'); }
     else if (now - restSince > (reduce ? 150 : 1500)) { restSince = now; scrollToRest(rest); }
   }
   onScroll(dy);

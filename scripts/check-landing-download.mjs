@@ -27,7 +27,8 @@ try {
         const viewport = VIEWPORTS.find(([name]) => name === vpName)[1];
         {
           const label = `${engineName} ${vpName} ${how}${motion === 'reduce' ? ' reduced-motion' : ''}`;
-          const context = await browser.newContext({ ...viewport, reducedMotion: motion });
+          const { width, height, ...device } = viewport;
+          const context = await browser.newContext({ viewport: { width, height }, ...device, reducedMotion: motion });
           const page = await context.newPage();
           const requested = [];
           context.on('request', request => { if (/\/releases\//.test(request.url())) requested.push(request.url()); });
@@ -39,7 +40,9 @@ try {
           else {
             // A person's wheel is separate gestures (two notches, then a pause), and the page moves one
             // scene per gesture. One endless stream of events is a single gesture and proves nothing.
-            await page.mouse.move(viewport.width / 2, viewport.height / 2);
+            // Over a demo frame the wheel belongs to the frame, by design; a reader scrolling the page has
+            // the pointer on its copy.
+            await page.mouse.move(250, viewport.height / 2);
             for (let g = 0; g < 14 && await page.evaluate(() => !document.querySelector('#five').classList.contains('on')); g++) {
               await page.mouse.wheel(0, 100); await page.waitForTimeout(100); await page.mouse.wheel(0, 100); await page.waitForTimeout(1300);
             }
