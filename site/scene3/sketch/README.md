@@ -1,3 +1,8 @@
+---
+listed: false
+uid: "40c6ee54"
+---
+
 # Scene 3 sketch studies
 
 The selected `living-garden` study is one repeated species: a small aperture form with a narrow body and two opening wings. Its main construction follows Faithful port 04's positive-e gate, where `k` and `e` choose the surviving points, `d` expands the distance field, and `c`/`o` fold that field into the dotted wing and body. Each individual holds one fixed `m` family and subtracts the source's `d=4.6` baseline before placement. Port 01's `d-t` orbit contributes only slow coherent drift; port 02's `d*8-t*3` pulse contributes only a low-amplitude breathing change to filament alpha. Those borrowed traits modulate the same aperture rather than adding separate forms.

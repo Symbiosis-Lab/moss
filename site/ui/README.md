@@ -1,3 +1,8 @@
+---
+listed: false
+uid: "41ddf713"
+---
+
 # Harvested moss interface bank
 
 These files are real moss interface, not drawings of it. They are generated from the desktop app's own code, so the landing page and the documentation show what the app shows. Reuse them before drawing a substitute interface, and never edit them by hand: a hand edit is lost at the next refresh.

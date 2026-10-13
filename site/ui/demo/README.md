@@ -1,3 +1,8 @@
+---
+listed: false
+uid: "6c601142"
+---
+
 # The demo: one moss interface per page, many scenes
 
 A documentation page shows one real moss interface once, pinned beside the text. A Play button under a heading runs a *scene* on that interface — a short scripted demonstration of what the heading describes — and the reader can take over at any moment. There is never a second interface on the page, and the demo frame has no controls of its own: the text is both the list of scenes and the way to start them.
