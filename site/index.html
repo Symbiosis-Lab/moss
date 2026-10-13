@@ -3005,13 +3005,13 @@ function sceneKey(e, fromDemo) {
   const dir = e.key === ' ' && e.shiftKey ? -1 : KEY_STEP[e.key];
   if (dir == null || (inClose() && !(dir < 0 && scrollY <= restY(SHARE) + 2))) return;
   e.preventDefault();
-  widenSnap();
+  widenSnap(); endCarry();
   const far = e.key === 'Home' || e.key === 'End';
   scrollToRest(far ? (dir < 0 ? -1 : SHARE) : Math.max(-1, Math.min(SHARE, (aimed ?? nearestRest()) + dir)));
 }
 addEventListener('keydown', (e) => sceneKey(e, false));
 // pointerdown on the page itself (a frame's own never reaches here): no demo is in use
-addEventListener('pointerdown', () => { demoInUse = false; aimed = null; widenSnap(); }, true);
+addEventListener('pointerdown', () => { demoInUse = false; aimed = null; widenSnap(); endCarry(); }, true);
 // Chrome snaps a short scroll back to the rest it started from: one 100px wheel notch moves the
 // page about 90px within 100 ms and has it back within 200 ms, and only two quick notches
 // advance (measured on Chrome 154). So a short scroll is carried on to the next rest: the first
@@ -3027,9 +3027,12 @@ addEventListener('pointerdown', () => { demoInUse = false; aimed = null; widenSn
 // already taking the page back (86px of backward travel, measured). So while a scroll is
 // carried the snap is off (html.carried), and drivePicture puts it back once the page has come
 // to rest on a rest. These are the only writes the page makes in response to the wheel, and
-// they never take the wheel from the reader.
+// they never take the wheel from the reader. carried names the rest a carry is heading for, and is
+// null when there is none.
 const ONWARD_QUIET_MS = 60, ONWARD_MIN_PX = 24, NOTCH_PX = 40;
-let stood = scrollY, carried = false, wheelOpen = false, wheelSum = 0, wheelQuiet = 0;
+let stood = scrollY, carried = null, wheelOpen = false, wheelSum = 0, wheelQuiet = 0;
+// A key or a click takes the page elsewhere, so a carry in progress has nothing left to finish.
+function endCarry() { carried = null; document.documentElement.classList.remove('carried'); }
 // One swipe moves at most one scene. A swipe's momentum is the browser's, and so is the snap
 // point it picks: the one nearest where the momentum would carry the page. scroll-snap-stop asks
 // it to stop at the first, but Safari's momentum passes it: scene 1 stands a third of a screen
@@ -3088,7 +3091,7 @@ function goOnward() {
   if (i < 0) return;
   const after = ys[i + dir];
   if (after != null && Math.abs(scrollY - after) < Math.abs(scrollY - ys[i])) return;
-  carried = true; document.documentElement.classList.add('carried');
+  carried = i - 1; document.documentElement.classList.add('carried');
   restSince = performance.now();   // the page's stillness is counted from here, not from before the gesture
   scrollToRest(i - 1);
 }
@@ -3319,10 +3322,17 @@ function drivePicture(now) {
   // stopped short of a rest is first finished on the nearest, waiting 1.5 s of true stillness so
   // a smooth scroll merely slow to start is not sent prematurely (measured: 400 ms was too
   // short). A window that became the phone layout has no snap to return.
-  if (carried) {
-    const rest = nearestRest(), there = Math.abs(scrollY - restY(rest)) <= 1;
-    if (mobileLayout() || there) { carried = false; document.documentElement.classList.remove('carried'); }
-    else if (now - restSince > 1500) { restSince = now; scrollToRest(rest); }
+  // With reduced motion the carry is an instant scroll, which is at its rest by the next frame, but
+  // Chromium does not cancel a scroll it already had running (the wheel's own, or its snap back
+  // toward where the gesture began): that one goes on from the rest for whatever distance it had
+  // left, with the snap off (measured: a snap back 29px into its 99px, carried to the rest, went on
+  // to stop 70px short of it, and every later gesture was carried to the same rest again). So an
+  // instant carry ends only once the page stands still on the rest it was carried to (carried),
+  // and one that stopped elsewhere is put back on it; an instant scroll is never slow to start.
+  if (carried != null) {
+    const rest = reduce ? carried : nearestRest(), there = Math.abs(scrollY - restY(rest)) <= 1;
+    if (mobileLayout() || (there && !(reduce && real))) endCarry();
+    else if (now - restSince > (reduce ? 150 : 1500)) { restSince = now; scrollToRest(rest); }
   }
   onScroll(dy);
   updateFinalDissolve();
