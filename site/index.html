@@ -1653,9 +1653,12 @@ function syncLoop() {
   if (want) loopVid.play().catch(() => {}); else loopVid.pause();
 }
 // How far the last join has run, and the only thing it moves.
-const setCross = (q) => { xf = q; document.documentElement.style.setProperty('--xf', q.toFixed(3)); syncLoop(); };
-// The close takes the pointer and the tab order only where it is settled: during
-// the scrub it is paint, and behind the page it is not there at all. The join
+// Once the close is more than half there it takes the pointer, and gives it back below that on the
+// way out: a button the reader can see must answer a click, and the page behind it is by then faded.
+const TAKES_POINTER = .5;
+const setCross = (q) => { xf = q; document.documentElement.style.setProperty('--xf', q.toFixed(3)); syncLoop(); fiveOn(q >= TAKES_POINTER); };
+// The close takes the pointer and the tab order only where it is mostly there: while it is
+// still faint it is paint, and behind the page it is not there at all. The join
 // has two sides and the page is the other one: where the close is settled the
 // page is faded to nothing, and a control faded to nothing is still a tab stop
 // until the element it sits in is inert.
