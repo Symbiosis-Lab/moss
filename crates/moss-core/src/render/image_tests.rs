@@ -1716,11 +1716,11 @@ fn scroll_shape_tags_only_when_option_and_ratio_both_say_so() {
 
 #[test]
 fn scroll_shape_is_not_applied_inside_a_grid_card() {
-    // A 3:1 image in a grid card is fitted to its slot, not a sideways strip:
+    // A 5:1 image in a grid card is fitted to its slot, not a sideways strip:
     // no scroll container, no tab stop, and the card's own sizes= (the value
     // its neighbours get), not the full-width scroll value. The same image in
     // ordinary article flow keeps the treatment.
-    let assets = snapshot_dims("logo.jpg", 2500, 833);
+    let assets = snapshot_dims("logo.jpg", 2500, 500);
     let cell = "auto, calc(min(47.25rem, 100vw) / 4)";
     let in_card = synthesize_image_html(
         "logo.jpg",

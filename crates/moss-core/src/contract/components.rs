@@ -1418,7 +1418,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-aspect",
                 values: &["portrait", "square", "auto", "scroll"],
                 default: "auto",
-                description: "Image aspect-ratio hint. `scroll` is the one wired value (`asset_paths::is_scroll_shape`: long edge past 3x the short edge, either axis — a handscroll or hanging scroll) and carries a default presentation: a fixed-height, horizontally-scrollable strip under horizontal typesetting (site.css), or the full column height as part of the page's own horizontal scroll under vertical typesetting (vertical.css) — no nested scroller there. It lives on the inner `<picture>`/`<img>`, not this figure wrapper, and applies the same way to a bare (non-figure) image. It does not apply inside a `:::grid` card, where the image is fitted to its cell. `portrait`/`square` remain an unwired follow-up.",
+                description: "Image aspect-ratio hint. `scroll` is the one wired value (`asset_paths::is_scroll_shape`: wider than 4x its height, or taller than 3x its width — a handscroll or hanging scroll) and carries a default presentation: a fixed-height, horizontally-scrollable strip under horizontal typesetting (site.css), or the full column height as part of the page's own horizontal scroll under vertical typesetting (vertical.css) — no nested scroller there. It lives on the inner `<picture>`/`<img>`, not this figure wrapper, and applies the same way to a bare (non-figure) image. It does not apply inside a `:::grid` card, where the image is fitted to its cell. `portrait`/`square` remain an unwired follow-up.",
             },
             DataAttr {
                 name: "data-width",

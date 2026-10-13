@@ -4875,7 +4875,7 @@ article.container > hr {
 /* The scroll-shadow technique itself, shared with any other horizontally-
    scrollable region that wants the same "hint only when there's more to
    see" affordance — currently `data-aspect="scroll"` (render::image::
-   is_scroll_shape, a handscroll/hanging-scroll body image past 3x its
+   is_scroll_shape, a handscroll past 4x or hanging-scroll body image past 3x its
    short edge; see that rule for the picture-specific structural properties
    this doesn't cover). `.moss-grid[data-scroll]`'s own scroll row uses a
    different cue (a peeking next card) and doesn't join this one.

@@ -305,24 +305,29 @@ pub const MAX_LADDER_ASPECT: u32 = 10;
 /// (10) for that reason — by the time a source's ladder disappears, its
 /// in-column presentation has been broken for a while.
 ///
-/// 3 matches the traditional handscroll (手卷) / hanging-scroll (立軸)
-/// formats this threshold targets, not an ordinary wide photograph: an
-/// ordinary panorama crop (2:1–3:1) still reads fine laid out at a normal
-/// column width, but a scroll painting routinely runs 3:1 to 30:1 or more.
-pub const SCROLL_SHAPE_ASPECT: u32 = 3;
+/// A handscroll (手卷) runs 4.6:1 to 30:1 or more, while a wide logo, banner
+/// or panorama crop (2:1 to 3.8:1) reads fine at the column width, so a WIDE
+/// source is a scroll only past 4:1. A hanging scroll (立軸) is tall, and a tall
+/// source past 3:1 is already taller than a screen at the column width, so a
+/// TALL source keeps the 3:1 threshold.
+pub const SCROLL_SHAPE_ASPECT: u32 = 4;
+/// The threshold for a tall source; see [`SCROLL_SHAPE_ASPECT`].
+pub const SCROLL_SHAPE_ASPECT_TALL: u32 = 3;
 
 /// Whether a source's aspect ratio is extreme enough to need the "scroll"
 /// default presentation (`render::image`'s `data-aspect="scroll"`, CSS in
 /// site.css / vertical.css) instead of ordinary in-column sizing — the
-/// long edge past [`SCROLL_SHAPE_ASPECT`] times the short edge, on either
-/// axis: a handscroll's long edge is its width, a hanging scroll's is its
-/// height. The boundary is INCLUSIVE on the ordinary side, matching
-/// [`MAX_LADDER_ASPECT`]'s own convention: exactly 3:1 is still ordinary,
-/// and only a ratio past it is tagged "scroll".
+/// width past [`SCROLL_SHAPE_ASPECT`] times the height for a wide source (a
+/// handscroll), or the height past [`SCROLL_SHAPE_ASPECT_TALL`] times the
+/// width for a tall one (a hanging scroll). The boundary is INCLUSIVE on the
+/// ordinary side, matching [`MAX_LADDER_ASPECT`]'s own convention: exactly
+/// 4:1 wide or 3:1 tall is still ordinary.
 pub fn is_scroll_shape(natural_w: u32, natural_h: u32) -> bool {
-    let long = natural_w.max(natural_h);
-    let short = natural_w.min(natural_h).max(1);
-    long > short.saturating_mul(SCROLL_SHAPE_ASPECT)
+    if natural_w >= natural_h {
+        natural_w > natural_h.max(1).saturating_mul(SCROLL_SHAPE_ASPECT)
+    } else {
+        natural_h > natural_w.max(1).saturating_mul(SCROLL_SHAPE_ASPECT_TALL)
+    }
 }
 
 /// Width the deployed base variant actually has after the encoder's
@@ -1766,17 +1771,24 @@ mod tests {
 
     #[test]
     fn is_scroll_shape_boundary_is_inclusive() {
-        // Ordinary photos, any orientation, well under 3:1: not a scroll.
+        // Ordinary photos, any orientation, well under 4:1: not a scroll.
         assert!(!is_scroll_shape(1600, 900));
         assert!(!is_scroll_shape(900, 1600));
-        // Exactly 3:1 is still "ordinary" — inclusive on the kept side.
-        assert!(!is_scroll_shape(2400, 800));
+        // Wide logos and banners between 3:1 and 4:1 fit the column.
+        assert!(!is_scroll_shape(800, 214));
+        assert!(!is_scroll_shape(2400, 720));
+        assert!(!is_scroll_shape(2500, 750));
+        // Exactly 4:1 wide is still "ordinary" — inclusive on the kept side;
+        // one px past it tips into scroll territory.
+        assert!(!is_scroll_shape(3200, 800));
+        assert!(is_scroll_shape(3201, 800));
+        // A tall source keeps 3:1: a hanging scroll at 800x2579 (3.2:1) is
+        // still a scroll, and exactly 3:1 tall is ordinary.
+        assert!(is_scroll_shape(800, 2579));
         assert!(!is_scroll_shape(800, 2400));
-        // One px past 3:1 tips into scroll territory, either axis.
-        assert!(is_scroll_shape(2401, 800));
         assert!(is_scroll_shape(800, 2401));
         // The real fixtures this feature targets: a handscroll (河上花圖,
-        // 1600×58, ~27.6:1) and a hanging scroll (portrait, well past 3:1).
+        // 1600×58, ~27.6:1) and a hanging scroll (portrait, well past 4:1).
         assert!(is_scroll_shape(1600, 58));
         assert!(is_scroll_shape(1300, 23660));
         // Degenerate zero height/width never panics or divides by zero.
