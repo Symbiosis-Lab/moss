@@ -913,7 +913,7 @@ main.has-sidebar > .moss-comments {
 }
 
 main.has-sidebar > .latest-sidebar {
-  width: clamp(200px, 22vw, 320px);
+  width: var(--moss-sidebar-width);
   flex-shrink: 0;
   position: sticky;
   top: var(--moss-space-lg);

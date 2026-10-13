@@ -153,9 +153,9 @@
       },
       {
         "name": "moss-sidebar-width",
-        "value": "280px",
+        "value": "clamp(200px, 22vw, 320px)",
         "type": "dimension",
-        "description": "Sidebar width"
+        "description": "Width of the side rail beside a page, on a wide screen (below 64rem the rail stacks at full width)"
       },
       {
         "name": "moss-site-max-width",

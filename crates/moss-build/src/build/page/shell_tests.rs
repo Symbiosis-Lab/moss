@@ -911,13 +911,12 @@ fn test_css_nav_right_uses_flex() {
 
 #[test]
 fn test_css_sidebar_responsive_width() {
-    // Sidebar width should scale on wider screens using clamp()
-    // Now on main.has-sidebar instead of .page-wrapper.has-sidebar
+    // The rail's width is the --moss-sidebar-width token, so a theme can set it.
     let rule = get_css_rule(DEFAULT_CSS, "main.has-sidebar > .latest-sidebar")
         .expect(".latest-sidebar CSS rule should exist");
     assert!(
-        rule.contains("clamp(") && rule.contains("vw"),
-        "Sidebar should use clamp() with vw units for responsive width, got: {}",
+        rule.contains("width: var(--moss-sidebar-width);"),
+        "Sidebar width must read --moss-sidebar-width, got: {}",
         rule
     );
 }
