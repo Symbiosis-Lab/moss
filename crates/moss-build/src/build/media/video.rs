@@ -649,10 +649,10 @@ pub(crate) fn convert_single_video(
     }
 
     let staged = if kept_original {
-        // Unachievable size target on an already-web-ready source (long
-        // film): store the ORIGINAL as its own transform output. The
-        // seal/registry flow and future cache hits are then identical to
-        // a real encode — rebuilds link the original without re-probing.
+        // The source already is its web file: store the ORIGINAL as its own
+        // transform output. The seal/registry flow and future cache hits are
+        // then identical to a real encode — rebuilds link the original
+        // without re-probing.
         stage_mp4(objects, source_file, &output_mp4)
     } else {
         // 3c. Validate converted MP4 via ffprobe before storing in CAS
@@ -1467,9 +1467,9 @@ pub(crate) fn run_video_conversion(
                 log::info!("[{}/{}] Converted successfully: {}", current, total, filename);
             }
 
-            // Cap-overrun visibility: KeptOriginal and the .mov floor clamp
-            // deliberately exceed max_size_mb (which may be a deploy-plugin PLATFORM
-            // cap). Surface the trade-off instead of letting the user's first signal
+            // Cap-overrun visibility: a video too long for even the bottom
+            // rung to fit deliberately exceeds max_size_mb (which may be a
+            // deploy-plugin PLATFORM cap). Surface the trade-off instead of letting the user's first signal
             // be a 413 at deploy time. Stat-based so cache-hit rebuilds report it too.
             let cap_bytes = compression_config.max_size_mb as u64 * 1024 * 1024;
             let over_cap = fs::metadata(&output_mp4)
@@ -1731,7 +1731,7 @@ fn video_output_keys(mapped: &str) -> Vec<String> {
 /// carry_forward_paths), not merely reserved for a run in flight.
 ///
 /// Unlike mp4/thumbnail, having no HLS ladder (a narrow source) or a shorter one
-/// (bitrate/budget clamped below the full table) is an everyday outcome for a
+/// (a smaller source, or a long one the budget narrowed) is an everyday outcome for a
 /// video, not a coherence violation — so unlike `video_output_keys`, the
 /// ladder half is never the full static table. It is
 /// `hls::ladder_members_from_master`'s reading of the gate's own references
@@ -2606,7 +2606,7 @@ pub(crate) mod tests {
         let mut staged = vec![asset_paths::to_mp4(item), asset_paths::to_thumb(item), asset_paths::to_poster(item)];
         let rungs = asset_paths::video_ladder_rungs((640, 360));
         if ladder {
-            staged.extend(asset_paths::hls_outputs(item, rungs));
+            staged.extend(asset_paths::hls_outputs(item, &rungs));
         }
         let master_key = asset_paths::to_hls_master(item);
         for key in &staged {
@@ -2616,7 +2616,7 @@ pub(crate) mod tests {
             // census reads them for real now, not just their presence — so
             // it alone does not get the sentinel every other file keeps.
             if ladder && *key == master_key {
-                std::fs::write(&abs, synthetic_master(rungs)).unwrap();
+                std::fs::write(&abs, synthetic_master(&rungs)).unwrap();
             } else {
                 std::fs::write(&abs, b"STAGED-SENTINEL").unwrap();
             }
@@ -2864,7 +2864,7 @@ pub(crate) mod tests {
     /// `video/hls/` key a real encode would have left, each backed by a real
     /// (if inert) CAS blob so `find_cached_output` sees it, under
     /// `hls::ladder_params` for today's default compression config, with
-    /// fabricated (but self-consistent) `SourceFacts` chosen so recomputing
+    /// fabricated (but self-consistent) probe facts chosen so recomputing
     /// them against that same config reproduces exactly `rung_count` rungs —
     /// a width narrow enough to cap it there, a duration far under the
     /// per-file budget so nothing narrows it further — so `cached_ladder`/
@@ -2881,7 +2881,6 @@ pub(crate) mod tests {
         rung_count: usize,
     ) -> Vec<String> {
         use crate::build::cache::{ObjectStore, TransformCache, TransformEntry};
-        use crate::build::media::hls::SourceFacts;
         use moss_core::asset_paths;
 
         seed_cached_video(vault, moss_dir, item, mp4, poster);
@@ -2893,18 +2892,21 @@ pub(crate) mod tests {
         let mut record = transforms.get_with(&source_oid, crate::build::cache::RecordMode::Request).expect("seed_cached_video just wrote this record");
 
         let config = crate::build::media::ffmpeg::VideoCompressionConfig::default();
-        let rungs = asset_paths::video_ladder_rungs_by_count(rung_count)
-            .unwrap_or_else(|| panic!("{rung_count} is not a real rung count"));
-        let source = SourceFacts {
+        assert!((2..=asset_paths::VIDEO_LADDER.len()).contains(&rung_count), "{rung_count} is not a real rung count");
+        // A source exactly the size of a table row gets the rows below it and
+        // itself: the table's first `rung_count` rows.
+        let rungs = &asset_paths::VIDEO_LADDER[..rung_count];
+        let source = crate::build::media::ffmpeg::SourceVideo {
             width: asset_paths::VIDEO_LADDER[rung_count - 1].width,
             height: asset_paths::VIDEO_LADDER[rung_count - 1].height,
             sar: 1.0,
             duration_secs: 60.0,
-            video_kbps: None,
+            fps: 30.0,
             total_kbps: None,
+            web_playable: false,
             has_audio: true,
         };
-        let params = crate::build::media::hls::ladder_params(&config, rungs, source);
+        let params = crate::build::media::hls::ladder_params(&config, rungs, &source);
         let master = synthetic_master(rungs);
         for name in asset_paths::hls_members(rungs) {
             // The gate gets REAL, parseable master-playlist bytes —
@@ -3273,7 +3275,7 @@ pub(crate) mod tests {
 
     /// `video_output_keys`' full `VIDEO_LADDER` table is a candidate set, not
     /// a promise every video has every file of the full table — a narrower ladder (fewer
-    /// rungs, clamped by the source's own bitrate or the per-file budget) is
+    /// rungs, from a smaller source or the per-file budget) is
     /// an everyday outcome, not damage. The names above a real ladder's own
     /// width must never reach `emit_video_outputs_via_channel`'s existence
     /// check, which logs anything it finds missing as a coherence violation
@@ -3288,7 +3290,7 @@ pub(crate) mod tests {
         std::fs::create_dir_all(&staging).unwrap();
 
         let item = "videos/narrow.mov".to_string();
-        let rungs = asset_paths::video_ladder_rungs_by_count(4).expect("4 is a real rung count");
+        let rungs = &asset_paths::VIDEO_LADDER[..4];
         let staged_ladder = asset_paths::hls_outputs(&item, rungs);
         let master_key = asset_paths::to_hls_master(&item);
         for key in [asset_paths::to_mp4(&item), asset_paths::to_thumb(&item), asset_paths::to_poster(&item)]
@@ -3362,7 +3364,7 @@ pub(crate) mod tests {
 
         // A previous build's full output set, still in staging from an older
         // version of this source.
-        let rungs = asset_paths::video_ladder_rungs_by_count(6).expect("6 is a real rung count");
+        let rungs = &asset_paths::VIDEO_LADDER[..6];
         let mut staged = vec![asset_paths::to_mp4(&item), asset_paths::to_thumb(&item), asset_paths::to_poster(&item)];
         staged.extend(asset_paths::hls_outputs(&item, rungs));
         let master_key = asset_paths::to_hls_master(&item);
@@ -3673,7 +3675,7 @@ pub(crate) mod tests {
         remove_stale_dirs(&staging, &compute_expected_dirs(view), &crate::build::lifecycle::permit_for_test());
 
         let master_key = asset_paths::to_hls_master(&item1);
-        let master_bytes = synthetic_master(asset_paths::video_ladder_rungs((640, 360)));
+        let master_bytes = synthetic_master(&asset_paths::video_ladder_rungs((640, 360)));
         for key in &untouched {
             let abs = staging.join(key);
             assert!(

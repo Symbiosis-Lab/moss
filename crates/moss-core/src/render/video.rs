@@ -155,25 +155,29 @@ pub fn synthesize_sequence_video_html(
     video_embed(&TitleParams::default(), placement, src, assets, Some(first), true)
 }
 
-/// The ladder's third-row file as a phone-only `<source>`, or nothing.
+/// The ladder's 640x360-box file as a phone-only `<source>`, or nothing.
 ///
-/// That row is a 640x360 box; the file's frame follows the source's own shape
-/// (a 4:3 clip gets 480x360). Only sequence slides get one, only when the
-/// source is at least 640 wide, and never for a portrait source: its frame in
-/// that box is a narrow strip (202x360 for a 9:16 clip) that a phone would
-/// enlarge. The ladder names its rungs by index (`v{i}.m4s`), so the index is
-/// the rung's position in `VIDEO_LADDER`. A missing file would fall through
-/// to the next `<source>`, so a rung dropped by the bitrate clamp costs
+/// The file's frame follows the source's own shape (a 4:3 clip gets 480x360).
+/// Only sequence slides get one, never for a portrait source (its frame in
+/// that box is a narrow strip, 202x360 for a 9:16 clip, that a phone would
+/// enlarge), and only when that box is a rung below the source's own size: a
+/// source close to 640 wide has no such rung, and its full-size file is what
+/// a phone would get anyway. The ladder names its rungs by position
+/// (`v{i}.m4s`), and the rows below the top are the table's first rows, so
+/// the box's index in the table is its file's. A missing file would fall
+/// through to the next `<source>`, so a rung the size budget dropped costs
 /// nothing but the lighter file.
 fn phone_rung_source(src: &str, assets: &AssetSnapshot, sequence: bool) -> String {
     if !sequence {
         return String::new();
     }
-    match assets.dims(&PathBuf::from(src)) {
-        Some((w, h)) if w >= 640 && w >= h => {}
+    let display = match assets.dims(&PathBuf::from(src)) {
+        Some((w, h)) if w >= h => (w, h),
         _ => return String::new(),
-    }
-    let Some(idx) = crate::asset_paths::VIDEO_LADDER.iter().position(|r| r.width == 640) else {
+    };
+    let rungs = crate::asset_paths::video_ladder_rungs(display);
+    let below_top = &rungs[..rungs.len() - 1];
+    let Some(idx) = below_top.iter().position(|r| r.width == 640) else {
         return String::new();
     };
     let master = crate::asset_paths::to_hls_master(src);
@@ -733,6 +737,16 @@ mod phone_rung_tests {
     #[test]
     fn sequence_slide_from_a_source_narrower_than_640_gets_no_phone_rung() {
         let html = synthesize_sequence_video_html(&Placement::default(), "clip.mp4", &snapshot(320, true), true);
+        assert!(!html.contains("max-width"), "got: {html}");
+    }
+
+    #[test]
+    fn sequence_slide_from_a_640_wide_source_gets_no_phone_rung() {
+        // A 640x360 source's top rung is the 640 row itself: v2 is its
+        // full-size file, not a lighter one for phones.
+        let mut s = snapshot(640, true);
+        s.dimensions.insert("clip.mp4".into(), (640, 360));
+        let html = synthesize_sequence_video_html(&Placement::default(), "clip.mp4", &s, false);
         assert!(!html.contains("max-width"), "got: {html}");
     }
 

@@ -9,12 +9,11 @@
 //! them too, and both files reach them the same way, through `super::`.
 
 use moss_core::asset_paths::{
-    display_size, rung_list_fingerprint, video_ladder_rungs_by_count,
-    video_ladder_rungs_within, SourceBitrate, VideoRung, HLS_MASTER_NAME,
+    rung_list_fingerprint, video_ladder_rungs_within, VideoRung, HLS_MASTER_NAME, VIDEO_LADDER,
 };
 
 use crate::build::cache::{TransformCache, TransformRecord};
-use crate::build::media::ffmpeg::{SourceVideo, VideoCompressionConfig};
+use crate::build::media::ffmpeg::{progressive_rung, SourceVideo, VideoCompressionConfig};
 
 use super::{transform_name, HLS_TRANSFORM_PREFIX, KEYFRAME_SECONDS, SEGMENT_SECONDS};
 
@@ -26,106 +25,66 @@ use super::{transform_name, HLS_TRANSFORM_PREFIX, KEYFRAME_SECONDS, SEGMENT_SECO
 /// to a fixed 16:9 frame. Each bump rebuilds existing ladders once.
 pub(super) const LADDER_FORMAT: u32 = 3;
 
-/// The source facts [`video_ladder_rungs_within`] needs, captured once at
-/// encode time and carried inside `ladder_params`'s `"source"` field so a
-/// later lookup can ask "what would this source's effective ladder be under
-/// TODAY's budget?" — `cached_ladder` must never read the source before a
-/// hit, and storing this is what lets it answer that without one.
-///
-/// `pub(crate)`, fields included: video.rs's own tests build one directly to
-/// seed a `TransformRecord` with (no real ffmpeg) for the staging self-heal.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct SourceFacts {
-    pub(crate) width: u32,
-    /// Height and pixel aspect ratio: with `width` they give the display
-    /// size that decides which rungs the source fills. A record from before
-    /// these existed reads back as height 0 / square pixels, which still
-    /// answers by width alone — and misses anyway, on [`LADDER_FORMAT`].
-    pub(crate) height: u32,
-    pub(crate) sar: f64,
-    pub(crate) duration_secs: f64,
-    pub(crate) video_kbps: Option<f64>,
-    pub(crate) total_kbps: Option<f64>,
-    /// Whether the source carries an audio stream — [`super::ladder_members`]
-    /// needs this to know which member list a cache hit is vouching for; a
-    /// record from before this field existed has none to read back, so
-    /// [`Self::from_json`] defaults it to `true` rather than failing the
-    /// whole lookup, which is exactly what every such record was actually
-    /// encoded with (a silent source never reached a successful cache write
-    /// before this field existed — see the encode-site fix this travels
-    /// with).
-    pub(crate) has_audio: bool,
+/// This source's effective ladder under `config`'s current budgets: the
+/// per-file one, and the web file's, which decides the rung the ladder must
+/// hold ([`progressive_rung`]). The one place [`video_ladder_rungs_within`] is
+/// called from, whether the source was just probed or read back out of a
+/// record, so the two can never compute a different answer for the same
+/// source.
+pub(crate) fn effective_rungs(source: &SourceVideo, config: &VideoCompressionConfig) -> Vec<VideoRung> {
+    let max_file_bytes = u64::from(config.hls_max_file_mb) * 1024 * 1024;
+    video_ladder_rungs_within(
+        source.display(),
+        source.duration_secs,
+        max_file_bytes,
+        progressive_rung(source, config),
+    )
 }
 
-impl SourceFacts {
-    pub(crate) fn from_probe(probe: &SourceVideo) -> Self {
-        Self {
-            width: probe.width,
-            height: probe.height,
-            sar: probe.sar,
-            duration_secs: probe.duration_secs,
-            video_kbps: probe.video_kbps,
-            total_kbps: probe.total_kbps,
-            has_audio: probe.has_audio,
-        }
-    }
-
-    /// This source's effective ladder under `config`'s current per-file
-    /// budget. The one place [`video_ladder_rungs_within`] is called from
-    /// either a fresh probe or a record's stored facts, so the two can never
-    /// compute a different answer for what claims to be the same source.
-    pub(crate) fn effective_rungs(&self, config: &VideoCompressionConfig) -> Vec<VideoRung> {
-        let max_file_bytes = u64::from(config.hls_max_file_mb) * 1024 * 1024;
-        video_ladder_rungs_within(
-            self.display(),
-            self.duration_secs,
-            max_file_bytes,
-            SourceBitrate { video_kbps: self.video_kbps, total_kbps: self.total_kbps },
-        )
-    }
-
-    pub(crate) fn display(&self) -> (u32, u32) {
-        display_size(self.width, self.height, self.sar)
-    }
-
-    fn to_json(self) -> serde_json::Value {
-        serde_json::json!({
-            "width": self.width,
-            "height": self.height,
-            "sar": self.sar,
-            "duration_secs": self.duration_secs,
-            "video_kbps": self.video_kbps,
-            "total_kbps": self.total_kbps,
-            "has_audio": self.has_audio,
-        })
-    }
-
-    fn from_json(v: &serde_json::Value) -> Option<Self> {
-        Some(Self {
-            width: v.get("width")?.as_u64()? as u32,
-            height: v.get("height").and_then(serde_json::Value::as_u64).unwrap_or(0) as u32,
-            sar: v.get("sar").and_then(serde_json::Value::as_f64).unwrap_or(1.0),
-            duration_secs: v.get("duration_secs")?.as_f64()?,
-            video_kbps: v.get("video_kbps").and_then(serde_json::Value::as_f64),
-            total_kbps: v.get("total_kbps").and_then(serde_json::Value::as_f64),
-            has_audio: v.get("has_audio").and_then(serde_json::Value::as_bool).unwrap_or(true),
-        })
-    }
+/// The probe facts stored in `ladder_params`'s `"source"` field, so a later
+/// lookup can ask "what would this source's effective ladder be under TODAY's
+/// budgets?" without reading the source: `cached_ladder` must never read it
+/// before a hit.
+fn source_to_json(source: &SourceVideo) -> serde_json::Value {
+    serde_json::json!({
+        "width": source.width,
+        "height": source.height,
+        "sar": source.sar,
+        "duration_secs": source.duration_secs,
+        "fps": source.fps,
+        "total_kbps": source.total_kbps,
+        "web_playable": source.web_playable,
+        "has_audio": source.has_audio,
+    })
 }
 
-/// The rung table a cached ladder's own file census names — its `video/hls/
-/// v*.m3u8` keys counted, then bounds-checked against the real table lengths
-/// (2..=the table length, [`video_ladder_rungs_by_count`]). `None` for a record
-/// with no ladder keys, too few to be a real ladder, or (in principle) more than the
-/// table can produce.
-fn record_table_rungs(record: &TransformRecord) -> Option<&'static [VideoRung]> {
+/// [`source_to_json`] read back. A record from before a field existed reads
+/// as the safe default (no height, square pixels, 30 fps, not web-playable,
+/// with audio), and misses anyway on [`LADDER_FORMAT`].
+fn source_from_json(v: &serde_json::Value) -> Option<SourceVideo> {
+    Some(SourceVideo {
+        width: v.get("width")?.as_u64()? as u32,
+        height: v.get("height").and_then(serde_json::Value::as_u64).unwrap_or(0) as u32,
+        sar: v.get("sar").and_then(serde_json::Value::as_f64).unwrap_or(1.0),
+        duration_secs: v.get("duration_secs")?.as_f64()?,
+        fps: v.get("fps").and_then(serde_json::Value::as_f64).unwrap_or(30.0),
+        total_kbps: v.get("total_kbps").and_then(serde_json::Value::as_f64),
+        web_playable: v.get("web_playable").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        has_audio: v.get("has_audio").and_then(serde_json::Value::as_bool).unwrap_or(true),
+    })
+}
+
+/// How many rungs a cached ladder's own file census names — its `video/hls/
+/// v*.m3u8` keys counted. `None` for a record with no ladder keys, too few to
+/// be a real ladder, or more than the table can produce.
+fn record_rung_count(record: &TransformRecord) -> Option<usize> {
     let rung_prefix = format!("{HLS_TRANSFORM_PREFIX}v");
     let rung_count = record
         .transforms
         .keys()
         .filter(|k| k.starts_with(rung_prefix.as_str()) && k.ends_with(".m3u8"))
         .count();
-    video_ladder_rungs_by_count(rung_count)
+    (2..=VIDEO_LADDER.len()).contains(&rung_count).then_some(rung_count)
 }
 
 /// A cached ladder, or nothing — never a partial one, and never a LEGACY-form
@@ -133,13 +92,10 @@ fn record_table_rungs(record: &TransformRecord) -> Option<&'static [VideoRung]> 
 /// carries no `"source"` block, so it misses and is encoded afresh).
 ///
 /// The rung count is read back out of the record rather than re-derived from
-/// the source, because the record is the only thing that knows which table the
-/// files were encoded under. `video_ladder_rungs` AND `video_ladder_rungs_within`
-/// both always truncate from the top, so a ladder of `k` rungs has the WIDTH,
-/// HEIGHT, FPS and AUDIO GROUP of `VIDEO_LADDER[..k]` regardless of which one
-/// produced it.
+/// the source, because the record is the only thing that knows how many
+/// files were encoded.
 ///
-/// Never reads the source: `SourceFacts` are read back out of the record —
+/// Never reads the source: its probe facts are read back out of the record —
 /// `ladder_params` stored them there at encode time — and recomputed against
 /// TODAY's config. `video_ladder_rungs_within` only ever narrows from the top,
 /// so two rung lists computed from the SAME source facts and landing at the
@@ -154,13 +110,11 @@ pub(super) fn cached_ladder(
     config: &VideoCompressionConfig,
 ) -> Option<(Vec<String>, Vec<String>, serde_json::Value)> {
     let record = transforms.get_with(source_oid, crate::build::cache::RecordMode::Wait)?;
-    // `effective` below stands in for the table slice `record_table_rungs`
-    // would otherwise return; only its length matters here.
-    let rung_count = record_table_rungs(&record)?.len();
+    let rung_count = record_rung_count(&record)?;
 
     let stored = record.transforms.get(&transform_name(HLS_MASTER_NAME))?;
-    let source = SourceFacts::from_json(stored.params.get("source")?)?;
-    let effective = source.effective_rungs(config);
+    let source = source_from_json(stored.params.get("source")?)?;
+    let effective = effective_rungs(&source, config);
     if effective.len() != rung_count {
         return None;
     }
@@ -170,7 +124,7 @@ pub(super) fn cached_ladder(
         return None;
     }
 
-    let params = ladder_params(config, &effective, source);
+    let params = ladder_params(config, &effective, &source);
     let oids: Option<Vec<String>> = members
         .iter()
         .map(|name| transforms.find_cached_output(source_oid, &transform_name(name), &params, crate::build::cache::RecordMode::Wait))
@@ -180,7 +134,7 @@ pub(super) fn cached_ladder(
 
 /// The transform-cache key for one ladder member: what shapes its bytes — the
 /// encoder settings and the EFFECTIVE rung list this video is (or would be)
-/// encoded at — plus the `SourceFacts` `cached_ladder` needs to answer
+/// encoded at — plus the probe facts `cached_ladder` needs to answer
 /// "would TODAY's budget produce a different ladder?" without re-probing.
 ///
 /// Policy inputs that do not shape the bytes ON THEIR OWN are deliberately
@@ -202,7 +156,7 @@ pub(super) fn cached_ladder(
 pub(crate) fn ladder_params(
     config: &VideoCompressionConfig,
     rungs: &[VideoRung],
-    source: SourceFacts,
+    source: &SourceVideo,
 ) -> serde_json::Value {
     serde_json::json!({
         "preset": config.preset,
@@ -210,7 +164,7 @@ pub(crate) fn ladder_params(
         "keyframe_seconds": KEYFRAME_SECONDS,
         "format": LADDER_FORMAT,
         "rungs": rung_list_fingerprint(rungs),
-        "source": source.to_json(),
+        "source": source_to_json(source),
     })
 }
 

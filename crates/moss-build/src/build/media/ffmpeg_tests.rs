@@ -185,11 +185,7 @@ fn test_collect_videos_small_mp4_is_thumbnail_only() {
 // Encode planning — one decision, from the ladder
 // ===========================================
 
-/// A 1080p source, comfortably inside the size budget.
-///
-/// `video_kbps` is always `None` here: `plan_video_encode` judges on
-/// `total_kbps` alone (see its own doc for why), so no test in this section
-/// needs a video-stream-only figure.
+/// A 16:9 source `width` wide.
 fn source(duration_secs: f64, width: u32, total_kbps: Option<f64>, web: bool) -> SourceVideo {
     SourceVideo {
         duration_secs,
@@ -198,7 +194,6 @@ fn source(duration_secs: f64, width: u32, total_kbps: Option<f64>, web: bool) ->
         sar: 1.0,
         fps: 30.0,
         total_kbps,
-        video_kbps: None,
         has_audio: true,
         web_playable: web,
     }
@@ -211,7 +206,7 @@ fn plan_puts_a_short_video_on_its_top_rung() {
     // input — a video one minute shorter would have been given MORE bitrate.
     // Duration no longer sets the bitrate; the ladder does.
     let config = VideoCompressionConfig::default();
-    let rung = match plan_video_encode(&source(339.8, 1920, Some(2150.0), true), &config) {
+    let rung = match plan_video_encode(&source(339.8, 1920, Some(9000.0), true), &config) {
         EncodePlan::Encode { rung } => rung,
         other => panic!("expected Encode, got {other:?}"),
     };
@@ -222,6 +217,26 @@ fn plan_puts_a_short_video_on_its_top_rung() {
         plan_video_encode(&source(60.0, 1920, Some(9000.0), true), &config),
         EncodePlan::Encode { rung: moss_core::asset_paths::VIDEO_LADDER[6] }
     );
+}
+
+/// The original is kept on what it costs, not on which table size it
+/// matches: under the ceiling for its own size and the size budget, a file
+/// every browser plays ships as it is.
+#[test]
+fn plan_keeps_an_original_that_is_cheaper_than_what_its_size_allows() {
+    let config = VideoCompressionConfig::default();
+    let sized = |w: u32, h: u32, secs: f64, kbps: f64| SourceVideo { height: h, ..source(secs, w, Some(kbps), true) };
+    // A 1080p file at 2150 kbps: the budget would place an encode at 720p.
+    assert_eq!(plan_video_encode(&source(339.8, 1920, Some(2150.0), true), &config), EncodePlan::KeepOriginal);
+    // A screen recording between the 720 and 1080 sizes, which no table row
+    // matches exactly.
+    assert_eq!(plan_video_encode(&sized(1280, 810, 91.0, 300.0), &config), EncodePlan::KeepOriginal);
+    // Twenty minutes of a lean 1708x1080 recording is 33 MB; an encode would
+    // be held to the 640x360 rung the budget allows for twenty minutes.
+    assert_eq!(plan_video_encode(&sized(1708, 1080, 1200.0, 220.0), &config), EncodePlan::KeepOriginal);
+    // ...but never past what the budget holds, or above the delivery ceiling.
+    assert!(matches!(plan_video_encode(&sized(1708, 1080, 7200.0, 220.0), &config), EncodePlan::Encode { .. }));
+    assert!(matches!(plan_video_encode(&sized(3840, 2160, 60.0, 1000.0), &config), EncodePlan::Encode { .. }));
 }
 
 #[test]
@@ -783,11 +798,11 @@ fn strip_ffmpeg_progress_caps_the_kept_line_count() {
 
 #[test]
 fn encode_start_line_names_source_and_rung() {
-    let rung = moss_core::asset_paths::VIDEO_LADDER[2];
-    let line = encode_start_line(Path::new("videos/clip.mov"), rung);
+    // The frame the source is encoded at, not the box it is fitted into.
+    let rung = moss_core::asset_paths::video_top_rung((1708, 1080));
+    let line = encode_start_line(Path::new("videos/clip.mov"), rung, (1708, 1080));
     assert!(line.contains("videos/clip.mov"), "{line}");
-    assert!(line.contains(&rung.width.to_string()), "{line}");
-    assert!(line.contains(&rung.height.to_string()), "{line}");
+    assert!(line.contains("1708x1080@30fps"), "{line}");
 }
 
 #[test]
@@ -855,7 +870,7 @@ fn test_to_params_equality() {
 
 #[test]
 fn to_params_carries_a_frame_version_so_pre_fit_encodes_are_rebuilt() {
-    assert_eq!(VideoCompressionConfig::default().to_params()["frame"], 2);
+    assert_eq!(VideoCompressionConfig::default().to_params()["frame"], 3);
 }
 
 #[test]

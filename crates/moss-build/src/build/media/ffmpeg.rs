@@ -137,10 +137,11 @@ impl VideoCompressionConfig {
             // keep serving renditions encoded under the old table. The table's
             // own contents are therefore part of the key.
             "ladder": asset_paths::video_ladder_fingerprint(),
-            // 2: the frame is the source's shape fitted into the rung's box
-            // with square pixels; 1 forced a fixed 16:9 frame. Nothing in the
-            // table changed when this did, so the key must say so.
-            "frame": 2,
+            // 3: the top size is the source's own picture; 2 fitted it into
+            // the table row below it, and 1 forced a fixed 16:9 frame.
+            // Nothing in the table changed when these did, so the key must
+            // say so.
+            "frame": 3,
             // The quality every encode aims at. A file encoded to hit its
             // rung's rate instead carries no such field and is rebuilt once.
             "crf": VIDEO_QUALITY_CRF,
@@ -165,7 +166,7 @@ pub enum EncodingResult {
 /// What ffprobe tells us about a source, and everything the delivery decision
 /// needs. Gathered in ONE probe rather than three — the encode used to shell
 /// out separately for duration and codec.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SourceVideo {
     pub duration_secs: f64,
     /// Coded width and height, as stored (rotation applied: a phone clip
@@ -180,21 +181,10 @@ pub struct SourceVideo {
     /// `a:0` on a silent source fails the entire encode.
     pub has_audio: bool,
     /// Container bitrate in kbps — video plus audio plus overhead, i.e. what a
-    /// viewer actually has to sustain. This, not `video_kbps`, is what a rung
-    /// promises, so this is what decides whether a source already meets one
+    /// viewer actually has to sustain. This is what a rung promises, so this
+    /// is what decides whether a source already meets one
     /// ([`plan_video_encode`]).
     pub total_kbps: Option<f64>,
-    /// The source's own VIDEO-stream bitrate in kbps, read from the video
-    /// stream's `bit_rate` — distinct from `total_kbps`, which also carries
-    /// audio and container overhead. `None` when the container states no
-    /// per-stream figure, which is common for mkv/webm. This is what the HLS
-    /// ladder clamps a rung against (`asset_paths::video_ladder_rungs_within`,
-    /// applied in `hls::produce_ladder`): re-encoding a rung above what the
-    /// source's own picture carries cannot add detail the source never had,
-    /// it only inflates the file. `total_kbps` is the fallback there when this
-    /// is `None` — looser, since it is not the picture alone, but still
-    /// tighter than no clamp at all.
-    pub video_kbps: Option<f64>,
     /// A codec every target browser decodes, in a container they all open. The
     /// container alone does not prove this: HEVC-in-mp4 does not play in Firefox.
     pub web_playable: bool,
@@ -253,11 +243,12 @@ impl SourceVideo {
 pub enum EncodePlan {
     /// Encode at this rung.
     Encode { rung: VideoRung },
-    /// The source ALREADY is the rung it would be encoded to — web-playable,
-    /// no wider, no fatter. It plays everywhere within the rate a viewer was
-    /// promised, so the source bytes ship: a re-encode might come out smaller,
-    /// but it would cost the picture a generation for a saving no viewer
-    /// needs.
+    /// The source is already something every browser plays, no larger than
+    /// the delivery ceiling and no heavier than its own size is allowed or
+    /// the size budget holds. It plays everywhere within the rate a viewer
+    /// was promised, so the source bytes ship: a re-encode might come out
+    /// smaller, but it would cost the picture a generation for a saving no
+    /// viewer needs.
     KeepOriginal,
 }
 
@@ -268,12 +259,19 @@ pub enum EncodePlan {
 /// **duration**. Neither was the right question. The right one is whether the
 /// source already satisfies the delivery policy — and the policy is the ladder.
 ///
-/// Two things pull the choice below the source's own top rung: the source being
-/// narrower (handled by `video_ladder_rungs`) and the hosting size budget
-/// (handled here). If not even the bottom rung fits the budget, the bottom rung
-/// ships anyway — an over-budget file that plays beats a video nobody can
-/// watch, and the alternative, shipping the multi-gigabyte original, is worse
-/// for the viewer *and* the bill.
+/// One thing pulls the choice below the source's own picture
+/// (`video_top_rung`): the hosting size budget. If not even the bottom rung
+/// fits the budget, the bottom rung ships anyway — an over-budget file that
+/// plays beats a video nobody can watch, and the alternative, shipping the
+/// multi-gigabyte original, is worse for the viewer *and* the bill.
+///
+/// The original is kept on what it costs, not on which box it happens to
+/// match. It is judged against its own top rung and against the budget
+/// directly, so a lean recording between two table sizes, or one long enough
+/// that the budget would place a re-encode several sizes down, ships as the
+/// file it already is. A 20-minute 1708x1080 screen recording at 220 kbps is
+/// 33 MB; measured against the rung the budget picks for a 20-minute encode
+/// (640x360) it was "too large" and was re-encoded to that size.
 ///
 /// This is the progressive MP4's own decision, over ONE file that can weigh
 /// up to `total_kbps * duration`. The HLS ladder's analogous truncation
@@ -286,30 +284,44 @@ pub fn plan_video_encode(source: &SourceVideo, config: &VideoCompressionConfig) 
         config.max_size_mb as f64 * 1024.0 * 1024.0 * config.target_fill_percentage;
     let budget_kbps = (budget_bytes * 8.0 / 1024.0) / source.duration_secs.max(0.001);
 
-    let rungs = video_ladder_rungs(source.display());
+    let display = source.display();
+    let rungs = video_ladder_rungs(display);
+    let top = rungs[rungs.len() - 1];
+    let ceiling = asset_paths::VIDEO_LADDER[asset_paths::VIDEO_LADDER.len() - 1];
+
+    // Judged on what the viewer must sustain, in the same unit the budget
+    // uses: the container total. Testing the video stream alone would keep a
+    // 300 kbps picture wrapped in a 320 kbps audio track and call it a 365 kbps
+    // rung. Frame rate counts too — the bottom rung is 15 fps because 30 fps at
+    // that bitrate measured as a smear, so a 30 fps original is not that rung
+    // however small its file is.
+    let keep = source.web_playable
+        && display.0 <= ceiling.width
+        && display.1 <= ceiling.height
+        && source.fps <= top.fps as f64 + 0.5
+        && source
+            .total_kbps
+            .is_some_and(|kbps| kbps <= (top.total_kbps() as f64).min(budget_kbps));
+    if keep {
+        return EncodePlan::KeepOriginal;
+    }
+
     let rung = rungs
         .iter()
         .rev()
         .find(|r| r.total_kbps() as f64 <= budget_kbps)
         .copied()
         .unwrap_or(rungs[0]);
+    EncodePlan::Encode { rung }
+}
 
-    // Judged on what the viewer must sustain, in the same unit the budget above
-    // uses: the container total. Testing the video stream alone would keep a
-    // 300 kbps picture wrapped in a 320 kbps audio track and call it a 365 kbps
-    // rung. Frame rate counts too — the bottom rung is 15 fps because 30 fps at
-    // that bitrate measured as a smear, so a 30 fps original is not that rung
-    // however small its file is.
-    let already_within = source.web_playable
-        && source.display().0 <= rung.width
-        && source.display().1 <= rung.height
-        && source.fps <= rung.fps as f64 + 0.5
-        && source.total_kbps.is_some_and(|kbps| kbps <= rung.total_kbps() as f64);
-
-    if already_within {
-        EncodePlan::KeepOriginal
-    } else {
-        EncodePlan::Encode { rung }
+/// The rung of the web file [`plan_video_encode`] decides on: the source's
+/// own top when it is kept, the rung it is encoded at otherwise. An HLS
+/// ladder is played instead of this file, so it must hold this rung.
+pub(crate) fn progressive_rung(source: &SourceVideo, config: &VideoCompressionConfig) -> VideoRung {
+    match plan_video_encode(source, config) {
+        EncodePlan::KeepOriginal => asset_paths::video_top_rung(source.display()),
+        EncodePlan::Encode { rung } => rung,
     }
 }
 
@@ -981,12 +993,11 @@ pub(crate) enum EncodeOutcome<'a> {
 /// One INFO line naming the source and the rung it is about to be encoded
 /// at — the "start" half of a start/end pair a shared, interleaved log can
 /// correlate against wall-clock time.
-pub(crate) fn encode_start_line(source: &Path, rung: VideoRung) -> String {
+pub(crate) fn encode_start_line(source: &Path, rung: VideoRung, display: (u32, u32)) -> String {
+    let (w, h) = rung.fitted_frame(display);
     format!(
-        "Encoding {} at {}x{}@{}fps (up to {} kbps)",
+        "Encoding {} at {w}x{h}@{}fps (up to {} kbps)",
         source.display(),
-        rung.width,
-        rung.height,
         rung.fps,
         rung.video_kbps,
     )
@@ -1161,7 +1172,8 @@ impl FFmpegManager {
     /// 1. Probe the source once.
     /// 2. `plan_video_encode` picks the rung: the best one the source fills
     ///    that the size budget allows, or `KeepOriginal` when the source
-    ///    already is that rung.
+    ///    already plays everywhere and costs no more than its own size and
+    ///    the budget allow.
     /// 3. One encode aimed at `VIDEO_QUALITY_CRF`, capped at the rung's rate.
     /// 4. Validate; on failure retry once, one rung down.
     ///
@@ -1214,13 +1226,14 @@ impl FFmpegManager {
         };
 
         let top = asset_paths::video_top_rung(probe.display());
-        if rung.width < top.width {
+        if rung != top {
+            let (w, h) = rung.fitted_frame(probe.display());
+            let (tw, th) = top.fitted_frame(probe.display());
             log::info!(
-                "{} is {:.0} minutes, so the {} MB budget places it at {}x{} rather than {}x{}",
+                "{} is {:.0} minutes, so the {} MB budget places it at {w}x{h} rather than {tw}x{th}",
                 source.display(),
                 probe.duration_secs / 60.0,
                 config.max_size_mb,
-                rung.width, rung.height, top.width, top.height,
             );
         }
 
@@ -1240,7 +1253,7 @@ impl FFmpegManager {
         // rather than needing one hand-placed at each of the half-dozen
         // return sites.
         let encode_started_at = std::time::Instant::now();
-        log::info!("{}", encode_start_line(source, rung));
+        log::info!("{}", encode_start_line(source, rung, probe.display()));
 
         let outcome = (|| -> Result<(u64, bool), String> {
             self.run_encode(source, output, rung, &probe, config, on_progress, registry, cancel_flag)?;
@@ -1457,14 +1470,8 @@ impl FFmpegManager {
         // the safe direction — the other error ships an unstreamable video.
         // `> 0.0`, mirroring the `duration_secs` guard above: a zero or
         // negative figure is not a real bitrate, and treating it as one would
-        // clamp every rung to nothing. The fallback to `total_kbps` still
-        // applies when this filters a bogus `video_kbps` out.
+        // keep any web-playable source.
         let total_kbps = format("bit_rate").and_then(kbps).filter(|v| *v > 0.0);
-
-        // Missing for a container whose video stream states no per-stream
-        // figure — mkv/webm commonly don't. The HLS ladder falls back to
-        // `total_kbps` when this is `None`.
-        let video_kbps = stream("bit_rate").and_then(kbps).filter(|v| *v > 0.0);
 
         let container_ok = input
             .extension()
@@ -1489,7 +1496,6 @@ impl FFmpegManager {
             sar,
             fps,
             total_kbps,
-            video_kbps,
             has_audio,
             web_playable,
         })
@@ -1721,13 +1727,7 @@ pub(crate) fn real_ffmpeg() -> Option<String> {
     out.status.success().then(|| "ffmpeg".to_string())
 }
 #[cfg(test)]
-/// Synthesise a short test video (with audio) at `size` (e.g. `"320x240"`).
-///
-/// Encoded with no explicit `-b:v`: a busy `testsrc` pattern at `-preset
-/// ultrafast` measures only a few hundred kbps (well under
-/// `asset_paths::VIDEO_LADDER`'s higher rungs), which is fine for a test that
-/// doesn't care about the source's own bitrate — but see
-/// [`synthesise_high_bitrate`] for one that does.
+/// Synthesise a 4-second test video (with audio) at `size` (e.g. `"320x240"`).
 pub(crate) fn synthesise(bin: &str, dest: &Path, size: &str) -> bool {
     std::process::Command::new(bin)
         .args([
@@ -1743,48 +1743,16 @@ pub(crate) fn synthesise(bin: &str, dest: &Path, size: &str) -> bool {
         .unwrap_or(false)
 }
 #[cfg(test)]
-/// Synthesise a short test video at `size` with its video stream forced,
-/// via a CBR-style VBV cap (`nal-hrd=cbr`), to a bitrate comfortably above
-/// `asset_paths::VIDEO_LADDER`'s own top rung — measured at ~7.8 Mbps for a
-/// 1280x720 clip. A plain `-b:v` ceiling is not enough: measured, a simple
-/// `testsrc` pattern under `-preset ultrafast` undershoots even an 8 Mbps
-/// ceiling by 5-6x, because the content is not complex enough to need it.
-/// For a test exercising the per-file BYTE budget in isolation, without also
-/// exercising the source's own bitrate clamp, [`synthesise`]'s default
-/// (unforced) bitrate is too low — it sits under several of the table's own
-/// rungs and would clamp them.
-pub(crate) fn synthesise_high_bitrate(bin: &str, dest: &Path, size: &str, duration_secs: u32) -> bool {
-    let d = duration_secs.to_string();
-    std::process::Command::new(bin)
-        .args([
-            "-hide_banner", "-loglevel", "error", "-y",
-            "-f", "lavfi", "-i", &format!("testsrc=size={size}:rate=30:duration={d}"),
-            "-f", "lavfi", "-i", &format!("sine=frequency=440:duration={d}"),
-            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-            "-b:v", "8000k", "-minrate", "8000k", "-maxrate", "8000k", "-bufsize", "8000k",
-            "-x264-params", "nal-hrd=cbr:force-cfr=1",
-            "-c:a", "aac", "-shortest",
-        ])
-        .arg(dest)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-#[cfg(test)]
 /// Synthesise a short test video with NO audio stream at all — distinct from
 /// a quiet one: [`probe_source`]'s `has_audio` is a stream-presence check,
-/// not a loudness measurement, and this is the only one of the three
-/// synthesisers that leaves it false. Forced to a high video bitrate like
-/// [`synthesise_high_bitrate`], so the source's own bitrate never narrows the
-/// ladder a test is about.
+/// not a loudness measurement, and this is the only synthesiser that leaves
+/// it false.
 pub(crate) fn synthesise_silent(bin: &str, dest: &Path, size: &str) -> bool {
     std::process::Command::new(bin)
         .args([
             "-hide_banner", "-loglevel", "error", "-y",
             "-f", "lavfi", "-i", &format!("testsrc=size={}:rate=30:duration=4", size),
             "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-            "-b:v", "8000k", "-minrate", "8000k", "-maxrate", "8000k", "-bufsize", "8000k",
-            "-x264-params", "nal-hrd=cbr:force-cfr=1",
         ])
         .arg(dest)
         .status()
@@ -1795,7 +1763,7 @@ pub(crate) fn synthesise_silent(bin: &str, dest: &Path, size: &str) -> bool {
 /// Synthesise a short test video whose audio stream is present but carries
 /// silence (`anullsrc`, not [`synthesise`]'s `sine`) — the source `has_audio`
 /// must still read true for, unlike [`synthesise_silent`]'s no-stream-at-all
-/// case. Forced to a high video bitrate like [`synthesise_high_bitrate`].
+/// case.
 pub(crate) fn synthesise_with_silent_audio_track(bin: &str, dest: &Path, size: &str) -> bool {
     std::process::Command::new(bin)
         .args([
@@ -1803,8 +1771,6 @@ pub(crate) fn synthesise_with_silent_audio_track(bin: &str, dest: &Path, size: &
             "-f", "lavfi", "-i", &format!("testsrc=size={}:rate=30:duration=4", size),
             "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono:duration=4",
             "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-            "-b:v", "8000k", "-minrate", "8000k", "-maxrate", "8000k", "-bufsize", "8000k",
-            "-x264-params", "nal-hrd=cbr:force-cfr=1",
             "-c:a", "aac", "-shortest",
         ])
         .arg(dest)

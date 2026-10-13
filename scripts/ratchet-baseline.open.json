@@ -45,7 +45,7 @@
         "crates/moss-build/src/build/manifest.rs": 1200,
         "crates/moss-build/src/ops/serve/invoke.rs": 900,
         "crates/moss-build/src/build/terms.rs": 1000,
-        "crates/moss-core/src/asset_paths.rs": 1100,
+        "crates/moss-core/src/asset_paths.rs": 1000,
         "crates/moss-build/src/build/page/link_meta.rs": 1200,
         "crates/moss-build/src/build/render/grid_cells.rs": 900,
         "crates/moss-build/src/build/place_map/svg.rs": 1000,
@@ -55,7 +55,6 @@
         "crates/moss-core/src/content_graph.rs": 900
       },
       "oversized": {
-        "crates/moss-core/src/asset_paths.rs": "Every output-path derivation for images and videos in one file by design, so a naming change is made in one place and the synthesizers, the build and the preview bridge cannot disagree; the video ladder's rung table and HLS file naming are most of it — retires by moving the HLS ladder naming into a sibling file, which nothing here currently plans.",
         "crates/moss-build/src/build.rs": "Crate root: dozens of submodule declarations plus the single run_pipeline entry point (zero-flicker staging, seal, ship, generation GC) that the rest of build/ hangs off of; deliberately tauri-free via the HostPorts ports pattern that replaced tauri::AppHandle, not a Tauri-command surface — retires by splitting run_pipeline's own body into its own file, which nothing here currently plans.",
         "crates/moss-build/src/build/assets/binary_resolver.rs": "Already the result of collapsing three separate FFmpeg/Git/Hugo binary resolvers into one four-step chain (user path, PATH, cache, download); retires further by splitting the download/verify/extract half from the resolution-order half.",
         "crates/moss-build/src/build/cache.rs": "Both halves of the two-layer cache — the sharded ObjectStore blob store and the TransformCache record store, which holds an ObjectStore and hand-duplicates its ASCII-hex fan-out path logic (documented as mirroring, not sharing) — live together so the composition stays visible; retires by extracting that duplicated shard-path logic into one helper the two files could share.",

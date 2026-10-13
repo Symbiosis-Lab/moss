@@ -23,7 +23,7 @@ use moss_core::asset_paths::{hls_members, video_ladder_rungs, VideoRung};
 /// The ladder a 1280x720 source gets: the synthetic source below stops at the
 /// 720p box, so the 1080p row is not offered to it.
 fn ladder_720() -> &'static [VideoRung] {
-    video_ladder_rungs((1280, 720))
+    &moss_core::asset_paths::VIDEO_LADDER[..6]
 }
 
 fn ffmpeg() -> Option<String> {
@@ -272,17 +272,13 @@ fn encode_ladder_writes_its_census_and_patches_the_master() {
     let mgr = moss_build::build::media::ffmpeg::FFmpegManager::from_bin_path(bin.clone());
     let probe = mgr.probe_source(&src).expect("probe");
     assert!(probe.has_audio, "the synthesised source has a tone");
-    assert!(
-        probe.video_kbps.is_some(),
-        "ffprobe reports the encoded video stream's own bit_rate, not just the container total"
-    );
 
     let out_dir = dir.path().join("out");
     let written = moss_build::build::media::hls::encode_ladder(
         std::path::Path::new(&bin),
         &src,
         &out_dir,
-        moss_core::asset_paths::video_ladder_rungs(probe.display()),
+        &moss_core::asset_paths::video_ladder_rungs(probe.display()),
         &probe,
         &moss_build::build::media::ffmpeg::VideoCompressionConfig::default(),
         None,
@@ -377,7 +373,7 @@ fn rungs_keep_the_sources_shape_with_square_pixels() {
             std::path::Path::new(&bin),
             &src,
             &out_dir,
-            rungs,
+            &rungs,
             &probe,
             &moss_build::build::media::ffmpeg::VideoCompressionConfig::default(),
             None,
@@ -476,7 +472,7 @@ fn a_1080p_source_gets_a_1920x1080_top_rung() {
         std::path::Path::new(&bin),
         &src,
         &out_dir,
-        rungs,
+        &rungs,
         &probe,
         &moss_build::build::media::ffmpeg::VideoCompressionConfig::default(),
         None,

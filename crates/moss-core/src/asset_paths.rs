@@ -564,12 +564,6 @@ impl VideoRung {
         };
         (even(dw * scale, self.width), even(dh * scale, self.height))
     }
-
-    /// Whether fitting `display` into this box would not enlarge it — the
-    /// source is at least as large as the box on whichever axis binds.
-    pub const fn fits_within(&self, display: (u32, u32)) -> bool {
-        self.width <= display.0 || self.height <= display.1
-    }
 }
 
 /// A source's display size: its coded width stretched by its sample aspect
@@ -598,15 +592,6 @@ pub fn display_size(width: u32, height: u32, sar: f64) -> (u32, u32) {
 /// there is no other way to clear the floor.
 pub const MIN_BITS_PER_PIXEL_PER_FRAME: f64 = 0.045;
 
-/// The minimum multiple a clamped top rung's bitrate must clear over the rung
-/// below it for [`video_ladder_rungs_within`] to keep a ladder at all —
-/// matching the 1.5-2x spacing [`VIDEO_LADDER`]'s own doc cites from Apple's
-/// authoring spec. A clamp under this multiple offers a player nothing worth
-/// switching to, so the source gets no ladder (a single rung) rather than a
-/// thinner one: the constant decides whether there is a ladder, not how many
-/// rungs it has.
-pub const LADDER_MIN_RUNG_SPACING: f64 = 1.5;
-
 /// The video delivery ladder, lowest rung first.
 ///
 /// Apple's H.264 rungs, spaced the 1.5-2x apart their authoring spec asks for,
@@ -631,13 +616,10 @@ pub const LADDER_MIN_RUNG_SPACING: f64 = 1.5;
 /// second `max_video_bitrate_kbps` knob beside this table: two independent
 /// statements of how much the best version may spend would overlap. (How good
 /// a picture each encode aims for under these rates is the encoder's setting,
-/// in moss-build.) The
-/// hosting-budget knobs that narrow a source's ladder (`max_size_mb`,
-/// `hls_max_file_mb`) pick a LOWER rung off this table; the HLS ladder's own
-/// source-bitrate clamp ([`video_ladder_rungs_within`]) goes one step further
-/// and lowers a rung's bitrate BELOW its table value — never above, and never
-/// past what the source itself can supply. The ceiling still holds in the
-/// sense that matters: nothing this crate builds ever asks libx264 for more
+/// in moss-build.) The hosting-budget knobs that narrow a source's ladder
+/// (`max_size_mb`, `hls_max_file_mb`) pick a LOWER rung off this table, and a
+/// source's own size between two rows gets a ceiling between theirs
+/// ([`video_top_rung`]). Nothing this crate builds ever asks libx264 for more
 /// than this table's top rung.
 pub const VIDEO_LADDER: [VideoRung; 7] = [
     VideoRung { width: 320, height: 180, fps: 15, video_kbps: 45, audio_kbps: 32, audio_channels: 1 },
@@ -649,26 +631,36 @@ pub const VIDEO_LADDER: [VideoRung; 7] = [
     VideoRung { width: 1920, height: 1080, fps: 30, video_kbps: 4000, audio_kbps: 192, audio_channels: 2 },
 ];
 
-/// The rungs worth encoding for a source of this display size
-/// ([`display_size`]).
+/// The sizes a source of this display size ([`display_size`]) is delivered
+/// at, smallest first: the table's boxes it is meaningfully larger than, then
+/// its own picture ([`video_top_rung`]).
 ///
-/// A rung is offered when fitting the source into its box would not enlarge
-/// it ([`VideoRung::fits_within`]). Truncated from the **top only**:
-/// `take_while` drops rungs bigger than the source, exactly as
-/// [`ladder_rungs`] does for images. Never truncate from the
-/// bottom — the bottom rung is the entire point of the ladder, and a
-/// low-bitrate source still downscales to it.
+/// A box is offered only when the frame the source gets in it has at most
+/// three quarters of the top frame's pixels. A box nearer the source's own
+/// size than that buys a viewer almost nothing: a 1280x810 recording would get
+/// a 1138x720 rung under its own, the same picture for nine tenths of the
+/// rate. The rows are taken in order and the first one too close stops the
+/// take, so the rungs below the top are always the table's first rows: rung
+/// `i` below the top is row `i`, which is what lets a ladder's files be named
+/// by position. (The table's widths and heights both ascend, so the frames
+/// do too.)
 ///
-/// A source smaller than every box keeps the bottom rung, so the result is
-/// never empty; having no rung at all would be a video that cannot be
-/// delivered (the frame is still never enlarged past the source).
-pub fn video_ladder_rungs(display: (u32, u32)) -> &'static [VideoRung] {
-    let n = VIDEO_LADDER
+/// Never empty: the source's own picture is always there. One rung means
+/// there is nothing to switch between, which callers read as no ladder.
+pub fn video_ladder_rungs(display: (u32, u32)) -> Vec<VideoRung> {
+    let top = video_top_rung(display);
+    let pixels = |r: &VideoRung| {
+        let (w, h) = r.fitted_frame(display);
+        u64::from(w) * u64::from(h)
+    };
+    let top_pixels = pixels(&top);
+    let mut rungs: Vec<VideoRung> = VIDEO_LADDER
         .iter()
-        .take_while(|r| r.fits_within(display))
-        .count()
-        .max(1);
-    &VIDEO_LADDER[..n]
+        .take_while(|r| 4 * pixels(r) <= 3 * top_pixels)
+        .copied()
+        .collect();
+    rungs.push(top);
+    rungs
 }
 
 /// The most the single file an HLS rung writes can weigh, in bytes, for a
@@ -687,153 +679,47 @@ fn hls_file_bytes(kbps: u32, duration_secs: f64) -> f64 {
     (kbps as f64) * 1000.0 / 8.0 * duration_secs * 1.05
 }
 
-/// The two bitrate figures [`video_ladder_rungs_within`] clamps a source's
-/// ladder against. A struct rather than two positional `Option<f64>` args:
-/// the two mean very different things and are easy to swap by position, and
-/// `for_clamp` gives the fallback rule ONE home instead of every caller
-/// spelling out `.or()` for itself.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct SourceBitrate {
-    /// The source's own VIDEO-stream bitrate, kbps — what actually bounds a
-    /// rung, since it is the picture alone. `None` when the container states
-    /// no per-stream figure, which is common for mkv/webm.
-    pub video_kbps: Option<f64>,
-    /// The container's TOTAL bitrate (video + audio + overhead), kbps. Used
-    /// only when `video_kbps` is `None` — a looser clamp, since it is not the
-    /// picture alone, but still tighter than none.
-    pub total_kbps: Option<f64>,
-}
-
-impl SourceBitrate {
-    /// The figure to clamp a rung against: the video stream's own bitrate
-    /// when known, the container total otherwise, `None` if neither is.
-    fn for_clamp(&self) -> Option<f64> {
-        self.video_kbps.or(self.total_kbps)
-    }
-}
-
 /// The rungs worth encoding for a source of `display` size and
-/// `duration_secs` seconds, narrowed twice over from [`VIDEO_LADDER`]:
+/// `duration_secs` seconds, or a single rung (which callers read as no
+/// ladder).
 ///
-/// 1. **The source's own bitrate.** Re-encoding a rung above what the source
-///    itself carries cannot add detail the source never captured — it only
-///    inflates the file. A 15-minute, 1280x1080 source shot at 600 kbps
-///    (98 MB) does not look any better muxed at the table's 1100 kbps 960x540
-///    rung; it just becomes a 123 MB file exactly as soft as the original.
-///    Every width-eligible rung at or below `source_bitrate`'s figure is kept
-///    unchanged. If that is all of them the table ladder stands. Otherwise
-///    the next rung is the only one that can be clamped down to that figure
-///    (floored to a whole kbps), and the result is a ladder only if that
-///    rung is the widest the source's width allows AND, above the bottom
-///    rung, the clamp stays within [`LADDER_MIN_RUNG_SPACING`] of the rung
-///    below it. In every other case the result is a single rung — the bottom
-///    one, clamped to the source's figure when the source is leaner than it
-///    — which a caller reads as not a ladder, just the progressive file. A
-///    player uses the ladder instead of that file, so a ladder whose best
-///    picture is narrower than the file would shrink it for everyone: a
-///    16:9 source 1280 wide keeps its ladder from about 1650 kbps (1.5 x the
-///    1100 kbps rung below its top rung), a 1080p one from about 3000 kbps
-///    (1.5 x 2000).
-/// 2. **The per-file byte budget**, checked against each rung's EFFECTIVE
-///    bitrate (the clamp above, when one applied) rather than the table's — that is the
-///    ceiling ffmpeg will actually be given, and so the most the file can
-///    weigh. A rung the table's own bitrate would have pushed over budget can
-///    still fit once clamped.
-///
-/// Both narrowings truncate from the top only. Width narrowing is
-/// [`video_ladder_rungs`], reused rather than re-derived; the bitrate clamp
-/// and the budget check both stop at the first rung they touch, sound for the
-/// same reason width's `take_while` is — a rung higher up the table only ever
-/// costs as much or more, in both `video_kbps` and `audio_kbps`
+/// [`video_ladder_rungs`] is narrowed from the top by the per-file byte
+/// budget: a rung whose file could reach `max_file_bytes` at its rate ceiling
+/// ([`hls_file_bytes`]) is dropped, with every rung above it. The check
+/// stops at the first rung it fails, sound because a rung higher up the table
+/// never has a lower ceiling, in either `video_kbps` or `audio_kbps`
 /// ([`video_ladder_is_strictly_ascending`],
-/// [`video_ladder_audio_kbps_is_non_decreasing`]) — and clamping only ever
-/// lowers a rung's effective bitrate, so that ordering survives the clamp too.
+/// [`video_ladder_audio_kbps_is_non_decreasing`]).
 ///
-/// `source_bitrate` skips the clamp entirely only when [`SourceBitrate::for_clamp`] finds neither figure known.
+/// Then the ladder must hold `progressive`, the rung of the single web file it
+/// would be played instead of (one of [`video_ladder_rungs`], or the source's
+/// own top when the original is kept). A player that can use the ladder never
+/// fetches that file, so a ladder without it would show every viewer a
+/// smaller picture than the file. A ten-minute 1280x810
+/// screen recording kept as its own file loses its full-size rung to the
+/// budget; its ladder would stop at 854x540, so it gets none. A long film
+/// whose web file the size budget already pulled down to 640x360 keeps a
+/// ladder that reaches past it.
 ///
-/// Returns an owned `Vec`, not a `&'static` slice: a clamped rung's bitrate is
-/// not one of the table's own values, so the result is no longer a literal
-/// prefix of `VIDEO_LADDER` — though it still IS one by width, height, fps and
-/// audio group, which is all naming needs, so
-/// [`video_ladder_rungs_by_count`]'s count-based cache identification still
-/// names the right files.
-///
-/// Never empty, for the same reason [`video_ladder_rungs`] never is: an
-/// over-budget or over-bitrate bottom rung still ships, because a file too
-/// big or too soft beats a video nobody can watch. No `has_audio` input:
-/// a rung's audio check is implied by its
-/// video check ([`video_ladder_video_kbps_exceeds_audio_kbps`]), and
-/// clamping — which only ever lowers `video_kbps`, never `audio_kbps` —
-/// cannot undo that.
+/// Never empty: an over-budget bottom rung still ships, because a file too
+/// big beats a video nobody can watch.
 pub fn video_ladder_rungs_within(
     display: (u32, u32),
     duration_secs: f64,
     max_file_bytes: u64,
-    source_bitrate: SourceBitrate,
+    progressive: VideoRung,
 ) -> Vec<VideoRung> {
-    let width_rungs = video_ladder_rungs(display);
-    let capped: Vec<VideoRung> = match source_bitrate.for_clamp() {
-        None => width_rungs.to_vec(),
-        Some(source_kbps) => {
-            // Leading width-eligible rungs the source can fill unchanged.
-            let kept = width_rungs.iter().take_while(|r| (r.video_kbps as f64) <= source_kbps).count();
-            if kept == width_rungs.len() {
-                width_rungs.to_vec()
-            } else {
-                // The next rung is the only one that can be clamped to the
-                // source's bitrate. A player uses the ladder INSTEAD of the
-                // progressive file, so a ladder whose best rung is narrower
-                // than that file shows every viewer a smaller picture than
-                // the file it replaced: keep the ladder only when that
-                // clamped rung is the widest the source's width allows, and
-                // (above the bottom rung) clears the minimum spacing.
-                let next = width_rungs[kept];
-                let clamped = VideoRung { video_kbps: source_kbps.floor() as u32, ..next };
-                let reaches_width = kept + 1 == width_rungs.len();
-                let spaced = kept == 0
-                    || (clamped.video_kbps as f64) >= LADDER_MIN_RUNG_SPACING * width_rungs[kept - 1].video_kbps as f64;
-                if reaches_width && spaced {
-                    let mut out = width_rungs[..kept].to_vec();
-                    out.push(clamped);
-                    out
-                } else if kept == 0 {
-                    // Leaner than the bottom rung: it ships alone, clamped.
-                    vec![clamped]
-                } else {
-                    // One rung: callers read it as "just the progressive file".
-                    vec![width_rungs[0]]
-                }
-            }
-        }
-    };
-
+    let rungs = video_ladder_rungs(display);
     let fits = |kbps: u32| hls_file_bytes(kbps, duration_secs) <= max_file_bytes as f64;
-    let n = capped
+    let n = rungs
         .iter()
         .take_while(|r| fits(r.video_kbps) && fits(r.audio_kbps))
         .count()
         .max(1);
-    capped[..n].to_vec()
-}
-
-/// The rungs a ladder of `n` rungs was built from, or `None` if `n` is not a
-/// ladder this table can produce.
-///
-/// The inverse of [`video_ladder_rungs`] AND of [`video_ladder_rungs_within`],
-/// which both truncate from the top only — so a ladder's length names its
-/// rungs regardless of which one produced it. A cache holding a ladder knows
-/// how many files it holds but not the width or duration of the source that
-/// produced them, and this is what lets it identify the ladder without
-/// re-reading that source.
-///
-/// Only an inverse of WIDTH, HEIGHT, FPS and AUDIO GROUP, not necessarily of
-/// `video_kbps`: a rung `video_ladder_rungs_within` clamped to the source's
-/// own bitrate can't be recovered here — the row returned for it names the
-/// table's bitrate, not the encoded one. Harmless for every caller today,
-/// which all use this to name FILES (`hls_members`, `audio_groups`), and
-/// naming never reads `video_kbps`.
-pub fn video_ladder_rungs_by_count(n: usize) -> Option<&'static [VideoRung]> {
-    (2..=VIDEO_LADDER.len()).contains(&n).then(|| &VIDEO_LADDER[..n])
+    if n > 1 && !rungs[..n].contains(&progressive) {
+        return rungs[..1].to_vec();
+    }
+    rungs[..n].to_vec()
 }
 
 /// Any rung list flattened into a stable string — one rung per comma-joined
@@ -841,9 +727,9 @@ pub fn video_ladder_rungs_by_count(n: usize) -> Option<&'static [VideoRung]> {
 /// (resolution, frame rate, video and audio bitrate, audio channels).
 ///
 /// Generalizes what [`video_ladder_fingerprint`] used to compute only for the
-/// static table, so a per-video EFFECTIVE ladder (bitrate-clamped, budget-
-/// narrowed — no longer literally a slice of [`VIDEO_LADDER`] once clamped)
-/// can be fingerprinted the exact same way for a transform-cache key.
+/// static table, so a per-video EFFECTIVE ladder (topped by the source's own
+/// size, budget-narrowed — not a slice of [`VIDEO_LADDER`]) can be
+/// fingerprinted the exact same way for a transform-cache key.
 pub fn rung_list_fingerprint(rungs: &[VideoRung]) -> String {
     rungs
         .iter()
@@ -871,12 +757,33 @@ pub fn video_ladder_fingerprint() -> String {
     rung_list_fingerprint(&VIDEO_LADDER)
 }
 
-/// The single rung a progressive (non-ladder) encode targets: the best one this
-/// source can fill. The progressive MP4 **is** the ladder's top rung for that
-/// source, which is why no separate ceiling constant exists.
+/// The best size a source is delivered at: its own picture, scaled down only
+/// if it is larger than the table's top box, and never enlarged. The
+/// progressive MP4 is encoded to it and the ladder ends on it.
+///
+/// The rung is the smallest table box that holds that picture, so fitting the
+/// source into it ([`VideoRung::fitted_frame`]) leaves the picture its own
+/// size. A picture that fills the box on a side takes the box's rate ceiling.
+/// One strictly between two boxes takes the larger box's rate scaled to its
+/// own pixel count, and never less than the smaller box's. A 1280x810 screen
+/// recording is delivered at 1280x810 under a 2000 kbps ceiling, where the
+/// 1280x720 box below made it 1138x720 and resampled every line of text.
 pub fn video_top_rung(display: (u32, u32)) -> VideoRung {
-    let rungs = video_ladder_rungs(display);
-    rungs[rungs.len() - 1]
+    let ceiling = VIDEO_LADDER[VIDEO_LADDER.len() - 1];
+    let (width, height) = ceiling.fitted_frame(display);
+    // The ceiling row holds every frame fitted into it, so this always finds one.
+    let i = VIDEO_LADDER
+        .iter()
+        .position(|r| width <= r.width && height <= r.height)
+        .unwrap_or(VIDEO_LADDER.len() - 1);
+    let holder = VIDEO_LADDER[i];
+    if i == 0 || width == holder.width || height == holder.height {
+        return holder;
+    }
+    let pixels = u64::from(width) * u64::from(height);
+    let box_pixels = u64::from(holder.width) * u64::from(holder.height);
+    let scaled = (u64::from(holder.video_kbps) * pixels / box_pixels) as u32;
+    VideoRung { video_kbps: scaled.max(VIDEO_LADDER[i - 1].video_kbps), ..holder }
 }
 
 /// Which of the two audio renditions a rung is bound to.
@@ -1387,7 +1294,7 @@ mod tests {
         // one audio group only that group is written.
         let rungs = video_ladder_rungs((320, 180));
         assert_eq!(rungs.len(), 1);
-        let outs = hls_outputs("clip.mov", rungs);
+        let outs = hls_outputs("clip.mov", &rungs);
         assert_eq!(outs, vec![
             "clip.hls/master.m3u8",
             "clip.hls/v0.m3u8",
@@ -1496,16 +1403,12 @@ mod tests {
         assert!(VIDEO_LADDER.windows(2).all(|w| w[0].video_kbps < w[1].video_kbps));
     }
 
-    /// `video_ladder_rungs_within`'s near-duplicate check drops a CLAMPED rung
-    /// under `LADDER_MIN_RUNG_SPACING` of the one below it — a real edit to
-    /// this table that violated the same spacing would silently introduce a
-    /// rung the check can never keep, however the source's own bitrate lands.
+    /// Apple's authoring spec asks for rungs 1.5-2x apart: closer than that, a
+    /// player has nothing worth switching between.
     #[test]
-    fn video_ladder_consecutive_rungs_are_at_least_the_min_spacing_apart() {
+    fn video_ladder_consecutive_rungs_are_at_least_one_and_a_half_times_apart() {
         assert!(
-            VIDEO_LADDER
-                .windows(2)
-                .all(|w| w[1].video_kbps as f64 >= LADDER_MIN_RUNG_SPACING * w[0].video_kbps as f64),
+            VIDEO_LADDER.windows(2).all(|w| w[1].video_kbps as f64 >= 1.5 * w[0].video_kbps as f64),
             "{VIDEO_LADDER:?}"
         );
     }
@@ -1530,233 +1433,124 @@ mod tests {
         assert!(VIDEO_LADDER.iter().all(|r| r.video_kbps > r.audio_kbps), "{VIDEO_LADDER:?}");
     }
 
-    /// Truncation is from the top only. A source narrower than every rung still
-    /// gets the bottom one — an empty ladder is a video that cannot be played.
+    /// A source gets the table's rows below its own size and then its own
+    /// picture; one smaller than every row still gets its own picture, alone.
     #[test]
-    fn video_ladder_truncates_from_the_top_and_never_to_nothing() {
-        assert_eq!(video_ladder_rungs((1920, 1080)).len(), VIDEO_LADDER.len());
-        assert_eq!(video_ladder_rungs((1280, 720)).len(), VIDEO_LADDER.len() - 1);
-        assert_eq!(video_ladder_rungs((640, 360)).len(), 3);
-        assert_eq!(video_ladder_rungs((200, 112)).len(), 1);
-        assert_eq!(video_ladder_rungs((200, 112))[0], VIDEO_LADDER[0]);
+    fn video_ladder_is_the_rows_below_the_source_then_the_source_itself() {
+        assert_eq!(video_ladder_rungs((1920, 1080)), VIDEO_LADDER);
+        assert_eq!(video_ladder_rungs((1280, 720)), VIDEO_LADDER[..VIDEO_LADDER.len() - 1]);
+        assert_eq!(video_ladder_rungs((640, 360)), VIDEO_LADDER[..3]);
+        assert_eq!(video_ladder_rungs((200, 112)), VIDEO_LADDER[..1]);
+        assert_eq!(VIDEO_LADDER[0].fitted_frame((200, 112)), (200, 112), "never enlarged");
+    }
+
+    /// The frames (and ceilings) a source of each size is delivered at.
+    fn frames(display: (u32, u32)) -> String {
+        video_ladder_rungs(display)
+            .iter()
+            .map(|r| {
+                let (w, h) = r.fitted_frame(display);
+                format!("{w}x{h}@{}", r.video_kbps)
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[test]
+    fn a_source_between_two_sizes_keeps_its_own_size_and_skips_the_row_too_close_to_it() {
+        // 1280x810: the 1280x720 row would be 1138x720, four fifths of the
+        // top's pixels, so it is not offered; the top is the recording itself.
+        assert_eq!(
+            frames((1280, 810)),
+            "284x180@45 370x234@145 568x360@365 682x432@730 854x540@1100 1280x810@2000"
+        );
+        // 1600x678 is far enough above the 1280 row to keep it.
+        assert_eq!(
+            frames((1600, 678)),
+            "320x136@45 416x176@145 640x272@365 768x326@730 960x406@1100 1280x542@2000 1600x678@2092"
+        );
+        // A 4:3 clip keeps its 640x480 instead of shrinking to 576x432.
+        assert_eq!(frames((640, 480)), "240x180@45 312x234@145 480x360@365 640x480@730");
+    }
+
+    /// Whatever the source's size, frames grow up the ladder, no rung is
+    /// allowed more than the one above it, and the top is the picture the
+    /// ceiling allows.
+    #[test]
+    fn every_ladder_grows_to_the_picture_the_ceiling_allows() {
+        for w in (120..=4000).step_by(77) {
+            for h in (90..=2400).step_by(53) {
+                let rungs = video_ladder_rungs((w, h));
+                let top = &rungs[rungs.len() - 1..];
+                let pixels = |r: &VideoRung| {
+                    let (fw, fh) = r.fitted_frame((w, h));
+                    u64::from(fw) * u64::from(fh)
+                };
+                for pair in rungs.windows(2) {
+                    assert!(pixels(&pair[0]) < pixels(&pair[1]), "{w}x{h}: {rungs:?}");
+                    assert!(pair[0].video_kbps <= pair[1].video_kbps, "{w}x{h}: {rungs:?}");
+                }
+                let ceiling = VIDEO_LADDER[VIDEO_LADDER.len() - 1];
+                assert_eq!(
+                    top[0].fitted_frame((w, h)),
+                    ceiling.fitted_frame((w, h)),
+                    "{w}x{h}: the top rung is the picture the ceiling allows, no smaller"
+                );
+            }
+        }
     }
 
     // ── video_ladder_rungs_within ──────────────────────────────────
 
     const MIB: u64 = 1024 * 1024;
 
-    /// No known bitrate for the source — neither its own video stream nor the
-    /// container total — is today's pre-clamp behavior: the per-file budget is
-    /// the only narrowing, exactly as this function worked before the clamp
-    /// existed. The real bug this budget alone exists for: a 903.47 s,
-    /// 1280x720 source's ladder had every rung fit the source, but the top two
-    /// rungs' single files measured 221,843,463 and 122,579,638 bytes —
-    /// 515 MB for the whole ladder against a hosting cap meant to bound one
-    /// upload. A 150 MiB cap must drop only the top rung (its file measured
-    /// over 200 MB); a 100 MiB cap must drop the next one too (its file
-    /// measured about 123 MB, over a 100 MiB cap once margin is applied),
-    /// landing on the rung one below the one that actually measured under
-    /// 123 MB.
+    /// The per-file budget is priced at each rung's ceiling. The real case it
+    /// exists for: a 903.47 s, 1280x720 source's top two rungs' single files
+    /// measured 221,843,463 and 122,579,638 bytes, 515 MB for the whole ladder
+    /// against a hosting cap meant to bound one upload. A 150 MiB cap drops
+    /// the top rung, a 100 MiB cap the next one too. The web file this ladder
+    /// stands in for (here a 640x360 one, as a long video's is) is smaller
+    /// than either, so both still are ladders.
     #[test]
-    fn video_ladder_rungs_within_is_the_table_ladder_when_no_bitrate_is_known() {
+    fn video_ladder_rungs_within_drops_the_rungs_whose_files_the_budget_cannot_hold() {
         let duration = 903.47;
-        let unknown = SourceBitrate::default();
-        let at_150_mib = video_ladder_rungs_within((1280, 720), duration, 150 * MIB, unknown);
-        assert_eq!(at_150_mib.len(), 5, "{at_150_mib:?}");
-        assert_eq!((at_150_mib.last().unwrap().width, at_150_mib.last().unwrap().height), (960, 540));
-
-        let at_100_mib = video_ladder_rungs_within((1280, 720), duration, 100 * MIB, unknown);
-        assert_eq!(at_100_mib.len(), 4, "{at_100_mib:?}");
-        assert_eq!((at_100_mib.last().unwrap().width, at_100_mib.last().unwrap().height), (768, 432));
+        let at_150_mib = video_ladder_rungs_within((1280, 720), duration, 150 * MIB, VIDEO_LADDER[2]);
+        assert_eq!(at_150_mib, VIDEO_LADDER[..5]);
+        let at_100_mib = video_ladder_rungs_within((1280, 720), duration, 100 * MIB, VIDEO_LADDER[2]);
+        assert_eq!(at_100_mib, VIDEO_LADDER[..4]);
     }
 
-    /// The clamp where it still produces a ladder: a 903.47 s, 768-wide
-    /// source whose own video stream measures 600 kbps. Re-encoding the
-    /// 768x432 rung at the table's 730 kbps cannot improve a picture the
-    /// source never had, so that rung is kept but clamped to 600 kbps,
-    /// comfortably clear of the 1.5x-of-365 near-duplicate floor
-    /// (600 >= 547.5). It is the widest rung the source's width allows, so
-    /// the ladder still reaches the source's own picture size.
-    #[test]
-    fn video_ladder_rungs_within_clamps_the_top_rung_to_the_sources_own_video_kbps() {
-        let source = SourceBitrate { video_kbps: Some(600.0), total_kbps: None };
-        let got = video_ladder_rungs_within((768, 432), 903.47, 150 * MIB, source);
-        assert_eq!(
-            got,
-            vec![
-                VIDEO_LADDER[0],
-                VIDEO_LADDER[1],
-                VIDEO_LADDER[2],
-                VideoRung { video_kbps: 600, ..VIDEO_LADDER[3] },
-            ],
-            "{got:?}"
-        );
-    }
-
-    /// The container total is only the fallback: with the video stream's own
-    /// bitrate unknown, the same clamp still applies off the container total,
-    /// and the case above comes out identically.
-    #[test]
-    fn video_ladder_rungs_within_falls_back_to_total_kbps_when_video_kbps_is_unknown() {
-        let source = SourceBitrate { video_kbps: None, total_kbps: Some(600.0) };
-        let got = video_ladder_rungs_within((768, 432), 903.47, 150 * MIB, source);
-        assert_eq!(
-            got,
-            vec![
-                VIDEO_LADDER[0],
-                VIDEO_LADDER[1],
-                VIDEO_LADDER[2],
-                VideoRung { video_kbps: 600, ..VIDEO_LADDER[3] },
-            ]
-        );
-    }
-
-    /// A source whose own bitrate already exceeds the table's top rung must
-    /// get the unchanged table ladder — the clamp only ever narrows, never
-    /// widens, what a source qualifies for.
-    #[test]
-    fn video_ladder_rungs_within_keeps_the_table_ladder_for_a_high_bitrate_source() {
-        let source = SourceBitrate { video_kbps: Some(5000.0), total_kbps: None };
-        let got = video_ladder_rungs_within((1920, 1080), 60.0, 150 * MIB, source);
-        assert_eq!(got, VIDEO_LADDER.to_vec(), "{got:?}");
-    }
-
-    /// The 1.5x-or-drop rule: a 1094.9 kbps source would clamp the 960x540
-    /// rung down to 1094, under 1.5x the 730 kbps rung already kept (1095), so
-    /// it would be a near-duplicate and is dropped. That leaves the ladder
-    /// short of the source's 960 px width, so it is no ladder at all: one
-    /// rung, the progressive file plays.
-    #[test]
-    fn video_ladder_rungs_within_drops_a_clamp_that_would_duplicate_the_rung_below() {
-        let source = SourceBitrate { video_kbps: Some(1094.9), total_kbps: None };
-        let got = video_ladder_rungs_within((960, 540), 100.0, 150 * MIB, source);
-        assert_eq!(got, vec![VIDEO_LADDER[0]], "{got:?}");
-    }
-
-    /// A lean, high-resolution source (a screen recording: 1280 wide at
-    /// 150 kbps) would get a ladder stopping at 416x234, and a player uses
-    /// the ladder instead of the progressive file, so every viewer would see
-    /// a picture a third the size of the file. Exactly one rung means no
-    /// ladder.
-    #[test]
-    fn video_ladder_rungs_within_leaves_no_ladder_when_the_clamp_stops_short_of_the_source_width() {
-        let source = SourceBitrate { video_kbps: Some(150.0), total_kbps: None };
-        let got = video_ladder_rungs_within((1280, 720), 91.5, 150 * MIB, source);
-        assert_eq!(got, vec![VIDEO_LADDER[0]], "{got:?}");
-    }
-
-    /// The middle of the range, and the widest consequence of the rule: a
-    /// 1280-wide source at 1200 kbps (a common phone or camera 720p file)
-    /// gets NO ladder. The clamped 1280x720 rung would be 1200 kbps, under
-    /// 1.5 x the 1100 kbps rung below it (1650), so the ladder would stop at
-    /// 960 px and shrink the picture; one rung means the plain file plays.
-    #[test]
-    fn video_ladder_rungs_within_gives_a_1280_wide_source_at_1200_kbps_no_ladder() {
-        let source = SourceBitrate { video_kbps: Some(1200.0), total_kbps: None };
-        let got = video_ladder_rungs_within((1280, 720), 91.5, 150 * MIB, source);
-        assert_eq!(got, vec![VIDEO_LADDER[0]], "{got:?}");
-    }
-
-    /// A source leaner than the bottom rung ships that rung alone, clamped,
-    /// whether or not its width allows more rungs.
-    #[test]
-    fn video_ladder_rungs_within_a_source_under_the_bottom_rung_clamps_it_at_any_width() {
-        let source = SourceBitrate { video_kbps: Some(20.0), total_kbps: None };
-        for (width, height) in [(320, 180), (1280, 720)] {
-            let got = video_ladder_rungs_within((width, height), 100.0, 150 * MIB, source);
-            assert_eq!(got, vec![VideoRung { video_kbps: 20, ..VIDEO_LADDER[0] }], "{width}: {got:?}");
-        }
-    }
-
-    /// The boundary that still ladders: a 1280-wide source at 1700 kbps keeps
-    /// all six rungs, the top one clamped from 2000 to 1700 (1700 >= 1.5 x
-    /// 1100), because the clamp reaches the source's width.
-    #[test]
-    fn video_ladder_rungs_within_keeps_the_full_ladder_when_the_clamp_reaches_the_source_width() {
-        let source = SourceBitrate { video_kbps: Some(1700.0), total_kbps: None };
-        let got = video_ladder_rungs_within((1280, 720), 91.5, 150 * MIB, source);
-        assert_eq!(got.len(), 6, "{got:?}");
-        assert_eq!(got[..5], VIDEO_LADDER[..5]);
-        assert_eq!(got[5], VideoRung { video_kbps: 1700, ..VIDEO_LADDER[5] });
-    }
-
-    /// The boundary the `>=` in the near-duplicate check is for: a clamp
-    /// landing at EXACTLY `LADDER_MIN_RUNG_SPACING` of the rung below must be
-    /// KEPT, not dropped. 730 kbps (the 768x432 rung, kept unclamped below a
-    /// 1095.9 kbps source) times 1.5 is exactly 1095 — and floor(1095.9) is
-    /// exactly that. A `>` in place of `>=` would drop this rung instead. The
-    /// source is 960 wide so the clamped 960x540 rung is its widest.
-    #[test]
-    fn video_ladder_rungs_within_keeps_a_clamp_exactly_at_the_min_spacing() {
-        assert_eq!(LADDER_MIN_RUNG_SPACING * VIDEO_LADDER[3].video_kbps as f64, 1095.0, "sanity: the tie is exact");
-        let source = SourceBitrate { video_kbps: Some(1095.9), total_kbps: None };
-        let got = video_ladder_rungs_within((960, 540), 60.0, 150 * MIB, source);
-        assert_eq!(
-            got,
-            vec![
-                VIDEO_LADDER[0],
-                VIDEO_LADDER[1],
-                VIDEO_LADDER[2],
-                VIDEO_LADDER[3],
-                VideoRung { video_kbps: 1095, ..VIDEO_LADDER[4] },
-            ],
-            "{got:?}"
-        );
-    }
-
-    /// A source leaner than even the bottom rung has no rung below it to
-    /// compare the 1.5x rule against, so its clamped bottom rung is kept
-    /// regardless — a one-element result a caller reads as "no ladder", the
-    /// same way an all-width-truncated ladder already is.
-    #[test]
-    fn video_ladder_rungs_within_a_source_leaner_than_the_bottom_rung_keeps_one_clamped_rung() {
-        let source = SourceBitrate { video_kbps: Some(20.0), total_kbps: None };
-        let got = video_ladder_rungs_within((1280, 720), 100.0, 150 * MIB, source);
-        assert_eq!(got, vec![VideoRung { video_kbps: 20, ..VIDEO_LADDER[0] }], "{got:?}");
-    }
-
-    /// The per-file budget must be checked against the EFFECTIVE (clamped)
-    /// bitrate, not the table's. At 1000 s and an 80 MiB cap, the table's
-    /// unclamped 730 kbps rung would measure over budget on its own — but the
-    /// same rung clamped to the source's 600 kbps fits, and must be kept.
-    #[test]
-    fn video_ladder_rungs_within_budget_check_uses_the_clamped_bitrate() {
-        let budget = 80 * MIB;
-        assert!(hls_file_bytes(730, 1000.0) > budget as f64, "sanity: the table figure alone would miss");
-        assert!(hls_file_bytes(600, 1000.0) <= budget as f64, "sanity: the clamped figure fits");
-
-        let source = SourceBitrate { video_kbps: Some(600.0), total_kbps: None };
-        let got = video_ladder_rungs_within((768, 432), 1000.0, budget, source);
-        assert_eq!(
-            got,
-            vec![
-                VIDEO_LADDER[0],
-                VIDEO_LADDER[1],
-                VIDEO_LADDER[2],
-                VideoRung { video_kbps: 600, ..VIDEO_LADDER[3] },
-            ],
-            "{got:?}"
-        );
-    }
-
-    /// A short clip's every rung — even the top one — fits comfortably under
-    /// any real hosting budget, so the budget truncates nothing beyond what
-    /// the width already did: same result as [`video_ladder_rungs`] alone.
     #[test]
     fn video_ladder_rungs_within_keeps_the_full_ladder_for_a_short_clip() {
-        let got = video_ladder_rungs_within((1920, 1080), 10.0, 150 * MIB, SourceBitrate::default());
+        let got = video_ladder_rungs_within((1920, 1080), 10.0, 150 * MIB, VIDEO_LADDER[6]);
         assert_eq!(got, video_ladder_rungs((1920, 1080)), "10s at any real bitrate is nowhere near 150 MiB");
         assert_eq!(got.len(), VIDEO_LADDER.len());
     }
 
+    /// A player that can use the ladder never fetches the web file, so a
+    /// ladder whose best frame is smaller than that file is no ladder. A
+    /// ten-minute 1280x810 screen recording kept as its own file loses its
+    /// full-size rung to the budget and would stop at 854x540.
+    #[test]
+    fn a_ladder_that_cannot_reach_the_web_files_size_is_no_ladder() {
+        let own = video_top_rung((1280, 810));
+        let rungs = video_ladder_rungs_within((1280, 810), 600.0, 150 * MIB, own);
+        assert_eq!(rungs.len(), 1, "{rungs:?}");
+        // The same recording at a minute keeps its full-size top.
+        let short = video_ladder_rungs_within((1280, 810), 60.0, 150 * MIB, own);
+        assert_eq!(short.last().unwrap().fitted_frame((1280, 810)), (1280, 810));
+        // An odd side is trimmed to even in every rung, the top included, and
+        // the ladder still holds the web file.
+        let odd = video_ladder_rungs_within((1281, 721), 60.0, 150 * MIB, video_top_rung((1281, 721)));
+        assert_eq!(odd, VIDEO_LADDER[..6]);
+    }
+
     /// However tight the budget, the bottom rung always ships: an over-budget
-    /// file that plays beats a video nobody can watch, and it is the same
-    /// `.max(1)` rule [`video_ladder_rungs`] applies for width.
+    /// file that plays beats a video nobody can watch.
     #[test]
     fn video_ladder_rungs_within_never_returns_empty_for_a_very_long_video() {
-        let got = video_ladder_rungs_within((1280, 720), 20_000.0, 1, SourceBitrate::default());
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0], VIDEO_LADDER[0]);
+        let got = video_ladder_rungs_within((1280, 720), 20_000.0, 1, VIDEO_LADDER[0]);
+        assert_eq!(got, VIDEO_LADDER[..1]);
     }
 
     /// The per-rung check is two conditions, not one: a rung's audio group is
@@ -1798,12 +1592,27 @@ mod tests {
     }
 
     #[test]
-    fn video_top_rung_is_the_best_the_source_can_fill() {
-        assert_eq!(video_top_rung((3840, 2160)).width, 1920);
-        assert_eq!(video_top_rung((1920, 1080)).width, 1920);
-        assert_eq!(video_top_rung((1280, 720)).width, 1280);
-        assert_eq!(video_top_rung((640, 360)).width, 640);
-        assert_eq!(video_top_rung((100, 56)).width, 320);
+    fn the_top_rung_is_the_sources_own_picture_under_the_ceiling_for_its_size() {
+        let top = |d| {
+            let r = video_top_rung(d);
+            let (w, h) = r.fitted_frame(d);
+            (w, h, r.fps, r.video_kbps)
+        };
+        // Larger than the table: scaled down to its top box.
+        assert_eq!(top((3840, 2160)), (1920, 1080, 30, 4000));
+        // Exactly a row, or one odd pixel over it: that row.
+        assert_eq!(video_top_rung((1280, 720)), VIDEO_LADDER[5]);
+        assert_eq!(video_top_rung((1281, 721)), VIDEO_LADDER[5]);
+        // Filling a box on one side takes the box's ceiling.
+        assert_eq!(top((1708, 1080)), (1708, 1080, 30, 4000));
+        assert_eq!(top((1080, 1920)), (608, 1080, 30, 4000));
+        // Strictly between two boxes: its own size, at the larger box's rate
+        // for its pixel count and never under the smaller box's.
+        assert_eq!(top((1280, 810)), (1280, 810, 30, 2000));
+        assert_eq!(top((1600, 900)), (1600, 900, 30, 2777));
+        assert_eq!(top((640, 480)), (640, 480, 30, 730));
+        // Smaller than every box: itself, on the bottom row's terms.
+        assert_eq!(top((100, 56)), (100, 56, 15, 45));
     }
 
     const BOX_720: VideoRung = VIDEO_LADDER[5];
@@ -1836,37 +1645,25 @@ mod tests {
     }
 
     #[test]
-    fn the_1080_box_is_offered_only_to_a_source_that_fills_it_on_some_axis() {
-        // 1620x1080 fills the box's height: it is delivered at its own size.
-        let rungs = video_ladder_rungs((1620, 1080));
-        assert_eq!(rungs.len(), VIDEO_LADDER.len());
-        assert_eq!(rungs[rungs.len() - 1].fitted_frame((1620, 1080)), (1620, 1080));
-        // 1600x678 is under 1920 across and 1080 tall: it tops out at 720.
-        let rungs = video_ladder_rungs((1600, 678));
-        assert_eq!(rungs.len(), VIDEO_LADDER.len() - 1);
-        assert_eq!(rungs[rungs.len() - 1].width, 1280);
-    }
-
-    #[test]
     fn a_long_1080p_source_loses_the_1080_rung_to_the_per_file_budget() {
         // 4000 kbps for 40 minutes is ~1.2 GB; under the default 150 MiB
         // per-file cap that rung (and only the rungs the budget cannot hold)
         // goes, while a 2-minute clip keeps all seven.
         let cap = 150 * MIB;
-        let long = video_ladder_rungs_within((1920, 1080), 2400.0, cap, SourceBitrate::default());
+        let long = video_ladder_rungs_within((1920, 1080), 2400.0, cap, VIDEO_LADDER[2]);
         assert!(long.len() < VIDEO_LADDER.len(), "{long:?}");
         assert!(long.iter().all(|r| r.width < 1920));
-        let short = video_ladder_rungs_within((1920, 1080), 120.0, cap, SourceBitrate::default());
+        let short = video_ladder_rungs_within((1920, 1080), 120.0, cap, VIDEO_LADDER[6]);
         assert_eq!(short.len(), VIDEO_LADDER.len());
     }
 
-    /// The ladder (frame @ bitrate) a source of each shape gets, with its own
-    /// video bitrate clamping the top rung: a 16:9 source, a 3:2 one filling
-    /// the 1080 box's height, and a wide cinema crop filling its width.
+    /// The ladder (frame @ ceiling) a source of each shape gets: a 16:9
+    /// source, a 3:2 one filling the 1080 box's height, and a wide cinema
+    /// crop filling its width.
     #[test]
-    fn the_ladder_a_source_gets_follows_its_own_shape_and_bitrate() {
-        let ladder = |disp: (u32, u32), kbps: f64| -> String {
-            video_ladder_rungs_within(disp, 60.0, 150 * MIB, SourceBitrate { video_kbps: Some(kbps), total_kbps: None })
+    fn the_ladder_a_source_gets_follows_its_own_shape() {
+        let ladder = |disp: (u32, u32)| -> String {
+            video_ladder_rungs_within(disp, 60.0, 150 * MIB, video_top_rung(disp))
                 .iter()
                 .map(|r| {
                     let (w, h) = r.fitted_frame(disp);
@@ -1876,16 +1673,16 @@ mod tests {
                 .join(" ")
         };
         assert_eq!(
-            ladder((1920, 1080), 3670.0),
-            "320x180@45 416x234@145 640x360@365 768x432@730 960x540@1100 1280x720@2000 1920x1080@3670"
+            ladder((1920, 1080)),
+            "320x180@45 416x234@145 640x360@365 768x432@730 960x540@1100 1280x720@2000 1920x1080@4000"
         );
         assert_eq!(
-            ladder((1620, 1080), 4680.0),
+            ladder((1620, 1080)),
             "270x180@45 352x234@145 540x360@365 648x432@730 810x540@1100 1080x720@2000 1620x1080@4000"
         );
         assert_eq!(
-            ladder((1920, 812), 3000.0),
-            "320x136@45 416x176@145 640x270@365 768x324@730 960x406@1100 1280x542@2000 1920x812@3000"
+            ladder((1920, 812)),
+            "320x136@45 416x176@145 640x270@365 768x324@730 960x406@1100 1280x542@2000 1920x812@4000"
         );
     }
 

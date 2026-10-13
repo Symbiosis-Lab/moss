@@ -440,12 +440,12 @@ mod hls_tests;
 /// references are exactly what a naming disagreement breaks.
 ///
 /// `Ok(None)` means no ladder was produced and none is owed: the source fills
-/// fewer than two rungs — too narrow for a second rung, so long that even its
+/// fewer than two rungs — too small for a second rung, so long that even its
 /// bottom rung's file only clears `config.hls_max_file_mb` by shipping alone,
-/// or so lean in its own video bitrate that the clamp stops short of the
-/// widest rung its width allows (`video_ladder_rungs_within` then leaves only
-/// the bottom rung, because a ladder narrower than the progressive file would
-/// replace it with a smaller picture).
+/// or long enough that the budget drops the rungs that would reach the
+/// progressive file's size (`video_ladder_rungs_within` then leaves only the
+/// bottom rung, because a ladder smaller than that file would replace it with
+/// a smaller picture).
 /// That is the honest resolution of "`EncodePlan::KeepOriginal` cannot survive HLS" —
 /// segmenting is mandatory, so shipping the source bytes as a ladder is not
 /// available, but *not building one* is: a ladder is a choice between rungs,
@@ -488,16 +488,13 @@ pub(crate) fn produce_ladder(
     } else {
         let probe = ffmpeg.probe_source(source_file)?;
         let width_rungs = video_ladder_rungs(probe.display());
-        let source = SourceFacts::from_probe(&probe);
-        let rungs = source.effective_rungs(config);
+        let rungs = effective_rungs(&probe, config);
         if rungs.len() < width_rungs.len() {
             // The reader who needs this line is the one wondering why a
-            // long video's top quality is missing: size alone would have
-            // kept more rungs, so either the source's own bitrate or the
-            // per-file budget is why it didn't — not necessarily which.
+            // long video's top quality, or its whole ladder, is missing.
             log::info!(
-                "HLS ladder for {}: kept {} of {} size-eligible rungs (narrowed by the \
-                 source's own bitrate and/or the {} MiB per-file budget)",
+                "HLS ladder for {}: kept {} of {} size-eligible rungs (the {} MiB per-file \
+                 budget dropped the larger ones; one rung means no ladder)",
                 source_file.display(),
                 rungs.len(),
                 width_rungs.len(),
@@ -534,7 +531,7 @@ pub(crate) fn produce_ladder(
         });
         // allow:unlink ladder scratch this call created under cache/tmp
         let _ = crate::build::io_utils::remove_output_dir_all(&scratch);
-        (members, stored?, ladder_params(config, &rungs, source))
+        (members, stored?, ladder_params(config, &rungs, &probe))
     };
     Ok(Some(link_members(objects, ladder_dir, &members, oids, &params)?))
 }
@@ -646,7 +643,7 @@ fn transform_name(member: &str) -> String {
 }
 
 mod cache;
-pub(crate) use cache::{ladder_params, SourceFacts};
+pub(crate) use cache::{effective_rungs, ladder_params};
 use cache::cached_ladder;
 // Test-only: video.rs's own staging-heal test needs the same real legacy
 // shapes hls_tests.rs's migration tests do — see `cache::legacy_form_params`.
