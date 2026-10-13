@@ -39,6 +39,10 @@ pub struct DryRun {
     pub would_register: Option<String>,
     /// A deploy creates a signing key when the site has none. Not created.
     pub would_create_key: bool,
+    /// A first publish would register a site, and this folder's key has no
+    /// email recorded, so the server will most likely refuse until the key is
+    /// verified. Nothing was sent to find out.
+    pub needs_verification: bool,
 }
 
 impl DryRun {
@@ -76,6 +80,9 @@ impl DryRun {
             out.push_str(&format!("A first publish would register the site \"{site}\" and create a signing key. Neither was done.\n"));
         } else if self.would_create_key {
             out.push_str("This folder's site has no signing key; a real deploy would create a new one. It was not created.\n");
+        }
+        if self.needs_verification {
+            out.push_str("This folder's key is not linked to an email yet, so registering would need verification: a real deploy needs `--email <address>` (the account the site should belong to) to be sent a sign-in link. Nothing was sent.\n");
         }
         match &self.refusal {
             Some(text) => out.push_str(&format!("Publish check: a real deploy would be refused:\n{text}\n")),
@@ -139,6 +146,7 @@ fn files(n: u32) -> String {
 struct Local {
     would_register: Option<String>,
     would_create_key: bool,
+    needs_verification: bool,
 }
 
 /// The checks a deploy makes before it sends anything that need nothing from
@@ -158,7 +166,7 @@ async fn check_locally(
     }
     crate::build::site_config::ensure_config_current(&folder_str)?;
     if matches!(route, DeployRoute::Plugin { .. }) {
-        return Ok(Local { would_register: None, would_create_key: false });
+        return Ok(Local { would_register: None, would_create_key: false, needs_verification: false });
     }
     let config = crate::build::site_config::get_domain_config(&folder_str)?;
     let would_register = match config.site_id {
@@ -183,7 +191,9 @@ async fn check_locally(
     // when there is none and regenerates the key when its file is missing.
     let would_create_key = !crate::identity::Identity::exists(folder)
         || !crate::identity::Identity::has_usable_signing_key(folder);
-    Ok(Local { would_register, would_create_key })
+    let needs_verification =
+        would_register.is_some() && crate::identity::Identity::read_email(folder).is_none();
+    Ok(Local { would_register, would_create_key, needs_verification })
 }
 
 /// Build the folder as a deploy would and describe the publish that would
@@ -230,6 +240,7 @@ pub async fn run_dry_run(
         refusal,
         would_register: local.would_register,
         would_create_key: local.would_create_key && !matches!(route, DeployRoute::Plugin { .. }),
+        needs_verification: local.needs_verification,
     })
 }
 
@@ -256,6 +267,7 @@ mod tests {
             refusal: Some("Nothing published — REFUSED".into()),
             would_register: None,
             would_create_key: false,
+            needs_verification: false,
         }
     }
 
@@ -275,6 +287,7 @@ mod tests {
             refusal: None,
             would_register: None,
             would_create_key: false,
+            needs_verification: false,
         };
 
         let text = dry.render();
@@ -335,6 +348,7 @@ mod tests {
             refusal: None,
             would_register: Some("my-site".into()),
             would_create_key: true,
+            needs_verification: false,
         };
         let text = dry.render();
         assert!(text.contains("Pages: not classified"), "{text}");

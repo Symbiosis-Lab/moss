@@ -1000,11 +1000,12 @@ fn register_failure_message(site_id: &str, e: crate::seta::client::SetaError) ->
     // ACLs, so this is the typical first-publish-of-a-new-folder failure.
     if msg.contains("pubkey not verified") || msg.contains("verification") {
         return format!(
-            "Identity not yet verified for an account. \
-             Run `moss` on this folder once to verify the new identity \
-             via the magic-link email flow, then retry.\n\n\
+            "{} This folder's key has not been linked to an email yet. \
+             Re-run with `--email <address>` to be sent a sign-in link \
+             (the address must be the account the site should belong to), \
+             or open the folder in the desktop app once to verify it there.\n\n\
              Underlying error: {}",
-            msg
+            crate::identity::verify_email::UNVERIFIED_REFUSAL, msg
         );
     }
     if msg.contains("already taken") || msg.contains("must be fresh") {
