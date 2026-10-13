@@ -2730,6 +2730,24 @@ fn render_markdown_to_html_with_respects_heading_anchors_param() {
     );
 }
 
+#[test]
+fn standalone_document_uses_original_lines_math_and_authored_markdown_links() {
+    let source = "---\ntitle: Preview\n---\n# Heading\n\n[Guide](../guide.md) and $E=mc^2$.\n";
+    let (html, css) = crate::build::markdown::render_standalone_document(source);
+    assert!(html.contains("data-source-line=\"4\""), "frontmatter lines must count: {html}");
+    assert!(html.contains("href=\"../guide.md\""), "standalone links retain .md: {html}");
+    assert!(html.contains("class=\"moss-math\""), "math uses the production typesetter: {html}");
+    assert!(html.contains("<svg"), "math must be typeset by the build hook: {html}");
+    assert!(css.contains("@layer tokens"), "CSS includes moss tokens");
+    assert!(css.contains(".callout"), "CSS includes document callout styles");
+}
+
+#[test]
+fn standalone_document_preserves_raw_html_for_the_embedding_boundary() {
+    let (html, _) = crate::build::markdown::render_standalone_document("<script>example()</script>\n");
+    assert!(html.contains("<script>example()</script>"), "renderer leaves raw HTML to caller policy: {html}");
+}
+
 /// Parse with production defaults and return the doc's merged tag set.
 fn tags_of(content: &str) -> Option<Vec<String>> {
     let empty_map = HashMap::new();

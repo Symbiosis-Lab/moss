@@ -1814,6 +1814,69 @@ pub fn render_markdown_to_html_with(
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     heading_anchors: bool,
 ) -> String {
+    render_markdown_to_html_with_config(
+        markdown,
+        resolve_link,
+        media_lookup,
+        heading_anchors,
+        moss_core::ast::ParseConfig::default(),
+    )
+}
+
+/// Render one standalone markdown document for an editor preview.
+///
+/// Frontmatter is removed with moss-core's shared splitter, and source-line
+/// attributes count from the original file. Relative links retain their
+/// authored paths because this renderer has no site graph or base URL.
+/// Authored raw HTML remains raw renderer output; callers handling untrusted
+/// documents must sanitize it and apply an appropriate content security policy.
+pub fn render_standalone_document(markdown: &str) -> (String, String) {
+    let (body, source_line_offset) = match moss_core::frontmatter::frontmatter_span(markdown) {
+        Some(span) => (
+            markdown.get(span.body..).unwrap_or_default(),
+            markdown[..span.body]
+                .bytes()
+                .filter(|b| *b == b'\n')
+                .count(),
+        ),
+        None => (markdown, 0),
+    };
+    let identity_resolver = |href: &str| href.to_string();
+    let html = render_markdown_to_html_with_config(
+        body,
+        &identity_resolver,
+        None,
+        true,
+        moss_core::ast::ParseConfig {
+            emit_source_lines: true,
+            source_line_offset,
+            math: true,
+            hard_line_breaks: true,
+            ..Default::default()
+        },
+    );
+    (html, standalone_document_css())
+}
+
+fn standalone_document_css() -> String {
+    let assets = crate::build::types::SiteAssets {
+        callouts: true,
+        has_footnotes: true,
+        search: true,
+        vertical: true,
+        places_explorer: true,
+        ..Default::default()
+    };
+    crate::build::emit::stylesheet::assemble(&assets)
+}
+
+fn render_markdown_to_html_with_config(
+    markdown: &str,
+    resolve_link: &dyn Fn(&str) -> String,
+    media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
+    heading_anchors: bool,
+    parse_config: moss_core::ast::ParseConfig,
+) -> String {
     // Idempotent pass: `process_markdown_file` already cleans page-level
     // markdown, but this helper is also callable from `render_markdown_to_html`
     // (with a default resolver). The `!text.contains('{')` fast path makes
@@ -1827,7 +1890,7 @@ pub fn render_markdown_to_html_with(
     // passes (`dispatch_wikilink_embeds`, `resolve_urls`, `extract_hero`,
     // `find_first_block_image`) which require a `ContentGraph` and apply
     // only to page-level documents.
-    let mut doc = moss_core::ast::parse(&accepted);
+    let mut doc = moss_core::ast::parse_with_config(&accepted, &parse_config);
 
     // Host-context URL classification. Apply the caller's `resolve_link`
     // closure to every `Url::Unresolved` in the AST. Same shape as the

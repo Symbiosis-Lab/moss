@@ -20,6 +20,9 @@ pub mod env;
 // `rename` is the editor's rename-with-refs from the terminal; its whole body
 // is `editor::ref_scan`, which crossed with it.
 pub mod rename;
+pub mod render;
+// Read-only project ownership lookup for hosts opening an arbitrary path.
+pub mod root;
 // `guide` reads nothing but the binary — no project, no network, no window —
 // and its whole body was already `agents::skill_package`, so it belongs beside
 // what it prints rather than one crate up behind a shim.

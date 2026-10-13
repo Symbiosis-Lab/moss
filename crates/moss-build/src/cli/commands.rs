@@ -66,6 +66,16 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
             description: "Print the moss contract surface (tokens, components, custom properties, frontmatter, plugin hooks, slots, CLI). --json for machine-readable output. --css <selector> prints the default CSS rules mentioning that selector or custom property, with their enclosing media queries and the comments explaining them — what a theme override has to displace.",
         },
         CliCommandInfo {
+            name: "render",
+            args: "--json",
+            description: "Render standalone Markdown documents from newline-delimited JSON on stdin. Each {id, source} request returns {id, html, css}; malformed requests return an error and do not stop later lines. Input is limited to 8 MiB per line. Raw HTML is preserved in the returned HTML and must be sanitized by the embedding application before displaying untrusted documents.",
+        },
+        CliCommandInfo {
+            name: "root",
+            args: "<path> --json",
+            description: "Print the moss site that owns a path as {\"root\": string|null}. Uses the canonical .moss ownership check, stops at the home directory, and does not scan or change files.",
+        },
+        CliCommandInfo {
             name: "import",
             args: "<url> [<folder>] [-r|--recursive]  |  --list <file> [<folder>] [-r|--recursive]  |  <folder> [--with <derivation-id>] [--allow-plugins]  |  --status [<site>] [--json] [--allow-plugins]",
             description: "Import a URL (or batch of URLs) into a project folder as markdown. Given an existing folder instead, show the files in it that an installed plugin can turn into pages (for example documents): records the choice in .moss/config.toml and writes a page beside each file, never overwriting one; `--with` picks a derivation when several accept the folder. A plugin the site carries runs only if allowed, as in a build: without `--allow-plugins` a plugin not yet allowed in the app is refused with the same sentence a build prints, and nothing is written. `--status` lists every folder holding such files with its decision (undecided, show, keep), file count, pages still missing and files a plugin declined; `--json` prints {\"folders\": [{folder, derivation_id, noun_one, noun_other, count, decision, stubs_missing, skipped: [{file, reason, message}], failed: [{file, message}]}]}.",
@@ -150,6 +160,8 @@ pub fn help_for(cmd: &str) -> Option<String> {
 /// it. Not rendered from [`cli_commands`] because an example is a second thing
 /// to know about a command, not a restatement of its grammar.
 const EXAMPLE_LINES: &[(&str, &str)] = &[
+    ("root", "moss root ~/blog/posts/essay.md --json  # Find the site that owns this path"),
+    ("render", "printf '%s\\n' '{\"id\":1,\"source\":\"# Hello\"}' | moss render --json"),
     ("build", "moss build docs/public/              # Build with plugins"),
     ("build", "moss build ~/blog/ --serve           # Build with plugins and serve"),
     ("build", "moss build ~/blog/ --no-plugins      # Fast build for CI/CD"),
