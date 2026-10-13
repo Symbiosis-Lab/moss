@@ -25,9 +25,8 @@ pub struct ShortcodeAttrSpec {
     /// scope asset search to these kinds. Empty for plain attrs
     /// (`cols=`, `button=`, …).
     pub asset_kinds: &'static [ExtKind],
-    /// True for a bare keyword inserted WITHOUT `=` (`{scroll}`). False (the
-    /// default shape of every attr in this catalog before this field
-    /// existed) is an ordinary `key=value` attr.
+    /// True for a bare keyword inserted without `=` (`{scroll}`); false for
+    /// an ordinary `key=value` attribute.
     pub flag: bool,
 }
 
@@ -74,7 +73,12 @@ fn entry(kind: ShortcodeKind) -> ShortcodeCatalogEntry {
             "buttons\n[${1:Get started}](${2:/})\n:::",
         ),
         ShortcodeKind::Gallery => (
-            &[ShortcodeAttrSpec { name: "per-line", asset_kinds: &[], flag: false }],
+            &[
+                ShortcodeAttrSpec { name: "per-line", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "wide", asset_kinds: &[], flag: true },
+                ShortcodeAttrSpec { name: "page", asset_kinds: &[], flag: true },
+                ShortcodeAttrSpec { name: "screen", asset_kinds: &[], flag: true },
+            ],
             None,
             "gallery ${1:3}\n![](${2:photo.jpg})\n:::",
         ),
@@ -85,7 +89,15 @@ fn entry(kind: ShortcodeKind) -> ShortcodeCatalogEntry {
                     asset_kinds: &[ExtKind::Image, ExtKind::Video],
                     flag: false,
                 },
-                ShortcodeAttrSpec { name: "wide", asset_kinds: &[], flag: false },
+                // Width words are bare keywords (`{wide}`), never `wide=…`.
+                ShortcodeAttrSpec { name: "wide", asset_kinds: &[], flag: true },
+                ShortcodeAttrSpec { name: "page", asset_kinds: &[], flag: true },
+                ShortcodeAttrSpec { name: "screen", asset_kinds: &[], flag: true },
+                ShortcodeAttrSpec { name: "alt", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "caption", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "header", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "mobile", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "align", asset_kinds: &[], flag: false },
             ],
             Some("image"),
             "hero {image=${1:photo.jpg}}\n# ${2:Title}\n${3:Subtitle}\n:::",
@@ -93,7 +105,9 @@ fn entry(kind: ShortcodeKind) -> ShortcodeCatalogEntry {
         ShortcodeKind::Grid => (
             &[
                 ShortcodeAttrSpec { name: "per-line", asset_kinds: &[], flag: false },
-                ShortcodeAttrSpec { name: "wide", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "wide", asset_kinds: &[], flag: true },
+                ShortcodeAttrSpec { name: "page", asset_kinds: &[], flag: true },
+                ShortcodeAttrSpec { name: "screen", asset_kinds: &[], flag: true },
                 ShortcodeAttrSpec { name: "scroll", asset_kinds: &[], flag: true },
                 ShortcodeAttrSpec { name: "label", asset_kinds: &[], flag: false },
             ],
@@ -251,5 +265,96 @@ mod tests {
                 e.name
             );
         }
+    }
+
+    #[test]
+    fn hero_value_attrs_are_read_by_the_parser() {
+        // Each listed `key=value` attribute must set something on the parsed
+        // hero, so a name the parser ignores (or a typo) cannot be offered.
+        use crate::ast::node::Block;
+        use crate::ast::shortcode::Shortcode;
+        let hero = catalog().into_iter().find(|e| e.kind == ShortcodeKind::Hero).expect("hero entry");
+        for a in hero.attrs.iter().filter(|a| !a.flag && a.asset_kinds.is_empty()) {
+            let md = format!(":::hero {{image=a.jpg {}=x}}\n# T\n:::\n", a.name);
+            let doc = crate::ast::parser::parse(&md);
+            let h = doc
+                .blocks
+                .iter()
+                .find_map(|b| match b {
+                    Block::Shortcode(Shortcode::Hero(h)) => Some(h),
+                    _ => None,
+                })
+                .expect("hero block");
+            let set = match a.name {
+                "alt" => !h.image_alt.is_empty(),
+                "caption" => !h.caption.is_empty(),
+                "header" => h.header.is_some(),
+                "mobile" => h.mobile.is_some(),
+                "align" => h.align.is_some(),
+                _ => false,
+            };
+            assert!(set, "hero: `{}=x` sets nothing on the parsed hero", a.name);
+        }
+    }
+
+    #[test]
+    fn flags_are_exactly_the_attrs_the_parser_takes_bare() {
+        // The attribute parser accepts a bare keyword only for the width words
+        // and `scroll`; `wide=x` is stored as an ordinary pair and sets no
+        // width. So an attr is a flag exactly when its bare form parses.
+        for e in catalog() {
+            for a in e.attrs {
+                let bare = crate::ast::attrs::parse_attrs(&format!("{{{}}}", a.name)).is_ok();
+                assert_eq!(bare, a.flag, "{}: `{}` has flag: {} but bare parse ok: {bare}", e.name, a.name, a.flag);
+            }
+        }
+    }
+
+    /// The template as an author would type it, with `{wide}` in its
+    /// attribute block and the snippet tab stops replaced by their text.
+    fn template_with_wide(template: &str) -> String {
+        let mut plain = String::new();
+        let mut rest = template;
+        while let Some(start) = rest.find("${") {
+            plain.push_str(&rest[..start]);
+            let after = &rest[start + 2..];
+            let end = after.find('}').expect("closed tab stop");
+            plain.push_str(after[..end].split_once(':').map_or("", |(_, text)| text));
+            rest = &after[end + 1..];
+        }
+        plain.push_str(rest);
+        let (first, tail) = plain.split_once('\n').unwrap_or((&plain, ""));
+        let first = if first.contains('{') { first.replacen('{', "{wide ", 1) } else { format!("{first} {{wide}}") };
+        format!(":::{first}\n{tail}\n")
+    }
+
+    #[test]
+    fn width_readers_offer_exactly_the_parsers_width_words() {
+        // A shortcode reads the width word when `{wide}` in its fence shows up
+        // as `width: Some("wide")` on the parsed block; those must offer the
+        // parser's width words, and the rest none.
+        let mut expected: Vec<&str> = crate::ast::attrs::WIDTH_TOKENS
+            .iter()
+            .filter(|(word, value)| word == value && *word != "body")
+            .map(|(word, _)| *word)
+            .collect();
+        expected.sort_unstable();
+        let mut readers = Vec::new();
+        for e in catalog() {
+            let doc = crate::ast::parser::parse(&template_with_wide(e.canonical_template));
+            let reads_width = format!("{:?}", doc.blocks).contains("width: Some(\"wide\")");
+            if reads_width {
+                readers.push(e.name);
+            }
+            let mut got: Vec<&str> = e
+                .attrs
+                .iter()
+                .filter(|a| crate::ast::attrs::WIDTH_TOKENS.iter().any(|(w, _)| *w == a.name))
+                .map(|a| a.name)
+                .collect();
+            got.sort_unstable();
+            assert_eq!(got, if reads_width { expected.clone() } else { Vec::new() }, "{}: width words", e.name);
+        }
+        assert!(readers.contains(&"hero") && readers.contains(&"grid") && readers.contains(&"gallery"), "readers found: {readers:?}");
     }
 }

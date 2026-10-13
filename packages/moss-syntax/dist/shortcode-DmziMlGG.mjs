@@ -14,16 +14,49 @@ const SHORTCODES = [
 	},
 	{
 		name: "gallery",
-		attrs: [{ name: "per-line" }],
+		attrs: [
+			{ name: "per-line" },
+			{
+				name: "wide",
+				flag: true
+			},
+			{
+				name: "page",
+				flag: true
+			},
+			{
+				name: "screen",
+				flag: true
+			}
+		],
 		canonicalTemplate: "gallery ${1:3}\n![](${2:photo.jpg})\n:::",
 		authorable: true
 	},
 	{
 		name: "hero",
-		attrs: [{
-			name: "image",
-			assetKinds: ["Image", "Video"]
-		}, { name: "wide" }],
+		attrs: [
+			{
+				name: "image",
+				assetKinds: ["Image", "Video"]
+			},
+			{
+				name: "wide",
+				flag: true
+			},
+			{
+				name: "page",
+				flag: true
+			},
+			{
+				name: "screen",
+				flag: true
+			},
+			{ name: "alt" },
+			{ name: "caption" },
+			{ name: "header" },
+			{ name: "mobile" },
+			{ name: "align" }
+		],
 		assetAttr: "image",
 		canonicalTemplate: "hero {image=${1:photo.jpg}}\n# ${2:Title}\n${3:Subtitle}\n:::",
 		authorable: true
@@ -32,7 +65,18 @@ const SHORTCODES = [
 		name: "grid",
 		attrs: [
 			{ name: "per-line" },
-			{ name: "wide" },
+			{
+				name: "wide",
+				flag: true
+			},
+			{
+				name: "page",
+				flag: true
+			},
+			{
+				name: "screen",
+				flag: true
+			},
 			{
 				name: "scroll",
 				flag: true

@@ -255,6 +255,17 @@ fn is_key_start(c: char) -> bool {
     c.is_ascii_alphabetic()
 }
 
+/// The bare width words an attribute block accepts, each with the width it
+/// sets. `full` is the author-facing alias for `screen`; `body` is the
+/// default width.
+pub const WIDTH_TOKENS: &[(&str, &str)] = &[
+    ("body", "body"),
+    ("wide", "wide"),
+    ("page", "page"),
+    ("screen", "screen"),
+    ("full", "screen"),
+];
+
 /// Recognize the spec § P9 width tokens (`body | wide | page | screen | full`).
 ///
 /// `full` is the author-facing alias for `screen` (the spec keeps both shapes
@@ -263,13 +274,7 @@ fn is_key_start(c: char) -> bool {
 /// ASCII lowercase per the grammar; the parser feeds keys verbatim, so any
 /// case-folding decision lives here.
 fn match_width_token(s: &str) -> Option<&'static str> {
-    match s {
-        "body" => Some("body"),
-        "wide" => Some("wide"),
-        "page" => Some("page"),
-        "screen" | "full" => Some("screen"),
-        _ => None,
-    }
+    WIDTH_TOKENS.iter().find(|(word, _)| *word == s).map(|(_, value)| *value)
 }
 
 fn is_key_continue(c: char) -> bool {
