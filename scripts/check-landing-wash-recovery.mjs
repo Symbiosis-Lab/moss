@@ -32,7 +32,7 @@ async function cross(page, scene, fraction = 1.05) {
 for (const engine of [chromium, webkit]) {
   const browser = await engine.launch();
   try {
-    for (const failure of ['throwing frame', 'lost context', 'missing print']) {
+    for (const failure of ['throwing frame', 'lost context', 'missing print', 'restored context', 'failed capture']) {
       const page = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true });
       await page.goto(withDebug(url));
       // mobile defers scene 3's print until the reader has left scene 1
@@ -43,12 +43,27 @@ for (const engine of [chromium, webkit]) {
       if (failure === 'throwing frame') await page.evaluate(() => { const sim = __playback.sim, play = sim.play; sim.play = () => { sim.play = play; throw new Error('injected wash failure'); }; });
       else if (failure === 'lost context') await page.evaluate(() => document.getElementById('gl').getContext('webgl2').getExtension('WEBGL_lose_context').loseContext());
       // the next scene's print not taken yet: the wash must not wait for a capture
-      else await page.evaluate(() => { sheets[2] = null; });
+      else if (failure === 'missing print') await page.evaluate(() => { sheets[2] = null; });
+      // The browser hands a lost context back (a phone short of GPU memory does, and iOS Safari does it
+      // often): the morph must come back with it, not stay cut until the page is reloaded.
+      else if (failure === 'restored context') await page.evaluate(async () => {
+        const lose = document.getElementById('gl').getContext('webgl2').getExtension('WEBGL_lose_context'), nap = (ms) => new Promise((r) => setTimeout(r, ms));
+        lose.loseContext(); await nap(300); lose.restoreContext(); await nap(800);
+      });
+      // One print that fails to draw (a first visit still loading its images and fonts) must not switch
+      // the morph off for the rest of the visit: the page tries again by itself.
+      else {
+        await page.evaluate(() => { sheets[2] = null; const real = capture; capture = async () => { capture = real; throw new Error('injected capture failure'); }; });
+        await page.waitForFunction(() => printable && !!sheets[2], null, { timeout: 30000 });
+      }
+      const washesBefore = await page.evaluate(() => __state().washes);
       const after = await cross(page, 1);
       assert(!after.running && after.shown === 2 && after.target === 2,
         `${engine.name()}: ${failure} left the art behind the scroll: ${JSON.stringify({ shown: after.shown, target: after.target, running: after.running })}`);
       // a dead canvas must not be raised over the live scene: the art would vanish for the crossing
       if (failure === 'lost context') assert(after.cover === 0, `${engine.name()}: the wash cover rose over a lost GPU context: ${after.cover}`);
+      if (failure === 'restored context' || failure === 'failed capture') assert(after.washes > washesBefore && after.cover > .5,
+        `${engine.name()}: after a ${failure} the join was still cut, not washed: ${JSON.stringify({ washes: after.washes, washesBefore, cover: after.cover })}`);
       // without the incoming print the outgoing scene still dissolves as the copy arrives,
       // and the print is taken again once the reader stands in the scene
       if (failure === 'missing print') {
