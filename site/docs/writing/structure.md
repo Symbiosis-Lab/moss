@@ -88,10 +88,10 @@ Each line is the old address on the left and the new one on the right, both star
 | Setting | Built | In lists | In sitemap |
 |---------|-------|----------|------------|
 | _(default)_ | yes | yes | yes |
-| `unlisted: true` | yes | no | no |
+| `listed: false` | yes | no | no |
 | `draft: true` | yes | no | no |
 
-A draft is still published at its own address: it is left out of lists, feeds and the sitemap and marked `noindex`, but anyone who has the link can open it. To keep a file out of the site entirely, start its name, or the name of its folder, with a `.`. A leading `_` does not hide anything: `_drafts/` is built like any other folder, at `/drafts/`.
+A draft is still published at its own address: it is left out of lists, feeds and the sitemap and marked `noindex`, but anyone who has the link can open it. A page with `listed: false` is left out of the same places but not marked `noindex`. To keep a file out of the site entirely, start its name, or the name of its folder, with a `.`. A leading `_` does not hide anything: `_drafts/` is built like any other folder, at `/drafts/`.
 
 ## Sort order
 

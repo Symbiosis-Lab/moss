@@ -78,7 +78,7 @@ These fields control how the page appears in the site's navigation and chrome.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `draft` | boolean | `false` | Publish at its own address only: left out of lists, feeds and the sitemap, and marked `noindex` |
-| `unlisted` | boolean | `false` | Generate but hide from lists and sitemap |
+| `listed` | boolean | `true` | Set `false` to leave the page out of lists, feeds and the sitemap; it is still published at its own address |
 <!-- auto:end:frontmatter-visibility -->
 
 ## Children
