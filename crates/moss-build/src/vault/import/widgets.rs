@@ -8,7 +8,10 @@
 //! - `Embed` — a video host: the iframe becomes moss's remote-embed form
 //!   (`![[url]]`), which the build renders as a player.
 //! - `Carry` — a hosted page (donation, scheduling, forms, any other `https`
-//!   iframe): a link to it where the iframe stood, the honest static form.
+//!   iframe, listed or not): a frame of it where the iframe stood, with a link
+//!   under the frame. The original page framed it, so the provider allowed
+//!   that site; another site may be refused, and the link under the frame
+//!   serves that reader.
 //! - `Chrome` — chat bubbles, comment embeds, newsletter vendors: dropped
 //!   silently, as the clutter strip always did.
 //!
@@ -27,6 +30,7 @@ use scraper::{ElementRef, Html, Node, Selector};
 use url::Url;
 
 use super::emit::{describing_alt, image_line};
+use moss_core::resolve::embed_renderer::Sizing;
 use super::scrape::extractor::{is_chrome_element, looks_hidden, LAZY_SRC_ATTRS};
 use super::scrape::metadata::schema_email;
 
@@ -259,17 +263,26 @@ fn escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-fn link_html(href: &str, label: &str) -> String {
-    format!("<p><a href=\"{}\">{}</a></p>", escape(href), escape(label))
+/// The address as a wikilink or markdown-link target: the characters that
+/// would end or split `![[…]]` or `[…](…)` are percent-encoded.
+fn wikilink_target(s: &str) -> String {
+    s.replace('(', "%28").replace(')', "%29").replace('|', "%7C").replace('[', "%5B").replace(']', "%5D")
 }
 
-/// Tag the pre-pass leaves for an embed; [`html_to_markdown`] turns it into
-/// `![[url]]`. (Plain text `![[url]]` would be escaped by the converter.)
+fn link_html(href: &str, label: &str) -> String {
+    format!("<p><a href=\"{}\">{}</a></p>", escape(&wikilink_target(href)), escape(label))
+}
+
+/// Tag the pre-pass leaves for an embed, or for a carried hosted page's frame
+/// (with `data-label` and `data-size`). [`html_to_markdown`] turns it into
+/// `![[url]]`, or `![[url|label|WxH]]` when it has either part.
+/// (Plain text `![[url]]` would be escaped by the converter.)
 const EMBED_TAG: &str = "moss-embed";
 
 /// htmd with two changes: `<moss-embed data-url="…">` becomes the
-/// remote-embed wikilink on its own paragraph, and an `<img>` whose alt is
-/// only a file name is written with an empty alt (see `describing_alt`).
+/// remote-embed wikilink on its own paragraph, with the label and size its
+/// attributes carry, and an `<img>` whose alt is only a file name is written
+/// with an empty alt (see `describing_alt`).
 pub(crate) fn html_to_markdown(html: &str) -> std::io::Result<String> {
     HtmlToMarkdown::builder()
         .add_handler(vec!["img"], |handlers: &dyn Handlers, el: htmd::Element| {
@@ -288,8 +301,18 @@ pub(crate) fn html_to_markdown(html: &str) -> std::io::Result<String> {
             (!lines.is_empty()).then(|| format!("\n\n:::gallery\n{}\n:::\n\n", lines.join("\n")).into())
         })
         .add_handler(vec![EMBED_TAG], |_: &dyn Handlers, el: htmd::Element| {
-            let url = el.attrs.iter().find(|a| &*a.name.local == "data-url")?;
-            Some(format!("\n\n![[{}]]\n\n", url.value).into())
+            let attr = |name: &str| {
+                el.attrs.iter().find(|a| &*a.name.local == name).map(|a| String::from(&*a.value)).unwrap_or_default()
+            };
+            let url = attr("data-url");
+            if url.is_empty() {
+                return None;
+            }
+            let parts: Vec<String> = [url, attr("data-label"), attr("data-size")]
+                .into_iter()
+                .filter(|p| !p.is_empty())
+                .collect();
+            Some(format!("\n\n![[{}]]\n\n", parts.join("|")).into())
         })
         .build()
         .convert(html)
@@ -313,7 +336,7 @@ fn embed_target(url: &Url) -> String {
         }
         _ => url.as_str().to_string(),
     };
-    target.replace('(', "%28").replace(')', "%29")
+    wikilink_target(&target)
 }
 
 enum Outcome {
@@ -321,6 +344,44 @@ enum Outcome {
     Leave,
     Carried(String),
     Dropped(String),
+}
+
+/// A `width` or `height` attribute as whole pixels: `"800"` or `"800px"`.
+/// A percentage, a unit other than px, or an empty value names no size.
+fn pixel_size(value: &str) -> Option<u32> {
+    let digits = value.strip_suffix("px").unwrap_or(value);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok().filter(|&n| n > 0)
+}
+
+/// The frame's and the link's text: whitespace runs collapsed, then `|` and
+/// `]` replaced by a space. A text the size parser would read as a size (a
+/// bare number, `800x600`) is no title, so the row's label or the host stands.
+fn frame_label(el: &Element, row: Option<&Row>, url: &Url) -> String {
+    let text = link_label(el, row, url).split_whitespace().collect::<Vec<_>>().join(" ");
+    let text = text.replace(['|', ']'], " ");
+    if !text.trim().is_empty() && Sizing::parse(&text).is_none() {
+        return text;
+    }
+    row.map(|r| r.label)
+        .filter(|l| !l.is_empty())
+        .map_or_else(|| url.host_str().unwrap_or("link").to_string(), str::to_string)
+}
+
+fn frame_html(el: &Element, row: Option<&Row>, url: &Url) -> String {
+    let label = frame_label(el, row, url);
+    let size = match (pixel_size(attr(el, "width")), pixel_size(attr(el, "height"))) {
+        (Some(w), Some(h)) => format!("{w}x{h}"),
+        _ => String::new(),
+    };
+    format!(
+        "<{EMBED_TAG} data-url=\"{}\" data-label=\"{}\" data-size=\"{size}\"></{EMBED_TAG}>{}",
+        escape(&wikilink_target(url.as_str())),
+        escape(&label),
+        link_html(url.as_str(), &label)
+    )
 }
 
 fn iframe_outcome(el: &Element, base: &Url) -> Outcome {
@@ -342,7 +403,7 @@ fn iframe_outcome(el: &Element, base: &Url) -> Outcome {
             escape(&embed_target(&url))
         )),
         Some(Chrome) => Outcome::Leave,
-        Some(Carry) | None => Outcome::Carried(link_html(url.as_str(), &link_label(el, row, &url))),
+        Some(Carry) | None => Outcome::Carried(frame_html(el, row, &url)),
     }
 }
 

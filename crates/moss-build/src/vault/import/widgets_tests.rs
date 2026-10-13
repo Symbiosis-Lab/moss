@@ -47,15 +47,57 @@ fn other_video_hosts_keep_their_player_url() {
 fn hosted_page_iframe_becomes_a_titled_link() {
     let html = page("", r#"<iframe src="https://pay.example/donate/123" title="Give to the studio"></iframe>"#);
     let (md, count) = run(&html);
+    assert!(md.contains("![[https://pay.example/donate/123|Give to the studio]]"), "{md}");
     assert!(md.contains("[Give to the studio](https://pay.example/donate/123)"), "{md}");
     assert_eq!(count, WidgetCount { carried: 1, dropped: 0 });
+}
+
+#[test]
+fn hosted_page_iframe_with_pixel_size_becomes_a_sized_frame_above_its_link() {
+    let html = page("", r#"<iframe src="https://forms.example/f/2" title="Sign-up form" width="420" height="620"></iframe>"#);
+    let md = run(&html).0;
+    let frame = md.find("![[https://forms.example/f/2|Sign-up form|420x620]]").unwrap_or_else(|| panic!("{md}"));
+    let link = md.find("[Sign-up form](https://forms.example/f/2)").unwrap_or_else(|| panic!("{md}"));
+    assert!(frame < link, "{md}");
+}
+
+#[test]
+fn hosted_page_iframe_with_percentage_width_is_a_frame_without_size() {
+    let html = page("", r#"<iframe src="https://pay.example/donate/9" title="Give" width="100%" height="700"></iframe>"#);
+    let md = run(&html).0;
+    assert!(md.contains("![[https://pay.example/donate/9|Give]]"), "{md}");
+    assert!(!md.contains("100%"), "{md}");
+}
+
+#[test]
+fn a_pipe_or_bracket_in_a_frame_label_cannot_break_the_embed() {
+    let html = page("", r#"<iframe src="https://tix.example/e/1" title="Tix | ] now" width="300" height="400"></iframe>"#);
+    let md = run(&html).0;
+    assert!(md.contains("![[https://tix.example/e/1|Tix     now|300x400]]"), "{md}");
+}
+
+#[test]
+fn google_forms_iframe_without_a_row_is_a_frame_labelled_by_its_host() {
+    let html = page(
+        "",
+        r#"<iframe src="https://docs.google.com/forms/d/e/1FAIpQLSc/viewform?embedded=true" width="640" height="800px"></iframe>"#,
+    );
+    let (md, count) = run(&html);
+    assert!(
+        md.contains("![[https://docs.google.com/forms/d/e/1FAIpQLSc/viewform?embedded=true|docs.google.com|640x800]]"),
+        "{md}"
+    );
+    assert!(md.contains("[docs.google.com](https://docs.google.com/forms/d/e/1FAIpQLSc/viewform?embedded=true)"), "{md}");
+    assert_eq!(count.carried, 1);
 }
 
 #[test]
 fn untitled_iframe_is_labelled_by_its_row_then_its_host() {
     let html = page("", r#"<iframe src="https://donorbox.org/embed/x"></iframe><iframe src="https://forms.example/f/1"></iframe>"#);
     let (md, count) = run(&html);
+    assert!(md.contains("![[https://donorbox.org/embed/x|Donate]]"), "{md}");
     assert!(md.contains("[Donate](https://donorbox.org/embed/x)"), "{md}");
+    assert!(md.contains("![[https://forms.example/f/1|forms.example]]"), "{md}");
     assert!(md.contains("[forms.example](https://forms.example/f/1)"), "{md}");
     assert_eq!(count.carried, 2);
 }
@@ -258,4 +300,30 @@ fn a_gallery_whose_lightbox_links_name_only_a_query_is_one_gallery() {
     let md = run(&html).0;
     let block = ":::gallery\n![](https://site.example/i/a.jpg)\n![](https://site.example/i/b.jpg)\n:::";
     assert!(md.contains(block), "{md}");
+}
+
+#[test]
+fn a_paren_or_pipe_in_a_hosted_url_cannot_end_the_link_or_the_embed() {
+    let html = page("", r#"<iframe src="https://pay.example/give/a)b|c" title="Give" width="420" height="620"></iframe>"#);
+    let md = run(&html).0;
+    assert!(md.contains("![[https://pay.example/give/a%29b%7Cc|Give|420x620]]"), "{md}");
+    assert!(md.contains("[Give](https://pay.example/give/a%29b%7Cc)"), "{md}");
+}
+
+#[test]
+fn a_newline_in_a_frame_title_is_one_space() {
+    let html = page("", "<iframe src=\"https://forms.example/n\" title=\"Sign-up\n   form\" width=\"420\" height=\"620\"></iframe>");
+    let md = run(&html).0;
+    assert!(md.contains("![[https://forms.example/n|Sign-up form|420x620]]"), "{md}");
+}
+
+#[test]
+fn a_size_shaped_title_is_replaced_by_the_row_label_or_the_host() {
+    let html = page(
+        "",
+        r#"<iframe src="https://forms.example/s/1" title="800x600" width="420" height="620"></iframe><iframe src="https://donorbox.org/embed/y" title="2024"></iframe>"#,
+    );
+    let md = run(&html).0;
+    assert!(md.contains("![[https://forms.example/s/1|forms.example|420x620]]"), "{md}");
+    assert!(md.contains("![[https://donorbox.org/embed/y|Donate]]"), "{md}");
 }

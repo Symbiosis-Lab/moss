@@ -120,7 +120,7 @@ pub fn run(args: &[String]) -> i32 {
                 // logged by page and kind).
                 if res.widgets_carried > 0 || res.widgets_dropped > 0 {
                     eprintln!(
-                        "  ↳ {} widget(s) carried as links, {} with no static form",
+                        "  ↳ {} widget(s) carried to their hosted page, {} with no static form",
                         res.widgets_carried, res.widgets_dropped
                     );
                 }
@@ -211,7 +211,7 @@ pub fn run(args: &[String]) -> i32 {
         },
         if totals.widgets_carried > 0 || totals.widgets_dropped > 0 {
             format!(
-                ", {} widget(s) carried as links, {} with no static form",
+                ", {} widget(s) carried to their hosted page, {} with no static form",
                 totals.widgets_carried, totals.widgets_dropped
             )
         } else {
