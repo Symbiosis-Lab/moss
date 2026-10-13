@@ -1,7 +1,6 @@
 import { HighlightStyle } from "@codemirror/language";
 import { Decoration, DecorationSet, EditorView, ViewPlugin, ViewUpdate } from "@codemirror/view";
-import { EditorState, Extension, StateEffectType } from "@codemirror/state";
-import { Diagnostic } from "@codemirror/lint";
+import { EditorState, Extension } from "@codemirror/state";
 
 //#region src/cm6/cm-active-lines.d.ts
 
@@ -416,7 +415,7 @@ interface ShortcodeBlockOptions {
 }
 declare function shortcodeBlockExtension(opts?: ShortcodeBlockOptions): Extension;
 //#endregion
-//#region src/cm6/cm-link-resolver.d.ts
+//#region src/cm6/cm-link-clickable.d.ts
 interface EditorReferenceResolution {
   /** The original reference text that was classified. */
   target: string;
@@ -448,61 +447,23 @@ interface EditorReferenceResolution {
   /** For FolderListing embeds: what the last build listed. */
   folder: unknown;
 }
+/** The (text, is_embed)-keyed lookup a host's reference cache exposes. */
 interface ReferenceCacheRead {
   get(text: string, isEmbed: boolean): EditorReferenceResolution | undefined;
 }
 /**
- * Map the cached LINK envelopes for every extracted link span to Diagnostic[].
+ * `cm-link-clickable` on every link NODE and every EMBED node — the class the
+ * host's Cmd/Ctrl-held cursor rule keys on. Exported for unit tests.
  *
- * Reads the shared reference cache with is_embed:false. Targets not yet in the
- * cache (the batch hasn't landed) produce no diagnostic — the linter re-runs
- * via `needsRefresh(refsResolvedEffect)` once the batch dispatches its effect.
- *
- * Pure over (state, cache) — no async, no IPC. One diagnostic per extracted
- * span (so the same target appearing twice gets two diagnostics).
+ * Embeds are a separate walk rather than an addition to `extractLinkTargets`:
+ * that extractor skips `WikilinkEmbed` on purpose, because a host may render an
+ * embed in place of its text. While it is rendered its source is hidden and
+ * nothing is painted; the moment the cursor reveals the raw `![[ … ]]`, a press
+ * follows it and the hand must say so.
  */
-declare function runLinkLintSource(view: EditorView, cache: ReferenceCacheRead): readonly Diagnostic[];
-/**
- * Build the link-feedback decorations:
- *   - `cm-link-clickable` on EVERY link NODE and every EMBED node (Cmd-held
- *     cursor affordance).
- *   - `cm-link-unresolved-dim` on not-found targets, EXCEPT the one the cursor
- *     is on (per-node) — while the user is typing toward a future page, no
- *     feedback at all for that link; sibling links keep their dim cue.
- *
- * Embeds get the hand but never the dim, which is why they are a separate walk
- * rather than an addition to `extractLinkTargets`: that extractor skips
- * `WikilinkEmbed` on purpose because a lint underline belongs on link
- * text, not on a rendered card. The CURSOR is a different question — an embed
- * is exactly as followable as a link, and cm-link-nav has followed one since
- * `followTargetAt` learned about embeds. While the card is rendered its source
- * is hidden and nothing is painted; the moment the cursor reveals the raw
- * `![[ … ]]` above the card, the press follows it and the hand must say so.
- */
-declare function buildLinkDecorations(state: EditorState, cache: ReferenceCacheRead): DecorationSet;
-interface LinkValidationResult {
-  /** CM6 extension array (linter + clickable-link decoration). Install via spread. */
-  extension: Extension[];
-}
-/**
- * Create a CM6 extension that validates links by READING the shared reference
- * cache (no RPC of its own).
- *
- * - Uses Lezer-based `extractLinkTargets`.
- * - The lint source is synchronous (a pure pull over the cache); the `linter()`
- *   delay (600 ms) keeps the diagnostic paint debounced.
- * - `needsRefresh(refsResolvedEffect)` re-runs the source when the reference
- *   resolver's batch lands (initial resolve AND the post-FileChanged re-batch,
- *   which the resolver triggers by clearing its cache + re-scheduling).
- * - `@codemirror/lint` shows the diagnostic message on hover natively.
- *
- * @param opts.resolvedCache       Shared reference cache (read-only lookup).
- * @param opts.refsResolvedEffect  The effect the resolver dispatches after a batch.
- */
-declare function linkValidationExtension(opts: {
-  resolvedCache: ReferenceCacheRead;
-  refsResolvedEffect: StateEffectType<void>;
-}): LinkValidationResult;
+declare function buildLinkDecorations(state: EditorState): DecorationSet;
+/** The followable-cursor mark, rebuilt as the document or the viewport changes. */
+declare function linkClickableExtension(): Extension;
 //#endregion
 //#region src/cm6/cm-footnote.d.ts
 /** A decoration to place, in the shape cm-live-preview collects. */
@@ -589,4 +550,4 @@ declare const footnoteViewPluginForTest: ViewPlugin<{
  */
 declare function footnoteExtension(): Extension;
 //#endregion
-export { CMType, EditorReferenceResolution, EmbedNodeRef, EmbedParts, EmbedSyntax, ExtractedTarget, FolderEmbedParams, FootnoteDeco, FootnoteSite, ImageTarget, LinkValidationResult, LinkedEmbed, ParsedMark, ReferenceCacheRead, ShortcodeBlockInfo, ShortcodeBlockOptions, ShortcodeBlockStrings, TreeNode, buildLinkDecorations, collectShortcodeBlocks, criticmarkupExtension, dividesCellsAt, embedNodeAt, embedParts, extractImageTargets, extractLinkTargets, flattenBlocks, folderChips, folderParamsFromEmbed, footnoteDecorations, footnoteExtension, footnoteIndex, footnoteJumpTarget, footnoteTheme, footnoteViewPluginForTest, imageNodeAtWidget, inShortcodeBody, isCellDividerLine, isEmbedNode, isLegacyDividerLine, legacyDividesCellsAt, linkUnitOfEmbed, linkValidationExtension, linkedEmbedOf, mossHighlight, mossHighlightExtension, nodeTouchesSelection, parseFolderParams, parseMarks, runLinkLintSource, shortcodeBlockExtension, shortcodeBodyRanges, topLevelLegacyDividerCount, widthFromPipe };
+export { CMType, EditorReferenceResolution, EmbedNodeRef, EmbedParts, EmbedSyntax, ExtractedTarget, FolderEmbedParams, FootnoteDeco, FootnoteSite, ImageTarget, LinkedEmbed, ParsedMark, ReferenceCacheRead, ShortcodeBlockInfo, ShortcodeBlockOptions, ShortcodeBlockStrings, TreeNode, buildLinkDecorations, collectShortcodeBlocks, criticmarkupExtension, dividesCellsAt, embedNodeAt, embedParts, extractImageTargets, extractLinkTargets, flattenBlocks, folderChips, folderParamsFromEmbed, footnoteDecorations, footnoteExtension, footnoteIndex, footnoteJumpTarget, footnoteTheme, footnoteViewPluginForTest, imageNodeAtWidget, inShortcodeBody, isCellDividerLine, isEmbedNode, isLegacyDividerLine, legacyDividesCellsAt, linkClickableExtension, linkUnitOfEmbed, linkedEmbedOf, mossHighlight, mossHighlightExtension, nodeTouchesSelection, parseFolderParams, parseMarks, shortcodeBlockExtension, shortcodeBodyRanges, topLevelLegacyDividerCount, widthFromPipe };

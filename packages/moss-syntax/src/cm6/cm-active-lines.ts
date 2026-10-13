@@ -1,11 +1,10 @@
-// Shared active-line predicate — the primitive the editor-wide colour-only
-// suppression contract uses (design-vocabulary.md: "Colour-only feedback —
-// diagnostics, unresolved-link dimming — may wait until the caret leaves the
-// construct being typed"). Presentation itself never reads the selection;
-// this predicate exists only for that one allowlisted exception.
+// Shared active-line predicate — the primitive behind one rule: colour-only
+// feedback, such as a host's marks on a broken or unresolved reference, may
+// wait until the caret leaves the construct being typed. Presentation itself
+// never reads the selection; this predicate exists only for that exception.
 //
 // Lives in its own module (not the consumer) so multiple feedback modules
-// (cm-link-resolver, cm-footnote in moss-desktop's callers) can share one
+// (cm-link-clickable, cm-footnote) can share one
 // predicate without an import cycle.
 
 import type { EditorState } from '@codemirror/state';

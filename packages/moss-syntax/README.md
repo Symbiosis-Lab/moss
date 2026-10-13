@@ -29,7 +29,7 @@ Works anywhere a string works (Obsidian mobile included).
 
 The CM6-importing, host-free extensions: `cm-active-lines`, `cm-link-extract`,
 `cm-image-extract`, `cm-criticmarkup`, `cm-highlight`, `cm-shortcode-block`
-(styles at `./cm6/cm-shortcode-block.css`) and `cm-link-resolver`.
+(styles at `./cm6/cm-shortcode-block.css`) and `cm-link-clickable`.
 
 Host-free means what it says. Anything only a host can answer arrives as an
 option: user-visible strings as **thunks** (called at `toDOM` time, so a locale

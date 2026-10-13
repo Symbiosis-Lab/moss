@@ -69,8 +69,8 @@ describe('extractLinkTargets', () => {
     expect(results).toHaveLength(1);
     // Resolution uses the page name…
     expect(results[0].target).toBe('Page');
-    // …but from/to cover the VISIBLE label, so Cmd+click and the clickable/dim
-    // marks land on what live-preview renders (the alias), not the hidden target.
+    // …but from/to cover the VISIBLE label, so Cmd+click and a host's problem
+    // mark land on what live-preview renders (the alias), not the hidden target.
     expect(doc.slice(results[0].from, results[0].to)).toBe('Display');
   });
 

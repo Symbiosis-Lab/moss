@@ -87,7 +87,7 @@ export function extractLinkTargets(state: EditorState): ExtractedTarget[] {
       // `target` is always the page name (the resolution key). `from`/`to` are
       // the VISIBLE span: the page name for a plain `[[Page]]`, or the alias for
       // `[[Page|Display]]` — matching exactly what cm-live-preview renders, so
-      // the clickable/dim mark (cm-link-resolver) and Cmd+click nav (cm-link-nav)
+      // the clickable mark (cm-link-clickable) and Cmd+click nav (cm-link-nav)
       // land on the text the user actually sees.
       if (node.name === 'Wikilink') {
         // Embeds need no guard here: `![[file]]` is a `WikilinkEmbed` node,
