@@ -6,7 +6,7 @@ description: What moss collects, why, and your choices — in plain language.
 lang: en
 translationKey: privacy
 ---
-moss is a local‑first tool for building and publishing websites. In one line: **your content stays on your own computer**, we collect as little data as we can, and there are **no ads and no usage tracking**.
+moss is a local‑first tool for building and publishing websites. In one line: **your content stays on your own computer**, we collect as little data as we can, and there are **no ads and no tracking of individuals**.
 
 This is an early policy. moss is in active development, and we'll keep refining it as the product grows. If anything here is unclear, [get in touch](#contact).
 
@@ -38,7 +38,7 @@ If you enable comments through moss, then when someone comments on your publishe
 
 ## Website analytics
 
-For published sites we keep basic, aggregate traffic stats: country, browser, OS, and which pages were viewed. These stats contain no cookies, no cross‑site tracking, and no IP addresses.
+For published sites, and for this site, we keep basic, aggregate traffic stats: the pages viewed, the referring page, country, browser and OS family, a screen‑size bucket (phone, tablet, or desktop), campaign tags in the link (utm_source and utm_medium), and named clicks on buttons a site marks for counting, such as a download button. These stats contain no cookies, no cross‑site tracking, no stored IP addresses, and nothing that identifies a person.
 
 If you turn on the analytics dashboard, your site's stats sync from our server to your device and are kept locally, so you can analyze them on your own machine.
 
