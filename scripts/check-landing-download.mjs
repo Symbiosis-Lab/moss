@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
 
 const CLICKABLE_WITHIN_MS = 12000;
+const WHEEL_ATTEMPTS = 3;
 const VIEWPORTS = [['desktop', { width: 1440, height: 900 }], ['phone', { width: 390, height: 844, isMobile: true, hasTouch: true }]];
 const engines = (process.env.LANDING_ENGINES || 'chromium,webkit').split(',');
 // Reduced motion takes different code paths in the page's scroll controller, so it gets its own rows.
@@ -25,7 +26,7 @@ try {
     try {
       for (const [vpName, how, motion] of ROWS) {
         const viewport = VIEWPORTS.find(([name]) => name === vpName)[1];
-        {
+        const runRow = async (attempt) => {
           const label = `${engineName} ${vpName} ${how}${motion === 'reduce' ? ' reduced-motion' : ''}`;
           const { width, height, ...device } = viewport;
           const context = await browser.newContext({ viewport: { width, height }, ...device, reducedMotion: motion });
@@ -41,8 +42,8 @@ try {
             // A person's wheel is separate gestures (two notches, then a pause), and the page moves one
             // scene per gesture. One endless stream of events is a single gesture and proves nothing.
             // Over a demo frame the wheel belongs to the frame, by design; a reader scrolling the page has
-            // the pointer on its copy.
-            await page.mouse.move(250, viewport.height / 2);
+            // the pointer in the margin, off the frames.
+            await page.mouse.move(120, viewport.height / 2);
             for (let g = 0; g < 14 && await page.evaluate(() => !document.querySelector('#five').classList.contains('on')); g++) {
               await page.mouse.wheel(0, 100); await page.waitForTimeout(100); await page.mouse.wheel(0, 100); await page.waitForTimeout(1300);
             }
@@ -65,15 +66,20 @@ try {
               const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
               return (hit ? `${hit.tagName}#${hit.id}` : 'nothing') + ` at scrollY ${Math.round(scrollY)} of ${document.documentElement.scrollHeight - innerHeight}, button y ${Math.round(r.y)}`;
             });
+            await context.close();
+            // The unchanged live page stalls mid-scroll in about 1 of 16 wheel runs in Chromium (a wheel
+            // elsewhere frees it), so a wheel row gets fresh attempts; a stall that is deterministic, like
+            // reduced motion's was, still fails all of them.
+            if (how === 'wheel' && attempt < WHEEL_ATTEMPTS) { console.warn(`WARN ${label}: stalled before the close (${covered}); retrying`); return 'retry'; }
             console.error(`FAIL ${label}: macOS button not clickable ${CLICKABLE_WITHIN_MS}ms after reaching the close; covered by ${covered}`);
-            failed = true; await context.close(); continue;
+            failed = true; return;
           }
           const dead = await page.evaluate(() => window.__visibleButDead || 0);
           if (dead) { console.error(`FAIL ${label}: the close was visible for ${dead * 100}ms while the button could not be clicked`); failed = true; }
           // A disk image answers a click with a download; cancel it rather than pull 40 MB.
           const download = page.waitForEvent('download', { timeout: 10000 }).catch(() => null);
           try { await page.locator('#downloads a[data-platform="macos"]').click({ timeout: 5000 }); }
-          catch (error) { console.error(`FAIL ${label}: click failed: ${error.message.split('\n')[0]}`); failed = true; await context.close(); continue; }
+          catch (error) { console.error(`FAIL ${label}: click failed: ${error.message.split('\n')[0]}`); failed = true; await context.close(); return; }
           const file = await download;
           if (file) await file.cancel();
           if (!file || !/\.dmg$/.test(file.suggestedFilename()) || requested[0] !== href) {
@@ -81,7 +87,8 @@ try {
             failed = true;
           } else console.log(`ok ${label}: clickable after ${Date.now() - t0}ms, downloads ${file.suggestedFilename()}`);
           await context.close();
-        }
+        };
+        for (let attempt = 1; await runRow(attempt) === 'retry'; attempt++);
       }
     } finally { await browser.close(); }
   }
