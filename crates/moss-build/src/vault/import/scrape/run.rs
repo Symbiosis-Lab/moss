@@ -57,6 +57,19 @@ pub struct ScrapeProgress {
     pub complete: bool,
 }
 
+/// One page that lost widgets with no static form: its address (the URL path,
+/// or the source file's name for a local import) and what each lost widget was.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct PageGap {
+    pub page: String,
+    pub kinds: Vec<String>,
+}
+
+/// Widgets with no static form across a list of pages: one per listed kind.
+pub fn dropped_widgets(gaps: &[PageGap]) -> usize {
+    gaps.iter().map(|g| g.kinds.len()).sum()
+}
+
 /// Result of the scrape operation.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct ScrapeResult {
@@ -116,10 +129,10 @@ pub struct ScrapeResult {
     /// Iframes and forms replaced by a link (a hosted page, or the page's
     /// contact address) because a static site cannot run them.
     pub widgets_carried: usize,
-    /// Iframes and forms with no static form at all (a contact form and no
-    /// address anywhere on the page): removed, and counted here instead of
-    /// marked in the page.
-    pub widgets_dropped: usize,
+    /// Pages that lost widgets with no static form, in crawl order. A widget
+    /// with no static form is removed or left as markup, and listed here by
+    /// kind instead of being marked in the page.
+    pub widget_gaps: Vec<PageGap>,
     /// True when `max_pages` stopped a recursive crawl before every
     /// discovered in-scope URL had been visited — distinct from a crawl that
     /// finished because its queue simply ran out.
@@ -602,7 +615,8 @@ where
                 }
                 written.push(relative);
                 state.tally.record_scraped();
-                state.tally.record_widgets(&widgets);
+                let page = url::Url::parse(&url).map_or_else(|_| url.clone(), |u| u.path().to_string());
+                state.tally.record_widgets(&page, &widgets);
                 state.cap.record_progress(is_declared);
             }
             PageOutcome::Failed(reason) => {
@@ -690,7 +704,7 @@ where
         linked_files_downloaded: state.tally.linked_files_downloaded(),
         oversized_files: state.tally.oversized_files(),
         widgets_carried: state.tally.widgets_carried(),
-        widgets_dropped: state.tally.widgets_dropped(),
+        widget_gaps: state.tally.widget_gaps(),
         capped: state.cap.capped(),
         remaining_urls,
         sitemap_urls: sitemap.urls.len(),

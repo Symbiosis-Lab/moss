@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use super::crawler::{host_of, path_identity};
 use super::sitemap::{block_if_locale_alternate, SitemapDiscovery};
+use super::run::PageGap;
 use crate::vault::import::widgets::WidgetCount;
 
 /// The crawl's frontier (cap bookkeeping), duplicate detection, the asset
@@ -563,7 +564,8 @@ pub(crate) struct Tally {
     linked_files_downloaded: usize,
     oversized_files: usize,
     widgets_carried: usize,
-    widgets_dropped: usize,
+    /// Per page that lost widgets: its path and what each lost widget was.
+    widget_gaps: Vec<PageGap>,
 }
 
 impl Tally {
@@ -611,8 +613,8 @@ impl Tally {
         self.widgets_carried
     }
 
-    pub(crate) fn widgets_dropped(&self) -> usize {
-        self.widgets_dropped
+    pub(crate) fn widget_gaps(&self) -> Vec<PageGap> {
+        self.widget_gaps.clone()
     }
 
     pub(crate) fn record_scraped(&mut self) {
@@ -639,9 +641,11 @@ impl Tally {
         self.unreachable_files += 1;
     }
 
-    pub(crate) fn record_widgets(&mut self, found: &WidgetCount) {
+    pub(crate) fn record_widgets(&mut self, page: &str, found: &WidgetCount) {
         self.widgets_carried += found.carried;
-        self.widgets_dropped += found.dropped;
+        if !found.dropped_kinds.is_empty() {
+            self.widget_gaps.push(PageGap { page: page.to_string(), kinds: found.dropped_kinds.clone() });
+        }
     }
 }
 

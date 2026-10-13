@@ -49,7 +49,7 @@ fn hosted_page_iframe_becomes_a_titled_link() {
     let (md, count) = run(&html);
     assert!(md.contains("![[https://pay.example/donate/123|Give to the studio]]"), "{md}");
     assert!(md.contains("[Give to the studio](https://pay.example/donate/123)"), "{md}");
-    assert_eq!(count, WidgetCount { carried: 1, dropped: 0 });
+    assert_eq!(count, WidgetCount { carried: 1, ..Default::default() });
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn contact_form_becomes_the_footer_mailto() {
     let (md, count) = run(&html);
     assert!(md.contains("[hello@studio.example](mailto:hello@studio.example)"), "{md}");
     assert!(!md.contains("<form"));
-    assert_eq!(count, WidgetCount { carried: 1, dropped: 0 });
+    assert_eq!(count, WidgetCount { carried: 1, ..Default::default() });
 }
 
 #[test]
@@ -132,7 +132,7 @@ fn contact_form_falls_back_to_the_json_ld_email() {
 fn contact_form_with_no_route_is_dropped_and_counted() {
     let (md, count) = run(&page("", CONTACT_FORM));
     assert!(!md.contains("<form") && !md.contains("Send") && !md.contains("mailto"), "{md}");
-    assert_eq!(count, WidgetCount { carried: 0, dropped: 1 });
+    assert_eq!(count, WidgetCount { dropped_kinds: vec!["contact form".into()], ..Default::default() });
 }
 
 #[test]
@@ -326,4 +326,102 @@ fn a_size_shaped_title_is_replaced_by_the_row_label_or_the_host() {
     let md = run(&html).0;
     assert!(md.contains("![[https://forms.example/s/1|forms.example|420x620]]"), "{md}");
     assert!(md.contains("![[https://donorbox.org/embed/y|Donate]]"), "{md}");
+}
+
+fn map_block(json_escaped: &str) -> String {
+    format!(r#"<div class="sqs-block map-block sqs-block-map" data-block-json="{json_escaped}"></div>"#)
+}
+
+#[test]
+fn map_block_with_an_address_title_becomes_a_map_frame_with_directions() {
+    let json = r#"{&quot;location&quot;:{&quot;addressTitle&quot;:&quot;Example Hall&quot;,&quot;addressLine1&quot;:&quot;1 Example Street&quot;,&quot;mapLat&quot;:51.5,&quot;mapLng&quot;:-0.12,&quot;mapZoom&quot;:14,&quot;markerLat&quot;:51.501,&quot;markerLng&quot;:-0.121}}"#;
+    let (md, count) = run(&page("", &map_block(json)));
+    assert!(md.contains("![[https://www.google.com/maps?q=51.501,-0.121&z=14&output=embed|Map of Example Hall]]"), "{md}");
+    assert!(md.contains("[Directions](https://www.google.com/maps/dir/?api=1&destination=51.501,-0.121)"), "{md}");
+    assert_eq!(count.carried, 1);
+}
+
+#[test]
+fn map_block_with_only_coordinates_uses_the_centre_and_default_zoom() {
+    let json = r#"{&quot;location&quot;:{&quot;mapLat&quot;:51.5,&quot;mapLng&quot;:-0.12}}"#;
+    let md = run(&page("", &map_block(json))).0;
+    assert!(md.contains("![[https://www.google.com/maps?q=51.5,-0.12&z=15&output=embed|Map]]"), "{md}");
+    assert!(md.contains("[Directions](https://www.google.com/maps/dir/?api=1&destination=51.5,-0.12)"), "{md}");
+}
+
+#[test]
+fn map_block_with_broken_json_is_dropped_without_an_empty_element() {
+    let (md, count) = run(&page("", &map_block(r#"{&quot;location&quot;:"#)));
+    assert!(!md.contains("google.com") && !md.contains("Directions"), "{md}");
+    assert_eq!(count.dropped(), 1);
+}
+
+#[test]
+fn map_block_in_the_current_markup_reads_its_location_from_data_context() {
+    let html = page(
+        "",
+        r#"<div class="sqs-block website-component-block sqs-block-website-component sqs-block-map map-block" data-block-type="1337" data-definition-name="website.components.map"><div class="sqs-block-content"> <div data-context="{&quot;blockId&quot;:&quot;b1&quot;,&quot;location&quot;:{&quot;mapLat&quot;:40.0,&quot;mapLng&quot;:-73.0,&quot;mapZoom&quot;:12,&quot;markerLat&quot;:40.0,&quot;markerLng&quot;:-73.0,&quot;addressLine1&quot;:&quot;1 Example Street&quot;,&quot;addressLine2&quot;:&quot;&quot;,&quot;addressCountry&quot;:&quot;&quot;,&quot;addressTitle&quot;:&quot;Example Hall&quot;}}"> &nbsp; </div></div></div>"#,
+    );
+    let (md, count) = run(&html);
+    assert!(md.contains("![[https://www.google.com/maps?q=40,-73&z=12&output=embed|Map of Example Hall]]"), "{md}");
+    assert!(md.contains("[Directions](https://www.google.com/maps/dir/?api=1&destination=40,-73)"), "{md}");
+    assert_eq!(count.carried, 1);
+}
+
+#[test]
+fn map_block_zoom_outside_0_to_21_uses_the_default_15() {
+    let md = run(&page("", &map_block(r#"{&quot;location&quot;:{&quot;mapLat&quot;:51.5,&quot;mapLng&quot;:-0.12,&quot;mapZoom&quot;:-3}}"#))).0;
+    assert!(md.contains("&z=15&output=embed"), "{md}");
+}
+
+#[test]
+fn map_block_reads_the_first_data_context_that_has_a_location() {
+    let html = page(
+        "",
+        r#"<div class="sqs-block-map map-block"><div data-context="{&quot;blockId&quot;:&quot;b0&quot;}"></div><div data-context="{&quot;location&quot;:{&quot;mapLat&quot;:40.0,&quot;mapLng&quot;:-73.0,&quot;mapZoom&quot;:12}}"></div></div>"#,
+    );
+    let md = run(&html).0;
+    assert!(md.contains("https://www.google.com/maps?q=40,-73&z=12&output=embed|Map]]"), "{md}");
+}
+
+#[test]
+fn a_script_widget_and_an_external_script_are_listed_as_not_carried() {
+    let main = r#"<donate-widget id="x"></donate-widget>
+<div class="sqs-block-code"><div class="sqs-block-content"><script src="https://cdn.example/embed.js"></script></div></div>"#;
+    let (md, count) = run(&page("", main));
+    assert_eq!(count.dropped(), 2);
+    assert_eq!(count.dropped_kinds, ["script widget donate-widget", "embedded script from cdn.example"]);
+    assert!(!md.contains("cdn.example"), "{md}");
+}
+
+#[test]
+fn chat_and_tracking_widgets_are_not_listed() {
+    let main = r#"<chat-widget></chat-widget><intercom-messenger></intercom-messenger>
+<div class="sqs-block-code"><script src="https://widget.intercom.io/widget/abc"></script><script src="https://www.googletagmanager.com/gtag/js?id=G-1"></script></div>"#;
+    let (md, count) = run(&page("", main));
+    assert_eq!(count, WidgetCount::default());
+    assert!(!md.contains("intercom") && !md.contains("googletagmanager"), "{md}");
+}
+
+#[test]
+fn a_hyphenated_tag_with_a_carry_token_row_is_carried_not_listed() {
+    let html = page("", r#"<calendly-inline-widget data-url="https://calendly.com/example/intro"></calendly-inline-widget>"#);
+    let (md, count) = run(&html);
+    assert!(md.contains("[Book a time](https://calendly.com/example/intro)"), "{md}");
+    assert_eq!(count, WidgetCount { carried: 1, ..Default::default() });
+}
+
+#[test]
+fn an_iframe_inside_a_custom_element_is_carried_and_the_element_is_not_listed() {
+    let html = page("", r#"<my-embed><iframe src="https://pay.example/donate/9" title="Give"></iframe></my-embed>"#);
+    let (md, count) = run(&html);
+    assert!(md.contains("[Give](https://pay.example/donate/9)"), "{md}");
+    assert_eq!(count, WidgetCount { carried: 1, ..Default::default() });
+}
+
+#[test]
+fn a_clutter_named_custom_element_is_not_listed() {
+    let base = Url::parse("https://example.test/page/").unwrap();
+    let (_, count) = carry_widgets("<p>Text.</p><cookie-banner></cookie-banner>", &base);
+    assert!(count.dropped_kinds.is_empty(), "got: {:?}", count.dropped_kinds);
 }

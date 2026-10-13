@@ -74,6 +74,11 @@ All notable changes to moss will be documented here.
 - An import downloads the documents and media a page links to on its own site (PDFs, scores, office files, images, audio, video, archives and calendar files) into the imported folder, so those links keep working. A file over 100 MB is skipped with a warning.
 - Markdown definition lists render: a term line followed by a `: ` line becomes a `<dl>` with `<dt>` and `<dd>`, so a credit like `Set Design` then `: Ines Varga` is marked up as a term and its definition. A paragraph followed directly by a line starting with `: ` now renders the same way, so a site that used that pattern as prose should check those pages.
 
+### Changed
+
+- `moss import` turns a site builder's map block into a map with a directions link.
+- `moss import` lists, page by page, the embedded widgets it could not carry, instead of only counting them.
+
 ### Fixed
 
 - A site's own PNG icon now gets the small tab sizes (from 32 px) and the home-screen icon (from 180 px) made from it, as an SVG icon already did.

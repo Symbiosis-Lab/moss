@@ -35,12 +35,20 @@ use super::scrape::extractor::{is_chrome_element, looks_hidden, LAZY_SRC_ATTRS};
 use super::scrape::metadata::schema_email;
 
 /// What the pre-pass did with the widgets on one page.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct WidgetCount {
     /// Replaced by a link (a hosted page, or a contact address).
     pub carried: usize,
-    /// No static form existed; removed.
-    pub dropped: usize,
+    /// What each widget with no static form was, one entry per widget:
+    /// `contact form`, `script widget donate-widget`, `embedded script from
+    /// cdn.example`. The dropped count is the number of entries.
+    pub dropped_kinds: Vec<String>,
+}
+
+impl WidgetCount {
+    pub fn dropped(&self) -> usize {
+        self.dropped_kinds.len()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,6 +106,26 @@ pub(crate) const GALLERY_CONTAINER_CLASSES: &[&str] = &[
     "gallery-slideshow",
     "sqs-gallery-block-grid",
     // Not `sqs-gallery`: a summary-block listing carries it too, and its cards are text.
+];
+
+/// Class tokens a hosted site builder puts on a map block. The map is drawn
+/// by a script, so the served HTML holds no frame; the place is read from the
+/// element's `data-block-json`.
+pub(crate) const MAP_BLOCK_CLASSES: &[&str] = &["sqs-block-map", "map-block"];
+
+/// Builder class of a code block: the author's own markup and scripts. Only
+/// an external script in it is a widget the importer cannot run.
+pub(crate) const CODE_BLOCK_CLASS: &str = "sqs-block-code";
+
+/// Tag-name words that mark a custom element as a chat, analytics or tracking
+/// widget (its chrome, dropped on purpose), beyond the clutter tokens.
+const CHROME_TAG_WORDS: &[&str] = &[
+    "chat", "messenger", "intercom", "crisp", "tawk", "drift", "zendesk", "hubspot", "analytics", "tracker", "pixel",
+];
+
+/// SVG elements whose names contain a hyphen; they are not web components.
+const SVG_HYPHEN_TAGS: &[&str] = &[
+    "font-face", "font-face-src", "font-face-uri", "font-face-format", "font-face-name", "color-profile", "missing-glyph",
 ];
 
 /// Host markers match by suffix (`player.vimeo.com` matches `vimeo.com`); the
@@ -166,12 +194,27 @@ fn contains_ci(html: &str, needle: &str) -> bool {
 fn may_hold_widget(html: &str) -> bool {
     contains_ci(html, "<iframe")
         || GALLERY_CONTAINER_CLASSES.iter().any(|t| contains_ci(html, t))
+        || MAP_BLOCK_CLASSES.iter().any(|t| contains_ci(html, t))
+        || contains_ci(html, CODE_BLOCK_CLASS)
         || contains_ci(html, "<form")
         || ROWS.iter().any(|r| r.marker == AttrToken && contains_ci(html, r.pattern))
+        || has_hyphenated_tag(html)
+}
+
+/// Whether the markup opens an element whose name holds a hyphen. Only a
+/// candidate: the parse decides which of them are custom elements.
+fn has_hyphenated_tag(html: &str) -> bool {
+    html.split('<').skip(1).any(|rest| {
+        let name = rest.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).next().unwrap_or("");
+        name.contains('-') && name.starts_with(|c: char| c.is_ascii_alphabetic())
+    })
 }
 
 enum Kind {
     Gallery,
+    Map,
+    Code,
+    Custom,
     Iframe,
     Form,
     Token(&'static Row),
@@ -212,15 +255,27 @@ fn kind_of(el: &Element) -> Option<Kind> {
     if el.classes().any(|c| GALLERY_CONTAINER_CLASSES.contains(&c)) {
         return Some(Kind::Gallery);
     }
-    match el.name() {
-        "iframe" => Some(Kind::Iframe),
-        "form" => Some(Kind::Form),
-        _ => ROWS
-            .iter()
-            .filter(|r| r.marker == AttrToken)
-            .find(|r| el.classes().any(|c| c == r.pattern))
-            .map(Kind::Token),
+    if el.classes().any(|c| MAP_BLOCK_CLASSES.contains(&c)) {
+        return Some(Kind::Map);
     }
+    if el.classes().any(|c| c == CODE_BLOCK_CLASS) {
+        return Some(Kind::Code);
+    }
+    match el.name() {
+        "iframe" => return Some(Kind::Iframe),
+        "form" => return Some(Kind::Form),
+        _ => {}
+    }
+    // A token row names an element by its tag or by a class; it must be read
+    // before the custom-element arm, which would otherwise take a hyphenated tag.
+    let token = ROWS
+        .iter()
+        .filter(|r| r.marker == AttrToken)
+        .find(|r| el.name() == r.pattern || el.classes().any(|c| c == r.pattern));
+    if let Some(row) = token {
+        return Some(Kind::Token(row));
+    }
+    (el.name().contains('-') && !SVG_HYPHEN_TAGS.contains(&el.name())).then_some(Kind::Custom)
 }
 
 fn scan(node: NodeRef<Node>, in_chrome: bool, in_widget: bool, out: &mut Scan) {
@@ -236,8 +291,10 @@ fn scan(node: NodeRef<Node>, in_chrome: bool, in_widget: bool, out: &mut Scan) {
         let mut nested = in_widget;
         if !chrome && !in_widget {
             if let Some(kind) = kind_of(el) {
+                // A custom element is judged by its text alone; the widgets
+                // inside it are still found and classified on their own.
+                nested = !matches!(kind, Kind::Custom);
                 out.widgets.push((child.id(), kind));
-                nested = true;
             }
         }
         scan(child, chrome, nested, out);
@@ -343,7 +400,10 @@ enum Outcome {
     Replace(String),
     Leave,
     Carried(String),
-    Dropped(String),
+    /// Not carried, and its markup removed. One entry per lost widget.
+    Dropped(Vec<String>),
+    /// Not carried, but its markup stays for the extractor to read as text.
+    DroppedInPlace(Vec<String>),
 }
 
 /// A `width` or `height` attribute as whole pixels: `"800"` or `"800px"`.
@@ -356,12 +416,17 @@ fn pixel_size(value: &str) -> Option<u32> {
     digits.parse().ok().filter(|&n| n > 0)
 }
 
+/// A label as the embed and link syntax can hold it: whitespace runs
+/// collapsed, and the `|` and `]` that would end the wikilink replaced.
+fn label_text(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ").replace(['|', ']'], " ")
+}
+
 /// The frame's and the link's text: whitespace runs collapsed, then `|` and
 /// `]` replaced by a space. A text the size parser would read as a size (a
 /// bare number, `800x600`) is no title, so the row's label or the host stands.
 fn frame_label(el: &Element, row: Option<&Row>, url: &Url) -> String {
-    let text = link_label(el, row, url).split_whitespace().collect::<Vec<_>>().join(" ");
-    let text = text.replace(['|', ']'], " ");
+    let text = label_text(&link_label(el, row, url));
     if !text.trim().is_empty() && Sizing::parse(&text).is_none() {
         return text;
     }
@@ -384,6 +449,77 @@ fn frame_html(el: &Element, row: Option<&Row>, url: &Url) -> String {
     )
 }
 
+/// A coordinate from a JSON number or numeric string, within `limit` in
+/// either direction. Parsed as a number, so no other text reaches the URL.
+fn coordinate(value: Option<&serde_json::Value>, limit: f64) -> Option<f64> {
+    let n = match value? {
+        serde_json::Value::Number(n) => n.as_f64()?,
+        serde_json::Value::String(s) => s.trim().parse().ok()?,
+        _ => return None,
+    };
+    (n.is_finite() && n.abs() <= limit).then_some(n)
+}
+
+/// The place a map block names: its marker when the marker has both
+/// coordinates, else the map's centre; the zoom defaults to 15. The title is
+/// the address title, else the first address line, else empty.
+fn map_place(json: &str) -> Option<(f64, f64, u32, String)> {
+    let block: serde_json::Value = serde_json::from_str(json).ok()?;
+    let loc = block.get("location")?;
+    let marker = coordinate(loc.get("markerLat"), 90.0).zip(coordinate(loc.get("markerLng"), 180.0));
+    let centre = coordinate(loc.get("mapLat"), 90.0).zip(coordinate(loc.get("mapLng"), 180.0));
+    let (lat, lng) = marker.or(centre)?;
+    let zoom = coordinate(loc.get("mapZoom"), 21.0)
+        .map(f64::round)
+        .filter(|z| (0.0..=21.0).contains(z))
+        .map_or(15, |z| z as u32);
+    let text = |key: &str| loc.get(key).and_then(|v| v.as_str()).map(str::trim).unwrap_or("").to_string();
+    let title = [text("addressTitle"), text("addressLine1")]
+        .into_iter()
+        .find(|s| !s.is_empty())
+        .unwrap_or_default();
+    Some((lat, lng, zoom, title))
+}
+
+/// The frame of a map block's place, then a directions link under it.
+fn map_html(json: &str) -> Option<String> {
+    let (lat, lng, zoom, title) = map_place(json)?;
+    let frame = format!("https://www.google.com/maps?q={lat},{lng}&z={zoom}&output=embed");
+    let directions = format!("https://www.google.com/maps/dir/?api=1&destination={lat},{lng}");
+    let label = match title.is_empty() {
+        true => "Map".to_string(),
+        false => format!("Map of {}", label_text(&title)),
+    };
+    Some(format!(
+        "<{EMBED_TAG} data-url=\"{}\" data-label=\"{}\"></{EMBED_TAG}>{}",
+        escape(&wikilink_target(&frame)),
+        escape(&label),
+        link_html(&directions, "Directions")
+    ))
+}
+
+/// The block's place JSON: `data-block-json` on the block itself (older
+/// markup), else the first `data-context` among its descendants whose JSON
+/// has a `location` (current markup, where the block wraps component divs).
+fn map_json(node: NodeRef<Node>) -> Option<String> {
+    let block = ElementRef::wrap(node)?;
+    if let Some(json) = block.value().attr("data-block-json") {
+        return Some(json.to_string());
+    }
+    block
+        .select(&Selector::parse("[data-context]").expect("static selector"))
+        .filter_map(|e| e.value().attr("data-context"))
+        .find(|json| serde_json::from_str::<serde_json::Value>(json).is_ok_and(|v| v.get("location").is_some()))
+        .map(str::to_string)
+}
+
+fn map_outcome(node: NodeRef<Node>) -> Outcome {
+    match map_json(node).as_deref().and_then(map_html) {
+        Some(html) => Outcome::Carried(html),
+        None => Outcome::Dropped(vec!["map block without coordinates".into()]),
+    }
+}
+
 fn iframe_outcome(el: &Element, base: &Url) -> Outcome {
     let raw = std::iter::once("src")
         .chain(LAZY_SRC_ATTRS.iter().copied())
@@ -394,7 +530,7 @@ fn iframe_outcome(el: &Element, base: &Url) -> Outcome {
     // a page with no URL of its own, name nothing to carry.
     let Some(url) = http_url(base, raw) else { return Outcome::Leave };
     if url.scheme() != "https" {
-        return Outcome::Dropped("iframe".into());
+        return Outcome::Dropped(vec!["iframe".into()]);
     }
     let row = host_row(&[EmbedHost, IframeSrcHost], url.host_str().unwrap_or(""));
     match row.map(|r| r.role) {
@@ -484,6 +620,51 @@ fn gallery_outcome(node: NodeRef<Node>) -> Outcome {
     }
 }
 
+/// A custom element with nothing in it is a widget a third-party script
+/// fills in, which the importer cannot run. Chat and tracking elements are
+/// chrome, and an element with text or pictures is content.
+fn custom_outcome(node: NodeRef<Node>, el: &Element) -> Outcome {
+    let name = el.name();
+    // A chat or tracking element is chrome, not a lost widget. Its tag name is
+    // matched against the vendor words and, as if it were a class token,
+    // against the extractor's clutter tokens (`cookie-banner`, `ad-slot`).
+    if name.split('-').any(|w| CHROME_TAG_WORDS.contains(&w)) || is_chrome_element("", name, "", "", "") {
+        return Outcome::Leave;
+    }
+    let element = ElementRef::wrap(node).expect("an element node");
+    let filled = element.text().any(|t| !t.trim().is_empty())
+        || element
+            .select(&Selector::parse("img, picture, video, iframe, form").expect("static selector"))
+            .next()
+            .is_some();
+    if filled {
+        Outcome::Leave
+    } else {
+        Outcome::Dropped(vec![format!("script widget {name}")])
+    }
+}
+
+/// A code block's external scripts, one entry per host. A script from a host
+/// the table marks as chrome (a chat or tracking vendor) is not counted. The
+/// block's markup stays in the page: the extractor strips the script itself.
+fn code_outcome(node: NodeRef<Node>, base: &Url) -> Outcome {
+    let block = ElementRef::wrap(node).expect("an element node");
+    let own_host = base.host_str().unwrap_or("");
+    let mut hosts: Vec<String> = block
+        .select(&Selector::parse("script[src]").expect("static selector"))
+        .filter_map(|s| http_url(base, attr(s.value(), "src")))
+        .filter_map(|u| u.host_str().map(str::to_string))
+        .filter(|h| h != own_host && host_row(&[IframeSrcHost], h).is_none_or(|r| r.role != Chrome))
+        .collect();
+    hosts.sort();
+    hosts.dedup();
+    if hosts.is_empty() {
+        Outcome::Leave
+    } else {
+        Outcome::DroppedInPlace(hosts.into_iter().map(|h| format!("embedded script from {h}")).collect())
+    }
+}
+
 fn form_outcome(node: NodeRef<Node>, el: &Element, base: &Url, doc: &Html, scan: &Scan) -> Outcome {
     let action = http_url(base, attr(el, "action"));
     let action_row = action
@@ -508,7 +689,7 @@ fn form_outcome(node: NodeRef<Node>, el: &Element, base: &Url, doc: &Html, scan:
         (Some(row), Some(url)) if row.role == Carry => {
             Outcome::Carried(link_html(url.as_str(), &link_label(el, Some(row), url)))
         }
-        _ => Outcome::Dropped("contact form".into()),
+        _ => Outcome::Dropped(vec!["contact form".into()]),
     }
 }
 
@@ -516,8 +697,15 @@ fn token_outcome(el: &Element, row: &Row, base: &Url) -> Outcome {
     let Href::Attr(name) = row.href else { return Outcome::Leave };
     match http_url(base, attr(el, name)) {
         Some(url) => Outcome::Carried(link_html(url.as_str(), &link_label(el, Some(row), &url))),
-        None => Outcome::Dropped(row.pattern.to_string()),
+        None => Outcome::Dropped(vec![row.pattern.to_string()]),
     }
+}
+
+fn record_dropped(count: &mut WidgetCount, base_url: &Url, kinds: Vec<String>) {
+    for kind in &kinds {
+        log::warn!("import: {base_url}: widget with no static form dropped: {kind}");
+    }
+    count.dropped_kinds.extend(kinds);
 }
 
 /// Classify every widget on a generic page before the extractor's strip
@@ -538,6 +726,9 @@ pub fn carry_widgets(html: &str, base_url: &Url) -> (String, WidgetCount) {
         let Node::Element(el) = node.value() else { continue };
         let outcome = match kind {
             Kind::Gallery => gallery_outcome(node),
+            Kind::Map => map_outcome(node),
+            Kind::Code => code_outcome(node, base_url),
+            Kind::Custom => custom_outcome(node, el),
             Kind::Iframe => iframe_outcome(el, base_url),
             Kind::Form => form_outcome(node, el, base_url, &doc, &found),
             Kind::Token(row) => token_outcome(el, row, base_url),
@@ -548,10 +739,13 @@ pub fn carry_widgets(html: &str, base_url: &Url) -> (String, WidgetCount) {
                 count.carried += 1;
                 replacements.push((*id, h));
             }
-            Outcome::Dropped(label) => {
-                count.dropped += 1;
-                log::warn!("import: {base_url}: widget with no static form dropped: {label}");
+            Outcome::Dropped(kinds) => {
+                record_dropped(&mut count, base_url, kinds);
+                // Removed rather than left: a block that drew nothing in
+                // the served HTML would otherwise stay as an empty element.
+                replacements.push((*id, String::new()));
             }
+            Outcome::DroppedInPlace(kinds) => record_dropped(&mut count, base_url, kinds),
             Outcome::Leave => {}
         }
     }
