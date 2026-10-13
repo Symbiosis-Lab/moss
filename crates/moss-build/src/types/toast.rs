@@ -18,9 +18,34 @@ pub struct ToastInlineLink {
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, specta::Type)]
 pub struct ToastAction {
     pub label: String,
-    /// Frontend event name to fire when the button is clicked. Resolved by
-    /// the desktop app's toast manager.
+    /// What the button does. `open-url:<url>` opens that link; anything else
+    /// is a key the host app resolves against its own fixed list of actions,
+    /// so a toast can only ask for what the host already knows how to do.
     pub event: String,
+    /// How much weight the button carries. None (the default) is a plain
+    /// follow-up link.
+    #[serde(default)]
+    pub variant: Option<ToastActionVariant>,
+}
+
+/// Visual weight of a [`ToastAction`], for a toast that offers a choice: the
+/// one thing it asks the user to do, and what else they could do instead.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, specta::Type)]
+#[serde(rename_all = "lowercase")]
+pub enum ToastActionVariant {
+    Primary,
+    Secondary,
+}
+
+impl ToastAction {
+    pub fn new(label: impl Into<String>, event: impl Into<String>) -> Self {
+        Self { label: label.into(), event: event.into(), variant: None }
+    }
+
+    pub fn with_variant(mut self, variant: ToastActionVariant) -> Self {
+        self.variant = Some(variant);
+        self
+    }
 }
 
 /// Payload for `MossEvent::ShowToast` (and `ShowToastUpdate`, with non-null `id`).
@@ -78,6 +103,13 @@ pub struct ToastPayload {
     /// unset.
     #[serde(default)]
     pub dot: Option<ToastDot>,
+    /// A progress bar under the message, for a toast that reports work with a
+    /// measurable end (a download). `0`–`100` is a determinate fill; a
+    /// negative value is indeterminate, for work whose total is not known
+    /// yet. None (the default) draws no bar, and on a `ShowToastUpdate`
+    /// removes one.
+    #[serde(default)]
+    pub progress: Option<i32>,
 }
 
 /// Colored status dot for [`ToastPayload::dot`]. Yellow = pending/in-flight,
@@ -104,6 +136,7 @@ impl ToastPayload {
             dismissible: None,
             id: None,
             dot: None,
+            progress: None,
         }
     }
 
@@ -122,6 +155,7 @@ impl ToastPayload {
             dismissible: None,
             id: None,
             dot: None,
+            progress: None,
         }
     }
 
@@ -134,6 +168,12 @@ impl ToastPayload {
     /// [`ToastDot`].
     pub fn with_dot(mut self, dot: ToastDot) -> Self {
         self.dot = Some(dot);
+        self
+    }
+
+    /// Draw a progress bar — see [`ToastPayload::progress`].
+    pub fn with_progress(mut self, percent: i32) -> Self {
+        self.progress = Some(percent);
         self
     }
 
@@ -158,5 +198,37 @@ impl ToastPayload {
     pub fn await_attention(mut self) -> Self {
         self.await_attention = Some(true);
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A payload written before `progress` and `variant` existed still reads,
+    /// with no bar and plain buttons.
+    #[test]
+    fn a_payload_without_the_newer_fields_still_deserializes() {
+        let json = r#"{
+            "what": "Sent", "severity": "ShippedDegraded", "ack": true,
+            "actions": [{ "label": "Open", "event": "open-url:https://example.com" }],
+            "duration": null, "persistent": null, "dismissible": null, "id": null
+        }"#;
+        let toast: ToastPayload = serde_json::from_str(json).expect("an older payload");
+        assert_eq!(toast.progress, None);
+        assert_eq!(toast.actions.unwrap()[0].variant, None);
+    }
+
+    /// The wire names a renderer matches on.
+    #[test]
+    fn progress_and_button_weight_cross_the_wire_as_a_number_and_a_lowercase_word() {
+        let toast = ToastPayload {
+            actions: Some(vec![ToastAction::new("Install", "install").with_variant(ToastActionVariant::Primary)]),
+            ..ToastPayload::ack("Downloading").with_progress(-1)
+        };
+        let json = serde_json::to_value(&toast).unwrap();
+        assert_eq!(json["progress"], -1);
+        assert_eq!(json["actions"][0]["variant"], "primary");
+        assert_eq!(json["actions"][0]["event"], "install");
     }
 }
