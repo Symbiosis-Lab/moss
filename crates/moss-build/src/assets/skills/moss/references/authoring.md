@@ -121,7 +121,15 @@ Consequences you can rely on:
 - Sibling assets resolve **relatively**: `url("grain.png")` in `style.css`
   points at `.moss/theme/grain.png` → `/_moss/theme/grain.png`. Drop fonts,
   textures, and overlay videos next to `style.css` and reference them by
-  relative name.
+  relative name. The files the stylesheet refers to are also published under
+  names that change whenever the file changes, and the built stylesheet points
+  at those (`url("fonts/a.woff2")` becomes `url("fonts/a.<hash>.woff2")`, the
+  hash being 16 lowercase hex digits before the extension), so a host can let
+  browsers keep them indefinitely. The plain `/_moss/theme/fonts/a.woff2` is
+  still published for pages and HTML you write yourself. Only relative
+  `url()`s to fonts and pictures up to 5 MB that sit inside `.moss/theme/` are
+  rewritten; larger files, absolute paths, full URLs and `data:` URLs stay as
+  written.
 - For JS that needs theme assets, moss injects `window.mossTheme.base` (the
   `/_moss/theme/` URL) before your `.moss/theme/script.js` runs. Resolve assets
   with `new URL("asset.woff2", mossTheme.base)`.

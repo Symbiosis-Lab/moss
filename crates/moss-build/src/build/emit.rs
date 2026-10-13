@@ -14,3 +14,4 @@ pub mod place_map_labels;
 pub mod scripts;
 pub mod slots;
 pub mod stylesheet;
+pub mod theme_css_assets;

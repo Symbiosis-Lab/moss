@@ -3348,7 +3348,9 @@ async fn a_theme_css_file_rewritten_on_disk_between_two_real_builds_is_in_modifi
     std::fs::create_dir_all(folder.join(".moss").join("theme")).unwrap();
     std::fs::write(folder.join("index.md"), "# Home\n\nbody\n").unwrap();
     let css_path = folder.join(".moss").join("theme").join("style.css");
-    std::fs::write(&css_path, "body { color: black; }\n").unwrap();
+    std::fs::write(&css_path, "@font-face { src: url(f.woff2); }\nbody { color: black; }\n").unwrap();
+    let font_path = folder.join(".moss").join("theme").join("f.woff2");
+    std::fs::write(&font_path, b"font one").unwrap();
 
     let root = crate::vault::paths::VaultRoot::resolve(&folder);
     let folder_key = root.as_str().to_string();
@@ -3384,13 +3386,24 @@ async fn a_theme_css_file_rewritten_on_disk_between_two_real_builds_is_in_modifi
     let before = stash().expect("build 1 stashes its hashes");
     wait_for_seal(&folder_key, USER_CSS_SOURCE_KEY, &before).await;
 
-    std::fs::write(&css_path, "body { color: midnightblue; }\n").unwrap();
+    std::fs::write(&css_path, "@font-face { src: url(f.woff2); }\nbody { color: midnightblue; }\n").unwrap();
     build(BuildTrigger::ContentOnly(vec![css_path.clone()])).await.expect("build 2");
     let after = stash().expect("build 2 stashes its hashes");
     wait_for_seal(&folder_key, USER_CSS_SOURCE_KEY, &after).await;
 
-    let event = decide_rebuild_event(Some(after), &folder_key, &before, &[])
+    let event = decide_rebuild_event(Some(after.clone()), &folder_key, &before, &[])
         .expect("a style.css edit on disk emits a rebuild event");
+    assert_eq!(event.modified_paths, Some(vec![USER_CSS_SOURCE_KEY.to_string()]));
+
+    // A font the stylesheet points at changes the stylesheet's address while
+    // `style.css` is untouched; the preview must still be told.
+    std::fs::write(&font_path, b"font two").unwrap();
+    build(BuildTrigger::ContentOnly(vec![font_path.clone()])).await.expect("build 3");
+    let third = stash().expect("build 3 stashes its hashes");
+    wait_for_seal(&folder_key, USER_CSS_SOURCE_KEY, &third).await;
+
+    let event = decide_rebuild_event(Some(third), &folder_key, &after, &[])
+        .expect("a font edit emits a rebuild event");
     assert_eq!(event.modified_paths, Some(vec![USER_CSS_SOURCE_KEY.to_string()]));
 }
 

@@ -1511,25 +1511,31 @@ pub fn generate_blocking_content_for_build(
         None => (None, None),
     };
     let has_user_css = user_css_content.is_some();
-    let user_css_version = user_css_content.as_ref().map(|content| {
+    // The stylesheet's references to theme files, pointed at their hashed
+    // copies. Hashed after the rewrite so a changed font renames the sheet.
+    let theme_css = user_css_content.as_deref().map(|content| {
+        crate::build::emit::theme_css_assets::for_site(content, source_path_buf, &input_evidence)
+    });
+    let user_css_version = user_css_content.as_ref().zip(theme_css.as_ref()).map(|(content, themed)| {
         // Phase 1 PR-1d: warn when theme references pre-v1 (Retired) class
         // vocabulary. Non-fatal; one warning per retired class found.
         for warning in crate::build::theme_lint::lint_theme_css(content) {
             log_warn_problem!("{}", warning);
         }
-        compute_content_hash(content)
+        compute_content_hash(&themed.css)
     });
     // Registered the same way a page's bytes are (`register_page_source`,
     // below) so `watch::compute_source_change_set`'s diff can name an
     // in-place style.css edit in `modified_paths` — see
-    // `manifest::is_reload_tracked_source_key`. This read already happened
-    // above for `user_css_version`; hashing it again here (rather than
-    // reusing that hash) keeps `SourceMetadata`'s fields honest: its stat is
-    // the one taken before that read.
-    if let Some(content) = user_css_content.as_ref() {
+    // `manifest::is_reload_tracked_source_key`. Registered over the REWRITTEN
+    // sheet: an edit to a font it points at changes what the sheet says and
+    // where it is served while `style.css` itself is untouched, and the
+    // preview learns of that only through this entry. The stat is the one
+    // taken before the read.
+    if let Some(themed) = theme_css.as_ref() {
         pending.register_page_source_hash(
             crate::build::manifest::USER_CSS_SOURCE_KEY.to_string(),
-            source_metadata(user_css_stat, content.as_bytes()),
+            source_metadata(user_css_stat, themed.css.as_bytes()),
         );
     }
 
@@ -1596,10 +1602,10 @@ pub fn generate_blocking_content_for_build(
     // these moved, that page now points at a file this build deleted.
     // See `FacadeCache::asset_versions` — this is the value it stores.
     //
-    // The user theme's two hashes are in here even though a `.moss/theme/`
-    // edit is never a `ContentOnly` markdown trigger today, so the skip cannot
-    // currently be live when they move. Relying on that is the exact implicit
-    // coupling this key exists to delete.
+    // The user theme's two hashes are in here because a `.moss/theme/` edit
+    // (a font the stylesheet points at, as much as `style.css` itself) can
+    // arrive as a `ContentOnly` trigger, and a skipped page keeps the old
+    // stylesheet link. The stylesheet's hash covers the files it points at.
     let asset_versions = {
         // Script hashes come from the registration table, not a hand-written
         // list: a script added to `SITE_SCRIPTS` joins this key automatically.
@@ -2371,12 +2377,9 @@ pub fn generate_blocking_content_for_build(
     // build *emits* it, and an eviction landing between them makes the site
     // link a file it never wrote — 404 on every page, which is the exact
     // outcome the deferral was added to prevent. One read, one answer.
-    if let Some(ref user_css_content) = user_css_content {
-        let user_css_hash = compute_binary_hash(user_css_content.as_bytes());
-        // Site 7 (Pattern A): emit _moss/theme/style.<hash>.css (content-hashed filename).
-        BuildContext::for_render(output_dir, pending)
-            .emit(&ServedPath::for_custom_stylesheet_hashed(&user_css_hash), user_css_content.as_bytes(), HashBucket::Files)
-            .map_err(|e| format!("Failed to emit _moss/theme/style.<hash>.css: {}", e))?;
+    if let Some(ref themed) = theme_css {
+        // Site 7 (Pattern A): _moss/theme/style.<hash>.css and the hashed files it points at.
+        themed.emit(output_dir, pending)?;
     }
 
     // Copy user's custom JS if present.
