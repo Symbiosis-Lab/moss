@@ -1,0 +1,7 @@
+# release-plz creates a GitHub release for moss-core right after each app
+# release is published. By default it marks that release "Latest", and GitHub's
+# /releases/latest/ then resolves to a release with no assets: the landing's
+# download link and the app updater's latest.json both 404. Only the app
+# release may hold the Latest badge.
+[workspace]
+git_release_latest = false
