@@ -7,6 +7,7 @@ Each proposal is a folder here: a `README.md` with the design, and its screens b
 | Proposal | Status |
 |---|---|
 | [Resumable imports and the Activity list](resumable-import/README.md) | Proposed |
+| [Leave specific subscribers out of one newsletter send](subscriber-exclusion/README.md) | In progress |
 
 ## Status
 
