@@ -420,6 +420,52 @@ fn pair_is_stale(old_src: &str, new_src: &str, new_hashes: &SiteHashes, previous
     unknown(old_src, previous_hashes) || unknown(new_src, new_hashes)
 }
 
+/// Renames the watcher could not pair, recognised by identity: a page the
+/// previous build served that is gone, and a page this build serves that is new,
+/// carrying the same inode AND the same content hash. The inode alone is not
+/// enough — Linux filesystems hand a freed inode number to the next new file —
+/// and a rename that also changed the text stays a delete plus a create, which
+/// is safe. Only a match unique on both sides pairs. Off unix no inode is
+/// recorded, so nothing pairs there.
+fn identity_pairs(
+    new_hashes: &SiteHashes,
+    previous_hashes: &SiteHashes,
+    already: &[(String, String)],
+) -> Vec<(String, String)> {
+    let identity = |h: &SiteHashes, src: &str| {
+        h.sources.get(src).and_then(|m| Some((m.inode?, m.hash.clone())))
+    };
+    let paired_old: std::collections::HashSet<&str> = already.iter().map(|(o, _)| o.as_str()).collect();
+    let paired_new: std::collections::HashSet<&str> = already.iter().map(|(_, n)| n.as_str()).collect();
+    let mut gone: std::collections::HashMap<(u64, String), Vec<&String>> = std::collections::HashMap::new();
+    for src in previous_hashes.source_to_output.keys() {
+        if new_hashes.source_to_output.contains_key(src) || paired_old.contains(src.as_str()) {
+            continue;
+        }
+        if let Some(id) = identity(previous_hashes, src) {
+            gone.entry(id).or_default().push(src);
+        }
+    }
+    let mut appeared: std::collections::HashMap<(u64, String), Vec<&String>> = std::collections::HashMap::new();
+    for src in new_hashes.source_to_output.keys() {
+        if previous_hashes.source_to_output.contains_key(src) || paired_new.contains(src.as_str()) {
+            continue;
+        }
+        if let Some(id) = identity(new_hashes, src) {
+            appeared.entry(id).or_default().push(src);
+        }
+    }
+    let mut pairs: Vec<(String, String)> = gone
+        .iter()
+        .filter_map(|(id, olds)| match (olds.as_slice(), appeared.get(id).map(Vec::as_slice)) {
+            ([old], Some([new])) => Some(((*old).clone(), (*new).clone())),
+            _ => None,
+        })
+        .collect();
+    pairs.sort();
+    pairs
+}
+
 /// Compose a `FileChangeEvent` from the output-hash diff plus the watcher's
 /// stitched rename pairs. Wraps [`compute_rebuild_event`] with these
 /// behaviors:
@@ -461,11 +507,13 @@ fn build_rebuild_event_with_renames(
     previous_hashes: &SiteHashes,
     rename_pairs: &[(String, String)],
 ) -> Option<FileChangeEvent> {
-    let rename_pairs: Vec<(String, String)> = rename_pairs
+    let mut rename_pairs: Vec<(String, String)> = rename_pairs
         .iter()
         .filter(|(old_src, new_src)| !pair_is_stale(old_src, new_src, new_hashes, previous_hashes))
         .cloned()
         .collect();
+    let by_identity = identity_pairs(new_hashes, previous_hashes, &rename_pairs);
+    rename_pairs.extend(by_identity);
     let rename_pairs = rename_pairs.as_slice();
 
     // Resolve each source-domain pair to output-domain paths via the manifest.

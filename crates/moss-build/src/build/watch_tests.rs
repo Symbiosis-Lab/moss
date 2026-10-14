@@ -4160,3 +4160,80 @@ fn a_renamed_page_that_owns_no_output_is_still_reported_as_a_rename() {
     assert_eq!(event.source_creates, None);
     assert_eq!(event.source_deletes, None);
 }
+
+// ── A rename the watcher could not pair, recognised by identity ─────────────
+//
+// macOS does not always report a rename made in Finder as one event; the
+// rebuild then sees a page vanish and another appear. The same inode with the
+// same content is the same file, so it is a rename, and the open document
+// follows it. Anything less certain stays a delete plus a create.
+
+fn page_hashes(path: &str, out: &str, inode: Option<u64>, hash: &str) -> SiteHashes {
+    let mut h = SiteHashes::new();
+    h.insert(out.into(), "out_hash".into());
+    h.source_to_output.insert(path.into(), out.into());
+    h.sources.insert(path.into(), crate::build::types::SourceMetadata {
+        hash: hash.into(), size: 1, mtime: 1, mtime_nanos: None, ctime: None, inode,
+    });
+    h
+}
+
+#[test]
+fn an_unpaired_rename_with_the_same_inode_and_content_is_a_rename() {
+    let prev = page_hashes("note.md", "note/index.html", Some(42), "same");
+    let new = page_hashes("field-notes.md", "field-notes/index.html", Some(42), "same");
+    let event = build_rebuild_event_with_renames(&new, &prev, &[]).expect("event");
+    assert_eq!(event.source_renames, Some(vec![("note.md".to_string(), "field-notes.md".to_string())]));
+    assert_eq!(event.source_deletes, None);
+    assert_eq!(event.source_creates, None);
+}
+
+#[test]
+fn a_reused_inode_with_different_content_is_not_a_rename() {
+    // Linux filesystems hand a freed inode number to the next new file.
+    let prev = page_hashes("note.md", "note/index.html", Some(42), "old text");
+    let new = page_hashes("other.md", "other/index.html", Some(42), "unrelated text");
+    let event = build_rebuild_event_with_renames(&new, &prev, &[]).expect("event");
+    assert_eq!(event.source_renames, None);
+    assert_eq!(event.source_deletes, Some(vec!["note.md".to_string()]));
+    assert_eq!(event.source_creates, Some(vec!["other.md".to_string()]));
+}
+
+#[test]
+fn without_an_inode_on_both_sides_nothing_is_paired() {
+    let prev = page_hashes("note.md", "note/index.html", None, "same");
+    let new = page_hashes("field-notes.md", "field-notes/index.html", Some(42), "same");
+    let event = build_rebuild_event_with_renames(&new, &prev, &[]).expect("event");
+    assert_eq!(event.source_renames, None);
+}
+
+#[test]
+fn two_new_pages_claiming_one_identity_pair_with_neither() {
+    let prev = page_hashes("note.md", "note/index.html", Some(42), "same");
+    let mut new = page_hashes("a.md", "a/index.html", Some(42), "same");
+    let b = page_hashes("b.md", "b/index.html", Some(42), "same");
+    new.source_to_output.extend(b.source_to_output);
+    new.sources.extend(b.sources);
+    let event = build_rebuild_event_with_renames(&new, &prev, &[]).expect("event");
+    assert_eq!(event.source_renames, None);
+}
+
+#[test]
+fn two_vanished_pages_sharing_one_identity_pair_with_neither() {
+    let mut prev = page_hashes("a.md", "a/index.html", Some(42), "same");
+    let b = page_hashes("b.md", "b/index.html", Some(42), "same");
+    prev.source_to_output.extend(b.source_to_output);
+    prev.sources.extend(b.sources);
+    let new = page_hashes("c.md", "c/index.html", Some(42), "same");
+    let event = build_rebuild_event_with_renames(&new, &prev, &[]).expect("event");
+    assert_eq!(event.source_renames, None);
+}
+
+#[test]
+fn a_page_the_watcher_already_paired_is_not_paired_again() {
+    let prev = page_hashes("note.md", "note/index.html", Some(42), "same");
+    let new = page_hashes("field-notes.md", "field-notes/index.html", Some(42), "same");
+    let watcher = [("note.md".to_string(), "field-notes.md".to_string())];
+    let event = build_rebuild_event_with_renames(&new, &prev, &watcher).expect("event");
+    assert_eq!(event.source_renames, Some(watcher.to_vec()));
+}

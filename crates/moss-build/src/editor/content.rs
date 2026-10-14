@@ -49,12 +49,18 @@ pub fn panic_message_from_payload(p: &(dyn std::any::Any + Send)) -> String {
 
 // ── Wire types ─────────────────────────────────────────────────────────────
 
-/// Result of a successful editor save — exposes the new mtime so the
-/// frontend's FrontmatterStore can register the self-write and drop the
-/// subsequent file-watcher echo.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
-pub struct SaveResult {
-    pub mtime_ms: u64,
+/// What an editor save did. A failure to write is an `Err`; this is the
+/// outcome of a save that did not fail.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub enum SaveResult {
+    /// Written. The new mtime lets the editor recognise the file watcher's
+    /// echo of its own write.
+    Saved { mtime_ms: u64 },
+    /// Nothing written: the file is no longer at this path, renamed or deleted
+    /// outside moss since it was opened. Not a failure — the file event that
+    /// follows says which, and the text stays unsaved in the editor until then.
+    Gone,
 }
 
 /// Frontmatter parsing result exposed to the frontend.
@@ -536,9 +542,9 @@ pub fn describe_source_role_inner(
 
 /// Pure byte-writing core of `save_editor_content`: serialize `frontmatter` +
 /// `body` and persist to `file_path`, returning the file's new mtime. Owns NO
-/// Tauri types, NO `TaskRegistry`, NO window model — just the same
-/// frontmatter-serialize → `fs::write` → read-mtime sequence the Save command
-/// has always performed.
+/// Tauri types, NO `TaskRegistry`, NO window model — just the
+/// frontmatter-serialize → write → read-mtime sequence the Save command
+/// performs. It writes only over a file that exists.
 ///
 /// Split out of `save_editor_content_with_task`'s `run_safely` closure so the
 /// bytes-to-disk logic has exactly ONE definition, reached by two carriers: the
@@ -558,9 +564,23 @@ pub fn persist_editor_content(
     // The destination is the author's SOURCE file (the one open in the
     // editor), not regenerable output under `.moss/build.nosync/` — its bytes were
     // just read to populate the buffer, so it is materialized.
+    //
+    // Opened without `create`: a save writes over the document that is open. If
+    // it was renamed or deleted outside moss a moment ago (or its folder was),
+    // writing would put the old file back beside the renamed one.
     // allow:raw_write vault user state, not .moss/build.nosync output
-    std::fs::write(file_path, &content)
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(file_path)
+    {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(SaveResult::Gone),
+        Err(e) => return Err(format!("Failed to write file '{}': {}", file_path, e)),
+    };
+    std::io::Write::write_all(&mut file, content.as_bytes())
         .map_err(|e| format!("Failed to write file '{}': {}", file_path, e))?;
+    drop(file);
     let meta = std::fs::metadata(file_path)
         .map_err(|e| format!("Failed to read mtime for '{}': {}", file_path, e))?;
     let mtime_ms = meta
@@ -569,7 +589,7 @@ pub fn persist_editor_content(
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| format!("Bad mtime: {}", e))?
         .as_millis() as u64;
-    Ok(SaveResult { mtime_ms })
+    Ok(SaveResult::Saved { mtime_ms })
 }
 
 /// Guard the union frontmatter fields (`children`, `series`) before writing.
@@ -635,6 +655,32 @@ mod tests {
         tempfile::Builder::new()
             .tempdir_in(&tmp_root)
             .expect("could not create temp dir in target/test-tmp")
+    }
+
+    /// A save writes over the document that is open, never into the place it
+    /// used to be: renamed or deleted outside moss in the moment before an
+    /// autosave, it must not re-create the old file beside the renamed one.
+    #[test]
+    fn a_save_to_a_file_that_is_gone_writes_nothing_and_says_so() {
+        let dir = make_test_tmpdir();
+        let file = dir.path().join("note.md");
+        std::fs::write(&file, "old").unwrap();
+        std::fs::rename(&file, dir.path().join("field-notes.md")).unwrap();
+
+        let outcome = persist_editor_content(&file.to_string_lossy(), &serde_json::json!({}), "typed")
+            .expect("a vanished file is an outcome, not a write failure");
+        assert_eq!(outcome, SaveResult::Gone);
+        assert!(!file.exists(), "the old name must not come back");
+        assert_eq!(std::fs::read_to_string(dir.path().join("field-notes.md")).unwrap(), "old");
+    }
+
+    #[test]
+    fn a_save_replaces_the_whole_file() {
+        let dir = make_test_tmpdir();
+        let file = dir.path().join("note.md");
+        std::fs::write(&file, "a much longer body than the one that replaces it").unwrap();
+        persist_editor_content(&file.to_string_lossy(), &serde_json::json!({}), "short").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "short");
     }
 
     /// BUG 3 editor surface: parsing a file with a malformed `---...---` block
