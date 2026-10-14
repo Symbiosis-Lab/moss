@@ -6,10 +6,18 @@
 //! heap, so they cannot see a SECOND `moss` process (a headless CLI build
 //! started while `--watch` is already running the same folder, or a
 //! terminal `moss build` racing the desktop app). This is the piece that
-//! reaches across that gap: one `flock`, held from before a build starts
-//! writing `stage_dir` until after its generation has been promoted, so
-//! that across processes the order of promotions equals the order of
-//! builds.
+//! reaches across that gap: one `flock`, held while a build renders into
+//! `stage_dir` and while it promotes a generation, so that no two processes
+//! render or promote one folder at the same time. The stamp a build takes
+//! right after acquiring it (`locked_at_nanos`, minted in `build_inner`) is
+//! what a promotion is compared by, so across processes the order of
+//! promotions equals the order of renders.
+//!
+//! It does not cover everything a build writes into `stage_dir`. A
+//! long-lived runtime's background encoders, and its seal's repair pass and
+//! `hashes.json` write (`advertise_sealed`), run after its render without
+//! this lock; they are ordered against that process's own builds only, by
+//! the stage-write guard.
 //!
 //! The lock file sits BESIDE `~/.moss/locks/`, one file per folder — never
 //! inside the folder it guards, for the same reason `deploy::stack_activity`
@@ -23,15 +31,27 @@
 //! absolute form, a trailing separator, a `..` component) always resolve to
 //! the same lock file.
 //!
-//! ## Two windows, not one continuous hold
+//! ## One hold for a one-shot build, two windows for a long-lived one
 //!
-//! [`acquire`] is taken TWICE per build, at exactly the two points
-//! `FolderSession::stage_write_lock` already is: once in `build_inner`
-//! (`build/pipeline.rs`), covering that build's own synchronous render span,
-//! and again in `run_materialize_phase` (`build/seal_phase.rs`), covering the
-//! materialize-through-`lifecycle::promote` span — released after each,
-//! never held continuously across the gap between them.
+//! [`acquire`] is taken in `build_inner` (`build/pipeline.rs`), before the
+//! render writes `stage_dir`. What happens after the render depends on the
+//! runtime.
 //!
+//! A one-shot build (`moss build`, `moss deploy`, `moss history --save`) keeps
+//! holding it through its seal and its promotion, and `run_materialize_phase`
+//! (`build/seal_phase.rs`) releases it once `current` has moved. That whole
+//! span reads and deletes from `stage_dir`: the final sweep removes whatever
+//! this build's manifest does not name, and the ship reads what the render
+//! wrote. Released at the end of the render, the lock let a second process
+//! render into that same span. Each build's sweep then deleted the other's
+//! stylesheet (its name is its content hash, so two builds with different
+//! stylesheets name different files), and the first build's seal saw pages
+//! naming a stylesheet it never wrote: its publish refused, or a generation
+//! without its stylesheet was promoted.
+//!
+//! A long-lived runtime (the app, `moss build --serve --watch`) releases it
+//! at the end of the render and takes it again, freshly, in
+//! `run_materialize_phase`, never holding it across the gap between them.
 //! That gap can be long: the materialize phase runs detached, often behind an
 //! idle debounce, so a build's render can finish while its own materialize is
 //! still pending, or — in `overlap_tests.rs` — deliberately held back
@@ -40,10 +60,18 @@
 //! through promote was tried first and reverted: it deadlocked that
 //! legitimate, already-tested overlap, because the second build's own
 //! render needs the very same lock the first build's still-pending
-//! materialize was holding. Two separate acquisitions close the cross-process
-//! gap — a second PROCESS cannot interleave its stage_dir writes or its
-//! `current_ptr` swap with this one's — without touching that in-process
-//! concurrency at all.
+//! materialize was holding. A one-shot build cannot deadlock that way: its
+//! materialize runs inline through `seal_phase::run_now`, never behind a
+//! debounce or another build, and every path takes this lock before the
+//! stage-write guard, including a materialize that has to wait for it.
+//!
+//! The price of the one-shot hold falls on whoever waits for it. Another
+//! process's render, and a long-lived process's pending materialize, wait
+//! out a terminal build's whole span, video encoding included. A folder
+//! switch in the app awaits its pending materialize with no bound, and a
+//! headless watch rebuild that waits past 300 s is reported overdue (only
+//! reported, never aborted). The wait is logged, with its length, when it
+//! ends.
 
 use std::path::{Path, PathBuf};
 
@@ -53,6 +81,10 @@ use fs2::FileExt;
 /// the kernel clears an `flock` the moment its last descriptor closes, which
 /// is the whole point: a killed `moss build` must never leave the next one
 /// waiting forever on a lock nobody will ever release.
+///
+/// Not re-entrant: each [`acquire`] opens the file anew, and a second open
+/// contends with the first even inside one process, so taking the lock again
+/// while this is held blocks forever. Hand the `Held` on instead.
 #[derive(Debug)]
 pub struct Held {
     file: std::fs::File,
@@ -142,7 +174,9 @@ pub fn acquire_named(folder: &Path, name: &str) -> Result<Held, String> {
             } else {
                 log::info!("waiting for another moss process holding the {name} lock on this folder");
             }
+            let waited = std::time::Instant::now();
             file.lock_exclusive().map_err(|e| format!("lock {}: {e}", path.display()))?;
+            log::info!("waited {:?} for the {name} lock on this folder", waited.elapsed());
         }
         Err(e) => return Err(format!("lock {}: {e}", path.display())),
     }

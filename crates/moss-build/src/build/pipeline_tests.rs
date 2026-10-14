@@ -178,6 +178,8 @@ fn build_test_full_with_gates(
             publishable: _publishable,
             render_seq: _render_seq,
             unready_derivations: _unready,
+            folder_lock: _,
+            locked_at_nanos: _,
         } = run(
             &root,
             site_dir_state,

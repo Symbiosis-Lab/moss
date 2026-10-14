@@ -913,6 +913,13 @@ pub struct PipelineRunOutput {
     /// The derived-text blocks this render showed without text: files still
     /// being read (a publish waits them out) and files whose read failed.
     pub unready_derivations: crate::system::derive::site::UnreadyReport,
+    /// The cross-process build lock this build rendered under, still held.
+    /// Taking it again from this process before this is dropped blocks forever.
+    pub folder_lock: crate::infra::folder_lock::Held,
+    /// When this build took `folder_lock`, in wall-clock nanos: its place in
+    /// the cross-process promotion order
+    /// (`infra::folder_lock::last_promoted_epoch`).
+    pub locked_at_nanos: u64,
 }
 
 /// Resolves all native/plugin slot content after marked HTML and article-map
@@ -1223,13 +1230,20 @@ fn build_inner(
     // `advertise_sealed`, behind every background worker) is on this build's
     // critical path — hypothesis H-lock, against H-config
     // just below.
-    // Cross-PROCESS counterpart of `_stage_write_guard` below, for this
-    // build's own render span — see `infra::folder_lock`'s module doc for
-    // why this is a SEPARATE window from `advertise_sealed`'s, rather than
-    // one continuous hold. Acquired unconditionally, unlike
-    // `_stage_write_guard`: two separate processes with no session between
-    // them are exactly the case this exists for.
-    let _folder_build_lock = crate::infra::folder_lock::acquire(root.path())?;
+    // Cross-PROCESS counterpart of `_stage_write_guard` below. Acquired
+    // unconditionally, unlike `_stage_write_guard`: two separate processes
+    // with no session between them are exactly the case this exists for.
+    // Returned rather than dropped: how long it is held after the render is
+    // the caller's to decide — see `infra::folder_lock`'s module doc.
+    let folder_build_lock = crate::infra::folder_lock::acquire(root.path())?;
+    // Minted under the lock, so that across processes the order of these
+    // stamps is the order the builds rendered in, which is what the
+    // materialize compares them by. Minted before the lock, a build could
+    // wait out another's whole render and still carry the older stamp.
+    // `MOSS_TEST_ADMISSION_NANOS` overrides this lock-time stamp (not an
+    // admission time, despite its name) for `folder_build_lock_test.rs` only.
+    let locked_at_nanos: u64 = std::env::var("MOSS_TEST_ADMISSION_NANOS").ok().and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0));
     let t_lock = std::time::Instant::now();
     let _stage_write_guard = services
         .and_then(|s| s.session.as_ref())
@@ -1647,6 +1661,8 @@ fn build_inner(
             publishable: false,
             render_seq: None,
             unready_derivations: Default::default(),
+            folder_lock: folder_build_lock,
+            locked_at_nanos,
         });
     }
 
@@ -1861,10 +1877,6 @@ fn build_inner(
     // (it covers this entire synchronous span, including notebook
     // processing, but not the detached background dispatch below).
     drop(_stage_write_guard);
-    // The cross-process counterpart releases here too — see its acquisition
-    // above for why this window ends here rather than carrying through the
-    // detached seal task.
-    drop(_folder_build_lock);
 
     // Subscribe landing pages moved to generate_blocking_content.
 
@@ -2112,6 +2124,8 @@ fn build_inner(
         publishable,
         render_seq,
         unready_derivations: derived.as_ref().map(|d| d.unready()).unwrap_or_default(),
+        folder_lock: folder_build_lock,
+        locked_at_nanos,
     })
 }
 

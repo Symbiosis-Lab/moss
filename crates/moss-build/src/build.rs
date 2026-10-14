@@ -717,9 +717,6 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     let build_generation = config
         .admission_epoch
         .unwrap_or_else(crate::build::ship::next_promotion_epoch);
-    // `build_generation`'s cross-process-comparable counterpart; override for `folder_build_lock_test.rs` only.
-    let admission_nanos: u64 = std::env::var("MOSS_TEST_ADMISSION_NANOS").ok().and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0));
 
     // This build may write the object store and staging from here until its
     // background workers join: scan stores blobs, render and the media workers
@@ -1208,7 +1205,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         })
     };
 
-    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, unresolved_inputs, cancelled, home_ready: _home_ready, publishable, render_seq, unready_derivations } = {
+    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, unresolved_inputs, cancelled, home_ready: _home_ready, publishable, render_seq, unready_derivations, folder_lock, locked_at_nanos } = {
         // One attempt: its own clones, its own `SlotResolver`.
         let attempt = || {
             let root_owned = config.root.clone();
@@ -1330,6 +1327,9 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     let mut media_rerender_owed = false;
     if let Some(handle) = _bg_handle {
         if config.host.shell_attached || !config.exits_after_build {
+            // A long-lived runtime takes the lock again for its materialize;
+            // see `infra::folder_lock`'s module doc.
+            drop(folder_lock);
             // Long-lived runtime — the desktop app, or a headless
             // `moss build --serve --watch` rebuild. Detached seal task,
             // announced through whichever ports fit the shell: the app's
@@ -1417,7 +1417,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                             std::sync::Arc::new(move |g: &str| store.is_pinned(g)),
                             session_opt.clone(),
                             promotion_epoch,
-                            admission_nanos,
+                            locked_at_nanos,
                             render_seq,
                             seal_freshness,
                             &folder_path_for_mat,
@@ -1478,9 +1478,10 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             // 2026-08-24; `run_cli_build` (the path an ordinary `moss build`
             // takes) registered none until then, and an earlier version of this
             // comment named only `start_cli_build`. So the tail takes the same
-            // stage-write guard the build's own span took — uncontended here
-            // (this arm exists because nothing else will run), and that is the
-            // price of one tail rather than a second code path.
+            // stage-write guard the build's own span took. A plain CLI process
+            // has no other build to contend for it; a serving process that runs
+            // a one-shot build (a version saved through its HTTP carrier) does,
+            // which is why every path takes the folder lock before this guard.
             let wait = SealWait::start();
             match handle.await_completion().await {
                 Ok((sealed, cache_lease)) => {
@@ -1490,9 +1491,11 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                         sealed.files().len(),
                         wait.finish()
                     );
+                    #[cfg(test)]
+                    let _ = ONE_SHOT_TAIL_TEST_HOOK.try_with(|hook| hook("rendered"));
                     let mp = crate::moss_paths::MossPaths::new(std::path::Path::new(&folder_path));
                     let session = crate::system::folder_session::registry().get(&folder_path);
-                    let pending = advertise_sealed(
+                    let mut pending = advertise_sealed(
                         &SealPorts {
                             events: config.host.events.clone(),
                             announcer: config.host.announcer.clone(),
@@ -1506,7 +1509,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                         std::sync::Arc::new(|_: &str| false),
                         session.clone(),
                         promotion_epoch,
-                        admission_nanos,
+                        locked_at_nanos,
                         render_seq,
                         crate::build::feeds::search_lane::Freshness::Now,
                         &folder_path,
@@ -1523,6 +1526,11 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                         },
                     )
                     .await;
+                    #[cfg(test)]
+                    let _ = ONE_SHOT_TAIL_TEST_HOOK.try_with(|hook| hook("sealed"));
+                    // Held across the seal above; released by the materialize
+                    // once `current` has moved. See `infra::folder_lock`.
+                    pending.folder_lock = Some(folder_lock);
                     // CLI / one-shot arm: keep sealing synchronously, exactly
                     // as before this split — the caller drops the tokio
                     // runtime as soon as `run_pipeline` returns, so a
@@ -1912,6 +1920,14 @@ tokio::task_local! {
     pub(crate) static SHIP_PHASE_LEASE_SAMPLE: std::sync::Arc<std::sync::atomic::AtomicUsize>;
 }
 
+// Test-only: called by a one-shot build's inline tail with "rendered" before
+// its seal, "sealed" after it, and "shipping" just before its materialize
+// copies the generation: the span another moss process could build in.
+#[cfg(test)]
+tokio::task_local! {
+    pub(crate) static ONE_SHOT_TAIL_TEST_HOOK: std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+}
+
 /// The seal's per-build half: everything that depends only on `stage_dir` and
 /// the in-memory `sealed` manifest, never on a materialized generation.
 /// Always runs inline, synchronously, in the seal task — on every watch
@@ -1935,7 +1951,7 @@ async fn advertise_sealed(
     is_pinned: std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>,
     session: Option<std::sync::Arc<crate::system::folder_session::FolderSession>>,
     promotion_epoch: u64,
-    admission_nanos: u64, // `promotion_epoch`'s cross-process-comparable counterpart.
+    locked_at_nanos: u64, // When this build took the folder lock: render order across processes, not `promotion_epoch`'s admission order.
     // The render `lifecycle::show_render` minted for this build.
     render_seq: Option<u64>,
     freshness: crate::build::feeds::search_lane::Freshness,
@@ -2157,13 +2173,14 @@ async fn advertise_sealed(
         stage_dir: stage_dir.to_path_buf(),
         sealed_at,
         promotion_epoch,
-        admission_nanos,
+        locked_at_nanos,
         render_seq,
         freshness,
         is_pinned,
         session,
         cache_lease: guards.cache_lease,
         build_root_identity: guards.build_root_identity,
+        folder_lock: None,
         media_rerender_owed,
     }
 }

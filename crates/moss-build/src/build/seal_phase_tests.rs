@@ -290,6 +290,37 @@ async fn a_slow_materialize_does_not_block_a_timeout_wrapping_settle() {
     );
 }
 
+/// A materialize that waits for the cross-process build lock does not hold
+/// the stage-write guard while it waits. A one-shot build in the same process
+/// (a version saved through a serving process) holds that lock from its render
+/// until its promotion, and its seal takes the guard in between; a materialize
+/// that took the guard first and then waited for the lock would deadlock with
+/// it. The lock is taken here the way that build holds it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_materialize_waiting_for_the_folder_build_lock_leaves_the_stage_write_guard_free() {
+    let vault = Vault::new();
+    // Both sides must name the same lock file under `MOSS_HOME`, which other tests set.
+    let _home = crate::infra::home::MOSS_HOME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    vault.build().await;
+    vault.drained().await;
+
+    let held = crate::infra::folder_lock::acquire(&vault.folder).expect("folder build lock");
+    let mp = crate::moss_paths::MossPaths::new(&vault.folder);
+    let settling = tokio::spawn(async move { settle(&mp).await });
+    // Time for the materialize to reach the lock; its first wait used to be the guard.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let guard = tokio::time::timeout(std::time::Duration::from_secs(5), vault.session.lock_stage_write()).await;
+    assert!(guard.is_ok(), "the materialize held the stage-write guard while it waited for the folder build lock");
+    drop(guard);
+    drop(held);
+
+    tokio::time::timeout(std::time::Duration::from_secs(30), settling)
+        .await
+        .expect("the materialize must finish once the lock is released")
+        .unwrap();
+    assert!(vault.mp.current_generation_id().is_ok(), "the materialize must promote once it gets the lock");
+}
+
 /// (e) A folder switch (or close) removes the folder's session from the
 /// registry as its first teardown step — a real app's workspace-close
 /// handler does this before anything else runs — so `settle` must complete
