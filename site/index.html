@@ -1180,9 +1180,9 @@ function groundToward(to, dryness, dtReal) {
 // and where every target orbits.
 const fanEl = $('fan');
 let pubR = 25;
+const publishButton = () => vdFrame.contentDocument?.querySelector('.moss-publish-button');
 function measurePub() {
-  const doc = vdFrame.contentDocument;
-  const btn = doc && doc.querySelector('.moss-publish-button');
+  const btn = publishButton();
   const r = btn && btn.getBoundingClientRect();
   if (!r || !r.width) return false;
   const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
@@ -1877,7 +1877,7 @@ function advanceMobilePigment(state, goal, fwd, stir, tilt, relift, paint) {
 }
 function publishBridge(from, to, prints) {
   if (Math.min(from, to) !== SHIPS || Math.max(from, to) !== DEPLOY) return null;
-  const button = vdFrame.contentDocument.querySelector('.moss-publish-button');
+  const button = publishButton();
   if (!button) return null;
   const r = button.getBoundingClientRect(), size = r.width;
   const clone = button.cloneNode(true);
@@ -2831,7 +2831,7 @@ async function warm() {
   // capture holds the canvas still over a moving page, and a wash no longer
   // waits for one — but a reader standing in a scene is enough, rest or not.
   const standing = mobileLayout() && !running() && target === shown && Math.abs(progressAt() - shown) < .002;
-  if (!atRest() && !standing && !(target !== shown && !primed() && !mobileLayout())) return;
+  if (!atRest() && !standing && !(heldForPrints() && !mobileLayout())) return;
   // One thing a tick, in this order: a print a jump may ask for that nobody has
   // taken, then the scene on screen, whose print goes off because the scene moves.
   if (!await fillPrints()) await retakeShown();
@@ -2842,7 +2842,14 @@ warmSoon();
 // being taken used to be dropped on the floor and wait for the reader to move
 // again; the warmer knocks here after every print it lands, so the join the
 // prints were holding shut runs as soon as they are on hand.
-function maybeJoin() { if (!running() && !retaking && target !== shown && (primed() || (mobileLayout() && washing() && sheets[shown]))) runJoin(); }
+function maybeJoin() { if (!running() && !retaking && target !== shown && !heldForPrints()) runJoin(); }
+// A join is owed and waits for prints. What it waits for is the join's own: primed() asks what the
+// scene needs, and a scene beside a wash needs prints even where the join being started (the close's
+// crossfade) carries none. On a phone a wash also goes with the outgoing print alone.
+function heldForPrints() {
+  if (target === shown || !joinAt(shown, stepToward(shown, target)).wash) return false;
+  return !primed() && !(mobileLayout() && washing() && sheets[shown]);
+}
 function setTarget(t) {
   if (t === SHARE && xfAt() >= 1) {
     target = t;
@@ -3249,14 +3256,28 @@ function deployPrint() {
     }
     g.restore();
   }
-  const source = sheets[DEPLOY];
-  if (source) {
-    const cs = getComputedStyle(stage), cx = parseFloat(cs.getPropertyValue('--pub-cx')), cy = parseFloat(cs.getPropertyValue('--pub-cy'));
-    const k = source.width / printW(), r = pubR, diameter = r * 2 * PUB_SCALE;
-    g.drawImage(source, (-32 + cx - r + ox) * k, (cy - r + oy) * k, r * 2 * k, r * 2 * k,
-      GEOM.cellW / 2 + ox - diameter / 2, GEOM.cellH / 2 + oy - diameter / 2, diameter, diameter);
-  }
+  drawControl(g, GEOM.cellW / 2 + ox, GEOM.cellH / 2 + oy);
   return copy;
+}
+// The grown control, drawn from its own markup rather than cut from scene 4's print, so the close
+// never waits for a capture: the disc in its colour and the icon's paths where the button places them.
+// The shell's icon is paths alone; another element in it would be left out of the close.
+function drawControl(g, x, y) {
+  const button = publishButton(), b = button?.getBoundingClientRect();
+  if (!b?.width) return;
+  const style = button.ownerDocument.defaultView.getComputedStyle(button), k = PUB_SCALE;
+  g.save();
+  g.beginPath(); g.arc(x, y, b.width / 2 * k, 0, Math.PI * 2); g.fillStyle = style.backgroundColor; g.fill();
+  const icon = [...button.querySelectorAll('svg')].find((svg) => svg.getClientRects().length), r = icon?.getBoundingClientRect();
+  const box = icon?.viewBox.baseVal || (r && { x: 0, y: 0, width: r.width, height: r.height });
+  if (box?.width) {
+    // the icon's rendered box, its CSS nudge included, placed relative to the button's centre
+    g.translate(x + (r.left + r.width / 2 - b.left - b.width / 2) * k, y + (r.top + r.height / 2 - b.top - b.height / 2) * k);
+    g.scale(r.width * k / box.width, r.height * k / box.height); g.translate(-box.x - box.width / 2, -box.y - box.height / 2);
+    g.strokeStyle = style.color; g.lineWidth = +icon.getAttribute('stroke-width') || 2; g.lineCap = g.lineJoin = 'round';
+    for (const path of icon.querySelectorAll('path')) g.stroke(new Path2D(path.getAttribute('d')));
+  }
+  g.restore();
 }
 function closingPigmentPrint() {
   const sheet = document.createElement('canvas'); sheet.width = printW(); sheet.height = printH();
@@ -3286,7 +3307,7 @@ function closingPigmentPrint() {
 // ahead of it.
 const CLOSE_HOLD = .04, CLOSE_DOSE = 30, CLOSE_LIFT = .3, CLOSE_STIR = .12;
 function updateFinalDissolve() {
-  if (!sim || reduce || simLost || !sheets[DEPLOY]) return;
+  if (!sim || reduce || simLost) return;
   const active = shown >= DEPLOY && +stage.dataset.scene === DEPLOY;
   const q = active ? closingProgress() : 0;
   finalDissolve = q;
