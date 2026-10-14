@@ -1877,3 +1877,17 @@ fn undo_file_moves_reports_the_reverse_pairs_before_the_undo_runs() {
     undo_applied(&root, &applied).expect("undo");
     assert!(root.join("posts/posts.md").exists());
 }
+
+#[test]
+fn readme_in_an_app_folder_is_a_page_at_its_own_address_when_links_are_rewritten() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "app/index.html", "<!doctype html><p>app</p>");
+    w(root, "app/README.md", "# Readme\n");
+    w(root, "index.md", "[Readme](/app/readme/)\n");
+
+    do_move(root, "app/README.md", "app/guide.md");
+
+    let index = r(root, "index.md");
+    assert!(index.contains("[Readme](/app/guide/)"), "{index}");
+}

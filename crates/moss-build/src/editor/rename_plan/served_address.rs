@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use crate::build::icloud::is_evicted;
 use crate::build::markdown::resolve_duplicate_slugs_with_lang;
 use crate::build::scan::article_map::to_pretty_url;
-use crate::build::scan::classify::{classify_extension, left_out, ScanBucket};
+use crate::build::scan::classify::{classify_extension, compute_passthrough_roots, left_out, verbatim_index_dirs, ScanBucket};
 use crate::build::scan::page_map::pages_before_dedup;
 use crate::build::types::ParsedDocument;
 use crate::i18n::Language;
@@ -110,7 +110,11 @@ impl ServedAddresses {
             files.push(file_info(then));
         }
         let locate = |then: &str| -> PathBuf { root.path().join(now_of.get(then).copied().unwrap_or(then)) };
-        let pages = pages_before_dedup(&files, root, site_lang, &locate, &is_evicted);
+        let html: Vec<FileInfo> =
+            pairs.iter().filter(|(_, then)| bucket(then) == ScanBucket::Html).map(|(_, then)| file_info(then)).collect();
+        let config = crate::build::site_config::get_build_passthrough(&root.path().to_string_lossy()).unwrap_or_default();
+        let reserved = verbatim_index_dirs(&html, &compute_passthrough_roots(&html, &config));
+        let pages = pages_before_dedup(&files, root, &reserved, site_lang, &locate, &is_evicted);
 
         // A page moved under a new name takes a place in the folder listing
         // that is not known yet; an address that depends on that place is

@@ -35,8 +35,8 @@ use crate::build::page::shell::{
     ShellProcessor, ShellType, ShellVars,
 };
 use crate::build::scan::page_map::{
-    build_page_map_and_external_urls_cached, compute_home_file_winners, compute_home_overrides,
-    folder_of, resolve_folder_languages, FolderLangCache, FrontmatterScanCache,
+    build_page_map_and_external_urls_cached, elect_homes, folder_of, is_home_translation, resolve_folder_languages,
+    FolderLangCache, FrontmatterScanCache,
 };
 use crate::build::scan::page_map::resolve_path_with_overrides;
 use crate::build::scan::cascade::apply_cascade;
@@ -400,12 +400,11 @@ pub fn generate_blocking_content_for_build(
     // of filename — lets `en/Mountain Home.md` (or any non-INDEX_STEM, non-self-named
     // file) be the EN homepage at `/en/` instead of getting a slug URL while
     // moss synthesizes an empty `en/index.html` titled `"En"`.
-    let home_overrides = compute_home_overrides(&project_structure.markdown_files, root);
-    let home_file_winners = compute_home_file_winners(
-        &project_structure.markdown_files,
-        root_folder_name,
-        &home_overrides,
+    let verbatim_dirs = crate::build::scan::classify::verbatim_index_dirs(
+        &project_structure.html_files,
+        &project_structure.passthrough_roots,
     );
+    let (home_overrides, home_file_winners) = elect_homes(&project_structure.markdown_files, root, &verbatim_dirs);
 
     // Build PageMap: pre-scan all markdown files to compute source_path → url_path mapping.
     // This includes cascading url overrides from folder index files, so child pages
@@ -783,15 +782,7 @@ pub fn generate_blocking_content_for_build(
                         // These should keep the winner's URL so resolve_duplicate_slugs_with_lang
                         // can properly deduplicate them (e.g., index.html → zh-hans/index.html),
                         // rather than getting a separate directory URL like /index/.
-                        let filename_lower = Path::new(&file_info.path)
-                            .file_stem()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("")
-                            .to_lowercase();
-                        let is_home_translation = moss_core::home::strip_lang_suffix(&filename_lower)
-                            .map_or(false, |bare| moss_core::home::is_index_stem(bare));
-
-                        if is_home_translation {
+                        if is_home_translation(&file_info.path, &home_file_winners) {
                             // Give it the same URL as the winner (index.html for root,
                             // parent/index.html for nested). resolve_duplicate_slugs_with_lang
                             // will rename the non-default-language version.
@@ -1627,6 +1618,7 @@ pub fn generate_blocking_content_for_build(
     let folder_plan = super::build_shared::FolderIndexPlan::resolve(
         &mut documents,
         project_structure,
+        &verbatim_dirs,
         &dir_overrides,
         &term_index,
         &input_evidence,
@@ -1636,6 +1628,7 @@ pub fn generate_blocking_content_for_build(
             doc
         },
     );
+    super::build_shared::report_verbatim_collisions(&documents, project_structure, &dir_overrides);
     // The resolved set now contains both authored and synthetic folders.
     // Stamp every explorer root once so its facade includes the shared places
     // asset URL that its own map markup renders below.

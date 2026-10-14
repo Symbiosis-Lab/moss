@@ -430,7 +430,7 @@ pub fn resolve_duplicate_slugs_with_lang(
     for c in &reported {
         log::warn!(
             target: "build",
-            "`{}` and `{}` both publish to /{} — keeping `{}` there and moving the other to /{}. Two folders carrying the same `url:` do this; a folder copied in Finder keeps the original's.",
+            "`{}` and `{}` both publish to /{} — keeping `{}` there and moving the other to /{}. Two files with one name, or folders carrying the same `url:` (a folder copied in Finder keeps the original's), do this.",
             c.keeper, c.loser, c.wanted, c.keeper, c.moved_to,
         );
     }

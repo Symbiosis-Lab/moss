@@ -150,7 +150,7 @@ fn pending_page_sources_suppress_only_their_generated_folder_indexes() {
         ..Default::default()
     }];
     let plan = super::FolderIndexPlan::resolve(
-        &mut documents, &project, &Default::default(), &Default::default(), &evidence,
+        &mut documents, &project, &Default::default(), &Default::default(), &Default::default(), &evidence,
         |folder| ParsedDocument { url_path: format!("{folder}/index.html"), ..Default::default() },
     );
     let folders: BTreeSet<&str> = plan.entries.iter().map(|entry| entry.folder.as_str()).collect();

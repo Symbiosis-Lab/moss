@@ -311,6 +311,21 @@ pub fn holds_only_prebuilt_apps(
         && !page_paths.iter().any(|p| p.starts_with(&prefix))
 }
 
+/// Directories whose `index.html` is copied verbatim: those holding a source
+/// file of exactly that name inside a passthrough root. Such a directory has no
+/// room for a page of its own at its folder address, so no markdown file or
+/// generated listing may take it.
+///
+/// Keys are source-relative directory paths without a trailing `/`.
+pub fn verbatim_index_dirs(html_files: &[FileInfo], passthrough_roots: &HashSet<String>) -> HashSet<String> {
+    html_files
+        .iter()
+        .filter(|f| is_in_passthrough(&f.path, passthrough_roots))
+        .filter_map(|f| f.path.strip_suffix("/index.html"))
+        .map(str::to_string)
+        .collect()
+}
+
 /// Each scanned directory that gets a folder-index page, paired with the
 /// page-tree key that index lives at.
 ///

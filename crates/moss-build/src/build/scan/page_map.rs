@@ -17,6 +17,9 @@ pub(crate) use frontmatter_cache::{build_page_map_and_external_urls_cached, Fron
 #[cfg(test)]
 pub(crate) use frontmatter_cache::build_page_map_and_external_urls_cached_with_evicted;
 
+mod home_election;
+pub(crate) use home_election::{elect_homes, elect_homes_with_evicted, is_home_translation};
+
 mod folder_lang;
 pub(crate) use folder_lang::{folder_of, resolve_folder_languages, FolderLangCache};
 
@@ -553,12 +556,12 @@ pub(crate) fn build_page_map_with_evicted(
 pub(crate) fn pages_before_dedup(
     markdown_files: &[crate::types::content::FileInfo],
     root: &crate::vault::paths::VaultRoot,
+    reserved: &std::collections::HashSet<String>,
     site_lang: crate::i18n::Language,
     locate: &dyn Fn(&str) -> std::path::PathBuf,
     is_evicted: &dyn Fn(&Path) -> bool,
 ) -> Vec<crate::build::types::ParsedDocument> {
-    let overrides = compute_home_overrides_with_evicted(markdown_files, root, locate, is_evicted);
-    let winners = compute_home_file_winners(markdown_files, root.name(), &overrides);
+    let (overrides, winners) = elect_homes_with_evicted(markdown_files, root, reserved, locate, is_evicted);
     let mut scan = FrontmatterScanCache::default();
     let scanned = frontmatter_cache::scan_frontmatter_urls_with_evicted(markdown_files, locate, &mut scan, is_evicted);
     let (entries, _, _) = frontmatter_cache::assemble_page_map(markdown_files, &scanned, root.name(), &winners, &overrides);
@@ -614,13 +617,10 @@ pub(super) fn page_map_entry(
 
     // Demote non-winner index files (same logic as in generate_blocking_content)
     let is_home_translation = if filename_match_is_home && !home_file_winners.contains(file_path) {
-        // Check if this is a language-suffixed variant of an index stem
-        // (e.g., index.zh-hans.md alongside the winning index.md).
-        // These should keep the winner's URL so resolve_duplicate_slugs_with_lang
-        // can properly deduplicate them, rather than getting a directory URL.
-        let has_lang_suffix = moss_core::home::strip_lang_suffix(&filename_lower).is_some();
+        // A language variant of the home keeps the winner's URL so slug
+        // deduplication can place it, rather than getting a directory URL.
         is_index = false;
-        has_lang_suffix
+        is_home_translation(file_path, home_file_winners)
     } else {
         false
     };
