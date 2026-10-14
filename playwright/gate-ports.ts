@@ -108,6 +108,8 @@ const GATE_PORT_KEYS = [
   'nav-split-pack',
   'theme-floor-hooks',
   'hls-short-clip',
+  'footer-end-space:hidden',
+  'footer-end-space:default',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

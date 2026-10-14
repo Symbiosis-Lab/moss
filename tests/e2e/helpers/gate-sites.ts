@@ -3402,3 +3402,36 @@ Body text.
     },
   };
 }
+
+// ── The footer's end space: a hidden colophon keeps it, a visible one closes the footer ──
+// Two sites that differ only in the theme rule `.moss-colophon { display: none }`
+// (moss has no setting that hides its mark, so sites do it in theme CSS).
+// Served by playwright/footer-end-space.config.ts.
+const footerEndSpaceFiles = {
+  "index.md": `---
+title: Footer end space
+uid: "fes00101"
+---
+
+# Footer end space
+
+Body text.
+`,
+  "footer.md": `Written by [an editor](/editor) for this scratch site.
+`,
+  ".moss/config.toml": CONFIG_TOML,
+};
+
+export const FOOTER_END_SPACE_HIDDEN: ScratchSiteSpec = {
+  name: "footer-end-space-hidden-gate",
+  files: {
+    ...footerEndSpaceFiles,
+    ".moss/theme/style.css": `.moss-colophon { display: none; }
+`,
+  },
+};
+
+export const FOOTER_END_SPACE_DEFAULT: ScratchSiteSpec = {
+  name: "footer-end-space-default-gate",
+  files: { ...footerEndSpaceFiles, ".moss/theme/style.css": null },
+};

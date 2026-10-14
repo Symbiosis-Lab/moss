@@ -974,9 +974,10 @@ footer.container {
      correct subsumed both patches; do not reintroduce padding-bottom on
      main to "fix" spacing for some new trailing element. */
   margin-block: 5rem 0;
-  /* The footer closes on moss's colophon, so what used to be its bottom
-     padding is the colophon's top margin (`.moss-colophon`). */
-  padding-block: 0;
+  /* The footer owns its end space, so a theme that hides the colophon keeps
+     it; a visible colophon cancels it with a negative end margin
+     (`.moss-colophon`) and puts the same space above itself. */
+  padding-block: 0 var(--moss-footer-end);
   --moss-footer-end: var(--moss-space-2xl);
   color: var(--moss-color-muted);
   text-align: start;
@@ -1002,7 +1003,11 @@ footer.container::before {
 footer.container > :first-child {
   margin-block-start: 0;
 }
-footer.container > :last-child {
+/* The colophon is the last child, hidden or not, so the clamp also reaches the
+   element before it: otherwise a theme that hides the colophon leaves the
+   footer's last text with its own bottom margin on top of the end space. */
+footer.container > :last-child:not(.moss-colophon),
+footer.container > :has(+ .moss-colophon) {
   margin-block-end: 0;
 }
 
@@ -1598,8 +1603,10 @@ footer.container:has(> .moss-subscribe) > .moss-colophon {
    at its middle). */
 .moss-colophon {
   text-align: center;
-  /* Unset outside a footer, which makes this 0. */
-  margin-block-start: var(--moss-footer-end);
+  /* Unset outside a footer, which makes both margins 0. Inside one, the gap
+     above the mark is the footer's end space and the negative end margin
+     cancels the footer's end padding, so the mark closes the footer. */
+  margin-block: var(--moss-footer-end) calc(-1 * var(--moss-footer-end));
   padding-block: var(--moss-space-lg) var(--moss-space-xl);
 }
 

@@ -95,6 +95,7 @@ GATES_BUILD=(
   places-explorer-perf
   places-explorer-vertical
   places-explorer-single
+  footer-end-space
 )
 
 # The rest: no config, spec, or harness in this gate's chain ever reads

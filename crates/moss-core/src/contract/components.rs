@@ -2432,7 +2432,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "Footer colophon credit appended by moss, the last child of the page's `<footer>` (after `</main>`, as a direct child of `<body>`, on a page with no footer). Carries its own margin and block padding, and so does its link; a theme that places the mark in its own row sets the colophon's own margin and padding and keeps the link's padding, which holds the line the hover wording appears on. Shows the moss mark alone at rest, quiet in the same muted grey as the footer above it; on hover or keyboard focus the mark takes its ink and the name fades in beneath it, without moving the mark.",
+        description: "Footer colophon credit appended by moss, the last child of the page's `<footer>` (after `</main>`, as a direct child of `<body>`, on a page with no footer). Carries its own margin and block padding, and so does its link. The footer keeps its own end space, so hiding the mark with `display: none` leaves that space; a theme that places the mark in its own row sets the colophon's whole `margin` (the end margin cancels the footer's end space) and padding and keeps the link's padding, which holds the line the hover wording appears on. Shows the moss mark alone at rest, quiet in the same muted grey as the footer above it; on hover or keyboard focus the mark takes its ink and the name fades in beneath it, without moving the mark.",
     },
     ComponentEntry {
         class: "moss-colophon-icon",
