@@ -95,6 +95,8 @@ pub struct FolderSession {
     /// The sweep reads it every tick and surfaces transitions to the preview
     /// as `FolderHealthChanged` — the full-window project-unavailable state.
     unavailable: AtomicBool,
+    /// Set by `deploy --dry-run` through `deny_source_writes`; see that method.
+    source_writes_denied: AtomicBool,
     /// The host's Live/Background signal, once a watch attaches one. Read
     /// through [`DerivedWorkGate`]; see `folder_session/derived_work.rs`.
     cadence: StdMutex<Option<tokio::sync::watch::Receiver<crate::ops::watch::cadence::Cadence>>>,
@@ -125,6 +127,16 @@ pub enum PreviewSource {
 #[path = "folder_session/preview_requirement_tests.rs"]
 mod preview_requirement_tests;
 
+/// Holds a session's source-write denial for as long as it lives; dropping it
+/// lets the session write source files again.
+pub struct SourceWriteDenial(Arc<FolderSession>);
+
+impl Drop for SourceWriteDenial {
+    fn drop(&mut self) {
+        self.0.source_writes_denied.store(false, Ordering::SeqCst);
+    }
+}
+
 impl FolderSession {
     pub fn new(folder: PathBuf) -> Arc<Self> {
         Self::with_stage_write_lock(folder, Arc::new(Mutex::new(())))
@@ -143,6 +155,7 @@ impl FolderSession {
             ui_bound: AtomicU32::new(0),
             stage_write_lock,
             unavailable: AtomicBool::new(false),
+            source_writes_denied: AtomicBool::new(false),
             cadence: StdMutex::new(None),
         })
     }
@@ -233,6 +246,20 @@ impl FolderSession {
 
     pub fn is_unavailable(&self) -> bool {
         self.unavailable.load(Ordering::SeqCst)
+    }
+
+    /// Refuse every build write-back to the folder's source files. A check run
+    /// (`deploy --dry-run`) builds the folder but must leave the author's files
+    /// byte-identical, so generated uids are not written back. The denial lasts
+    /// as long as the returned guard, so it cannot outlive the check run on the
+    /// shared session registry.
+    pub fn deny_source_writes(self: &Arc<Self>) -> SourceWriteDenial {
+        self.source_writes_denied.store(true, Ordering::SeqCst);
+        SourceWriteDenial(self.clone())
+    }
+
+    pub fn source_writes_allowed(&self) -> bool {
+        !self.source_writes_denied.load(Ordering::SeqCst)
     }
 
     /// Spawn a UiBound future. Cancelled on window close.

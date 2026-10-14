@@ -689,6 +689,19 @@ mod dry_run_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dry_run_leaves_the_source_folder_byte_identical() {
+        let fx = Fixture::new(false);
+        let note = "---\ntitle: Note\n---\n\nShared text.\n";
+        std::fs::write(fx.dir.path().join("note.md"), note).unwrap();
+        let index_before = std::fs::read(fx.dir.path().join("index.md")).unwrap();
+
+        fx.run(true).await.expect("a dry run reports");
+
+        assert_eq!(std::fs::read_to_string(fx.dir.path().join("note.md")).unwrap(), note);
+        assert_eq!(std::fs::read(fx.dir.path().join("index.md")).unwrap(), index_before);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_dry_run_that_a_real_deploy_would_refuse_exits_non_zero_and_sends_nothing() {
         let fx = Fixture::new(true);
         let before = fx.record_bytes();

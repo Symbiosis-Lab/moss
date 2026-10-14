@@ -210,6 +210,7 @@ pub async fn run_dry_run(
 
     let folder_str = folder.to_string_lossy().to_string();
     let _session = crate::system::folder_session::register_session(&folder_str);
+    let _denied = _session.deny_source_writes();
     let root = crate::vault::paths::VaultRoot::resolve(folder);
     // The seal already classified the build against the last publish; asking
     // again would walk the tree twice.

@@ -938,6 +938,7 @@ pub fn generate_blocking_content_for_build(
     // UID normalization is the final source-owning step. It completes before
     // source evidence, cache identity, metadata, or any write observes bytes.
     let reduce_pre_start = std::time::Instant::now();
+    let writes_allowed = services.and_then(|s| s.session.as_ref()).map_or(true, |s| s.source_writes_allowed());
     for record in &mut source_records {
         record.mint_missing_uid(&mut documents[record.document_index]);
     }
@@ -1001,7 +1002,7 @@ pub fn generate_blocking_content_for_build(
         urls: &url_index,
     };
     for record in &mut source_records {
-        let written = record.write_final();
+        let written = record.write_final(writes_allowed);
         if written && record.final_source != record.original_source {
             input_evidence.owned_rewrite(
                 &record.disk_path,

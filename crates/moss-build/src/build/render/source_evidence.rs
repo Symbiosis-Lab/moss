@@ -138,9 +138,16 @@ impl FinalSourceRecord {
 
     /// Persist only the final owned bytes. A failed write restores the exact
     /// prior source and tells the caller to restore its parsed UID as well.
-    pub(super) fn write_final(&mut self) -> bool {
+    /// `allowed` is false when the folder's session refuses source writes (a
+    /// check run); that is the same outcome as a failed write, so the caller
+    /// takes the same restore path.
+    pub(super) fn write_final(&mut self, allowed: bool) -> bool {
         if self.final_source == self.original_source {
             return true;
+        }
+        if !allowed {
+            self.final_source.clone_from(&self.original_source);
+            return false;
         }
         // The stat comes from the handle that wrote, so it describes moss's write
         // and nothing that lands on the path afterwards.
@@ -366,7 +373,7 @@ mod tests {
         let stat_before_read = std::fs::metadata(&disk).ok().map(|md| crate::build::stat::FileStat::of(&md));
         let mut record = FinalSourceRecord::fresh(0, "note.md".to_string(), disk.clone(), source.to_string(), None, stat_before_read);
         record.mint_missing_uid(&mut ParsedDocument::default());
-        assert!(record.write_final());
+        assert!(record.write_final(true));
 
         let now = std::fs::metadata(&disk).unwrap();
         assert_eq!(
@@ -384,7 +391,7 @@ mod tests {
         let mut record = FinalSourceRecord::fresh(0, "note.md".into(), disk.clone(), source.into(), None, None);
         record.mint_missing_uid(&mut ParsedDocument::default());
         std::fs::write(&disk, "---\ntitle: Newer\n---\nbody\n").unwrap();
-        assert!(!record.write_final());
+        assert!(!record.write_final(true));
         assert_eq!(std::fs::read_to_string(&disk).unwrap(), "---\ntitle: Newer\n---\nbody\n");
     }
 
@@ -404,7 +411,7 @@ mod tests {
             None,
         );
         record.mint_missing_uid(&mut document);
-        assert!(record.write_final());
+        assert!(record.write_final(true));
         let written = std::fs::read_to_string(&disk).unwrap();
         assert_eq!(written, record.final_source);
         let offset = record.final_source.find("gone.png").expect("reference survives uid insertion");
@@ -446,7 +453,7 @@ mod tests {
             None,
         );
         assert!(record.plan_duplicate_uid("replacement-id"));
-        assert!(record.write_final());
+        assert!(record.write_final(true));
         let written = std::fs::read_to_string(&disk).unwrap();
 
         let graph = ContentGraphBuilder::new().build();

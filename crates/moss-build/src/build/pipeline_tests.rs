@@ -6180,6 +6180,30 @@ fn a_readable_page_with_denied_uid_write_keeps_its_consumed_read_evidence() {
     assert!(crate::deploy::refuse_unresolved_inputs(&sealed).is_ok());
 }
 
+#[test]
+fn a_build_under_a_denied_source_write_session_leaves_every_source_byte_identical() {
+    let index = "---\ntitle: Home\n---\nHi";
+    let note = "---\ntitle: Note\npartial: true\n---\nShared text";
+
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), index).unwrap();
+    fs::write(dir.join("note.md"), note).unwrap();
+    let session = crate::system::folder_session::FolderSession::new(dir.clone());
+    let _denied = session.deny_source_writes();
+    let folder_path = dir.to_str().unwrap();
+    let (_, keys, _, _) = build_test_with_focus(folder_path, scan_folder(folder_path).unwrap(), None, Some(session), None, None).unwrap();
+    assert!(keys.iter().any(|key| key == "index.html"));
+    assert_eq!(fs::read_to_string(dir.join("index.md")).unwrap(), index);
+    assert_eq!(fs::read_to_string(dir.join("note.md")).unwrap(), note);
+
+    let (control, _control_cleanup) = create_test_dir();
+    fs::write(control.join("index.md"), index).unwrap();
+    fs::write(control.join("note.md"), note).unwrap();
+    build_test_promoted_or_withheld(control.to_str().unwrap()).unwrap();
+    assert!(fs::read_to_string(control.join("index.md")).unwrap().contains("uid:"));
+    assert!(fs::read_to_string(control.join("note.md")).unwrap().contains("uid:"));
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn an_arrival_after_scan_needs_a_new_render_before_it_clears_publish() {
