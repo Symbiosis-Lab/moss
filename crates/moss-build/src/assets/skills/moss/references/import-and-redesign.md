@@ -51,11 +51,13 @@ Dispatch these small tasks in parallel, each writing one file into `<Site> desig
 | For each kind of page, how it reads now, measured on the rendered page: body text size, line height and column width in px; the page's height in screens at 1440 and 390 px; and its outline, block by block in order | `baseline.md`. This is the floor the redesign is held to in steps 6 and 7 |
 | Every video and the largest version its page serves, from the browser's network log: address, pixel size, aspect ratio as displayed, bitrate, length | `media.md`. A file can store non-square pixels (1350×1080 shown as 16:9), so read the display aspect ratio, never width over height. Copy that version without re-encoding it; a clip cut from it is encoded once, at its own pixel size |
 
+Some sites refuse automated browsers outright: the capture shows "Access Denied", a 403 or a bot check instead of the page, and government and institutional sites do this often. Never work around the refusal. Read the original through the Internet Archive instead (`https://web.archive.org/web/2026if_/<address>`, the `if_` form drops the archive's own toolbar), say in `baseline.md` that you did, and treat a page the archive has no copy of as unmeasured rather than guessed.
+
 Then, in your own session, read the six files and the screenshots and write two lines into `vision.md`'s notes: the current aesthetic direction in one sentence, and what is genuinely good and what is weak.
 
 ## 3. Research
 
-Choose the candidates yourself: eight to twelve of the best sites of the same kind, five to eight in the same aesthetic from any field, and the relevant entries from [the list below](#design-references). Then dispatch one small task per candidate with the same rubric, so the answers line up in one table: the URL; whether it loaded; the one pattern it does best; how that pattern would apply here; and its aesthetic in a phrase. Design references are searched locally first and fetched otherwise. Take patterns and name where each came from. Never copy one site's design.
+Choose the candidates yourself: eight to twelve of the best sites of the same kind, five to eight in the same aesthetic from any field, and the relevant entries from [the list below](#design-references). Choose about a third more than you need: archives, libraries and government sites often refuse automated browsers, and a refused candidate is skipped, never worked around. Then dispatch one small task per candidate with the same rubric, so the answers line up in one table: the URL; whether it loaded; the one pattern it does best; how that pattern would apply here; and its aesthetic in a phrase. Design references are searched locally first and fetched otherwise. Take patterns and name where each came from. Never copy one site's design.
 
 ## 4. The vision
 
