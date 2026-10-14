@@ -558,7 +558,7 @@ fn collect_native_slots_for_documents(
         &pages,
         &site_lang,
         domain.as_deref(),
-        Some(cached_domain_config),
+        &cached_domain_config,
         start_server,
         Some(&media_lookup),
         site_comments,

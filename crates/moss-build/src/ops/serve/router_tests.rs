@@ -377,7 +377,7 @@ async fn frozen_generation_page_regains_preview_gate_attribute() {
         temp_dir.path().join("index.html"),
         concat!(
             "<html><head>",
-            "<script id=\"moss-beacon\" data-moss-deploy-only></script>",
+            "<script data-moss-deploy-only src=\"/_moss/js/beacon.js\" defer></script>",
             "</head><body class=\"page\"><p>frozen</p></body></html>",
         ),
     )
@@ -443,14 +443,14 @@ async fn preview_router_strips_deploy_only_script_from_both_staging_and_shipped_
         &[],
         "en",
         None,
-        Some(deploy),
+        &deploy,
         false,
         None,
         None,
     );
     let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
     assert!(
-        head_end.contains("moss-beacon") && head_end.contains("goatcounter"),
+        head_end.contains("/_moss/js/beacon.js") && head_end.contains("goatcounter"),
         "precondition: the emitter injects both the beacon and analytics, got: {head_end}"
     );
 
@@ -463,7 +463,7 @@ async fn preview_router_strips_deploy_only_script_from_both_staging_and_shipped_
     );
     let shipped_page = String::from_utf8(shipped_bytes).expect("shipped page is UTF-8");
     assert!(
-        shipped_page.contains("moss-beacon") && shipped_page.contains("goatcounter"),
+        shipped_page.contains("/_moss/js/beacon.js") && shipped_page.contains("goatcounter"),
         "precondition: ship keeps both deploy-only scripts, got: {shipped_page}"
     );
 
@@ -499,7 +499,7 @@ async fn preview_router_strips_deploy_only_script_from_both_staging_and_shipped_
 
     for (label, served) in [("staging", &staging_served), ("shipped", &shipped_served)] {
         assert!(
-            !served.contains("moss-beacon") && !served.contains("goatcounter"),
+            !served.contains("/_moss/js/beacon.js") && !served.contains("goatcounter"),
             "{label}-origin page must carry neither deploy-only script, got: {served}"
         );
     }

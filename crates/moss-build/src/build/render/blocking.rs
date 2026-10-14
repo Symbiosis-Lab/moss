@@ -450,9 +450,9 @@ pub fn generate_blocking_content_for_build(
     // Resolve site_id for the inline subscribe shortcode. Per-build (not per-file)
     // so we read .moss/config.toml once. None means no published site → renders
     // an empty action path which the form treats as a no-op.
-    let site_id = crate::build::site_config::get_domain_config(source_path)
-        .ok()
-        .and_then(|c| c.site_id);
+    let deploy = crate::build::site_config::get_domain_config(source_path)
+        .unwrap_or_default();
+    let site_id = deploy.site_id.clone();
 
     // Resolve the seta base URL once per build from the project environment.
     // Passed into `process_markdown_file` so inline `:::subscribe` shortcodes
@@ -2874,6 +2874,8 @@ pub fn generate_blocking_content_for_build(
     // never name a file that was skipped. Replaces seven hand-rolled
     // `if gate { emit }` blocks; see `build::emit::scripts`.
     shared.scripts.emit(&site_assets, output_dir, pending)?;
+    // The visit counter is unhashed so hand-written pages can name it; see `emit::beacon`.
+    crate::build::emit::beacon::emit(&deploy, root.as_str(), output_dir, pending)?;
 
     // Email/RSS math PNG projection. This is only the GATE
     // (the fullscreen.js conditional-emission precedent above) — the emission

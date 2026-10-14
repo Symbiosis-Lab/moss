@@ -137,6 +137,9 @@ pub struct EventRow {
     #[serde(rename = "utmMedium")]
     pub utm_medium: Option<String>,
     pub event: Option<String>,
+    /// Daily visitor code, a hash the server computes per reader and day.
+    /// Rows written before the server carried it have none.
+    pub visitor: Option<String>,
 }
 
 /// Response from GET /api/sites/{id}/events (batch of raw events for delta sync).

@@ -186,3 +186,11 @@ The scripts reuse an installed Playwright package (`playwright` by default); no 
 Before any deploy of the landing page, staging or production, run `node scripts/predeploy-landing.mjs`: it refuses a commit that is not on `develop` or a `site/` with uncommitted changes, then runs `check-landing-download.mjs`, which scrolls to the close by wheel and by jump on desktop and phone in Chromium and WebKit, clicks the macOS button and requires a `.dmg` download, and then requests the link itself. The link is `releases/latest/download/moss.dmg`, so it only works while the release marked Latest is the app's (`release-plz.toml` keeps the crate release from taking the badge). Added 2026-10-12, after a download button with a good link was reported dead and no check clicked it. Run it again with the staged URL as its argument after a staging deploy.
 
 Before publishing the landing page, run `check-landing-subscription.mjs <url>` with `PLAYWRIGHT_MODULE` set. It intercepts API requests and exercises validation, focus, new and existing subscriber responses, and failure recovery in all three languages without creating subscribers. Compare the production form action with the proposed form: a successful HTTP response alone does not prove the correct subscriber list is being used. Keep an exact backup of the currently published file generation before a prebuilt deployment. Stop the native watcher before creating and freezing release output, and run browser checks against that plain frozen output.
+
+### Download counts
+
+The download button's clicks are intent; completed downloads are GitHub's count, kept per release asset. This prints the completed macOS downloads for each release:
+
+```sh
+gh api repos/Symbiosis-Lab/moss/releases --jq '.[] | {tag: .tag_name, dmg: ([.assets[] | select(.name == "moss.dmg") | .download_count] | add)}'
+```

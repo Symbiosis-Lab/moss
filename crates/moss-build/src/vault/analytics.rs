@@ -399,6 +399,7 @@ mod tests {
             utm_source: None,
             utm_medium: None,
             event: None,
+            visitor: None,
         }
     }
 

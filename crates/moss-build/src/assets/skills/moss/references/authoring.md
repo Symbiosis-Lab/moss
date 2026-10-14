@@ -155,6 +155,8 @@ For a homepage that must own its complete HTML document, keep `index.md` for sit
 passthrough = ["index.html"]
 ```
 
+A passthrough page receives none of moss's injected features: no visit counter, comments or subscribe form. To be counted on a site hosted by moss, it adds `<script src="/_moss/js/beacon.js" defer></script>` itself.
+
 The explicit entry makes the source HTML win only the root `index.html` output collision. moss still generates every Markdown page, and `--watch` rebuilds when either source changes. The HTML document owns its own head, styles, scripts, accessibility, and asset links. A root `index.html` without this explicit entry remains an ordinary source asset and does not replace moss's generated homepage.
 
 ## Files moss does not render, and where they belong

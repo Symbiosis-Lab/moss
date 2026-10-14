@@ -6,6 +6,7 @@
 //! and exposes a single build-phase entry point that `blocking.rs` merely
 //! *gates* (the `fullscreen.js` conditional-emission precedent).
 
+pub mod beacon;
 pub mod inventory;
 pub mod listing_style;
 pub mod math_png;

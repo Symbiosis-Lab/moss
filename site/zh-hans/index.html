@@ -473,7 +473,7 @@
 <script>document.documentElement.classList.add('js'); history.scrollRestoration = 'manual';</script>
 <script src="landing-i18n.js"></script>
 <!-- Mirrors the beacon moss injects into rendered pages; these pages are copied verbatim, so it is repeated here. -->
-<script id="moss-beacon">(function(){document.addEventListener('DOMContentLoaded',function(){if(location.hostname!=='mosspub.com')return;var b='https://api.mosspub.com/api/sites/landing/beacon';var u=new URLSearchParams(location.search);var s=function(d){fetch(b,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d),keepalive:true}).catch(function(){})}; s({path:location.pathname,referrer:document.referrer||null,screen_bucket:innerWidth<768?'mobile':innerWidth<1024?'tablet':'desktop',utm_source:u.get('utm_source'),utm_medium:u.get('utm_medium')}); document.querySelectorAll('[data-track]').forEach(function(el){el.addEventListener('click',function(){s({path:location.pathname,event:el.getAttribute('data-track')})})})});})()</script>
+<script src="/_moss/js/beacon.js" defer></script>
 </head>
 <body>
 

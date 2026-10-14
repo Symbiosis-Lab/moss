@@ -126,14 +126,14 @@ fn beacon_injected_for_moss_hosted_build() {
         &[],
         "en",
         None,
-        Some(deploy),
+        &deploy,
         false, // build, not preview
         None,  // no media lookup in this test
         None, // [site] comments unset
     );
     let html = slots.get_html("head-end", "index.html").unwrap_or_default();
     assert!(
-        html.contains("/api/sites/landing/beacon"),
+        html.contains(r#"<script data-moss-deploy-only src="/_moss/js/beacon.js" defer></script>"#),
         "beacon script must be injected on a moss-hosted build"
     );
 }
@@ -159,15 +159,15 @@ fn beacon_injected_during_preview_mode_independent() {
         &[],
         "en",
         None,
-        Some(deploy),
+        &deploy,
         true, // preview — beacon must still be in the slot
         None, // no media lookup in this test
         None, // [site] comments unset
     );
     let html = slots.get_html("head-end", "index.html").unwrap_or_default();
     assert!(
-        html.contains("/api/sites/landing/beacon"),
-        "beacon must be injected even in preview mode (self-gates at runtime), got: {html}"
+        html.contains(r#"<script data-moss-deploy-only src="/_moss/js/beacon.js" defer></script>"#),
+        "beacon must be injected even in preview mode (the preview server strips it), got: {html}"
     );
 }
 
@@ -184,7 +184,7 @@ fn test_comment_form_gets_inactive_class_without_endpoint() {
         &[],
         "en",
         None,
-        None,
+        &DomainDeploymentConfig::default(),
         false,
         None,
         None, // [site] comments unset
@@ -249,7 +249,7 @@ fn folder_index_pages_default_off_articles_default_on() {
         &pages,
         "en",
         None,
-        None,
+        &DomainDeploymentConfig::default(),
         false,
         None,
         None, // [site] comments unset
@@ -303,7 +303,7 @@ fn folder_index_pages_default_off_articles_default_on() {
         &[],
         "en",
         None,
-        None,
+        &DomainDeploymentConfig::default(),
         false,
         None,
         Some(false), // [site] comments = false
@@ -335,7 +335,7 @@ fn folder_index_pages_default_off_articles_default_on() {
         &pages,
         "en",
         None,
-        None,
+        &DomainDeploymentConfig::default(),
         false,
         None,
         Some(true), // [site] comments = true
@@ -361,7 +361,7 @@ fn test_comment_form_inactive_zh_tooltip() {
         &[],
         "zh-hans",
         None,
-        None,
+        &DomainDeploymentConfig::default(),
         false,
         None,
         None, // [site] comments unset
@@ -414,7 +414,7 @@ fn comment_section_uses_per_page_lang_not_site_lang() {
         &pages,
         "zh-hans",
         None,
-        None,
+        &DomainDeploymentConfig::default(),
         false,
         None,
         None, // [site] comments unset
@@ -490,7 +490,7 @@ fn subscribe_form_uses_per_page_lang_on_scoped_site() {
         &pages,
         "zh-hans",
         None,
-        Some(deploy),
+        &deploy,
         false,
         None,
         None, // [site] comments unset
@@ -522,7 +522,7 @@ fn test_comment_form_active_with_endpoint() {
         &[],
         "en",
         None,
-        None,
+        &DomainDeploymentConfig::default(),
         false,
         None,
         None, // [site] comments unset
@@ -585,7 +585,7 @@ fn comments_form_renders_from_features_toggle_fallback() {
         &[],
         "en",
         None,
-        None,
+        &DomainDeploymentConfig::default(),
         false,
         None,
         None, // [site] comments unset
@@ -669,7 +669,7 @@ fn comments_explicit_disabled_does_not_render() {
         &[],
         "en",
         None,
-        None,
+        &DomainDeploymentConfig::default(),
         false,
         None,
         None, // [site] comments unset
@@ -753,7 +753,7 @@ fn moss_hosted_email_channel_auto_injects_form_into_footer_end() {
         &pages,
         "en",
         None,
-        Some(deploy),
+        &deploy,
         false, // build, not preview
         None,  // no media lookup in this test
         None, // [site] comments unset
@@ -825,7 +825,7 @@ fn email_channel_without_site_id_injects_pending_form() {
         &pages,
         "en",
         None,
-        None,
+        &DomainDeploymentConfig::default(),
         false,
         None,
         None, // [site] comments unset
@@ -886,7 +886,7 @@ fn single_scope_form_covers_synthesized_pages() {
         &pages,
         "en",
         None,
-        None,
+        &DomainDeploymentConfig::default(),
         false,
         None,
         None, // [site] comments unset
@@ -943,7 +943,7 @@ fn empty_site_id_renders_pending_form() {
         &pages,
         "en",
         None,
-        Some(deploy),
+        &deploy,
         false,
         None,
         None, // [site] comments unset
@@ -993,7 +993,7 @@ fn pending_form_not_injected_when_footer_md_present() {
         &pages,
         "en",
         None,
-        None,
+        &DomainDeploymentConfig::default(),
         false,
         None,
         None, // [site] comments unset
@@ -1047,6 +1047,7 @@ fn email_slots_identical_across_build_modes() {
     };
     let deploy_configs = [Some(wired), None];
     for deploy in deploy_configs {
+        let deploy = deploy.unwrap_or_default();
         let per_mode: Vec<_> = [true, false]
             .iter()
             .map(|&serving| {
@@ -1059,7 +1060,7 @@ fn email_slots_identical_across_build_modes() {
                     &pages,
                     "en",
                     None,
-                    deploy.clone(),
+                    &deploy,
                     serving,
                     None,
                     None, // [site] comments unset
@@ -1074,7 +1075,7 @@ fn email_slots_identical_across_build_modes() {
             per_mode[0],
             per_mode[1],
             "email slot output must not depend on the start-server flag (deploy={:?})",
-            deploy.is_some()
+            deploy.site_id
         );
     }
 }
@@ -1125,7 +1126,7 @@ fn seta_form_injects_with_site_id_but_no_deploy_method() {
         &pages,
         "en",
         None,
-        Some(deploy),
+        &deploy,
         false,
         None,
         None, // [site] comments unset
@@ -1192,7 +1193,7 @@ fn wired_form_renders_when_site_id_present_regardless_of_provider_config() {
         &pages,
         "en",
         None,
-        Some(deploy),
+        &deploy,
         false,
         None,
         None, // [site] comments unset
@@ -1272,7 +1273,7 @@ fn moss_hosted_footer_form_scope_matches_page_top_folder() {
         &pages,
         "en",
         None,
-        Some(deploy),
+        &deploy,
         false,
         None,
         None, // [site] comments unset
@@ -1348,7 +1349,7 @@ fn moss_hosted_footer_form_single_lang_site_emits_empty_scope() {
         &pages,
         "en",
         None,
-        Some(deploy),
+        &deploy,
         false,
         None,
         None, // [site] comments unset
@@ -1421,7 +1422,7 @@ fn moss_hosted_email_channel_injects_form_without_api_key() {
         &pages,
         "en",
         None,
-        Some(deploy),
+        &deploy,
         false,
         None,
         None, // [site] comments unset
@@ -1479,7 +1480,7 @@ fn email_channel_install_injects_subscribe_assets() {
         &[],
         "en",
         None,
-        None,
+        &DomainDeploymentConfig::default(),
         false,
         None,
         None, // [site] comments unset
@@ -1650,7 +1651,7 @@ fn colophon_slot_merge_routes_cover_through_synthesizer_when_lookup_provided() {
         &[],
         "en",
         None,
-        None,
+        &DomainDeploymentConfig::default(),
         false,
         Some(&lookup),
         None, // [site] comments unset
@@ -1757,7 +1758,7 @@ fn colophon_slot_merge_emits_class_even_without_lookup() {
         &[],
         "en",
         None,
-        None,
+        &DomainDeploymentConfig::default(),
         false,
         None, // no manifest → empty AssetSnapshot; dims fall back to 800×600
         None, // [site] comments unset
@@ -1911,7 +1912,7 @@ fn analytics_present_in_both_build_modes() {
             &[],
             "en",
             None,
-            None,
+            &DomainDeploymentConfig::default(),
             start_server,
             None,
             None, // [site] comments unset
@@ -1958,7 +1959,7 @@ fn comments_section_present_during_preview() {
         &[],
         "en",
         None,
-        None,
+        &DomainDeploymentConfig::default(),
         true, // start_server = preview mode
         None,
         None, // [site] comments unset
@@ -2017,7 +2018,7 @@ fn moss_hosted_production_injections_absent_during_preview() {
         &pages,
         "en",
         None,
-        Some(deploy),
+        &deploy,
         true, // start_server = preview mode
         None,
         None, // [site] comments unset
@@ -2071,14 +2072,14 @@ fn beacon_present_in_both_build_modes_for_moss_hosted() {
             &make_pages(),
             "en",
             None,
-            Some(deploy.clone()),
+            &deploy,
             start_server,
             None,
             None, // [site] comments unset
         );
         let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
         assert!(
-            head_end.contains("/beacon"),
+            head_end.contains("/_moss/js/beacon.js"),
             "beacon must be injected when start_server={start_server}, got: {head_end}"
         );
     }
@@ -2101,7 +2102,7 @@ fn head_end_byte_identical_across_build_modes() {
             &make_pages(),
             "en",
             None,
-            Some(deploy.clone()),
+            &deploy,
             start_server,
             None,
             None, // [site] comments unset
@@ -2114,170 +2115,6 @@ fn head_end_byte_identical_across_build_modes() {
         render(false),
         "head-end must be byte-identical regardless of start_server"
     );
-}
-
-/// The beacon must defer to DOMContentLoaded so document.body exists before
-/// it reads location/document state. There is no longer a data-moss-preview
-/// runtime gate to check alongside it: that self-gate existed only to cover
-/// a gap in the old comment-marker preview strip (see
-/// beacon_carries_deploy_only_attribute), and the gap is closed at the
-/// source now, so nothing here reads data-moss-preview at all.
-#[test]
-fn beacon_script_defers_to_domcontentloaded() {
-    let (config, deploy, tmp) = moss_hosted_fixture();
-    let project_path = tmp.path().to_str().unwrap();
-    let slots = generate_native_slots(
-        &config,
-        project_path,
-        email_installed(project_path),
-        crate::build::features::comment::MATTERS_DOMAIN_FALLBACK,
-        &HashMap::new(),
-        &make_pages(),
-        "en",
-        None,
-        Some(deploy),
-        false,
-        None,
-        None, // [site] comments unset
-    );
-    let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
-    // Scope to the beacon's OWN script — this fixture's head-end also
-    // carries the subscribe bundle, which has its own, unrelated
-    // data-moss-preview check (subscribe.ts's gate, untouched by this fix).
-    let beacon_start = head_end.find("id=\"moss-beacon\"").expect("beacon script present");
-    let beacon_end = head_end[beacon_start..]
-        .find("</script>")
-        .map(|rel| beacon_start + rel)
-        .expect("beacon script is closed");
-    let beacon_script = &head_end[beacon_start..beacon_end];
-    assert!(
-        beacon_script.contains("DOMContentLoaded"),
-        "beacon must defer to DOMContentLoaded, got: {beacon_script}"
-    );
-    assert!(
-        !beacon_script.contains("data-moss-preview"),
-        "the beacon's old data-moss-preview self-gate is dead weight now that \
-         the preview server strips it at the source — it must not come back, got: {beacon_script}"
-    );
-}
-
-/// The beacon's `<script>` element must carry `data-moss-deploy-only` so the
-/// preview server's serve-time strip drops it from every response it serves,
-/// exactly like the analytics pixel — including a page served from a
-/// SHIP-TRANSFORMED generation, where a comment-marker wrapper would already
-/// be gone (ship keeps the script for deploy but never this attribute). See
-/// `ops::serve::iframe_bridge::strip_matches_between_staging_and_a_ship_transformed_generation`
-/// for the end-to-end proof.
-#[test]
-fn beacon_carries_deploy_only_attribute() {
-    let (config, deploy, tmp) = moss_hosted_fixture();
-    let project_path = tmp.path().to_str().unwrap();
-    let slots = generate_native_slots(
-        &config,
-        project_path,
-        email_installed(project_path),
-        crate::build::features::comment::MATTERS_DOMAIN_FALLBACK,
-        &HashMap::new(),
-        &make_pages(),
-        "en",
-        None,
-        Some(deploy),
-        false,
-        None,
-        None, // [site] comments unset
-    );
-    let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
-    let beacon = head_end.find("moss-beacon").expect("beacon script present");
-    let open = head_end.find("<script data-moss-deploy-only id=\"moss-beacon\">");
-    let close = head_end[beacon..].find("</script>");
-    assert!(
-        open.is_some(),
-        "beacon script tag must carry data-moss-deploy-only, got: {head_end}"
-    );
-    assert!(
-        close.is_some(),
-        "beacon script tag must be closed, got: {head_end}"
-    );
-}
-
-/// The beacon endpoint must be an absolute URL carrying the environment's
-/// scheme (https for prod/staging, http for local seta) — a
-/// protocol-relative `//host` URL inherits the page's scheme, and any
-/// http origin (local preview, misconfigured proxy) then POSTs to
-/// http://, where the server's 308 http→https redirect kills the CORS
-/// preflight.
-#[test]
-fn beacon_url_is_absolute_https_and_fetch_failure_is_swallowed() {
-    // This test asserts the PRODUCTION host, so it must pin the resolved
-    // environment: lock the env mutex and clear the override vars that
-    // test_resolve_environment_precedence mutates in-process.
-    let _env = crate::ENV_TEST_MUTEX
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    std::env::remove_var("MOSS_ENV");
-    std::env::remove_var("MOSS_SETA_URL");
-
-    let (config, deploy, tmp) = moss_hosted_fixture();
-    let project_path = tmp.path().to_str().unwrap();
-    let slots = generate_native_slots(
-        &config,
-        project_path,
-        email_installed(project_path),
-        crate::build::features::comment::MATTERS_DOMAIN_FALLBACK,
-        &HashMap::new(),
-        &make_pages(),
-        "en",
-        None,
-        Some(deploy),
-        false,
-        None,
-        None, // [site] comments unset
-    );
-    let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
-    assert!(
-        head_end.contains("'https://api.mosspub.com/api/sites/test-site/beacon'"),
-        "beacon URL must be absolute https, got: {head_end}"
-    );
-    // An analytics ping must never surface as an unhandled promise
-    // rejection on a reader's console.
-    assert!(
-        head_end.contains(".catch("),
-        "beacon fetch must swallow failures with .catch, got: {head_end}"
-    );
-}
-
-/// Ship output served outside the preview server (python -m http.server
-/// on .moss/build.nosync/current, file:// opens) is un-middlewared, so
-/// neither the serve-time deploy-only-script strip nor the re-guaranteed
-/// data-moss-preview attribute applies — with an absolute https URL the
-/// beacon would silently record real pageviews from a dev machine. The
-/// script must therefore also gate on loopback/file origins. Local-env
-/// deploys live on *.localhost subdomains and are NOT gated.
-#[test]
-fn beacon_gates_on_loopback_and_file_origins() {
-    let (config, deploy, tmp) = moss_hosted_fixture();
-    let project_path = tmp.path().to_str().unwrap();
-    let slots = generate_native_slots(
-        &config,
-        project_path,
-        email_installed(project_path),
-        crate::build::features::comment::MATTERS_DOMAIN_FALLBACK,
-        &HashMap::new(),
-        &make_pages(),
-        "en",
-        None,
-        Some(deploy),
-        false,
-        None,
-        None, // [site] comments unset
-    );
-    let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
-    for gate in ["location.hostname", "'localhost'", "'127.0.0.1'", "'file:'"] {
-        assert!(
-            head_end.contains(gate),
-            "beacon must gate on loopback/file origins (missing {gate}), got: {head_end}"
-        );
-    }
 }
 
 #[test]
@@ -2333,7 +2170,7 @@ fn footer_survives_a_build_that_could_not_read_footer_md() {
         &[footer_page],
         "en",
         None,
-        Some(DomainDeploymentConfig::default()),
+        &DomainDeploymentConfig::default(),
         false,
         None,
         None,
@@ -2356,7 +2193,7 @@ fn footer_survives_a_build_that_could_not_read_footer_md() {
         &[],
         "en",
         None,
-        Some(DomainDeploymentConfig::default()),
+        &DomainDeploymentConfig::default(),
         false,
         None,
         None,
