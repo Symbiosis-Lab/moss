@@ -16,6 +16,85 @@ use super::node::{Block, Inline};
 use super::shortcode::Shortcode;
 use std::collections::HashMap;
 
+/// What a page marks a markdown image for, with an HTML comment on the line
+/// after it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MediaMarker {
+    /// `<!-- photography -->`
+    Photography,
+    /// `<!-- video-meta -->` or `<!-- video-meta: collection -->`
+    Video { collection: Option<String> },
+}
+
+impl MediaMarker {
+    /// The marker `html` consists of, if it is only that comment. Public
+    /// because the same grammar applies after media written as HTML by hand,
+    /// which the build reads from the HTML itself.
+    pub fn parse(html: &str) -> Option<Self> {
+        let body = html.trim().strip_prefix("<!--")?.strip_suffix("-->")?.trim();
+        if body == "photography" {
+            return Some(Self::Photography);
+        }
+        let rest = body.strip_prefix("video-meta")?;
+        let rest = rest.strip_prefix(':').unwrap_or(rest).trim();
+        if !rest.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            return None;
+        }
+        Some(Self::Video { collection: (!rest.is_empty()).then(|| rest.to_string()) })
+    }
+
+    fn accepts(&self, kind: crate::resolve::ext_kind::ExtKind) -> bool {
+        use crate::resolve::ext_kind::ExtKind;
+        matches!((self, kind), (Self::Photography, ExtKind::Image) | (Self::Video { .. }, ExtKind::Video))
+    }
+}
+
+/// A markdown image marked for a collection page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkedMedia {
+    pub marker: MediaMarker,
+    /// The image's address, as the page renders it.
+    pub href: String,
+    /// The figure's caption, else the alt text. May be empty.
+    pub title: String,
+}
+
+/// The markdown image `blocks[i]` marks, when `blocks[i]` is a marker comment
+/// and the block before it shows one image on its own (a figure, or a
+/// paragraph holding nothing else) of the kind the marker collects: an image
+/// file for photography, a video file for video. The typed equivalent of the
+/// markdown half of the photography and video regexes that used to scan the
+/// rendered page, which depended on the exact markup around the `<img>`.
+pub fn marked_media_at(blocks: &[Block], i: usize) -> Option<MarkedMedia> {
+    let Block::Other(html) = blocks.get(i)? else { return None };
+    let marker = MediaMarker::parse(html)?;
+    let (image, caption) = match blocks.get(i.checked_sub(1)?)? {
+        Block::Figure { image, caption, .. } => (image, caption.as_deref()),
+        Block::Paragraph(inlines) => {
+            let mut shown = inlines
+                .iter()
+                .filter(|i| !matches!(i, Inline::LineBreak) && !matches!(i, Inline::Text(t) if t.trim().is_empty()));
+            match (shown.next(), shown.next()) {
+                (Some(image), None) => (image, None),
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    let Inline::Image { src, alt, .. } = image else { return None };
+    let href = match src {
+        super::url::Url::Resolved(r) => r.href.clone(),
+        super::url::Url::Unresolved(s) => s.clone(),
+    };
+    let kind = crate::resolve::ext_kind::reference_kind_for_ext(&crate::path_ext::path_extension_lower(&href));
+    if !marker.accepts(kind) {
+        return None;
+    }
+    let caption = caption.map(super::plain_text::inlines_to_plain_text).filter(|c| !c.trim().is_empty());
+    Some(MarkedMedia { marker, href, title: caption.unwrap_or_else(|| alt.clone()) })
+}
+
 /// Hrefs of the images in the document that a screen reader gets no text for:
 /// an empty alt and, for a figure, no caption to stand in for it. Only image
 /// files count; a video, audio or PDF written in the image form takes its
@@ -592,5 +671,23 @@ mod tests {
             }
             _ => panic!("expected overlay image"),
         }
+    }
+
+    fn marked(src: &str, marker: &str) -> Option<MarkedMedia> {
+        let blocks = vec![Block::Paragraph(vec![img(src)]), Block::Other(marker.to_string())];
+        marked_media_at(&blocks, 1)
+    }
+
+    #[test]
+    fn a_photography_marker_collects_an_image_file_only() {
+        assert_eq!(marked("sunset.jpg", "<!-- photography -->").map(|m| m.marker), Some(MediaMarker::Photography));
+        assert_eq!(marked("clip.mp4", "<!-- photography -->"), None, "a video is not a photo");
+    }
+
+    #[test]
+    fn a_video_marker_collects_a_video_file_only() {
+        let video = marked("clip.mp4", "<!-- video-meta: walks -->").map(|m| m.marker);
+        assert_eq!(video, Some(MediaMarker::Video { collection: Some("walks".into()) }));
+        assert_eq!(marked("sunset.jpg", "<!-- video-meta -->"), None, "a photo is not a video");
     }
 }

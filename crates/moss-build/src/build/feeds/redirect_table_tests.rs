@@ -174,7 +174,7 @@ fn a_notebook_viewer_is_served_only_for_a_published_notebook() {
 fn a_declared_redirect_to_a_media_collection_page_is_kept() {
     let cfg = config(r#""/old-photos/" = "/photography/""#);
     let b = build(&[
-        ("essay.md", "---\ntitle: Essay\n---\n\n<p><img src=\"photo.png\" alt=\"A photo\"></p>\n<!-- photography -->\n"),
+        ("essay.md", "---\ntitle: Essay\n---\n\n![A photo](photo.png)\n<!-- photography -->\n"),
         (".moss/config.toml", &cfg),
     ]);
     assert!(b.has("photography/index.html"), "premise: the collection page is built");

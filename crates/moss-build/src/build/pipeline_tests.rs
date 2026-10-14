@@ -6971,6 +6971,45 @@ fn pages_deleted_outside_moss_leave_the_sitemap_on_the_next_build() {
     assert!(still_naming.is_empty(), "outputs still naming a page whose source was deleted: {still_naming:?}\n{sitemap}");
 }
 
+/// A photo marked for the photography page is listed however its paragraph
+/// renders: as a captioned figure, as a plain paragraph on a site that turned
+/// implicit figures off, or as an image without alt text, which never becomes
+/// a figure. An unmarked photo before them is not listed in their place. A
+/// marked video is listed on the videos page either way.
+#[test]
+fn marked_media_reach_their_collection_pages_however_the_paragraph_renders() {
+    for implicit_figure in [true, false] {
+        let (test_dir, _cleanup) = create_test_dir();
+        let folder_path = test_dir.to_str().unwrap();
+        fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+        fs::create_dir_all(test_dir.join(".moss")).unwrap();
+        fs::write(test_dir.join(".moss/config.toml"), format!("schema_version = 6\n\n[site]\nimplicit_figure = {implicit_figure}\n")).unwrap();
+        fs::write(
+            test_dir.join("trip.md"),
+            "---\ntitle: Trip\n---\n\nA walk.\n\n![Not for the gallery](unmarked.jpg)\n\n![Sunset over hills](sunset.jpg)\n<!-- photography -->\n\n![](noalt.jpg)\n<!-- photography -->\n\n![Morning mist](mist.mp4)\n<!-- video-meta: walks -->\n\n![[embedded.jpg]]\n<!-- photography -->\n\n![[embedded.mp4]]\n<!-- video-meta -->\n",
+        )
+        .unwrap();
+        for name in ["unmarked.jpg", "sunset.jpg", "noalt.jpg", "embedded.jpg"] {
+            image::RgbImage::from_pixel(24, 24, image::Rgb([23, 45, 67])).save(test_dir.join(name)).unwrap();
+        }
+        fs::write(test_dir.join("mist.mp4"), "fake video data").unwrap();
+        fs::write(test_dir.join("embedded.mp4"), "fake video data").unwrap();
+
+        build_test_sealed(folder_path).expect("build");
+        let staging = test_dir.join(".moss/build.nosync/staging");
+        let photos = fs::read_to_string(staging.join("photography/index.html")).unwrap_or_default();
+        for src in ["/sunset.jpg", "/noalt.jpg", "/embedded.jpg"] {
+            assert!(photos.contains(&format!(r#"data-src="{src}""#)), "implicit_figure = {implicit_figure}: {src} is listed:\n{photos}");
+        }
+        assert!(photos.contains(r#"data-title="Sunset over hills""#), "implicit_figure = {implicit_figure}: the alt text is the title");
+        assert!(!photos.contains("/unmarked.jpg"), "implicit_figure = {implicit_figure}: an unmarked photo is not listed");
+        let videos = fs::read_to_string(staging.join("videos/index.html")).unwrap_or_default();
+        for src in ["/mist.mp4", "/embedded.mp4"] {
+            assert!(videos.contains(&format!(r#"data-src="{src}""#)), "implicit_figure = {implicit_figure}: {src} is listed:\n{videos}");
+        }
+    }
+}
+
 /// The other side of the test above: a page this build could not read because
 /// it is still in the cloud keeps serving its last HTML
 /// (`carry_forward_deferred_page`), so it stays in the sitemap too. It must not

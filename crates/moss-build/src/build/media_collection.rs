@@ -1,7 +1,7 @@
 //! Media collection support for photography, videos, and interactive experiments.
 //!
 //! This module handles:
-//! - Extracting media metadata from HTML comment markers
+//! - Collecting the media a page marks with HTML comment markers
 //! - Aggregating media items into collections
 //! - Generating collection pages with grid layouts
 
@@ -12,11 +12,16 @@ use std::sync::LazyLock;
 use crate::build::media::cover::html_escape;
 
 // Compiled once per process: `extract_media_items` runs for every page, and
-// compiling these per call cost more than matching them.
-static PHOTO_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?s)(<figure[^>]*>.*?<img[^>]+src="([^"]+)"[^>]*>.*?</figure>|<p>\s*<img[^>]+src="([^"]+)"[^>]*>\s*</p>)\s*<!--\s*photography\s*-->"#).unwrap());
-static VIDEO_IMG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?s)<p>\s*<img[^>]+src="([^"]+\.(mov|mp4|webm|MOV|MP4|WEBM))"[^>]*alt="([^"]*)"[^>]*/?\s*>\s*</p>\s*<!--\s*video-meta:?\s*(\w*)?\s*-->"#).unwrap());
-static VIDEO_TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?s)<video[^>]+src="([^"]+\.(mov|mp4|webm|MOV|MP4|WEBM))"[^>]*>.*?</video>\s*<!--\s*video-meta:?\s*(\w*)?\s*-->"#).unwrap());
-static INTERACTIVE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?s)<iframe[^>]+src="([^"]+)"[^>]*>.*?</iframe>\s*<!--\s*interactive-meta:?\s*(\w*)?(?:\s*\|\s*title:\s*([^-]+))?\s*-->"#).unwrap());
+// compiling these per call cost more than matching them. They read only HTML
+// the author wrote by hand; an image written in markdown is read from the AST.
+// Each element is matched on its own and then the text right after it is
+// tested for a marker, so a match can never run from one element to a later
+// element's marker.
+static FIGURE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?s)<figure\b[^>]*>.*?</figure>|<p>\s*<img\b[^>]*>\s*</p>"#).unwrap());
+static VIDEO_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?s)<video\b[^>]+src="([^"]+\.(?:mov|mp4|webm|MOV|MP4|WEBM))"[^>]*>.*?</video>"#).unwrap());
+static IFRAME_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?s)<iframe\b[^>]+src="([^"]+)"[^>]*>.*?</iframe>"#).unwrap());
+static IMG_SRC_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<img\b[^>]+src="([^"]+)""#).unwrap());
+static INTERACTIVE_MARK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"^\s*<!--\s*interactive-meta:?\s*(\w*)?(?:\s*\|\s*title:\s*([^-]+))?\s*-->"#).unwrap());
 static FIGCAPTION_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<figcaption>([^<]+)</figcaption>"#).unwrap());
 static ALT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"alt="([^"]+)""#).unwrap());
 
@@ -43,120 +48,115 @@ pub struct MediaItem {
     pub collection: Option<String>,
     /// URL path of the containing article
     pub article_url: String,
-    /// Anchor ID for deep linking to media in article
-    pub anchor_id: String,
 }
 
-/// Extracts media metadata from HTML content with comment markers.
+impl MediaItem {
+    fn marked(media_type: MediaType, source_path: &str, title: String, collection: Option<String>, article_url: &str) -> Self {
+        Self { media_type, source_path: source_path.to_string(), title, collection, article_url: article_url.to_string() }
+    }
+}
+
+/// Collects the media a page marks for the **gallery grids**, in page order,
+/// including inside callouts, lists, grid cells and the like.
 ///
-/// # Purpose
+/// A marker is an HTML comment on the line after the media:
 ///
-/// This function extracts media items that should appear in **gallery grids**.
-/// It requires HTML comment markers to identify which media should be included.
-///
-/// **Note:** Video conversion is handled separately by `collect_videos_for_conversion()`,
-/// which automatically converts all MOV files without requiring markers.
-///
-/// # Supported Patterns
-///
-/// Photography:
-/// ```html
-/// <figure>...<img src="path">...</figure>
+/// ```markdown
+/// ![Sunset](sunset.jpg)
 /// <!-- photography -->
-/// ```
 ///
-/// Video (for gallery display):
-/// ```html
-/// <p><img src="...video.mov" alt="Title"></p>
+/// ![Morning mist](mist.mp4)
 /// <!-- video-meta: collection_name -->
 /// ```
 ///
-/// Interactive:
-/// ```html
-/// <iframe src="..."></iframe>
-/// <!-- interactive-meta: collection | title: Demo Name -->
-/// ```
-pub fn extract_media_items(html: &str, article_url: &str, lang: crate::i18n::Language) -> Vec<MediaItem> {
+/// An image written in markdown is read from the page's blocks
+/// ([`moss_core::ast::marked_media_at`]), so how the renderer wraps it (a
+/// figure, a paragraph, a `<picture>`, source-line attributes) does not
+/// matter, and a photography marker collects only an image file and a video
+/// marker only a video file. Media written as HTML by hand (`<figure>`,
+/// `<video>`, `<iframe>` followed by `<!-- interactive-meta: collection |
+/// title: Demo -->`) is read from that HTML.
+///
+/// **Note:** Video conversion is handled separately by `collect_videos_for_conversion()`,
+/// which automatically converts all MOV files without requiring markers.
+pub fn extract_media_items(blocks: &[moss_core::ast::Block], article_url: &str, lang: crate::i18n::Language) -> Vec<MediaItem> {
     let mut items = Vec::new();
-    let mut anchor_counter = 0;
-
-    // Pattern 1: Photography - figure or img followed by <!-- photography -->
-    for caps in PHOTO_RE.captures_iter(html) {
-        let src = caps.get(2).or(caps.get(3)).map(|m| m.as_str()).unwrap_or("");
-        anchor_counter += 1;
-        items.push(MediaItem {
-            media_type: MediaType::Photography,
-            source_path: src.to_string(),
-            title: extract_title_from_html(&caps[0], lang),
-            collection: None,
-            article_url: article_url.to_string(),
-            anchor_id: format!("media-{}", anchor_counter),
-        });
-    }
-
-    // Pattern 2: Video - img with video extension followed by <!-- video-meta: name -->
-    for caps in VIDEO_IMG_RE.captures_iter(html) {
-        anchor_counter += 1;
-        let collection = caps.get(4).and_then(|m| {
-            let s = m.as_str().trim();
-            if s.is_empty() { None } else { Some(s.to_string()) }
-        });
-        items.push(MediaItem {
-            media_type: MediaType::Video,
-            source_path: caps[1].to_string(),
-            title: caps[3].to_string(),
-            collection,
-            article_url: article_url.to_string(),
-            anchor_id: format!("media-{}", anchor_counter),
-        });
-    }
-
-    // Pattern 2b: Video - <video> tag followed by <!-- video-meta: name -->
-    for caps in VIDEO_TAG_RE.captures_iter(html) {
-        anchor_counter += 1;
-        let collection = caps.get(3).and_then(|m| {
-            let s = m.as_str().trim();
-            if s.is_empty() { None } else { Some(s.to_string()) }
-        });
-        // Extract title from filename (stem without extension)
-        let src = &caps[1];
-        let title = Path::new(src)
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "video".to_string());
-        items.push(MediaItem {
-            media_type: MediaType::Video,
-            source_path: src.to_string(),
-            title,
-            collection,
-            article_url: article_url.to_string(),
-            anchor_id: format!("media-{}", anchor_counter),
-        });
-    }
-
-    // Pattern 3: Interactive - iframe followed by <!-- interactive-meta: ... -->
-    for caps in INTERACTIVE_RE.captures_iter(html) {
-        anchor_counter += 1;
-        let title = caps.get(3)
-            .map(|m| m.as_str().trim().to_string())
-            .unwrap_or_else(|| extract_filename(&caps[1]));
-        let collection = caps.get(2).and_then(|m| {
-            let s = m.as_str().trim();
-            if s.is_empty() { None } else { Some(s.to_string()) }
-        });
-        items.push(MediaItem {
-            media_type: MediaType::Interactive,
-            source_path: caps[1].to_string(),
-            title,
-            collection,
-            article_url: article_url.to_string(),
-            anchor_id: format!("media-{}", anchor_counter),
-        });
-    }
-
+    collect_media(blocks, article_url, lang, &mut items);
     items
 }
 
+/// [`extract_media_items`] for one block sequence, descending into a
+/// container where it stands so nested media keeps its place in the page.
+fn collect_media(sequence: &[moss_core::ast::Block], article_url: &str, lang: crate::i18n::Language, items: &mut Vec<MediaItem>) {
+    use moss_core::ast::{Block, MediaMarker};
+    // Consecutive raw HTML blocks, read together: a hand-written `<video>`
+    // and the marker on the line after it can arrive as two blocks.
+    let mut raw = String::new();
+    for (i, block) in sequence.iter().enumerate() {
+        if let Some(marked) = moss_core::ast::marked_media_at(sequence, i) {
+            items.extend(media_in_html(&std::mem::take(&mut raw), article_url, lang));
+            let href = marked.href.as_str();
+            items.push(match marked.marker {
+                MediaMarker::Photography => {
+                    let title = if marked.title.is_empty() { crate::i18n::t(lang, "untitled").to_string() } else { marked.title };
+                    MediaItem::marked(MediaType::Photography, href, title, None, article_url)
+                }
+                MediaMarker::Video { collection } => {
+                    MediaItem::marked(MediaType::Video, href, extract_filename(href), collection, article_url)
+                }
+                // A marker this build does not collect for yet.
+                _ => continue,
+            });
+        } else if let Block::Other(html) = block {
+            raw.push_str(html);
+            raw.push('\n');
+        } else {
+            items.extend(media_in_html(&std::mem::take(&mut raw), article_url, lang));
+            moss_core::ast::for_each_child_sequence(block, |nested| {
+                collect_media(nested, article_url, lang, items);
+                true
+            });
+        }
+    }
+    items.extend(media_in_html(&raw, article_url, lang));
+}
+
+/// The marker comment directly after `html[..end]`, if there is one.
+fn marker_after(html: &str, end: usize) -> Option<moss_core::ast::MediaMarker> {
+    let rest = html[end..].trim_start();
+    let len = rest.strip_prefix("<!--")?.find("-->")? + "<!--".len() + "-->".len();
+    moss_core::ast::MediaMarker::parse(&rest[..len])
+}
+
+/// Media written as HTML by hand and followed by its marker, in page order.
+fn media_in_html(html: &str, article_url: &str, lang: crate::i18n::Language) -> Vec<MediaItem> {
+    if !html.contains("<!--") {
+        return Vec::new();
+    }
+    let item = |media_type, source_path: &str, title, collection| MediaItem::marked(media_type, source_path, title, collection, article_url);
+    let word = |m: Option<regex::Match>| m.map(|m| m.as_str().trim()).filter(|s| !s.is_empty()).map(str::to_string);
+    let mut found: Vec<(usize, MediaItem)> = Vec::new();
+    for m in FIGURE_RE.find_iter(html) {
+        if let (Some(moss_core::ast::MediaMarker::Photography), Some(src)) = (marker_after(html, m.end()), IMG_SRC_RE.captures(m.as_str())) {
+            found.push((m.start(), item(MediaType::Photography, &src[1], extract_title_from_html(m.as_str(), lang), None)));
+        }
+    }
+    for caps in VIDEO_RE.captures_iter(html) {
+        let element = caps.get(0).expect("whole match");
+        if let Some(moss_core::ast::MediaMarker::Video { collection }) = marker_after(html, element.end()) {
+            found.push((element.start(), item(MediaType::Video, &caps[1], extract_filename(&caps[1]), collection)));
+        }
+    }
+    for caps in IFRAME_RE.captures_iter(html) {
+        let element = caps.get(0).expect("whole match");
+        if let Some(mark) = INTERACTIVE_MARK_RE.captures(&html[element.end()..]) {
+            let title = word(mark.get(2)).unwrap_or_else(|| extract_filename(&caps[1]));
+            found.push((element.start(), item(MediaType::Interactive, &caps[1], title, word(mark.get(1)))));
+        }
+    }
+    found.sort_by_key(|(start, _)| *start);
+    found.into_iter().map(|(_, item)| item).collect()
+}
 
 /// Extracts a title from HTML, trying figcaption first, then alt text.
 fn extract_title_from_html(html: &str, lang: crate::i18n::Language) -> String {
@@ -173,7 +173,7 @@ fn extract_title_from_html(html: &str, lang: crate::i18n::Language) -> String {
 
 /// Extracts filename without extension from a path.
 fn extract_filename(path: &str) -> String {
-    std::path::Path::new(path)
+    Path::new(path)
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("Untitled")
@@ -408,7 +408,6 @@ mod tests {
             title: "Sunset".to_string(),
             collection: None,
             article_url: "posts/travel.html".to_string(),
-            anchor_id: "media-1".to_string(),
         };
         let json = serde_json::to_string(&item).unwrap();
         assert!(json.contains("Photography"));
@@ -419,147 +418,117 @@ mod tests {
     // extract_media_items tests
     // ===========================================
 
-    #[test]
-    fn test_extract_photography_from_figure() {
-        let html = r#"<figure>
-            <img src="../../assets/sunset.jpg" alt="Sunset" />
-            <figcaption>Beautiful sunset</figcaption>
-        </figure>
-        <!-- photography -->"#;
+    /// Parse `markdown` the way a page is parsed, implicit figures on or off.
+    fn media(markdown: &str, implicit_figure: bool, lang: crate::i18n::Language) -> Vec<MediaItem> {
+        let config = moss_core::ast::ParseConfig { implicit_figure, ..Default::default() };
+        extract_media_items(&moss_core::ast::parse_with_config(markdown, &config).blocks, "posts/travel.html", lang)
+    }
 
-        let items = extract_media_items(html, "posts/travel.html", crate::i18n::Language::En);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].media_type, MediaType::Photography);
-        assert_eq!(items[0].source_path, "../../assets/sunset.jpg");
-        assert_eq!(items[0].title, "Beautiful sunset");
-        assert_eq!(items[0].article_url, "posts/travel.html");
+    #[test]
+    fn a_marked_markdown_photo_is_collected_as_a_figure_or_a_paragraph() {
+        for implicit_figure in [true, false] {
+            let items = media("![Sunset](assets/sunset.jpg)\n<!-- photography -->\n", implicit_figure, crate::i18n::Language::En);
+            assert_eq!(items.len(), 1, "implicit_figure = {implicit_figure}");
+            assert_eq!(items[0].media_type, MediaType::Photography);
+            assert_eq!(items[0].source_path, "assets/sunset.jpg");
+            assert_eq!(items[0].title, "Sunset");
+            assert_eq!(items[0].article_url, "posts/travel.html");
+        }
+    }
+
+    #[test]
+    fn an_italic_caption_titles_the_photo() {
+        let items = media("![Sunset](sunset.jpg)\n*Over the hills*\n<!-- photography -->\n", true, crate::i18n::Language::En);
+        assert_eq!(items[0].title, "Over the hills");
     }
 
     #[test]
     fn untitled_media_fallback_localizes_by_lang() {
-        // An uncaptioned photography item (no <figcaption>, no alt) falls back
-        // to the localized "untitled" title. pipeline.rs passes the page's own
-        // doc_lang here, so an item on a zh-hans page renders "无标题", not the
-        // site default. Guards the downstream of the pipeline.rs doc_lang fix.
-        let html = r#"<p><img src="../../assets/x.jpg" /></p>
-        <!-- photography -->"#;
-
-        let zh = extract_media_items(html, "zh-hans/gallery.html", crate::i18n::Language::ZhHans);
+        // An image without alt text is never promoted to a figure, and falls
+        // back to the localized "untitled" title of the page's own language.
+        let zh = media("![](x.jpg)\n<!-- photography -->\n", true, crate::i18n::Language::ZhHans);
         assert_eq!(zh.len(), 1);
         assert_eq!(zh[0].title, "无标题", "zh-hans page → Chinese untitled title");
-
-        let en = extract_media_items(html, "gallery.html", crate::i18n::Language::En);
+        let en = media("![](x.jpg)\n<!-- photography -->\n", true, crate::i18n::Language::En);
         assert_eq!(en[0].title, "Untitled", "En page → English untitled title");
     }
 
     #[test]
-    fn test_extract_photography_from_img() {
-        let html = r#"<p><img src="../../assets/mountain.jpg" alt="Mountain peak" /></p>
-        <!-- photography -->"#;
-
-        let items = extract_media_items(html, "posts/hiking.html", crate::i18n::Language::En);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].media_type, MediaType::Photography);
-        assert_eq!(items[0].title, "Mountain peak");
+    fn a_marked_markdown_video_is_collected_with_its_collection() {
+        for implicit_figure in [true, false] {
+            let items = media("![Morning Mist](videos/mist.mov)\n<!-- video-meta: nature -->\n", implicit_figure, crate::i18n::Language::En);
+            assert_eq!(items.len(), 1, "implicit_figure = {implicit_figure}");
+            assert_eq!(items[0].media_type, MediaType::Video);
+            assert_eq!(items[0].source_path, "videos/mist.mov");
+            assert_eq!(items[0].title, "mist");
+            assert_eq!(items[0].collection, Some("nature".to_string()));
+            let bare = media("![](clip.mp4)\n<!-- video-meta -->\n", implicit_figure, crate::i18n::Language::En);
+            assert_eq!(bare[0].collection, None);
+        }
     }
 
     #[test]
-    fn test_extract_video_with_collection() {
-        let html = r#"<p><img src="../../videos/mist.mov" alt="Morning Mist" /></p>
-        <!-- video-meta: nature -->"#;
+    fn a_marked_photo_in_a_grid_cell_is_collected() {
+        let items = media(":::grid\n![A](a.jpg)\n<!-- photography -->\n+++\n![B](b.jpg)\n:::\n", true, crate::i18n::Language::En);
+        let srcs: Vec<&str> = items.iter().map(|i| i.source_path.as_str()).collect();
+        assert_eq!(srcs, ["a.jpg"]);
+    }
 
-        let items = extract_media_items(html, "posts/journal.html", crate::i18n::Language::En);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].media_type, MediaType::Video);
-        assert_eq!(items[0].source_path, "../../videos/mist.mov");
-        assert_eq!(items[0].title, "Morning Mist");
-        assert_eq!(items[0].collection, Some("nature".to_string()));
+    /// Media inside a container keeps its place in the page: before a marked
+    /// photo that comes after the container, not after every top-level one.
+    #[test]
+    fn nested_media_is_collected_in_page_order() {
+        let callout = "> [!note]\n> ![A](a.jpg)\n> <!-- photography -->\n\n![B](b.jpg)\n<!-- photography -->\n";
+        let grid = ":::grid\n![A](a.jpg)\n<!-- photography -->\n+++\nText.\n:::\n\n![B](b.jpg)\n<!-- photography -->\n";
+        for source in [callout, grid] {
+            let srcs: Vec<String> = media(source, true, crate::i18n::Language::En).into_iter().map(|i| i.source_path).collect();
+            assert_eq!(srcs, ["a.jpg", "b.jpg"], "{source}");
+        }
+    }
+
+    /// An unmarked image before a marked one is not listed in its place.
+    #[test]
+    fn only_the_marked_one_of_two_images_is_collected() {
+        let markdown = "![First](one.jpg)\n\nText between.\n\n![Second](two.jpg)\n<!-- photography -->\n";
+        let html = "<figure><img src=\"one.jpg\" alt=\"First\"></figure>\n<figure><img src=\"two.jpg\" alt=\"Second\"></figure>\n<!-- photography -->\n";
+        for source in [markdown, html] {
+            let srcs: Vec<String> = media(source, true, crate::i18n::Language::En).into_iter().map(|i| i.source_path).collect();
+            assert_eq!(srcs, ["two.jpg"], "{source}");
+        }
     }
 
     #[test]
-    fn test_extract_video_without_collection() {
-        let html = r#"<p><img src="../../videos/clip.mp4" alt="My Clip" /></p>
-        <!-- video-meta -->"#;
-
-        let items = extract_media_items(html, "posts/video.html", crate::i18n::Language::En);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].media_type, MediaType::Video);
-        assert_eq!(items[0].collection, None);
+    fn a_marked_photo_inside_a_callout_or_list_is_collected() {
+        let items = media("> [!note]\n> ![A](a.jpg)\n> <!-- photography -->\n\n- ![B](b.jpg)\n  <!-- photography -->\n", true, crate::i18n::Language::En);
+        let srcs: Vec<&str> = items.iter().map(|i| i.source_path.as_str()).collect();
+        assert_eq!(srcs, ["a.jpg", "b.jpg"]);
     }
 
     #[test]
-    fn test_extract_interactive_with_title() {
-        let html = r#"<iframe src="../../interactive/particles.html" width="100%" height="400"></iframe>
-        <!-- interactive-meta: experiments | title: Particle Universe -->"#;
-
-        let items = extract_media_items(html, "posts/code.html", crate::i18n::Language::En);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].media_type, MediaType::Interactive);
-        assert_eq!(items[0].source_path, "../../interactive/particles.html");
-        assert_eq!(items[0].title, "Particle Universe");
-        assert_eq!(items[0].collection, Some("experiments".to_string()));
-    }
-
-    #[test]
-    fn test_extract_interactive_without_title() {
-        let html = r#"<iframe src="../../interactive/demo.html"></iframe>
-        <!-- interactive-meta -->"#;
-
-        let items = extract_media_items(html, "posts/demo.html", crate::i18n::Language::En);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].media_type, MediaType::Interactive);
-        assert_eq!(items[0].title, "demo"); // Extracted from filename
-    }
-
-    #[test]
-    fn test_extract_video_from_video_tag_with_marker() {
-        let html = r#"<video src="./Morning Mist.mov" controls width="100%"></video>
-        <!-- video-meta: films -->"#;
-
-        let items = extract_media_items(html, "videos/morning-mist.html", crate::i18n::Language::En);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].media_type, MediaType::Video);
-        assert_eq!(items[0].source_path, "./Morning Mist.mov");
-        assert_eq!(items[0].title, "Morning Mist");
-        assert_eq!(items[0].collection, Some("films".to_string()));
-    }
-
-    #[test]
-    fn test_extract_video_from_video_tag_without_collection() {
-        let html = r#"<video src="./clip.MOV" controls></video>
-        <!-- video-meta -->"#;
-
-        let items = extract_media_items(html, "videos/clip.html", crate::i18n::Language::En);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].media_type, MediaType::Video);
-        assert_eq!(items[0].source_path, "./clip.MOV");
-        assert_eq!(items[0].collection, None);
+    fn hand_written_html_media_is_collected() {
+        let html = "<figure>\n<img src=\"sunset.jpg\" alt=\"Sunset\" />\n<figcaption>Beautiful sunset</figcaption>\n</figure>\n<!-- photography -->\n\n\
+                    <video src=\"./Morning Mist.mov\" controls>\n</video>\n<!-- video-meta: films -->\n\n\
+                    <iframe src=\"particles.html\"></iframe>\n<!-- interactive-meta: experiments | title: Particle Universe -->\n\n\
+                    <iframe src=\"demo.html\"></iframe>\n<!-- interactive-meta -->\n";
+        let items = media(html, true, crate::i18n::Language::En);
+        let got: Vec<(&MediaType, &str, &str, Option<&str>)> =
+            items.iter().map(|i| (&i.media_type, i.source_path.as_str(), i.title.as_str(), i.collection.as_deref())).collect();
+        assert_eq!(
+            got,
+            [
+                (&MediaType::Photography, "sunset.jpg", "Beautiful sunset", None),
+                (&MediaType::Video, "./Morning Mist.mov", "Morning Mist", Some("films")),
+                (&MediaType::Interactive, "particles.html", "Particle Universe", Some("experiments")),
+                (&MediaType::Interactive, "demo.html", "demo", None),
+            ]
+        );
     }
 
     #[test]
     fn test_no_markers_returns_empty() {
-        let html = r#"<p>Regular content</p>
-        <figure><img src="photo.jpg" /></figure>"#;
-
-        let items = extract_media_items(html, "posts/article.html", crate::i18n::Language::En);
-        assert!(items.is_empty());
+        assert!(media("Regular content\n\n![Photo](photo.jpg)\n", true, crate::i18n::Language::En).is_empty());
     }
 
-    #[test]
-    fn test_multiple_media_items() {
-        let html = r#"
-        <figure><img src="photo1.jpg" alt="First" /></figure>
-        <!-- photography -->
-        <p>Some text</p>
-        <figure><img src="photo2.jpg" alt="Second" /></figure>
-        <!-- photography -->
-        "#;
-
-        let items = extract_media_items(html, "posts/gallery.html", crate::i18n::Language::En);
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0].anchor_id, "media-1");
-        assert_eq!(items[1].anchor_id, "media-2");
-    }
 
     // ===========================================
     // Grid item generation tests
@@ -573,7 +542,6 @@ mod tests {
             title: "Sunset".to_string(),
             collection: None,
             article_url: "posts/travel.html".to_string(),
-            anchor_id: "media-1".to_string(),
         };
         let html = generate_grid_item(&item, None);
         assert!(html.contains(r#"data-type="image""#));
@@ -589,7 +557,6 @@ mod tests {
             title: "My Video".to_string(),
             collection: None,
             article_url: "posts/video.html".to_string(),
-            anchor_id: "media-1".to_string(),
         };
         let html = generate_grid_item(&item, None);
         assert!(html.contains(r#"data-type="video""#));
@@ -616,7 +583,6 @@ mod tests {
             title: "Sunset".to_string(),
             collection: None,
             article_url: "posts/travel.html".to_string(),
-            anchor_id: "media-1".to_string(),
         };
         let images = vec![MediaMetadata {
             is_animated: false,
@@ -678,7 +644,6 @@ mod tests {
                 title: "First Photo".to_string(),
                 collection: None,
                 article_url: "posts/travel.html".to_string(),
-                anchor_id: "media-1".to_string(),
             },
             MediaItem {
                 media_type: MediaType::Photography,
@@ -686,7 +651,6 @@ mod tests {
                 title: "Second Photo".to_string(),
                 collection: None,
                 article_url: "posts/nature.html".to_string(),
-                anchor_id: "media-2".to_string(),
             },
         ];
 
@@ -736,7 +700,6 @@ mod tests {
             title: "My Clip".to_string(),
             collection: None,
             article_url: "posts/video.html".to_string(),
-            anchor_id: "media-1".to_string(),
         }];
 
         let html = generate_media_page(&MediaType::Video, &items, "My Site", "", "/_moss/style.testabcd.css", crate::i18n::Language::En, crate::i18n::Language::En.as_bcp47_attr(), None, "/_moss/js/theme.testabcd.js", "", None, "");
@@ -759,7 +722,6 @@ mod tests {
             title: "Clip".to_string(),
             collection: None,
             article_url: "posts/video.html".to_string(),
-            anchor_id: "media-1".to_string(),
         }];
 
         let html = generate_media_page(&MediaType::Video, &items, "My Site", "", "/_moss/style.testabcd.css", crate::i18n::Language::En, "fr", None, "/_moss/js/theme.testabcd.js", "", None, "");
@@ -776,7 +738,6 @@ mod tests {
             title: "Demo".to_string(),
             collection: Some("experiments".to_string()),
             article_url: "posts/code.html".to_string(),
-            anchor_id: "media-1".to_string(),
         }];
 
         let html = generate_media_page(&MediaType::Interactive, &items, "My Site", "", "/_moss/style.testabcd.css", crate::i18n::Language::En, crate::i18n::Language::En.as_bcp47_attr(), None, "/_moss/js/theme.testabcd.js", "", None, "");
@@ -804,7 +765,6 @@ mod tests {
                         title: "Photo 1".to_string(),
                         collection: None,
                         article_url: "posts/post1.html".to_string(),
-                        anchor_id: "media-1".to_string(),
                     },
                 ],
                 kind: PageKind::Article,
@@ -824,7 +784,6 @@ mod tests {
                         title: "Photo 2".to_string(),
                         collection: None,
                         article_url: "posts/post2.html".to_string(),
-                        anchor_id: "media-1".to_string(),
                     },
                     MediaItem {
                         media_type: MediaType::Video,
@@ -832,7 +791,6 @@ mod tests {
                         title: "Video 1".to_string(),
                         collection: None,
                         article_url: "posts/post2.html".to_string(),
-                        anchor_id: "media-2".to_string(),
                     },
                 ],
                 kind: PageKind::Article,
@@ -865,7 +823,6 @@ mod tests {
             title: "My Clip".to_string(),
             collection: None,
             article_url: "posts/video.html".to_string(),
-            anchor_id: "media-1".to_string(),
         }];
         let html = generate_media_page(
             &MediaType::Video,
@@ -893,7 +850,6 @@ mod tests {
             title: "My Clip".to_string(),
             collection: None,
             article_url: "posts/video.html".to_string(),
-            anchor_id: "media-1".to_string(),
         }];
         let html = generate_media_page(
             &MediaType::Video,
@@ -923,7 +879,6 @@ mod tests {
             title: "Photo".to_string(),
             collection: None,
             article_url: "posts/photo.html".to_string(),
-            anchor_id: "media-1".to_string(),
         }];
         let html_with = generate_media_page(
             &MediaType::Photography,

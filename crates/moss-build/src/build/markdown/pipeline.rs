@@ -1404,7 +1404,7 @@ pub fn process_markdown_file(
     // Generate enhanced fields following SSG best practices
     let slug = super::frontmatter::generate_slug(&title);
     let permalink = format!("/{}", url_path); // allow:served-path-url-construct (page permalink derived from doc url_path, stored in ParsedDocument)
-    let media_items = crate::build::media_collection::extract_media_items(&body_plan.to_html(), &url_path, doc_lang);
+    let media_items = crate::build::media_collection::extract_media_items(&doc.blocks, &url_path, doc_lang);
 
     // Adjust relative paths for pretty URLs: non-index files get wrapped in a subdirectory
     // (e.g., article.md → article/index.html), so relative paths need one extra "../"

@@ -256,75 +256,45 @@ fn visit_block<F>(block: &Block, callback: &mut F) -> bool
 where
     F: FnMut(&Block) -> bool,
 {
-    if !callback(block) {
-        return false;
-    }
+    callback(block) && for_each_child_sequence(block, |blocks| blocks.iter().all(|nested| visit_block(nested, callback)))
+}
+
+/// Hand each block sequence `block` directly owns to `f`, in document order,
+/// stopping at the first `false`. The one list of block containers the
+/// read-only walks share, public so a query that needs a block's neighbours
+/// (a marker comment that applies to the image before it) can recurse at the
+/// block and keep page order. Every variant is named, so a new container
+/// fails to compile here instead of being skipped by every walk at once.
+pub fn for_each_child_sequence(block: &Block, mut f: impl FnMut(&[Block]) -> bool) -> bool {
+    use super::shortcode::Shortcode;
     match block {
+        // A footnote definition is a block container like any other: a walk
+        // that skipped a note's body would answer "does any block …?" with a
+        // No that only means "not anywhere I looked".
         Block::Callout { children, .. }
         | Block::BlockQuote(children)
-        // A footnote definition is a block container like any other. It is
-        // listed here rather than left to the catch-all because the catch-all
-        // is for blocks with no block children at all, and a walk that skipped
-        // a note's body would answer "does any block …?" with a No that only
-        // means "not anywhere I looked".
-        | Block::FootnoteDefinition { children, .. } => {
-            for nested in children {
-                if !visit_block(nested, callback) {
-                    return false;
-                }
-            }
-        }
-        Block::List { items, .. } => {
-            for item_blocks in items {
-                for nested in item_blocks {
-                    if !visit_block(nested, callback) {
-                        return false;
-                    }
-                }
-            }
-        }
-        Block::LinkCard { children, .. } => {
-            // Phase 4 PR4.5: descend into the compound-link cell's inner
-            // block content (image + heading + paragraphs).
-            for nested in children {
-                if !visit_block(nested, callback) {
-                    return false;
-                }
-            }
-        }
-        Block::Shortcode(super::shortcode::Shortcode::Grid(args)) => {
-            // Phase 4 PR4.5: cells are typed Vec<Block>; descend so
-            // `has_shortcode_recursive(_, Subscribe)` etc. find shortcodes
-            // nested inside grid cells.
-            for cell_blocks in &args.cells {
-                for nested in cell_blocks {
-                    if !visit_block(nested, callback) {
-                        return false;
-                    }
-                }
-            }
-        }
-        Block::Shortcode(super::shortcode::Shortcode::Hero(args)) => {
-            // Phase 4 PR4.5: overlay is typed Vec<Block>; descend so
-            // `has_shortcode_recursive(_, Subscribe)` etc. find shortcodes
-            // nested inside `:::hero` overlays.
-            for nested in &args.overlay {
-                if !visit_block(nested, callback) {
-                    return false;
-                }
-            }
-        }
-        // Headings, paragraphs, code blocks, tables, other shortcode
-        // variants, thematic breaks, figures, raw HTML — terminal at the
-        // block level. Inline children of headings/paragraphs are visited
-        // by inline visitors, not block visitors.
-        //
-        // Every variant that OWNS a `Vec<Block>` must be named above, not
-        // left to fall through here: this arm reads as "no block children",
-        // and a container that lands in it is skipped in silence.
-        _ => {}
+        | Block::DefinitionList(children)
+        | Block::DefinitionDefinition(children)
+        | Block::FootnoteDefinition { children, .. }
+        // The compound-link cell's inner content (image, heading, paragraphs).
+        | Block::LinkCard { children, .. } => f(children),
+        Block::List { items, .. } => items.iter().all(|item| f(item)),
+        Block::Shortcode(Shortcode::Grid(args)) => args.cells.iter().all(|cell| f(cell)),
+        Block::Shortcode(Shortcode::Hero(args)) => f(&args.overlay),
+        Block::Shortcode(
+            Shortcode::Subscribe(_) | Shortcode::Buttons(_) | Shortcode::Gallery(_) | Shortcode::Recent(_) | Shortcode::Apply(_),
+        ) => true,
+        // No block children. Inline children of headings, paragraphs, terms,
+        // tables and figures are visited by inline visitors, not block ones.
+        Block::Heading { .. }
+        | Block::Paragraph(_)
+        | Block::DefinitionTitle(_)
+        | Block::CodeBlock { .. }
+        | Block::Table { .. }
+        | Block::ThematicBreak
+        | Block::Figure { .. }
+        | Block::Other(_) => true,
     }
-    true
 }
 
 /// Core of every single-predicate `has_*_recursive` query below: true if any
@@ -553,6 +523,23 @@ mod tests {
             true
         });
         assert_eq!(seen, seen_control, "identical content, different container");
+    }
+
+    /// A definition list owns its terms' definitions, and a definition owns
+    /// its blocks; both are walked like any other container.
+    #[test]
+    fn visit_blocks_descends_into_a_definition_list() {
+        let doc = Document::from_blocks(vec![Block::DefinitionList(vec![Block::DefinitionDefinition(vec![
+            Block::ThematicBreak,
+        ])])]);
+        let mut seen = 0usize;
+        visit_blocks(&doc, |b| {
+            if matches!(b, Block::ThematicBreak) {
+                seen += 1;
+            }
+            true
+        });
+        assert_eq!(seen, 1, "the definition's block was never visited");
     }
 
     #[test]
