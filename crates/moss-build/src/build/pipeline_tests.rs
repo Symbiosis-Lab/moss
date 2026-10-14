@@ -5487,6 +5487,7 @@ fn cold_page_metadata_keeps_complete_home_and_assets_until_recovery() {
 
 #[test]
 fn prior_route_requires_matching_source_and_current_bytes() {
+    use crate::build::cloud_ledger::{InputEntry, InputRole, InputState};
     use crate::system::folder_session::{PreviewRequirement, PreviewSource};
     let (dir, _cleanup) = create_test_dir();
     fs::write(dir.join("index.html"), "old page").unwrap();
@@ -5496,16 +5497,25 @@ fn prior_route_requires_matching_source_and_current_bytes() {
     ));
     previous.source_to_output.insert("index.md".into(), "index.html".into());
     let requirement = |source| PreviewRequirement { url_path: "/".into(), source, revision: 1 };
-    assert!(previous_route_present(&requirement(PreviewSource::File("index.md".into())), &previous, &dir));
-    assert!(!previous_route_present(&requirement(PreviewSource::File("other.md".into())), &previous, &dir));
-    assert!(!previous_route_present(&requirement(PreviewSource::Generated), &previous, &dir));
-    assert!(!previous_route_present(&requirement(PreviewSource::Unresolved), &previous, &dir));
+    let ledger = |state| std::collections::BTreeMap::from([
+        ("index.md".to_string(), InputEntry { role: InputRole::PageContent, state }),
+    ]);
+    let unread = std::collections::BTreeMap::new();
+    let read = ledger(InputState::Read { hash: "current".into() });
+    assert!(previous_route_present(&requirement(PreviewSource::File("index.md".into())), &previous, &dir, &unread));
+    assert!(!previous_route_present(&requirement(PreviewSource::File("other.md".into())), &previous, &dir, &unread));
+    assert!(!previous_route_present(&requirement(PreviewSource::Generated), &previous, &dir, &unread));
+    assert!(!previous_route_present(&requirement(PreviewSource::Unresolved), &previous, &dir, &unread));
+    assert!(!previous_route_present(&requirement(PreviewSource::Unresolved), &previous, &dir,
+        &ledger(InputState::Pending { retained: false })), "a source still downloading proves nothing");
+    assert!(previous_route_present(&requirement(PreviewSource::Unresolved), &previous, &dir, &read),
+        "a source this attempt read proves the route it owned");
     previous.source_to_output.clear();
-    assert!(!previous_route_present(&requirement(PreviewSource::Unresolved), &previous, &dir),
+    assert!(!previous_route_present(&requirement(PreviewSource::Unresolved), &previous, &dir, &read),
         "a generated old home cannot prove the unresolved new source");
     previous.source_to_output.insert("index.md".into(), "index.html".into());
     fs::write(dir.join("index.html"), "newer generation").unwrap();
-    assert!(!previous_route_present(&requirement(PreviewSource::File("index.md".into())), &previous, &dir));
+    assert!(!previous_route_present(&requirement(PreviewSource::File("index.md".into())), &previous, &dir, &unread));
 }
 
 #[cfg(target_os = "macos")]
@@ -5547,25 +5557,65 @@ fn pending_authored_folder_index_does_not_synthesize_a_finished_substitute() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn focused_unresolved_and_unemitted_routes_wait() {
+fn a_request_that_named_no_source_never_waits_on_a_local_page() {
     use crate::system::folder_session::PreviewSource;
     let (dir, _cleanup) = create_test_dir();
     let folder = dir.to_str().unwrap();
     fs::write(dir.join("article.md"), "# Article\n").unwrap();
-    assert_eq!(focused_build_phase(folder, "/article/", PreviewSource::Unresolved).unwrap(), "home_waiting");
+    assert_eq!(focused_build_phase(folder, "/article/", PreviewSource::Unresolved).unwrap(), "home_ready");
+    assert_eq!(focused_build_phase(folder, "/missing/", PreviewSource::Unresolved).unwrap(), "home_ready");
     assert_eq!(focused_build_phase(folder, "/missing/", PreviewSource::Generated).unwrap(), "home_ready");
 }
 
 #[cfg(target_os = "macos")]
 #[test]
-fn unresolved_navigation_waits_even_when_an_old_route_exists() {
+fn a_rebuild_keeps_showing_a_local_page_the_request_did_not_name_a_source_for() {
     use crate::system::folder_session::PreviewSource;
     let (dir, _cleanup) = create_test_dir();
     let folder = dir.to_str().unwrap();
     fs::write(dir.join("article.md"), "# Article\n").unwrap();
     let (promotion, _, _, _) = build_test_promoted_or_withheld(folder).unwrap();
     assert_eq!(promotion, crate::build::ship::Promotion::Promoted);
-    assert_eq!(focused_build_phase(folder, "/article/", PreviewSource::Unresolved).unwrap(), "home_waiting");
+    fs::write(dir.join("article.md"), "---\ntitle: Edited elsewhere\n---\n# Article\n").unwrap();
+    assert_eq!(focused_build_phase(folder, "/article/", PreviewSource::Unresolved).unwrap(), "home_ready");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_page_unusable_for_a_reason_outside_the_cloud_raises_no_cloud_wait() {
+    use std::os::unix::fs::PermissionsExt;
+    use crate::system::folder_session::PreviewSource;
+    let (dir, _cleanup) = create_test_dir();
+    let folder = dir.to_str().unwrap();
+    fs::write(dir.join("article.md"), "# Article\n").unwrap();
+    fs::set_permissions(dir.join("article.md"), fs::Permissions::from_mode(0o000)).unwrap();
+    let phase = focused_build_phase(folder, "/article/", PreviewSource::File("article.md".into()));
+    let mp = crate::moss_paths::MossPaths::new(&dir);
+    let state = SiteDirectoryState::new(mp.current_ptr());
+    let session = crate::system::folder_session::FolderSession::new(dir.clone());
+    session.set_preview_requirement("/article/".into(), PreviewSource::File("article.md".into())).unwrap();
+    let built = build_test_with_focus(folder, scan_folder(folder).unwrap(), Some(&state), Some(session), None, None);
+    fs::set_permissions(dir.join("article.md"), fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(phase.unwrap(), "home_ready", "nothing is in the cloud, so nothing is waited on");
+    built.unwrap();
+    assert_eq!(*state.current_dir.read().unwrap(), mp.staging_dir(),
+        "the preview shows this build, not a stale one held back for a download that does not exist");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_folder_page_waiting_on_its_index_is_shown_once_the_index_arrives() {
+    use crate::system::folder_session::PreviewSource;
+    let (dir, _cleanup) = create_test_dir();
+    let folder = dir.to_str().unwrap();
+    fs::create_dir_all(dir.join("notes")).unwrap();
+    fs::write(dir.join("notes/child.md"), "# Child\n").unwrap();
+    fs::write(dir.join("notes/.index.md.icloud"), "").unwrap();
+    assert_eq!(focused_build_phase(folder, "/notes/", PreviewSource::Unresolved).unwrap(), "home_waiting");
+    fs::remove_file(dir.join("notes/.index.md.icloud")).unwrap();
+    fs::write(dir.join("notes/index.md"), "# Notes\n").unwrap();
+    assert_eq!(focused_build_phase(folder, "/notes/", PreviewSource::Unresolved).unwrap(), "home_ready",
+        "the same request, never renamed by a navigation, is answered once its source is read");
 }
 
 #[cfg(target_os = "macos")]
@@ -5594,7 +5644,24 @@ fn generated_places_requires_the_emitted_route_in_this_attempt() {
     fs::write(dir.path().join("places/index.html"), b"<h1>Places</h1>").unwrap();
     assert_eq!(pending.preview_readiness(&requirement, dir.path()), crate::build::manifest::PreviewReadiness::Usable);
     let unresolved = PreviewRequirement { source: PreviewSource::Unresolved, ..requirement };
-    assert_eq!(pending.preview_readiness(&unresolved, dir.path()), crate::build::manifest::PreviewReadiness::Pending);
+    assert_eq!(pending.preview_readiness(&unresolved, dir.path()), crate::build::manifest::PreviewReadiness::Usable,
+        "no source maps to the route and nothing is pending, so the request stands for the generated page");
+}
+
+#[test]
+fn an_unresolved_request_with_no_route_waits_only_while_a_page_is_pending() {
+    use crate::build::cloud_ledger::{InputEvidence, InputRole};
+    use crate::build::manifest::{PendingManifest, PreviewReadiness};
+    use crate::system::folder_session::{PreviewRequirement, PreviewSource};
+    let dir = tempfile::tempdir().unwrap();
+    let requirement = PreviewRequirement { url_path: "/notes/".into(), source: PreviewSource::Unresolved, revision: 1 };
+    let settled = PendingManifest::for_build(Default::default(), InputEvidence::new(dir.path()));
+    assert_eq!(settled.preview_readiness(&requirement, dir.path()), PreviewReadiness::Missing);
+    let downloading = InputEvidence::new(dir.path());
+    downloading.require(&dir.path().join("notes/index.md"), InputRole::PageMetadata);
+    downloading.pending(&dir.path().join("notes/index.md"));
+    let waiting = PendingManifest::for_build(Default::default(), downloading);
+    assert_eq!(waiting.preview_readiness(&requirement, dir.path()), PreviewReadiness::Pending);
 }
 
 /// Every file under `dir`, as relative path → content hash. The instrument a

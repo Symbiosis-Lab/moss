@@ -63,7 +63,7 @@ pub mod link_audit;
 pub mod published_record;
 /// Selected-page input and required-output readiness projections for preview.
 mod preview_readiness;
-pub(crate) use preview_readiness::required_page_outputs_present;
+pub(crate) use preview_readiness::{proven_unresolved_source, required_page_outputs_present};
 pub use preview_readiness::PreviewReadiness;
 use preview_readiness::preview_readiness_for;
 /// How `ship_phase` reads one entry's staged bytes: [`ShipSource`] and its accessors.
@@ -944,22 +944,16 @@ impl SealedManifest {
             .find(|key| crate::build::served_path::served_address(key) == requirement.url_path)
         else { return false; };
         match &requirement.source {
-            PreviewSource::Unresolved => {
-                let mapped_source = self.inner.source_to_output.iter()
-                    .find(|(_, mapped)| *mapped == output).map(|(source, _)| source);
-                if let Some(source) = mapped_source {
-                    return self.input_evidence.as_ref()
-                        .and_then(|entries| entries.get(source))
-                        .is_some_and(|entry| matches!(entry.state,
-                            crate::build::cloud_ledger::InputState::Read { .. }
-                            | crate::build::cloud_ledger::InputState::Pending { retained: true }
-                            | crate::build::cloud_ledger::InputState::ReadError { retained: true, .. }));
-                }
-                let generated = crate::system::folder_session::PreviewRequirement {
-                    source: PreviewSource::Generated, ..requirement.clone()
-                };
-                self.preview_readiness(&generated) == PreviewReadiness::Usable
-            }
+            // A proven `File` is the source mapped to this very output.
+            PreviewSource::Unresolved => match self.input_evidence.as_ref()
+                .and_then(|evidence| proven_unresolved_source(&self.inner.source_to_output, evidence, Some(output)))
+            {
+                Some(PreviewSource::File(_)) => true,
+                Some(source) => self.preview_readiness(&crate::system::folder_session::PreviewRequirement {
+                    source, ..requirement.clone()
+                }) == PreviewReadiness::Usable,
+                None => false,
+            },
             PreviewSource::Generated => self.preview_readiness(requirement) == PreviewReadiness::Usable,
             PreviewSource::File(source) => {
                 let rel = moss_core::slug::normalize_separators(&source.to_string_lossy());

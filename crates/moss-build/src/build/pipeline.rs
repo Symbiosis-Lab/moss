@@ -181,6 +181,7 @@ fn previous_route_present(
     requirement: &crate::system::folder_session::PreviewRequirement,
     previous: &crate::types::content::SiteHashes,
     current_dir: &Path,
+    evidence: &std::collections::BTreeMap<String, super::cloud_ledger::InputEntry>,
 ) -> bool {
     use crate::system::folder_session::PreviewSource;
     let output = previous.files.keys()
@@ -192,9 +193,13 @@ fn previous_route_present(
                 previous.source_to_output.get(&rel).is_some_and(|mapped| mapped == key)
             }
             PreviewSource::Generated => !previous.source_to_output.values().any(|mapped| mapped == key),
-            // An old generated page can share this URL with a newly authored
-            // source still in the cloud. The route alone proves no owner.
-            PreviewSource::Unresolved => false,
+            // The old route counts once this attempt's evidence proves its
+            // mapped source. An old generated page can share this URL with a
+            // newly authored source still in the cloud: the route alone
+            // proves no owner.
+            PreviewSource::Unresolved => matches!(
+                crate::build::manifest::proven_unresolved_source(&previous.source_to_output, evidence, Some(key)),
+                Some(PreviewSource::File(_))),
         };
         // `hashes.json` is advertised before materialization. A failed or
         // superseded promotion can leave it ahead of `current`, so verify the
@@ -1171,7 +1176,7 @@ fn build_inner(
     };
     let initial_route = initial_request.as_ref().unwrap_or(&elected_home);
     let prior_route = !(home_substituted && initial_route.url_path == "/")
-        && previous_route_present(initial_route, &previous_hashes, &paths.current_ptr());
+        && previous_route_present(initial_route, &previous_hashes, &paths.current_ptr(), &input_evidence.snapshot());
 
     // An evicted home page used to block this thread here for up to
     // HOME_PAGE_DEADLINE, polling for it to materialize before the build could
@@ -1663,8 +1668,14 @@ fn build_inner(
         .and_then(|s| s.preview_requirement());
     let request = current_request.as_ref().unwrap_or(&elected_home);
     let prior_route = !(home_substituted && request.url_path == "/")
-        && previous_route_present(request, &previous_hashes, &paths.current_ptr());
-    let focused_pending = matches!(pending.preview_readiness(request, &stage_dir), crate::build::manifest::PreviewReadiness::Pending);
+        && previous_route_present(request, &previous_hashes, &paths.current_ptr(), &input_evidence.snapshot());
+    // `Pending` means the page waits on a download. An attempt with nothing
+    // pending and nothing evicted has none to wait for, so whatever the
+    // request named, this stage is shown as it is (an unreadable page shows
+    // as missing) instead of being held behind the cloud waiting screen.
+    let in_the_cloud = cloud_outstanding > 0 || !project_structure.evicted_paths.is_empty();
+    let focused_pending = in_the_cloud
+        && matches!(pending.preview_readiness(request, &stage_dir), crate::build::manifest::PreviewReadiness::Pending);
     let waiting = focused_pending && !prior_route;
     if focused_pending && prior_route {
         crate::build::lifecycle::protect_current_before_rebuild(&paths);
