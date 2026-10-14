@@ -162,9 +162,13 @@ type TriggerContext = "onboarding_flow" | "settings_manual" | "background" | "ma
  * free-text affordance label after the colon, mirroring the dev harness
  * dialect (e.g., `"resend:Resend email"`, `"recheck:Recheck DNS"`).
  * Plain `"cancel"` carries no label.
+ *
+ * `"download-tool:<name>"` shows a Download button that fetches the named
+ * tool moss can download (e.g. `"git"`, `"ffmpeg"`); the name is a tool
+ * identifier, not a display label.
  * @category Messaging
  */
-type EscapeSpec = "cancel" | `resend:${string}` | `recheck:${string}`;
+type EscapeSpec = "cancel" | `resend:${string}` | `recheck:${string}` | `download-tool:${string}`;
 /**
  * Which axis of the system an advisory is about. Mirrors the Rust
  * `advisory::Scope` (externally-tagged unit enum → bare string).

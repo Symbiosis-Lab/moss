@@ -16,6 +16,7 @@ release heading.
 ### Added
 
 - `openBrowser()` can be called without a URL to open the panel in its loading state.
+- `EscapeSpec` accepts `download-tool:<name>`, which shows a Download button for a tool moss can fetch (e.g. `git`, `ffmpeg`).
 - `contributes.stack`, replacing `requires_stack`: a plugin can now carry the pin (version, download url, sha256) for the machine-wide companion process it needs, instead of moss compiling that pin into the app. A `download` source with no `sha256` is refused, not defaulted; a `path` source (a binary the user already installed, resolved on PATH) needs no hash since nothing is fetched. `requires_stack: true` still parses, folded into `needs: ["stack"]` on every capability's setup block, so an existing manifest keeps working. See `docs/plugin-manifest.md`.
 
 ### Changed
