@@ -63,7 +63,7 @@ fn a_video_and_poster_still_pending_at_seal_time_gate_publish() {
     let recorded = crate::system::build_records::records()
         .promised_dead_links(&folder)
         .expect("record_promise_gate must always write a verdict");
-    assert_eq!(recorded.len(), 2);
+    assert_eq!(recorded.links.len(), 2);
 
     let err = crate::deploy::refuse_publish(&folder)
         .expect_err("a publish landing in the window must be refused, not raced through");
@@ -156,6 +156,29 @@ fn no_registry_at_all_is_advisory_only() {
     let unfulfilled = record_promise_gate(tmp.path(), &sealed, None, &folder);
     assert!(unfulfilled.is_empty());
     assert!(crate::deploy::refuse_publish(&folder).is_ok());
+}
+
+/// A pending video whose source is still in the cloud is waiting on a download,
+/// not an encode. The refusal must name the file and must not claim moss is
+/// encoding it.
+#[test]
+fn a_promise_whose_source_is_still_in_the_cloud_names_the_file() {
+    let tmp = stage_dir();
+    let folder = format!("/promise-gate-cloud-{}", uuid::Uuid::new_v4());
+    let sealed = sealed_with_one_page(tmp.path(), VIDEO_PAGE);
+    let source = tmp.path().join("vault/videos/clip.mov");
+    let _in_cloud = crate::build::icloud::pretend::evicted(&source);
+
+    let assets = std::sync::Arc::new(AssetRegistry::new());
+    assets.set_source_passthrough("videos/clip.mp4".into(), source);
+    assets.set_pending("videos/clip.mp4".into(), None, None);
+
+    record_promise_gate(tmp.path(), &sealed, Some(&assets), &folder);
+    let err = crate::deploy::refuse_publish(&folder)
+        .expect_err("a promise still in the cloud must refuse the publish");
+    assert!(err.contains("clip.mov"), "{err}");
+    assert!(err.contains("still downloading from the cloud"), "{err}");
+    assert!(!err.contains("moss is still finishing"), "{err}");
 }
 
 /// The follow-up rebuild's clean seal — video now Ready and registered in

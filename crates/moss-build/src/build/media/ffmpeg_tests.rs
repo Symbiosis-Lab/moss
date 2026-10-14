@@ -526,55 +526,6 @@ fn test_convert_with_config_fails_gracefully() {
 // On failure: copy original video, serve as-is, show warning toast.
 
 #[test]
-fn test_copy_video_fallback() {
-    let temp = tempfile::TempDir::new().unwrap();
-    let source = temp.path().join("input.mov");
-    let output = temp.path().join("output").join("input.mov");
-
-    // Create a fake video file
-    std::fs::write(&source, "fake MOV content").unwrap();
-
-    // Copy using fallback function
-    let result = copy_video_as_fallback(&source, &output);
-    assert!(result.is_ok(), "Fallback copy should succeed");
-
-    // Output should exist with same content
-    assert!(output.exists(), "Output file should exist");
-    assert_eq!(
-        std::fs::read_to_string(&output).unwrap(),
-        "fake MOV content"
-    );
-}
-
-#[test]
-fn test_copy_video_fallback_creates_parent_dirs() {
-    let temp = tempfile::TempDir::new().unwrap();
-    let source = temp.path().join("input.mov");
-    let output = temp
-        .path()
-        .join("deep")
-        .join("nested")
-        .join("dir")
-        .join("input.mov");
-
-    std::fs::write(&source, "video content").unwrap();
-
-    let result = copy_video_as_fallback(&source, &output);
-    assert!(result.is_ok(), "Should create parent directories");
-    assert!(output.exists());
-}
-
-#[test]
-fn test_copy_video_fallback_nonexistent_source() {
-    let temp = tempfile::TempDir::new().unwrap();
-    let output = temp.path().join("output.mov");
-
-    let result = copy_video_as_fallback(Path::new("/nonexistent/video.mov"), &output);
-    assert!(result.is_err(), "Should fail for nonexistent source");
-}
-
-
-#[test]
 fn test_validate_encoded_video_detects_missing_file() {
     let manager = match FFmpegManager::detect() {
         Ok(m) => m,

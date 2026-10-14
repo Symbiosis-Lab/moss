@@ -457,7 +457,7 @@ mod tests {
         let registry = AssetRegistry::new();
         registry.set_failed(
             "assets/corrupt.webp".to_string(),
-            "decode error: invalid PNG signature".to_string(),
+            crate::types::assets::Failure::encode("decode error: invalid PNG signature"),
         );
 
         let response = handle_asset_request("/assets/corrupt.webp", &registry, temp_dir.path()).unwrap();

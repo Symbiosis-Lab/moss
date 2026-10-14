@@ -62,11 +62,6 @@ advisory_strings! {
         zh_hant: "另一個頁面已經在用這個網址：{keeper}。這個頁面暫時發佈在 /{moved_to}。請修改這裡的 url，給它一個自己的網址。"
     },
     not_found => { en: "not found", zh_hans: "未找到", zh_hant: "找不到" },
-    still_downloading_icloud => { en: "still downloading from iCloud — will optimize on next preview", zh_hans: "仍在从 iCloud 下载，将在下次预览时优化", zh_hant: "仍在從 iCloud 下載，將在下次預覽時最佳化" },
-    // Provider-neutral twin of `still_downloading_icloud`, for the image
-    // pipeline: the vaults this fires on are as often Google Drive or Dropbox
-    // as iCloud, and naming the wrong provider reads as a different bug.
-    still_downloading_cloud => { en: "still downloading — will optimize once it arrives", zh_hans: "仍在下载 —— 到达后会自动优化", zh_hant: "仍在下載 —— 抵達後會自動最佳化" },
     could_not_read_file => { en: "could not read file", zh_hans: "无法读取文件", zh_hant: "無法讀取檔案" },
     shipped_without_optimizing => { en: "shipped without optimizing — {err}", zh_hans: "已发布但未优化 —— {err}", zh_hant: "已發佈但未最佳化 —— {err}" },
     // The floor under every can't-encode path gave way: not even the original
@@ -142,7 +137,6 @@ advisory_strings! {
     sending_site => { en: "Sending your site…", zh_hans: "正在发送网站……", zh_hant: "正在傳送網站……" },
     registering_site => { en: "Registering site…", zh_hans: "正在注册网站……", zh_hant: "正在註冊網站……" },
     uploading => { en: "Uploading {name}", zh_hans: "正在上传 {name}", zh_hant: "正在上傳 {name}" },
-    downloading_from_icloud => { en: "Downloading {name} from iCloud…", zh_hans: "正在从 iCloud 下载 {name}……", zh_hant: "正在從 iCloud 下載 {name}……" },
     rechecking => { en: "Rechecking...", zh_hans: "重新检查……", zh_hant: "重新檢查……" },
     resending => { en: "Resending...", zh_hans: "重新发送……", zh_hant: "重新傳送……" },
     plugin_could_not_run => { en: "Plugin ‘{name}’ could not run — {detail} (content sync may be stale)", zh_hans: "插件“{name}”无法运行 —— {detail}（内容同步可能已过期）", zh_hant: "插件「{name}」無法執行 —— {detail}（內容同步可能已過時）" },

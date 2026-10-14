@@ -1057,7 +1057,7 @@ async fn failed_variant_returns_warning_svg_despite_passthrough_registration() {
     let registry = Arc::new(AssetRegistry::new());
     // Registered at pending time, then the encode failed terminally.
     registry.set_source_passthrough("assets/broken.webp".to_string(), source_file.clone());
-    registry.set_failed("assets/broken.webp".to_string(), "decode error".to_string());
+    registry.set_failed("assets/broken.webp".to_string(), crate::types::assets::Failure::encode("decode error"));
 
     let site_dir_state = Arc::new(std::sync::RwLock::new(site.path().to_path_buf()));
     let (port, shutdown_tx) = start_server(ServeConfig {
@@ -1226,7 +1226,7 @@ async fn old_current_image_uses_its_own_original_after_new_registry_is_cleared()
         std::fs::write(current.join("assets/cover.jpg"), b"old original").unwrap();
         let registry = latest_failed.then(|| {
             let registry = Arc::new(AssetRegistry::new());
-            registry.set_failed("assets/cover.webp".into(), "new attempt failed".into());
+            registry.set_failed("assets/cover.webp".into(), crate::types::assets::Failure::encode("new attempt failed"));
             registry.set_source_passthrough("assets/cover.webp".into(),
                 site.path().join("new-attempt.jpg"));
             registry

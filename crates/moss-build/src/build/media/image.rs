@@ -42,6 +42,7 @@
 //! TODO: preserve ICC profile via WebPMux
 
 use crate::moss_paths::MossPaths;
+use crate::types::assets::Failure;
 use crate::types::services::{BackgroundContext, BuildServices};
 use std::collections::HashMap;
 use std::fs;
@@ -1709,7 +1710,7 @@ enum ItemStep {
     /// on real work.
     Handled {
         delivered: Vec<(String, Option<String>)>,
-        failed: Vec<(String, String)>,
+        failed: Vec<(String, Failure)>,
         advisories: Vec<Advisory>,
         encoded: bool,
     },
@@ -1725,8 +1726,8 @@ impl ItemStep {
     /// owner of a policy the decode-failure arm spelled out in full and the
     /// hash-failure arm not at all.
     fn base_failed(source_path: &str, webp: &str, rungs: Vec<(u32, String)>, err: String) -> Self {
-        let mut failed = vec![(webp.to_string(), err.clone())];
-        failed.extend(rungs.into_iter().map(|(_, rung)| (rung, err.clone())));
+        let mut failed = vec![(webp.to_string(), Failure::encode(err.clone()))];
+        failed.extend(rungs.into_iter().map(|(_, rung)| (rung, Failure::encode(err.clone()))));
         Self::Handled {
             delivered: Vec::new(),
             failed,
@@ -1739,23 +1740,6 @@ impl ItemStep {
             )],
             encoded: false,
         }
-    }
-
-    /// Still in the cloud: ask for the bytes and leave every promise Pending,
-    /// because the build their arrival triggers runs this item for real. One
-    /// owner for the gate before the encode and the race back mid-encode.
-    fn deferred_to_cloud(source_file: &Path, rel_source_str: &str) -> Self {
-        crate::build::cloud_readiness::request_download(source_file);
-        log::debug!("[image] {} is still in the cloud — deferring", rel_source_str);
-        Self::nothing_shipped(vec![Advisory::for_source(
-            Scope::File,
-            // Transient and self-resolving: the tier the video gate's timeout
-            // uses, not NeedsAction.
-            Severity::ShippedDegraded,
-            rel_source_str,
-            crate::infra::app_advisory::t("still_downloading_cloud"),
-            Action::None,
-        )])
     }
 
     /// Handled without producing bytes and without retracting a promise — an
@@ -1997,16 +1981,14 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
         // so the work was wasted AND the site shipped full-size originals in
         // place of its `w800`/`w1600` rungs.
         //
-        // Unlike video this does NOT wait. The video gate spends up to 90s per
-        // file because videos are few and a re-encode is expensive to redo; this
-        // is a per-core fan-out over the whole vault, where the same deadline
-        // would serialize hundreds of files behind downloads. The supervisor is
-        // already draining in priority order and an arrival triggers a rebuild.
+        // Does not wait: `not_yet` requests the download, and the rebuild that
+        // the arrival triggers is what ships this item, so a fan-out over the
+        // whole vault never queues behind a download.
         //
         // Two lstats per item, so this is also the negative cache: nothing to
         // remember between builds when re-deciding is this cheap.
-        if crate::build::icloud::is_still_in_the_cloud(&source_file) {
-            return ItemStep::deferred_to_cloud(&source_file, &rel_source_str);
+        if crate::build::outcome::not_yet(project_root, &source_file) {
+            return ItemStep::nothing_shipped(Vec::new());
         }
 
         // Derived before the hash resolution below, not after: a hash failure
@@ -2033,8 +2015,8 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
         let source_oid = if item.source_oid.is_empty() {
             match bg_hash_index.lock().unwrap().resolve(&source_file, &rel_source_str) {
                 Ok(oid) => oid,
-                Err(_) if crate::build::icloud::is_still_in_the_cloud(&source_file) => {
-                    return ItemStep::deferred_to_cloud(&source_file, &rel_source_str);
+                Err(_) if crate::build::outcome::not_yet(project_root, &source_file) => {
+                    return ItemStep::nothing_shipped(Vec::new());
                 }
                 Err(e) => {
                     log::warn!("Failed to hash image {}: {}", rel_source_str, e);
@@ -2159,7 +2141,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                 };
 
                 let mut delivered: Vec<(String, Option<String>)> = Vec::new();
-                let mut failed: Vec<(String, String)> = Vec::new();
+                let mut failed: Vec<(String, Failure)> = Vec::new();
                 let mut item_advisories: Vec<Advisory> = Vec::new();
                 {
                     let out = ctx.staging_dir.join(&relative_webp);
@@ -2226,7 +2208,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                                 ),
                                 Action::None,
                             ));
-                            failed.push((rung_rel.clone(), err));
+                            failed.push((rung_rel.clone(), Failure::encode(err)));
                         }
                     }
 
@@ -2242,7 +2224,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                             "Registered rung {} was not produced by the encode for {} — marking failed",
                             rung_rel, filename
                         );
-                        failed.push((rung_rel, "rung not produced by encode".to_string()));
+                        failed.push((rung_rel, Failure::encode("rung not produced by encode")));
                     }
                 }
                 ItemStep::Handled {
@@ -2261,11 +2243,11 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             // The source went back to the cloud between the gate above and the
             // decode — a live possibility on a vault the provider is actively
             // evicting, and the one failure here that is not the image's fault.
-            // Answer it the way the gate does (Pending + a soft notice), not
+            // Answer it the way the gate does (Pending, nothing shipped), not
             // the way a corrupt file is answered (Failed + a warning SVG), or a
             // race decides whether the user sees a broken image.
-            Err(_) if crate::build::icloud::is_still_in_the_cloud(&source_file) => {
-                ItemStep::deferred_to_cloud(&source_file, &rel_source_str)
+            Err(_) if crate::build::outcome::not_yet(project_root, &source_file) => {
+                ItemStep::nothing_shipped(Vec::new())
             }
             // Bazel's FindMissingBlobs invariant — a manifest-level "hit" must
             // not stand in for a filesystem-level "present". Failed is the
@@ -2342,7 +2324,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             "Image conversion cancelled ({} converted before cancel)",
             converted_count
         );
-        emit_image_outputs_via_channel(&ctx.tx, &produced_webp_paths, &ctx.staging_dir, &objects, suppressed, services.assets.as_deref());
+        emit_image_outputs_via_channel(project_root, &ctx.tx, &produced_webp_paths, &ctx.staging_dir, &objects, suppressed, services.assets.as_deref());
         return true;
     }
 
@@ -2376,7 +2358,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
     // `tx.is_none()` fallback to `update_image_hashes` (on-disk
     // hashes.json read+write); that fallback is gone — every caller goes
     // through the coordinator now.
-    emit_image_outputs_via_channel(&ctx.tx, &produced_webp_paths, &ctx.staging_dir, &objects, suppressed, services.assets.as_deref());
+    emit_image_outputs_via_channel(project_root, &ctx.tx, &produced_webp_paths, &ctx.staging_dir, &objects, suppressed, services.assets.as_deref());
 
     // Dual-emit (Step 3 Phase 4): legacy BackgroundProgress + a media child Job
     // under the Build parent. Gated on REAL work (FIX 1b).
@@ -2449,6 +2431,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
 ///
 /// Returns the violation lines logged, for tests (no log-capture harness here).
 fn emit_image_outputs_via_channel(
+    root: &Path,
     tx: &Option<mpsc::Sender<EmitMessage>>,
     paths: &[(String, Option<String>)],
     staging_dir: &Path,
@@ -2476,7 +2459,7 @@ fn emit_image_outputs_via_channel(
     // `<picture>` cannot fall back from (a rule added 2026-09-09).
     // Suppressed paths stay excluded: absent by the prune's intent, and failing
     // each would make `degrade` read every page on every build of a settled vault.
-    let settle_failed = |path: &String, why: String| {
+    let settle_failed = |path: &String, why: Failure| {
         if let Some(registry) = registry {
             registry.set_failed(path.clone(), why);
         }
@@ -2512,7 +2495,7 @@ fn emit_image_outputs_via_channel(
                     if suppressed.contains(path) {
                         suppressed_absent_count += 1;
                     } else {
-                        settle_failed(path, "missing at manifest registration".to_string());
+                        settle_failed(path, Failure::encode("missing at manifest registration"));
                         missing.push(abs.display().to_string());
                     }
                     continue;
@@ -2529,8 +2512,11 @@ fn emit_image_outputs_via_channel(
                 // Race: existed at the pre-flight check, gone now. Treat as the
                 // same coherence violation as the missing case and skip —
                 // never register without a hash.
-                settle_failed(path, format!("unreadable at manifest registration: {}", e));
-                read_failures.push((abs.display().to_string(), e.to_string()));
+                let text = e.to_string();
+                if let Some(failure) = Failure::unreadable("unreadable at manifest registration", crate::build::outcome::classify_unreadable(root, &abs, e)) {
+                    settle_failed(path, failure);
+                }
+                read_failures.push((abs.display().to_string(), text));
                 continue;
             }
         };
@@ -2957,7 +2943,7 @@ pub(crate) fn dispatch_image_conversions_at(
         // variant on a synced vault.
         if !skip_paths.is_empty() {
             emit_image_outputs_via_channel(
-                &tx, &skip_paths, &ctx.staging_dir, &heal_objects, &heal_suppressed, None,
+                Path::new(&ctx.source_path), &tx, &skip_paths, &ctx.staging_dir, &heal_objects, &heal_suppressed, None,
             );
         }
 

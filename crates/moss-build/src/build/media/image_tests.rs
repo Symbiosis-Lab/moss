@@ -4010,7 +4010,7 @@ async fn emit_image_outputs_skips_missing_staged_files() {
     registry.set_pending("missing.webp".to_string(), None, None);
     let reg = registry.clone();
     tokio::task::spawn_blocking(move || {
-        emit_image_outputs_via_channel(
+        emit_image_outputs_via_channel(Path::new(""), 
             &Some(tx),
             &paths,
             &staging_path,
@@ -4071,7 +4071,7 @@ async fn emit_image_outputs_suppressed_absent_produces_no_violation() {
     let objects = crate::build::cache::ObjectStore::new(staging.path().join("cache"));
 
     let lines = tokio::task::spawn_blocking(move || {
-        emit_image_outputs_via_channel(&Some(tx), &paths, &staging_path, &objects, &suppressed, None)
+        emit_image_outputs_via_channel(Path::new(""), &Some(tx), &paths, &staging_path, &objects, &suppressed, None)
     })
     .await
     .unwrap();
@@ -4098,7 +4098,7 @@ async fn emit_image_outputs_unsuppressed_absent_still_violates() {
     let objects = crate::build::cache::ObjectStore::new(staging.path().join("cache"));
 
     let lines = tokio::task::spawn_blocking(move || {
-        emit_image_outputs_via_channel(&Some(tx), &paths, &staging_path, &objects, &suppressed, None)
+        emit_image_outputs_via_channel(Path::new(""), &Some(tx), &paths, &staging_path, &objects, &suppressed, None)
     })
     .await
     .unwrap();
@@ -4138,7 +4138,7 @@ async fn emit_image_outputs_registers_suppressed_path_that_exists() {
     let objects = crate::build::cache::ObjectStore::new(staging.path().join("cache"));
 
     tokio::task::spawn_blocking(move || {
-        emit_image_outputs_via_channel(&Some(tx), &paths, &staging_path, &objects, &suppressed, None);
+        emit_image_outputs_via_channel(Path::new(""), &Some(tx), &paths, &staging_path, &objects, &suppressed, None);
     })
     .await
     .unwrap();
@@ -5324,7 +5324,7 @@ fn self_heal_then_emit_registers_relinked_webp() {
     // Control: emit with the staged file still absent ⇒ SKIP (no File msg).
     {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
-        emit_image_outputs_via_channel(
+        emit_image_outputs_via_channel(Path::new(""), 
             &Some(tx),
             &[("photo.webp".to_string(), None)],
             &h.staging,
@@ -5356,7 +5356,7 @@ fn self_heal_then_emit_registers_relinked_webp() {
     assert!(staged.exists(), "self-heal must restore the staged webp");
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
-    emit_image_outputs_via_channel(
+    emit_image_outputs_via_channel(Path::new(""), 
         &Some(tx),
         &[("photo.webp".to_string(), None)],
         &h.staging,
@@ -5491,7 +5491,7 @@ fn emit_image_outputs_heals_an_evicted_staged_webp_when_the_oid_is_known() {
     // Registering now, WITH the oid the encode already produced, must heal
     // in place and register — the image is present, not silently missing.
     let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
-    emit_image_outputs_via_channel(
+    emit_image_outputs_via_channel(Path::new(""), 
         &Some(tx),
         &[("photo.webp".to_string(), Some(webp_oid))],
         &h.staging,
@@ -5562,7 +5562,7 @@ fn emit_image_outputs_heals_a_removed_staged_webp_when_the_oid_is_known() {
     );
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
-    emit_image_outputs_via_channel(
+    emit_image_outputs_via_channel(Path::new(""), 
         &Some(tx),
         &[("photo.webp".to_string(), Some(webp_oid))],
         &h.staging,
@@ -5596,7 +5596,7 @@ fn emit_image_outputs_does_not_fabricate_a_file_without_a_recoverable_oid() {
     let h = harness();
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
-    let lines = emit_image_outputs_via_channel(
+    let lines = emit_image_outputs_via_channel(Path::new(""), 
         &Some(tx),
         &[
             ("no-oid.webp".to_string(), None),
@@ -6293,7 +6293,7 @@ fn registration_over_an_unreadable_variant_reports_it_and_never_fails_it() {
     let registry = AssetRegistry::new();
     registry.set_pending("locked/photo.webp".to_string(), None, None);
     let (tx, mut rx) = tokio::sync::mpsc::channel::<EmitMessage>(16);
-    emit_image_outputs_via_channel(
+    emit_image_outputs_via_channel(Path::new(""), 
         &Some(tx),
         &[("locked/photo.webp".to_string(), None)],
         &h.staging,

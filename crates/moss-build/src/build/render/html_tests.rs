@@ -9493,7 +9493,7 @@ mod registry_clear_tests {
         // An earlier build's failure, surviving on the shared registry.
         let services = BuildServices::headless();
         let registry = services.assets.clone().expect("headless has a registry");
-        registry.set_failed("images/from-a-deleted-page.webp".to_string(), "encode failed".to_string());
+        registry.set_failed("images/from-a-deleted-page.webp".to_string(), crate::types::assets::Failure::encode("encode failed"));
 
         let project_structure =
             scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");

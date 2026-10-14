@@ -519,29 +519,6 @@ fn resolve_ffprobe_path(ffmpeg_bin_path: &str) -> Result<String, String> {
     Ok(resolution.path)
 }
 
-/// Copies a video file as-is when conversion fails or is unavailable.
-///
-/// This implements graceful degradation: when FFmpeg is unavailable or
-/// conversion fails, we copy the original video to the output location.
-/// The video will still play (browsers can handle MOV files), just without
-/// optimization.
-///
-/// # Arguments
-/// * `source` - Path to the source video file
-/// * `output` - Path to the output location
-///
-/// # Returns
-/// * `Ok(())` - File copied successfully
-/// * `Err(String)` - Copy failed
-pub fn copy_video_as_fallback(source: &Path, output: &Path) -> Result<(), String> {
-    // `copy_output`: the destination is build output, so a cloud-evicted one
-    // is discarded rather than materialized. Parent dirs included.
-    crate::build::io_utils::copy_output(source, output)
-        .map_err(|e| format!("Failed to copy video: {}", e))?;
-
-    Ok(())
-}
-
 /// Parses FFmpeg's `time=HH:MM:SS.ff` progress field from a stderr line.
 ///
 /// FFmpeg writes progress to stderr using carriage returns (`\r`), with lines like:

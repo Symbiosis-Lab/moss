@@ -816,9 +816,8 @@ impl ItemStep {
     /// Ship the source bytes unchanged at the video's own output URL, with the
     /// advisory explaining why, if there is one to give.
     ///
-    /// The one owner of the fallback that three arms used to spell out
-    /// separately (no FFmpeg, the iCloud wait timing out, a failed encode).
-    /// Each copy wrote the original to the SOURCE path — `videos/clip.mov` —
+    /// The one owner of the fallback that three arms spell out (no FFmpeg, a
+    /// failed hash, a failed encode). Each copy wrote the original to the SOURCE path — `videos/clip.mov` —
     /// while announcing `to_mp4`'s `videos/clip.mp4`, so a published site
     /// referenced a file that existed nowhere; preview hid it, because
     /// `set_source_passthrough` serves the original at the `.mp4` URL there.
@@ -826,54 +825,66 @@ impl ItemStep {
     /// that never landed — and says so in an advisory of its own. `encoded` is
     /// false by construction: no new bytes means no media child Job (FIX 1b).
     ///
-    /// A failed copy also retracts the `.mp4` promise via `set_failed`
-    /// (2026-09-16 thermo review of the promise gate). Without it the key
-    /// registered by `blocking.rs`'s `set_pending` stayed `Pending` forever —
-    /// a rebuild hits the same copy failure every time — and the publish
-    /// promise gate this arm feeds (`link_audit::dead_links_among_promises`)
-    /// has no override, so the folder's publish would be blocked
-    /// indefinitely. `services` is only needed for this registry write; every
-    /// other outcome here (delivered bytes, or none at all) still flows
-    /// through the caller's one `record_deliveries` call.
+    /// A failed copy also retracts the `.mp4` promise via `set_failed`. The key
+    /// `blocking.rs`'s `set_pending` registered would otherwise stay `Pending`,
+    /// and the publish promise gate this arm feeds
+    /// (`link_audit::dead_links_among_promises`) has no override, so the
+    /// folder's publish would be blocked indefinitely. `services` is only
+    /// needed for this registry write; every other outcome here (delivered
+    /// bytes, or none at all) still flows through the caller's one
+    /// `record_deliveries` call.
     fn shipped_original(
         services: &BuildServices,
+        root: &Path,
         source_file: &Path,
         staging_dir: &Path,
         mapped_source: &str,
         item: &str,
         advisory: Option<Advisory>,
     ) -> Self {
+        if crate::build::outcome::not_yet(root, source_file) {
+            return Self::awaiting_cloud();
+        }
         let url = moss_core::asset_paths::to_mp4(mapped_source);
         let mut advisories: Vec<Advisory> = advisory.into_iter().collect();
-        let delivered = match crate::build::media::ffmpeg::copy_video_as_fallback(
-            source_file,
-            &staging_dir.join(&url),
-        ) {
+        let delivered = match crate::build::io_utils::copy_output(source_file, &staging_dir.join(&url)) {
             // A raw fs copy of the source, not a CAS write — no oid to offer.
             Ok(()) => vec![Delivery { url, kind: DeliveryKind::Video, oid: None }],
-            Err(e) => {
-                log::warn!("Fallback copy failed for {}: {}", mapped_source, e);
-                // The caller's advisory says why moss could not OPTIMIZE the
-                // video; only this arm knows the worse fact, that the page has
-                // no video at all. `item`, not `mapped_source`: the advisory
-                // names the SOURCE file, and a `url:` override can make those
-                // two paths diverge (mapped_source is the OUTPUT's page-tree
-                // path, which need not exist anywhere on disk).
-                advisories.push(Advisory::blocking_file(
-                    item,
-                    crate::infra::app_advisory::fmt("video_not_published", &[("err", &e)]),
-                ));
-                // Terminal: this key leaves `pending_keys()` so the promise
-                // gate stops refusing this folder's publish over a video that
-                // will never arrive (a permanently failed encode already
-                // takes this same exit through `set_failed`).
-                if let Some(ref registry) = services.assets {
-                    registry.set_failed(url, e);
+            Err(e) => match crate::build::outcome::classify_unreadable(root, source_file, e) {
+                crate::build::outcome::Unreadable::NotYet => return Self::awaiting_cloud(),
+                crate::build::outcome::Unreadable::Broken(io) => {
+                    let e = format!("Failed to copy video: {}", io);
+                    log::warn!("Fallback copy failed for {}: {}", mapped_source, e);
+                    // The caller's advisory says why moss could not OPTIMIZE the
+                    // video; only this arm knows the worse fact, that the page has
+                    // no video at all. `item`, not `mapped_source`: the advisory
+                    // names the SOURCE file, and a `url:` override can make those
+                    // two paths diverge (mapped_source is the OUTPUT's page-tree
+                    // path, which need not exist anywhere on disk).
+                    advisories.push(Advisory::blocking_file(
+                        item,
+                        crate::infra::app_advisory::fmt("video_not_published", &[("err", &e)]),
+                    ));
+                    // Terminal: this key leaves `pending_keys()` so the promise
+                    // gate stops refusing this folder's publish over a video that
+                    // will never arrive (a permanently failed encode already
+                    // takes this same exit through `set_failed`).
+                    if let Some(ref registry) = services.assets {
+                        if let Some(failure) = crate::types::assets::Failure::unreadable("Failed to copy video", crate::build::outcome::Unreadable::Broken(io)) {
+                            registry.set_failed(url, failure);
+                        }
+                    }
+                    Vec::new()
                 }
-                Vec::new()
-            }
+            },
         };
         Self::Handled { delivered, advisories, encoded: false }
+    }
+
+    /// Still in the cloud: nothing shipped and the promise left Pending, because
+    /// the rebuild that the file's arrival triggers runs this item again.
+    fn awaiting_cloud() -> Self {
+        Self::Handled { delivered: Vec::new(), advisories: Vec::new(), encoded: false }
     }
 
     /// Nothing shipped, but the user should hear why.
@@ -1219,6 +1230,7 @@ pub(crate) fn run_video_conversion(
                 // No advisory: this one is the environment's, pushed once above.
                 break 'item ItemStep::shipped_original(
                     services,
+                    project_root,
                     &source_file,
                     &ctx.staging_dir,
                     &mapped_source,
@@ -1227,70 +1239,16 @@ pub(crate) fn run_video_conversion(
                 );
             };
 
-            // iCloud readiness gate: large .mov sources in iCloud Drive can be dataless
-            // placeholders or mid-resync even when "Keep Downloaded" (eviction is
-            // prevented; the re-sync/download window is not). Non-faststart QuickTime
-            // keeps `moov` at EOF, so ffprobe fails with "moov atom not found" until the
-            // tail is present. Materialize first (on this background worker, never the
-            // build/UI thread) instead of reporting a transient sync gap as a hard
-            // failure. No-op for already-resident files (~two lstats) and off macOS.
-            // Placed after the fast-path skip so cached-output files never wait.
-            use crate::build::cloud_readiness::{await_ready, Settled, MATERIALIZE_DEADLINE, POLL_INTERVAL};
-            let announced = || {
-                services.reporter.report(&PipelineEvent::BackgroundProgress {
-                    task: "videos".to_string(),
-                    current,
-                    total,
-                    message: crate::infra::app_advisory::fmt("downloading_from_icloud", &[("name", &filename)]),
-                    completed: false,
-                    advisories: vec![],
-                });
-                if is_headless {
-                    crate::cli_eprintln!("  [{}/{}] Downloading from iCloud: {}", current, total, filename);
-                }
-            };
+            // iCloud readiness: a source still in the cloud is not waited for. Its
+            // download is requested, and the arrival's rebuild through the folder
+            // watcher runs this item again; waiting here only serialized every video
+            // behind the slowest download. Placed after the fast-path skip so
+            // cached-output files never wait.
+            if crate::build::outcome::not_yet(project_root, &source_file) {
+                break 'item ItemStep::awaiting_cloud();
+            }
             let superseded_or_cancelled =
                 || services.cancellation.current_id() != epoch || is_cancelled();
-            match await_ready(
-                &source_file,
-                MATERIALIZE_DEADLINE,
-                POLL_INTERVAL,
-                &superseded_or_cancelled,
-                &announced,
-            ) {
-                Settled::Ready => { /* fall through to conversion */ }
-                Settled::Cancelled => {
-                    log::info!("[epoch {}] iCloud wait cancelled for {}", epoch, filename);
-                    break 'item abandonment(is_cancelled());
-                }
-                Settled::TimedOut => {
-                    // Still not materialized after the deadline. Do NOT run ffprobe
-                    // (that would surface "moov atom not found"). Surface a soft, honest
-                    // advisory and ship the original bytes.
-                    log::warn!(
-                        "[epoch {}] iCloud download did not complete for {} within {:?}",
-                        epoch, filename, MATERIALIZE_DEADLINE
-                    );
-                    break 'item ItemStep::shipped_original(
-                        services,
-                        &source_file,
-                        &ctx.staging_dir,
-                        &mapped_source,
-                        item,
-                        Some(Advisory::for_source(
-                            Scope::File,
-                            // Transient and self-resolving (no user action): the original
-                            // ships unoptimized and the next preview re-optimizes it. Use
-                            // the calm "shipped, not optimal" tier, not NeedsAction — this
-                            // is a soft notice, not a failure.
-                            Severity::ShippedDegraded,
-                            item,
-                            crate::infra::app_advisory::t("still_downloading_icloud"),
-                            Action::None,
-                        )),
-                    );
-                }
-            }
 
             // Hash source file (uses HashIndex cache to avoid re-reading large files)
             let source_oid = match resolve_source_hash(&source_file, &item, &mut hash_index) {
@@ -1304,6 +1262,7 @@ pub(crate) fn run_video_conversion(
                     log::warn!("Failed to hash video {}: {}", filename, e);
                     break 'item ItemStep::shipped_original(
                         services,
+                        project_root,
                         &source_file,
                         &ctx.staging_dir,
                         &mapped_source,
@@ -1321,7 +1280,7 @@ pub(crate) fn run_video_conversion(
 
             // Bound concurrent encodes across dispatch epochs. LOCK ORDER (global,
             // never reversed): iCloud gate -> encode permit -> singleflight -> ffmpeg.
-            // - Acquired AFTER await_ready: a 90s iCloud stall must not hold a slot.
+            // - Acquired after the cloud check: a source still downloading must not hold a slot.
             // - Acquired BEFORE do_work: a cancelled wait must not flow through
             //   VideoConversionOutcome.error (that path ships a fallback copy).
             // - A singleflight waiter holds a permit while blocked: bounded waste,
@@ -1421,6 +1380,7 @@ pub(crate) fn run_video_conversion(
                 // path, which is a different file when two sources share an oid.
                 break 'item ItemStep::shipped_original(
                     services,
+                    project_root,
                     &source_file,
                     &ctx.staging_dir,
                     &mapped_source,
@@ -4456,6 +4416,76 @@ pub(crate) mod tests {
             ),
             other => panic!("expected a failed media Job, got {other:?}"),
         }
+    }
+
+    /// A source still in the cloud is not a failure. The fallback copy ships
+    /// nothing and raises nothing, and the promise stays Pending for the rebuild
+    /// that the file's arrival triggers. Calls `shipped_original` directly, so
+    /// this covers the no-encoder path as well as the gate.
+    #[test]
+    fn a_video_still_in_the_cloud_stays_pending_and_says_nothing() {
+        let tmp = portable_tmpdir();
+        let root = tmp.path().join("vault");
+        let staging = tmp.path().join("stage");
+        std::fs::create_dir_all(root.join("videos")).unwrap();
+        std::fs::create_dir_all(&staging).unwrap();
+        let source = root.join("videos/clip.mov");
+        std::fs::write(&source, b"bytes that have not arrived").unwrap();
+        let _cloud = crate::build::icloud::pretend::evicted(&source);
+
+        let (svc, _tasks) = BuildServices::with_task_registry();
+        let assets = svc.assets.clone().expect("the harness wires an asset registry");
+        assets.set_pending("videos/clip.mp4".to_string(), None, None);
+
+        match ItemStep::shipped_original(&svc, &root, &source, &staging, "videos/clip.mov", "videos/clip.mov", None) {
+            ItemStep::Handled { delivered, advisories, .. } => {
+                assert!(delivered.is_empty(), "nothing is copied while the bytes are in the cloud");
+                assert!(advisories.is_empty(), "the user can do nothing about a download, so nothing is raised");
+            }
+            _ => panic!("expected a handled step"),
+        }
+        assert!(
+            matches!(assets.get("videos/clip.mp4"), Some(crate::types::assets::AssetState::Pending(_))),
+            "the promise must stay Pending, not Failed"
+        );
+        assert_eq!(crate::build::icloud::pretend::requests_for(&source), 1, "one download request");
+    }
+
+    /// The same source through the whole item loop: the gate defers it, so the
+    /// media Job must not report a failure.
+    #[test]
+    fn a_video_still_in_the_cloud_does_not_fail_its_media_job() {
+        use crate::tasks::{TaskScope, TaskState, WindowId};
+        let tmp = portable_tmpdir();
+        let vault = tmp.path().join("vault");
+        let staging = tmp.path().join("stage");
+        std::fs::create_dir_all(vault.join("videos")).unwrap();
+        std::fs::create_dir_all(&staging).unwrap();
+        let source = vault.join("videos/clip.mov");
+        std::fs::write(&source, b"bytes that have not arrived").unwrap();
+        let _cloud = crate::build::icloud::pretend::evicted(&source);
+
+        let (svc, registry) = BuildServices::with_task_registry();
+        let ctx = BackgroundContext {
+            video_items: vec!["videos/clip.mov".to_string()],
+            source_path: vault.display().to_string(),
+            staging_dir: staging.clone(),
+            moss_dir: tmp.path().join(".moss"),
+            ffmpeg_bin_path: Some(tmp.path().join("no-such-ffmpeg").display().to_string()),
+            ..BackgroundContext::for_test()
+        };
+        run_video_conversion(&svc, &ctx, 0, None);
+
+        assert!(!staging.join("videos/clip.mp4").exists(), "nothing is copied while the bytes are in the cloud");
+        let tasks = registry.tasks(&WindowId::from("main"), TaskScope::Preview);
+        for t in &tasks {
+            match &t.state {
+                TaskState::Failed { advisory } => panic!("a download in progress must not fail the job: {advisory:?}"),
+                TaskState::Succeeded { advisories, .. } => assert!(advisories.is_empty(), "no advisory for a download in progress"),
+                _ => {}
+            }
+        }
+        assert_eq!(crate::build::icloud::pretend::requests_for(&source), 1, "one download request");
     }
 
     /// Shared rig for the three "staging is obstructed" tests below:

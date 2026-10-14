@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use crate::build::PluginMode;
 use crate::build::media::image::{ImageConversionItem, SkipReason};
-use crate::types::assets::AssetRegistry;
+use crate::types::assets::{AssetRegistry, Failure};
 use crate::types::content::ProjectStructure;
 
 /// Register every collected item's variant URLs with `registry` (when the
@@ -126,7 +126,7 @@ pub(crate) fn promise_image_variants(
         for url in variants {
             manifest.register_preview_original(url.clone(), item.source_path.to_string_lossy().into_owned());
             if let Some(registry) = registry { match never {
-                Some(why) => registry.set_failed(url, why.to_string()),
+                Some(why) => registry.set_failed(url, Failure::skip(why)),
                 None => {
                     registry.set_source_passthrough(url.clone(), source_abs.clone());
                     registry.set_pending(url, dimensions, dominant_color.clone());

@@ -387,9 +387,12 @@ pub fn refuse_publish(folder_path: &str) -> Result<(), String> {
             return Err(refusal_text(projection.missing_references.len()));
         }
     }
-    if let Some(unfulfilled) = records.promised_dead_links(folder_path) {
-        if !unfulfilled.is_empty() {
-            return Err(in_flight_refusal_text(unfulfilled.len()));
+    if let Some(promised) = records.promised_dead_links(folder_path) {
+        if !promised.in_cloud.is_empty() {
+            return Err(cloud_refusal_text(&promised.in_cloud));
+        }
+        if !promised.links.is_empty() {
+            return Err(in_flight_refusal_text(promised.links.len()));
         }
     }
     if let Some(pending) = records.pending_derivations(folder_path).filter(|n| *n > 0) {
@@ -462,6 +465,22 @@ pub(crate) fn in_flight_refusal_text(count: usize) -> String {
     format!(
         "Nothing published — {subject}. moss is still finishing a video in the background. \
          Publish again in a moment."
+    )
+}
+
+/// The refusal for a promise whose source is still in the cloud: the bytes are
+/// being downloaded, not encoded, and may never arrive, so the author decides
+/// whether to wait, download in Finder, or remove the reference. Names at most
+/// three files.
+pub(crate) fn cloud_refusal_text(names: &[String]) -> String {
+    const SHOWN: usize = 3;
+    let mut list = names.iter().take(SHOWN).cloned().collect::<Vec<_>>().join(", ");
+    if names.len() > SHOWN {
+        list.push_str(&format!(", and {} more", names.len() - SHOWN));
+    }
+    format!(
+        "Not published yet: these files are still downloading from the cloud — {list}. \
+         moss publishes as soon as they arrive. If they don't, download them in Finder or remove them from the page."
     )
 }
 

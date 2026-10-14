@@ -7,11 +7,15 @@
 
 use super::{in_flight_refusal_text, refuse_publish};
 use crate::build::manifest::link_audit::DeadLink;
+use crate::system::build_records::PromisedDeadLinks;
 
 /// The records are process-global, so every case keys on its own folder —
 /// otherwise two tests running in parallel share one verdict.
 fn record(folder: &str, dead: Vec<DeadLink>) {
-    crate::system::build_records::records().record_promised_dead_links(folder, dead);
+    crate::system::build_records::records().record_promised_dead_links(
+        folder,
+        PromisedDeadLinks { links: dead, in_cloud: Vec::new() },
+    );
 }
 
 fn dead(page: &str, href: &str) -> DeadLink {

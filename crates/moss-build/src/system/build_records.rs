@@ -88,14 +88,25 @@ impl FolderSlot<PublishPreflightProjection> {
     }
 }
 
+/// What a seal found among its own still-pending promises.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PromisedDeadLinks {
+    /// Links the link audit caught dead — see `link_audit::dead_links_among_promises`.
+    pub links: Vec<DeadLink>,
+    /// Base names of those promises' sources that are still in the cloud,
+    /// sorted and unique. A promise in this list is waiting on a download, not
+    /// an encode, and may never arrive.
+    pub in_cloud: Vec<String>,
+}
+
 /// The per-folder records the build tail writes and the watcher reads.
 #[derive(Default)]
 pub struct BuildRecords {
     content_hashes: FolderSlot<SiteHashes>,
     publish_preflight: FolderSlot<PublishPreflightProjection>,
     /// This seal's own still-pending promises the link audit caught dead —
-    /// see `link_audit::dead_links_among_promises` and `refuse_publish`.
-    promised_dead_links: FolderSlot<Vec<DeadLink>>,
+    /// see `refuse_publish`.
+    promised_dead_links: FolderSlot<PromisedDeadLinks>,
     /// How many embedded files the last render of this folder showed as a
     /// placeholder because their text was still being read. A publish waits
     /// for zero: a placeholder is not something to put on the web.
@@ -180,14 +191,14 @@ impl BuildRecords {
     /// Always called, including with an empty `Vec` — a video that finishes
     /// encoding between one seal and the next must have its refusal cleared
     /// by the CLEAN verdict, not left standing because nothing wrote over it.
-    pub fn record_promised_dead_links(&self, folder_path: &str, dead: Vec<DeadLink>) {
-        self.promised_dead_links.record(Self::key(folder_path), dead);
+    pub fn record_promised_dead_links(&self, folder_path: &str, promised: PromisedDeadLinks) {
+        self.promised_dead_links.record(Self::key(folder_path), promised);
     }
 
     /// What the last seal of `folder_path` found among its own unfulfilled
     /// promises. `None` means no seal has recorded a verdict — not "clean",
     /// the same distinction the preflight projection draws.
-    pub fn promised_dead_links(&self, folder_path: &str) -> Option<Vec<DeadLink>> {
+    pub fn promised_dead_links(&self, folder_path: &str) -> Option<PromisedDeadLinks> {
         self.promised_dead_links.get(&Self::key(folder_path))
     }
 

@@ -288,3 +288,71 @@ async fn only_a_first_discard_is_retried() {
         assert_eq!(attempts.get(), expected_attempts, "for {message}");
     }
 }
+
+/// A file under a fresh vault root, written so that it exists on disk.
+fn vault_file(dir: &tempfile::TempDir, rel: &str) -> std::path::PathBuf {
+    let path = dir.path().join(rel);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"# hello\n").unwrap();
+    path
+}
+
+/// A vault file the cloud has not handed back defers, and asking for it
+/// happens exactly once: the classifier is the only caller that requests.
+#[test]
+#[cfg(unix)]
+fn an_evicted_vault_file_classifies_as_not_yet() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = vault_file(&dir, "posts/hello.md");
+    let _cloud = crate::build::icloud::pretend::evicted(&path);
+    let before = crate::build::icloud::pretend::requests_for(&path);
+
+    let e = io::Error::from_raw_os_error(libc::EDEADLK);
+    let verdict = classify_unreadable(dir.path(), &path, e);
+    assert!(matches!(verdict, Unreadable::NotYet), "an evicted vault file is still coming");
+    assert_eq!(crate::build::icloud::pretend::requests_for(&path) - before, 1);
+}
+
+#[test]
+fn a_missing_vault_file_classifies_as_broken() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("posts/missing.md");
+    let e = std::fs::read(&path).unwrap_err();
+    assert!(matches!(classify_unreadable(dir.path(), &path, e), Unreadable::Broken(_)));
+}
+
+#[test]
+fn a_permission_error_on_a_vault_file_classifies_as_broken() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = vault_file(&dir, "posts/hello.md");
+    let e = io::Error::new(io::ErrorKind::PermissionDenied, "denied");
+    assert!(matches!(classify_unreadable(dir.path(), &path, e), Unreadable::Broken(_)));
+}
+
+#[test]
+#[cfg(unix)]
+fn io_stop_defers_on_an_evicted_vault_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = vault_file(&dir, "posts/hello.md");
+    let _cloud = crate::build::icloud::pretend::evicted(&path);
+    let before = crate::build::icloud::pretend::requests_for(&path);
+
+    let e = io::Error::from_raw_os_error(libc::EDEADLK);
+    let stopped = io_stop(dir.path(), "read page source", &path, e);
+    assert!(stopped.is_deferred(), "{}", stopped.message());
+    assert_eq!(crate::build::icloud::pretend::requests_for(&path) - before, 1);
+}
+
+#[test]
+#[cfg(unix)]
+fn not_yet_is_true_only_for_a_file_in_the_cloud() {
+    let dir = tempfile::tempdir().unwrap();
+    let evicted = vault_file(&dir, "posts/hello.md");
+    let local = vault_file(&dir, "posts/local.md");
+    let _cloud = crate::build::icloud::pretend::evicted(&evicted);
+    let before = crate::build::icloud::pretend::requests_for(&evicted);
+
+    assert!(not_yet(dir.path(), &evicted), "an evicted file is still coming");
+    assert_eq!(crate::build::icloud::pretend::requests_for(&evicted) - before, 1);
+    assert!(!not_yet(dir.path(), &local), "an ordinary local file is not waiting");
+}

@@ -1855,9 +1855,47 @@ fn record_promise_gate(
 
     let unfulfilled =
         crate::build::manifest::link_audit::dead_links_among_promises(&dead_links, &promised);
-    crate::system::build_records::records()
-        .record_promised_dead_links(folder_path, unfulfilled.clone());
+    let in_cloud = promised_sources_in_cloud(assets, &unfulfilled);
+    crate::system::build_records::records().record_promised_dead_links(
+        folder_path,
+        crate::system::build_records::PromisedDeadLinks {
+            links: unfulfilled.clone(),
+            in_cloud,
+        },
+    );
     unfulfilled
+}
+
+/// Base names of the sources behind the unfulfilled promises that are still in
+/// the cloud. A promise is waiting on a download, not an encode, when its
+/// source is dataless; the author needs to hear that, so the refusal names the
+/// file. A poster is not registry-tracked, so each pending key's source is also
+/// indexed under its derived poster key.
+fn promised_sources_in_cloud(
+    assets: Option<&std::sync::Arc<crate::types::assets::AssetRegistry>>,
+    unfulfilled: &[crate::build::manifest::link_audit::DeadLink],
+) -> Vec<String> {
+    let Some(registry) = assets else { return Vec::new() };
+    let mut sources: std::collections::HashMap<String, std::path::PathBuf> =
+        std::collections::HashMap::new();
+    for key in registry.pending_keys() {
+        let Some(source) = registry.source_passthrough(&key) else { continue };
+        if let Some(poster) = moss_core::asset_paths::to_thumb_if_video(&key) {
+            sources.insert(poster, source.clone());
+        }
+        sources.insert(key, source);
+    }
+    let mut names: Vec<String> = unfulfilled
+        .iter()
+        .filter_map(|link| crate::build::manifest::link_audit::candidate_keys(&link.href))
+        .flatten()
+        .filter_map(|key| sources.get(&key))
+        .filter(|source| crate::build::icloud::is_still_in_the_cloud(source))
+        .filter_map(|source| source.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .collect();
+    names.sort();
+    names.dedup();
+    names
 }
 
 // Test-only rendezvous for `cache_lease_ship_tests.rs`. A task-local rather
