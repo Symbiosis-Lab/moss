@@ -462,13 +462,35 @@ pub fn flat(need: usize, remove: usize) -> ChangeSet {
 /// knowing which files move says nothing about *why*, and the page-level
 /// `sources`/`source_to_output` a verb needs are not in a file set.
 ///
-/// Its one caller is [`super::backfill`], which reconstructs `previous` by
-/// re-hashing the last deployed generation.
+/// [`super::backfill`] reconstructs `previous` by re-hashing the last deployed
+/// generation; `moss deploy --dry-run` takes the two halves separately
+/// ([`upload_count`], [`removed_files`]) because it also names the removals.
 pub fn flat_against(previous: &HashMap<String, String>, current: &SealedManifest) -> ChangeSet {
-    let cur = current.files();
-    let need = cur.iter().filter(|(path, entry)| previous.get(*path) != Some(*entry)).count();
-    let remove = previous.keys().filter(|path| !cur.contains_key(*path)).count();
-    flat(need, remove)
+    flat(upload_count(previous, current), removed_files(previous, current).len())
+}
+
+/// How many of `current`'s files `previous` does not already hold.
+pub fn upload_count(previous: &HashMap<String, String>, current: &SealedManifest) -> usize {
+    current.files().iter().filter(|(path, entry)| previous.get(*path) != Some(*entry)).count()
+}
+
+/// The paths `files` holds that `current` no longer produces: the one
+/// definition of "vanished", shared by [`removed_files`] and `vanished_outputs`.
+fn vanished_keys<'a, 'c>(
+    files: &'a HashMap<String, String>,
+    current: &'c SealedManifest,
+) -> impl Iterator<Item = &'a str> + 'c
+where
+    'a: 'c,
+{
+    files.keys().map(String::as_str).filter(|out| !current.files().contains_key(*out))
+}
+
+/// The output paths `previous` has that `current` no longer produces, sorted.
+pub fn removed_files(previous: &HashMap<String, String>, current: &SealedManifest) -> Vec<String> {
+    let mut gone: Vec<String> = vanished_keys(previous, current).map(str::to_string).collect();
+    gone.sort();
+    gone
 }
 
 /// The path→hash diff two flat maps can answer on their own: Added (in
@@ -622,12 +644,7 @@ pub fn classify(previous: Option<&PublishedSnapshot>, current: &SealedManifest) 
 fn vanished_outputs<'a>(baseline: &'a PublishedSnapshot, current: &SealedManifest) -> Vec<(&'a str, bool)> {
     let page_outputs: std::collections::HashSet<&str> =
         baseline.source_to_output.values().map(String::as_str).collect();
-    baseline
-        .files
-        .keys()
-        .filter(|out| !current.files().contains_key(*out))
-        .map(|out| (out.as_str(), page_outputs.contains(out.as_str())))
-        .collect()
+    vanished_keys(&baseline.files, current).map(|out| (out, page_outputs.contains(out))).collect()
 }
 
 /// A video's ladder file (its master playlist, a rung's playlist or segment

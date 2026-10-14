@@ -21,7 +21,9 @@ use crate::moss_paths::MossPaths;
 #[derive(Debug)]
 pub enum Transfer {
     /// Files that differ from this folder's last publish record.
-    SinceLastPublish { upload: u32, remove: u32 },
+    /// `removed` is every output path the last publish had and this build
+    /// does not; its length is the count of files a deploy would remove.
+    SinceLastPublish { upload: u32, removed: Vec<String> },
     /// No record of an earlier publish from this folder, so nothing to count
     /// against; only the server could say.
     NoRecord,
@@ -66,11 +68,23 @@ impl DryRun {
             out.push_str(&capped_lines(&set.removed, cause_line));
         }
         match &self.transfer {
-            Transfer::SinceLastPublish { upload, remove } => out.push_str(&format!(
-                "Transfer, measured against this folder's last publish: would upload {} and remove {}.\n",
-                files(*upload),
-                files(*remove)
-            )),
+            Transfer::SinceLastPublish { upload, removed } => {
+                out.push_str(&format!(
+                    "Transfer, measured against this folder's last publish: would upload {} and remove {}.\n",
+                    files(*upload),
+                    files(removed.len() as u32)
+                ));
+                // A removed public address is already listed above; this is the rest.
+                let rest: Vec<String> = removed
+                    .iter()
+                    .filter(|p| !set.removed.iter().any(|a| &a.path == *p))
+                    .map(|p| crate::build::served_path::served_address(p))
+                    .collect();
+                if !rest.is_empty() {
+                    out.push_str("Also removed:\n");
+                    out.push_str(&capped_lines(&rest, |a| a.clone()));
+                }
+            }
             Transfer::NoRecord => out.push_str(
                 "Transfer: not known, because there is no record of an earlier publish from this folder.\n",
             ),
@@ -226,8 +240,10 @@ pub async fn run_dry_run(
         let target = backfill::publish_target(&mp);
         match published_record::load_for(&mp, target.as_deref()) {
             Some(record) => {
-                let flat = change_set::flat_against(&record.files, &sealed);
-                Transfer::SinceLastPublish { upload: flat.flat_upload, remove: flat.flat_remove }
+                Transfer::SinceLastPublish {
+                    upload: change_set::upload_count(&record.files, &sealed) as u32,
+                    removed: change_set::removed_files(&record.files, &sealed),
+                }
             }
             None => Transfer::NoRecord,
         }
@@ -264,7 +280,7 @@ mod tests {
                 moved_to: None,
                 source: None,
             }]),
-            transfer: Transfer::SinceLastPublish { upload: 2, remove: 1 },
+            transfer: Transfer::SinceLastPublish { upload: 2, removed: vec!["legacy-feed.xml".into(), "style.1a2b3c.css".into()] },
             refusal: Some("Nothing published — REFUSED".into()),
             would_register: None,
             would_create_key: false,
@@ -332,12 +348,42 @@ mod tests {
              \x20 added    new.md\n\
              Addresses going offline: 1\n\
              \x20 /legacy-feed.xml is no longer produced by your site.\n\
-             Transfer, measured against this folder's last publish: would upload 2 files and remove 1 file.\n\
+             Transfer, measured against this folder's last publish: would upload 2 files and remove 2 files.\n\
+             Also removed:\n\
+             \x20 /style.1a2b3c.css\n\
              Publish check: a real deploy would be refused:\n\
              Nothing published — REFUSED\n\
              Not run, because it needs the server: whether another copy of this folder published since this one, and the upload itself. \
              A real deploy can still stop there.\n"
         );
+    }
+
+    #[test]
+    fn removed_files_not_already_offline_addresses_are_listed_and_capped() {
+        let removed: Vec<String> = (0..23).map(|i| format!("old-{i:02}.css")).collect();
+        let dry = DryRun { transfer: Transfer::SinceLastPublish { upload: 0, removed }, ..small() };
+        let text = dry.render();
+        assert!(text.contains("remove 23 files.\nAlso removed:\n  /old-00.css\n  /old-01.css\n"), "{text}");
+        assert!(text.contains("  /old-19.css\n  and 3 more\n"), "{text}");
+        assert!(!text.contains("old-20"), "{text}");
+    }
+
+    #[test]
+    fn a_removed_page_is_listed_once_as_its_address_and_hashed_assets_as_served() {
+        let mut dry = small();
+        dry.change_set.removed.push(RemovedAddress {
+            path: "a/index.html".into(),
+            reason: RemovalReason::Unexplained,
+            moved_to: None,
+            source: None,
+        });
+        dry.transfer = Transfer::SinceLastPublish {
+            upload: 0,
+            removed: vec!["a/index.html".into(), "legacy-feed.xml".into(), "style.1a2b3c.css".into()],
+        };
+        let text = dry.render();
+        assert_eq!(text.matches("/a/").count(), 1, "{text}");
+        assert!(text.contains("Also removed:\n  /style.1a2b3c.css\n"), "{text}");
     }
 
     /// Never a promise that the deploy goes ahead.

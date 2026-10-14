@@ -198,6 +198,21 @@ fn a_published_file_set_yields_flat_counts_and_still_no_verbs() {
     assert_eq!((set.added, set.edited, set.deleted, set.restyled), (0, 0, 0, 0));
 }
 
+/// The dry run names what the flat counts only number: sorted, and exactly the
+/// paths the current build stopped producing.
+#[test]
+fn a_published_file_set_names_the_files_it_no_longer_produces() {
+    let previous = sealed(
+        &[("g.md", "gone/index.html", "h-g", b"G"), ("s.md", "stays/index.html", "h-s", b"S")],
+        &[("style.aaaa.css", b"old")],
+    );
+    let previous = previous.files().clone();
+    let current = sealed(&[("s.md", "stays/index.html", "h-s", b"S")], &[("style.bbbb.css", b"new")]);
+
+    assert_eq!(removed_files(&previous, &current), vec!["gone/index.html", "style.aaaa.css"]);
+    assert_eq!(upload_count(&previous, &current), 1);
+}
+
 /// Outputs with no page behind them are counted, not enumerated — and only
 /// when they changed. Counting every unmapped output would report "1,847
 /// assets" on a publish that changes nothing.

@@ -710,6 +710,11 @@ mod dry_run_tests {
         let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
 
         assert!(dry.refusal.as_deref().is_some_and(|r| r.contains("/legacy-feed.xml")), "{dry:?}");
+        assert!(
+            matches!(&dry.transfer, crate::deploy::dry_run::Transfer::SinceLastPublish { removed, .. } if removed == &["legacy-feed.xml"]),
+            "{:?}",
+            dry.transfer
+        );
         assert_eq!(report_code(report), 1);
         assert!(!fx.contacted_the_server(), "a dry run must not contact the hosting server");
         assert_eq!(fx.record_bytes(), before, "a dry run must not write a published record");
