@@ -5970,6 +5970,31 @@ fn a_cloud_evicted_page_survives_the_seal_time_sweep_and_the_deploy_manifest() {
     assert!(!keys.iter().any(|k| k == "keeper/index.html"), "keys: {keys:?}");
 }
 
+/// A translation still in the cloud is not gone: the build keeps publishing
+/// its last page, so an old address recorded as forwarding to it keeps doing
+/// so, rather than being sent to the default language's page at that place.
+#[test]
+fn a_translation_still_in_the_cloud_keeps_its_old_address() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    let page = |title: &str| format!("---\ntitle: {title}\n---\n\n# {title}\n");
+    fs::write(test_dir.join("index.md"), "# Home").unwrap();
+    fs::write(test_dir.join("new.md"), page("New")).unwrap();
+    fs::create_dir_all(test_dir.join("zh-hans")).unwrap();
+    fs::write(test_dir.join("zh-hans/new.md"), page("新")).unwrap();
+    fs::create_dir_all(test_dir.join(".moss/data")).unwrap();
+    fs::write(test_dir.join(".moss/data/redirects.json"), r#"{"zh-hans/old/": "zh-hans/new/"}"#).unwrap();
+    let staging = test_dir.join(".moss/build.nosync/staging");
+
+    build_test_sealed(folder_path).expect("first build");
+    assert!(fs::read_to_string(staging.join("zh-hans/old/index.html")).unwrap().contains("url=/zh-hans/new/"));
+
+    let _cloud = crate::build::icloud::pretend::evicted(&test_dir.join("zh-hans/new.md"));
+    let keys = build_test_sealed(folder_path).expect("build with the translation evicted");
+    assert!(keys.iter().any(|k| k == "zh-hans/new/index.html"), "premise: the translation is carried forward, keys: {keys:?}");
+    assert!(fs::read_to_string(staging.join("zh-hans/old/index.html")).unwrap().contains("url=/zh-hans/new/"));
+}
+
 
 // ---------------------------------------------------------------------------
 // The cloud gate: does this build's home page belong to the user?

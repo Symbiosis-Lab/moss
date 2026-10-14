@@ -2632,62 +2632,6 @@ pub fn generate_blocking_content_for_build(
         log::warn!("⚠️ Failed to save inventory: {}", e);
     }
 
-    // Gap #3 fix: emit the redirect table into the pending manifest so the seal
-    // (and therefore the generation-id) covers it. The baseline is the record
-    // of what the last publish put live (`.moss/deploy/`), so it reflects the
-    // URLs serving at the point a new build starts.
-    // We use the IN-MEMORY `article_map` — not a re-read from disk — because
-    // `article_map.save()` may not have flushed yet and, more importantly,
-    // the in-memory value is the authoritative result of this build.
-    //
-    // A term whose namespace moved (`author` declared under `[terms.people]`)
-    // keeps serving its old `authors/<slug>/` URL: those moves are recomputed
-    // from the kinds table every build and stored nowhere, so they ride in
-    // beside the persisted rename history.
-    let term_stubs =
-        [crate::build::terms::kind_move_stubs(&term_index), crate::build::terms::claim_stubs(&term_index)].concat();
-    let table_inputs = crate::build::feeds::redirects::TableInputs {
-        term_stubs,
-        has_deployed_url: site_url.is_deployed(),
-        declared: site_config.declared_redirects.clone(),
-    };
-    match crate::build::feeds::redirects::emit_redirect_table(
-        &paths,
-        &article_map,
-        &table_inputs,
-        output_dir,
-        pending,
-    ) {
-        // A build that could not read what is live cannot notice a rename, and
-        // an unnoticed rename 404s the old URL for good.
-        //
-        // Logged, not shown. The author cannot make the record readable, and
-        // the risk is conditional on a rename she has not made — so the app
-        // panel said only that something she had never heard of was missing.
-        // The moment worth her attention is a rename made WHILE the record is
-        // unusable, and this function is where that becomes visible: compare
-        // the previous `article_map` on disk with `current_article_map` before
-        // `article_map.save()` overwrites it. Deferred deliberately, not
-        // forgotten (2026-08-29).
-        Ok(health) => {
-            use crate::build::feeds::redirects::BaselineHealth;
-            let reason = match health {
-                BaselineHealth::Fine => None,
-                BaselineHealth::Unusable(why) => Some(why.describe()),
-                BaselineHealth::NoBaselineYet => {
-                    Some("this site has no usable record of what is live yet; the next \
-                          publish writes it")
-                }
-            };
-            if let Some(reason) = reason {
-                log_warn_problem!(
-                    "{reason} — a renamed page's old link may 404 until then"
-                );
-            }
-        }
-        Err(e) => log::warn!("Failed to emit the redirect table: {}", e),
-    }
-
     // Generate _previews.json for hover link previews
     // Compact JSON mapping permalink → { title, description, preview }
     // Keyed on `is_public_page` (not `is_listable`): a `listed: false` page can
@@ -2764,7 +2708,7 @@ pub fn generate_blocking_content_for_build(
             }
         }
     }
-    log::debug!(target: "timing", "[render] prelude: article_map+inventory+redirects+previews+subscribe: {:?}", total_start.elapsed());
+    log::debug!(target: "timing", "[render] prelude: article_map+inventory+previews+subscribe: {:?}", total_start.elapsed());
 
     send_progress(
         progress_sender,
@@ -3018,21 +2962,91 @@ pub fn generate_blocking_content_for_build(
         if carried > 0 { log::info!("[build] {} page(s) still in the cloud — keeping their published output", carried); }
     }
 
+    // Static `.html` pages and notebook viewers are written after this, by the
+    // asset walk and the notebook step, at served paths the scan already fixes.
+    // The redirect table counts them as served, and the sitemap lists them.
+    let static_pages: Vec<(ServedPath, &str)> = project_structure
+        .html_files
+        .iter()
+        .filter_map(|f| Some((ServedPath::from_source(&resolve_path_with_overrides(&f.path, &dir_overrides)).ok()?, f.path.as_str())))
+        .collect();
+    let notebook_viewers: Vec<ServedPath> = project_structure
+        .notebook_files
+        .iter()
+        .filter_map(|f| crate::build::notebook::viewer_path(&f.path).ok())
+        .collect();
+
+    // Gap #3 fix: emit the redirect table into the pending manifest so the seal
+    // (and therefore the generation-id) covers it. The baseline is the record
+    // of what the last publish put live (`.moss/deploy/`), so it reflects the
+    // URLs serving at the point a new build starts.
+    //
+    // Planned here, after every page this phase registers (the media collection
+    // pages, the subscribe pages and the pages carried forward because their
+    // source is still in the cloud), so that a target or an old address taken by
+    // one of them reads as served: a translation still in the cloud is not gone,
+    // and an old address pointing at it must not be sent to another language.
+    //
+    // We use the IN-MEMORY `article_map` — not a re-read from disk — because
+    // `article_map.save()` may not have flushed yet and, more importantly,
+    // the in-memory value is the authoritative result of this build.
+    //
+    // A term whose namespace moved (`author` declared under `[terms.people]`)
+    // keeps serving its old `authors/<slug>/` URL: those moves are recomputed
+    // from the kinds table every build and stored nowhere, so they ride in
+    // beside the persisted rename history.
+    let term_stubs =
+        [crate::build::terms::kind_move_stubs(&term_index), crate::build::terms::claim_stubs(&term_index)].concat();
+    let table_inputs = crate::build::feeds::redirects::TableInputs {
+        term_stubs,
+        has_deployed_url: site_url.is_deployed(),
+        declared: site_config.declared_redirects.clone(),
+        written_later: static_pages.iter().map(|(sp, _)| sp).chain(&notebook_viewers).map(|sp| sp.as_str().to_string()).collect(),
+    };
+    match crate::build::feeds::redirects::emit_redirect_table(
+        &paths,
+        &article_map,
+        &table_inputs,
+        output_dir,
+        pending,
+    ) {
+        // A build that could not read what is live cannot notice a rename, and
+        // an unnoticed rename 404s the old URL for good.
+        //
+        // Logged, not shown. The author cannot make the record readable, and
+        // the risk is conditional on a rename she has not made — so the app
+        // panel said only that something she had never heard of was missing.
+        // The moment worth her attention is a rename made WHILE the record is
+        // unusable, and this function is where that becomes visible: compare
+        // the previous `article_map` on disk with `current_article_map` before
+        // `article_map.save()` overwrites it. Deferred deliberately, not
+        // forgotten (2026-08-29).
+        Ok(health) => {
+            use crate::build::feeds::redirects::BaselineHealth;
+            let reason = match health {
+                BaselineHealth::Fine => None,
+                BaselineHealth::Unusable(why) => Some(why.describe()),
+                BaselineHealth::NoBaselineYet => {
+                    Some("this site has no usable record of what is live yet; the next \
+                          publish writes it")
+                }
+            };
+            if let Some(reason) = reason {
+                log_warn_problem!(
+                    "{reason} — a renamed page's old link may 404 until then"
+                );
+            }
+        }
+        Err(e) => log::warn!("Failed to emit the redirect table: {}", e),
+    }
+
     if has_rss {
-        // Static `.html` pages and notebook viewers are written after this, by
-        // the asset walk and the notebook step, at served paths the scan
-        // already fixes.
-        sitemap_pages.extend(project_structure.html_files.iter().filter_map(|f| {
-            let sp = ServedPath::from_source(&resolve_path_with_overrides(&f.path, &dir_overrides)).ok()?;
+        sitemap_pages.extend(static_pages.iter().filter_map(|(sp, src)| {
             let listed = sp.as_str().ends_with(".html")
-                && !crate::build::feeds::sitemap::declares_noindex(&Path::new(source_path).join(&f.path));
+                && !crate::build::feeds::sitemap::declares_noindex(&Path::new(source_path).join(src));
             listed.then(|| sp.as_str().to_string())
         }));
-        sitemap_pages.extend(
-            project_structure.notebook_files.iter()
-                .filter_map(|f| crate::build::notebook::viewer_path(&f.path).ok())
-                .map(|sp| sp.as_str().to_string()),
-        );
+        sitemap_pages.extend(notebook_viewers.iter().map(|sp| sp.as_str().to_string()));
         let entries = crate::build::feeds::sitemap::entries_for_pages(&sitemap_pages, &documents);
         let sitemap_content = crate::build::feeds::sitemap::generate_sitemap(&entries, site_url.as_str());
         // Site 11 (Pattern A): emit sitemap.xml.

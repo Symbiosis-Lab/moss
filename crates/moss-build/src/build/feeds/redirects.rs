@@ -183,6 +183,8 @@ pub struct TableInputs {
     pub has_deployed_url: bool,
     /// The `[redirects]` entries of the config the build already parsed.
     pub declared: Vec<(String, String)>,
+    /// Addresses the background phase writes after the table is planned.
+    pub written_later: std::collections::BTreeSet<String>,
 }
 
 /// Build-time entry point: detect renames, write every redirect into `pending`,
@@ -281,7 +283,7 @@ pub fn emit_redirect_table(
         inputs.declared.iter().map(|(from, to)| Candidate { from: from.clone(), to: to.clone(), declared: true }),
     );
     let project_root = paths.project_root();
-    let planned = table::plan(candidates, &Probe { pending, source_root: project_root });
+    let planned = table::plan(candidates, &Probe { pending, source_root: project_root, written_later: &inputs.written_later });
 
     // Every build re-derives the table regardless (no I/O of its own), but
     // writing every stub's bytes to stage on every build — the loop below — is
@@ -308,7 +310,7 @@ pub fn emit_redirect_table(
             .filter(|p| p.form == Form::Stub)
             .all(|p| crate::build::io_utils::output_present(&output_dir.join(p.from.key())));
 
-    let probe = Probe { pending, source_root: project_root };
+    let probe = Probe { pending, source_root: project_root, written_later: &inputs.written_later };
     let copy_sources: Vec<Option<table::CopySource>> = planned
         .iter()
         .map(|p| match (&p.form, &p.to) {
