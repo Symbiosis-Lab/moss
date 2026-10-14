@@ -30,6 +30,9 @@ for (const engine of ['chromium', 'webkit']) {
   await input.waitFor({state:'visible'});
   assert.equal(await input.getAttribute('aria-label'),label);
   assert.equal(await page.locator('.moss-search__panel').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(250, 248, 245)');
+  // Focus shows on the panel's own edge (accent border), never as an outline on the input.
+  const focus=await page.evaluate(()=>{const i=document.querySelector('.moss-search__input'),p=document.querySelector('.moss-search__panel');const t=document.createElement('i');t.style.color='var(--moss-color-ui-accent)';document.body.append(t);const accent=getComputedStyle(t).color;t.remove();return {focused:document.activeElement===i,outline:getComputedStyle(i).outlineStyle,border:getComputedStyle(p).borderTopColor,accent};});
+  assert.equal(focus.focused,true); assert.equal(focus.outline,'none'); assert.equal(focus.border,focus.accent);
   await input.fill(query);
   const results=page.locator('.moss-search__link');
   await results.first().waitFor({state:'visible',timeout:20000});

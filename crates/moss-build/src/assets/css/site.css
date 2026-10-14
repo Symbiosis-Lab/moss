@@ -117,6 +117,10 @@
 .moss-input:focus {
   border-block-end-color: var(--moss-color-text);
 }
+.moss-input:focus-visible { outline: none; }
+@media (forced-colors: active) {
+  .moss-input:focus { border-block-end-color: Highlight; }
+}
 .moss-input:disabled {
   opacity: 0.5;
   cursor: not-allowed;

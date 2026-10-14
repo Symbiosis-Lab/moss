@@ -26,6 +26,8 @@ Reach for the cheapest rung that works; earn each step:
    not three stacked utilities.
 4. **Structural override.** Re-lay-out a page against moss's defaults.
 
+A text field shows focus on its own border, never as a ring inside or outside it. A theme's site-wide focus ring should exclude fields, for example `:focus-visible:not(input, textarea, select)`, and style a field's focus on its own border.
+
 ### Rung 4 in detail
 
 The first three rungs restyle a component in place. Rung 4 is for the other

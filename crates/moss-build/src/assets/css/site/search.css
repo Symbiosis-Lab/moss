@@ -126,6 +126,16 @@
   overflow: hidden;
 }
 
+/* The panel is the field the reader sees, so while its input holds focus the
+   panel's own edge takes the accent: the focus shows on the box itself, never
+   as a ring inside or around it. The input draws no outline of its own. */
+.moss-search__panel:has(.moss-search__input:focus) {
+  border-color: var(--moss-color-ui-accent);
+}
+@media (forced-colors: active) {
+  .moss-search__panel:has(.moss-search__input:focus) { border-color: Highlight; }
+}
+
 /* --- Input row --- */
 
 .moss-search__field {
@@ -156,6 +166,7 @@
   color: var(--moss-color-text);
 }
 .moss-search__input::placeholder { color: var(--moss-color-muted); }
+.moss-search__input:focus-visible { outline: none; }
 
 /* Indeterminate 1px hairline — only shown past 200ms of genuine chunk-fetch
    latency, so a fast query never flashes it. */
@@ -186,8 +197,8 @@
 
    Neutral, not accent-tinted. It was --moss-color-accent-quiet, which put a
    green rule directly under the input — close enough to a focus underline that
-   it read as one, on a field that is always focused and has no focus state to
-   express. It is a divider between the query and its results, so it takes the
+   it read as one. The panel's focus state lives on the panel's own border (above),
+   not here. It is a divider between the query and its results, so it takes the
    same --moss-border-light every other hairline in this panel uses (the panel
    border, the row separators). */
 .moss-search__seam {
