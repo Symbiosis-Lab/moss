@@ -2684,18 +2684,11 @@ pub fn generate_blocking_content_for_build(
                 PREVIEW_MAX_CHARS,
                 site_config.math,
             );
-            let mut entry = serde_json::Map::new();
             // Hover-preview tooltips are chrome; use the plain-text label.
-            entry.insert("title".into(), serde_json::Value::String(doc.label.clone()));
-            if let Some(ref desc) = doc.description {
-                if !desc.is_empty() {
-                    let clean_desc = crate::build::page::meta::strip_markdown_inline(desc);
-                    entry.insert("description".into(), serde_json::Value::String(clean_desc));
-                }
-            }
-            if !preview_text.is_empty() {
-                entry.insert("preview".into(), serde_json::Value::String(preview_text));
-            }
+            let Some(entry) = crate::build::page::meta::preview_entry(&doc.label, doc.description.as_deref(), &preview_text)
+            else {
+                continue;
+            };
             let permalink = format!("/{}", doc.url_path.trim_start_matches('/')); // allow:served-path-url-construct (page permalink key for previews.json index, not an HTML-emitted URL)
             let pretty = crate::build::scan::article_map::to_pretty_url(&permalink);
             let pretty_url = format!("/{}", pretty.trim_start_matches('/')); // allow:served-path-url-construct (pretty URL key for previews.json index, derived from permalink)

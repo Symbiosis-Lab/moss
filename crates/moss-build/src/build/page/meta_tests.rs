@@ -2491,3 +2491,24 @@ fn a_derived_text_placeholder_is_not_description_material() {
         assert_eq!(extract_description(&only, true), "");
     }
 }
+
+#[test]
+fn title_only_page_has_no_entry() {
+    assert!(preview_entry("Work", None, "").is_none());
+    assert!(preview_entry("Work", Some(""), "").is_none());
+}
+
+#[test]
+fn page_with_description_keeps_entry() {
+    let entry = preview_entry("Work", Some("Selected projects"), "").expect("entry");
+    assert_eq!(entry["title"], "Work");
+    assert_eq!(entry["description"], "Selected projects");
+    assert!(!entry.contains_key("preview"));
+}
+
+#[test]
+fn page_with_excerpt_only_keeps_entry() {
+    let entry = preview_entry("Work", None, "Body text").expect("entry");
+    assert_eq!(entry["preview"], "Body text");
+    assert!(!entry.contains_key("description"));
+}
