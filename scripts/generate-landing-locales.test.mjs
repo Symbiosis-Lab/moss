@@ -34,3 +34,21 @@ test('locale generation preserves script and style text through HTML end tag var
     }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+// The Chinese pages are this script's output, committed beside the English page they come from. A change
+// to site/index.html that is not regenerated leaves those routes running the old page.
+test('the committed Chinese landing pages are generated from the current English page', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'moss-locales-'));
+  try {
+    for (const directory of ['scripts', 'site/assets/brand', 'crates/moss-build/icons']) await mkdir(join(root, directory), { recursive: true });
+    for (const path of ['scripts/generate-landing-locales.mjs', 'site/index.html', 'site/landing-i18n.js', 'crates/moss-build/icons/icon.svg']) {
+      await copyFile(new URL(`../${path}`, import.meta.url), join(root, path));
+    }
+    execFileSync(process.execPath, [join(root, 'scripts/generate-landing-locales.mjs')], { stdio: 'pipe' });
+    for (const locale of ['zh-hans', 'zh-hant']) {
+      const generated = await readFile(join(root, `site/${locale}/index.html`), 'utf8');
+      const committed = await readFile(new URL(`../site/${locale}/index.html`, import.meta.url), 'utf8');
+      assert(generated === committed, `site/${locale}/index.html is stale; run node scripts/generate-landing-locales.mjs`);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

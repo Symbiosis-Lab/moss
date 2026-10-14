@@ -997,7 +997,8 @@ scatterPlates(plateEls);
 // page has no module bundler). createSim/advance below are that package's.
 //
 // Phones display the wash at less than half its design size.
-const sim = MossWatercolor.createSim({ canvas, texW: BASE_TEX_W, texH: BASE_TEX_H, divisor: mobileLayout() ? 4 : 2, diagMode: DIAG, rect: () => printRect });
+const simOptions = () => ({ canvas, texW: BASE_TEX_W, texH: BASE_TEX_H, divisor: mobileLayout() ? 4 : 2, diagMode: DIAG, rect: () => printRect });
+let sim = MossWatercolor.createSim(simOptions());
 // Wherever the cursor is, a scroll gesture moves the page and nothing else. The
 // editor and the preview are live documents with their own scroll containers,
 // so each frame has its own scrolling switched off and the browser chains the
@@ -1655,9 +1656,12 @@ function syncLoop() {
   if (want) loopVid.play().catch(() => {}); else loopVid.pause();
 }
 // How far the last join has run, and the only thing it moves.
-const setCross = (q) => { xf = q; document.documentElement.style.setProperty('--xf', q.toFixed(3)); syncLoop(); };
-// The close takes the pointer and the tab order only where it is settled: during
-// the scrub it is paint, and behind the page it is not there at all. The join
+// Once the close is more than half there it takes the pointer, and gives it back below that on the
+// way out: a button the reader can see must answer a click, and the page behind it is by then faded.
+const TAKES_POINTER = .5;
+const setCross = (q) => { xf = q; document.documentElement.style.setProperty('--xf', q.toFixed(3)); syncLoop(); fiveOn(q >= TAKES_POINTER); };
+// The close takes the pointer and the tab order only where it is mostly there: while it is
+// still faint it is paint, and behind the page it is not there at all. The join
 // has two sides and the page is the other one: where the close is settled the
 // page is faded to nothing, and a control faded to nothing is still a tab stop
 // until the element it sits in is inert.
@@ -1809,6 +1813,21 @@ const reachToward = (from, want) => {
   const to = legToward(from, want, true), next = stepToward(from, want);
   return to === from && mobileLayout() && next !== from && joinAt(from, next).wash && Math.min(from, next) !== SHIPS ? next : to;
 };
+// A join the morph cannot make (no GPU, or a print not yet taken) used to pop: the stage changed scene
+// between two frames. With the print of the scene being left in hand, that print is laid over the
+// canvas's own place first and thinned away while the live scene stands beneath, which needs no GPU.
+let dissolvesRun = 0;
+function dissolveFrom(print) {
+  if (!print || reduce) return;
+  const veil = document.createElement('canvas');
+  veil.width = print.width; veil.height = print.height;
+  veil.getContext('2d').drawImage(print, 0, 0);
+  veil.setAttribute('aria-hidden', 'true');
+  veil.style.cssText = `position:absolute;left:${printRect.x}px;top:${printRect.y}px;width:${printRect.w}px;height:${printRect.h}px;z-index:6;pointer-events:none;`;
+  cell.append(veil); dissolvesRun++;
+  const gone = () => veil.remove();
+  veil.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 360, easing: 'ease-out' }).finished.then(gone, gone);
+}
 const passThrough = (from, to) => { for (let s = stepToward(from, to); s !== to; s = stepToward(s, to)) { sceneClasses(s); groundAt(s); } };
 // A scene change: one mechanism at a time, and never two at once. The target is
 // read whole off the scroll position, so a jump is not a queue of joins to walk
@@ -1843,7 +1862,7 @@ async function runJoin() {
         // wash is a cut, and so is a boundary whose print never arrived; a wash
         // that runs may be re-pointed or turned around inside.
         if (reach !== shown) { shown = await pour(reach); }
-        else { passThrough(shown, to); shown = to; }
+        else { dissolveFrom(sheets[shown]); passThrough(shown, to); shown = to; }
       }
       if (target === SHARE && xfAt() >= 1) { standAtTerminalClose(); break; }
       still(shown);
@@ -1911,7 +1930,7 @@ let playPair = null;
 // when the art stops answering the scroll (a join waits on running, on the
 // prints being on hand, and on no capture being in progress).
 if (new URLSearchParams(location.search).has('washdbg')) {
-  window.__playback = { sim, pair: () => playPair };
+  window.__playback = { get sim() { return sim; }, pair: () => playPair };
   const hud = document.createElement('pre');
   hud.setAttribute('style', 'position:fixed;left:6px;bottom:6px;z-index:9999;margin:0;padding:6px 8px;font:11px/1.35 ui-monospace,monospace;background:rgba(0,0,0,.72);color:#fff;border-radius:6px;pointer-events:none;white-space:pre');
   let frames = 0, fps = 0, last = performance.now();
@@ -2600,12 +2619,25 @@ const setSheet = (scene, c) => {
 // Prints are the wash's. Reduced motion cuts, a machine without float render
 // targets cuts, and a scene whose print has proved impossible cuts too; none of
 // them needs a capture, and the retake loop was taking one every second anyway.
-let printable = true;
+let printable = true, printFailures = 0, printRetryAt = 0;
 // A phone short of GPU memory can take the context away. Nothing then draws,
 // so the washes stop and the joins cut: a page that answers is better than a
 // canvas frozen over it.
 let simLost = false, washError = null;
-canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); simLost = true; console.warn('watercolor: GPU context lost; transitions cut from here'); });
+canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); simLost = true; console.warn('watercolor: GPU context lost; transitions cut until it returns'); });
+// The browser hands a lost context back, but the programs, textures and recordings of the old one died
+// with it. Without building the simulation again the joins stayed cut until the page was reloaded.
+canvas.addEventListener('webglcontextrestored', () => {
+  try {
+    const next = MossWatercolor.createSim(simOptions());
+    if (!next) return;
+    sim = next; playPair = null; finalPrints = null;
+    if (finalWash) { cancelAnimationFrame(finalWash.raf); finalWash = null; releasePigmentCover(); }
+    simLost = false;
+    console.info('watercolor: GPU context restored; transitions wash again');
+    warmSoon();
+  } catch (e) { console.warn('watercolor: could not build again after the GPU context returned:', e.message); }
+});
 const washing = () => !!sim && !reduce && printable && !simLost;
 const primed = () => !washing() || needed(shown).every((n) => sheets[n]);   // a cut needs no prints
 // The article iframe nested inside a scene's own shell (the preview pane),
@@ -2706,8 +2738,14 @@ async function takeOthers(list = neighbours(shown)) {
     // An unprintable neighbour must not lock every transition behind primed()
     // and repeatedly switch the live stage while retrying. Use the existing
     // cut fallback for this visit, then restore the visible scene below.
-    try { setSheet(other, await capture(other)); }
-    catch (e) { printable = false; console.warn('Watercolor unavailable:', e.message); break; }
+    try { setSheet(other, await capture(other)); printFailures = 0; }
+    catch (e) {
+      // Cut for now, and try again a little later: a print that failed while images and fonts were still
+      // arriving is not one that is impossible, and switching the morph off for the whole visit is why a
+      // first visit could cut where a reload washed.
+      printable = false; printFailures++; printRetryAt = performance.now() + 4000 * printFailures;
+      console.warn('Watercolor unavailable:', e.message); break;
+    }
     finally { restoreImgs(); }
   }
   // The reader may have crossed a boundary while the foreignObject capture was
@@ -2784,9 +2822,11 @@ const atRest = () => !running() && !document.hidden && performance.now() - restS
 // moment old than cut, and `takeOthers` never re-enters a scene that has one.
 let warmTimer = null;
 function warmSoon(ms = WARM_MS) { if (warmTimer != null) return; warmTimer = setTimeout(() => { warmTimer = null; whenIdle(warm); }, ms); }
+const PRINT_TRIES = 4;
 async function warm() {
   if (document.documentElement.dataset.static) return;
   warmSoon();            // the next tick is a second from this one's start, not from its end
+  if (!printable && printFailures < PRINT_TRIES && performance.now() >= printRetryAt) printable = true;
   // On mobile nothing is captured while the reader crosses a boundary — a
   // capture holds the canvas still over a moving page, and a wash no longer
   // waits for one — but a reader standing in a scene is enough, rest or not.
@@ -3004,13 +3044,13 @@ function sceneKey(e, fromDemo) {
   const dir = e.key === ' ' && e.shiftKey ? -1 : KEY_STEP[e.key];
   if (dir == null || (inClose() && !(dir < 0 && scrollY <= restY(SHARE) + 2))) return;
   e.preventDefault();
-  widenSnap();
+  widenSnap(); endCarry();
   const far = e.key === 'Home' || e.key === 'End';
   scrollToRest(far ? (dir < 0 ? -1 : SHARE) : Math.max(-1, Math.min(SHARE, (aimed ?? nearestRest()) + dir)));
 }
 addEventListener('keydown', (e) => sceneKey(e, false));
 // pointerdown on the page itself (a frame's own never reaches here): no demo is in use
-addEventListener('pointerdown', () => { demoInUse = false; aimed = null; widenSnap(); }, true);
+addEventListener('pointerdown', () => { demoInUse = false; aimed = null; widenSnap(); endCarry(); }, true);
 // Chrome snaps a short scroll back to the rest it started from: one 100px wheel notch moves the
 // page about 90px within 100 ms and has it back within 200 ms, and only two quick notches
 // advance (measured on Chrome 154). So a short scroll is carried on to the next rest: the first
@@ -3026,9 +3066,13 @@ addEventListener('pointerdown', () => { demoInUse = false; aimed = null; widenSn
 // already taking the page back (86px of backward travel, measured). So while a scroll is
 // carried the snap is off (html.carried), and drivePicture puts it back once the page has come
 // to rest on a rest. These are the only writes the page makes in response to the wheel, and
-// they never take the wheel from the reader.
+// they never take the wheel from the reader. carried names the rest a carry is heading for, and is
+// null when there is none.
 const ONWARD_QUIET_MS = 60, ONWARD_MIN_PX = 24, NOTCH_PX = 40;
-let stood = scrollY, carried = false, wheelOpen = false, wheelSum = 0, wheelQuiet = 0;
+let stood = scrollY, carried = null, wheelOpen = false, wheelSum = 0, wheelQuiet = 0;
+// A key or a click takes the page elsewhere, so an instant carry in progress has nothing left to
+// finish. A smooth carry is left to drivePicture as it always was.
+function endCarry() { if (!reduce) return; carried = null; document.documentElement.classList.remove('carried'); }
 // One swipe moves at most one scene. A swipe's momentum is the browser's, and so is the snap
 // point it picks: the one nearest where the momentum would carry the page. scroll-snap-stop asks
 // it to stop at the first, but Safari's momentum passes it: scene 1 stands a third of a screen
@@ -3087,7 +3131,7 @@ function goOnward() {
   if (i < 0) return;
   const after = ys[i + dir];
   if (after != null && Math.abs(scrollY - after) < Math.abs(scrollY - ys[i])) return;
-  carried = true; document.documentElement.classList.add('carried');
+  carried = i - 1; document.documentElement.classList.add('carried');
   restSince = performance.now();   // the page's stillness is counted from here, not from before the gesture
   scrollToRest(i - 1);
 }
@@ -3318,10 +3362,17 @@ function drivePicture(now) {
   // stopped short of a rest is first finished on the nearest, waiting 1.5 s of true stillness so
   // a smooth scroll merely slow to start is not sent prematurely (measured: 400 ms was too
   // short). A window that became the phone layout has no snap to return.
-  if (carried) {
-    const rest = nearestRest(), there = Math.abs(scrollY - restY(rest)) <= 1;
-    if (mobileLayout() || there) { carried = false; document.documentElement.classList.remove('carried'); }
-    else if (now - restSince > 1500) { restSince = now; scrollToRest(rest); }
+  // With reduced motion the carry is an instant scroll, which is at its rest by the next frame, but
+  // Chromium does not cancel a scroll it already had running (the wheel's own, or its snap back
+  // toward where the gesture began): that one goes on from the rest for whatever distance it had
+  // left, with the snap off (measured: a snap back 29px into its 99px, carried to the rest, went on
+  // to stop 70px short of it, and every later gesture was carried to the same rest again). So an
+  // instant carry ends only once the page stands still on the rest it was carried to (carried),
+  // and one that stopped elsewhere is put back on it; an instant scroll is never slow to start.
+  if (carried != null) {
+    const rest = reduce ? carried : nearestRest(), there = Math.abs(scrollY - restY(rest)) <= 1;
+    if (mobileLayout() || (there && !(reduce && real))) { carried = null; document.documentElement.classList.remove('carried'); }
+    else if (now - restSince > (reduce ? 150 : 1500)) { restSince = now; scrollToRest(rest); }
   }
   onScroll(dy);
   updateFinalDissolve();
@@ -3707,7 +3758,7 @@ window.__onHand = sheets;
 window.__restY = restY;   // the rests' own geometry, so a rest check reads it rather than keeping a second copy
 window.__targetAt = targetAt;   // what a rested position names, read the same way the wash reads it
 window.__plateBounds = plateBounds;   // the region a scattered/dragged plate must stay inside, the same formula the drag clamp and the initial scatter both read
-window.__state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +(mobileLayout() ? progressAt() : restProgress()).toFixed(3), travel, view: +pos().toFixed(1), primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg });
+window.__state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, dissolves: dissolvesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +(mobileLayout() ? progressAt() : restProgress()).toFixed(3), travel, view: +pos().toFixed(1), primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg });
 // window.__s3 is defined with the rest of scene 3's own script, above.
 // How the print pipeline is doing: captures started, how many are drawing now,
 // the most that ever drew at once, and how old the print on hand is.
