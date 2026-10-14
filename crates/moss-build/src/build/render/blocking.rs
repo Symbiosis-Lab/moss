@@ -766,7 +766,7 @@ pub fn generate_blocking_content_for_build(
                         has_content_folders: project_structure.has_content_folders,
                         seta_url: Some(&seta_url_for_build),
                         folder_lang,
-                        derived_title: resolve_result.derived_title.as_deref(),
+                        derived_facts: &resolve_result.derived_facts,
                     };
 
                     let mut doc = match process_markdown_file(&file_info.path, resolved_content, root_folder_name, &page_map, emit_source_lines, site_lang, site_id.as_deref(), site_config.markdown(), Some(&event_level_image_lookup), Some(&external_url_map), Some(&content_graph), page_context) {

@@ -417,7 +417,7 @@ fn nav_page_shows_its_article_title() {
         None,
         None,
         None,
-        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, derived_title: None },
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, derived_facts: &Default::default() },
     )
     .expect("should parse");
     assert!(
@@ -444,7 +444,7 @@ fn nav_page_with_body_heading_has_exactly_one_h1() {
         None,
         None,
         None,
-        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, derived_title: None },
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, derived_facts: &Default::default() },
     )
     .expect("should parse");
     assert_eq!(
@@ -477,7 +477,7 @@ fn non_nav_article_still_injects_title() {
         None,
         None,
         None,
-        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, derived_title: None },
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, derived_facts: &Default::default() },
     )
     .expect("should parse");
     assert!(
@@ -506,7 +506,7 @@ fn nav_false_restores_article_title() {
         None,
         None,
         None,
-        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, derived_title: None },
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, derived_facts: &Default::default() },
     )
     .expect("should parse");
     assert!(
@@ -533,7 +533,7 @@ fn nav_page_with_leading_image_then_h1_has_one_h1() {
         None,
         None,
         None,
-        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, derived_title: None },
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, derived_facts: &Default::default() },
     )
     .expect("should parse");
     assert_eq!(
@@ -561,7 +561,7 @@ fn nav_page_keeps_authored_body_h1() {
         None,
         None,
         None,
-        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, derived_title: None },
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, derived_facts: &Default::default() },
     )
     .expect("should parse");
     assert!(
@@ -1046,7 +1046,7 @@ fn homepage_sections_keep_permalink_anchors_and_title_has_none() {
         None,
         None,
         None,
-        PageContext { has_content_folders: false, seta_url: None, folder_lang: None, derived_title: None },
+        PageContext { has_content_folders: false, seta_url: None, folder_lang: None, derived_facts: &Default::default() },
     )
     .expect("should parse");
     assert!(
@@ -1822,7 +1822,7 @@ fn test_pipeline_sets_features_inline_apply_when_shortcode_present() {
         None,
         None,
         None,
-        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, derived_title: None },
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, derived_facts: &Default::default() },
     )
     .expect("pipeline should succeed");
     assert!(doc.features.inline_apply, "inline_apply flag must be set");
@@ -3587,7 +3587,7 @@ fn per_page_language_apply_in_zh_hans_subdir() {
         None,
         None,
         None,
-        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, derived_title: None },
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, derived_facts: &Default::default() },
     )
     .expect("should parse");
     assert!(
@@ -3630,7 +3630,7 @@ fn per_page_language_subscribe_in_zh_hans_subdir() {
         None,
         None,
         None,
-        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, derived_title: None },
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, derived_facts: &Default::default() },
     )
     .expect("should parse");
     assert!(
@@ -3669,7 +3669,7 @@ fn per_page_language_apply_en_page_in_zh_hans_site() {
         None,
         None,
         None,
-        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, derived_title: None },
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, derived_facts: &Default::default() },
     )
     .expect("should parse");
     assert!(
@@ -4393,4 +4393,36 @@ fn an_author_cannot_turn_on_the_lazy_flag_from_the_embed_options() {
     );
     let body = resolved_body(&doc, &lookup);
     assert_eq!(eager_count(&body), 1, "a typed flag must not take the slot away: {body}");
+}
+
+#[test]
+fn a_blank_title_or_description_takes_the_inferred_fact_and_a_written_one_wins() {
+    let facts = moss_core::resolve::embeds::derived::DerivedFacts {
+        title: Some("Derived title".into()),
+        description: Some("Derived words".into()),
+    };
+    let parse = |source: &str| {
+        process_markdown_file(
+            "about.md",
+            source,
+            "site",
+            &HashMap::new(),
+            false,
+            Language::En,
+            None,
+            crate::build::markdown::SiteMarkdown::default(),
+            None,
+            None,
+            None,
+            PageContext { has_content_folders: true, seta_url: None, folder_lang: None, derived_facts: &facts },
+        )
+        .expect("should parse")
+    };
+    let blank = parse("---\ntitle: \"\"\ndescription: \"\"\ninferred: [title, description]\n---\nBody paragraph.\n");
+    assert_eq!(blank.title, "Derived title");
+    assert_eq!(blank.description.as_deref(), Some("Derived words"));
+    let written = parse("---\ntitle: Mine\ndescription: Mine too\ninferred: [title, description]\n---\nBody paragraph.\n");
+    assert_eq!((written.title.as_str(), written.description.as_deref()), ("Mine", Some("Mine too")));
+    let unlisted = parse("---\ntitle: \"\"\n---\nBody paragraph.\n");
+    assert_ne!(unlisted.title, "Derived title");
 }

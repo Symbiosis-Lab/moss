@@ -164,7 +164,7 @@ pub fn generate_llms_txt(
         out.push_str(&format!("## {}\n\n", doc.label));
         // Strip raw HTML <style>/<script> blocks (tags + contents) before
         // trimming so leftover blank lines at the edges are removed too.
-        let stripped = strip_html_blocks(&moss_core::resolve::embeds::derived::without_status_blocks(&doc.content));
+        let stripped = strip_html_blocks(&moss_core::resolve::embeds::derived::without_derived_markup(&doc.content));
         let body = stripped.trim();
         if !body.is_empty() {
             out.push_str(body);

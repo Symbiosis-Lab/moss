@@ -4,7 +4,7 @@
 //!
 //! The binary reads `{"path": "<absolute input path>"}` on stdin and prints
 //! exactly one JSON object on stdout, either
-//! `{"kind":"derived","fragments":{"<name>":"<text>"},"facts":{"title":<string|null>}}`
+//! `{"kind":"derived","fragments":{"<name>":"<text>"},"facts":{"title":<string|null>,"description":<string|null>}}`
 //! or `{"kind":"skip","reason":"<short>","message":"<sentences>"}`. Core knows
 //! nothing about the file format; the declaration
 //! (`plugins::contributions::derivation`) says which extensions go here and
@@ -29,15 +29,8 @@ use crate::plugins::contributions::derivation::FragmentType;
 
 pub use batch::{derive_batch, derive_budget, DeriveJob};
 pub use cache::{derive_cached, lookup_cached, lookup_failure, remember_failure, remembered, DeriveResult};
+pub use moss_core::resolve::embeds::derived::DerivedFacts;
 pub use run::run_deriver;
-
-/// What the binary reports about the file, beside its fragments. Fields it
-/// does not know are ignored on the way in.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DerivedFacts {
-    #[serde(default)]
-    pub title: Option<String>,
-}
 
 /// The binary's answer, validated and in the form the cache stores.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

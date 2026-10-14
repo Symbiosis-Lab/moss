@@ -9331,8 +9331,9 @@ body[data-moss-preview] .moss-service-inactive {
 
 /* ── Derived text ──────────────────────────────────────────────── */
 /* `![[file.ext#fragment]]` stands for text a plugin reads out of the file.
-   When the text is ready it is plain page content and none of this applies.
-   Until then a pending block holds the place with a faint grid; a skipped
+   When the text is ready it sits inside a bare `.moss-derived` wrapper
+   (`data-fragment` names the fragment) that a theme may style; only the
+   block margin below applies to it. Until then a pending block holds the place with a faint grid; a skipped
    block says, in a plain note, why no text will appear. */
 .moss-derived {
   margin-block: 1.5em;

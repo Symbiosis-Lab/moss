@@ -126,11 +126,11 @@ pub fn derive_remembering(site: &MossPaths, entry: &DerivationEntry, input: &Pat
     derive_with(site, entry, input, true)
 }
 
-fn run_pinned(entry: &DerivationEntry, input: &Path) -> Result<DeriveOutcome, DeriveFailure> {
+fn run_pinned(entry: &DerivationEntry, input: &Path) -> Result<run::Answer, DeriveFailure> {
     let binary = binary::resolve_binary(entry)?;
-    let outcome = run::run_deriver(&binary, input, run::derive_timeout())?;
-    outcome.check_against(&entry.contribution.fragments)?;
-    Ok(outcome)
+    let answer = run::run_deriver_answer(&binary, input, run::derive_timeout())?;
+    answer.outcome.check_against(&entry.contribution.fragments)?;
+    Ok(answer)
 }
 
 fn derive_with(site: &MossPaths, entry: &DerivationEntry, input: &Path, remembering: bool) -> DeriveResult {
@@ -140,12 +140,12 @@ fn derive_with(site: &MossPaths, entry: &DerivationEntry, input: &Path, remember
     }
     let size = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
     match run_pinned(entry, input) {
-        Ok(outcome) => {
+        Ok(run::Answer { raw, outcome }) => {
+            // The deriver's own text is stored, not the parsed struct: the
+            // entry is read with whatever this moss knows when it is read.
             // Stored and read back: a write that lands where the next lookup
             // cannot see it (an object parked offline) is as good as none.
-            let stored = serde_json::to_vec(&outcome)
-                .map_err(|e| e.to_string())
-                .and_then(|bytes| store_bytes(site, transform_name(entry), entry, &source_oid, size, &bytes))
+            let stored = store_bytes(site, transform_name(entry), entry, &source_oid, size, raw.as_bytes())
                 .and_then(|()| lookup_oid(site, entry, &source_oid).map(|_| ()).ok_or_else(|| "it could not be read back".to_string()));
             if let Err(e) = stored {
                 log::warn!(target: "derive", "could not cache the result for {}: {e}", transform_name(entry));

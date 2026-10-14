@@ -81,6 +81,14 @@ fn last_line(stderr: &str) -> Option<String> {
         .map(|l| l.chars().take(300).collect())
 }
 
+/// What a deriver printed, and what this moss reads out of it.
+pub struct Answer {
+    /// Its stdout, trimmed, exactly as printed: what the cache keeps, so a
+    /// field a later moss learns to read is still in the entry.
+    pub raw: String,
+    pub outcome: DeriveOutcome,
+}
+
 /// Run `binary` on `input` and parse its answer. Does not check the fragments
 /// against a declaration — [`DeriveOutcome::check_against`] does, because only
 /// the caller knows the declaration.
@@ -89,6 +97,15 @@ pub fn run_deriver(
     input: &Path,
     timeout: Duration,
 ) -> Result<DeriveOutcome, DeriveFailure> {
+    run_deriver_answer(binary, input, timeout).map(|a| a.outcome)
+}
+
+/// [`run_deriver`], keeping the printed text beside the parsed answer.
+pub fn run_deriver_answer(
+    binary: &Path,
+    input: &Path,
+    timeout: Duration,
+) -> Result<Answer, DeriveFailure> {
     let input = std::path::absolute(input)
         .map_err(|e| DeriveFailure::new(format!("bad input path: {e}")))?;
     let input_str = input
@@ -107,7 +124,8 @@ pub fn run_deriver(
         let detail = last_line(&out.stderr).map_or(String::new(), |l| format!(": {l}"));
         return Err(DeriveFailure::new(format!("{what} failed ({}){detail}", out.status)));
     }
-    serde_json::from_str::<DeriveOutcome>(out.stdout.trim()).map_err(|e| {
+    let raw = out.stdout.trim().to_string();
+    serde_json::from_str::<DeriveOutcome>(&raw).map(|outcome| Answer { raw, outcome }).map_err(|e| {
         let detail = last_line(&out.stderr).map_or(String::new(), |l| format!(" ({l})"));
         DeriveFailure::new(format!("{what} did not print a derivation result: {e}{detail}"))
     })

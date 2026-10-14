@@ -101,7 +101,7 @@ fn importing_a_folder_shows_its_files_as_pages_and_remembers_the_choice() {
     assert!(out.contains("Q1 Summary.md") && out.contains("Q2.md"), "{out}");
 
     let page = std::fs::read_to_string(folder.join("Q1 Summary.md")).unwrap();
-    assert_eq!(page, "---\ninferred: [title]\n---\n![[Q1 Summary.fake]]\n\n![[Q1 Summary.fake#body]]\n");
+    assert_eq!(page, "---\ninferred: [title, description]\n---\n![[Q1 Summary.fake]]\n\n![[Q1 Summary.fake#body]]\n");
     let config = std::fs::read_to_string(f.site.join(".moss/config.toml")).unwrap();
     assert!(config.contains("# mine") && config.contains("\"reports/\" = [\"fake-pages\"]"), "{config}");
 
@@ -205,4 +205,123 @@ fn the_url_and_file_forms_still_parse_as_before() {
     assert!(stderr(&o).contains("unknown option: --bogus-flag"), "{}", stderr(&o));
     let o = moss(&f.home, &["import"]);
     assert!(stderr(&o).contains("missing URL"), "{}", stderr(&o));
+}
+
+/// reports/ (2 files) -> 2024/ (1) -> deep/ (1), a sibling old/ already kept,
+/// an unrelated notes/ without files the plugin accepts, and a hidden folder.
+fn tree_fixture() -> Fixture {
+    let f = fixture();
+    for (dir, file) in [("reports/2024", "Jan.fake"), ("reports/2024/deep", "Deep.fake"), ("reports/old", "Old.fake")] {
+        std::fs::create_dir_all(f.site.join(dir)).unwrap();
+        std::fs::write(f.site.join(dir).join(file), "x").unwrap();
+    }
+    std::fs::create_dir_all(f.site.join("reports/notes")).unwrap();
+    std::fs::write(f.site.join("reports/notes/a.txt"), "plain").unwrap();
+    std::fs::create_dir_all(f.site.join("reports/.hidden")).unwrap();
+    std::fs::write(f.site.join("reports/.hidden/Secret.fake"), "x").unwrap();
+    std::fs::write(f.site.join(".moss/config.toml"), "# mine\n[derive]\n\"reports/old/\" = false\n").unwrap();
+    plugin(&f.site, "fakes", "fake-pages");
+    f
+}
+
+#[test]
+fn recursive_import_covers_the_tree_and_leaves_a_decided_folder_alone() {
+    let f = tree_fixture();
+    let reports = f.site.join("reports");
+    let o = moss(&f.home, &["import", reports.to_str().unwrap(), "--recursive", "--allow-plugins"]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let out = stdout(&o);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "reports/  shown as pages  2 pages written",
+            "reports/2024/  shown as pages  1 page written",
+            "reports/2024/deep/  shown as pages  1 page written",
+            "reports/old/  kept as files, left as it was  0 pages written",
+            "4 folders, 4 pages written",
+        ],
+        "{out}"
+    );
+    for page in ["Q2.md", "Q1 Summary.md", "2024/Jan.md", "2024/deep/Deep.md"] {
+        assert!(reports.join(page).exists(), "{page}");
+    }
+    assert!(!reports.join("old/Old.md").exists() && !reports.join(".hidden/Secret.md").exists());
+    let config = std::fs::read_to_string(f.site.join(".moss/config.toml")).unwrap();
+    for key in ["\"reports/\" = [\"fake-pages\"]", "\"reports/2024/\" = [\"fake-pages\"]", "\"reports/2024/deep/\" = [\"fake-pages\"]", "\"reports/old/\" = false"] {
+        assert!(config.contains(key), "{key} in {config}");
+    }
+    assert!(!config.contains("notes") && !config.contains("hidden"), "{config}");
+
+    // Everything now has a decision: a second run changes and writes nothing, and succeeds.
+    let again = moss(&f.home, &["import", reports.to_str().unwrap(), "-r", "--allow-plugins"]);
+    assert!(again.status.success(), "{}", stderr(&again));
+    let out = stdout(&again);
+    assert!(out.contains("reports/2024/  shown as pages, left as it was  0 pages written"), "{out}");
+    assert!(out.ends_with("4 folders, 0 pages written\n"), "{out}");
+    assert_eq!(std::fs::read_to_string(f.site.join(".moss/config.toml")).unwrap(), config);
+}
+
+#[test]
+fn recursive_import_with_nothing_to_show_is_the_same_error_as_one_folder() {
+    let f = tree_fixture();
+    let notes = f.site.join("reports/notes");
+    let o = moss(&f.home, &["import", notes.to_str().unwrap(), "-r", "--allow-plugins"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(stderr(&o).contains("no installed plugin turns the files"), "{}", stderr(&o));
+}
+
+#[test]
+fn recursive_import_reports_a_folder_two_plugins_claim_and_with_resolves_it() {
+    let f = fixture();
+    plugin(&f.site, "alpha", "alpha-pages");
+    let dir = f.site.join(".moss/plugins/beta");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("manifest.json"),
+        r##"{"name":"beta","version":"1.0.0","contributes":{"derivations":{"beta-pages":{
+            "accepts":["other"],"noun":{"one":"item","other":"items"},
+            "fragments":{"body":"markdown"},"stub":[""],
+            "run":{"binary":"unpack","artifact":[{"kind":"path","binary":"/bin/true"}]}}}}}"##,
+    )
+    .unwrap();
+    std::fs::write(f.site.join("reports/x.other"), "x").unwrap();
+    let reports = f.site.join("reports");
+
+    let o = moss(&f.home, &["import", reports.to_str().unwrap(), "-r", "--allow-plugins"]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert!(stdout(&o).contains("reports/  not changed: several plugins accept these files"), "{}", stdout(&o));
+    assert!(!reports.join("x.md").exists());
+
+    let o = moss(&f.home, &["import", reports.to_str().unwrap(), "-r", "--with", "beta-pages", "--allow-plugins"]);
+    assert!(stdout(&o).starts_with("reports/  shown as pages  1 page written"), "{}", stdout(&o));
+    assert!(reports.join("x.md").exists() && !reports.join("Q2.md").exists());
+}
+
+#[test]
+fn recursive_import_reports_a_decided_folder_as_decided_even_when_two_plugins_claim_it() {
+    let f = fixture();
+    plugin(&f.site, "alpha", "alpha-pages");
+    let dir = f.site.join(".moss/plugins/beta");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("manifest.json"),
+        r##"{"name":"beta","version":"1.0.0","contributes":{"derivations":{"beta-pages":{
+            "accepts":["other"],"noun":{"one":"item","other":"items"},
+            "fragments":{"body":"markdown"},"stub":[""],
+            "run":{"binary":"unpack","artifact":[{"kind":"path","binary":"/bin/true"}]}}}}}"##,
+    )
+    .unwrap();
+    std::fs::write(f.site.join("reports/x.other"), "x").unwrap();
+    let config = "# mine\n[derive]\n\"reports/\" = false\n";
+    std::fs::write(f.site.join(".moss/config.toml"), config).unwrap();
+    let reports = f.site.join("reports");
+
+    let o = moss(&f.home, &["import", reports.to_str().unwrap(), "-r", "--allow-plugins"]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let out = stdout(&o);
+    assert!(out.contains("reports/  kept as files, left as it was  0 pages written"), "{out}");
+    assert!(!out.contains("several plugins"), "{out}");
+    assert_eq!(std::fs::read_to_string(f.site.join(".moss/config.toml")).unwrap(), config);
+    assert!(!reports.join("Q2.md").exists() && !reports.join("x.md").exists());
 }

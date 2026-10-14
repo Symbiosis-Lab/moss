@@ -338,9 +338,9 @@ impl Default for SiteMarkdown<'_> {
 /// next fact `process_markdown_file` needs changes this type instead of
 /// every call site — the four fields here replaced four positional
 /// parameters that a single later addition had just touched across every
-/// caller. `#[derive(Default)]`'s all-`false`/`None` answer
+/// caller. The `Default` impl's all-`false`/`None` answer
 /// matches every existing test call's old positional defaults exactly.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct PageContext<'a> {
     /// Project-level signal (true when the site has content subfolders).
     /// Feeds `is_nav_bar_item`, which decides only whether a root-level nav
@@ -362,10 +362,20 @@ pub struct PageContext<'a> {
     /// file's directory; tests pass `None`, matching the old rung-4
     /// behavior of "no folder signal available".
     pub folder_lang: Option<crate::i18n::Language>,
-    /// The first embedded derived file's `title` fact. Becomes the page's
-    /// title only when the page lists `title` under `inferred:` and sets no
-    /// `title:` of its own.
-    pub derived_title: Option<&'a str>,
+    /// The first embedded derived file's facts. A fact becomes the page's
+    /// `title` or `description` only when the page lists that field under
+    /// `inferred:` and sets none of its own.
+    pub derived_facts: &'a moss_core::resolve::embeds::derived::DerivedFacts,
+}
+
+/// What a page with no derived embeds is given.
+static NO_FACTS: moss_core::resolve::embeds::derived::DerivedFacts =
+    moss_core::resolve::embeds::derived::DerivedFacts { title: None, description: None };
+
+impl Default for PageContext<'_> {
+    fn default() -> Self {
+        Self { has_content_folders: false, seta_url: None, folder_lang: None, derived_facts: &NO_FACTS }
+    }
 }
 
 /// Processes a markdown file with frontmatter into a ParsedDocument.
@@ -523,12 +533,15 @@ pub fn process_markdown_file(
     // Task 5: defensive conversion for future authors who might write the old form.
     frontmatter.normalize();
     let event = crate::build::types::EventFields::from_frontmatter(&frontmatter);
-    // `inferred: [title]` takes the title from the first embedded derived file
-    // that has one — only when the page sets none of its own.
-    if frontmatter.title.is_none()
-        && frontmatter.inferred.as_ref().is_some_and(|fields| fields.iter().any(|f| f == "title"))
-    {
-        frontmatter.title = page.derived_title.map(str::to_string);
+    // `inferred: [title, description]` takes those fields from the first
+    // embedded derived file that has them — only when the page sets none of
+    // its own.
+    let listed = frontmatter.inferred.clone().unwrap_or_default();
+    if let Some(title) = page.derived_facts.fact_for("title", frontmatter.title.as_deref(), &listed) {
+        frontmatter.title = Some(title);
+    }
+    if let Some(text) = page.derived_facts.fact_for("description", frontmatter.description.as_deref(), &listed) {
+        frontmatter.description = Some(text);
     }
 
     // Translate the deprecated `sidebar:` field for both simplified and YAML

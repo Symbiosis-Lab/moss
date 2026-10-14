@@ -516,7 +516,7 @@ fn first_paragraph_excerpt(content: &str, strip_callout_marker: bool, math: bool
     //
     // A derived-text block with no text (pending, declined, failed) is a status
     // note, not prose; as an HTML block it would surface as escaped markup.
-    let content = moss_core::resolve::embeds::derived::without_status_blocks(content);
+    let content = moss_core::resolve::embeds::derived::without_derived_markup(content);
     let processed =
         moss_core::ast::shortcode_extract::extract_shortcodes(&content).markdown_with_placeholders;
 

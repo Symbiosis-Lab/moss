@@ -15,11 +15,20 @@ pub struct DeriveJob<'a> {
     pub input: PathBuf,
 }
 
-/// Half the cores, between one and four: a deriver is usually itself
-/// multi-threaded and memory-hungry, and the build is doing other work.
+/// How many derivers run at once: half the cores, between one and four (a
+/// deriver is usually itself multi-threaded and memory-hungry, and the build
+/// is doing other work), or `MOSS_DERIVE_JOBS` when set to a whole number from
+/// 1 to 64.
 pub fn derive_budget() -> usize {
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
-    (cores / 2).clamp(1, 4)
+    budget_from(std::env::var("MOSS_DERIVE_JOBS").ok().as_deref(), cores)
+}
+
+fn budget_from(value: Option<&str>, cores: usize) -> usize {
+    value
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|jobs| (1..=64).contains(jobs))
+        .unwrap_or_else(|| (cores / 2).clamp(1, 4))
 }
 
 /// The threads derivers run on: [`derive_budget`] of them, so that many

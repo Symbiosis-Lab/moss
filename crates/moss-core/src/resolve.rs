@@ -89,9 +89,9 @@ pub struct ResolveResult {
     pub block_ids: Vec<String>,
     /// (target_path, source_path) pairs for embed dependency tracking.
     pub embed_deps: Vec<(String, String)>,
-    /// The first ready derived embed's `title` fact, for pages that infer
-    /// their title from what they embed.
-    pub derived_title: Option<String>,
+    /// The first ready derived embed's facts (`title`, `description`), for
+    /// pages that infer those fields from what they embed.
+    pub derived_facts: embeds::derived::DerivedFacts,
 }
 
 /// Resolve all Obsidian syntax in a markdown file, producing clean standard markdown.
@@ -218,13 +218,13 @@ pub fn resolve_content_with_derivations(
     // Step 3.6: splice derived text. After the passes above so the text is
     // never scanned for embed markers; it still flows through block refs and
     // the one markdown pipeline like a transcluded note.
-    let (deferred_content, derived_title) = match derivations {
+    let (deferred_content, derived_facts) = match derivations {
         Some(d) => {
             let spliced = embeds::derived::splice_markers(&deferred_result.content, source_path, d);
             embed_deps.extend(spliced.deps);
-            (spliced.content, spliced.title)
+            (spliced.content, spliced.facts)
         }
-        None => (deferred_result.content, None),
+        None => (deferred_result.content, Default::default()),
     };
 
     // Step 4.6 (DELETED, Phase 4 PR7a-stage1b 2026-05-28):
@@ -264,7 +264,7 @@ pub fn resolve_content_with_derivations(
         diagnostics,
         block_ids,
         embed_deps,
-        derived_title,
+        derived_facts,
     }
 }
 

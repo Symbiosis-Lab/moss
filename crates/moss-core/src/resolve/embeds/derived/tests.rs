@@ -38,7 +38,10 @@ fn resolve(
 }
 
 fn ready(md: &str) -> DerivedFragment {
-    DerivedFragment::Ready { markdown: md.to_string(), title: Some("T".to_string()) }
+    DerivedFragment::Ready {
+        markdown: md.to_string(),
+        facts: DerivedFacts { title: Some("T".to_string()), description: Some("D".to_string()) },
+    }
 }
 
 #[test]
@@ -47,7 +50,28 @@ fn claimed_pair_splices_the_markdown_and_records_the_dependency() {
     assert!(r.content_markdown.contains("## Hello\n\nworld"), "{}", r.content_markdown);
     assert!(!r.content_markdown.contains("moss-derived:"));
     assert!(r.embed_deps.contains(&("a.fake".to_string(), "page.md".to_string())));
-    assert_eq!(r.derived_title.as_deref(), Some("T"));
+    assert_eq!(r.derived_facts, DerivedFacts { title: Some("T".into()), description: Some("D".into()) });
+}
+
+#[test]
+fn facts_come_from_the_first_ready_derivation_that_has_each_and_blank_ones_are_ignored() {
+    let facts = |title: &str, description: &str| DerivedFragment::Ready {
+        markdown: "x\n".into(),
+        facts: DerivedFacts {
+            title: Some(title.into()).filter(|t: &String| !t.is_empty()),
+            description: Some(description.into()).filter(|t: &String| !t.is_empty()),
+        },
+    };
+    let r = resolve("![[a.fake#text]]\n\n![[b.fake#text]]\n", &|path, _| match path {
+        "a.fake" => facts("  ", "First d"),
+        _ => facts("Second t", "Second d"),
+    });
+    assert_eq!(
+        r.derived_facts,
+        DerivedFacts { title: Some("Second t".into()), description: Some("First d".into()) }
+    );
+    let none = resolve("![[a.fake#text]]\n", &|_, _| facts("", "\t\n"));
+    assert_eq!(none.derived_facts, DerivedFacts::default());
 }
 
 #[test]
@@ -167,10 +191,10 @@ fn a_marker_written_inside_a_code_fence_is_not_spliced() {
 fn status_blocks_are_what_placeholder_html_writes_and_nothing_else() {
     for state in [DerivedFragment::Pending, DerivedFragment::Skipped { message: "m".into() }, DerivedFragment::Failed { message: "m".into() }] {
         let block = placeholder_html(&state).unwrap();
-        assert_eq!(without_status_blocks(&format!("a\n{block}\nb\n")), "a\nb\n");
+        assert_eq!(without_derived_markup(&format!("a\n{block}\nb\n")), "a\nb\n");
     }
     let prose = "<div class='moss-derivedish'>kept</div>\ntext\n";
-    assert_eq!(without_status_blocks(prose), prose);
+    assert_eq!(without_derived_markup(prose), prose);
 }
 
 #[test]
@@ -184,10 +208,13 @@ fn a_derived_embed_sharing_its_line_is_left_as_written() {
     ] {
         let r = resolve(body, &|_, _| panic!("a non-sole embed must not be read: {body}"));
         assert_eq!(r.content_markdown, body);
+        assert!(!r.content_markdown.contains("data-fragment") && r.content_markdown.contains("![[a.fake#text]]"));
         assert!(r.embed_deps.is_empty());
     }
+    // A sole embed with spaces around it is still a sole embed: it is spliced.
     let r = resolve("  ![[a.fake#text]]  \n", &|_, _| ready("X\n"));
-    assert!(r.content_markdown.contains('X') && !r.content_markdown.contains("moss-derived"), "{}", r.content_markdown);
+    assert!(r.content_markdown.contains("data-fragment=\"text\"") && r.content_markdown.contains('X'), "{}", r.content_markdown);
+    assert!(!r.content_markdown.contains("moss-derived:"), "{}", r.content_markdown);
 }
 
 #[test]
@@ -229,9 +256,77 @@ fn expand_writes_the_derived_title_where_the_page_inferred_it() {
         expand("---\ninferred:\n  - title\n  - date\n---\n![[a.fake#text]]\n"),
         "---\ninferred:\n  - date\ntitle: T\n---\nderived\n\n"
     );
+    // The description is carried the same way, and each name leaves `inferred` once written.
+    assert_eq!(
+        expand("---\nlayout:   wide\ninferred: [title, description]\n---\n![[a.fake#text]]\n"),
+        "---\nlayout:   wide\ntitle: T\ndescription: D\n---\nderived\n\n"
+    );
+    assert_eq!(
+        expand("---\ninferred: [description]\ntags: [x]\n---\n![[a.fake#text]]\n"),
+        "---\ntags: [x]\ndescription: D\n---\nderived\n\n"
+    );
+    assert_eq!(
+        expand("---\ndescription: Mine\ninferred: [title, description]\n---\n![[a.fake#text]]\n"),
+        "---\ndescription: Mine\ninferred: [description]\ntitle: T\n---\nderived\n\n"
+    );
+    // A blank key counts as unset and is filled where it stands, not repeated.
+    assert_eq!(
+        expand("---\ndescription: \"\"\ninferred: [description]\ntags: [x]\n---\n![[a.fake#text]]\n"),
+        "---\ndescription: D\ntags: [x]\n---\nderived\n\n"
+    );
+    assert_eq!(
+        expand("---\ntitle:\ninferred: [title, description]\n---\n![[a.fake#text]]\n"),
+        "---\ntitle: T\ndescription: D\n---\nderived\n\n"
+    );
     // A title the author wrote, or no `inferred`, is left alone.
     let own = "---\ntitle: Mine\ninferred: [title]\n---\n![[a.fake#text]]\n";
     assert!(expand(own).starts_with("---\ntitle: Mine\ninferred: [title]\n---\n"));
     let none = "---\nlayout: x\n---\n![[a.fake#text]]\n";
     assert!(expand(none).starts_with("---\nlayout: x\n---\n"));
+}
+
+#[test]
+fn ready_text_sits_in_a_wrapper_naming_its_fragment() {
+    let r = resolve("before\n\n![[a.fake#text]]\n\nafter\n", &|_, _| ready("## Hello\n\nworld\n"));
+    assert!(
+        r.content_markdown.contains("\n<div class=\"moss-derived\" data-fragment=\"text\">\n\n## Hello\n\nworld\n\n</div><!-- /moss-derived -->\n\n"),
+        "{}",
+        r.content_markdown
+    );
+    let odd = splice_markers(
+        "<!-- moss-derived:a.fake#t\"<x -->\n",
+        "page.md",
+        &Derivations { table: &table(), reader: &|_, _| ready("X\n") },
+    );
+    assert!(odd.content.contains("data-fragment=\"t&quot;&lt;x\">"), "{}", odd.content);
+}
+
+#[test]
+fn wrapper_lines_are_left_out_of_plain_text_and_the_text_is_kept() {
+    let spliced = resolve("a\n\n![[a.fake#text]]\n\nb\n", &|_, _| ready("kept words\n")).content_markdown;
+    let plain = without_derived_markup(&spliced);
+    assert!(plain.contains("kept words") && plain.contains('a') && plain.contains('b'), "{plain}");
+    assert!(!plain.contains("<div") && !plain.contains("</div>") && !plain.contains("moss-derived"), "{plain}");
+    // Status blocks go too; an author's own div is left alone.
+    let mixed = format!("{}\n<div class='mine'>\nx\n</div>\n", placeholder_html(&DerivedFragment::Pending).unwrap());
+    assert_eq!(without_derived_markup(&mixed), "<div class='mine'>\nx\n</div>\n");
+    // A closing tag inside the derived text's own code block is text, not the wrapper's end.
+    let fenced = resolve("![[a.fake#text]]\n", &|_, _| ready("```\n</div>\n```\n")).content_markdown;
+    assert!(without_derived_markup(&fenced).contains("</div>"), "{fenced}");
+}
+
+#[test]
+fn only_what_the_splice_wrote_is_removed_never_an_authors_own_html() {
+    let opener = "<div class=\"moss-derived\" data-fragment=\"x\">";
+    // An author's lines that look like the opener, with a plain `</div>`, are kept whole.
+    let mine = format!("{opener}\nmine\n</div>\nafter\n");
+    assert_eq!(without_derived_markup(&mine), mine);
+    // A lone closing line of the splice's form has no opener to pair with: kept.
+    let lone = "text\n</div><!-- /moss-derived -->\n";
+    assert_eq!(without_derived_markup(lone), lone);
+    // Next to a real wrapper, the author's lines stay and the splice's pair goes.
+    let spliced = resolve("![[a.fake#text]]\n", &|_, _| ready("words\n")).content_markdown;
+    let plain = without_derived_markup(&format!("{mine}{spliced}"));
+    assert!(plain.starts_with(&mine) && plain.trim_end().ends_with("words") && !plain.contains("moss-derived:"), "{plain}");
+    assert_eq!(plain.matches("moss-derived").count(), 1, "only the author's opener is left: {plain}");
 }

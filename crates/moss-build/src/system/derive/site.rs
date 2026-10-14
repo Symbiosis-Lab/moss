@@ -171,7 +171,7 @@ impl DerivedSite {
             Slot::Failed(message) => DerivedFragment::Failed { message: message.clone() },
             Slot::Outcome(DeriveOutcome::Skip { message, .. }) => DerivedFragment::Skipped { message: message.clone() },
             Slot::Outcome(DeriveOutcome::Derived { fragments, facts }) => match fragments.get(fragment) {
-                Some(markdown) => DerivedFragment::Ready { markdown: markdown.clone(), title: facts.title.clone() },
+                Some(markdown) => DerivedFragment::Ready { markdown: markdown.clone(), facts: facts.clone() },
                 None => DerivedFragment::Failed { message: format!("no `{fragment}` fragment was produced") },
             },
         }

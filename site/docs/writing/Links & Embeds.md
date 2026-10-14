@@ -101,9 +101,9 @@ Some plugins can read a kind of file you keep in the folder (a PDF, a slide deck
 
 The text appears in the page as ordinary markdown, so it is searchable and can be linked to. While moss is still reading the file the page shows a placeholder, and if the plugin could not read it the page says so instead of failing the build. The text comes from a file someone else wrote, so moss shows HTML tags, `$` amounts and `[[brackets]]` in it as plain text.
 
-To show every file in a folder as its own page, run `moss import reports/ --allow-plugins`. moss writes a short page beside each file (`annual-report.md` next to `annual-report.pdf`) that embeds the file and takes its title from the file, and remembers the choice for that folder. It never overwrites a page you already have, and a file that another page already embeds gets none. `moss import --status` lists each folder, how many files it holds, and any file the plugin declined to read, with its reason. To keep the text and drop the file, run `moss expand reports/annual-report.md`: each line holding only an embed is replaced by the text it stands for.
+To show every file in a folder as its own page, run `moss import reports/ --allow-plugins` (add `--recursive` to cover the folders beneath it too). moss writes a short page beside each file (`annual-report.md` next to `annual-report.pdf`) that embeds the file and takes its title and description from the file, and remembers the choice for that folder. It never overwrites a page you already have, and a file that another page already embeds gets none. `moss import --status` lists each folder, how many files it holds, and any file the plugin declined to read, with its reason. To keep the text and drop the file, run `moss expand reports/annual-report.md`: each line holding only an embed is replaced by the text it stands for.
 
-A page can take its title from the first file it embeds instead of repeating it: write `inferred: [title]` in the frontmatter, and a `title:` you write yourself still wins.
+A page can take its title and description from the first file it embeds instead of repeating them: write `inferred: [title, description]` in the frontmatter, and a `title:` or `description:` you write yourself still wins.
 
 ## HTML and interactive embeds
 

@@ -22,7 +22,7 @@ fn a_derived_answer_parses_and_unknown_facts_are_ignored() {
         out,
         DeriveOutcome::Derived {
             fragments: BTreeMap::from([("text".into(), "hello".into())]),
-            facts: crate::system::derive::DerivedFacts { title: Some("T".into()) },
+            facts: crate::system::derive::DerivedFacts { title: Some("T".into()), ..Default::default() },
         }
     );
 }

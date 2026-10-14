@@ -18,16 +18,56 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use serde::{Deserialize, Serialize};
+
 use crate::resolve::embed_renderer::{html_escape_attr, MARKER_DERIVED};
 
 #[cfg(test)]
 mod tests;
 
+/// What a deriver reports about a file beside its text. A page that lists a
+/// field under `inferred` takes it from the first ready derivation that gave
+/// one. Fields a deriver does not know are ignored on the way in.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DerivedFacts {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+impl DerivedFacts {
+    /// Fill each field that is still unset from `other`, ignoring a blank one.
+    pub fn fill_from(&mut self, other: &DerivedFacts) {
+        for (mine, theirs) in [(&mut self.title, &other.title), (&mut self.description, &other.description)] {
+            if mine.is_none() {
+                *mine = theirs.clone().filter(|t| !t.trim().is_empty());
+            }
+        }
+    }
+}
+
+impl DerivedFacts {
+    /// The fact to use for `field` (`title` or `description`) on a page: the
+    /// derived one, when the page lists `field` under `inferred` and its own
+    /// value (`own`) is missing or blank. The one rule for the build and for
+    /// `moss expand`.
+    pub fn fact_for(&self, field: &str, own: Option<&str>, inferred: &[String]) -> Option<String> {
+        let wanted = inferred.iter().any(|f| f == field) && own.is_none_or(|v| v.trim().is_empty());
+        let fact = match field {
+            "title" => &self.title,
+            "description" => &self.description,
+            _ => &None,
+        };
+        fact.clone().filter(|_| wanted)
+    }
+}
+
 /// What the reader knows about one `(file, fragment)` right now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DerivedFragment {
-    /// The derivation ran: its markdown, and the `title` fact when it gave one.
-    Ready { markdown: String, title: Option<String> },
+    /// The derivation ran: its markdown, and the facts it gave about the file.
+    Ready { markdown: String, facts: DerivedFacts },
     /// The derivation has not finished yet.
     Pending,
     /// The deriver declined this file, with a reason fit to show a reader.
@@ -118,12 +158,46 @@ pub fn placeholder_html(state: &DerivedFragment) -> Option<String> {
     }
 }
 
-/// `content` without the lines [`placeholder_html`] wrote. Each is a status note
-/// for a reader of the page, not prose, so a description or a plain-text feed
-/// of the page leaves it out.
-pub fn without_status_blocks(content: &str) -> String {
-    content.split_inclusive('\n').filter(|line| !line.trim_start().starts_with(STATUS_BLOCK_OPEN)).collect()
+/// `content` as prose for a description, an excerpt or a plain-text feed:
+/// without the status notes [`placeholder_html`] wrote (each is a note for a
+/// reader of the page, not prose) and without the two lines [`splice_markers`]
+/// wraps ready text in, so only the derived words remain.
+///
+/// Only what the splice wrote is removed: a line opening a wrapper
+/// ([`WRAPPER_OPEN`]) together with the next line that is exactly
+/// [`WRAPPER_CLOSE`]. An opener with no such closer after it, a closer with no
+/// opener, and every other line of an author's own HTML are kept, as is
+/// anything inside a code block.
+pub fn without_derived_markup(content: &str) -> String {
+    let inert = crate::inert_regions::inert_lines(content);
+    let lines: Vec<&str> = content.split_inclusive('\n').collect();
+    let mut dropped = vec![false; lines.len()];
+    let mut open: Option<usize> = None;
+    for (index, line) in lines.iter().enumerate() {
+        let live = !inert.get(index).copied().unwrap_or(false);
+        let text = line.trim();
+        if !live {
+            continue;
+        }
+        if text.starts_with(STATUS_BLOCK_OPEN) {
+            dropped[index] = true;
+        } else if text.starts_with(WRAPPER_OPEN) && text.ends_with("\">") {
+            open = Some(index);
+        } else if text == WRAPPER_CLOSE {
+            if let Some(start) = open.take() {
+                dropped[start] = true;
+                dropped[index] = true;
+            }
+        }
+    }
+    lines.iter().zip(&dropped).filter(|(_, d)| !**d).map(|(l, _)| *l).collect()
 }
+
+/// How the line that opens a wrapper around ready text begins.
+const WRAPPER_OPEN: &str = "<div class=\"moss-derived\" data-fragment=\"";
+
+/// The line that closes it: the comment marks it as the splice's own.
+const WRAPPER_CLOSE: &str = "</div><!-- /moss-derived -->";
 
 /// How every line from [`placeholder_html`] begins.
 const STATUS_BLOCK_OPEN: &str = "<div class=\"moss-derived ";
@@ -225,8 +299,8 @@ pub(in crate::resolve) struct Spliced {
     pub content: String,
     /// `(derived source file, page)` pairs, like transclusion dependencies.
     pub deps: Vec<(String, String)>,
-    /// The first ready derivation's `title` fact.
-    pub title: Option<String>,
+    /// The first ready derivation's facts, field by field.
+    pub facts: DerivedFacts,
 }
 
 /// Replace every marker line with its derivation's text or placeholder.
@@ -237,7 +311,7 @@ pub(in crate::resolve) fn splice_markers(
 ) -> Spliced {
     let mut output = String::with_capacity(content.len());
     let mut deps = Vec::new();
-    let mut title = None;
+    let mut facts = DerivedFacts::default();
     let regions = crate::inert_regions::InertRegions::scan(content);
     let mut line_start = 0;
     for chunk in content.split_inclusive('\n') {
@@ -258,11 +332,12 @@ pub(in crate::resolve) fn splice_markers(
         // neighbouring paragraph; the HTML block itself has none inside.
         output.push('\n');
         match &state {
-            DerivedFragment::Ready { markdown, title: fact } => {
-                if title.is_none() {
-                    title = fact.clone().filter(|t| !t.trim().is_empty());
-                }
+            DerivedFragment::Ready { markdown, facts: fact } => {
+                facts.fill_from(fact);
+                output.push_str(&format!("{WRAPPER_OPEN}{}\">\n\n", html_escape_attr(fragment)));
                 output.push_str(&escape_derived_markdown(markdown.trim_end()));
+                output.push_str("\n\n");
+                output.push_str(WRAPPER_CLOSE);
             }
             other => output.push_str(&placeholder_html(other).unwrap_or_default()),
         }
@@ -271,5 +346,5 @@ pub(in crate::resolve) fn splice_markers(
     if !content.ends_with('\n') && output.ends_with('\n') {
         output.pop();
     }
-    Spliced { content: output, deps, title }
+    Spliced { content: output, deps, facts }
 }

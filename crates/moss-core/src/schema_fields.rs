@@ -826,7 +826,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         widget: Widget::TagInput,
         items_type: Some(FieldType::String),
         score: 99,
-        description: "Fields this page takes from the files it embeds when it does not set them itself. `title` takes the first embedded file's derived title; a title written in the page always wins.",
+        description: "Fields this page takes from the files it embeds when it does not set them itself. `title` and `description` take the first embedded file's derived title and description; one written in the page always wins.",
         label: Some("Inferred"),
         label_key: "chip.inferred.label",
         group: "This Page",

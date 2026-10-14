@@ -184,3 +184,30 @@ fn every_question_about_one_file_hashes_it_once() {
     assert_eq!(lookup_cached(&f.site, &e, &f.input), None);
     assert_eq!(HASH_READS.with(|count| count.get()), 2, "an edited file is hashed again");
 }
+
+const ANSWER: &str = r#"{"kind":"derived","fragments":{"text":"hello"},"facts":{"title":"T","description":"D","extra":1}}"#;
+
+#[test]
+fn an_entry_written_as_the_deriver_printed_it_yields_every_fact_the_reader_knows() {
+    let f = fixture();
+    let e = entry(&f.bin(BROKEN), "1.0.0");
+    let oid = binary::content_hash(&f.input).unwrap();
+    store_bytes(&f.site, transform_name(&e), &e, &oid, 7, ANSWER.as_bytes()).unwrap();
+    match lookup_cached(&f.site, &e, &f.input) {
+        Some(DeriveOutcome::Derived { facts, .. }) => {
+            assert_eq!((facts.title.as_deref(), facts.description.as_deref()), (Some("T"), Some("D")));
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn the_cache_keeps_the_bytes_the_deriver_printed_not_a_re_serialization() {
+    let f = fixture();
+    // A trailing newline and a fact this moss does not know: both are the deriver's own.
+    let e = entry(&f.bin(&format!("printf '%s\\n' '{ANSWER}'")), "1.0.0");
+    derive_cached(&f.site, &e, &f.input).unwrap();
+    let oid = binary::content_hash(&f.input).unwrap();
+    let stored = lookup_bytes(&f.site, &transform_name(&e), &e, &oid).expect("stored");
+    assert_eq!(String::from_utf8(stored).unwrap(), ANSWER);
+}

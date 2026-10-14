@@ -7,12 +7,12 @@
 //!
 //! Derived text is inserted with the escaping and the blank lines the build
 //! applies when it splices it, and a page that took its title from the file
-//! (`inferred: [title]`) is given that title, so the expanded page renders as
-//! the embed did.
+//! (`inferred: [title, description]`) is given them, so the expanded page
+//! renders as the embed did.
 
 use crate::content_graph::ContentGraph;
 
-use super::derived::{escape_derived_markdown, parse_marker, DerivedFragment, Derivations};
+use super::derived::{escape_derived_markdown, parse_marker, DerivedFacts, DerivedFragment, Derivations};
 use super::{parse_embed_marker, select_section, split_target, strip_frontmatter};
 
 /// One line that was replaced.
@@ -48,7 +48,7 @@ pub fn expand_page(
 
     let mut content = String::from(head);
     let mut expanded = Vec::new();
-    let mut title_fact: Option<String> = None;
+    let mut facts = DerivedFacts::default();
     for (index, (line, masked_line)) in body.split_inclusive('\n').zip(masked.split_inclusive('\n')).enumerate() {
         let text = line.trim_end_matches(['\n', '\r']);
         let ending = line.get(text.len()..).unwrap_or("");
@@ -59,7 +59,7 @@ pub fn expand_page(
         match replacement {
             Some(r) => {
                 if r.derived {
-                    title_fact = title_fact.or(r.title.filter(|t| !t.trim().is_empty()));
+                    facts.fill_from(&r.facts);
                     // Blank lines around derived text, as in the build, keep
                     // it from fusing with a neighbour or turning the line
                     // before it into a setext heading.
@@ -77,11 +77,13 @@ pub fn expand_page(
             None => content.push_str(line),
         }
     }
-    if let Some(title) = title_fact {
-        if let Some(head_with_title) = with_inferred_title(head, &title) {
-            content.replace_range(..head.len(), &head_with_title);
+    let mut new_head = head.to_string();
+    for key in ["title", "description"] {
+        if let Some(written) = with_inferred_field(&new_head, key, &facts) {
+            new_head = written;
         }
     }
+    content.replace_range(..head.len(), &new_head);
     Expansion { content, expanded }
 }
 
@@ -94,9 +96,9 @@ fn sole_embed(trimmed: &str) -> Option<&str> {
 /// What one embed line is replaced with.
 struct Replacement {
     text: String,
-    /// Derived text rather than a note's: it is padded and may carry a title.
+    /// Derived text rather than a note's: it is padded and may carry facts.
     derived: bool,
-    title: Option<String>,
+    facts: DerivedFacts,
 }
 
 fn expansion_for(
@@ -110,8 +112,8 @@ fn expansion_for(
     let marker = crate::resolve::lower_embed(inner, graph, source_path, Some(derivations))?;
     if let Some((path, fragment)) = parse_marker(&marker) {
         return match (derivations.reader)(path, fragment) {
-            DerivedFragment::Ready { markdown, title } => {
-                Some(Replacement { text: escape_derived_markdown(markdown.trim_end()), derived: true, title })
+            DerivedFragment::Ready { markdown, facts } => {
+                Some(Replacement { text: escape_derived_markdown(markdown.trim_end()), derived: true, facts })
             }
             _ => None,
         };
@@ -119,45 +121,46 @@ fn expansion_for(
     let (path, anchor) = split_target(parse_embed_marker(&marker)?);
     let text = file_reader(path)?;
     let text = select_section(strip_frontmatter(&text), anchor)?;
-    Some(Replacement { text, derived: false, title: None })
+    Some(Replacement { text, derived: false, facts: DerivedFacts::default() })
 }
 
-/// `head` (the frontmatter block, kept byte-for-byte) with `title` written in
-/// and `title` taken out of `inferred`, when the page names no title of its own
-/// and lists `title` in a flow (`[title]`) or block list. `None` leaves it alone.
-fn with_inferred_title(head: &str, title: &str) -> Option<String> {
+/// `head` (the frontmatter block, kept byte-for-byte) with `key` (`title` or
+/// `description`) written in from `facts` and `key` taken out of `inferred`,
+/// when [`DerivedFacts::fact_for`] says the page takes it and `inferred` is a
+/// flow (`[title]`) or block list. A blank `key:` line is filled where it
+/// stands; otherwise the line is added. `None` leaves the head alone.
+fn with_inferred_field(head: &str, key: &str, facts: &DerivedFacts) -> Option<String> {
     let span = crate::frontmatter::frontmatter_span(head)?;
     let map = crate::frontmatter::frontmatter_map(head);
-    let own_title = map.get("title").and_then(crate::frontmatter::value_as_string).is_some_and(|t| !t.trim().is_empty());
-    let lists_title = map
+    let own = map.get(key).and_then(crate::frontmatter::value_as_string);
+    let listed: Vec<String> = map
         .get("inferred")
         .and_then(|v| v.as_sequence())
-        .is_some_and(|items| items.iter().any(|i| i.as_str() == Some("title")));
-    if own_title || !lists_title {
-        return None;
-    }
-    let title_line = {
-        let one_line = title.split_whitespace().collect::<Vec<_>>().join(" ");
-        format!("title: {}\n", serde_yaml::to_string(&one_line).ok()?.trim_end())
+        .map(|items| items.iter().filter_map(|i| i.as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    let value = facts.fact_for(key, own.as_deref(), &listed)?;
+    let value_line = {
+        let one_line = value.split_whitespace().collect::<Vec<_>>().join(" ");
+        format!("{key}: {}\n", serde_yaml::to_string(&one_line).ok()?.trim_end())
     };
     let fields = head.get(span.fields.clone())?;
     let lines: Vec<&str> = fields.split_inclusive('\n').collect();
     let at = lines.iter().position(|l| l.starts_with("inferred:"))?;
-    let key = *lines.get(at)?;
-    let rest = key.trim_start_matches("inferred:").trim();
+    let inferred_line = *lines.get(at)?;
+    let rest = inferred_line.trim_start_matches("inferred:").trim();
     let mut out: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
-    let newline = if key.ends_with("\r\n") { "\r\n" } else { "\n" };
+    let newline = if inferred_line.ends_with("\r\n") { "\r\n" } else { "\n" };
     if let Some(list) = rest.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
         let kept: Vec<&str> = list
             .split(',')
             .map(str::trim)
-            .filter(|i| !i.is_empty() && i.trim_matches(['"', '\'']) != "title")
+            .filter(|i| !i.is_empty() && i.trim_matches(['"', '\'']) != key)
             .collect();
         out.splice(at..=at, if kept.is_empty() { vec![] } else { vec![format!("inferred: [{}]{newline}", kept.join(", "))] });
     } else if rest.is_empty() {
         let item = (at + 1..lines.len())
             .take_while(|&i| lines.get(i).is_some_and(|l| l.trim_start().starts_with('-')))
-            .find(|&i| lines.get(i).is_some_and(|l| l.trim_start().trim_start_matches('-').trim().trim_matches(['"', '\'']) == "title"))?;
+            .find(|&i| lines.get(i).is_some_and(|l| l.trim_start().trim_start_matches('-').trim().trim_matches(['"', '\'']) == key))?;
         let items = (at + 1..lines.len()).take_while(|&i| lines.get(i).is_some_and(|l| l.trim_start().starts_with('-'))).count();
         if items == 1 {
             out.splice(at..=item, std::iter::empty());
@@ -167,11 +170,16 @@ fn with_inferred_title(head: &str, title: &str) -> Option<String> {
     } else {
         return None;
     }
+    let own_line = out.iter().position(|l| l.starts_with(&format!("{key}:")));
+    let mut value_line = value_line.replace('\n', newline);
+    if let Some(at) = own_line {
+        out[at] = std::mem::take(&mut value_line);
+    }
     let mut fields_out: String = out.concat();
     if !fields_out.is_empty() && !fields_out.ends_with('\n') {
         fields_out.push_str(newline);
     }
-    fields_out.push_str(&title_line.replace('\n', newline));
+    fields_out.push_str(&value_line);
     let mut result = String::from(head);
     result.replace_range(span.fields, &fields_out);
     Some(result)

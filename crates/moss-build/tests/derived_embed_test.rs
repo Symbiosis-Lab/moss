@@ -13,7 +13,7 @@ const DERIVER: &str = r###"#!/bin/sh
 REQ=$(cat)
 case "$REQ" in
   *locked*) printf '%s' '{"kind":"skip","reason":"locked","message":"This <file> is locked."}' ;;
-  *) printf '%s' '{"kind":"derived","fragments":{"text":"## Hello\n\nworld"},"facts":{"title":"From Facts"}}' ;;
+  *) printf '%s' '{"kind":"derived","fragments":{"text":"## Hello\n\nworld"},"facts":{"title":"From Facts","description":"8 pages, scanned"}}' ;;
 esac
 "###;
 
@@ -43,6 +43,7 @@ impl Site {
         });
         fs::write(plugin.join("manifest.json"), manifest.to_string()).unwrap();
         for (name, body) in files {
+            fs::create_dir_all(site.root().join(name).parent().unwrap()).unwrap();
             fs::write(site.root().join(name), body).unwrap();
         }
         site
@@ -73,12 +74,14 @@ impl Site {
 
     /// The page as the last sealed generation holds it: what a publish would ship.
     fn sealed_page(&self, slug: &str) -> Option<String> {
+        [format!("{slug}/index.html"), format!("{slug}.html")].iter().find_map(|candidate| self.sealed_file(candidate))
+    }
+
+    /// A file of the last sealed generation, by its served path.
+    fn sealed_file(&self, served: &str) -> Option<String> {
         // What a publish does first: finish the materialize the seal queued.
         self.rt.block_on(moss_build::build::seal_phase::settle(&moss_build::moss_paths::MossPaths::new(self.root())));
-        let current = self.root().join(".moss/build.nosync/current");
-        [format!("{slug}/index.html"), format!("{slug}.html")]
-            .iter()
-            .find_map(|candidate| fs::read_to_string(current.join(candidate)).ok())
+        fs::read_to_string(self.root().join(".moss/build.nosync/current").join(served)).ok()
     }
 
     fn build(&self, plugins: PluginMode, mode: DeriveMode) {
@@ -128,8 +131,92 @@ fn derived_text_is_rendered_and_names_an_inferring_page() {
     assert!(html.contains("<h2"), "{html}");
     assert!(html.contains("Hello"), "{html}");
     assert!(html.contains("world"), "{html}");
-    assert!(!html.contains("moss-derived"), "a ready derivation leaves no placeholder");
+    assert!(!html.contains("moss-derived--"), "a ready derivation leaves no status block");
     assert!(title_of(&html).contains("From Facts"), "{}", title_of(&html));
+}
+
+#[test]
+fn ready_text_is_wrapped_and_still_renders_as_markdown_inside() {
+    let site = Site::new(&[("a.fake", "bytes"), ("page.md", "before\n\n![[a.fake#text]]\n\nafter\n")]);
+    site.build(PluginMode::Blocking, DeriveMode::Await);
+    let html = site.page("page");
+    let open = html.find("<div class=\"moss-derived\" data-fragment=\"text\"").unwrap_or_else(|| panic!("no wrapper in {html}"));
+    let heading = html[open..].find("<h2").map(|at| open + at).expect("the heading renders inside the wrapper");
+    let close = html[heading..].find("</div>").map(|at| heading + at).expect("the wrapper closes after its text");
+    assert!(html[heading..close].contains("Hello") && html[heading..close].contains("world"), "{html}");
+    assert!(!html.contains("## Hello"), "the heading must not be left as source text: {html}");
+}
+
+fn meta_description(html: &str) -> String {
+    html.split("name=\"description\" content=\"").nth(1).and_then(|rest| rest.split('"').next()).unwrap_or("").to_string()
+}
+
+/// A folder of two pages, one of them embedding derived text, built to a
+/// listing at `docs/` and to `llms.txt`.
+fn listed_site() -> Site {
+    Site::new(&[
+        ("docs/a.fake", "bytes"),
+        ("docs/item.md", "---\ninferred: [title]\n---\n\n![[a.fake#text]]\n"),
+        ("docs/other.md", "---\ntitle: Other\n---\n\nplain words\n"),
+    ])
+}
+
+#[test]
+fn a_listing_card_shows_the_derived_words_and_no_wrapper_markup() {
+    let site = listed_site();
+    site.build(PluginMode::Blocking, DeriveMode::Await);
+    let listing = site.page("docs");
+    assert!(listing.contains("From Facts"), "the listing names the derived page: {listing}");
+    assert!(listing.contains("world"), "the card shows the derived words: {listing}");
+    assert!(!listing.contains("moss-derived") && !listing.contains("&lt;div"), "{listing}");
+    let page = site.page("docs/item");
+    let meta = meta_description(&page);
+    assert!(meta.contains("world") && !meta.contains("div"), "meta description {meta:?} in {page}");
+}
+
+#[test]
+fn an_inferred_description_fills_the_meta_description_and_the_listing_card() {
+    let site = Site::new(&[
+        ("docs/a.fake", "bytes"),
+        ("docs/item.md", "---\ninferred: [title, description]\n---\n\n![[a.fake#text]]\n"),
+        ("docs/other.md", "---\ntitle: Other\n---\n\nplain words\n"),
+    ]);
+    site.build(PluginMode::Blocking, DeriveMode::Await);
+    assert_eq!(meta_description(&site.page("docs/item")), "8 pages, scanned");
+    let listing = site.page("docs");
+    assert!(listing.contains("8 pages, scanned"), "the card shows the derived description: {listing}");
+    assert!(listing.contains("plain words"), "other cards are unaffected: {listing}");
+}
+
+#[test]
+fn a_written_description_beats_the_inferred_one() {
+    let site = Site::new(&[
+        ("docs/a.fake", "bytes"),
+        ("docs/item.md", "---\ndescription: Mine\ninferred: [title, description]\n---\n\n![[a.fake#text]]\n"),
+        ("docs/other.md", "---\ntitle: Other\n---\n\nplain words\n"),
+    ]);
+    site.build(PluginMode::Blocking, DeriveMode::Await);
+    assert_eq!(meta_description(&site.page("docs/item")), "Mine");
+    let listing = site.page("docs");
+    assert!(listing.contains("Mine") && !listing.contains("8 pages, scanned"), "{listing}");
+}
+
+#[test]
+fn without_description_in_inferred_the_description_stays_the_page_text() {
+    let site = listed_site();
+    site.build(PluginMode::Blocking, DeriveMode::Await);
+    let meta = meta_description(&site.page("docs/item"));
+    assert!(meta.contains("world") && !meta.contains("scanned"), "{meta}");
+    assert!(!site.page("docs").contains("8 pages, scanned"));
+}
+
+#[test]
+fn llms_txt_carries_the_derived_words_and_no_wrapper_markup() {
+    let site = listed_site();
+    site.build(PluginMode::Blocking, DeriveMode::Await);
+    let llms = site.sealed_file("llms.txt").expect("llms.txt in the sealed generation");
+    assert!(llms.contains("world"), "{llms}");
+    assert!(!llms.contains("<div") && !llms.contains("</div>") && !llms.contains("moss-derived"), "{llms}");
 }
 
 #[test]
@@ -282,7 +369,7 @@ fn a_publish_retries_a_read_that_failed_while_previewing() {
     fs::remove_file(&flag).unwrap();
     site.build(PluginMode::Blocking, DeriveMode::Await);
     let html = site.page("page");
-    assert!(html.contains("Hello") && !html.contains("moss-derived"), "{html}");
+    assert!(html.contains("Hello") && !html.contains("moss-derived--"), "{html}");
 }
 
 #[test]
@@ -380,7 +467,11 @@ fn an_expanded_page_renders_as_the_embed_did() {
     moss_build::cli::expand::expand_in(&target, site.root(), false).unwrap();
     assert!(!fs::read_to_string(&target).unwrap().contains("![[a.fake"));
     site.build(PluginMode::Blocking, DeriveMode::Await);
-    assert_eq!(article(&site.page("page")), article(&before));
+    // Only the wrapper's own two lines differ from the written-out text.
+    let unwrapped = article(&before)
+        .replacen("<div class=\"moss-derived\" data-fragment=\"text\">\n", "", 1)
+        .replacen("</div><!-- /moss-derived -->\n", "", 1);
+    assert_eq!(article(&site.page("page")), unwrapped);
 }
 
 #[test]

@@ -24,7 +24,7 @@ fn a_stub_embeds_its_file_in_the_layout_the_manifest_gives() {
     assert_eq!(written, vec![d.path().join("017 Report.md")]);
     assert_eq!(
         fs::read_to_string(&written[0]).unwrap(),
-        "---\ninferred: [title]\n---\n![[017 Report.fake#text]]\n\n![[017 Report.fake]]\n"
+        "---\ninferred: [title, description]\n---\n![[017 Report.fake#text]]\n\n![[017 Report.fake]]\n"
     );
 }
 
