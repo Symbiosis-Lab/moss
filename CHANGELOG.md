@@ -84,6 +84,7 @@ All notable changes to moss will be documented here.
 
 - `moss import` turns a site builder's map block into a map with a directions link.
 - `moss import` lists, page by page, the embedded widgets it could not carry, instead of only counting them.
+- Hover link previews now open only for a link inside a page's written paragraphs. They no longer open over hero captions, image captions, credit lists, cards, lists, navigation, the header or the footer, where a card hid the work the link points at. Links written in ordinary paragraphs keep their previews, so a site that links from its prose is unchanged. The `[site].link_preview = false` setting that turns previews off is now documented in `moss describe`.
 
 ### Fixed
 

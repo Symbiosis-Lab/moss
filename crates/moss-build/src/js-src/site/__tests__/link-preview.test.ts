@@ -22,15 +22,38 @@ const PREVIEWS: Record<string, { title: string; description?: string }> = {
 /** Run the 200ms hover-show delay forward without spending it. */
 const wait = async (ms: number): Promise<void> => { await vi.advanceTimersByTimeAsync(ms); };
 
+/** A same-origin wikilink to a page that has a preview entry. */
+const link = (text = "Import from Matters"): string =>
+  `<a class="wikilink" href="${location.origin}/docs/from-matters/">${text}</a>`;
+
+/**
+ * Put `html` inside a `<main>` (the article element the shell renders) and
+ * return its first anchor. Links outside `main` never preview, so every test
+ * that expects a card has to mount its anchor here.
+ */
+function mount(html: string): HTMLAnchorElement {
+  const main = document.createElement("main");
+  main.innerHTML = html;
+  document.body.appendChild(main);
+  return main.querySelector("a") as HTMLAnchorElement;
+}
+
+/** Hover `a`, run the show delay, and report whether a card opened. */
+async function hovers(a: HTMLAnchorElement): Promise<boolean> {
+  a.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+  await wait(300);
+  return document.querySelector(".moss-preview-popup.visible") !== null;
+}
+
 describe("link-preview — hover popup", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    // Clear the LINKS, not the whole body. The module appends its popup once
+    // Clear the mounted content, not the whole body. The module appends its popup once
     // and keeps a singleton reference to it, so wiping `body.innerHTML` orphans
     // that node for good: every later test then hovers a link, `createPopup`
     // returns early because the reference is still live, and nothing appears in
     // the DOM to assert on. Hiding the popup is the reset it actually needs.
-    document.body.querySelectorAll("a").forEach((a) => a.remove());
+    document.body.querySelectorAll("main").forEach((m) => m.remove());
     document.querySelector(".moss-preview-popup")?.classList.remove("visible");
     vi.stubGlobal(
       "fetch",
@@ -40,7 +63,8 @@ describe("link-preview — hover popup", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    document.body.querySelectorAll("a").forEach((a) => a.remove());
+    document.body.querySelectorAll("main").forEach((m) => m.remove());
+    document.body.querySelectorAll(":scope > p, :scope > a").forEach((n) => n.remove());
     vi.unstubAllGlobals();
     for (const prop of ["clientWidth", "clientHeight"]) {
       Object.defineProperty(document.documentElement, prop, { configurable: true, value: 0 });
@@ -48,13 +72,11 @@ describe("link-preview — hover popup", () => {
   });
 
   test("shows a preview card for a CJK-path wikilink (decodes pathname to match previews.json)", async () => {
-    const a = document.createElement("a");
-    a.className = "wikilink";
     // Same-origin href with a percent-encoded CJK segment (文档), as the browser
     // produces it. Use location.origin so it isn't treated as an external link.
-    a.href = location.origin + "/zh-hans/%E6%96%87%E6%A1%A3/from-matters/";
-    a.textContent = "从 Matters 导入";
-    document.body.appendChild(a);
+    const a = mount(
+      `<p><a class="wikilink" href="${location.origin}/zh-hans/%E6%96%87%E6%A1%A3/from-matters/">从 Matters 导入</a></p>`,
+    );
 
     a.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
     await wait(300); // 200ms show delay + async previews.json fetch
@@ -80,14 +102,10 @@ describe("link-preview — hover popup", () => {
       value: 768,
     });
 
-    const a = document.createElement("a");
-    a.className = "wikilink";
-    a.href = location.origin + "/docs/from-matters/";
-    a.textContent = "Import from Matters";
+    const a = mount(`<p>${link()}</p>`);
     a.getBoundingClientRect = vi.fn(
       () => ({ top: 300, bottom: 320, left: 900, right: 980, width: 80, height: 20 }) as DOMRect,
     );
-    document.body.appendChild(a);
 
     // First hover creates the singleton popup; only then can its own rect be
     // stubbed, because the module never exposes the node.
@@ -109,15 +127,63 @@ describe("link-preview — hover popup", () => {
   });
 
   test("does not show a card for a non-wikilink internal link", async () => {
-    const a = document.createElement("a");
-    a.href = location.origin + "/docs/from-matters/"; // no .wikilink class
-    a.textContent = "plain link";
-    document.body.appendChild(a);
+    const a = mount(`<p><a href="${location.origin}/docs/from-matters/">plain link</a></p>`); // no .wikilink class
 
     a.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
     await wait(300);
 
     const popup = document.querySelector(".moss-preview-popup.visible");
     expect(popup).toBeNull();
+  });
+
+  test("a link in a body paragraph previews", async () => {
+    expect(await hovers(mount(`<p>${link()}</p>`))).toBe(true);
+  });
+
+  test("a paragraph inside a blockquote still previews", async () => {
+    expect(await hovers(mount(`<blockquote><p>${link()}</p></blockquote>`))).toBe(true);
+  });
+
+  test("a link in a hero caption does not preview", async () => {
+    expect(
+      await hovers(mount(`<div class="moss-hero"><p class="moss-hero-caption">${link()}</p></div>`)),
+    ).toBe(false);
+  });
+
+  test("a link in a figcaption does not preview", async () => {
+    expect(await hovers(mount(`<figure><img alt=""><figcaption>${link()}</figcaption></figure>`))).toBe(false);
+  });
+
+  test("a link in a list item does not preview", async () => {
+    expect(await hovers(mount(`<ul><li>${link()}</li></ul>`))).toBe(false);
+  });
+
+  test("a paragraph inside a list item does not preview", async () => {
+    expect(await hovers(mount(`<ul><li><p>${link()}</p></li></ul>`))).toBe(false);
+  });
+
+  test.each([
+    ["nav", "nav"],
+    ["header", "header"],
+    ["footer", "footer"],
+  ])("a paragraph inside %s, when inside main, does not preview", async (_name, tag) => {
+    expect(await hovers(mount(`<${tag}><p>${link()}</p></${tag}>`))).toBe(false);
+  });
+
+  test("a link in a card does not preview", async () => {
+    expect(await hovers(mount(`<div class="moss-card"><p>${link()}</p></div>`))).toBe(false);
+  });
+
+  test("a paragraph outside any main element does not preview", async () => {
+    const p = document.createElement("p");
+    p.innerHTML = link();
+    document.body.appendChild(p);
+    expect(await hovers(p.querySelector("a") as HTMLAnchorElement)).toBe(false);
+  });
+
+  test("a previewed prose link is described by its card", async () => {
+    const a = mount(`<p>${link()}</p>`);
+    await hovers(a);
+    expect(a.getAttribute("aria-describedby")).toMatch(/^moss-preview-\d+$/);
   });
 });

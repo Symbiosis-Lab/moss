@@ -309,3 +309,24 @@ fn asking_for_a_tag_on_the_lazy_chunk_panics() {
     let resolver = crate::build::assets::paths::PathResolver::new();
     let _ = ScriptAssets::resolve().tag("share-card", &all_on(), &resolver);
 }
+
+/// `isInProse` treats a link inside any listed container as chrome, so every
+/// class a renderer wraps links in must be listed, or a card opens over it.
+#[test]
+fn link_preview_not_prose_lists_each_component_class() {
+    let src = include_str!("../../js-src/site/link-preview.ts");
+    let start = src.find("const NOT_PROSE").expect("NOT_PROSE is declared");
+    let body = &src[start..];
+    let body = &body[..body.find(';').expect("NOT_PROSE ends")];
+    let selectors: BTreeSet<&str> = body
+        .split(|c: char| matches!(c, '"' | ',' | ' ' | '\n' | '+'))
+        .filter(|s| !s.is_empty())
+        .collect();
+    for class in [
+        "moss-hero", "moss-embed-figure", "moss-cards", "moss-card", "moss-card-grid",
+        "moss-card-list", "moss-card-row", "moss-grid", "moss-credit", "moss-series-nav", "moss-byline",
+    ] {
+        let selector = format!(".{class}");
+        assert!(selectors.contains(selector.as_str()), "{selector} is missing from NOT_PROSE");
+    }
+}

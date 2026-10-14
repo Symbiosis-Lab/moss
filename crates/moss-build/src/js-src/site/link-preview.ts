@@ -36,8 +36,29 @@ import { clampLeft, maxSurfaceWidth, verticalSlot } from "./viewport";
     catch { return true; }
   }
 
+  // Containers whose links are chrome or captions, not running prose. A card
+  // over one of these hides the work on portfolio-style sites. The moss-*
+  // entries mirror the classes the Rust renderers emit; a new link-bearing
+  // component needs an entry here and in the scripts_tests guard.
+  const NOT_PROSE =
+    "figure, figcaption, ul, ol, dl, table, nav, header, footer, aside, " +
+    ".moss-hero, .moss-embed-figure, .moss-cards, .moss-card, .moss-card-grid, " +
+    ".moss-card-list, .moss-card-row, .moss-grid, .moss-credit, .moss-series-nav, .moss-byline";
+
+  // A link counts as prose only when its nearest block is a <p> inside the
+  // article. The shell puts the hero outside <main> and the article inside it,
+  // so the `main` test drops hero, header and footer. A <p> inside a blockquote
+  // still previews, because its nearest block is the <p>.
+  function isInProse(link: HTMLAnchorElement): boolean {
+    const block = link.closest("p, li, figcaption, h1, h2, h3, h4, h5, h6, td, th, dt, dd, blockquote, pre, div");
+    if (!block || block.tagName !== "P") return false;
+    if (!link.closest("main")) return false;
+    return !link.closest(NOT_PROSE);
+  }
+
   function isSkippable(link: HTMLAnchorElement): boolean {
     if (!link.classList.contains("wikilink")) return true;
+    if (!isInProse(link)) return true;
     const href = link.getAttribute("href");
     if (!href || href.charAt(0) === "#") return true;
     if (isExternal(link.href)) return true;

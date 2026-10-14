@@ -2372,7 +2372,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "Floating link-preview popover injected at `document.body` level by the runtime `preview.js`. Fetches `/_moss/previews.json` and renders a hover card with title, description, and excerpt for internal links.",
+        description: "Floating link-preview popover injected at `document.body` level by the runtime `preview.js`. Fetches `/_moss/previews.json` and renders a hover card with title, description, and excerpt for internal links. Opens only for an internal wikilink written inside a body paragraph of the page's main content; links in a hero, figure or caption, card or card grid, list, navigation, header or footer never open it. Set `[site].link_preview = false` in `.moss/config.toml` to turn hover previews off; `preview.js` and `_moss/previews.json` are then not written. Default `true`.",
     },
     ComponentEntry {
         class: "moss-preview-title",
