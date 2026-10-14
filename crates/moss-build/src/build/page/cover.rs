@@ -799,8 +799,8 @@ pub fn needs_plate(width: u32, height: u32) -> bool {
     !(PASSTHROUGH_MIN_AR..=PASSTHROUGH_MAX_AR).contains(&ar)
 }
 
-/// A cover moss will draw into the card rather than hand over, with the stat
-/// triple that keys the rendered card. Owned, because [`CardPlate`] borrows
+/// A cover moss will draw into the card rather than hand over, with the
+/// SHA-256 of its bytes that keys the rendered card. Owned, because [`CardPlate`] borrows
 /// the path and the caller needs somewhere for it to live.
 ///
 /// [`CardPlate`]: crate::build::page::og_card::CardPlate
@@ -815,8 +815,7 @@ pub struct PlateSource {
     relative_path: String,
     width: u32,
     height: u32,
-    len: u64,
-    mtime_secs: i64,
+    digest: [u8; 32],
 }
 
 impl PlateSource {
@@ -826,8 +825,7 @@ impl PlateSource {
             relative_path: &self.relative_path,
             width: self.width,
             height: self.height,
-            len: self.len,
-            mtime_secs: self.mtime_secs,
+            digest: self.digest,
         }
     }
 }
@@ -864,20 +862,18 @@ pub fn plate_source(
     if !needs_plate(width, height) {
         return None;
     }
+    use sha2::{Digest, Sha256};
     let file = source_root.join(&meta.path);
-    let stat = std::fs::metadata(&file).ok()?;
+    // Streamed, not read whole: a plate is up to ~20 MB and this runs once per page that names it.
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut std::fs::File::open(&file).ok()?, &mut hasher).ok()?;
+    let digest: [u8; 32] = hasher.finalize().into();
     Some(PlateSource {
         file,
         relative_path: meta.path.clone(),
         width,
         height,
-        len: stat.len(),
-        mtime_secs: stat
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0),
+        digest,
     })
 }
 
