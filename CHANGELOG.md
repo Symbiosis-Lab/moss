@@ -85,6 +85,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A folder's "Download calendar · Subscribe to calendar" links now follow the listing they describe. They used to close the page, after whatever came last, and on a home page with its listing off they pointed at a calendar of the whole site. Now an embedded `![[folder/]]` listing carries its own folder's links while that folder has an event that has not ended (once per page, after the last embed of that folder), a page with `children: false` prints no folder links at its end, and a folder page keeps them after its own listing. The calendar files and their addresses are unchanged.
 - A site's own PNG icon now gets the small tab sizes (from 32 px) and the home-screen icon (from 180 px) made from it, as an SVG icon already did.
 - `moss build --serve` now prints the same "Reading … · n of m" lines as a plain build while a plugin reads files in the background; it used to stay silent until the text arrived.
 - An embed written as `![[url|Title|420x620]]` now gets both its title and its size, and an embed with no title gets a default name (YouTube video, Vimeo video, CodePen, or the page's site), so screen readers can announce it.

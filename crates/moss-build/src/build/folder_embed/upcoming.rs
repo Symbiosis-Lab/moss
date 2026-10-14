@@ -5,6 +5,7 @@
 use crate::build::components::child_list::ChildItemProps;
 use crate::build::types::ParsedDocument;
 use chrono::Local;
+use moss_core::event::EventTime;
 use std::collections::HashSet;
 
 /// True for an event that has not ended at `now`. An all-day event counts
@@ -14,7 +15,13 @@ use std::collections::HashSet;
 /// upcoming, whatever their `date`.
 fn is_upcoming(doc: &ParsedDocument, now: chrono::NaiveDateTime) -> bool {
     let Some(ev) = &doc.event else { return false };
-    let last = ev.end.unwrap_or(ev.start);
+    span_is_upcoming(ev.start, ev.end, now)
+}
+
+/// The test behind [`is_upcoming`], for callers that hold an event's times
+/// rather than its page.
+pub(crate) fn span_is_upcoming(start: EventTime, end: Option<EventTime>, now: chrono::NaiveDateTime) -> bool {
+    let last = end.unwrap_or(start);
     if last.is_all_day() {
         last.day_key() >= now.format("%Y-%m-%d").to_string()
     } else {
@@ -22,13 +29,17 @@ fn is_upcoming(doc: &ParsedDocument, now: chrono::NaiveDateTime) -> bool {
     }
 }
 
+/// The build's "now" for every past/upcoming decision.
+pub(crate) fn now() -> chrono::NaiveDateTime {
+    Local::now().naive_local()
+}
+
 /// The `url_path`s of the upcoming events among `docs`; empty unless `group`
 /// is `upcoming`.
-pub(super) fn urls<'a>(group: &str, docs: &[&'a ParsedDocument]) -> HashSet<&'a str> {
+pub(super) fn urls<'a>(group: &str, docs: &[&'a ParsedDocument], now: chrono::NaiveDateTime) -> HashSet<&'a str> {
     if group != "upcoming" {
         return HashSet::new();
     }
-    let now = Local::now().naive_local();
     docs.iter().filter(|d| is_upcoming(d, now)).map(|d| d.url_path.as_str()).collect()
 }
 

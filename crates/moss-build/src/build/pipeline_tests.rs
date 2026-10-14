@@ -7329,6 +7329,111 @@ fn a_folder_calendar_holds_what_the_folders_listing_shows() {
     assert_eq!(staged_calendars(&dir), ["calendar.ics", "season/calendar.ics"], "the root home lists the whole tree; Plain lists direct children only, and Talk is nested");
 }
 
+/// A site whose home (listing off) has `body`, with `Season/` and `Archive/`
+/// folders of events: `Season` holds a 2099 event, `Archive` only 2001 ones.
+fn embedding_home_site(body: &str) -> (std::path::PathBuf, impl Drop) {
+    let (dir, cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), format!("---\ntitle: Home\nchildren: false\n---\n\n{body}\n")).unwrap();
+    for (path, fm) in [
+        ("Season/index.md", "title: Season\n"),
+        ("Season/Gala.md", "title: Gala\nuid: gala0001\nstart: 2099-05-01\n"),
+        ("Archive/index.md", "title: Archive\n"),
+        ("Archive/Old.md", "title: Old\nuid: old00001\nstart: 2001-05-01\n"),
+    ] {
+        fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
+        fs::write(dir.join(path), format!("---\n{fm}---\n\nBody.\n")).unwrap();
+    }
+    build_test_sealed_at(dir.to_str().unwrap(), Some("https://example.test")).expect("build");
+    (dir, cleanup)
+}
+
+#[test]
+fn calendar_links_follow_the_embedded_listing_not_the_end_of_the_page() {
+    let (dir, _c) = embedding_home_site("![[Season/]]\n\nClosing words.");
+    let home = staged(&dir, "index.html");
+    assert_eq!(home.matches("moss-calendar-links").count(), 1, "{home}");
+    let links = home.find(r#"href="/season/calendar.ics""#).expect(&home);
+    assert!(home.contains(r#"href="webcal://example.test/season/calendar.ics""#), "{home}");
+    assert!(home.find("/season/gala/").unwrap() < links, "the links come after the listing: {home}");
+    assert!(links < home.find(">Closing words.</p>").unwrap(), "and before the prose that follows it: {home}");
+    assert!(!home.contains(r#"href="/calendar.ics" type"#), "the page's own all-events calendar is not offered at the end: {home}");
+    assert!(home.contains(r#"rel="alternate" type="text/calendar""#), "the head link stays: {home}");
+    assert!(staged_exists(&dir, "calendar.ics"), "the home's calendar file is still served");
+}
+
+#[test]
+fn a_folder_embedded_twice_gets_its_links_once_after_the_last_embed() {
+    let (dir, _c) = embedding_home_site("![[Season/|limit:1]]\n\nMiddle words.\n\n![[Season/]]\n\nClosing words.");
+    let home = staged(&dir, "index.html");
+    assert_eq!(home.matches(r#"href="/season/calendar.ics""#).count(), 1, "{home}");
+    let links = home.find(r#"href="/season/calendar.ics""#).unwrap();
+    assert!(home.find(">Middle words.</p>").unwrap() < links && links < home.find(">Closing words.</p>").unwrap(), "{home}");
+}
+
+#[test]
+fn an_embedded_listing_with_nothing_still_to_come_gets_no_calendar_links() {
+    let (dir, _c) = embedding_home_site("![[Archive/]]\n\nClosing words.");
+    let home = staged(&dir, "index.html");
+    assert!(home.contains("Old"), "the listing is there: {home}");
+    assert!(!home.contains("moss-calendar-links"), "{home}");
+    assert!(staged_exists(&dir, "archive/calendar.ics"), "the past season's own file is still served");
+}
+
+/// Regression guard: embedding must not move the links off a folder page that
+/// shows its own listing.
+#[test]
+fn a_folder_page_with_its_own_listing_closes_its_body_with_the_links() {
+    let (dir, _c) = embedding_home_site("Welcome.");
+    let page = staged(&dir, "season/index.html");
+    let links = page.find("moss-calendar-links").expect(&page);
+    assert!(page.find("Gala").unwrap() < links, "{page}");
+    assert!(page.contains(r#"href="/season/calendar.ics""#), "{page}");
+}
+
+/// A site with `Season/` (one 2099 event) whose home page has `fm` and `body`.
+fn season_home_site(fm: &str, body: &str) -> (std::path::PathBuf, impl Drop) {
+    let (dir, cleanup) = create_test_dir();
+    fs::create_dir_all(dir.join("Season")).unwrap();
+    fs::write(dir.join("Season/index.md"), format!("---\ntitle: Season\n{fm}---\n\n{body}\n")).unwrap();
+    fs::write(dir.join("Season/Gala.md"), "---\ntitle: Gala\nuid: gala0001\nstart: 2099-05-01\n---\n\nBody.\n").unwrap();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    build_test_sealed_at(dir.to_str().unwrap(), Some("https://example.test")).expect("build");
+    (dir, cleanup)
+}
+
+#[test]
+fn a_folder_page_with_its_listing_off_prints_no_calendar_links() {
+    let (dir, _c) = season_home_site("children: false\n", "Welcome.");
+    let page = staged(&dir, "season/index.html");
+    assert!(!page.contains("moss-calendar-links"), "{page}");
+    assert!(page.contains(r#"rel="alternate" type="text/calendar""#), "the head link stays: {page}");
+    assert!(staged_exists(&dir, "season/calendar.ics"), "and the file is still served");
+}
+
+#[test]
+fn a_folder_page_embedding_its_own_folder_gets_one_set_of_links() {
+    let (dir, _c) = season_home_site("", "![[/Season/]]");
+    let page = staged(&dir, "season/index.html");
+    assert_eq!(page.matches("moss-calendar-links").count(), 1, "{page}");
+}
+
+#[test]
+fn calendar_links_under_an_embedded_listing_stay_out_of_the_feed() {
+    let (dir, _c) = create_test_dir();
+    fs::create_dir_all(dir.join("Season")).unwrap();
+    fs::create_dir_all(dir.join("Notes")).unwrap();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::write(dir.join("Season/index.md"), "---\ntitle: Season\n---\n\nSeason.\n").unwrap();
+    fs::write(dir.join("Season/Gala.md"), "---\ntitle: Gala\nuid: gala0001\nstart: 2099-05-01\n---\n\nBody.\n").unwrap();
+    fs::write(dir.join("Notes/Post.md"), "---\ntitle: Post\ndate: 2026-01-01\n---\n\n![[/Season/]]\n").unwrap();
+    build_test_sealed_at(dir.to_str().unwrap(), Some("https://example.test")).expect("build");
+    let post = staged(&dir, "notes/post/index.html");
+    assert!(post.contains("moss-calendar-links"), "the page carries the links: {post}");
+    let feed = staged(&dir, "rss.xml");
+    assert!(feed.contains("Gala"), "the entry holds the listing: {feed}");
+    assert!(!feed.contains("calendar.ics") && !feed.contains("Download calendar"), "{feed}");
+}
+
 #[test]
 fn a_folder_without_a_home_page_gets_no_calendar() {
     let (dir, _c) = site_of(&[("Dates/2026/11/01/Show.md", "title: Show\nuid: show0001\nstart: 2026-11-01 19:00\n")]);

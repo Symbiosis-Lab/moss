@@ -1113,7 +1113,7 @@ pub fn generate_blocking_content_for_build(
     // site default. Reuse it here.
     // Out here because the article map, written far below, carries these to the editor's `url` chip.
     let mut url_collisions: Vec<crate::build::scan::slug::UrlCollision> = Vec::new();
-    let (layout_config, site_url, has_rss, show_rss_in_footer, term_index) = {
+    let (layout_config, site_url, has_rss, show_rss_in_footer, term_index, calendar) = {
         // Profile the whole-corpus Reduce chain. Each pass
         // below folds OTHER pages' state into `documents`, so (unlike Loop A)
         // none of it is skippable by the parse cache — this is the floor on
@@ -1203,6 +1203,17 @@ pub fn generate_blocking_content_for_build(
             site_config.place_maps = Some(ctx.with_explorer_places_hash(hash));
         }
 
+        // The canonical site URL and the calendar plan are decided before the
+        // embeds, so an embedded listing can carry its folder's calendar links.
+        // Resolution lives in site_url::resolve_for_project — the ONE path,
+        // shared with the deploy guard so build and publish can never disagree
+        // about what URL a generation embeds.
+        let site_url = crate::build::site_url::resolve_for_project(
+            source_path,
+            site_config.site_url_override.as_deref(),
+        )?;
+        let calendar = crate::build::feeds::calendar::CalendarPlan::build(&documents, project_structure, &site_url);
+
         // Resolve folder-list embed markers (`![[/folder/|limit:N,more]]`).
         // moss-core emits a `<!--MOSS_MARKER_FOLDER_LIST:…-->` marker during
         // wikilink resolution; we expand it here, AFTER
@@ -1219,6 +1230,7 @@ pub fn generate_blocking_content_for_build(
             &event_level_image_lookup,
             site_config.typesetting.as_deref(),
             site_config.place_maps.as_ref(),
+            Some((&calendar, &site_url)),
         );
         log::debug!(target: "timing", "[reduce] expand_markers_in_documents: {:?}", reduce_start.elapsed());
 
@@ -1331,16 +1343,6 @@ pub fn generate_blocking_content_for_build(
         let layout_config = layout_config.with_header_mode(site_config.header);
         let layout_config = layout_config.with_place_maps(site_config.place_maps.clone());
 
-        // Resolve the canonical site URL for this build. Resolution lives in
-        // site_url::resolve_for_project — the ONE path, shared with the
-        // deploy guard so build and publish can never disagree about what URL
-        // a generation embeds. Priority chain (domain, site_url, site_id, …) is
-        // documented on resolve_site_url in site_url.rs.
-        let site_url = crate::build::site_url::resolve_for_project(
-            source_path,
-            site_config.site_url_override.as_deref(),
-        )?;
-
         // RSS feed: always generated when a real (https) URL is resolved.
         // Localhost fallbacks (no deployment configured) skip RSS/sitemap.
         // Footer RSS link: additionally controlled by [features].rss_footer
@@ -1372,6 +1374,7 @@ pub fn generate_blocking_content_for_build(
             has_rss,
             show_rss_in_footer,
             term_index,
+            calendar,
         )
     };
 
@@ -1686,7 +1689,7 @@ pub fn generate_blocking_content_for_build(
 
     // Built once here rather than once per page. See `BuildShared`.
     let mut shared = super::build_shared::BuildShared::new(scripts, project_structure, &dir_overrides);
-    shared.calendar = crate::build::feeds::calendar::CalendarPlan::build(&documents, project_structure, &site_url);
+    shared.calendar = calendar;
 
     let rss_href = ServedPath::for_rss("").unwrap().to_relative_url();
     let page_rss_link = has_rss.then(|| format!(r#"<link rel="alternate" type="application/rss+xml" title="RSS" href="{rss_href}">"#));
@@ -2249,7 +2252,7 @@ pub fn generate_blocking_content_for_build(
                 None,
                 site_config.math, false,
                 &Default::default(),
-                false,
+                false, crate::build::folder_embed::upcoming::now(),
             );
             // The generated half of the same split the claimed term page gets
             // in `folder_embed`, through the same function: a term no page

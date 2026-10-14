@@ -207,6 +207,18 @@ fn render(name: &str, events: &[Event], subscribable: bool) -> String {
     ics::calendar_text(name, &zones, events, subscribable)
 }
 
+impl ParsedDocument {
+    /// Whether this page's body ends with its own folder's calendar links.
+    /// `render/html.rs` prints them whenever the page has a planned calendar
+    /// (`folder_href`) and this holds; the embed pass relies on that and leaves
+    /// a self-embed of the page's own folder without links, so they are never
+    /// printed twice. A page with `children: false` shows no listing of its
+    /// own, so its links belong under the listings it embeds instead.
+    pub fn prints_folder_calendar_links(&self) -> bool {
+        self.children != Some(false)
+    }
+}
+
 struct PlannedEvent {
     path: ServedPath,
     event: Event,
@@ -350,29 +362,65 @@ impl CalendarPlan {
         out
     }
 
-    /// The calendar links that close a page's body: `event_href` (the caller
-    /// passes it only when the meta line did not carry the event's link), then
-    /// a folder's calendar file and, when the site is deployed, its `webcal://`
-    /// subscribe link. Empty when there is nothing to link.
-    pub fn links_html(&self, doc: &ParsedDocument, site_url: &SiteUrl, lang: crate::i18n::Language, event_href: Option<&str>) -> String {
-        let t = |key| crate::i18n::t(lang, key);
-        let mut links = Vec::new();
-        if let Some(href) = event_href {
-            links.push(format!(r#"<a class="moss-calendar-link" href="{href}" type="text/calendar">{}</a>"#, t("add_to_calendar")));
+    /// The "Add to calendar" paragraph for an event page whose meta line did
+    /// not carry the link.
+    pub fn event_link_html(&self, href: &str, lang: crate::i18n::Language) -> String {
+        links_paragraph(vec![format!(
+            r#"<a class="moss-calendar-link" href="{href}" type="text/calendar">{}</a>"#,
+            crate::i18n::t(lang, "add_to_calendar")
+        )])
+    }
+
+    /// A folder page's download link and, on a deployed site, its `webcal://`
+    /// subscribe link. Empty when the page has no calendar.
+    pub fn folder_links_html(&self, doc: &ParsedDocument, site_url: &SiteUrl, lang: crate::i18n::Language) -> String {
+        match self.folder_href(doc) {
+            Some(href) => links_paragraph(folder_links(&href, site_url, lang)),
+            None => String::new(),
         }
-        if let Some(href) = self.folder_href(doc) {
-            links.push(format!(r#"<a class="moss-calendar-link" href="{href}" type="text/calendar">{}</a>"#, t("download_calendar")));
-            if site_url.is_deployed() {
-                links.push(format!(
-                    r#"<a class="moss-calendar-link" href="webcal://{}{href}">{}</a>"#,
-                    site_url.host(),
-                    t("subscribe_to_calendar")
-                ));
-            }
-        }
-        if links.is_empty() {
+    }
+
+    /// The links that follow an embedded listing of the folder whose home page
+    /// is `home_url_path`: empty unless that folder has a calendar and at least
+    /// one of its events has not ended at `now`.
+    pub fn embed_links_html(&self, home_url_path: &str, site_url: &SiteUrl, lang: crate::i18n::Language, now: chrono::NaiveDateTime) -> String {
+        let Some(folder) = self.folders.get(home_url_path) else { return String::new() };
+        if !folder.events.iter().any(|e| crate::build::folder_embed::upcoming::span_is_upcoming(e.start, e.end, now)) {
             return String::new();
         }
-        format!("\n<p class=\"moss-calendar-links\">{}</p>\n", links.join(" · "))
+        links_paragraph(folder_links(&folder.path.to_relative_url(), site_url, lang))
     }
+}
+
+fn folder_links(href: &str, site_url: &SiteUrl, lang: crate::i18n::Language) -> Vec<String> {
+    let t = |key| crate::i18n::t(lang, key);
+    let mut links = vec![format!(r#"<a class="moss-calendar-link" href="{href}" type="text/calendar">{}</a>"#, t("download_calendar"))];
+    if site_url.is_deployed() {
+        links.push(format!(
+            r#"<a class="moss-calendar-link" href="webcal://{}{href}">{}</a>"#,
+            site_url.host(),
+            t("subscribe_to_calendar")
+        ));
+    }
+    links
+}
+
+const LINKS_OPEN: &str = "\n<p class=\"moss-calendar-links\">";
+const LINKS_CLOSE: &str = "</p>\n";
+
+fn links_paragraph(links: Vec<String>) -> String {
+    format!("{LINKS_OPEN}{}{LINKS_CLOSE}", links.join(" · "))
+}
+
+/// `html` without any calendar-links paragraph, for text that leaves the
+/// page (a feed entry), where "Download calendar" has nothing to act on.
+pub fn strip_links_paragraphs(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some((before, after)) = rest.split_once(LINKS_OPEN) {
+        out.push_str(before);
+        rest = after.split_once(LINKS_CLOSE).map_or("", |(_, tail)| tail);
+    }
+    out.push_str(rest);
+    out
 }

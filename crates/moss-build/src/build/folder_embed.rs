@@ -30,7 +30,8 @@
 //! `folder_id` because those carry on-disk paths.
 
 mod maps;
-mod upcoming;
+mod calendar_tokens;
+pub(crate) mod upcoming;
 use maps::place_map_with_placement;
 
 use std::path::Path;
@@ -395,6 +396,7 @@ pub(crate) fn generate_children(
     is_embed: bool,
     placement: &moss_core::media::Placement,
     lazy_cards: bool,
+    now: chrono::NaiveDateTime,
 ) -> String {
     if folder_docs.is_empty() {
         return String::new();
@@ -476,7 +478,7 @@ pub(crate) fn generate_children(
         sorted.sort_by(|a, b| moss_core::sort::cmp_date_axis(&a.date_sort_key(), &b.date_sort_key(), ascending));
     }
 
-    let upcoming = upcoming::urls(group, folder_docs);
+    let upcoming = upcoming::urls(group, folder_docs, now);
     if group == "upcoming" {
         sorted = upcoming::order(sorted, &upcoming, skip_resort);
     }
@@ -746,7 +748,7 @@ pub fn expand_markers_in_documents(
     media_lookup: &crate::build::media::dimensions::MediaDimensionLookup,
     site_typesetting: Option<&str>,
 ) {
-    expand_markers_in_documents_with_place_maps(documents, project, dir_overrides, math, media_lookup, site_typesetting, None)
+    expand_markers_in_documents_with_place_maps(documents, project, dir_overrides, math, media_lookup, site_typesetting, None, None)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -758,11 +760,15 @@ pub fn expand_markers_in_documents_with_place_maps(
     media_lookup: &crate::build::media::dimensions::MediaDimensionLookup,
     site_typesetting: Option<&str>,
     place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
+    calendar: Option<(&crate::build::feeds::calendar::CalendarPlan, &crate::build::site_url::SiteUrl)>,
 ) {
     let has_marker = |d: &ParsedDocument| d.html_content.contains(MARKER_FOLDER_LIST);
     if !documents.iter().any(has_marker) {
         return;
     }
+    // One clock for every past/upcoming decision this pass makes: the
+    // `group:upcoming` ordering and the calendar links agree exactly.
+    let now = upcoming::now();
     for i in 0..documents.len() {
         if !has_marker(&documents[i]) {
             continue;
@@ -799,14 +805,21 @@ pub fn expand_markers_in_documents_with_place_maps(
                 true,
                 place_maps,
                 &ordinal,
+                now,
             )
         };
-        let resolved = match &mut plan {
+        let links_for = calendar_tokens::links_for(calendar, &documents[i], now);
+        let resolved = match plan.as_mut() {
             Some(p) => {
                 p.map_html(&expand);
+                calendar_tokens::settle(p, &links_for);
                 p.to_html()
             }
-            None => expand(&documents[i].html_content),
+            None => {
+                let mut p = crate::build::markdown::body_plan::BodyPlan::opaque(expand(&documents[i].html_content));
+                calendar_tokens::settle(&mut p, &links_for);
+                p.to_html()
+            }
         };
         documents[i].body_plan = plan;
         documents[i].html_content = resolved;
@@ -865,6 +878,7 @@ pub(crate) fn resolve_markers_with_place_maps(
         false,
         place_maps,
         &std::cell::Cell::new(0),
+        upcoming::now(),
     )
 }
 
@@ -890,6 +904,7 @@ fn resolve_markers_impl(
     is_embed: bool,
     place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
     ordinal: &std::cell::Cell<usize>,
+    now: chrono::NaiveDateTime,
 ) -> String {
     if !html.contains(MARKER_FOLDER_LIST) {
         return html.to_string();
@@ -927,6 +942,7 @@ fn resolve_markers_impl(
                 math,
                 is_embed,
                 place_maps,
+                now,
             ),
             None => Err(format!("Invalid folder-embed marker: {body}")),
         };
@@ -1197,6 +1213,7 @@ fn render_one(
     math: bool,
     is_embed: bool,
     place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
+    now: chrono::NaiveDateTime,
 ) -> Result<String, String> {
     // Prefer the marker's `from=` (the original markdown source); the
     // page-level `from_md_path` is a safe fallback when older markers omit it.
@@ -1425,7 +1442,7 @@ fn render_one(
     // Upcoming events lead whatever the folder's sort is, so `limit` cuts
     // from that order (the same grouping `generate_children` applies later).
     let sorted = if effective_group == "upcoming" {
-        let upcoming_urls = upcoming::urls(&effective_group, &folder_docs);
+        let upcoming_urls = upcoming::urls(&effective_group, &folder_docs, now);
         upcoming::order_docs(sorted, &upcoming_urls, skip_resort)
     } else {
         sorted
@@ -1465,6 +1482,7 @@ fn render_one(
             is_embed,
             &container_placement,
             parsed.lazy_cards,
+            now,
         )
     };
     // A page that won a term claim splits its listing by the field each
@@ -1570,13 +1588,17 @@ fn render_one(
         ),
         None => listing,
     };
-    Ok(match parsed.caption.as_deref() {
+    let embed = match parsed.caption.as_deref() {
         Some(caption) => moss_core::render::placement::wrap_embed_with_caption(
             &listing,
             &parsed.placement,
             caption,
         ),
         None => listing,
+    };
+    Ok(match target_doc {
+        Some(t) if is_embed => format!("{embed}{}", calendar_tokens::token(ordinal, &t.url_path)),
+        _ => embed,
     })
 }
 

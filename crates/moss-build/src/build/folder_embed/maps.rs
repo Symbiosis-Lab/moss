@@ -85,7 +85,7 @@ mod tests {
     fn expand(docs: &mut [ParsedDocument], maps: &PlaceMapRenderContext) {
         super::super::expand_markers_in_documents_with_place_maps(
             docs, &super::super::tests::test_project(), &Default::default(), false,
-            &crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &Default::default(), None), None, Some(maps),
+            &crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &Default::default(), None), None, Some(maps), None,
         );
     }
 

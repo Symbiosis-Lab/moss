@@ -1309,8 +1309,15 @@ pub(super) fn render_page<'d>(
     }
     // Calendar links that close the body: a folder's download and subscribe
     // links, and an event's "Add to calendar" when no meta line carries it.
+    // A page with its listing off shows no events here; its embedded listings
+    // carry their own folders' links (`folder_embed`).
     if let Some(d) = doc {
-        homepage_content.push_str(&context.shared.calendar.links_html(d, site_url, d.lang, calendar_at_body_end.as_deref()));
+        if let Some(href) = calendar_at_body_end.as_deref() {
+            homepage_content.push_str(&context.shared.calendar.event_link_html(href, d.lang));
+        }
+        if d.prints_folder_calendar_links() {
+            homepage_content.push_str(&context.shared.calendar.folder_links_html(d, site_url, d.lang));
+        }
     }
 
     // Resolve the share-card description once for the page, using the

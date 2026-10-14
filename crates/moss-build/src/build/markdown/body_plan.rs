@@ -231,6 +231,24 @@ impl BodyPlan {
         (join(&self.segments[..cut]), join(&self.segments[cut..]))
     }
 
+    /// Read every emitted piece, in the order [`map_html`] rewrites them.
+    ///
+    /// [`map_html`]: BodyPlan::map_html
+    pub fn for_each_html(&self, f: &mut dyn FnMut(&str)) {
+        for seg in &self.segments {
+            match seg {
+                BodySegment::Html(s) => f(s),
+                BodySegment::Grid(g) => {
+                    f(&g.open_tag);
+                    for cell in &g.cells {
+                        f(&cell.parts.inner);
+                    }
+                }
+                BodySegment::Subscribe(s) => f(&s.html),
+            }
+        }
+    }
+
     /// Rewrite every emitted piece with `f`.
     ///
     /// Used for the per-page HTML fixups that run after rendering
