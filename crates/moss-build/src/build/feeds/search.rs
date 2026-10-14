@@ -434,6 +434,12 @@ fn segment_pages(site_dir: &Path) -> (Vec<SegmentedPage>, usize, usize) {
     let walk = walkdir::WalkDir::new(site_dir).sort_by_file_name().into_iter().filter_map(Result::ok);
     let mut slots: Vec<Slot> = walk
         .filter(|e| e.file_type().is_file() && e.path().extension().and_then(|x| x.to_str()) == Some("html"))
+        // The not-found page, at both of its addresses, is not content a
+        // reader searches for. Left out of the walk, not counted as skipped.
+        .filter(|e| {
+            let rel = moss_core::slug::normalize_separators(&e.path().strip_prefix(site_dir).unwrap_or(e.path()).to_string_lossy());
+            !crate::build::served_path::is_not_found_address(&rel)
+        })
         .map(|entry| {
             let Ok(rel) = entry.path().strip_prefix(site_dir) else {
                 return Slot::Skipped;

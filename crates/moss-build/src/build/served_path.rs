@@ -39,6 +39,19 @@ use std::fmt;
 /// trigger (`build.rs`), both of which recognize cards by this prefix alone.
 pub const OG_CARD_PREFIX: &str = "_moss/og/";
 
+/// Where the not-found page is built: the page at `/404/`.
+pub const NOT_FOUND_PAGE: &str = "404/index.html";
+
+/// Where a static host looks for the page to show for an unknown address: a copy
+/// of the not-found page at the site root.
+pub const NOT_FOUND_FILE: &str = "404.html";
+
+/// Whether `rel`, a path relative to the site root, is one of the two addresses
+/// the not-found page is served at.
+pub fn is_not_found_address(rel: &str) -> bool {
+    rel == NOT_FOUND_PAGE || rel == NOT_FOUND_FILE
+}
+
 /// Is this output path an address a visitor can have stored — anything outside
 /// the content-addressed, rotating `_moss/` namespace?
 pub fn is_public_address(path: &str) -> bool {
@@ -362,6 +375,12 @@ impl ServedPath {
     /// LLMs.txt. Path is fixed.
     pub fn for_llms_txt() -> Self {
         ServedPath("llms.txt".to_string())
+    }
+
+    /// The not-found page at the site root, where a static host looks for the
+    /// page to show for an unknown address. Path is fixed.
+    pub fn for_not_found() -> Self {
+        ServedPath(NOT_FOUND_FILE.to_string())
     }
 
     /// robots.txt. Path is fixed.

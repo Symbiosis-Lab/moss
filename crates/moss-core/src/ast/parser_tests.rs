@@ -1334,6 +1334,7 @@ fn parse_with_source_lines_assigns_1_based_line_numbers() {
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
+        warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
     };
@@ -1359,6 +1360,7 @@ fn source_line_offset_is_applied_additively() {
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 7,
+        warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
     };
@@ -1388,6 +1390,7 @@ fn source_lines_not_collapsed_across_multiline_shortcode() {
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
+        warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
     };
@@ -1412,6 +1415,7 @@ fn parse_with_source_lines_lists_and_blockquotes() {
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
+        warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
     };
@@ -1435,6 +1439,7 @@ fn parse_with_source_lines_populates_item_lines_on_list() {
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
+        warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
     };
@@ -1491,6 +1496,7 @@ fn parse_with_source_lines_populates_row_lines_on_table() {
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
+        warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
     };
@@ -1670,6 +1676,7 @@ fn parse_with_source_lines_handles_list_after_blank_line_offset() {
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
+        warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
     };
@@ -1705,6 +1712,7 @@ fn parse_implicit_figure_off_leaves_image_paragraph_unpromoted() {
         emit_source_lines: false,
         implicit_figure: false,
         source_line_offset: 0,
+        warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
     };
@@ -1811,6 +1819,7 @@ fn implicit_figure_caption_carries_link_and_math_nodes() {
         emit_source_lines: false,
         implicit_figure: true,
         source_line_offset: 0,
+        warning_line_offset: 0,
         math: true,
         hard_line_breaks: false,
     };
@@ -1851,6 +1860,7 @@ fn implicit_figure_caption_only_math_is_a_math_node() {
         emit_source_lines: false,
         implicit_figure: true,
         source_line_offset: 0,
+        warning_line_offset: 0,
         math: true,
         hard_line_breaks: false,
     };

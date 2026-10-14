@@ -10,6 +10,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::shortcode_extract::{fence_step, parse_shortcode_opener};
+
 /// Half-open byte-offset range `[from, to)` into the original markdown
 /// source. Bytes, not characters: positions are taken straight from
 /// `&str` slicing math so they line up with what the editor receives over
@@ -78,48 +80,28 @@ pub fn editor_scan(markdown: &str) -> EditorScanResult {
 
     let mut current: Option<PartialBlock> = None;
     let mut depth: usize = 0;
-    // Stack of arities for each nesting level. Entry 0 = outermost block's arity.
-    // This prevents an inner ::: from accidentally closing an outer :::grid.
-    let mut arity_stack: Vec<usize> = Vec::new();
     let mut current_is_grid: bool = false;
 
-    let mut in_code_fence = false;
-    let mut code_fence_marker = String::new();
+    // The same inert set every other scanner reads: code, comments.
+    let inert = crate::inert_regions::inert_lines(markdown);
 
     // `offset` is `u32` to match `EditorRange`'s field type. Documents larger
     // than 4 GiB aren't a real editor scenario; we'd truncate silently rather
     // than panic in that pathological case.
     let mut offset: u32 = 0;
-    for line in markdown.split_inclusive('\n') {
+    for (line_index, line) in markdown.split_inclusive('\n').enumerate() {
         let line_content = line.strip_suffix('\n').unwrap_or(line);
         let line_len_without_newline = line_content.len();
         let line_start = offset;
         let line_end = offset + line_len_without_newline as u32;
 
-        // Code-fence tracking: stable ``` or ~~~ fences (length >= 3).
-        if let Some(fence) = match_code_fence(line_content) {
-            if !in_code_fence {
-                in_code_fence = true;
-                code_fence_marker = fence.to_string();
-            } else if code_fence_marker
-                .chars()
-                .next()
-                .is_some_and(|marker_ch| fence.starts_with(marker_ch))
-                && fence.len() >= code_fence_marker.len()
-            {
-                in_code_fence = false;
-                code_fence_marker.clear();
-            }
-            offset += line.len() as u32;
-            continue;
-        }
-        if in_code_fence {
+        if inert.get(line_index).copied().unwrap_or(false) {
             offset += line.len() as u32;
             continue;
         }
 
         if depth == 0 {
-            if let Some((arity, name, args)) = match_open_fence(line_content) {
+            if let Some((name, args)) = parse_shortcode_opener(line_content.trim()) {
                 current_is_grid = name == "grid";
                 current = Some(PartialBlock {
                     open: EditorRange {
@@ -130,45 +112,36 @@ pub fn editor_scan(markdown: &str) -> EditorScanResult {
                     args: args.to_string(),
                     dividers: Vec::new(),
                 });
-                arity_stack.push(arity);
                 depth = 1;
             }
-        } else if let Some((inner_arity, _, _)) = match_open_fence(line_content) {
-            // Nested opener — push its arity; depth increments.
-            arity_stack.push(inner_arity);
+        } else if fence_step(line_content.trim()) > 0 {
+            // Nested opener; its own bare colon line closes it.
             depth += 1;
-        } else if let Some(current_arity) = arity_stack.last().copied() {
-            // Checks whether this line closes the CURRENT depth level's block.
-            // `arity_stack.len() == depth` and `depth > 0` here, so the pattern
-            // always matches; written as one so a future invariant break skips
-            // the line instead of panicking mid-build.
-            if is_close_fence(line_content, current_arity) {
-                arity_stack.pop();
-                depth -= 1;
-                if depth == 0 {
-                    if let Some(partial) = current.take() {
-                        blocks.push(EditorShortcodeBlock {
-                            open: partial.open,
-                            close: EditorRange {
-                                from: line_start,
-                                to: line_end,
-                            },
-                            name: partial.name,
-                            args: partial.args,
-                            dividers: partial.dividers,
-                        });
-                    }
-                    current_is_grid = false;
+        } else if fence_step(line_content.trim()) < 0 {
+            // A bare colon line closes the innermost open block, whatever
+            // its colon count.
+            depth -= 1;
+            if depth == 0 {
+                if let Some(partial) = current.take() {
+                    blocks.push(EditorShortcodeBlock {
+                        open: partial.open,
+                        close: EditorRange {
+                            from: line_start,
+                            to: line_end,
+                        },
+                        name: partial.name,
+                        args: partial.args,
+                        dividers: partial.dividers,
+                    });
                 }
-            } else if depth == 1 && current_is_grid {
-                // Divider check only applies at depth 1 inside a grid block,
-                // and only on lines that are not open/close fences.
-                if let Some(divider) =
-                    match_divider(line_content, line_start, &mut legacy_dash)
-                {
-                    if let Some(c) = current.as_mut() {
-                        c.dividers.push(divider);
-                    }
+                current_is_grid = false;
+            }
+        } else if depth == 1 && current_is_grid {
+            // Divider check only applies at depth 1 inside a grid block,
+            // and only on lines that are not open/close fences.
+            if let Some(divider) = match_divider(line_content, line_start, &mut legacy_dash) {
+                if let Some(c) = current.as_mut() {
+                    c.dividers.push(divider);
                 }
             }
         }
@@ -217,53 +190,6 @@ struct PartialBlock {
     name: String,
     args: String,
     dividers: Vec<EditorDivider>,
-}
-
-/// Match `:::name args...` or `::::name args...` etc. (arity ≥ 3).
-/// Returns `(arity, name, args)` if matched.
-fn match_open_fence(line: &str) -> Option<(usize, &str, &str)> {
-    let trimmed = line.trim_start();
-    let arity = trimmed.bytes().take_while(|b| *b == b':').count();
-    if arity < 3 {
-        return None;
-    }
-    let rest = trimmed.get(arity..)?;
-    // Match the name-char set used by `parse_shortcode_opener` in
-    // `shortcode_extract.rs`: alphanumeric, underscore, hyphen. Plugins can
-    // register names like `:::my-widget`, and the editor must recognize them
-    // or its depth counter drifts from the build pipeline.
-    let name_bytes = rest
-        .bytes()
-        .take_while(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'-')
-        .count();
-    if name_bytes == 0 {
-        return None;
-    }
-    let name = rest.get(..name_bytes)?;
-    let after_name = rest.get(name_bytes..)?;
-    let args = after_name.trim();
-    Some((arity, name, args))
-}
-
-/// Match a closing fence of the given arity (exactly `arity` colons, nothing else).
-fn is_close_fence(line: &str, arity: usize) -> bool {
-    let trimmed = line.trim();
-    trimmed.len() == arity && trimmed.bytes().all(|b| b == b':')
-}
-
-/// Return the fence string (sequence of `` ` `` or `~`) if the line is a
-/// fenced-code delimiter at the start of the line, else None.
-fn match_code_fence(line: &str) -> Option<&str> {
-    let trimmed = line.trim_start();
-    let ch = trimmed.chars().next()?;
-    if ch != '`' && ch != '~' {
-        return None;
-    }
-    let len = trimmed.chars().take_while(|c| *c == ch).count();
-    if len < 3 {
-        return None;
-    }
-    trimmed.get(..len)
 }
 
 #[cfg(test)]
@@ -476,14 +402,36 @@ mod tests {
     }
 
     #[test]
-    fn mismatched_arity_close_drops_both_blocks() {
-        // If ::::buttons (4-colon) is closed with ::: (3-colon), the inner
-        // block never closes. The outer :::grid is also dropped as unclosed.
-        // Correct: malformed markup produces no blocks.
+    fn a_closer_of_another_length_closes_the_innermost_block() {
+        // `:::` closes `::::buttons`, the second `:::` closes the grid.
         let md = ":::grid\n::::buttons\nbody\n:::\n:::\n";
-        //                              ^^^ wrong arity — should be ::::
         let r = editor_scan(md);
-        assert!(r.blocks.is_empty(),
-            "mismatched inner close should leave outer block unclosed too");
+        assert_eq!(r.blocks.len(), 1);
+        assert_eq!(r.blocks[0].name, "grid");
+        assert_eq!(r.blocks[0].close.from, 29);
+    }
+
+    #[test]
+    fn a_nameless_attribute_opener_nests_like_a_named_one() {
+        // Before the shared grammar the scan did not see `::: {.note}` as an
+        // opener at all, so its closer ended the grid and `+++` was lost.
+        let md = ":::grid 2\na\n::: {.note}\nx\n:::\n+++\nb\n:::\n";
+        let r = editor_scan(md);
+        assert_eq!(r.blocks.len(), 1);
+        assert_eq!(r.blocks[0].dividers.len(), 1);
+    }
+
+    #[test]
+    fn colons_in_a_comment_or_indented_code_do_not_close_a_block() {
+        // The scan reads the same inert set as the extractor, not just fenced
+        // code: a `:::` in a comment or an indented code block is not a closer.
+        for md in [
+            ":::grid\n<!--\n:::\n-->\n:::\n",
+            ":::grid\n\n    :::\n\n:::\n",
+        ] {
+            let r = editor_scan(md);
+            assert_eq!(r.blocks.len(), 1, "{md:?}");
+            assert_eq!(r.blocks[0].close.from as usize, md.rfind(":::").unwrap(), "{md:?}");
+        }
     }
 }

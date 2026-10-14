@@ -40,16 +40,13 @@ If you separately serve an exported build, set the server root explicitly to tha
 
 ## Shortcode appears as literal text
 
-Usually this means **no matching closing fence**. The closer carries the same
-colon count as the opener (`::::grid` closes with `::::`), and nothing but
-whitespace may follow it — `::: extra` is body text, not a closer.
-
-**Nested fences must not share a colon count.** A closer matches its opener by
-arity, so `::::grid` wrapping `:::gallery` and `:::grid` wrapping `::::buttons`
-both work — the direction does not matter, only that the two differ. Give both
-the same count and the first bare `:::` closes the *outer* fence early, so the
-rest of the block spills out. This is the most common way a correct-looking
-shortcode produces wrong output.
+Usually this means **no matching closing fence**. A fence with a name or
+`{attributes}` opens a block, and a bare line of three or more colons closes the
+innermost open block — the colon count does not matter, and nothing but
+whitespace may follow it (`::: extra` is body text, not a closer). The build
+warns with the line of an opener that is never closed and of a closer that has
+nothing left to close. When two openers share one closer, the closer belongs to
+the inner block and the warning names the outer one.
 
 Two other causes produce the same symptom: the line sits somewhere fences are
 inert (inside a code fence, an indented code block, an inline code span, or an

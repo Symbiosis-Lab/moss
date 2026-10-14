@@ -256,3 +256,20 @@ fn crlf_input_is_handled() {
     assert_inert(md, ":::grid", true);
     assert_eq!(mask_inert(md).len(), md.len());
 }
+
+#[test]
+fn html_and_math_lines_flag_a_tag_block_until_the_blank_line_and_display_math() {
+    let md = "plain\n<div>\n:::\n\nafter\n$$\nx\n$$\n$$x$$\nend\n";
+    let flags = html_and_math_lines(md, &inert_lines(md));
+    assert_eq!(
+        flags,
+        [false, true, true, false, false, true, true, true, false, false]
+    );
+}
+
+#[test]
+fn html_and_math_lines_skip_inert_lines() {
+    let md = "```\n<div>\n```\n:::\n";
+    let flags = html_and_math_lines(md, &inert_lines(md));
+    assert_eq!(flags, [false, false, false, false]);
+}

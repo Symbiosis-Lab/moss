@@ -81,6 +81,17 @@ pub struct ParseConfig {
     /// coordinate-system mismatch.
     pub source_line_offset: usize,
 
+    /// How many lines of the author's file sit above the parser's line 1
+    /// (frontmatter, plus any blank lines between it and the body), so a
+    /// warning can name a line of the file rather than a line of the body.
+    ///
+    /// It differs from `source_line_offset` on purpose. That one follows the
+    /// editor's buffer, which holds the body without its frontmatter, so it
+    /// excludes the frontmatter and is only used when source lines are
+    /// emitted. This one is always the real file line, because a warning is
+    /// read against the file, not the editor.
+    pub warning_line_offset: usize,
+
     /// When true, `$…$` / `$$…$$` parse as math ([`Options::ENABLE_MATH`])
     /// and render as escaped LaTeX source in `<code class="moss-math">`.
     /// When false (default), `$` is an ordinary character and math source
@@ -115,6 +126,7 @@ impl Default for ParseConfig {
             // callers all assume figure promotion happens.
             implicit_figure: true,
             source_line_offset: 0,
+            warning_line_offset: 0,
             // Off by default so the ~40 in-crate `parse()` callers and every
             // committed snapshot fixture are untouched by math landing.
             // Production opts in via `[site].math`.

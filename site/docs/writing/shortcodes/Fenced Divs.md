@@ -18,9 +18,9 @@ Civic engagement through community-centered performance.
 :::
 ```
 +++
-:::: {.tagline}
+::: {.tagline}
 Civic engagement through community-centered performance.
-::::
+:::
 :::
 
 This renders as:
@@ -42,11 +42,11 @@ Founded in 2018, we make theatre that listens.
 :::
 ```
 +++
-:::: {.hero .narrow}
+::: {.hero .narrow}
 ## Our story
 
 Founded in 2018, we make theatre that listens.
-::::
+:::
 :::
 
-Use named-class fenced divs instead of `<div class="…">` HTML wrappers. The class lives in `.moss/theme/style.css`; the markdown stays readable. A bare `:::` with no attribute block is not a shortcode — it remains literal text in the output.
+Use named-class fenced divs instead of `<div class="…">` HTML wrappers. The class lives in `.moss/theme/style.css`; the markdown stays readable. A bare `:::` with no attribute block is not a shortcode: it closes the innermost open block, and when nothing is open it stays literal text in the output and the build warns about it.

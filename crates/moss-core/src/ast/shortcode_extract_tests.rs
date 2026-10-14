@@ -214,7 +214,7 @@ fn nonce_makes_authored_collision_inert() {
 fn parse_shortcode_opener_recognizes_simple_name() {
     assert_eq!(
         parse_shortcode_opener(":::subscribe"),
-        Some((3, "subscribe", ""))
+        Some(("subscribe", ""))
     );
 }
 
@@ -222,17 +222,17 @@ fn parse_shortcode_opener_recognizes_simple_name() {
 fn parse_shortcode_opener_extracts_args() {
     assert_eq!(
         parse_shortcode_opener(":::grid 3 1:2:1"),
-        Some((3, "grid", "3 1:2:1"))
+        Some(("grid", "3 1:2:1"))
     );
 }
 
 #[test]
 fn parse_shortcode_opener_recognizes_quadruple_colon() {
     // ::::buttons is the standard way to nest a shortcode inside
-    // a :::grid cell. The arity is preserved so the closer matches.
+    // a :::grid cell.
     assert_eq!(
         parse_shortcode_opener("::::buttons"),
-        Some((4, "buttons", ""))
+        Some(("buttons", ""))
     );
 }
 
@@ -313,21 +313,18 @@ fn extracts_grid_with_nested_buttons_via_arity() {
 }
 
 #[test]
-fn arity_mismatch_does_not_close_block() {
-    // A `:::` closer inside a `::::buttons` block must NOT close it.
-    // Body content can contain `:::` strings as text (in code blocks
-    // or grid cell separators when nested differently).
+fn a_closer_of_another_length_still_closes_the_block() {
+    // Colon count is decoration: the first `:::` ends `::::buttons`, and the
+    // `::::` after it has nothing left to close.
     let md = "::::buttons\n[t](u)\n:::\n[t2](u2)\n::::\n";
     let result = extract_shortcodes(md);
-    // Only one extraction (the ::::buttons block).
     assert_eq!(result.extracted.len(), 1);
     match &result.extracted[0].shortcode {
-        Shortcode::Buttons(args) => {
-            // Both links should be captured (the `:::` was just body text).
-            assert_eq!(args.items.len(), 2);
-        }
+        Shortcode::Buttons(args) => assert_eq!(args.items.len(), 1),
         _ => panic!("expected Buttons"),
     }
+    assert_eq!(result.warnings.len(), 1, "{:?}", result.warnings);
+    assert!(result.warnings[0].contains("line 5"), "{:?}", result.warnings);
 }
 
 // ---- Buttons (Phase B Task 8) ----
@@ -460,14 +457,15 @@ fn is_close_fence_handles_multibyte_utf8_lines() {
     // longer than 3 bytes but the first 3 bytes land mid-character
     // because `[` (1 byte) + `申` (3 bytes, bytes 1..4). Char-based
     // iteration sidesteps the issue.
-    assert!(!is_close_fence("[申请测试版](#青苔正在封闭测试)", 3));
-    assert!(!is_close_fence("[申请测试版](#青苔正在封闭测试)", 4));
+    assert!(!is_close_fence("[申请测试版](#青苔正在封闭测试)"));
     // CJK lines that would have panicked the old split_at variant.
-    assert!(!is_close_fence("中文内容", 3));
-    assert!(!is_close_fence("日本語", 3));
+    assert!(!is_close_fence("中文内容"));
+    assert!(!is_close_fence("日本語"));
     // Truly closing lines still match.
-    assert!(is_close_fence(":::", 3));
-    assert!(is_close_fence("::::", 4));
+    assert!(is_close_fence(":::"));
+    assert!(is_close_fence("::::::"));
+    assert!(!is_close_fence("::"));
+    assert!(!is_close_fence("::: extra"));
 }
 
 #[test]
@@ -1544,36 +1542,23 @@ fn extracts_hero_block_with_directive_line_path_and_classes() {
 // ---- Adversarial cases for Step 1 (D/E semantics) ----
 
 #[test]
-fn nested_css_region_outer_closes_at_first_inner_close() {
-    // Pinning test: same-arity nested `:::{.outer}` containing
-    // `:::{.inner}` is NOT a Step 1 feature. The outer block closes at
-    // the inner block's `:::` because both fences are arity 3.
-    // Authors who need nesting must use mismatched arities
-    // (`::::{.outer}` containing `:::{.inner}`).
-    //
-    // This test pins the current behavior so a future regression
-    // surfaces. The author is also warned (the warning's
-    // own wording is pinned below in the same-arity section).
-    let md = ":::{.outer}\n:::{.inner}\nbody\n:::\n:::\n";
+fn same_length_css_regions_nest() {
+    let md = ":::{.outer}\n:::{.inner}\nbody\n:::\nafter inner\n:::\n";
     let result = extract_shortcodes(md);
     let out = &result.markdown_with_placeholders;
-    // The outer `<div class="outer">` opens.
-    assert!(out.contains("<div class=\"outer\""));
-    // The inner `:::{.inner}` opener is left as literal text in the
-    // outer body — the outer fence closed at the first arity-3 `:::`.
-    assert!(out.contains(":::{.inner}"));
-    assert_eq!(result.warnings.len(), 1, "{:?}", result.warnings);
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    let outer = out.find("<div class=\"outer\"").expect("outer div");
+    let inner = out.find("<div class=\"inner\"").expect("inner div");
+    let after = out.find("after inner").expect("tail text");
+    let last_close = out.rfind("</div>").expect("closing div");
+    // The tail of the outer block stays inside it.
+    assert!(outer < inner && inner < after && after < last_close, "{out}");
 
-    // Same mechanism with a TYPED inner: the outer consumes the
-    // arity-3 closer at `:::subscribe`'s fence, so subscribe is never
-    // seen by the extractor.
+    // A typed inner at the same length is extracted too.
     let typed = ":::{.wrapper}\n:::subscribe\n:::\n:::\n";
     let typed_result = extract_shortcodes(typed);
-    assert!(typed_result
-        .markdown_with_placeholders
-        .contains("<div class=\"wrapper\""));
-    assert!(typed_result.extracted.is_empty());
-    assert_eq!(typed_result.warnings.len(), 1, "{:?}", typed_result.warnings);
+    assert_eq!(typed_result.extracted.len(), 1);
+    assert!(typed_result.warnings.is_empty(), "{:?}", typed_result.warnings);
 }
 
 #[test]
@@ -1701,7 +1686,7 @@ fn unknown_name_with_plus_plus_plus_in_body_passes_through() {
 fn parse_shortcode_opener_recognizes_empty_name_with_attrs() {
     assert_eq!(
         parse_shortcode_opener(":::{.tagline}"),
-        Some((3, "", "{.tagline}"))
+        Some(("", "{.tagline}"))
     );
 }
 
@@ -1794,35 +1779,157 @@ fn grid_per_line_wins_over_cols_but_cols_still_warns() {
     );
 }
 
-// ---- Same-arity nesting warns ----
+// ---- One rule: a bare colon line closes the innermost open block ----
 //
-// A `:::` fence nested inside another `:::` fence steals the outer
-// block's closer: the outer ends early and the rest of it — dividers
-// included — spills into the prose as literal text. The page still
-// builds, so before this fix nothing said a word. The parse is unchanged;
-// these tests pin the diagnostic and, just as importantly, its silence
-// on documents that are fine.
+// Every test here pins a place where counting colons (the old rule) and
+// counting nesting (this one) disagree, or a diagnostic that names a line.
 
 #[test]
-fn same_arity_nesting_inside_grid_warns_and_names_the_higher_arity_fix() {
-    // The reproduction that motivated this fix. `:::grid 2` is closed by the nested
-    // `::: {.some-class}` block's fence, so `+++` and `Cell two` land
-    // outside the grid.
-    let md = ":::grid 2\nCell one\n\n::: {.some-class}\nquiet text\n:::\n+++\nCell two\n:::\n";
+fn same_length_attribute_fences_nest_without_a_warning() {
+    // The reproduction that motivated the rule. The old scan ended the outer
+    // block at the inner block's closer and spilled "after fig" out of it.
+    let md = "::: {.intro}\nhello\n\n::: {.figure}\nfig\n:::\n\nafter fig\n:::\n";
+    let result = extract_shortcodes(md);
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    let out = &result.markdown_with_placeholders;
+    let after = out.find("after fig").expect("tail text");
+    assert!(out[..after].contains("<div class=\"intro\""), "{out}");
+    assert!(out[after..].contains("</div>"), "{out}");
+}
+
+#[test]
+fn an_inner_fence_with_more_colons_inside_an_attribute_fence_nests() {
+    let md = ":::{.outer}\n::::{.inner}\nbody\n::::\nafter\n:::\n";
+    let out = extract_shortcodes(md).markdown_with_placeholders;
+    let after = out.find("after").expect("tail text");
+    assert!(out[..after].contains("<div class=\"inner\""), "{out}");
+    assert!(out[after..].contains("</div>"), "{out}");
+}
+
+#[test]
+fn an_outer_with_more_colons_inside_a_named_shortcode_still_nests() {
+    // `:::::hero` around `:::buttons`: the inner block closes with `:::`,
+    // the outer with `:::::`, and nothing is stray.
+    let md = ":::::{.band}\n:::buttons\n[a](b)\n:::\n:::::\n";
+    let result = extract_shortcodes(md);
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    assert_eq!(result.extracted.len(), 1);
+}
+
+#[test]
+fn deep_nesting_closes_level_by_level_with_three_colons_throughout() {
+    let md = ":::{.a}\n:::{.b}\n:::{.c}\ndeep\n:::\n:::\n:::\n";
+    let result = extract_shortcodes(md);
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    let out = &result.markdown_with_placeholders;
+    assert_eq!(out.matches("</div>").count(), 3, "{out}");
+    let (a, b, c) = (
+        out.find("class=\"a\"").unwrap(),
+        out.find("class=\"b\"").unwrap(),
+        out.find("class=\"c\"").unwrap(),
+    );
+    assert!(a < b && b < c);
+    // Same structure when written with mixed lengths.
+    let mixed = ":::::{.a}\n::::{.b}\n:::{.c}\ndeep\n:::\n::::\n:::::\n";
+    assert_eq!(
+        extract_shortcodes(mixed).markdown_with_placeholders,
+        *out
+    );
+}
+
+#[test]
+fn grid_cells_ignore_dividers_inside_a_same_length_inner_fence() {
+    // The inner `+++` belongs to the inner block, and the inner closer must
+    // not end the grid: two cells, with the inner fence inside the first.
+    let md = ":::grid 2\nA\n::: {.note}\nx\n+++\n:::\n+++\nB\n:::\n";
+    let result = extract_shortcodes(md);
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    match &result.extracted[0].shortcode {
+        Shortcode::Grid(grid) => assert_eq!(grid.cells.len(), 2),
+        other => panic!("expected Grid, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_unclosed_opener_warns_and_names_its_line() {
+    let md = "intro\n\n:::grid 2\nA\n+++\nB\n";
+    let result = extract_shortcodes(md);
+    assert!(result.extracted.is_empty());
+    assert_eq!(result.warnings.len(), 1, "{:?}", result.warnings);
+    let w = &result.warnings[0];
+    assert!(w.contains("`:::grid 2`") && w.contains("line 3") && w.contains("never closed"), "{w}");
+}
+
+#[test]
+fn an_unclosed_inner_opener_names_the_outer_block_that_swallowed_its_closer() {
+    // Two openers, one closer: the closer closes the inner block, so the
+    // outer opener on line 1 is the unclosed one.
+    let md = ":::{.outer}\n:::{.inner}\nbody\n:::\n";
+    let result = extract_shortcodes(md);
+    assert_eq!(result.warnings.len(), 1, "{:?}", result.warnings);
+    assert!(result.warnings[0].contains("`:::{.outer}`") && result.warnings[0].contains("line 1"));
+}
+
+#[test]
+fn warning_lines_count_the_frontmatter_above_the_body() {
+    let config = ParseConfig { warning_line_offset: 4, ..Default::default() };
+    let result = extract_shortcodes_with_config(":::{.a}\ntext\n", &config);
+    assert!(result.warnings[0].contains("line 5"), "{:?}", result.warnings);
+}
+
+#[test]
+fn a_stray_closer_warns_and_names_its_line_and_the_block_before_it() {
+    let md = ":::{.a}\ntext\n:::\n\nmore\n:::\n";
     let result = extract_shortcodes(md);
     assert_eq!(result.warnings.len(), 1, "{:?}", result.warnings);
     let w = &result.warnings[0];
-    // Says which block ended early, and which nested block took its fence.
-    assert!(w.contains("`:::grid 2`"), "{w}");
-    assert!(w.contains("`::: {.some-class}`"), "{w}");
-    // Names the replacement to type, the way the `---` deprecation does.
-    assert!(w.contains("`::::grid 2`"), "{w}");
-    assert!(w.contains("`::::`"), "{w}");
+    assert!(w.contains("line 6") && w.contains("closes nothing"), "{w}");
+    assert!(w.contains("closed on line 3") && w.contains("started on line 1"), "{w}");
+    // Still shown as text, as before.
+    assert!(result.markdown_with_placeholders.contains("\n:::\n"));
+}
+
+#[test]
+fn a_bare_closer_in_a_raw_html_block_or_display_math_stays_quiet() {
+    for md in [
+        "<div>\n:::\n</div>\n",
+        "text\n\n<div class=\"x\">\nhello\n:::\n</div>\n",
+        "$$\n:::\n$$\n",
+        "$$\nx = 1\n:::\ny\n$$\n",
+    ] {
+        let result = extract_shortcodes(md);
+        assert!(result.warnings.is_empty(), "{md:?}: {:?}", result.warnings);
+    }
+}
+
+#[test]
+fn a_bare_closer_after_the_html_block_or_math_ended_still_warns() {
+    for md in ["<div>\nx\n</div>\n\n:::\n", "$$\nx\n$$\n\n:::\n", "$$x$$\n:::\n"] {
+        let result = extract_shortcodes(md);
+        assert_eq!(result.warnings.len(), 1, "{md:?}: {:?}", result.warnings);
+    }
+}
+
+#[test]
+fn a_bare_closer_continuing_a_list_item_warns_like_any_other() {
+    // CommonMark reads it as paragraph text inside the item, but the
+    // extractor trims indentation and reads it as a closer (an opener there
+    // opens a block), so an author who typed it meant a closer.
+    let result = extract_shortcodes("- item\n  :::\n");
+    assert_eq!(result.warnings.len(), 1, "{:?}", result.warnings);
+    assert!(result.warnings[0].contains("line 2"));
+}
+
+#[test]
+fn fences_inside_code_and_comments_produce_neither_warning() {
+    let md = "```\n:::{.a}\n```\n\n```\n:::\n```\n\n<!--\n:::\n-->\n";
+    let result = extract_shortcodes(md);
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
 }
 
 #[test]
 fn higher_arity_outer_grid_around_a_nested_fence_does_not_warn() {
-    // The documented correct form: more colons outside than inside.
+    // Still fine: more colons outside than inside, for the eye.
     let md = "::::grid 2\nCell one\n\n::: {.some-class}\nquiet text\n:::\n+++\nCell two\n::::\n";
     let result = extract_shortcodes(md);
     assert!(result.warnings.is_empty(), "{:?}", result.warnings);

@@ -392,3 +392,20 @@ fn empty_directory_yields_no_files_without_erroring() {
     assert!(index.files.is_empty());
     assert_eq!((index.pages, index.skipped), (0, 0));
 }
+
+/// The not-found page, at both of its addresses, stays out of the index: a
+/// search for a word on it must not lead a reader to a "page not found".
+#[test]
+fn the_not_found_page_is_not_indexed() {
+    let dir = tempfile::tempdir().unwrap();
+    write_bilingual_site(dir.path());
+    let page = "<html lang=\"en\"><body><h1>Nothing here</h1><p>Nothing past this gate.</p></body></html>";
+    std::fs::write(dir.path().join(crate::build::served_path::NOT_FOUND_FILE), page).unwrap();
+    std::fs::create_dir_all(dir.path().join("404")).unwrap();
+    std::fs::write(dir.path().join(crate::build::served_path::NOT_FOUND_PAGE), page).unwrap();
+    let _serialize = lock_index_counter();
+    clear_segment_cache();
+    let index = build_search_index(dir.path()).expect("index should build");
+    assert_eq!(index.pages, SITE_PAGES);
+    assert_eq!(index.skipped, 0, "leaving the page out is not a skip");
+}

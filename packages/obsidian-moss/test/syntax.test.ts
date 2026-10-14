@@ -79,11 +79,11 @@ describe("shortcode decorations", () => {
     expect(open.map((r) => r.from)).toEqual([0, 8]);
   });
 
-  it("flags an unclosed child inside a closed parent", () => {
+  it("one closer for two openers closes the inner block and flags the outer", () => {
     const doc = ":::grid\n::::hero\norphan\n:::\n";
     const ranges = decorate(doc);
-    expect(ranges).toContainEqual({ from: 0, to: 0, line: true, cls: "moss-sc-open" });
-    expect(ranges).toContainEqual({ from: 8, to: 8, line: true, cls: "moss-sc-unclosed" });
+    expect(ranges).toContainEqual({ from: 0, to: 0, line: true, cls: "moss-sc-unclosed" });
+    expect(ranges).toContainEqual({ from: 8, to: 8, line: true, cls: "moss-sc-open" });
   });
 
   it("judges nothing on a nameless fence", () => {

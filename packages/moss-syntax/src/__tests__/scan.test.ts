@@ -3,14 +3,14 @@
  * since it cannot register a @lezer/markdown grammar extension.
  *
  * Two layers:
- * 1. Direct semantics: offsets, nesting, arity pairing, unclosed blocks,
+ * 1. Direct semantics: offsets, nesting, close pairing, unclosed blocks,
  *    attrs, CRLF — pinned against the stub contract in
  *    packages/obsidian-moss/src/syntax/shortcode-parser.ts.
  * 2. Cross-check: on comparable documents (no fenced-code / blockquote /
  *    indented-code wrappers, which only a real markdown parse can see) the
  *    scanner and the Lezer grammar must produce the SAME closed-block
  *    structure. The Lezer side below pairs Open/Close nodes with the same
- *    arity-stack rule the editor's `collectShortcodeBlocks` uses.
+ *    stack rule the editor's `collectShortcodeBlocks` uses.
  */
 import { describe, test, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -65,8 +65,8 @@ describe('scanShortcodeBlocks — offsets and shape', () => {
   });
 });
 
-describe('scanShortcodeBlocks — arity stack and nesting', () => {
-  test('`::::` inside `:::` nests: close pairs by arity, not position', () => {
+describe('scanShortcodeBlocks — stack and nesting', () => {
+  test('`::::` inside `:::` nests', () => {
     const text = ':::grid\n::::buttons\n[a](/a)\n::::\ncell\n:::\n';
     const [grid] = scanShortcodeBlocks(text);
     expect(grid.name).toBe('grid');
@@ -79,10 +79,21 @@ describe('scanShortcodeBlocks — arity stack and nesting', () => {
     expect(grid.closeFrom).toBe(text.lastIndexOf(':::'));
   });
 
-  test('a close fence with no open of its arity is ignored', () => {
-    // ::: cannot close ::::a — the arity-4 open stays open to EOF.
-    const [b] = scanShortcodeBlocks('::::a\nx\n:::\n');
-    expect(b).toMatchObject({ name: 'a', arity: 4, closeFrom: null });
+  test('a close fence closes the innermost block whatever its colon count', () => {
+    const text = '::::a\nx\n:::\n';
+    const [b] = scanShortcodeBlocks(text);
+    expect(b).toMatchObject({ name: 'a', arity: 4, closeFrom: text.indexOf(':::\n', 6) });
+  });
+
+  test('same-length fences nest: the inner close does not end the outer', () => {
+    const text = '::: {.intro}\nhi\n::: {.figure}\nfig\n:::\nafter\n:::\n';
+    const [outer] = scanShortcodeBlocks(text);
+    expect(outer.closeFrom).toBe(text.lastIndexOf(':::'));
+    expect(outer.children.map((c) => c.attrs)).toEqual(['{.figure}']);
+  });
+
+  test('a stray close fence with nothing open is ignored', () => {
+    expect(scanShortcodeBlocks(':::a\nx\n:::\n:::\n')).toHaveLength(1);
   });
 });
 
@@ -93,15 +104,14 @@ describe('scanShortcodeBlocks — unclosed blocks (closeFrom: null)', () => {
     expect(b).toMatchObject({ name: 'hero', closeFrom: null, to: text.length });
   });
 
-  test('unclosed inner open becomes an unclosed child of the block that closes', () => {
+  test('one close for two opens closes the inner block and leaves the outer unclosed', () => {
     const text = ':::grid\n::::buttons\nx\n:::\n';
     const [grid] = scanShortcodeBlocks(text);
-    expect(grid.closeFrom).not.toBeNull();
+    expect(grid.closeFrom).toBeNull();
     expect(grid.children).toHaveLength(1);
     expect(grid.children[0]).toMatchObject({
       name: 'buttons',
-      closeFrom: null,
-      to: text.indexOf('\nx') + 2, // end of its last body line, before the close fence
+      closeFrom: text.lastIndexOf(':::'),
     });
   });
 
@@ -198,18 +208,14 @@ function lezerBlocks(text: string): Proj[] {
         const m = SHORTCODE_OPEN_RE.exec(text.slice(openLine, end))!;
         stack.push({ openLine, arity: m[2].length, name: m[3] ?? '', attrs: m[4].trim(), children: [] });
       } else if (n.name === 'ShortcodeCloseLine') {
-        const arity = text.slice(n.from, n.to).trim().length;
-        for (let i = stack.length - 1; i >= 0; i--) {
-          if (stack[i].arity === arity) {
-            const open = stack.splice(i)[0];
-            const p: Proj = {
-              name: open.name, attrs: open.attrs, arity: open.arity,
-              openLine: open.openLine, closeLine: lineStartAt(text, n.from), children: open.children,
-            };
-            if (stack.length > 0) stack[stack.length - 1].children.push(p);
-            else out.push(p);
-            break;
-          }
+        const open = stack.pop();
+        if (open) {
+          const p: Proj = {
+            name: open.name, attrs: open.attrs, arity: open.arity,
+            openLine: open.openLine, closeLine: lineStartAt(text, n.from), children: open.children,
+          };
+          if (stack.length > 0) stack[stack.length - 1].children.push(p);
+          else out.push(p);
         }
       }
     },
@@ -239,7 +245,8 @@ const EXTRA_COMPARABLE = [
   ':::{.tagline}\nsome text\n:::\n', // nameless class region
   'paragraph line\n:::grid\ninterrupts the paragraph\n:::\n',
   ':::grid\n::::buttons\nx\n:::\n', // unclosed inner (both sides drop/report it)
-  '::::a\nx\n:::\n', // arity mismatch — nothing closes
+  '::::a\nx\n:::\n', // closer of another length still closes
+  '::: {.o}\n::: {.i}\nx\n:::\n:::\n', // same-length nesting
   ':::hero {image="a b.jpg"}\n# Title\n:::\nafter\n',
   ':::grid 2\nleft\n+++\nright\n:::\n:::grid\nsecond\n:::\n',
 ];

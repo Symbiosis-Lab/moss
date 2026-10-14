@@ -106,7 +106,7 @@ const SHORTCODES = [
 
 //#endregion
 //#region src/shortcode.ts
-const SHORTCODE_OPEN_RE = /^(\s*)(:{3,})([A-Za-z][\w-]*)?(.*)$/;
+const SHORTCODE_OPEN_RE = /^(\s*)(:{3,})([\p{L}\p{N}_-]+)?(.*)$/u;
 /** True when `m` (a `SHORTCODE_OPEN_RE` match) is a real opener: either it
 *  has a name, or its remainder is an attrs block (starts with `{`). Shared
 *  by `parse` and `endLeaf` so the two can't drift on what counts as open. */

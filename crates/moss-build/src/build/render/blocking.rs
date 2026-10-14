@@ -1794,6 +1794,7 @@ pub fn generate_blocking_content_for_build(
             /// under `MOSS_INCREMENTAL_VERIFY=1`, for pages this build would
             /// have carried. Read before the re-render overwrites the file.
             carried_previous: Option<(String, Vec<u8>)>,
+            is_not_found: bool,
         }
 
         // Same emission gates as the old loop: skip the homepage (rendered
@@ -1985,6 +1986,7 @@ pub fn generate_blocking_content_for_build(
                     source_mapping,
                     page_meta,
                     carried_previous,
+                    is_not_found: doc.is_not_found_page(),
                 })
             })
             .collect();
@@ -2020,6 +2022,14 @@ pub fn generate_blocking_content_for_build(
                     card.register(pending);
                 }
                 og_requests.extend(page.og_requests);
+                // A static host shows the root `404.html` for an unknown
+                // address, so the not-found page is also written there; an
+                // author's own `404.html` file wins.
+                if page.is_not_found
+                    && !project_structure.html_files.iter().any(|f| f.path == crate::build::served_path::NOT_FOUND_FILE)
+                {
+                    pending.register_unwritten_page(&ServedPath::for_not_found(), page.html.clone());
+                }
                 pending.register_unwritten_page(&page.url_sp, page.html);
                 // Register source→output mapping so the file watcher's rename-hint
                 // resolver can find the output path without re-deriving slug rules.

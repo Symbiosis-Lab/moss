@@ -681,10 +681,9 @@ pub(super) fn detect_compound_link(cell_text: &str) -> Option<(String, String, S
 /// the grammar recommends — handed the inner grid's cells to the outer one,
 /// with no warning and plausible-looking output. Nested bodies pass through
 /// verbatim and are re-extracted when the cell is parsed, which is where the
-/// inner block gets its own dividers. Depth is tracked as
-/// [`super::editor_scan`] tracks it: an opener pushes its arity, a closer of
-/// the innermost arity pops it. Same-arity nesting is a different bug with
-/// its own warning (`nested_arity_warning`).
+/// inner block gets its own dividers. Depth is a plain counter: an opener
+/// adds one, a bare colon line takes one off, colon counts are ignored (the
+/// same rule as [`find_block_end`]).
 ///
 /// Returns `(cells, found_legacy_dash)` where `found_legacy_dash` is
 /// `true` when at least one `---` divider **of this grid** was encountered,
@@ -701,31 +700,30 @@ fn split_grid_cells(body: &str) -> (Vec<String>, bool) {
     let mut current = String::new();
     let mut first_line_in_cell = true;
     let mut found_legacy_dash = false;
-    // Arities of the nested blocks we are currently inside; empty means
-    // "at this grid's own depth", which is the only place a divider counts.
-    let mut nested_arities: Vec<usize> = Vec::new();
+    // Blocks we are currently inside; 0 means "at this grid's own depth",
+    // which is the only place a divider counts.
+    let mut depth: usize = 0;
 
     for (idx, line) in body.split_inclusive('\n').enumerate() {
         let content_no_eol = line.strip_suffix('\n').unwrap_or(line);
         let trimmed = content_no_eol.trim();
         let live = !inert.get(idx).copied().unwrap_or(false);
         if live {
-            if let Some((inner_arity, _, _)) = parse_shortcode_opener(trimmed) {
-                nested_arities.push(inner_arity);
-            } else if let Some(&innermost) = nested_arities.last() {
-                if is_close_fence(trimmed, innermost) {
-                    nested_arities.pop();
+            match fence_step(trimmed) {
+                1 => depth += 1,
+                -1 if depth > 0 => depth -= 1,
+                _ if depth == 0 && (trimmed == "+++" || trimmed == "---") => {
+                    if trimmed == "---" {
+                        found_legacy_dash = true;
+                    }
+                    if let Some(stripped) = current.strip_suffix('\n') {
+                        current.truncate(stripped.len());
+                    }
+                    cells.push(std::mem::take(&mut current));
+                    first_line_in_cell = true;
+                    continue;
                 }
-            } else if trimmed == "+++" || trimmed == "---" {
-                if trimmed == "---" {
-                    found_legacy_dash = true;
-                }
-                if let Some(stripped) = current.strip_suffix('\n') {
-                    current.truncate(stripped.len());
-                }
-                cells.push(std::mem::take(&mut current));
-                first_line_in_cell = true;
-                continue;
+                _ => {}
             }
         }
         if first_line_in_cell {
@@ -876,21 +874,20 @@ struct StructuralBlock<'a> {
 }
 
 /// Parse one block boundary using the same multi-line-attribute and
-/// same-arity-closer rules as `extract_with_state`.
+/// closer rules as `extract_with_state`.
 fn structural_block_at<'a>(
     mask_lines: &'a [&str],
     opener: usize,
     end: usize,
 ) -> Option<StructuralBlock<'a>> {
     let line = mask_lines.get(opener)?;
-    let (arity, name, args) = parse_shortcode_opener(line.trim())?;
+    let (name, args) = parse_shortcode_opener(line.trim())?;
     let (_, attrs_lines) = gather_multi_line_attrs(args, &mask_lines[opener + 1..end]);
     let body_start = opener + 1 + attrs_lines;
     if body_start > end {
         return Some(StructuralBlock { name, body_start, close: None });
     }
-    let close = (body_start..end)
-        .find(|&line| is_close_fence(mask_lines.get(line).map_or("", |line| line.trim()), arity));
+    let close = find_block_end(&mask_lines[..end], body_start, |_| false);
     Some(StructuralBlock { name, body_start, close })
 }
 
@@ -1413,6 +1410,9 @@ fn extract_with_state(
     let inert = crate::inert_regions::inert_lines(markdown);
     let is_inert = |idx: usize| inert.get(idx).copied().unwrap_or(false);
     let mut i = 0;
+    // (opener, closer) line indices of the last block closed at this level,
+    // so a stray closer can point at the block it most likely doubles.
+    let mut last_closed: Option<(usize, usize)> = None;
 
     while i < lines.len() {
         let line = lines[i];
@@ -1427,7 +1427,7 @@ fn extract_with_state(
         }
 
         // Try to recognize a `:::name` (or `::::name`, etc.) opener.
-        if let Some((arity, name, single_line_args)) = parse_shortcode_opener(trimmed) {
+        if let Some((name, single_line_args)) = parse_shortcode_opener(trimmed) {
             // Multi-line attribute block support: if the args contain an
             // unclosed `{`, gather subsequent lines into the args string
             // until the brace closes (respecting quoted strings). The
@@ -1441,53 +1441,23 @@ fn extract_with_state(
             let args: &str = args_owned.as_deref().unwrap_or(single_line_args);
             let body_start = i + 1 + opener_lines_consumed;
 
-            // Look for the matching closer (same arity) on a subsequent line.
-            //
-            // While scanning, remember the first body line that is itself an
-            // OPENER at the same arity. First-closer-wins means the closer we
-            // are about to accept is that inner block's, not ours — see
-            // `nested_same_arity` below.
-            let mut body_lines: Vec<&str> = Vec::new();
-            let mut j = body_start;
-            let mut closed = false;
-            let mut nested_same_arity: Option<&str> = None;
-            while j < lines.len() {
-                // An inert line cannot close the block either: a bare `:::`
-                // inside a code fence or a comment in the body used to end
-                // the shortcode early and strand the rest of it as prose.
-                let body_trimmed = lines[j].trim();
-                if !is_inert(j) && is_close_fence(body_trimmed, arity) {
-                    closed = true;
-                    break;
-                }
-                if nested_same_arity.is_none() && !is_inert(j) {
-                    if let Some((inner_arity, _, _)) = parse_shortcode_opener(body_trimmed) {
-                        if inner_arity == arity {
-                            nested_same_arity = Some(body_trimmed);
-                        }
-                    }
-                }
-                body_lines.push(lines[j]);
-                j += 1;
-            }
-
-            if !closed {
-                // Unclosed block: emit verbatim, let the legacy rewriter
-                // surface the syntax error.
+            // The block ends at the first bare colon line that no nested
+            // opener claims (an inert line cannot close it either: a `:::`
+            // inside a code fence or a comment used to end the shortcode
+            // early and strand the rest as prose).
+            let Some(j) = find_block_end(&lines, body_start, is_inert) else {
+                // Unclosed block: emit verbatim, and say where it opened.
+                warnings.push(unclosed_opener_warning(
+                    trimmed,
+                    config.warning_line_offset + i + 1,
+                ));
                 output.push_str(line);
                 output.push('\n');
                 i += 1;
                 continue;
-            }
-
-            // The block closed — but if a same-arity opener sat in the body,
-            // the fence we just stopped on belongs to THAT block, and this
-            // one ended early. Nothing about the parse changes; the author
-            // just gets told, because the page still builds and only looks
-            // wrong (stray `+++`, cells outside the grid).
-            if let Some(inner) = nested_same_arity {
-                warnings.push(nested_arity_warning(arity, trimmed, inner));
-            }
+            };
+            last_closed = Some((i, j));
+            let body_lines = lines.get(body_start..j).unwrap_or_default();
 
             let body = body_lines.join("\n");
 
@@ -1511,9 +1481,8 @@ fn extract_with_state(
                 // shortcodes nested inside the styling wrapper (the
                 // common site pattern of `:::{.support-band}` around
                 // `::::buttons`) also get extracted into sentinels.
-                // Higher-arity inner blocks survive because the outer
-                // closer-search only matches the outer's exact arity;
-                // the recursive call then handles the inner.
+                // The body is balanced (see `find_block_end`), so the
+                // recursive call sees every inner block whole.
                 let parsed = super::attrs::parse_attrs(args).unwrap_or_default();
                 // A plain div renders only classes and an id, so any other
                 // key on the fence is read and then thrown away.
@@ -1593,7 +1562,23 @@ fn extract_with_state(
             continue;
         }
 
-        // Regular content line.
+        // Regular content line. A live bare colon line here closed nothing.
+        // Inside a raw HTML block or display math it is more likely literal
+        // text than a miscount, so it stays quiet there; a list-item
+        // continuation is NOT exempt, because the extractor reads that line
+        // like any other and an author who wrote it meant a closer.
+        if fence_step(trimmed) < 0 {
+            let quiet = crate::inert_regions::html_and_math_lines(markdown, &inert);
+            if !quiet.get(i).copied().unwrap_or(false) {
+                warnings.push(stray_closer_warning(
+                    trimmed,
+                    config.warning_line_offset + i + 1,
+                    last_closed.map(|(o, c)| {
+                        (config.warning_line_offset + o + 1, config.warning_line_offset + c + 1)
+                    }),
+                ));
+            }
+        }
         output.push_str(line);
         output.push('\n');
         i += 1;
@@ -1602,26 +1587,28 @@ fn extract_with_state(
     output
 }
 
-/// Word the "this block ended at someone else's fence" warning.
-///
-/// `arity` and `outer_line` describe the OUTER opener; `inner_line` is the
-/// trimmed text of the nested opener that has the same colon count. Says what
-/// went wrong in plain words first, then exactly what to type: one more colon
-/// on the outer fence, nested fences left alone.
-///
-/// The suggestion is built by prefixing one `:` to the author's own opener
-/// line, so it reads back in their words (`:::grid 2` → `::::grid 2`) and
-/// works for a nameless CSS region (`:::{.band}` → `::::{.band}`) too.
-fn nested_arity_warning(arity: usize, outer_line: &str, inner_line: &str) -> String {
-    let colons = ":".repeat(arity);
-    let wider = ":".repeat(arity + 1);
-    let outer_short = clip_for_warning(outer_line);
-    let inner_short = clip_for_warning(inner_line);
+/// Word the warning for an opener no bare colon line ever closes.
+fn unclosed_opener_warning(opener: &str, line: usize) -> String {
     format!(
-        "shortcode `{outer_short}` ends at the nested `{inner_short}` block's closing fence \
-         instead of its own, so everything after that point falls outside the block.\n\
-         A nested fence needs FEWER colons than the block around it: write `:{outer_short}` … \
-         `{wider}` for the outer block and leave the nested one as `{colons}`."
+        "`{}` on line {line} is never closed: a bare `:::` line closes the innermost \
+         open block, and none follows, so the block is shown as plain text.",
+        clip_for_warning(opener)
+    )
+}
+
+/// Word the warning for a bare colon line with nothing left to close.
+/// `last_closed` is the (opener line, closer line) of the block closed just
+/// above, which an extra closer most often doubles.
+fn stray_closer_warning(closer: &str, line: usize, last_closed: Option<(usize, usize)>) -> String {
+    let hint = match last_closed {
+        Some((open, close)) => {
+            format!(" The last block closed on line {close} and started on line {open}.")
+        }
+        None => String::new(),
+    };
+    format!(
+        "`{}` on line {line} closes nothing: every block opened above it is already closed.{hint}",
+        clip_for_warning(closer)
     )
 }
 
@@ -1680,19 +1667,19 @@ fn html_escape_attr(s: &str) -> String {
     out
 }
 
-/// Parse an opening fence line into (colon_count, name, args). Returns
-/// `None` if the line is not an opener.
+/// Parse an opening fence line into (name, args). Returns `None` if the line
+/// is not an opener.
 ///
-/// Accepts any colon count >= 3 (`:::name`, `::::name`, `:::::name`, ...).
-/// The colon count is preserved so the closer must match the same arity
-/// (allows nested shortcodes like `::::buttons` inside `:::grid`).
+/// Accepts any colon count >= 3 (`:::name`, `::::name`, `:::::name`, ...);
+/// the count is not returned, because a bare colon line of any length closes
+/// the block.
 ///
 /// **Pure-CSS region opener** — `:::{.class}` (no name, attrs only) is
 /// also recognized. The returned `name` is empty, signaling the caller
 /// to render the block as a plain styling wrapper. Empty name without
 /// a following `{` is rejected (just colons followed by content is not
 /// an opener).
-pub(crate) fn parse_shortcode_opener(trimmed: &str) -> Option<(usize, &str, &str)> {
+pub(crate) fn parse_shortcode_opener(trimmed: &str) -> Option<(&str, &str)> {
     let colons = trimmed.chars().take_while(|&c| c == ':').count();
     if colons < 3 {
         return None;
@@ -1713,7 +1700,7 @@ pub(crate) fn parse_shortcode_opener(trimmed: &str) -> Option<(usize, &str, &str
         if !after_ws.starts_with('{') {
             return None;
         }
-        return Some((colons, "", rest.trim()));
+        return Some(("", rest.trim()));
     }
     // char-aligned: name_end is a byte index returned by str::find with a
     // char predicate, which is guaranteed to be a char boundary (or rest.len()).
@@ -1721,35 +1708,68 @@ pub(crate) fn parse_shortcode_opener(trimmed: &str) -> Option<(usize, &str, &str
     let name = &rest[..name_end];
     #[allow(clippy::string_slice)]
     let args = rest[name_end..].trim();
-    Some((colons, name, args))
+    Some((name, args))
 }
 
-/// True if `trimmed` is a closing fence with the specified arity (`:::`
-/// for arity 3, `::::` for arity 4, etc.).
+/// True if `trimmed` is a closing fence: three or more colons and nothing
+/// else. The count does not matter; a closer closes the innermost open block.
 ///
-/// Closer semantics: N colons followed by optional whitespace only. A
-/// line like `::: extra` is NOT a closer (it's body content). This was
-/// the legacy `parse_fence_close` contract; the typed extractor preserves
-/// it so author content with trailing text after `:::` still parses the
-/// same way.
-///
-/// Implemented via char iteration (NOT `split_at(arity)`) because the
-/// `arity` is a count of `:` characters (always ASCII, 1 byte each), but
-/// the `trimmed` line might start with multi-byte UTF-8 characters
-/// (e.g. `[申请测试版](...)` from Chinese-language buttons). `split_at`
-/// is byte-indexed and would panic mid-character on such lines. Char
-/// iteration sidesteps the issue and is also slightly faster — we early-exit
-/// on the first non-`:` character.
-fn is_close_fence(trimmed: &str, arity: usize) -> bool {
+/// A line like `::: extra` is NOT a closer (it's body content). Iterates
+/// chars, never byte offsets, because the line may begin with multi-byte
+/// UTF-8 (a byte-indexed split panicked mid-character on Chinese button
+/// text).
+pub(crate) fn is_close_fence(trimmed: &str) -> bool {
+    let mut colons = 0;
     let mut chars = trimmed.chars();
-    for _ in 0..arity {
-        match chars.next() {
-            Some(':') => {}
-            _ => return false,
+    for c in chars.by_ref() {
+        if c != ':' {
+            return colons >= 3 && c.is_whitespace() && chars.all(char::is_whitespace);
+        }
+        colons += 1;
+    }
+    colons >= 3
+}
+
+/// What one live line does to block depth: `1` for an opener, `-1` for a
+/// closer, `0` for anything else. The single place that decides which of the
+/// two wins, shared by every walk that tracks nesting.
+pub(crate) fn fence_step(trimmed: &str) -> i8 {
+    if parse_shortcode_opener(trimmed).is_some() {
+        1
+    } else if is_close_fence(trimmed) {
+        -1
+    } else {
+        0
+    }
+}
+
+/// Index of the line that closes a block whose body starts at `from`, or
+/// `None` when nothing closes it.
+///
+/// Pandoc's rule: an opener (a name or `{attributes}` after the colons) opens
+/// a nested block, and a bare colon line closes the innermost open one. The
+/// colon count is only for the eye. Every caller that asks "where does this
+/// block end" goes through here, so the build, the grid splitter and the
+/// rename scanner cannot disagree. A body between opener and closer is
+/// balanced, which is what lets bodies be re-scanned on their own.
+pub(crate) fn find_block_end(
+    lines: &[&str],
+    from: usize,
+    is_inert: impl Fn(usize) -> bool,
+) -> Option<usize> {
+    let mut depth = 0usize;
+    for (j, line) in lines.iter().enumerate().skip(from) {
+        if is_inert(j) {
+            continue;
+        }
+        match fence_step(line.trim()) {
+            1 => depth += 1,
+            -1 if depth == 0 => return Some(j),
+            -1 => depth -= 1,
+            _ => {}
         }
     }
-    // Remaining chars (if any) must all be whitespace.
-    chars.all(char::is_whitespace)
+    None
 }
 
 #[cfg(test)]

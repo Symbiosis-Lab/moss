@@ -667,7 +667,7 @@ pub(crate) fn hero_asset_spans(
     // Priority 2: a positional path on the directive line, before any `{`.
     // `parse_shortcode_opener` already stripped the colons and the name.
     let opener_trimmed = opener_masked.trim();
-    if let Some((_, _name, args)) = super::shortcode_extract::parse_shortcode_opener(opener_trimmed) {
+    if let Some((_name, args)) = super::shortcode_extract::parse_shortcode_opener(opener_trimmed) {
         let cut = args.find('{').unwrap_or(args.len());
         #[allow(clippy::string_slice)]
         // `find` on ASCII '{' → char boundary; `args` is a suffix of the line.

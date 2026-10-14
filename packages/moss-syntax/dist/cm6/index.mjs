@@ -1,4 +1,4 @@
-import { a as shortcodeAssetRef, i as parseAttrKvSpans, r as isOpenMatch, t as SHORTCODE_OPEN_RE } from "../shortcode-DmziMlGG.mjs";
+import { a as shortcodeAssetRef, i as parseAttrKvSpans, r as isOpenMatch, t as SHORTCODE_OPEN_RE } from "../shortcode-DtxjbgXz.mjs";
 import { HighlightStyle, syntaxHighlighting, syntaxTree } from "@codemirror/language";
 import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
 import { RangeSetBuilder, StateField } from "@codemirror/state";
@@ -774,7 +774,7 @@ function mossHighlightExtension() {
 //#region src/cm6/cm-shortcode-block.ts
 /**
 * Block-decoration StateField for shortcode blocks. Reads the SYNCHRONOUS Lezer
-* syntax tree and pairs Open↔Close fence markers with an arity stack, so
+* syntax tree and pairs Open↔Close fence markers with a stack, so
 * positions are always current for tr.state — no stale offsets, no glitches.
 *
 * The document alone decides how a block renders, never the caret: every
@@ -794,7 +794,7 @@ const DEFAULT_STRINGS = {
 	legacyDividerTooltip: () => "The grid still splits here, but --- is the old way to write a cell divider. Replace it with +++."
 };
 /**
-* Pair Open↔Close fence markers with an arity stack. Returns the TOP-LEVEL
+* Pair Open↔Close fence markers with a plain stack: a close pops the innermost open. Returns the TOP-LEVEL
 * blocks; each carries its nested `children` so the decoration layer can render
 * `::::buttons` inside `:::grid` instead of leaking the inner fences as raw
 * text. (Nesting parity with the Rust extractor — see cm-shortcode-scanner.)
@@ -821,9 +821,8 @@ function collectShortcodeBlocks(state) {
 				children: []
 			});
 		} else if (node.name === "ShortcodeCloseLine") {
-			const arity = state.doc.sliceString(node.from, node.to).trim().length;
-			for (let i = stack.length - 1; i >= 0; i--) if (stack[i].arity === arity) {
-				const open = stack.splice(i)[0];
+			const open = stack.pop();
+			if (open) {
 				const block = {
 					from: open.from,
 					to: node.to,
@@ -835,7 +834,6 @@ function collectShortcodeBlocks(state) {
 				};
 				if (stack.length > 0) stack[stack.length - 1].children.push(block);
 				else out.push(block);
-				break;
 			}
 		}
 	} });

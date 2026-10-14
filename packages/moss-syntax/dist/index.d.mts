@@ -405,11 +405,11 @@ declare function findEnclosingBlockName(doc: DocLines, lineNumber: number): stri
  *
  * The line predicates are REUSED from ./shortcode.ts, not copied: an open
  * fence is exactly `SHORTCODE_OPEN_RE` + `isOpenMatch`, a close fence is
- * exactly `isCloseFence`, and open↔close pairing uses the same arity stack as
+ * exactly `isCloseFence`, and open↔close pairing uses the same stack as
  * the editor's tree walk (`collectShortcodeBlocks` in
- * ./cm6/cm-shortcode-block.ts): a close fence of arity N closes
- * the TOPMOST open of arity N (`::::` inside `:::` nests); opens above the
- * matched one never got a close and are reported as unclosed children.
+ * ./cm6/cm-shortcode-block.ts): a close fence closes the innermost open
+ * block whatever its colon count (pandoc's rule); with nothing open it is
+ * ordinary text.
  *
  * Two deliberate differences from the Lezer path, both on degenerate input:
  *

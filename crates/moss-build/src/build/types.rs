@@ -699,6 +699,8 @@ impl ParsedDocument {
     ///    layout slot rather than rendering as a page. Structurally detected by
     ///    `crate::build::footer::is_excluded_from_pages`; see
     ///    `ParsedDocument::slot_only`.
+    /// 4. `is_not_found_page()` — the site's `404.md`, which a host shows for
+    ///    an address that does not exist.
     ///
     /// All list-emitting sites call this helper so any future visibility flag
     /// is added in one place.
@@ -708,17 +710,25 @@ impl ParsedDocument {
     /// pages both render — emission only branches on `slot_only`); or
     /// `noindex`/share-card gating (use `is_public_page`).
     pub fn is_listable(&self) -> bool {
-        self.draft != Some(true) && self.listed != Some(false) && !self.slot_only
+        self.draft != Some(true) && self.listed != Some(false) && !self.slot_only && !self.is_not_found_page()
+    }
+
+    /// The site's `404.md`: the page a host shows for an unknown address. It
+    /// is a page at `/404/` and a copy at `/404.html`, and it is no part of
+    /// the site's content, so no listing surface carries it.
+    pub fn is_not_found_page(&self) -> bool {
+        self.url_path == crate::build::served_path::NOT_FOUND_PAGE
     }
 
     /// Whether this is a real reader-facing page: indexable (no `noindex`) and
     /// eligible for an og/twitter share card + JSON-LD + QR + hover preview.
     /// Independent of *listing* membership — a `listed: false` page is still a
-    /// public page. Only `draft` (work-in-progress) and `slot_only` (layout
-    /// chrome) are excluded. Gates per-page public affordances, where
+    /// public page. Only `draft` (work-in-progress), `slot_only` (layout
+    /// chrome) and the not-found page (which a crawler should never be sent
+    /// to) are excluded. Gates per-page public affordances, where
     /// `is_listable` gates multi-page listing surfaces.
     pub fn is_public_page(&self) -> bool {
-        self.draft != Some(true) && !self.slot_only
+        self.draft != Some(true) && !self.slot_only && !self.is_not_found_page()
     }
 }
 

@@ -113,6 +113,7 @@ pub(crate) fn entries_for_pages<'a>(
     };
     pages
         .into_iter()
+        .filter(|k| !crate::build::served_path::is_not_found_address(k))
         .filter(|k| !documents.iter().any(|d| d.url_path == **k && (!d.is_listable() || is_linkblog(d))))
         .map(|url_path| SitemapEntry {
             url_path: url_path.clone(),

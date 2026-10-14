@@ -258,6 +258,7 @@ pub(super) fn restore(blocks: &mut [Block], embeds: &LinkedEmbeds, config: &Pars
             emit_source_lines: false,
             implicit_figure: false,
             source_line_offset: 0,
+            warning_line_offset: 0,
             math: config.math,
             hard_line_breaks: false,
         },

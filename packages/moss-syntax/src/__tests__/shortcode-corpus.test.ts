@@ -14,7 +14,7 @@
  * by the cross-check in scan.test.ts, closing the triangle.
  *
  * (Before L1 of the extraction this file drove the editor's Lezer tree walk,
- * `collectShortcodeBlocks`; that walk now pairs fences with the same arity
+ * `collectShortcodeBlocks`; that walk now pairs fences with the same
  * stack and is exercised app-side by cm-shortcode-block.test.ts.)
  */
 import { describe, test, expect } from 'vitest';
@@ -48,15 +48,31 @@ function countGridCells(text: string, b: ShortcodeBlock): number {
   return dividers + 1;
 }
 
+/** The shortcodes the build extracts as typed blocks. */
+const TYPED = new Set(['grid', 'buttons', 'hero', 'gallery', 'subscribe', 'recent', 'apply']);
+
+/** The corpus view of a scan: closed typed blocks only. A closed block of any
+ *  other name is a wrapper whose contents the build does not list, and an
+ *  unclosed one is plain text there, so its children surface in its place. */
 function summarize(text: string, blocks: ShortcodeBlock[]): SummaryNode[] {
-  return blocks.map((b) => ({
-    name: b.name,
-    gridCells: b.name === 'grid' ? countGridCells(text, b) : null,
-    children: summarize(text, b.children),
-  }));
+  return blocks.flatMap((b) => {
+    if (b.closeFrom === null) return summarize(text, b.children);
+    if (!TYPED.has(b.name)) return [];
+    return [{
+      name: b.name,
+      gridCells: b.name === 'grid' ? countGridCells(text, b) : null,
+      children: summarize(text, b.children),
+    }];
+  });
 }
 
 describe('text scanner matches the shared shortcode-structure corpus', () => {
+  test('the package copy is identical to the build crate\'s corpus', () => {
+    const crateCopy = new URL('../../../../crates/moss-core/tests/fixtures/shortcode_structure_corpus.json', import.meta.url);
+    const here = new URL('../../fixtures/shortcode_structure_corpus.json', import.meta.url);
+    expect(readFileSync(here, 'utf8')).toBe(readFileSync(crateCopy, 'utf8'));
+  });
+
   test('corpus is non-empty', () => {
     expect(corpus.cases.length).toBeGreaterThan(0);
   });

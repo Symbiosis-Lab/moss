@@ -6,6 +6,8 @@ All notable changes to moss will be documented here.
 
 ### New
 
+- A site's `404.md` is now also written at `/404.html`, the address static hosts serve for an unknown URL, instead of only at `/404/`; `/404/` keeps working. The page is left out of the sitemap, the feed, `llms.txt`, search and every listing (before, it was listed in the sitemap and `llms.txt` and indexed for search), both addresses carry `<meta name="robots" content="noindex">`, and a `404.html` file you place at the site root is served as written.
+- Fenced blocks now follow pandoc's nesting rule: a fence with a name or `{attributes}` opens a block, and a bare line of three or more colons closes the innermost open block, whatever its colon count. `::: {.intro}` around `::: {.figure}` used to end the outer block at the inner closer and spill the rest of it onto the page; it now nests, and the docs no longer ask you to count colons. A closer of another length than its opener now closes it (it used to be body text, leaving the block open to the end of the page). An opener that nothing closes, and a closer with nothing left to close (it showed as literal `:::` text), now each produce a build warning naming the line, which `--strict` counts. The editor's block scan follows the same rule.
 - `moss root <path> --json` prints the canonical site root that owns a file or folder, or `null` when no site owns it. It stops at the home directory and does not scan or change files.
 - `moss render --json` renders newline-delimited `{id, source}` requests from stdin and returns the rendered HTML and moss CSS without reading a site folder. It preserves source line numbers, typesets math, and leaves relative Markdown links unchanged; raw HTML is returned as authored for the embedding application to sanitize.
 - `--moss-sidebar-width` now sets the width of the side rail beside a page on a wide screen. It was documented but nothing read it; the rail kept its own fixed rule. The default is the rail's old width, so no site changes until a theme sets it.
@@ -285,6 +287,7 @@ All notable changes to moss will be documented here.
 - A page with a hero and a folder listing below it has one high-priority image, the hero. The listing's cover images load lazily, so they no longer compete with the hero on a slow connection. A page without a hero gives that slot to whichever comes first in its opening content, a picture or a folder listing; a listing that opens the page keeps its first cover eager.
 - `sitemap.xml` lists a static `.html` page and a notebook viewer at the address the site serves them at, ending in `.html`, instead of an address without the extension that returned 404.
 - A page that stands for a person or other term and has a cover now has one heading in its markup, not an empty one before its title.
+- A shortcode name may use letters and digits from any script, not only ASCII, matching the Rust parser.
 
 ### Changed
 

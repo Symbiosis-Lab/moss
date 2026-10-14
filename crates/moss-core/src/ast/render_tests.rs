@@ -1297,6 +1297,7 @@ fn end_to_end_parse_with_config_emits_data_source_line() {
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
+        warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
     };

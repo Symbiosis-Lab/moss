@@ -342,7 +342,7 @@ interface ShortcodeBlockInfo {
   children: ShortcodeBlockInfo[];
 }
 /**
- * Pair Open↔Close fence markers with an arity stack. Returns the TOP-LEVEL
+ * Pair Open↔Close fence markers with a plain stack: a close pops the innermost open. Returns the TOP-LEVEL
  * blocks; each carries its nested `children` so the decoration layer can render
  * `::::buttons` inside `:::grid` instead of leaking the inner fences as raw
  * text. (Nesting parity with the Rust extractor — see cm-shortcode-scanner.)

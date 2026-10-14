@@ -882,12 +882,14 @@ pub fn process_markdown_file(
     //      correct fix is a raw↔accepted line MAP, not a scalar; deferred —
     //      CriticMarkup is a rare, transient authoring layer and the failure
     //      degrades to a slightly-off scroll-sync, never a panic.
-    let source_line_offset = {
+    // Lines of the file above the parser's line 1: the frontmatter plus any
+    // blank lines the body lost after it. Warnings name file lines with this.
+    let raw_body_offset = {
         let lookup_leading_blanks = markdown_content
             .lines()
             .take_while(|l| l.trim().is_empty())
             .count();
-        let raw_body_offset = markdown_content
+        markdown_content
             .lines()
             .find(|l| !l.trim().is_empty())
             .and_then(|first| {
@@ -898,7 +900,9 @@ pub fn process_markdown_file(
                     .map(|p| p + frontmatter_line_count)
             })
             .map(|pos| pos.saturating_sub(lookup_leading_blanks))
-            .unwrap_or(0);
+            .unwrap_or(0)
+    };
+    let source_line_offset = {
         // Lines the EDITOR's frontmatter parser strips before CM6 line 1.
         // Derive it from the ACTUAL buffer the editor loads —
         // `frontmatter::parse(content).body` — not from `frontmatter_range`:
@@ -922,6 +926,7 @@ pub fn process_markdown_file(
         emit_source_lines,
         implicit_figure: site.implicit_figure,
         source_line_offset,
+        warning_line_offset: raw_body_offset,
         math: site.math,
         hard_line_breaks: site.hard_line_breaks,
     };
