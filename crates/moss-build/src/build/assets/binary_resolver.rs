@@ -1,12 +1,19 @@
 //! Generic binary resolution pipeline.
 //!
-//! Provides a unified system for resolving external binaries (FFmpeg, Git, Hugo, etc.)
-//! through a 4-step resolution chain:
+//! Provides a unified system for resolving external binaries (FFmpeg, Git, Hugo, etc.).
+//!
+//! Finding and downloading are separate operations. [`resolve_binary`] only
+//! finds a binary, through a 4-step chain:
 //!
 //! 1. Check a user-configured path
 //! 2. Check the system PATH
-//! 3. Check the `~/.moss/bin/` cache
-//! 4. Download on demand (if `auto_download` is true)
+//! 3. Check the standard install directories (macOS: `/opt/homebrew/bin`,
+//!    `/usr/local/bin`, `/opt/local/bin`)
+//! 4. Check the `~/.moss/bin/` cache
+//!
+//! [`download_binary`] fetches a binary into the cache. It is never called
+//! implicitly: a caller must have the user's agreement to download an
+//! executable first, and [`download_tool`] is the entry point for that.
 //!
 //! This module is the core of the unified binary resolution system that replaces
 //! three separate resolution systems (FFmpeg, Git, Hugo) with one pipeline.
@@ -38,7 +45,7 @@
 //!     required_disk_space: None,
 //! };
 //!
-//! let resolution = resolve_binary(&config, None, true, None)?;
+//! let resolution = resolve_binary(&config, None)?;
 //! println!("Binary at: {} (source: {:?})", resolution.path, resolution.source);
 //! ```
 
@@ -48,11 +55,20 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::download::{check_disk_space, download_with_progress, verify_sha256, DownloadProgress};
-use crate::build::media::ffmpeg::get_moss_bin_dir;
+use super::git::git_binary_config;
+use crate::build::media::ffmpeg::{ffmpeg_binary_config, ffprobe_binary_config, get_moss_bin_dir};
 
 /// Download timeout in seconds (5 minutes). Matches the timeout used across
 /// all binary download modules (ffmpeg.rs, git.rs).
 const DOWNLOAD_TIMEOUT_SECS: u64 = 300;
+
+/// Directories searched after the PATH lookup fails. An app launched from
+/// Finder inherits a minimal PATH that omits the Homebrew and MacPorts
+/// prefixes, so a tool installed there is invisible to the PATH step.
+#[cfg(target_os = "macos")]
+const STANDARD_INSTALL_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"];
+#[cfg(not(target_os = "macos"))]
+const STANDARD_INSTALL_DIRS: &[&str] = &[];
 
 // =============================================================================
 // Types
@@ -205,28 +221,25 @@ pub struct BinaryResolution {
 ///
 /// 1. Check `configured_path` (if provided) — validates the binary works
 /// 2. Check system PATH — looks up by binary name
-/// 3. Check `~/.moss/bin/` cache — looks for a previously downloaded copy
-/// 4. Download (if `auto_download` is true) — fetches from configured source
-///
+/// 3. Check the standard install directories (macOS: Homebrew, `/usr/local`,
+///    MacPorts) — a Finder-launched app's PATH omits them
+/// 4. Check `~/.moss/bin/` cache — looks for a previously downloaded copy
 /// If a cached binary exists but fails the version check, it is deleted and
-/// the resolver falls through to download. This handles corrupt cache recovery.
+/// reported as not found. This never downloads: fetching a binary is
+/// [`download_binary`], which a caller invokes only after the user agrees.
 ///
 /// # Arguments
 ///
 /// * `config` - Binary configuration describing name, sources, and verification.
 /// * `configured_path` - Optional user-specified path to check first.
-/// * `auto_download` - Whether to download the binary if not found locally.
-/// * `on_progress` - Optional progress callback for downloads.
 ///
 /// # Returns
 ///
 /// * `Ok(BinaryResolution)` - Binary found and verified.
-/// * `Err(String)` - Binary not found or all resolution steps failed.
+/// * `Err(String)` - Binary not found by any of the steps.
 pub fn resolve_binary(
     config: &BinaryConfig,
     configured_path: Option<&str>,
-    auto_download: bool,
-    on_progress: Option<&DownloadProgress>,
 ) -> Result<BinaryResolution, String> {
     validate_config(config)?;
     let binary_filename = get_binary_filename(config);
@@ -274,7 +287,13 @@ pub fn resolve_binary(
         }
     }
 
-    // Step 3: Check ~/.moss/bin/ cache
+    // Step 3: Check the standard install directories
+    let standard_dirs: Vec<&Path> = STANDARD_INSTALL_DIRS.iter().map(Path::new).collect();
+    if let Some(resolution) = find_in_dirs(&binary_filename, &standard_dirs, config) {
+        return Ok(resolution);
+    }
+
+    // Step 4: Check ~/.moss/bin/ cache
     let cached_path = get_cached_binary_path(config)?;
     if cached_path.exists() {
         let cached_str = cached_path.to_string_lossy().to_string();
@@ -287,7 +306,7 @@ pub fn resolve_binary(
                 });
             }
             Err(e) => {
-                // Corrupt cache: delete and fall through to download
+                // Corrupt cache: delete it so the next download starts clean
                 log::warn!(
                     "Cached {} at '{}' failed validation ({}), removing corrupt cache",
                     config.name,
@@ -299,17 +318,34 @@ pub fn resolve_binary(
         }
     }
 
-    // Step 4: Download if auto_download is enabled
-    if !auto_download {
-        return Err(format!(
-            "{} not found (checked: configured path, system PATH, cache). \
-             Auto-download is disabled.",
-            config.name
-        ));
-    }
+    Err(format!(
+        "{} not found (checked: configured path, system PATH, install directories, cache)",
+        config.name
+    ))
+}
 
-    let resolution = download_and_extract(config, on_progress)?;
-    Ok(resolution)
+/// Returns the first `dir/binary_filename` in `dirs` that exists and passes
+/// [`check_binary_works`], as an absolute path. Directories are tried in order.
+fn find_in_dirs(
+    binary_filename: &str,
+    dirs: &[&Path],
+    config: &BinaryConfig,
+) -> Option<BinaryResolution> {
+    for dir in dirs {
+        let candidate = dir.join(binary_filename);
+        if !candidate.exists() {
+            continue;
+        }
+        let path = candidate.to_string_lossy().into_owned();
+        if let Ok(version) = check_binary_works(&path, config) {
+            return Some(BinaryResolution {
+                path,
+                version,
+                source: ResolutionSource::SystemPath,
+            });
+        }
+    }
+    None
 }
 
 // =============================================================================
@@ -357,7 +393,8 @@ pub fn validate_config(config: &BinaryConfig) -> Result<(), String> {
 
 /// Downloads a binary for the current platform and extracts it to the cache.
 ///
-/// This is step 4 of the resolution chain. It:
+/// This is the only path that fetches a binary, and it is never reached from
+/// [`resolve_binary`]. It:
 /// 1. Detects the current platform
 /// 2. Looks up the download source for this platform
 /// 3. Checks available disk space
@@ -371,10 +408,11 @@ pub fn validate_config(config: &BinaryConfig) -> Result<(), String> {
 ///
 /// * `Ok(BinaryResolution)` - Binary downloaded, verified, and cached.
 /// * `Err(String)` - Any step in the pipeline failed.
-fn download_and_extract(
+pub fn download_binary(
     config: &BinaryConfig,
     on_progress: Option<&DownloadProgress>,
 ) -> Result<BinaryResolution, String> {
+    validate_config(config)?;
     let platform = get_current_platform()?;
 
     let source = config.sources.get(&platform).ok_or_else(|| {
@@ -484,6 +522,52 @@ fn download_and_extract(
 }
 
 // =============================================================================
+// Tools the user can ask moss to install
+// =============================================================================
+
+/// A binary that moss can download on the user's request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tool {
+    Ffmpeg,
+    Git,
+}
+
+impl Tool {
+    /// The name the tool is requested by, on the CLI and in the app.
+    pub fn name(self) -> &'static str {
+        match self {
+            Tool::Ffmpeg => "ffmpeg",
+            Tool::Git => "git",
+        }
+    }
+
+    /// Parses a name produced by [`Tool::name`].
+    pub fn from_name(name: &str) -> Option<Tool> {
+        match name {
+            "ffmpeg" => Some(Tool::Ffmpeg),
+            "git" => Some(Tool::Git),
+            _ => None,
+        }
+    }
+}
+
+/// Makes `tool` available by downloading each of its binaries that
+/// [`resolve_binary`] cannot find. Call only after the user has agreed to the
+/// download; a binary that is already installed is left alone.
+pub fn download_tool(tool: Tool, on_progress: Option<&DownloadProgress>) -> Result<(), String> {
+    let configs = match tool {
+        Tool::Ffmpeg => vec![ffmpeg_binary_config(), ffprobe_binary_config()],
+        Tool::Git => vec![git_binary_config()],
+    };
+    for config in configs {
+        if resolve_binary(&config, None).is_err() {
+            download_binary(&config, on_progress)?;
+        }
+    }
+    Ok(())
+}
+
+// =============================================================================
 // URL resolution
 // =============================================================================
 
@@ -574,24 +658,6 @@ fn resolve_download_url(
         })?;
 
     Ok((asset_url.to_string(), Some(version)))
-}
-
-/// Constructs a resolved asset name from a GitHub source pattern and version info.
-///
-/// This is the pure logic extracted for testability — no network calls.
-///
-/// # Arguments
-///
-/// * `pattern` - Asset pattern with `{version}`, `{os}`, `{arch}` placeholders.
-/// * `version` - Version string (without leading 'v').
-/// * `os` - Operating system string (e.g. "darwin", "linux", "windows").
-/// * `arch` - Architecture string (e.g. "arm64", "x64").
-#[allow(dead_code)]
-pub fn resolve_asset_pattern(pattern: &str, version: &str, os: &str, arch: &str) -> String {
-    pattern
-        .replace("{version}", version)
-        .replace("{os}", os)
-        .replace("{arch}", arch)
 }
 
 // =============================================================================

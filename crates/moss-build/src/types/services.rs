@@ -102,7 +102,7 @@ pub struct BackgroundContext {
     pub search_enabled: bool,
     /// Pre-resolved FFmpeg binary path from scan phase (Task 4: lazy resolution).
     /// When Some, `run_video_conversion` reuses this path instead of calling
-    /// `FFmpegManager::get_or_download()` again (which would trigger a second download log).
+    /// `FFmpegManager::find()` again.
     pub ffmpeg_bin_path: Option<String>,
     /// Notebook files (.ipynb) that need JupyterLite processing in background.
     /// When non-empty, `run_notebook_processing` downloads JupyterLite assets

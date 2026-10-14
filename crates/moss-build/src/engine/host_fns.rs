@@ -561,11 +561,8 @@ async fn dispatch_command_core(
             app.return_to_editor().await?;
             Ok("null".into())
         }
-        // No progress sink: the AppHandle was only ever the `download-progress`
-        // emit target, and a headless caller has no window to paint it in. The
-        // binary resolves identically, quietly.
         "resolve_git_path" => {
-            let r = crate::plugins::runtime::portable::resolve_git_path_impl(None).await?;
+            let r = crate::plugins::runtime::portable::resolve_git_path_impl().await?;
             reply_json(&r)
         }
         // Runs headless: the registries come from the injected

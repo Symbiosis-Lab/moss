@@ -1,21 +1,6 @@
 use super::*;
 
 #[test]
-fn test_ffmpeg_detect_returns_result() {
-    // This test just verifies the API works - doesn't require FFmpeg installed
-    let result = FFmpegManager::detect();
-    // Result is Ok if FFmpeg is installed, Err if not - both are valid
-    assert!(result.is_ok() || result.is_err());
-}
-
-#[test]
-fn test_detect_returns_result() {
-    // This test verifies the API works without requiring FFmpeg
-    let _result = FFmpegManager::detect();
-    // Just checking it doesn't panic
-}
-
-#[test]
 fn test_ffmpeg_config_shape() {
     let config = ffmpeg_binary_config();
     assert_eq!(config.name, "ffmpeg");
@@ -36,15 +21,6 @@ fn test_moss_bin_dir() {
         assert_eq!(path, home.join("bin"));
         assert!(path.is_dir());
     });
-}
-
-#[test]
-fn test_ffmpeg_manager_get_or_download() {
-    // This test verifies the API - actual download only happens if FFmpeg not in PATH
-    let result = FFmpegManager::get_or_download(None);
-    // Should either find system FFmpeg or attempt download
-    // We just verify it doesn't panic and returns a Result
-    assert!(result.is_ok() || result.is_err());
 }
 
 #[test]
@@ -379,22 +355,21 @@ async fn test_http_request_in_async_context_does_not_panic() {
     );
 }
 
-/// Test that get_or_download uses ureq (not reqwest::blocking) and doesn't panic.
-/// This is an integration test that actually calls get_or_download from async context.
+/// Test that find (which uses ureq, not reqwest::blocking) doesn't panic from async context.
+/// This is an integration test that actually calls find from async context.
 #[tokio::test]
-async fn test_get_or_download_in_async_context_does_not_panic() {
+async fn test_find_in_async_context_does_not_panic() {
     // This simulates the GUI path where we're inside Tauri's async runtime.
     // Before fix: PANICS with "Cannot drop a runtime in a context where blocking is not allowed"
     // After fix: Should return Ok or Err gracefully (no panic)
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        FFmpegManager::get_or_download(None)
+        FFmpegManager::find()
     }));
 
     // The test passes if no panic occurred (regardless of success/failure)
-    // Network errors are acceptable, panics are not
     assert!(
         result.is_ok(),
-        "FFmpegManager::get_or_download panicked in async context!"
+        "FFmpegManager::find panicked in async context!"
     );
 }
 
@@ -456,8 +431,8 @@ fn test_get_duration_nonexistent_file() {
 #[test]
 fn test_ffprobe_binary_config_targets_separate_artifact() {
     // Root cause of a real site's video 404s: moss downloaded ffmpeg-only.
-    // ffprobe must be provisioned from its OWN evermeet artifact on macOS —
-    // the ffmpeg getrelease/zip does not contain it.
+    // ffprobe must be provisioned from its OWN artifact on macOS —
+    // the macOS ffmpeg archive does not contain it.
     let config = ffprobe_binary_config();
     for platform in ["darwin-arm64", "darwin-x64"] {
         let url = config.sources[platform]
@@ -465,7 +440,7 @@ fn test_ffprobe_binary_config_targets_separate_artifact() {
             .as_deref()
             .expect("macOS ffprobe source must have a direct_url");
         assert!(
-            url.contains("/ffprobe/"),
+            url.contains("/ffprobe-macos-"),
             "{platform} ffprobe URL must be the separate ffprobe artifact, got: {url}"
         );
     }
@@ -527,7 +502,7 @@ fn test_convert_with_config_fails_gracefully() {
 
 #[test]
 fn test_validate_encoded_video_detects_missing_file() {
-    let manager = match FFmpegManager::detect() {
+    let manager = match FFmpegManager::find() {
         Ok(m) => m,
         Err(_) => return, // Skip if FFmpeg not available
     };
@@ -545,7 +520,7 @@ fn test_validate_encoded_video_checks_duration() {
     // This test will fail until we implement validate_encoded_video
     // It should use get_duration() to verify the video is playable
 
-    let manager = match FFmpegManager::detect() {
+    let manager = match FFmpegManager::find() {
         Ok(m) => m,
         Err(_) => return, // Skip if FFmpeg not available
     };
@@ -1087,4 +1062,39 @@ fn a_poster_is_the_display_size_fitted_into_the_top_rung_and_never_enlarged() {
     assert_eq!(poster_frame((3840, 2160)), (1920, 1080));
     // A declared pixel aspect ratio is part of the shape.
     assert_eq!(poster_frame(asset_paths::display_size(1350, 1080, 64.0 / 45.0)), (1920, 1080));
+}
+
+#[test]
+fn macos_sources_are_pinned_moss_releases() {
+    const RELEASE: &str =
+        "https://github.com/Symbiosis-Lab/moss/releases/download/ffmpeg-7.1.5-moss.1/";
+    for config in [ffmpeg_binary_config(), ffprobe_binary_config()] {
+        crate::build::assets::binary_resolver::validate_config(&config)
+            .expect("pinned config must validate");
+        for platform in ["darwin-arm64", "darwin-x64"] {
+            let source = &config.sources[platform];
+            let url = source.direct_url.as_deref().expect("macOS source has a URL");
+            assert!(url.starts_with(RELEASE), "{platform}: {url}");
+            assert!(source.sha256.is_some(), "{platform} must pin a checksum");
+        }
+    }
+}
+
+/// Live check: downloads both pinned macOS builds over the network and runs
+/// the ffmpeg it installed. Run with `--ignored`.
+#[test]
+#[ignore = "downloads from GitHub; run with --ignored"]
+fn downloads_pinned_ffmpeg_for_this_mac() {
+    crate::infra::home::with_moss_home(|home| {
+        for config in [ffmpeg_binary_config(), ffprobe_binary_config()] {
+            crate::build::assets::binary_resolver::download_binary(&config, None)
+                .expect("pinned download must verify");
+        }
+        let out = std::process::Command::new(home.join("bin").join("ffmpeg"))
+            .arg("-version")
+            .output()
+            .expect("run the downloaded ffmpeg");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.starts_with("ffmpeg version 7.1.5"), "{text}");
+    });
 }

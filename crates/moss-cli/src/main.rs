@@ -33,6 +33,7 @@ const CROSSED: &[(&str, fn(&[String]) -> i32)] = &[
     ("root", moss_build::cli::root::run),
     ("describe", |args| moss_build::cli::describe::run(args, env!("CARGO_PKG_VERSION"))),
     ("env", moss_build::cli::env::run),
+    ("tools", moss_build::cli::tools::run),
     ("domain", moss_build::cli::domain::run),
     ("import", moss_build::cli::import::run),
     ("deploy", moss_build::cli::deploy::run),

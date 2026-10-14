@@ -979,6 +979,9 @@ fn finish_run(
                     Some(f) => crate::cli_eprintln!("  Advisory: {}: {}", f, a.what),
                     None => crate::cli_eprintln!("  Advisory: {}", a.what),
                 }
+                if let Some(hint) = a.action.cli_hint() {
+                    crate::cli_eprintln!("    {}", hint);
+                }
             }
         }
     }
@@ -1108,32 +1111,27 @@ pub(crate) fn run_video_conversion(
     });
 
     // FFmpeg, or the reason there is none — reusing the path from the scan when
-    // it has one (avoids a duplicate download). Missing is not fatal and is not
+    // it has one. Missing is not fatal and is not
     // a separate run: it becomes one advisory plus a per-item outcome, so the
     // originals it ships reach the census through the same owner as every other
     // delivery. They did not, before, and the stale sweep deleted them.
     let ffmpeg = match ctx.ffmpeg_bin_path {
         Some(ref path) => Some(FFmpegManager::from_bin_path(path.clone())),
-        None => match FFmpegManager::get_or_download(None) {
-            Ok(f) => Some(f),
-            Err(e) => {
-                log::warn!("Video conversion skipped: FFmpeg not available: {}", e);
-                advisories.push(Advisory {
-                    scope: Scope::Environment,
-                    severity: Severity::NeedsAction,
-                    item: None,
-                    what: crate::infra::app_advisory::fmt(
-                        "shipped_unoptimized",
-                        &[("err", &e.to_string())],
-                    ),
-                    action: Action::Command {
-                        run: "brew install ffmpeg".into(),
-                        label: crate::infra::app_advisory::t("copy"),
-                    },
-                });
-                None
-            }
-        },
+        None => {
+            log::warn!("Video conversion skipped: FFmpeg not found during scan");
+            advisories.push(Advisory {
+                scope: Scope::Environment,
+                severity: Severity::NeedsAction,
+                item: None,
+                what: crate::infra::app_advisory::t("ffmpeg_offer"),
+                action: Action::InApp {
+                    op: crate::advisory::AppOp::DownloadTool,
+                    args: serde_json::json!({ "tool": "ffmpeg" }),
+                    label: crate::infra::app_advisory::t("download_ffmpeg"),
+                },
+            });
+            None
+        }
     };
 
     let project_root = Path::new(&ctx.source_path);

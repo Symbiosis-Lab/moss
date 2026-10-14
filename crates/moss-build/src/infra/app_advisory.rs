@@ -50,7 +50,8 @@ advisory_strings! {
     published               => { en: "Published!",                 zh_hans: "已发布！",           zh_hant: "已發佈！" },
     uploaded_checking_live  => { en: "Uploaded — checking your site is live…", zh_hans: "已上传 —— 正在确认网站已上线……", zh_hant: "已上傳 —— 正在確認網站已上線……" },
     // ── Advisories + receipts (Phase 1b) ────────────────────────────────────
-    shipped_unoptimized => { en: "Videos shipped full-size — FFmpeg isn't installed ({err})", zh_hans: "视频以原始大小发布 —— 未安装 FFmpeg（{err}）", zh_hant: "影片以原始大小發佈 —— 尚未安裝 FFmpeg（{err}）" },
+    ffmpeg_offer => { en: "Videos ship full-size because FFmpeg isn't on this Mac. Download it (about 11 MB) and moss will optimize them.", zh_hans: "这台 Mac 上没有 FFmpeg，视频将以原始大小发布。下载它（约 11 MB）后，青苔会为视频做优化。", zh_hant: "這台 Mac 上沒有 FFmpeg，影片將以原始大小發佈。下載它（約 11 MB）後，青苔會為影片做最佳化。" },
+    download_ffmpeg => { en: "Download FFmpeg", zh_hans: "下载 FFmpeg", zh_hant: "下載 FFmpeg" },
     copy => { en: "Copy", zh_hans: "复制", zh_hant: "複製" },
     // Two files carry the same `url:` — usually a folder copied in Finder,
     // which keeps the original's frontmatter verbatim. Shown on the `url`

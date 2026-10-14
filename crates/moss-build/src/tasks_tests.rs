@@ -1210,6 +1210,22 @@ fn awaiting_serializes_action_on_the_wire() {
     assert!(!json.contains("escape"), "escape must be gone: {json}");
 }
 
+#[test]
+fn escape_download_tool_maps_only_known_tools() {
+    match crate::tasks::escape_spec_to_action("download-tool:ffmpeg") {
+        Action::InApp { op, args, label } => {
+            assert_eq!(op, crate::advisory::AppOp::DownloadTool);
+            assert_eq!(args, serde_json::json!({ "tool": "ffmpeg" }));
+            assert_eq!(label, "Download ffmpeg");
+        }
+        other => panic!("expected a DownloadTool action, got {other:?}"),
+    }
+    assert_eq!(
+        crate::tasks::escape_spec_to_action("download-tool:bogus"),
+        Action::None
+    );
+}
+
 // ── parent/child Jobs (Step 3 Phase 4 — media nests under Build) ──────
 
 #[test]

@@ -1114,7 +1114,7 @@ fn test_scan_folder_with_videos_populates_ffmpeg_path() {
         );
     }
     // If ffmpeg is NOT available (CI/minimal environments), ffmpeg_bin_path
-    // will be None — the lazy init ran but get_or_download returned an error.
+    // will be None — the lazy init ran but find returned an error.
 
     fs::remove_dir_all(&temp_dir).ok();
 }

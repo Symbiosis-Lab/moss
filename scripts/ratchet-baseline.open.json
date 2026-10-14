@@ -56,7 +56,7 @@
       },
       "oversized": {
         "crates/moss-build/src/build.rs": "Crate root: dozens of submodule declarations plus the single run_pipeline entry point (zero-flicker staging, seal, ship, generation GC) that the rest of build/ hangs off of; deliberately tauri-free via the HostPorts ports pattern that replaced tauri::AppHandle, not a Tauri-command surface — retires by splitting run_pipeline's own body into its own file, which nothing here currently plans.",
-        "crates/moss-build/src/build/assets/binary_resolver.rs": "Already the result of collapsing three separate FFmpeg/Git/Hugo binary resolvers into one four-step chain (user path, PATH, cache, download); retires further by splitting the download/verify/extract half from the resolution-order half.",
+        "crates/moss-build/src/build/assets/binary_resolver.rs": "Already the result of collapsing three separate FFmpeg/Git/Hugo binary resolvers into one four-step finder (user path, PATH, install directories, cache); the download/verify/extract half now lives in download_binary, so retiring further means splitting that half out.",
         "crates/moss-build/src/build/cache.rs": "Both halves of the two-layer cache — the sharded ObjectStore blob store and the TransformCache record store, which holds an ObjectStore and hand-duplicates its ASCII-hex fan-out path logic (documented as mirroring, not sharing) — live together so the composition stays visible; retires by extracting that duplicated shard-path logic into one helper the two files could share.",
         "crates/moss-build/src/build/folder_embed.rs": "Three resolution branches (content folder, static-index folder, missing) share one marker-parsing frontend; retires by extracting that shared parsing into its own file first, which none of the three branches currently need enough to justify.",
         "crates/moss-build/src/build/types.rs": "ParsedDocument's visibility predicates (is_listable, is_public_page, is_not_found_page) read the same fields as the struct they belong to, so they stay beside it; the not-found predicate adds eight lines to a file already at the line limit.",
@@ -105,7 +105,7 @@
         "crates/moss-build/src/ops/serve": 20,
         "crates/moss-build/src/js-src/site/places-explorer": 17,
         "crates/moss-build/src/vault/import/scrape": 17,
-        "crates/moss-build/src/cli": 19
+        "crates/moss-build/src/cli": 20
       },
       "oversized": {
         "crates/moss-core/src": "Flat by charter: pure, zero-I/O leaf modules (parse, schema, contract, resolve) that are named-scanned, not navigated. ast/ and resolve/ are the two clusters that earned subdirectories. (carried over from the desktop baseline's open/crates/moss-core/src entry, dated pre-2026-09-16.)",

@@ -1184,10 +1184,10 @@ pub fn scan_folder_with_dedup_emit_with_error(
             }
             ScanBucket::Video => {
                 // Videos use FFmpeg for dimensions and dominant color, with caching.
-                // Lazy resolution (Task 4): FFmpeg is only downloaded/detected when
+                // Lazy resolution (Task 4): FFmpeg is only detected when
                 // the first video file is encountered during the directory walk.
                 let ffmpeg = ffmpeg_cell.get_or_init(|| {
-                    match FFmpegManager::get_or_download(None) {
+                    match FFmpegManager::find() {
                         Ok(mgr) => Some(mgr),
                         Err(e) => {
                             log::debug!("FFmpeg not available during scan: {}", e);

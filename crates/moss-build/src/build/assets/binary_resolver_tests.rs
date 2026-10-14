@@ -43,7 +43,7 @@ fn test_resolve_system_path() {
     // builtin with no .exe, so probe for cmd itself instead.
     let name = if cfg!(target_os = "windows") { "cmd" } else { "echo" };
     let config = test_config(name);
-    let result = resolve_binary(&config, None, false, None);
+    let result = resolve_binary(&config, None);
     assert!(
         result.is_ok(),
         "{name} should be found in system PATH: {:?}",
@@ -74,7 +74,7 @@ fn test_resolve_configured_path() {
     let configured = "/bin/echo";
 
     let config = test_config("echo");
-    let result = resolve_binary(&config, Some(configured), false, None);
+    let result = resolve_binary(&config, Some(configured));
     assert!(
         result.is_ok(),
         "Configured {} should work: {:?}",
@@ -91,22 +91,39 @@ fn test_resolve_configured_path() {
 }
 
 #[test]
-fn test_resolve_no_download() {
-    // A nonexistent binary with auto_download=false should fail.
-    let config = test_config("definitely_not_a_real_binary_xyz123");
-    let result = resolve_binary(&config, None, false, None);
-    assert!(result.is_err(), "Should fail for nonexistent binary");
-    let err = result.unwrap_err();
+fn test_resolve_binary_never_downloads() {
+    // The source points at a closed local port, so a download attempt fails
+    // with a connection error. The assertion below requires the not-found
+    // error instead, which proves resolve_binary never reached a download.
+    let name = "moss_absent_probe_binary";
+    let mut config = test_config(name);
+    config.sources.insert(
+        get_current_platform().unwrap(),
+        BinarySource {
+            github: None,
+            direct_url: Some("http://127.0.0.1:9/x.zip".to_string()),
+            sha256: None,
+            archive_format: Some(ArchiveFormat::Zip),
+        },
+    );
+    let err = resolve_binary(&config, None).unwrap_err();
     assert!(
-        err.contains("not found"),
-        "Error should mention 'not found', got: {}",
+        err.starts_with(&format!("{name} not found")),
+        "Expected the not-found error, got: {}",
         err
     );
-    assert!(
-        err.contains("Auto-download is disabled"),
-        "Error should mention auto-download disabled, got: {}",
-        err
-    );
+    let cached = get_cached_binary_path(&config).unwrap();
+    assert!(!cached.exists(), "resolve_binary must not create a cache entry");
+}
+
+#[test]
+fn test_tool_name_round_trip() {
+    for tool in [Tool::Ffmpeg, Tool::Git] {
+        assert_eq!(Tool::from_name(tool.name()), Some(tool));
+    }
+    assert_eq!(Tool::from_name("hugo"), None);
+    assert_eq!(Tool::from_name("FFmpeg"), None);
+    assert_eq!(Tool::from_name(""), None);
 }
 
 // -------------------------------------------------------------------------
@@ -454,34 +471,6 @@ fn test_get_binary_filename_override() {
     } else {
         assert_eq!(name, "git-custom");
     }
-}
-
-// -------------------------------------------------------------------------
-// resolve_asset_pattern tests
-// -------------------------------------------------------------------------
-
-#[test]
-fn test_github_url_construction() {
-    let pattern = "hugo_extended_{version}_{os}-{arch}.tar.gz";
-    let result = resolve_asset_pattern(pattern, "0.123.0", "darwin", "arm64");
-    assert_eq!(
-        result, "hugo_extended_0.123.0_darwin-arm64.tar.gz",
-        "All placeholders should be resolved"
-    );
-}
-
-#[test]
-fn test_github_url_construction_no_placeholders() {
-    let pattern = "binary.tar.gz";
-    let result = resolve_asset_pattern(pattern, "1.0", "linux", "x64");
-    assert_eq!(result, "binary.tar.gz", "No placeholders means no changes");
-}
-
-#[test]
-fn test_github_url_construction_dugite_pattern() {
-    let pattern = "dugite-native-v{version}-macOS-{arch}.tar.gz";
-    let result = resolve_asset_pattern(pattern, "2.53.0", "darwin", "arm64");
-    assert_eq!(result, "dugite-native-v2.53.0-macOS-arm64.tar.gz");
 }
 
 // -------------------------------------------------------------------------
@@ -888,9 +877,9 @@ fn test_resolve_cached() {
 #[test]
 fn test_resolve_fallthrough() {
     // A nonexistent binary should fall through all steps and report not found.
-    // This exercises steps 1→2→3→4 (with auto_download=false).
+    // This exercises steps 1→2→3→4.
     let config = test_config("nonexistent_binary_xyz_123_abc");
-    let result = resolve_binary(&config, Some("/nonexistent/path/binary"), false, None);
+    let result = resolve_binary(&config, Some("/nonexistent/path/binary"));
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
@@ -920,4 +909,32 @@ fn test_download_and_verify_sha256() {
         "Should mention SHA-256 mismatch: {}",
         err
     );
+}
+
+// -------------------------------------------------------------------------
+// find_in_dirs tests
+// -------------------------------------------------------------------------
+
+#[cfg(unix)]
+#[test]
+fn test_find_in_dirs_finds_working_binary() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let script = tmp.path().join("fakebin");
+    std::fs::write(&script, "#!/bin/sh\necho v1.2.3\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let config = test_config_with_version_check("fakebin", vec!["--version"], Some(r"v(\d+\.\d+\.\d+)"));
+    let found = find_in_dirs("fakebin", &[tmp.path()], &config)
+        .expect("a working binary in the directory should be found");
+    assert_eq!(found.path, script.to_string_lossy());
+    assert_eq!(found.version.as_deref(), Some("1.2.3"));
+    assert!(matches!(found.source, ResolutionSource::SystemPath));
+}
+
+#[test]
+fn test_find_in_dirs_returns_none_when_binary_absent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = test_config("fakebin");
+    assert!(find_in_dirs("fakebin", &[tmp.path()], &config).is_none());
 }

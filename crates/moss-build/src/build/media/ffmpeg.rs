@@ -11,7 +11,7 @@
 //! ```rust,ignore
 //! use moss::build::media::ffmpeg::{FFmpegManager, VideoCompressionConfig};
 //!
-//! let ffmpeg = FFmpegManager::detect()?;
+//! let ffmpeg = FFmpegManager::find()?;
 //! let config = VideoCompressionConfig::default();
 //! ffmpeg.convert_to_mp4_with_config(Path::new("input.mov"), Path::new("output.mp4"), &config)?;
 //! ```
@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::build::assets::binary_resolver::{
@@ -368,7 +368,9 @@ pub fn get_moss_bin_dir() -> Result<PathBuf, String> {
 
 /// Returns a `BinaryConfig` for FFmpeg.
 ///
-/// Defines download sources for macOS (arm64, x64) and Windows (x64).
+/// Defines download sources for macOS (arm64, x64) and Windows (x64). The macOS
+/// builds are moss's own releases, built by the `ffmpeg-build` workflow and
+/// pinned to a version with a SHA-256 for each architecture.
 /// Linux users should install FFmpeg via their package manager since
 /// the Linux distribution uses tar.xz which is not supported by `binary_resolver`.
 pub fn ffmpeg_binary_config() -> BinaryConfig {
@@ -384,10 +386,8 @@ pub fn ffmpeg_binary_config() -> BinaryConfig {
                 "darwin-arm64".to_string(),
                 BinarySource {
                     github: None,
-                    direct_url: Some(
-                        "https://evermeet.cx/ffmpeg/getrelease/zip".to_string(),
-                    ),
-                    sha256: None,
+                    direct_url: Some("https://github.com/Symbiosis-Lab/moss/releases/download/ffmpeg-7.1.5-moss.1/ffmpeg-macos-arm64.zip".to_string()),
+                    sha256: Some("e92f5ba2a8138afeda79c3d82f3c3024f5bfda0f765554d8e92945d4cc4e0039".to_string()),
                     archive_format: Some(ArchiveFormat::Zip),
                 },
             ),
@@ -395,10 +395,8 @@ pub fn ffmpeg_binary_config() -> BinaryConfig {
                 "darwin-x64".to_string(),
                 BinarySource {
                     github: None,
-                    direct_url: Some(
-                        "https://evermeet.cx/ffmpeg/getrelease/zip".to_string(),
-                    ),
-                    sha256: None,
+                    direct_url: Some("https://github.com/Symbiosis-Lab/moss/releases/download/ffmpeg-7.1.5-moss.1/ffmpeg-macos-x86_64.zip".to_string()),
+                    sha256: Some("9db13e87646b56cffb75a1779b50a29d87828b98e1b7a449694eba3ece0f3d8b".to_string()),
                     archive_format: Some(ArchiveFormat::Zip),
                 },
             ),
@@ -429,10 +427,10 @@ pub fn ffmpeg_binary_config() -> BinaryConfig {
 /// ffprobe ships from the same ffmpeg project but is distributed as its own
 /// download. moss must own provisioning it separately: assuming a sibling next
 /// to the ffmpeg binary is the root cause of a real site's video 404s — the
-/// macOS evermeet `getrelease/zip` contains ffmpeg ONLY, so the derived ffprobe
+/// macOS ffmpeg archive contains ffmpeg ONLY, so the derived ffprobe
 /// path did not exist and conversion failed with `Failed to run ffprobe`.
 ///
-/// - macOS: evermeet serves ffprobe as its own single-binary zip.
+/// - macOS: moss's pinned release ships ffprobe as its own single-binary zip.
 /// - Windows: the gyan "essentials" zip bundles both ffmpeg.exe and ffprobe.exe;
 ///   the resolver's zip extractor selects `ffprobe.exe` by the config `name`.
 /// - Linux: omitted (package managers install both binaries co-located).
@@ -449,10 +447,8 @@ pub fn ffprobe_binary_config() -> BinaryConfig {
                 "darwin-arm64".to_string(),
                 BinarySource {
                     github: None,
-                    direct_url: Some(
-                        "https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip".to_string(),
-                    ),
-                    sha256: None,
+                    direct_url: Some("https://github.com/Symbiosis-Lab/moss/releases/download/ffmpeg-7.1.5-moss.1/ffprobe-macos-arm64.zip".to_string()),
+                    sha256: Some("9a84899a65c2735e43d27042c2cf88f708310026eb88dadb3d2ff89b67e1512f".to_string()),
                     archive_format: Some(ArchiveFormat::Zip),
                 },
             ),
@@ -460,10 +456,8 @@ pub fn ffprobe_binary_config() -> BinaryConfig {
                 "darwin-x64".to_string(),
                 BinarySource {
                     github: None,
-                    direct_url: Some(
-                        "https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip".to_string(),
-                    ),
-                    sha256: None,
+                    direct_url: Some("https://github.com/Symbiosis-Lab/moss/releases/download/ffmpeg-7.1.5-moss.1/ffprobe-macos-x86_64.zip".to_string()),
+                    sha256: Some("18ea144dc8d313495a8714f6fd0657c535506245957fb9a6da3172c8fbc480f1".to_string()),
                     archive_format: Some(ArchiveFormat::Zip),
                 },
             ),
@@ -505,8 +499,8 @@ fn ffprobe_filename() -> &'static str {
 /// 1. If `ffmpeg_bin_path` is absolute, the sibling `ffprobe` beside it — covers
 ///    Homebrew/system installs and a `~/.moss/bin` cache that already holds both.
 /// 2. Otherwise (bare name from PATH, or no sibling), the shared binary
-///    resolver: system PATH → `~/.moss/bin` cache → download from evermeet
-///    (macOS) / gyan (Windows) via [`ffprobe_binary_config`].
+///    resolver: system PATH → install directories → `~/.moss/bin` cache. It
+///    never downloads; a missing ffprobe is an error.
 fn resolve_ffprobe_path(ffmpeg_bin_path: &str) -> Result<String, String> {
     let ffmpeg = Path::new(ffmpeg_bin_path);
     if ffmpeg.is_absolute() {
@@ -515,7 +509,7 @@ fn resolve_ffprobe_path(ffmpeg_bin_path: &str) -> Result<String, String> {
             return Ok(sibling.to_string_lossy().into_owned());
         }
     }
-    let resolution = resolve_binary(&ffprobe_binary_config(), None, true, None)?;
+    let resolution = resolve_binary(&ffprobe_binary_config(), None)?;
     Ok(resolution.path)
 }
 
@@ -1037,9 +1031,9 @@ pub struct FFmpegManager {
     /// Path to the ffprobe binary, resolved lazily on first probe and cached.
     ///
     /// ffprobe is a SEPARATE binary from ffmpeg and is NOT included in moss's
-    /// downloaded ffmpeg (evermeet/gyan), so it cannot be assumed to sit beside
-    /// every ffmpeg. Resolved on demand via [`resolve_ffprobe_path`] (which may
-    /// download it) and cached here. `OnceLock` (not `Cell`/`OnceCell`) because
+    /// downloaded ffmpeg (moss's pinned macOS build, or gyan on Windows), so it cannot be assumed to sit beside
+    /// every ffmpeg. Resolved on demand via [`resolve_ffprobe_path`] and cached
+    /// here. `OnceLock` (not `Cell`/`OnceCell`) because
     /// a manager is shared by reference across the background conversion threads.
     ffprobe: OnceLock<String>,
 }
@@ -1059,26 +1053,13 @@ impl FFmpegManager {
         &self.bin_path
     }
 
-    /// Returns the path to the ffprobe binary, resolving (and downloading if
-    /// necessary) on first use and caching the result.
+    /// Returns the path to the ffprobe binary, resolving it on first use and
+    /// caching the result.
     ///
     /// See [`resolve_ffprobe_path`] for the resolution order. ffprobe is owned
     /// and provisioned by moss separately from ffmpeg — never assumed to be a
     /// sibling of the ffmpeg binary.
     fn ffprobe_path(&self) -> Result<PathBuf, String> {
-        if let Some(p) = self.ffprobe.get() {
-            return Ok(PathBuf::from(p));
-        }
-        // Serialize the first-time resolution across threads. The video pipeline
-        // converts several videos concurrently (encode semaphore), all sharing
-        // one FFmpegManager; without this lock each would independently call
-        // resolve_binary and race the ffprobe DOWNLOAD — and the resolver writes
-        // the single-file zip artifact to its final cache path non-atomically,
-        // so concurrent writers could corrupt ~/.moss/bin/ffprobe. The lock makes
-        // exactly one thread download; the rest hit the cache it just populated.
-        static RESOLVE_LOCK: Mutex<()> = Mutex::new(());
-        let _guard = RESOLVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Another thread may have resolved while we waited on the lock.
         if let Some(p) = self.ffprobe.get() {
             return Ok(PathBuf::from(p));
         }
@@ -1096,51 +1077,19 @@ impl FFmpegManager {
         Self::new(path)
     }
 
-    /// Gets FFmpeg from system PATH, cache, or downloads it.
+    /// Finds an installed FFmpeg without downloading one.
     ///
-    /// Delegates to the unified binary resolver which tries in order:
-    /// 1. System FFmpeg (in PATH)
-    /// 2. Previously downloaded FFmpeg (~/.moss/bin/ffmpeg)
-    /// 3. Downloads FFmpeg to ~/.moss/bin/
+    /// Delegates to the binary resolver, which searches the configured path,
+    /// the system PATH, the standard install directories and `~/.moss/bin/`.
     ///
     /// # Returns
     /// * `Ok(FFmpegManager)` - Ready to convert videos
-    /// * `Err(String)` - FFmpeg unavailable and download failed
-    pub fn get_or_download(
-        on_progress: Option<&crate::build::assets::download::DownloadProgress>,
-    ) -> Result<Self, String> {
+    /// * `Err(String)` - FFmpeg is not installed
+    pub fn find() -> Result<Self, String> {
         let config = ffmpeg_binary_config();
         let resolution =
-            crate::build::assets::binary_resolver::resolve_binary(&config, None, true, on_progress)?;
+            crate::build::assets::binary_resolver::resolve_binary(&config, None)?;
         Ok(Self::new(resolution.path))
-    }
-
-    /// Detects FFmpeg in the system PATH.
-    ///
-    /// Returns an FFmpegManager if ffmpeg is found, otherwise an error.
-    #[allow(dead_code)]
-    pub fn detect() -> Result<Self, String> {
-        // Try to find ffmpeg in PATH
-        let ffmpeg_path = if cfg!(target_os = "windows") {
-            "ffmpeg.exe"
-        } else {
-            "ffmpeg"
-        };
-
-        // Verify ffmpeg is available
-        let output = background_command(Path::new(ffmpeg_path))
-            .arg("-version")
-            .output()
-            .map_err(|_| {
-                "FFmpeg not found in PATH. Please install FFmpeg to enable video conversion."
-                    .to_string()
-            })?;
-
-        if !output.status.success() {
-            return Err("FFmpeg found but failed to execute".to_string());
-        }
-
-        Ok(Self::new(ffmpeg_path.to_string()))
     }
 
     /// Encodes a video into moss's single web rendition.

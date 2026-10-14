@@ -61,6 +61,27 @@ pub enum AppOp {
     SignIn,
     /// Re-run a DNS check for a custom domain.
     RecheckDns,
+    /// Download a command-line tool moss needs, after the user asked for it; `args` is `{"tool": "ffmpeg"|"git"}`.
+    DownloadTool,
+}
+
+impl Action {
+    /// The command line a CLI user can type to take this action, when there
+    /// is one. The app runs `DownloadTool` from its button; the CLI prints
+    /// the matching `moss` command instead.
+    pub fn cli_hint(&self) -> Option<String> {
+        match self {
+            Action::InApp {
+                op: AppOp::DownloadTool,
+                args,
+                ..
+            } => Some(format!(
+                "run: moss tools download {}",
+                args.get("tool")?.as_str()?
+            )),
+            _ => None,
+        }
+    }
 }
 
 /// The recovery affordance for an advisory, expressed as data (no rendering
@@ -352,5 +373,29 @@ mod tests {
             should_warn_advisory_once("videos/clip.mov", "size grew past a new cap", &seen),
             "a changed `what` on the same path must still warn"
         );
+    }
+}
+
+#[cfg(test)]
+mod cli_hint_tests {
+    use super::*;
+
+    #[test]
+    fn download_tool_action_prints_the_moss_command() {
+        let action = Action::InApp {
+            op: AppOp::DownloadTool,
+            args: serde_json::json!({ "tool": "ffmpeg" }),
+            label: "Download FFmpeg".into(),
+        };
+        assert_eq!(
+            action.cli_hint().as_deref(),
+            Some("run: moss tools download ffmpeg")
+        );
+        let other = Action::InApp {
+            op: AppOp::RecheckDns,
+            args: serde_json::Value::Null,
+            label: "Check".into(),
+        };
+        assert_eq!(other.cli_hint(), None);
     }
 }

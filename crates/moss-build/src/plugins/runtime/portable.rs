@@ -702,27 +702,19 @@ pub fn report_plugin_task_lifecycle_with_descriptor(
 
 
 // ============================================================================
-// Git binary resolution (headless: `on_progress: None` skips the app's
-// download-progress events; the resolver itself is build-tree code)
+// Git binary resolution (find-only; the resolver itself is build-tree code)
 // ============================================================================
 
 use crate::build::assets::binary_resolver::resolve_binary;
-use crate::build::assets::download::DownloadProgress;
 use crate::build::assets::git::git_binary_config;
 
-/// Resolve the path to a usable git binary, reporting download progress to
-/// `on_progress` (bytes downloaded, total if the server declared one).
+/// Finds a usable git binary already installed on this machine. Never
+/// downloads one: a plugin cannot start a download, so a missing git is an error.
 ///
-/// Shared body behind both seams. The progress sink is the ONLY thing the app
-/// was ever needed for here, so the headless path passes `None` and
-/// resolves the same binary — quietly.
-pub async fn resolve_git_path_impl(
-    on_progress: Option<std::sync::Arc<DownloadProgress>>,
-) -> Result<String, String> {
+/// Shared body behind both seams.
+pub async fn resolve_git_path_impl() -> Result<String, String> {
     let config = git_binary_config();
-    let result = tokio::task::spawn_blocking(move || {
-        resolve_binary(&config, None, true, on_progress.as_deref())
-    })
+    let result = tokio::task::spawn_blocking(move || resolve_binary(&config, None))
     .await
     .map_err(|e| format!("Task failed: {}", e))?;
 

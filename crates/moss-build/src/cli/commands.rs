@@ -71,6 +71,11 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
             description: "Render standalone Markdown documents from newline-delimited JSON on stdin. Each {id, source} request returns {id, html, css}; malformed requests return an error and do not stop later lines. Input is limited to 8 MiB per line. Raw HTML is preserved in the returned HTML and must be sanitized by the embedding application before displaying untrusted documents.",
         },
         CliCommandInfo {
+            name: "tools",
+            args: "download <ffmpeg|git>",
+            description: "Download a command-line tool moss needs, into moss's own cache (~/.moss/bin). Running it is the consent: moss downloads nothing else without asking. The download is checked against a pinned SHA-256 before it is used. Exits 0 when the tool is available, 1 when the download or check fails.",
+        },
+        CliCommandInfo {
             name: "root",
             args: "<path> --json",
             description: "Print the moss site that owns a path as {\"root\": string|null}. Uses the canonical .moss ownership check, stops at the home directory, and does not scan or change files.",
@@ -183,6 +188,7 @@ const EXAMPLE_LINES: &[(&str, &str)] = &[
     ("domain", "moss domain link ~/blog/ example.com # Link a custom domain (same path as the UI)"),
     ("env", "moss env staging ~/blog/             # Set the hosting environment to staging"),
     ("env", "moss env ~/blog/                     # Show the hosting environment"),
+    ("tools", "moss tools download ffmpeg         # Fetch FFmpeg so videos are optimized"),
     ("import", "moss import https://example.com/     # Mirror a site into the current directory"),
     ("import", "moss import https://blog.example.com/post/ ~/Sites/me/articles/"),
     ("import", "moss import --list urls.txt ~/Sites/me/articles/"),

@@ -17,6 +17,7 @@ pub mod list;
 // `env` reads and writes the environment through `vault::config`, the one
 // config writer both binaries share.
 pub mod env;
+pub mod tools;
 // `rename` is the editor's rename-with-refs from the terminal; its whole body
 // is `editor::ref_scan`, which crossed with it.
 pub mod rename;
