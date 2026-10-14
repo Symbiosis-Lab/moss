@@ -55,7 +55,7 @@ pub trait AppHost: Send + Sync {
     /// panel after the plugin instead of after the URL it happened to open.
     async fn open_action_panel(
         &self,
-        url: String,
+        url: Option<String>,
         title: Option<String>,
         below_titlebar: bool,
         plugin: Option<String>,

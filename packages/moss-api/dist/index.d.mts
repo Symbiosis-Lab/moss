@@ -883,9 +883,14 @@ interface BrowserHandle {
 /**
  * Open a URL in the action panel
  *
+ * With a URL, the panel opens (or navigates in place) to that page. With no URL,
+ * the panel opens in its loading state, showing the app's own loader, until a
+ * later `openBrowser(url)` call loads a page. The returned handle is the same
+ * either way.
+ *
  * Returns a BrowserHandle that can be used to detect when the window is closed.
  *
- * @param url - The URL to open
+ * @param url - The URL to open. Omit it to open the panel in its loading state.
  * @returns BrowserHandle with a `closed` promise
  *
  * @example
@@ -904,7 +909,7 @@ interface BrowserHandle {
  * ```
  * @category Browser
  */
-declare function openBrowser(url: string): Promise<BrowserHandle>;
+declare function openBrowser(url?: string): Promise<BrowserHandle>;
 /**
  * Close the action panel
  * @category Browser

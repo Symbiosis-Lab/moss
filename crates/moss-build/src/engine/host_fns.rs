@@ -524,7 +524,12 @@ async fn dispatch_command_core(
         }
         "open_action_panel" => {
             let app = need_app(&host, "open_action_panel")?;
-            let url = req_str(&args, "url")?;
+            // `url: null` (openBrowser() with no page) and a missing key both
+            // mean "open the panel in its loading state".
+            let url = args.get("url").filter(|v| !v.is_null())
+                .map(|v| v.as_str().map(String::from)
+                    .ok_or_else(|| "'url' must be a string or null".to_string()))
+                .transpose()?;
             let title = args.get("title").and_then(|v| v.as_str()).map(String::from);
             let below = args.get("belowTitlebar").and_then(|v| v.as_bool()).unwrap_or(true);
             app.open_action_panel(url, title, below, host.plugin.map(String::from)).await?;
@@ -1422,6 +1427,105 @@ mod tests {
         assert_eq!(p.binary_path, "echo");
     }
 
+    /// Stands in for the desktop seam and records the `url` that
+    /// `open_action_panel` receives: `None` for "no page", `Some` for a page.
+    #[derive(Default)]
+    struct PanelRecorder(std::sync::Mutex<Option<Option<String>>>);
+
+    #[async_trait::async_trait]
+    impl crate::engine::app_host::AppHost for PanelRecorder {
+        async fn get_plugin_cookies(&self, _: &str, _: &str) -> std::result::Result<String, String> { unreachable!() }
+        async fn set_plugin_cookies(&self, _: &str, _: &str, _: serde_json::Value) -> std::result::Result<(), String> { unreachable!() }
+        async fn clear_plugin_cookies(&self, _: &str, _: &str) -> std::result::Result<(), String> { unreachable!() }
+        async fn open_action_panel(&self, url: Option<String>, _: Option<String>, _: bool, _: Option<String>) -> std::result::Result<(), String> {
+            *self.0.lock().unwrap() = Some(url);
+            Ok(())
+        }
+        async fn set_action_panel_html(&self, _: String, _: Option<String>, _: Option<String>) -> std::result::Result<(), String> { unreachable!() }
+        async fn close_action_panel(&self) -> std::result::Result<(), String> { unreachable!() }
+        async fn open_system_browser(&self, _: String) -> std::result::Result<(), String> { unreachable!() }
+        async fn return_to_editor(&self) -> std::result::Result<(), String> { unreachable!() }
+        async fn prompt_credential(&self, _: &str, _: &str, _: &str, _: Option<String>) -> std::result::Result<Option<String>, String> { unreachable!() }
+        fn listen(&self, _: String, _: Box<dyn Fn(&str) + Send + Sync + 'static>) -> crate::engine::app_host::ListenerId { unreachable!() }
+        fn unlisten(&self, _: crate::engine::app_host::ListenerId) { unreachable!() }
+        fn emit_plugin_event(&self, _: &str, _: Option<String>) { unreachable!() }
+    }
+
+    /// Runs a plugin bundle whose only action is one `open_action_panel` invoke
+    /// with `invoke_args` as its argument object, and returns what the desktop
+    /// seam received.
+    async fn open_panel_url_from_bundle(invoke_args: &str) -> Option<Option<String>> {
+        let desk = std::sync::Arc::new(PanelRecorder::default());
+        let (engine, mut dispatch_rx) = crate::engine::QuickJsEngine::new(None);
+        let desk2 = desk.clone();
+        tokio::spawn(async move {
+            while let Some(req) = dispatch_rx.recv().await {
+                let host = EngineHost {
+                    app: Some(desk2.as_ref()),
+                    state: None,
+                    project_path: "/tmp/none",
+                    plugin: req.plugin.as_deref(),
+                    declared: None,
+                };
+                let r = dispatch_command_core(host, &req.cmd, &req.args_json).await;
+                let _ = req.reply.send(r);
+            }
+        });
+        let bundle = format!(
+            r#""use strict"; var P = (() => ({{
+                async process() {{
+                    await globalThis.__TAURI__.core.invoke('open_action_panel', {invoke_args});
+                    return {{ ok: true }};
+                }}
+            }}))();"#
+        );
+        engine
+            .dispatch_hook_raw("p", &bundle, "P", "process", "{}", "", "")
+            .await
+            .expect("bundle must run");
+        engine.shutdown().await;
+        let got = desk.0.lock().unwrap().clone();
+        got
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn plugin_open_action_panel_with_null_url_reaches_the_seam_as_none() {
+        let got = open_panel_url_from_bundle("{ url: null, belowTitlebar: true }").await;
+        assert_eq!(got, Some(None), "null url must arrive as None");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn plugin_open_action_panel_without_url_key_reaches_the_seam_as_none() {
+        let got = open_panel_url_from_bundle("{ belowTitlebar: true }").await;
+        assert_eq!(got, Some(None), "missing url must arrive as None");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn open_action_panel_refuses_a_non_string_url_without_opening() {
+        let desk = PanelRecorder::default();
+        let host = EngineHost {
+            app: Some(&desk),
+            state: None,
+            project_path: "/tmp/none",
+            plugin: Some("p"),
+            declared: None,
+        };
+        let err = dispatch_command_core(host, "open_action_panel", r#"{"url":42}"#)
+            .await
+            .expect_err("a numeric url must be refused");
+        assert!(err.contains("must be a string or null"), "got: {err}");
+        assert_eq!(*desk.0.lock().unwrap(), None, "the panel must not open");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn plugin_open_action_panel_with_url_string_reaches_the_seam_as_some() {
+        let got = open_panel_url_from_bundle(
+            "{ url: 'https://example.com/login', belowTitlebar: true }",
+        )
+        .await;
+        assert_eq!(got, Some(Some("https://example.com/login".to_string())));
+    }
+
     /// B.8c: app-needing arms via stub return structured Err mentioning "requires an
     /// app handle".
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1541,7 +1645,7 @@ mod tests {
             async fn get_plugin_cookies(&self, _: &str, _: &str) -> std::result::Result<String, String> { unreachable!() }
             async fn set_plugin_cookies(&self, _: &str, _: &str, _: serde_json::Value) -> std::result::Result<(), String> { unreachable!() }
             async fn clear_plugin_cookies(&self, _: &str, _: &str) -> std::result::Result<(), String> { unreachable!() }
-            async fn open_action_panel(&self, _: String, _: Option<String>, _: bool, _: Option<String>) -> std::result::Result<(), String> { unreachable!() }
+            async fn open_action_panel(&self, _: Option<String>, _: Option<String>, _: bool, _: Option<String>) -> std::result::Result<(), String> { unreachable!() }
             async fn set_action_panel_html(&self, _: String, _: Option<String>, _: Option<String>) -> std::result::Result<(), String> { unreachable!() }
             async fn close_action_panel(&self) -> std::result::Result<(), String> { unreachable!() }
             async fn open_system_browser(&self, _: String) -> std::result::Result<(), String> { unreachable!() }

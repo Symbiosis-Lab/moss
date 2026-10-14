@@ -34,9 +34,9 @@ with fractions. Routers and renderers MAY use this to choose between
 optional hook?: PluginHook;
 ```
 
-Hook the task belongs to. Defaults to "import" — the most common
-onboarding case. Plugins should pass an explicit hook for non-import
-work (e.g., a syndicator passes "syndicate").
+Hook the task belongs to. Defaults to "process" — work done on the
+site's files before generation. Plugins should pass an explicit hook for
+anything else (e.g., a syndicator passes "syndicate").
 
 ***
 

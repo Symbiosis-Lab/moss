@@ -43,6 +43,19 @@ describe("Browser Utilities", () => {
       expect(handle).toBeDefined();
     });
 
+    it("opens the panel in its loading state when called without a URL", async () => {
+      const handle = await openBrowser();
+      expect(mockInvoke).toHaveBeenCalledWith("open_action_panel", {
+        url: null,
+        belowTitlebar: true,
+      });
+      expect(handle).toHaveProperty("closed");
+
+      const eventHandler = mockListen.mock.calls[0][1];
+      eventHandler({ payload: { reason: { type: "user" } } });
+      expect(await handle.closed).toEqual({ type: "user" });
+    });
+
     it("returns BrowserHandle with closed promise", async () => {
       const handle = await openBrowser("https://example.com");
 

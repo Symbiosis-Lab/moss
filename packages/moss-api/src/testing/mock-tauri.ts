@@ -436,8 +436,8 @@ export function createMockSecretStorage(): MockSecretStorage {
  * Tracks browser open/close calls for testing
  */
 export interface MockBrowserTracker {
-  /** URLs that were opened in action panel */
-  openedUrls: string[];
+  /** URLs opened in the action panel; null when it was opened in its loading state */
+  openedUrls: (string | null)[];
   /** URLs that were opened in system browser */
   systemBrowserUrls: string[];
   /** HTML content passed to openBrowserWithHtml */
@@ -451,7 +451,7 @@ export interface MockBrowserTracker {
 }
 
 export function createMockBrowserTracker(): MockBrowserTracker {
-  const openedUrls: string[] = [];
+  const openedUrls: (string | null)[] = [];
   const systemBrowserUrls: string[] = [];
   const htmlContent: string[] = [];
   let closeCount = 0;
@@ -999,7 +999,7 @@ export function setupMockTauri(options?: SetupMockTauriOptions): MockTauriContex
       }
 
       case "open_action_panel": {
-        const url = payload?.url as string;
+        const url = (payload?.url as string | null | undefined) ?? null;
         browserTracker.openedUrls.push(url);
         (browserTracker as { isOpen: boolean }).isOpen = true;
         return null;
