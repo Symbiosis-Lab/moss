@@ -149,6 +149,8 @@ jobs:
           EOF
           )
           gh release create "$TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
             --title "FFmpeg $VERSION for moss" \
             --notes "$NOTES" \
             --latest=false
