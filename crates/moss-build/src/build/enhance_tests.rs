@@ -219,13 +219,28 @@ fn strip_empty_footer_removes_a_footer_with_nothing_to_show() {
     // subscribe form: two unresolved slot markers, sentinel-bounded, and
     // nothing else.
     let slots = ResolvedSlots::empty();
-    let html = "<body><!-- moss:footer --><footer class=\"container\">\n        <!-- slot:footer-left -->\n        <!-- slot:footer-end -->\n</footer><!-- /moss:footer -->\n\n    <div class=\"moss-colophon\">mark</div></body>";
+    let html = "<body><!-- moss:footer --><footer class=\"container\">\n        <!-- slot:footer-left -->\n        <!-- slot:footer-end -->\n</footer><!-- /moss:footer -->\n\n    <!-- moss:colophon --><div class=\"moss-colophon\">mark</div><!-- /moss:colophon --></body>";
     let out = inject_slots(html, &slots, "index.html");
     assert!(!out.contains("<footer"), "an empty footer must not render at all: {out}");
     assert!(
-        out.contains("moss-colophon"),
-        "the colophon sits outside <footer> in the template and must survive: {out}"
+        out.contains("<div class=\"moss-colophon\">mark</div>") && !out.contains("moss:colophon"),
+        "with no footer the colophon stays where the template put it, bounds erased: {out}"
     );
+}
+
+#[test]
+fn colophon_moves_into_a_kept_footer_as_its_last_child() {
+    // `data-source-none` is added to the colophon's opening tag in preview
+    // mode before slot injection; the move must carry it along.
+    let html = "<main>x</main>\n\n    <!-- moss:footer --><!-- footer:has-content --><footer class=\"container\">\n        <!-- slot:footer-left --><p class=\"footer-default\">links</p>\n        <!-- slot:footer-end -->\n</footer><!-- /moss:footer -->\n\n    <!-- moss:colophon --><div class=\"moss-colophon\" data-source-none>mark</div><!-- /moss:colophon -->\n\n    <script></script>";
+    let out = inject_slots(html, &ResolvedSlots::empty(), "index.html");
+    let footer_end = out.find("</footer>").expect("footer kept");
+    let colophon = out.find("<div class=\"moss-colophon\" data-source-none>mark</div>").expect("colophon survives with its attribute");
+    assert!(out.find("<footer").unwrap() < colophon && colophon < footer_end, "colophon inside footer: {out}");
+    assert!(out[colophon..footer_end].trim_end().ends_with("</div>"), "colophon is the last child: {out}");
+    assert_eq!(out.matches("moss-colophon").count(), 1, "moved, not copied: {out}");
+    assert!(!out.contains("moss:colophon") && !out.contains("moss:footer"), "bounds never ship: {out}");
+    assert!(out.ends_with("</footer>\n\n    <script></script>"), "the gap the colophon left is closed: {out}");
 }
 
 #[test]

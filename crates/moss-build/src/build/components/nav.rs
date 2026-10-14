@@ -14,8 +14,10 @@ use crate::i18n::link::TranslationLink;
 mod breadcrumb;
 /// The floating nav island. A child module for the same reason.
 mod island;
-/// `generate_footer`. A child module for the same reason as the two above.
-mod footer;
+/// `generate_footer`, and `strip_empty_footer`, which settles the footer it
+/// emits once slots are resolved. A child module for the same reason as the
+/// two above.
+pub(crate) mod footer;
 /// `[site].header` — see `HeaderMode`. Not a private-state module like the
 /// two above (nothing here reads `NavigationBuilder`'s privates), just a
 /// sibling kept close to its one reader.

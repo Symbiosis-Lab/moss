@@ -1042,6 +1042,35 @@ fn language_home_with_children_depth_all_lists_only_its_own_tree() {
     assert_homes_list_only_their_own_language("children_depth: all\n");
 }
 
+/// moss's colophon is the footer's last child, so a theme's footer layout can
+/// place the mark. Without a footer it stays after `</main>`.
+#[test]
+fn colophon_is_the_footers_last_child_when_the_page_has_a_footer() {
+    let (_cleanup, out) = build_inline_site(&[
+        (".moss/config.toml", "[site]\ndomain = \"example.com\"\n"),
+        ("index.md", "---\ntitle: Lantern Notes\n---\n\nHello.\n"),
+        ("footer.md", "Written by the quarry committee.\n"),
+    ]);
+    let html = fs::read_to_string(out.join("index.html")).expect("index.html");
+    let footer_start = html.find("<footer").expect("footer rendered");
+    let footer_end = html.find("</footer>").expect("footer closed");
+    let colophon = html.find("<div class=\"moss-colophon\"").expect("colophon rendered");
+    assert!(
+        footer_start < colophon && colophon < footer_end,
+        "the colophon must sit inside <footer>: {html}"
+    );
+    assert_eq!(html.matches("moss-colophon\"").count(), 1, "exactly one colophon");
+    let after_colophon = &html[colophon..footer_end];
+    assert!(
+        after_colophon.trim_end().ends_with("</div>"),
+        "the colophon is the footer's last child: {after_colophon}"
+    );
+    assert!(
+        html.find("Written by the quarry committee.").unwrap() < colophon,
+        "authored footer content comes before the colophon"
+    );
+}
+
 #[test]
 fn snapshot_flat_site() {
     run_snapshot_test("flat-site");

@@ -142,3 +142,70 @@ impl<'a> NavigationBuilder<'a> {
         )
     }
 }
+
+/// Remove the whole chrome `<footer>` element when it has nothing left to
+/// show; otherwise strip the bookkeeping markers back out so shipped HTML
+/// carries no trace of them. The element is found by its own
+/// `<!-- moss:footer -->` / `<!-- /moss:footer -->` bounds — fixed,
+/// code-controlled tokens, the same trust model `<!-- slot:NAME -->` already
+/// uses — never by searching for a literal `<footer` tag, which an author's
+/// own raw-HTML `<footer>` elsewhere on the page (moss passes body HTML
+/// through verbatim) could also match.
+///
+/// The keep/drop decision itself is three known facts, never a scan of
+/// `html` for visible content: `footer_left_has_content` /
+/// `footer_end_has_content` (from `inject_slots`'s own `slots.get_html`
+/// calls above — did `footer.md`/a `slot: footer-left` page, or the
+/// auto-injected subscribe form/a plugin widget, resolve to anything this
+/// pass), and the `<!-- footer:has-content -->` marker, the render-time
+/// third fact: whether `generate_footer` emitted any default links or a feed
+/// link, which is baked into `html` already and never re-resolved here — the
+/// marker is only how it survives the render → slot-injection boundary.
+///
+/// moss's colophon is bounded in the template by its own
+/// `<!-- moss:colophon -->` / `<!-- /moss:colophon -->` tokens. A kept footer
+/// takes it in as its last child, so a theme's footer layout (a band
+/// background, a closing picture) can place the mark; a stripped footer, or
+/// no footer at all, leaves it where the template put it. Its bounds are
+/// erased either way.
+pub(crate) fn strip_empty_footer(html: String, footer_left_has_content: bool, footer_end_has_content: bool) -> String {
+    const OPEN: &str = "<!-- moss:footer -->";
+    const HAS_CONTENT: &str = "<!-- footer:has-content -->";
+    const CLOSE: &str = "<!-- /moss:footer -->";
+    const COLOPHON_OPEN: &str = "<!-- moss:colophon -->";
+    const COLOPHON_CLOSE: &str = "<!-- /moss:colophon -->";
+
+    let erase_colophon_bounds = |s: String| s.replacen(COLOPHON_OPEN, "", 1).replacen(COLOPHON_CLOSE, "", 1);
+
+    let Some(open_start) = html.find(OPEN) else {
+        return erase_colophon_bounds(html);
+    };
+    let Some(close_rel) = html[open_start..].find(CLOSE) else {
+        return erase_colophon_bounds(html);
+    };
+    let close_end = open_start + close_rel + CLOSE.len();
+
+    let region = &html[open_start..close_end];
+    let has_default_content = region.contains(HAS_CONTENT);
+
+    if !(footer_left_has_content || footer_end_has_content || has_default_content) {
+        return erase_colophon_bounds(format!("{}{}", &html[..open_start], &html[close_end..]));
+    }
+
+    // Keep the element; erase the bookkeeping markers (each a plain
+    // substring removal — `HAS_CONTENT` is a no-op when absent) so the
+    // shipped bytes are exactly what `generate_footer` would have
+    // produced with no sentinels at all.
+    let mut kept = region.replacen(OPEN, "", 1).replacen(HAS_CONTENT, "", 1).replacen(CLOSE, "", 1);
+    let mut rest = html[close_end..].to_string();
+    if let (Some(c_open), Some(c_close), Some(at)) = (rest.find(COLOPHON_OPEN), rest.find(COLOPHON_CLOSE), kept.rfind("</footer>")) {
+        let c_end = c_close + COLOPHON_CLOSE.len();
+        if c_open < c_close {
+            kept.insert_str(at, &format!("    {}\n", &rest[c_open + COLOPHON_OPEN.len()..c_close]));
+            // The blank gap the colophon sat in goes with it.
+            let gap_start = if rest[..c_open].trim().is_empty() { 0 } else { c_open };
+            rest.replace_range(gap_start..c_end, "");
+        }
+    }
+    erase_colophon_bounds(format!("{}{}{}", &html[..open_start], kept, rest))
+}

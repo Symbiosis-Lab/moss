@@ -98,8 +98,8 @@ ${Array.from({ length: CARD_COUNT }, (_, i) => card(i)).join('\n')}
 </article>
 <nav class="moss-series-nav"><div class="moss-series-nav-links"><a href="#">上一篇</a></div></nav>
 </main>
-<footer class="container"><p>版權所有</p></footer>
-${colophon}
+<footer class="container"><p>版權所有</p>
+${colophon}</footer>
 </body></html>`;
 }
 
@@ -350,9 +350,12 @@ test.describe('vertical-rl folder page', () => {
     // its container grew with it.
     expect(cards.width).toBeGreaterThan(CARD_COUNT * 40);
     expect(main.left).toBeLessThanOrEqual(cards.left + 1);
-    // The footer starts after the last card, the colophon after the footer.
+    // The footer starts after the last card; the colophon is the footer's
+    // last child, so it lies inside the footer and past its text.
     expect(footer.right).toBeLessThanOrEqual(lastCard.left);
-    expect(colophon.right).toBeLessThanOrEqual(footer.left);
+    expect(colophon.right).toBeLessThanOrEqual(footer.right + 1);
+    expect(colophon.left).toBeGreaterThanOrEqual(footer.left - 1);
+    expect(colophon.right).toBeLessThanOrEqual((await rect(page, 'footer p')).left + 1);
   });
 
   test('the body sits at the golden-section head margin (天 smaller than 地), on a normal and a tall viewport', async ({ page }) => {

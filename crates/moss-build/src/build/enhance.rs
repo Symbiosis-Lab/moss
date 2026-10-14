@@ -18,6 +18,7 @@
 
 use crate::build::lifecycle::cas_heal::{Placement, StagedLinks};
 use crate::build::outcome::{io_stop, BuildStopped};
+use crate::build::components::nav::footer::strip_empty_footer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -247,55 +248,6 @@ pub fn inject_slots(html: &str, slots: &ResolvedSlots, page_path: &str) -> Strin
         }
     }
     strip_empty_footer(result, footer_left_has_content, footer_end_has_content)
-}
-
-/// Remove the whole chrome `<footer>` element when it has nothing left to
-/// show; otherwise strip the bookkeeping markers back out so shipped HTML
-/// carries no trace of them. The element is found by its own
-/// `<!-- moss:footer -->` / `<!-- /moss:footer -->` bounds — fixed,
-/// code-controlled tokens, the same trust model `<!-- slot:NAME -->` already
-/// uses — never by searching for a literal `<footer` tag, which an author's
-/// own raw-HTML `<footer>` elsewhere on the page (moss passes body HTML
-/// through verbatim) could also match.
-///
-/// The keep/drop decision itself is three known facts, never a scan of
-/// `html` for visible content: `footer_left_has_content` /
-/// `footer_end_has_content` (from `inject_slots`'s own `slots.get_html`
-/// calls above — did `footer.md`/a `slot: footer-left` page, or the
-/// auto-injected subscribe form/a plugin widget, resolve to anything this
-/// pass), and the `<!-- footer:has-content -->` marker, the render-time
-/// third fact: whether `generate_footer` emitted any default links or a feed
-/// link, which is baked into `html` already and never re-resolved here — the
-/// marker is only how it survives the render → slot-injection boundary.
-///
-/// moss's colophon sits as `<footer>`'s own template sibling, not inside it,
-/// so it is untouched either way.
-fn strip_empty_footer(html: String, footer_left_has_content: bool, footer_end_has_content: bool) -> String {
-    const OPEN: &str = "<!-- moss:footer -->";
-    const HAS_CONTENT: &str = "<!-- footer:has-content -->";
-    const CLOSE: &str = "<!-- /moss:footer -->";
-
-    let Some(open_start) = html.find(OPEN) else {
-        return html;
-    };
-    let Some(close_rel) = html[open_start..].find(CLOSE) else {
-        return html;
-    };
-    let close_end = open_start + close_rel + CLOSE.len();
-
-    let region = &html[open_start..close_end];
-    let has_default_content = region.contains(HAS_CONTENT);
-
-    if footer_left_has_content || footer_end_has_content || has_default_content {
-        // Keep the element; erase the bookkeeping markers (each a plain
-        // substring removal — `HAS_CONTENT` is a no-op when absent) so the
-        // shipped bytes are exactly what `generate_footer` would have
-        // produced with no sentinels at all.
-        let kept = region.replacen(OPEN, "", 1).replacen(HAS_CONTENT, "", 1).replacen(CLOSE, "", 1);
-        return format!("{}{}{}", &html[..open_start], kept, &html[close_end..]);
-    }
-
-    format!("{}{}", &html[..open_start], &html[close_end..])
 }
 
 /// Known slot markers still present in HTML that is about to ship.

@@ -974,7 +974,10 @@ footer.container {
      correct subsumed both patches; do not reintroduce padding-bottom on
      main to "fix" spacing for some new trailing element. */
   margin-block: 5rem 0;
-  padding-block: 0 var(--moss-space-2xl);
+  /* The footer closes on moss's colophon, so what used to be its bottom
+     padding is the colophon's top margin (`.moss-colophon`). */
+  padding-block: 0;
+  --moss-footer-end: var(--moss-space-2xl);
   color: var(--moss-color-muted);
   text-align: start;
 }
@@ -1062,7 +1065,8 @@ footer.container:has(> .moss-subscribe) {
  * shifts the link list off the start edge. `flex-basis: 100%` claims a full
  * row so the divider spans the width and the link list + form wrap below it.
  */
-footer.container:has(> .moss-subscribe)::before {
+footer.container:has(> .moss-subscribe)::before,
+footer.container:has(> .moss-subscribe) > .moss-colophon {
   flex-basis: 100%;
 }
 
@@ -1420,7 +1424,8 @@ footer.container:has(> .moss-subscribe)::before {
   footer.container a {
     position: relative;
   }
-  footer.container a::after {
+  /* The colophon's link carries its own padded hit area. */
+  footer.container a:where(:not(.moss-colophon a))::after {
     content: "";
     position: absolute;
     inset-block: -16px;
@@ -1586,12 +1591,15 @@ footer.container:has(> .moss-subscribe)::before {
   top: 0;
 }
 
-/* A stretched flex item of body: `text-align: center` centres the anchor on
-   the page's inline axis in both writing modes — across the page here, down
-   the content band under vertical-rl (the colophon column is as tall as the
-   band, so the mark sits at its middle). */
+/* The footer's last child, or on a page with no footer a stretched flex item
+   of body: `text-align: center` centres the anchor on the inline axis in both
+   writing modes — across the page here, down the content band under
+   vertical-rl (the colophon column is as tall as the band, so the mark sits
+   at its middle). */
 .moss-colophon {
   text-align: center;
+  /* Unset outside a footer, which makes this 0. */
+  margin-block-start: var(--moss-footer-end);
   padding-block: var(--moss-space-lg) var(--moss-space-xl);
 }
 
@@ -5324,7 +5332,7 @@ article a:where(:not(.moss-btn)):focus {
 
   footer.container {
     /* Tighter spacing on narrow viewports. */
-    padding-block-end: var(--moss-space-lg);
+    --moss-footer-end: var(--moss-space-lg);
   }
 
   .article-date {
