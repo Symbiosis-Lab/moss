@@ -221,6 +221,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Colour of the hairline under the header's navigation. Set it to `transparent` when `--moss-header-bg` gives the header a band, since the band's own edge already divides it from the page; the hairline would otherwise draw inside the band.",
     },
     CustomProp {
+        name: "--moss-footer-end",
+        owner: "footer.container",
+        default: "var(--moss-space-2xl)",
+        description: "The space at the very end of the page, below the footer's last content. moss's colophon (the \"Published with moss\" line) puts the same space above itself, and the footer keeps it when a theme hides the colophon. Set it to `0` when the footer ends on a picture that should touch the page end; the value is smaller on a phone.",
+    },
+    CustomProp {
         name: "--moss-bg",
         owner: "moss-card",
         default: "var(--moss-color-bg, #fff)",
