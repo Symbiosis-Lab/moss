@@ -177,8 +177,9 @@ An image followed on the next line by one italic line becomes a figure: the brac
 
 A folder embed takes comma-separated options after the `|` that follows the folder name, for example `![[Opera/|style:grid,limit:6,sort:date]]`. The options are `limit:N`; `sort:` one of `date`, `date-asc`, `weight`, `title`; `style:` one of `list`, `summary`, `grid`; `group:` `year` or `none`; `depth:all` (every descendant, not just the direct children), `covers:only` (only pages that have a cover) and `more:<folder>` (where the "More" link points). `style:list` is the compact dated index; `style:summary` is rows with covers and descriptions. A folder note can list its own folder as `![[<FolderName>/]]`: when the relative target is missing beside the note and starts with the note's own folder name, it is read from the note's parent folder, so `![[Opera/]]` in `work/Opera/Opera.md` lists `work/Opera/`. A path that starts with `/` names the folder from the site root, so it reads the same from any page: `![[/work/Opera/]]`.
 
-moss warns and you lose enhancement (LQIP, WebP encode, thumbnails, dimensions)
-if you use raw HTML tags for media that moss owns.
+moss warns and you lose enhancement (LQIP, WebP encode, thumbnails, dimensions) if you use raw HTML tags for media that moss owns.
+
+A picture that is only decoration, with nothing a reader needs to be told (a texture, a band of ornament, a faded page behind a heading), belongs in the theme, not in a page: put the file in `.moss/theme/` and paint it with CSS (`background` or `mask` on a moss selector or pseudo-element). An image embedded in a page is content, so it needs alt text, and `--strict` reports one without it. Giving decoration made-up alt text to quiet that report makes screen readers announce it.
 
 **Ambient loop video.** Add `|loop` to a video embed for a silent background
 loop — autoplays, no controls, respects `prefers-reduced-motion`:
