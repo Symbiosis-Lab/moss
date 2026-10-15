@@ -47,7 +47,7 @@ pub(super) fn select<'a>(
     let picked = picked.into_iter().filter(|d| host.is_none_or(|h| d.url_path != h.url_path));
     // `covers:only` is applied before sort and limit, so `limit` counts off
     // the covered set. A folder entry is covered when its own index page has a cover.
-    picked.filter(|d| !covers_only || d.cover.is_some()).collect()
+    picked.filter(|d| !covers_only || d.listing_cover().is_some()).collect()
 }
 
 /// A listing's pages in listing order, cut at the limit.

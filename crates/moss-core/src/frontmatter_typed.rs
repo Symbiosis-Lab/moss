@@ -332,7 +332,9 @@ pub struct FrontMatter {
     pub analytics: Option<AnalyticsConfig>,
     /// Site logo image path (rendered before site name in nav)
     pub logo: Option<String>,
-    /// Cover image URL for collection pages
+    /// Cover image URL for collection pages. `false` (read as the text
+    /// "false") says the page has no listing picture, not even its first one.
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub cover: Option<String>,
     /// Explicit cover type override: "image", "video", or "iframe"
     pub cover_type: Option<String>,

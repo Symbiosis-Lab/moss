@@ -98,6 +98,7 @@ All notable changes to moss will be documented here.
 
 ### Changed
 
+- A page with no `cover:` is now listed with its own first picture: its opening hero's picture, else the first figure, gallery picture or grid-cell picture in its body. Listing cards, grid cards and `covers:only` all see it. The picture is not drawn again on the page itself. A picture set inside a sentence, in a heading or a table, inside a link to another page, a vector or video, and a remote or `data:` address are not taken. Write `cover: false` to list a page without a picture, or `cover: file.jpg` to choose another. The share image follows the same rule: it also takes a gallery's first picture now, and no longer takes a picture set in a sentence, a heading or a table, inside a link to another page, or a vector.
 - On a page that is also a term's page (a person's own page that their name links to), the list of pages carrying the term now comes before a closing `## Sources` or `## References` section (`## Quellen`, and the Chinese equivalents) instead of after the whole body, so the sources stay at the foot of the page, in reading order as well as on screen. Any other page body is unchanged.
 - `moss import` turns a site builder's map block into a map with a directions link.
 - `moss import` lists, page by page, the embedded widgets it could not carry, instead of only counting them.

@@ -164,7 +164,7 @@ pub fn validate_frontmatter(
             }
             Some(value) => {
                 // Type check.
-                if !value_matches_def(value, def) {
+                if !value_matches_def(value, def) && !is_false_opt_out(name, value) {
                     diags.push(Diagnostic {
                         severity: Severity::Error,
                         message: format!(
@@ -282,6 +282,12 @@ pub fn validate_frontmatter(
     diags.extend(crate::event::validation::check_end_not_before_start(fm));
 
     diags
+}
+
+/// `cover: false` says the page has no listing picture. The field is a path, so
+/// the schema calls it a string; the build reads `false` as the opt-out.
+fn is_false_opt_out(name: &str, value: &serde_yaml::Value) -> bool {
+    name == "cover" && value.as_bool() == Some(false)
 }
 
 /// Check if a YAML value satisfies a field definition. For `OneOf` unions the

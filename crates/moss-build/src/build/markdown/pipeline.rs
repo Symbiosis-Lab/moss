@@ -1118,26 +1118,13 @@ pub fn process_markdown_file(
     //    only, no folder/non-image trailing slash) so the field stays
     //    byte-equivalent to today's `ParsedDocument.body_cover_path`.
     let body_cover_path: Option<String> =
-        moss_core::ast::find_first_block_image(&doc).and_then(|img| match img {
-            moss_core::ast::Inline::Image {
-                src: moss_core::ast::Url::Resolved(r),
-                ..
-            } => {
+        moss_core::ast::find_first_block_image(&doc).and_then(|url| match url {
+            moss_core::ast::Url::Resolved(r) => {
                 let href = &r.href;
                 if href.ends_with('/') {
                     return None;
                 }
-                let bare = href.split(&['#', '?'][..]).next().unwrap_or("");
-                let ext = bare.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-                let is_raster = matches!(
-                    ext.as_str(),
-                    "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "avif"
-                );
-                if is_raster {
-                    Some(href.clone())
-                } else {
-                    None
-                }
+                crate::build::page::cover::is_raster_picture(href).then(|| href.clone())
             }
             _ => None,
         });
@@ -1379,7 +1366,8 @@ pub fn process_markdown_file(
     //
     // Pipe-aware: split on | to separate path from display attrs, resolve
     // only the path part, then rejoin with attrs for downstream rendering.
-    let cover = frontmatter.cover.map(|c| {
+    let cover_opted_out = frontmatter.cover.as_deref().is_some_and(|c| c.trim() == "false");
+    let cover = frontmatter.cover.filter(|_| !cover_opted_out).map(|c| {
         let trimmed = c.trim();
         // Strip optional surrounding quotes. A lone `"` is not a quoted empty
         // string — `strip_prefix`/`strip_suffix` require two distinct quotes,
@@ -1447,6 +1435,10 @@ pub fn process_markdown_file(
         };
         resolved_path
     });
+
+    let card_cover = (!cover_opted_out)
+        .then(|| crate::build::page::cover::card_cover_from_page(hero_image_url.as_deref(), body_cover_path.as_deref()))
+        .flatten();
 
     // Extract page tree fields from frontmatter
     let nav = frontmatter.nav;
@@ -1546,6 +1538,7 @@ pub fn process_markdown_file(
         analytics,
         logo: frontmatter.logo,
         cover,
+        card_cover,
         cover_type: frontmatter.cover_type,
         nav,
         is_root_level,

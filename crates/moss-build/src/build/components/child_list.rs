@@ -408,7 +408,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
 
     // Split pipe-encoded cover to resolve only the path part. Rejoin with
     // attrs so downstream renderers can extract them.
-    let (cover, cover_path_for_type) = match doc.cover.as_deref() {
+    let (cover, cover_path_for_type) = match doc.listing_cover() {
         Some(c) => {
             let (path_part, attrs_str) = moss_core::media::split_pipe(c);
             let resolved = path_resolver.resolve_url(path_part);

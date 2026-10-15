@@ -13,6 +13,7 @@
 
 use super::document::Document;
 use super::node::{Block, Inline};
+use super::url::{Url, UrlKind};
 use super::shortcode::Shortcode;
 use super::visit::visit_blocks;
 use std::collections::HashMap;
@@ -148,24 +149,16 @@ pub fn images_without_text(doc: &Document) -> Vec<String> {
     out
 }
 
-/// Find the first `Inline::Image` reachable from the document's top-level
-/// block sequence.
+/// The source of the page's first content picture, or `None`.
 ///
-/// Search order (depth-first, document order):
-/// 1. `Block::Figure { image, .. }` — the promoted image-only paragraph.
-///    Direct match.
-/// 2. `Block::Paragraph(inlines)` — look for the first `Inline::Image`
-///    appearing in the paragraph (descending into nested
-///    Emphasis/Strong/Link children, so the first markdown-origin image is
-///    found regardless of inline wrapping).
-/// 3. `Block::Shortcode(_)` — descend into shortcode bodies (Grid cells,
-///    Hero overlay, Gallery items) in document order. Production's
-///    cover chain explicitly considers shortcode-borne images.
-/// 4. `Block::List`, `Block::BlockQuote`, `Block::Callout`, `Block::Table`
-///    — descend into their nested block sequences.
-/// 5. `Block::LinkCard` — descend into children.
+/// A content picture is one the author put on the page to be looked at: a
+/// figure, a picture standing alone in its paragraph, a picture in a grid
+/// cell, the first item of a gallery. Searched depth-first in document order
+/// through lists, quotes, callouts and shortcode bodies.
 ///
-/// Returns `None` if no image is found anywhere reachable.
+/// Not content pictures: an image set inside a sentence, heading or table
+/// cell (an icon or an emoji), and an image wrapped in a link to another page
+/// or to a page card (the page the link names owns that picture).
 ///
 /// # Render order, not source order
 ///
@@ -184,7 +177,7 @@ pub fn images_without_text(doc: &Document) -> Vec<String> {
 /// so it answers the case the definition arm below exists for — an image
 /// that lives *only* in a note is still the only image — without letting an
 /// endnote outrank the body.
-pub fn find_first_block_image(doc: &Document) -> Option<&Inline> {
+pub fn find_first_block_image(doc: &Document) -> Option<&Url> {
     // The renderer's identity decision, from the same lookup `is_hoisted`
     // uses — a first-sighting counter here diverged from it whenever a
     // label's first definition was NESTED inside another note (the pass-one
@@ -224,7 +217,7 @@ fn find_first_image_in_blocks<'a>(
     blocks: &'a [Block],
     notes: Notes,
     hoisted: &HashMap<String, usize>,
-) -> Option<&'a Inline> {
+) -> Option<&'a Url> {
     for block in blocks {
         if let Some(img) = find_first_image_in_block(block, notes, hoisted) {
             return Some(img);
@@ -237,14 +230,16 @@ fn find_first_image_in_block<'a>(
     block: &'a Block,
     notes: Notes,
     hoisted: &HashMap<String, usize>,
-) -> Option<&'a Inline> {
+) -> Option<&'a Url> {
     match block {
         // Direct hit: PR3's typed Figure variant.
-        Block::Figure { image, .. } => Some(image),
+        Block::Figure { image: Inline::Image { src, .. }, .. } => Some(src),
+        Block::Figure { .. } => None,
 
-        // Paragraphs may contain inline images (possibly nested inside
-        // emphasis/strong/link children — the inline walker descends).
-        Block::Paragraph(inlines) => find_first_image_in_inlines(inlines),
+        // An image-only paragraph is a figure that implicit-figure promotion
+        // did not wrap; one with prose around the image is an icon or emoji.
+        Block::Paragraph(inlines) if only_pictures(inlines) => find_first_image_in_inlines(inlines),
+        Block::Paragraph(_) => None,
 
         // List items, blockquotes, callouts, table cells: descend into
         // their nested block sequences. Same depth-first document-order
@@ -261,35 +256,19 @@ fn find_first_image_in_block<'a>(
         Block::DefinitionList(children) | Block::DefinitionDefinition(children) => {
             find_first_image_in_blocks(children, notes, hoisted)
         }
-        Block::DefinitionTitle(inlines) => find_first_image_in_inlines(inlines),
+        Block::DefinitionTitle(_) => None,
         Block::Callout { children, .. } => find_first_image_in_blocks(children, notes, hoisted),
-        Block::Table { header, rows, .. } => {
-            // Headers walked first (document order), then rows.
-            for cell in header {
-                if let Some(img) = find_first_image_in_inlines(cell) {
-                    return Some(img);
-                }
-            }
-            for row in rows {
-                for cell in row {
-                    if let Some(img) = find_first_image_in_inlines(cell) {
-                        return Some(img);
-                    }
-                }
-            }
-            None
-        }
+        Block::Table { .. } => None,
 
         // Shortcodes: descend by variant. Gallery/Hero/Grid carry images.
         // A definition inside a shortcode body is NOT hoisted — the endnote
         // section does not reach in there — so its images are body matter.
         Block::Shortcode(sc) => find_first_image_in_shortcode(sc, Notes::InPlace, hoisted),
 
-        // Compound-link grid cells (PR4.5 LinkCard) wrap block-level
-        // children including images.
-        Block::LinkCard { children, .. } => find_first_image_in_blocks(children, notes, hoisted),
+        // A card is a link to another page; the picture is that page's.
+        Block::LinkCard { .. } => None,
 
-        Block::Heading { children, .. } => find_first_image_in_inlines(children),
+        Block::Heading { .. } => None,
 
         // Only the doc-order-FIRST definition of a label is hoisted; a
         // REPEAT renders where it sits, so a repeat's images are body matter
@@ -317,50 +296,42 @@ fn find_first_image_in_block<'a>(
     }
 }
 
-fn find_first_image_in_inlines(inlines: &[Inline]) -> Option<&Inline> {
-    for inline in inlines {
-        match inline {
-            Inline::Image { .. } => return Some(inline),
-            Inline::Link { children, .. }
-            | Inline::Emphasis(children)
-            | Inline::Strong(children)
-            | Inline::Strikethrough(children) => {
-                if let Some(img) = find_first_image_in_inlines(children) {
-                    return Some(img);
-                }
-            }
-            Inline::Text(_)
-            | Inline::Code(_)
-            | Inline::LineBreak
-            | Inline::FootnoteRef(_)
-            | Inline::TaskMarker(_)
-            | Inline::Other(_) => {}
+fn find_first_image_in_inlines(inlines: &[Inline]) -> Option<&Url> {
+    inlines.iter().find_map(|inline| match inline {
+        Inline::Image { src, .. } => Some(src),
+        Inline::Link { url: Url::Resolved(r), .. }
+            if matches!(r.kind, UrlKind::Internal | UrlKind::Wikilink) =>
+        {
+            None
         }
-    }
-    None
+        Inline::Link { children, .. }
+        | Inline::Emphasis(children)
+        | Inline::Strong(children)
+        | Inline::Strikethrough(children) => find_first_image_in_inlines(children),
+        _ => None,
+    })
+}
+
+/// Nothing in the paragraph but pictures: no words for them to sit among.
+fn only_pictures(inlines: &[Inline]) -> bool {
+    inlines.iter().all(|inline| match inline {
+        Inline::Image { .. } | Inline::LineBreak => true,
+        Inline::Text(t) => t.trim().is_empty(),
+        Inline::Link { children, .. } | Inline::Emphasis(children) | Inline::Strong(children) => {
+            only_pictures(children)
+        }
+        _ => false,
+    })
 }
 
 fn find_first_image_in_shortcode<'a>(
     sc: &'a Shortcode,
     notes: Notes,
     hoisted: &HashMap<String, usize>,
-) -> Option<&'a Inline> {
+) -> Option<&'a Url> {
     match sc {
         Shortcode::Subscribe(_) | Shortcode::Buttons(_) | Shortcode::Recent(_) | Shortcode::Apply(_) => None,
-        Shortcode::Gallery(args) => {
-            // Gallery items carry image refs but not as Inline::Image —
-            // they're typed as GalleryItem { src, alt, attrs }. The
-            // cover chain currently consumes hero/figure/paragraph
-            // images; gallery images are not part of body_cover_path
-            // today. Skip.
-            //
-            // If a future Phase makes Gallery items consumable here,
-            // the right move is to add a synthetic Inline::Image; for
-            // now matching today's transform_events behavior is the
-            // gate.
-            let _ = args;
-            None
-        }
+        Shortcode::Gallery(args) => args.items.first().map(|item| &item.src),
         Shortcode::Hero(args) => {
             // Hero overlay walked first; the hero image itself is not
             // surfaced as an Inline::Image (it's a `Url` on the
@@ -459,7 +430,7 @@ mod tests {
             "Intro paragraph[^a].\n\n[^a]: ![diagram](d.png)\n\nLater section.\n\n![photo](p.png)\n",
         );
         match find_first_block_image(&doc) {
-            Some(Inline::Image { src, .. }) => assert_eq!(
+            Some(src) => assert_eq!(
                 src,
                 &Url::unresolved("p.png"),
                 "the endnote's image won the cover over the body's"
@@ -478,10 +449,10 @@ mod tests {
     #[test]
     fn a_repeated_labels_second_definition_is_body_matter_not_endnote_matter() {
         let doc = super::super::parse(
-            "Para one[^1].\n\n[^1]: see ![chart](c1.png)\n\nPara two[^1].\n\n[^1]: see ![chart2](c2.png)\n",
+            "Para one[^1].\n\n[^1]: ![chart](c1.png)\n\nPara two[^1].\n\n[^1]: ![chart2](c2.png)\n",
         );
         match find_first_block_image(&doc) {
-            Some(Inline::Image { src, .. }) => assert_eq!(
+            Some(src) => assert_eq!(
                 src,
                 &Url::unresolved("c2.png"),
                 "picked the hoisted first definition's image over the one that \
@@ -500,10 +471,10 @@ mod tests {
     #[test]
     fn a_repeat_whose_first_definition_is_nested_is_still_body_matter() {
         let doc = super::super::parse(
-            "Body[^a][^b].\n\n[^a]: OUT\n\n    > [^b]: IN ![in](in.png)\n\n[^b]: REPEAT ![repeat](r.png)\n",
+            "Body[^a][^b].\n\n[^a]: OUT\n\n    > [^b]: ![in](in.png)\n\n[^b]: ![repeat](r.png)\n",
         );
         match find_first_block_image(&doc) {
-            Some(Inline::Image { src, .. }) => assert_eq!(
+            Some(src) => assert_eq!(
                 src,
                 &Url::unresolved("r.png"),
                 "picked an endnote-only image over the repeat's body image"
@@ -522,7 +493,7 @@ mod tests {
         let doc =
             super::super::parse("Body[^b][^a].\n\n[^a]: ![a](a.png)\n\n[^b]: ![b](b.png)\n");
         match find_first_block_image(&doc) {
-            Some(Inline::Image { src, .. }) => assert_eq!(
+            Some(src) => assert_eq!(
                 src,
                 &Url::unresolved("b.png"),
                 "picked the first-written definition's image over the first-rendered note's"
@@ -538,7 +509,7 @@ mod tests {
     fn an_image_that_lives_only_in_a_note_is_still_found() {
         let doc = super::super::parse("Intro[^a].\n\n[^a]: ![diagram](d.png)\n");
         match find_first_block_image(&doc) {
-            Some(Inline::Image { src, .. }) => assert_eq!(src, &Url::unresolved("d.png")),
+            Some(src) => assert_eq!(src, &Url::unresolved("d.png")),
             other => panic!("expected the note's image, got {other:?}"),
         }
     }
@@ -566,7 +537,7 @@ mod tests {
     fn finds_image_inside_figure() {
         let doc = Document::from_blocks(vec![img_block("photo.jpg")]);
         match find_first_block_image(&doc) {
-            Some(Inline::Image { src, .. }) => {
+            Some(src) => {
                 let Url::Resolved(r) = src else {
                     panic!("expected Resolved, got {src:?}")
                 };
@@ -577,20 +548,53 @@ mod tests {
     }
 
     #[test]
-    fn finds_image_inside_paragraph() {
-        let doc = Document::from_blocks(vec![Block::Paragraph(vec![
-            Inline::Text("see ".into()),
-            img("inline.png"),
+    fn a_picture_alone_in_its_paragraph_is_found_and_one_among_words_is_not() {
+        let alone = Document::from_blocks(vec![Block::Paragraph(vec![img("alone.png")])]);
+        assert_eq!(find_first_block_image(&alone), Some(&Url::resolved("alone.png", UrlKind::Asset)));
+
+        let among_words = Document::from_blocks(vec![Block::Paragraph(vec![
+            Inline::Text("press ".into()),
+            img("icon.png"),
+            Inline::Text(" to save".into()),
         ])]);
-        match find_first_block_image(&doc) {
-            Some(Inline::Image { src, .. }) => {
-                let Url::Resolved(r) = src else {
-                    panic!("expected Resolved, got {src:?}")
-                };
-                assert_eq!(r.href, "inline.png");
-            }
-            _ => panic!("expected Image"),
+        assert_eq!(find_first_block_image(&among_words), None);
+    }
+
+    #[test]
+    fn a_heading_or_table_picture_is_not_a_content_picture() {
+        let heading = Document::from_blocks(vec![Block::Heading {
+            level: 2,
+            children: vec![img("badge.png"), Inline::Text("Title".into())],
+            id: None,
+        }]);
+        assert_eq!(find_first_block_image(&heading), None);
+        let table = super::super::parse("| a |\n|---|\n| ![](cell.png) |\n");
+        assert_eq!(find_first_block_image(&table), None);
+    }
+
+    #[test]
+    fn a_picture_linking_to_a_page_is_that_pages_and_one_linking_to_a_file_is_ours() {
+        let link = |kind| {
+            Block::Paragraph(vec![Inline::Link {
+                url: Url::resolved("target", kind),
+                title: None,
+                children: vec![img("thumb.png")],
+                is_wikilink: false,
+                has_pothole: false,
+            }])
+        };
+        for kind in [UrlKind::Internal, UrlKind::Wikilink] {
+            assert_eq!(find_first_block_image(&Document::from_blocks(vec![link(kind)])), None, "{kind:?}");
         }
+        for kind in [UrlKind::Asset, UrlKind::AssetNewtab, UrlKind::External] {
+            assert!(find_first_block_image(&Document::from_blocks(vec![link(kind)])).is_some(), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn the_first_gallery_item_is_a_content_picture() {
+        let doc = super::super::parse(":::gallery\n![A](one.jpg)\n![B](two.jpg)\n:::\n");
+        assert_eq!(find_first_block_image(&doc), Some(&Url::unresolved("one.jpg")));
     }
 
     #[test]
@@ -601,7 +605,7 @@ mod tests {
             "nested.png",
         )])])]);
         match find_first_block_image(&doc) {
-            Some(Inline::Image { src, .. }) => {
+            Some(src) => {
                 let Url::Resolved(r) = src else {
                     panic!("expected Resolved, got {src:?}")
                 };
@@ -619,7 +623,7 @@ mod tests {
             img_block("second.jpg"),
         ]);
         match find_first_block_image(&doc) {
-            Some(Inline::Image { src, .. }) => {
+            Some(src) => {
                 let Url::Resolved(r) = src else {
                     panic!("expected Resolved, got {src:?}")
                 };
@@ -645,7 +649,7 @@ mod tests {
             label: None,
         }))]);
         match find_first_block_image(&doc) {
-            Some(Inline::Image { src, .. }) => {
+            Some(src) => {
                 let Url::Resolved(r) = src else {
                     panic!("expected Resolved, got {src:?}")
                 };
@@ -695,7 +699,7 @@ mod tests {
             header: None,
         }))]);
         match find_first_block_image(&doc) {
-            Some(Inline::Image { src, .. }) => {
+            Some(src) => {
                 let Url::Resolved(r) = src else {
                     panic!("expected Resolved, got {src:?}")
                 };

@@ -418,7 +418,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         widget: Widget::FilePicker,
         // Frequency=5, Importance=4 → score = 100 - (5*6 + 4*4) = 100 - 46 = 54
         score: 54,
-        description: "Cover image path",
+        description: "The page's listing picture: a path, or `false` for none. Listing and grid cards show it, and a folder home or a page that claims a name draws it beside its title; a leaf page does not draw it in its body. With no cover, listings use the page's own first picture (opening hero, else the first figure, gallery or grid-cell picture in the body)",
         label_key: "chip.cover.label",
         group: "This Page",
         file_kinds: Some(&[ExtKind::Image, ExtKind::Video, ExtKind::Iframe]),
@@ -1047,7 +1047,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         enum_values: Some(&["only"]),
         // Frequency=1, Importance=2 → score=86
         score: 87,
-        description: "Keep only pages with a cover. \"only\" — e.g. the home page of an artist's site lists the latest works that have a picture. Absent = no filter.",
+        description: "Keep only pages with a cover or a first picture. \"only\" — e.g. the home page of an artist's site lists the latest works that have a picture. Absent = no filter.",
         label: Some("Covers"),
         label_key: "chip.children_covers.label",
         group: "Child Styles",

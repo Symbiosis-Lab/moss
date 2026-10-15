@@ -125,6 +125,12 @@ pub struct ParsedDocument {
     pub logo: Option<String>,
     /// Cover image URL for collections
     pub cover: Option<String>,
+    /// The page's own first picture as a source path, kept for listing cards
+    /// when the page names no `cover:` and has not opted out with `cover: false`.
+    /// Read through [`Self::listing_cover`]; never drawn on the page itself.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub card_cover: Option<String>,
     /// Explicit cover type override ("video", "iframe", or "image")
     pub cover_type: Option<String>,
     /// Media items marked for collection pages (photography, video, interactive)
@@ -725,6 +731,13 @@ impl ParsedDocument {
     /// the corpus the reader sees.
     pub fn resolve_for_flatten(&self, scope: &[&ParsedDocument]) -> moss_core::sort::ResolvedSort {
         moss_core::sort::resolve_folder_sort(self, scope)
+    }
+
+    /// The picture listings show for this page: its `cover:`, or else its own
+    /// first picture. The page body and the folder cover row read `cover`
+    /// itself, so an inferred picture is never drawn twice on its own page.
+    pub fn listing_cover(&self) -> Option<&str> {
+        self.cover.as_deref().or(self.card_cover.as_deref())
     }
 
     /// Whether this document appears on moss's auto-generated *listing*

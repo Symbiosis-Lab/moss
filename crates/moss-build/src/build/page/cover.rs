@@ -128,6 +128,28 @@ pub fn resolve_cover_chain(inputs: &CoverChainInputs) -> Option<CoverRef> {
         .or_else(|| cover_from_frontmatter(inputs.body_cover_path))
 }
 
+/// Whether a path names a raster picture. The share image and the listing card
+/// both take only these: most share targets cannot show a vector, and a card
+/// crops a picture, not a drawing or a video.
+pub fn is_raster_picture(path: &str) -> bool {
+    let bare = path.split(['#', '?']).next().unwrap_or("");
+    let ext = bare.rsplit('/').next().and_then(|f| f.rsplit_once('.')).map_or("", |(_, e)| e);
+    matches!(ext.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "avif")
+}
+
+/// A page's own first picture as a listing-card source path, or `None`.
+/// Remote, `data:`, vector and video pictures make poor cards, so they are not taken.
+pub fn card_cover_from_page(hero_image_url: Option<&str>, body_cover_path: Option<&str>) -> Option<String> {
+    [hero_image_url, body_cover_path].into_iter().flatten().find_map(|raw| {
+        let (path, _attrs) = moss_core::media::split_pipe(raw);
+        let local = !(path.starts_with("http://") || path.starts_with("https://") || path.starts_with("//") || path.starts_with("data:"));
+        (local && is_raster_picture(path)).then(|| {
+            let decoded = urlencoding::decode(path).map(|d| d.into_owned()).unwrap_or_else(|_| path.to_string());
+            decoded.trim_start_matches('/').to_string()
+        })
+    })
+}
+
 /// Resolve a frontmatter cover string to CoverRef. External http(s) URLs
 /// pass through; local paths route through ServedPath::from_source.
 ///
