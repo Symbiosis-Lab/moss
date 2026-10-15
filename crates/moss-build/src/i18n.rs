@@ -168,7 +168,7 @@ impl Language {
             Language::En => "EN",
             Language::ZhHans => "简",
             Language::ZhHant => "繁",
-            Language::De => "Deutsch",
+            Language::De => "DE",
         }
     }
 }
@@ -291,11 +291,10 @@ pub fn lang_tag(code: &str) -> String {
 
 /// The chip a language switcher shows for a declared tag.
 ///
-/// English and the two Chinese editions keep their own short labels (`繁`,
-/// `简`, `EN`) — they are what the existing switcher shows and changing them
-/// would change every multilingual moss site. German and every language moss
-/// has no interface for show the endonym, because a reader looking for the
-/// German edition is looking for "Deutsch"; `DE` would be a code, not a name.
+/// Each edition has its own short label (`EN`, `DE`, `简`, `繁`), so the
+/// chips of a switcher read alike. Every language moss has no interface for
+/// shows its endonym instead, and so does a regional German tag (`de-AT`),
+/// since two German editions side by side need telling apart.
 ///
 /// Total for any tag that passed the allowlist, which is every tag that can
 /// reach a switcher.
@@ -540,7 +539,7 @@ mod tests {
         }
         assert_eq!(Language::De.code(), "de");
         assert_eq!(Language::De.as_bcp47_attr(), "de");
-        assert_eq!(switcher_label("de"), "Deutsch");
+        assert_eq!(switcher_label("de"), "DE");
         assert_eq!(lang_tag("de-at"), "de-AT");
         assert!(!Language::De.is_cjk());
     }

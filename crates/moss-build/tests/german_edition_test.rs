@@ -1,6 +1,6 @@
 //! German is a site edition: a page under a `de/` tree is dressed in German
 //! interface strings, German dates and `<html lang="de">`, and the switcher on
-//! the other editions still reads "Deutsch".
+//! the other editions reads "DE", as the English one reads "EN".
 
 use std::fs;
 use std::path::PathBuf;
@@ -104,7 +104,7 @@ fn a_de_tree_is_dressed_in_german_chrome_and_dates() {
     // The English edition keeps its own chrome and points at the German one.
     let root = site.html("index.html");
     assert!(root.contains("Skip to content") && root.contains(r#"hreflang="de""#), "{root}");
-    assert!(root.contains("Deutsch"), "the switcher names the German edition");
+    assert!(root.contains(r#"hreflang="de">DE</a>"#), "the switcher labels the German edition DE, as it labels English EN: {root}");
 }
 
 #[test]

@@ -569,7 +569,7 @@ particular tree shape: moss's UI-language type has exactly four variants and
 resolves only `en`, `de` (also `de-de`, `de-at`, `de-ch`), `zh`/`zh-hans`/`zh-cn`,
 and `zh-hant`/`zh-tw`. A `de/` tree gets German interface strings (navigation,
 search, dates such as "15. Oktober 2026", comment and subscribe forms) and
-`<html lang="de">`, with `Deutsch` as its switcher label. `en-us/` and `en-gb/`
+`<html lang="de">`, with `DE` as its switcher label (as English is `EN`). `en-us/` and `en-gb/`
 are accepted as directory names but resolve to no edition either.
 
 **A language tree outside those four gets correct content in the default
