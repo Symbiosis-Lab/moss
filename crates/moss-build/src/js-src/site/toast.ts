@@ -8,6 +8,7 @@ import { langBucket } from "./subscribe/i18n";
 
 const COPY = {
   en: "Copied to clipboard",
+  de: "In die Zwischenablage kopiert",
   "zh-hans": "已复制到剪贴板",
   "zh-hant": "已複製到剪貼簿",
 } as const;

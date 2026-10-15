@@ -35,6 +35,11 @@ describe('langBucket', () => {
     expect(langBucket('zh-CN')).toBe('zh-hans');
     expect(langBucket('zh')).toBe('zh-hans');
   });
+  test('routes German tags to de', () => {
+    for (const tag of ['de', 'de-DE', 'de-AT', 'de_CH', 'deu']) {
+      expect(langBucket(tag)).toBe('de');
+    }
+  });
   test('routes unknown/empty to en', () => {
     expect(langBucket('')).toBe('en');
     expect(langBucket(null)).toBe('en');

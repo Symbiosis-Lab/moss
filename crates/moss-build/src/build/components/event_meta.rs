@@ -120,7 +120,7 @@ fn text(s: &str) -> Seg {
     Seg::Text(s.to_string())
 }
 
-/// `Sunday, November 1, 2026` / `2026年11月1日 星期日`, as runs.
+/// `Sunday, November 1, 2026` / `Sonntag, 1. November 2026` / `2026年11月1日 星期日`, as runs.
 fn long_date(t: EventTime, lang: Language) -> Vec<Seg> {
     let (y, m, d) = t.ymd();
     let month = crate::i18n::t(lang, &format!("month_{m}")).to_string();
@@ -138,6 +138,21 @@ fn long_date(t: EventTime, lang: Language) -> Vec<Seg> {
                 text(" "),
                 Seg::Part("day", d.to_string()),
                 text(", "),
+                Seg::Part("year", y.to_string()),
+            ]);
+            v
+        }
+        Language::De => {
+            let mut v = Vec::new();
+            if let Some(wd) = weekday {
+                v.push(Seg::Part("weekday", wd.to_string()));
+                v.push(text(", "));
+            }
+            v.extend([
+                Seg::Part("day", format!("{d}.")),
+                text(" "),
+                Seg::Part("month", month),
+                text(" "),
                 Seg::Part("year", y.to_string()),
             ]);
             v
@@ -164,6 +179,9 @@ fn clock(h: u8, m: u8, lang: Language, meridiem: bool) -> String {
             let suffix = if meridiem { if h < 12 { " AM" } else { " PM" } } else { "" };
             format!("{h12}:{m:02}{suffix}")
         }
+        // `meridiem` marks the last clock of a time, which carries the unit:
+        // "14:00–16:00 Uhr".
+        Language::De => format!("{h:02}:{m:02}{}", if meridiem { " Uhr" } else { "" }),
         Language::ZhHans | Language::ZhHant => format!("{h:02}:{m:02}"),
     }
 }
@@ -174,7 +192,7 @@ fn sep(lang: Language) -> Seg {
     Seg::Part(
         "sep",
         match lang {
-            Language::En => ", ",
+            Language::En | Language::De => ", ",
             Language::ZhHans | Language::ZhHant => " ",
         }
         .to_string(),
@@ -204,7 +222,11 @@ fn segments(start: EventTime, end: Option<EventTime>, lang: Language) -> Vec<Seg
         (Some((h, m)), Some(e)) => match e.hm() {
             Some((eh, em)) if same_day => {
                 // "2:00–4:00 PM" when both fall in the same half of the day.
-                let shared = lang == Language::En && (h < 12) == (eh < 12);
+                let shared = match lang {
+                    Language::En => (h < 12) == (eh < 12),
+                    Language::De => true,
+                    _ => false,
+                };
                 time(&mut out, format!("{}–{}", clock(h, m, lang, !shared), clock(eh, em, lang, true)));
             }
             end_time => {

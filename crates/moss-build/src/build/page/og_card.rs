@@ -105,7 +105,7 @@ fn card_script(lang: crate::i18n::Language, title: &str) -> Option<CardScript> {
     let script_of = |l| match l {
         crate::i18n::Language::ZhHant => Some(CardScript::Traditional),
         crate::i18n::Language::ZhHans => Some(CardScript::Simplified),
-        crate::i18n::Language::En => None,
+        crate::i18n::Language::En | crate::i18n::Language::De => None,
     };
     script_of(lang).or_else(|| {
         // `detect_language` counts Han blocks and knows nothing of kana, so a

@@ -40,7 +40,7 @@ pub struct LayoutConfig {
     /// The SITE's declared language as a BCP-47 tag — what `<html lang>` says
     /// on a page that declares none of its own.
     ///
-    /// A tag, not a [`Language`]: moss draws its interface in three languages
+    /// A tag, not a [`Language`]: moss draws its interface in a few languages
     /// and `lang` describes the content, so `[site] lang = "fr"`
     /// belongs here in full even though the chrome falls back to English.
     /// Before 2026-09-01 the render path only had the three-variant enum, so

@@ -3550,7 +3550,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "Text[^1].\n\n[^1]: The note.",
         status: Status::Emerging,
         since: "1",
-        description: "The endnote section's heading (localized en/zh-hans/zh-hant), inserted by `sidenotes.ts` — the pure renderer has no language. In flow always, not only on the lifted sheet, so the docked list and the sheet are the same pixels. Differentiated from the notes by type, not lines: the display face, small, muted, letter-spaced.",
+        description: "The endnote section's heading (localized en/de/zh-hans/zh-hant), inserted by `sidenotes.ts` — the pure renderer has no language. In flow always, not only on the lifted sheet, so the docked list and the sheet are the same pixels. Differentiated from the notes by type, not lines: the display face, small, muted, letter-spaced.",
     },
     ComponentEntry {
         class: "moss-footnote-grab",
@@ -3561,7 +3561,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "Text[^1].\n\n[^1]: The note.",
         status: Status::Emerging,
         since: "1",
-        description: "The lifted sheet's grabber: a full-width 24px touch strip drawing the standard pill, honest per iOS's rule because the sheet drags between two detents. A button (aria-label localized en/zh-hans/zh-hant), so the drag's destination — the expanded glossary — is equally reachable by tap, keyboard and screen reader. Hidden while the section rests in flow; its opacity rides the dock's `--moss-sheet-away` fade.",
+        description: "The lifted sheet's grabber: a full-width 24px touch strip drawing the standard pill, honest per iOS's rule because the sheet drags between two detents. A button (aria-label localized en/de/zh-hans/zh-hant), so the drag's destination — the expanded glossary — is equally reachable by tap, keyboard and screen reader. Hidden while the section rests in flow; its opacity rides the dock's `--moss-sheet-away` fade.",
     },
     ComponentEntry {
         class: "moss-footnote-scroller",

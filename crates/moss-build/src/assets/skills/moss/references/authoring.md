@@ -514,7 +514,7 @@ There is no second allowlist to extend by hand.
 questions have different answers. `.languages` decides whether a directory name
 is read as a language tree at all — ~50 codes. Whether that tree gets interface
 strings of its own is a separate, much smaller ceiling, described under "moss
-supports exactly three editions" below. `ja` is on the first list and not the
+supports exactly four editions" below. `ja` is on the first list and not the
 second: a `ja/` tree publishes correctly and is dressed in another language's
 chrome. Neither answer is a bug, but reading the first as the second is the way
 to be surprised by the result.
@@ -534,13 +534,16 @@ strings the pages that *did* fall through to it are dressed in. If the two ever
 disagree, believe the page: `moss list` reports each page's own language, and
 that is the one that ships in `<html lang>`.
 
-**moss supports exactly three editions: English, Simplified Chinese, and
-Traditional Chinese.** This is a hard ceiling, not a special case for a
-particular tree shape: moss's UI-language type has exactly three variants and
-resolves only `en`, `zh`/`zh-hans`/`zh-cn`, and `zh-hant`/`zh-tw`. `en-us/` and
-`en-gb/` are accepted as directory names but resolve to no edition either.
+**moss supports exactly four editions: English, German, Simplified Chinese,
+and Traditional Chinese.** This is a hard ceiling, not a special case for a
+particular tree shape: moss's UI-language type has exactly four variants and
+resolves only `en`, `de` (also `de-de`, `de-at`, `de-ch`), `zh`/`zh-hans`/`zh-cn`,
+and `zh-hant`/`zh-tw`. A `de/` tree gets German interface strings (navigation,
+search, dates such as "15. Oktober 2026", comment and subscribe forms) and
+`<html lang="de">`, with `Deutsch` as its switcher label. `en-us/` and `en-gb/`
+are accepted as directory names but resolve to no edition either.
 
-**A language tree outside those three gets correct content in the default
+**A language tree outside those four gets correct content in the default
 edition's chrome.** The ceiling is real, but it is a ceiling on *interface*, not
 on the page. Measured on a `ja/` tree:
 
@@ -557,7 +560,7 @@ on the page. Measured on a `ja/` tree:
 - The `<title>` gets the site name appended as a suffix, which a real edition
   home (`/en/`) does not get: `ja` is a tree, not an edition.
 
-So: for a fourth language, translate the body content and expect to supply the
+So: for a fifth language, translate the body content and expect to supply the
 chrome yourself — an authored `ja/footer.md`, theme CSS, and your own nav if
 the default one is unacceptable. What you do *not* have to do any more is
 correct the `lang` attribute by hand.

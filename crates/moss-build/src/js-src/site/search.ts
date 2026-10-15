@@ -70,6 +70,7 @@ interface PagefindApi {
 /** Resolve `<html lang>` the same way `Language::from_bcp47` does: any zh-* by region. */
 function resolveStrings(): SearchStrings {
   const tag = (document.documentElement.lang || "en").toLowerCase();
+  if (/^de(-|_|$)/.test(tag)) return STRINGS.de;
   if (!tag.startsWith("zh")) return STRINGS.en;
   if (/hant|tw|hk|mo/.test(tag)) return STRINGS["zh-hant"];
   return STRINGS["zh-hans"];

@@ -93,7 +93,7 @@ fn home_title_globals_is_per_language_and_empty_string_when_absent() {
     // zh-hant has no home page at all — still present, with a stable digest
     // over the empty string, so a LATER arrival of a zh-hant home is a real
     // move rather than a key that silently never existed.
-    assert_eq!(globals.len(), 3);
+    assert_eq!(globals.len(), Language::ALL.len());
     assert_ne!(globals["en"], globals["zh-hans"]);
     assert_eq!(globals["zh-hant"], debug_hash(&""));
 }

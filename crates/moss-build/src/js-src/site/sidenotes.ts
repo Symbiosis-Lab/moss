@@ -34,11 +34,13 @@ import { langBucket, type Lang } from "./subscribe/i18n";
  * pattern as `selection-actions.ts`. */
 const NOTES_TITLE: Record<Lang, string> = {
   en: "Notes",
+  de: "Anmerkungen",
   "zh-hans": "注释",
   "zh-hant": "註釋",
 };
 const ALL_NOTES: Record<Lang, string> = {
   en: "All notes",
+  de: "Alle Anmerkungen",
   "zh-hans": "全部注释",
   "zh-hant": "全部註釋",
 };

@@ -122,10 +122,10 @@ fn home_doc_for_lang<'a>(
 /// Every language a document could plausibly declare — used to seed the two
 /// per-lang home digests below so a language's key still moves when its home
 /// page is DELETED (present last build, absent this one), not only when it is
-/// edited. `Language` has exactly three interface variants (`i18n.rs`), so
-/// this is a fixed, cheap enumeration rather than a corpus scan.
-fn every_language() -> [Language; 3] {
-    [Language::En, Language::ZhHans, Language::ZhHant]
+/// edited. `Language` has a fixed set of interface variants (`Language::ALL`), so
+/// this is a cheap enumeration rather than a corpus scan.
+fn every_language() -> [Language; 4] {
+    Language::ALL
 }
 
 /// Per-language digest of that language's home-page title —

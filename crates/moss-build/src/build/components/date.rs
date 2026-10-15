@@ -276,6 +276,10 @@ fn format_long_date(year: i32, month: u32, day: Option<u32>, lang: Language) -> 
             Some(day) => format!("{month_name} {day}, {year}"),
             None => format!("{month_name} {year}"),
         },
+        Language::De => match day {
+            Some(day) => format!("{day}. {month_name} {year}"),
+            None => format!("{month_name} {year}"),
+        },
         Language::ZhHans | Language::ZhHant => match day {
             Some(day) => format!("{year}年{month_name}{day}日"),
             None => format!("{year}年{month_name}"),

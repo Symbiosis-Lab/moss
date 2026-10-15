@@ -895,7 +895,7 @@ pub(super) fn render_page<'d>(
                 }
                 if term_listing.is_some() && !is_explorer_root {
                     let hosted = content.split_off(body_end);
-                    content = crate::build::terms::insert_before_sources(&content, &hosted, doc.lang, doc.lang_tag.as_deref().unwrap_or(""));
+                    content = crate::build::terms::insert_before_sources(&content, &hosted, doc.lang);
                 }
             }
 

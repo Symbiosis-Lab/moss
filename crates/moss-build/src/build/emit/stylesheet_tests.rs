@@ -577,12 +577,12 @@ fn ownership_rule_rejects_unowned_selectors() {
 #[test]
 fn colophon_font_covers_the_wordmark() {
     use crate::i18n::Language;
-    let langs = [Language::En, Language::ZhHans, Language::ZhHant];
-    // Adding a language without extending `langs` fails to compile here, so the
+    let langs = Language::ALL;
+    // Adding a language without extending `ALL` fails to compile here, so the
     // new wordmark cannot reach the range unchecked.
     for lang in langs {
         match lang {
-            Language::En | Language::ZhHans | Language::ZhHant => {}
+            Language::En | Language::De | Language::ZhHans | Language::ZhHant => {}
         }
     }
 
