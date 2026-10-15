@@ -32,8 +32,27 @@ fn url_constructor<'js>(
         })?,
     };
     let obj = Object::new(ctx.clone())?;
+    // The fields a browser's URL has, read the way the WHATWG URL standard
+    // spells them: `protocol` keeps its colon, `search` and `hash` their
+    // leading `?`/`#` (empty when absent), and `port` is empty when it is the
+    // scheme's default.
     obj.set("href", resolved.as_str())?;
+    obj.set("protocol", format!("{}:", resolved.scheme()))?;
+    obj.set("username", resolved.username())?;
+    obj.set("password", resolved.password().unwrap_or(""))?;
+    obj.set("hostname", resolved.host_str().unwrap_or(""))?;
+    let port = resolved.port().map(|p| p.to_string()).unwrap_or_default();
+    let host = match (resolved.host_str(), port.is_empty()) {
+        (Some(h), false) => format!("{h}:{port}"),
+        (Some(h), true) => h.to_string(),
+        (None, _) => String::new(),
+    };
+    obj.set("host", host)?;
+    obj.set("port", port)?;
     obj.set("pathname", resolved.path())?;
+    obj.set("search", resolved.query().map(|q| format!("?{q}")).unwrap_or_default())?;
+    obj.set("hash", resolved.fragment().map(|f| format!("#{f}")).unwrap_or_default())?;
+    obj.set("origin", resolved.origin().ascii_serialization())?;
     Ok(obj)
 }
 
@@ -79,5 +98,25 @@ mod tests {
         assert_eq!(href, "https://x.io/scale-compare.html");
         assert_eq!(pathname, "/p/q");
         assert!(threw);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn carries_the_fields_a_browser_url_has() {
+        let rt = AsyncRuntime::new().unwrap();
+        let ctx = AsyncContext::full(&rt).await.unwrap();
+        let fields: Vec<String> = async_with!(ctx => |ctx| {
+            install_url(&ctx).unwrap();
+            ctx.eval(
+                "(() => { const u = new URL('../x?q=1#top', 'https://a:b@host.example:8443/p/q/'); \
+                  const m = new URL('mailto:ada@example.org'); \
+                  return [u.protocol, u.username, u.password, u.host, u.hostname, u.port, u.search, u.hash, u.origin, \
+                          new URL('https://host.example:443/').port, m.protocol, m.host, m.origin]; })()"
+            ).unwrap()
+        })
+        .await;
+        assert_eq!(
+            fields,
+            ["https:", "a", "b", "host.example:8443", "host.example", "8443", "?q=1", "#top", "https://host.example:8443", "", "mailto:", "", "null"]
+        );
     }
 }

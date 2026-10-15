@@ -93,6 +93,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- `new URL(...)` in a plugin running at build time now has the fields a browser's has (`protocol`, `host`, `hostname`, `port`, `search`, `hash`, `origin`, `username`, `password`), not only `href` and `pathname`. Code that checked `url.protocol`, such as a link sanitizer, read `undefined` and refused every link.
 - A page in a language folder (`zh-hant/notes/trip.md`) now pairs with the page at the same path in the default language (`notes/trip.md`) without a `translationKey`: its language switch, `hreflang` links (one per language) and breadcrumb point at its twin. Where a page does carry a `translationKey`, the key wins over the path for that language.
 - A theme can set `--moss-footer-end` without a warning.
 - A folder's "Download calendar · Subscribe to calendar" links now follow the listing they describe. They used to close the page, after whatever came last, and on a home page with its listing off they pointed at a calendar of the whole site. Now an embedded `![[folder/]]` listing carries its own folder's links while that folder has an event that has not ended (once per page, after the last embed of that folder), a page with `children: false` prints no folder links at its end, and a folder page keeps them after its own listing. The calendar files and their addresses are unchanged.
