@@ -193,8 +193,8 @@ pub struct ChildItemProps {
     pub online: Option<String>,
     /// The accent colour of the section the page sits in
     /// (`ParsedDocument::section`), published on the card as
-    /// `--moss-section-color` so a theme can tint cards by section.
-    pub section_color: Option<String>,
+    /// `--moss-section-color` (with its readable text variants) so a theme can tint cards by section.
+    pub section_color: Option<crate::build::types::SectionAccent>,
 }
 
 impl ChildItemProps {
@@ -202,8 +202,8 @@ impl ChildItemProps {
     /// a page outside any coloured section.
     pub(crate) fn section_style_attr(&self) -> String {
         self.section_color
-            .as_deref()
-            .map(|c| format!(r#" style="--moss-section-color: {}""#, html_escape(c)))
+            .as_ref()
+            .map(|a| format!(r#" style="{}""#, html_escape(&crate::build::scan::section_text::section_style(a))))
             .unwrap_or_default()
     }
 
@@ -432,7 +432,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         credits: doc.card_credits.clone(),
         tickets: doc.event.as_ref().and_then(|e| e.tickets.clone()),
         online: doc.event.as_ref().and_then(|e| e.online.clone()),
-        section_color: doc.section.as_ref().map(|s| s.color.clone()),
+        section_color: doc.section.clone(),
     }
 }
 

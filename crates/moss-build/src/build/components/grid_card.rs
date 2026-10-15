@@ -142,7 +142,7 @@ fn render_item(
     let style_decls: Vec<String> = cover_color
         .iter()
         .map(|c| format!("--item-cover-color: {}", html_escape(c)))
-        .chain(props.section_color.iter().map(|c| format!("--moss-section-color: {}", html_escape(c))))
+        .chain(props.section_color.iter().map(|a| html_escape(&crate::build::scan::section_text::section_style(a))))
         .collect();
     let cover_color_attrs = format!(
         "{}{}",

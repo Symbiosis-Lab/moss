@@ -202,3 +202,80 @@ fn changing_only_a_folders_colour_restyles_its_pages_on_an_incremental_build() {
     let body = body_tag(&site.html("work/piece/index.html")).to_string();
     assert!(body.contains("--moss-section-color: #00aa55") && !body.contains("#a3312a"), "{body}");
 }
+
+fn style_value(tag: &str, prop: &str) -> String {
+    let at = tag.find(&format!("{prop}: ")).unwrap_or_else(|| panic!("{prop} in {tag}")) + prop.len() + 2;
+    tag[at..].chars().take_while(|c| *c != ';' && *c != '"').collect()
+}
+
+fn contrast(a: &str, b: &str) -> f64 {
+    let lum = |hex: &str| {
+        let ch = |i: usize| {
+            let v = u8::from_str_radix(&hex[i..i + 2], 16).unwrap() as f64 / 255.0;
+            if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * ch(1) + 0.7152 * ch(3) + 0.0722 * ch(5)
+    };
+    let (x, y) = (lum(a), lum(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+#[test]
+fn a_coloured_page_carries_a_readable_text_colour_for_each_theme() {
+    let site = Site::new(&[
+        ("index.md", &page("Home")),
+        ("work/index.md", &folder_home("Work", Some("#f2d64b"))),
+        ("work/piece.md", &page("Piece")),
+    ]);
+    let html = site.html("work/piece/index.html");
+    let body = body_tag(&html).to_string();
+    let (light, dark) = (style_value(&body, "--moss-section-text-light"), style_value(&body, "--moss-section-text-dark"));
+    // The default page backgrounds, as the page's own stylesheet declares them.
+    let tokens = moss_core::contract::tokens::load_tokens().unwrap();
+    let (bg_light, bg_dark) = moss_core::contract::tokens::bg_colors(&tokens);
+    assert_eq!(style_value(&body, "--moss-section-color"), "#f2d64b");
+    assert!(contrast(&light, bg_light) >= 4.5, "light {light} on {bg_light}: {body}");
+    assert!(contrast(&dark, bg_dark) >= 4.5, "dark {dark} on {bg_dark}: {body}");
+    assert_ne!(light, "#f2d64b", "a pale yellow is darkened for the light page");
+    // The stylesheet turns the two variants into the one a theme reads.
+    let css = fs::read_dir(site.0.join(".moss/build.nosync/staging"))
+        .unwrap()
+        .chain(fs::read_dir(site.0.join(".moss/build.nosync/staging/_moss")).into_iter().flatten())
+        .filter_map(|e| fs::read_to_string(e.ok()?.path()).ok())
+        .find(|c| c.contains("--moss-section-text:"))
+        .expect("a stylesheet that defines --moss-section-text");
+    // The served stylesheet is minified; compare without whitespace.
+    let css: String = css.split_whitespace().collect();
+    assert!(
+        css.contains(r#"[style*="--moss-section-text-light"]{--moss-section-text:var(--moss-section-text-light)}"#),
+        "light rule: {css:.300}"
+    );
+    assert!(
+        css.contains(r#"[data-theme="dark"][style*="--moss-section-text-light"]{--moss-section-text:var(--moss-section-text-dark)}"#),
+        "dark rule: {css:.300}"
+    );
+}
+
+#[test]
+fn list_and_grid_cards_carry_the_text_colours_too() {
+    let site = Site::new(&[
+        ("index.md", &page("Home")),
+        ("work/index.md", &folder_home("Work", Some("#f2d64b"))),
+        ("work/piece.md", &page("Piece")),
+        ("gallery/index.md", "---\ntitle: Gallery\ncolor: \"#f2d64b\"\nchildren_style: grid\n---\n\nText.\n"),
+        ("gallery/shot.md", &page("Shot")),
+    ]);
+    let body = body_tag(&site.html("work/piece/index.html")).to_string();
+    let (light, dark) = (style_value(&body, "--moss-section-text-light"), style_value(&body, "--moss-section-text-dark"));
+    for (rel, needle) in [("work/index.html", "/work/piece/"), ("gallery/index.html", "/gallery/shot/")] {
+        let html = site.html(rel);
+        let card = html
+            .split("<a ")
+            .filter(|chunk| chunk.contains("class=\"moss-card\"") && chunk.contains(needle))
+            .map(|chunk| chunk.split('>').next().unwrap().to_string())
+            .next()
+            .unwrap_or_else(|| panic!("a card for {needle} in {rel}: {html}"));
+        assert!(card.contains(&format!("--moss-section-text-light: {light}")), "{rel}: {card}");
+        assert!(card.contains(&format!("--moss-section-text-dark: {dark}")), "{rel}: {card}");
+    }
+}

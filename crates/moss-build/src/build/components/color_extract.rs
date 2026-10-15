@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use moss_core::asset_paths;
 
 use crate::build::media::cover::CoverType;
+use crate::build::scan::wcag::{contrast_ratio, relative_luminance};
 use crate::build::media::dimensions::MediaDimensionLookup;
 
 /// Resolve a cover URL to an on-disk image file that `extract_dominant_color`
@@ -199,21 +200,6 @@ fn parse_hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
     }
 }
 
-/// Compute WCAG 2.x relative luminance from linear RGB.
-///
-/// Formula: L = 0.2126 * R + 0.7152 * G + 0.0722 * B
-/// where R, G, B are linearized (gamma-decoded) sRGB values.
-fn relative_luminance(r: f32, g: f32, b: f32) -> f32 {
-    fn linearize(c: f32) -> f32 {
-        if c <= 0.04045 {
-            c / 12.92
-        } else {
-            ((c + 0.055) / 1.055).powf(2.4)
-        }
-    }
-    0.2126 * linearize(r) + 0.7152 * linearize(g) + 0.0722 * linearize(b)
-}
-
 /// Is this image light enough that white overlay text needs a stronger scrim?
 ///
 /// Takes a raw scan-cached `dominant_color` (`#RRGGBB` from image scan, or an
@@ -246,12 +232,6 @@ pub fn is_light_cover(raw_dominant_color: &str) -> Option<bool> {
     let (r, g, b) = parse_hex_rgb(hex)?;
     let lum = relative_luminance(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
     Some(lum > 0.4)
-}
-
-/// WCAG 2.x contrast ratio between two relative luminances.
-fn contrast_ratio(l1: f32, l2: f32) -> f32 {
-    let (lighter, darker) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
-    (lighter + 0.05) / (darker + 0.05)
 }
 
 /// Convert HSL to RGB (sRGB, 0.0–1.0 range).

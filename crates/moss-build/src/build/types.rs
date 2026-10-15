@@ -54,6 +54,10 @@ impl EventFields {
 pub struct SectionAccent {
     /// The validated colour, as written (`#rgb` or `#rrggbb`).
     pub color: String,
+    /// The same hue as a text colour on the default light page, `#rrggbb`.
+    pub text_light: String,
+    /// The same hue as a text colour on the default dark page, `#rrggbb`.
+    pub text_dark: String,
     /// The coloured folder's own url path segment; empty for the site root.
     pub segment: String,
 }

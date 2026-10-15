@@ -220,6 +220,17 @@
   background: rgba(106, 154, 90, 0.25);
 }
 
+/* A section's readable text colour. The build writes both variants beside
+   --moss-section-color (on <body> and on a listing card); this picks the one
+   for the current theme. The variants are computed against this stylesheet's
+   own --moss-color-bg, so a theme that repaints the page checks its own. */
+[style*="--moss-section-text-light"] {
+  --moss-section-text: var(--moss-section-text-light);
+}
+[data-theme="dark"] [style*="--moss-section-text-light"] {
+  --moss-section-text: var(--moss-section-text-dark);
+}
+
 /* Traditional Chinese — prioritize TC fonts.
    Critical: 為/为, 體/体 etc. render with the wrong regional shape
    if SC variants are picked first. */

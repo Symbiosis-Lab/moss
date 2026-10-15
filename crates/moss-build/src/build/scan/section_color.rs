@@ -6,15 +6,9 @@
 //! own subtree. An invalid value is reported once, against the page that wrote
 //! it, and ignored.
 
+use crate::build::scan::section_text;
 use crate::build::types::{ParsedDocument, SectionAccent};
 use moss_core::PageKind;
-
-/// Whether `value` is a `#rgb` or `#rrggbb` hex colour.
-fn is_hex_colour(value: &str) -> bool {
-    value
-        .strip_prefix('#')
-        .is_some_and(|hex| matches!(hex.len(), 3 | 6) && hex.bytes().all(|b| b.is_ascii_hexdigit()))
-}
 
 /// Resolve `ParsedDocument::section` for every document from its folder
 /// homes' `color:`. Runs once per build, over the whole document set.
@@ -31,13 +25,13 @@ pub(crate) fn apply_section_colors(docs: &mut [ParsedDocument]) {
         let Some(prefix) = doc.url_path.strip_suffix("index.html") else {
             continue;
         };
-        if !is_hex_colour(raw) {
+        let Some(accent) = section_text::accent(raw, String::new()) else {
             let page = doc.source_path.as_deref().unwrap_or(doc.url_path.as_str());
             log::warn!("[{page}] `color: {raw}` is not a hex colour (#rgb or #rrggbb), so it is ignored");
             continue;
-        }
+        };
         let segment = prefix.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
-        folders.push((prefix.to_string(), SectionAccent { color: raw.to_string(), segment }));
+        folders.push((prefix.to_string(), SectionAccent { segment, ..accent }));
     }
     if folders.is_empty() {
         return;

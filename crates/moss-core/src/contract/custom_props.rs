@@ -323,6 +323,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "The accent colour of the section a page sits in, written by moss as an inline style on `<body>` (and on a listing card for such a page, on the card's root element) when a folder's home page declares `color:`; the nearest coloured ancestor folder wins. No moss style reads it, so nothing changes until a theme does: `var(--moss-section-color, var(--moss-color-accent))`. Not set on pages outside any coloured folder, so always give `var()` a fallback.",
     },
     CustomProp {
+        name: "--moss-section-text",
+        owner: "body",
+        default: "unset",
+        description: "A readable text colour for the section accent: the hue of `--moss-section-color`, adjusted until it reaches 4.5:1 contrast (WCAG 2) against moss's default page background, with one value for the light theme and one for the dark, switching with `data-theme` like moss's own colour tokens. A colour that already passes is used unchanged. moss derives it at build time and writes the two variants (`--moss-section-text-light`, `--moss-section-text-dark`) beside `--moss-section-color`, on `<body>` and on a listing card for the page; the default stylesheet picks the one for the current theme. Write `color: var(--moss-section-text, var(--moss-color-text))`. The guarantee is against moss's default `--moss-color-bg`: a theme that repaints the page background checks its own contrast. Not set on pages outside any coloured folder, so always give `var()` a fallback.",
+    },
+    CustomProp {
         name: "--moss-sidenote-inset",
         owner: "body",
         default: "0px",
