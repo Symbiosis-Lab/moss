@@ -199,20 +199,23 @@ pub fn render_with_sort(
     // CLAUDE.md "Tooltips" rule applies to the editor UI only).
     if is_linkblog {
         format!(
-            r#"<div class="moss-card" data-linkblog><div class="moss-card-row"><div class="moss-card-body">{}</div>{}</div></div>"#,
+            r#"<div class="moss-card" data-linkblog{}><div class="moss-card-row"><div class="moss-card-body">{}</div>{}</div></div>"#,
+            props.section_style_attr(),
             body,
             cover_html,
         )
     } else if event_links.is_some() {
         format!(
-            r#"<div class="moss-card"><div class="moss-card-row"><div class="moss-card-body">{}</div>{}</div></div>"#,
+            r#"<div class="moss-card"{}><div class="moss-card-row"><div class="moss-card-body">{}</div>{}</div></div>"#,
+            props.section_style_attr(),
             body,
             cover_html,
         )
     } else {
         format!(
-            r#"<a href="{}" class="moss-card"><div class="moss-card-row"><div class="moss-card-body">{}</div>{}</div></a>"#,
+            r#"<a href="{}" class="moss-card"{}><div class="moss-card-row"><div class="moss-card-body">{}</div>{}</div></a>"#,
             html_escape(&props.url),
+            props.section_style_attr(),
             body,
             cover_html,
         )

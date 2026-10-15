@@ -445,6 +445,10 @@ pub struct FrontMatter {
     pub typesetting: Option<String>,
     /// Content width preset: "wide" or "full"
     pub content_width: Option<String>,
+    /// On a folder's home page: the accent colour (`#rgb` or `#rrggbb`) of the
+    /// folder's section. Validated and inherited by `build::scan::section_color`.
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
+    pub color: Option<String>,
     /// Template layout override: "page" or "article"
     pub layout: Option<String>,
     /// URL of item being reviewed (activates review feature for this page)

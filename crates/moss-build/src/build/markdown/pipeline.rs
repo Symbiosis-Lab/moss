@@ -1548,6 +1548,8 @@ pub fn process_markdown_file(
         uid: frontmatter.uid,
         typesetting: frontmatter.typesetting,
         content_width: frontmatter.content_width,
+        color: frontmatter.color,
+        section: None,
         layout: frontmatter.layout,
         source_path: Some(file_path.to_string()),
         url_override: frontmatter.url,

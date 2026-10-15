@@ -783,6 +783,17 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "color",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        // Frequency=1, Importance=1 → score=90
+        score: 90,
+        description: "Section accent colour (`#rgb` or `#rrggbb`). Only a folder's home page reads it: the colour then applies to that page and every page under the folder, down to a nested folder that sets its own. Pages carry it as `--moss-section-color` on `<body>`, with the folder's name in `data-section`; no default style uses it",
+        label: Some("Section colour"),
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "layout",
         field_type: FieldType::String,
         widget: Widget::Select,

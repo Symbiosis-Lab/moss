@@ -131,14 +131,24 @@ fn render_item(
 
     // One shared ladder for every cover type: `|color=` override →
     // cache/extract by type → iframe dark default.
-    let cover_color_attrs = super::color_extract::resolve_card_color(
+    let cover_color = super::color_extract::resolve_card_color(
         props.cover.as_deref(),
         cover_type,
         root,
         media_lookup,
-    )
-        .map(|c| format!(r#" data-cover-color style="--item-cover-color: {}""#, html_escape(&c)))
-        .unwrap_or_default();
+    );
+    // One `style` attribute carries both the cover's band colour and the
+    // page's section colour.
+    let style_decls: Vec<String> = cover_color
+        .iter()
+        .map(|c| format!("--item-cover-color: {}", html_escape(c)))
+        .chain(props.section_color.iter().map(|c| format!("--moss-section-color: {}", html_escape(c))))
+        .collect();
+    let cover_color_attrs = format!(
+        "{}{}",
+        if cover_color.is_some() { " data-cover-color" } else { "" },
+        if style_decls.is_empty() { String::new() } else { format!(r#" style="{}""#, style_decls.join("; ")) },
+    );
 
     let kicker_html = props.kicker.as_deref()
         .filter(|s| !s.is_empty())

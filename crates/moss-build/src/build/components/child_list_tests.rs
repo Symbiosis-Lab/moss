@@ -223,6 +223,7 @@ fn test_render_child_article() {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card">"#));
@@ -254,6 +255,7 @@ fn render_child_shows_the_resolved_place_next_to_a_leafs_date() {
         url_path: String::new(),
         place: Some("Cambridge".to_string()),
         when_html: None,
+        section_color: None,
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
@@ -292,6 +294,7 @@ fn render_child_puts_the_listed_names_after_the_date_and_place() {
         url_path: String::new(),
         place: Some("Cambridge".to_string()),
         when_html: None,
+        section_color: None,
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     let expected = format!(r#"<span class="moss-prefix-link-prefix date">1924 · 10 · Cambridge<span class="moss-event-sep"> · </span>{credits}</span>"#);
@@ -335,6 +338,7 @@ fn render_child_wraps_an_event_place_in_its_own_span() {
         url_path: String::new(),
         place: Some("Example Hall".to_string()),
         when_html: Some(when),
+        section_color: None,
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
@@ -365,6 +369,7 @@ fn render_child_event_row_with_only_online_links_title_and_carries_its_online_li
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(html.contains(r#"<a class="moss-card-link" href="spring-gala.html">Spring Gala</a>"#), "{html}");
@@ -396,6 +401,7 @@ fn render_child_never_shows_a_place_beside_a_folders_count() {
         url_path: String::new(),
         place: Some("Kyoto".to_string()),
         when_html: None,
+        section_color: None,
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
@@ -427,6 +433,7 @@ fn flat_row_shows_year_for_month_precision_date() {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
@@ -457,6 +464,7 @@ fn flat_row_passes_through_display_only_date_as_is() {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
@@ -485,6 +493,7 @@ fn flat_row_shows_bare_year_for_year_precision_date() {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
@@ -515,6 +524,7 @@ fn folder_count_uses_chinese_numerals_in_vertical_cjk() {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     };
     let vertical = render_child(&props, crate::i18n::Language::ZhHant, Some("vertical"));
     assert!(vertical.contains("三十八篇"), "{vertical}");
@@ -542,6 +552,7 @@ fn test_render_child_folder_without_description() {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card">"#));
@@ -573,6 +584,7 @@ fn test_render_child_folder_with_description() {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card moss-folder-item">"#));
@@ -605,6 +617,7 @@ fn test_render_child_folder_escapes_html() {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains("&lt;b&gt;Bold&lt;/b&gt; &amp; &quot;Quoted&quot;"));
@@ -631,6 +644,7 @@ fn test_render_child_article_no_date() {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card">"#));
@@ -949,6 +963,7 @@ fn event_row_props(tickets: Option<&str>) -> ChildItemProps {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     }
 }
 

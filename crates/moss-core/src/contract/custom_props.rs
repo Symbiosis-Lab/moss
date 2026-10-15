@@ -317,6 +317,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Scale applied to a river path's own baked stroke-width (`--river-w`, set once per path by raster.ts's `splitMapSvg`), so rivers keep a constant on-screen width as `applyCamera` zooms the world layer instead of thickening with it. Not a theme hook: a hand-set value is overwritten on the next camera settle.",
     },
     CustomProp {
+        name: "--moss-section-color",
+        owner: "body",
+        default: "unset",
+        description: "The accent colour of the section a page sits in, written by moss as an inline style on `<body>` (and on a listing card for such a page, on the card's root element) when a folder's home page declares `color:`; the nearest coloured ancestor folder wins. No moss style reads it, so nothing changes until a theme does: `var(--moss-section-color, var(--moss-color-accent))`. Not set on pages outside any coloured folder, so always give `var()` a fallback.",
+    },
+    CustomProp {
         name: "--moss-sidenote-inset",
         owner: "body",
         default: "0px",
@@ -363,6 +369,12 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         name: "data-path",
         values: &[],
         description: "The page's published address, with a leading and trailing slash, exactly as the sitemap and links spell it: `/` on the front page, `/contact/` for a page at that address, `/zh-hans/about/` for a language edition. It is the address as moss writes it, so a folder named `Film & Sound` is `/film-and-sound/`, and characters outside ASCII appear as written, not percent-encoded. Scope one page with `body[data-path=\"/contact/\"]` and a whole section with `body[data-path^=\"/work/\"]`. A selector on an address breaks when the page is renamed, because the address changes with it.",
+    },
+    ScopeAttr {
+        selector: "body",
+        name: "data-section",
+        values: &[],
+        description: "The url path segment of the folder whose home page sets `color:` for this page: `work` for every page under `/work/`, the nearest coloured folder when they nest. Absent on pages outside any coloured folder, and on a site-wide colour set by the front page. Scope a section with `body[data-section=\"work\"]` and tint it with `var(--moss-section-color)`, instead of `body[data-path^=\"/work/\"]`, which breaks when the folder is renamed.",
     },
     ScopeAttr {
         selector: "html",

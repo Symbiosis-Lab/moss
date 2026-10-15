@@ -191,9 +191,22 @@ pub struct ChildItemProps {
     /// An event's `online:` address. Like `tickets`, a web address here gives
     /// the card its own Online link after Tickets (`event_card_links`).
     pub online: Option<String>,
+    /// The accent colour of the section the page sits in
+    /// (`ParsedDocument::section`), published on the card as
+    /// `--moss-section-color` so a theme can tint cards by section.
+    pub section_color: Option<String>,
 }
 
 impl ChildItemProps {
+    /// The card's ` style="--moss-section-color: …"` attribute, or nothing for
+    /// a page outside any coloured section.
+    pub(crate) fn section_style_attr(&self) -> String {
+        self.section_color
+            .as_deref()
+            .map(|c| format!(r#" style="--moss-section-color: {}""#, html_escape(c)))
+            .unwrap_or_default()
+    }
+
     pub(crate) fn date_sort_key(&self) -> moss_core::sort::DateSortKey<'_> {
         moss_core::sort::DateSortKey {
             date: self.date_raw.as_deref(),
@@ -419,6 +432,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         credits: doc.card_credits.clone(),
         tickets: doc.event.as_ref().and_then(|e| e.tickets.clone()),
         online: doc.event.as_ref().and_then(|e| e.online.clone()),
+        section_color: doc.section.as_ref().map(|s| s.color.clone()),
     }
 }
 

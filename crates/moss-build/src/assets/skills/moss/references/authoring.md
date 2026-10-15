@@ -35,7 +35,7 @@ kind of design call — a page whose whole shape differs from the default: a
 front page that is one full-bleed image, a section index laid out as a poster
 wall. Three moves, in order:
 
-**Scope to a declared attribute.** `moss describe --json` reports `scope_attributes`: the attributes moss guarantees it sets, on which element, with which values. Scope to those rather than to something merely unique to this page today. To style one page or one section, scope to `data-path`, the page's published address: `body[data-path="/contact/"]` matches that page and `body[data-path^="/work/"]` every page under `/work/`. A selector written on a page's address must be updated if the page is renamed, because the address changes with it.
+**Scope to a declared attribute.** `moss describe --json` reports `scope_attributes`: the attributes moss guarantees it sets, on which element, with which values. Scope to those rather than to something merely unique to this page today. To style one page or one section, scope to `data-path`, the page's published address: `body[data-path="/contact/"]` matches that page and `body[data-path^="/work/"]` every page under `/work/`. A selector written on a page's address must be updated if the page is renamed, because the address changes with it. To give a whole folder an accent, put `color: "#a3312a"` on the folder's home page: that page and every page under the folder then carry `data-section="<folder>"` and `--moss-section-color` on `<body>`, and a listing card for such a page carries the same property. Style a section with `[data-section]` and `var(--moss-section-color)` instead of `body[data-path^=…]`, which breaks when a folder is renamed.
 
 ```css
 body[data-page="home"] .moss-hero { --moss-hero-object-position: center; }

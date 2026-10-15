@@ -18,6 +18,7 @@ fn article_props(title: &str, url: &str) -> ChildItemProps {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     }
 }
 
@@ -39,6 +40,7 @@ fn folder_props(title: &str, url: &str, count: usize) -> ChildItemProps {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     }
 }
 
@@ -199,6 +201,7 @@ fn test_render_card_escapes_html() {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     };
     let html = render_with_sort(
         &props,
@@ -409,6 +412,7 @@ fn renders_permalink_star_inside_kicker_when_external_url_overrides_href() {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     };
     let html = render_with_sort(
         &props,
@@ -471,6 +475,7 @@ fn omits_permalink_when_kicker_is_none_even_with_external_url() {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     };
     let html = render_with_sort(
         &props,
@@ -516,6 +521,7 @@ fn cjk_date_keeps_separate_meta_inside_card() {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     };
     let html = render_with_sort(
         &props,
@@ -565,6 +571,7 @@ fn omits_permalink_when_no_external_url() {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     };
     let html = render_with_sort(
         &props,
@@ -608,6 +615,7 @@ fn renders_kicker_above_title_horizontal() {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     };
     let html = render_with_sort(
         &props,
@@ -661,6 +669,7 @@ fn kicker_absorbing_the_date_still_shows_the_place() {
         url_path: String::new(),
         place: Some("Cambridge".to_string()),
         when_html: None,
+        section_color: None,
     };
     let html = render_with_sort(
         &props,
@@ -704,6 +713,7 @@ fn vertical_head_order_matches_horizontal() {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     };
     let html = render_with_sort(
         &props,
@@ -753,6 +763,7 @@ fn vertical_typesetting_still_sets_the_meta_line_with_a_place_appended() {
         url_path: String::new(),
         place: Some("Cambridge".to_string()),
         when_html: None,
+        section_color: None,
     };
     let html = render_with_sort(
         &props,
@@ -791,6 +802,7 @@ fn meta_renders_date_when_axis_is_date() {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     };
     let html = render_with_sort(
         &props,
@@ -824,6 +836,7 @@ fn meta_shows_the_resolved_place_next_to_the_date() {
         url_path: String::new(),
         place: Some("Cambridge".into()),
         when_html: None,
+        section_color: None,
     };
     let html = render_with_sort(
         &props,
@@ -881,6 +894,7 @@ fn meta_collapses_when_axis_is_title() {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     };
     let html = render_with_sort(
         &props,
@@ -914,6 +928,7 @@ fn meta_collapses_when_axis_is_weight() {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     };
     let html = render_with_sort(
         &props,

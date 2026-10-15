@@ -13,5 +13,6 @@ pub(crate) mod case_collision;
 pub mod classify;
 pub mod page_map;
 pub mod scan;
+pub(crate) mod section_color;
 pub mod slug;
 pub(crate) mod sort_inference;

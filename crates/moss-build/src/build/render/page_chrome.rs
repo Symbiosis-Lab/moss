@@ -118,6 +118,12 @@ impl PageChromeContext<'_, '_> {
         // it. A page with no document is the synthetic homepage.
         let address = served_address(doc.map(|d| d.url_path.as_str()).unwrap_or("index.html"));
         body_attrs.push_str(&format!(r#" data-path="{}""#, escape_html_attr(&address)));
+        if let Some(section) = doc.and_then(|d| d.section.as_ref()) {
+            if !section.segment.is_empty() {
+                body_attrs.push_str(&format!(r#" data-section="{}""#, escape_html_attr(&section.segment)));
+            }
+            body_attrs.push_str(&format!(r#" style="--moss-section-color: {}""#, escape_html_attr(&section.color)));
+        }
         let homepage = self.project.homepage_file.as_ref()
             .and_then(|_| self.documents.iter().find(|d| d.url_path == "index.html"));
         // Generated indexes have always read root analytics even when the

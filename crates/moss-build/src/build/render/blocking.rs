@@ -1150,6 +1150,7 @@ pub fn generate_blocking_content_for_build(
         // from listings).
         apply_cascade(&mut documents);
         log::debug!(target: "timing", "[reduce] apply_cascade: {:?}", reduce_start.elapsed());
+        crate::build::scan::section_color::apply_section_colors(&mut documents);
 
         // Populate `direct_children_sort` on every folder index. Must run AFTER
         // `apply_cascade` so that cascaded `sort:` values are visible to the

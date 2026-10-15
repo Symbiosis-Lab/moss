@@ -49,6 +49,15 @@ impl EventFields {
     }
 }
 
+/// The accent a folder's `color:` gives the pages under it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionAccent {
+    /// The validated colour, as written (`#rgb` or `#rrggbb`).
+    pub color: String,
+    /// The coloured folder's own url path segment; empty for the site root.
+    pub segment: String,
+}
+
 /// Parsed markdown document with frontmatter and content.
 ///
 /// Represents a processed markdown file ready for HTML generation.
@@ -520,6 +529,16 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub layout: Option<String>,
+    /// `color:` as written in frontmatter. Only a folder's home page's is read;
+    /// the resolved colour a page inherits from it is [`Self::section`].
+    #[serde(skip)]
+    #[specta(skip)]
+    pub color: Option<String>,
+    /// The section this page sits in, when its folder (or an ancestor folder)
+    /// declares a valid `color:`. Set by `build::scan::section_color`.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub section: Option<SectionAccent>,
     /// Original relative file path (e.g. "友链.md") for filesystem fallbacks like creation date
     #[serde(skip)]
     #[specta(skip)]

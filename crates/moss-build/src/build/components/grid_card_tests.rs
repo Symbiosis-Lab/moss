@@ -19,6 +19,7 @@ fn blank() -> ChildItemProps {
         url_path: String::new(),
         place: None,
         when_html: None,
+        section_color: None,
     }
 }
 
