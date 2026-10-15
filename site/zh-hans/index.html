@@ -1739,7 +1739,7 @@ function mobileInkProgress(text) {
 // second: on a phone the copy crossing the visual, on desktop the page between
 // the two rests, so a scene is whole exactly when its copy has arrived.
 const washAt = (from, to, y = pos()) => mobileLayout() ? clamp01((progressAt() - from) / (to - from)) : clamp01((y - restY(from)) / (restY(to) - restY(from)));
-function closingProgress(y) { return mobileLayout() ? mobileInkProgress(scenesEl[DEPLOY].firstElementChild) : washAt(DEPLOY, SHARE, y); }
+function closingProgress() { return mobileLayout() ? mobileInkProgress(scenesEl[DEPLOY].firstElementChild) : washAt(DEPLOY, SHARE); }
 function mobileVisualBand() {
   const visual = document.getElementById('vis');
   const top = parseFloat(getComputedStyle(visual).top);
@@ -1748,7 +1748,18 @@ function mobileVisualBand() {
 }
 // The crossfade that whitens the copy and brings in the film runs over the
 // last part of the close, after the logos have gone to pigment.
-function xfAt(y) { return smooth(.45, 1, closingProgress(y)); }
+const crossAt = (q) => smooth(.45, 1, q);
+const xfAt = () => crossAt(closingProgress());
+// How far into the close the page stands, read back from the crossfade (crossAt inverted): the one
+// part of a close that outlives it, and before boot the only part drawn, following the page. Short
+// of its span the crossfade reads as the close's start.
+const closeShown = () => xf <= 0 ? 0 : xf >= 1 ? 1 : .45 + .55 * (.5 - Math.sin(Math.asin(1 - 2 * xf) / 3));
+// Whether scene 5 may stand on the reader reaching past the close: once the close has drawn itself to
+// its end, and at once where nothing draws it — before boot, where the crossfade follows the page
+// directly, and on desktop, whose picture follows the page at its own pace. On a booted phone a reader
+// who flings past the close's end runs the paced close first, so the film never comes up over art the
+// dissolve has not reached.
+const closeDrawn = () => xf >= 1 || !booted || !mobileLayout();
 // Scene 5's own scrolling: from the close's rest down to the footer, the page is the browser's.
 const inClose = () => scrollY >= restY(SHARE) - 2;
 // The scene on the far side of this join arrives already standing rather than
@@ -1760,6 +1771,14 @@ function snapStage() {
   stage.classList.add('snap');
   requestAnimationFrame(() => requestAnimationFrame(() => { if (token === snapToken) stage.classList.remove('snap'); }));
 }
+// The close is the third way across a crossing (crossing()), beside the wash and the live fade: its
+// drawing is the close's own progress, which sets both the crossfade and scene 4's dissolve, so the two
+// stay in step. Read straight off the position, a close that started with the reader already deep in it
+// (after a fling, or after a crossing into scene 4 that landed late) drew that depth on its first frame,
+// the art going from whole to mostly gone between two frames. Paced, it covers the art in no fewer than
+// four frames a close and no faster than one dissolve, the rate of the print's own dissolve, which also
+// keeps the drawing behind the recording the dissolve is played from. Desktop's is unpaced, like its
+// wash: the picture it reads keeps its own pace. A close starts from where the crossfade stands.
 async function fade(to) {
   // Restore the centred composition under pigment, never replay its entrance.
   if (shown === SHARE) {
@@ -1768,19 +1787,15 @@ async function fade(to) {
   }
   mountLoop();
   if (reduce) { setCross(to === SHARE ? 1 : 0); return to; }
-  const settled = await new Promise(done => {
-    // the close's own progress, not the crossfade's: the crossfade is only its last part
-    const frame = () => {
-      const q = closingProgress(); setCross(xfAt()); updateFinalDissolve();
-      if (q >= 1 && target !== DEPLOY) done(SHARE);
-      else if (q <= 0 && target !== SHARE) done(DEPLOY);
-      else requestAnimationFrame(f);
-    };
-    // a frame that throws ends the close at the end the reader is headed for, rather than holding the
-    // join open for the rest of the visit
-    const f = () => { try { frame(); } catch (e) { washError = e.message; console.error('close frame failed; ending it:', e); done(target === SHARE ? SHARE : DEPLOY); } };
-    requestAnimationFrame(f);
+  // the close's progress from the crossing's: it runs from scene 4 to scene 5 whichever way it is crossed
+  const q = shown === DEPLOY ? (pos) => pos : (pos) => 1 - pos;
+  const settled = await crossing(to, {
+    pace: mobileLayout() ? 1 : null,
+    start: q(closeShown()),
+    frame(pos) { setCross(crossAt(q(pos))); updateFinalDissolve(q(pos)); return { at: pos }; },
   });
+  // ended by a throw, a close back to scene 4 can stop short of drawing its start
+  if (settled === DEPLOY) updateFinalDissolve(0);
   setCross(settled === SHARE ? 1 : 0); snapStage();
   return settled;
 }
@@ -1809,12 +1824,16 @@ const legToward = (from, want, onHand) => {
 // interiors belong to the scene the reader arrives at, which `still` sets: the
 // one scene that carries a fan sits next to the one join that never washes, so
 // it is always a leg's end and never a scene passed over.
-// How far a wash can go toward `want` with the prints on hand. On mobile a wash
-// does not wait for the next print (pour's half pair), so the next boundary is
-// reachable without it — except the Publish bridge, which needs both prints.
+// How far a wash can go toward `want` with the prints on hand. A boundary that is not a wash stops it
+// where it stands, whatever lies beyond: the close carries no print and has its own mechanism, and a
+// wash re-pointed across it walked the stage to scene 5 with the close never drawn. On mobile a wash
+// does not wait for the next print (pour's half pair), so the next boundary is reachable without it —
+// except the Publish bridge, which needs both prints.
 const reachToward = (from, want) => {
-  const to = legToward(from, want, true), next = stepToward(from, want);
-  return to === from && mobileLayout() && next !== from && joinAt(from, next).wash && Math.min(from, next) !== SHIPS ? next : to;
+  const next = stepToward(from, want);
+  if (next === from || !joinAt(from, next).wash) return from;
+  const to = legToward(from, want, true);
+  return to === from && mobileLayout() && Math.min(from, next) !== SHIPS ? next : to;
 };
 // A join the morph cannot make (no GPU, or a print not yet taken) used to pop: the stage changed scene
 // between two frames. With the print of the scene being left in hand, that print is laid over the
@@ -1834,33 +1853,33 @@ function dissolveFrom(print) {
   veil.animate([{ opacity: 1 }, { opacity: 0 }], DISSOLVE).finished.then(gone, gone);
 }
 // One crossing from the scene shown toward `to`, frame by frame, for every way a scene is left: a
-// wash (pour) and a fade of the live stage (fadeLive). The way across draws; this decides when it is
-// over, the same for both:
+// wash (pour), a fade of the live stage (fadeLive) and the close (fade). The way across draws; this
+// decides when it is over, the same for all three:
 // - the clock is the reader's position (washAt), and a rest's pixel rounding, the .002 targetAt uses,
 //   counts as arrival, or a crossing resting a hair short of its end would hold every later join;
 // - it has arrived once the position has and the drawing has caught up with it;
 // - it is back where it began once the drawing is back at its start and the target no longer lies
 //   ahead, so a drawing that runs behind the position plays back rather than dropping what it shows;
 // - the scene asked for comes into the stage at the drawing's own midpoint (showScene);
-// - past the close, it ends there, and the close stands; on a phone, short of it, the close's
-//   crossfade follows the reader meanwhile;
+// - past the close, it ends there, and the close stands;
 // - a frame that throws ends it at its target and says so in ?washdbg, rather than holding the join
 //   open for the rest of the visit.
 // - a paced drawing follows the position in no fewer than four frames a crossing, so a fling past a
 //   whole crossing in one frame cannot change the scenes between two frames, and no faster than
 //   `way.pace` dissolves a crossing where it has one, whichever is slower: the fade takes two, one out
-//   and one in; the phone's wash has none (see pour). A frame that
+//   and one in, the close one; the phone's wash has none (see pour). A frame that
 //   comes well past the recent frame interval counts for no more than twice it, so one stall cannot
 //   carry a drawing across, while a page that is slow throughout still runs in real time. Desktop's
-//   wash is unpaced: the picture it reads its position from keeps its own pace.
+//   wash and close are unpaced: the picture they read their position from keeps its own pace. A
+//   drawing starts at 0, or where `way.start` says it already stands.
 const toward = (x, goal, step) => goal > x ? Math.min(goal, x + step) : Math.max(goal, x - step);
 async function crossing(to, way) {
   const from = shown;
-  let on = from, last = performance.now(), interval = 1000 / 60, pos = 0, snap = false;
+  let on = from, last = performance.now(), interval = 1000 / 60, pos = way.start ?? 0, snap = false;
   return new Promise((finish) => {
     const frame = (now) => {
       if (way.lost?.()) { finish(to); return; }
-      if (target === SHARE && xfAt() >= 1) { finish(SHARE); return; }
+      if (target === SHARE && xfAt() >= 1 && closeDrawn()) { finish(SHARE); return; }
       if (way.held?.()) { requestAnimationFrame(f); return; }
       const raw = now - last, dt = Math.min(raw, 2 * interval + 1000 / 60); last = now; interval += (raw - interval) / 4;
       const aimed = way.aim?.(to) ?? to;
@@ -1869,10 +1888,6 @@ async function crossing(to, way) {
       pos = snap || way.pace == null ? goal : toward(pos, goal, Math.min(way.pace ? dt / (way.pace * DISSOLVE.duration) : 1, 1 / 4));
       snap = false;
       const { at, stand } = way.frame(pos, raw, to);
-      // A phone reader already in the close keeps its crossfade where the position puts it, so a close
-      // that starts after this crossing does not start with the page jumping there. Desktop's close
-      // follows its own pinned picture, and no crossing runs beside it.
-      if (mobileLayout()) setCross(xfAt());
       if (stand != null && stand !== on) { showScene(stand, way); on = stand; }
       if (at >= 1 - 1e-6 && (w >= 1 || way.unclocked?.())) finish(to);
       else if (at <= 0 && stepToward(from, target) !== stepToward(from, to)) finish(from);
@@ -1969,7 +1984,7 @@ async function runJoin() {
         else if (mobileLayout() && !reduce) shown = await fadeLive(to);
         else { dissolveFrom(sheets[shown]); passThrough(shown, to); shown = to; }
       }
-      if (target === SHARE && xfAt() >= 1) { standAtTerminalClose(); break; }
+      if (target === SHARE && xfAt() >= 1 && closeDrawn()) { standAtTerminalClose(); break; }
       still(shown);
     }
   } finally { driving = false; flushPrintRect(); }
@@ -2947,7 +2962,7 @@ function heldForPrints() {
   return !primed();
 }
 function setTarget(t) {
-  if (t === SHARE && xfAt() >= 1) {
+  if (t === SHARE && xfAt() >= 1 && closeDrawn()) {
     target = t;
     // Closing copy and its poster are independent of the active join.
     mountLoop(); setCross(1); fiveOn(true);
@@ -3399,15 +3414,15 @@ function closingPigmentPrint() {
 // colour before the blooms meet, each keeping more of it (CLOSE_STIR of the
 // usual mixing, and never thinned); that wash turns into the film's, and the
 // film's print gathers over the rest of the close, darkening in step with the
-// crossfade that whitens the copy and brings in the movie itself (xfAt), never
-// ahead of it.
+// crossfade that whitens the copy and brings in the movie itself (crossAt), never
+// ahead of it. `at` is the close's progress as the close draws it (fade), not
+// the reader's position, which the drawing follows at its own pace.
 const CLOSE_HOLD = .04, CLOSE_DOSE = 30, CLOSE_LIFT = .3, CLOSE_STIR = .12;
-function updateFinalDissolve() {
-  if (!sim || reduce || simLost) return;
-  const active = shown >= DEPLOY && +stage.dataset.scene === DEPLOY;
-  const q = active ? closingProgress() : 0;
-  finalDissolve = q;
-  if (!q) {
+function updateFinalDissolve(at) {
+  finalDissolve = at;
+  // The release comes before every other gate: a close that lost the GPU mid-way still has its cover
+  // raised, and leaving it raised on the way back to scene 4 leaves scene 4 invisible.
+  if (!at) {
     if (finalWash) {
       cancelAnimationFrame(finalWash.raf); finalWash = null;
       releasePigmentCover();
@@ -3415,8 +3430,8 @@ function updateFinalDissolve() {
     }
     return;
   }
+  if (!sim || reduce || simLost) return;
   if (!finalWash) {
-    if (!active) return;
     orbitSim?.stop(); orbitFrozen = true; holdVisual(true);
     // The frozen targets and these exact pixels hold through scene 5 and the
     // return trip, until releaseClose(). The close's recording lives with its
@@ -3427,9 +3442,9 @@ function updateFinalDissolve() {
       dropPlaybackPair(); finalPrints.rec = sim.pair({ dose: CLOSE_DOSE, lift: CLOSE_LIFT, stir: CLOSE_STIR, rinse: 0 });
     }
     holdCanvas(finalPrints.source, finalPrints.film, DEPLOY, true, true);
-    finalWash = { goal: q * T_TOTAL, raf: 0, covered: true, rec: finalPrints.rec };
+    finalWash = { goal: at * T_TOTAL, raf: 0, covered: true, rec: finalPrints.rec };
   }
-  const wash = finalWash; wash.goal = q * T_TOTAL;
+  const wash = finalWash; wash.goal = at * T_TOTAL;
   if (wash.raf) return;
   const frame = () => {
     if (finalWash !== wash) return;
@@ -3492,7 +3507,6 @@ function drivePicture(now) {
     else if (now - restSince > (reduce ? 150 : 1500)) { restSince = now; scrollToRest(rest); }
   }
   onScroll(dy);
-  updateFinalDissolve();
   syncHeldVisual();
   const dt = Math.min(0.1, Math.max(0, (now - lastWatchT) / 1000)); lastWatchT = now;
   scrollV *= Math.exp(-dt / V_TAU);
