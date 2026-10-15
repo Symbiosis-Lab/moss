@@ -839,6 +839,9 @@ pub(super) fn render_page<'d>(
                 // flag). The two cases can never both apply to one page — a
                 // term claim always resolves to a sub-key, never the bare
                 // namespace root `is_place_namespace_root` marks.
+                // Where the page's own body ends: a claimed term page's map and
+                // listing are placed relative to it (see `insert_before_sources`).
+                let body_end = content.len();
                 let root_map_key = doc.is_place_namespace_root.then(|| folder_path.as_str());
                 let map_key = term_listing.or(root_map_key).filter(|_| doc.shows_own_map(true));
                 if let Some(map) = map_key.and_then(|key| {
@@ -889,6 +892,10 @@ pub(super) fn render_page<'d>(
                         doc,
                         annotate_children_listing(resolved_html, emit_source_lines),
                     ));
+                }
+                if term_listing.is_some() && !is_explorer_root {
+                    let hosted = content.split_off(body_end);
+                    content = crate::build::terms::insert_before_sources(&content, &hosted, doc.lang, doc.lang_tag.as_deref().unwrap_or(""));
                 }
             }
 

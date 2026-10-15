@@ -25,6 +25,8 @@ use crate::build::scan::article_map::to_pretty_url;
 use crate::build::types::ParsedDocument;
 
 mod roles;
+mod listing_placement;
+pub(crate) use listing_placement::insert_before_sources;
 pub use roles::{set_card_credits, term_role_heading, term_role_label};
 mod kinds;
 pub use kinds::{declared_name_list_fields, term_kinds, TermKind, BUILTIN_DEFAULT_FIELDS};

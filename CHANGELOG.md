@@ -86,6 +86,7 @@ All notable changes to moss will be documented here.
 
 ### Changed
 
+- On a page that is also a term's page (a person's own page that their name links to), the list of pages carrying the term now comes before a closing `## Sources` or `## References` section (`## Quellen`, and the Chinese equivalents) instead of after the whole body, so the sources stay at the foot of the page, in reading order as well as on screen. Any other page body is unchanged.
 - `moss import` turns a site builder's map block into a map with a directions link.
 - `moss import` lists, page by page, the embedded widgets it could not carry, instead of only counting them.
 - Hover link previews now open only for a link inside a page's written paragraphs. They no longer open over hero captions, image captions, credit lists, cards, lists, navigation, the header or the footer, where a card hid the work the link points at. Links written in ordinary paragraphs keep their previews, so a site that links from its prose is unchanged. The `[site].link_preview = false` setting that turns previews off is now documented in `moss describe`.

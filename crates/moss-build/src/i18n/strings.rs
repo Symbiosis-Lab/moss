@@ -15,6 +15,20 @@ pub fn term_root_title(lang: Language, ns: &str) -> &'static str {
     t(lang, if ns == moss_core::terms::AUTHOR_NS { "term_authors_title" } else { "term_tags_title" })
 }
 
+/// The headings that name a page's sources section, compared
+/// case-insensitively against a heading's text. `lang_tag` is the page's
+/// declared language: German is not an interface language, so it is told
+/// apart from English by its tag. Any other language reads English.
+pub fn sources_headings(lang: Language, lang_tag: &str) -> &'static [&'static str] {
+    let primary = lang_tag.split(['-', '_']).next().unwrap_or("");
+    match lang {
+        Language::ZhHans => &["来源", "参考资料"],
+        Language::ZhHant => &["來源", "參考資料"],
+        Language::En if primary.eq_ignore_ascii_case("de") => &["Quellen"],
+        Language::En => &["Sources", "References"],
+    }
+}
+
 pub fn t(lang: Language, key: &str) -> &'static str {
     match key {
         // Month names (full)
