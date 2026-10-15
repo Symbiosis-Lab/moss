@@ -209,6 +209,22 @@ pub fn render_blocks<H: RenderHooks + ?Sized>(hooks: &H, out: &mut String, block
     render_blocks_with(hooks, out, blocks, &mut FootnoteCtx::default());
 }
 
+/// [`render_blocks`] for a fragment whose blocks have positions (`metas`
+/// parallel to `blocks`; a missing entry renders unannotated), so a hero
+/// overlay or grid cell keeps its `data-source-line`s.
+pub fn render_blocks_with_meta<H: RenderHooks + ?Sized>(
+    hooks: &H,
+    out: &mut String,
+    blocks: &[Block],
+    metas: &[BlockMeta],
+) {
+    let mut fnotes = FootnoteCtx::default();
+    for (i, block) in blocks.iter().enumerate() {
+        let meta = metas.get(i).copied().unwrap_or_default();
+        render_block(hooks, out, block, &meta, &mut fnotes);
+    }
+}
+
 /// The in-document nested-block walk: same as [`render_blocks`] but keeps
 /// the caller's footnote state, so a marker inside a blockquote, callout,
 /// multi-paragraph list item or link card is numbered like any other.

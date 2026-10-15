@@ -3,24 +3,7 @@ use super::*;
 /// A card with nothing filled in — every test names only what it is about.
 fn blank() -> ChildItemProps {
     ChildItemProps {
-        online: None,
-        credits: None,
-        tickets: None,
-        title: String::new(),
-        url: String::new(),
-        date_display: None,
-        date_raw: None,
-        child_count: None,
-        description: None,
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
-        place: None,
-        when_html: None,
-        section_color: None,
-        count_setting: None,
+        ..Default::default()
     }
 }
 

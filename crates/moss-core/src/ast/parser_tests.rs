@@ -2459,3 +2459,46 @@ fn inline_image_in_prose_keeps_its_trailing_pipe() {
         other => panic!("expected Paragraph, got {other:?}"),
     }
 }
+
+fn tracked_html(md: &str, offset: usize) -> String {
+    let config = ParseConfig { emit_source_lines: true, source_line_offset: offset, ..ParseConfig::default() };
+    let doc = parse_with_config(md, &config);
+    crate::ast::render::render_document(&doc, &crate::ast::hooks::DefaultHooks::new())
+}
+
+#[test]
+fn hero_spans_its_fence_and_annotates_the_lines_inside() {
+    let md = "\n:::hero {align=center}\n# Short heading\n\nOne line of overlay text.\n:::\n\nBody text below the hero.\n";
+    let html = tracked_html(md, 0);
+    assert!(html.contains(r#"data-source-range="2-6""#), "fence 2..6: {html}");
+    assert!(html.contains(r#"<h1 id="short-heading" data-source-line="3""#), "h1 on 3: {html}");
+    assert!(html.contains(r#"<p data-source-line="5">One line"#), "p on 5: {html}");
+    assert!(html.contains(r#"<p data-source-line="8">Body text"#), "body p on 8: {html}");
+}
+
+#[test]
+fn fragment_lines_follow_the_frontmatter_offset() {
+    let md = ":::hero\n# Title\n:::\n";
+    let html = tracked_html(md, 4);
+    assert!(html.contains(r#"data-source-range="5-7""#), "{html}");
+    assert!(html.contains(r#"data-source-line="6""#), "{html}");
+}
+
+#[test]
+fn grid_cells_carry_their_range_and_inner_lines() {
+    let md = "intro\n\n:::grid 2\nleft one\n\nleft two\n---\nright\n:::\n";
+    let html = tracked_html(md, 0);
+    assert!(html.contains(r#"class="moss-grid" data-columns="2" data-source-range="3-9""#), "{html}");
+    assert!(html.contains(r#"<div class="moss-grid-card" data-source-range="4-6"><p data-source-line="4">left one"#), "{html}");
+    assert!(html.contains(r#"<p data-source-line="6">left two"#), "{html}");
+    assert!(html.contains(r#"<div class="moss-grid-card" data-source-range="8-8"><p data-source-line="8">right"#), "{html}");
+}
+
+#[test]
+fn fragments_are_unannotated_when_tracking_is_off() {
+    let html = crate::ast::render::render_document(
+        &parse(":::grid 2\nleft\n---\nright\n:::\n"),
+        &crate::ast::hooks::DefaultHooks::new(),
+    );
+    assert!(!html.contains("data-source"), "{html}");
+}

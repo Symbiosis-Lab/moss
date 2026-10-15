@@ -64,11 +64,11 @@ pub use node::{Block, CalloutKind, Fold, Inline};
 pub use parser::{parse, parse_with_config, parser_options, unwrap_implicit_figures, ParseConfig};
 pub use plain_text::{inlines_to_plain_text, render_plain_text};
 pub use query::{find_first_block_image, images_without_text, marked_media_at, MarkedMedia, MediaMarker};
-pub use render::{render_block_with_meta, render_blocks, render_document};
+pub use render::{render_block_with_meta, render_blocks, render_blocks_with_meta, render_document};
 pub use resolve_urls::{classify_remaining_urls, resolve_urls, UrlResolution};
 pub use shortcode::{
     ButtonItem, ButtonsShortcode, GalleryItem, GalleryShortcode, GridShortcode, HeroShortcode,
-    RecentShortcode, Shortcode, ShortcodeKind, SubscribeShortcode,
+    RecentShortcode, Shortcode, ShortcodeKind, ShortcodeSource, SourceFragment, SubscribeShortcode,
 };
 pub use tags::extract_inline_tags;
 pub use url::{ResolvedUrl, Url, UrlKind};

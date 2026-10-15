@@ -184,13 +184,15 @@ fn normalize_html(content: &str) -> String {
 
     // Strip staging/ preview annotation attributes so snapshot golden files
     // remain valid. staging/ carries data-source-line, data-source-fm,
-    // data-source-none, and data-moss-preview for editor scroll-sync.
+    // data-source-file, data-source-none, and data-moss-preview for editor scroll-sync.
     // ship_phase strips them for deploy-ready output; normalize_html must
     // strip them too so snapshots are portable between staging/ and deploy.
     let anno_line_re = regex::Regex::new(r#" data-source-line="\d+""#).unwrap();
     normalized = anno_line_re.replace_all(&normalized, "").to_string();
     let anno_fm_re = regex::Regex::new(r#" data-source-fm="[^"]*""#).unwrap();
     normalized = anno_fm_re.replace_all(&normalized, "").to_string();
+    let anno_file_re = regex::Regex::new(r#" data-source-file="[^"]*""#).unwrap();
+    normalized = anno_file_re.replace_all(&normalized, "").to_string();
     let anno_none_re = regex::Regex::new(r#" data-source-none"#).unwrap();
     normalized = anno_none_re.replace_all(&normalized, "").to_string();
     let anno_preview_re = regex::Regex::new(r#" data-moss-preview"#).unwrap();

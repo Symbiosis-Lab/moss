@@ -605,6 +605,7 @@ mod tests {
         // descend into the inner block sequences.
         let cell = vec![img_block("grid.png")];
         let doc = Document::from_blocks(vec![Block::Shortcode(Shortcode::Grid(GridShortcode {
+            source: Default::default(),
             columns: 1,
             ratio: None,
             classes: String::new(),
@@ -648,6 +649,7 @@ mod tests {
         // behavior where the hero is part of the body until hoisted).
         let overlay = vec![img_block("overlay.jpg")];
         let doc = Document::from_blocks(vec![Block::Shortcode(Shortcode::Hero(HeroShortcode {
+            source: Default::default(),
             image: Some(Url::resolved("hero.jpg", UrlKind::Asset)),
             image_alt: String::new(),
             extra_images: Vec::new(),

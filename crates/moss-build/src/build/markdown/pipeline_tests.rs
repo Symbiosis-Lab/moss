@@ -2303,8 +2303,8 @@ fn process_markdown_file_omits_data_source_line_when_flag_off() {
     );
 }
 
-/// Task E1 (source-annotation-completeness): shortcode blocks carry a
-/// point `data-source-range="N-N"` on their outermost element when
+/// Shortcode blocks carry `data-source-range="N-M"` (opening through closing
+/// fence) on their outermost element when
 /// `emit_source_lines=true`, so the editor bridge's `resolveSourceTarget`
 /// routes a click on a `:::grid` / `:::hero` back to its source line.
 /// Grid renders inline (Hero is hoisted to the heading slot), so the
@@ -2328,10 +2328,15 @@ fn process_markdown_file_emits_data_source_range_on_shortcode_when_flag_on() {
         PageContext::default(),
     )
     .expect("pipeline should succeed");
-    // The :::grid opener is on body line 3.
+    // The :::grid fence runs from body line 3 to 6; the cell's text is on 4-5.
     assert!(
-        doc.html_content.contains(r#"data-source-range="3-3""#),
-        "grid should carry a point source range on body line 3, got: {}",
+        doc.html_content.contains(r#"data-source-range="3-6""#),
+        "grid should carry its fence range, got: {}",
+        doc.html_content
+    );
+    assert!(
+        doc.html_content.contains(r#"data-source-range="4-5"><p data-source-line="4">left"#),
+        "the cell should carry its range and the line of its paragraph, got: {}",
         doc.html_content
     );
 }
@@ -3487,6 +3492,36 @@ fn parse_with_graph_cfg(
         PageContext::default(),
     )
     .expect("should parse")
+}
+
+/// A click inside a hoisted hero must reach the line it came from: the
+/// section spans the fence, and the overlay's blocks carry their own lines.
+#[test]
+fn hoisted_hero_spans_its_fence_and_annotates_overlay_lines() {
+    let md = "\n:::hero {align=center}\n![[busy.png]]\n# Short heading\n\nOne line of overlay text.\n:::\n\nBody text below the hero.\n";
+    let mut b = moss_core::content_graph::ContentGraphBuilder::new();
+    b.add_file("busy.png", "busy");
+    let graph = b.build();
+    let doc = process_markdown_file(
+        "test.md",
+        md,
+        "site",
+        &HashMap::new(),
+        true,
+        crate::i18n::Language::En,
+        None,
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
+        None,
+        None,
+        Some(&graph),
+        PageContext::default(),
+    )
+    .expect("should parse");
+    let hero = doc.hero_html.expect("hero hoisted");
+    assert!(hero.contains(r#"data-source-range="2-7""#), "got: {hero}");
+    assert!(hero.contains(r#"<h1 id="short-heading" data-source-line="4""#), "got: {hero}");
+    assert!(hero.contains(r#"<p data-source-line="6">One line"#), "got: {hero}");
+    assert!(doc.html_content.contains(r#"<p data-source-line="9">Body text"#), "got: {}", doc.html_content);
 }
 
 #[test]

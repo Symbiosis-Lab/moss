@@ -34,7 +34,8 @@ use super::node::{Block, Inline};
 use super::parser::{parse_fragment_with_config, ParseConfig};
 use crate::resolve::md_extract::{AssetPathSpan, MediaLineSpan, PathContainer};
 use super::shortcode::{HeroShortcode, Shortcode};
-use super::shortcode_extract::{fragment_parts, Diagnostics};
+use super::shortcode::ShortcodeSource;
+use super::shortcode_extract::{config_at_body_line, fragment_parts, source_fragment, Diagnostics};
 use super::url::Url;
 
 /// Captured Hero data after extraction.
@@ -282,7 +283,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
     if let Some(image_value) = parsed.get("image") {
         let (path, attrs_str) = crate::media::split_pipe(image_value);
         let overlay_text = body.trim().to_string();
-        let (overlay, overlay_warnings) = parse_overlay_to_blocks(&overlay_text, config);
+        let (overlay, source, overlay_warnings) = parse_overlay_to_blocks(&overlay_text, body, config);
         return (
             HeroShortcode {
                 image: if path.trim().is_empty() {
@@ -295,6 +296,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 attrs: attrs_str.to_string(),
                 classes,
                 overlay,
+                source,
                 overlay_text,
                 width,
                 mobile,
@@ -314,7 +316,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
     if !positional.is_empty() {
         let (path, attrs_str) = crate::media::split_pipe(positional);
         let overlay_text = body.trim().to_string();
-        let (overlay, overlay_warnings) = parse_overlay_to_blocks(&overlay_text, config);
+        let (overlay, source, overlay_warnings) = parse_overlay_to_blocks(&overlay_text, body, config);
         return (
             HeroShortcode {
                 image: if path.trim().is_empty() {
@@ -327,6 +329,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 attrs: attrs_str.to_string(),
                 classes,
                 overlay,
+                source,
                 overlay_text,
                 width,
                 mobile,
@@ -387,7 +390,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
         .join("\n")
         .trim()
         .to_string();
-    let (overlay, overlay_warnings) = parse_overlay_to_blocks(&overlay_text, config);
+    let (overlay, source, overlay_warnings) = parse_overlay_to_blocks(&overlay_text, body, config);
     (
         HeroShortcode {
             image: image_path.map(Url::unresolved),
@@ -396,6 +399,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
             attrs: image_attrs,
             classes,
             overlay,
+            source,
             overlay_text,
             width,
             mobile,
@@ -452,11 +456,25 @@ fn is_media_attrs_pipe(pipe: &str) -> bool {
 /// overlay body) are carried out here rather than dropped, so they reach
 /// [`parse_hero`] → [`super::shortcode_extract::parse_shortcode_block`],
 /// which already merges its `Vec<String>` into `doc.warnings`.
-fn parse_overlay_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Diagnostics) {
+///
+/// `body` is the hero's whole body, which the overlay text is cut from; the
+/// overlay's first line is where its text first appears there.
+fn parse_overlay_to_blocks(
+    raw: &str,
+    body: &str,
+    config: &ParseConfig,
+) -> (Vec<Block>, ShortcodeSource, Diagnostics) {
     if raw.is_empty() {
-        return (Vec::new(), Diagnostics::default());
+        return (Vec::new(), ShortcodeSource::default(), Diagnostics::default());
     }
-    fragment_parts(parse_fragment_with_config(raw, config))
+    let body_line = body.find(raw).map_or(0, |at| body[..at].matches('\n').count());
+    let (blocks, metas, diag) =
+        fragment_parts(parse_fragment_with_config(raw, &config_at_body_line(config, body_line)));
+    let source = ShortcodeSource {
+        extra_lines: 0,
+        fragments: vec![source_fragment(config, body_line, raw, metas)],
+    };
+    (blocks, source, diag)
 }
 
 /// A caption is one line of inline markdown. Anything that does not parse to

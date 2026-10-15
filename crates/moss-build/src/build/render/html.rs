@@ -1140,6 +1140,7 @@ pub(super) fn render_page<'d>(
                         url_path: d.url_path.clone(),
                         place: d.place_names.clone(),
                         when_html: None,
+                        source_file: d.source_path.clone(),
                     }
                 })
                 .collect();

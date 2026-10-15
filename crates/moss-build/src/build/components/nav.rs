@@ -316,7 +316,16 @@ impl<'a> NavigationBuilder<'a> {
                 } else {
                     ""
                 };
-                (doc.weight, doc.nav_text(), format!(r#"<a href="{}"{attrs}>{}</a>"#, href, label))
+                // Editor preview: the entry's settings (`nav`, `nav_label`,
+                // `weight`) live in that page's frontmatter, not the open file's.
+                let source = match &doc.source_path {
+                    Some(path) => format!(
+                        r#" data-source-file="{}" data-source-fm="nav""#,
+                        crate::build::features::html_escape(path)
+                    ),
+                    _ => String::new(),
+                };
+                (doc.weight, doc.nav_text(), format!(r#"<a href="{}"{attrs}{source}>{}</a>"#, href, label))
             })
             .collect();
 

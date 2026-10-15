@@ -2,16 +2,13 @@ use super::*;
 
 fn make_article(title: &str, date_raw: Option<&str>, url: &str) -> ArticleListItemProps {
     ArticleListItemProps {
-        credits: None,
         date_display: date_raw
             .map(|d| super::super::date::format_date_string(d))
             .unwrap_or_default(),
         date_raw: date_raw.map(|s| s.to_string()),
         url: url.to_string(),
         title: title.to_string(),
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     }
 }
 

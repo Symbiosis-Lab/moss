@@ -689,6 +689,24 @@ fn editor_preview_breadcrumb_and_logo_name_their_fields() {
 }
 
 #[test]
+fn nav_entry_names_the_page_that_owns_it() {
+    // A nav entry is rendered into every page but its settings (`nav`,
+    // `nav_label`, `weight`) live in that page's frontmatter.
+    let mut about = make_doc("about.html", "About", Some(1), Some(true));
+    about.source_path = Some("about & more.md".into());
+    let documents = vec![about, make_doc("contact.html", "Contact", Some(2), Some(true))];
+    let html = NavigationBuilder::new(&documents, "Site", None, crate::i18n::Language::En, false)
+        .generate_navigation();
+    assert!(
+        html.contains(r#"<a href="/about" data-source-file="about &amp; more.md" data-source-fm="nav">About</a>"#),
+        "{html}"
+    );
+    assert!(html.contains(r#"<a href="/contact">Contact</a>"#), "no source path, no claim: {html}");
+    let shipped = crate::build::ship::apply_transform(crate::build::ship::ShipTransform::StripPreviewAttrs, html.as_bytes());
+    assert!(!String::from_utf8(shipped).unwrap().contains("data-source"));
+}
+
+#[test]
 fn test_breadcrumb_not_rendered_on_root_page() {
     // Root pages (depth 0) should not get breadcrumbs even with breadcrumb: true on homepage
     let documents = vec![

@@ -18,8 +18,11 @@
 //!
 //! - `stage_dir/` (`.moss/build.nosync/staging/`) — writer surface + at-rest reader.
 //!   All emits write here. HTML carries preview-only annotations
-//!   (`data-source-line`, `data-source-range`, `data-source-fm`, `data-source-none`,
-//!   `data-moss-preview`) used by editor↔preview scroll-sync and click-to-source.
+//!   (`data-source-line`, `data-source-range`, `data-source-fm`, `data-source-file`,
+//!   `data-source-none`, `data-moss-preview`) used by editor↔preview scroll-sync
+//!   and click-to-source. `data-source-file` names the page (path from the site
+//!   root) that owns an element rendered into another page: a listing card, a
+//!   navigation entry. Lines and fields then refer to that file, not this one.
 //!   The preview server reads from stage when no rebuild is in progress.
 //!
 //! - `generations/<gen-id>/` — immutable frozen deploy output. Written once by

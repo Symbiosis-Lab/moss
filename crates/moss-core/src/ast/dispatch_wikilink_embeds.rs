@@ -642,6 +642,7 @@ mod tests {
         }])];
         let mut doc =
             Document::from_blocks(vec![Block::Shortcode(Shortcode::Grid(GridShortcode {
+                source: Default::default(),
                 columns: 1,
                 ratio: None,
                 classes: String::new(),
@@ -677,6 +678,7 @@ mod tests {
         }])];
         let mut doc =
             Document::from_blocks(vec![Block::Shortcode(Shortcode::Hero(HeroShortcode {
+                source: Default::default(),
                 image: None,
                 image_alt: String::new(),
                 extra_images: Vec::new(),

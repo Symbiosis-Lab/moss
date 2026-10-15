@@ -79,11 +79,9 @@ fn hero_href_is_video(href: &str) -> bool {
 /// :::hero block once Step 2 of the unified-grammar migration moves Hero
 /// into the typed AST.
 ///
-/// Click-to-source: when `source_line` is `Some(n)`, the outermost
-/// `<section class="moss-hero">` carries `data-source-range="n-n"` (a point
-/// range) so the editor bridge's `resolveSourceTarget` routes a click back
-/// to the `:::hero` line. `None` for callers without a source position
-/// (parity probes, fragment renders).
+/// Click-to-source: with `source_line` `Some(n)`, the outermost `<section>`
+/// carries `data-source-range="n-m"` (opening through closing fence). `None`
+/// for callers without a source position.
 pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
     args: &moss_core::ast::HeroShortcode,
     // Phase 4 PR4.5 (2026-05-28): Hero overlay is now typed
@@ -100,9 +98,9 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
     // behavior for test/fragment-render contexts without a media manifest.
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     // Click-to-source: when `Some(n)`, the hero's outermost `<section>`
-    // carries `data-source-range="n-n"` (a point range) so the editor
-    // bridge's `resolveSourceTarget` routes clicks back to the `:::hero`
-    // line. `None` for callers that don't carry source positions.
+    // carries `data-source-range="n-m"` so the editor bridge's
+    // `resolveSourceTarget` routes clicks back to the `:::hero` block.
+    // `None` for callers that don't carry source positions.
     source_line: Option<usize>,
     dominant_color: Option<&str>,
     lang: crate::i18n::Language,
@@ -138,7 +136,7 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
     // covered): the stylesheet's grow-to-fit overlay layout keys on this.
     let overlay_attr = if is_plate { "" } else { " data-overlay" };
     let source_range_attr = match source_line {
-        Some(n) => format!(r#" data-source-range="{n}-{n}""#),
+        Some(n) => format!(r#" data-source-range="{}""#, args.source.range_from(n)),
         None => String::new(),
     };
     let mobile_attr = if args.mobile.as_deref() == Some("overlay") {
@@ -533,7 +531,12 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
         // an unused-arg until PR7a flips production to `render_document`.
         let mut html_content = String::new();
         let hooks = moss_core::ast::DefaultHooks::hero_overlay(media_assets);
-        moss_core::ast::render::render_blocks(&hooks, &mut html_content, &args.overlay);
+        moss_core::ast::render::render_blocks_with_meta(
+            &hooks,
+            &mut html_content,
+            &args.overlay,
+            args.source.fragments.first().map_or(&[], |f| f.blocks.as_slice()),
+        );
         // Collapse tag-adjacent newlines to match production push_html
         // byte shape (no `>\n<`). Inside text content, embedded newlines
         // are preserved.
@@ -983,7 +986,16 @@ mod tests {
         let html = render_hero_html_typed(&args, &resolver, None, Some(5), None, crate::i18n::Language::En);
         assert!(
             html.contains(r#"data-source-range="5-5""#),
-            "hero with source_line=Some(5) should emit data-source-range=\"5-5\", got: {html}"
+            "hero with source_line=Some(5) and no fence length should emit a point range, got: {html}"
+        );
+        let args = moss_core::ast::HeroShortcode {
+            source: moss_core::ast::ShortcodeSource { extra_lines: 5, fragments: vec![] },
+            ..Default::default()
+        };
+        let html = render_hero_html_typed(&args, &resolver, None, Some(2), None, crate::i18n::Language::En);
+        assert!(
+            html.contains(r#"data-source-range="2-7""#),
+            "hero range runs from the opening fence to the closing fence, got: {html}"
         );
     }
 

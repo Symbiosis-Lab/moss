@@ -463,9 +463,7 @@ pub trait RenderHooks {
                 // line. Same start/end = point range (mirrors the Grid arm).
                 if let Some(n) = source_line {
                     out.push_str(r#" data-source-range=""#);
-                    out.push_str(&n.to_string());
-                    out.push('-');
-                    out.push_str(&n.to_string());
+                    out.push_str(&args.source.range_from(n));
                     out.push('"');
                 }
                 out.push('>');
@@ -552,6 +550,7 @@ pub trait RenderHooks {
                     render_hero_overlay_blocks(
                         self.gallery_assets(),
                         &args.overlay,
+                        args.source.fragments.first().map_or(&[], |f| f.blocks.as_slice()),
                         &mut overlay_html,
                     );
                     let collapsed = collapse_tag_adjacent_newlines(&overlay_html);
@@ -1043,9 +1042,10 @@ fn push_bare_img(
 fn render_hero_overlay_blocks(
     snapshot: Option<&crate::asset_snapshot::AssetSnapshot>,
     blocks: &[super::node::Block],
+    metas: &[super::document::BlockMeta],
     out: &mut String,
 ) {
-    super::render::render_blocks(&DefaultHooks::hero_overlay(snapshot), out, blocks);
+    super::render::render_blocks_with_meta(&DefaultHooks::hero_overlay(snapshot), out, blocks, metas);
 }
 
 /// Collapse `\n` that follows a heading or paragraph closing tag when the
@@ -2282,6 +2282,7 @@ mod tests {
         let snap = ladder_snapshot("photo.jpg");
         let hooks = DefaultHooks::with_snapshot(&snap);
         let grid = Shortcode::Grid(crate::ast::GridShortcode {
+            source: Default::default(),
             columns: 3,
             ratio: None,
             classes: String::new(),
@@ -2312,6 +2313,7 @@ mod tests {
         let snap = ladder_snapshot("photo.jpg");
         let hooks = DefaultHooks::with_snapshot(&snap);
         let grid = Shortcode::Grid(crate::ast::GridShortcode {
+            source: Default::default(),
             columns: 2,
             ratio: None,
             classes: String::new(),

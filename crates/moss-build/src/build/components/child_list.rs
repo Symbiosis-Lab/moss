@@ -18,7 +18,7 @@ use crate::build::media::cover::{detect_cover_type, html_escape, CoverType};
 use crate::build::types::ParsedDocument;
 
 /// Properties for rendering an article list item
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ArticleListItemProps {
     /// Formatted date display (e.g., "2025 · 09" or "September 2, 2025")
     pub date_display: String,
@@ -40,6 +40,8 @@ pub struct ArticleListItemProps {
     pub when_html: Option<String>,
     /// The page's listed names, pre-rendered (`ChildItemProps::credits`).
     pub credits: Option<String>,
+    /// Source path of the page this row stands for (`ParsedDocument::source_path`).
+    pub source_file: Option<String>,
 }
 
 impl ArticleListItemProps {
@@ -51,6 +53,12 @@ impl ArticleListItemProps {
             url_path: &self.url_path,
         }
     }
+}
+
+/// ` data-source-file="…"` for an element whose source is another page, or
+/// nothing when the path is unknown.
+pub(crate) fn source_file_attr(path: Option<&str>) -> String {
+    path.map(|p| format!(r#" data-source-file="{}""#, html_escape(p))).unwrap_or_default()
 }
 
 /// Renders an article list item as HTML.
@@ -88,7 +96,8 @@ pub fn render(
 ) -> String {
     if no_date {
         return format!(
-            r#"<p class="moss-card"><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-title title">{}</span></a></p>"#,
+            r#"<p class="moss-card"{}><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-title title">{}</span></a></p>"#,
+            source_file_attr(props.source_file.as_deref()),
             html_escape(&props.url),
             html_escape(&props.title)
         );
@@ -127,7 +136,8 @@ pub fn render(
         )
     };
     format!(
-        r#"<p class="moss-card"><a href="{}" class="moss-prefix-link">{}<span class="moss-prefix-link-title title">{}</span></a></p>"#,
+        r#"<p class="moss-card"{}><a href="{}" class="moss-prefix-link">{}<span class="moss-prefix-link-title title">{}</span></a></p>"#,
+        source_file_attr(props.source_file.as_deref()),
         html_escape(&props.url),
         prefix,
         html_escape(&props.title)
@@ -135,7 +145,7 @@ pub fn render(
 }
 
 /// Properties for rendering a child list item (article or folder)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ChildItemProps {
     pub title: String,
     pub url: String,
@@ -195,6 +205,10 @@ pub struct ChildItemProps {
     /// (`ParsedDocument::section`), published on the card as
     /// `--moss-section-color` (with its readable text variants) so a theme can tint cards by section.
     pub section_color: Option<crate::build::types::SectionAccent>,
+    /// Source path of the page this card stands for (`ParsedDocument::source_path`),
+    /// published as `data-source-file` on the card's root so a click in the
+    /// preview opens that page rather than the listing.
+    pub source_file: Option<String>,
     /// The listing's `children_count:` setting, applied to a folder's count.
     pub count_setting: Option<moss_core::frontmatter_union::ChildrenCount>,
 }
@@ -205,6 +219,10 @@ impl ChildItemProps {
     pub(crate) fn count_label(&self, lang: crate::i18n::Language, typesetting: Option<&str>) -> Option<String> {
         let count = self.child_count?;
         crate::i18n::card_count_label(lang, count, typesetting, self.count_setting.as_ref())
+    }
+
+    pub(crate) fn source_file_attr(&self) -> String {
+        source_file_attr(self.source_file.as_deref())
     }
 
     /// The card's ` style="--moss-section-color: …"` attribute, or nothing for
@@ -443,6 +461,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         tickets: doc.event.as_ref().and_then(|e| e.tickets.clone()),
         online: doc.event.as_ref().and_then(|e| e.online.clone()),
         section_color: doc.section.clone(),
+        source_file: doc.source_path.clone(),
     }
 }
 
@@ -545,16 +564,16 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
             // Folder WITH description: title + count suffix, description below
             let (open, title, close) = row_parts(props, event, "moss-prefix-link moss-folder-link", "moss-prefix-link-title");
             format!(
-                r#"<div class="moss-card moss-folder-item">{}{}{}{}<p class="moss-folder-description">{}</p></div>"#,
-                open, title, meta_span("moss-prefix-link-suffix"), close,
+                r#"<div class="moss-card moss-folder-item"{}>{}{}{}{}<p class="moss-folder-description">{}</p></div>"#,
+                props.source_file_attr(), open, title, meta_span("moss-prefix-link-suffix"), close,
                 crate::build::page::meta::render_description_html(desc)
             )
         } else {
             // Folder WITHOUT description: count in prefix slot
             let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
             format!(
-                r#"<div class="moss-card">{}{}{}{}</div>"#,
-                open, meta_span("moss-prefix-link-prefix"), title, close
+                r#"<div class="moss-card"{}>{}{}{}{}</div>"#,
+                props.source_file_attr(), open, meta_span("moss-prefix-link-prefix"), title, close
             )
         }
     } else if let Some(ref date_raw) = props.date_raw {
@@ -567,8 +586,8 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
         let date = leaf_meta(&date, props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref());
         let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
         format!(
-            r#"<div class="moss-card">{}<span class="moss-prefix-link-prefix date">{}</span>{}{}</div>"#,
-            open, date, title, close
+            r#"<div class="moss-card"{}>{}<span class="moss-prefix-link-prefix date">{}</span>{}{}</div>"#,
+            props.source_file_attr(), open, date, title, close
         )
     } else if let Some(ref date_display) = props.date_display {
         // Article with a display date but no raw date. `date_display` is
@@ -577,15 +596,15 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
         let date = leaf_meta(date_display, props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref());
         let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
         format!(
-            r#"<div class="moss-card">{}<span class="moss-prefix-link-prefix date">{}</span>{}{}</div>"#,
-            open, date, title, close
+            r#"<div class="moss-card"{}>{}<span class="moss-prefix-link-prefix date">{}</span>{}{}</div>"#,
+            props.source_file_attr(), open, date, title, close
         )
     } else {
         // Article without any date
         let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
         format!(
-            r#"<div class="moss-card">{}{}{}</div>"#,
-            open, title, close
+            r#"<div class="moss-card"{}>{}{}{}</div>"#,
+            props.source_file_attr(), open, title, close
         )
     }
 }

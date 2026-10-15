@@ -191,7 +191,7 @@ fn render_item(
     let event = event_card_links(props, lang);
     let (open, close, title_html, actions_html) = match &event {
         Some(links) => (
-            format!(r#"<div class="moss-card"{}>"#, cover_color_attrs),
+            format!(r#"<div class="moss-card"{}{}>"#, props.source_file_attr(), cover_color_attrs),
             "</div>",
             format!(r#"<span class="moss-card-title">{}</span>"#, links.title),
             links.actions.as_str(),
@@ -203,7 +203,7 @@ fn render_item(
                 format!(r#" aria-label="{}""#, html_escape(&props.title))
             };
             (
-                format!(r#"<a href="{}" class="moss-card"{}{}>"#, html_escape(&props.url), label_attr, cover_color_attrs),
+                format!(r#"<a href="{}" class="moss-card"{}{}{}>"#, html_escape(&props.url), label_attr, props.source_file_attr(), cover_color_attrs),
                 "</a>",
                 format!(r#"<span class="moss-card-title">{}</span>"#, html_escape(&props.title)),
                 "",

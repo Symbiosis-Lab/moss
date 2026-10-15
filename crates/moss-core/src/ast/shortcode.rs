@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::document::BlockMeta;
 use super::node::{Block, Inline};
 use super::url::Url;
 
@@ -153,6 +154,47 @@ pub struct GalleryItem {
     pub attrs: String,
 }
 
+/// Where a fenced shortcode's inner content sits in the page source, so a click
+/// in the preview can reach the line inside a hero overlay or a grid cell.
+/// Default (nothing tracked) renders no inner annotations.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShortcodeSource {
+    /// Lines between the opening fence and the closing fence, so the block
+    /// spans `start..=start + extra_lines`.
+    pub extra_lines: usize,
+    /// One per grid cell; one for a hero's overlay.
+    pub fragments: Vec<SourceFragment>,
+}
+
+/// The source position of one fragment (a grid cell, a hero overlay) and of
+/// each top-level block in it, in the same line coordinates as
+/// [`BlockMeta::source_line`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceFragment {
+    pub first_line: Option<usize>,
+    pub last_line: Option<usize>,
+    /// Parallel to the fragment's blocks.
+    pub blocks: Vec<BlockMeta>,
+}
+
+impl Shortcode {
+    /// The source record of a shortcode that renders fragments (grid, hero).
+    pub fn source_mut(&mut self) -> Option<&mut ShortcodeSource> {
+        match self {
+            Shortcode::Grid(g) => Some(&mut g.source),
+            Shortcode::Hero(h) => Some(&mut h.source),
+            _ => None,
+        }
+    }
+}
+
+impl ShortcodeSource {
+    /// The `data-source-range` value for a block that opens at `start`.
+    pub fn range_from(&self, start: usize) -> String {
+        format!("{start}-{}", start + self.extra_lines)
+    }
+}
+
 /// Arguments for [`Shortcode::Grid`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GridShortcode {
@@ -183,6 +225,9 @@ pub struct GridShortcode {
     /// `vec![Block::LinkCard { url, children }]`. See
     /// [`Block::LinkCard`](crate::ast::Block::LinkCard) for the rationale.
     pub cells: Vec<Vec<Block>>,
+    /// Source positions of the fence and of each cell's blocks.
+    #[serde(default)]
+    pub source: ShortcodeSource,
     /// Spec § P9 width attribute: `body | wide | page | screen` (with
     /// `full` aliased to `screen`). `None` means the author did not set
     /// a width — the emitter omits `data-width` so the HTML stays sparse.
@@ -286,6 +331,9 @@ pub struct HeroShortcode {
     /// [`crate::ast::parser::parse`] recursion in
     /// [`crate::ast::shortcode_extract::parse_hero`].
     pub overlay: Vec<Block>,
+    /// Source positions of the fence and of the overlay's blocks.
+    #[serde(default)]
+    pub source: ShortcodeSource,
     /// Plain-text overlay source for downstream OG-fallback extraction.
     ///
     /// PR4.5 (2026-05-28): captured at parse time alongside the typed

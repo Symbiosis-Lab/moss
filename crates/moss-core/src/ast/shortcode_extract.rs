@@ -22,12 +22,12 @@
 
 use super::attrs::gather_multi_line_attrs;
 use super::cells::split_cells;
-use super::document::Document;
+use super::document::{BlockMeta, Document};
 use super::node::Block;
 use super::parser::{parse_fragment_with_config, ParseConfig};
 use super::shortcode::{
     ApplyShortcode, ButtonItem, ButtonsShortcode, GalleryItem, GalleryShortcode, GridShortcode,
-    RecentShortcode, Shortcode, SubscribeShortcode,
+    RecentShortcode, Shortcode, ShortcodeSource, SourceFragment, SubscribeShortcode,
 };
 use super::url::Url;
 use crate::resolve::md_extract::{
@@ -92,10 +92,44 @@ pub(crate) struct Diagnostics {
     pub(crate) advisories: Vec<String>,
 }
 
-/// Split a fragment `Document` into its blocks and the diagnostics its own
-/// parse raised, so nothing a nested body reports is dropped on the way out.
-pub(crate) fn fragment_parts(doc: Document) -> (Vec<Block>, Diagnostics) {
-    (doc.blocks, Diagnostics { warnings: doc.warnings, advisories: doc.advisories })
+/// Split a fragment `Document` into its blocks, their source positions and the
+/// diagnostics its own parse raised, so nothing a nested body reports is
+/// dropped on the way out.
+pub(crate) fn fragment_parts(doc: Document) -> (Vec<Block>, Vec<BlockMeta>, Diagnostics) {
+    (doc.blocks, doc.block_meta, Diagnostics { warnings: doc.warnings, advisories: doc.advisories })
+}
+
+/// `config` for a fragment whose first line is `body_line` (0-based) of the
+/// body `config` describes. The one place a fragment's start is carried, so
+/// the fragment's blocks report document lines instead of fragment lines.
+pub(crate) fn config_at_body_line(config: &ParseConfig, body_line: usize) -> ParseConfig {
+    ParseConfig { source_line_offset: config.source_line_offset + body_line, ..*config }
+}
+
+/// `config` for a wrapper's body that is extracted again at the next level:
+/// both line offsets advance, so warnings and fragments stay in file lines.
+fn nested_body_config(config: &ParseConfig, body_start: usize) -> ParseConfig {
+    ParseConfig {
+        warning_line_offset: config.warning_line_offset + body_start,
+        source_line_offset: config.source_line_offset + body_start,
+        ..*config
+    }
+}
+
+/// The source position of a fragment whose first line is `body_line` and
+/// which holds `raw`.
+pub(crate) fn source_fragment(
+    config: &ParseConfig,
+    body_line: usize,
+    raw: &str,
+    metas: Vec<BlockMeta>,
+) -> SourceFragment {
+    let first = config.emit_source_lines.then(|| config.source_line_offset + body_line + 1);
+    SourceFragment {
+        first_line: first,
+        last_line: first.map(|f| f + raw.lines().count().saturating_sub(1)),
+        blocks: metas,
+    }
 }
 
 /// Names recognized by the typed AST. Other names fall through to the
@@ -302,6 +336,7 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
     }
 
     let (raw_cells, found_legacy_dash) = split_grid_cells(body);
+    let mut fragments = Vec::with_capacity(raw_cells.len());
 
     // Phase 4 PR4.5 (2026-05-28): cells become Vec<Vec<Block>>. Each raw
     // cell string is either:
@@ -320,10 +355,12 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
     let mut fragment = Diagnostics::default();
     let cells: Vec<Vec<Block>> = raw_cells
         .iter()
-        .map(|raw| {
-            let (blocks, diag) = parse_cell_to_blocks(raw, config);
+        .map(|(raw, body_line)| {
+            let (blocks, metas, diag) =
+                parse_cell_to_blocks(raw, &config_at_body_line(config, *body_line));
             fragment.warnings.extend(diag.warnings);
             fragment.advisories.extend(diag.advisories);
+            fragments.push(source_fragment(config, *body_line, raw, metas));
             blocks
         })
         .collect();
@@ -343,6 +380,7 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
             ratio,
             classes,
             cells,
+            source: ShortcodeSource { extra_lines: 0, fragments },
             width,
             scroll,
             label,
@@ -362,14 +400,10 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
 /// content is appended as sibling blocks after the card. On no match,
 /// parses the cell directly via [`super::parser::parse`].
 ///
-/// Returns `(Vec<Block>, Diagnostics)`: the parsed blocks, plus any
-/// warnings and advisories collected by the fragment parse(s) underneath (e.g. a
-/// misspelled `:::name` shortcode nested inside this cell). Each internal
-/// [`parse_fragment_with_config`] call produces its own independent
-/// `Document`, whose `warnings` would otherwise be dropped on the floor —
-/// this is the plumbing that carries them out to [`parse_shortcode_block`],
-/// which already merges its `Vec<String>` into `doc.warnings`.
-fn parse_cell_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Diagnostics) {
+/// Returns the parsed blocks, their positions, and the warnings and advisories
+/// the fragment parses raised (e.g. a misspelled `:::name` nested in the cell),
+/// which [`parse_shortcode_block`] merges into `doc.warnings`.
+fn parse_cell_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Vec<BlockMeta>, Diagnostics) {
     if let Some((url, inner, trailing)) = detect_compound_link(raw) {
         let inner_trimmed = inner.trim();
         let trailing_trimmed = trailing.trim();
@@ -397,6 +431,8 @@ fn parse_cell_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Diagnos
             let linkified = format!("[{}]({})", inner_trimmed, url);
             return fragment_parts(parse_fragment_with_config(&linkified, config));
         }
+        // A card's inner text is cut out of the cell, so its lines are not
+        // tracked; the cell's own range still reaches the card.
         let inner_doc = parse_fragment_with_config(inner_trimmed, config);
         let mut diag = Diagnostics { warnings: inner_doc.warnings, advisories: inner_doc.advisories };
         let mut blocks = vec![Block::LinkCard {
@@ -409,7 +445,8 @@ fn parse_cell_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Diagnos
             diag.warnings.extend(trailing_doc.warnings);
             diag.advisories.extend(trailing_doc.advisories);
         }
-        return (blocks, diag);
+        let metas = vec![BlockMeta::default(); blocks.len()];
+        return (blocks, metas, diag);
     }
     // Phase 4 PR4.5 (2026-05-28): bare-URL cell auto-promotion. When the
     // entire cell content is a single bare URL on its own line (no
@@ -703,9 +740,9 @@ pub(super) fn detect_compound_link(cell_text: &str) -> Option<(String, String, S
 /// `true` when at least one `---` divider **of this grid** was encountered,
 /// signaling the caller to emit a deprecation warning. A `---` belonging to
 /// a nested block is reported when that block is parsed, not here.
-fn split_grid_cells(body: &str) -> (Vec<String>, bool) {
+fn split_grid_cells(body: &str) -> (Vec<(String, usize)>, bool) {
     if body.is_empty() {
-        return (vec![String::new()], false);
+        return (vec![(String::new(), 0)], false);
     }
     // One flag per line, aligned with `str::lines`, which agrees index-for-
     // index with `split_inclusive('\n')` for every input.
@@ -714,6 +751,8 @@ fn split_grid_cells(body: &str) -> (Vec<String>, bool) {
     let mut current = String::new();
     let mut first_line_in_cell = true;
     let mut found_legacy_dash = false;
+    // Body line the current cell's text starts on.
+    let mut cell_start = 0;
     // Blocks we are currently inside; 0 means "at this grid's own depth",
     // which is the only place a divider counts.
     let mut depth: usize = 0;
@@ -733,7 +772,8 @@ fn split_grid_cells(body: &str) -> (Vec<String>, bool) {
                     if let Some(stripped) = current.strip_suffix('\n') {
                         current.truncate(stripped.len());
                     }
-                    cells.push(std::mem::take(&mut current));
+                    cells.push((std::mem::take(&mut current), cell_start));
+                    cell_start = idx + 1;
                     first_line_in_cell = true;
                     continue;
                 }
@@ -743,6 +783,7 @@ fn split_grid_cells(body: &str) -> (Vec<String>, bool) {
         if first_line_in_cell {
             first_line_in_cell = false;
             if trimmed.is_empty() {
+                cell_start = idx + 1;
                 continue;
             }
         }
@@ -751,7 +792,7 @@ fn split_grid_cells(body: &str) -> (Vec<String>, bool) {
     if let Some(stripped) = current.strip_suffix('\n') {
         current.truncate(stripped.len());
     }
-    cells.push(current);
+    cells.push((current, cell_start));
     (cells, found_legacy_dash)
 }
 
@@ -1530,10 +1571,7 @@ fn extract_with_state(
                 });
                 // The body's first line sits `body_start` lines into this
                 // level, so the recursion's line numbers are shifted by it.
-                let body_config = ParseConfig {
-                    warning_line_offset: config.warning_line_offset + body_start,
-                    ..*config
-                };
+                let body_config = nested_body_config(config, body_start);
                 let body_processed =
                     extract_with_state(&body, nonce, collected, &body_config);
                 output.push_str(&render_div_open(
@@ -1553,7 +1591,12 @@ fn extract_with_state(
             }
 
             if is_typed_known(name) {
-                if let (Some(sc), diag) = parse_shortcode_block(name, args, &body, config) {
+                // The body's first line is `body_start` lines into this level.
+                let body_config = config_at_body_line(config, body_start);
+                if let (Some(mut sc), diag) = parse_shortcode_block(name, args, &body, &body_config) {
+                    if let Some(source) = sc.source_mut() {
+                        source.extra_lines = j - i;
+                    }
                     collected.warnings.extend(diag.warnings);
                     collected.advisories.extend(diag.advisories);
                     let index = collected.extracted.len();
@@ -1597,10 +1640,7 @@ fn extract_with_state(
             let mut classes = vec!["moss-unknown-shortcode".to_string()];
             classes.extend(parsed.classes.iter().cloned());
             let extra_attrs = format!(r#" data-name="{}""#, html_escape_attr(name));
-            let body_config = ParseConfig {
-                warning_line_offset: config.warning_line_offset + body_start,
-                ..*config
-            };
+            let body_config = nested_body_config(config, body_start);
             let body_processed =
                 extract_with_state(&body, nonce, collected, &body_config);
             output.push_str(&render_div_open(&classes, parsed.id.as_deref(), None, Some(&extra_attrs)));
