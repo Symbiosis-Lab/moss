@@ -1617,7 +1617,7 @@ mod tests {
 
         let result = with_seta_url(
             addr,
-            crate::deploy::prebuilt::run_prebuilt_deploy(folder.path(), site.path(), None, false, &progress::silent()),
+            crate::deploy::prebuilt::run_prebuilt_deploy(folder.path(), site.path(), None, false, false, &progress::silent()),
         )
         .await;
 
@@ -1659,7 +1659,7 @@ mod tests {
         .await;
         let published = with_seta_url(
             addr,
-            crate::deploy::prebuilt::run_prebuilt_deploy(folder.path(), site.path(), None, false, &progress::silent()),
+            crate::deploy::prebuilt::run_prebuilt_deploy(folder.path(), site.path(), None, false, false, &progress::silent()),
         )
         .await;
         assert!(matches!(published, Ok(PushResult::Success { files_uploaded: 1, .. })), "got: {published:?}");
@@ -1736,7 +1736,7 @@ mod tests {
         .await;
         let published = with_seta_url(
             addr,
-            crate::deploy::prebuilt::run_prebuilt_deploy(folder.path(), site.path(), None, false, &progress::silent()),
+            crate::deploy::prebuilt::run_prebuilt_deploy(folder.path(), site.path(), None, false, false, &progress::silent()),
         )
         .await;
         assert!(matches!(published, Ok(PushResult::Success { files_uploaded: 1, .. })), "got: {published:?}");

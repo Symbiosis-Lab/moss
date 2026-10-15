@@ -80,6 +80,23 @@ pub(crate) fn refusal_text(pending: &[PendingRemoval]) -> String {
     )
 }
 
+/// The refusal for an upload that has no sources: every missing address is
+/// unexplained, because nothing here could show the author deleted it.
+pub(crate) fn prebuilt_refusal(paths: &[String]) -> String {
+    let pending: Vec<PendingRemoval> = paths
+        .iter()
+        .map(|path| PendingRemoval {
+            path: path.clone(),
+            address: served_address(path),
+            cause: RemovalCause::Generated,
+        })
+        .collect();
+    format!(
+        "{} A prebuilt folder has no sources to show you deleted a page on purpose, so every missing address counts.",
+        refusal_text(&pending)
+    )
+}
+
 /// The refusal for `folder_path`, or `None` when the last build found nothing
 /// the author has not accepted.
 pub(crate) fn refusal_for(folder_path: &str) -> Option<String> {

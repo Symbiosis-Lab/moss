@@ -129,6 +129,7 @@ pub async fn push_prebuilt(
     prebuilt_dir: &Path,
     site_id: &str,
     identity: &Identity,
+    accept_removals: bool,
     sink: &Arc<dyn DeploySink>,
 ) -> Result<PushResult, String> {
     // Under the same stall watchdog as the interactive publish. This path had
@@ -142,6 +143,7 @@ pub async fn push_prebuilt(
             prebuilt_dir,
             site_id,
             identity,
+            accept_removals,
             sink,
         )),
         crate::infra::liveness::STALL_TIMEOUT,
@@ -150,11 +152,35 @@ pub async fn push_prebuilt(
     .await
 }
 
+/// Refuse an upload that stops serving an address the last publish served.
+/// Runs before any request, on the same record and the same `_moss/` filter
+/// the normal route's removal gate uses.
+fn refuse_removed_addresses(
+    project_folder: &Path,
+    site_id: &str,
+    manifest: &HashMap<String, String>,
+) -> Result<(), String> {
+    let mp = crate::moss_paths::MossPaths::new(project_folder);
+    let target = crate::config::deployment::slot_for("moss", Some(site_id));
+    let Some(baseline) =
+        crate::build::manifest::published_record::load_address_baseline(&mp, target.as_deref())
+    else {
+        return Ok(());
+    };
+    let gone = crate::build::manifest::change_set::removed_public_paths(&baseline, manifest);
+    if gone.is_empty() {
+        Ok(())
+    } else {
+        Err(crate::deploy::removal_gate::prebuilt_refusal(&gone))
+    }
+}
+
 async fn push_prebuilt_inner(
     project_folder: &Path,
     prebuilt_dir: &Path,
     site_id: &str,
     identity: &Identity,
+    accept_removals: bool,
     sink: &Arc<dyn DeploySink>,
 ) -> Result<PushResult, String> {
     // The door guard every config-reading door shares
@@ -178,6 +204,10 @@ async fn push_prebuilt_inner(
         manifest.len(),
         prebuilt_dir.display()
     );
+
+    if !accept_removals {
+        refuse_removed_addresses(project_folder, site_id, &manifest)?;
+    }
 
     // Compute the generation_id early so it's available for both the
     // short-circuit (Piece 3) and the commit + save calls below.
@@ -467,6 +497,7 @@ pub async fn run_prebuilt_deploy(
     dir: &Path,
     requested_site_id: Option<&str>,
     overwrite_newer: bool,
+    accept_removals: bool,
     sink: &Arc<dyn DeploySink>,
 ) -> Result<PushResult, String> {
     let Some((site_id, identity)) =
@@ -475,5 +506,5 @@ pub async fn run_prebuilt_deploy(
         return Ok(PushResult::NeedsSetup);
     };
 
-    push_prebuilt(folder, dir, &site_id, &identity, sink).await
+    push_prebuilt(folder, dir, &site_id, &identity, accept_removals, sink).await
 }

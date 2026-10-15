@@ -324,6 +324,7 @@ async fn send(
                 dir,
                 flags.site_id.as_deref(),
                 flags.overwrite_newer,
+                flags.accept_removals,
                 sink,
             )
                 .await

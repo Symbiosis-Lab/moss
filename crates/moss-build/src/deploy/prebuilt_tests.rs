@@ -146,7 +146,7 @@ async fn prebuilt_publish_is_rejected_while_a_normal_publish_is_in_flight() {
     // Guarded, it never touches the filesystem or the network at all.
     let missing = project.path().join("no-such-prebuilt-dir");
 
-    let err = push_prebuilt(project.path(), &missing, "guard-test-site", &identity, &silent())
+    let err = push_prebuilt(project.path(), &missing, "guard-test-site", &identity, false, &silent())
         .await
         .expect_err("a prebuilt publish must be rejected while a publish is in flight");
     assert_eq!(
@@ -182,6 +182,7 @@ async fn a_normal_publish_is_rejected_while_a_prebuilt_publish_is_in_flight() {
         project.path(),
         "guard-test-site",
         &identity,
+        false,
         &sink,
     ));
     // One poll runs the whole synchronous prologue (hash the dir, resolve the
@@ -234,7 +235,7 @@ async fn a_version_ahead_config_refuses_before_hashing_the_directory() {
     std::fs::write(moss_dir.join("config.toml"), format!("schema_version = {future}\n")).unwrap();
     let missing = project.path().join("no-such-prebuilt-dir");
 
-    let err = push_prebuilt(project.path(), &missing, "guard-test-site", &identity, &silent())
+    let err = push_prebuilt(project.path(), &missing, "guard-test-site", &identity, false, &silent())
         .await
         .expect_err("a version-ahead config must refuse");
     assert!(err.contains("schema_version") && err.contains("newer"), "got: {err}");
@@ -350,6 +351,7 @@ async fn a_self_healed_prebuilt_file_corrects_its_manifest_entry_before_commit()
         prebuilt.path(),
         "healed-prebuilt",
         &identity,
+        false,
         &silent(),
     )
     .await;
@@ -435,7 +437,7 @@ async fn commit_sent_for_sync_answer(sync_body: &'static str) -> bool {
 
     std::env::set_var("MOSS_SETA_URL", format!("http://{addr}"));
     let identity = Identity::generate().expect("generate identity");
-    let result = push_prebuilt(project.path(), prebuilt.path(), "fake-site", &identity, &silent()).await;
+    let result = push_prebuilt(project.path(), prebuilt.path(), "fake-site", &identity, false, &silent()).await;
     match prev_url {
         Some(u) => std::env::set_var("MOSS_SETA_URL", u),
         None => std::env::remove_var("MOSS_SETA_URL"),
@@ -462,4 +464,82 @@ async fn nothing_changed_does_not_commit() {
 #[tokio::test]
 async fn an_older_server_without_internal_remove_does_not_commit() {
     assert!(!commit_sent_for_sync_answer(r#"{"need":[],"remove":[]}"#).await);
+}
+
+// ── Removal gate: an upload may not take a served address offline ───────────
+
+const GATE_SITE: &str = "gate-site";
+
+fn record_served(project: &Path, served: &[&str]) {
+    let snap = crate::build::manifest::change_set::PublishedSnapshot {
+        generation_id: "g1".into(),
+        target: format!("moss:{GATE_SITE}"),
+        published_at: "2026-01-01T00:00:00Z".into(),
+        files: served.iter().map(|p| (p.to_string(), "100644:aa".to_string())).collect(),
+        ..Default::default()
+    };
+    crate::build::manifest::published_record::save(&crate::moss_paths::MossPaths::new(project), &snap).unwrap();
+}
+
+/// Uploads `files` against a dead local server, so a call that passes the gate
+/// fails on the connection instead of reaching anything real.
+async fn gated_push(project: &Path, files: &[&str], accept_removals: bool) -> Result<PushResult, String> {
+    let prebuilt = tmp_dir();
+    for f in files {
+        let path = prebuilt.path().join(f);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"x").unwrap();
+    }
+    let _lock = PUBLISH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let prev_url = std::env::var("MOSS_SETA_URL").ok();
+    std::env::set_var("MOSS_SETA_URL", "http://127.0.0.1:1");
+    let identity = Identity::generate().expect("generate identity");
+    let result = push_prebuilt(project, prebuilt.path(), GATE_SITE, &identity, accept_removals, &silent()).await;
+    match prev_url {
+        Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+        None => std::env::remove_var("MOSS_SETA_URL"),
+    }
+    result
+}
+
+#[tokio::test]
+async fn a_prebuilt_upload_missing_a_served_address_is_refused() {
+    let project = tmp_dir();
+    record_served(project.path(), &["index.html", "old/index.html"]);
+
+    let err = gated_push(project.path(), &["index.html"], false).await.unwrap_err();
+
+    assert!(err.starts_with("Nothing published"), "{err}");
+    assert!(err.contains("/old/"), "{err}");
+    assert!(err.contains("--accept-removals"), "{err}");
+}
+
+#[tokio::test]
+async fn accepting_removals_lets_a_prebuilt_upload_past_the_gate() {
+    let project = tmp_dir();
+    record_served(project.path(), &["index.html", "old/index.html"]);
+
+    let err = gated_push(project.path(), &["index.html"], true).await.unwrap_err();
+
+    assert!(!err.contains("Nothing published"), "{err}");
+}
+
+#[tokio::test]
+async fn a_prebuilt_upload_with_no_publish_record_is_not_gated() {
+    let project = tmp_dir();
+
+    let err = gated_push(project.path(), &["index.html"], false).await.unwrap_err();
+
+    assert!(!err.contains("Nothing published"), "{err}");
+}
+
+#[tokio::test]
+async fn only_moss_internal_hashed_files_differing_is_not_a_removal() {
+    let project = tmp_dir();
+    record_served(project.path(), &["index.html", "_moss/app.1111.css"]);
+
+    let err = gated_push(project.path(), &["index.html", "_moss/app.2222.css"], false).await.unwrap_err();
+
+    assert!(!err.contains("Nothing published"), "{err}");
 }

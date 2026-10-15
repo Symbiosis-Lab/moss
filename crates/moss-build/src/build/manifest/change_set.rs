@@ -478,17 +478,17 @@ pub fn upload_count(previous: &HashMap<String, String>, current: &SealedManifest
 /// definition of "vanished", shared by [`removed_files`] and `vanished_outputs`.
 fn vanished_keys<'a, 'c>(
     files: &'a HashMap<String, String>,
-    current: &'c SealedManifest,
+    current: &'c HashMap<String, String>,
 ) -> impl Iterator<Item = &'a str> + 'c
 where
     'a: 'c,
 {
-    files.keys().map(String::as_str).filter(|out| !current.files().contains_key(*out))
+    files.keys().map(String::as_str).filter(|out| !current.contains_key(*out))
 }
 
 /// The output paths `previous` has that `current` no longer produces, sorted.
 pub fn removed_files(previous: &HashMap<String, String>, current: &SealedManifest) -> Vec<String> {
-    let mut gone: Vec<String> = vanished_keys(previous, current).map(str::to_string).collect();
+    let mut gone: Vec<String> = vanished_keys(previous, current.files()).map(str::to_string).collect();
     gone.sort();
     gone
 }
@@ -644,7 +644,7 @@ pub fn classify(previous: Option<&PublishedSnapshot>, current: &SealedManifest) 
 fn vanished_outputs<'a>(baseline: &'a PublishedSnapshot, current: &SealedManifest) -> Vec<(&'a str, bool)> {
     let page_outputs: std::collections::HashSet<&str> =
         baseline.source_to_output.values().map(String::as_str).collect();
-    vanished_keys(&baseline.files, current).map(|out| (out, page_outputs.contains(out))).collect()
+    vanished_keys(&baseline.files, current.files()).map(|out| (out, page_outputs.contains(out))).collect()
 }
 
 /// A video's ladder file (its master playlist, a rung's playlist or segment
@@ -656,9 +656,9 @@ fn vanished_outputs<'a>(baseline: &'a PublishedSnapshot, current: &SealedManifes
 /// is as much a regenerated rendition as one that vanished whole. Only the
 /// ladder's own file names count; an author's file in the same directory is
 /// still reported.
-fn is_ladder_of_published_video(out: &str, current: &SealedManifest) -> bool {
+fn is_ladder_of_published_video(out: &str, current: &HashMap<String, String>) -> bool {
     moss_core::asset_paths::hls_ladder_file_stem(out).is_some_and(|stem| {
-        moss_core::asset_paths::video_served_paths(stem).any(|p| current.files().contains_key(&p))
+        moss_core::asset_paths::video_served_paths(stem).any(|p| current.contains_key(&p))
     })
 }
 
@@ -701,7 +701,7 @@ pub fn removed_addresses(
 
     let mut removed: Vec<RemovedAddress> = vanished_outputs(baseline, current)
         .into_iter()
-        .filter(|(out, _)| is_public_address(out) && !is_ladder_of_published_video(out, current))
+        .filter(|(out, _)| is_public_address(out) && !is_ladder_of_published_video(out, current.files()))
         .map(|(out, is_page)| {
             let recorded = if is_page { page_sources.get(out) } else { asset_sources.as_ref().and_then(|m| m.get(out)) };
             let reason = match recorded {
@@ -725,6 +725,18 @@ pub fn removed_addresses(
         .collect();
     removed.sort_by(|a, b| a.path.cmp(&b.path));
     removed
+}
+
+/// Public output paths the baseline served that a tree with these `files`
+/// does not, sorted: [`removed_addresses`] without the page and source
+/// bookkeeping, for an upload that has no sources to explain a loss.
+pub fn removed_public_paths(baseline: &PublishedSnapshot, files: &HashMap<String, String>) -> Vec<String> {
+    let mut gone: Vec<String> = vanished_keys(&baseline.files, files)
+        .filter(|out| is_public_address(out) && !is_ladder_of_published_video(out, files))
+        .map(str::to_string)
+        .collect();
+    gone.sort();
+    gone
 }
 
 /// Did the output this page renders to change since the last publish?
