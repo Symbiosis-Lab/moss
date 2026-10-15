@@ -18,7 +18,7 @@
  */
 
 import { WORLD_WIDTH, WORLD_HEIGHT } from "./projection";
-import type { Camera, Point, Rect, Viewport } from "./types";
+import type { Camera, ExplorerFit, Point, Rect, Viewport } from "./types";
 
 /** `viewport` as a `Rect` at the origin — the default "free rectangle" for a caller that has no card row, controls or chip to dodge (every test fixture, and any `fitPoints`/`coverCamera` call this module's own tests make directly). */
 function wholeViewport(viewport: Viewport): Rect {
@@ -174,14 +174,17 @@ export function tileDetailMaxScale(): number {
   return 360 / (TILE_DETAIL_DEGREES_PER_PX * WORLD_WIDTH);
 }
 
-/**
- * The deepest the opening view of all places (and Fit all places) zooms: one CSS px covers 0.015 degrees of longitude, so a 1280 px map opens about 19 degrees across. The bundled map data is simplified for frames about 10 degrees across, and below this the land turns into 10 to 30 px polygon steps and blocky relief, so the opening view stops where it still looks clean. A reader can still zoom in by hand up to the tile ceiling (`TILE_DETAIL_DEGREES_PER_PX`).
- */
-export const OPENING_DEGREES_PER_PX = 0.015;
+/** Degrees of longitude one CSS px covers at the deepest zoom the world layer alone still draws cleanly; deeper, its relief shows as steps. */
+export const WORLD_CLEAN_DEGREES_PER_PX = 0.26;
 
-/** The zoom multiplier at which `screenScale` reaches the opening view's depth limit for this viewport. */
-export function openingMaxZoom(viewport: Viewport): number {
-  return 360 / (OPENING_DEGREES_PER_PX * WORLD_WIDTH * coverScale(viewport));
+/** The deepest zoom at which the world layer alone may carry the frame: `WORLD_CLEAN_DEGREES_PER_PX`, or the cover view where that is already deeper. Past it, regional tiles must draw the frame. */
+export function worldCleanMaxZoom(viewport: Viewport): number {
+  return Math.max(MIN_ZOOM, 360 / (WORLD_CLEAN_DEGREES_PER_PX * WORLD_WIDTH * coverScale(viewport)));
+}
+
+/** The zoom multiplier at which the opening view of all places (and Fit all places) stops: one CSS px covers `degreesPerPx` of longitude, the build's opening depth (`tiles.json`'s `openingDegreesPerPx`), which is also the depth the build emits that view's cells for. A reader can still zoom in by hand up to the tile ceiling (`TILE_DETAIL_DEGREES_PER_PX`). */
+export function openingMaxZoom(viewport: Viewport, degreesPerPx: number): number {
+  return 360 / (degreesPerPx * WORLD_WIDTH * coverScale(viewport));
 }
 
 /** The zoom multiplier at which `screenScale` reaches `tileDetailMaxScale()` for this viewport — the raised ceiling once the camera has tiles to show. The zoom controls disable here. */
@@ -321,26 +324,25 @@ export function fitPoints(
 }
 
 /**
- * The smallest geographic span a work's fit shows, and the margin it pads the
- * places' bounding box by — mirrored from the build's locator poster so the
- * live map and the static poster it replaces open on the same framing
- * (`geometry.rs`: `MIN_FRAME_DEGREES`, `FRAME_PADDING`). The minimum applies to longitude only: the poster's latitude share assumes a 3:2 canvas, and a wide live frame would otherwise stay height-bound and show far more than the poster.
- */
-const WORK_MIN_SPAN_DEGREES = 10;
-const WORK_BOX_PADDING = 1.25;
-/** Breathing room per edge, as a share of the frame's smaller side. */
-const WORK_EDGE_PAD_FRACTION = 0.06;
-
-/**
  * Fit one work's own places — the initial article scope, a marker click and
- * a card click all share this one function. The bounding box is padded like
- * the poster's frame and widened to a minimum span so a single place frames
- * regionally instead of at the ceiling.
+ * a card click all share this one function — or all places for the opening
+ * view. The bounding box is padded by `fit.boxPadding` and widened to
+ * `fit.minSpanDegrees` of longitude so a single place frames regionally
+ * instead of at the ceiling. Both are the build's locator poster framing
+ * (`geometry.rs`: `FRAME_PADDING`, `MIN_FRAME_DEGREES`), so the live map and
+ * the static poster it replaces open on the same frame. The minimum applies
+ * to longitude only: the poster's latitude share assumes a 3:2 canvas, and
+ * a wide frame would otherwise stay height-bound and show far more than
+ * the poster.
  *
  * `frame` (the card row/controls-free rectangle) is honoured only when it is
  * at least half the viewport in each dimension; a smaller one would shrink
  * the fit to a sliver, so the whole viewport is used. Callers that must
  * ignore overlays entirely (the collapsed embed) pass no frame.
+ *
+ * `fit` is `tiles.json`'s, so the build chooses cells for the frames this
+ * draws; `fit.edgePad` is the breathing room per edge, as a share of the
+ * frame's smaller side.
  *
  * Clamped only by `maxZoom` (callers pass the tile ceiling: tiles exist
  * around every place), never raised to the cover floor beyond what
@@ -349,6 +351,7 @@ const WORK_EDGE_PAD_FRACTION = 0.06;
 export function fitWork(
   points: Point[],
   viewport: Viewport,
+  fit: ExplorerFit,
   frame: Rect = wholeViewport(viewport),
   maxZoom: number = tileDetailMaxZoom(viewport),
 ): Camera {
@@ -360,10 +363,10 @@ export function fitWork(
     frame.width >= viewport.width / 2 && frame.height >= viewport.height / 2 ? frame : wholeViewport(viewport);
   const xs = points.map((point) => point.x);
   const ys = points.map((point) => point.y);
-  const minSpanX = (WORK_MIN_SPAN_DEGREES * WORLD_WIDTH) / 360;
-  const spanX = Math.max((Math.max(...xs) - Math.min(...xs)) * WORK_BOX_PADDING, minSpanX);
-  const spanY = (Math.max(...ys) - Math.min(...ys)) * WORK_BOX_PADDING;
-  const pad = Math.min(usable.width, usable.height) * WORK_EDGE_PAD_FRACTION;
+  const minSpanX = (fit.minSpanDegrees * WORLD_WIDTH) / 360;
+  const spanX = Math.max((Math.max(...xs) - Math.min(...xs)) * fit.boxPadding, minSpanX);
+  const spanY = (Math.max(...ys) - Math.min(...ys)) * fit.boxPadding;
+  const pad = Math.min(usable.width, usable.height) * fit.edgePad;
   const scale = Math.min((usable.width - pad * 2) / spanX, (usable.height - pad * 2) / spanY);
   const zoom = clamp(Number.isFinite(scale) ? scale / coverScale(viewport) : MIN_ZOOM, MIN_ZOOM, maxZoom);
   const centered = centerOnFrame(

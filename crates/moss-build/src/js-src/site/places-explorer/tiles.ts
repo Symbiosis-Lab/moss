@@ -20,9 +20,9 @@
  * same concurrency limit as loads, when that density moves away from it.
  */
 import { detailMaxZoom, screenScale } from "./camera";
-import { project } from "./projection";
+import { project, unproject } from "./projection";
 import { rasterizeOrFallback, splitMapSvg, WORLD_RASTER_ZOOM_CAP, type MapSvgSplit } from "./raster";
-import type { Camera, Viewport } from "./types";
+import type { Camera, EdgeFade, Point, Viewport } from "./types";
 
 /** Tile rasters are capped at this device pixel ratio — a tile's own build-time resolution already carries the real detail ceiling, so a 3x phone gains nothing from tripling it further. */
 const TILE_RASTER_DPR_CAP = 2;
@@ -35,7 +35,24 @@ const MAX_CONCURRENT_TILE_LOADS = 6;
 
 /** The final fraction of the world raster budget where regional detail fades in. */
 const TILE_FADE_BAND = 0.2;
-const WORLD_TILE_CELLS: Array<[number, number]> = Array.from({ length: 36 * 18 }, (_, index) => [index % 36, Math.floor(index / 36)]);
+
+/** The tile grid's size in cells (`tiles.json`'s `columns` and `rows`) and the fade at an outer edge of a site's cells (`edgeFade`). */
+export interface TileGrid {
+  columns: number;
+  rows: number;
+  edgeFade: EdgeFade;
+}
+
+type CellTest = (x: number, y: number) => boolean;
+type Side = "west" | "east" | "north" | "south";
+/** Larger y is further north (`tile_frame`'s `center_latitude`). */
+const NEIGHBOUR: Record<Side, readonly [number, number]> = { west: [-1, 0], east: [1, 0], north: [0, 1], south: [0, -1] };
+
+/** Whether `(x, y)`'s `side` is an outer edge of the cells `has` names, where its tile fades toward the world layer. The edges of the world are not: the camera never shows past them. */
+function isOuterEdge(has: CellTest, grid: TileGrid, x: number, y: number, side: Side): boolean {
+  const [nx, ny] = [x + NEIGHBOUR[side][0], y + NEIGHBOUR[side][1]];
+  return nx >= 0 && nx < grid.columns && ny >= 0 && ny < grid.rows && !has(nx, ny);
+}
 
 /** Regional detail takes over at the smaller of the bitmap and geometry budgets, independently of whether the manifest covers this camera. */
 export function tileFadeOpacity(camera: Camera, viewport: Viewport): number {
@@ -94,14 +111,14 @@ export function tileDrawOrder(x: number, y: number, columns: number, rows: numbe
   return (rows - 1 - y) * columns + x;
 }
 
-/** Pad, in world units, added to the viewport's own visible rect before testing a tile for intersection — a tile just past the edge is worth fetching slightly ahead of the reader panning to it. */
-const TILE_VIEW_PAD = 20;
+/** Pad, in CSS px, added to the view before testing a tile for intersection: a tile just past the edge is worth fetching slightly ahead of the reader panning to it. */
+const TILE_VIEW_PAD_PX = 96;
 
-/** Which of `cells` intersect the current view, world-space. Pure — no fetch, no DOM, so a view can be tested without a camera ever existing (the vitest suite passes a plain `Camera`/`Viewport` pair). */
-export function tilesForView(cells: Array<[number, number]>, camera: Camera, viewport: Viewport, pad: number = TILE_VIEW_PAD): Array<[number, number]> {
+/** Which of `cells` intersect the current view, padded by `padPx` CSS px on every side. Pure — no fetch, no DOM, so a view can be tested without a camera ever existing (the vitest suite passes a plain `Camera`/`Viewport` pair). */
+export function tilesForView(cells: Array<[number, number]>, camera: Camera, viewport: Viewport, padPx: number = TILE_VIEW_PAD_PX): Array<[number, number]> {
   const scale = screenScale(camera, viewport);
-  const halfW = viewport.width / 2 / scale + pad;
-  const halfH = viewport.height / 2 / scale + pad;
+  const halfW = (viewport.width / 2 + padPx) / scale;
+  const halfH = (viewport.height / 2 + padPx) / scale;
   const left = camera.x - halfW;
   const right = camera.x + halfW;
   const top = camera.y - halfH;
@@ -112,13 +129,59 @@ export function tilesForView(cells: Array<[number, number]>, camera: Camera, vie
   });
 }
 
-/** How far, in canvas units (world units times `k`), the outer edge of a tile's own covered region fades toward the bare world layer past it — a cell about 23 world units wide, so this is a short distance against it, not a redraw of the whole tile. */
-const OUTER_FADE_WORLD_UNITS = 1.5;
-const TILE_OPAQUE_COVERAGE_PAD = OUTER_FADE_WORLD_UNITS + 0.5;
+const gridCellLists = new Map<string, Array<[number, number]>>();
+
+/** Every cell of `grid`, built once per grid size. */
+function gridCells(grid: TileGrid): Array<[number, number]> {
+  const key = `${grid.columns}x${grid.rows}`;
+  let cells = gridCellLists.get(key);
+  if (!cells) {
+    cells = Array.from({ length: grid.columns * grid.rows }, (_, index): [number, number] => [index % grid.columns, Math.floor(index / grid.columns)]);
+    gridCellLists.set(key, cells);
+  }
+  return cells;
+}
+
+/**
+ * The cells under the view at `camera`, when `has` names every one of them
+ * and no outer-edge fade reaches into the view; otherwise `null`, meaning
+ * some of the frame can only come from the world layer. Pure: which cells
+ * count as present is the caller's to say.
+ */
+export function cellsCoveringView(
+  has: CellTest,
+  camera: Camera,
+  viewport: Viewport,
+  grid: TileGrid,
+): Array<[number, number]> | null {
+  const required = tilesForView(gridCells(grid), camera, viewport, 0);
+  if (required.length === 0) return null;
+  const scale = screenScale(camera, viewport);
+  const view = {
+    left: camera.x - viewport.width / (2 * scale),
+    right: camera.x + viewport.width / (2 * scale),
+    top: camera.y - viewport.height / (2 * scale),
+    bottom: camera.y + viewport.height / (2 * scale),
+  };
+  const pad = grid.edgeFade.width + grid.edgeFade.margin;
+  for (const [x, y] of required) {
+    if (!has(x, y)) return null;
+    const bounds = tileCellBounds(x, y);
+    if (
+      (isOuterEdge(has, grid, x, y, "west") && view.left < bounds.minX + pad) ||
+      (isOuterEdge(has, grid, x, y, "east") && view.right > bounds.maxX - pad) ||
+      (isOuterEdge(has, grid, x, y, "north") && view.top < bounds.minY + pad) ||
+      (isOuterEdge(has, grid, x, y, "south") && view.bottom > bounds.maxY - pad)
+    ) {
+      return null;
+    }
+  }
+  return required;
+}
 
 /**
  * The `mask-image` that fades a tile's own OUTER edges only — the sides
- * with no real neighbour cell — toward transparent,
+ * with no real neighbour cell inside the world — toward transparent,
  * leaving every edge shared with a real neighbour fully opaque: past the
  * site's own detail coverage, the world layer carries a frame at this
  * tile's own geometry but no further detail past it, so a tile that
@@ -144,37 +207,25 @@ const TILE_OPAQUE_COVERAGE_PAD = OUTER_FADE_WORLD_UNITS + 0.5;
  * common case past a site's own first ring of tiles, which keeps its own
  * `mask-image` unset rather than carrying a no-op one.
  */
-export function tileEdgeMask(
-  x: number,
-  y: number,
-  availableTiles: Array<[number, number]>,
-  k: number,
-): string | null {
-  const has = (cx: number, cy: number): boolean => availableTiles.some(([ax, ay]) => ax === cx && ay === cy);
-  const fade = `${OUTER_FADE_WORLD_UNITS * k}px`;
+export function tileEdgeMask(has: CellTest, grid: TileGrid, x: number, y: number, k: number): string | null {
+  const fade = `${grid.edgeFade.width * k}px`;
   const opaque = "black";
   const clear = "transparent";
-  const layers: string[] = [];
-  if (!has(x - 1, y)) layers.push(`linear-gradient(to right, ${clear}, ${opaque} ${fade})`);
-  if (!has(x + 1, y)) layers.push(`linear-gradient(to left, ${clear}, ${opaque} ${fade})`);
-  // Larger y is further north (`tile_frame`'s own `center_latitude`): the
-  // top of a tile's own canvas (CSS "to bottom" fades FROM the top edge)
-  // is its north side, so a missing NORTH neighbour is `(x, y + 1)`.
-  if (!has(x, y + 1)) layers.push(`linear-gradient(to bottom, ${clear}, ${opaque} ${fade})`);
-  if (!has(x, y - 1)) layers.push(`linear-gradient(to top, ${clear}, ${opaque} ${fade})`);
+  // The top of a tile's canvas (CSS "to bottom" fades FROM the top edge) is its north side.
+  const directions: Record<Side, string> = { west: "to right", east: "to left", north: "to bottom", south: "to top" };
+  const layers = (Object.keys(directions) as Side[])
+    .filter((side) => isOuterEdge(has, grid, x, y, side))
+    .map((side) => `linear-gradient(${directions[side]}, ${clear}, ${opaque} ${fade})`);
   return layers.length > 0 ? layers.join(", ") : null;
 }
 
-export interface TileLayerOptions {
+export interface TileLayerOptions extends TileGrid {
   tilesBaseUrl: string;
   availableTiles: Array<[number, number]>;
   /** The factor a tile is drawn at over the world's own scale (`tiles.json`'s own `k`, the build's `TILE_K`). */
   k: number;
   /** Each emitted cell's canvas origin, keyed `"x,y"`, in whole canvas units (`tiles.json`'s own `origins`) — see `tileOverlayTransform`. */
   origins: Record<string, [number, number]>;
-  /** The grid's size in cells (`tiles.json`'s own `columns` and `rows`), which `tileDrawOrder` numbers tiles by. */
-  columns: number;
-  rows: number;
 }
 
 /** A fetched, decoded tile: the positioned wrapper div and the raster's own release callback (a no-op on the progressive-enhancement fallback — see `raster.ts`'s `rasterizeOrFallback`). */
@@ -226,14 +277,18 @@ export class TileLayer {
   /** Padding is serial so one low-priority raster cannot occupy the shared load slots when a gesture exposes a new cell. */
   private activeBackgroundLoads = 0;
 
+  private readonly manifestKeys: Set<string>;
+
   constructor(container: HTMLElement, options: TileLayerOptions) {
     this.container = container;
     this.options = options;
+    this.manifestKeys = new Set(options.availableTiles.map(([x, y]) => `${x},${y}`));
   }
 
-  /** Whether any of this layer's own cells (manifest minus failed fetches) are in view at `camera`/`viewport` — `map.ts`'s own detail-ceiling switch (`currentMaxZoom`) reads this rather than reaching into `availableTiles` itself. */
-  hasVisibleTiles(camera: Camera, viewport: Viewport): boolean {
-    return tilesForView(this.nonFailedManifestCells(), camera, viewport).length > 0;
+  /** Whether the world point `point` lies in one of this layer's own cells, failed fetches excluded. */
+  hasCellAt(point: Point): boolean {
+    const { lat, lng } = unproject(point.x, point.y);
+    return this.usableCell(Math.floor(((lng + 180) / 360) * this.options.columns), Math.floor(((lat + 90) / 180) * this.options.rows));
   }
 
   /** Whether the manifest has tile coverage under this view, including cells whose fetch failed. Initial embed readiness must fail closed for those cells, while the zoom ceiling may correctly ignore them. */
@@ -244,42 +299,25 @@ export class TileLayer {
   /** True only when already-decoded regional canvases cover the whole frame beyond their outer-edge fades. The world raster remains required for partial coverage, fade frames, failed cells, or any tile that still needs a sharper bake. */
   hasOpaqueViewportCoverage(camera: Camera, viewport: Viewport): boolean {
     if (tileFadeOpacity(camera, viewport) !== 1) return false;
-    const required = tilesForView(WORLD_TILE_CELLS, camera, viewport, 0);
-    if (required.length === 0) return false;
-    const available = new Set(this.options.availableTiles.map(([x, y]) => `${x},${y}`));
-    const scale = screenScale(camera, viewport);
-    const view = {
-      left: camera.x - viewport.width / (2 * scale),
-      right: camera.x + viewport.width / (2 * scale),
-      top: camera.y - viewport.height / (2 * scale),
-      bottom: camera.y + viewport.height / (2 * scale),
-    };
-    return required.every(([x, y]) => {
-      const key = `${x},${y}`;
-      if (!available.has(key)) return false;
-      const entry = this.elements.get(key);
+    const required = cellsCoveringView(this.usableCell, camera, viewport, this.options);
+    return required !== null && required.every(([x, y]) => {
+      const entry = this.elements.get(`${x},${y}`);
       if (entry === undefined || entry === "loading" || entry === "failed" || entry.bakeState !== "ready") return false;
       const surface = entry.el.firstElementChild;
       if (surface?.tagName.toLowerCase() !== "canvas" || (surface as HTMLCanvasElement).width < 1 || (surface as HTMLCanvasElement).height < 1) return false;
       const wantedDensity = this.bakeableDensity(entry.split, this.density);
-      if (entry.bakedDensity * TILE_REBAKE_RATIO < wantedDensity) return false;
-      const bounds = tileCellBounds(x, y);
-      const hasUsableNeighbour = (nx: number, ny: number): boolean => {
-        if (!available.has(`${nx},${ny}`)) return false;
-        return this.elements.get(`${nx},${ny}`) !== "failed";
-      };
-      // Outer tile edges fade across 1.5 world units. Include a small
-      // rounding margin for the tile's bleed and independently transformed
-      // CSS boxes; if any faded strip reaches the frame, the world is still
-      // needed underneath it.
-      return !(
-        (!hasUsableNeighbour(x - 1, y) && view.left < bounds.minX + TILE_OPAQUE_COVERAGE_PAD) ||
-        (!hasUsableNeighbour(x + 1, y) && view.right > bounds.maxX - TILE_OPAQUE_COVERAGE_PAD) ||
-        (!hasUsableNeighbour(x, y + 1) && view.top < bounds.minY + TILE_OPAQUE_COVERAGE_PAD) ||
-        (!hasUsableNeighbour(x, y - 1) && view.bottom > bounds.maxY - TILE_OPAQUE_COVERAGE_PAD)
-      );
+      return entry.bakedDensity * TILE_REBAKE_RATIO >= wantedDensity;
     });
   }
+
+  /** Whether this layer's cells, failed fetches excluded, can cover the whole frame at `camera` once loaded, so the world layer is needed nowhere in it. */
+  coversView(camera: Camera, viewport: Viewport): boolean {
+    return cellsCoveringView(this.usableCell, camera, viewport, this.options) !== null;
+  }
+
+  /** A manifest cell whose fetch has not failed. A cell the manifest never listed and one that failed read the same, so either fades the shared edge; a cell still loading may yet load, so its edge is not outer. */
+  private readonly usableCell = (x: number, y: number): boolean =>
+    this.manifestKeys.has(`${x},${y}`) && this.elements.get(`${x},${y}`) !== "failed";
 
   /** Waits for the captured visible cells; padding-only neighbours never hold first paint. Cleared generations are superseded so the caller can recheck the resized frame. */
   waitForVisibleTiles(): Promise<VisibleTilesResult> {
@@ -297,13 +335,15 @@ export class TileLayer {
    * world view at rest from ever showing a tile rectangle sitting on top of
    * it. `unitScale` is world units to CSS px (constant across pan/zoom —
    * see `map.ts`'s `applyCamera`), the SAME px space the world layer's own
-   * internal layout uses.
+   * internal layout uses. `preload` loads the tiles `camera` would show,
+   * without padding and without drawing them, for a view the caller is
+   * about to move to.
    */
-  render(camera: Camera, viewport: Viewport, unitScale: number, settled = false): void {
+  render(camera: Camera, viewport: Viewport, unitScale: number, { settled = false, preload = false }: { settled?: boolean; preload?: boolean } = {}): void {
     this.unitScale = unitScale;
     this.density = (unitScale / this.options.k) * camera.zoom;
     const opacity = tileFadeOpacity(camera, viewport);
-    this.container.style.setProperty("--moss-place-tile-opacity", String(opacity));
+    this.container.style.setProperty("--moss-place-tile-opacity", String(preload ? 0 : opacity));
     this.settledRender = settled;
     this.shown = opacity > 0;
     if (opacity <= 0) {
@@ -311,8 +351,19 @@ export class TileLayer {
       this.publishState();
       return;
     }
-    const visible = tilesForView(this.options.availableTiles, camera, viewport);
+    const visible = tilesForView(this.options.availableTiles, camera, viewport, preload ? 0 : undefined);
     this.onScreen = new Set(tilesForView(visible, camera, viewport, 0).map(([x, y]) => `${x},${y}`));
+    // A queued cell this view no longer reaches is dropped, so an earlier frame's padding is never fetched.
+    // A waiter holding a dropped cell is superseded: that cell will not load for it.
+    const wanted = new Set(visible.map(([x, y]) => `${x},${y}`));
+    const dropped = this.queue.filter((queued) => !wanted.has(queued));
+    for (const key of dropped) this.elements.delete(key);
+    this.queue.splice(0, this.queue.length, ...this.queue.filter((queued) => wanted.has(queued)));
+    for (const waiter of this.visibleTileWaiters) {
+      if (!dropped.some((key) => waiter.keys.has(key))) continue;
+      this.visibleTileWaiters.delete(waiter);
+      waiter.resolve("superseded");
+    }
     for (const [x, y] of visible) {
       const key = `${x},${y}`;
       const existing = this.elements.get(key);
@@ -582,14 +633,9 @@ export class TileLayer {
     el.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
   }
 
-  /** The manifest's own cells, minus any that have already `"failed"` to load — the "neighbour exists at all" `tileEdgeMask` needs for its outer-edge fade: a cell the manifest never listed and a cell whose fetch permanently failed read the same way here, both absent, so either one fades the shared edge instead of ending it hard. A cell still `"loading"` (or not yet attempted) stays present — it may yet load, so its edge is not treated as outer. */
-  private nonFailedManifestCells(): Array<[number, number]> {
-    return this.options.availableTiles.filter(([cx, cy]) => this.elements.get(`${cx},${cy}`) !== "failed");
-  }
-
   /** Recompute and (re)apply `mask-image` for `el`, the tile wrapper at `(x, y)` — the only place it is ever written, so it changes only by a call here, never on a plain `render()` pan. The mask works on the wrapper's own CSS box, which `load()` sizes to the tile's native canvas dimensions directly, so a fade distance in canvas units (`tileEdgeMask`) lands in the right place regardless of `unitScale`/zoom, and fades the wrapper's raster AND its rivers overlay together as one composited unit. A tile is never clipped toward a neighbour: a fractional clip edge antialiases into a one-pixel light line, and the current vector clip context plus tile overlap must be verified before changing that edge policy. */
   private applyEdgeMask(el: HTMLElement, x: number, y: number): void {
-    const mask = tileEdgeMask(x, y, this.nonFailedManifestCells(), this.options.k);
+    const mask = tileEdgeMask(this.usableCell, this.options, x, y, this.options.k);
     el.style.maskImage = mask ?? "";
     el.style.webkitMaskImage = mask ?? "";
     if (mask) {

@@ -673,33 +673,21 @@ fn snapshot_places_route_site() {
 /// The places explorer's world/tile SVGs (`place_map::emit_world_svg`/
 /// `emit_tile_svg`, emitted by `emit::place_map_assets`) land under one
 /// `_moss/map.<hash>/` directory — exactly one, since for a given pack and
-/// generator version the hash is a function of the gazetteer's cells alone,
-/// not of page content (see `place_map_assets::assets_hash`'s own tests for
-/// the gazetteer half of that claim). Their brotli-q11 size is page weight
+/// generator version the hash is a function of `tiles.json` (the
+/// gazetteer's cells and the fit they were chosen for), not of page content
+/// (see `place_map_assets::assets_hash`'s own tests for the gazetteer half
+/// of that claim). Their brotli-q11 size is page weight
 /// the explorer's later task will actually serve, so it is pinned here the
 /// same way `svg.rs`'s own `the_world_map_stays_under_its_inline_budget`
 /// pins the places-root aggregate map: measured at landing (this commit)
 /// and allowed only to shrink without a reviewed reason for growth.
 ///
-/// Measured at landing, on the `places-site` fixture: world.svg = 89,077
-/// brotli bytes (up from 83,325 — the explorer's world SVG now carries its
-/// full, uncropped Patterson extent instead of the page map's cropped
-/// 720-wide canvas, about 26 degrees more on each side; still under the
-/// pinned ceiling of 96 KiB, matching the aggregate map's own budget,
-/// since the two emitters share a rendering body); this fixture's
-/// Kansai-region places all fall in one 3x3 neighbourhood, so its 9 tiles
-/// combined = 51,886 brotli bytes (pinned ceiling 512 KiB) — down from
-/// 134,854 when each tile still drew a full 720x480 `FlatProjection`
-/// canvas: a tile's own viewBox is now its cell's Patterson rectangle
-/// times `TILE_K` (about 94x88 viewBox units near the equator, smaller
-/// toward the poles), a fraction of the old fixed canvas's area, for the
-/// same fine-tier detail. Before tiles were scoped to the gazetteer's own
-/// cells, every one of the pack's 648 tiles was emitted regardless of this
-/// site's places — 6,678,052 brotli bytes, 50x this fixture's actual
-/// footprint and the same for every site regardless of how many places it
-/// names. `tiles.json` lists exactly the tiles emitted, plus `k` (the
-/// factor each tile was drawn at over the world's own scale), so the
-/// explorer can know which cells exist without probing and can never
+/// On the `places-site` fixture, world.svg stays under 96 KiB, the
+/// aggregate map's own budget, since the two emitters share a rendering
+/// body. The fixture's Kansai-region places need their 3x3 neighbourhood
+/// plus the cells under their opening view: 15 tiles, 160,852 brotli bytes
+/// (ceiling 512 KiB). `tiles.json` lists exactly the tiles emitted, plus
+/// `k`, so the explorer knows which cells exist without probing and cannot
 /// disagree with the build about the scale it rendered them at.
 #[test]
 fn place_map_explorer_assets_land_in_one_hashed_directory_within_budget() {
@@ -743,7 +731,10 @@ fn place_map_explorer_assets_land_in_one_hashed_directory_within_budget() {
         tiles_brotli_total += brotli_len(&fs::read(entry.path()).unwrap());
     }
     assert!(tile_count > 0, "expected at least one tile SVG");
-    assert!(tile_count < 20, "expected a small Kansai-region neighbourhood, not the whole pack: {tile_count} tiles");
+    assert!(
+        tile_count <= 15,
+        "expected the Kansai neighbourhood and its opening view's cells, not the whole pack: {tile_count} tiles"
+    );
     assert!(
         tiles_brotli_total <= TILES_BROTLI_CEILING,
         "{tile_count} tiles total {tiles_brotli_total} brotli bytes, over the {TILES_BROTLI_CEILING} ceiling"

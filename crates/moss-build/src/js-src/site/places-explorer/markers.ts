@@ -96,8 +96,8 @@ export interface MarkerCallbacks {
   /** Restrict the card row to exactly these work ids, or `null` to lift the restriction. */
   scopeRow(ids: Set<string> | null): void;
   announce(message: string): void;
-  /** The current detail ceiling (zoom units) — rises once the camera has crossed into tile detail. */
-  maxZoom(): number;
+  /** The detail ceiling (zoom units) for a zoom towards the world point `anchor`. */
+  maxZoom(anchor: Point): number;
 }
 
 interface RingState {
@@ -377,7 +377,7 @@ export class MarkerLayer {
       this.callbacks.selectWork(workIds[0] ?? null);
       return;
     }
-    const ceiling = this.callbacks.maxZoom();
+    const ceiling = this.callbacks.maxZoom(worldCentroid(members));
     if (!staysMergedAtMaxZoom(members, ceiling, CLUSTER_DISTANCE)) {
       // Case 1: can separate by zooming — let re-clustering pull them apart.
       this.callbacks.fitPoints(members.map((member) => ({ x: member.x, y: member.y })));
@@ -408,7 +408,7 @@ function clusterKey(ids: string[]): string {
 }
 
 /** A cluster's own world-space centroid, from its members' WORLD (unscaled) coordinates — never `ProximityCluster.screen`, which is `clusters.ts`'s zoom-scaled, pan-independent position, meaningful only for distance comparisons, not for placing anything on the actual page. Exported for `labels.ts`'s own marker-box reservation, which needs the SAME on-screen cluster position this module draws a marker at, not a second computation of it. */
-export function worldCentroid(members: WorkPoint[]): Point {
+export function worldCentroid(members: Point[]): Point {
   if (members.length === 0) return { x: 0, y: 0 };
   const sum = members.reduce((acc, member) => ({ x: acc.x + member.x, y: acc.y + member.y }), { x: 0, y: 0 });
   return { x: sum.x / members.length, y: sum.y / members.length };

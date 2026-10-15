@@ -43,7 +43,7 @@
  */
 import { mountPlacesMap } from "./map";
 import { attachEmbedModeIfRequested, initPlaceEmbeds, prepareEmbedLayoutIfRequested } from "./embed";
-import { normalizePlacesData, type LabelsData, type PlacesDataWire } from "./types";
+import { normalizePlacesData, type EdgeFade, type ExplorerFit, type LabelsData, type PlacesDataWire } from "./types";
 
 export {};
 
@@ -71,9 +71,11 @@ async function fetchLocal(url: string): Promise<Response> {
   return response;
 }
 
-/** `tiles.json`'s own shape (`emit::place_map_assets::emit`'s `TileIndex`): `k`, the factor a tile is drawn at over the world's own scale (`place_map::geometry::TILE_K`), `origins`, each tile's canvas top-left in whole canvas units keyed `"x,y"`, `columns` and `rows`, the grid's size in cells, alongside a `[x, y]` pair per emitted regional tile — all travel with the cells they were rendered at so the runtime's own detail ceiling and placement transform can never drift from them. */
+/** `tiles.json`'s own shape (`emit::place_map_assets::emit`'s `TileIndex`): `k`, the factor a tile is drawn at over the world's own scale (`place_map::geometry::TILE_K`), `origins`, each tile's canvas top-left in whole canvas units keyed `"x,y"`, `columns` and `rows`, the grid's size in cells, `fit` and `edgeFade`, the fit and outer-edge fade the build chose the cells for, alongside a `[x, y]` pair per emitted regional tile. They travel with the cells, so the runtime reads the build's values instead of keeping copies; the opening frame's arithmetic itself exists on both sides, held together by shared golden vectors. */
 interface TileIndex {
   k: number;
+  fit: ExplorerFit;
+  edgeFade: EdgeFade;
   columns: number;
   rows: number;
   cells: Array<[number, number]>;
@@ -134,6 +136,8 @@ export async function initPlacesExplorer(root: ParentNode = document): Promise<v
       tileOrigins: tiles.origins,
       tileColumns: tiles.columns,
       tileRows: tiles.rows,
+      fit: tiles.fit,
+      edgeFade: tiles.edgeFade,
       tilesBaseUrl,
       lang: document.documentElement.lang,
     });

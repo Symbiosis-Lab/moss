@@ -8,12 +8,14 @@
  * the static figure.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { FIT, EDGE_FADE } from "./explorer-fit";
+import "./armed-timers";
 import { initPlacesExplorer } from "../index";
 import * as raster from "../raster";
 
 const WORLD_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 842.035025 480"></svg>';
 const PLACES_JSON = { works: [], places: [] };
-const TILES_JSON = { k: 4, columns: 36, rows: 18, origins: {}, cells: [] as Array<[number, number]> };
+const TILES_JSON = { k: 4, fit: FIT, edgeFade: EDGE_FADE, columns: 36, rows: 18, origins: {}, cells: [] as Array<[number, number]> };
 const LABELS_JSON = { languages: ["en"], en: { cities: [], ranges: [], peaks: [], rivers: [] } };
 
 function handshakeFigure(withLabels = false): string {
