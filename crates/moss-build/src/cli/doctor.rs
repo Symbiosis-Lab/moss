@@ -1,6 +1,7 @@
 //! `moss doctor` — read-only audits of a vault, reported never enforced.
 //!
-//! v1 ships exactly one check, `--math`.
+//! Two checks: `--math` (below) and `--surface`, which lists markdown
+//! constructs a cleaner form could replace (see `surface.rs`).
 //!
 //! ## Why `--math` exists
 //!
@@ -43,6 +44,8 @@
 use pulldown_cmark::{Event, Parser};
 use std::path::{Path, PathBuf};
 
+mod surface;
+
 /// One `$`-span that the real parser would turn into math.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MathSpan {
@@ -70,24 +73,12 @@ const MAX_SOURCE_ECHO: usize = 120;
 /// in a `price:` field is not a finding. Line numbers still count from the top
 /// of the file.
 pub fn scan_markdown(content: &str) -> Vec<MathSpan> {
-    // Normalize CRLF exactly as `frontmatter::parse` does, so the offsets it
-    // reports index into the same bytes we slice and count newlines in.
-    let normalized: std::borrow::Cow<'_, str> = if content.contains("\r\n") {
-        std::borrow::Cow::Owned(content.replace("\r\n", "\n"))
-    } else {
-        std::borrow::Cow::Borrowed(content)
-    };
-
-    let parsed = moss_core::frontmatter::parse(&normalized);
-    let body_offset = parsed.frontmatter_range.map_or(0, |(_, end)| end);
-    let Some(body) = normalized.get(body_offset..) else {
-        return Vec::new();
-    };
+    let (body, offset) = page_body(content);
 
     let options = moss_core::ast::parser_options(true);
 
     let mut spans = Vec::new();
-    for (event, range) in Parser::new_ext(body, options).into_offset_iter() {
+    for (event, range) in Parser::new_ext(&body, options).into_offset_iter() {
         // The two math events are the whole point of this scan; every other
         // event is someone else's concern.
         let display = match event {
@@ -96,19 +87,33 @@ pub fn scan_markdown(content: &str) -> Vec<MathSpan> {
             _ => continue,
         };
 
-        let start = body_offset + range.start;
-        let end = body_offset + range.end;
-        let Some(source) = normalized.get(start..end) else {
+        let Some(source) = body.get(range.clone()) else {
             continue;
         };
 
         spans.push(MathSpan {
-            line: line_of(&normalized, start),
+            line: offset + line_of(&body, range.start),
             display,
             source: condense(source),
         });
     }
     spans
+}
+
+/// A page's body as the build parses it, and the lines in front of it: a body
+/// line `n` is file line `offset + n`. Reads through the build's own split, so
+/// the report's lines are the file's lines.
+fn page_body(content: &str) -> (String, usize) {
+    use crate::build::markdown::frontmatter::{
+        frontmatter_block_lines, frontmatter_body, raw_body_line_offset,
+    };
+    // CRLF becomes LF first, as `frontmatter::parse` does, so line counts
+    // and byte offsets agree.
+    let normalized = content.replace("\r\n", "\n");
+    let body = frontmatter_body(&normalized);
+    let fm_lines = frontmatter_block_lines(&normalized, &body);
+    let offset = raw_body_line_offset(&normalized, &body, fm_lines);
+    (body, offset)
 }
 
 /// 1-indexed line number of `offset` within `content`.
@@ -131,10 +136,14 @@ fn condense(source: &str) -> String {
 
 /// Entry point for `moss doctor`. Returns an exit code.
 pub fn run(args: &[String]) -> i32 {
-    if !args.iter().any(|a| a == "--math") {
+    let math = args.iter().any(|a| a == "--math");
+    let surface = args.iter().any(|a| a == "--surface");
+    let json = args.iter().any(|a| a == "--json");
+    // Exactly one check. `--json` is only defined for `--surface`.
+    // 2, not 1: "you asked for a check that does not exist" is a usage
+    // error, distinct from a check that ran and failed. Findings exit 0.
+    if math == surface || (json && !surface) {
         print_usage();
-        // 2, not 1: "you asked for a check that does not exist" is a usage
-        // error, distinct from a check that ran and failed. Findings exit 0.
         return 2;
     }
 
@@ -149,6 +158,10 @@ pub fn run(args: &[String]) -> i32 {
     if !folder.is_dir() {
         eprintln!("Error: not a folder: {}", folder.display());
         return 1;
+    }
+
+    if surface {
+        return surface::run(&folder, json);
     }
 
     let mut files_with_math = 0usize;
@@ -227,6 +240,11 @@ fn markdown_files(folder: &Path) -> Vec<PathBuf> {
 
 fn print_usage() {
     eprintln!("Usage: moss doctor --math [<folder>]");
+    eprintln!("       moss doctor --surface [<folder>] [--json]");
+    eprintln!();
+    eprintln!("--surface reports classed divs repeated across pages (a fact a frontmatter");
+    eprintln!("field could hold) and theme selectors keyed on a page address. --json prints");
+    eprintln!("it as JSON; it is accepted with --surface only.");
     eprintln!();
     eprintln!("Reports every `$`-span in the vault that moss would parse as math.");
     eprintln!("Run it before publishing an imported corpus: pulldown's delimiter rule");
@@ -342,6 +360,18 @@ mod tests {
     fn missing_math_flag_is_a_usage_error() {
         assert_eq!(run(&[]), 2);
         assert_eq!(run(&["--links".to_string()]), 2);
+    }
+
+    /// `--json` belongs to `--surface` only; with `--math` it is a usage error.
+    #[test]
+    fn json_without_surface_is_a_usage_error() {
+        assert_eq!(run(&["--math".to_string(), "--json".to_string()]), 2);
+    }
+
+    /// The two checks are exclusive. Both flags name a mode, so neither runs.
+    #[test]
+    fn math_and_surface_together_are_a_usage_error() {
+        assert_eq!(run(&["--math".to_string(), "--surface".to_string()]), 2);
     }
 
     #[test]

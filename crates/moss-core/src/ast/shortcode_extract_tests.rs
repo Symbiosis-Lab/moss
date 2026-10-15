@@ -3150,3 +3150,48 @@ fn hero_header_unknown_value_warns_and_is_ignored() {
         result.warnings
     );
 }
+
+#[test]
+fn empty_name_fenced_div_is_recorded_as_a_css_region_with_its_line() {
+    let md = "::: {.eyebrow}\nStation 21\n:::\n";
+    let result = extract_shortcodes(md);
+    assert_eq!(
+        result.css_regions,
+        vec![CssRegionSpan { classes: vec!["eyebrow".to_string()], line: 1 }]
+    );
+}
+
+#[test]
+fn css_region_nested_inside_another_region_is_recorded_too() {
+    let md = "::: {.outer}\n::: {.inner}\ntext\n:::\n:::\n";
+    let result = extract_shortcodes(md);
+    assert_eq!(
+        result.css_regions,
+        vec![
+            CssRegionSpan { classes: vec!["outer".to_string()], line: 1 },
+            CssRegionSpan { classes: vec!["inner".to_string()], line: 2 },
+        ]
+    );
+}
+
+#[test]
+fn css_region_inside_a_fenced_code_block_is_not_recorded() {
+    let md = "```md\n::: {.x}\nbody\n:::\n```\n";
+    let result = extract_shortcodes(md);
+    assert!(result.css_regions.is_empty());
+}
+
+#[test]
+fn typed_shortcode_with_a_class_is_not_a_css_region() {
+    let md = ":::grid {.x}\n:::\n";
+    let result = extract_shortcodes(md);
+    assert!(result.css_regions.is_empty());
+}
+
+#[test]
+fn warning_line_offset_shifts_css_region_lines() {
+    let md = "intro\n\n::: {.eyebrow}\nbody\n:::\n";
+    let config = ParseConfig { warning_line_offset: 10, ..ParseConfig::default() };
+    let result = extract_shortcodes_with_config(md, &config);
+    assert_eq!(result.css_regions[0].line, 13);
+}

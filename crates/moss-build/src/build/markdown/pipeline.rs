@@ -26,7 +26,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use super::frontmatter::{
-    compute_url_path, is_simplified_frontmatter, parse_simplified_frontmatter,
+    compute_url_path, frontmatter_block_lines, is_simplified_frontmatter,
+    parse_simplified_frontmatter, raw_body_line_offset,
 };
 use super::html_post::{
     accept_criticmarkup, adjust_relative_paths_for_pretty_urls, inject_article_title_h1,
@@ -450,7 +451,7 @@ pub fn process_markdown_file(
             for warning in foreign_frontmatter_warnings(file_path, &key_refs, &Default::default()) {
                 crate::build::cli_output::cli_warn!("{}", warning);
             }
-            let fm_lines = content.lines().count().saturating_sub(body.lines().count());
+            let fm_lines = frontmatter_block_lines(content, &body);
             (fm, body, std::collections::BTreeMap::new(), fm_lines)
         } else {
             // Traditional YAML frontmatter. ONE parser: the same
@@ -474,10 +475,7 @@ pub fn process_markdown_file(
             let render_body = parsed.render_body();
             // Frontmatter line count from the verbatim body (before normalize
             // strips leading/trailing blanks); see the comment on the binding.
-            let fm_lines = content
-                .lines()
-                .count()
-                .saturating_sub(render_body.lines().count());
+            let fm_lines = frontmatter_block_lines(content, render_body);
             let mut mapping = serde_yaml::Mapping::new();
             for (k, v) in &parsed.frontmatter {
                 mapping.insert(serde_yaml::Value::String(k.clone()), v.clone());
@@ -887,24 +885,7 @@ pub fn process_markdown_file(
     //      degrades to a slightly-off scroll-sync, never a panic.
     // Lines of the file above the parser's line 1: the frontmatter plus any
     // blank lines the body lost after it. Warnings name file lines with this.
-    let raw_body_offset = {
-        let lookup_leading_blanks = markdown_content
-            .lines()
-            .take_while(|l| l.trim().is_empty())
-            .count();
-        markdown_content
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .and_then(|first| {
-                content
-                    .lines()
-                    .skip(frontmatter_line_count)
-                    .position(|l| l.trim_end() == first.trim_end())
-                    .map(|p| p + frontmatter_line_count)
-            })
-            .map(|pos| pos.saturating_sub(lookup_leading_blanks))
-            .unwrap_or(0)
-    };
+    let raw_body_offset = raw_body_line_offset(content, &markdown_content, frontmatter_line_count);
     let source_line_offset = {
         // Lines the EDITOR's frontmatter parser strips before CM6 line 1.
         // Derive it from the ACTUAL buffer the editor loads —

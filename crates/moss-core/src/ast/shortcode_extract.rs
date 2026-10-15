@@ -67,6 +67,20 @@ pub struct ExtractionResult {
     /// that parses but has no effect on the output. They are logged at the
     /// plain warning level, outside the problem count `--strict` reads.
     pub advisories: Vec<String>,
+    /// One entry per empty-name fenced div (`:::{.x}`) the extractor wrapped,
+    /// in source order of their openers, nested regions included. Lets a
+    /// caller audit which classes a page uses without re-parsing the fences.
+    pub css_regions: Vec<CssRegionSpan>,
+}
+
+/// An empty-name fenced div the extractor wrapped in a plain `<div>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CssRegionSpan {
+    /// The classes written on the opener, without the leading dot.
+    pub classes: Vec<String>,
+    /// 1-based source line of the opener, counted with
+    /// `ParseConfig::warning_line_offset` applied.
+    pub line: usize,
 }
 
 /// What a shortcode's parse reports back to the extractor. `warnings` are
@@ -1372,17 +1386,27 @@ pub fn extract_shortcodes_with_config(
     config: &ParseConfig,
 ) -> ExtractionResult {
     let nonce = compute_nonce(markdown);
-    let mut extracted: Vec<ExtractedShortcode> = Vec::new();
-    let mut warnings: Vec<String> = Vec::new();
-    let mut advisories: Vec<String> = Vec::new();
-    let output = extract_with_state(markdown, &nonce, &mut extracted, &mut warnings, &mut advisories, config);
+    let mut collected = Collected::default();
+    let output = extract_with_state(markdown, &nonce, &mut collected, config);
     ExtractionResult {
         markdown_with_placeholders: output,
-        extracted,
+        extracted: collected.extracted,
         nonce,
-        warnings,
-        advisories,
+        warnings: collected.warnings,
+        advisories: collected.advisories,
+        css_regions: collected.css_regions,
     }
+}
+
+/// What one extraction pass accumulates across every nesting level. The
+/// levels share one instance, so placeholder indices, the nonce-indexed
+/// `extracted` list and every diagnostic come out flat.
+#[derive(Default)]
+struct Collected {
+    extracted: Vec<ExtractedShortcode>,
+    warnings: Vec<String>,
+    advisories: Vec<String>,
+    css_regions: Vec<CssRegionSpan>,
 }
 
 /// Recursive worker for [`extract_shortcodes`]. Walks `markdown`
@@ -1394,9 +1418,7 @@ pub fn extract_shortcodes_with_config(
 fn extract_with_state(
     markdown: &str,
     nonce: &str,
-    extracted: &mut Vec<ExtractedShortcode>,
-    warnings: &mut Vec<String>,
-    advisories: &mut Vec<String>,
+    collected: &mut Collected,
     config: &ParseConfig,
 ) -> String {
     let mut output = String::with_capacity(markdown.len());
@@ -1447,7 +1469,7 @@ fn extract_with_state(
             // early and strand the rest as prose).
             let Some(j) = find_block_end(&lines, body_start, is_inert) else {
                 // Unclosed block: emit verbatim, and say where it opened.
-                warnings.push(unclosed_opener_warning(
+                collected.warnings.push(unclosed_opener_warning(
                     trimmed,
                     config.warning_line_offset + i + 1,
                 ));
@@ -1488,12 +1510,23 @@ fn extract_with_state(
                 // key on the fence is read and then thrown away.
                 if !parsed.kvs.is_empty() {
                     let keys: Vec<&str> = parsed.kvs.iter().map(|(k, _)| k.as_str()).collect();
-                    advisories.push(format!(
+                    collected.advisories.push(format!(
                         "fenced div `:::{{...}}` does not render attribute(s) {}; only classes and an id reach the output",
                         keys.join(", ")
                     ));
                 }
-                let body_processed = extract_with_state(&body, nonce, extracted, warnings, advisories, config);
+                collected.css_regions.push(CssRegionSpan {
+                    classes: parsed.classes.clone(),
+                    line: config.warning_line_offset + i + 1,
+                });
+                // The body's first line sits `body_start` lines into this
+                // level, so the recursion's line numbers are shifted by it.
+                let body_config = ParseConfig {
+                    warning_line_offset: config.warning_line_offset + body_start,
+                    ..*config
+                };
+                let body_processed =
+                    extract_with_state(&body, nonce, collected, &body_config);
                 output.push_str(&render_div_open(&parsed.classes, parsed.id.as_deref(), None));
                 output.push_str("\n\n");
                 output.push_str(&body_processed);
@@ -1507,9 +1540,9 @@ fn extract_with_state(
 
             if is_typed_known(name) {
                 if let (Some(sc), diag) = parse_shortcode_block(name, args, &body, config) {
-                    warnings.extend(diag.warnings);
-                    advisories.extend(diag.advisories);
-                    let index = extracted.len();
+                    collected.warnings.extend(diag.warnings);
+                    collected.advisories.extend(diag.advisories);
+                    let index = collected.extracted.len();
                     output.push_str(&placeholder_for(&nonce, index));
                     output.push('\n');
                     // Preserve the block's original line count. The block spanned
@@ -1525,7 +1558,7 @@ fn extract_with_state(
                     for _ in 0..(j - i) {
                         output.push('\n');
                     }
-                    extracted.push(ExtractedShortcode {
+                    collected.extracted.push(ExtractedShortcode {
                         index,
                         shortcode: sc,
                     });
@@ -1546,11 +1579,16 @@ fn extract_with_state(
             // into the body so a misspelled outer doesn't strand any
             // valid typed shortcodes nested inside it.
             let parsed = super::attrs::parse_attrs(args).unwrap_or_default();
-            warnings.push(format!("unknown shortcode `:::{}`", name));
+            collected.warnings.push(format!("unknown shortcode `:::{}`", name));
             let mut classes = vec!["moss-unknown-shortcode".to_string()];
             classes.extend(parsed.classes.iter().cloned());
             let extra_attrs = format!(r#" data-name="{}""#, html_escape_attr(name));
-            let body_processed = extract_with_state(&body, nonce, extracted, warnings, advisories, config);
+            let body_config = ParseConfig {
+                warning_line_offset: config.warning_line_offset + body_start,
+                ..*config
+            };
+            let body_processed =
+                extract_with_state(&body, nonce, collected, &body_config);
             output.push_str(&render_div_open(&classes, parsed.id.as_deref(), Some(&extra_attrs)));
             output.push_str("\n\n");
             output.push_str(&body_processed);
@@ -1570,7 +1608,7 @@ fn extract_with_state(
         if fence_step(trimmed) < 0 {
             let quiet = crate::inert_regions::html_and_math_lines(markdown, &inert);
             if !quiet.get(i).copied().unwrap_or(false) {
-                warnings.push(stray_closer_warning(
+                collected.warnings.push(stray_closer_warning(
                     trimmed,
                     config.warning_line_offset + i + 1,
                     last_closed.map(|(o, c)| {
