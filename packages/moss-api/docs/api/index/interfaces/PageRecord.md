@@ -7,6 +7,17 @@ it lists and every subfolder's home page have this shape.
 
 ## Properties
 
+### field\_errors
+
+```ts
+field_errors: Record<string, string>;
+```
+
+For each declared field whose value does not fit, the reason it does not, as
+the build warning states it. Empty when every value fits.
+
+***
+
 ### fields
 
 ```ts
@@ -15,10 +26,12 @@ fields: Record<string, unknown>;
 
 The page's declared fields (`[fields.*]` in `.moss/config.toml`) that its own
 frontmatter carries and that parse, each as its typed value. A date is
-`{ value, precision, qualifier }`; a period is `{ start, end, text }` with
-`start` and `end` in that date shape; a choice is `{ value, label }`. A value
-that does not parse is left out here and stays in `frontmatter`. Values a
-folder's `cascade:` supplies are not typed here.
+`{ value, precision, qualifier }`; a period is `{ start, end, open, text }` with
+`start` and `end` in that date shape and `open` true only for an interval with
+no end; a choice is `{ value, label }` with the label in this page's language;
+a count is `{ number, noun, text }`. A value that does not parse is left out
+here and stays in `frontmatter`. Values a folder's `cascade:` supplies are not
+typed here.
 
 ***
 

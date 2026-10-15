@@ -302,28 +302,44 @@ fn schema_frontmatter_warnings(
 
 /// The site's declared fields (`[fields.*]` in `.moss/config.toml`) that apply
 /// to this page and carry a value, each parsed once here. A value that does not
-/// fit its type is a warning naming the file and the field. `file_path` is the
-/// site-relative source path, which is what a declaration's `in` scope matches.
+/// fit its type is a warning naming the file and the field, and its reason is
+/// kept in the returned error map. `file_path` is the site-relative source path,
+/// which is what a declaration's `in` scope matches.
 fn declared_fields(
     file_path: &str,
     frontmatter: &std::collections::HashMap<String, serde_yaml::Value>,
     decls: &[moss_core::fields::FieldDecl],
-) -> (std::collections::BTreeMap<String, moss_core::fields::TypedValue>, Vec<String>) {
-    let mut values = std::collections::BTreeMap::new();
-    let mut warnings = Vec::new();
-    for decl in decls.iter().filter(|decl| moss_core::fields::applies_to(decl, file_path)) {
+    page: moss_core::fields::PageFormat,
+) -> DeclaredFields {
+    // A page in a language tree (`de/Housing/x.md`) is also inside `Housing`.
+    let within_tree = moss_core::home::lang_tree_prefix(file_path).and_then(|_| file_path.split_once('/')).map(|(_, rest)| rest);
+    let applies = |decl: &moss_core::fields::FieldDecl| {
+        moss_core::fields::applies_to(decl, file_path) || within_tree.is_some_and(|p| moss_core::fields::applies_to(decl, p))
+    };
+    let mut out = DeclaredFields::default();
+    for decl in decls.iter().filter(|decl| applies(decl)) {
         let Some(raw) = frontmatter.get(&decl.name) else { continue };
         let Ok(json) = serde_json::to_value(raw) else { continue };
-        match moss_core::fields::parse_value(decl, &json) {
+        match moss_core::fields::parse_value(decl, &json, page) {
             Ok(value) => {
-                values.insert(decl.name.clone(), value);
+                out.values.insert(decl.name.clone(), value);
             }
             Err(reason) => {
-                warnings.push(format!("[{file_path}] frontmatter: field '{}': {reason}", decl.name));
+                out.warnings.push(format!("[{file_path}] frontmatter: field '{}': {reason}", decl.name));
+                out.errors.insert(decl.name.clone(), reason);
             }
         }
     }
-    (values, warnings)
+    out
+}
+
+/// What [`declared_fields`] reads from one page.
+#[derive(Default)]
+struct DeclaredFields {
+    values: std::collections::BTreeMap<String, moss_core::fields::TypedValue>,
+    /// Field name to the reason a value does not fit, as the build warning prints it.
+    errors: std::collections::BTreeMap<String, String>,
+    warnings: Vec<String>,
 }
 
 /// The `[site]` answers that change how a page's markdown renders, handed to
@@ -407,6 +423,11 @@ pub struct PageContext<'a> {
     /// `title` or `description` only when the page lists that field under
     /// `inferred:` and sets none of its own.
     pub derived_facts: &'a moss_core::resolve::embeds::derived::DerivedFacts,
+    /// The page's source as authored, before embeds and wikilinks were
+    /// resolved. Declared fields are read from this, so a `[[link]]` in
+    /// frontmatter is checked as written, not as the path it resolved to.
+    /// `None` (footer slots, tests) reads the frontmatter it was given.
+    pub authored_source: Option<&'a str>,
 }
 
 /// What a page with no derived embeds is given.
@@ -415,7 +436,7 @@ static NO_FACTS: moss_core::resolve::embeds::derived::DerivedFacts =
 
 impl Default for PageContext<'_> {
     fn default() -> Self {
-        Self { has_content_folders: false, seta_url: None, folder_lang: None, derived_facts: &NO_FACTS }
+        Self { has_content_folders: false, seta_url: None, folder_lang: None, derived_facts: &NO_FACTS, authored_source: None }
     }
 }
 
@@ -479,6 +500,10 @@ pub fn process_markdown_file(
     // skip the frontmatter region (so a body line that happens to equal a
     // frontmatter value line is not matched too early). 0 when no frontmatter.
     let mut declared = std::collections::BTreeMap::new();
+    let mut field_errors = std::collections::BTreeMap::new();
+    // The frontmatter the declared fields are read from, as authored. Taken only
+    // when the site declares fields, so a site without them parses nothing extra.
+    let mut field_source: Option<std::collections::HashMap<String, serde_yaml::Value>> = None;
     let (mut frontmatter, markdown_content_raw, raw_frontmatter, frontmatter_line_count) =
         if is_simplified_frontmatter(content) {
             let (fm, body) = parse_simplified_frontmatter(content);
@@ -545,11 +570,12 @@ pub fn process_markdown_file(
             for warning in schema_frontmatter_warnings(file_path, &parsed.frontmatter) {
                 crate::build::cli_output::cli_warn!("{}", warning);
             }
-            let (fields, field_warnings) = declared_fields(file_path, &parsed.frontmatter, site.fields);
-            for warning in field_warnings {
-                crate::build::cli_output::cli_warn!("{}", warning);
+            if !site.fields.is_empty() {
+                field_source = Some(match page.authored_source {
+                    Some(authored) => moss_core::frontmatter::parse(authored).frontmatter,
+                    None => parsed.frontmatter.clone(),
+                });
             }
-            declared = fields;
             // Body reconciliation: gray_matter's `result.content`
             // — which the downstream pipeline + every snapshot fixture were built
             // against — strips leading blank lines and drops the trailing newline,
@@ -675,6 +701,20 @@ pub fn process_markdown_file(
     let fm_lang = frontmatter.lang.as_deref();
     let doc_lang_tag =
         crate::i18n::declared_lang_tag(fm_lang, filename_stem, file_path, ancestor_lang);
+    // Read once the page's language is known: a choice's label and a count's
+    // decimal mark both depend on it.
+    if let Some(source) = &field_source {
+        let format = moss_core::fields::PageFormat {
+            lang: doc_lang.as_bcp47_attr(),
+            decimal: crate::build::components::field_text::decimal_mark(doc_lang),
+        };
+        let fields = declared_fields(file_path, source, site.fields, format);
+        for warning in fields.warnings {
+            crate::build::cli_output::cli_warn!("{}", warning);
+        }
+        declared = fields.values;
+        field_errors = fields.errors;
+    }
 
     // Detect if this is an index file (needed for url_path computation).
     let filename_lower = Path::new(file_path)
@@ -1473,6 +1513,7 @@ pub fn process_markdown_file(
 
     Ok(ParsedDocument {
         declared,
+        field_errors,
         card_credits: None,
         label,
         nav_label,

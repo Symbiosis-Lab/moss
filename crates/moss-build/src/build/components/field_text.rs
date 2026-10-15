@@ -5,8 +5,17 @@
 
 use crate::build::components::date::format_display_date;
 use crate::i18n::{t, Language};
-use moss_core::date::{parse_edtf, Edtf, EdtfDate, PartialDate, Precision, Qualifier};
-use moss_core::fields::TypedValue;
+use moss_core::date::{EdtfDate, PartialDate, Precision, Qualifier};
+use moss_core::fields::{DecimalMark, TypedValue};
+
+/// The decimal mark a language writes numbers with. Parsing a count and
+/// displaying one both read it from here, so a page's numbers round-trip.
+pub fn decimal_mark(lang: Language) -> DecimalMark {
+    match lang {
+        Language::De => DecimalMark::Comma,
+        Language::En | Language::ZhHans | Language::ZhHant => DecimalMark::Point,
+    }
+}
 
 /// The date as written at its own precision: a year-precision date never
 /// gains a month or day, and a month-precision one never gains a day.
@@ -44,12 +53,17 @@ pub fn date_text(d: &EdtfDate, lang: Language, typesetting: Option<&str>) -> Str
 pub fn period_text(
     start: &EdtfDate,
     end: Option<&EdtfDate>,
+    open: bool,
     lang: Language,
     typesetting: Option<&str>,
 ) -> String {
-    let Some(end) = end else {
+    if open {
         let from = date_text(start, lang, typesetting);
         return t(lang, "field_open_from").replace("{start}", &from);
+    }
+    // A one-point period is the date itself, not a range with no end.
+    let Some(end) = end else {
+        return date_text(start, lang, typesetting);
     };
     let plain = start.qualifier.is_none() && end.qualifier.is_none();
     let (s, e) = (start.date, end.date);
@@ -89,9 +103,9 @@ fn join_spaced(start: &EdtfDate, end: &EdtfDate, lang: Language, typesetting: Op
 /// The number as displayed, and the noun unchanged. Digits are grouped by
 /// the language's convention and decimals use its separator.
 pub fn count_text(number: f64, noun: Option<&str>, lang: Language) -> (String, Option<String>) {
-    let (group, decimal) = match lang {
-        Language::De => ('.', ','),
-        Language::En | Language::ZhHans | Language::ZhHant => (',', '.'),
+    let (group, decimal) = match decimal_mark(lang) {
+        DecimalMark::Comma => ('.', ','),
+        DecimalMark::Point => (',', '.'),
     };
     let plain = format!("{number}");
     let (int_part, frac) = match plain.split_once('.') {
@@ -134,11 +148,7 @@ pub fn value_text(v: &TypedValue, lang: Language, typesetting: Option<&str>) -> 
         TypedValue::Choice { label, .. } => label.clone(),
         TypedValue::Number(n) => number_text(n, lang),
         TypedValue::Date(d) => date_text(d, lang, typesetting),
-        TypedValue::Period { start, end, text } => match parse_edtf(text) {
-            // A one-point period has no end; it reads as the date, not as "from".
-            Some(Edtf::Date(d)) => date_text(&d, lang, typesetting),
-            _ => period_text(start, end.as_ref(), lang, typesetting),
-        },
+        TypedValue::Period { start, end, open, .. } => period_text(start, end.as_ref(), *open, lang, typesetting),
         TypedValue::Count { number: Some(n), noun, .. } => {
             let number = number_text(n, lang);
             match noun {

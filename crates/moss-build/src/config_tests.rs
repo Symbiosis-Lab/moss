@@ -210,7 +210,7 @@ fn a_redirects_value_that_is_not_a_table_is_an_advisory_not_a_crash() {
 #[test]
 fn field_decls_reads_a_choice_with_a_label_table() {
     let config = ConfigFile::parse(
-        "[fields.kind]\ntype = \"choice\"\nof = { Building = \"Built\", Service = \"Founded\" }\nplace = \"eyebrow\"\nin = [\"Housing\"]\n",
+        "[fields.kind]\ntype = \"choice\"\nof = { Building = { en = \"Built\", de = \"Errichtet\" }, Service = \"Founded\" }\nplace = \"eyebrow\"\nin = [\"Housing\"]\n",
     )
     .unwrap();
     let (decls, problems) = config.field_decls();
@@ -222,12 +222,26 @@ fn field_decls_reads_a_choice_with_a_label_table() {
     assert_eq!(
         kind.choices,
         vec![
-            moss_core::fields::Choice { value: "Building".into(), label: "Built".into() },
-            moss_core::fields::Choice { value: "Service".into(), label: "Founded".into() },
+            moss_core::fields::Choice {
+                value: "Building".into(),
+                labels: vec![("de".into(), "Errichtet".into()), ("en".into(), "Built".into())],
+            },
+            moss_core::fields::Choice { value: "Service".into(), labels: vec![("en".into(), "Founded".into())] },
         ]
     );
     assert_eq!(kind.place, Some(moss_core::fields::Place::Eyebrow));
     assert_eq!(kind.scope, vec!["Housing".to_string()]);
+}
+
+#[test]
+fn field_decls_choice_table_keeps_the_order_the_file_writes() {
+    let config = ConfigFile::parse(
+        "[fields.kind]\ntype = \"choice\"\nof = { Service = \"Founded\", Building = \"Built\", Event = \"Held\" }\n",
+    )
+    .unwrap();
+    let (decls, _) = config.field_decls();
+    let values: Vec<&str> = decls[0].choices.iter().map(|c| c.value.as_str()).collect();
+    assert_eq!(values, ["Service", "Building", "Event"]);
 }
 
 #[test]
@@ -238,8 +252,8 @@ fn field_decls_choice_from_a_list_labels_each_value_with_itself() {
     assert_eq!(
         decls[0].choices,
         vec![
-            moss_core::fields::Choice { value: "Building".into(), label: "Building".into() },
-            moss_core::fields::Choice { value: "Service".into(), label: "Service".into() },
+            moss_core::fields::Choice { value: "Building".into(), labels: vec![("en".into(), "Building".into())] },
+            moss_core::fields::Choice { value: "Service".into(), labels: vec![("en".into(), "Service".into())] },
         ]
     );
 }

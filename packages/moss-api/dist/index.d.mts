@@ -809,12 +809,19 @@ interface PageRecord {
   /**
    * The page's declared fields (`[fields.*]` in `.moss/config.toml`) that its own
    * frontmatter carries and that parse, each as its typed value. A date is
-   * `{ value, precision, qualifier }`; a period is `{ start, end, text }` with
-   * `start` and `end` in that date shape; a choice is `{ value, label }`. A value
-   * that does not parse is left out here and stays in `frontmatter`. Values a
-   * folder's `cascade:` supplies are not typed here.
+   * `{ value, precision, qualifier }`; a period is `{ start, end, open, text }` with
+   * `start` and `end` in that date shape and `open` true only for an interval with
+   * no end; a choice is `{ value, label }` with the label in this page's language;
+   * a count is `{ number, noun, text }`. A value that does not parse is left out
+   * here and stays in `frontmatter`. Values a folder's `cascade:` supplies are not
+   * typed here.
    */
   fields: Record<string, unknown>;
+  /**
+   * For each declared field whose value does not fit, the reason it does not, as
+   * the build warning states it. Empty when every value fits.
+   */
+  field_errors: Record<string, string>;
   /**
    * The rendered body. Relative links and image sources are rewritten to
    * resolve from the listing page, where the HTML is drawn. Empty for a
@@ -846,6 +853,24 @@ interface ListingContext {
   folders: PageRecord[];
   /** `terms[namespace][name]` is where that term's page is, written like a record's `url` so it resolves from the listing page, for every name `pages` use. */
   terms: Record<string, Record<string, string>>;
+  /** Every declared field, by name. Choice labels are in the listing page's language. */
+  declarations: Record<string, FieldDeclaration>;
+}
+/**
+ * One `[fields.<name>]` declaration. `choices` is present only for a choice, in
+ * declared order.
+ *
+ * @category Listing styles
+ */
+interface FieldDeclaration {
+  /** The declared type: `text`, `number`, `date`, `url`, `choice`, `period`, `count`, `page` or `pages`. */
+  type: string;
+  choices?: {
+    value: string;
+    label: string;
+  }[];
+  /** Where the field is placed on the page, or `null`. */
+  place: string | null;
 }
 /**
  * What the `listing` export returns. A malformed result, a throw or a timeout
@@ -2241,4 +2266,4 @@ declare function showToast(options: ToastOptions | string): Promise<void>;
  */
 declare function dismissToast(id: string): Promise<void>;
 //#endregion
-export { AddressKind, AdvisoryAction, AdvisoryAppOp, AdvisoryProposal, AdvisoryScope, AdvisorySeverity, ArchType, ArticleInfo, ArtifactSource, BaseContext, BrowserCloseReason, BrowserHandle, CompleteMessage, ConfigureDomainContext, Cookie, DeployAddress, DeployContext, DeploymentInfo, DerivationContribution, DnsRecord, DnsTarget, DownloadOptions, DownloadResult, ErrorMessage, EscapeSpec, ExecuteOptions, ExecuteResult, FetchOptions, FetchResult, GetOptions, HookResult, HookToast, KeyAlgorithm, KeyInfo, LegacySetupVerdict, ListingContext, ListingResult, ListingStyleContribution, LogMessage, MultipartFilePart, MultipartPostOptions, MultipartTextField, OSType, PageRecord, PlatformInfo, PlatformKey, PluginCategory, PluginHook, PluginManifest, PluginMessage, PostOptions, ProcessContext, ProgressMessage, ProjectFileEntry, ProjectInfo, SetupBlocker, SetupContext, SetupField, SetupForm, SetupVerdict, SiteFileInfo, SocialArticleData, SocialComment, SocialDataFile, StartTaskOptions, SyndicateContext, TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, TaskHandle, TauriCore, ToastAction, ToastOptions, ToastType, ToastVariant, TriggerContext, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startTask, writeFile, writePluginFile };
+export { AddressKind, AdvisoryAction, AdvisoryAppOp, AdvisoryProposal, AdvisoryScope, AdvisorySeverity, ArchType, ArticleInfo, ArtifactSource, BaseContext, BrowserCloseReason, BrowserHandle, CompleteMessage, ConfigureDomainContext, Cookie, DeployAddress, DeployContext, DeploymentInfo, DerivationContribution, DnsRecord, DnsTarget, DownloadOptions, DownloadResult, ErrorMessage, EscapeSpec, ExecuteOptions, ExecuteResult, FetchOptions, FetchResult, FieldDeclaration, GetOptions, HookResult, HookToast, KeyAlgorithm, KeyInfo, LegacySetupVerdict, ListingContext, ListingResult, ListingStyleContribution, LogMessage, MultipartFilePart, MultipartPostOptions, MultipartTextField, OSType, PageRecord, PlatformInfo, PlatformKey, PluginCategory, PluginHook, PluginManifest, PluginMessage, PostOptions, ProcessContext, ProgressMessage, ProjectFileEntry, ProjectInfo, SetupBlocker, SetupContext, SetupField, SetupForm, SetupVerdict, SiteFileInfo, SocialArticleData, SocialComment, SocialDataFile, StartTaskOptions, SyndicateContext, TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, TaskHandle, TauriCore, ToastAction, ToastOptions, ToastType, ToastVariant, TriggerContext, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startTask, writeFile, writePluginFile };

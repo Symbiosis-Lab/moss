@@ -1438,6 +1438,9 @@ fn build_inner(
     // which needs it again after `site_config` is consumed, read the same
     // value.
     let math = site_bool("math").unwrap_or(true);
+    // The listing styles read every declaration, and `site_config` takes
+    // `field_decls` below, so the listing gets its own copy.
+    let listing_field_decls = field_decls.clone();
     // Read site-level config from .moss/config.toml [site] section
     let site_config = crate::build::render::SiteConfig {
         lang: site_lang.clone(),
@@ -1565,7 +1568,7 @@ fn build_inner(
         Some(resolve) => resolve(&documents, &site_lang, site_comments)?,
         None => ResolvedSlots::empty(),
     };
-    crate::build::emit::listing_style::apply(&documents, project_structure, &site_result.term_index, &stage_dir, &mut pending, &mut resolved_slots);
+    crate::build::emit::listing_style::apply(&documents, project_structure, &site_result.term_index, &listing_field_decls, &stage_dir, &mut pending, &mut resolved_slots);
     // Injects slots (and plugin listings) over the stage, re-registers every page it
     // rewrote, and settles the `MOSS_INCREMENTAL_VERIFY=1` carry check. See `build::emit::slots`.
     crate::build::emit::slots::apply_to_stage_and_manifest(

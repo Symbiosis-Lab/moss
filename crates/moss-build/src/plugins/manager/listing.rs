@@ -53,11 +53,16 @@ pub struct PageRecord {
     pub frontmatter: BTreeMap<String, serde_json::Value>,
     /// The page's declared fields (`[fields.*]` in `.moss/config.toml`) that
     /// its own frontmatter carries and that parse, each as its typed value. A
-    /// date is `{value, precision, qualifier}`; a period is `{start, end, text}`
-    /// with `start` and `end` in that date shape; a choice is `{value, label}`.
+    /// date is `{value, precision, qualifier}`; a period is `{start, end, open, text}`
+    /// with `start` and `end` in that date shape; a choice is `{value, label}`
+    /// with the label in this page's language; a count is `{number, noun, text}`.
     /// A value that does not parse is left out here and stays in `frontmatter`.
     /// Values a folder's `cascade:` supplies are not typed here. Empty when none applies.
     pub fields: BTreeMap<String, serde_json::Value>,
+    /// For each declared field whose value does not fit, the reason it does
+    /// not, as the build warning states it. Empty when every value fits.
+    #[serde(default)]
+    pub field_errors: BTreeMap<String, String>,
     /// The rendered body. Relative links and image sources are rewritten to
     /// resolve from the listing page, where the HTML is drawn. Empty for a
     /// subfolder that has no home page.
@@ -91,6 +96,30 @@ pub struct ListingContext {
     /// record's `url` so it resolves from the listing page, for every name
     /// used by `pages`.
     pub terms: BTreeMap<String, BTreeMap<String, String>>,
+    /// Every declared field, by name, so a plugin can draw a field's choices
+    /// or place without reading `.moss/config.toml`. Choice labels are in the
+    /// listing page's language.
+    #[serde(default)]
+    pub declarations: BTreeMap<String, FieldDeclarationRecord>,
+}
+
+/// One `[fields.<name>]` declaration as a plugin sees it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FieldDeclarationRecord {
+    /// The declared type, as the config names it (`choice`, `period`, ...).
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// Only for a choice: the allowed values in declared order.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub choices: Option<Vec<ChoiceRecord>>,
+    /// Where the field is placed on the page, or `None` for no place.
+    pub place: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChoiceRecord {
+    pub value: String,
+    pub label: String,
 }
 
 /// One tag for the page's `<head>`.

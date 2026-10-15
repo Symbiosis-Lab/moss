@@ -1759,6 +1759,7 @@ secp256k1-schnorr: BIP-340). Any protocol framing (an IPNS record's
 
 | Interface | Description |
 | ------ | ------ |
+| [FieldDeclaration](interfaces/FieldDeclaration.md) | One `[fields.<name>]` declaration. `choices` is present only for a choice, in declared order. |
 | [ListingContext](interfaces/ListingContext.md) | The argument of the `listing` export. |
 | [ListingResult](interfaces/ListingResult.md) | What the `listing` export returns. A malformed result, a throw or a timeout leaves moss's own listing in place with one build warning. |
 | [PageRecord](interfaces/PageRecord.md) | One page, as a listing plugin sees it. The listing page itself, every page it lists and every subfolder's home page have this shape. |

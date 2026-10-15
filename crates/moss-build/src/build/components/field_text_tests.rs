@@ -46,7 +46,8 @@ fn period_text_collapses_ranges_and_reads_open_ends() {
     ];
     for (start, end, lang, expected) in cases {
         let end = end.map(date);
-        assert_eq!(period_text(&date(start), end.as_ref(), lang, None), expected, "{start} to {end:?} in {lang:?}");
+        let open = end.is_none();
+        assert_eq!(period_text(&date(start), end.as_ref(), open, lang, None), expected, "{start} to {end:?} in {lang:?}");
     }
 }
 
@@ -64,9 +65,9 @@ fn value_text_dispatches_each_kind() {
     let choice = TypedValue::Choice { value: "yes".to_string(), label: "Yes".to_string() };
     assert_eq!(value_text(&choice, En, None), "Yes");
 
-    let one_point = TypedValue::Period { start: date("1923"), end: None, text: "1923".to_string() };
+    let one_point = TypedValue::Period { start: date("1923"), end: None, open: false, text: "1923".to_string() };
     assert_eq!(value_text(&one_point, En, None), "1923", "a one-point period reads as the date");
 
-    let open = TypedValue::Period { start: date("1923"), end: None, text: "1923/".to_string() };
+    let open = TypedValue::Period { start: date("1923"), end: None, open: true, text: "1923/".to_string() };
     assert_eq!(value_text(&open, En, None), "from 1923", "an open interval reads as from");
 }

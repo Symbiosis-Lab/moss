@@ -59,10 +59,10 @@ use toml::Value;
 #[derive(Debug, Clone)]
 pub struct ConfigFile {
     root: toml::Table,
-    /// The keys under `[terms]` in the order the file writes them. `root`
-    /// reads tables back sorted by key, so this is the only record of that
-    /// order; it orders the nav-bar term kinds.
-    terms_order: Vec<String>,
+    /// Keys of the tables whose written order matters, in the order the file
+    /// writes them, by dotted path (`terms`, `fields.kind.of`). `root` reads
+    /// tables back sorted by key, so this is the only record of that order.
+    key_orders: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 impl ConfigFile {
@@ -88,15 +88,7 @@ impl ConfigFile {
         if let Err(e) = crate::config::migrations::migrate_to_current(&mut table) {
             log::warn!(target: "config", "in-memory config migration failed, reading raw values: {e}");
         }
-        let terms_order = text
-            .parse::<toml_edit::Document>()
-            .ok()
-            .and_then(|doc| {
-                let terms = doc.get("terms")?.as_table_like()?;
-                Some(terms.iter().map(|(key, _)| key.to_string()).collect())
-            })
-            .unwrap_or_default();
-        Ok(Self { root: table, terms_order })
+        Ok(Self { root: table, key_orders: written_key_orders(text) })
     }
 
     /// The config of a project that has none — every lookup answers `None`.
@@ -108,7 +100,7 @@ impl ConfigFile {
     pub fn empty() -> Self {
         Self {
             root: toml::Table::new(),
-            terms_order: Vec::new(),
+            key_orders: Default::default(),
         }
     }
 
@@ -292,7 +284,7 @@ impl ConfigFile {
                 let table = value.as_table()?;
                 table.get("nav")?.as_bool().filter(|on| *on)?;
                 let title = table.get("title").and_then(|v| v.as_str()).map(str::to_string);
-                let order = self.terms_order.iter().position(|k| k == key).unwrap_or(usize::MAX);
+                let order = self.written_position("terms", key);
                 let weight = table.get("weight").and_then(|v| v.as_integer()).and_then(|w| i32::try_from(w).ok());
                 Some((order, key.clone(), title, weight))
             })
@@ -345,10 +337,30 @@ impl ConfigFile {
         }
     }
 
+    /// One choice's label: a string for every language, or a table of
+    /// `language tag = label`. `None` when the value is neither, or a table
+    /// holds a non-string.
+    fn choice_labels(label: &Value) -> Option<Vec<(String, String)>> {
+        match label {
+            Value::String(s) => Some(vec![("en".to_string(), s.clone())]),
+            Value::Table(by_lang) => by_lang
+                .iter()
+                .map(|(lang, l)| l.as_str().map(|l| (lang.clone(), l.to_string())))
+                .collect(),
+            _ => None,
+        }
+    }
+
     /// The `[fields.<name>]` declarations, and one problem string for each
     /// table or key the build cannot use. The caller reports the problems once
     /// per build. A declaration with a bad `place` or an unknown key is kept;
     /// one with a bad type or a built-in name is dropped.
+    /// Where `key` sits among the keys of the table at `path`, as the file
+    /// writes them; keys the file did not order come last.
+    fn written_position(&self, path: &str, key: &str) -> usize {
+        self.key_orders.get(path).and_then(|keys| keys.iter().position(|k| k == key)).unwrap_or(usize::MAX)
+    }
+
     pub fn field_decls(&self) -> (Vec<moss_core::fields::FieldDecl>, Vec<String>) {
         use moss_core::fields::{parse_place, place_names, Choice, FieldDecl, FieldKind};
         let mut decls = Vec::new();
@@ -392,18 +404,25 @@ impl ConfigFile {
                 }
                 (FieldKind::Choice, Some(Value::Array(_))) => Self::string_list(sub, "of", name, &mut problems)
                     .into_iter()
-                    .map(|v| Choice { value: v.clone(), label: v })
+                    .map(|v| Choice { value: v.clone(), labels: vec![("en".to_string(), v)] })
                     .collect(),
-                (FieldKind::Choice, Some(Value::Table(labels))) => labels
-                    .iter()
-                    .filter_map(|(v, label)| match label.as_str() {
-                        Some(label) => Some(Choice { value: v.clone(), label: label.to_string() }),
-                        None => {
-                            problems.push(format!("[fields.{name}] label for \"{v}\" must be a string; skipping it"));
-                            None
-                        }
-                    })
-                    .collect(),
+                (FieldKind::Choice, Some(Value::Table(values))) => {
+                    let path = format!("fields.{name}.of");
+                    let mut written: Vec<_> = values.iter().collect();
+                    written.sort_by_key(|(v, _)| self.written_position(&path, v));
+                    written
+                        .into_iter()
+                        .filter_map(|(v, label)| match Self::choice_labels(label) {
+                            Some(labels) => Some(Choice { value: v.clone(), labels }),
+                            None => {
+                                problems.push(format!(
+                                    "[fields.{name}] label for \"{v}\" must be a string or a table of language labels; skipping it"
+                                ));
+                                None
+                            }
+                        })
+                        .collect()
+                }
                 (FieldKind::Choice, Some(_)) => {
                     problems.push(format!("[fields.{name}] `of` must be a list or a table of labels"));
                     continue;
@@ -479,6 +498,25 @@ pub struct RawKind {
     /// `build::terms::term_kinds` is the one place that reports a value that
     /// is not a bool. `None` when the key is absent and for the two built-ins.
     pub cards: Option<toml::Value>,
+}
+
+/// The written key order of `[terms]` and of each `[fields.<name>]` table's
+/// `of`, read with `toml_edit`, which keeps the order `toml` discards.
+fn written_key_orders(text: &str) -> std::collections::BTreeMap<String, Vec<String>> {
+    let mut orders = std::collections::BTreeMap::new();
+    let Ok(doc) = text.parse::<toml_edit::Document>() else { return orders };
+    let keys = |t: &dyn toml_edit::TableLike| t.iter().map(|(k, _)| k.to_string()).collect::<Vec<_>>();
+    if let Some(terms) = doc.get("terms").and_then(|v| v.as_table_like()) {
+        orders.insert("terms".to_string(), keys(terms));
+    }
+    if let Some(fields) = doc.get("fields").and_then(|v| v.as_table_like()) {
+        for (name, field) in fields.iter() {
+            if let Some(of) = field.as_table_like().and_then(|f| f.get("of")).and_then(|v| v.as_table_like()) {
+                orders.insert(format!("fields.{name}.of"), keys(of));
+            }
+        }
+    }
+    orders
 }
 
 #[cfg(test)]

@@ -568,6 +568,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub declared: std::collections::BTreeMap<String, moss_core::fields::TypedValue>,
+    /// For each declared field whose value does not fit, the reason, as the
+    /// build warning states it. Filled in the same pass as `declared`.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub field_errors: std::collections::BTreeMap<String, String>,
     /// Declared listing sort from frontmatter (folder index pages only;
     /// `None` on article pages).
     pub sort: Option<moss_core::sort::SortField>,

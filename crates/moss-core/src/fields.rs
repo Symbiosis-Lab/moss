@@ -44,6 +44,11 @@ impl FieldKind {
     pub fn from_name(name: &str) -> Option<FieldKind> {
         KIND_NAMES.iter().find(|(n, _)| *n == name).map(|(_, kind)| *kind)
     }
+
+    /// The `type` name this kind is declared with.
+    pub fn name(self) -> &'static str {
+        KIND_NAMES.iter().find(|(_, kind)| *kind == self).map_or("", |(name, _)| *name)
+    }
 }
 
 /// One `[fields.<name>]` declaration.
@@ -62,7 +67,32 @@ pub struct FieldDecl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Choice {
     pub value: String,
-    pub label: String,
+    /// `(language tag, label)` pairs. A plain string in config is stored as the
+    /// `en` label, which every language falls back to.
+    pub labels: Vec<(String, String)>,
+}
+
+impl Choice {
+    /// The label for a page in `lang` (a BCP-47 tag, matched ignoring case):
+    /// its own, else the `en` one, else the value itself.
+    pub fn label_for(&self, lang: &str) -> &str {
+        let find = |tag: &str| self.labels.iter().find(|(t, _)| t.eq_ignore_ascii_case(tag)).map(|(_, l)| l.as_str());
+        find(lang).or_else(|| find("en")).unwrap_or(&self.value)
+    }
+}
+
+/// The decimal mark a language writes. The other mark separates digit groups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecimalMark {
+    Point,
+    Comma,
+}
+
+/// The page a value is read on: its language tag, and the decimal mark it writes numbers with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PageFormat<'a> {
+    pub lang: &'a str,
+    pub decimal: DecimalMark,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +120,13 @@ pub fn parse_place(s: &str) -> Option<Place> {
     PLACE_NAMES.iter().find(|(n, _)| *n == s).map(|(_, place)| *place)
 }
 
+impl Place {
+    /// The name this place is declared with.
+    pub fn name(self) -> &'static str {
+        PLACE_NAMES.iter().find(|(_, place)| *place == self).map_or("", |(name, _)| *name)
+    }
+}
+
 /// A parsed field value, shaped the way plugins receive it. Serialized
 /// untagged, so the JSON is each variant's own fields.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -100,7 +137,9 @@ pub enum TypedValue {
     Date(EdtfDate),
     Url(String),
     Choice { value: String, label: String },
-    Period { start: EdtfDate, end: Option<EdtfDate>, text: String },
+    /// `open` is true only for an interval written with no end (`1923/..`).
+    /// A one-point period is a date, so `end` is `None` and `open` is false.
+    Period { start: EdtfDate, end: Option<EdtfDate>, open: bool, text: String },
     Count {
         #[serde(skip_serializing_if = "Option::is_none")]
         number: Option<serde_json::Number>,
@@ -120,7 +159,7 @@ pub struct PageLink {
 /// Checks one raw frontmatter value against its declaration and returns the
 /// typed value plugins receive. `Err` carries a reason a person can act on;
 /// the caller adds the file and field name.
-pub fn parse_value(decl: &FieldDecl, value: &Value) -> Result<TypedValue, String> {
+pub fn parse_value(decl: &FieldDecl, value: &Value, page: PageFormat) -> Result<TypedValue, String> {
     if value.is_null() {
         return Err("has no value; give it one or remove the line".to_string());
     }
@@ -164,15 +203,19 @@ pub fn parse_value(decl: &FieldDecl, value: &Value) -> Result<TypedValue, String
                 other => return Err(format!("{other} is not one of: {}", allowed(decl))),
             };
             match decl.choices.iter().find(|c| c.value == raw) {
-                Some(choice) => Ok(TypedValue::Choice { value: choice.value.clone(), label: choice.label.clone() }),
+                Some(choice) => {
+                    Ok(TypedValue::Choice { value: choice.value.clone(), label: choice.label_for(page.lang).to_string() })
+                }
                 None => Err(format!("\"{raw}\" is not one of: {}", allowed(decl))),
             }
         }
         FieldKind::Period => {
             let s = date_text(value).ok_or_else(|| "expected a period like 1927/1933".to_string())?;
             match parse_edtf(&s) {
-                Some(Edtf::Date(start)) => Ok(TypedValue::Period { start, end: None, text: s }),
-                Some(Edtf::Interval { start, end }) => Ok(TypedValue::Period { start, end, text: s }),
+                Some(Edtf::Date(start)) => Ok(TypedValue::Period { start, end: None, open: false, text: s }),
+                Some(Edtf::Interval { start, end }) => {
+                    Ok(TypedValue::Period { open: end.is_none(), start, end, text: s })
+                }
                 None => Err(format!(
                     "\"{s}\" is not a period; write 1927/1933, 1927–1933, 1927/.. for an open end, or one date"
                 )),
@@ -180,7 +223,7 @@ pub fn parse_value(decl: &FieldDecl, value: &Value) -> Result<TypedValue, String
         }
         FieldKind::Count => match value {
             Value::Number(n) => Ok(TypedValue::Count { number: Some(n.clone()), noun: None, text: n.to_string() }),
-            Value::String(s) => Ok(parse_count(s).unwrap_or_else(|| TypedValue::Count {
+            Value::String(s) => Ok(parse_count(s, page.decimal).unwrap_or_else(|| TypedValue::Count {
                 number: None,
                 noun: None,
                 text: s.clone(),
@@ -264,7 +307,8 @@ fn date_text(value: &Value) -> Option<String> {
 
 /// `1,382 flats` → `{number: 1382, noun: "flats", text}`. A leading number with
 /// no noun, or prose such as `about 65 million`, is `None`: the caller keeps the text.
-fn parse_count(s: &str) -> Option<TypedValue> {
+/// With `Comma`, `.` and spaces group digits and `,` is the decimal; with `Point`, it is the reverse.
+fn parse_count(s: &str, decimal: DecimalMark) -> Option<TypedValue> {
     let is_grouping = |c: char| c.is_ascii_digit() || matches!(c, ',' | '.' | '\u{202F}' | '\u{00A0}' | ' ');
     if !s.starts_with(|c: char| c.is_ascii_digit()) {
         return None;
@@ -278,7 +322,14 @@ fn parse_count(s: &str) -> Option<TypedValue> {
     if tail.len() == noun.len() || !noun.starts_with(char::is_alphabetic) {
         return None;
     }
-    let clean: String = number_text.chars().filter(|c| !matches!(c, ',' | '\u{202F}' | '\u{00A0}' | ' ')).collect();
+    let clean: String = match decimal {
+        DecimalMark::Point => number_text.chars().filter(|c| !matches!(c, ',' | '\u{202F}' | '\u{00A0}' | ' ')).collect(),
+        DecimalMark::Comma => number_text
+            .chars()
+            .filter(|c| !matches!(c, '.' | '\u{202F}' | '\u{00A0}' | ' '))
+            .map(|c| if c == ',' { '.' } else { c })
+            .collect(),
+    };
     let number = match clean.parse::<i64>() {
         Ok(i) => serde_json::Number::from(i),
         Err(_) => serde_json::Number::from_f64(clean.parse::<f64>().ok()?)?,

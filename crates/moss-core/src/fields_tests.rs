@@ -2,22 +2,25 @@ use super::*;
 use crate::date::{parse_edtf, Edtf};
 use serde_json::json;
 
+const EN: PageFormat = PageFormat { lang: "en", decimal: DecimalMark::Point };
+const DE: PageFormat = PageFormat { lang: "de", decimal: DecimalMark::Comma };
+
 fn decl(kind: FieldKind) -> FieldDecl {
     FieldDecl { name: "f".into(), kind, choices: vec![], place: None, scope: vec![] }
 }
 
 fn choice(values: &[&str]) -> FieldDecl {
-    let choices = values.iter().map(|v| Choice { value: v.to_string(), label: v.to_string() }).collect();
+    let choices = values.iter().map(|v| Choice { value: v.to_string(), labels: vec![] }).collect();
     FieldDecl { choices, ..decl(FieldKind::Choice) }
 }
 
 fn ok(kind: FieldKind, value: Value) -> Value {
-    let typed = parse_value(&decl(kind), &value).expect("expected Ok");
+    let typed = parse_value(&decl(kind), &value, EN).expect("expected Ok");
     serde_json::to_value(typed).expect("typed values serialize")
 }
 
 fn err(kind: FieldKind, value: Value) -> String {
-    parse_value(&decl(kind), &value).expect_err("expected Err")
+    parse_value(&decl(kind), &value, EN).expect_err("expected Err")
 }
 
 /// The JSON a date at this precision and qualifier serializes to.
@@ -84,23 +87,29 @@ fn edtf_day_check_knows_leap_years() {
 
 #[test]
 fn period_reads_intervals_and_one_date() {
-    let period = |start: Value, end: Value, text: &str| json!({"start": start, "end": end, "text": text});
+    let period = |start: Value, end: Value, open: bool, text: &str| {
+        json!({"start": start, "end": end, "open": open, "text": text})
+    };
     let y = |v: &str| date(v, "year", None);
     let cases: [(&str, Value); 6] = [
-        ("1927/1933", period(y("1927"), y("1933"), "1927/1933")),
-        ("1927–1933", period(y("1927"), y("1933"), "1927–1933")),
-        ("1927—1933", period(y("1927"), y("1933"), "1927—1933")),
-        ("1927/..", period(y("1927"), Value::Null, "1927/..")),
-        ("1927–", period(y("1927"), Value::Null, "1927–")),
-        ("1927", period(y("1927"), Value::Null, "1927")),
+        ("1927/1933", period(y("1927"), y("1933"), false, "1927/1933")),
+        ("1927–1933", period(y("1927"), y("1933"), false, "1927–1933")),
+        ("1927—1933", period(y("1927"), y("1933"), false, "1927—1933")),
+        ("1927/..", period(y("1927"), Value::Null, true, "1927/..")),
+        ("1927–", period(y("1927"), Value::Null, true, "1927–")),
+        ("1927", period(y("1927"), Value::Null, false, "1927")),
     ];
     for (text, expected) in cases {
         assert_eq!(ok(FieldKind::Period, json!(text)), expected, "{text}");
     }
-    assert_eq!(ok(FieldKind::Period, json!(1927)), period(y("1927"), Value::Null, "1927"), "a bare YAML year");
+    assert_eq!(
+        ok(FieldKind::Period, json!(1927)),
+        period(y("1927"), Value::Null, false, "1927"),
+        "a bare YAML year"
+    );
     assert_eq!(
         ok(FieldKind::Period, json!("1927-06–1933-09")),
-        period(date("1927-06", "month", None), date("1933-09", "month", None), "1927-06–1933-09")
+        period(date("1927-06", "month", None), date("1933-09", "month", None), false, "1927-06–1933-09")
     );
 }
 
@@ -116,23 +125,48 @@ fn period_rejects_the_dash_form_and_other_shapes() {
 #[test]
 fn choice_returns_value_and_label_and_names_the_allowed_values() {
     let d = FieldDecl {
-        choices: vec![Choice { value: "Building".into(), label: "Built".into() }],
+        choices: vec![Choice { value: "Building".into(), labels: vec![("en".into(), "Built".into())] }],
         ..decl(FieldKind::Choice)
     };
-    let typed = parse_value(&d, &json!("Building")).expect("ok");
+    let typed = parse_value(&d, &json!("Building"), EN).expect("ok");
     assert_eq!(typed, TypedValue::Choice { value: "Building".into(), label: "Built".into() });
     let d = choice(&["Building", "Service", "Programme"]);
     assert_eq!(
-        parse_value(&d, &json!("Buidling")).expect_err("err"),
+        parse_value(&d, &json!("Buidling"), EN).expect_err("err"),
         "\"Buidling\" is not one of: Building, Service, Programme"
     );
-    assert!(parse_value(&d, &json!("building")).is_err(), "match is case-sensitive");
+    assert!(parse_value(&d, &json!("building"), EN).is_err(), "match is case-sensitive");
+}
+
+#[test]
+fn choice_label_is_the_pages_language_then_en_then_the_value() {
+    let labels = vec![("en".into(), "Built".into()), ("de".into(), "Errichtet".into())];
+    let d = FieldDecl {
+        choices: vec![
+            Choice { value: "Building".into(), labels },
+            Choice { value: "Service".into(), labels: vec![("de".into(), "Dienst".into())] },
+            Choice { value: "Plan".into(), labels: vec![] },
+        ],
+        ..decl(FieldKind::Choice)
+    };
+    let label = |value: &str, lang: &str| {
+        let format = PageFormat { lang, decimal: DecimalMark::Point };
+        match parse_value(&d, &json!(value), format).expect("ok") {
+            TypedValue::Choice { label, .. } => label,
+            other => panic!("not a choice: {other:?}"),
+        }
+    };
+    assert_eq!(label("Building", "de"), "Errichtet", "the page's own language");
+    assert_eq!(label("Building", "zh-hans"), "Built", "no zh-hans label: falls back to en");
+    assert_eq!(label("Building", "DE"), "Errichtet", "language tags match ignoring case");
+    assert_eq!(label("Service", "en"), "Service", "no en label: falls back to the value");
+    assert_eq!(label("Plan", "de"), "Plan", "no labels at all: the value");
 }
 
 #[test]
 fn choice_given_a_yaml_number_names_the_allowed_values() {
     let d = choice(&["Building", "Service"]);
-    assert_eq!(parse_value(&d, &json!(1)).expect_err("err"), "1 is not one of: Building, Service");
+    assert_eq!(parse_value(&d, &json!(1), EN).expect_err("err"), "1 is not one of: Building, Service");
 }
 
 #[test]
@@ -163,6 +197,19 @@ fn count_splits_a_number_from_its_noun() {
     assert_eq!(ok(FieldKind::Count, json!("48.1 km")), json!({"number": 48.1, "noun": "km", "text": "48.1 km"}));
     assert_eq!(ok(FieldKind::Count, json!(12)), json!({"number": 12, "text": "12"}));
     assert_eq!(ok(FieldKind::Count, json!(48.5)), json!({"number": 48.5, "text": "48.5"}));
+}
+
+#[test]
+fn count_reads_the_pages_decimal_mark() {
+    let count = |text: &str, format| parse_value(&decl(FieldKind::Count), &json!(text), format).expect("ok");
+    let number = |typed: TypedValue| match typed {
+        TypedValue::Count { number: Some(n), .. } => n.as_f64().expect("a number"),
+        other => panic!("no number: {other:?}"),
+    };
+    assert_eq!(number(count("1.382 Wohnungen", DE)), 1382.0, "a point groups digits on a comma page");
+    assert_eq!(number(count("48,1 km", DE)), 48.1, "a comma is the decimal on a comma page");
+    assert_eq!(number(count("1,382 flats", EN)), 1382.0, "a comma groups digits on a point page");
+    assert_eq!(number(count("48.1 km", EN)), 48.1, "a point is the decimal on a point page");
 }
 
 #[test]

@@ -22,7 +22,8 @@ use crate::build::folder_embed::members::{in_listing_order, is_folder_home, list
 use crate::build::types::ParsedDocument;
 use crate::plugins::contributions::listing_style::{is_builtin_style, ListingStylePlan};
 use crate::plugins::manager::listing::{
-    HeadEntry, ListingContext, ListingResult, ListingWarning, PageRecord, TranslationRecord, LISTING_MODEL,
+    ChoiceRecord, FieldDeclarationRecord, HeadEntry, ListingContext, ListingResult, ListingWarning, PageRecord,
+    TranslationRecord, LISTING_MODEL,
 };
 use crate::types::content::ProjectStructure;
 
@@ -243,6 +244,30 @@ fn relative_url(listing_dir: &[String], served: &str) -> String {
     }
 }
 
+/// Every declared field, with its choices' labels in `lang` (a page's tag).
+fn declarations(
+    field_decls: &[moss_core::fields::FieldDecl],
+    lang: &str,
+) -> BTreeMap<String, FieldDeclarationRecord> {
+    field_decls
+        .iter()
+        .map(|decl| {
+            let choices = (decl.kind == moss_core::fields::FieldKind::Choice).then(|| {
+                decl.choices
+                    .iter()
+                    .map(|c| ChoiceRecord { value: c.value.clone(), label: c.label_for(lang).to_string() })
+                    .collect()
+            });
+            let record = FieldDeclarationRecord {
+                kind: decl.kind.name().to_string(),
+                choices,
+                place: decl.place.map(|p| p.name().to_string()),
+            };
+            (decl.name.clone(), record)
+        })
+        .collect()
+}
+
 fn record(doc: &ParsedDocument, listing_dir: &[String], with_body: bool) -> PageRecord {
     let mut own_dir = dir_segments(&doc.url_path);
     let url = relative_url(listing_dir, &doc.url_path);
@@ -262,6 +287,7 @@ fn record(doc: &ParsedDocument, listing_dir: &[String], with_body: bool) -> Page
             .collect(),
         frontmatter,
         fields: doc.declared.iter().filter_map(|(name, value)| Some((name.clone(), serde_json::to_value(value).ok()?))).collect(),
+        field_errors: doc.field_errors.clone(),
         html: if with_body { rebase_html(&without_title(&doc.html_content), &doc.url_path, listing_dir) } else { String::new() },
         folder,
     }
@@ -313,6 +339,7 @@ pub(crate) fn apply(
     documents: &[ParsedDocument],
     project: &ProjectStructure,
     terms: &crate::build::terms::TermIndex,
+    field_decls: &[moss_core::fields::FieldDecl],
     stage_dir: &Path,
     pending: &mut PendingManifest,
     slots: &mut ResolvedSlots,
@@ -390,6 +417,7 @@ pub(crate) fn apply(
             pages: children.iter().map(|d| record(d, &listing_dir, true)).collect(),
             folders: in_listing_order(page, documents, &folders).iter().map(|d| record(d, &listing_dir, true)).collect(),
             terms: term_addresses(&children, terms, &listing_dir),
+            declarations: declarations(field_decls, &lang_tag(page)),
         };
         let result = match host.as_ref().map_or(Err("plugins are off".to_string()), |h| h.call(loaded, plugin, &ctx)) {
             Ok(result) => result,

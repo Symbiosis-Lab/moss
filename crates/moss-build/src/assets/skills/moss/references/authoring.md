@@ -393,7 +393,7 @@ A site can declare its own frontmatter fields in `.moss/config.toml`, each with 
 ```toml
 [fields.kind]
 type = "choice"
-of   = { Building = "Built", Service = "Founded" }
+of   = { Building = { en = "Built", de = "Errichtet" }, Service = "Founded" }
 
 [fields.years]
 type = "period"
@@ -403,7 +403,7 @@ type = "pages"
 in   = ["Housing"]
 ```
 
-A page then writes plain values, such as `kind: Building`, `years: 1927/1933` or `architects: ["[[Anna Weber]]"]`. Quote a page link, because unquoted `[[…]]` is read as a nested list. A field a page does not carry is fine.
+A page then writes plain values, such as `kind: Building`, `years: 1927/1933` or `architects: ["[[Anna Weber]]"]`. Quote a page link, because unquoted `[[…]]` is read as a nested list. A link is checked as the author wrote it, so `[[Riverside Court]]` and `[[Housing/Riverside Court]]` both pass. A field a page does not carry is fine.
 
 | Type | A page writes | Plugins receive |
 |---|---|---|
@@ -411,12 +411,16 @@ A page then writes plain values, such as `kind: Building`, `years: 1927/1933` or
 | `number` | `48.1` | the number |
 | `date` | `1930-10-12`, `1930-10` or `1930`; `1923?` uncertain, `~1930` approximate, `1930%` both | `{ value, precision, qualifier }` |
 | `url` | `https://…` or `/path/` | the address |
-| `choice` | one of the values in `of` | `{ value, label }` |
-| `period` | `1927/1933` or `1927–1933`, `1927/..` for an open end, or one date | `{ start, end, text }`, each date as `{ value, precision, qualifier }` |
+| `choice` | one of the values in `of` | `{ value, label }`, the label in the page's language |
+| `period` | `1927/1933` or `1927–1933`, `1927/..` for an open end, or one date | `{ start, end, open, text }`, each date as `{ value, precision, qualifier }`; `open` is true only for an interval with no end |
 | `count` | `1,382 flats` | `{ number, noun, text }`, or `{ text }` when the value is not a number followed by a noun |
 | `page`, `pages` | `"[[Page name]]"` | the link targets |
 
-`in` limits a field to some folders. `place` (`eyebrow`, `subtitle`, `facts`, `key-figure` or `none`) is checked now but not drawn yet. `moss build --strict` turns a value that does not fit into a failure.
+A choice's `of` gives one label for every language when it is a string. A table gives a label per language tag (`en`, `de`, `zh-hans`, `zh-hant`); a page in a language without its own label uses the `en` one, then the value itself. Choices keep the order the file writes them, in either form; plugins receive them in that order.
+
+A count's digits follow the page's language. On a German page `.` groups digits and `,` is the decimal, so `1.382 Wohnungen` is 1382 and `48,1 km` is 48.1. Other pages read `,` as the grouping mark and `.` as the decimal.
+
+`in` limits a field to some folders, and a language tree counts as inside its folder: `in = ["Housing"]` also checks `de/Housing/…`. `place` (`eyebrow`, `subtitle`, `facts`, `key-figure` or `none`) is checked now but not drawn yet. `moss build --strict` turns a value that does not fit into a failure.
 
 ### Places
 

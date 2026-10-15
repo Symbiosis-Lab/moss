@@ -82,3 +82,28 @@ fn the_warning_still_fails_a_second_strict_build_of_an_unchanged_site() {
     assert!(!second.status.success(), "a second strict build must still fail: {err}");
     assert!(err.contains("field 'kind'"), "{err}");
 }
+
+#[test]
+fn a_wikilink_in_a_pages_field_is_read_as_written_and_builds_clean_under_strict() {
+    let config = "[fields.highlights]\ntype = \"pages\"\n";
+    let s = site(
+        config,
+        &[
+            ("Housing/Riverside Court.md", "---\ntitle: Riverside Court\n---\nbody\n"),
+            ("Housing/court.md", "---\ntitle: Court\nhighlights: [\"[[Riverside Court]]\"]\n---\nbody\n"),
+            ("Housing/block.md", "---\ntitle: Block\nhighlights:\n  - \"[[Housing/Riverside Court]]\"\n---\nbody\n"),
+        ],
+    );
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+}
+
+#[test]
+fn a_value_in_a_language_tree_is_checked_under_its_folder_scope() {
+    let config = format!("{KIND}in = [\"Housing\"]\n");
+    let s = site(&config, &[("de/Housing/x.md", "---\ntitle: X\nkind: Buidling\n---\nbody\n")]);
+    let o = build_strict(&s);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success(), "a strict build must fail: {err}");
+    assert!(err.contains("[de/Housing/x.md] frontmatter: field 'kind'"), "{err}");
+}

@@ -9,6 +9,16 @@ version; renaming or removing one bumps it.
 
 ## Properties
 
+### declarations
+
+```ts
+declarations: Record<string, FieldDeclaration>;
+```
+
+Every declared field, by name. Choice labels are in the listing page's language.
+
+***
+
 ### folders
 
 ```ts

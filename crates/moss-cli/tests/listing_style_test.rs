@@ -426,6 +426,7 @@ fn a_declared_field_reaches_the_plugin_parsed_and_an_invalid_one_does_not() {
         serde_json::json!({
             "start": {"value": "1927", "precision": "year", "qualifier": null},
             "end": {"value": "1933", "precision": "year", "qualifier": null},
+            "open": false,
             "text": "1927–1933"
         }),
         "{beta}"
@@ -433,4 +434,62 @@ fn a_declared_field_reaches_the_plugin_parsed_and_an_invalid_one_does_not() {
     let gamma = pages.iter().find(|p| p["title"] == "Gamma").unwrap();
     assert!(gamma["fields"].get("years").is_none(), "an invalid value is left out: {gamma}");
     assert_eq!(gamma["frontmatter"]["years"], "the twenties", "the raw value stays in frontmatter");
+}
+
+const FIELDS: &str = "[fields.kind]\ntype = \"choice\"\nof = { Building = { en = \"Built\", de = \"Errichtet\" }, Service = \"Founded\" }\nplace = \"eyebrow\"\n\n[fields.stage]\ntype = \"choice\"\nof = [\"Service\", \"Building\"]\n";
+
+#[test]
+fn the_plugin_gets_declarations_in_the_listing_language_and_each_pages_field_errors() {
+    let s = site("board");
+    write(&s.root, ".moss/config.toml", FIELDS);
+    write(&s.root, "board/index.md", "---\ntitle: Board\nlang: de\nchildren_style: board\n---\nIntro\n");
+    write(&s.root, "board/Beta.md", "---\ntitle: Beta\nlang: en\nkind: Building\nstage: Service\n---\nbeta body\n");
+    write(&s.root, "board/Gamma.md", "---\ntitle: Gamma\nkind: Buidling\n---\ngamma\n");
+    plugin(&s.root, "boardview", &["board"], DUMP);
+    let o = s.build(&["--allow-plugins"]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let ctx = context_of(&s.out("board/index.html").unwrap());
+
+    assert_eq!(
+        ctx["declarations"]["kind"],
+        serde_json::json!({
+            "type": "choice",
+            "choices": [{"value": "Building", "label": "Errichtet"}, {"value": "Service", "label": "Founded"}],
+            "place": "eyebrow",
+        }),
+    );
+    assert_eq!(
+        ctx["declarations"]["stage"],
+        serde_json::json!({
+            "type": "choice",
+            "choices": [{"value": "Service", "label": "Service"}, {"value": "Building", "label": "Building"}],
+            "place": null,
+        }),
+        "declared order is kept, not sorted"
+    );
+
+    let pages = ctx["pages"].as_array().unwrap();
+    let beta = pages.iter().find(|p| p["title"] == "Beta").unwrap();
+    assert_eq!(beta["fields"]["kind"], serde_json::json!({"value": "Building", "label": "Built"}), "the page's own language");
+    assert_eq!(beta["field_errors"], serde_json::json!({}), "always present, empty when every value fits");
+    let gamma = pages.iter().find(|p| p["title"] == "Gamma").unwrap();
+    assert_eq!(gamma["field_errors"]["kind"], "\"Buidling\" is not one of: Building, Service", "{gamma}");
+    assert!(gamma["fields"].get("kind").is_none(), "a value that does not fit is left out: {gamma}");
+}
+
+#[test]
+fn a_count_on_a_german_page_reads_its_decimal_mark_from_the_page_language() {
+    let s = site("board");
+    write(&s.root, ".moss/config.toml", "[fields.homes]\ntype = \"count\"\n");
+    write(&s.root, "board/Beta.md", "---\ntitle: Beta\nlang: de\nhomes: 1.382 Wohnungen\n---\nbeta body\n");
+    write(&s.root, "board/Gamma.md", "---\ntitle: Gamma\nhomes: 1,382 flats\n---\ngamma\n");
+    plugin(&s.root, "boardview", &["board"], DUMP);
+    let o = s.build(&["--allow-plugins", "--strict"]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let ctx = context_of(&s.out("board/index.html").unwrap());
+    let pages = ctx["pages"].as_array().unwrap();
+    let beta = pages.iter().find(|p| p["title"] == "Beta").unwrap();
+    assert_eq!(beta["fields"]["homes"]["number"], 1382, "{beta}");
+    let gamma = pages.iter().find(|p| p["title"] == "Gamma").unwrap();
+    assert_eq!(gamma["fields"]["homes"]["number"], 1382, "{gamma}");
 }
