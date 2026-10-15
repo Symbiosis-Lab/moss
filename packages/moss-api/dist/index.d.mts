@@ -812,7 +812,7 @@ interface PageRecord {
    * `{ value, precision, qualifier }`; a period is `{ start, end, open, text }` with
    * `start` and `end` in that date shape and `open` true only for an interval with
    * no end; a choice is `{ value, label }` with the label in this page's language;
-   * a count is `{ number, noun, text }`. A value that does not parse is left out
+   * a count is `{ number, noun, text }`; a page link is `{ target, alias? }`, with `alias` the text after `|` in `[[target|alias]]` when there is one. A value that does not parse is left out
    * here and stays in `frontmatter`. Values a folder's `cascade:` supplies are not
    * typed here.
    */

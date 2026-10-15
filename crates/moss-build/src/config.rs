@@ -372,7 +372,9 @@ impl ConfigFile {
             problems.push("[fields] must be a table of [fields.NAME] tables; ignoring it".to_string());
             return (decls, problems);
         };
-        for (name, value) in table {
+        let mut written: Vec<_> = table.iter().collect();
+        written.sort_by_key(|(name, _)| self.written_position("fields", name));
+        for (name, value) in written {
             let Some(sub) = value.as_table() else {
                 problems.push(format!("[fields.{name}] must be a table; ignoring it"));
                 continue;
@@ -393,7 +395,7 @@ impl ConfigFile {
                 continue;
             };
             for key in sub.keys() {
-                if !matches!(key.as_str(), "type" | "of" | "place" | "in") {
+                if !matches!(key.as_str(), "type" | "of" | "place" | "label" | "in") {
                     problems.push(format!("[fields.{name}] has an unknown key \"{key}\""));
                 }
             }
@@ -446,8 +448,15 @@ impl ConfigFile {
                     }
                 },
             };
+            let label = match sub.get("label") {
+                None => Vec::new(),
+                Some(v) => Self::choice_labels(v).unwrap_or_else(|| {
+                    problems.push(format!("[fields.{name}] `label` must be a string or a table of language labels; ignoring it"));
+                    Vec::new()
+                }),
+            };
             let scope = Self::string_list(sub, "in", name, &mut problems);
-            decls.push(FieldDecl { name: name.clone(), kind, choices, place, scope });
+            decls.push(FieldDecl { name: name.clone(), kind, choices, place, label, scope });
         }
         (decls, problems)
     }
@@ -500,7 +509,7 @@ pub struct RawKind {
     pub cards: Option<toml::Value>,
 }
 
-/// The written key order of `[terms]` and of each `[fields.<name>]` table's
+/// The written key order of `[terms]`, of `[fields]`, and of each `[fields.<name>]` table's
 /// `of`, read with `toml_edit`, which keeps the order `toml` discards.
 fn written_key_orders(text: &str) -> std::collections::BTreeMap<String, Vec<String>> {
     let mut orders = std::collections::BTreeMap::new();
@@ -510,6 +519,7 @@ fn written_key_orders(text: &str) -> std::collections::BTreeMap<String, Vec<Stri
         orders.insert("terms".to_string(), keys(terms));
     }
     if let Some(fields) = doc.get("fields").and_then(|v| v.as_table_like()) {
+        orders.insert("fields".to_string(), keys(fields));
         for (name, field) in fields.iter() {
             if let Some(of) = field.as_table_like().and_then(|f| f.get("of")).and_then(|v| v.as_table_like()) {
                 orders.insert(format!("fields.{name}.of"), keys(of));

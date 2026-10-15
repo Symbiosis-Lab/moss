@@ -560,7 +560,7 @@ pub const DEFAULT_CSS: &str = include_str!("../../assets/css/site.css");
 /// unnecessary characters. This is a simple, regex-free minifier that covers
 /// the most impactful optimizations without needing a full CSS parser.
 pub fn minify_css(css: &str) -> String {
-    let mut result = String::with_capacity(css.len());
+    let mut result: Vec<u8> = Vec::with_capacity(css.len());
     let bytes = css.as_bytes();
     let len = bytes.len();
     let mut i = 0;
@@ -580,18 +580,18 @@ pub fn minify_css(css: &str) -> String {
         // Preserve quoted strings as-is
         if bytes[i] == b'"' || bytes[i] == b'\'' {
             let quote = bytes[i];
-            result.push(bytes[i] as char);
+            result.push(bytes[i]);
             i += 1;
             while i < len && bytes[i] != quote {
                 if bytes[i] == b'\\' && i + 1 < len {
-                    result.push(bytes[i] as char);
+                    result.push(bytes[i]);
                     i += 1;
                 }
-                result.push(bytes[i] as char);
+                result.push(bytes[i]);
                 i += 1;
             }
             if i < len {
-                result.push(bytes[i] as char);
+                result.push(bytes[i]);
                 i += 1;
             }
             continue;
@@ -611,23 +611,23 @@ pub fn minify_css(css: &str) -> String {
             // hovered), which is a different set of elements entirely. Property-value
             // colons ("color: red") never have whitespace before them in well-formed
             // source CSS, so they are not affected by this rule.
-            let last = result.as_bytes().last().copied().unwrap_or(0);
+            let last = result.last().copied().unwrap_or(0);
             let next = if i < len { bytes[i] } else { 0 };
             if !matches!(last, b'{' | b'}' | b';' | b':' | b',' | b'>' | b'(' | 0)
                 && !matches!(next, b'{' | b'}' | b';' | b',' | b')' | 0)
             {
-                result.push(' ');
+                result.push(b' ');
             }
             continue;
         }
 
-        result.push(bytes[i] as char);
+        result.push(bytes[i]);
         i += 1;
     }
 
     // Pass 2: remove last semicolons before } and spaces around certain chars
-    let mut final_result = String::with_capacity(result.len());
-    let rbytes = result.as_bytes();
+    let mut final_result: Vec<u8> = Vec::with_capacity(result.len());
+    let rbytes = &result[..];
     let rlen = rbytes.len();
     i = 0;
     while i < rlen {
@@ -643,11 +643,12 @@ pub fn minify_css(css: &str) -> String {
                 continue;
             }
         }
-        final_result.push(rbytes[i] as char);
+        final_result.push(rbytes[i]);
         i += 1;
     }
 
-    final_result
+    // Only ASCII bytes are dropped or added, so whole characters survive intact.
+    String::from_utf8(final_result).expect("minify_css keeps every multibyte character whole")
 }
 /// Shared HTML shell: full `<head>` + chrome (header/nav, hero, footer,
 /// colophon, scripts) with a single `{main_content}` slot for the per-type

@@ -19,6 +19,7 @@ pub mod folder_title;
 pub mod color_extract;
 pub mod date;
 pub mod event_meta;
+pub mod field_places;
 pub mod field_text;
 pub mod nav;
 

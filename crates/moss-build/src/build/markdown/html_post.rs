@@ -414,6 +414,22 @@ pub(crate) fn inject_article_title_h1(html_body: &str, title: &str, emit_source_
     }
 }
 
+/// Splits off a leading `<p class="moss-eyebrow">…</p>` line, the one block a
+/// declared field draws above the page title. Every check for "the body starts
+/// with its title" steps past it through this, so an eyebrow never hides the
+/// title block. Returns `("", html)` when there is none.
+pub(crate) fn split_leading_eyebrow(html: &str) -> (&str, &str) {
+    const OPEN: &str = "<p class=\"moss-eyebrow\">";
+    let lead = html.len() - html.trim_start().len();
+    if !html[lead..].starts_with(OPEN) {
+        return ("", html);
+    }
+    let Some(close) = html[lead..].find("</p>") else { return ("", html) };
+    let end = lead + close + "</p>".len();
+    let end = end + html[end..].len() - html[end..].trim_start_matches('\n').len();
+    html.split_at(end)
+}
+
 /// Put the parent-section link (`breadcrumb: label`) above the finished
 /// title block of `content`. Content that does not open with the injected
 /// title heading (its layout hides the title, or it has none) gets no link: the
@@ -423,7 +439,7 @@ pub(crate) fn prepend_parent_label(
     content: &mut String,
     parent: &crate::build::components::nav::BreadcrumbSegment,
 ) {
-    if content.starts_with("<h1 class=\"moss-article-title\"") {
+    if split_leading_eyebrow(content).1.starts_with("<h1 class=\"moss-article-title\"") {
         let link = format!(
             "<a class=\"moss-parent-label\" href=\"{}\">{}</a>\n",
             html_escape(&parent.url),
@@ -475,6 +491,11 @@ pub(crate) fn splice_after_title_block(html_body: &str, fragment: &str) -> Strin
     if fragment.is_empty() {
         return html_body.to_string();
     }
+    let (eyebrow, rest) = split_leading_eyebrow(html_body);
+    format!("{eyebrow}{}", splice_below_eyebrow(rest, fragment))
+}
+
+fn splice_below_eyebrow(html_body: &str, fragment: &str) -> String {
     let (prefix, body) = split_cover_body_prefix(html_body);
     if !body.trim_start().starts_with("<h1") {
         if let Some(end) = crate::build::render::credits::first_h1_end_in_leading_grid(body) {
@@ -514,6 +535,7 @@ fn split_cover_body_prefix(html_body: &str) -> (&str, &str) {
         return ("", html_body);
     };
     let split_at = leading_ws + body_rel + BODY_OPEN.len();
+    let split_at = split_at + split_leading_eyebrow(&html_body[split_at..]).0.len();
     if html_body[split_at..].starts_with("<h1") {
         (&html_body[..split_at], &html_body[split_at..])
     } else {

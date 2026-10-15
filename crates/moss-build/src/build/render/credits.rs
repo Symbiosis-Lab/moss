@@ -174,8 +174,10 @@ pub fn splice_page_masthead(
     layout: &crate::build::page::layout::LayoutConfig,
     emit_source_lines: bool,
     placement: LocatorPlacement,
+    fields: &crate::build::components::field_places::Placements,
 ) -> String {
     let masthead = render_page_masthead(doc, layout, emit_source_lines, placement);
+    let masthead = format!("{}{masthead}{}", fields.subtitle, fields.after_masthead());
     if masthead.is_empty() {
         content
     } else {

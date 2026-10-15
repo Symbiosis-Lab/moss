@@ -573,6 +573,12 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub field_errors: std::collections::BTreeMap<String, String>,
+    /// The declared fields this page draws: each declaration with a `place`
+    /// and the page's valid value for it, in declaration order. Empty on a
+    /// folder index. Drawn at render by `components::field_places`.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub placed_fields: Vec<(moss_core::fields::FieldDecl, moss_core::fields::TypedValue)>,
     /// Declared listing sort from frontmatter (folder index pages only;
     /// `None` on article pages).
     pub sort: Option<moss_core::sort::SortField>,
@@ -813,6 +819,9 @@ pub struct PageFeatures {
     /// this page. Read from the typed AST
     /// (`moss_core::ast::has_shortcode_recursive`).
     pub galleries: bool,
+    /// True if a declared field was drawn on the page. Gates the
+    /// `field-places` stylesheet partial via [`SiteAssets`].
+    pub field_places: bool,
 }
 
 /// Which optional asset partials this build ships — the site-level union of
@@ -865,6 +874,8 @@ pub struct SiteAssets {
     /// Some page has a `:::gallery`, whose images open in the same
     /// full-screen viewer (`fullscreen.js`) as the media collection pages.
     pub galleries: bool,
+    /// Some page draws declared fields (`place`). Gates the `field-places` stylesheet partial.
+    pub field_places: bool,
     /// The site ships the search overlay: `[site].search`, resolved once by the config phase
     /// (`LayoutConfig::with_search`) and read from `LayoutConfig::assets` by
     /// the nav button, the search-index emitter and `search.js`'s tag alike.
@@ -920,6 +931,7 @@ impl SiteAssets {
             has_footnotes: false,
             scroll_rows: false,
             galleries: false,
+            field_places: false,
             vertical: site_typesetting == Some("vertical"),
             ..from_config
         };
@@ -932,6 +944,7 @@ impl SiteAssets {
             out.has_footnotes |= page.features.footnotes;
             out.scroll_rows |= page.features.scroll_rows;
             out.galleries |= page.features.galleries;
+            out.field_places |= page.features.field_places;
         }
         out
     }

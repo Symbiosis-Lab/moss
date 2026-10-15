@@ -113,6 +113,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Width of the right-hand gutter reserved for margin sidenotes. It is the note column's measure, not how far the page moves: core derives `--moss-sidenote-inset` from it in site.css and pads <body> by that, so the page gives up only the width the window is short of fitting the gutter — nothing at all from about 1316px up, where a centred column already has margin enough — and every centred block moves half of what it gives up. The sidenotes stylesheet (shipped only on sites with footnotes) sets the reserve at wide viewports to a measured clamp, on every page except the front page, full-width pages and sidebar pages — those keep the bottom-sheet presentation at any width. A theme can override the clamp to widen or narrow the note column, and the shift follows it; setting it on a site without footnotes reserves a gutter nothing fills.",
     },
     CustomProp {
+        name: "--moss-eyebrow-separator",
+        owner: ".moss-eyebrow",
+        default: "\" · \"",
+        description: "The text drawn between the fields of the eyebrow line above a page title, as a CSS string. The markup holds no separator, so a theme sets this to change it: `\" / \"` for a slash, or `\" \"` for a plain space.",
+    },
+    CustomProp {
         name: "--moss-hint-x",
         owner: "[data-tooltip]",
         default: "0px",

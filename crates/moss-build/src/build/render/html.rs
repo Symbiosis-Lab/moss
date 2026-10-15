@@ -435,6 +435,13 @@ pub(super) fn render_page<'d>(
         LocatorPlacement::Masthead
     };
 
+    // The declared fields the page draws: the eyebrow goes into the body above
+    // the title, the rest into the masthead that follows it.
+    let mut fields = doc.map_or_else(Default::default, |d| {
+        crate::build::components::field_places::draw_for_page(d, all_docs, content_graph, resolved_typesetting)
+    });
+    let eyebrow = std::mem::take(&mut fields.eyebrow);
+
     // True when the page should advertise a social share card + be indexed: a
     // real public page (not draft/slot_only). `listed: false` pages are still
     // public, so they keep their card. Shared by the og/twitter/cover/
@@ -483,7 +490,7 @@ pub(super) fn render_page<'d>(
             // under; render/credits.rs says where it goes instead, and why a
             // `layout: article` homepage is the article path's page, not this one.
             if !is_article_page {
-                content = credits::splice_page_masthead(content, doc, layout_config, emit_source_lines, locator_placement);
+                content = credits::splice_page_masthead(content, doc, layout_config, emit_source_lines, locator_placement, &fields);
 
                 // The home injects no visible title of its own, but a page
                 // needs one top-level heading: when the body supplies none,
@@ -570,6 +577,9 @@ pub(super) fn render_page<'d>(
             // it is splitting, same as any other segment, rather than
             // needing its own case.
             splice_body_locator(&mut body, doc, layout_config, locator_placement);
+            if !eyebrow.is_empty() {
+                body.prepend_html(eyebrow);
+            }
             let mut content = body.to_html();
 
             // Check if this is a folder index page (any non-root index page).
@@ -789,7 +799,7 @@ pub(super) fn render_page<'d>(
                     // and lands the byline beside the real title inside it,
                     // the same as it would for an unwrapped page — one splice
                     // site for both shapes.
-                    content = credits::splice_page_masthead(content, doc, layout_config, emit_source_lines, locator_placement);
+                    content = credits::splice_page_masthead(content, doc, layout_config, emit_source_lines, locator_placement, &fields);
                 }
             }
 
@@ -1282,7 +1292,8 @@ pub(super) fn render_page<'d>(
     // splice_after_title_block in html_post.rs for the title-block detection
     // (matches the # H1 + > blockquote deck pattern).
     if is_article_page {
-        let mut after_title_block = article_date_line_html.unwrap_or_default();
+        let mut after_title_block = fields.subtitle.clone();
+        after_title_block.push_str(&article_date_line_html.unwrap_or_default());
         // Byline rows (frontmatter `byline:`) sit between the date row and the
         // after-title slot: they belong to the masthead, but they are not part
         // of `.date-line`, which is a single flex row owning the reading-size
@@ -1303,6 +1314,7 @@ pub(super) fn render_page<'d>(
             }
         }
         after_title_block.push_str("<!-- slot:after-title -->");
+        after_title_block.push_str(&fields.after_masthead());
         homepage_content = splice_after_title_block(&homepage_content, &after_title_block);
         // Colophon rows go at the very end of the article body — after the
         // prose and any footnote section, inside `<article>`. Where the piece

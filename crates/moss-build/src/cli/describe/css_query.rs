@@ -217,6 +217,7 @@ fn shipping_note(sheet: &str) -> &'static str {
             "shipped only when some page defines a footnote; the rules themselves \
              render nothing below a 76rem viewport"
         }
+        "site/field-places.css" => "shipped only when some page draws a declared field (a `place` in [fields])",
         "site/vertical.css" => "shipped only when some page uses vertical typesetting",
         "site/places-explorer.css" => {
             "shipped only when the site has a place-typed namespace root with the explorer on"

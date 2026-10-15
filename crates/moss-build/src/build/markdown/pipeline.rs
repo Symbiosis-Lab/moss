@@ -1337,6 +1337,20 @@ pub fn process_markdown_file(
         )),
     }
 
+    // The declarations with a `place` that this page has a value for, in
+    // declaration order. The render stage draws them: a page link needs the
+    // target's title, which only it knows. A folder index and a slot take none.
+    let placed_fields: Vec<_> = if is_index_file || is_slot_only {
+        Vec::new()
+    } else {
+        site.fields
+            .iter()
+            .filter(|d| d.place.is_some())
+            .filter_map(|d| Some((d.clone(), declared.get(&d.name)?.clone())))
+            .collect()
+    };
+    let has_field_places = !placed_fields.is_empty();
+
     // Look up pre-computed url_path from PageMap, falling back to inline computation
     let url_path = page_map.get(file_path).cloned().unwrap_or_else(|| {
         compute_url_path(
@@ -1514,6 +1528,7 @@ pub fn process_markdown_file(
     Ok(ParsedDocument {
         declared,
         field_errors,
+        placed_fields,
         card_credits: None,
         label,
         nav_label,
@@ -1604,6 +1619,7 @@ pub fn process_markdown_file(
             footnotes: has_footnotes,
             scroll_rows: has_scroll_row,
             galleries: has_gallery,
+            field_places: has_field_places,
         },
         slot: frontmatter.slot.clone(),
         // Reserved-name convention: `footer.md` at the project root parses
@@ -1754,7 +1770,7 @@ fn split_path_suffix(url: &str) -> (&str, Option<&str>) {
 /// Root-absolute pretty URL for a url_path — `"awards/index.html"` → `"/awards/"`,
 /// `"index.html"` → `"/"`. Depth-independent by construction, which is what slot
 /// HTML needs: it is injected into pages at every depth.
-fn absolute_pretty_url(to_url_path: &str) -> String {
+pub(crate) fn absolute_pretty_url(to_url_path: &str) -> String {
     match url_path_to_dir(to_url_path).trim_matches('/') {
         "" => "/".to_string(),
         dir => format!("/{}/", dir), // allow:served-path-url-construct (page permalink for slot HTML, same class as the url_path permalink above)

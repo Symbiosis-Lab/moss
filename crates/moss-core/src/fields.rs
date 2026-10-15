@@ -60,8 +60,26 @@ pub struct FieldDecl {
     pub choices: Vec<Choice>,
     /// Where the field is placed on the page, if anywhere.
     pub place: Option<Place>,
+    /// `(language tag, label)` pairs for the row a facts-placed field draws; empty = the capitalised name.
+    pub label: Vec<(String, String)>,
     /// Folder prefixes (site-relative, no leading slash) this field applies to; empty = whole site.
     pub scope: Vec<String>,
+}
+
+impl FieldDecl {
+    /// The row label for a page in `lang`: its own, else the `en` one, else the field name with its first letter capitalised.
+    pub fn label_for(&self, lang: &str) -> String {
+        label_in(&self.label, lang).map(str::to_string).unwrap_or_else(|| {
+            let mut chars = self.name.chars();
+            chars.next().map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
+        })
+    }
+}
+
+/// The label for `lang` (matched ignoring case), else the `en` one.
+fn label_in<'a>(labels: &'a [(String, String)], lang: &str) -> Option<&'a str> {
+    let find = |tag: &str| labels.iter().find(|(t, _)| t.eq_ignore_ascii_case(tag)).map(|(_, l)| l.as_str());
+    find(lang).or_else(|| find("en"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,8 +94,7 @@ impl Choice {
     /// The label for a page in `lang` (a BCP-47 tag, matched ignoring case):
     /// its own, else the `en` one, else the value itself.
     pub fn label_for(&self, lang: &str) -> &str {
-        let find = |tag: &str| self.labels.iter().find(|(t, _)| t.eq_ignore_ascii_case(tag)).map(|(_, l)| l.as_str());
-        find(lang).or_else(|| find("en")).unwrap_or(&self.value)
+        label_in(&self.labels, lang).unwrap_or(&self.value)
     }
 }
 
@@ -154,6 +171,9 @@ pub enum TypedValue {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PageLink {
     pub target: String,
+    /// The text after `|` in `[[target|alias]]`, when the author wrote one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
 }
 
 /// Checks one raw frontmatter value against its declaration and returns the
@@ -232,7 +252,7 @@ pub fn parse_value(decl: &FieldDecl, value: &Value, page: PageFormat) -> Result<
         },
         FieldKind::Page => match value {
             Value::String(s) => page_target(s)
-                .map(|target| TypedValue::Page(PageLink { target }))
+                .map(|link| TypedValue::Page(link))
                 .ok_or_else(|| "write it as \"[[name]]\" so moss rename keeps it pointing at the page".to_string()),
             Value::Array(_) => Err("write the link in quotes, as \"[[name]]\"".to_string()),
             _ => Err("expected a page link written as \"[[name]]\"".to_string()),
@@ -244,13 +264,13 @@ pub fn parse_value(decl: &FieldDecl, value: &Value, page: PageFormat) -> Result<
             };
             let mut out = Vec::with_capacity(items.len());
             for item in items {
-                let Some(target) = item.as_str().and_then(page_target) else {
+                let Some(link) = item.as_str().and_then(page_target) else {
                     return Err(format!(
                         "{} is not a page link; write each one in quotes, as \"[[name]]\"",
                         item_text(item)
                     ));
                 };
-                out.push(PageLink { target });
+                out.push(link);
             }
             Ok(TypedValue::Pages(out))
         }
@@ -337,11 +357,11 @@ fn parse_count(s: &str, decimal: DecimalMark) -> Option<TypedValue> {
     Some(TypedValue::Count { number: Some(number), noun: Some(noun.to_string()), text: s.to_string() })
 }
 
-/// A `[[target]]` or `[[target|alias]]` link, returning the target.
-fn page_target(s: &str) -> Option<String> {
-    let (target, _alias) = split_pipe(wikilink_inner(s)?);
-    let target = target.trim();
-    (!target.is_empty()).then(|| target.to_string())
+/// A `[[target]]` or `[[target|alias]]` link.
+fn page_target(s: &str) -> Option<PageLink> {
+    let (target, alias) = split_pipe(wikilink_inner(s)?);
+    let (target, alias) = (target.trim(), alias.trim());
+    (!target.is_empty()).then(|| PageLink { target: target.to_string(), alias: (!alias.is_empty()).then(|| alias.to_string()) })
 }
 
 #[cfg(test)]

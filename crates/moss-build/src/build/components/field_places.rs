@@ -1,0 +1,134 @@
+//! A page's declared fields, drawn where their `place` says.
+//!
+//! The frontmatter holds the fact once; this module turns the typed values
+//! into the eyebrow above the title, the subtitle and key figure below it,
+//! and the facts list. Text comes from `field_text`, so a value reads in the
+//! page's language and typesetting. Pure: page links arrive as a closure.
+
+use crate::build::components::field_text::{datetime_attr, number_text, value_text};
+use crate::build::types::ParsedDocument;
+use crate::i18n::Language;
+use moss_core::content_graph::ContentGraph;
+use moss_core::fields::{FieldDecl, PageLink, Place, TypedValue};
+use moss_core::media::html_escape;
+
+/// The markup a page's placed fields draw. `eyebrow` goes above the title;
+/// the rest follows it, `subtitle` first and `key_figures` then `facts` after
+/// the page's own masthead.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Placements {
+    pub eyebrow: String,
+    pub subtitle: String,
+    pub key_figures: String,
+    pub facts: String,
+}
+
+impl Placements {
+    /// What follows the masthead: key figures, then the facts list.
+    pub fn after_masthead(&self) -> String {
+        format!("{}{}", self.key_figures, self.facts)
+    }
+}
+
+/// `placed` holds the page's placed declarations with a valid value, in
+/// declaration order. `page_href` maps a page-link target to its URL, or `None` when the
+/// target is not a page of this site (it is then drawn as plain text).
+pub fn draw(
+    placed: &[(FieldDecl, TypedValue)],
+    lang: Language,
+    typesetting: Option<&str>,
+    page_href: &dyn Fn(&str) -> Option<String>,
+) -> Placements {
+    let drawn = |place: Place| {
+        placed.iter().filter(move |(d, _)| d.place == Some(place)).filter_map(|(d, v)| {
+            let html = inline(v, lang, typesetting, page_href);
+            (!html.is_empty()).then_some((d, v, html))
+        })
+    };
+    let field = |d: &FieldDecl| html_escape(&d.name);
+
+    let eyebrow: String = drawn(Place::Eyebrow)
+        .map(|(d, _, html)| format!("<span data-field=\"{}\">{html}</span>", field(d)))
+        .collect();
+    let subtitle = drawn(Place::Subtitle)
+        .next()
+        .map(|(d, _, html)| format!("<p class=\"moss-subtitle\" data-field=\"{}\">{html}</p>\n", field(d)))
+        .unwrap_or_default();
+    let key_figures: String = drawn(Place::KeyFigure)
+        .map(|(d, v, html)| {
+            let body = if matches!(v, TypedValue::Count { .. } | TypedValue::Number(_)) { html } else { format!("<span>{html}</span>") };
+            format!("<p class=\"moss-key-figure\" data-field=\"{}\">{body}</p>\n", field(d))
+        })
+        .collect();
+    let rows: String = drawn(Place::Facts)
+        .map(|(d, _, html)| {
+            format!(
+                "<div data-field=\"{}\"><dt>{}</dt><dd>{html}</dd></div>\n",
+                field(d),
+                html_escape(&d.label_for(lang.as_bcp47_attr()))
+            )
+        })
+        .collect();
+    Placements {
+        eyebrow: if eyebrow.is_empty() { eyebrow } else { format!("<p class=\"moss-eyebrow\">{eyebrow}</p>\n") },
+        subtitle,
+        key_figures,
+        facts: if rows.is_empty() { rows } else { format!("<dl class=\"moss-facts\" data-beside>\n{rows}</dl>\n") },
+    }
+}
+
+/// [`draw`] for a rendered page: a page link resolves through the content
+/// graph to another page of `all_docs`, which supplies its URL.
+pub fn draw_for_page(
+    doc: &ParsedDocument,
+    all_docs: &[ParsedDocument],
+    graph: Option<&ContentGraph>,
+    typesetting: Option<&str>,
+) -> Placements {
+    if doc.placed_fields.is_empty() {
+        return Placements::default();
+    }
+    let page_href = |target: &str| {
+        let source = graph?.resolve_path(target, doc.source_path.as_deref()?)?;
+        let page = all_docs.iter().find(|d| d.source_path.as_deref() == Some(source.as_str()))?;
+        Some(crate::build::markdown::pipeline::absolute_pretty_url(&page.url_path))
+    };
+    draw(&doc.placed_fields, doc.lang, typesetting, &page_href)
+}
+
+/// One value as inline markup.
+fn inline(v: &TypedValue, lang: Language, typesetting: Option<&str>, page_href: &dyn Fn(&str) -> Option<String>) -> String {
+    if let Some(datetime) = datetime_attr(v) {
+        return format!("<time datetime=\"{}\">{}</time>", html_escape(&datetime), html_escape(&value_text(v, lang, typesetting)));
+    }
+    match v {
+        TypedValue::Number(n) => format!("<data value=\"{n}\">{}</data>", html_escape(&number_text(n, lang))),
+        TypedValue::Count { number: Some(n), noun, .. } => {
+            let data = format!("<data value=\"{n}\">{}</data>", html_escape(&number_text(n, lang)));
+            match noun {
+                Some(noun) => format!("{data} <span>{}</span>", html_escape(noun)),
+                None => data,
+            }
+        }
+        TypedValue::Count { number: None, text, .. } if !text.is_empty() => format!("<span>{}</span>", html_escape(text)),
+        TypedValue::Url(u) => format!("<a href=\"{}\">{}</a>", html_escape(u), html_escape(u)),
+        TypedValue::Page(p) => page_link_html(p, page_href),
+        TypedValue::Pages(pages) => pages.iter().map(|p| page_link_html(p, page_href)).collect::<Vec<_>>().join(", "),
+        other => html_escape(&value_text(other, lang, typesetting)),
+    }
+}
+
+/// A page link reads as written, like a body wikilink: its alias, else the last
+/// segment of its target. It links to the page when the target resolves.
+fn page_link_html(link: &PageLink, page_href: &dyn Fn(&str) -> Option<String>) -> String {
+    let name = link.alias.as_deref().unwrap_or_else(|| link.target.rsplit('/').next().unwrap_or(&link.target));
+    let name = html_escape(name);
+    match page_href(&link.target) {
+        Some(href) => format!("<a href=\"{}\">{name}</a>", html_escape(&href)),
+        None => name,
+    }
+}
+
+#[cfg(test)]
+#[path = "field_places_tests.rs"]
+mod tests;

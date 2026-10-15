@@ -132,7 +132,11 @@ When a design call needs a visual treatment, stop at the first rung that reaches
    set `--moss-color-ui-accent: var(--moss-color-text)`.
 2. **Selector on semantic HTML.** Target the existing semantic structure (a
    heading, a blockquote, a list) with a plain CSS rule. No new markup.
-3. **Named-class fenced div.** `::: {.your-class}` wraps markdown in a `<div>`
+3. **A declared field with a `place`, or a named-class fenced div.** First ask
+   whether the content is a fact about the page (a year, a count, a role, a
+   place). If it is, declare it as a field and give it a `place` (see `moss guide authoring`, Declared fields),
+   so moss draws it from frontmatter instead of a classed block repeated on
+   every page. Otherwise `::: {.your-class}` wraps markdown in a `<div>`
    with that class. Write the CSS under the class name. One descriptive class,
    not three stacked utilities.
 4. **Structural override.** Re-lay-out a page against moss's defaults: scope to

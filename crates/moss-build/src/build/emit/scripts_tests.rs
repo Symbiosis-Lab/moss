@@ -15,6 +15,7 @@ fn all_on() -> SiteAssets {
         scroll_rows: true,
         video_ladder: true,
         places_explorer: true,
+        field_places: true,
     }
 }
 

@@ -245,6 +245,21 @@ fn field_decls_choice_table_keeps_the_order_the_file_writes() {
 }
 
 #[test]
+fn field_decls_keep_the_order_the_file_writes_and_read_a_label() {
+    let config = ConfigFile::parse(
+        "[fields.years]\ntype = \"period\"\n[fields.architect]\ntype = \"text\"\nlabel = { en = \"Architect\", de = \"Architektin\" }\n[fields.district]\ntype = \"text\"\nlabel = \"Quarter\"\n",
+    )
+    .unwrap();
+    let (decls, problems) = config.field_decls();
+    assert!(problems.is_empty(), "got: {problems:?}");
+    let names: Vec<&str> = decls.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(names, ["years", "architect", "district"]);
+    assert_eq!(decls[1].label_for("de"), "Architektin");
+    assert_eq!(decls[2].label_for("de"), "Quarter");
+    assert_eq!(decls[0].label_for("de"), "Years");
+}
+
+#[test]
 fn field_decls_choice_from_a_list_labels_each_value_with_itself() {
     let config = ConfigFile::parse("[fields.kind]\ntype = \"choice\"\nof = [\"Building\", \"Service\"]\n").unwrap();
     let (decls, problems) = config.field_decls();

@@ -686,3 +686,23 @@ fn sidenote_eligibility_selector_is_written_identically() {
         );
     }
 }
+
+/// Facts leave the column for the right margin only where that margin is free.
+/// Every rule that positions them there must exclude a vertical page, a
+/// full-width page, a sidebar page and a page with sidenotes.
+#[test]
+fn facts_are_only_taken_out_of_the_column_where_the_margin_is_free() {
+    let css = assemble(&SiteAssets { field_places: true, ..SiteAssets::default() });
+    let mut absolute = 0;
+    for (at, _) in css.match_indices("position:absolute") {
+        let selector = css[..at].rsplit_once('}').map_or(&css[..at], |(_, rest)| rest);
+        if !selector.contains(".moss-facts") {
+            continue;
+        }
+        absolute += 1;
+        for guard in [r#":not([data-typesetting="vertical"]"#, r#"[data-content-width="full"]"#, ":not(:has(main.has-sidebar))", ":not(:has(.moss-sidenote))"] {
+            assert!(selector.contains(guard), "the facts rule `{selector}` lacks {guard}");
+        }
+    }
+    assert_eq!(absolute, 1, "one rule positions the facts");
+}

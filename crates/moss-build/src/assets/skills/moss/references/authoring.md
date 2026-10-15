@@ -21,7 +21,11 @@ Reach for the cheapest rung that works; earn each step:
    every current token name, its light value, and its dark value.
 2. **Selector on semantic HTML.** Target the existing semantic structure (a
    heading, a blockquote, a list) with a CSS rule. No new markup required.
-3. **Named-class fenced div.** `::: {.your-class}` wraps markdown in a `<div>`
+3. **A declared field with a `place`, or a named-class fenced div.** First ask
+   whether the content is a fact about the page (a year, a count, a role, a
+   place). If it is, declare it as a field and give it a `place` (see Declared fields below),
+   so moss draws it from frontmatter instead of a classed block repeated on
+   every page. Otherwise `::: {.your-class}` wraps markdown in a `<div>`
    with that class. Write the CSS under the class name. One descriptive class,
    not three stacked utilities.
 4. **Structural override.** Re-lay-out a page against moss's defaults.
@@ -414,13 +418,28 @@ A page then writes plain values, such as `kind: Building`, `years: 1927/1933` or
 | `choice` | one of the values in `of` | `{ value, label }`, the label in the page's language |
 | `period` | `1927/1933` or `1927–1933`, `1927/..` for an open end, or one date | `{ start, end, open, text }`, each date as `{ value, precision, qualifier }`; `open` is true only for an interval with no end |
 | `count` | `1,382 flats` | `{ number, noun, text }`, or `{ text }` when the value is not a number followed by a noun |
-| `page`, `pages` | `"[[Page name]]"` | the link targets |
+| `page`, `pages` | `"[[Page name]]"` or `"[[Page name\|text]]"` | `{ target, alias? }` per link |
 
 A choice's `of` gives one label for every language when it is a string. A table gives a label per language tag (`en`, `de`, `zh-hans`, `zh-hant`); a page in a language without its own label uses the `en` one, then the value itself. Choices keep the order the file writes them, in either form; plugins receive them in that order.
 
 A count's digits follow the page's language. On a German page `.` groups digits and `,` is the decimal, so `1.382 Wohnungen` is 1382 and `48,1 km` is 48.1. Other pages read `,` as the grouping mark and `.` as the decimal.
 
-`in` limits a field to some folders, and a language tree counts as inside its folder: `in = ["Housing"]` also checks `de/Housing/…`. `place` (`eyebrow`, `subtitle`, `facts`, `key-figure` or `none`) is checked now but not drawn yet. `moss build --strict` turns a value that does not fit into a failure.
+`in` limits a field to some folders, and a language tree counts as inside its folder: `in = ["Housing"]` also checks `de/Housing/…`. `moss build --strict` turns a value that does not fit into a failure.
+
+`place` makes moss draw the field on every page that carries a valid value, so the fact is written once in frontmatter and never repeated as a styled block. The value is read in the page's language, so a German page shows an open period as "ab 1923" and groups a count with ".". A folder index and a generated term page draw nothing.
+
+| `place` | Drawn as | Class |
+|---|---|---|
+| `eyebrow` | a small line above the title; every eyebrow field, in the order the file declares them, one `<span data-field>` each | `moss-eyebrow` |
+| `subtitle` | a line under the title; only the first subtitle field is drawn | `moss-subtitle` |
+| `key-figure` | a large number under the title, then its noun; one line per field | `moss-key-figure` |
+| `facts` | a label and value row per field, in a list | `moss-facts` |
+
+Dates and periods are `<time datetime>` elements carrying the EDTF value (`1927/1933`, or `1923/..` when open). A count is a `<data value>` element with the number as displayed, then its noun. A choice shows its label. A `page` or `pages` value links to the page where moss can resolve it, and shows the link as written (the text after `|` if there is one, else the last part of the name); where it cannot resolve, it shows the same text without a link; several pages are joined with ", ". A field whose value is missing or does not fit is not drawn on that page.
+
+A facts row is labelled with the field's `label`, a string or a table per language in the same form as a choice's labels (`label = { en = "Architect", de = "Architektin" }`); without one the label is the field name with its first letter capitalised. On a screen at least 76rem wide the facts sit in the right margin beside the title, in the space sidenotes use; on a narrower screen, on a vertical or full-width page, beside a sidebar, and on a page with sidenotes (which use that margin) they stay in the column under the title. The subtitle follows the title, then come the page's date and byline, then the key figures and the facts.
+
+moss draws no separator in the eyebrow. The stylesheet puts one between its fields from `--moss-eyebrow-separator`, a CSS string defaulting to `" · "`, so a theme sets `--moss-eyebrow-separator: " "` or `" / "`.
 
 ### Places
 

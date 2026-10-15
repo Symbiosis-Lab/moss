@@ -6,7 +6,7 @@ const EN: PageFormat = PageFormat { lang: "en", decimal: DecimalMark::Point };
 const DE: PageFormat = PageFormat { lang: "de", decimal: DecimalMark::Comma };
 
 fn decl(kind: FieldKind) -> FieldDecl {
-    FieldDecl { name: "f".into(), kind, choices: vec![], place: None, scope: vec![] }
+    FieldDecl { name: "f".into(), kind, choices: vec![], place: None, label: vec![], scope: vec![] }
 }
 
 fn choice(values: &[&str]) -> FieldDecl {
@@ -172,7 +172,7 @@ fn choice_given_a_yaml_number_names_the_allowed_values() {
 #[test]
 fn page_needs_a_wikilink_and_takes_an_alias() {
     assert_eq!(ok(FieldKind::Page, json!("[[A]]")), json!({"target": "A"}));
-    assert_eq!(ok(FieldKind::Page, json!("[[B|alias]]")), json!({"target": "B"}));
+    assert_eq!(ok(FieldKind::Page, json!("[[B|alias]]")), json!({"target": "B", "alias": "alias"}));
     assert!(err(FieldKind::Page, json!("Anna Weber")).contains("[[name]]"));
     assert!(err(FieldKind::Page, json!([["A"]])).contains("in quotes"));
 }
@@ -181,7 +181,7 @@ fn page_needs_a_wikilink_and_takes_an_alias() {
 fn pages_takes_a_list_or_one_link_and_names_the_bad_item() {
     assert_eq!(
         ok(FieldKind::Pages, json!(["[[A]]", "[[B|alias]]"])),
-        json!([{"target": "A"}, {"target": "B"}])
+        json!([{"target": "A"}, {"target": "B", "alias": "alias"}])
     );
     assert_eq!(ok(FieldKind::Pages, json!("[[A]]")), json!([{"target": "A"}]));
     let message = err(FieldKind::Pages, json!(["[[A]]", "Bob"]));
@@ -268,4 +268,17 @@ fn every_listed_type_name_parses_and_others_do_not() {
     }
     assert_eq!(FieldKind::from_name("Text"), None);
     assert!(matches!(parse_edtf("1930"), Some(Edtf::Date(_))));
+}
+
+#[test]
+fn field_label_is_a_string_a_language_table_or_the_capitalised_name() {
+    let named = |label: Vec<(String, String)>| FieldDecl { name: "architect".into(), label, ..decl(FieldKind::Text) };
+    assert_eq!(named(vec![]).label_for("de"), "Architect", "no label: the name, first letter capitalised");
+    let plain = named(vec![("en".into(), "Designed by".into())]);
+    assert_eq!(plain.label_for("de"), "Designed by", "a plain string serves every language");
+    let table = named(vec![("en".into(), "Architect".into()), ("de".into(), "Architektin".into())]);
+    assert_eq!(table.label_for("DE"), "Architektin", "the page's own language, case-insensitive");
+    assert_eq!(table.label_for("zh-hans"), "Architect", "no zh-hans label: falls back to en");
+    let only_de = named(vec![("de".into(), "Architektin".into())]);
+    assert_eq!(only_de.label_for("fr"), "Architect", "no en label either: the capitalised name");
 }

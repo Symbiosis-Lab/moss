@@ -2727,6 +2727,12 @@ fn minify_css_strips_comments() {
 }
 
 #[test]
+fn minify_css_keeps_non_ascii_text_intact() {
+    let result = minify_css(".a::before { content: \" · \"; }\n.b { content: \"全\"; }");
+    assert_eq!(result, ".a::before{content:\" · \"}.b{content:\"全\"}");
+}
+
+#[test]
 fn minify_css_collapses_whitespace() {
     let input = "body  {\n  color:  red;\n  font-size:  16px;\n}";
     let result = minify_css(input);

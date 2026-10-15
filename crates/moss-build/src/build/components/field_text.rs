@@ -135,10 +135,24 @@ fn group_digits(digits: &str, sep: char) -> String {
     out
 }
 
-fn number_text(n: &serde_json::Number, lang: Language) -> String {
+pub(crate) fn number_text(n: &serde_json::Number, lang: Language) -> String {
     match n.as_f64() {
         Some(x) => count_text(x, None, lang).0,
         None => n.to_string(),
+    }
+}
+
+/// The EDTF value a `<time datetime>` carries: a date at its own precision, a
+/// period as `start/end`, an open one as `start/..`. `None` for every other kind.
+pub fn datetime_attr(v: &TypedValue) -> Option<String> {
+    match v {
+        TypedValue::Date(d) => Some(at_precision(d)),
+        TypedValue::Period { start, end, open, .. } => Some(match (end, open) {
+            (_, true) => format!("{}/..", at_precision(start)),
+            (Some(end), false) => format!("{}/{}", at_precision(start), at_precision(end)),
+            (None, false) => at_precision(start),
+        }),
+        _ => None,
     }
 }
 
