@@ -103,6 +103,7 @@ All notable changes to moss will be documented here.
 
 - A page's `byline:` now sits directly under its first heading even when that heading is inside a `:::grid` cell. It used to print above the grid, so the byline read above the heading it belongs to. An article whose body opens with such a grid and a heading matching its title no longer gets a second title above the grid.
 - `moss deploy --prebuilt` refuses to take an address offline that the last publish served, the same check a normal publish makes.
+- A site's redirect history is kept in `.moss/redirects.json`, which git tracks, so a fresh clone or another machine keeps every old address working. The old `.moss/data/redirects.json` moves there on the next build.
 - A publish whose only change is removed theme or internal files (a font dropped from the theme, say) now takes effect. Before, `moss deploy` printed "0 uploaded, 0 removed" and the old files stayed live, because nothing counted as changed. It needs a hosting server that reports the count; against an older one the publish behaves as before.
 - A page in a language folder (`zh-hant/notes/trip.md`) now pairs with the page at the same path in the default language (`notes/trip.md`) without a `translationKey`: its language switch, `hreflang` links (one per language) and breadcrumb point at its twin. Where a page does carry a `translationKey`, the key wins over the path for that language.
 - A theme can set `--moss-footer-end` without a warning.

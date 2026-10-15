@@ -87,7 +87,7 @@ fn page(title: &str) -> String {
 
 #[test]
 fn a_recorded_rename_still_gets_its_stub() {
-    let b = build(&[ABOUT, (".moss/data/redirects.json", r#"{"old-about/": "about/"}"#)]);
+    let b = build(&[ABOUT, (".moss/redirects.json", r#"{"old-about/": "about/"}"#)]);
     assert!(b.read("old-about/index.html").contains("url=/about/"));
     assert_eq!(b.problems, 0);
 }
@@ -95,7 +95,7 @@ fn a_recorded_rename_still_gets_its_stub() {
 /// The recorded history may aim at a section of the new page.
 #[test]
 fn a_target_fragment_survives_into_the_stub() {
-    let b = build(&[ABOUT, (".moss/data/redirects.json", r##"{"old-team/": "about/#team"}"##)]);
+    let b = build(&[ABOUT, (".moss/redirects.json", r##"{"old-team/": "about/#team"}"##)]);
     assert!(b.read("old-team/index.html").contains("url=/about/#team"));
     assert_eq!(b.problems, 0);
 }
@@ -111,7 +111,7 @@ fn a_recorded_rename_whose_translation_is_gone_lands_on_the_default_language_pag
         ("kept.md", &page("Kept")),
         ("zh-hans/kept.md", &page("保留")),
         ("gone.md", &page("Gone")),
-        (".moss/data/redirects.json", history),
+        (".moss/redirects.json", history),
     ]);
     assert!(b.read("zh-hans/old-kept/index.html").contains("url=/zh-hans/kept/"));
     assert!(b.read("zh-hans/old-gone/index.html").contains("url=/gone/?from=old"));
@@ -123,7 +123,7 @@ fn a_recorded_rename_whose_translation_is_gone_lands_on_the_default_language_pag
 #[test]
 fn a_gone_language_home_lands_on_the_site_home_in_either_spelling() {
     let history = r#"{"zh-hans/start/": "zh-hans/", "zh-hant/start/": "zh-hant"}"#;
-    let b = build(&[ABOUT, (".moss/data/redirects.json", history)]);
+    let b = build(&[ABOUT, (".moss/redirects.json", history)]);
     assert!(b.read("zh-hans/start/index.html").contains("url=/\""));
     assert!(b.read("zh-hant/start/index.html").contains("url=/\""));
 }
@@ -134,7 +134,7 @@ fn a_gone_language_home_lands_on_the_site_home_in_either_spelling() {
 #[test]
 fn a_fallback_that_is_itself_only_a_redirect_is_not_followed() {
     let history = r#"{"zh-hans/old/": "zh-hans/mid/", "mid/": "new/"}"#;
-    let b = build(&[("new.md", &page("New")), (".moss/data/redirects.json", history)]);
+    let b = build(&[("new.md", &page("New")), (".moss/redirects.json", history)]);
     assert!(b.read("mid/index.html").contains("url=/new/"));
     assert!(b.read("zh-hans/old/index.html").contains("url=/zh-hans/mid/"));
 }
@@ -144,7 +144,7 @@ fn a_fallback_that_is_itself_only_a_redirect_is_not_followed() {
 #[test]
 fn a_missing_target_outside_a_language_edition_is_left_as_recorded() {
     let history = r#"{"old-guide/": "guides/gone/"}"#;
-    let b = build(&[ABOUT, ("gone.md", &page("Gone")), (".moss/data/redirects.json", history)]);
+    let b = build(&[ABOUT, ("gone.md", &page("Gone")), (".moss/redirects.json", history)]);
     assert!(b.read("old-guide/index.html").contains("url=/guides/gone/"));
 }
 
@@ -265,7 +265,7 @@ fn the_shipped_table_lists_every_source_in_order() {
     let b = build(&[
         ABOUT,
         ("assets/data.csv", "x"),
-        (".moss/data/redirects.json", r#"{"old-about/": "about/"}"#),
+        (".moss/redirects.json", r#"{"old-about/": "about/"}"#),
         (".moss/config.toml", &cfg),
     ]);
     assert_eq!(
@@ -296,7 +296,7 @@ fn a_target_cannot_inject_markup_into_a_stub() {
     );
     let b = build(&[
         ABOUT,
-        (".moss/data/redirects.json", r##"{"old-c/": "about/#\"><script>alert(2)</script>"}"##),
+        (".moss/redirects.json", r##"{"old-c/": "about/#\"><script>alert(2)</script>"}"##),
         (".moss/config.toml", &cfg),
     ]);
     for stub in ["a/index.html", "b/index.html", "old-c/index.html"] {

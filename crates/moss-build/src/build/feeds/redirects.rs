@@ -22,7 +22,7 @@ use crate::build::scan::article_map::ArticleMap;
 #[cfg(test)]
 use crate::types::content::file_entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Detect URL renames by comparing article UIDs between what is live and what
 /// this build produced.
@@ -210,7 +210,6 @@ pub fn emit_redirect_table(
     use crate::build::context::BuildContext;
     use crate::build::manifest::HashBucket;
 
-    let data_dir = paths.data_dir();
     let baseline = live_baseline::load(paths);
 
     // `Err` here means the file is present but could not be read — evicted by
@@ -221,7 +220,7 @@ pub fn emit_redirect_table(
     // serving, and the next build (after the download lands) writes the real
     // merge. Only a file that is provably absent is legitimately "no redirects
     // yet".
-    let existing: Option<BTreeMap<String, String>> = load_redirects(&data_dir);
+    let existing: Option<BTreeMap<String, String>> = load_redirects(paths);
     // An unreadable baseline detects NO new renames — not "no renames". The
     // difference is the one the uid-remint bug is about: a build that decides against a
     // record it could not read publishes that decision. Every stub already in
@@ -259,7 +258,7 @@ pub fn emit_redirect_table(
 
     match existing {
         Some(_) => {
-            if let Err(e) = save_redirects(&data_dir, &merged) {
+            if let Err(e) = save_redirects(paths, &merged) {
                 log::warn!("Failed to save redirects.json: {}", e);
             }
         }
@@ -434,48 +433,57 @@ fn site_has_been_published(paths: &crate::moss_paths::MossPaths) -> bool {
         .unwrap_or(false)
 }
 
-/// Load redirects from `data_dir/redirects.json`.
+/// Load the redirect history from `.moss/redirects.json`, folding in a copy
+/// left at the old `.moss/data/redirects.json`. The tracked file wins a
+/// conflicting key.
 ///
-/// `None` means the file is present but could not be read — see
+/// `None` means a file is present but could not be read — see
 /// `emit_redirect_table`, where that is the difference between merging and
-/// erasing. `Some(empty)` means it is genuinely absent (or empty), which is the
-/// ordinary state of a site that has never renamed a page.
-pub fn load_redirects(data_dir: &Path) -> Option<BTreeMap<String, String>> {
-    let path = data_dir.join("redirects.json");
-    match crate::build::cloud_readiness::read_input_if_present(&path) {
+/// erasing. `Some(empty)` means both are genuinely absent (or empty), which is
+/// the ordinary state of a site that has never renamed a page.
+pub fn load_redirects(paths: &crate::moss_paths::MossPaths) -> Option<BTreeMap<String, String>> {
+    let read = |path: PathBuf| match crate::build::cloud_readiness::read_input_if_present(&path) {
         Ok(Some(contents)) => Some(serde_json::from_str(&contents).unwrap_or_default()),
         Ok(None) => Some(BTreeMap::new()),
         Err(e) => {
             log::warn!("could not read {} ({e})", path.display());
             None
         }
-    }
+    };
+    // The pre-move location: read once to migrate, never written.
+    let mut history: BTreeMap<String, String> = read(paths.data_dir().join("redirects.json"))?;
+    history.extend(read(paths.redirects())?);
+    Some(history)
 }
 
-/// Save redirects as pretty-printed JSON to `data_dir/redirects.json`.
+/// Save the redirect history to `.moss/redirects.json`, then remove the old
+/// `.moss/data/redirects.json` it supersedes.
 ///
-/// Creates the parent directory if it doesn't exist.
-///
-/// Deliberately NOT an `io_utils` output write. `.moss/data` is user state —
-/// this file is a site's rename history, it syncs on purpose, and it is not
-/// regenerable — so the "dataless is absent" rule for regenerable output does not reach it. If
+/// Deliberately NOT an `io_utils` output write. This file is user state — a
+/// site's rename history, it syncs on purpose, and it is not regenerable — so
+/// the "dataless is absent" rule for regenerable output does not reach it. If
 /// the sync client has evicted it, clobbering it with a map that has lost the
-/// history is worse than failing, and "unreadable is not absent" applies in its
-/// original, unqualified form.
-pub fn save_redirects(data_dir: &Path, redirects: &BTreeMap<String, String>) -> Result<(), String> {
-    let path = data_dir.join("redirects.json");
+/// history is worse than failing.
+pub fn save_redirects(paths: &crate::moss_paths::MossPaths, redirects: &BTreeMap<String, String>) -> Result<(), String> {
+    let path = paths.redirects();
     let json = serde_json::to_string_pretty(redirects)
         .map_err(|e| format!("Failed to serialize redirects: {}", e))?;
-    if std::fs::read(&path).is_ok_and(|existing| existing == json.as_bytes()) {
-        return Ok(()); // unchanged — don't churn the mtime
+    if !std::fs::read(&path).is_ok_and(|existing| existing == json.as_bytes()) {
+        if let Some(parent) = path.parent() {
+            // allow:raw_write .moss, not the build tree
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create {}: {}", parent.display(), e))?;
+        }
+        std::fs::write(&path, json.as_bytes())  // allow:raw_write user state under .moss, not regenerable output
+            .map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
     }
-    if let Some(parent) = path.parent() {
-        // allow:raw_write .moss/data, not the build tree
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create {}: {}", parent.display(), e))?;
+    // allow:unlink .moss/data user state, never under staging
+    match std::fs::remove_file(paths.data_dir().join("redirects.json")) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            Err(format!("Failed to remove the old redirects file: {e}"))
+        }
+        _ => Ok(()),
     }
-    std::fs::write(&path, json.as_bytes())  // allow:raw_write user state under .moss/data, not regenerable output
-        .map_err(|e| format!("Failed to write {}: {}", path.display(), e))
 }
 
 #[cfg(test)]
@@ -875,14 +883,14 @@ mod tests {
     #[test]
     fn load_save_round_trip() {
         let dir = tempfile::tempdir().unwrap();
-        let data_dir = dir.path();
+        let paths = crate::moss_paths::MossPaths::from_moss_dir(dir.path().to_path_buf());
 
         let mut redirects = BTreeMap::new();
         redirects.insert("old/page/".to_string(), "new/page/".to_string());
         redirects.insert("posts/draft/".to_string(), "posts/published/".to_string());
 
-        save_redirects(data_dir, &redirects).unwrap();
-        let loaded = load_redirects(data_dir);
+        save_redirects(&paths, &redirects).unwrap();
+        let loaded = load_redirects(&paths);
 
         assert_eq!(loaded, Some(redirects));
     }
@@ -890,38 +898,38 @@ mod tests {
     #[test]
     fn load_nonexistent_returns_empty() {
         let dir = tempfile::tempdir().unwrap();
-        let data_dir = dir.path().join("nonexistent_subdir");
+        let paths = crate::moss_paths::MossPaths::from_moss_dir(dir.path().join("nonexistent_subdir"));
 
         // Provably absent — `Some(empty)`, not `None`. The difference decides
         // whether `emit_redirect_table` rewrites the file or leaves it alone.
-        assert_eq!(load_redirects(&data_dir), Some(BTreeMap::new()));
+        assert_eq!(load_redirects(&paths), Some(BTreeMap::new()));
     }
 
     #[test]
     fn save_creates_parent_dir() {
         let dir = tempfile::tempdir().unwrap();
-        let nested = dir.path().join("a").join("b").join("c");
+        let paths = crate::moss_paths::MossPaths::from_moss_dir(dir.path().join("a").join("b").join(".moss"));
 
-        let redirects = BTreeMap::new();
-        save_redirects(&nested, &redirects).unwrap();
+        save_redirects(&paths, &BTreeMap::new()).unwrap();
 
-        assert!(nested.join("redirects.json").exists());
+        assert!(paths.redirects().exists());
     }
 
     #[test]
     fn save_redirects_is_idempotent() {
         use std::fs;
         let dir = tempfile::tempdir().unwrap();
+        let paths = crate::moss_paths::MossPaths::from_moss_dir(dir.path().to_path_buf());
         let mut redirects = BTreeMap::new();
         redirects.insert("/old".to_string(), "/new".to_string());
         redirects.insert("/other".to_string(), "/target".to_string());
 
-        save_redirects(dir.path(), &redirects).unwrap();
-        let path = dir.path().join("redirects.json");
+        save_redirects(&paths, &redirects).unwrap();
+        let path = paths.redirects();
         let mtime_before = fs::metadata(&path).unwrap().modified().unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
 
-        save_redirects(dir.path(), &redirects).unwrap();
+        save_redirects(&paths, &redirects).unwrap();
         let mtime_after = fs::metadata(&path).unwrap().modified().unwrap();
         assert_eq!(mtime_before, mtime_after,
             "second save of identical map must not touch mtime");
@@ -1098,7 +1106,7 @@ mod tests {
             sealed.files().get(stub_key)
         );
 
-        let redirects_path = data_dir.join("redirects.json");
+        let redirects_path = paths.redirects();
         let saved: std::collections::BTreeMap<String, String> = serde_json::from_str(
             &std::fs::read_to_string(&redirects_path).unwrap(),
         )
@@ -1141,7 +1149,7 @@ mod tests {
         // that parses as neither format.
         let mut earned = BTreeMap::new();
         earned.insert("ancient/page/".to_string(), "current/page/".to_string());
-        save_redirects(&data_dir, &earned).unwrap();
+        save_redirects(&crate::moss_paths::MossPaths::from_moss_dir(moss_dir.clone()), &earned).unwrap();
         std::fs::write(deploy_dir.join("deployed-article-map.json"), "not json").unwrap();
 
         // uid-X moved, and this build has no way to know it.
@@ -1207,6 +1215,82 @@ mod tests {
 
         let paths = crate::moss_paths::MossPaths::from_moss_dir(moss_dir);
         (paths, output_dir, tmp)
+    }
+
+    // ---------------------------------------------------------------
+    // where the history lives: `.moss/redirects.json`, with a one-way
+    // migration from `.moss/data/redirects.json`
+    // ---------------------------------------------------------------
+
+    fn read_map(path: &Path) -> BTreeMap<String, String> {
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    fn build_once(paths: &crate::moss_paths::MossPaths, output_dir: &Path) -> std::collections::BTreeSet<String> {
+        use crate::build::manifest::PendingManifest;
+        use crate::types::content::SiteHashes;
+        let mut current_map = ArticleMap::new();
+        current_map.articles.insert("new/page/".to_string(), article_info_with_uid(Some("uid-X")));
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        emit_redirect_table(paths, &current_map, &TableInputs::default(), output_dir, &mut pending).unwrap();
+        pending.seal().files().keys().cloned().collect()
+    }
+
+    #[test]
+    fn history_in_the_tracked_file_is_served() {
+        let (paths, output_dir, _tmp) = gate_test_fixture();
+        std::fs::write(paths.root().join("redirects.json"), r#"{"hand/old/": "new/page/"}"#).unwrap();
+
+        let emitted = build_once(&paths, &output_dir);
+
+        assert!(emitted.contains("hand/old/index.html"), "emitted: {emitted:?}");
+    }
+
+    #[test]
+    fn history_in_the_old_place_moves_to_the_tracked_file_in_one_build() {
+        let (paths, output_dir, _tmp) = gate_test_fixture();
+        let old = paths.root().join("data/redirects.json");
+        std::fs::write(&old, r#"{"hand/old/": "new/page/"}"#).unwrap();
+
+        let emitted = build_once(&paths, &output_dir);
+
+        assert!(emitted.contains("hand/old/index.html"), "stubs come from the same build: {emitted:?}");
+        let moved = read_map(&paths.root().join("redirects.json"));
+        assert_eq!(moved.get("hand/old/").map(String::as_str), Some("new/page/"));
+        assert!(!old.exists(), "the old file is removed once the new one is written");
+    }
+
+    #[test]
+    fn a_restored_old_copy_is_merged_into_the_tracked_file_and_loses_conflicts() {
+        let (paths, output_dir, _tmp) = gate_test_fixture();
+        let old = paths.root().join("data/redirects.json");
+        std::fs::write(&old, r#"{"only/old/": "new/page/", "both/": "stale/"}"#).unwrap();
+        std::fs::write(paths.root().join("redirects.json"), r#"{"only/new/": "new/page/", "both/": "new/page/"}"#).unwrap();
+
+        build_once(&paths, &output_dir);
+
+        let merged = read_map(&paths.root().join("redirects.json"));
+        assert_eq!(merged.get("only/old/").map(String::as_str), Some("new/page/"));
+        assert_eq!(merged.get("only/new/").map(String::as_str), Some("new/page/"));
+        assert_eq!(merged.get("both/").map(String::as_str), Some("new/page/"), "the tracked file wins a conflict");
+        assert!(!old.exists());
+    }
+
+    /// A tracked file that cannot be read (a directory stands in for an
+    /// evicted or half-synced one) must not be replaced by a smaller set, and
+    /// the old file must survive as the only copy.
+    #[test]
+    fn an_unreadable_tracked_file_is_never_overwritten_or_the_old_copy_deleted() {
+        let (paths, output_dir, _tmp) = gate_test_fixture();
+        let old = paths.root().join("data/redirects.json");
+        std::fs::write(&old, r#"{"hand/old/": "new/page/"}"#).unwrap();
+        let new = paths.root().join("redirects.json");
+        std::fs::create_dir_all(&new).unwrap();
+
+        build_once(&paths, &output_dir);
+
+        assert!(new.is_dir(), "the unreadable file is left alone");
+        assert_eq!(std::fs::read_to_string(&old).unwrap(), r#"{"hand/old/": "new/page/"}"#);
     }
 
     /// A second build with the same baseline and the same article map — no
