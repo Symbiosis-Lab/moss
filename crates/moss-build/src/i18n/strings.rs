@@ -655,6 +655,21 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHant => "本節永久連結",
         },
 
+        // A declared field's open-ended period, `{start}` being the start date's text.
+        "field_open_from" => match lang {
+            Language::En => "from {start}",
+            Language::De => "ab {start}",
+            Language::ZhHans => "{start}起",
+            Language::ZhHant => "{start}起",
+        },
+        // The prefix a declared field's approximate date carries.
+        "field_approximate" => match lang {
+            Language::En => "c. ",
+            Language::De => "um ",
+            Language::ZhHans => "约",
+            Language::ZhHant => "約",
+        },
+
         // Unrecognized key — return the key itself.
         // This uses a leaked string to satisfy the 'static lifetime.
         // Only happens for programmer errors (wrong key), not at runtime.
