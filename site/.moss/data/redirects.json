@@ -22,7 +22,7 @@
   "zh-hans/docs/author/links/": "zh-hans/docs/writing/wikilinks-and-embeds/",
   "zh-hans/docs/author/navigation/": "zh-hans/docs/writing/navigation/",
   "zh-hans/docs/author/wikilinks-and-embeds/": "zh-hans/开始使用/links/",
-  "zh-hans/docs/editors/": "zh-hans/docs/writing/editors/",
+  "zh-hans/docs/editors/": "zh-hans/开始使用/markdown/",
   "zh-hans/docs/extend/cli/": "zh-hans/docs/reference/cli/",
   "zh-hans/docs/extend/hooks/": "zh-hans/docs/reference/hooks/",
   "zh-hans/docs/extend/manifest/": "zh-hans/docs/reference/manifest/",
