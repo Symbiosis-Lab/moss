@@ -221,6 +221,24 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Colour of the hairline under the header's navigation. Set it to `transparent` when `--moss-header-bg` gives the header a band, since the band's own edge already divides it from the page; the hairline would otherwise draw inside the band.",
     },
     CustomProp {
+        name: "--moss-footer-bg",
+        owner: "footer.container",
+        default: "transparent",
+        description: "Background colour of the site footer's band, which runs the full page width although the footer's content stays in its column. It takes a colour, not a gradient or image. Unset, the footer has none. Set it on `:root`, with its dark-mode pair under `:root[data-theme=\"dark\"]`.",
+    },
+    CustomProp {
+        name: "--moss-footer-ink",
+        owner: "footer.container",
+        default: "var(--moss-color-muted)",
+        description: "Colour of the text, links and headings in the footer. Hover and focus keep the accent colour, and the colophon keeps its own. The footer's own text defaults to `var(--moss-color-muted)`, its authored links to `var(--moss-color-accent)` and its headings and generated link list to `var(--moss-color-text)`; setting this replaces all of them with one colour. Use it with `--moss-footer-bg` so the text stays readable on the band.",
+    },
+    CustomProp {
+        name: "--moss-footer-rule",
+        owner: "footer.container",
+        default: "var(--moss-border-light)",
+        description: "Colour of the hairline at the top of the footer and of any horizontal rule (`---`) inside it, which is a plain line in the footer rather than the three-dot ornament. Set it to `transparent` when `--moss-footer-bg` gives the footer a band, since the band's own edge already divides it from the page.",
+    },
+    CustomProp {
         name: "--moss-footer-end",
         owner: "footer.container",
         default: "var(--moss-space-2xl)",

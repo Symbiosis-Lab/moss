@@ -994,13 +994,17 @@ footer.container {
      (`.moss-colophon`) and puts the same space above itself. */
   padding-block: 0 var(--moss-footer-end);
   --moss-footer-end: var(--moss-space-2xl);
-  color: var(--moss-color-muted);
+  color: var(--moss-footer-ink, var(--moss-color-muted));
   text-align: start;
+  /* The band runs the full page width though the box is the content column:
+     an image border outset sideways paints outside the box without moving
+     layout, clipping its children, or catching the pointer. */
+  border-image: linear-gradient(var(--moss-footer-bg, transparent), var(--moss-footer-bg, transparent)) fill 1 / 0 / 0 100vmax;
 }
 footer.container::before {
   content: "";
   display: block;
-  border-block-start: 1px solid var(--moss-border-light);
+  border-block-start: 1px solid var(--moss-footer-rule, var(--moss-border-light));
   /* Breathing room between the divider and footer content (link list,
      subscribe form, or richer footer.md). Tightening to xs makes the
      muted footer chrome feel cramped against the divider, especially in
@@ -1385,10 +1389,30 @@ footer.container:has(> .moss-subscribe) > .moss-colophon {
 }
 
 .footer-link {
-  color: var(--moss-color-text);
+  color: var(--moss-footer-ink, var(--moss-color-text));
   text-decoration: underline;
-  text-decoration-color: var(--moss-color-muted);
+  text-decoration-color: var(--moss-footer-ink, var(--moss-color-muted));
   text-underline-offset: 3px;
+}
+
+/* --moss-footer-ink reaches an author's classless footer links and headings
+   at the element rules' own specificity (`:where`), so hover, focus and the
+   colophon keep theirs. */
+:where(footer.container) a {
+  color: var(--moss-footer-ink, var(--moss-color-accent));
+}
+:where(footer.container) :is(h1, h2, h3, h4, h5, h6) {
+  color: var(--moss-footer-ink, var(--moss-color-text));
+}
+
+/* A footer rule is a plain hairline in the footer's rule colour, not the
+   three-dot ornament. */
+footer.container hr {
+  height: 0;
+  border-block-start: 1px solid var(--moss-footer-rule, var(--moss-border-light));
+}
+footer.container hr::before {
+  content: none;
 }
 
 /* Touch floor: `footer.container a`, not `.footer-link` — the generated

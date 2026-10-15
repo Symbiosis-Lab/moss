@@ -1143,9 +1143,8 @@ fn test_css_footer_container_provides_default_chrome() {
     let rule = get_css_rule(DEFAULT_CSS, "footer.container")
         .expect("footer.container CSS rule should exist");
     assert!(
-        rule.contains("color: var(--moss-color-muted)")
-            || rule.contains("color:var(--moss-color-muted)"),
-        "footer.container should use muted color, got: {}",
+        rule.contains("color: var(--moss-footer-ink, var(--moss-color-muted))"),
+        "footer.container should use muted color unless --moss-footer-ink is set, got: {}",
         rule
     );
     // Block padding only: the inline inset is `.container`'s, the one owner
@@ -1263,10 +1262,33 @@ fn test_css_footer_link_underline_uses_text_muted() {
     let rule =
         get_css_rule(DEFAULT_CSS, ".footer-link").expect(".footer-link CSS rule should exist");
     assert!(
-        rule.contains("text-decoration-color: var(--moss-color-muted)"),
-        "Footer link underline should use --moss-color-muted, got: {}",
+        rule.contains("text-decoration-color: var(--moss-footer-ink, var(--moss-color-muted))"),
+        "Footer link underline should use --moss-color-muted unless --moss-footer-ink is set, got: {}",
         rule
     );
+}
+
+#[test]
+fn test_css_footer_reads_band_ink_and_rule_properties() {
+    let footer = get_css_rule(DEFAULT_CSS, "footer.container").expect("footer.container rule");
+    assert!(footer.contains("var(--moss-footer-bg, transparent)"), "band: {footer}");
+
+    let divider = get_css_rule(DEFAULT_CSS, "footer.container::before").expect("divider rule");
+    assert!(
+        divider.contains("1px solid var(--moss-footer-rule, var(--moss-border-light))"),
+        "divider: {divider}"
+    );
+
+    let links = get_css_rule(DEFAULT_CSS, ":where(footer.container) a").expect("footer link rule");
+    assert!(links.contains("color: var(--moss-footer-ink, var(--moss-color-accent))"), "links: {links}");
+
+    let hr = get_css_rule(DEFAULT_CSS, "footer.container hr").expect("footer hr rule");
+    assert!(
+        hr.contains("height: 0") && hr.contains("var(--moss-footer-rule, var(--moss-border-light))"),
+        "hairline: {hr}"
+    );
+    let ornament = get_css_rule(DEFAULT_CSS, "footer.container hr::before").expect("ornament rule");
+    assert!(ornament.contains("content: none"), "ornament: {ornament}");
 }
 
 #[test]

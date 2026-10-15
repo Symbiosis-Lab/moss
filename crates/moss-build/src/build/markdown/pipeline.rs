@@ -822,7 +822,8 @@ pub fn process_markdown_file(
         assets: asset_snapshot,
         media_lookup,
         permalink_section_label: crate::i18n::t(doc_lang, "permalink_section"),
-        heading_anchors: site.heading_anchors,
+        // A slot's HTML lands in the footer, where a permalink mark is clutter.
+        heading_anchors: site.heading_anchors && !injects_into_every_page,
         vertical: crate::build::render::config::effective_typesetting(
             frontmatter.typesetting.as_deref(),
             site.typesetting,

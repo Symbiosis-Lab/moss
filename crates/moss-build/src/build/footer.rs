@@ -680,6 +680,34 @@ mod tests {
         );
     }
 
+    /// A heading in slot HTML renders without the permalink mark; the same
+    /// heading in a page body keeps it.
+    #[test]
+    fn heading_in_footer_slot_has_no_permalink_mark() {
+        let render = |path: &str, frontmatter: &str| {
+            let empty_map = HashMap::new();
+            crate::build::markdown::process_markdown_file(
+                path,
+                &format!("{frontmatter}## Contact\n\nWrite to us."),
+                "",
+                &empty_map,
+                false,
+                crate::i18n::Language::En,
+                None,
+                crate::build::markdown::SiteMarkdown::default(),
+                None,
+                None,
+                None,
+                crate::build::markdown::PageContext::default(),
+            )
+            .expect("parses")
+            .html_content
+        };
+        assert!(!render("footer.md", "").contains("moss-heading-anchor"));
+        assert!(!render("note.md", "---\nslot: footer-left\n---\n\n").contains("moss-heading-anchor"));
+        assert!(render("note.md", "").contains("moss-heading-anchor"));
+    }
+
     // -----------------------------------------------------------------
     // apply_last_known_good_fallback
     // -----------------------------------------------------------------

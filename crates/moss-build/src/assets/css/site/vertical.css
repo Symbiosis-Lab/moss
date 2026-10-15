@@ -272,6 +272,12 @@ body[data-typesetting="vertical"] picture[data-aspect="scroll"] img {
    with 青苔 written top-to-bottom on the block-end side of the mark — its
    left. */
 
+/* The footer band's sideways reach is physical; the footer's long axis is
+   vertical here, so the band reaches up and down instead. */
+body[data-typesetting="vertical"] footer.container {
+  border-image-outset: 100vmax 0;
+}
+
 /* site.css carries the reveal motion as `--moss-colophon-rise`; `translate`
    is physical, so the rotation happens here: the drift goes along x, and
    away from the mark is leftward. */

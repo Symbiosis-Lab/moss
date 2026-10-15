@@ -3372,8 +3372,19 @@ listed: false
 [[one]]
 :::
 `,
+    "footer.md": `## Contact
+
+[Write to us](https://example.com/hello)
+
+---
+
+Small print.
+`,
     ".moss/config.toml": CONFIG_TOML,
     ".moss/theme/style.css": `:root {
+  --moss-footer-bg: rgb(20, 20, 20);
+  --moss-footer-ink: rgb(240, 240, 240);
+  --moss-footer-rule: rgb(90, 90, 90);
   --moss-header-bg: rgb(200, 0, 0);
   --moss-header-ink: rgb(0, 0, 255);
   --moss-header-rule: transparent;
