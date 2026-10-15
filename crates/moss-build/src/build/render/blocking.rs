@@ -3340,6 +3340,7 @@ pub fn generate_blocking_content_for_build(
             hashes: site_hashes,
             deferred_paths,
             missing_references,
+            term_index,
         },
         background_ctx,
         // Surface the parsed page slice to the caller so

@@ -276,6 +276,9 @@ fn schema_frontmatter_warnings(
     moss_core::validation::validate_frontmatter(frontmatter, schema)
         .into_iter()
         .filter(|d| matches!(d.severity, Severity::Error | Severity::Warning))
+        // A plugin may contribute the style, which this static schema cannot
+        // know; `listing_style::apply` judges the value against the plugins.
+        .filter(|d| d.path.as_deref() != Some("children_style"))
         .filter(|d| {
             // `path` is either a field name or `field[i]` for an array item;
             // both map back to a top-level key the author wrote.

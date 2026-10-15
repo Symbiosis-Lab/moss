@@ -3785,13 +3785,21 @@ fn schema_type_mismatch_warns_at_build() {
 #[test]
 fn schema_enum_violation_warns_at_build() {
     let warnings =
-        schema_frontmatter_warnings("index.md", &fm_of("title: Hi\nchildren_style: carousel"));
+        schema_frontmatter_warnings("index.md", &fm_of("title: Hi\nchildren_group: sideways"));
     assert_eq!(warnings.len(), 1, "got: {warnings:?}");
     assert!(
-        warnings[0].contains("'children_style'") && warnings[0].contains("carousel"),
+        warnings[0].contains("'children_group'") && warnings[0].contains("sideways"),
         "warning must name the field and the bad value, got: {}",
         warnings[0]
     );
+}
+
+/// A plugin may contribute a `children_style` value this static schema cannot
+/// know, so the build's listing pass judges it, not the schema.
+#[test]
+fn children_style_is_judged_by_the_listing_pass_not_the_static_schema() {
+    let warnings = schema_frontmatter_warnings("index.md", &fm_of("title: Hi\nchildren_style: carousel"));
+    assert!(warnings.is_empty(), "got: {warnings:?}");
 }
 
 /// Date-format problems are `Warning`, not `Error` — both severities surface.

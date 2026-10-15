@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
 pub mod engine_adapter;
+pub mod listing;
 mod hook_context;
 pub mod signal_route;
 
@@ -797,7 +798,7 @@ impl PluginManager {
     ) -> Result<Option<HookResult>, String> {
         match self.run_hook(plugin, hook_name, context_json, &self.host.state.hooks).await {
             HookRun::NeverRan(e) => Err(e),
-            HookRun::Finished(result) => result,
+            HookRun::Finished(result) => result.map(|(hook_result, _)| hook_result),
         }
     }
 
@@ -884,7 +885,7 @@ impl PluginManager {
                     break match completion {
                         Ok(completion_result) => {
                             if completion_result.success {
-                                Ok(completion_result.result)
+                                Ok((completion_result.result, completion_result.returned))
                             } else {
                                 // Prefer .error (set for throw-path failures), then fall
                                 // back to .result.message (set when success:false is
@@ -961,7 +962,7 @@ impl PluginManager {
 /// success or timeout) → complete, so waiters share the result.
 enum HookRun {
     NeverRan(String),
-    Finished(Result<Option<HookResult>, String>),
+    Finished(Result<(Option<HookResult>, Option<serde_json::Value>), String>),
 }
 
 /// Derive the JavaScript global name from a plugin name.
@@ -1030,6 +1031,7 @@ mod tests {
             success: false,
             error: Some("network timeout".to_string()),
             result: None,
+            returned: None,
         };
         let msg = with_error.error
             .or_else(|| with_error.result.as_ref().and_then(|r| r.message.clone()))
@@ -1049,6 +1051,7 @@ mod tests {
             success: false,
             error: None,
             result: Some(hook_result),
+            returned: None,
         };
         let msg = with_message.error
             .or_else(|| with_message.result.as_ref().and_then(|r| r.message.clone()))
@@ -1060,6 +1063,7 @@ mod tests {
             success: false,
             error: None,
             result: None,
+            returned: None,
         };
         let msg = neither.error
             .or_else(|| neither.result.as_ref().and_then(|r| r.message.clone()))
@@ -1163,6 +1167,7 @@ mod tests {
                     jobs: Some(ContributedJobs { descriptors }),
                     stack: None,
                     derivations: None,
+                    listing_styles: None,
                 }),
                 ..Default::default()
             },

@@ -1541,13 +1541,13 @@ fn build_inner(
     // marker-bearing bytes and leaves the pages for this phase to write, which
     // rewrites those entries so all downstream artifact boundaries see the
     // final HTML bytes.
-    let resolved_slots = match slot_resolver {
+    let mut resolved_slots = match slot_resolver {
         Some(resolve) => resolve(&documents, &site_lang, site_comments)?,
         None => ResolvedSlots::empty(),
     };
-    // Runs the enhance hook over the stage, re-registers every page it
-    // rewrote, and (under `MOSS_INCREMENTAL_VERIFY=1`) settles the carry
-    // check against the resulting final bytes. See `build::emit::slots`.
+    crate::build::emit::listing_style::apply(&documents, project_structure, &site_result.term_index, &stage_dir, &mut pending, &mut resolved_slots);
+    // Injects slots (and plugin listings) over the stage, re-registers every page it
+    // rewrote, and settles the `MOSS_INCREMENTAL_VERIFY=1` carry check. See `build::emit::slots`.
     crate::build::emit::slots::apply_to_stage_and_manifest(
         &paths,
         &stage_dir,

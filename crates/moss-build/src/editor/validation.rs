@@ -77,6 +77,13 @@ pub fn compose_schema(
             }
         }
     }
+    // `children_style` also accepts the id of any listing style an installed
+    // plugin contributes.
+    if let Some(field) = schema.frontmatter.fields.get_mut("children_style") {
+        let plan = crate::plugins::contributions::listing_style::ListingStylePlan::from_plugins(plugins);
+        let allowed = field.enum_values.get_or_insert_with(Vec::new);
+        allowed.extend(plan.ids().map(str::to_string));
+    }
     schema
 }
 
@@ -234,5 +241,28 @@ mod url_collision_tests {
         };
         assert_eq!(unknown(undeclared), 2, "undeclared, both are unknown-field hints");
         assert_eq!(unknown(declared), 0, "declared, neither is reported");
+    }
+
+    #[test]
+    fn children_style_accepts_the_styles_installed_plugins_contribute() {
+        use crate::plugins::contributions::{listing_style::ListingStyleContribution, PluginContributes};
+        use crate::plugins::types::{Plugin, PluginManifest};
+        let frontmatter: std::collections::HashMap<String, serde_yaml::Value> =
+            serde_yaml::from_str("children_style: board\n").unwrap();
+        let styles = std::collections::BTreeMap::from([("board".to_string(), ListingStyleContribution::default())]);
+        let manifest = PluginManifest {
+            name: "boardview".into(),
+            contributes: Some(PluginContributes { listing_styles: Some(styles), ..Default::default() }),
+            ..Default::default()
+        };
+        let installed = [Plugin { manifest, path: "boardview".into() }];
+        let flagged = |schema| {
+            moss_core::validation::validate_frontmatter(&frontmatter, &schema)
+                .into_iter()
+                .filter(|d| d.path.as_deref() == Some("children_style"))
+                .count()
+        };
+        assert_eq!(flagged(super::compose_schema(&[], &[])), 1, "no plugin: the value is unknown");
+        assert_eq!(flagged(super::compose_schema(&installed, &[])), 0, "the plugin's style is valid");
     }
 }

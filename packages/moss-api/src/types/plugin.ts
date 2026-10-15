@@ -77,3 +77,19 @@ export interface DerivationContribution {
   stub?: string[];
   run: { binary: string; artifact: ArtifactSource[] };
 }
+
+/**
+ * `contributes.listing_styles[id]`: a way of listing a folder that the
+ * plugin's `listing` export draws. An author picks it with
+ * `children_style: <id>` on the folder's home page.
+ *
+ * @category Plugin manifest
+ */
+export interface ListingStyleContribution {
+  /** Name shown in the editor's select. */
+  label?: string;
+  /** One sentence for the select's hint. */
+  description?: string;
+  /** The page width this style wants; applies to a page that sets none. */
+  content_width?: "wide" | "full";
+}

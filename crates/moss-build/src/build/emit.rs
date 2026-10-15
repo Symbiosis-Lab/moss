@@ -7,6 +7,7 @@
 //! *gates* (the `fullscreen.js` conditional-emission precedent).
 
 pub mod inventory;
+pub mod listing_style;
 pub mod math_png;
 pub mod feature_styles;
 pub mod place_map_assets;

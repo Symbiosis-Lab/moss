@@ -30,6 +30,7 @@
 //! `folder_id` because those carry on-disk paths.
 
 mod maps;
+pub(crate) mod members;
 mod calendar_tokens;
 pub(crate) mod upcoming;
 use maps::place_map_with_placement;
@@ -1333,44 +1334,17 @@ fn render_one(
     // Collect children respecting the depth param via the shared selector.
     // "all" flattens all descendants; "direct" (default) is one level only.
     let is_flatten = parsed.depth.as_deref() == Some("all");
-    let folder_docs = select_children_by_slug(
+    let host = all_docs.iter().find(|d| d.source_path.as_deref() == Some(from));
+    let folder_docs = members::select(
         &folder_id_slug,
         is_flatten,
         parsed.scope_default_tree,
         parsed.exclude_nav,
+        parsed.covers == Some("only"),
+        host,
         all_docs,
         project,
     );
-
-    // A page that hosts a listing of a folder it also sits inside (a
-    // `children:`/`children_more` whole-site listing at the root, where
-    // every page's prefix is "") must not list itself. The folder's own
-    // index already excludes itself because its url IS `target_url` inside
-    // `select_children_by_slug`; a page that merely POINTS at a folder
-    // (including the root) has no such coincidence, so exclude it here by
-    // matching `from` against `source_path` — the one thing that identifies
-    // "this listing's host page" regardless of where it lives.
-    let folder_docs: Vec<&ParsedDocument> = match all_docs
-        .iter()
-        .find(|d| d.source_path.as_deref() == Some(from))
-    {
-        Some(host) => folder_docs
-            .into_iter()
-            .filter(|d| d.url_path != host.url_path)
-            .collect(),
-        None => folder_docs,
-    };
-
-    // `covers:only` keeps pages that have a cover. Applied right after
-    // flattening/self-exclusion and before sort+limit, so `limit` counts off
-    // the covered set rather than the full set. A folder entry is covered
-    // when its own index page (the same `ParsedDocument`, `cover` is that
-    // page's own field) has a cover — no separate lookup needed.
-    let folder_docs: Vec<&ParsedDocument> = if parsed.covers == Some("only") {
-        folder_docs.into_iter().filter(|d| d.cover.is_some()).collect()
-    } else {
-        folder_docs
-    };
 
     if folder_docs.is_empty() {
         return Ok(String::new());
@@ -1390,29 +1364,6 @@ fn render_one(
         }
     }
 
-    // Resolve sort: flatten uses resolve_for_flatten; direct uses resolve_for_direct_children.
-    // Per-embed sort= override wins over both. A pseudo-folder has no target
-    // doc to carry sort intent, so it gets the same default a folder with no
-    // sort cache gets (date-descending).
-    let mut resolved = match target_doc {
-        Some(t) if is_flatten => t.resolve_for_flatten(&folder_docs),
-        Some(t) => t.resolve_for_direct_children(),
-        None => moss_core::sort::ResolvedSort {
-            axis: moss_core::sort::SortAxis::Date,
-            explicit_order: None,
-            series_default: false,
-        },
-    };
-    if let Some(axis) = parsed.sort {
-        // Override: drop explicit_order (sort:axis is a user-typed scalar,
-        // not a list) and recompute series_default to match.
-        resolved = ResolvedSort {
-            axis,
-            explicit_order: None,
-            series_default: matches!(axis, SortAxis::Weight),
-        };
-    }
-
     // Auto-detect style and group when not specified in embed params.
     let style_override: Option<moss_core::Resolved<String>> = parsed
         .style
@@ -1423,35 +1374,18 @@ fn render_one(
         .group
         .as_ref()
         .map(|g| moss_core::Resolved::frontmatter(g.clone()));
-    let (style_resolved, group_resolved) = resolve_children_config(
+    let members::Ordered { resolved, style: style_resolved, group: effective_group, skip_resort, limited, truncated } = members::order(
         &folder_docs,
+        target_doc,
+        is_flatten,
+        parsed.sort,
         style_override.as_ref(),
         group_override.as_ref(),
+        parsed.limit,
         math,
+        now,
     );
     let children_style = style_resolved.value.clone();
-    // An explicit `order:`/`sort:` list is a manual sequence the author chose;
-    // it must survive even when the inferred axis is Date (which would otherwise
-    // re-sort the children date-descending below and discard the order). The
-    // upstream `sort_by_resolved` already placed listed children in the explicit
-    // order, so render that order verbatim — no date re-sort, no year grouping.
-    let skip_resort = !resolved.axis.shows_date() || resolved.explicit_order.is_some();
-    let effective_group = effective_group_for_axis(&group_resolved, resolved.axis);
-
-    let sorted = moss_core::sort::sort_by_resolved(&folder_docs, &resolved);
-    // Upcoming events lead whatever the folder's sort is, so `limit` cuts
-    // from that order (the same grouping `generate_children` applies later).
-    let sorted = if effective_group == "upcoming" {
-        let upcoming_urls = upcoming::urls(&effective_group, &folder_docs, now);
-        upcoming::order_docs(sorted, &upcoming_urls, skip_resort)
-    } else {
-        sorted
-    };
-
-    let (limited, truncated): (Vec<&ParsedDocument>, bool) = match parsed.limit {
-        Some(n) if n > 0 && n < sorted.len() => (sorted.iter().take(n).copied().collect(), true),
-        _ => (sorted.clone(), false),
-    };
 
     let all_docs_refs: Vec<&ParsedDocument> = all_docs.iter().collect();
 

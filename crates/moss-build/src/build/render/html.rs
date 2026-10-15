@@ -539,7 +539,10 @@ pub(super) fn render_page<'d>(
                     Some(media_lookup),
                     layout_config.assets.math,
                 );
-                content.push_str(&annotate_children_listing(resolved_html, emit_source_lines));
+                content.push_str(&crate::build::emit::listing_style::wrap(
+                    doc,
+                    annotate_children_listing(resolved_html, emit_source_lines),
+                ));
             }
 
             // Colophon at the very foot, after the children listing.
@@ -882,7 +885,10 @@ pub(super) fn render_page<'d>(
                         Some(media_lookup),
                         layout_config.assets.math,
                     );
-                    content.push_str(&annotate_children_listing(resolved_html, emit_source_lines));
+                    content.push_str(&crate::build::emit::listing_style::wrap(
+                        doc,
+                        annotate_children_listing(resolved_html, emit_source_lines),
+                    ));
                 }
             }
 

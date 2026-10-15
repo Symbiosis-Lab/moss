@@ -457,7 +457,8 @@ async fn arm_validate_content(ctx: &Session, args: Value) -> ArmResult {
         Ok(cfg) => crate::build::terms::declared_name_list_fields(&cfg),
         Err(_) => Vec::new(),
     };
-    let schema = crate::editor::validation::compose_schema(&[], &declared);
+    let plugins = crate::plugins::discovery::discover_installed_plugins(&root.to_string_lossy()).unwrap_or_default();
+    let schema = crate::editor::validation::compose_schema(&plugins, &declared);
     to_value(crate::editor::validation::diagnose(
         Some(&root),
         &path,

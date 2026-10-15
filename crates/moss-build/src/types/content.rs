@@ -362,6 +362,11 @@ pub struct SiteResult {
     #[serde(skip)]
     #[specta(skip)]
     pub missing_references: Vec<crate::build::types::MissingReferenceOccurrence>,
+    /// The terms this build derived, for passes that run after render (a
+    /// plugin-drawn listing links names to their term pages).
+    #[serde(skip)]
+    #[specta(skip)]
+    pub term_index: crate::build::terms::TermIndex,
 }
 
 /// Hash map of generated site files for change detection.

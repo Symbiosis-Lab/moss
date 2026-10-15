@@ -930,7 +930,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         default_json: None,
         // Frequency=3, Importance=3 → score=70
         score: 70,
-        description: "How child pages are rendered. When absent, moss picks from the children: `summary` if most of them have a cover or a description (or all but three do), otherwise `list` if any child has a date, otherwise `grid`",
+        description: "How child pages are rendered. When absent, moss picks from the children: `summary` if most of them have a cover or a description (or all but three do), otherwise `list` if any child has a date, otherwise `grid`. An installed plugin can add styles of its own (its `contributes.listing_styles`); name one by its id",
         label: Some("Child Layout"),
         label_key: "chip.children_style.label",
         group: "Child Styles",

@@ -43,6 +43,10 @@ pub enum HookSignal {
         /// Optional hook result carrying deployment info (publisher plugins).
         #[serde(default)]
         result: Option<HookResult>,
+        /// What the hook returned, verbatim. Never on the wire: only the
+        /// engine adapter fills it, for hooks whose result is not a `HookResult`.
+        #[serde(skip)]
+        returned: Option<serde_json::Value>,
     },
 }
 
@@ -93,11 +97,11 @@ pub fn route_signal(
             log::error!(target: "plugin", "❌ [{plugin_name}] {error_msg}");
             state.add_error(plugin_name, hook_name, error_msg, fatal);
         }
-        HookSignal::Complete { success, error, result } => {
+        HookSignal::Complete { success, error, result, returned } => {
             let status = if success { "success" } else { "failed" };
             log::info!(target: "plugin", "✅ [{plugin_name}] Hook {hook_name} complete ({status})");
             state.update_activity(plugin_name, hook_name);
-            state.send_completion(plugin_name, hook_name, CompletionResult { success, error, result });
+            state.send_completion(plugin_name, hook_name, CompletionResult { success, error, result, returned });
         }
     }
 }
@@ -117,7 +121,7 @@ mod tests {
             discarding(),
             "p",
             "process",
-            HookSignal::Complete { success: true, error: None, result: None },
+            HookSignal::Complete { success: true, error: None, result: None, returned: None },
         );
         let got = rx.await.unwrap();
         assert!(got.success);

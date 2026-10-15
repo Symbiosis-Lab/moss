@@ -20,6 +20,8 @@ pub struct CompletionResult {
     pub error: Option<String>,
     /// Full hook result including deployment info (for publisher plugins)
     pub result: Option<crate::plugins::types::HookResult>,
+    /// The hook's return value as the plugin wrote it.
+    pub returned: Option<serde_json::Value>,
 }
 
 /// The longest an unbroken run of host calls may hold the inactivity watchdog

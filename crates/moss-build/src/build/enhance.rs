@@ -90,6 +90,13 @@ pub struct ResolvedSlots {
     /// which has the `PendingManifest`. Without it the linked file would never
     /// be emitted and every page would 404 its stylesheet.
     feature_styles: Vec<&'static str>,
+    /// What replaces a plugin-styled listing, by the listing page's stage
+    /// path. A listing with no entry here keeps the default moss drew. See
+    /// `build::listing_style`.
+    listings: HashMap<String, crate::build::emit::listing_style::ListingFill>,
+    /// How the listing pass reaches the plugins; never part of the cache key.
+    #[serde(skip)]
+    listing_host: Option<crate::build::emit::listing_style::ListingHost>,
 }
 
 impl ResolvedSlots {
@@ -98,6 +105,8 @@ impl ResolvedSlots {
         Self {
             entries: HashMap::new(),
             feature_styles: Vec::new(),
+            listings: HashMap::new(),
+            listing_host: None,
         }
     }
 
@@ -118,14 +127,28 @@ impl ResolvedSlots {
         &self.feature_styles
     }
 
+    pub(crate) fn set_listing_host(&mut self, host: Option<crate::build::emit::listing_style::ListingHost>) {
+        self.listing_host = host;
+    }
+
+    pub(crate) fn listing_host(&self) -> Option<&crate::build::emit::listing_style::ListingHost> {
+        self.listing_host.as_ref()
+    }
+
+    /// Settle one page's plugin-styled listing.
+    pub(crate) fn set_listing(&mut self, page_path: &str, fill: crate::build::emit::listing_style::ListingFill) {
+        self.listings.insert(page_path.to_string(), fill);
+    }
+
     /// Check if there are no slot entries at all.
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.is_empty() && self.listings.is_empty()
     }
 
     /// Merge all entries from another `ResolvedSlots` into self.
     /// Entries are re-sorted by priority after merge.
     pub fn merge_all(&mut self, other: ResolvedSlots) {
+        self.listings.extend(other.listings);
         for name in other.feature_styles {
             if !self.feature_styles.contains(&name) {
                 self.feature_styles.push(name);
@@ -217,7 +240,7 @@ impl ResolvedSlots {
 /// Known slot markers are replaced with content (or removed if empty).
 /// Unknown markers are left untouched.
 pub fn inject_slots(html: &str, slots: &ResolvedSlots, page_path: &str) -> String {
-    let mut result = html.to_string();
+    let mut result = crate::build::emit::listing_style::settle_spans(html, slots.listings.get(page_path));
     // Whether footer-left / footer-end resolved to real content THIS pass —
     // known here, from the same `slots.get_html` call the marker loop below
     // already makes, rather than re-derived later from the assembled HTML.

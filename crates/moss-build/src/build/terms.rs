@@ -243,7 +243,7 @@ impl TermIndex {
 
 /// This doc's values for a name-list field. A name outside the five built-ins
 /// is site-declared, read from the page's own frontmatter like `author:`.
-fn field_names(doc: &ParsedDocument, field: &str) -> Vec<String> {
+pub(crate) fn field_names(doc: &ParsedDocument, field: &str) -> Vec<String> {
     match field {
         "author" => doc.author.clone(),
         // Frontmatter tags only — inline #hashtags are prose, not

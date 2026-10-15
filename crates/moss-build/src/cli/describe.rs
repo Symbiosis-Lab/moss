@@ -91,6 +91,12 @@ fn plugin_hooks() -> Vec<PluginHookInfo> {
             context: "SyndicateContext",
         },
         PluginHookInfo {
+            name: "listing",
+            description: "Draw a folder's listing in a style the plugin contributes (contributes.listing_styles); runs after render, once per folder home page whose children_style names one of the plugin's styles.",
+            arity: "multiple",
+            context: "ListingContext",
+        },
+        PluginHookInfo {
             name: "login",
             description: "Connect a user account for a plugin that needs one (e.g. Matters); invoked once via `connect_account`, not part of the build pipeline.",
             arity: "multiple",
@@ -209,7 +215,7 @@ fn manifest_fields() -> Vec<ManifestFieldInfo> {
             name: "contributes",
             r#type: "object",
             required: false,
-            description: "Contributions (deploy targets, frontmatter fields, embed renderers, job descriptors, stack declarations, derivations), VS Code style. Each contribution may carry a setup block — needs (host-checked preconditions like \"stack\"), settings (fields moss draws, the Field vocabulary), credentials, and check (the plugin implements the check_setup hook). A stack contribution carries its own artifact pin (id, version, sources) instead of a setup block. A derivation (contributes.derivations[id]) names the file extensions it accepts, the fragments it produces, and a pinned one-shot binary that turns a file into markdown fragments an author embeds as ![[file.ext#fragment]].",
+            description: "Contributions (deploy targets, frontmatter fields, embed renderers, job descriptors, stack declarations, derivations, listing styles), VS Code style. Each contribution may carry a setup block — needs (host-checked preconditions like \"stack\"), settings (fields moss draws, the Field vocabulary), credentials, and check (the plugin implements the check_setup hook). A stack contribution carries its own artifact pin (id, version, sources) instead of a setup block. A derivation (contributes.derivations[id]) names the file extensions it accepts, the fragments it produces, and a pinned one-shot binary that turns a file into markdown fragments an author embeds as ![[file.ext#fragment]]. A listing style (contributes.listing_styles[id] = {label, description, content_width}) is a way of listing a folder that the plugin's `listing` export draws; authors choose it with `children_style: <id>` on the folder's home page.",
         },
         ManifestFieldInfo {
             name: "min_moss_version",

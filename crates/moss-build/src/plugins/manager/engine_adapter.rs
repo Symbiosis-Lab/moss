@@ -602,10 +602,11 @@ impl PluginEngine for QuickJsEngineAdapter {
                     let parsed: Option<crate::plugins::types::HookResult> = serde_json::from_str(&json).ok();
                     let success = parsed.as_ref().map(|r| r.success).unwrap_or(true);
                     let error = if success { None } else { parsed.as_ref().and_then(|r| r.message.clone()) };
-                    sink.emit(HookSignal::Complete { success, error, result: parsed });
+                    let returned = serde_json::from_str(&json).ok();
+                    sink.emit(HookSignal::Complete { success, error, result: parsed, returned });
                 }
                 Err(msg) => {
-                    sink.emit(HookSignal::Complete { success: false, error: Some(msg), result: None });
+                    sink.emit(HookSignal::Complete { success: false, error: Some(msg), result: None, returned: None });
                 }
             }
         })));
@@ -848,7 +849,7 @@ mod tests {
     #[async_trait]
     impl PluginEngine for FakeEngine {
         async fn dispatch_hook(&self, _inv: HookInvocation, sink: HookSignalSink) -> Result<(), String> {
-            sink.emit(HookSignal::Complete { success: true, error: None, result: None });
+            sink.emit(HookSignal::Complete { success: true, error: None, result: None, returned: None });
             Ok(())
         }
             async fn teardown(&self) {}

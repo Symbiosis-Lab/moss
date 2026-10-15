@@ -30,6 +30,7 @@ Plugins attach to stages by declaring **capabilities** in their manifest.
 | `process` | multiple | `ProcessContext` | Pre-process source files before generation (e.g. download remote assets, transform markdown). |
 | `deploy` | single | `DeployContext` | Deploy the built site to a hosting platform (e.g. GitHub Pages, Netlify). |
 | `syndicate` | multiple | `SyndicateContext` | POSSE-distribute published content after deployment (e.g. cross-post to Matters, RSS). |
+| `listing` | multiple | `ListingContext` | Draw a folder's listing in a style the plugin contributes (contributes.listing_styles); runs after render, once per folder home page whose children_style names one of the plugin's styles. |
 | `login` | multiple | `BaseContext` | Connect a user account for a plugin that needs one (e.g. Matters); invoked once via `connect_account`, not part of the build pipeline. |
 <!-- auto:end:hooks -->
 

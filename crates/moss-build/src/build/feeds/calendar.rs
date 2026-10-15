@@ -63,15 +63,6 @@ fn page_output(doc: &ParsedDocument) -> Option<ServedPath> {
     ServedPath::from_source(&doc.url_path).ok()
 }
 
-/// The folder a folder page lists: its own served directory.
-fn own_dir(doc: &ParsedDocument) -> Option<String> {
-    let out = page_output(doc)?;
-    if out.as_str() == "index.html" {
-        return Some(String::new());
-    }
-    out.as_str().strip_suffix("/index.html").map(str::to_string)
-}
-
 /// The folders a served page sits in, from the site root down:
 /// `events/talk/index.html` is in `""`, `events` and `events/talk`.
 fn ancestor_dirs(served: &str) -> impl Iterator<Item = &str> {
@@ -245,7 +236,7 @@ impl CalendarPlan {
     /// Plans the calendars and warns, once each, about event fields it had to
     /// drop or could not use.
     pub fn build(documents: &[ParsedDocument], project: &ProjectStructure, site_url: &SiteUrl) -> Self {
-        use crate::build::render::incremental::listing::{groups_read_by, Depth};
+        use crate::build::folder_embed::members::{is_folder_home, listed_unfiltered, own_dir};
         let mut problems = Problems::default();
         let mut plan = CalendarPlan::default();
         let mut floating = 0usize;
@@ -268,30 +259,20 @@ impl CalendarPlan {
 
         for host in documents {
             // A synthesized folder index has no source file; a home page has one.
-            let is_home = host.source_path.is_some() && (host.kind == moss_core::PageKind::Folder || host.url_path == "index.html");
-            let Some(dir) = own_dir(host).filter(|_| is_home) else { continue };
+            let Some(dir) = own_dir(host).filter(|_| is_folder_home(host)) else { continue };
             if !dirs_with_events.contains(dir.as_str()) {
                 continue;
             }
             let mut seen = std::collections::BTreeSet::new();
             let mut events = Vec::new();
-            let keys = groups_read_by(host, documents).unwrap_or_else(|| {
+            let members = listed_unfiltered(host, documents, project).unwrap_or_else(|| {
                 log::warn!("Folder `{}` lists a folder that does not exist, so its calendar file is left out", host.url_path);
                 Vec::new()
             });
-            for key in keys.into_iter().filter(|k| k.folder_slug == dir) {
-                for member in crate::build::folder_embed::select_children_by_slug(
-                    &key.folder_slug,
-                    key.depth == Depth::All,
-                    key.scope_default_tree,
-                    key.exclude_nav,
-                    documents,
-                    project,
-                ) {
-                    if let Some(e) = parsed.get(member.url_path.as_str()) {
-                        if seen.insert(e.uid.clone()) {
-                            events.push(e.clone());
-                        }
+            for member in members {
+                if let Some(e) = parsed.get(member.url_path.as_str()) {
+                    if seen.insert(e.uid.clone()) {
+                        events.push(e.clone());
                     }
                 }
             }

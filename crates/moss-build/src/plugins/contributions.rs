@@ -14,6 +14,7 @@
 //! as aliases that fold into this one shape, in [`PluginManifest::parse`].
 
 pub mod derivation;
+pub mod listing_style;
 pub mod settings;
 pub mod stack;
 
@@ -29,7 +30,7 @@ use std::collections::HashMap;
 /// Modeled after VS Code's `contributes` manifest key — plugins declare
 /// field definitions in their manifest; moss merges them into the active
 /// schema at runtime.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PluginContributes {
     /// Frontmatter field definitions contributed by this plugin.
     #[serde(default)]
@@ -75,6 +76,11 @@ pub struct PluginContributes {
     /// pinned one-shot binary, keyed by a plugin-local derivation id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub derivations: Option<std::collections::BTreeMap<String, derivation::DerivationContribution>>,
+
+    /// Ways of listing a folder that this plugin draws, keyed by the id an
+    /// author writes in `children_style`. The plugin exports `listing`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listing_styles: Option<std::collections::BTreeMap<String, listing_style::ListingStyleContribution>>,
 }
 
 /// Job descriptors contributed by a plugin (§8).
@@ -483,6 +489,14 @@ impl PluginManifest {
                 derivation.validate(id).map_err(serde_json::Error::custom)?;
             }
         }
+        if let Some(styles) = manifest.contributes.as_ref().and_then(|c| c.listing_styles.as_ref()) {
+            for (id, style) in styles {
+                listing_style::validate(id, style).map_err(serde_json::Error::custom)?;
+            }
+            if manifest.entry.is_none() {
+                return Err(serde_json::Error::custom("a plugin that contributes listing styles needs an `entry` that exports `listing`"));
+            }
+        }
         manifest.fold_legacy_surfaces();
         manifest.fold_contributions_into_capabilities();
         Ok(manifest)
@@ -496,15 +510,7 @@ impl PluginManifest {
         if self.capabilities.is_empty() {
             return;
         }
-        let contributes = self.contributes.get_or_insert(PluginContributes {
-            frontmatter: None,
-            channel: None,
-            deploy_target: None,
-            processor: None,
-            jobs: None,
-            stack: None,
-            derivations: None,
-        });
+        let contributes = self.contributes.get_or_insert_with(PluginContributes::default);
         for capability in &self.capabilities {
             match capability {
                 Capability::Process => {

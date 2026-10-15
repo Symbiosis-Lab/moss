@@ -49,6 +49,29 @@ moss describe --json | jq '.plugin_hooks'
 
 A plugin that reads a kind of file (documents, slide decks) and returns markdown needs no script: it declares `contributes.derivations[<id>]` with the extensions it `accepts`, the named `fragments` it may return, a `noun` for counting files, a `stub` layout for the page written beside each file, and `run`, a pinned one-shot binary (`download` sources need a `sha256`; a `path` source is a binary you already have). Omit `entry` when the plugin declares nothing else. moss runs the binary once per file in a sandbox, with `{"path": "<absolute path>"}` on stdin, and caches its answer by the file's content, so keep the output deterministic. It prints one JSON object: `{"kind":"derived","fragments":{"text":"…"},"facts":{"title":"…","description":"…"}}`, or `{"kind":"skip","reason":"…","message":"…"}` to decline a file (a result, cached; the message is shown to readers and in `moss import --status`). Any other outcome is a failure and is retried next build. The authoring side is `![[file.ext#text]]` in a page; the full field list and protocol are in the manifest reference (`moss describe --json | jq '.manifest_fields'`, and the plugin manifest page on the docs site).
 
+## A listing style
+
+A plugin can draw how a folder lists its pages. It declares `contributes.listing_styles.<id>` (`label`, `description`, optional `content_width` of `wide` or `full`) and exports `listing(ctx)`; an author then writes `children_style: <id>` on the folder's home page, and the editor offers the id in the same select as `list`, `summary` and `grid`. An id belongs to one plugin, and the ids moss draws itself are taken. Without the plugin (or under `--no-plugins`) the folder is listed in moss's default style with one build warning.
+
+`listing` runs after render, once per folder home page that names one of the plugin's styles. `ctx` is `{ model: 1, style, page, pages, folders, terms }`. `page`, every entry of `pages` and every entry of `folders` are the same record: `{ title, url_path, url, lang, translations: [{lang, url_path}], frontmatter, html, folder }`. `pages` are exactly the pages moss's own listing of that folder shows, `url` is relative to the listing page, `html` is the rendered body with its relative links and image sources rewritten to resolve from the listing page, and `terms[namespace][name]` is where the page for each name those pages use is, written like `url`, so it resolves from the listing page. `pages` and `folders` come in the order moss's own listing shows them. Return `{ html, head, files, warnings }`: `html` replaces the listing, `head` is `[{stylesheet: href} | {script: href}]` for the page's `<head>` (a script is emitted with `defer`, so it runs after the listing is in the page), `files` are `{path, text}` or `{path, base64}` written beside the page (a path that is absolute, contains `..`, starts with `_moss/` or collides with a page is refused with a warning), and each `warnings` entry, a string or `{text, page}` with `page` a record's `url_path` (the warning then names that page's source file), becomes a build warning, so `--strict` fails on it. A throw, a timeout or a malformed result also leaves the default listing with one warning.
+
+A plugin that only contributes listing styles declares no `capabilities` (a `"listing"` entry there fails to parse, since `listing` is dispatched by style, not declared). A plugin that carries its own renderer script or stylesheet reads those bundled files with the host call `read_plugin_file` and returns them in `files`: in plain JavaScript, `await __TAURI__.core.invoke("read_plugin_file", { relativePath: "assets/board.js" })` resolves to the file's text, the path is relative to the plugin's own folder, and only text files can be read this way.
+
+```json
+{ "name": "boardview", "version": "1.0.0", "entry": "main.js",
+  "contributes": { "listing_styles": { "board": { "label": "Board", "description": "One card per page" } } } }
+```
+
+```js
+var BoardviewPlugin = {
+  async listing(ctx) {
+    const cards = ctx.pages.map(p => `<li><a href="${p.url}">${p.title}</a></li>`).join("");
+    return { html: `<ul class="board">${cards}</ul>`, head: [{ stylesheet: "board.css" }],
+             files: [{ path: "board.css", text: ".board { display: grid; gap: 1rem; }" }] };
+  }
+};
+```
+
 ## Setup: declare, don't build UI
 
 A contribution that needs anything from the user declares a `setup` block — moss draws all of it; a plugin never builds settings or first-publish UI. Three members, ordered by what they cost to evaluate:

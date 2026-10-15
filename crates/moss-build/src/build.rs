@@ -1185,14 +1185,16 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // through the `enhance` capability until that capability was retired,
     // having gone three months with no implementation in any plugin, bundled
     // or WIP.
+    let listing_host = (!skip_plugins).then(|| crate::build::emit::listing_style::ListingHost::new(&config.host.plugins, &folder_path));
     let make_slot_resolver = |folder_path_for_slots: String,
                               cached_domain_config_for_slots: crate::config::deployment::DomainDeploymentConfig,
                               project_structure_for_slots: ProjectStructure|
      -> pipeline::SlotResolver {
         let start_server_for_slots = config.start_server;
+        let listing_host = listing_host.clone();
         Box::new(move |pages, site_lang, site_comments| {
             let _slots_trace = PhaseTrace::start("slot_resolution");
-            Ok(collect_native_slots_for_documents(
+            let mut slots = collect_native_slots_for_documents(
                 &folder_path_for_slots,
                 cached_domain_config_for_slots,
                 &project_structure_for_slots,
@@ -1200,17 +1202,13 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                 start_server_for_slots,
                 site_lang,
                 site_comments,
-            ))
+            );
+            slots.set_listing_host(listing_host);
+            Ok(slots)
         })
     };
 
     let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, unresolved_inputs, cancelled, home_ready: _home_ready, publishable, render_seq, unready_derivations } = {
-        // moss's own generator, always. A plugin could replace it wholesale
-        // through the `generate` capability until that capability was
-        // retired: three months, no implementation, and the branch had
-        // already decayed into
-        // a GUI-only path whose headless arm re-ran this same code with a
-        // warning.
         // One attempt: its own clones, its own `SlotResolver`.
         let attempt = || {
             let root_owned = config.root.clone();
