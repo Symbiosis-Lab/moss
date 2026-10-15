@@ -273,18 +273,29 @@ pub fn title_outcome(body_markdown: &str, body_heading_replaces_title: bool) -> 
 }
 
 /// True when the body's first block is a level-1 ATX heading (`# Text`) whose
-/// text is the same as `title` under [`same_heading_text`]. Leading blank
+/// text is the same as `title` under [`same_heading_text`], or a `:::grid`
+/// whose first `# Text` line, up to the grid's first bare `:::` line, has that
+/// text (a heading moved into a cell is still the page's title). Leading blank
 /// lines are skipped; anything else first, including a `##` heading or a
 /// different `# Text`, makes this false.
 pub fn body_opens_with_title(body_markdown: &str, title: &str) -> bool {
     let title = same_heading_text_key(title);
-    !title.is_empty()
-        && body_markdown
-            .lines()
-            .find(|line| !line.trim().is_empty())
-            .and_then(|line| line.strip_prefix('#'))
-            .and_then(|rest| rest.strip_prefix([' ', '\t']))
-            .is_some_and(|text| same_heading_text_key(text) == title)
+    if title.is_empty() {
+        return false;
+    }
+    let mut lines = body_markdown.lines().filter(|line| !line.trim().is_empty());
+    let first = lines.next();
+    let text = if first.is_some_and(|l| l.starts_with(":::grid")) {
+        lines.take_while(|l| l.trim() != ":::").find_map(h1_text)
+    } else {
+        first.and_then(h1_text)
+    };
+    text.is_some_and(|text| same_heading_text_key(text) == title)
+}
+
+/// The text of a `# Text` line, or `None` for any other line.
+fn h1_text(line: &str) -> Option<&str> {
+    line.strip_prefix('#')?.strip_prefix([' ', '\t'])
 }
 
 /// The comparison key for "same heading text": case folded, `-` and `_`
@@ -391,6 +402,18 @@ mod tests {
         assert_eq!(title_outcome(":::hero\n# T\n:::\n", false), None);
         assert_eq!(title_outcome("# T\n", true), None);
         assert_eq!(title_outcome("# T\n", false), Visible);
+    }
+
+    #[test]
+    fn body_opens_with_title_looks_into_a_leading_grid() {
+        let grid = ":::grid 2 1:2\n![P](p.jpg)\n+++\n# Contact\n\nText.\n:::\n";
+        assert!(body_opens_with_title(grid, "Contact"));
+        assert!(!body_opens_with_title(grid, "Other"));
+        assert!(!body_opens_with_title(&format!("Intro.\n\n{grid}"), "Contact"));
+        assert!(!body_opens_with_title(":::grid 2\nText.\n:::\n\n# Contact\n", "Contact"));
+        assert!(body_opens_with_title("# Contact\n", "Contact"));
+        assert!(body_opens_with_title(":::grid 2\n+++\n#\tContact\n:::\n", "Contact"));
+        assert!(body_opens_with_title("#\tContact\n", "Contact"));
     }
 
     #[test]

@@ -462,6 +462,10 @@ pub(crate) fn prepend_parent_label(
 /// title instead of falling through to prepend (which would land the date row
 /// and byline above the cover image).
 ///
+/// A body that opens with a `:::grid` whose first `<h1>` is inside it counts as
+/// having its title block there: the fragment follows that `</h1>` inside the
+/// cell. A grid that comes after other content is not recognised.
+///
 /// With no title block the fragment is prepended, which puts it at the top of
 /// `<article>` — under a hero, since the hero is hoisted out of the body and
 /// rendered above `<main>`. That is where a byline belongs on a page whose
@@ -473,6 +477,9 @@ pub(crate) fn splice_after_title_block(html_body: &str, fragment: &str) -> Strin
     }
     let (prefix, body) = split_cover_body_prefix(html_body);
     if !body.trim_start().starts_with("<h1") {
+        if let Some(end) = crate::build::render::credits::first_h1_end_in_leading_grid(body) {
+            return format!("{}\n{}{}", &body[..end], fragment, &body[end..]);
+        }
         return format!("{}{}{}", prefix, fragment, body);
     }
     let Some((before, after)) = body.split_once("</h1>") else {

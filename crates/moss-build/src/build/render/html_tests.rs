@@ -3761,6 +3761,117 @@ mod children_field_tests {
         );
     }
 
+    const GRID_CELL_PAGE: &str = concat!(
+        r#"<div class="moss-grid" data-columns="2" style="--moss-grid-ratio:minmax(0, 1fr) minmax(0, 2fr)">"#,
+        r#"<div class="moss-grid-card"><img src="portrait.jpg" alt="Portrait"></div>"#,
+        "\n",
+        r#"<div class="moss-grid-card"><h1>Ada Harbor</h1>"#,
+        "\n<p>Text.</p></div></div>"
+    );
+
+    /// The byline follows the page's first `<h1>` into the grid cell that holds
+    /// it, instead of printing above the grid, where it would read above the
+    /// heading it belongs to.
+    #[test]
+    fn a_byline_follows_a_heading_moved_into_a_grid_cell() {
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+        homepage.byline = vec!["Costume Design".to_string()];
+        homepage.html_content = GRID_CELL_PAGE.to_string();
+        let all_docs = vec![homepage.clone()];
+        let html = render_page(Some(&homepage), &all_docs, true);
+
+        assert_eq!(html.matches(r#"class="moss-byline""#).count(), 1, "Got: {html}");
+        assert!(
+            html.contains(concat!(
+                "<h1>Ada Harbor</h1>\n",
+                r#"<div class="moss-byline"><div class="moss-byline-row">Costume Design</div></div>"#,
+                "\n<p>Text.</p></div></div>"
+            )),
+            "byline must sit right after the h1, inside its cell. Got: {html}"
+        );
+        let grid_at = html.find(r#"class="moss-grid""#).expect("grid renders");
+        let byline_at = html.find(r#"class="moss-byline""#).unwrap();
+        assert!(grid_at < byline_at, "no byline above the grid. Got: {html}");
+    }
+
+    /// An article whose body opens with a grid holding its h1 gets no injected
+    /// title: the in-cell h1 is the page's one title and the byline follows it
+    /// inside the cell.
+    #[test]
+    fn an_article_opening_with_a_grid_holding_its_heading_places_the_byline() {
+        let md = "---\ntitle: Contact\nlayout: article\nbyline: \"Costume Design\"\n---\n:::grid 2 1:2\n![Portrait](portrait.jpg)\n+++\n# Contact\n\nText.\n:::\n";
+        let mut article = crate::build::markdown::process_markdown_file(
+            "contact.md", md, "", &std::collections::HashMap::new(), false,
+            crate::i18n::Language::En, None, crate::build::markdown::SiteMarkdown::default(),
+            None, None, None, crate::build::markdown::PageContext::default(),
+        )
+        .expect("parses");
+        article.byline = vec!["Costume Design".to_string()];
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+        let html = render_page(Some(&article), &[homepage, article.clone()], false);
+        assert_eq!(html.matches("<h1").count(), 1, "one title h1. Got: {html}");
+        assert!(!html.contains("moss-article-title"), "no injected title. Got: {html}");
+        assert_eq!(html.matches(r#"class="moss-byline""#).count(), 1, "Got: {html}");
+        let h1_at = html.find(r#"<h1 id="contact">Contact</h1>"#).expect("in-cell title");
+        let byline_at = html.find(r#"class="moss-byline""#).unwrap();
+        let grid_at = html.find(r#"class="moss-grid""#).expect("grid renders");
+        assert!(grid_at < h1_at && h1_at < byline_at, "grid, h1, byline. Got: {html}");
+        assert!(html[h1_at..byline_at].contains("</h1>\n"), "byline directly after the h1. Got: {html}");
+    }
+
+    /// A grid heading whose text differs from the title is not the title: the
+    /// pipeline keeps its own title above the grid, and the byline goes under it.
+    #[test]
+    fn a_differing_grid_heading_leaves_the_title_and_byline_above_the_grid() {
+        let md = "---\ntitle: Contact\nlayout: article\n---\n:::grid 2 1:2\n![Portrait](portrait.jpg)\n+++\n# Other\n\nText.\n:::\n";
+        let mut article = crate::build::markdown::process_markdown_file(
+            "contact.md", md, "", &std::collections::HashMap::new(), false,
+            crate::i18n::Language::En, None, crate::build::markdown::SiteMarkdown::default(),
+            None, None, None, crate::build::markdown::PageContext::default(),
+        )
+        .expect("parses");
+        article.byline = vec!["Costume Design".to_string()];
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+        let html = render_page(Some(&article), &[homepage, article.clone()], false);
+        assert_eq!(html.matches(r#"class="moss-article-title""#).count(), 1, "Got: {html}");
+        assert!(
+            html.contains(concat!(
+                r#"<h1 class="moss-article-title">Contact</h1>"#,
+                "\n",
+                r#"<div class="moss-byline">"#
+            )),
+            "byline directly under the injected title. Got: {html}"
+        );
+        let byline_at = html.find(r#"class="moss-byline""#).unwrap();
+        let grid_at = html.find(r#"class="moss-grid""#).expect("grid renders");
+        assert!(byline_at < grid_at, "byline above the grid. Got: {html}");
+        assert!(html.contains(r#"<h1 id="other">Other</h1><p>Text.</p>"#), "grid h1 unchanged. Got: {html}");
+    }
+
+    /// A heading in the normal flow keeps the byline directly under it, and a
+    /// page with no body heading keeps it at the top of the content.
+    #[test]
+    fn a_byline_is_unchanged_without_a_heading_in_a_grid_cell() {
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+        homepage.byline = vec!["Costume Design".to_string()];
+        let byline = r#"<div class="moss-byline"><div class="moss-byline-row">Costume Design</div></div>"#;
+
+        homepage.html_content = "<h1>Ada Harbor</h1>\n<div class=\"moss-grid\" data-columns=\"1\"><div class=\"moss-grid-card\"><p>Cell.</p></div></div>".to_string();
+        let html = render_page(Some(&homepage), &[homepage.clone()], true);
+        assert!(
+            html.contains(&format!("<h1>Ada Harbor</h1>\n{byline}\n<div class=\"moss-grid\"")),
+            "Got: {html}"
+        );
+
+        homepage.html_content = "<div class=\"moss-grid\" data-columns=\"1\"><div class=\"moss-grid-card\"><p>Cell.</p></div></div>".to_string();
+        let html = render_page(Some(&homepage), &[homepage.clone()], true);
+        assert!(html.contains(&format!("{byline}<div class=\"moss-grid\"")), "Got: {html}");
+    }
+
     /// A site whose `logo:` names a raster file renders the logo with that
     /// file's size, so the header does not move when the image arrives.
     #[test]

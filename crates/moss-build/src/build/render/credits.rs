@@ -243,6 +243,49 @@ pub fn splice_byline_at_page_head(
     crate::build::markdown::html_post::splice_after_title_block(&content, &byline)
 }
 
+/// Byte offset just past the `</h1>` of the first heading, when the body opens
+/// with a `:::grid` block and that heading sits inside it. A heading moved into
+/// a cell is still the page's title, so the title block follows it there.
+pub(crate) fn first_h1_end_in_leading_grid(body: &str) -> Option<usize> {
+    let body_start = body.len() - body.trim_start().len();
+    let rest = &body[body_start..];
+    if !(rest.starts_with("<div class=\"moss-grid\"")
+        || rest.starts_with("<div class=\"moss-grid "))
+    {
+        return None;
+    }
+    let h1_close = rest.find("</h1>")? + "</h1>".len();
+    // The grid's own closing `</div>` is where its `<div>` depth returns to zero.
+    let mut depth = 0usize;
+    let mut at = 0;
+    loop {
+        let open = match (rest[at..].find("<div "), rest[at..].find("<div>")) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        let close = rest[at..].find("</div>");
+        let (i, opens) = match (open, close) {
+            (Some(o), Some(c)) if o < c => (o, true),
+            (_, Some(c)) => (c, false),
+            _ => return None,
+        };
+        at += i;
+        if at >= h1_close {
+            return Some(body_start + h1_close);
+        }
+        if opens {
+            depth += 1;
+            at += 4;
+        } else {
+            depth -= 1;
+            if depth == 0 {
+                return None;
+            }
+            at += 6;
+        }
+    }
+}
+
 /// The shared body of both renderers.
 fn render_rows(
     block_class: &str,
