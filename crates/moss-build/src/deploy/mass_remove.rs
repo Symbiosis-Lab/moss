@@ -238,6 +238,7 @@ mod tests {
             need: vec![],
             remove: page_paths(355),
             server_total: Some(366),
+            internal_remove: None,
         };
         let msg = check_mass_removal_for_diff(11, &diff, false).unwrap_err();
         assert!(
@@ -249,6 +250,7 @@ mod tests {
             need: vec![],
             remove: page_paths(355),
             server_total: None,
+            internal_remove: None,
         };
         let msg = check_mass_removal_for_diff(11, &old_server, false).unwrap_err();
         assert!(msg.contains("roughly"), "None must select the fallback: {msg}");

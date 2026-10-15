@@ -728,3 +728,14 @@ async fn upload_file_gives_up_after_bounded_attempts() {
         "expected 1 try + 3 retries then give up"
     );
 }
+
+#[test]
+fn sync_manifest_response_internal_remove_decides_whether_to_commit() {
+    let parse = |json: &str| serde_json::from_str::<SyncManifestResponse>(json).unwrap();
+    // Older server: field absent, nothing to do.
+    assert!(!parse(r#"{"need": [], "remove": []}"#).needs_commit());
+    assert!(!parse(r#"{"need": [], "remove": [], "internal_remove": 0}"#).needs_commit());
+    assert!(parse(r#"{"need": [], "remove": [], "internal_remove": 1}"#).needs_commit());
+    assert!(parse(r#"{"need": ["a.html"], "remove": []}"#).needs_commit());
+    assert!(parse(r#"{"need": [], "remove": ["a.html"]}"#).needs_commit());
+}

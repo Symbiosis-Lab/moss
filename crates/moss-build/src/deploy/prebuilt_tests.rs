@@ -382,3 +382,84 @@ async fn a_self_healed_prebuilt_file_corrects_its_manifest_entry_before_commit()
         "the stale pre-drift hash must not survive into the committed manifest: {body}"
     );
 }
+
+// ── A removal that only touched `_moss/` still publishes ────────────────────
+//
+// The server leaves `_moss/` paths out of `remove` (they are not wipe
+// evidence) and reports how many it left out as `internal_remove`. With
+// `need` and `remove` both empty the publish used to return "up to date"
+// without committing, so a theme file deleted from the build stayed live.
+
+/// Publish a one-file directory against a fake server whose sync answer is
+/// `sync_body`; returns whether the client sent a commit.
+async fn commit_sent_for_sync_answer(sync_body: &'static str) -> bool {
+    use tokio::net::TcpListener;
+
+    let _lock = PUBLISH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let prev_url = std::env::var("MOSS_SETA_URL").ok();
+
+    let project = tmp_dir();
+    let prebuilt = tmp_dir();
+    std::fs::write(prebuilt.path().join("index.html"), b"<html>same</html>").unwrap();
+
+    let listener = TcpListener::bind::<std::net::SocketAddr>("127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let addr = listener.local_addr().unwrap();
+    let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let seen = requests.clone();
+    let server = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let raw = crate::test_drain_http_request(&mut stream).await;
+            let line = String::from_utf8_lossy(&raw).lines().next().unwrap_or("").to_string();
+            seen.lock().unwrap().push(line.clone());
+            let json = |body: &str| {
+                format!(
+                    "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+            };
+            let resp = if line.contains("/generation") {
+                "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 2\r\n\r\n{}".to_string()
+            } else if line.contains("/sync") {
+                json(sync_body)
+            } else {
+                json(r#"{"url":"https://fake.mosspub.com","files_updated":1,"files_removed":0,"timestamp":1700000000}"#)
+            };
+            crate::test_respond_and_close(&mut stream, resp.as_bytes()).await;
+        }
+    });
+
+    std::env::set_var("MOSS_SETA_URL", format!("http://{addr}"));
+    let identity = Identity::generate().expect("generate identity");
+    let result = push_prebuilt(project.path(), prebuilt.path(), "fake-site", &identity, &silent()).await;
+    match prev_url {
+        Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+        None => std::env::remove_var("MOSS_SETA_URL"),
+    }
+    server.abort();
+    assert!(result.is_ok(), "{result:?}");
+    let sent = requests.lock().unwrap().iter().any(|l| l.contains("/commit"));
+    sent
+}
+
+#[tokio::test]
+async fn a_publish_whose_only_change_is_removed_internal_files_commits() {
+    assert!(
+        commit_sent_for_sync_answer(r#"{"need":[],"remove":[],"server_total":2,"internal_remove":1}"#).await,
+        "internal_remove > 0 must reach the generation swap"
+    );
+}
+
+#[tokio::test]
+async fn nothing_changed_does_not_commit() {
+    assert!(!commit_sent_for_sync_answer(r#"{"need":[],"remove":[],"server_total":2,"internal_remove":0}"#).await);
+}
+
+#[tokio::test]
+async fn an_older_server_without_internal_remove_does_not_commit() {
+    assert!(!commit_sent_for_sync_answer(r#"{"need":[],"remove":[]}"#).await);
+}

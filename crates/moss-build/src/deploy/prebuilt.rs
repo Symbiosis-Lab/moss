@@ -231,7 +231,7 @@ async fn push_prebuilt_inner(
         .await
         .map_err(|e| e.to_string())?;
 
-    if diff.need.is_empty() && diff.remove.is_empty() {
+    if !diff.needs_commit() {
         // Complete comes from `with_publish_guard` on the way out.
         return Ok(PushResult::Success {
             url: crate::deploy::view_site_url(&folder_str, site_id, env.clone()),
