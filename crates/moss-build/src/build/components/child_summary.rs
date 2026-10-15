@@ -89,10 +89,10 @@ pub fn render_with_sort(
         // Folder: the count is always shown, on every sort axis — a bare
         // folder's own `location:` is not a date to sit beside, but its own
         // `date:`, if any, is exactly that.
-        (Some(count), _) => {
-            let count_label = crate::i18n::article_count_label(lang, count, typesetting);
-            let text = child_list::meta_text(props.date_display.as_deref(), None, props.place.as_deref(), Some(&count_label), None);
-            format!(r#"<div class="moss-card-meta">{}</div>"#, text)
+        (Some(_), _) => {
+            let count_label = props.count_label(lang, typesetting);
+            let text = child_list::meta_text(props.date_display.as_deref(), None, props.place.as_deref(), count_label.as_deref(), None);
+            if text.is_empty() { String::new() } else { format!(r#"<div class="moss-card-meta">{}</div>"#, text) }
         }
         (None, axis) if axis.shows_date() && date_merged_into_kicker => {
             // The kicker carries the year; the meta slot keeps the event's

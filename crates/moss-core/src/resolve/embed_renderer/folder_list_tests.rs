@@ -185,3 +185,16 @@ fn caption_drops_the_placement_words_it_shared_a_segment_with() {
     assert_eq!(p.caption.as_deref(), Some("cover"));
     assert_eq!(p.placement.width, Some("wide"));
 }
+
+#[test]
+fn marker_roundtrips_count_text_with_separators() {
+    use crate::frontmatter_union::ChildrenCount;
+    let text = "{n} production|{n} productions, all";
+    let p = FolderEmbedParams { count: Some(ChildrenCount(text.into())), ..Default::default() };
+    let m = emit_marker("/p/", "index.md", &p);
+    assert!(!m.contains(text), "separators must be encoded: {m}");
+    assert!(m.contains("count="), "{m}");
+    let hidden = FolderEmbedParams { count: Some(ChildrenCount(String::new())), ..Default::default() };
+    assert!(emit_marker("/p/", "index.md", &hidden).contains("|count=-->"));
+    assert!(!emit_marker("/p/", "index.md", &FolderEmbedParams::default()).contains("count"));
+}

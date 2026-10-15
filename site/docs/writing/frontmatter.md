@@ -93,6 +93,7 @@ These fields control how a [[structure#^folder-page|folder page]] displays its c
 | `children_group` | string | `"none"` | Group by `"year"`, `"none"`, or `"upcoming"` |
 | `children_depth` | string | `"direct"` | `"direct"` (immediate children) or `"all"` (all descendants) |
 | `children_source` | string | (none) | Wikilink to folder whose children to show instead |
+| `children_count` | `false` or string | (none) | What the folder cards in this listing say they count. `false` hides it; text such as `"{n} productions"` replaces "N articles" (`{n}` is the number; the first `|` always splits a singular form, used for 1, from the plural, so `"{n} production|{n} productions"`; an empty form hides the count) |
 <!-- auto:end:frontmatter-children -->
 
 `children_source` takes a wikilink target, e.g. `children_source: "[[news]]"`.

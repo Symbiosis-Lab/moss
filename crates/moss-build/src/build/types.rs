@@ -404,6 +404,11 @@ pub struct ParsedDocument {
     /// when ITS OWN index page (the same `ParsedDocument`) has a cover —
     /// no special-casing needed, `cover` is already that page's field.
     pub children_covers: Option<String>,
+    /// What this listing's folder cards say they count; absent = the built-in
+    /// "N articles" text. Left out of the exported bindings: the listing
+    /// reads it, no UI does.
+    #[specta(skip)]
+    pub children_count: Option<moss_core::frontmatter_union::ChildrenCount>,
     /// Internal: marks documents whose `children_*` fields came from the deprecated
     /// `sidebar:` alias. Sidebar callsite uses this to apply the legacy default-3
     /// limit on cross-ref. Skip-serialize so it never round-trips into stored frontmatter.

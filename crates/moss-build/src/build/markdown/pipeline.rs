@@ -204,6 +204,14 @@ fn frontmatter_invalid_yaml_warning(
     })
 }
 
+/// A `children_count:` text without `{n}` still builds, but every folder card
+/// then shows the same words whatever it holds.
+fn children_count_warning(file_path: &str, count: Option<&moss_core::frontmatter_union::ChildrenCount>) -> Option<String> {
+    count
+        .filter(|c| c.lacks_placeholder())
+        .map(|_| format!("[{file_path}] frontmatter: children_count has no {{n}}, so every folder card shows the same text"))
+}
+
 /// Warnings for frontmatter keys that name another generator's field.
 ///
 /// Unknown keys are normally silent, rightly — templates and plugins read their
@@ -488,6 +496,9 @@ pub fn process_markdown_file(
                     continue;
                 }
                 crate::build::cli_output::cli_warn!("[{}] frontmatter: {}", file_path, w.message);
+            }
+            if let Some(warning) = children_count_warning(file_path, fm.children_count.as_ref()) {
+                crate::build::cli_output::log_warn_problem!("{}", warning);
             }
             // Keys another generator uses for a job moss also does. See
             // `foreign_frontmatter_warnings` for why these are not silent.
@@ -1379,6 +1390,7 @@ pub fn process_markdown_file(
     let children_limit = frontmatter.children_limit;
     let children_more = frontmatter.children_more;
     let children_covers = frontmatter.children_covers;
+    let children_count = frontmatter.children_count;
     let from_sidebar_alias = frontmatter._from_sidebar_alias;
     let series = frontmatter.series;
     let breadcrumb = frontmatter.breadcrumb;
@@ -1489,6 +1501,7 @@ pub fn process_markdown_file(
         children_limit,
         children_more,
         children_covers,
+        children_count,
         from_sidebar_alias,
         series,
         breadcrumb,

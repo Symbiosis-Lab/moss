@@ -195,9 +195,18 @@ pub struct ChildItemProps {
     /// (`ParsedDocument::section`), published on the card as
     /// `--moss-section-color` (with its readable text variants) so a theme can tint cards by section.
     pub section_color: Option<crate::build::types::SectionAccent>,
+    /// The listing's `children_count:` setting, applied to a folder's count.
+    pub count_setting: Option<moss_core::frontmatter_union::ChildrenCount>,
 }
 
 impl ChildItemProps {
+    /// A folder card's count text, or `None` for a leaf or a listing that
+    /// hides the count. The one place the setting is applied.
+    pub(crate) fn count_label(&self, lang: crate::i18n::Language, typesetting: Option<&str>) -> Option<String> {
+        let count = self.child_count?;
+        crate::i18n::card_count_label(lang, count, typesetting, self.count_setting.as_ref())
+    }
+
     /// The card's ` style="--moss-section-color: …"` attribute, or nothing for
     /// a page outside any coloured section.
     pub(crate) fn section_style_attr(&self) -> String {
@@ -421,6 +430,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         kicker: crate::build::scan::page_map::publisher(&doc.raw_frontmatter),
         permalink,
         url_path: doc.url_path.clone(),
+        count_setting: None,
         place: doc.place_names.clone().or_else(|| {
             // An event's place is shown even when it names no place page.
             doc.event.as_ref()?;
@@ -524,24 +534,27 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
     let event = event_card_links(props, lang);
     let event = event.as_ref();
 
-    if let Some(count) = props.child_count {
-        let count_label = crate::i18n::article_count_label(lang, count, typesetting);
-        let count_text = meta_text(props.date_display.as_deref(), None, props.place.as_deref(), Some(&count_label), None);
+    if props.child_count.is_some() {
+        let count_label = props.count_label(lang, typesetting);
+        let count_text = meta_text(props.date_display.as_deref(), None, props.place.as_deref(), count_label.as_deref(), None);
+        let meta_span = |class: &str| {
+            if count_text.is_empty() { String::new() } else { format!(r#"<span class="{}">{}</span>"#, class, count_text) }
+        };
 
         if let Some(ref desc) = props.description {
             // Folder WITH description: title + count suffix, description below
             let (open, title, close) = row_parts(props, event, "moss-prefix-link moss-folder-link", "moss-prefix-link-title");
             format!(
-                r#"<div class="moss-card moss-folder-item">{}{}<span class="moss-prefix-link-suffix">{}</span>{}<p class="moss-folder-description">{}</p></div>"#,
-                open, title, count_text, close,
+                r#"<div class="moss-card moss-folder-item">{}{}{}{}<p class="moss-folder-description">{}</p></div>"#,
+                open, title, meta_span("moss-prefix-link-suffix"), close,
                 crate::build::page::meta::render_description_html(desc)
             )
         } else {
             // Folder WITHOUT description: count in prefix slot
             let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
             format!(
-                r#"<div class="moss-card">{}<span class="moss-prefix-link-prefix">{}</span>{}{}</div>"#,
-                open, count_text, title, close
+                r#"<div class="moss-card">{}{}{}{}</div>"#,
+                open, meta_span("moss-prefix-link-prefix"), title, close
             )
         }
     } else if let Some(ref date_raw) = props.date_raw {

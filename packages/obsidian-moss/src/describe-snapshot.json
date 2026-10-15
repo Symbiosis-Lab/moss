@@ -4318,6 +4318,14 @@
       "skip_schema": false
     },
     {
+      "name": "children_count",
+      "type": "one_of",
+      "widget": "union",
+      "description": "What this listing's folder cards say they count. false hides the count; text replaces \"N articles\", with {n} standing for the number, e.g. \"{n} productions\". Put a singular form first, split by |, to use it when the number is 1 (the first | always splits; an empty form hides the count): \"{n} production|{n} productions\". Applies to the cards this page lists, not to the folder's own page.",
+      "group": "Child Styles",
+      "skip_schema": false
+    },
+    {
       "name": "children_more",
       "type": "string",
       "widget": "text-input",

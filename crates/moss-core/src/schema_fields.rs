@@ -186,6 +186,23 @@ const CHILDREN_MEMBERS: &[BuiltinField] = &[
     },
 ];
 
+/// Union members for `children_count`: `false` to hide the count, or the
+/// text to show instead.
+const CHILDREN_COUNT_MEMBERS: &[BuiltinField] = &[
+    BuiltinField {
+        name: "",
+        field_type: FieldType::Boolean,
+        widget: Widget::Checkbox,
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        ..FIELD_DEFAULTS
+    },
+];
+
 /// Union members for `series`: a boolean flag OR an ordered list of wikilinks
 /// giving the explicit child order.
 const SERIES_MEMBERS: &[BuiltinField] = &[
@@ -996,6 +1013,18 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "Cap the feed at N items. If truncated, a 'More \u{2192}' link is added. Absent = no cap.",
         label: Some("Limit"),
         label_key: "chip.children_limit.label",
+        group: "Child Styles",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "children_count",
+        field_type: FieldType::OneOf,
+        widget: Widget::Union,
+        one_of_members: Some(CHILDREN_COUNT_MEMBERS),
+        score: 88,
+        description: "What this listing's folder cards say they count. false hides the count; text replaces \"N articles\", with {n} standing for the number, e.g. \"{n} productions\". Put a singular form first, split by |, to use it when the number is 1 (the first | always splits; an empty form hides the count): \"{n} production|{n} productions\". Applies to the cards this page lists, not to the folder's own page.",
+        label: Some("Card Count"),
+        label_key: "chip.children_count.label",
         group: "Child Styles",
         ..FIELD_DEFAULTS
     },

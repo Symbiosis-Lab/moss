@@ -20,6 +20,7 @@ fn blank() -> ChildItemProps {
         place: None,
         when_html: None,
         section_color: None,
+        count_setting: None,
     }
 }
 

@@ -4452,3 +4452,14 @@ fn a_blank_title_or_description_takes_the_inferred_fact_and_a_written_one_wins()
     let unlisted = parse("---\ntitle: \"\"\n---\nBody paragraph.\n");
     assert_ne!(unlisted.title, "Derived title");
 }
+
+#[test]
+fn children_count_text_without_a_placeholder_warns() {
+    use moss_core::frontmatter_union::ChildrenCount;
+    let warning = children_count_warning("index.md", Some(&ChildrenCount("productions".into())))
+        .expect("a text with no {n} warns");
+    assert!(warning.contains("index.md") && warning.contains("children_count"), "{warning}");
+    assert_eq!(children_count_warning("index.md", Some(&ChildrenCount("{n} productions".into()))), None);
+    assert_eq!(children_count_warning("index.md", Some(&ChildrenCount(String::new()))), None);
+    assert_eq!(children_count_warning("index.md", None), None);
+}

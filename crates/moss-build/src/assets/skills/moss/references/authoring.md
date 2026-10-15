@@ -499,6 +499,12 @@ children_limit: 10
 
 The automatic "More" link only appears on a **cross-folder** feed that actually truncated something. A `children_limit` on a page listing its own children truncates silently with no "More" link, because linking back to the page you are already on is meaningless. So always name the target folder when you want the link to appear.
 
+A listing's folder cards say how many pages they hold ("46 articles"). `children_count` on the listing page changes that text or hides it; `{n}` is the number, and the first `|` always splits the form used for 1 from the plural (there is no way to write a literal `|`); an empty form hides the count.
+
+```yaml
+children_count: "{n} production|{n} productions"   # or false to hide it
+```
+
 ### Moved and removed pages
 
 Every page carries a `uid:`, and each build compares that uid's current address against the one recorded at the last deploy — an address that changed gets an automatic redirect, a small page at the old address forwarding to the new one. Never hand-write one of these: it isn't tracked as a redirect, so moss cannot retire it later, and a stray one at the site root gets crawled and can leak into the sitemap. The comparison is against what was actually *deployed*, so a first port with no deploy on record yet gets no redirect for anything renamed before that first publish — only a move made after at least one deploy is caught automatically. To keep the old address of a page you move before the first deploy, as a port's restructure does, add the old address to `.moss/data/redirects.json` as the next paragraph describes; that is the hand-declared redirect this paragraph's warning does not cover.

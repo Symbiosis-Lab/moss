@@ -38,6 +38,7 @@ use maps::place_map_with_placement;
 use std::path::Path;
 
 use moss_core::asset_snapshot::AssetSnapshot;
+use moss_core::frontmatter_union::ChildrenCount;
 use moss_core::resolve::embed_renderer::folder_list::{marker_decode, LAZY_CARDS_TOKEN, MARKER_END, MARKER_FOLDER_LIST};
 use moss_core::resolve::embed_renderer::Sizing;
 use moss_core::resolve::title_params::TitleParams;
@@ -85,6 +86,8 @@ struct ParsedMarker<'a> {
     /// both flow through `FolderEmbedParams::more` (moss-core) into this one
     /// marker field, so the render side doesn't need to know which named it.
     more: Option<String>,
+    /// `children_count:` — what the listing's folder cards say they count.
+    count: Option<moss_core::frontmatter_union::ChildrenCount>,
     /// The listing's own width / float / size, read off the embed pothole.
     placement: moss_core::media::Placement,
     /// Caption for the listing, rendered on the figure that wraps it.
@@ -134,6 +137,7 @@ fn parse_marker_body(body: &str) -> Option<ParsedMarker<'_>> {
                 "group" => out.group = Some(v.trim().to_string()),
                 "size" => out.size = Some(v.trim().to_string()),
                 "more" => out.more = Some(marker_decode(v.trim())),
+                "count" => out.count = Some(ChildrenCount(marker_decode(v.trim()))),
                 "covers" => out.covers = Some(v.trim()),
                 "width" => out.placement.width = moss_core::media::match_width_token(v.trim()),
                 "align" => {
@@ -397,6 +401,7 @@ pub(crate) fn generate_children(
     is_embed: bool,
     placement: &moss_core::media::Placement,
     lazy_cards: bool,
+    count: Option<&ChildrenCount>,
     now: chrono::NaiveDateTime,
 ) -> String {
     if folder_docs.is_empty() {
@@ -421,6 +426,7 @@ pub(crate) fn generate_children(
             // `props_for_document` (frontmatter, then the first byline row) and
             // never from the body excerpt, like the `:::grid` card it shares a
             // renderer with.
+            props.count_setting = count.cloned();
             if style != "grid" {
                 props.description = crate::build::page::meta::resolve_page_description(
                     crate::build::components::child_list::explicit_card_text(doc).as_deref(),
@@ -1416,6 +1422,7 @@ fn render_one(
             is_embed,
             &container_placement,
             parsed.lazy_cards,
+            parsed.count.as_ref(),
             now,
         )
     };
@@ -1610,6 +1617,7 @@ pub fn synthesize_children_marker(
         // Empty-string guard matches the embed grammar's own `more:`
         // key, which never carries an empty value either.
         more: doc.children_more.clone().filter(|s| !s.is_empty()),
+        count: doc.children_count.clone(),
         scope_default_tree: root_default_mode,
         exclude_nav: root_default_mode,
         // A frontmatter listing has no pothole to read placement or a

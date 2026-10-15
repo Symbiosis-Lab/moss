@@ -393,6 +393,9 @@ pub struct FrontMatter {
     /// Listing filter: "only" keeps pages that have a cover. Applied after
     /// flattening and before `children_limit`. Absent = no filter.
     pub children_covers: Option<String>,
+    /// What this listing's folder cards say they count: `false` hides it, a
+    /// string replaces the text (see [`crate::frontmatter_union::ChildrenCount`]).
+    pub children_count: Option<crate::frontmatter_union::ChildrenCount>,
     /// Internal: marks frontmatter that came from the deprecated `sidebar:` alias.
     /// Used by the sidebar callsite to apply the legacy default-3 limit on cross-ref.
     /// Skip-serialize so the form doesn't round-trip the synthetic flag back into the file.
@@ -1091,6 +1094,15 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                 },
                 "children_limit" => frontmatter.children_limit = value.parse().ok(),
                 "children_more" => frontmatter.children_more = Some(value.to_string()),
+                "children_count" => {
+                    use crate::frontmatter_union::ChildrenCount;
+                    let unquoted = value.trim_matches(|c| c == '\'' || c == '"');
+                    frontmatter.children_count = match unquoted {
+                        "true" => None,
+                        "false" => Some(ChildrenCount(String::new())),
+                        text => Some(ChildrenCount(text.to_string())),
+                    };
+                }
                 "children_covers" => match value {
                     "only" => frontmatter.children_covers = Some(value.to_string()),
                     _ => eprintln!(
@@ -1312,6 +1324,40 @@ mod project_typed_tests {
         assert_eq!(fm.title.as_deref(), Some("Hello"));
         assert_eq!(fm.date.as_deref(), Some("2025-05-28"));
         assert!(warnings.is_empty(), "clean frontmatter yields no warnings");
+    }
+
+    #[test]
+    fn project_typed_children_count_forms() {
+        use crate::frontmatter_union::ChildrenCount;
+        use serde_yaml::Value;
+        let (fm, w) = project_typed(&map_of(&[("children_count", Value::Bool(false))]));
+        assert_eq!(fm.children_count, Some(ChildrenCount(String::new())));
+        assert!(w.is_empty());
+        let (fm, w) = project_typed(&map_of(&[("children_count", Value::String("{n} x".into()))]));
+        assert_eq!(fm.children_count, Some(ChildrenCount("{n} x".into())));
+        assert!(w.is_empty());
+    }
+
+    #[test]
+    fn project_typed_children_count_of_another_type_warns_and_is_ignored() {
+        use serde_yaml::Value;
+        let m = map_of(&[
+            ("title", Value::String("T".into())),
+            ("children_count", Value::Number(serde_yaml::Number::from(3u64))),
+        ]);
+        let (fm, w) = project_typed(&m);
+        assert_eq!(fm.children_count, None);
+        assert_eq!(fm.title.as_deref(), Some("T"));
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert_eq!(w[0].key, "children_count");
+    }
+
+    #[test]
+    fn simplified_children_count() {
+        use crate::frontmatter_union::ChildrenCount;
+        let parse = |v: &str| parse_simplified_frontmatter(&format!("children_count: {v}\n---\nbody")).0.children_count;
+        assert_eq!(parse("false"), Some(ChildrenCount(String::new())));
+        assert_eq!(parse("\"{n} productions\""), Some(ChildrenCount("{n} productions".into())));
     }
 
     #[test]

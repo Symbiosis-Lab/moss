@@ -192,6 +192,27 @@ pub fn article_count_label(lang: Language, count: usize, typesetting: Option<&st
     }
 }
 
+/// A folder card's count text under the listing's `children_count:` setting,
+/// or `None` when it hides the count. No setting is the built-in
+/// [`article_count_label`]; a custom text takes its `{n}` in the same
+/// numerals the built-in one would use.
+pub fn card_count_label(
+    lang: Language,
+    count: usize,
+    typesetting: Option<&str>,
+    setting: Option<&moss_core::frontmatter_union::ChildrenCount>,
+) -> Option<String> {
+    let Some(setting) = setting else {
+        return Some(article_count_label(lang, count, typesetting));
+    };
+    let number = if use_cjk_numerals(typesetting, lang) {
+        numerals::to_chinese_numeral(count)
+    } else {
+        count.to_string()
+    };
+    setting.render(count, &number)
+}
+
 /// The one predicate that decides whether a piece of UI chrome is written in
 /// Chinese numerals: a vertical-typesetting page in a CJK language.
 ///

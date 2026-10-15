@@ -90,9 +90,7 @@ fn render_item(
     // `child_list::meta_text`, which also HTML-escapes the result (this slot
     // used to print the count unescaped, safe only because it was always
     // machine-generated text).
-    let count_label = props
-        .child_count
-        .map(|count| i18n::article_count_label(lang, count, typesetting));
+    let count_label = props.count_label(lang, typesetting);
     let count_text = super::child_list::meta_text(
         props.date_display.as_deref(),
         props.when_html.as_deref(),
@@ -213,12 +211,20 @@ fn render_item(
         }
     };
 
+    // A folder card that hides its count and has nothing else to say gets no
+    // meta element; every other card keeps its (possibly empty) slot.
+    let meta_html = if props.child_count.is_some() && count_text.is_empty() {
+        String::new()
+    } else {
+        format!(r#"<span class="moss-card-meta">{}</span>"#, count_text)
+    };
+
     format!(
-        r#"{}{}<div class="moss-card-content">{}<span class="moss-card-meta">{}</span>{}{}{}</div>{}"#,
+        r#"{}{}<div class="moss-card-content">{}{}{}{}{}</div>{}"#,
         open,
         cover_html,
         kicker_html,
-        count_text,
+        meta_html,
         title_html,
         description_html,
         actions_html,
