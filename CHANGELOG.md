@@ -89,6 +89,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A page in a language folder (`zh-hant/notes/trip.md`) now pairs with the page at the same path in the default language (`notes/trip.md`) without a `translationKey`: its language switch, `hreflang` links (one per language) and breadcrumb point at its twin. Where a page does carry a `translationKey`, the key wins over the path for that language.
 - A theme can set `--moss-footer-end` without a warning.
 - A folder's "Download calendar · Subscribe to calendar" links now follow the listing they describe. They used to close the page, after whatever came last, and on a home page with its listing off they pointed at a calendar of the whole site. Now an embedded `![[folder/]]` listing carries its own folder's links while that folder has an event that has not ended (once per page, after the last embed of that folder), a page with `children: false` prints no folder links at its end, and a folder page keeps them after its own listing. The calendar files and their addresses are unchanged.
 - A page whose share image is a plate cover (a picture too tall or too wide for a social platform's crop) keeps its share card when its folder is copied or synced, where it used to get a new card and a new share-image address on every publish from the new location. The card's address is derived from the picture's bytes now, so each plate card changes address once, on the first build after upgrading. A social platform that cached the old address keeps showing the old card until it refetches.

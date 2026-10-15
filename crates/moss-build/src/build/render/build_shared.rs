@@ -158,8 +158,15 @@ impl FolderIndexPlan {
             .filter(|d| d.source_path.is_some())
             .filter_map(|d| d.url_path.strip_suffix("/index.html").map(str::to_string))
             .collect();
+        // Follows authored keys, not `translations`, so pairing by path never
+        // changes which pages are built. The breadcrumb's translation-root test
+        // (`trail_tail` in components/nav.rs) reads linked translations instead,
+        // because it only affects presentation.
+        let home_key = documents.iter()
+            .find(|d| d.url_path == "index.html")
+            .and_then(|d| d.translation_key.as_deref());
         let translation_roots: HashSet<&str> = documents.iter()
-            .filter(|d| d.translations.iter().any(|t| t.url_path == "index.html"))
+            .filter(|d| home_key.is_some() && d.translation_key.as_deref() == home_key)
             .filter_map(|d| d.url_path.strip_suffix("/index.html"))
             .filter(|root| !root.contains('/'))
             .collect();

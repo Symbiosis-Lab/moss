@@ -1252,10 +1252,10 @@ pub fn generate_blocking_content_for_build(
                 .iter()
                 .enumerate()
                 .map(|(i, doc)| {
-                    // Use source_path (original file path) for directory grouping,
-                    // not url_path, because lang-prefix directories (e.g., zh-hans/)
-                    // would prevent translations from being grouped together.
-                    let directory = doc.source_path.as_ref()
+                    // Source path minus a leading language folder, so `a/x.md` and
+                    // `zh-hans/a/x.md` share a directory (url_path keeps the folder).
+                    let directory = doc.source_path.as_deref()
+                        .map(|sp| &sp[moss_core::home::lang_tree_prefix(sp).map_or(0, |p| p.len() + 1)..])
                         .and_then(|sp| std::path::Path::new(sp).parent())
                         .and_then(|p| p.to_str())
                         .map(|s| s.to_string())

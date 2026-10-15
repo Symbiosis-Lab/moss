@@ -735,6 +735,9 @@ fn trail_tail(
 
     // Detect translation root: if the first folder's index is a translation of the
     // root homepage, skip it from breadcrumb segments and use its URL as home.
+    // This reads linked translations (keyed or by path) on purpose: it only
+    // shapes presentation. `FolderIndexPlan` decides from authored keys so the
+    // set of generated pages never moves.
     let (effective_parts, home_url) = if !folder_parts.is_empty() {
         let first_folder_index = format!("{}/index.html", folder_parts[0]);
         let is_translation_root = all_docs.iter()

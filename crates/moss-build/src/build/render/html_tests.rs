@@ -9032,6 +9032,8 @@ mod homepage_translation_tests {
     fn localized_root_title_names_authored_and_synthetic_pages() {
         let (test_dir, _cleanup) = create_test_dir();
         let output_dir = test_dir.join(".moss/build/staging");
+        // The tree's home is not named `index`, so it is not the translation of the
+        // site home: a tree that is one gets no generated folder pages.
         fs::create_dir_all(test_dir.join("zh-hant/guide")).unwrap();
         fs::write(
             test_dir.join("index.md"),
@@ -9039,7 +9041,7 @@ mod homepage_translation_tests {
         )
         .unwrap();
         fs::write(
-            test_dir.join("zh-hant/index.md"),
+            test_dir.join("zh-hant/README.md"),
             "---\ntitle: 青苔\nlang: zh-hant\n---\n# 首頁\n",
         )
         .unwrap();
@@ -9070,7 +9072,12 @@ mod homepage_translation_tests {
         let synthetic = fs::read_to_string(output_dir.join("zh-hant/guide/index.html"))
             .expect("synthetic Traditional Chinese folder page");
         assert!(synthetic.contains(" - 青苔</title>"));
-        assert!(synthetic.contains(r#"class="site-name"#) && synthetic.contains(">青苔</a>"));
+        // The tree pairs with the site home by path, so its pages get the
+        // translation-tree breadcrumb, as a keyed tree's do.
+        assert!(
+            synthetic.contains(r#"<a href="/zh-hant/" class="breadcrumb-segment""#)
+                && synthetic.contains(r#"<span class="breadcrumb-label">青苔</span>"#)
+        );
         assert!(!synthetic.contains(" - moss</title>"));
     }
 
