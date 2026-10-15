@@ -1357,6 +1357,10 @@ fn build_inner(
         cfg.as_ref().unwrap_or(&crate::config::ConfigFile::empty()),
         crate::i18n::Language::from_code(&site_lang).unwrap_or(crate::i18n::Language::En),
     );
+    let (field_decls, field_problems) = cfg.as_ref().map(|c| c.field_decls()).unwrap_or_default();
+    for problem in &field_problems {
+        crate::build::cli_output::log_warn_problem!("{problem}");
+    }
     let places_toml_path = paths.places();
     input_evidence.require(&places_toml_path, super::cloud_ledger::InputRole::GeneratedData);
     let (places_toml_stat, places_read) =
@@ -1502,6 +1506,7 @@ fn build_inner(
         // attached first.
         term_kinds: kinds,
         term_nav: cfg.as_ref().map(|c| c.terms_nav()).unwrap_or_default(),
+        field_decls,
         place_maps,
         incremental,
         derivations: derived.clone(),

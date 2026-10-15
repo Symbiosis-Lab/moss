@@ -300,6 +300,32 @@ fn schema_frontmatter_warnings(
         .collect()
 }
 
+/// The site's declared fields (`[fields.*]` in `.moss/config.toml`) that apply
+/// to this page and carry a value, each parsed once here. A value that does not
+/// fit its type is a warning naming the file and the field. `file_path` is the
+/// site-relative source path, which is what a declaration's `in` scope matches.
+fn declared_fields(
+    file_path: &str,
+    frontmatter: &std::collections::HashMap<String, serde_yaml::Value>,
+    decls: &[moss_core::fields::FieldDecl],
+) -> (std::collections::BTreeMap<String, moss_core::fields::TypedValue>, Vec<String>) {
+    let mut values = std::collections::BTreeMap::new();
+    let mut warnings = Vec::new();
+    for decl in decls.iter().filter(|decl| moss_core::fields::applies_to(decl, file_path)) {
+        let Some(raw) = frontmatter.get(&decl.name) else { continue };
+        let Ok(json) = serde_json::to_value(raw) else { continue };
+        match moss_core::fields::parse_value(decl, &json) {
+            Ok(value) => {
+                values.insert(decl.name.clone(), value);
+            }
+            Err(reason) => {
+                warnings.push(format!("[{file_path}] frontmatter: field '{}': {reason}", decl.name));
+            }
+        }
+    }
+    (values, warnings)
+}
+
 /// The `[site]` answers that change how a page's markdown renders, handed to
 /// [`process_markdown_file`] as one value.
 ///
@@ -326,6 +352,8 @@ pub struct SiteMarkdown<'a> {
     /// (`render::config::effective_typesetting`); a vertical page's body
     /// images declare their `sizes=` against the column height.
     pub typesetting: Option<&'a str>,
+    /// The parse cache fingerprint hashes this value, so a changed declaration invalidates cached parses.
+    pub fields: &'a [moss_core::fields::FieldDecl],
 }
 
 /// Math, hard line breaks and heading anchors on — their absent-key answers
@@ -340,6 +368,7 @@ impl Default for SiteMarkdown<'_> {
             hard_line_breaks: true,
             heading_anchors: true,
             typesetting: None,
+            fields: &[],
         }
     }
 }
@@ -449,6 +478,7 @@ pub fn process_markdown_file(
     // suffix split is additive. Used below to make the source-line-offset search
     // skip the frontmatter region (so a body line that happens to equal a
     // frontmatter value line is not matched too early). 0 when no frontmatter.
+    let mut declared = std::collections::BTreeMap::new();
     let (mut frontmatter, markdown_content_raw, raw_frontmatter, frontmatter_line_count) =
         if is_simplified_frontmatter(content) {
             let (fm, body) = parse_simplified_frontmatter(content);
@@ -515,6 +545,11 @@ pub fn process_markdown_file(
             for warning in schema_frontmatter_warnings(file_path, &parsed.frontmatter) {
                 crate::build::cli_output::cli_warn!("{}", warning);
             }
+            let (fields, field_warnings) = declared_fields(file_path, &parsed.frontmatter, site.fields);
+            for warning in field_warnings {
+                crate::build::cli_output::cli_warn!("{}", warning);
+            }
+            declared = fields;
             // Body reconciliation: gray_matter's `result.content`
             // — which the downstream pipeline + every snapshot fixture were built
             // against — strips leading blank lines and drops the trailing newline,
@@ -1437,6 +1472,7 @@ pub fn process_markdown_file(
     };
 
     Ok(ParsedDocument {
+        declared,
         card_credits: None,
         label,
         nav_label,

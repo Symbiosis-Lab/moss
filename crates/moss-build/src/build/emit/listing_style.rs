@@ -249,6 +249,7 @@ fn record(doc: &ParsedDocument, listing_dir: &[String], with_body: bool) -> Page
     // The folder the page sits in, inside the listed folder.
     own_dir.pop();
     let folder = if own_dir.starts_with(listing_dir) { own_dir[listing_dir.len()..].join("/") } else { String::new() };
+    let frontmatter = resolved_frontmatter(doc);
     PageRecord {
         title: doc.title.clone(),
         url_path: doc.url_path.clone(),
@@ -259,7 +260,8 @@ fn record(doc: &ParsedDocument, listing_dir: &[String], with_body: bool) -> Page
             .iter()
             .map(|t| TranslationRecord { lang: t.lang_tag.clone(), url_path: t.url_path.clone() })
             .collect(),
-        frontmatter: resolved_frontmatter(doc),
+        frontmatter,
+        fields: doc.declared.iter().filter_map(|(name, value)| Some((name.clone(), serde_json::to_value(value).ok()?))).collect(),
         html: if with_body { rebase_html(&without_title(&doc.html_content), &doc.url_path, listing_dir) } else { String::new() },
         folder,
     }

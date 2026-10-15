@@ -206,3 +206,85 @@ fn a_redirects_value_that_is_not_a_table_is_an_advisory_not_a_crash() {
     assert!(cfg.declared_redirects().is_empty());
     assert_eq!(crate::build::cli_output::take_cli_problems(), 1);
 }
+
+#[test]
+fn field_decls_reads_a_choice_with_a_label_table() {
+    let config = ConfigFile::parse(
+        "[fields.kind]\ntype = \"choice\"\nof = { Building = \"Built\", Service = \"Founded\" }\nplace = \"eyebrow\"\nin = [\"Housing\"]\n",
+    )
+    .unwrap();
+    let (decls, problems) = config.field_decls();
+    assert!(problems.is_empty(), "got: {problems:?}");
+    assert_eq!(decls.len(), 1);
+    let kind = &decls[0];
+    assert_eq!(kind.name, "kind");
+    assert_eq!(kind.kind, moss_core::fields::FieldKind::Choice);
+    assert_eq!(
+        kind.choices,
+        vec![
+            moss_core::fields::Choice { value: "Building".into(), label: "Built".into() },
+            moss_core::fields::Choice { value: "Service".into(), label: "Founded".into() },
+        ]
+    );
+    assert_eq!(kind.place, Some(moss_core::fields::Place::Eyebrow));
+    assert_eq!(kind.scope, vec!["Housing".to_string()]);
+}
+
+#[test]
+fn field_decls_choice_from_a_list_labels_each_value_with_itself() {
+    let config = ConfigFile::parse("[fields.kind]\ntype = \"choice\"\nof = [\"Building\", \"Service\"]\n").unwrap();
+    let (decls, problems) = config.field_decls();
+    assert!(problems.is_empty(), "got: {problems:?}");
+    assert_eq!(
+        decls[0].choices,
+        vec![
+            moss_core::fields::Choice { value: "Building".into(), label: "Building".into() },
+            moss_core::fields::Choice { value: "Service".into(), label: "Service".into() },
+        ]
+    );
+}
+
+#[test]
+fn field_decls_unknown_type_is_a_problem_and_dropped() {
+    let config = ConfigFile::parse("[fields.size]\ntype = \"integer\"\n").unwrap();
+    let (decls, problems) = config.field_decls();
+    assert!(decls.is_empty());
+    assert_eq!(problems.len(), 1, "got: {problems:?}");
+    assert!(problems[0].contains("[fields.size] has an unknown type \"integer\"; one of: text, number"), "{}", problems[0]);
+}
+
+#[test]
+fn field_decls_builtin_name_is_a_problem_and_dropped() {
+    let config = ConfigFile::parse("[fields.title]\ntype = \"text\"\n").unwrap();
+    let (decls, problems) = config.field_decls();
+    assert!(decls.is_empty());
+    assert_eq!(problems, vec!["[fields.title] is a moss field and cannot be redeclared".to_string()]);
+}
+
+#[test]
+fn field_decls_unknown_key_and_bad_place_keep_the_declaration() {
+    let config = ConfigFile::parse("[fields.years]\ntype = \"period\"\nsize = 3\n[fields.mood]\ntype = \"text\"\nplace = \"sidebar\"\n")
+        .unwrap();
+    let (decls, problems) = config.field_decls();
+    assert_eq!(decls.len(), 2, "both declarations are kept");
+    assert!(problems.iter().any(|p| p.contains("[fields.years] has an unknown key \"size\"")), "{problems:?}");
+    assert!(problems.iter().any(|p| p.contains("[fields.mood] has an unknown place")), "{problems:?}");
+    let mood = decls.iter().find(|d| d.name == "mood").unwrap();
+    assert_eq!(mood.place, None);
+}
+
+#[test]
+fn field_decls_choice_without_of_is_dropped() {
+    let config = ConfigFile::parse("[fields.kind]\ntype = \"choice\"\n").unwrap();
+    let (decls, problems) = config.field_decls();
+    assert!(decls.is_empty());
+    assert_eq!(problems.len(), 1, "{problems:?}");
+}
+
+#[test]
+fn field_decls_fields_that_is_not_a_table_of_tables_is_one_problem() {
+    let config = ConfigFile::parse("fields = \"kind\"\n").unwrap();
+    let (decls, problems) = config.field_decls();
+    assert!(decls.is_empty());
+    assert_eq!(problems.len(), 1);
+}

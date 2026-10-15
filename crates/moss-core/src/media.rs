@@ -275,11 +275,12 @@ impl MediaAttrs {
 /// Returns the inner text. If brackets are not present, returns the input
 /// unchanged.
 pub fn strip_wikilink(raw: &str) -> &str {
-    let trimmed = raw.trim();
-    trimmed
-        .strip_prefix("[[")
-        .and_then(|s| s.strip_suffix("]]"))
-        .unwrap_or(trimmed)
+    wikilink_inner(raw).unwrap_or(raw.trim())
+}
+
+/// The inner text of a `[[...]]` wikilink, or `None` when `raw` is not one.
+pub fn wikilink_inner(raw: &str) -> Option<&str> {
+    raw.trim().strip_prefix("[[").and_then(|s| s.strip_suffix("]]"))
 }
 
 /// Split a media reference on the first `|`, returning `(path, attrs_str)`.

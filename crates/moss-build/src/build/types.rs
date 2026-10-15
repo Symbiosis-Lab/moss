@@ -563,6 +563,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub raw_frontmatter: std::collections::BTreeMap<String, serde_json::Value>,
+    /// The site's declared fields this page's own frontmatter carries, parsed
+    /// at the markdown stage. Folder `cascade:` values are not included.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub declared: std::collections::BTreeMap<String, moss_core::fields::TypedValue>,
     /// Declared listing sort from frontmatter (folder index pages only;
     /// `None` on article pages).
     pub sort: Option<moss_core::sort::SortField>,

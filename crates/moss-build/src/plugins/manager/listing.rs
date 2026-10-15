@@ -51,6 +51,13 @@ pub struct PageRecord {
     /// The page's frontmatter as moss resolved it: values inherited from a
     /// parent folder are applied and `title` is filled in when the page set none.
     pub frontmatter: BTreeMap<String, serde_json::Value>,
+    /// The page's declared fields (`[fields.*]` in `.moss/config.toml`) that
+    /// its own frontmatter carries and that parse, each as its typed value. A
+    /// date is `{value, precision, qualifier}`; a period is `{start, end, text}`
+    /// with `start` and `end` in that date shape; a choice is `{value, label}`.
+    /// A value that does not parse is left out here and stays in `frontmatter`.
+    /// Values a folder's `cascade:` supplies are not typed here. Empty when none applies.
+    pub fields: BTreeMap<String, serde_json::Value>,
     /// The rendered body. Relative links and image sources are rewritten to
     /// resolve from the listing page, where the HTML is drawn. Empty for a
     /// subfolder that has no home page.

@@ -323,6 +323,116 @@ impl ConfigFile {
         pairs
     }
 
+    /// The strings in a `[fields.NAME]` list key. A non-list value is one
+    /// problem and yields nothing; a non-string item is one problem and is skipped.
+    fn string_list(sub: &toml::Table, key: &str, name: &str, problems: &mut Vec<String>) -> Vec<String> {
+        match sub.get(key) {
+            None => Vec::new(),
+            Some(Value::Array(items)) => items
+                .iter()
+                .filter_map(|item| match item.as_str() {
+                    Some(s) => Some(s.to_string()),
+                    None => {
+                        problems.push(format!("[fields.{name}] `{key}` must hold strings; skipping {item}"));
+                        None
+                    }
+                })
+                .collect(),
+            Some(_) => {
+                problems.push(format!("[fields.{name}] `{key}` must be a list of strings; ignoring it"));
+                Vec::new()
+            }
+        }
+    }
+
+    /// The `[fields.<name>]` declarations, and one problem string for each
+    /// table or key the build cannot use. The caller reports the problems once
+    /// per build. A declaration with a bad `place` or an unknown key is kept;
+    /// one with a bad type or a built-in name is dropped.
+    pub fn field_decls(&self) -> (Vec<moss_core::fields::FieldDecl>, Vec<String>) {
+        use moss_core::fields::{parse_place, place_names, Choice, FieldDecl, FieldKind};
+        let mut decls = Vec::new();
+        let mut problems = Vec::new();
+        let Some(value) = self.root.get("fields") else {
+            return (decls, problems);
+        };
+        let Some(table) = value.as_table() else {
+            problems.push("[fields] must be a table of [fields.NAME] tables; ignoring it".to_string());
+            return (decls, problems);
+        };
+        for (name, value) in table {
+            let Some(sub) = value.as_table() else {
+                problems.push(format!("[fields.{name}] must be a table; ignoring it"));
+                continue;
+            };
+            if moss_core::schema_fields::BUILTIN_FIELDS.iter().any(|f| f.name == name) {
+                problems.push(format!("[fields.{name}] is a moss field and cannot be redeclared"));
+                continue;
+            }
+            let Some(type_name) = sub.get("type").and_then(|v| v.as_str()) else {
+                problems.push(format!("[fields.{name}] has no type; one of: {}", FieldKind::names().join(", ")));
+                continue;
+            };
+            let Some(kind) = FieldKind::from_name(type_name) else {
+                problems.push(format!(
+                    "[fields.{name}] has an unknown type \"{type_name}\"; one of: {}",
+                    FieldKind::names().join(", ")
+                ));
+                continue;
+            };
+            for key in sub.keys() {
+                if !matches!(key.as_str(), "type" | "of" | "place" | "in") {
+                    problems.push(format!("[fields.{name}] has an unknown key \"{key}\""));
+                }
+            }
+            let choices = match (kind, sub.get("of")) {
+                (FieldKind::Choice, None) => {
+                    problems.push(format!("[fields.{name}] is a choice and needs `of`, a list or a table of labels"));
+                    continue;
+                }
+                (FieldKind::Choice, Some(Value::Array(_))) => Self::string_list(sub, "of", name, &mut problems)
+                    .into_iter()
+                    .map(|v| Choice { value: v.clone(), label: v })
+                    .collect(),
+                (FieldKind::Choice, Some(Value::Table(labels))) => labels
+                    .iter()
+                    .filter_map(|(v, label)| match label.as_str() {
+                        Some(label) => Some(Choice { value: v.clone(), label: label.to_string() }),
+                        None => {
+                            problems.push(format!("[fields.{name}] label for \"{v}\" must be a string; skipping it"));
+                            None
+                        }
+                    })
+                    .collect(),
+                (FieldKind::Choice, Some(_)) => {
+                    problems.push(format!("[fields.{name}] `of` must be a list or a table of labels"));
+                    continue;
+                }
+                (_, Some(_)) => {
+                    problems.push(format!("[fields.{name}] has `of`, which only a choice takes; ignoring it"));
+                    Vec::new()
+                }
+                (_, None) => Vec::new(),
+            };
+            let place = match sub.get("place").and_then(|v| v.as_str()) {
+                None | Some("none") => None,
+                Some(v) => match parse_place(v) {
+                    Some(place) => Some(place),
+                    None => {
+                        problems.push(format!(
+                            "[fields.{name}] has an unknown place \"{v}\"; one of: {}, none",
+                            place_names().join(", ")
+                        ));
+                        None
+                    }
+                },
+            };
+            let scope = Self::string_list(sub, "in", name, &mut problems);
+            decls.push(FieldDecl { name: name.clone(), kind, choices, place, scope });
+        }
+        (decls, problems)
+    }
+
     /// A boolean field under `[terms]`, e.g. `author`, `tags`: the legacy,
     /// pre-kinds toggle `terms_kinds` folds into the two built-ins' `fields`.
     /// `None` means the key is absent, which is not the same as `false` —

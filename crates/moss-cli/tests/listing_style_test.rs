@@ -407,3 +407,30 @@ fn a_warning_about_a_page_names_its_source_file() {
     assert!(err.contains("[boardview] plain one"), "{err}");
     assert!(err.contains("[boardview] board/Beta.md: about beta"), "{err}");
 }
+
+#[test]
+fn a_declared_field_reaches_the_plugin_parsed_and_an_invalid_one_does_not() {
+    let s = site("board");
+    write(&s.root, ".moss/config.toml", "[fields.years]\ntype = \"period\"\n");
+    write(&s.root, "board/Beta.md", "---\ntitle: Beta\ndate: 2026-01-02\nyears: 1927–1933\n---\nbeta body\n");
+    write(&s.root, "board/Gamma.md", "---\ntitle: Gamma\nyears: the twenties\n---\ngamma\n");
+    plugin(&s.root, "boardview", &["board"], DUMP);
+    let o = s.build(&["--allow-plugins"]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert!(stderr(&o).contains("field 'years'"), "the invalid value is warned about: {}", stderr(&o));
+    let ctx = context_of(&s.out("board/index.html").unwrap());
+    let pages = ctx["pages"].as_array().unwrap();
+    let beta = pages.iter().find(|p| p["title"] == "Beta").unwrap();
+    assert_eq!(
+        beta["fields"]["years"],
+        serde_json::json!({
+            "start": {"value": "1927", "precision": "year", "qualifier": null},
+            "end": {"value": "1933", "precision": "year", "qualifier": null},
+            "text": "1927–1933"
+        }),
+        "{beta}"
+    );
+    let gamma = pages.iter().find(|p| p["title"] == "Gamma").unwrap();
+    assert!(gamma["fields"].get("years").is_none(), "an invalid value is left out: {gamma}");
+    assert_eq!(gamma["frontmatter"]["years"], "the twenties", "the raw value stays in frontmatter");
+}

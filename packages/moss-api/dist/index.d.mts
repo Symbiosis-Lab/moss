@@ -807,6 +807,15 @@ interface PageRecord {
    */
   frontmatter: Record<string, unknown>;
   /**
+   * The page's declared fields (`[fields.*]` in `.moss/config.toml`) that its own
+   * frontmatter carries and that parse, each as its typed value. A date is
+   * `{ value, precision, qualifier }`; a period is `{ start, end, text }` with
+   * `start` and `end` in that date shape; a choice is `{ value, label }`. A value
+   * that does not parse is left out here and stays in `frontmatter`. Values a
+   * folder's `cascade:` supplies are not typed here.
+   */
+  fields: Record<string, unknown>;
+  /**
    * The rendered body. Relative links and image sources are rewritten to
    * resolve from the listing page, where the HTML is drawn. Empty for a
    * subfolder that has no home page.

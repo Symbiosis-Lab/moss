@@ -386,6 +386,38 @@ Two things that surprise people:
 
 To stop a dimension generating pages, either switch the built-in off — `[terms].author = false` or `[terms].tags = false` — or drop the field from the `fields` list of the kind that claims it.
 
+### Declared fields
+
+A site can declare its own frontmatter fields in `.moss/config.toml`, each with a type. moss checks every page's value against that type and warns, naming the file and the field, when the value does not fit; listing plugins receive the parsed value. A declaration cannot redefine one of moss's own fields.
+
+```toml
+[fields.kind]
+type = "choice"
+of   = { Building = "Built", Service = "Founded" }
+
+[fields.years]
+type = "period"
+
+[fields.architects]
+type = "pages"
+in   = ["Housing"]
+```
+
+A page then writes plain values, such as `kind: Building`, `years: 1927/1933` or `architects: ["[[Anna Weber]]"]`. Quote a page link, because unquoted `[[…]]` is read as a nested list. A field a page does not carry is fine.
+
+| Type | A page writes | Plugins receive |
+|---|---|---|
+| `text` | any text | the text |
+| `number` | `48.1` | the number |
+| `date` | `1930-10-12`, `1930-10` or `1930`; `1923?` uncertain, `~1930` approximate, `1930%` both | `{ value, precision, qualifier }` |
+| `url` | `https://…` or `/path/` | the address |
+| `choice` | one of the values in `of` | `{ value, label }` |
+| `period` | `1927/1933` or `1927–1933`, `1927/..` for an open end, or one date | `{ start, end, text }`, each date as `{ value, precision, qualifier }` |
+| `count` | `1,382 flats` | `{ number, noun, text }`, or `{ text }` when the value is not a number followed by a noun |
+| `page`, `pages` | `"[[Page name]]"` | the link targets |
+
+`in` limits a field to some folders. `place` (`eyebrow`, `subtitle`, `facts`, `key-figure` or `none`) is checked now but not drawn yet. `moss build --strict` turns a value that does not fit into a failure.
+
 ### Places
 
 `location:` is a name-list field like `author:`/`editor:`/`jury:`, feeding whichever kind's `fields` names it — but a kind that also sets `type = "place"` gets three things the others don't: a hand-edited gazetteer, a parent hierarchy, and an automatic place line.

@@ -93,13 +93,21 @@ How serious the plugin proposes an advisory is. moss CLAMPS this (R13): a
 ### EscapeSpec
 
 ```ts
-type EscapeSpec = "cancel" | `resend:${string}` | `recheck:${string}`;
+type EscapeSpec = 
+  | "cancel"
+  | `resend:${string}`
+  | `recheck:${string}`
+  | `download-tool:${string}`;
 ```
 
 Escape kind for `awaiting()` calls. The string variants take a
 free-text affordance label after the colon, mirroring the dev harness
 dialect (e.g., `"resend:Resend email"`, `"recheck:Recheck DNS"`).
 Plain `"cancel"` carries no label.
+
+`"download-tool:<name>"` shows a Download button that fetches the named
+tool moss can download (e.g. `"git"`, `"ffmpeg"`); the name is a tool
+identifier, not a display label.
 
 ***
 
@@ -1746,6 +1754,14 @@ secp256k1-schnorr: BIP-340). Any protocol framing (an IPNS record's
 #### Returns
 
 `Promise`\<`Uint8Array`\<`ArrayBufferLike`\>\>
+
+## Listing styles
+
+| Interface | Description |
+| ------ | ------ |
+| [ListingContext](interfaces/ListingContext.md) | The argument of the `listing` export. |
+| [ListingResult](interfaces/ListingResult.md) | What the `listing` export returns. A malformed result, a throw or a timeout leaves moss's own listing in place with one build warning. |
+| [PageRecord](interfaces/PageRecord.md) | One page, as a listing plugin sees it. The listing page itself, every page it lists and every subfolder's home page have this shape. |
 
 ## Secrets
 

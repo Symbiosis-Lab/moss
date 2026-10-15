@@ -121,6 +121,9 @@ pub struct SiteConfig {
     /// The term kinds that asked for a nav-bar entry (`nav = true`), in config
     /// order — `ConfigFile::terms_nav`.
     pub term_nav: Vec<(String, Option<String>, Option<i32>)>,
+    /// The `[fields.<name>]` declarations, read once per build; the markdown
+    /// pipeline checks each page's frontmatter against them.
+    pub field_decls: Vec<moss_core::fields::FieldDecl>,
     /// Decoded geography, gazetteer, place namespace and locator preference.
     pub place_maps: Option<crate::build::place_map::PlaceMapRenderContext>,
     /// What this build may reuse from the last one. Both bits are
@@ -142,6 +145,7 @@ impl SiteConfig {
             hard_line_breaks: self.hard_line_breaks,
             heading_anchors: self.heading_anchors,
             typesetting: self.typesetting.as_deref(),
+            fields: &self.field_decls,
         }
     }
 }
@@ -175,6 +179,7 @@ impl Default for SiteConfig {
             search: false,
             term_kinds: Vec::new(),
             term_nav: Vec::new(),
+            field_decls: Vec::new(),
             place_maps: None,
             incremental: IncrementalGates::default(),
             derivations: None,

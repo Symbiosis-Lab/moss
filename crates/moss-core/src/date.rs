@@ -360,3 +360,195 @@ mod tests {
         }
     }
 }
+
+/// A date parsed to whatever precision it was written at: a year, a year and
+/// month, or a full year, month and day.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PartialDate {
+    pub year: i32,
+    pub month: Option<u32>,
+    pub day: Option<u32>,
+}
+
+/// Parses `YYYY`, `YYYY-MM`, or `YYYY-MM-DD` (also accepting `/` as the
+/// separator, and dropping anything from a `T` or a space onward, so a full
+/// ISO datetime or a "YYYY · MM" display string reduces to its date part).
+/// The year must be exactly 4 numeric digits; a present month or day must be
+/// numeric and in range (`1..=12`, `1..=31`). Anything else is `None`.
+///
+/// A 4th+ dash-separated segment is ignored rather than rejected — a leaf
+/// page's date-stamped filename (`2021-04-09-spring.html`) carries its slug
+/// in the same string the date is read from, and only the leading
+/// year-month(-day) run needs to parse.
+pub fn parse_partial_date(s: &str) -> Option<PartialDate> {
+    let trimmed = s.trim();
+    let mut end = trimmed.len();
+    if let Some(i) = trimmed.find('T') {
+        end = end.min(i);
+    }
+    if let Some(i) = trimmed.find(' ') {
+        end = end.min(i);
+    }
+    let date_part = trimmed.get(..end)?.replace('/', "-");
+    let parts: Vec<&str> = date_part.split('-').collect();
+    if parts.is_empty() {
+        return None;
+    }
+
+    let year_part = parts[0];
+    if year_part.len() != 4 || !year_part.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let year: i32 = year_part.parse().ok()?;
+
+    let parse_part = |part: &str, range: std::ops::RangeInclusive<u32>| -> Option<u32> {
+        if part.is_empty() || !part.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        part.parse::<u32>().ok().filter(|v| range.contains(v))
+    };
+
+    let month = match parts.get(1) {
+        Some(m) => Some(parse_part(m, 1..=12)?),
+        None => None,
+    };
+    let day = match parts.get(2) {
+        Some(d) => Some(parse_part(d, 1..=31)?),
+        None => None,
+    };
+
+    Some(PartialDate { year, month, day })
+}
+
+/// Whether `year`-`month`-`day` is a day the Gregorian calendar has: February
+/// has 29 days in a leap year, a leap year is divisible by 4 except centuries
+/// not divisible by 400.
+pub fn is_valid_day(year: i32, month: u32, day: u32) -> bool {
+    let is_leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=days).contains(&day)
+}
+
+/// The finest unit an EDTF date states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Precision {
+    Year,
+    Month,
+    Day,
+}
+
+/// How sure the author is of a date: `?` uncertain, `~` approximate, `%` both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Qualifier {
+    Uncertain,
+    Approximate,
+    Both,
+}
+
+/// One EDTF date: the calendar date, its precision and its qualifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EdtfDate {
+    pub date: PartialDate,
+    pub precision: Precision,
+    pub qualifier: Option<Qualifier>,
+}
+
+impl EdtfDate {
+    /// The date as written, without its qualifier: `1930`, `1930-10`, `1930-10-12`.
+    pub fn value(&self) -> String {
+        let mut out = format!("{:04}", self.date.year);
+        if let Some(month) = self.date.month {
+            out.push_str(&format!("-{month:02}"));
+        }
+        if let Some(day) = self.date.day {
+            out.push_str(&format!("-{day:02}"));
+        }
+        out
+    }
+}
+
+impl Serialize for EdtfDate {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("EdtfDate", 3)?;
+        state.serialize_field("value", &self.value())?;
+        state.serialize_field("precision", &self.precision)?;
+        state.serialize_field("qualifier", &self.qualifier)?;
+        state.end()
+    }
+}
+
+/// A parsed EDTF value: one date, or an interval with an optional end
+/// (`None` is an open end, written `..` or left empty).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edtf {
+    Date(EdtfDate),
+    Interval { start: EdtfDate, end: Option<EdtfDate> },
+}
+
+/// Strict EDTF (ISO 8601-2) parser. Accepts `YYYY`, `YYYY-MM` and `YYYY-MM-DD`
+/// checked against the calendar, one trailing or leading qualifier (`?`, `~`,
+/// `%`), and an interval split once on `/`, `–` or `—`, with `..` or an empty
+/// end for an open interval. The lenient [`parse_partial_date`] is separate and
+/// unchanged.
+pub fn parse_edtf(s: &str) -> Option<Edtf> {
+    let s = s.trim();
+    let Some(i) = s.find(['/', '–', '—']) else {
+        return parse_edtf_date(s).map(Edtf::Date);
+    };
+    let (left, rest) = s.split_at(i);
+    let sep = rest.chars().next()?.len_utf8();
+    let right = rest.get(sep..)?.trim();
+    let start = parse_edtf_date(left)?;
+    let end = match right {
+        "" | ".." => None,
+        other => Some(parse_edtf_date(other)?),
+    };
+    Some(Edtf::Interval { start, end })
+}
+
+fn parse_edtf_date(s: &str) -> Option<EdtfDate> {
+    let (body, qualifier) = if let Some(rest) = s.strip_prefix('~') {
+        (rest, Some(Qualifier::Approximate))
+    } else if let Some(rest) = s.strip_suffix('?') {
+        (rest, Some(Qualifier::Uncertain))
+    } else if let Some(rest) = s.strip_suffix('~') {
+        (rest, Some(Qualifier::Approximate))
+    } else if let Some(rest) = s.strip_suffix('%') {
+        (rest, Some(Qualifier::Both))
+    } else {
+        (s, None)
+    };
+    let digits = |p: &str, n: usize| p.len() == n && p.bytes().all(|b| b.is_ascii_digit());
+    let parts: Vec<&str> = body.split('-').collect();
+    let (precision, year, month, day) = match parts.as_slice() {
+        [y] if digits(y, 4) => (Precision::Year, *y, None, None),
+        [y, m] if digits(y, 4) && digits(m, 2) => (Precision::Month, *y, Some(*m), None),
+        [y, m, d] if digits(y, 4) && digits(m, 2) && digits(d, 2) => {
+            (Precision::Day, *y, Some(*m), Some(*d))
+        }
+        _ => return None,
+    };
+    let year: i32 = year.parse().ok()?;
+    let month: Option<u32> = month.map(str::parse).transpose().ok()?;
+    let day: Option<u32> = day.map(str::parse).transpose().ok()?;
+    if let Some(m) = month {
+        if !(1..=12).contains(&m) {
+            return None;
+        }
+    }
+    if let (Some(m), Some(d)) = (month, day) {
+        if !is_valid_day(year, m, d) {
+            return None;
+        }
+    }
+    Some(EdtfDate { date: PartialDate { year, month, day }, precision, qualifier })
+}
