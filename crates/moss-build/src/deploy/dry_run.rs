@@ -45,16 +45,24 @@ pub struct DryRun {
     /// email recorded, so the server will most likely refuse until the key is
     /// verified. Nothing was sent to find out.
     pub needs_verification: bool,
+    /// The folder was read as it is, with no build.
+    pub prebuilt: bool,
 }
 
 impl DryRun {
     pub fn render(&self) -> String {
         let set = &self.change_set;
-        let mut out = String::from(
-            "Dry run: the site was built exactly as a deploy builds it, including any plugin this command allows. The build may use the network as any build does: a plugin's own requests, and link previews fetched from third-party sites. \
-             Nothing was uploaded, no publish record was written and no acceptance was recorded.\n",
-        );
-        if set.classified {
+        let mut out = if self.prebuilt {
+            String::from("Dry run: nothing was built; the folder was read as it is. ")
+        } else {
+            String::from(
+                "Dry run: the site was built exactly as a deploy builds it, including any plugin this command allows. The build may use the network as any build does: a plugin's own requests, and link previews fetched from third-party sites. ",
+            )
+        };
+        out.push_str("Nothing was uploaded, no publish record was written and no acceptance was recorded.\n");
+        if self.prebuilt {
+            out.push_str("Pages: not classified, because a prebuilt folder has no sources, so counts are in files.\n");
+        } else if set.classified {
             out.push_str(&format!(
                 "Pages: {} added, {} edited, {} deleted, {} restyled\n",
                 set.added, set.edited, set.deleted, set.restyled
@@ -81,7 +89,7 @@ impl DryRun {
                     .map(|p| crate::build::served_path::served_address(p))
                     .collect();
                 if !rest.is_empty() {
-                    out.push_str("Also removed:\n");
+                    out.push_str(if set.removed.is_empty() { "Removed:\n" } else { "Also removed:\n" });
                     out.push_str(&capped_lines(&rest, |a| a.clone()));
                 }
             }
@@ -258,6 +266,47 @@ pub async fn run_dry_run(
         would_register: local.would_register,
         would_create_key: local.would_create_key && !matches!(route, DeployRoute::Plugin { .. }),
         needs_verification: local.needs_verification,
+        prebuilt: false,
+    })
+}
+
+/// Describe the publish of a prebuilt folder: the folder is read as it is,
+/// with the same manifest the upload hashes and the same record and removal
+/// check the upload's gate uses. Sends and writes nothing.
+pub async fn run_prebuilt_dry_run(
+    folder: &Path,
+    dir: &Path,
+    requested_site_id: Option<&str>,
+    accept_removals: bool,
+) -> Result<DryRun, String> {
+    let route = DeployRoute::Prebuilt { dir: dir.to_path_buf() };
+    let local = check_locally(folder, &route, requested_site_id).await?;
+    let folder_str = folder.to_string_lossy().to_string();
+    let site_id = match &local.would_register {
+        Some(id) => id.clone(),
+        None => crate::build::site_config::get_domain_config(&folder_str)?
+            .site_id
+            .ok_or("this folder has no site yet")?,
+    };
+
+    let manifest = super::prebuilt::build_manifest_from_dir(dir)?;
+    let (transfer, refusal) = match super::prebuilt::removed_against_last_publish(folder, &site_id, &manifest) {
+        Some((baseline, removed)) => {
+            let refusal = (!accept_removals && !removed.is_empty())
+                .then(|| crate::deploy::removal_gate::prebuilt_refusal(&removed));
+            let upload = change_set::upload_count_of(&baseline.files, &manifest) as u32;
+            (Transfer::SinceLastPublish { upload, removed }, refusal)
+        }
+        None => (Transfer::NoRecord, None),
+    };
+    Ok(DryRun {
+        change_set: ChangeSet::default(),
+        transfer,
+        refusal,
+        would_register: local.would_register,
+        would_create_key: local.would_create_key,
+        needs_verification: local.needs_verification,
+        prebuilt: true,
     })
 }
 
@@ -285,6 +334,7 @@ mod tests {
             would_register: None,
             would_create_key: false,
             needs_verification: false,
+            prebuilt: false,
         }
     }
 
@@ -305,6 +355,7 @@ mod tests {
             would_register: None,
             would_create_key: false,
             needs_verification: false,
+            prebuilt: false,
         };
 
         let text = dry.render();
@@ -396,6 +447,7 @@ mod tests {
             would_register: Some("my-site".into()),
             would_create_key: true,
             needs_verification: false,
+            prebuilt: false,
         };
         let text = dry.render();
         assert!(text.contains("Pages: not classified"), "{text}");
@@ -404,5 +456,111 @@ mod tests {
         assert!(text.contains("Publish check: passes.\n"), "{text}");
         assert!(text.contains("Not run, because it needs the server"), "{text}");
         assert!(!text.contains("go ahead"), "{text}");
+    }
+
+    mod prebuilt {
+        use super::*;
+        use crate::build::manifest::change_set::PublishedSnapshot;
+
+        fn entry(bytes: &str) -> String {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("f"), bytes).unwrap();
+            super::super::super::prebuilt::build_manifest_from_dir(dir.path()).unwrap()["f"].clone()
+        }
+
+        /// A registered folder and a prebuilt `_site` holding `files`; the
+        /// last publish served `served`, if given.
+        fn folder(files: &[(&str, &str)], served: Option<&[(&str, &str)]>) -> tempfile::TempDir {
+            let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp/prebuilt-dry");
+            std::fs::create_dir_all(&base).unwrap();
+            let dir = tempfile::Builder::new().prefix("pd").tempdir_in(&base).unwrap();
+            let root = dir.path();
+            std::fs::create_dir_all(root.join(".moss/identity")).unwrap();
+            std::fs::write(root.join(".moss/state.toml"), "[deployment]\nsite_id = \"pd-test\"\n").unwrap();
+            std::fs::write(root.join(".moss/identity/secret-key"), "k").unwrap();
+            std::fs::write(root.join(".moss/identity/public.json"), "{}").unwrap();
+            for (path, body) in files {
+                let full = root.join("_site").join(path);
+                std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+                std::fs::write(full, body).unwrap();
+            }
+            if let Some(served) = served {
+                published_record::save(
+                    &MossPaths::new(root),
+                    &PublishedSnapshot {
+                        generation_id: "ours".into(),
+                        target: "moss:pd-test".into(),
+                        published_at: "2026-09-20T09:12:30+00:00".into(),
+                        files: served.iter().map(|(p, b)| (p.to_string(), entry(b))).collect(),
+                        asset_source_to_output: Some(Default::default()),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            }
+            dir
+        }
+
+        async fn run(dir: &tempfile::TempDir, accept: bool) -> DryRun {
+            let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+            std::env::set_var("MOSS_SETA_URL", "http://127.0.0.1:9");
+            run_prebuilt_dry_run(dir.path(), &dir.path().join("_site"), None, accept).await.unwrap()
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn an_address_the_folder_no_longer_holds_is_listed_and_refused() {
+            let dir = folder(&[("index.html", "a")], Some(&[("index.html", "a"), ("old/index.html", "o")]));
+            let dry = run(&dir, false).await;
+            let Transfer::SinceLastPublish { removed, .. } = &dry.transfer else { panic!("{dry:?}") };
+            assert_eq!(removed, &vec!["old/index.html".to_string()]);
+            assert!(dry.refusal.as_deref().is_some_and(|t| t.contains("/old/")), "{dry:?}");
+            let text = dry.render();
+            assert!(text.contains("nothing was built"), "{text}");
+            assert!(text.contains("\nRemoved:\n  /old/\n") && !text.contains("Also removed"), "{text}");
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn accepting_removals_lifts_the_refusal_but_still_lists_them() {
+            let dir = folder(&[("index.html", "a")], Some(&[("index.html", "a"), ("old/index.html", "o")]));
+            let dry = run(&dir, true).await;
+            assert!(dry.refusal.is_none(), "{dry:?}");
+            assert!(matches!(&dry.transfer, Transfer::SinceLastPublish { removed, .. } if removed.len() == 1), "{dry:?}");
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_changed_and_a_new_file_upload_and_an_unchanged_one_does_not() {
+            let dir = folder(
+                &[("same.css", "s"), ("changed.css", "new"), ("added.css", "n")],
+                Some(&[("same.css", "s"), ("changed.css", "old")]),
+            );
+            let dry = run(&dir, false).await;
+            assert!(matches!(&dry.transfer, Transfer::SinceLastPublish { upload: 2, .. }), "{dry:?}");
+            assert!(dry.refusal.is_none(), "{dry:?}");
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn no_record_is_not_counted_against_anything() {
+            let dir = folder(&[("index.html", "a")], None);
+            let dry = run(&dir, false).await;
+            assert!(matches!(dry.transfer, Transfer::NoRecord), "{dry:?}");
+        }
+
+        fn snapshot(root: &Path) -> Vec<(std::path::PathBuf, std::time::SystemTime)> {
+            let mut all: Vec<_> = walkdir::WalkDir::new(root.join(".moss"))
+                .into_iter()
+                .flatten()
+                .map(|e| (e.path().to_path_buf(), e.metadata().unwrap().modified().unwrap()))
+                .collect();
+            all.sort();
+            all
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn nothing_is_written_under_the_moss_directory() {
+            let dir = folder(&[("index.html", "a")], Some(&[("old/index.html", "o")]));
+            let before = snapshot(dir.path());
+            run(&dir, false).await;
+            assert_eq!(snapshot(dir.path()), before);
+        }
     }
 }

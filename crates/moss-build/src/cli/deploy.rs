@@ -289,10 +289,14 @@ async fn dispatch(
     // everything after the gate left out, so it never reaches the match.
     if flags.dry_run {
         return match route {
-            DeployRoute::Prebuilt { .. } => Err(
-                "--dry-run needs a build to describe, and a prebuilt folder is uploaded as it is."
-                    .to_string(),
-            ),
+            DeployRoute::Prebuilt { dir } => crate::deploy::dry_run::run_prebuilt_dry_run(
+                folder,
+                dir,
+                flags.site_id.as_deref(),
+                flags.accept_removals,
+            )
+            .await
+            .map(|dry| DeployReport::DryRun(Box::new(dry))),
             _ => crate::deploy::dry_run::run_dry_run(folder, route, flags.site_id.as_deref(), host_ports, plugins)
                 .await
                 .map(|dry| DeployReport::DryRun(Box::new(dry))),
@@ -833,16 +837,20 @@ mod dry_run_tests {
         assert!(!fx.contacted_the_server());
     }
 
-    /// A prebuilt folder is uploaded as it is: there is no build to describe.
+    /// A prebuilt folder is described from the files on disk, not refused.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_dry_run_of_a_prebuilt_folder_is_a_usage_error() {
-        let fx = Fixture::new(false);
+    async fn a_dry_run_of_a_prebuilt_folder_describes_it_and_contacts_no_server() {
+        let fx = Fixture::new(true);
+        let site = fx.dir.path().join("_site");
+        std::fs::create_dir_all(&site).unwrap();
+        std::fs::write(site.join("index.html"), "<p>hi</p>").unwrap();
         let flags = DeployFlags { dry_run: true, ..DeployFlags::default() };
-        let route = DeployRoute::Prebuilt { dir: fx.dir.path().join("_site") };
-        let err = dispatch(fx.dir.path(), &route, &crate::cli::host::cli_host_ports, crate::build::PluginMode::Skip, &flags, &printing())
+        let route = DeployRoute::Prebuilt { dir: site };
+        let report = dispatch(fx.dir.path(), &route, &crate::cli::host::cli_host_ports, crate::build::PluginMode::Skip, &flags, &printing())
             .await
-            .expect_err("nothing to build");
-        assert!(err.starts_with("--dry-run needs a build"), "{err}");
+            .expect("a prebuilt dry run reports");
+        let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
+        assert!(dry.prebuilt && dry.refusal.is_some(), "{dry:?}");
         assert!(!fx.contacted_the_server());
     }
 

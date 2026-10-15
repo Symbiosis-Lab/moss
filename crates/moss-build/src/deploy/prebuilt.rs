@@ -152,26 +152,32 @@ pub async fn push_prebuilt(
     .await
 }
 
+/// The last publish record an upload is measured against, and the public
+/// addresses it served that `manifest` no longer holds. Both the upload's
+/// removal gate and the dry run read this, so they cannot disagree.
+pub(crate) fn removed_against_last_publish(
+    project_folder: &Path,
+    site_id: &str,
+    manifest: &HashMap<String, String>,
+) -> Option<(crate::build::manifest::change_set::PublishedSnapshot, Vec<String>)> {
+    let mp = crate::moss_paths::MossPaths::new(project_folder);
+    let target = crate::config::deployment::slot_for("moss", Some(site_id));
+    let baseline =
+        crate::build::manifest::published_record::load_address_baseline(&mp, target.as_deref())?;
+    let gone = crate::build::manifest::change_set::removed_public_paths(&baseline, manifest);
+    Some((baseline, gone))
+}
+
 /// Refuse an upload that stops serving an address the last publish served.
-/// Runs before any request, on the same record and the same `_moss/` filter
-/// the normal route's removal gate uses.
+/// Runs before any request.
 fn refuse_removed_addresses(
     project_folder: &Path,
     site_id: &str,
     manifest: &HashMap<String, String>,
 ) -> Result<(), String> {
-    let mp = crate::moss_paths::MossPaths::new(project_folder);
-    let target = crate::config::deployment::slot_for("moss", Some(site_id));
-    let Some(baseline) =
-        crate::build::manifest::published_record::load_address_baseline(&mp, target.as_deref())
-    else {
-        return Ok(());
-    };
-    let gone = crate::build::manifest::change_set::removed_public_paths(&baseline, manifest);
-    if gone.is_empty() {
-        Ok(())
-    } else {
-        Err(crate::deploy::removal_gate::prebuilt_refusal(&gone))
+    match removed_against_last_publish(project_folder, site_id, manifest) {
+        Some((_, gone)) if !gone.is_empty() => Err(crate::deploy::removal_gate::prebuilt_refusal(&gone)),
+        _ => Ok(()),
     }
 }
 

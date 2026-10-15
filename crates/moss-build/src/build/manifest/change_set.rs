@@ -471,7 +471,12 @@ pub fn flat_against(previous: &HashMap<String, String>, current: &SealedManifest
 
 /// How many of `current`'s files `previous` does not already hold.
 pub fn upload_count(previous: &HashMap<String, String>, current: &SealedManifest) -> usize {
-    current.files().iter().filter(|(path, entry)| previous.get(*path) != Some(*entry)).count()
+    upload_count_of(previous, current.files())
+}
+
+/// [`upload_count`] for a plain path→entry map, such as a prebuilt folder's.
+pub fn upload_count_of(previous: &HashMap<String, String>, current: &HashMap<String, String>) -> usize {
+    current.iter().filter(|(path, entry)| previous.get(*path) != Some(*entry)).count()
 }
 
 /// The paths `files` holds that `current` no longer produces: the one
