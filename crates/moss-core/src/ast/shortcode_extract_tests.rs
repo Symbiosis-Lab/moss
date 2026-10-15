@@ -858,6 +858,43 @@ fn css_region_unnamed_emits_div_wrapper() {
 }
 
 #[test]
+fn css_region_emits_the_width_word_it_parsed() {
+    for (word, want) in [("wide", "wide"), ("page", "page"), ("screen", "screen"), ("full", "screen")] {
+        let md = format!(":::{{.band {word}}}\nText.\n:::\n");
+        let out = extract_shortcodes(&md).markdown_with_placeholders;
+        assert!(
+            out.contains(&format!("<div class=\"band\" data-width=\"{want}\">")),
+            "{word}: {out}"
+        );
+    }
+    for md in [":::{.band}\nText.\n:::\n", ":::{.band body}\nText.\n:::\n"] {
+        let out = extract_shortcodes(md).markdown_with_placeholders;
+        assert!(out.contains("<div class=\"band\">"), "{out}");
+        assert!(!out.contains("data-width"), "{out}");
+    }
+}
+
+#[test]
+fn css_region_width_word_does_not_disturb_class_order_or_id_only_fences() {
+    let doc = crate::ast::parser::parse(":::grid 2 {.x}\nA\n+++\nB\n:::\n");
+    let html = crate::ast::render::render_document(&doc, &crate::ast::hooks::DefaultHooks::new());
+    assert!(html.contains("class=\"moss-grid x\""), "{html}");
+    let out = extract_shortcodes(":::{#x screen}\nText.\n:::\n").markdown_with_placeholders;
+    assert!(out.contains("<div id=\"x\" data-width=\"screen\">"), "{out}");
+    assert!(!out.contains("class="), "{out}");
+}
+
+#[test]
+fn css_region_with_unreadable_attributes_says_so() {
+    let result = extract_shortcodes(":::{.band sreen}\nText.\n:::\n");
+    assert!(
+        result.advisories.iter().any(|a| a.contains("sreen") && a.contains("could not be read")),
+        "{:?}",
+        result.advisories
+    );
+}
+
+#[test]
 fn css_region_with_id_only() {
     let md = ":::{#intro}\nIntro prose.\n:::\n";
     let result = extract_shortcodes(md);

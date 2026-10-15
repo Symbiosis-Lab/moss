@@ -286,6 +286,14 @@ A fence with a name or `{attributes}` opens a block, and a bare line of three or
 
 Extract repeated blocks to a partial file and transclude with `![[partial-name]]`. Partials are content reuse, not styling — they live outside the styling rungs. Two limits: a partial file is also a page, published at its own address like any other page, and `draft: true` or `listed: false` hides it from listings without removing that address; a dot-prefixed file name keeps it out of the build, but then the embed does not resolve either. An embed expands only when it is the only thing on its line, so `![[partial-name]]` written inside a sentence is left unexpanded and its text does not appear — put the embed on a line of its own.
 
+A fenced div takes a width word like any other block: `:::{.band screen}` makes the div as wide as the window (`wide` and `page` are narrower), and its children stay at the reading width, centred, so the theme paints a full-width band with `.band { background: … }` and no `100vw` or `box-shadow` trick. The div must sit directly in the page text, not inside another block.
+
+```markdown
+:::{.band screen}
+A statement on a full-width background.
+:::
+```
+
 ### Footer
 
 A `footer.md` at the top of the site is the footer. Its markdown renders as written inside the page's `<footer>`, on every page, and replaces the row of links moss otherwise builds from pages marked `footer: true`. Shortcodes work there as they do in a page, so footer columns are a grid, and the theme only sets their widths:

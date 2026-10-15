@@ -1760,6 +1760,18 @@ Home.
         [`v-${t}.md`, escapePage(t, true)],
       ]),
     ),
+    "band.md": `---
+title: Band
+---
+
+Before the band.
+
+:::{.band screen}
+A paragraph inside the band that is long enough to run past the reading width when nothing holds it back. ${"It keeps going with more words so the line wraps. ".repeat(12)}
+:::
+
+After the band.
+`,
     "sized.md": `---
 title: Sized
 ---

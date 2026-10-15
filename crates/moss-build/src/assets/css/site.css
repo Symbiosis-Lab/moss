@@ -4824,6 +4824,15 @@ article.container > [data-width="screen"] {
   }
 }
 
+/* A fenced-div band (`:::{.band screen}`) takes the escape width above; its
+ * children keep the reading measure, centred, so text inside a full-width
+ * band does not run edge to edge. moss's own components carry a `moss-`
+ * class and size their children themselves. */
+article.container > div[data-width]:not([class^="moss-"]):not([class*=" moss-"]) > * {
+  max-inline-size: var(--moss-content-width);
+  margin-inline: auto;
+}
+
 /* Direct-child article-body headings + horizontal rules clear floats so
  * wrap scope ends predictably at the next section. Direct-child scope
  * avoids hitting headings inside cards/callouts/year-groups. */

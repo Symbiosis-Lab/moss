@@ -392,7 +392,7 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         selector: "article > [data-width]",
         name: "data-width",
         values: &["body", "wide", "page", "screen"],
-        description: "Set by block shortcodes to escape the text column. The width resolves through `--moss-escape`, clamped by `min(…, 100cqi)` so a narrow viewport stays safe.",
+        description: "Set by block shortcodes, and by a fenced div that carries a width word (`:::{.band screen}`), to escape the text column. The width resolves through `--moss-escape`, clamped by `min(…, 100cqi)` so a narrow viewport stays safe.",
     },
     ScopeAttr {
         selector: "body",

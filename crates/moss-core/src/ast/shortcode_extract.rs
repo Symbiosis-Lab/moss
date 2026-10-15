@@ -1505,13 +1505,22 @@ fn extract_with_state(
                 // `::::buttons`) also get extracted into sentinels.
                 // The body is balanced (see `find_block_end`), so the
                 // recursive call sees every inner block whole.
-                let parsed = super::attrs::parse_attrs(args).unwrap_or_default();
-                // A plain div renders only classes and an id, so any other
-                // key on the fence is read and then thrown away.
+                let parsed = match super::attrs::parse_attrs(args) {
+                    Ok(block) => block,
+                    Err(_) => {
+                        collected.advisories.push(format!(
+                            "fenced div attributes `{}` could not be read; the div renders without its classes, id and width",
+                            args.trim()
+                        ));
+                        Default::default()
+                    }
+                };
+                // A plain div renders only classes, an id and a width word,
+                // so any other key on the fence is read and then thrown away.
                 if !parsed.kvs.is_empty() {
                     let keys: Vec<&str> = parsed.kvs.iter().map(|(k, _)| k.as_str()).collect();
                     collected.advisories.push(format!(
-                        "fenced div `:::{{...}}` does not render attribute(s) {}; only classes and an id reach the output",
+                        "fenced div `:::{{...}}` does not render attribute(s) {}; only classes, an id and a width word reach the output",
                         keys.join(", ")
                     ));
                 }
@@ -1527,7 +1536,12 @@ fn extract_with_state(
                 };
                 let body_processed =
                     extract_with_state(&body, nonce, collected, &body_config);
-                output.push_str(&render_div_open(&parsed.classes, parsed.id.as_deref(), None));
+                output.push_str(&render_div_open(
+                    &parsed.classes,
+                    parsed.id.as_deref(),
+                    parsed.width,
+                    None,
+                ));
                 output.push_str("\n\n");
                 output.push_str(&body_processed);
                 if !body_processed.is_empty() && !body_processed.ends_with('\n') {
@@ -1589,7 +1603,7 @@ fn extract_with_state(
             };
             let body_processed =
                 extract_with_state(&body, nonce, collected, &body_config);
-            output.push_str(&render_div_open(&classes, parsed.id.as_deref(), Some(&extra_attrs)));
+            output.push_str(&render_div_open(&classes, parsed.id.as_deref(), None, Some(&extra_attrs)));
             output.push_str("\n\n");
             output.push_str(&body_processed);
             if !body_processed.is_empty() && !body_processed.ends_with('\n') {
@@ -1662,9 +1676,15 @@ fn clip_for_warning(line: &str) -> String {
 
 /// Render the opening `<div>` tag for a CssRegion or Unknown wrapper.
 ///
-/// `extra_attrs` (already with leading space) is appended before `>`,
-/// used by the unknown-name renderer to add `data-name="..."`.
-fn render_div_open(classes: &[String], id: Option<&str>, extra_attrs: Option<&str>) -> String {
+/// `width` is a fenced div's width word (`body` emits nothing); `extra_attrs`
+/// (already with leading space) is appended before `>`, used by the
+/// unknown-name renderer to add `data-name="..."`.
+fn render_div_open(
+    classes: &[String],
+    id: Option<&str>,
+    width: Option<&str>,
+    extra_attrs: Option<&str>,
+) -> String {
     let mut out = String::from("<div");
     if !classes.is_empty() {
         out.push_str(" class=\"");
@@ -1679,6 +1699,11 @@ fn render_div_open(classes: &[String], id: Option<&str>, extra_attrs: Option<&st
     if let Some(id_val) = id {
         out.push_str(" id=\"");
         out.push_str(&html_escape_attr(id_val));
+        out.push('"');
+    }
+    if let Some(w) = width.filter(|w| *w != "body") {
+        out.push_str(" data-width=\"");
+        out.push_str(&html_escape_attr(w));
         out.push('"');
     }
     if let Some(extra) = extra_attrs {
