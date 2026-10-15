@@ -1659,7 +1659,7 @@ function syncLoop() {
 // Once the close is more than half there it takes the pointer, and gives it back below that on the
 // way out: a button the reader can see must answer a click, and the page behind it is by then faded.
 const TAKES_POINTER = .5;
-const setCross = (q) => { xf = q; document.documentElement.style.setProperty('--xf', q.toFixed(3)); syncLoop(); fiveOn(q >= TAKES_POINTER); };
+const setCross = (q) => { if (q === xf) return; xf = q; document.documentElement.style.setProperty('--xf', q.toFixed(3)); syncLoop(); fiveOn(q >= TAKES_POINTER); };
 // The close takes the pointer and the tab order only where it is mostly there: while it is
 // still faint it is paint, and behind the page it is not there at all. The join
 // has two sides and the page is the other one: where the close is settled the
@@ -1774,9 +1774,12 @@ async function fade(to) {
       const q = closingProgress(); setCross(xfAt()); updateFinalDissolve();
       if (q >= 1 && target !== DEPLOY) done(SHARE);
       else if (q <= 0 && target !== SHARE) done(DEPLOY);
-      else requestAnimationFrame(frame);
+      else requestAnimationFrame(f);
     };
-    requestAnimationFrame(frame);
+    // a frame that throws ends the close at the end the reader is headed for, rather than holding the
+    // join open for the rest of the visit
+    const f = () => { try { frame(); } catch (e) { washError = e.message; console.error('close frame failed; ending it:', e); done(target === SHARE ? SHARE : DEPLOY); } };
+    requestAnimationFrame(f);
   });
   setCross(settled === SHARE ? 1 : 0); snapStage();
   return settled;
@@ -1816,7 +1819,9 @@ const reachToward = (from, want) => {
 // A join the morph cannot make (no GPU, or a print not yet taken) used to pop: the stage changed scene
 // between two frames. With the print of the scene being left in hand, that print is laid over the
 // canvas's own place first and thinned away while the live scene stands beneath, which needs no GPU.
+// A phone fades the live scene itself instead (fadeLive), on the same curve.
 let dissolvesRun = 0;
+const DISSOLVE = { duration: 360, easing: 'ease-out' };
 function dissolveFrom(print) {
   if (!print || reduce) return;
   const veil = document.createElement('canvas');
@@ -1826,7 +1831,106 @@ function dissolveFrom(print) {
   veil.style.cssText = `position:absolute;left:${printRect.x}px;top:${printRect.y}px;width:${printRect.w}px;height:${printRect.h}px;z-index:6;pointer-events:none;`;
   cell.append(veil); dissolvesRun++;
   const gone = () => veil.remove();
-  veil.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 360, easing: 'ease-out' }).finished.then(gone, gone);
+  veil.animate([{ opacity: 1 }, { opacity: 0 }], DISSOLVE).finished.then(gone, gone);
+}
+// One crossing from the scene shown toward `to`, frame by frame, for every way a scene is left: a
+// wash (pour) and a fade of the live stage (fadeLive). The way across draws; this decides when it is
+// over, the same for both:
+// - the clock is the reader's position (washAt), and a rest's pixel rounding, the .002 targetAt uses,
+//   counts as arrival, or a crossing resting a hair short of its end would hold every later join;
+// - it has arrived once the position has and the drawing has caught up with it;
+// - it is back where it began once the drawing is back at its start and the target no longer lies
+//   ahead, so a drawing that runs behind the position plays back rather than dropping what it shows;
+// - the scene asked for comes into the stage at the drawing's own midpoint (showScene);
+// - past the close, it ends there, and the close stands; on a phone, short of it, the close's
+//   crossfade follows the reader meanwhile;
+// - a frame that throws ends it at its target and says so in ?washdbg, rather than holding the join
+//   open for the rest of the visit.
+// - a paced drawing follows the position in no fewer than four frames a crossing, so a fling past a
+//   whole crossing in one frame cannot change the scenes between two frames, and no faster than
+//   `way.pace` dissolves a crossing where it has one, whichever is slower: the fade takes two, one out
+//   and one in; the phone's wash has none (see pour). A frame that
+//   comes well past the recent frame interval counts for no more than twice it, so one stall cannot
+//   carry a drawing across, while a page that is slow throughout still runs in real time. Desktop's
+//   wash is unpaced: the picture it reads its position from keeps its own pace.
+const toward = (x, goal, step) => goal > x ? Math.min(goal, x + step) : Math.max(goal, x - step);
+async function crossing(to, way) {
+  const from = shown;
+  let on = from, last = performance.now(), interval = 1000 / 60, pos = 0, snap = false;
+  return new Promise((finish) => {
+    const frame = (now) => {
+      if (way.lost?.()) { finish(to); return; }
+      if (target === SHARE && xfAt() >= 1) { finish(SHARE); return; }
+      if (way.held?.()) { requestAnimationFrame(f); return; }
+      const raw = now - last, dt = Math.min(raw, 2 * interval + 1000 / 60); last = now; interval += (raw - interval) / 4;
+      const aimed = way.aim?.(to) ?? to;
+      if (aimed !== to) { to = aimed; snap = true; }   // a re-pointed drawing starts from the position
+      const w = washAt(from, to) > .998 ? 1 : washAt(from, to), goal = way.goal ? way.goal(w) : w;
+      pos = snap || way.pace == null ? goal : toward(pos, goal, Math.min(way.pace ? dt / (way.pace * DISSOLVE.duration) : 1, 1 / 4));
+      snap = false;
+      const { at, stand } = way.frame(pos, raw, to);
+      // A phone reader already in the close keeps its crossfade where the position puts it, so a close
+      // that starts after this crossing does not start with the page jumping there. Desktop's close
+      // follows its own pinned picture, and no crossing runs beside it.
+      if (mobileLayout()) setCross(xfAt());
+      if (stand != null && stand !== on) { showScene(stand, way); on = stand; }
+      if (at >= 1 - 1e-6 && (w >= 1 || way.unclocked?.())) finish(to);
+      else if (at <= 0 && stepToward(from, target) !== stepToward(from, to)) finish(from);
+      else requestAnimationFrame(f);
+    };
+    const f = (now) => { try { frame(now); } catch (e) { washError = e.message; console.error('crossing frame failed; ending it at its target:', e); finish(to); } };
+    requestAnimationFrame(f);
+  });
+}
+// The scene a crossing has reached comes into the stage already standing. Under a wash's cover scene
+// 3's sketch and film stay off; in a fade it is seen, so they run.
+function showScene(scene, { covered, keepPhase }) {
+  snapStage();
+  sceneClasses(scene);
+  groundAt(scene);
+  if (!keepPhase?.(scene)) scenes(PHASE[scene]);
+  if (scene === SHIPS) { sketchVisible(!covered); videoActive(!covered); }
+}
+// A phone takes a print only while the reader stands in a scene, so a reader who scrolled or flung
+// through one has none of it, and waiting for one held its art up until the reader stopped. A phone
+// fades the live scene instead, as it does wherever a join cannot wash: out over the first half of the
+// crossing and the scene asked for up over the second, one after the other, because the two share one
+// stage. It moves no faster than the print's dissolve, on the same curve, so a fling past the whole
+// crossing fades rather than pops. A reader who stops partway would otherwise stand before a scene
+// partly faded, or before bare paper, so once the page has been still for IDLE_REST the fade settles
+// on the scene whose half of the crossing the reader stopped in, whole, and from there fades over what
+// is left of the crossing in either direction. It never lands mid-crossing: targetAt names the far end
+// of the crossing from the scene shown, so a scene that landed there would have the target point
+// straight back, and the join back would land and be pointed back in turn. The fade is an animation,
+// which a print's clone of the stage does not carry, and no print is taken while a join runs.
+async function fadeLive(to) {
+  const from = shown;
+  dissolvesRun++;
+  // k runs 0 to 1 as the scene being left fades and 1 to 2 as the scene asked for comes up
+  let k = 0, settled = null, thin = null;
+  const fadeTo = (k) => {
+    const gone = k <= 1 ? k : 2 - k;
+    if (gone <= 0) { thin?.cancel(); thin = null; return; }
+    if (!thin) { thin = cell.animate([{ opacity: 1 }, { opacity: 0 }], { ...DISSOLVE, fill: 'both' }); thin.pause(); }
+    thin.currentTime = gone * DISSOLVE.duration;
+  };
+  try {
+    return await crossing(to, {
+      covered: false,
+      pace: 2,   // one dissolve out and one in
+      goal(w) {
+        if (performance.now() - restSince >= IDLE_REST) settled = { w, end: w >= .5 ? 1 : 0 };
+        // settled, the scene shown stays whole on its own side and fades over the distance left on the other
+        return !settled ? w : settled.end ? (w >= settled.w ? 1 : w / Math.max(settled.w, 1e-3))
+          : (w <= settled.w ? 0 : (w - settled.w) / Math.max(1 - settled.w, 1e-3));
+      },
+      frame(pos) {
+        k = 2 * pos;
+        fadeTo(k);
+        return { at: pos, stand: k > 1 ? to : from };
+      },
+    });
+  } finally { thin?.cancel(); }
 }
 const passThrough = (from, to) => { for (let s = stepToward(from, to); s !== to; s = stepToward(s, to)) { sceneClasses(s); groundAt(s); } };
 // A scene change: one mechanism at a time, and never two at once. The target is
@@ -1859,9 +1963,10 @@ async function runJoin() {
         // a cut. The warmer has the others by the next rest.
         const reach = washing() && join.wash && sheets[shown] ? reachToward(shown, target) : shown;
         // With no simulation (reduced motion, or no float render targets) a
-        // wash is a cut, and so is a boundary whose print never arrived; a wash
-        // that runs may be re-pointed or turned around inside.
+        // wash is a cut, and so is a boundary whose print never arrived, which
+        // a phone fades live; a wash that runs may be re-pointed or turned around inside.
         if (reach !== shown) { shown = await pour(reach); }
+        else if (mobileLayout() && !reduce) shown = await fadeLive(to);
         else { dissolveFrom(sheets[shown]); passThrough(shown, to); shown = to; }
       }
       if (target === SHARE && xfAt() >= 1) { standAtTerminalClose(); break; }
@@ -1952,7 +2057,6 @@ function playbackPair(lo, hi, only = null) {
 function dropPlaybackPair() { if (playPair) { sim.free(playPair.rec); playPair = null; } }
 async function pour(to) {
   const from = shown;
-  let terminal = false;
   let fwd = to > from;
   washesRun++;
   // The prints are on hand (below), so the first drops land on the frame the
@@ -1984,17 +2088,8 @@ async function pour(to) {
   const playback = !bridge;
   let rec = playback ? playbackPair(...inOrder(), half ? fwd : null) : null;
   if (mobileHandoff && from === SHIPS) { sketchVisible(false); videoActive(false); }
-  let liveScene = from, lastCover = -1, drawnT = -1;
+  let lastCover = -1, drawnT = -1;
   const pigment = { t: 0, drawn: -1 };
-  const showUnderCover = (scene) => {
-    if (scene === liveScene) return;
-    snapStage();
-    sceneClasses(scene);
-    groundAt(scene);
-    if (!(bridge && scene === DEPLOY)) scenes(PHASE[scene]);
-    if (scene === SHIPS) { sketchVisible(false); videoActive(false); }
-    liveScene = scene;
-  };
   // The scenes' classes all land in this frame, under the canvas: the ones a
   // jump passes over, and the target's. The wash used to take a fresh print of
   // the scene it was leaving first, so the poem under the splash was the poem as
@@ -2006,50 +2101,52 @@ async function pour(to) {
   // reader leaves it and is whole exactly when the next copy has arrived, and a
   // turnaround plays the same frames back. Speed still agitates the live
   // bridge's film and tilts its sheet the way the page is pushed.
-  let t = 0, acc = 0, relift = 0, last = performance.now();
+  let t = 0, acc = 0, relift = 0;
   steps = 0; washT = 0;
-  await new Promise((finish) => {
-    const frame = (now) => {
-      // a lost GPU context draws nothing: end at the target, and later joins cut
-      if (simLost) { finish(); return; }
-      if (target === SHARE && xfAt() >= 1) { terminal = true; finish(); return; }
-      const stepClock = window.__stepClock;
-      if (stepClock && window.__stepLimit != null && steps >= window.__stepLimit) { requestAnimationFrame(f); return; }
-      const dtReal = Math.min(0.1, (now - last) / 1000); last = now;
-      // The newest target, however far off it is: this wash is re-pointed at
-      // it rather than finishing and handing on to a second one.
+  const end = await crossing(to, {
+    covered: true,
+    keepPhase: (scene) => bridge && scene === DEPLOY,
+    lost: () => simLost,   // a lost GPU context draws nothing: end at the target, and later joins cut
+    held: () => window.__stepClock && window.__stepLimit != null && steps >= window.__stepLimit,
+    unclocked: () => !!window.__stepClock,   // the harness steps the wash itself
+    // On a phone the wash keeps only the four-frame floor. A dissolve a crossing, as the fade has,
+    // would hold every crossing a fling passes for that time, one after another: a fling from the top
+    // reached the close 0.77 s after it stopped in WebKit, against 0.17 s with the floor alone.
+    pace: mobileLayout() ? 0 : null,
+    // The newest target, however far off it is: this wash is re-pointed at it rather than finishing
+    // and handing on to a second one. On desktop the recorded wash goes by the position alone: turned
+    // back, it finishes at the scene it left; gone on, it finishes at its own scene and the next join
+    // takes over from there. A turn back to the scene it began on plays the wash back, on either
+    // layout: pointed at its own start, a wash would clock itself by a crossing of no length, and on
+    // desktop, with the picture resting exactly there, that held the join open until the reader moved.
+    aim(goal) {
       const turn = reachToward(from, target);
-      if (mobileLayout() && turn === from) { to = from; finish(); return; }
-      // On desktop the position alone says where the wash is: turned back, it
-      // finishes at the scene it left; gone on, it finishes at its own scene and
-      // the next join takes over from there.
-      const byPosition = playback && !mobileLayout();
-      if (byPosition && t <= 0 && (turn - from) * (to - from) <= 0) { to = from; finish(); return; }
-      if (turn !== to && !byPosition) {
-        // Back across the scene it began on is the turnaround it always was:
-        // the water is poured again and what it laid down lifts. Anything else
-        // is a re-point — the film keeps its pigment and its motion, and only
-        // the print it is drying onto changes.
-        const back = (turn - from) * (to - from) <= 0;
-        to = turn; fwd = to > from;
-        half = mobileLayout() && !sheets[to];
-        if (!pr[to]) pr[to] = sheets[to] || pr[from];
-        if (back) { t = 0; acc = 0; relift = 1; }
-        sim.setPrints(...inOrder());
-        if (playback) rec = playbackPair(...inOrder(), half ? fwd : null);
-        if (!mobileHandoff) { scenes('morph'); passThrough(from, to); sceneClasses(to); }
-      }
+      if (turn === goal || turn === from || (playback && !mobileLayout())) return goal;
+      // Back across the scene it began on is the turnaround it always was:
+      // the water is poured again and what it laid down lifts. Anything else
+      // is a re-point — the film keeps its pigment and its motion, and only
+      // the print it is drying onto changes.
+      const back = (turn - from) * (goal - from) <= 0;
+      to = turn; fwd = to > from;
+      half = mobileLayout() && !sheets[to];
+      if (!pr[to]) pr[to] = sheets[to] || pr[from];
+      if (back) { t = 0; acc = 0; relift = 1; }
+      sim.setPrints(...inOrder());
+      if (playback) rec = playbackPair(...inOrder(), half ? fwd : null);
+      if (!mobileHandoff) { scenes('morph'); passThrough(from, to); sceneClasses(to); }
+      return to;
+    },
+    frame(clock, raw) {
+      const stepClock = window.__stepClock;
+      const dtReal = Math.min(0.1, raw / 1000);
       const v = stepClock ? (window.__scrollV || 0) : scrollV;   // the harness can hold a scroll speed
       const stir = Math.min(2, 3 * Math.abs(v)), tilt = -0.35 * Math.max(-1.2, Math.min(1.2, v));
-      if (!stepClock) acc = T_TOTAL * washAt(from, to);
+      if (!stepClock) acc = T_TOTAL * clock;
       washDbg = { acc: +acc.toFixed(3), dtReal: +dtReal.toFixed(3), fps: Math.round(1 / Math.max(dtReal, 1e-3)) };
       if (playback && !stepClock) {
-        // the position is the clock; the recording runs ahead of it, the outgoing side first
+        // the clock is the position; the recording runs ahead of it, the outgoing side first
         sim.record(rec, fwd, STEPS_PER_FRAME);
-        // A rest's pixel rounding leaves the position a hair short of the end
-        // (targetAt's .002): that is arrival, or the wash would never finish and
-        // would hold every later join.
-        t = T_TOTAL - acc < .002 * T_TOTAL ? T_TOTAL : acc;
+        t = acc;
       } else if (mobileHandoff && !stepClock) {
         pigment.t = t;
         const advanced = advanceMobilePigment(pigment, acc, fwd, stir, tilt, relift, () => {});
@@ -2060,6 +2157,7 @@ async function pour(to) {
       }
       washT = t;
       const caughtUp = t >= acc - DT;
+      let stand = null;
       if (mobileHandoff && caughtUp) {
         // All source furniture stays put while the cover rises. Both live
         // compositions switch only under opaque pigment, including reversal.
@@ -2073,7 +2171,7 @@ async function pour(to) {
           stage.style.setProperty('--wash-cover', cover.toFixed(3));
           lastCover = cover;
         }
-        showUnderCover((playback ? p < .5 : t < .35) ? from : to);
+        stand = (playback ? p < .5 : t < .35) ? from : to;
         bridge?.draw(t);
         if (bridge && mobileLayout() && to === DEPLOY && t > .35 &&
             textBottom(scenesEl[SHIPS]) <= stage.getBoundingClientRect().top + GEOM.cellH * SCALE / 2) {
@@ -2093,21 +2191,18 @@ async function pour(to) {
         drawnT = t;
       }
       if (!mobileHandoff) groundToward(to, smooth(T_DRY, T_TOTAL, t), stepClock ? DT * SPF : dtReal);
-      if (t >= T_TOTAL - 1e-6) finish(); else requestAnimationFrame(f);
-    };
-    // A frame that throws must not leave the join awaiting a wash that never
-    // finishes: that holds `driving` for good and every later join is refused,
-    // so the art stops answering the scroll for the rest of the visit.
-    const f = (now) => { try { frame(now); } catch (e) { washError = e.message; console.error('wash frame failed; ending the transition at its target:', e); finish(); } };
-    requestAnimationFrame(f);
+      // The live wash steps its own film in DT and, sent back to the start, stops within a step of it:
+      // that is its start, or a wash turned back to where it began would never finish.
+      return { at: acc === 0 && t <= DT ? 0 : t / T_TOTAL, stand };
+    },
   });
   if (mobileHandoff) releasePigmentCover();
   bridge?.remove();
   fanEl.style.filter = '';
   fanEl.style.zIndex = '';
-  if (terminal) return SHARE;
-  if (!bridge && !half) setSheet(to, pr[to]);   // the scene now on screen, at rest
-  return to;
+  if (end === SHARE) return SHARE;
+  if (!bridge && !half) setSheet(end, pr[end]);   // the scene now on screen, at rest
+  return end;
 }
 // The wash needs the scene as pixels, and a browser will not hand over its own
 // rendering, so the scene is re-rendered by the same engine: each document
@@ -2831,7 +2926,7 @@ async function warm() {
   // capture holds the canvas still over a moving page, and a wash no longer
   // waits for one — but a reader standing in a scene is enough, rest or not.
   const standing = mobileLayout() && !running() && target === shown && Math.abs(progressAt() - shown) < .002;
-  if (!atRest() && !standing && !(heldForPrints() && !mobileLayout())) return;
+  if (!atRest() && !standing && !heldForPrints()) return;
   // One thing a tick, in this order: a print a jump may ask for that nobody has
   // taken, then the scene on screen, whose print goes off because the scene moves.
   if (!await fillPrints()) await retakeShown();
@@ -2845,10 +2940,11 @@ warmSoon();
 function maybeJoin() { if (!running() && !retaking && target !== shown && !heldForPrints()) runJoin(); }
 // A join is owed and waits for prints. What it waits for is the join's own: primed() asks what the
 // scene needs, and a scene beside a wash needs prints even where the join being started (the close's
-// crossfade) carries none. On a phone a wash also goes with the outgoing print alone.
+// crossfade) carries none. A phone never waits: its wash goes with the outgoing print alone, and
+// without that print the live scene fades (fadeLive).
 function heldForPrints() {
-  if (target === shown || !joinAt(shown, stepToward(shown, target)).wash) return false;
-  return !primed() && !(mobileLayout() && washing() && sheets[shown]);
+  if (mobileLayout() || target === shown || !joinAt(shown, stepToward(shown, target)).wash) return false;
+  return !primed();
 }
 function setTarget(t) {
   if (t === SHARE && xfAt() >= 1) {
@@ -3804,7 +3900,7 @@ async function ready() {
   // scenes cut, which is the path reduced motion already takes
   if (washing() && needed(shown).length) { try { setSheet(shown, await capture(shown)); await takeOthers(mobileLayout() ? neighbours(shown) : washable.filter((scene) => scene !== shown)); } catch (e) { printable = false; console.warn('no prints:', e.message); } }
   booted = true;
-  onScroll(0); if (target !== shown && primed()) runJoin(); else still(shown);
+  onScroll(0); if (target !== shown && !heldForPrints()) runJoin(); else still(shown);
   document.documentElement.dataset.ready = '1';
 }
 // Every frame must be there before the first prints are taken: a print of a
