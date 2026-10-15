@@ -82,6 +82,8 @@ pub struct NavigationBuilder<'a> {
     fm_logo: bool,
     /// `[site].header`, resolved. See `HeaderMode`.
     header_mode: HeaderMode,
+    /// Term-kind roots that are nav entries: `(namespace key, label, weight)`.
+    term_nav: Vec<(String, String, Option<i32>)>,
 }
 
 impl<'a> NavigationBuilder<'a> {
@@ -109,7 +111,14 @@ impl<'a> NavigationBuilder<'a> {
             fm_breadcrumb: false,
             fm_logo: false,
             header_mode: HeaderMode::Brand,
+            term_nav: Vec::new(),
         }
+    }
+
+    /// Add term-kind roots as nav entries after the content entries.
+    pub fn with_term_nav(mut self, term_nav: Vec<(String, String, Option<i32>)>) -> Self {
+        self.term_nav = term_nav;
+        self
     }
 
     /// Editor-preview `data-source-fm` annotations — see the field docs.
@@ -280,21 +289,7 @@ impl<'a> NavigationBuilder<'a> {
             })
             .collect();
 
-        nav_documents.sort_by(|a, b| {
-            match (a.weight, b.weight) {
-                // Tied weights fall through to alphabetical so the order is
-                // independent of filesystem walk order. Without the tiebreaker
-                // macOS and Linux scan_folder() produce different nav orders
-                // for items with the same explicit weight.
-                (Some(aw), Some(bw)) => aw.cmp(&bw).then_with(|| a.nav_text().cmp(b.nav_text())),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                // Sort alphabetically by the plain-text chrome label.
-                (None, None) => a.nav_text().cmp(b.nav_text()),
-            }
-        });
-
-        let mut page_items: Vec<String> = nav_documents.iter()
+        let mut entries: Vec<(Option<i32>, &str, String)> = nav_documents.iter()
             .map(|doc| {
                 // Nav link text: `nav_label` if the page set one, else the
                 // chrome label. Both are plain text, so escape at the write.
@@ -321,9 +316,46 @@ impl<'a> NavigationBuilder<'a> {
                 } else {
                     ""
                 };
-                format!(r#"<a href="{}"{attrs}>{}</a>"#, href, label)
+                (doc.weight, doc.nav_text(), format!(r#"<a href="{}"{attrs}>{}</a>"#, href, label))
             })
             .collect();
+
+        // Term kinds that asked for a place in the nav. Only for pages of the
+        // site language: a term root is not part of a language tree. One with
+        // a `weight` is ordered among the entries by the rule below; one
+        // without follows every page entry, in config order.
+        let mut unweighted_terms: Vec<String> = Vec::new();
+        if effective_lang == self.lang {
+            for (key, label, weight) in &self.term_nav {
+                let is_current = self.current_page_url == Some(format!("{key}/index.html").as_str());
+                let attrs = if is_current { r#" class="active""# } else { "" };
+                let item = format!(
+                    r#"<a href="/{}/"{attrs}>{}</a>"#, // allow:served-path-url-construct (nav href to a term kind's root page, not a framework asset)
+                    crate::build::features::html_escape(key),
+                    crate::build::features::html_escape(label),
+                );
+                match weight {
+                    Some(_) => entries.push((*weight, label.as_str(), item)),
+                    None => unweighted_terms.push(item),
+                }
+            }
+        }
+
+        entries.sort_by(|a, b| {
+            match (a.0, b.0) {
+                // Tied weights fall through to alphabetical so the order is
+                // independent of filesystem walk order. Without the tiebreaker
+                // macOS and Linux scan_folder() produce different nav orders
+                // for items with the same explicit weight.
+                (Some(aw), Some(bw)) => aw.cmp(&bw).then_with(|| a.1.cmp(b.1)),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                // Sort alphabetically by the plain-text chrome label.
+                (None, None) => a.1.cmp(b.1),
+            }
+        });
+        let mut page_items: Vec<String> = entries.into_iter().map(|(_, _, item)| item).collect();
+        page_items.extend(unweighted_terms);
 
         // `nav` header mode always opens the link list with Home, ahead of
         // the site's own nav items and outside their weight order — it is

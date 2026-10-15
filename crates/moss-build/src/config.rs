@@ -59,6 +59,10 @@ use toml::Value;
 #[derive(Debug, Clone)]
 pub struct ConfigFile {
     root: toml::Table,
+    /// The keys under `[terms]` in the order the file writes them. `root`
+    /// reads tables back sorted by key, so this is the only record of that
+    /// order; it orders the nav-bar term kinds.
+    terms_order: Vec<String>,
 }
 
 impl ConfigFile {
@@ -84,7 +88,15 @@ impl ConfigFile {
         if let Err(e) = crate::config::migrations::migrate_to_current(&mut table) {
             log::warn!(target: "config", "in-memory config migration failed, reading raw values: {e}");
         }
-        Ok(Self { root: table })
+        let terms_order = text
+            .parse::<toml_edit::Document>()
+            .ok()
+            .and_then(|doc| {
+                let terms = doc.get("terms")?.as_table_like()?;
+                Some(terms.iter().map(|(key, _)| key.to_string()).collect())
+            })
+            .unwrap_or_default();
+        Ok(Self { root: table, terms_order })
     }
 
     /// The config of a project that has none — every lookup answers `None`.
@@ -96,6 +108,7 @@ impl ConfigFile {
     pub fn empty() -> Self {
         Self {
             root: toml::Table::new(),
+            terms_order: Vec::new(),
         }
     }
 
@@ -265,6 +278,27 @@ impl ConfigFile {
         }
         kinds.extend(declared);
         kinds
+    }
+
+    /// The kinds whose `[terms.<key>]` block says `nav = true`, in the order
+    /// the file writes them, each with its explicit `title` and `weight` if it set them.
+    /// Whether a kind has a root page to link is decided later, from the terms
+    /// the site actually has (`TermIndex::nav_entries`).
+    pub fn terms_nav(&self) -> Vec<(String, Option<String>, Option<i32>)> {
+        let Some(terms) = self.root.get("terms").and_then(|v| v.as_table()) else { return Vec::new() };
+        let mut nav: Vec<(usize, String, Option<String>, Option<i32>)> = terms
+            .iter()
+            .filter_map(|(key, value)| {
+                let table = value.as_table()?;
+                table.get("nav")?.as_bool().filter(|on| *on)?;
+                let title = table.get("title").and_then(|v| v.as_str()).map(str::to_string);
+                let order = self.terms_order.iter().position(|k| k == key).unwrap_or(usize::MAX);
+                let weight = table.get("weight").and_then(|v| v.as_integer()).and_then(|w| i32::try_from(w).ok());
+                Some((order, key.clone(), title, weight))
+            })
+            .collect();
+        nav.sort();
+        nav.into_iter().map(|(_, key, title, weight)| (key, title, weight)).collect()
     }
 
     /// The `[redirects]` table: old address, new address, as the author wrote

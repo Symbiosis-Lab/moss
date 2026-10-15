@@ -215,6 +215,26 @@ impl TermIndex {
         self.kinds.iter().map(|k| k.key.as_str()).filter(move |ns| self.namespace_in_use(ns))
     }
 
+    /// The nav-bar entries of the kinds in `nav` (see
+    /// `ConfigFile::terms_nav`) that have a root page: `(namespace key,
+    /// label, weight)`, in the order given. The label is the kind's explicit `title`,
+    /// else its resolved title for a built-in kind, else its key capitalized.
+    pub fn nav_entries(&self, nav: &[(String, Option<String>, Option<i32>)]) -> Vec<(String, String, Option<i32>)> {
+        nav.iter()
+            .filter(|(key, _, _)| self.namespace_in_use(key))
+            .map(|(key, title, weight)| {
+                let label = title.clone().unwrap_or_else(|| match self.kinds.iter().find(|k| k.key == *key) {
+                    Some(k) if key == moss_core::terms::AUTHOR_NS || key == moss_core::terms::TAGS_NS => k.title.clone(),
+                    _ => {
+                        let mut chars = key.chars();
+                        chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+                    }
+                });
+                (key.clone(), label, *weight)
+            })
+            .collect()
+    }
+
     /// Every pseudo-folder that needs a synthetic folder document and an
     /// index page: the unclaimed terms, plus the root of each namespace in
     /// use. The one list both folder-index synthesis blocks in

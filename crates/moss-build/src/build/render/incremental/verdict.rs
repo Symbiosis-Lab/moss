@@ -202,6 +202,8 @@ pub struct VerdictInputs<'a> {
     pub site_lang: crate::i18n::Language,
     pub typesetting: Option<&'a str>,
     pub math: bool,
+    /// Term kinds shown in the nav bar — see `LayoutConfig::term_nav`.
+    pub term_nav: &'a [(String, String, Option<i32>)],
 }
 
 /// Name up to three of the paths behind a full-render cause, sorted so the
@@ -404,7 +406,8 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
     // `FullCause`'s other build-globals, a move here is NOT a full-render
     // bypass: it feeds the per-language widen inside the incremental branch
     // below instead.
-    let nav_globals = dependents::nav_globals(documents, inputs.project.has_content_folders);
+    let mut nav_globals = dependents::nav_globals(documents, inputs.project.has_content_folders);
+    dependents::fold_term_nav(&mut nav_globals, inputs.site_lang, inputs.term_nav);
     let nav_globals_changed = previous.digests_moved(DigestMap::NavGlobals, &nav_globals);
     let home_title_globals = dependents::home_title_globals(documents, inputs.site_lang);
     let home_title_globals_changed = previous.digests_moved(DigestMap::HomeTitleGlobals, &home_title_globals);

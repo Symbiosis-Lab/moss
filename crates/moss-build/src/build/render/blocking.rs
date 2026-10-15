@@ -1342,7 +1342,7 @@ pub fn generate_blocking_content_for_build(
         let layout_config = layout_config.with_floating_nav(site_config.floating_nav);
         // [site].header (default "brand") rides along for the same reason:
         // the nav renderer reads LayoutConfig, not SiteConfig.
-        let layout_config = layout_config.with_header_mode(site_config.header);
+        let layout_config = layout_config.with_header_mode(site_config.header).with_term_nav(term_index.nav_entries(&site_config.term_nav));
         let layout_config = layout_config.with_place_maps(site_config.place_maps.clone());
 
         // RSS feed: always generated when a real (https) URL is resolved.
@@ -1678,6 +1678,7 @@ pub fn generate_blocking_content_for_build(
             site_lang,
             typesetting: layout_config.typesetting.as_deref(),
             math: site_config.math,
+            term_nav: &layout_config.term_nav,
         },
     );
     // The carry machinery's own price, and on a real vault the largest single
@@ -2847,6 +2848,7 @@ pub fn generate_blocking_content_for_build(
         )
         .with_search(layout_config.assets.search)
         .with_header_mode(layout_config.header)
+        .with_term_nav(layout_config.term_nav.clone())
         .with_asset_snapshot(shared.media_lookup.asset_snapshot());
         let nav_builder = if let Some(ref logo) = layout_config.logo_path {
             nav_builder.with_logo(logo.clone())

@@ -89,6 +89,17 @@ pub fn nav_globals(documents: &[ParsedDocument], has_content_folders: bool) -> B
         .collect()
 }
 
+/// Fold the nav-bar term kinds (`[terms.<key>] nav = true`, with a root page)
+/// into the site language's nav digest: they are nav entries too, and they
+/// appear on exactly that language's pages. A no-op for a site with none.
+pub fn fold_term_nav(globals: &mut BTreeMap<String, String>, site_lang: Language, term_nav: &[(String, String, Option<i32>)]) {
+    if term_nav.is_empty() {
+        return;
+    }
+    let digest = globals.entry(site_lang.code().to_string()).or_default();
+    *digest = debug_hash(&(digest.as_str(), term_nav));
+}
+
 /// The document that serves as `lang`'s home page: `index.html` for the
 /// site's own language, `{lang.code()}/index.html` for any other —
 /// mirrors `render::html::find_homepage_doc` exactly (duplicated rather than

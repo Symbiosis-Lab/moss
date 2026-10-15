@@ -1487,6 +1487,7 @@ fn build_inner(
         // before this literal, so the gazetteer's `parent` links can be
         // attached first.
         term_kinds: kinds,
+        term_nav: cfg.as_ref().map(|c| c.terms_nav()).unwrap_or_default(),
         place_maps,
         incremental,
         derivations: derived.clone(),

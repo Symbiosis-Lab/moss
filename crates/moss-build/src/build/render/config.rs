@@ -118,6 +118,9 @@ pub struct SiteConfig {
     /// namespace, built-in (`authors`, `tags`) and declared alike. The one
     /// thing `build::terms::derive_terms` reads to decide term membership.
     pub term_kinds: Vec<crate::build::terms::TermKind>,
+    /// The term kinds that asked for a nav-bar entry (`nav = true`), in config
+    /// order — `ConfigFile::terms_nav`.
+    pub term_nav: Vec<(String, Option<String>, Option<i32>)>,
     /// Decoded geography, gazetteer, place namespace and locator preference.
     pub place_maps: Option<crate::build::place_map::PlaceMapRenderContext>,
     /// What this build may reuse from the last one. Both bits are
@@ -171,6 +174,7 @@ impl Default for SiteConfig {
             ai_policy: None,
             search: false,
             term_kinds: Vec::new(),
+            term_nav: Vec::new(),
             place_maps: None,
             incremental: IncrementalGates::default(),
             derivations: None,

@@ -113,6 +113,7 @@ impl Harness {
                 site_lang: crate::i18n::Language::En,
                 typesetting: None,
                 math: false,
+                term_nav: &[],
             },
         )
     }
