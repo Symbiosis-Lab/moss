@@ -14,7 +14,7 @@ logo: assets/brand/logo.svg
 將資料夾打包成網站的桌面應用。右鍵，預覽，上線。
 
 :::buttons
-[申請測試版](#青苔正在封閉測試)
+[下載青苔](https://github.com/Symbiosis-Lab/moss/releases/latest)
 [開始使用](開始使用/)
 :::
 
@@ -48,11 +48,9 @@ Markdown 檔案。使用內建編輯器、Obsidian、或者任何軟體。
 
 透過 CSS 和 JavaScript 自訂設計，透過指令碼外掛自訂編譯流程。CLI 支援自動化和 CI 整合。詳見[擴充](docs/Write a plugin/)。
 
-### 青苔正在封閉測試
+### 取得更新
 
-我們正在分批邀請寫作者，一邊打磨細節。你可以留下你的郵箱，等到你那一批，我們會發送一份建構版本，通常在報名後幾週內。
+偶爾一封關於青苔的消息，有值得說的事才寫。
 
-只發一封郵件。只有當你的建構版本就緒，我們才會寫信。
-
-:::subscribe {button="申請測試"}
+:::subscribe {button="訂閱"}
 :::

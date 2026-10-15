@@ -19,7 +19,7 @@ const WHEEL_ATTEMPTS = 3;
 const VIEWPORTS = [['desktop', { width: 1440, height: 900 }], ['phone', { width: 390, height: 844, isMobile: true, hasTouch: true }]];
 const engines = (process.env.LANDING_ENGINES || 'chromium,webkit').split(',');
 // Reduced motion takes different code paths in the page's scroll controller, so it gets its own rows.
-const ROWS = [['desktop', 'wheel', 'no-preference'], ['desktop', 'wheel', 'reduce'], ['desktop', 'jump', 'no-preference'], ['desktop', 'jump', 'reduce'], ['phone', 'jump', 'no-preference']];
+const ROWS = [['desktop', 'wheel', 'no-preference'], ['desktop', 'wheel', 'reduce'], ['desktop', 'jump', 'no-preference'], ['desktop', 'jump', 'reduce'], ['phone', 'jump', 'no-preference'], ['desktop', 'cta', 'no-preference'], ['phone', 'cta', 'no-preference']];
 
 const server = await resolveBaseURL(process.argv[2], { root: fileURLToPath(new URL('../site/', import.meta.url)) });
 const playwright = await loadPlaywright();
@@ -43,6 +43,14 @@ try {
           const href = await page.locator('#downloads a[data-platform="macos"]').getAttribute('href');
           seen.add(href);
           if (how === 'jump') await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+          // The hero CTA is the way a reader asks for the download: it must land on the buttons, not
+          // merely somewhere near them, so this row also requires the first one to take the focus.
+          else if (how === 'cta') {
+            // closing.js wires the CTA on boot; clicked before that it is a plain anchor jump, which
+            // reaches the buttons but focuses nothing. The wired handler is what this row is about.
+            await page.waitForFunction(() => document.documentElement.dataset.ready === '1', null, { timeout: CLICKABLE_WITHIN_MS });
+            await page.locator('a[data-track="cta-download"]').first().click();
+          }
           else {
             // A person's wheel is separate gestures (two notches, then a pause), and the page moves one
             // scene per gesture. One endless stream of events is a single gesture and proves nothing.
@@ -78,6 +86,12 @@ try {
             if (how === 'wheel' && attempt < WHEEL_ATTEMPTS) { console.warn(`WARN ${label}: stalled before the close (${covered}); retrying`); return 'retry'; }
             console.error(`FAIL ${label}: macOS button not clickable ${CLICKABLE_WITHIN_MS}ms after reaching the close; covered by ${covered}`);
             failed = true; return;
+          }
+          if (how === 'cta') {
+            // The handler focuses once the staged scene settles, which is after the button becomes
+            // reachable, so this waits for the focus rather than reading it the instant it arrives.
+            const focused = await page.waitForFunction(() => !!document.activeElement?.closest('#downloads'), null, { timeout: CLICKABLE_WITHIN_MS, polling: 100 }).then(() => true, () => false);
+            if (!focused) { console.error(`FAIL ${label}: the CTA reached the buttons but focus stayed on ${await page.evaluate(() => document.activeElement?.tagName)} outside them`); failed = true; }
           }
           const dead = await page.evaluate(() => window.__visibleButDead || 0);
           if (dead) { console.error(`FAIL ${label}: the close was visible for ${dead * 100}ms while the button could not be clicked`); failed = true; }

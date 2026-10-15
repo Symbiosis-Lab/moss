@@ -157,21 +157,23 @@
         : (window.__landingI18n?.t('success') || 'Check your email to confirm your subscription.')
     );
 
-    document.querySelectorAll('a[href="#beta"]').forEach((link) => {
+    document.querySelectorAll('a[href="#downloads"]').forEach((link) => {
       link.addEventListener('click', (event) => {
         event.preventDefault();
-        const beta = document.querySelector('#beta');
-        const email = document.querySelector('#beta-email');
-        beta?.scrollIntoView({ behavior: 'auto', block: 'center' });
+        const downloads = document.querySelector('#downloads');
+        downloads?.scrollIntoView({ behavior: 'auto', block: 'center' });
         window.mossLanding?.openSignup();
         const started = performance.now();
-        const focusEmail = () => {
+        // The buttons live inside the staged closing scene, so they take the pointer only once it
+        // has settled: the focus waits for the scene, not for the scroll.
+        const focusDownload = () => {
           const state = window.__state?.();
-          if (email && !email.closest('[inert]') && state?.shown === 4 && !state.running) email.focus({ preventScroll: true });
-          else if (performance.now() - started < 10000) setTimeout(focusEmail, 50);
+          const first = downloads?.querySelector('a');
+          if (first && !first.closest('[inert]') && state?.shown === 4 && !state.running) first.focus({ preventScroll: true });
+          else if (performance.now() - started < 10000) setTimeout(focusDownload, 50);
         };
-        focusEmail();
-        if ('onscrollend' in window) addEventListener('scrollend', focusEmail, { once: true });
+        focusDownload();
+        if ('onscrollend' in window) addEventListener('scrollend', focusDownload, { once: true });
       });
     });
   });

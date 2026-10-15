@@ -10,3 +10,9 @@ search = true
 ai_policy = "unrestricted"
 lang = "en"
 rss_footer = false
+
+[redirects]
+# The apply pages are gone with the closed beta; the app still links /apply.
+"apply/" = "/"
+"zh-hans/apply/" = "/zh-hans/"
+"zh-hant/apply/" = "/zh-hant/"

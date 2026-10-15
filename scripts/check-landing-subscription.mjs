@@ -11,7 +11,12 @@ for (const engine of [chromium, webkit]) {
    // the page's visit counter posts to the same host: answer it without counting it, and never let a check reach production
    await page.route('https://api.mosspub.com/**',async route=>{if(/\/beacon$/.test(new URL(route.request().url()).pathname))return route.fulfill({status:204});calls.push({url:route.request().url(),body:JSON.parse(route.request().postData())});await route.fulfill({status,contentType:'application/json',body:JSON.stringify(reply)});});
    await page.goto(new URL(locale,baseURL).href);
-   await page.locator('a[href="#beta"]').first().click();
+   // No link points at the form any more: the hero CTA leads to the downloads. Reveal the closing
+   // scene the way the page does and wait for it to stop being inert, which is what the old click
+   // was really waiting for.
+   await page.evaluate(()=>window.mossLanding?.openSignup());
+   await page.waitForFunction(()=>{const e=document.querySelector('#beta-email');return !!e&&!e.closest('[inert]');},null,{timeout:20000});
+   await page.locator('#beta-email').focus();
    await page.waitForFunction(()=>document.activeElement?.id==='beta-email',null,{timeout:20000});
    // a catalog string that carries a line break has to be set as markup: set as text, the reader sees its tag
    const shown=await page.evaluate(()=>document.body.innerText), tag=shown.match(/.{0,40}<\/?[a-z][^>]*>.{0,40}/i);
