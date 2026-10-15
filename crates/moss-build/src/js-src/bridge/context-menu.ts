@@ -25,6 +25,8 @@
  * `installContextMenu`.
  */
 
+import { resolveSourceTargets, type SourceTarget } from "./source-target";
+
 /** What the shell needs to build the menu. Posted to window.parent. */
 export interface PreviewContextPayload {
   type: "moss-context-menu";
@@ -33,8 +35,8 @@ export interface PreviewContextPayload {
   y: number;
   /** The iframe document's current URL at click time. */
   page: string;
-  /** Resolved source target under the cursor (click-vocabulary shape), or null. */
-  target: object | null;
+  /** Source targets under the cursor, nearest first; empty when none. */
+  targets: SourceTarget[];
   /** Absolute URL of the enclosing <a>, or null. */
   link: string | null;
   /** Absolute URL of the <img> under the cursor, or null. */
@@ -73,8 +75,6 @@ export interface BuildContextOptions {
   pageHref: string;
   /** Raw selection string (window.getSelection()?.toString()). */
   selection: string | null | undefined;
-  /** The bridge's resolveSourceTarget, injected to avoid a circular import. */
-  resolveSourceTarget(el: Element | null): object | null;
 }
 
 /**
@@ -119,7 +119,7 @@ export function buildContextPayload(
     x: opts.x,
     y: opts.y,
     page: opts.pageHref,
-    target: opts.resolveSourceTarget(el),
+    targets: resolveSourceTargets(el),
     link,
     image,
     selection: selText.length > 0 ? selText : null,
@@ -130,10 +130,7 @@ export function buildContextPayload(
  * Suppress the native context menu and post the moss context payload to the
  * shell. Editable targets keep the native menu (see isEditableTarget).
  */
-export function installContextMenu(
-  win: Window,
-  resolveSourceTarget: (el: Element | null) => object | null,
-): void {
+export function installContextMenu(win: Window): void {
   win.document.addEventListener("contextmenu", (event: MouseEvent) => {
     const el = event.target instanceof Element ? event.target : null;
     if (isEditableTarget(el)) return; // native editable menu stays (Paste)
@@ -145,7 +142,6 @@ export function installContextMenu(
         y: event.clientY,
         pageHref: win.location.href,
         selection: win.getSelection()?.toString(),
-        resolveSourceTarget,
       }),
       "*",
     );

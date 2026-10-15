@@ -97,7 +97,7 @@
         "crates/moss-build/src/build": 78,
         "crates/moss-build/src/build/media": 19,
         "crates/moss-build/src/deploy": 18,
-        "crates/moss-build/src/js-src/bridge": 17,
+        "crates/moss-build/src/js-src/bridge": 18,
         "crates/moss-build/src/js-src/site": 27,
         "crates/moss-build/src/plugins": 19,
         "crates/moss-core/src": 42,

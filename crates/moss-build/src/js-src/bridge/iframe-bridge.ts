@@ -25,6 +25,7 @@ import { startSiteAccent } from "./site-accent";
 import type { ThemeSettled } from "./theme-settled";
 import { classifyClickGesture, shouldLeaveClickToPage } from "./click-vocabulary";
 import { installContextMenu } from "./context-menu";
+import { resolveSourceTarget } from "./source-target";
 import { installCaptureResponder } from "./capture/responder";
 
 (function () {
@@ -592,51 +593,6 @@ import { installCaptureResponder } from "./capture/responder";
   );
 
   // ============================================================
-  // Source Target Resolution (unified click-to-source mapping)
-  // ============================================================
-  // Resolves a DOM element to its source target by walking up the DOM
-  // checking for annotation attributes in priority order:
-  //   1. data-source-fm="field"   → frontmatter field
-  //   2. data-source-range="N-M"  → shortcode line range
-  //   3. data-source-line="N"     → body markdown line
-  //   4. data-source-none         → template chrome (unmappable)
-  //   5. no annotation            → null (ignore)
-
-  type SourceTarget =
-    | { kind: 'frontmatter'; field: string }
-    | { kind: 'body-range'; startLine: number; endLine: number }
-    | { kind: 'body-line'; line: number }
-    | { kind: 'none' };
-
-  /** Extract the start source line from an element with data-source-line or data-source-range. */
-  function resolveSourceTarget(el: Element | null): SourceTarget | null {
-    if (!el) return null;
-
-    const fm = el.closest('[data-source-fm]');
-    if (fm) return { kind: 'frontmatter', field: fm.getAttribute('data-source-fm')! };
-
-    const range = el.closest('[data-source-range]');
-    if (range) {
-      const parts = range.getAttribute('data-source-range')!.split('-');
-      const start = Number(parts[0]);
-      const end = Number(parts[1]);
-      if (isNaN(start) || isNaN(end)) return null;
-      return { kind: 'body-range', startLine: start, endLine: end };
-    }
-
-    const line = el.closest('[data-source-line]');
-    if (line) {
-      const n = parseInt(line.getAttribute('data-source-line')!, 10);
-      return n > 0 ? { kind: 'body-line', line: n } : null;
-    }
-
-    const none = el.closest('[data-source-none]');
-    if (none) return { kind: 'none' };
-
-    return null;
-  }
-
-  // ============================================================
   // Click-to-Source Handler (Preview → Editor navigation)
   // ============================================================
   // Preview-click vocabulary: single click = reveal (editor scrolls + flashes, focus stays here),
@@ -669,7 +625,7 @@ import { installCaptureResponder } from "./capture/responder";
   // bypassed the shell's navigation orchestration and whose "Copy Link"
   // handed out localhost URLs) and report the click's context to the shell,
   // which renders the moss menu. Logic lives in bridge/context-menu.ts.
-  installContextMenu(window, resolveSourceTarget);
+  installContextMenu(window);
 
   // ============================================================
   // Selection Sync: Preview → Editor (text selection mapping)
