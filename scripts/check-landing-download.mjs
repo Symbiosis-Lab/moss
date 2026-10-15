@@ -9,7 +9,12 @@ import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { loadPlaywright, resolveBaseURL } from './landing-harness.mjs';
 
-const CLICKABLE_WITHIN_MS = 12000;
+// A hang guard, not a pace bound. Reaching the close plays every crossing it passes, and those are
+// paced in frames, so a software-rendered engine under load needs seconds where a real one needs
+// tenths. The rule that a button a person can see must work is __visibleButDead below; this only
+// bounds how long we wait for the button, and a tight bound here reports a slow machine as a dead
+// button and hides that assertion behind its own timeout.
+const CLICKABLE_WITHIN_MS = 30000;
 const WHEEL_ATTEMPTS = 3;
 const VIEWPORTS = [['desktop', { width: 1440, height: 900 }], ['phone', { width: 390, height: 844, isMobile: true, hasTouch: true }]];
 const engines = (process.env.LANDING_ENGINES || 'chromium,webkit').split(',');
