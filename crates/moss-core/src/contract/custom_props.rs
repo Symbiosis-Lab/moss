@@ -430,4 +430,10 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         values: &["wide", "full"],
         description: "Present when a page widens its column via `content_width:` frontmatter; absent at the default reading measure. This is what `--moss-content-width` — and therefore `--moss-nav-width`, which tracks it — resolves against, so it is the hook for a layout that should respond to the preset rather than to a fixed width.",
     },
+    ScopeAttr {
+        selector: ".moss-eyebrow > span, .moss-subtitle, .moss-key-figure, .moss-facts > div",
+        name: "data-field",
+        values: &[],
+        description: "The declared field's name, on each element a placed field draws: each eyebrow span, the subtitle, each key figure and each facts row. Scope one field with `[data-field=\"ja\"]` rather than a selector on the page's address.",
+    },
 ];

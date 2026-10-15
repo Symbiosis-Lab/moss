@@ -362,7 +362,7 @@ impl ConfigFile {
     }
 
     pub fn field_decls(&self) -> (Vec<moss_core::fields::FieldDecl>, Vec<String>) {
-        use moss_core::fields::{parse_place, place_names, Choice, FieldDecl, FieldKind};
+        use moss_core::fields::{Choice, FieldDecl, FieldKind};
         let mut decls = Vec::new();
         let mut problems = Vec::new();
         let Some(value) = self.root.get("fields") else {
@@ -379,8 +379,24 @@ impl ConfigFile {
                 problems.push(format!("[fields.{name}] must be a table; ignoring it"));
                 continue;
             };
-            if moss_core::schema_fields::BUILTIN_FIELDS.iter().any(|f| f.name == name) {
-                problems.push(format!("[fields.{name}] is a moss field and cannot be redeclared"));
+            if moss_core::schema_fields::builtin_field(name).is_some() {
+                if !moss_core::schema_fields::PLACEABLE_BUILTINS.contains(&name.as_str()) {
+                    problems.push(format!(
+                        "[fields.{name}] is a moss field and cannot be redeclared; of moss's fields only {} can take a place",
+                        moss_core::schema_fields::PLACEABLE_BUILTINS.join(" and ")
+                    ));
+                    continue;
+                }
+                for key in sub.keys() {
+                    if !matches!(key.as_str(), "place" | "label") {
+                        problems.push(format!(
+                            "[fields.{name}] has \"{key}\"; built-in fields take only place and label"
+                        ));
+                    }
+                }
+                let place = Self::declared_place(sub, name, &mut problems);
+                let label = Self::declared_label(sub, name, &mut problems);
+                decls.push(FieldDecl { name: name.clone(), kind: FieldKind::Text, choices: Vec::new(), place, label, scope: Vec::new() });
                 continue;
             }
             let Some(type_name) = sub.get("type").and_then(|v| v.as_str()) else {
@@ -435,30 +451,41 @@ impl ConfigFile {
                 }
                 (_, None) => Vec::new(),
             };
-            let place = match sub.get("place").and_then(|v| v.as_str()) {
-                None | Some("none") => None,
-                Some(v) => match parse_place(v) {
-                    Some(place) => Some(place),
-                    None => {
-                        problems.push(format!(
-                            "[fields.{name}] has an unknown place \"{v}\"; one of: {}, none",
-                            place_names().join(", ")
-                        ));
-                        None
-                    }
-                },
-            };
-            let label = match sub.get("label") {
-                None => Vec::new(),
-                Some(v) => Self::choice_labels(v).unwrap_or_else(|| {
-                    problems.push(format!("[fields.{name}] `label` must be a string or a table of language labels; ignoring it"));
-                    Vec::new()
-                }),
-            };
+            let place = Self::declared_place(sub, name, &mut problems);
+            let label = Self::declared_label(sub, name, &mut problems);
             let scope = Self::string_list(sub, "in", name, &mut problems);
             decls.push(FieldDecl { name: name.clone(), kind, choices, place, label, scope });
         }
         (decls, problems)
+    }
+
+    /// A declaration's `place`, when it names one. `none` and an absent key both mean no place.
+    fn declared_place(sub: &toml::Table, name: &str, problems: &mut Vec<String>) -> Option<moss_core::fields::Place> {
+        use moss_core::fields::{parse_place, place_names};
+        match sub.get("place").and_then(|v| v.as_str()) {
+            None | Some("none") => None,
+            Some(v) => match parse_place(v) {
+                Some(place) => Some(place),
+                None => {
+                    problems.push(format!(
+                        "[fields.{name}] has an unknown place \"{v}\"; one of: {}, none",
+                        place_names().join(", ")
+                    ));
+                    None
+                }
+            },
+        }
+    }
+
+    /// A declaration's `label`, as `(language tag, label)` pairs; empty when absent or malformed.
+    fn declared_label(sub: &toml::Table, name: &str, problems: &mut Vec<String>) -> Vec<(String, String)> {
+        match sub.get("label") {
+            None => Vec::new(),
+            Some(v) => Self::choice_labels(v).unwrap_or_else(|| {
+                problems.push(format!("[fields.{name}] `label` must be a string or a table of language labels; ignoring it"));
+                Vec::new()
+            }),
+        }
     }
 
     /// A boolean field under `[terms]`, e.g. `author`, `tags`: the legacy,

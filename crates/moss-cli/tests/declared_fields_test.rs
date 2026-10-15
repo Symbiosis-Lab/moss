@@ -235,3 +235,18 @@ fn a_page_link_in_a_fact_reads_as_written_and_links_where_it_resolves() {
     assert!(html.contains("<dd><a href=\"/people/anna/\">anna</a></dd>"), "{html}");
     assert!(html.contains("<dd><a href=\"/people/anna/\">Dr. Weber</a>, Nobody</dd>"), "{html}");
 }
+
+#[test]
+fn a_builtin_description_placed_as_eyebrow_draws_only_the_authored_value() {
+    let config = "[fields.description]\nplace = \"eyebrow\"\n";
+    let page = "---\ntitle: Okabe\ndescription: Station 21 · Okabe\n---\nbody\n";
+    let plain = "---\ntitle: Plain\n---\nA paragraph of body text that a derived description could be taken from.\n";
+    let s = site(config, &[("Housing/okabe.md", page), ("Housing/plain.md", plain)]);
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let html = built(&s, "housing/okabe/index.html");
+    let eyebrow = position(&html, "<p class=\"moss-eyebrow\"><span data-field=\"description\">Station 21 · Okabe</span></p>");
+    let h1 = position(&html, "<h1 class=\"moss-article-title\">Okabe</h1>");
+    assert!(eyebrow < h1, "{html}");
+    assert!(!built(&s, "housing/plain/index.html").contains("moss-eyebrow"), "a derived description is not drawn");
+}

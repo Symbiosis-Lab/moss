@@ -1170,6 +1170,15 @@ pub fn term_claim_fields() -> impl Iterator<Item = &'static str> {
     BUILTIN_FIELDS.iter().filter(|f| f.term_claim).map(|f| f.name)
 }
 
+/// The built-in field a declaration with this name redeclares, if any.
+pub fn builtin_field(name: &str) -> Option<&'static BuiltinField> {
+    BUILTIN_FIELDS.iter().find(|f| f.name == name)
+}
+
+/// The built-in fields a site may give a `place`: page text a reader would
+/// see. Plain-string plumbing such as `url`, `slot` or `uid` is not on it.
+pub const PLACEABLE_BUILTINS: &[&str] = &["description", "publisher"];
+
 #[cfg(test)]
 #[path = "schema_fields_tests.rs"]
 mod tests;

@@ -234,6 +234,14 @@ fn field_decls_reads_a_choice_with_a_label_table() {
 }
 
 #[test]
+fn field_decls_plumbing_builtin_cannot_take_a_place() {
+    let config = ConfigFile::parse("[fields.url]\nplace = \"eyebrow\"\n").unwrap();
+    let (decls, problems) = config.field_decls();
+    assert!(decls.is_empty());
+    assert!(problems.iter().any(|p| p.contains("[fields.url]") && p.contains("description and publisher")), "got: {problems:?}");
+}
+
+#[test]
 fn field_decls_choice_table_keeps_the_order_the_file_writes() {
     let config = ConfigFile::parse(
         "[fields.kind]\ntype = \"choice\"\nof = { Service = \"Founded\", Building = \"Built\", Event = \"Held\" }\n",
@@ -283,11 +291,26 @@ fn field_decls_unknown_type_is_a_problem_and_dropped() {
 }
 
 #[test]
-fn field_decls_builtin_name_is_a_problem_and_dropped() {
-    let config = ConfigFile::parse("[fields.title]\ntype = \"text\"\n").unwrap();
+fn field_decls_description_takes_a_place() {
+    let config = ConfigFile::parse("[fields.description]\nplace = \"eyebrow\"\nlabel = \"Summary\"\n").unwrap();
     let (decls, problems) = config.field_decls();
-    assert!(decls.is_empty());
-    assert_eq!(problems, vec!["[fields.title] is a moss field and cannot be redeclared".to_string()]);
+    assert!(problems.is_empty(), "got: {problems:?}");
+    assert_eq!(decls.len(), 1);
+    assert_eq!(decls[0].kind, moss_core::fields::FieldKind::Text);
+    assert_eq!(decls[0].place, Some(moss_core::fields::Place::Eyebrow));
+    assert_eq!(decls[0].label_for("en"), "Summary");
+}
+
+#[test]
+fn field_decls_a_builtin_takes_only_place_and_label() {
+    let config = ConfigFile::parse("[fields.description]\ntype = \"text\"\nin = [\"Housing\"]\nplace = \"subtitle\"\n").unwrap();
+    let (decls, problems) = config.field_decls();
+    assert_eq!(decls.len(), 1, "the declaration is kept: {problems:?}");
+    assert_eq!(decls[0].place, Some(moss_core::fields::Place::Subtitle));
+    assert!(decls[0].scope.is_empty());
+    assert_eq!(problems.len(), 2, "{problems:?}");
+    assert!(problems.iter().any(|p| p.contains("has \"type\"; built-in fields take only place and label")), "{problems:?}");
+    assert!(problems.iter().any(|p| p.contains("has \"in\"; built-in fields take only place and label")), "{problems:?}");
 }
 
 #[test]

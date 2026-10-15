@@ -320,10 +320,13 @@ fn declared_fields(
     for decl in decls.iter().filter(|decl| applies(decl)) {
         let Some(raw) = frontmatter.get(&decl.name) else { continue };
         let Ok(json) = serde_json::to_value(raw) else { continue };
+        let builtin = moss_core::schema_fields::builtin_field(&decl.name).is_some();
         match moss_core::fields::parse_value(decl, &json, page) {
             Ok(value) => {
                 out.values.insert(decl.name.clone(), value);
             }
+            // moss's own schema check reports a built-in's bad value, so it is not reported twice.
+            Err(_) if builtin => {}
             Err(reason) => {
                 out.warnings.push(format!("[{file_path}] frontmatter: field '{}': {reason}", decl.name));
                 out.errors.insert(decl.name.clone(), reason);

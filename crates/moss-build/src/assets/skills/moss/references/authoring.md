@@ -392,7 +392,7 @@ To stop a dimension generating pages, either switch the built-in off — `[terms
 
 ### Declared fields
 
-A site can declare its own frontmatter fields in `.moss/config.toml`, each with a type. moss checks every page's value against that type and warns, naming the file and the field, when the value does not fit; listing plugins receive the parsed value. A declaration cannot redefine one of moss's own fields.
+A site can declare its own frontmatter fields in `.moss/config.toml`, each with a type. moss checks every page's value against that type and warns, naming the file and the field, when the value does not fit; listing plugins receive the parsed value. A declaration cannot redefine one of moss's own fields, except that `description` and `publisher` can take a `place` (see below).
 
 ```toml
 [fields.kind]
@@ -432,12 +432,16 @@ A count's digits follow the page's language. On a German page `.` groups digits 
 |---|---|---|
 | `eyebrow` | a small line above the title; every eyebrow field, in the order the file declares them, one `<span data-field>` each | `moss-eyebrow` |
 | `subtitle` | a line under the title; only the first subtitle field is drawn | `moss-subtitle` |
-| `key-figure` | a large number under the title, then its noun; one line per field | `moss-key-figure` |
+| `key-figure` | a large number under the title, then its noun, for a number or a count; any other value, such as `Start` or a text field, draws as one `<span>`, so a theme can style `.moss-key-figure > span:only-child`; one line per field | `moss-key-figure` |
 | `facts` | a label and value row per field, in a list | `moss-facts` |
 
 Dates and periods are `<time datetime>` elements carrying the EDTF value (`1927/1933`, or `1923/..` when open). A count is a `<data value>` element with the number as displayed, then its noun. A choice shows its label. A `page` or `pages` value links to the page where moss can resolve it, and shows the link as written (the text after `|` if there is one, else the last part of the name); where it cannot resolve, it shows the same text without a link; several pages are joined with ", ". A field whose value is missing or does not fit is not drawn on that page.
 
-A facts row is labelled with the field's `label`, a string or a table per language in the same form as a choice's labels (`label = { en = "Architect", de = "Architektin" }`); without one the label is the field name with its first letter capitalised. On a screen at least 76rem wide the facts sit in the right margin beside the title, in the space sidenotes use; on a narrower screen, on a vertical or full-width page, beside a sidebar, and on a page with sidenotes (which use that margin) they stay in the column under the title. The subtitle follows the title, then come the page's date and byline, then the key figures and the facts.
+`description` and `publisher` can take a place too, and their type is their own. `[fields.description]` with `place = "eyebrow"` draws the page's own `description:` as written, never the description moss derives from the body when the page has none. A built-in takes only `place` and `label`; no other moss field can take a place.
+
+Every placed element carries `data-field` with the field's name, and `moss describe --json` lists it among the scope attributes, so it is a guaranteed hook. Style one field with `[data-field="years"]` instead of a selector on the page's address.
+
+A facts row is labelled with the field's `label`, a string or a table per language in the same form as a choice's labels (`label = { en = "Architect", de = "Architektin" }`); without one the label is the field name with its first letter capitalised. On a screen at least 76rem wide the facts sit in the right margin beside the title, in the space sidenotes use; on a narrower screen, on a vertical or full-width page, beside a sidebar, and on a page with sidenotes (which use that margin) they stay in the column under the title. The eyebrow sits right before the title. After the title come the subtitle, the page's date and byline, the key figures and the facts, all before the page body. A theme that wants them elsewhere, such as under a cover picture, lays out `article` as a grid with named rows.
 
 moss draws no separator in the eyebrow. The stylesheet puts one between its fields from `--moss-eyebrow-separator`, a CSS string defaulting to `" · "`, so a theme sets `--moss-eyebrow-separator: " "` or `" / "`.
 
