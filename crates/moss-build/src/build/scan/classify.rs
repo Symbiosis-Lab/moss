@@ -574,6 +574,38 @@ pub fn classify_extension(extension: &str) -> ScanBucket {
     }
 }
 
+/// Every folder (site-relative, `/`-separated) above some file the scan kept.
+/// A symlink counts, because the asset copy recreates it in the output; OS
+/// metadata (`.DS_Store`, Finder's `Icon\r`) does not, as in the asset walk.
+/// An iCloud placeholder (`.name.icloud`) counts: it stands for a real file
+/// still in the cloud, though its dot-name would read as OS metadata.
+pub fn folders_holding_files<'a>(files: impl Iterator<Item = &'a Path>, root: &Path) -> HashSet<String> {
+    let mut holding = HashSet::new();
+    for file in files {
+        let is_stub = crate::build::icloud::icloud_stub_target(file).is_some();
+        if !is_stub && file.file_name().and_then(|n| n.to_str()).is_some_and(is_os_metadata_file) {
+            continue;
+        }
+        let Ok(rel) = file.strip_prefix(root) else { continue };
+        let rel = moss_core::slug::normalize_separators(&rel.to_string_lossy());
+        for (i, _) in rel.match_indices('/') {
+            holding.insert(rel[..i].to_string());
+        }
+    }
+    holding
+}
+
+/// The folders among `dirs` with no file beneath them, keeping only the
+/// topmost of a nested run, so `a/` is named once rather than `a/` and `a/b/`.
+pub fn topmost_empty_folders(dirs: &[String], holding_files: &HashSet<String>) -> Vec<String> {
+    let empty: Vec<&String> = dirs.iter().filter(|d| !holding_files.contains(*d)).collect();
+    empty
+        .iter()
+        .filter(|d| !empty.iter().any(|p| d.len() > p.len() && d.starts_with(p.as_str()) && d.as_bytes()[p.len()] == b'/'))
+        .map(|d| (*d).clone())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

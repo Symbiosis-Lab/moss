@@ -292,10 +292,9 @@ pub struct ProjectStructure {
     pub passthrough_roots: std::collections::HashSet<String>,
     /// Every directory that gets a synthetic folder-index page, as
     /// project-relative (raw, un-slugified) paths with `/` separators — e.g.
-    /// `["my-1st-folder", "Notes/2024"]`. Unlike the file lists, this records
-    /// directories that contain no files at all, so the renderer can emit an
-    /// index page for EVERY folder including completely empty ones (a product
-    /// decision: no folder 404s). The scanned root itself is NOT included
+    /// `["my-1st-folder", "Notes/2024"]`. A directory is listed only when a
+    /// file sits beneath it (OS metadata excluded), so a folder with nothing in
+    /// it publishes no page. The scanned root itself is NOT included
     /// (its page is the homepage).
     ///
     /// This is a narrower set than "every directory the walk saw", and the
@@ -312,6 +311,12 @@ pub struct ProjectStructure {
     #[serde(skip)]
     #[specta(skip)]
     pub dirs: Vec<String>,
+    /// Folders the scan left out of `dirs` because no file sits anywhere
+    /// beneath them, topmost only (`a/` and not also `a/b/`), so the build can
+    /// say why a folder the author made is not on the site.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub empty_folders: Vec<String>,
 }
 
 /// User configuration for site generation and publishing.

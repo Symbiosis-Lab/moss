@@ -43,11 +43,12 @@ fn generated_tree_and_output_agree_for_nested_empty_assets_terms_and_mapped_fold
     fs::create_dir_all(root.path().join("Authored/Empty")).unwrap();
     let (output, documents) = build(root.path());
     let generated = generated(&documents);
-    for expected in ["nested/index.html", "nested/deep/index.html", "assets/index.html", "empty/index.html", "archive/empty/index.html", "authors/index.html", "authors/ada/index.html"] {
+    for expected in ["nested/index.html", "nested/deep/index.html", "assets/index.html", "authors/index.html", "authors/ada/index.html"] {
         assert!(generated.contains(expected), "missing generated tree entry {expected}: {generated:?}");
         assert!(output.join(expected).exists(), "missing emitted index {expected}");
     }
     assert!(!generated.contains("archive/index.html"), "an authored index remains authored");
+    assert!(!generated.contains("empty/index.html") && !generated.contains("archive/empty/index.html"), "empty folders publish nothing: {generated:?}");
     for doc in documents.iter().filter(|d| d.source_path.is_none()) {
         assert!(output.join(&doc.url_path).exists(), "tree entry has no output: {}", doc.url_path);
         assert!(doc.lang_tag.is_some(), "generated entry lacks content language: {}", doc.url_path);
@@ -154,7 +155,7 @@ fn pending_page_sources_suppress_only_their_generated_folder_indexes() {
         |folder| ParsedDocument { url_path: format!("{folder}/index.html"), ..Default::default() },
     );
     let folders: BTreeSet<&str> = plan.entries.iter().map(|entry| entry.folder.as_str()).collect();
-    assert!(folders.contains("empty"), "a genuinely empty directory still gets an index");
+    assert!(!folders.contains("empty"), "a genuinely empty directory publishes no index");
     assert!(!folders.contains("pending"), "a pending-only directory cannot masquerade as finished");
     assert!(!folders.contains("mixed"), "a pending authored index cannot be replaced by a synthetic one");
 }
@@ -188,3 +189,56 @@ fn draft_only_language_tree_cannot_publish_a_generated_language_edition() {
         assert!(!html.contains("nav-lang-toggle"), "a draft-only edition cannot add a root fallback on {}", doc.url_path);
     }
 }
+
+#[test]
+fn folder_with_no_file_beneath_it_publishes_no_page() {
+    let root = tempfile::tempdir().unwrap();
+    write(root.path(), "index.md", "---\ntitle: Garden\n---\n# Garden");
+    fs::create_dir(root.path().join("empty")).unwrap();
+    fs::create_dir_all(root.path().join("nested/deeper")).unwrap();
+    write(root.path(), "keep/photo.png", "x");
+    let (output, documents) = build(root.path());
+    let generated = generated(&documents);
+    for gone in ["empty/index.html", "nested/index.html", "nested/deeper/index.html"] {
+        assert!(!generated.contains(gone), "an empty folder must not get {gone}: {generated:?}");
+        assert!(!output.join(gone).exists(), "an empty folder must not emit {gone}");
+    }
+    assert!(generated.contains("keep/index.html"), "an image-only folder keeps its page: {generated:?}");
+    assert!(output.join("keep/index.html").exists());
+}
+
+#[test]
+fn a_build_names_each_empty_folder_it_left_out() {
+    use crate::build::ports::reporter::BuildReporter;
+    use crate::build::progress::PipelineEvent;
+    #[derive(Default)]
+    struct Recording(std::sync::Mutex<Vec<PipelineEvent>>);
+    impl BuildReporter for Recording {
+        fn report(&self, event: &PipelineEvent) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    write(root.path(), "index.md", "---\ntitle: Garden\n---\n# Garden");
+    fs::create_dir_all(root.path().join("drafts/later")).unwrap();
+    let project = crate::build::scan::scan::scan_folder(root.path().to_str().unwrap()).unwrap();
+    let output = root.path().join(".moss/build.nosync/site");
+    fs::create_dir_all(&output).unwrap();
+    let kinds = crate::build::terms::term_kinds(&crate::config::ConfigFile::parse("").unwrap(), Language::En);
+    let recording = std::sync::Arc::new(Recording::default());
+    let mut services = crate::types::services::BuildServices::headless();
+    services.reporter = recording.clone();
+    super::super::blocking::generate_blocking_content(
+        &crate::vault::paths::VaultRoot::resolve(root.path()), &project, &output,
+        Some(&services), None, true,
+        super::super::config::SiteConfig { term_kinds: kinds, ..Default::default() },
+        &mut PendingManifest::for_build(SiteHashes::default(), crate::build::cloud_ledger::InputEvidence::new(root.path())),
+    ).unwrap();
+    let named: Vec<String> = recording.0.lock().unwrap().iter()
+        .filter_map(|e| match e { PipelineEvent::BackgroundProgress { advisories, .. } => Some(advisories.clone()), _ => None })
+        .flatten()
+        .filter_map(|a| a.item)
+        .collect();
+    assert_eq!(named, vec!["drafts".to_string()], "the build names the empty folder once, topmost");
+}
+

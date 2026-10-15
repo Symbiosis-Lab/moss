@@ -1061,6 +1061,9 @@ pub fn generate_blocking_content_for_build(
             reporter.report(&event);
         }
     }
+    if let Some(event) = crate::build::progress::make_empty_folder_advisory(&project_structure.empty_folders) {
+        reporter.report(&event);
+    }
     log::debug!(target: "timing", "[reduce] uid_dedup: {:?}", reduce_pre_start.elapsed());
 
     let missing_references = flatten_missing_reference_occurrences(&documents);
@@ -2198,13 +2201,12 @@ pub fn generate_blocking_content_for_build(
                     project_structure,
                 );
 
-            // NOTE: an empty `folder_docs` is intentionally NOT skipped anymore.
-            // Every real folder gets an index page, even a completely empty one
-            // (product decision: no folder 404s). `generate_children` returns
-            // "" for an empty slice, so the page degrades to a title-only
-            // listing with full nav/chrome. The only folders reaching this loop
-            // with no children are real on-disk directories seeded from the
-            // scan; doc-derived folders always have ≥1 child.
+            // NOTE: an empty `folder_docs` is not skipped here. The scan lists
+            // only folders holding a file, so a folder reaching this loop with no
+            // documents holds something else (an image, say) and keeps its page.
+            // `generate_children` returns "" for an empty slice, so the page
+            // degrades to a title-only listing with full nav/chrome. Doc-derived
+            // folders always have ≥1 child.
 
             let auto_url_path = format!("{}/index.html", folder);
             let folder_doc = &documents[entry.document_index];

@@ -833,7 +833,8 @@ fn generated_folder_index_carries_with_its_qr_and_rerenders_for_child_excerpt_ch
     // its pre-render bytes are compared with post-slot output, too.
     let verify_root = tmp.path().join("verify");
     write(&verify_root, "index.md", "---\ntitle: Home\n---\n\nHome page.\n");
-    std::fs::create_dir_all(verify_root.join("empty")).unwrap();
+    // A folder holding only a file gets a generated index page; an empty one gets none.
+    write(&verify_root, "files/note.txt", "notes");
     let verify_baseline = build_with_site_url(
         &verify_root.to_string_lossy(),
         moss_build::build::BuildTrigger::Full,

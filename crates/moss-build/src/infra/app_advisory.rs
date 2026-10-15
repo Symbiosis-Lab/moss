@@ -146,6 +146,7 @@ advisory_strings! {
     processing_notebook       => { en: "Processing notebook {n}/{total}: {name}",          zh_hans: "正在处理笔记本 {n}/{total}：{name}",                 zh_hant: "正在處理筆記本 {n}/{total}：{name}" },
     processing_notebook_short => { en: "Processing notebook {n}/{total}",                  zh_hans: "正在处理笔记本 {n}/{total}",                         zh_hant: "正在處理筆記本 {n}/{total}" },
     skipped_notebook          => { en: "Skipped notebook {n}/{total} after {secs}s timeout: {name}", zh_hans: "已跳过笔记本 {n}/{total}（{secs} 秒后超时）：{name}", zh_hant: "已略過筆記本 {n}/{total}（{secs} 秒後逾時）：{name}" },
+    empty_folder_not_published => { en: "‘{folder}’ holds nothing yet, so it is not on the site; it appears once a page or file is in it", zh_hans: "“{folder}”里还没有任何内容，所以没有出现在网站上；放进页面或文件后就会出现", zh_hant: "「{folder}」裡還沒有任何內容，所以沒有出現在網站上；放進頁面或檔案後就會出現" },
     notebook_skip_advisory    => { en: "skipped after {secs}s of blocked I/O — next rebuild retries", zh_hans: "已跳过（{secs} 秒 I/O 阻塞后）—— 下次重新构建时重试", zh_hant: "已略過（{secs} 秒 I/O 阻塞後）—— 下次重新建置時重試" },
     // ── Build completion ──────────────────────────────────────────────────────
     build_complete            => { en: "Build complete",                                   zh_hans: "构建完成",                                           zh_hant: "建置完成" },

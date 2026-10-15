@@ -76,6 +76,7 @@ fn test_generate_year_grouped_article_list_filters_index_files() {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
+        empty_folders: Vec::new(),
     };
 
     let result = generate_year_grouped_article_list(&docs, &project, true, Language::En, None);
@@ -141,6 +142,7 @@ fn test_generate_year_grouped_article_list_excludes_nav_items() {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
+        empty_folders: Vec::new(),
     };
 
     let result = generate_year_grouped_article_list(&docs, &project, true, Language::En, None);
@@ -195,6 +197,7 @@ fn test_year_grouped_list_uses_pretty_urls() {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
+        empty_folders: Vec::new(),
     };
 
     let result = generate_year_grouped_article_list(&docs, &project, true, Language::En, None);
@@ -232,6 +235,7 @@ fn make_project() -> ProjectStructure {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
+        empty_folders: Vec::new(),
     }
 }
 

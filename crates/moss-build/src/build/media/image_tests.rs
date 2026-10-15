@@ -2400,6 +2400,7 @@ pub(crate) fn build_project_with_images(
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
+        empty_folders: Vec::new(),
     };
 
     (structure, tmp)
@@ -6452,6 +6453,7 @@ impl RewriteVault {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
+            empty_folders: Vec::new(),
         };
         let transforms = crate::build::cache::TransformCache::new(
             paths.cache_transforms(),

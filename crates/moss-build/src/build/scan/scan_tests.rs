@@ -2305,6 +2305,7 @@ fn test_build_content_graph_indexes_files() {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
+        empty_folders: Vec::new(),
     };
 
     let graph = build_content_graph(&ps);
@@ -2359,6 +2360,7 @@ fn test_build_content_graph_indexes_html_files() {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
+        empty_folders: Vec::new(),
     };
 
     let graph = build_content_graph(&ps);
@@ -2438,6 +2440,7 @@ fn test_build_content_graph_indexes_asset_directories() {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
+        empty_folders: Vec::new(),
     };
 
     let graph = build_content_graph(&ps);
@@ -2694,7 +2697,7 @@ fn scan_folder_prunes_nested_moss_sites() {
 /// `share/<id>/` holding a pre-built app (raw files, no markdown) is that app's
 /// storage: a parent holding only apps (`deep/`, `deep/mid/`) gets no listing page
 /// of nothing, while a folder with a page beneath it, or with a kept folder
-/// beneath it (`share/empty/`, whose breadcrumb links up), still does.
+/// beneath it (`share/kept/`, holding an image, whose breadcrumb links up), still does.
 #[test]
 fn folder_holding_only_a_prebuilt_app_gets_no_index_page() {
     let dir = tempfile::Builder::new().prefix("moss_scan_stub").tempdir().unwrap();
@@ -2705,7 +2708,8 @@ fn folder_holding_only_a_prebuilt_app_gets_no_index_page() {
         fs::write(root.join("share/abc").join(f), "x").unwrap();
     }
     fs::write(root.join("share/abc/icons/a.png"), "x").unwrap();
-    fs::create_dir_all(root.join("share/empty")).unwrap();
+    fs::create_dir_all(root.join("share/kept")).unwrap();
+    fs::write(root.join("share/kept/photo.png"), "x").unwrap();
     fs::create_dir_all(root.join("deep/mid/app")).unwrap();
     fs::write(root.join("deep/mid/app/index.html"), "x").unwrap();
     fs::create_dir_all(root.join("notes/2026")).unwrap();
@@ -2722,7 +2726,7 @@ fn folder_holding_only_a_prebuilt_app_gets_no_index_page() {
         ps.dirs
     );
     assert!(
-        ps.dirs.iter().any(|d| d == "share") && ps.dirs.iter().any(|d| d == "share/empty"),
+        ps.dirs.iter().any(|d| d == "share") && ps.dirs.iter().any(|d| d == "share/kept"),
         "a kept folder's parent keeps its listing so the breadcrumb link does not 404: {:?}",
         ps.dirs
     );
@@ -2854,3 +2858,78 @@ fn availability_scan_timeout_returns_no_partial_candidate() {
     let ScanFailure::Storage(error) = result.unwrap_err() else { panic!("not a contextual storage stop") };
     assert_eq!(error.pending, Some(Settled::TimedOut));
 }
+
+/// A folder with no file beneath it (after the walk's ignore rules) is not a
+/// folder the site shows: empty and nested-empty folders get no index page,
+/// while a folder holding only an image still does. Hidden files do not count.
+#[test]
+fn folder_with_no_file_beneath_it_gets_no_index_page() {
+    let dir = tempfile::Builder::new().prefix("moss_scan_empty").tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join("index.md"), "# home").unwrap();
+    fs::create_dir_all(root.join("empty")).unwrap();
+    fs::create_dir_all(root.join("nested/deeper")).unwrap();
+    fs::create_dir_all(root.join("hidden")).unwrap();
+    fs::write(root.join("hidden/.DS_Store"), "x").unwrap();
+    fs::create_dir_all(root.join("keep")).unwrap();
+    fs::write(root.join("keep/photo.png"), "x").unwrap();
+
+    let ps = scan_folder(root.to_str().unwrap()).expect("scan should succeed");
+
+    assert_eq!(ps.dirs, vec!["keep".to_string()], "only a folder holding a file is a folder: {:?}", ps.dirs);
+    // The left-out folders are named so the build can say why, topmost only:
+    // `nested/deeper` is inside `nested`, so only `nested` is named.
+    let mut empty = ps.empty_folders.clone();
+    empty.sort();
+    assert_eq!(empty, vec!["empty", "hidden", "nested"], "{:?}", ps.empty_folders);
+}
+
+#[test]
+fn an_empty_attachment_folder_is_not_named_as_empty() {
+    // An attachment folder never gets a page, so "it appears once a page or
+    // file is in it" would be false: it is left out of the notice.
+    let dir = tempfile::Builder::new().prefix("moss_scan_empty_attach").tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join("index.md"), "# home").unwrap();
+    fs::create_dir_all(root.join(".moss")).unwrap();
+    fs::write(root.join(".moss/config.toml"), "[editor]\nattachment_folder = \"files\"\n").unwrap();
+    fs::create_dir_all(root.join("files")).unwrap();
+    fs::create_dir_all(root.join("drafts")).unwrap();
+
+    let ps = scan_folder(root.to_str().unwrap()).expect("scan should succeed");
+
+    assert_eq!(ps.empty_folders, vec!["drafts".to_string()], "{:?}", ps.empty_folders);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_folder_holding_only_icloud_placeholders_keeps_its_page() {
+    // `.story.md.icloud` stands for `story.md`, still in the cloud: its folder
+    // holds a page, so the folder keeps its own page.
+    let dir = tempfile::Builder::new().prefix("moss_scan_icloud_folder").tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join("index.md"), "# home").unwrap();
+    fs::create_dir_all(root.join("cloud")).unwrap();
+    fs::write(root.join("cloud/.story.md.icloud"), "stub").unwrap();
+
+    let ps = scan_folder(root.to_str().unwrap()).expect("scan should succeed");
+
+    assert!(ps.dirs.contains(&"cloud".to_string()), "dirs: {:?}", ps.dirs);
+    assert!(ps.empty_folders.is_empty(), "{:?}", ps.empty_folders);
+}
+
+#[test]
+fn an_empty_folder_inside_a_prebuilt_app_is_not_named_as_empty() {
+    // A folder inside a pre-built app never gets a page of its own, so it is
+    // left out of the notice.
+    let dir = tempfile::Builder::new().prefix("moss_scan_empty_app").tempdir().unwrap();
+    let root = dir.path().join("site");
+    fs::create_dir_all(root.join("app/empty")).unwrap();
+    fs::write(root.join("index.md"), "# home").unwrap();
+    fs::write(root.join("app/index.html"), "<!DOCTYPE html><html></html>").unwrap();
+
+    let ps = scan_folder(root.to_str().unwrap()).expect("scan should succeed");
+
+    assert!(!ps.empty_folders.iter().any(|f| f.starts_with("app")), "{:?}", ps.empty_folders);
+}
+

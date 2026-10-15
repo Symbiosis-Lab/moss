@@ -1149,6 +1149,25 @@ fn advisory_event(task: &str, advisories: Vec<Advisory>) -> Option<PipelineEvent
     })
 }
 
+/// One notice per folder the scan left out because nothing sits beneath it
+/// (`ProjectStructure::empty_folders`). An empty folder publishes no page, so
+/// an author who has just made one learns here why it is not on the site yet.
+pub fn make_empty_folder_advisory(folders: &[String]) -> Option<PipelineEvent> {
+    let advisories = folders
+        .iter()
+        .map(|folder| {
+            Advisory::for_source(
+                Scope::File,
+                Severity::ShippedDegraded,
+                folder,
+                crate::infra::app_advisory::fmt("empty_folder_not_published", &[("folder", folder)]),
+                Action::None,
+            )
+        })
+        .collect();
+    advisory_event("scan", advisories)
+}
+
 /// The other half of [`advisory_event`]: an explicit "this build's check ran
 /// and found nothing" signal for `task` — a `completed: true` tick with an
 /// EMPTY `advisories` vec, in place of `advisory_event`'s `None`.
@@ -1355,6 +1374,18 @@ pub fn make_duplicate_uid_advisory(
 mod route_tests {
     use super::*;
     use crate::advisory::{Action, Advisory, Scope, Severity};
+
+    #[test]
+    fn an_empty_folder_gets_a_notice_naming_it() {
+        assert!(make_empty_folder_advisory(&[]).is_none());
+        let Some(PipelineEvent::BackgroundProgress { advisories, .. }) = make_empty_folder_advisory(&["drafts".to_string()]) else {
+            panic!("an empty folder must produce a notice");
+        };
+        assert_eq!(advisories.len(), 1);
+        assert_eq!(advisories[0].item.as_deref(), Some("drafts"));
+        assert!(advisories[0].what.contains("drafts"), "{}", advisories[0].what);
+        assert_eq!(advisories[0].severity, Severity::ShippedDegraded);
+    }
 
     #[test]
     fn content_only_rebuild_births_zero_jobs() {

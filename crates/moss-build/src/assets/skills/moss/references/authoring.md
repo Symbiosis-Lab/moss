@@ -231,7 +231,7 @@ The home page's title is the site's name; moss adds it as a hidden heading for s
 
 A page's title is its visible heading, including a page in the navigation, whose nav label may differ from its title. A home page, and any page whose opening `:::hero` stands in for its masthead, gets its title as a visually hidden `<h1>` instead, so screen readers have a heading, unless the body already supplies one: a `# Heading` in the body, or in a `:::hero` block. A hero of only an image and a link does not supply one. To show a visible title on an article, write the title as a `# Heading` that opens the body: when its text equals the page's title, moss keeps it as written and adds no second copy above it. A different opening `# Heading` sits below the injected title.
 
-A home page or folder page lists its child pages by default. `children: false` in its frontmatter turns that listing off, and on a place page it also drops the place's term listing, while links to the place still resolve.
+A folder with no file anywhere beneath it publishes nothing, and the build names it; it gets its page once it holds a page or a file. A home page or folder page lists its child pages by default. `children: false` in its frontmatter turns that listing off, and on a place page it also drops the place's term listing, while links to the place still resolve.
 
 Quote a frontmatter value that contains a colon followed by a space, such as `title: "Notes: spring"`. Unquoted, it is invalid YAML, and the whole frontmatter block is ignored rather than the one field, so every field on the page falls back to its default. The build prints `frontmatter: invalid YAML`; `moss build --strict` turns that warning into a failure.
 
