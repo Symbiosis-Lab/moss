@@ -8,7 +8,8 @@ for (const engine of [chromium, webkit]) {
   for (const locale of ['', 'zh-hans/', 'zh-hant/']) {
    const page = await browser.newPage({reducedMotion:'reduce'});
    const calls=[]; let reply={subscribed:true,confirmationSent:true}, status=200;
-   await page.route('https://api.mosspub.com/**',async route=>{calls.push({url:route.request().url(),body:JSON.parse(route.request().postData())});await route.fulfill({status,contentType:'application/json',body:JSON.stringify(reply)});});
+   // the page's visit counter posts to the same host: answer it without counting it, and never let a check reach production
+   await page.route('https://api.mosspub.com/**',async route=>{if(/\/beacon$/.test(new URL(route.request().url()).pathname))return route.fulfill({status:204});calls.push({url:route.request().url(),body:JSON.parse(route.request().postData())});await route.fulfill({status,contentType:'application/json',body:JSON.stringify(reply)});});
    await page.goto(new URL(locale,baseURL).href);
    await page.locator('a[href="#beta"]').first().click();
    await page.waitForFunction(()=>document.activeElement?.id==='beta-email',null,{timeout:20000});
