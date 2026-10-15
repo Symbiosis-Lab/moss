@@ -18,6 +18,7 @@
 //! isolation.
 
 pub mod anchor;
+pub mod attrs;
 pub mod extract;
 pub mod state;
 pub mod text;

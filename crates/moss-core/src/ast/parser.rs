@@ -363,6 +363,11 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
     // Carry the extractor's findings out of the parse. Collected since the
     // unknown-name fallback landed, dropped here until now.
     doc.warnings = extraction.warnings;
+    // `Number` marks a top-level parse. The scan reads the whole source, fenced
+    // divs and grid cells included, so embedded fragments are covered by their host's scan.
+    if heading_ids == HeadingIds::Number {
+        doc.warnings.extend(crate::heading::attrs::warnings(markdown, config.warning_line_offset));
+    }
     doc.advisories = extraction.advisories;
 
     // Obsidian parity: a single newline inside a paragraph becomes `<br>`.
