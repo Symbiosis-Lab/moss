@@ -169,6 +169,38 @@ fn test_position_from_keyword_unknown() {
     assert_eq!(Position::from_keyword(""), None);
 }
 
+#[test]
+fn test_position_from_focus() {
+    let pos = Position::from_keyword("focus:20%,62%");
+    assert_eq!(pos, Some(Position::Focus(20, 62)));
+    assert_eq!(pos.unwrap().to_css_value(), "20% 62%");
+    assert_eq!(
+        Position::from_keyword("FOCUS:0%,100%"),
+        Some(Position::Focus(0, 100))
+    );
+}
+
+#[test]
+fn test_position_from_focus_rejects_malformed() {
+    assert_eq!(Position::from_keyword("focus:101%,0%"), None);
+    assert_eq!(Position::from_keyword("focus:20%"), None);
+    assert_eq!(Position::from_keyword("focus:a%,b%"), None);
+    assert_eq!(Position::from_keyword("20%,62%"), None);
+}
+
+#[test]
+fn test_parse_media_attrs_focus_with_fit() {
+    let attrs = parse_media_attrs("cover focus:50%,42%");
+    assert_eq!(attrs.fit, Some(Fit::Cover));
+    assert_eq!(attrs.position, Some(Position::Focus(50, 42)));
+}
+
+#[test]
+fn test_parse_media_attrs_bare_width_is_not_a_position() {
+    let attrs = parse_media_attrs("40%");
+    assert_eq!(attrs.position, None);
+}
+
 // -- MediaAttrs ---------------------------------------------------------
 
 #[test]

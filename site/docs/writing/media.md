@@ -66,6 +66,8 @@ Control how media displays with pipe syntax — append a fit/position keyword, a
 
 Combine them: `![[panorama.jpg|contain center]]`, `![[headshot.jpg|cover top]]`.
 
+For a point the nine names do not reach, write a focus point `focus:X%,Y%`, whole percentages from 0 to 100 measured from the top-left, e.g. `![[photo.jpg|focus:20%,62%]]`; the crop lines that point of the picture up with the same point of the frame, so `focus:50%,50%` is `center` and `focus:0%,0%` is `top-left`.
+
 **Size** — a width, or width × height, in place of fit/position:
 
 | Pipe | Result |

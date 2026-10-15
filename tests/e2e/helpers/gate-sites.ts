@@ -2933,6 +2933,22 @@ One line of overlay text.
 
 Body text below the hero.
 `,
+    // A centred overlay over an image with a free focus point: the panel
+    // sits in the middle of the frame, and the crop keeps the named point.
+    "align-center.md": `---
+title: Hero align center gate
+uid: "hol00104"
+---
+
+:::hero {align=center}
+![[busy.png|focus:20%,62%]]
+# Short heading
+
+One line of overlay text.
+:::
+
+Body text below the hero.
+`,
     // Image-only: no overlay text, so the scrim never paints at all (search
     // data-page="home" -- no, search ":has()" above) -- the ground truth
     // for "undarkened pixel" the align=end scrim-direction test compares

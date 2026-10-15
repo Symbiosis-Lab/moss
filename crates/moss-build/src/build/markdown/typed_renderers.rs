@@ -146,10 +146,9 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
     } else {
         String::new()
     };
-    let align_attr = if args.align.as_deref() == Some("end") {
-        r#" data-align="end""#.to_string()
-    } else {
-        String::new()
+    let align_attr = match args.align.as_deref() {
+        Some(v @ ("end" | "center")) => format!(r#" data-align="{v}""#),
+        _ => String::new(),
     };
     // `:::hero {header=over}`: the CSS lays the site header over this hero,
     // selected as `header:has(+ .moss-hero[data-header="over"])`.
@@ -1161,6 +1160,36 @@ mod tests {
     #[test]
     fn render_hero_default_omits_data_align() {
         let args = moss_core::ast::HeroShortcode {
+            overlay: vec![moss_core::ast::Block::Paragraph(vec![
+                moss_core::ast::Inline::Text("Text".to_string()),
+            ])],
+            overlay_text: "Text".to_string(),
+            ..Default::default()
+        };
+        let resolver = |s: &str| s.to_string();
+        let html = render_hero_html_typed(&args, &resolver, None, None, None, crate::i18n::Language::En);
+        assert!(!html.contains("data-align"), "got: {html}");
+    }
+
+    #[test]
+    fn render_hero_align_center_emits_data_align() {
+        let args = moss_core::ast::HeroShortcode {
+            align: Some("center".to_string()),
+            overlay: vec![moss_core::ast::Block::Paragraph(vec![
+                moss_core::ast::Inline::Text("Text".to_string()),
+            ])],
+            overlay_text: "Text".to_string(),
+            ..Default::default()
+        };
+        let resolver = |s: &str| s.to_string();
+        let html = render_hero_html_typed(&args, &resolver, None, None, None, crate::i18n::Language::En);
+        assert!(html.contains(r#"data-align="center""#), "got: {html}");
+    }
+
+    #[test]
+    fn render_hero_unknown_align_omits_data_align() {
+        let args = moss_core::ast::HeroShortcode {
+            align: Some("middle".to_string()),
             overlay: vec![moss_core::ast::Block::Paragraph(vec![
                 moss_core::ast::Inline::Text("Text".to_string()),
             ])],

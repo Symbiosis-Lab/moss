@@ -6926,6 +6926,9 @@ article a:where(:not(.moss-btn)):focus {
     linear-gradient(to top, rgba(0,0,0,0.62) 0%, rgba(0,0,0,0.30) 32%, transparent 62%),
     linear-gradient(to right, rgba(0,0,0,0.30) 0%, transparent 55%);
 }
+.moss-hero[data-align="center"]::before {
+  background: radial-gradient(ellipse at center, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0.22) 50%, transparent 78%);
+}
 
 .moss-hero:has(.moss-hero-content)::before { content: ''; }
 
@@ -7196,6 +7199,13 @@ article a:where(:not(.moss-btn)):focus {
     align-items: flex-end;
   }
 
+  /* `align=center` sets the panel in the middle of the picture, its text centred. */
+  .moss-hero[data-overlay][data-align="center"] {
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+  }
+
   .moss-hero[data-overlay] > picture,
   .moss-hero[data-overlay] > img,
   .moss-hero[data-overlay] > video,
@@ -7238,9 +7248,10 @@ article a:where(:not(.moss-btn)):focus {
   }
 
   /* Captions join the same bottom stack, directly above the content, so the
-     two can never overlap. Only `align=end` keeps them apart sideways (caption
-     bottom-start, content bottom-end), which is why that case stays absolute. */
-  .moss-hero[data-overlay]:not([data-align="end"]) > .moss-hero-captions {
+     two can never overlap. Whenever the content is not at the bottom-start
+     (`align=end` and `align=center`), captions stay absolute at bottom-start
+     so they keep clear of it. */
+  .moss-hero[data-overlay]:not([data-align="end"], [data-align="center"]) > .moss-hero-captions {
     position: static;
     flex: none;
     align-self: flex-start;

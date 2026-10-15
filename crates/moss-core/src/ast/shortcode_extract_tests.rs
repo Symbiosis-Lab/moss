@@ -2220,17 +2220,23 @@ fn hero_without_align_attr_has_none() {
 
 #[test]
 fn hero_unknown_align_value_emits_warning() {
-    let md = ":::hero {image=hero.jpg align=center}\n# Title\n:::\n";
+    let md = ":::hero {image=hero.jpg align=middle}\n# Title\n:::\n";
     let result = extract_shortcodes(md);
     assert!(
         result
             .warnings
             .iter()
-            .any(|w| w.contains("unrecognized") && w.contains("center")),
+            .any(|w| w.contains("unrecognized") && w.contains("middle")),
         "expected warning for unknown align value, got: {:?}",
         result.warnings,
     );
     assert_eq!(result.extracted.len(), 1);
+}
+
+#[test]
+fn hero_align_center_is_recognized() {
+    let result = extract_shortcodes(":::hero {image=hero.jpg align=center}\n# Title\n:::\n");
+    assert!(result.warnings.is_empty(), "got: {:?}", result.warnings);
 }
 
 #[test]

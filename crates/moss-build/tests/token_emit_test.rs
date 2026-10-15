@@ -130,8 +130,8 @@ fn hero_phone_overlay_floor_and_caption_stack_declarations() {
         "mobile overlay floor must honour --moss-hero-max-height"
     );
     assert!(
-        css.contains(r#".moss-hero[data-overlay]:not([data-align="end"]) > .moss-hero-captions {"#),
-        "wide captions must join the flex stack unless align=end"
+        css.contains(r#".moss-hero[data-overlay]:not([data-align="end"], [data-align="center"]) > .moss-hero-captions {"#),
+        "wide captions must join the flex stack unless align=end or align=center"
     );
     assert!(
         css.contains(r#".moss-hero[data-align="end"]:not(:has(.moss-hero-captions)) .moss-hero-pause"#),

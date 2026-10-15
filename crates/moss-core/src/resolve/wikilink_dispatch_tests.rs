@@ -794,6 +794,18 @@ fn dispatch_image_two_word_position_combines() {
     }
 }
 
+#[test]
+fn dispatch_image_focus_point_sets_object_position() {
+    use crate::ast::node::Block;
+    let emit = dispatch_img(Some("focus:20%,62%"));
+    match figure_of(&emit) {
+        Block::Figure { img_style, .. } => {
+            assert_eq!(img_style.as_deref(), Some("object-position:20% 62%"));
+        }
+        other => panic!("expected Figure, got {other:?}"),
+    }
+}
+
 /// One row of the image-pothole vocabulary table below.
 struct PotholeRow {
     /// The pipe text after `![[photo.jpg|`.

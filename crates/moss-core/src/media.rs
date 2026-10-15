@@ -73,28 +73,40 @@ pub enum Position {
     TopRight,
     BottomLeft,
     BottomRight,
+    /// A free focus point, each axis a percentage 0–100.
+    Focus(u8, u8),
 }
 
 impl Position {
     /// Return the CSS `object-position` value.
-    pub fn to_css_value(&self) -> &str {
+    pub fn to_css_value(&self) -> std::borrow::Cow<'static, str> {
         match self {
-            Position::Center => "center",
-            Position::Left => "left",
-            Position::Right => "right",
-            Position::Top => "top",
-            Position::Bottom => "bottom",
-            Position::TopLeft => "top left",
-            Position::TopRight => "top right",
-            Position::BottomLeft => "bottom left",
-            Position::BottomRight => "bottom right",
+            Position::Center => "center".into(),
+            Position::Left => "left".into(),
+            Position::Right => "right".into(),
+            Position::Top => "top".into(),
+            Position::Bottom => "bottom".into(),
+            Position::TopLeft => "top left".into(),
+            Position::TopRight => "top right".into(),
+            Position::BottomLeft => "bottom left".into(),
+            Position::BottomRight => "bottom right".into(),
+            Position::Focus(x, y) => format!("{x}% {y}%").into(),
         }
+    }
+
+    /// A free focus point, `focus:X%,Y%` with integer percentages 0–100.
+    /// Anything else, including a bare `X%`, is `None`.
+    fn from_focus(lower: &str) -> Option<Self> {
+        let (x, y) = lower.strip_prefix("focus:")?.split_once(',')?;
+        let x = x.strip_suffix('%')?.parse::<u8>().ok().filter(|v| *v <= 100)?;
+        let y = y.strip_suffix('%')?.parse::<u8>().ok().filter(|v| *v <= 100)?;
+        Some(Position::Focus(x, y))
     }
 
     /// Parse from a keyword string (case-insensitive).
     ///
     /// Accepts hyphenated (`"top-left"`), concatenated (`"topleft"`), and
-    /// space-separated (`"top left"`) forms.
+    /// space-separated (`"top left"`) forms, and a `focus:X%,Y%` point.
     pub fn from_keyword(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "center" => Some(Position::Center),
@@ -106,7 +118,7 @@ impl Position {
             "top-right" | "topright" | "top right" => Some(Position::TopRight),
             "bottom-left" | "bottomleft" | "bottom left" => Some(Position::BottomLeft),
             "bottom-right" | "bottomright" | "bottom right" => Some(Position::BottomRight),
-            _ => Option::None,
+            lower => Self::from_focus(lower),
         }
     }
 }
@@ -294,7 +306,8 @@ pub fn split_pipe(raw: &str) -> (&str, &str) {
 /// from the portion after `|`.
 ///
 /// Recognized keywords map to [`Fit`], [`Position`], and [`AlignSide`]
-/// variants. Recognized `key=value` pairs: `color=<css-color>` (stored in
+/// variants, including a `focus:X%,Y%` [`Position::Focus`] point. Recognized
+/// `key=value` pairs: `color=<css-color>` (stored in
 /// [`MediaAttrs::color`]; consumed by the build's cover-color ladder).
 /// Empty-value tokens (`color=`) are silently ignored. Unknown tokens are
 /// silently ignored (callers may add diagnostic reporting).
