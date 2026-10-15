@@ -399,6 +399,37 @@ fn article_with_frontmatter_title_injects_title() {
     );
 }
 
+/// A body that opens with its own `# Heading` is the page's one h1: no title
+/// is injected above it, and the title text still reaches `doc.title`.
+#[test]
+fn article_opening_with_body_h1_has_exactly_one_h1() {
+    let doc = parse_for_test("Page.md", "---\ntitle: Custom\n---\n\n# Custom\n\ntext\n", None);
+    assert_eq!(doc.html_content.matches("<h1").count(), 1, "got: {}", doc.html_content);
+    assert!(doc.html_content.contains("<h1 id=\"custom\">Custom</h1>"), "got: {}", doc.html_content);
+    assert!(!doc.html_content.contains("moss-article-title"), "got: {}", doc.html_content);
+    assert_eq!(doc.title, "Custom");
+}
+
+/// A body that opens with a `# Heading` whose text differs from the title
+/// keeps the injected title above it; `doc.title` comes from `title:`.
+#[test]
+fn article_opening_with_different_body_h1_keeps_injected_title() {
+    let doc = parse_for_test("Page.md", "---\ntitle: Custom\n---\n\n# Something Else\n\ntext\n", None);
+    assert!(doc.html_content.contains("<h1 class=\"moss-article-title\">Custom</h1>"), "got: {}", doc.html_content);
+    assert!(doc.html_content.contains("<h1 id=\"something-else\">Something Else</h1>"), "got: {}", doc.html_content);
+    assert_eq!(doc.html_content.matches("<h1").count(), 2, "got: {}", doc.html_content);
+    assert_eq!(doc.title, "Custom");
+}
+
+/// A body whose first block is a paragraph keeps the injected title above a
+/// later `# Heading`, as before.
+#[test]
+fn article_with_paragraph_before_body_h1_keeps_injected_title() {
+    let doc = parse_for_test("Page.md", "---\ntitle: Custom\n---\n\nIntro.\n\n# Custom\n\ntext\n", None);
+    assert!(doc.html_content.contains("<h1 class=\"moss-article-title\">Custom</h1>"), "got: {}", doc.html_content);
+    assert_eq!(doc.html_content.matches("<h1").count(), 2, "got: {}", doc.html_content);
+}
+
 /// A root-level non-index file in organized mode is a nav page. It shows its
 /// title like any other page: the nav label may differ from the title, and a
 /// visitor who arrives by search needs the heading.
@@ -581,16 +612,12 @@ fn nav_page_keeps_authored_body_h1() {
     );
 }
 
-/// Regression: an article whose body opens with a section-number H1
-/// (`# 1.`) MUST inject the filename heading above the body. An earlier
-/// 2026-04-28 inference rule suppressed injection when the body's lead
-/// block was an H1; the 2026-04-29 contract removed that inference and
-/// always injects (gated only on `heading: false` and hero-H1).
-///
-/// Original screenshot: 不要去自动化你爱的事 — opened with `# 1.`
-/// and got no visible heading.
+/// An article whose body opens with a section-number H1 (`# 1.`) keeps the
+/// injected title from the filename above that body heading: the body's
+/// opening heading shows as the page's title only when its text equals the
+/// resolved title.
 #[test]
-fn strict_contract_section_number_h1_does_not_suppress_injection() {
+fn strict_contract_section_number_h1_keeps_injected_title() {
     let md = "---\nuid: x\n---\n\n# 1.\n\nIntro text.\n";
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
@@ -671,12 +698,10 @@ fn strict_contract_leading_blockquote_then_section_h1_injects_title() {
     );
 }
 
-/// Obsidian-match: an article whose body opens with `# Title` matching the
-/// resolved title (frontmatter or filename) renders BOTH the injected
-/// `moss-article-title` and the authored body H1 — no dedup. (Replaces the
-/// pre-2026-05-30 `strict_contract_dedup_strips_matching_leading_body_h1`.)
+/// An article whose body opens with `# Title` matching the resolved title
+/// renders that body H1 as the page's only h1.
 #[test]
-fn matching_leading_body_h1_is_kept_alongside_injected_title() {
+fn matching_leading_body_h1_is_the_only_h1() {
     let md = "---\ntitle: Architecture\n---\n\n# Architecture\n\nBody content.\n";
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
@@ -694,24 +719,21 @@ fn matching_leading_body_h1_is_kept_alongside_injected_title() {
         PageContext::default(),
     )
     .expect("should parse");
-    // Two H1s now: the injected article title AND the authored body H1.
     let h1_count = doc.html_content.matches("<h1").count();
     assert_eq!(
-        h1_count, 2,
-        "expected injected title + body H1 (no dedup), got {} in: {}",
+        h1_count, 1,
+        "expected the body H1 as the only h1, got {} in: {}",
         h1_count, doc.html_content
     );
     assert!(
-        doc.html_content
-            .contains("<h1 class=\"moss-article-title\">Architecture</h1>"),
-        "the injected article title must be present, got: {}",
+        !doc.html_content.contains("moss-article-title"),
+        "no title may be injected above a body H1, got: {}",
         doc.html_content
     );
 }
 
-/// Body H1s are never stripped (Obsidian-match). An article whose body's
-/// leading H1 differs from the injected title keeps both the injected
-/// `moss-article-title` and the authored body H1.
+/// An article whose body opens with a `# H1` that differs from `title:`
+/// keeps the injected title above it; `doc.title` still comes from `title:`.
 #[test]
 fn dedup_does_not_strip_when_text_differs() {
     let md = "---\ntitle: Outer\n---\n\n# Inner\n\nBody.\n";
@@ -785,9 +807,8 @@ fn dedup_does_not_strip_buried_h1_matching_filename() {
         );
 }
 
-/// Article with a body H1 whose text differs from `title:`. Under the
-/// 2026-05-06 consolidated rule, the resolved heading (title: value)
-/// is injected, and the differing body H1 survives as a section header.
+/// Article whose body opens with a `# H1` that differs from `title:`: the
+/// injected title stays above the body heading, and `doc.title` comes from `title:`.
 #[test]
 fn article_with_differing_body_h1_renders_both() {
     let md = "---\ntitle: Resolved Title\n---\n\n# Body Heading\n\nContent.\n";
@@ -1103,24 +1124,21 @@ fn ordinary_page_heading_keeps_h2_permalink_anchor() {
     );
 }
 
-/// Article (non-index): body H1 text equals the filename-derived title.
-/// `filename_text("posts/my post.md")` == "my post" (stem verbatim, no
-/// title-casing). Both the injected `moss-article-title` and the body H1
-/// render — Obsidian-match: no dedup.
+/// Article whose body opens with a `# H1` equal to the filename-derived
+/// title: the body heading is the page's one h1, with no injected title.
 #[test]
-fn article_body_h1_matching_title_is_not_deduped() {
+fn article_body_h1_matching_title_is_the_only_h1() {
     let md = "---\n---\n# my post\n\nbody\n";
     let doc = parse_for_test("posts/my post.md", md, Some("VaultRoot"));
     assert!(
-        doc.html_content.contains("moss-article-title"),
-        "article title still injected, got: {}",
+        !doc.html_content.contains("moss-article-title"),
+        "no title may be injected above a body H1, got: {}",
         doc.html_content
     );
-    let count = doc.html_content.matches("my post").count();
-    assert!(
-        count >= 2,
-        "expected both injected title and body H1 (no dedup), got {} in: {}",
-        count,
+    assert_eq!(
+        doc.html_content.matches("<h1").count(),
+        1,
+        "got: {}",
         doc.html_content
     );
 }

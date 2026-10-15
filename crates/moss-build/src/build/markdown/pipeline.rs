@@ -1151,10 +1151,12 @@ pub fn process_markdown_file(
     //   2. A `:::hero` block at the top of the body owns the heading slot —
     //      no auto-injection regardless of title.
     //   3. Index/folder pages never get auto-injection.
-    //   4. NO dedup (Obsidian-match, 2026-05-30): an authored body `# H1` is
-    //      content and is kept verbatim. A `title: Custom` article whose body
-    //      opens with `# Custom` renders BOTH the injected title and the body
-    //      H1 — like Obsidian with "Show inline title" on.
+    //   4. A body whose first block is a `# H1` with the same text as the
+    //      resolved title supplies the page's one h1: no title is injected
+    //      above it, and the heading is kept verbatim. Readers, screen
+    //      readers and search should see one h1 per page, not two copies of
+    //      the same words. Any other body keeps the injected title above its
+    //      authored headings.
     //
     // The injected `<h1 class="moss-article-title">` carries a stable class so
     // themes/sites can target it.
@@ -1234,10 +1236,9 @@ pub fn process_markdown_file(
     );
 
     // Article pages inject `<h1 class="moss-article-title">` from the
-    // resolved heading text. We do NOT dedup a matching body `# H1` — an
-    // authored heading is content and stays put (Obsidian-match). A page
-    // that opens with `# Title` therefore renders both the injected title
-    // and the body H1, exactly like Obsidian with inline-title on.
+    // resolved heading text, unless the body opens with a `# H1` whose text
+    // equals it: that heading is the page's one h1, so the body is passed through
+    // untouched and nothing is added above it.
     // Index/folder pages inject `<h1 class="moss-folder-title">` downstream
     // (render/html.rs, render/blocking.rs) from `doc.title`; the body is
     // passed through untouched here. `article_title_outcome` makes the title

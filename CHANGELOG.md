@@ -324,6 +324,7 @@ All notable changes to moss will be documented here.
 - A page in the navigation now shows its title, like every other page. A navigation page that already has a `# Heading` in its body still shows one title.
 - **BREAKING (`moss-core` API):** `moss_core::heading::title_outcome` lost its `hidden_by_chrome` parameter, which only nav pages set; a nav page now shows its title.
 - **BREAKING (`moss-build` API):** `deploy::resolve_publish_inputs`, `deploy::push::run_hosted_deploy` and `deploy::prebuilt::run_prebuilt_deploy` take `overwrite_newer: bool` after `requested_site_id` (pass `false` to keep the stale-copy refusal), and `cli::deploy::DeployFlags` gains an `overwrite_newer` field.
+- An article whose body opens with a `# heading` identical to its title shows that heading once; moss no longer adds a second copy above it.
 
 ### Removed
 

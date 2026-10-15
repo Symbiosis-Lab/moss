@@ -43,7 +43,7 @@ These fields describe what the page is.
 | `lang` | string | auto-detected | Language override (`"en"`, `"zh-hans"`, `"zh-hant"`) |
 <!-- auto:end:frontmatter-identity -->
 
-`title:` is the page's title. On article pages moss always renders it as `<h1 class="moss-article-title">` above the body, using the filename (title-cased) when `title:` is absent. If the body itself opens with `# Same Title`, that body H1 is deduplicated so the reader sees one title, not two.
+`title:` is the page's title. On article pages moss always renders it as `<h1 class="moss-article-title">` above the body, using the filename (title-cased) when `title:` is absent. If the body opens with a `# H1` whose text equals the title, moss adds no injected copy above it, so the reader sees one title; an opening `# H1` with different text sits below the injected title.
 
 Body H1s anywhere else are section headers, not document titles. moss does not infer the title from body structure. Write the title in `title:` or rely on the filename.
 

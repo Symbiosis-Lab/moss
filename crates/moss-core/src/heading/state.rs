@@ -272,13 +272,46 @@ pub fn title_outcome(body_markdown: &str, body_heading_replaces_title: bool) -> 
     }
 }
 
+/// True when the body's first block is a level-1 ATX heading (`# Text`) whose
+/// text is the same as `title` under [`same_heading_text`]. Leading blank
+/// lines are skipped; anything else first, including a `##` heading or a
+/// different `# Text`, makes this false.
+pub fn body_opens_with_title(body_markdown: &str, title: &str) -> bool {
+    let title = same_heading_text_key(title);
+    !title.is_empty()
+        && body_markdown
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .and_then(|line| line.strip_prefix('#'))
+            .and_then(|rest| rest.strip_prefix([' ', '\t']))
+            .is_some_and(|text| same_heading_text_key(text) == title)
+}
+
+/// The comparison key for "same heading text": case folded, `-` and `_`
+/// read as spaces, whitespace runs collapsed, trimmed. The injected title is
+/// often a filename (`hello-world.md`), so a body `# Hello World` is the same
+/// heading. Inline markup is not stripped, so `# *Title*` is a different text.
+fn same_heading_text_key(text: &str) -> String {
+    text.to_lowercase()
+        .replace(['-', '_'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// [`title_outcome`] for an article page: [`TitleOutcome::None`] when the file
-/// gets no injected title at all (index/folder, slot file, empty `title:`).
+/// gets no injected title at all (index/folder, slot file, empty `title:`),
+/// or when the body opens with a `# Heading` whose text equals the resolved
+/// title, which then stands as the page's one h1.
+///
+/// A body that opens with a different `# Heading` keeps the injected title
+/// above it.
 ///
 /// On a nav page (`is_nav_item`) a `#` heading in the body replaces the
 /// injected title, so only the body heading shows. On any other page both show.
 pub fn article_title_outcome(input: HeadingInputs<'_>, is_nav_item: bool) -> TitleOutcome {
-    if !resolve(input).visible {
+    let resolved = resolve(input);
+    if !resolved.visible || body_opens_with_title(input.body_markdown, &resolved.text) {
         return TitleOutcome::None;
     }
     title_outcome(input.body_markdown, is_nav_item)
@@ -833,5 +866,58 @@ mod tests {
         assert!(!hero_at_top_owns_title("Some prose first.\n\n:::hero\n# Overlay\n:::"));
         assert!(!hero_at_top_owns_title(""));
         assert!(!hero_at_top_owns_title("\n\n"));
+    }
+
+    fn article_inputs<'a>(body_markdown: &'a str, frontmatter_title: Option<&'a str>) -> HeadingInputs<'a> {
+        HeadingInputs {
+            file_path: "Page.md",
+            frontmatter_title,
+            body_markdown,
+            root_folder_name: None,
+            is_home_override: false,
+            slot_only: false,
+        }
+    }
+
+    /// Rule: a body whose first block is a `# Heading` with the same text as
+    /// the resolved title shows that heading once, with no injected copy.
+    #[test]
+    fn body_heading_equal_to_title_has_no_injected_title() {
+        assert_eq!(article_title_outcome(article_inputs("# Custom\n\ntext", Some("Custom")), false), TitleOutcome::None);
+        assert_eq!(article_title_outcome(article_inputs("\n\n#  Custom  \n", Some("Custom")), false), TitleOutcome::None);
+        assert_eq!(article_title_outcome(article_inputs("# Page\n", None), false), TitleOutcome::None);
+    }
+
+    /// A filename-derived title matches a body heading written with capitals
+    /// and spaces: `hello-world.md` with `# Hello World` shows one heading.
+    #[test]
+    fn filename_title_matches_body_heading_loosely() {
+        let hello = HeadingInputs {
+            file_path: "hello-world.md",
+            frontmatter_title: None,
+            body_markdown: "# Hello World\n\ntext",
+            root_folder_name: None,
+            is_home_override: false,
+            slot_only: false,
+        };
+        assert_eq!(article_title_outcome(hello, false), TitleOutcome::None);
+        assert_eq!(article_title_outcome(article_inputs("# custom\n", Some("Custom")), false), TitleOutcome::None);
+        assert_eq!(article_title_outcome(article_inputs("#   Spaced   Out  \n", Some("spaced_out")), false), TitleOutcome::None);
+    }
+
+    /// Rule: a body whose first block is a `# Heading` with different text
+    /// keeps the injected title above it, as before.
+    #[test]
+    fn body_heading_different_from_title_keeps_injected_title() {
+        assert_eq!(article_title_outcome(article_inputs("\n\n# Something Else\n", Some("Custom")), false), TitleOutcome::Visible);
+        assert_eq!(article_title_outcome(article_inputs("# 1.\n\nIntro.\n", Some("Automate")), false), TitleOutcome::Visible);
+        assert_eq!(article_title_outcome(article_inputs("# Custom Two\n", Some("Custom")), false), TitleOutcome::Visible);
+    }
+
+    #[test]
+    fn article_with_h1_later_or_a_lower_heading_first_keeps_injected_title() {
+        assert_eq!(article_title_outcome(article_inputs("Intro.\n\n# Custom\n\ntext", Some("Custom")), false), TitleOutcome::Visible);
+        assert_eq!(article_title_outcome(article_inputs("## Section\n\n# Custom\n", Some("Custom")), false), TitleOutcome::Visible);
+        assert_eq!(article_title_outcome(article_inputs("## Section\n\ntext", Some("Custom")), false), TitleOutcome::Visible);
     }
 }

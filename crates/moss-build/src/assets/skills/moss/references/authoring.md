@@ -229,7 +229,7 @@ The wiki spelling is `![[https://www.youtube.com/watch?v=dQw4w9WgXcQ|640x360]]`.
 
 The home page's title is the site's name; moss adds it as a hidden heading for screen readers unless the page opens with its own `# ` heading or a hero.
 
-A page's title is its visible heading, including a page in the navigation, whose nav label may differ from its title. A home page, and any page whose opening `:::hero` stands in for its masthead, gets its title as a visually hidden `<h1>` instead, so screen readers have a heading, unless the body already supplies one: a `# Heading` in the body, or in a `:::hero` block. A hero of only an image and a link does not supply one. To show a visible title on any page, write a `# Heading` in the body: moss keeps it as written and it is then the page's heading.
+A page's title is its visible heading, including a page in the navigation, whose nav label may differ from its title. A home page, and any page whose opening `:::hero` stands in for its masthead, gets its title as a visually hidden `<h1>` instead, so screen readers have a heading, unless the body already supplies one: a `# Heading` in the body, or in a `:::hero` block. A hero of only an image and a link does not supply one. To show a visible title on an article, write the title as a `# Heading` that opens the body: when its text equals the page's title, moss keeps it as written and adds no second copy above it. A different opening `# Heading` sits below the injected title.
 
 A home page or folder page lists its child pages by default. `children: false` in its frontmatter turns that listing off, and on a place page it also drops the place's term listing, while links to the place still resolve.
 
