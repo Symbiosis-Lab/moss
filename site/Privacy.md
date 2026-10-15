@@ -40,6 +40,8 @@ If you enable comments through moss, then when someone comments on your publishe
 
 For published sites, and for this site, we keep basic traffic stats: the pages viewed, the referring site (its name only, not the full address), country, browser and OS family, a screen‑size bucket (phone, tablet, or desktop), campaign tags in the link (utm_source and utm_medium), and named clicks on buttons a site marks for counting, such as a download button. To count unique visitors without cookies, our server turns each visitor's IP address and browser details into a short code, using a secret that is replaced every day and never stored. The same visitor gets the same code on one site for one day, and an unrelated code on another site or another day, so no one can follow a reader across sites or over time. The IP address itself is never stored. These stats contain no cookies and no cross‑site tracking. We keep them on our server for 400 days and then delete them. We process them on the basis of a legitimate interest: letting each site understand its own readers with as little data as that takes.
 
+On this site only (mosspub.com), we also run Cloudflare Web Analytics, a cookieless counter from our hosting provider, so we can compare its numbers with our own. Sites published with moss do not run it.
+
 If you turn on the analytics dashboard, your site's stats sync from our server to your device and are kept locally, so you can analyze them on your own machine.
 
 ## Crash reports
