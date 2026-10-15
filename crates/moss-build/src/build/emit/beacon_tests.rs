@@ -36,3 +36,21 @@ fn site_without_a_site_id_emits_no_beacon_file() {
 
     assert!(!out.path().join("_moss/js/beacon.js").exists());
 }
+
+#[test]
+fn script_sends_raw_address_referrer_and_width_and_no_derived_fields() {
+    let vault = vault_with_state("[deployment]\nsite_id = \"blog\"\ndeploy_method = \"moss\"\n");
+    let out = tempdir().unwrap();
+    let mut pending = PendingManifest::new(SiteHashes::default());
+
+    let p = vault.path().to_str().unwrap();
+    let deploy = crate::build::site_config::get_domain_config(p).unwrap();
+    emit(&deploy, p, out.path(), &mut pending).unwrap();
+
+    let js = std::fs::read_to_string(out.path().join("_moss/js/beacon.js")).unwrap();
+    assert!(js.contains("{url:location.href,referrer:document.referrer||null,screen_width:innerWidth}"), "pageview body:\n{js}");
+    assert!(js.contains("{url:location.href,event:t.getAttribute('data-track')}"), "click body:\n{js}");
+    for derived in ["URLSearchParams", "screen_bucket", "utm_source", "utm_medium", "path:"] {
+        assert!(!js.contains(derived), "script still derives or sends {derived}:\n{js}");
+    }
+}

@@ -49,8 +49,8 @@ for (const engineName of engines) {
     const { page, posts, context } = await open(browser);
     const views = () => posts.filter(p => !p.event);
     assert.equal(views().length, 1, `${engineName}: expected one pageview, got ${JSON.stringify(posts)}`);
-    assert.equal(views()[0].path, '/', `${engineName}: pageview path`);
-    assert.equal(views()[0].screen_bucket, 'desktop', `${engineName}: screen bucket`);
+    assert.equal(new URL(views()[0].url).pathname, '/', `${engineName}: pageview url`);
+    assert.equal(views()[0].screen_width, 1440, `${engineName}: screen width`);
 
     // A page restored from the back-forward cache is counted again.
     await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
@@ -60,7 +60,7 @@ for (const engineName of engines) {
     await page.locator('#downloads a[data-platform="macos"]').dispatchEvent('click');
     await page.waitForTimeout(800);
     const clicks = posts.filter(p => p.event);
-    assert.deepEqual(clicks.map(p => [p.path, p.event]), [['/', 'download-macos']], `${engineName}: click events ${JSON.stringify(clicks)}`);
+    assert.deepEqual(clicks.map(p => [new URL(p.url).pathname, p.event]), [['/', 'download-macos']], `${engineName}: click events ${JSON.stringify(clicks)}`);
     await context.close();
     console.log(`ok ${engineName}: one pageview at /, one more on pageshow, download-macos click`);
   } catch (error) { console.error(`FAIL ${error.message.split('\n')[0]}`); failed = true; }

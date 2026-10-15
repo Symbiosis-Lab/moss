@@ -13,7 +13,7 @@ use crate::config::deployment::{DomainDeploymentConfig, MOSS_TARGET_ID};
 /// The script body. `ENDPOINT` is replaced by the JSON-encoded endpoint URL.
 /// The hosting server decides which events count, so this carries no
 /// hostname checks of its own.
-const BEACON_TEMPLATE: &str = r#"(function(){var b=ENDPOINT;var s=function(d){fetch(b,{method:'POST',body:JSON.stringify(d),keepalive:true}).catch(function(){})};var u=new URLSearchParams(location.search);var v=function(){s({path:location.pathname,referrer:document.referrer||null,screen_bucket:innerWidth<768?'mobile':innerWidth<1024?'tablet':'desktop',utm_source:u.get('utm_source'),utm_medium:u.get('utm_medium')})};v();addEventListener('pageshow',function(e){if(e.persisted)v()});document.addEventListener('click',function(e){var t=e.target.closest&&e.target.closest('[data-track]');if(t)s({path:location.pathname,event:t.getAttribute('data-track')})})})();"#;
+const BEACON_TEMPLATE: &str = r#"(function(){var b=ENDPOINT;var s=function(d){fetch(b,{method:'POST',body:JSON.stringify(d),keepalive:true}).catch(function(){})};var v=function(){s({url:location.href,referrer:document.referrer||null,screen_width:innerWidth})};v();addEventListener('pageshow',function(e){if(e.persisted)v()});document.addEventListener('click',function(e){var t=e.target.closest&&e.target.closest('[data-track]');if(t)s({url:location.href,event:t.getAttribute('data-track')})})})();"#;
 
 /// Whether this site gets the visit counter: moss-hosted, with a site id. The
 /// tag and the file both gate on this, so a tag never names a file that was not written.
