@@ -280,11 +280,11 @@ fn generate_grid_item(
 }
 
 /// The full-screen viewer's markup, which `fullscreen.js` drives. Shared by the
-/// media collection pages and by any page with a `:::gallery`.
+/// media collection pages and by any page with a picture that opens in it.
 pub(crate) fn lightbox_html(lang: crate::i18n::Language) -> String {
     format!(
         r##"<!-- Lightbox -->
-  <div id="lightbox" class="lightbox" hidden tabindex="-1">
+  <div id="lightbox" class="lightbox" role="dialog" aria-modal="true" aria-label="{viewer_label}" hidden tabindex="-1">
     <button class="lightbox-close" aria-label="{close_label}">&times;</button>
     <div class="lightbox-content">
       <img class="lightbox-image" src="" alt="" hidden />
@@ -298,6 +298,7 @@ pub(crate) fn lightbox_html(lang: crate::i18n::Language) -> String {
     <button class="lightbox-nav lightbox-prev" aria-label="{previous_label}">&lsaquo;</button>
     <button class="lightbox-nav lightbox-next" aria-label="{next_label}">&rsaquo;</button>
   </div>"##,
+        viewer_label = crate::i18n::t(lang, "image_viewer"),
         close_label = crate::i18n::t(lang, "close"),
         view_in_article = crate::i18n::t(lang, "view_in_article"),
         previous_label = crate::i18n::t(lang, "previous"),

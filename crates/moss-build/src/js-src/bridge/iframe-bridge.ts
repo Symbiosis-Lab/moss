@@ -23,7 +23,7 @@ import { installSwipeNavigation } from "./swipe-gesture";
 import { startChromeAmbient } from "./chrome-ambient";
 import { startSiteAccent } from "./site-accent";
 import type { ThemeSettled } from "./theme-settled";
-import { classifyClickGesture, shouldLeaveClickToPage } from "./click-vocabulary";
+import { classifyClickGesture, installViewerGuard, shouldLeaveClickToPage } from "./click-vocabulary";
 import { installContextMenu } from "./context-menu";
 import { resolveSourceTarget } from "./source-target";
 import { installCaptureResponder } from "./capture/responder";
@@ -618,6 +618,7 @@ import { installCaptureResponder } from "./capture/responder";
     }, '*');
   }
 
+  installViewerGuard(document);
   document.addEventListener('click', (event: MouseEvent) => postSourceTarget(event, 'click'));
   document.addEventListener('dblclick', (event: MouseEvent) => postSourceTarget(event, 'dblclick'));
 

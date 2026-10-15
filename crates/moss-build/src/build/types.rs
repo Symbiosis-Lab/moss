@@ -814,11 +814,12 @@ pub struct PageFeatures {
     /// runtime script via [`SiteAssets`]. Read from the typed AST
     /// (`moss_core::ast::has_scroll_row_recursive`).
     pub scroll_rows: bool,
-    /// True if the page has a `:::gallery`. Gates the full-screen viewer
-    /// (`fullscreen.js`) via [`SiteAssets`] and puts the viewer's markup on
-    /// this page. Read from the typed AST
-    /// (`moss_core::ast::has_shortcode_recursive`).
-    pub galleries: bool,
+    /// True if the page may have a picture the full-screen viewer opens: a
+    /// figure, an image or a `:::gallery`. A coarse superset; `fullscreen.js`
+    /// decides which pictures actually open. Gates the viewer via
+    /// [`SiteAssets`] and puts the viewer's markup on this page. Read from the typed AST
+    /// (`moss_core::ast::has_viewable_picture_recursive`).
+    pub viewer: bool,
     /// True if a declared field was drawn on the page. Gates the
     /// `field-places` stylesheet partial via [`SiteAssets`].
     pub field_places: bool,
@@ -871,9 +872,9 @@ pub struct SiteAssets {
     /// (`/photography`, `/videos`, `/experiments`), which is what
     /// `fullscreen.js` attaches to.
     pub media_pages: bool,
-    /// Some page has a `:::gallery`, whose images open in the same
-    /// full-screen viewer (`fullscreen.js`) as the media collection pages.
-    pub galleries: bool,
+    /// Some page has a picture that opens in the same full-screen viewer
+    /// (`fullscreen.js`) as the media collection pages.
+    pub viewer: bool,
     /// Some page draws declared fields (`place`). Gates the `field-places` stylesheet partial.
     pub field_places: bool,
     /// The site ships the search overlay: `[site].search`, resolved once by the config phase
@@ -930,7 +931,7 @@ impl SiteAssets {
             callouts: false,
             has_footnotes: false,
             scroll_rows: false,
-            galleries: false,
+            viewer: false,
             field_places: false,
             vertical: site_typesetting == Some("vertical"),
             ..from_config
@@ -943,7 +944,7 @@ impl SiteAssets {
             ) == Some("vertical");
             out.has_footnotes |= page.features.footnotes;
             out.scroll_rows |= page.features.scroll_rows;
-            out.galleries |= page.features.galleries;
+            out.viewer |= page.features.viewer;
             out.field_places |= page.features.field_places;
         }
         out

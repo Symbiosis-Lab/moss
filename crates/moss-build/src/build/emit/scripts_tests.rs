@@ -8,7 +8,7 @@ fn all_on() -> SiteAssets {
         heading_anchors: true,
         math: true,
         media_pages: true,
-        galleries: true,
+        viewer: true,
         search: true,
         vertical: true,
         has_footnotes: true,
@@ -120,7 +120,7 @@ fn each_gate_reads_a_distinct_fact() {
         ("math-copy", |a| a.math = true),
         ("search", |a| a.search = true),
         ("fullscreen", |a| a.media_pages = true),
-        ("fullscreen", |a| a.galleries = true),
+        ("fullscreen", |a| a.viewer = true),
     ];
     for (name, set) in fields {
         let mut assets = SiteAssets::default();

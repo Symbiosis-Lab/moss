@@ -481,6 +481,7 @@ fn an_embed_sharing_its_line_renders_as_before_and_leaks_no_marker() {
         ("page.md", "> ![[a.fake#text]]\n\n- item ![[a.fake#text]]\n\nsee ![[a.fake#text]] now\n"),
     ]);
     site.build(PluginMode::Blocking, DeriveMode::Await);
-    let html = site.page("page");
+    // The page may carry the picture viewer, which opens with its own comment.
+    let html = site.page("page").replace("<!-- Lightbox -->", "");
     assert!(!html.contains("moss-derived:") && !html.contains("<!--"), "{html}");
 }

@@ -461,6 +461,12 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "关闭",
             Language::ZhHant => "關閉",
         },
+        "image_viewer" => match lang {
+            Language::En => "Image viewer",
+            Language::De => "Bildansicht",
+            Language::ZhHans => "图片查看器",
+            Language::ZhHant => "圖片檢視器",
+        },
         "previous" => match lang {
             Language::En => "Previous",
             Language::De => "Zurück",

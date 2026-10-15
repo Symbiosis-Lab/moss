@@ -480,7 +480,7 @@ fn parse_overlay_to_blocks(
 /// A caption is one line of inline markdown. Anything that does not parse to
 /// a single paragraph (a heading-like line, a list marker) is kept as plain
 /// text, so it renders as the author wrote it.
-fn parse_caption_inlines(raw: &str, config: &ParseConfig) -> Vec<Inline> {
+pub(super) fn parse_caption_inlines(raw: &str, config: &ParseConfig) -> Vec<Inline> {
     if raw.is_empty() {
         return Vec::new();
     }

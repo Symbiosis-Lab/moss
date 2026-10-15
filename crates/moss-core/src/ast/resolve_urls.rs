@@ -696,11 +696,13 @@ where
     match sc {
         Shortcode::Subscribe(_) | Shortcode::Buttons(_) | Shortcode::Recent(_) | Shortcode::Apply(_) => {}
         Shortcode::Gallery(args) => {
-            // Gallery items carry their src as a structural `Url` on
-            // GalleryItem, not as an `Inline::Image`. The Inline-image
-            // walker has nothing to do here; the structural URL is
-            // resolved by `resolve_shortcode_image_urls` instead.
-            let _ = args;
+            // An item's src is a structural `Url`, resolved by
+            // `resolve_shortcode_image_urls`; only its caption holds inlines.
+            for item in &mut args.items {
+                for inline in &mut item.caption {
+                    walk_images_in_inline(inline, f);
+                }
+            }
         }
         Shortcode::Hero(args) => {
             // Hero's image is a structural `Url` field, not an
@@ -853,9 +855,13 @@ where
                 f(&mut item.url, &text, false);
             }
         }
-        Shortcode::Gallery(_) => {
-            // Gallery items use src URLs (image-kind), not link URLs.
-            // No link-walk action.
+        Shortcode::Gallery(args) => {
+            // An item's src is an image URL; a link can only be in its caption.
+            for item in &mut args.items {
+                for inline in &mut item.caption {
+                    walk_links_in_inline(inline, f);
+                }
+            }
         }
         Shortcode::Hero(args) => {
             for block in &mut args.overlay {

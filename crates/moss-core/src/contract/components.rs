@@ -194,6 +194,8 @@ pub const UNPREFIXED_LEGACY_CLASSES: &[&str] = &[
     "wikilink",
     // The expand/exit-fullscreen control of an embedded iframe (immersive mode).
     "immersive-fullscreen-btn",
+    // Written by authors, like `no-cards`; moss only reads it.
+    "no-viewer",
 ];
 
 /// Whether `class` is exempt from the `moss-` prefix rule.
@@ -1436,7 +1438,18 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "![alt](image.jpg)",
         status: Status::Confirmed,
         since: "0",
-        description: "Wrapper around an inline `<img>` for sizing and figure semantics. `data-width` carries a named width token (body|wide|page|screen); a content-relative width is instead emitted as inline `style=\"width:NN%\"` (set by the editor drag-resize), which also forces the inner image to fill that percent box. Images narrower than the content column center horizontally. A captioned image is announced once, through its `<figcaption>`: when the alt is empty or only repeats the caption the inner `<img>` has `alt=\"\"`. An alt that differs from the caption comes from an italic line under the image: `![description](x.jpg)` then `*caption*` on the next line.",
+        description: "Wrapper around an inline `<img>` for sizing and figure semantics. `data-width` carries a named width token (body|wide|page|screen); a content-relative width is instead emitted as inline `style=\"width:NN%\"` (set by the editor drag-resize), which also forces the inner image to fill that percent box. Images narrower than the content column center horizontally. A captioned image is announced once, through its `<figcaption>`: when the alt is empty or only repeats the caption the inner `<img>` has `alt=\"\"`. An alt that differs from the caption comes from an italic line under the image: `![description](x.jpg)` then `*caption*` on the next line. With scripting, a figure that has alt text or a caption opens in the full-screen viewer, and the viewer shows its `<figcaption>`, links included.",
+    },
+    ComponentEntry {
+        class: "no-viewer",
+        kind: "state",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<div class="no-viewer"><figure class="moss-image"><img src="..." alt="..." /></figure></div>"#,
+        example_markdown: ":::{.no-viewer}\n![A scan of the receipt](receipt.jpg)\n:::\n",
+        status: Status::Confirmed,
+        since: "0.17",
+        description: "Written by the author on a fenced div, a `:::grid` or a `:::gallery` to keep the pictures inside it out of the full-screen viewer; they stay plain images. Pictures inside a link, a hero or a listing card never open it either.",
     },
     ComponentEntry {
         class: "moss-align-left",
@@ -1661,11 +1674,22 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         kind: "instance",
         parent: "moss-gallery",
         data_attrs: &[],
-        example_html: r#"<div class="moss-gallery-item"><a class="moss-gallery-link" href="..." data-title="..."><img src="..." /></a></div>"#,
+        example_html: r#"<div class="moss-gallery-item"><a class="moss-gallery-link" href="..." data-title="..."><img src="..." /></a><p class="moss-gallery-caption">...</p></div>"#,
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "Single image entry inside `.moss-gallery`.",
+        description: "Single image entry inside `.moss-gallery`, with its caption under the link when the author wrote one.",
+    },
+    ComponentEntry {
+        class: "moss-gallery-caption",
+        kind: "instance",
+        parent: "moss-gallery-item",
+        data_attrs: &[],
+        example_html: r#"<p class="moss-gallery-caption">Dusk, <a href="...">the quay</a></p>"#,
+        example_markdown: ":::gallery\nphoto.jpg\n*Dusk, [the quay](quay/)*\n:::\n",
+        status: Status::Confirmed,
+        since: "0.17",
+        description: "The visible caption of a gallery item: the italic line under the image in `:::gallery`, inline markdown so it may hold a link. It sits under the image link, never inside it, and the full-screen viewer shows it, links and credit included, as the large view's caption. An item without the line has none, and `:::gallery rows` keeps the caption under its item.",
     },
     ComponentEntry {
         class: "moss-gallery-link",
@@ -1676,7 +1700,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "The link around a gallery image. With scripting it opens the image in the full-screen viewer (the same one as the media collection pages), stepping through that gallery's images with the arrow keys; without scripting it opens the full-size image. `href` is the full image and `data-title` is its caption.",
+        description: "The link around a gallery image. With scripting it opens the image in the full-screen viewer (the same one as the media collection pages), stepping through the page's pictures, the gallery's included, with the arrow keys; without scripting it opens the full-size image. `href` is the full image and `data-title` is its caption.",
     },
     ComponentEntry {
         class: "moss-buttons",

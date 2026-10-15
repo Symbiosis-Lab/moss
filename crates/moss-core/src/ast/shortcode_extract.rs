@@ -23,7 +23,7 @@
 use super::attrs::gather_multi_line_attrs;
 use super::cells::split_cells;
 use super::document::{BlockMeta, Document};
-use super::node::Block;
+use super::node::{Block, Inline};
 use super::parser::{parse_fragment_with_config, ParseConfig};
 use super::shortcode::{
     ApplyShortcode, ButtonItem, ButtonsShortcode, GalleryItem, GalleryShortcode, GridShortcode,
@@ -159,7 +159,7 @@ fn parse_shortcode_block(
         "subscribe" => (Some(Shortcode::Subscribe(parse_subscribe_args(args))), Diagnostics::default()),
         "buttons" => (Some(Shortcode::Buttons(parse_buttons_body(args, body))), Diagnostics::default()),
         "gallery" => {
-            let (sc, warns) = parse_gallery_body(args, body);
+            let (sc, warns) = parse_gallery_body(args, body, config);
             (Some(Shortcode::Gallery(sc)), Diagnostics { warnings: warns, ..Default::default() })
         }
         "hero" => {
@@ -889,9 +889,13 @@ fn collect_structural_asset_spans(
         };
         match block.name {
             "gallery" => {
-                for line in block.body_start..close {
-                    if let Some(span) = gallery_body_span(source, table, line) {
-                        out.push(span);
+                let lines = (block.body_start..close).map(|k| gallery_line_text(source, table, k));
+                let kinds = gallery_lines(lines, &ParseConfig::default());
+                for (k, kind) in (block.body_start..close).zip(kinds) {
+                    if let Some(GalleryLine::Item(it)) = kind {
+                        if let Some(span) = gallery_body_span(table, k, it) {
+                            out.push(span);
+                        }
                     }
                 }
             }
@@ -946,7 +950,17 @@ fn structural_block_at<'a>(
     Some(StructuralBlock { name, body_start, close })
 }
 
-/// One `:::gallery` body line → an [`AssetPathSpan`], or `None`.
+/// The text of physical line `k`, without its terminator.
+fn gallery_line_text<'a>(source: &'a str, table: &[(usize, usize, usize)], k: usize) -> &'a str {
+    let Some(&(base, content_len, _)) = table.get(k) else { return "" };
+    #[allow(clippy::string_slice)]
+    // `base` and `base + content_len` are line boundaries from `line_table`,
+    // which splits on ASCII '\n'/'\r' only.
+    &source[base..base + content_len]
+}
+
+/// One `:::gallery` item line (`it`, read from physical line `k`) → an
+/// [`AssetPathSpan`], or `None`.
 ///
 /// The **emission filter** lives here, not in [`gallery_item_span`]: a
 /// gallery body line is only reported as an asset reference when it carried
@@ -955,16 +969,11 @@ fn structural_block_at<'a>(
 /// rename tracking). Without it, every line of prose in a gallery body would
 /// show up in the delete-confirmation modal.
 fn gallery_body_span(
-    source: &str,
     table: &[(usize, usize, usize)],
     k: usize,
+    it: MediaLineSpan,
 ) -> Option<AssetPathSpan> {
     let (base, content_len, term_len) = *table.get(k)?;
-    #[allow(clippy::string_slice)]
-    // `base` and `base + content_len` are line boundaries from `line_table`,
-    // which splits on ASCII '\n'/'\r' only.
-    let line = &source[base..base + content_len];
-    let it = gallery_item_span(line)?;
     if !it.is_token && !super::extract_hero::is_bare_hero_media(&it.path) {
         return None;
     }
@@ -980,12 +989,13 @@ fn gallery_body_span(
 
 /// Recognize one `:::gallery` body line, with LINE-RELATIVE byte offsets.
 ///
-/// This is the single grammar for a gallery body line: [`parse_gallery_body`]
-/// is a thin loop over it, and [`shortcode_asset_spans`] lifts its offsets to
-/// absolute. The three arms and their ORDER mirror the historical parser
-/// exactly — `![[…]]` first, then the pipe split, then the markdown-image
-/// pattern — because that ordering is observable (`![alt](x.png|cover)`
-/// splits on the pipe first and therefore is NOT a markdown image).
+/// This is the single grammar for one gallery item line: [`gallery_lines`]
+/// reads every body line through it (adding the caption rule), and
+/// [`shortcode_asset_spans`] lifts its offsets to absolute. The three arms and
+/// their ORDER mirror the historical parser exactly — `![[…]]` first, then the
+/// pipe split, then the markdown-image pattern — because that ordering is
+/// observable (`![alt](x.png|cover)` splits on the pipe first and therefore is
+/// NOT a markdown image).
 ///
 /// Returns a span for every non-blank line, prose included; the media filter
 /// lives in [`shortcode_asset_spans`], which is what must not put prose in
@@ -1066,6 +1076,42 @@ pub(crate) fn gallery_item_span(line: &str) -> Option<MediaLineSpan> {
     }
 }
 
+/// The inside of a line that is one `*italic*` span and nothing else, parsed as
+/// inline markdown: the caption rule a figure in running text follows.
+fn italic_line(line: &str, config: &ParseConfig) -> Option<Vec<Inline>> {
+    match super::extract_hero::parse_caption_inlines(line.trim(), config).as_mut_slice() {
+        [Inline::Emphasis(inner)] if !inner.is_empty() => Some(std::mem::take(inner)),
+        _ => None,
+    }
+}
+
+/// What a `:::gallery` body line is, once read in order.
+enum GalleryLine {
+    Item(MediaLineSpan),
+    /// The italic line directly under an item.
+    Caption(Vec<Inline>),
+}
+
+/// Read the body lines of a gallery in order: the one place that decides
+/// whether a line is an item or the caption of the item above it, shared by
+/// [`parse_gallery_body`] and the asset-span enumerator. Blank lines are `None`.
+fn gallery_lines<'a>(lines: impl Iterator<Item = &'a str>, config: &ParseConfig) -> Vec<Option<GalleryLine>> {
+    let mut after_item = false;
+    lines
+        .map(|line| {
+            if after_item {
+                if let Some(caption) = italic_line(line, config) {
+                    after_item = false;
+                    return Some(GalleryLine::Caption(caption));
+                }
+            }
+            let item = gallery_item_span(line);
+            after_item = item.is_some();
+            item.map(GalleryLine::Item)
+        })
+        .collect()
+}
+
 /// Parse a `:::gallery` block.
 ///
 /// Args: `N {.classes width per-line=N}` where `N` is optional column
@@ -1076,7 +1122,7 @@ pub(crate) fn gallery_item_span(line: &str) -> Option<MediaLineSpan> {
 ///
 /// Returns the shortcode plus any deprecation warnings (currently just the
 /// `cols=` alias warning, when that key was written).
-fn parse_gallery_body(args: &str, body: &str) -> (GalleryShortcode, Vec<String>) {
+fn parse_gallery_body(args: &str, body: &str, config: &ParseConfig) -> (GalleryShortcode, Vec<String>) {
     let attrs = split_positional_classes_width_and_per_line(args);
     let mut warnings = Vec::new();
     // `rows` is a layout word, not a count: `:::gallery rows` is justified rows.
@@ -1099,18 +1145,26 @@ fn parse_gallery_body(args: &str, body: &str) -> (GalleryShortcode, Vec<String>)
         .and_then(|v| v.parse::<u32>().ok());
     let columns = if rows { None } else { count };
     let mut items: Vec<GalleryItem> = Vec::new();
-    for line in body.lines() {
-        if let Some(it) = gallery_item_span(line) {
-            let (alt, alt_only) = match super::parser::alt_only_text(&it.alt) {
-                Some(alt) => (alt, true),
-                None => (it.alt, false),
-            };
-            items.push(GalleryItem {
-                src: Url::unresolved(it.path),
-                alt,
-                alt_only,
-                attrs: it.attrs,
-            });
+    for line in gallery_lines(body.lines(), config).into_iter().flatten() {
+        match line {
+            GalleryLine::Caption(caption) => {
+                if let Some(item) = items.last_mut() {
+                    item.caption = caption;
+                }
+            }
+            GalleryLine::Item(it) => {
+                let (alt, alt_only) = match super::parser::alt_only_text(&it.alt) {
+                    Some(alt) => (alt, true),
+                    None => (it.alt, false),
+                };
+                items.push(GalleryItem {
+                    src: Url::unresolved(it.path),
+                    alt,
+                    alt_only,
+                    attrs: it.attrs,
+                    caption: Vec::new(),
+                });
+            }
         }
     }
     if attrs.used_cols_alias {

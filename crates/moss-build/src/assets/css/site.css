@@ -7995,6 +7995,9 @@ a.moss-grid-card:hover {
   display: flex;
   flex-wrap: wrap;
   gap: var(--moss-gallery-gap, 6px);
+  /* Items share their top edge: a caption under one must not shift the photos
+     of its row, which the grid's centring would do. */
+  align-items: flex-start;
 }
 
 /* Basis is the row height scaled by the item's ratio, so a wide photo takes
@@ -8008,6 +8011,21 @@ a.moss-grid-card:hover {
    image and makes items in one row differ in height. */
 .moss-gallery[data-layout="rows"] .moss-gallery-item picture {
   display: block;
+}
+
+/* An item's visible caption, set like a figure's. `min-width: 0` lets a row of
+   the justified layout keep its proportions however long the caption is. */
+.moss-gallery[data-layout="rows"] .moss-gallery-item {
+  min-width: 0;
+}
+
+.moss-gallery-caption {
+  margin: var(--moss-space-xs) 0 0;
+  font-size: var(--moss-read-caption);
+  line-height: 1.4;
+  color: var(--moss-color-muted, var(--moss-color-text-secondary, #666));
+  text-align: center;
+  overflow-wrap: anywhere;
 }
 
 .moss-gallery[data-layout="rows"] .moss-gallery-item img {
@@ -8471,6 +8489,38 @@ main.has-sidebar > .moss-series-nav {
 
 .lightbox-next {
   right: calc(var(--moss-space-sm) + 7.449px);
+}
+
+/* One picture on the page: nothing to step to. */
+.lightbox-nav[hidden] {
+  display: none;
+}
+
+/* A caption copied from the page keeps its links, readable on the dark overlay. */
+.lightbox-title a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+/* fullscreen.js marks the page pictures it opens; without the script they
+   stay plain images. */
+img[data-viewer] {
+  cursor: zoom-in;
+}
+
+img[data-viewer]:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent, currentColor);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .lightbox:not([hidden]) {
+    animation: moss-lightbox-in 0.15s ease-out;
+  }
+}
+
+@keyframes moss-lightbox-in {
+  from { opacity: 0; }
 }
 
 /* Video figure styling */

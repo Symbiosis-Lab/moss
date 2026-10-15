@@ -35,3 +35,16 @@ export function classifyClickGesture(
 export function shouldLeaveClickToPage(target: Element): boolean {
   return target.closest(".moss-gallery-link") !== null;
 }
+
+// A picture the site's viewer script has taken as its own, which it marks
+// `data-viewer`. In the editor preview a click or Enter on one belongs to the
+// editor's select gesture, so the guard defaults it away in the capture phase,
+// before the site script, which skips any event already prevented. Gallery
+// links are the exception above: they keep opening the viewer.
+export function installViewerGuard(doc: Document): void {
+  const claim = (e: Event): void => {
+    if (e.target instanceof Element && e.target.closest("[data-viewer]")) e.preventDefault();
+  };
+  doc.addEventListener("click", claim, true);
+  doc.addEventListener("keydown", (e) => (e.key === "Enter" || e.key === " ") && claim(e), true);
+}

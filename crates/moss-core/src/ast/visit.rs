@@ -164,6 +164,9 @@ where
         Shortcode::Gallery(args) => {
             for item in &mut args.items {
                 v.url(&mut item.src);
+                for inline in &mut item.caption {
+                    visit_urls_in_inline(inline, v);
+                }
             }
         }
         Shortcode::Hero(args) => {

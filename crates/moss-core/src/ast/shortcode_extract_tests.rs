@@ -678,6 +678,65 @@ fn gallery_alt_only_pipe_is_stripped_from_the_alt_text() {
     }
 }
 
+fn gallery_items(md: &str) -> Vec<GalleryItem> {
+    match extract_shortcodes(md).extracted.remove(0).shortcode {
+        Shortcode::Gallery(args) => args.items,
+        other => panic!("expected Gallery, got {other:?}"),
+    }
+}
+
+fn caption_text(item: &GalleryItem) -> String {
+    crate::ast::inlines_to_plain_text(&item.caption)
+}
+
+#[test]
+fn a_gallery_item_takes_the_italic_line_under_it_as_its_caption() {
+    let items = gallery_items(":::gallery
+![Harbour](a.jpg)
+*Dusk, 14 May*
+b.jpg
+*Second*
+![[c.jpg]]
+:::
+");
+    assert_eq!(items.len(), 3, "a caption line is not an item");
+    assert_eq!(caption_text(&items[0]), "Dusk, 14 May");
+    assert_eq!(items[0].alt, "Harbour");
+    assert_eq!(caption_text(&items[1]), "Second");
+    assert!(items[2].caption.is_empty());
+}
+
+#[test]
+fn a_gallery_caption_may_contain_a_link() {
+    let items = gallery_items(":::gallery
+a.jpg
+*Dusk · [Quay Project](projects/quay.md) · 1931*
+:::
+");
+    assert_eq!(caption_text(&items[0]), "Dusk · Quay Project · 1931");
+    assert!(
+        items[0].caption.iter().any(|i| matches!(i, Inline::Link { .. })),
+        "the link must stay a link: {:?}",
+        items[0].caption
+    );
+}
+
+#[test]
+fn only_an_italic_line_directly_under_an_item_is_a_caption() {
+    // Bold is not italic; a blank line separates; the first line has nothing above it.
+    let items = gallery_items(":::gallery
+*Opening*
+a.jpg
+**Bold**
+b.jpg
+
+*After a blank line*
+:::
+");
+    assert!(items.iter().all(|i| i.caption.is_empty()), "{items:?}");
+    assert_eq!(items.len(), 5);
+}
+
 #[test]
 fn gallery_placement_before_a_pipe_stays_a_media_attribute() {
     let md = ":::gallery\n![55%|](p.jpg)\n:::\n";
@@ -2864,7 +2923,7 @@ fn gallery_prose_line_emits_no_span() {
     let s = spans(src);
     assert_eq!(s.len(), 1, "only the media line, got {s:?}");
     assert_eq!(s[0].path, "photo.jpg");
-    let (g, _) = parse_gallery_body("", "Just some prose here\nphoto.jpg");
+    let (g, _) = parse_gallery_body("", "Just some prose here\nphoto.jpg", &ParseConfig::default());
     assert_eq!(g.items.len(), 2, "the parser still yields both items");
 }
 
@@ -3034,10 +3093,11 @@ fn spans_agree_with_parsers() {
         ":::gallery\n![[a.png]]\n![alt](b.png)\nc.png|cover\n:::\n",
         ":::gallery\n\n  indented.png\n\n:::\n",
         ":::gallery\n關於/x.png\n:::\n",
+        ":::gallery\na.png\n*Dusk · [Quay](projects/quay.md)*\nb.png\n:::\n",
     ];
     for src in gallery_cases {
         let body: Vec<&str> = src.lines().skip(1).take_while(|l| l.trim() != ":::").collect();
-        let (parsed, _) = parse_gallery_body("", &body.join("\n"));
+        let (parsed, _) = parse_gallery_body("", &body.join("\n"), &ParseConfig::default());
         let want: Vec<String> = parsed
             .items
             .iter()

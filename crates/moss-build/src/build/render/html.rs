@@ -1593,7 +1593,7 @@ pub(super) fn render_page<'d>(
             resolved_cover_for_og.as_ref(), site_url, &homepage_meta_url, &page_lang_tag,
         )?,
         embed_head_assets,
-        lightbox: if doc.is_some_and(|d| d.features.galleries) {
+        lightbox: if doc.is_some_and(|d| d.features.viewer) {
             format!("{}\n    ", crate::build::media_collection::lightbox_html(chrome.ui_lang))
         } else {
             String::new()

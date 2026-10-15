@@ -14,6 +14,7 @@
 use super::document::Document;
 use super::node::{Block, Inline};
 use super::shortcode::Shortcode;
+use super::visit::visit_blocks;
 use std::collections::HashMap;
 
 /// What a page marks a markdown image for, with an HTML comment on the line
@@ -381,6 +382,35 @@ fn find_first_image_in_shortcode<'a>(
     }
 }
 
+/// True if the page may hold a picture the full-screen viewer opens: a
+/// figure, a gallery, a paragraph's image, or raw HTML with an `<img`.
+///
+/// A deliberate superset. `fullscreen.js` owns the exact rules (alt text,
+/// links, heroes, `no-viewer`), so the build only decides whether the page
+/// carries the viewer's markup and the site its script; a false positive
+/// costs a few hundred bytes, a false negative a picture that cannot open.
+pub fn has_viewable_picture_recursive(doc: &Document) -> bool {
+    let mut found = false;
+    visit_blocks(doc, |block| {
+        found = match block {
+            Block::Figure { .. } | Block::Shortcode(Shortcode::Gallery(_)) => true,
+            Block::Paragraph(inlines) => inlines.iter().any(|i| match i {
+                Inline::Image { .. } => true,
+                Inline::Other(html) => has_img_tag(html),
+                _ => false,
+            }),
+            Block::Other(html) => has_img_tag(html),
+            _ => false,
+        };
+        !found
+    });
+    found
+}
+
+fn has_img_tag(html: &str) -> bool {
+    html.to_ascii_lowercase().contains("<img")
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::node::Inline;
@@ -691,5 +721,28 @@ mod tests {
         let video = marked("clip.mp4", "<!-- video-meta: walks -->").map(|m| m.marker);
         assert_eq!(video, Some(MediaMarker::Video { collection: Some("walks".into()) }));
         assert_eq!(marked("sunset.jpg", "<!-- video-meta -->"), None, "a photo is not a video");
+    }
+
+    // ---- has_viewable_picture_recursive ----
+
+    fn has_picture(markdown: &str) -> bool {
+        has_viewable_picture_recursive(&crate::ast::parse(markdown))
+    }
+
+    #[test]
+    fn any_figure_image_gallery_or_raw_img_marks_the_page() {
+        assert!(has_picture("![Harbour](harbour.jpg)\n*Dusk*\n"));
+        assert!(has_picture("![](divider.jpg)\n"));
+        assert!(has_picture(":::grid 2\n![One](a.jpg)\n+++\n![Two](b.jpg)\n:::\n"));
+        assert!(has_picture("> ![Harbour](harbour.jpg)\n"));
+        assert!(has_picture(":::gallery\na.jpg\nb.jpg\n:::\n"));
+        assert!(has_picture("<div><IMG src=\"a.jpg\"></div>\n"));
+    }
+
+    #[test]
+    fn a_page_without_pictures_is_not_marked() {
+        assert!(!has_picture("Words only, with a [link](page.md).\n"));
+        assert!(!has_picture(":::hero {image=hero.jpg}\n# Title\n:::\n"));
+        assert!(!has_picture("[![Harbour](harbour.jpg)](page.md)\n"));
     }
 }

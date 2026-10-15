@@ -145,7 +145,7 @@ pub const SITE_SCRIPTS: &[SiteScript] = &[
         name: "fullscreen",
         dev_path: "src/assets/js/fullscreen.js",
         source: || include_str!("../../assets/js/fullscreen.js"),
-        gate: |a| a.media_pages || a.galleries,
+        gate: |a| a.media_pages || a.viewer,
         load: Load::Shell { defer: false },
     },
     SiteScript {

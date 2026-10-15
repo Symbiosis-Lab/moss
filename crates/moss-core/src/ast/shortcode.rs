@@ -152,6 +152,11 @@ pub struct GalleryItem {
     /// "1.5:1 contain"). Empty if no pipe in the source.
     /// The renderer parses this via `moss_core::media::parse_media_attrs`.
     pub attrs: String,
+    /// The visible caption: the italic line under the image, as under a figure
+    /// in running text. Inline markdown, so a link in it goes through the same
+    /// URL resolution as body links. Empty when the item has none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub caption: Vec<Inline>,
 }
 
 /// Where a fenced shortcode's inner content sits in the page source, so a click
@@ -664,12 +669,14 @@ mod tests {
                     alt: "A".to_string(),
                     alt_only: false,
                     attrs: String::new(),
+                    caption: Vec::new(),
                 },
                 GalleryItem {
                     src: Url::unresolved("b.jpg"),
                     alt: "B".to_string(),
                     alt_only: false,
                     attrs: "cover top".to_string(),
+                    caption: Vec::new(),
                 },
             ],
             width: None,
@@ -704,6 +711,7 @@ mod tests {
                 alt: "Photo".to_string(),
                 alt_only: false,
                 attrs: "1:1 contain".to_string(),
+                caption: Vec::new(),
             }],
             width: None,
             rows: false,

@@ -63,7 +63,7 @@ pub use hooks::{DefaultHooks, RenderHooks};
 pub use node::{Block, CalloutKind, Fold, Inline};
 pub use parser::{parse, parse_with_config, parser_options, unwrap_implicit_figures, ParseConfig};
 pub use plain_text::{inlines_to_plain_text, render_plain_text};
-pub use query::{find_first_block_image, images_without_text, marked_media_at, MarkedMedia, MediaMarker};
+pub use query::{find_first_block_image, has_viewable_picture_recursive, images_without_text, marked_media_at, MarkedMedia, MediaMarker};
 pub use render::{render_block_with_meta, render_blocks, render_blocks_with_meta, render_document};
 pub use resolve_urls::{classify_remaining_urls, resolve_urls, UrlResolution};
 pub use shortcode::{

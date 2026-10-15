@@ -27,7 +27,7 @@
     
     
     <script>var t=null;try{t=localStorage.getItem("moss-theme")}catch(e){}document.documentElement.setAttribute("data-theme",t||((window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light"));</script>
-    <link rel="stylesheet" href="/_moss/style.fd1537a210348111.css">
+    <link rel="stylesheet" href="/_moss/style.ee732b7efaf0da75.css">
     
 </head>
 <body data-path="/obsidian/"><a class="moss-skip-link" data-pagefind-ignore href="#main-content">Skip to content</a>
@@ -74,10 +74,26 @@
         </a>
     </div>
 
+    <!-- Lightbox -->
+  <div id="lightbox" class="lightbox" role="dialog" aria-modal="true" aria-label="Image viewer" hidden tabindex="-1">
+    <button class="lightbox-close" aria-label="Close">&times;</button>
+    <div class="lightbox-content">
+      <img class="lightbox-image" src="" alt="" hidden />
+      <video class="lightbox-video" controls playsinline hidden></video>
+      <iframe class="lightbox-iframe" hidden></iframe>
+    </div>
+    <div class="lightbox-caption">
+      <p class="lightbox-title"></p>
+      <a class="lightbox-article-link" href="">View in article &rarr;</a>
+    </div>
+    <button class="lightbox-nav lightbox-prev" aria-label="Previous">&lsaquo;</button>
+    <button class="lightbox-nav lightbox-next" aria-label="Next">&rsaquo;</button>
+  </div>
     <script src="/_moss/js/theme.ea5234ac55547a40.js" data-share-card="/_moss/js/share-card.3f8e5951fda238d2.js"></script>
     <script src="/_moss/js/preview.2113070924552688.js"></script>
     <script src="/_moss/js/heading-anchor.f0092270cc65ebdf.js"></script>
     <script src="/_moss/js/math-copy.1698adf527fc680c.js"></script>
+    <script src="/_moss/js/fullscreen.c0c450f09b927cc1.js"></script>
     
 </body>
 </html>

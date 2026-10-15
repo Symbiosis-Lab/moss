@@ -6,7 +6,8 @@
  * - A plain item keeps its title as the caption, and the alt is the same text.
  */
 
-import { describe, test, expect, beforeEach, vi } from "vitest";
+import { describe, test, expect, beforeEach, afterAll } from "vitest";
+import { loadViewer, unloadViewer } from "./fixtures/load-viewer";
 
 function buildPage(linkAttrs: string, thumbAlt: string): void {
   document.body.innerHTML = `
@@ -29,14 +30,15 @@ async function openFirstItem(): Promise<{
   image: HTMLImageElement;
   title: HTMLElement;
 }> {
-  vi.resetModules();
-  await import("../fullscreen");
+  await loadViewer(document.body.innerHTML);
   (document.querySelector(".moss-gallery-link") as HTMLElement).click();
   return {
     image: document.querySelector(".lightbox-image") as HTMLImageElement,
     title: document.querySelector(".lightbox-title") as HTMLElement,
   };
 }
+
+afterAll(unloadViewer);
 
 describe("fullscreen viewer alt and caption", () => {
   beforeEach(() => {

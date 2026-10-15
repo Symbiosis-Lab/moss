@@ -1218,8 +1218,7 @@ pub fn process_markdown_file(
     // SCRIPT (the sidenotes bundle) rather than a stylesheet partial.
     let has_footnotes = !moss_core::ast::footnotes::FootnoteIndex::build(&doc.blocks).is_empty();
     let has_scroll_row = moss_core::ast::has_scroll_row_recursive(&doc);
-    let has_gallery =
-        moss_core::ast::has_shortcode_recursive(&doc, moss_core::ast::ShortcodeKind::Gallery);
+    let has_viewer = moss_core::ast::has_viewable_picture_recursive(&doc);
 
     // Defensive sweep: `Block::Other` raw HTML (e.g. `<div class="callout">`
     // from upstream Stage 1) may still contain `href="moss-resolved:..."` /
@@ -1621,7 +1620,7 @@ pub fn process_markdown_file(
             callouts: has_callout,
             footnotes: has_footnotes,
             scroll_rows: has_scroll_row,
-            galleries: has_gallery,
+            viewer: has_viewer,
             field_places: has_field_places,
         },
         slot: frontmatter.slot.clone(),

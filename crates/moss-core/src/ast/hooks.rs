@@ -323,7 +323,13 @@ pub trait RenderHooks {
                         &opts,
                     );
                     out.push_str(&item_html);
-                    out.push_str("</a></div>");
+                    out.push_str("</a>");
+                    if !item.caption.is_empty() {
+                        out.push_str(r#"<p class="moss-gallery-caption">"#);
+                        out.push_str(&super::render::render_inlines_html(self, &item.caption));
+                        out.push_str("</p>");
+                    }
+                    out.push_str("</div>");
                 }
                 out.push_str("</div>");
             }
@@ -1450,6 +1456,37 @@ mod tests {
     }
 
     #[test]
+    fn gallery_caption_sits_under_the_link_not_inside_it() {
+        let item = |src: &str, caption: Vec<Inline>| GalleryItem {
+            src: Url::resolved(src, UrlKind::Asset),
+            alt: "Alt".to_string(),
+            alt_only: false,
+            attrs: String::new(),
+            caption,
+        };
+        let link = Inline::Link {
+            url: Url::resolved("../quay/", UrlKind::Internal),
+            title: None,
+            children: vec![Inline::Text("Quay".to_string())],
+            is_wikilink: false,
+            has_pothole: false,
+        };
+        let sc = Shortcode::Gallery(GalleryShortcode {
+            items: vec![
+                item("a.jpg", vec![Inline::Text("Dusk, ".to_string()), link]),
+                item("b.jpg", Vec::new()),
+            ],
+            ..Default::default()
+        });
+        let html = render_shortcode_html(&sc);
+        assert_eq!(html.matches("moss-gallery-caption").count(), 1, "only the captioned item: {html}");
+        assert!(
+            html.contains(r#"</a><p class="moss-gallery-caption">Dusk, <a href="../quay/">Quay</a></p></div>"#),
+            "the caption follows the image link and keeps its own link: {html}"
+        );
+    }
+
+    #[test]
     fn gallery_with_width_page_emits_data_width() {
         let sc = Shortcode::Gallery(GalleryShortcode {
             width: Some("page".to_string()),
@@ -1458,6 +1495,7 @@ mod tests {
                 alt: String::new(),
                 alt_only: false,
                 attrs: String::new(),
+                caption: Vec::new(),
             }],
             ..Default::default()
         });
@@ -1492,6 +1530,7 @@ mod tests {
                 alt: String::new(),
                 alt_only: false,
                 attrs: String::new(),
+                caption: Vec::new(),
             }],
             ..Default::default()
         });
@@ -1525,6 +1564,7 @@ mod tests {
             alt: String::new(),
             alt_only: false,
             attrs: String::new(),
+            caption: Vec::new(),
         };
         let sc = Shortcode::Gallery(GalleryShortcode {
             rows: true,
@@ -1555,6 +1595,7 @@ mod tests {
                 alt: String::new(),
                 alt_only: false,
                 attrs: String::new(),
+                caption: Vec::new(),
             }],
             ..Default::default()
         });
@@ -1578,6 +1619,7 @@ mod tests {
                 alt: String::new(),
                 alt_only: false,
                 attrs: String::new(),
+                caption: Vec::new(),
             }],
             ..Default::default()
         });
@@ -1597,6 +1639,7 @@ mod tests {
                 alt: String::new(),
                 alt_only: false,
                 attrs: String::new(),
+                caption: Vec::new(),
             }],
             ..Default::default()
         });
@@ -1615,6 +1658,7 @@ mod tests {
                 alt: "Two dancers".to_string(),
                 alt_only: true,
                 attrs: String::new(),
+                caption: Vec::new(),
             }],
             ..Default::default()
         });
@@ -1632,6 +1676,7 @@ mod tests {
                 alt: "Two dancers".to_string(),
                 alt_only: false,
                 attrs: String::new(),
+                caption: Vec::new(),
             }],
             ..Default::default()
         });
@@ -1704,6 +1749,7 @@ mod tests {
                 alt: "photo".to_string(),
                 alt_only: false,
                 attrs: String::new(),
+                caption: Vec::new(),
             }],
             ..Default::default()
         })

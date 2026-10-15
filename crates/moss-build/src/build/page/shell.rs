@@ -282,7 +282,7 @@ pub struct ShellVars {
     /// identical on every page of a build.
     pub runtime_js_tags: String,
     /// The full-screen viewer's markup (`media_collection::lightbox_html`),
-    /// set only on a page that has a `:::gallery`; empty elsewhere. Dropped in
+    /// set only on a page that has a picture the viewer opens; empty elsewhere. Dropped in
     /// just before the runtime scripts, which `fullscreen.js` finds it through.
     pub lightbox: String,
     /// Robots meta tag (e.g. noindex for drafts). Empty when omitted.

@@ -6,8 +6,11 @@
 // double (jump), so the first click of a double may fire immediately and be
 // superseded. What must NOT happen is the reveal firing twice, which is what
 // the detail>1 suppression is for.
-import { describe, test, expect } from 'vitest';
-import { classifyClickGesture, shouldLeaveClickToPage } from '../click-vocabulary';
+import { describe, test, expect, afterAll } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { loadViewer, unloadViewer } from '../../site/__tests__/fixtures/load-viewer';
+import { classifyClickGesture, installViewerGuard, shouldLeaveClickToPage } from '../click-vocabulary';
 
 describe('classifyClickGesture', () => {
   test('a lone click is the reveal, with zero latency', () => {
@@ -44,5 +47,33 @@ describe('shouldLeaveClickToPage', () => {
   test('a click inside a plain link is not left to the page', () => {
     document.body.innerHTML = '<a href="/about">About</a>';
     expect(shouldLeaveClickToPage(document.querySelector('a')!)).toBe(false);
+  });
+});
+
+describe('the editor preview and the picture viewer', () => {
+  const PAGE = '<main><figure class="moss-image"><img src="/a.jpg" alt="Harbour"><figcaption>Dusk</figcaption></figure></main>';
+  afterAll(unloadViewer);
+
+  test('a click on a figure picture selects in the editor and does not open the viewer', async () => {
+    await loadViewer(PAGE);
+    installViewerGuard(document);
+    let reachedEditor = false;
+    document.addEventListener('click', () => (reachedEditor = true));
+    document.querySelector('img')!.click();
+    expect(reachedEditor).toBe(true);
+    expect(document.getElementById('lightbox')).toBeNull();
+    document.querySelector('img')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    expect(document.getElementById('lightbox')).toBeNull();
+  });
+
+  test('without the guard the same click opens the viewer', async () => {
+    await loadViewer(PAGE);
+    document.querySelector('img')!.click();
+    expect(document.getElementById('lightbox')?.hidden).toBe(false);
+  });
+
+  test('the bridge installs the guard', () => {
+    const bridge = readFileSync(resolve(__dirname, '../iframe-bridge.ts'), 'utf8');
+    expect(bridge).toContain('installViewerGuard(document);');
   });
 });
