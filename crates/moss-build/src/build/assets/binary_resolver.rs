@@ -414,13 +414,7 @@ pub fn download_binary(
 ) -> Result<BinaryResolution, String> {
     validate_config(config)?;
     let platform = get_current_platform()?;
-
-    let source = config.sources.get(&platform).ok_or_else(|| {
-        format!(
-            "No download source configured for {} on platform '{}'",
-            config.name, platform
-        )
-    })?;
+    let source = download_source(config, &platform)?;
 
     // Check disk space
     let bin_dir = get_moss_bin_dir()?;
@@ -551,15 +545,33 @@ impl Tool {
     }
 }
 
+impl Tool {
+    /// The binaries that make up this tool.
+    fn configs(self) -> Vec<BinaryConfig> {
+        match self {
+            Tool::Ffmpeg => vec![ffmpeg_binary_config(), ffprobe_binary_config()],
+            Tool::Git => vec![git_binary_config()],
+        }
+    }
+
+    /// True when every binary of this tool has a download source for the
+    /// current platform. A tool without one cannot be fetched here, so it must
+    /// not be offered as a download.
+    pub fn download_available(self) -> bool {
+        let Ok(platform) = get_current_platform() else {
+            return false;
+        };
+        self.configs()
+            .iter()
+            .all(|config| download_source(config, &platform).is_ok())
+    }
+}
+
 /// Makes `tool` available by downloading each of its binaries that
 /// [`resolve_binary`] cannot find. Call only after the user has agreed to the
 /// download; a binary that is already installed is left alone.
 pub fn download_tool(tool: Tool, on_progress: Option<&DownloadProgress>) -> Result<(), String> {
-    let configs = match tool {
-        Tool::Ffmpeg => vec![ffmpeg_binary_config(), ffprobe_binary_config()],
-        Tool::Git => vec![git_binary_config()],
-    };
-    for config in configs {
+    for config in tool.configs() {
         if resolve_binary(&config, None).is_err() {
             download_binary(&config, on_progress)?;
         }
@@ -570,6 +582,17 @@ pub fn download_tool(tool: Tool, on_progress: Option<&DownloadProgress>) -> Resu
 // =============================================================================
 // URL resolution
 // =============================================================================
+
+/// The download source [`download_binary`] uses for `platform`, or the error
+/// it reports when the binary has none there.
+fn download_source<'a>(config: &'a BinaryConfig, platform: &str) -> Result<&'a BinarySource, String> {
+    config.sources.get(platform).ok_or_else(|| {
+        format!(
+            "No download source configured for {} on platform '{}'",
+            config.name, platform
+        )
+    })
+}
 
 /// Resolves the download URL for a binary source.
 ///

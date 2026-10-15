@@ -1119,16 +1119,26 @@ pub(crate) fn run_video_conversion(
         Some(ref path) => Some(FFmpegManager::from_bin_path(path.clone())),
         None => {
             log::warn!("Video conversion skipped: FFmpeg not found during scan");
+            // Offer the download only where moss has a source for it.
+            let (what, action) =
+                if crate::build::assets::binary_resolver::Tool::Ffmpeg.download_available() {
+                    (
+                        crate::infra::app_advisory::t("ffmpeg_offer"),
+                        Action::InApp {
+                            op: crate::advisory::AppOp::DownloadTool,
+                            args: serde_json::json!({ "tool": "ffmpeg" }),
+                            label: crate::infra::app_advisory::t("download_ffmpeg"),
+                        },
+                    )
+                } else {
+                    (crate::infra::app_advisory::t("ffmpeg_install"), Action::None)
+                };
             advisories.push(Advisory {
                 scope: Scope::Environment,
                 severity: Severity::NeedsAction,
                 item: None,
-                what: crate::infra::app_advisory::t("ffmpeg_offer"),
-                action: Action::InApp {
-                    op: crate::advisory::AppOp::DownloadTool,
-                    args: serde_json::json!({ "tool": "ffmpeg" }),
-                    label: crate::infra::app_advisory::t("download_ffmpeg"),
-                },
+                what,
+                action,
             });
             None
         }

@@ -5,7 +5,7 @@
 //!
 //! Exit codes:
 //!   0  the tool is available
-//!   1  the download or verification failed
+//!   1  the download or verification failed, or moss has no download for this platform
 //!   2  usage error
 
 use crate::build::assets::binary_resolver::{download_tool, Tool};
@@ -18,6 +18,13 @@ pub fn run(args: &[String]) -> i32 {
                 eprintln!("error: unknown tool '{name}': use ffmpeg|git");
                 return 2;
             };
+            if !tool.download_available() {
+                eprintln!(
+                    "moss has no {} download for this platform; install it with your system's package manager",
+                    tool.name()
+                );
+                return 1;
+            }
             match download_tool(tool, None) {
                 Ok(()) => {
                     println!("{} is ready", tool.name());

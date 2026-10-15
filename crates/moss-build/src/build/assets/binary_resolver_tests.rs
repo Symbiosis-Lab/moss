@@ -126,6 +126,20 @@ fn test_tool_name_round_trip() {
     assert_eq!(Tool::from_name(""), None);
 }
 
+#[test]
+#[cfg(target_os = "macos")]
+fn test_download_available_on_macos() {
+    assert!(Tool::Ffmpeg.download_available());
+    assert!(Tool::Git.download_available());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn test_download_unavailable_on_linux() {
+    assert!(!Tool::Ffmpeg.download_available());
+    assert!(!Tool::Git.download_available());
+}
+
 // -------------------------------------------------------------------------
 // check_binary_works tests
 // -------------------------------------------------------------------------

@@ -352,11 +352,15 @@ pub fn advisory_from_error(what: impl Into<String>, recoverable: bool) -> Adviso
 ///   through to `Action::None`, so a plugin never gets a button that does nothing.
 pub fn escape_spec_to_action(spec: &str) -> Action {
     match spec.split_once(':') {
-        Some(("download-tool", name)) if Tool::from_name(name).is_some() => Action::InApp {
-            op: AppOp::DownloadTool,
-            args: serde_json::json!({ "tool": name }),
-            label: format!("Download {name}"),
-        },
+        Some(("download-tool", name))
+            if Tool::from_name(name).is_some_and(Tool::download_available) =>
+        {
+            Action::InApp {
+                op: AppOp::DownloadTool,
+                args: serde_json::json!({ "tool": name }),
+                label: format!("Download {name}"),
+            }
+        }
         Some(("recheck", label)) => Action::InApp {
             op: AppOp::RecheckDns,
             args: serde_json::Value::Null,

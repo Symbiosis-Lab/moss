@@ -1211,7 +1211,16 @@ fn awaiting_serializes_action_on_the_wire() {
 }
 
 #[test]
-fn escape_download_tool_maps_only_known_tools() {
+fn escape_download_tool_drops_unknown_tools() {
+    assert_eq!(
+        crate::tasks::escape_spec_to_action("download-tool:bogus"),
+        Action::None
+    );
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn escape_download_tool_maps_a_tool_with_a_source_here() {
     match crate::tasks::escape_spec_to_action("download-tool:ffmpeg") {
         Action::InApp { op, args, label } => {
             assert_eq!(op, crate::advisory::AppOp::DownloadTool);
@@ -1220,8 +1229,13 @@ fn escape_download_tool_maps_only_known_tools() {
         }
         other => panic!("expected a DownloadTool action, got {other:?}"),
     }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn escape_download_tool_drops_a_tool_without_a_source_here() {
     assert_eq!(
-        crate::tasks::escape_spec_to_action("download-tool:bogus"),
+        crate::tasks::escape_spec_to_action("download-tool:ffmpeg"),
         Action::None
     );
 }
