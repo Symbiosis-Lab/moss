@@ -1,6 +1,5 @@
 identity/
 data/*
-!data/redirects.json
 build/
 keys/
 agents/
