@@ -367,6 +367,19 @@ impl ServedPath {
         out.strip_suffix(".html").map(|stem| ServedPath(format!("{stem}.ics")))
     }
 
+    /// The welcome email of one language tree, read by the hosting server
+    /// when a subscriber is confirmed. `edition` is the language-tree folder
+    /// name, or `default` for the root tree.
+    pub fn for_welcome_email(edition: &str) -> Result<Self, ServedPathError> {
+        if edition.is_empty() {
+            return Err(ServedPathError::Empty);
+        }
+        if !edition.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            return Err(ServedPathError::InvalidInput("welcome-email edition must be a bare language-tree name"));
+        }
+        Ok(ServedPath(format!(".moss-email/welcome.{edition}.json")))
+    }
+
     /// The redirect table a host that can answer a real 301 reads.
     pub fn for_redirects_manifest() -> Self {
         ServedPath("_moss/redirects.json".to_string())

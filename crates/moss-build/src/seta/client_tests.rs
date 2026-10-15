@@ -1380,3 +1380,71 @@ async fn transport_policy_blocks_remote_http_redirects_before_connecting() {
         result => panic!("remote HTTP redirect should fail before connecting: {result:?}"),
     }
 }
+
+// ── `site_limit_reached` 403 ────────────────────────────────────────────────
+
+#[test]
+fn site_limit_reached_parses_with_and_without_contact() {
+    let with = r#"{"error":"site_limit_reached","limit":3,"contact":"help@example.com"}"#;
+    assert_eq!(
+        parse_site_limit_reached(403, with),
+        Some((3, Some("help@example.com".to_string())))
+    );
+    let without = r#"{"error":"site_limit_reached","limit":1}"#;
+    assert_eq!(parse_site_limit_reached(403, without), Some((1, None)));
+    let blank = r#"{"error":"site_limit_reached","limit":2,"contact":"  "}"#;
+    assert_eq!(parse_site_limit_reached(403, blank), Some((2, None)));
+}
+
+#[test]
+fn unknown_403_bodies_are_not_site_limit_reached() {
+    assert_eq!(parse_site_limit_reached(403, r#"{"error":"forbidden"}"#), None);
+    assert_eq!(parse_site_limit_reached(403, r#"{"error":"site_limit_reached"}"#), None);
+    assert_eq!(parse_site_limit_reached(403, "<html>nope</html>"), None);
+    assert_eq!(parse_site_limit_reached(400, r#"{"error":"site_limit_reached","limit":1}"#), None);
+}
+
+// ── `lang` on the verification request ─────────────────────────────────────
+
+#[test]
+fn auth_request_body_sends_lang_only_when_valid() {
+    let body = |l| auth_request_body("a@example.com", "pk", "sid", l);
+    assert!(body(None).get("lang").is_none());
+    assert_eq!(body(Some("zh-hans"))["lang"], "zh-hans");
+    assert_eq!(body(Some("EN"))["lang"], "EN");
+    assert_eq!(body(Some("pt-br-x1"))["lang"], "pt-br-x1");
+    for bad in ["", "e", "english", "en_US", "en-", "en-x", "en-toolongtag1", "a-b-c-d", "zh hans", "en-us-a1-b2"] {
+        assert!(body(Some(bad)).get("lang").is_none(), "{bad:?} must be dropped");
+    }
+    assert_eq!(body(None)["email"], "a@example.com");
+}
+
+#[tokio::test]
+async fn a_site_limit_403_through_the_failed_response_path_is_site_limit_reached() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = stream.read(&mut buf).await.unwrap();
+        let body = r#"{"error":"site_limit_reached","limit":2,"contact":"help@example.com"}"#;
+        let resp = format!(
+            "HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(resp.as_bytes()).await.unwrap();
+        stream.shutdown().await.ok();
+    });
+    let client = MossSetaClient::with_url(&format!("http://{}", addr));
+    let err = client
+        .request_auth("user@example.com", "pk", "sid", None)
+        .await
+        .expect_err("a 403 is an error");
+    handle.await.unwrap();
+    assert!(
+        matches!(&err, SetaError::SiteLimitReached { limit: 2, contact: Some(c) } if c == "help@example.com"),
+        "{err:?}"
+    );
+}

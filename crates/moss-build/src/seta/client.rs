@@ -8,6 +8,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::time::Duration;
 
+use super::wire::{auth_request_body, parse_not_allowlisted, parse_site_limit_reached};
+
 /// Time to wait for a TCP+TLS connection to establish. Catches dead or
 /// half-open connections (e.g. a dropped network, a wedged edge) fast without
 /// limiting the duration of legitimate large uploads.
@@ -433,6 +435,14 @@ pub enum SetaError {
     #[error("not allowlisted (apply at: {apply_url})")]
     NotAllowlisted { apply_url: String },
 
+    /// The hosting plan's site quota is used up:
+    /// `403 {error:'site_limit_reached', limit:N, contact:'<optional address>'}`.
+    /// `contact` is whatever the server chooses to offer; none is built in. The
+    /// Display string is a diagnostic only — the localized copy is built at the
+    /// call sites via `app_advisory`.
+    #[error("site limit reached ({limit})")]
+    SiteLimitReached { limit: u32, contact: Option<String> },
+
     /// An edge interstitial — in practice a Cloudflare bot/managed challenge —
     /// blocked the request before it ever reached seta.
     ///
@@ -454,32 +464,6 @@ pub enum SetaError {
     /// right sentence with no change.
     #[error("{}", CHALLENGE_MESSAGE)]
     Challenge { status: u16 },
-}
-
-/// Parse a seta invite-gate `not_allowlisted` 403, returning `apply_url`.
-///
-/// Returns `Some(apply_url)` only when `status == 403` AND the body's `error`
-/// field is exactly `"not_allowlisted"` — the shape the seta invite gate emits
-/// from `POST /api/sites`: `{"error":"not_allowlisted","apply_url":"<url>"}`.
-/// `apply_url` may be an empty string (the server sends `""` when its `APPLY_URL`
-/// env var is unset); a missing `apply_url` key also yields `Some("")`. Every
-/// other status / error reason returns `None` so the caller falls through to the
-/// normal failure path. Pure (status + body in, `Option<String>` out) so it's
-/// unit-testable without constructing a `reqwest::Response`.
-pub(super) fn parse_not_allowlisted(status: u16, body: &str) -> Option<String> {
-    if status != 403 {
-        return None;
-    }
-    let json = serde_json::from_str::<serde_json::Value>(body).ok()?;
-    if json.get("error").and_then(|v| v.as_str()) != Some("not_allowlisted") {
-        return None;
-    }
-    Some(
-        json.get("apply_url")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-    )
 }
 
 /// Extract the user-facing message from a moss-seta error response body.
@@ -615,6 +599,10 @@ impl SetaError {
         if let Some(apply_url) = parse_not_allowlisted(status, &body) {
             log::warn!(target: "seta", "request to {} rejected by invite gate (not allowlisted)", url);
             return SetaError::NotAllowlisted { apply_url };
+        }
+        if let Some((limit, contact)) = parse_site_limit_reached(status, &body) {
+            log::warn!(target: "seta", "request to {} refused: site limit {} reached", url, limit);
+            return SetaError::SiteLimitReached { limit, contact };
         }
         let ray_suffix = cf_ray
             .as_ref()
@@ -835,12 +823,15 @@ impl MossSetaClient {
 
     // ========== Auth Endpoints ==========
 
-    /// Request email verification via magic link.
+    /// Request email verification via magic link. `lang` (a BCP 47-shaped tag
+    /// such as `zh-hans`) picks the language of the email; it is sent only when
+    /// it has that shape.
     pub async fn request_auth(
         &self,
         email: &str,
         pubkey: &str,
         session_id: &str,
+        lang: Option<&str>,
     ) -> Result<(), SetaError> {
         let url = self.secure_url("/auth/request");
 
@@ -849,11 +840,7 @@ impl MossSetaClient {
         let response = self.client
             .post(&url)
             .timeout(std::time::Duration::from_secs(15))
-            .json(&serde_json::json!({
-                "email": email,
-                "pubkey": pubkey,
-                "session_id": session_id,
-            }))
+            .json(&auth_request_body(email, pubkey, session_id, lang))
             .send()
             .await?;
 

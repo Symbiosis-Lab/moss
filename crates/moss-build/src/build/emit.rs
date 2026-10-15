@@ -16,3 +16,4 @@ pub mod scripts;
 pub mod slots;
 pub mod stylesheet;
 pub mod theme_css_assets;
+pub mod welcome_email;

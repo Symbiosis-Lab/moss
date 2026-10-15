@@ -992,6 +992,9 @@ pub async fn register_moss_host_site(
         Err(crate::seta::client::SetaError::NotAllowlisted { apply_url }) => {
             return Err(not_allowlisted_message(&apply_url));
         }
+        Err(crate::seta::client::SetaError::SiteLimitReached { limit, contact }) => {
+            return Err(site_limit_message(limit, contact.as_deref()));
+        }
         Err(e) => return Err(register_failure_message(site_id, e)),
     };
 
@@ -1051,6 +1054,21 @@ pub fn not_allowlisted_message(apply_url: &str) -> String {
         format!("{}\n{}", base, apply_url)
     }
 }
+
+/// The "your plan's site quota is used up" message. The contact address is
+/// whatever the server sent; with none, the message ends after the first sentence.
+pub fn site_limit_message(limit: u32, contact: Option<&str>) -> String {
+    use crate::infra::app_advisory::fmt;
+    let first = match limit {
+        1 => fmt("site_limit_one", &[]),
+        n => fmt("site_limit_many", &[("limit", &n.to_string())]),
+    };
+    contact.map_or(first.clone(), |c| format!("{first} {}", fmt("site_limit_contact", &[("contact", c)])))
+}
+
+#[cfg(test)]
+#[path = "deploy/site_limit_message_tests.rs"]
+mod site_limit_message_tests;
 
 #[cfg(test)]
 mod not_allowlisted_message_tests {

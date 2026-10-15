@@ -94,8 +94,13 @@ pub fn language_tree_split(rel_path: &str) -> (Option<String>, &str) {
 /// predicate is consulted at page-emission time only.
 pub fn is_excluded_from_pages(rel_path: &str) -> bool {
     let (_, within_tree) = language_tree_split(rel_path);
-    slot_from_filename(within_tree).is_some()
+    slot_from_filename(within_tree).is_some() || within_tree == WELCOME_EMAIL_FILE
 }
+
+/// Reserved filename of the welcome email at a language-tree root. It is
+/// slot-only like `footer.md` but fills no slot: it feeds
+/// `emit::welcome_email` instead, so `slot_from_filename` does not know it.
+pub const WELCOME_EMAIL_FILE: &str = "welcome-email.md";
 
 /// Whether this document's rendered HTML lands in a slot — by reserved name
 /// (`footer.md`) or by `slot:` frontmatter.

@@ -77,7 +77,7 @@ pub async fn verify_folder_email(
 
     let session_id = new_session_id();
     client
-        .request_auth(email, &identity.pubkey, &session_id)
+        .request_auth(email, &identity.pubkey, &session_id, None)
         .await
         .map_err(|e| format!("Could not send a sign-in link to {email}: {e}"))?;
     eprintln!("Sent a sign-in link to {email}. Open it to continue \u{2014} waiting (Ctrl-C to stop).");

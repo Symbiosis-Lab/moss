@@ -308,6 +308,25 @@ hello@example.com
 
 A heading in a footer cell gets no permalink mark. The grid's columns are equal and become one column at 768px; for other widths, or a different arrangement on a phone, give the grid a class (`:::grid 4 {.footer-cols}`) and set `grid-template-columns` on it in the theme. Short link lists read better as two columns side by side on a phone, with a long block (identity, address) spanning both; one column stacks them into a long footer. The footer sits in the page column; a width word (`wide`, `page`, `screen`) does not widen it, so a full-width footer band is theme CSS. moss's own one-line colophon is the footer's last line, inside it, so a footer band's background covers it. To hide the mark, the theme sets `.moss-colophon { display: none; }` in `.moss/theme/style.css`; there is no config switch for it. The footer keeps its own end space whether or not the mark shows, so hiding the mark leaves that space. A theme that places the mark in its own row sets the colophon's whole `margin` (the end margin cancels the footer's end space) and padding and keeps the link's padding, which holds the line the hover wording appears on. A picture below everything is the footer's own `::after`, and the footer sets `padding-block-end: 0` so nothing follows it (hide moss's colophon with `.moss-colophon { display: none }` if the picture should be the very last thing). A picture behind the footer's text needs more: draw it as the footer's `::before`, which replaces moss's divider, so reset that rule's `margin-block-end` and border; make the footer a flex column, put the columns, legal row and colophon before it with `order`, and lift it behind them with a negative top margin. Small text needs near-empty ground, and a footer picture has no hero panel behind it: if the picture's quiet area is not tall enough for the text, extend the picture with an even fade above its subject rather than setting text over detail (2026-10-14: a legal row was unreadable over the dense top of a footer picture). A site in several languages can keep one `footer.md` per language folder. (2026-10-13: a rebuilt site's theme carried 24 rules placing footer columns by `:nth-of-type` because nothing here said a footer could hold a grid; written as a grid, every one of them went.)
 
+### Welcome email
+
+A `welcome-email.md` at the top of the site is the email each new subscriber gets once, right after they confirm. It is not a page: it has no address and no nav item. Write it in `zh-hans/welcome-email.md` (or any other language folder) for subscribers of that language; a language without its own file sends none.
+
+```
+---
+subject: Welcome to Harbor Notes
+preview: What to expect, and how to write back
+from: hello@example.com
+reply_to: me@example.com
+---
+
+Hi {{email}},
+
+Thanks for joining {{site_name}}. New posts arrive at {{site_url}}.
+```
+
+`subject:` is required; a file without one sends nothing and the build warns. `preview:` is the line mail apps show beside the subject. `from:` and `reply_to:` are optional. The `from:` address is used only when the site's hosting has verified that sending domain; otherwise mail goes out from the hosting default, and replies still reach the `reply_to:` address if you set one. The body is markdown; `%%comments%%` are removed, so notes to yourself do not reach subscribers. Three variables are filled in per subscriber: `{{site_name}}`, `{{site_url}}` and `{{email}}`. An unsubscribe line is always added at the end for you, so do not write one. When the site is published to the moss hosting service, the build writes the file to `.moss-email/welcome.<language>.json` (`welcome.default.json` for the top-level one) and publishes it with the site; on any other host the letter is not used and nothing is written.
+
 ### Term kinds
 
 Name-list fields are listable dimensions, not just metadata. Every value generates a page listing what carries it: `author: 趙雲` gives `/authors/趙雲/`, `tags: [城市]` gives `/tags/城市/`. Nothing to set up, and a link to a term page never 404s.

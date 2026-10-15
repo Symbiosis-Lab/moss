@@ -2497,6 +2497,11 @@ pub fn generate_blocking_content_for_build(
             .emit_held(&ServedPath::for_llms_txt(), llms_content.into_bytes(), HashBucket::Files)
             .map_err(|e| format!("Failed to emit llms.txt: {}", e))?;
     }
+    // Only the moss host keeps `.moss-email/` private; any other host would
+    // publish the templates.
+    if crate::build::site_config::get_domain_config(source_path).unwrap_or_default().site_id.is_some() {
+        crate::build::emit::welcome_email::emit(&documents, output_dir, pending)?;
+    }
     log::debug!(target: "timing", "[render] prelude: llms.txt: {:?}", total_start.elapsed());
     send_progress(
         progress_sender,
