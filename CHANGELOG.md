@@ -115,6 +115,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A plugin in a folder synced by iCloud, Dropbox, Nextcloud or another cloud app now loads, and stays allowed, when its files have not been downloaded yet. Before, it was skipped with "Resource deadlock avoided" and the build drew the default listing instead.
 - `moss history <folder> <page> --restore` and the page timeline read a relative page path from the site named, as the help says, when the current directory is outside it. Before, it was read from the current directory and refused as not inside the site.
 - A non-ASCII character inside a quoted string in a stylesheet, such as `content: " · "` or `content: "全"`, no longer comes out garbled in the built CSS. The minifier re-encoded each byte of the character separately.
 - A heading written with an attribute block (`## Pictures {.pictures}`, `{#id}`) now produces a build warning naming the file and line, which `--strict` counts. moss does not support attributes on a heading and prints the braces as text in the heading and its anchor id, as before; the warning says to wrap the section in a fenced div (`:::{.pictures}`) to give it a class or an id.

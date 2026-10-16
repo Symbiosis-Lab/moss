@@ -442,7 +442,7 @@ pub fn get_installed_plugin_icon(project_path: &str, plugin_id: &str) -> Option<
     // discovery side-effects (ensure_bundled_plugins_installed) and rejects
     // plugins whose entry file is missing — both wrong for an icon read.
     let plugin_dir = crate::plugins::plugin_dir(project_path, plugin_id);
-    let manifest = std::fs::read_to_string(plugin_dir.join("manifest.json"))
+    let manifest = crate::build::cloud_readiness::read_to_string_with_materialize_wait(&plugin_dir.join("manifest.json"), crate::build::cloud_readiness::INTERACTIVE_DEADLINE)
         .ok()
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
     let field = |key: &str| {
@@ -455,7 +455,7 @@ pub fn get_installed_plugin_icon(project_path: &str, plugin_id: &str) -> Option<
         return None;
     }
     let version = field("version").unwrap_or_default();
-    let raw = std::fs::read_to_string(icon_path).ok()?;
+    let raw = crate::build::cloud_readiness::read_to_string_with_materialize_wait(&icon_path, crate::build::cloud_readiness::INTERACTIVE_DEADLINE).ok()?;
     // Everything else is a stranger's. The download path cleans the PREVIEW
     // icon, but `resolve_channel_icon` reaches the installed copy first, and an
     // installed plugin's `icon.svg` is whatever its artifact contained —
@@ -796,6 +796,7 @@ fn strip_plugin_from_config(config_path: &std::path::Path, plugin_id: &str) -> R
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use super::catalog::{row, row_with};
     use std::fs;

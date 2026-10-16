@@ -180,7 +180,7 @@ pub fn load_plugin(plugin_dir: &Path) -> Result<Plugin, String> {
     }
 
     // Read and parse manifest
-    let manifest_content = fs::read_to_string(&manifest_path)
+    let manifest_content = crate::build::cloud_readiness::read_to_string_with_materialize_wait(&manifest_path, crate::build::cloud_readiness::INTERACTIVE_DEADLINE)
         .map_err(|e| format!("Failed to read manifest.json: {}", e))?;
 
     let manifest: PluginManifest = PluginManifest::parse(&manifest_content)
@@ -347,7 +347,7 @@ fn read_plugin_config_json(
 ) -> Result<std::collections::HashMap<String, serde_json::Value>, String> {
     use std::collections::HashMap;
 
-    let content = fs::read_to_string(config_path)
+    let content = crate::build::cloud_readiness::read_to_string_with_materialize_wait(config_path, crate::build::cloud_readiness::INTERACTIVE_DEADLINE)
         .map_err(|e| format!("Failed to read plugin config.json: {}", e))?;
 
     let json_value: serde_json::Value = serde_json::from_str(&content)
@@ -366,7 +366,7 @@ fn read_plugin_config_file(
 ) -> Result<std::collections::HashMap<String, serde_json::Value>, String> {
     use std::collections::HashMap;
 
-    let config_content = fs::read_to_string(config_path)
+    let config_content = crate::build::cloud_readiness::read_to_string_with_materialize_wait(config_path, crate::build::cloud_readiness::INTERACTIVE_DEADLINE)
         .map_err(|e| format!("Failed to read plugin config: {}", e))?;
 
     let config: toml::Value = toml::from_str(&config_content)
@@ -551,6 +551,27 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    /// A plugin file a cloud app has not downloaded yet is waited for, not
+    /// reported unreadable. Before macOS 14 such a file is absent from its own
+    /// path with a `.name.icloud` placeholder beside it, which a plain read
+    /// cannot tell from a missing file; the file arrives while the read waits.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_plugin_file_still_in_the_cloud_is_waited_for() {
+        let dir = TempDir::new().unwrap();
+        let config = dir.path().join("config.json");
+        fs::write(dir.path().join(".config.json.icloud"), b"").unwrap();
+        let arriving = config.clone();
+        let download = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            fs::write(arriving, r#"{"title":"Notes"}"#).unwrap();
+        });
+
+        let values = read_plugin_config_json(&config).expect("the file arrives while the read waits");
+        download.join().unwrap();
+        assert_eq!(values.get("title"), Some(&serde_json::json!("Notes")));
+    }
 
     /// Hook contexts must see manifest-declared defaults for fields the user
     /// never persisted. The CLI runs with no settings ever saved, so without

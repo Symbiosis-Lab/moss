@@ -224,8 +224,8 @@ pub(crate) fn bundle_source_for_project(
             return Err(format!("plugin '{plugin_name}' has no script to run"));
         };
         let entry = plugin.path.join(entry);
-        // Sync ~100 KB read inside an async dispatch; acceptable, noted.
-        let bundle = std::fs::read_to_string(&entry)
+        // Sync ~100 KB read inside an async dispatch; acceptable, noted. Can wait up to 15 s for a cloud download.
+        let bundle = crate::build::cloud_readiness::read_to_string_with_materialize_wait(&entry, crate::build::cloud_readiness::INTERACTIVE_DEADLINE)
             .map_err(|e| format!("read bundle {}: {e}", entry.display()))?;
         let global_name = plugin.manifest.global_name.clone()
             .unwrap_or_else(|| derive_global_name(plugin_name));

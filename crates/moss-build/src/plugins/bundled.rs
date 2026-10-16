@@ -99,7 +99,7 @@ fn bundled_file(plugin_name: &str, rel: &str) -> Option<&'static [u8]> {
 /// Read and parse the manifest.json from an installed plugin
 pub fn read_installed_manifest(plugin_path: &Path) -> Option<PluginManifest> {
     let manifest_path = plugin_path.join("manifest.json");
-    let content = fs::read_to_string(&manifest_path).ok()?;
+    let content = crate::build::cloud_readiness::read_to_string_with_materialize_wait(&manifest_path, crate::build::cloud_readiness::INTERACTIVE_DEADLINE).ok()?;
     PluginManifest::parse(&content).ok()
 }
 
@@ -195,12 +195,12 @@ fn compute_installed_hash(plugin_name: &str, plugin_dir: &Path) -> Option<String
 /// something. `None` when either file cannot be read, which no caller treats
 /// as a match.
 pub fn code_hash(plugin_dir: &Path, manifest: &PluginManifest) -> Option<String> {
-    let manifest_bytes = fs::read(plugin_dir.join("manifest.json")).ok()?;
+    let manifest_bytes = crate::build::cloud_readiness::read_with_materialize_wait(&plugin_dir.join("manifest.json"), crate::build::cloud_readiness::INTERACTIVE_DEADLINE).ok()?;
     // A derivation-only plugin has no code beyond the manifest. A pinned
     // download carries its hash there; a `path` binary is only named, so its
     // content joins the hash and changing it asks for consent again.
     let entry_bytes = match &manifest.entry {
-        Some(entry) => fs::read(plugin_dir.join(entry)).ok()?,
+        Some(entry) => crate::build::cloud_readiness::read_with_materialize_wait(&plugin_dir.join(entry), crate::build::cloud_readiness::INTERACTIVE_DEADLINE).ok()?,
         None => Vec::new(),
     };
     let binaries = crate::system::derive::binary::local_binary_hashes(plugin_dir, manifest);
@@ -268,7 +268,7 @@ fn collect_installed_files(
             collect_installed_files(base, &path, files)?;
         } else {
             let rel_path = path.strip_prefix(base).unwrap_or(&path);
-            let contents = fs::read(&path)?;
+            let contents = crate::build::cloud_readiness::read_with_materialize_wait(&path, crate::build::cloud_readiness::INTERACTIVE_DEADLINE)?;
             files.push((rel_path.to_string_lossy().into_owned(), contents));
         }
     }
@@ -288,7 +288,7 @@ fn read_auto_update_plugins_config(project_path: &str) -> bool {
         return true; // default: auto-update enabled
     }
 
-    let content = match fs::read_to_string(&config_path) {
+    let content = match crate::build::cloud_readiness::read_to_string_with_materialize_wait(&config_path, crate::build::cloud_readiness::INTERACTIVE_DEADLINE) {
         Ok(c) => c,
         Err(_) => return true,
     };
