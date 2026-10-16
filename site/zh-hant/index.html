@@ -570,7 +570,7 @@
   <div id="closing-film" aria-hidden="true"><video id="loop" muted playsinline loop preload="none" tabindex="-1"></video><div id="scrim"></div></div>
   <div id="five-in">
     <noscript><style>.signup, [data-copy] { display: none; }</style><p>To subscribe for updates, enable JavaScript. Downloads and installation commands work without it.</p></noscript>
-    <h2 id="five-headline">你的網路發布器。</h2>
+    <h2 id="five-headline">加入公測。</h2>
     <p class="closing-lede">網路不只用來瀏覽，也用來創作。這裡是你的網路發布器。</p>
     <div id="install">
       <div id="downloads" aria-label="下載青苔">
@@ -585,7 +585,7 @@
       <p class="copy-status" id="copy-status" role="status" aria-live="polite"></p>
     </div>
     <section id="beta" aria-labelledby="beta-title" tabindex="-1">
-      <div><h3 id="beta-title">加入公測。</h3><p>認識你的網路發布器。</p></div>
+      <div><h3 id="beta-title">取得更新</h3><p>不定期一封，來自青苔團隊的消息。</p></div>
       <p class="static-signup-note">啟用 JavaScript 即可訂閱。</p><form id="beta-form" class="signup" data-subscription="beta"><label class="sr-only" for="beta-email">你的電子郵件地址</label><div class="input-row"><input id="beta-email" name="email" type="email" autocomplete="email" placeholder="你的電子郵件地址" required><button type="submit" data-track="subscribe-submit">訂閱</button></div><p class="form-status" role="status" aria-live="polite"></p></form>
     </section>
     <footer id="footer">
@@ -674,7 +674,7 @@ const FAN_OUT_MS = PUB_OUT_DELAY + PUB_MS;
 const arg = (k, d) => new URLSearchParams(location.search).get(k) || d;
 const LOOP_SRC = arg('loopVideo', 'scene5-loop/out/v8-press.mp4');
 const LOOP_POSTER = arg('loopPoster', 'scene5-loop/out/v8-press-poster.jpg');
-const HEADLINE = arg('headline', 'Your internet publisher is here.');
+const HEADLINE = arg('headline', 'Join the beta test.');
 const SCRIM = 0.72, XF_SPAN = 0.1;
 // The one window radius every sheet on the stage wears (--win-r in the
 // stylesheet); mirrored here for the same reason GEOM mirrors --cell-w — a
