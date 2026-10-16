@@ -6,6 +6,8 @@ All notable changes to moss will be documented here.
 
 ### New
 
+- A hero can set its words in the middle of the picture: `:::hero {align=center}` centres the panel and its text, with a shading that darkens from the centre instead of one side. `align=end` and the default bottom-start placement are unchanged.
+- An image can name the point that must stay in view when it is cropped: `focus:X%,Y%` in its options, whole percentages from the top-left, such as `![[photo.jpg|focus:20%,62%]]` or `:::hero {image="photo.jpg|focus:20%,62%"}`. `focus:50%,50%` is `center` and `focus:0%,0%` is `top-left`; the nine named positions still work.
 - `moss deploy --prebuilt=<dir> --dry-run` shows what a prebuilt publish would upload and which addresses it would take offline, without building or sending anything.
 - A theme can make a dark footer band with three properties, like the header's: `--moss-footer-bg` (a colour), `--moss-footer-ink` (text, links and headings) and `--moss-footer-rule` (the line above the footer and any `---` inside it). The band runs the full page width. Two things change for every site: headings in the footer no longer get a permalink mark, and a `---` in the footer is a plain line instead of the three dots. Otherwise a site that sets none of the properties looks the same.
 - A listing page can set what its folder cards say they count. `children_count: false` hides the count, and `children_count: "{n} productions"` replaces "N articles" (`{n}` is the number; `"{n} production|{n} productions"` gives a singular form for 1, and text without `|` is used for every number). Without it, cards read as before. It applies to listings made with `children:` on a page, not to `![[folder]]` embeds, and a text without `{n}` builds with a warning.
