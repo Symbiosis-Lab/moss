@@ -115,6 +115,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- `moss history <folder> <page> --restore` and the page timeline read a relative page path from the site named, as the help says, when the current directory is outside it. Before, it was read from the current directory and refused as not inside the site.
 - A non-ASCII character inside a quoted string in a stylesheet, such as `content: " · "` or `content: "全"`, no longer comes out garbled in the built CSS. The minifier re-encoded each byte of the character separately.
 - A heading written with an attribute block (`## Pictures {.pictures}`, `{#id}`) now produces a build warning naming the file and line, which `--strict` counts. moss does not support attributes on a heading and prints the braces as text in the heading and its anchor id, as before; the warning says to wrap the section in a fenced div (`:::{.pictures}`) to give it a class or an id.
 - A page's `byline:` now sits directly under its first heading even when that heading is inside a `:::grid` cell. It used to print above the grid, so the byline read above the heading it belongs to. An article whose body opens with such a grid and a heading matching its title no longer gets a second title above the grid.

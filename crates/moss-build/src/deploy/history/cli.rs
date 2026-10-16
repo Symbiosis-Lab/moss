@@ -267,7 +267,7 @@ fn open_store(root: &VaultRoot) -> HistoryStore {
 /// gone (`resolve_input` never touches the filesystem beyond a `..`
 /// component, so a deleted page's stem still resolves).
 fn relative_source_path(root: &VaultRoot, raw: &str) -> Result<String, String> {
-    let abs = resolve_input(raw);
+    let abs = Some(resolve_input(raw)).filter(|abs| abs.starts_with(root.path()) || Path::new(raw).is_absolute()).unwrap_or_else(|| root.path().join(raw));
     let rel = abs
         .strip_prefix(root.path())
         .map_err(|_| format!("'{raw}' is not inside the site at '{}'", root.as_str()))?;
@@ -943,6 +943,13 @@ mod tests {
 
     /// A page's history must be reachable after the page itself is gone —
     /// that is the whole point of "restore a deleted page".
+    #[test]
+    fn a_relative_path_from_outside_the_site_is_read_from_the_site() {
+        let (_dir, vault) = tmp_vault();
+        let root = VaultRoot::resolve(&vault);
+        assert_eq!(relative_source_path(&root, "articles/hello.md").unwrap(), "articles/hello.md");
+    }
+
     #[test]
     fn relative_source_path_does_not_require_the_file_to_exist() {
         let (_dir, vault) = tmp_vault();
