@@ -49,9 +49,9 @@ Videos, images, HTML, Jupyter notebooks. Drop them in the folder, moss handles t
 
 Customize with CSS and JavaScript. Build plugins by dropping scripts into a folder. Vibe-coding ready, but always human-friendly.
 
-### Get updates
+### Join the beta test
 
-Occasional news about moss. One email when there is something worth saying.
+Meet your internet publisher.
 
 :::subscribe {button="Subscribe"}
 :::
