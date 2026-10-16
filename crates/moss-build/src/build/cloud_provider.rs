@@ -38,6 +38,7 @@ pub enum CloudProvider {
     GoogleDrive,
     OneDrive,
     Box,
+    Nextcloud,
     /// Some other File Provider extension (Sync.com, pCloud, etc.) or a
     /// provider we couldn't identify from the path.
     Unknown,
@@ -55,6 +56,7 @@ impl CloudProvider {
             CloudProvider::GoogleDrive => Some("Google Drive"),
             CloudProvider::OneDrive => Some("OneDrive"),
             CloudProvider::Box => Some("Box"),
+            CloudProvider::Nextcloud => Some("Nextcloud"),
             CloudProvider::Unknown => None,
         }
     }
@@ -68,6 +70,7 @@ impl CloudProvider {
             CloudProvider::GoogleDrive => "google_drive",
             CloudProvider::OneDrive => "onedrive",
             CloudProvider::Box => "box",
+            CloudProvider::Nextcloud => "nextcloud",
             CloudProvider::Unknown => "unknown",
         }
     }
@@ -89,6 +92,7 @@ impl CloudProvider {
 /// - `~/Library/CloudStorage/GoogleDrive-…` → Google Drive
 /// - `~/Library/CloudStorage/OneDrive-…` → OneDrive
 /// - `~/Library/CloudStorage/Box-Box…` → Box
+/// - `~/Library/CloudStorage/Nextcloud-<server host>-<user>…` → Nextcloud
 ///
 /// Anything else under `~/Library/CloudStorage/` is reported as `Unknown`
 /// (some File Provider extension we don't have a name for) rather than `None`,
@@ -151,16 +155,17 @@ pub(crate) fn recovery_context(path: &Path) -> bool {
 /// but some providers (Dropbox) just use the bare provider name.
 fn classify_cloudstorage_root(root: &str) -> CloudProvider {
     // Match by prefix so that account suffixes like "-user@example.com" are
-    // tolerated. Order matters: `OneDrive` must be checked before a generic
-    // "Drive" match would win.
+    // tolerated.
     if root == "Dropbox" || root.starts_with("Dropbox-") {
         CloudProvider::Dropbox
     } else if root.starts_with("GoogleDrive") {
         CloudProvider::GoogleDrive
     } else if root.starts_with("OneDrive") {
         CloudProvider::OneDrive
-    } else if root.starts_with("Box-Box") || root == "Box" || root.starts_with("Box-") {
+    } else if root == "Box" || root.starts_with("Box-") {
         CloudProvider::Box
+    } else if root.starts_with("Nextcloud-") {
+        CloudProvider::Nextcloud
     } else if root.starts_with("iCloud Drive") || root.starts_with("iCloudDrive") {
         CloudProvider::ICloud
     } else {
@@ -287,6 +292,14 @@ mod tests {
     }
 
     #[test]
+    fn detects_nextcloud() {
+        let path = p("/Users/alice/Library/CloudStorage/Nextcloud-cloud.example.org-Alice/Site");
+        let provider = detect_from_path(&path);
+        assert_eq!(provider, Some(CloudProvider::Nextcloud));
+        assert_eq!(provider.and_then(|p| p.display_name()), Some("Nextcloud"));
+    }
+
+    #[test]
     fn unknown_cloudstorage_provider_still_reports_cloud() {
         // Some future provider we haven't mapped — still reported so the UI
         // can show a generic cloud label instead of pretending it's local.
@@ -346,6 +359,8 @@ mod tests {
         assert_eq!(CloudProvider::OneDrive.id(), "onedrive");
         assert_eq!(CloudProvider::Box.display_name(), Some("Box"));
         assert_eq!(CloudProvider::Box.id(), "box");
+        assert_eq!(CloudProvider::Nextcloud.display_name(), Some("Nextcloud"));
+        assert_eq!(CloudProvider::Nextcloud.id(), "nextcloud");
         assert_eq!(CloudProvider::Unknown.display_name(), None);
         assert_eq!(CloudProvider::Unknown.id(), "unknown");
     }

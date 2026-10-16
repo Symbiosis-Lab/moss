@@ -103,6 +103,7 @@ All notable changes to moss will be documented here.
 - An image whose alt text is only a file name is imported with an empty alt, so the file name does not show as a caption under the photo.
 - An import downloads the documents and media a page links to on its own site (PDFs, scores, office files, images, audio, video, archives and calendar files) into the imported folder, so those links keep working. A file over 100 MB is skipped with a warning.
 - Markdown definition lists render: a term line followed by a `: ` line becomes a `<dl>` with `<dt>` and `<dd>`, so a credit like `Set Design` then `: Ines Varga` is marked up as a term and its definition. A paragraph followed directly by a line starting with `: ` now renders the same way, so a site that used that pattern as prose should check those pages.
+- Folders synced by Nextcloud's Mac app are recognised: the loading screen names Nextcloud instead of showing its storage path, and downloads say they come from Nextcloud.
 
 ### Changed
 
