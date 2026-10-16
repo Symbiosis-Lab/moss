@@ -130,7 +130,9 @@ test("the world view fills the minimum label budget without exceeding the area b
 });
 
 test("after a zoom, the label set is re-placed and stays collision-free", async ({ page }) => {
-  await gotoReady(page, worldCameraSearch());
+  // Past the world layer's clean depth a hand zoom needs a regional cell under the view's centre, and the world cover camera's centre sits on the equator, where the build emits none. Start centred between the fixture's two places, where it does.
+  const between = pattersonProject(35.22, 137.6);
+  await gotoReady(page, `?p=patterson&z=4&x=${between.x}&y=${between.y}`);
   const before = await boxesOf(page.locator(VISIBLE_LABELS));
 
   await page.locator('[data-control="zoom-in"]').click();
