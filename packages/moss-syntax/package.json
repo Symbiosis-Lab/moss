@@ -21,6 +21,7 @@
   "files": [
     "dist",
     "src/cm6/cm-shortcode-block.css",
+    "fixtures",
     "README.md"
   ],
   "scripts": {

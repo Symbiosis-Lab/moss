@@ -1,0 +1,429 @@
+{
+  "_comment": [
+    "Cross-language contract for the image-options words: where an image is",
+    "cropped to (`position`), how it is fitted (`fit`), and which side it floats on (`align`).",
+    "Rust side: crates/moss-core/tests/position_vectors.rs requires `Position::from_keyword`",
+    "to give `position` for every `position_words` input, and `parse_media_attrs` to give",
+    "`fit`/`position`/`align` for every `frame_segments` input.",
+    "A position is a name, `{\"focus\": [x, y]}` (integers 0-100), or null for not-a-position.",
+    "A mirror of this grammar elsewhere loads this file and requires the same answers.",
+    "This file is the gate: when the grammar changes, add or change a vector."
+  ],
+  "position_words": [
+    {
+      "input": "center",
+      "position": "center",
+      "note": "`center` names center"
+    },
+    {
+      "input": "left",
+      "position": "left",
+      "note": "`left` names left"
+    },
+    {
+      "input": "right",
+      "position": "right",
+      "note": "`right` names right"
+    },
+    {
+      "input": "top",
+      "position": "top",
+      "note": "`top` names top"
+    },
+    {
+      "input": "bottom",
+      "position": "bottom",
+      "note": "`bottom` names bottom"
+    },
+    {
+      "input": "top-left",
+      "position": "top-left",
+      "note": "`top-left` names top-left"
+    },
+    {
+      "input": "topleft",
+      "position": "top-left",
+      "note": "`topleft` names top-left"
+    },
+    {
+      "input": "top left",
+      "position": "top-left",
+      "note": "`top left` names top-left"
+    },
+    {
+      "input": "top-right",
+      "position": "top-right",
+      "note": "`top-right` names top-right"
+    },
+    {
+      "input": "topright",
+      "position": "top-right",
+      "note": "`topright` names top-right"
+    },
+    {
+      "input": "top right",
+      "position": "top-right",
+      "note": "`top right` names top-right"
+    },
+    {
+      "input": "bottom-left",
+      "position": "bottom-left",
+      "note": "`bottom-left` names bottom-left"
+    },
+    {
+      "input": "bottomleft",
+      "position": "bottom-left",
+      "note": "`bottomleft` names bottom-left"
+    },
+    {
+      "input": "bottom left",
+      "position": "bottom-left",
+      "note": "`bottom left` names bottom-left"
+    },
+    {
+      "input": "bottom-right",
+      "position": "bottom-right",
+      "note": "`bottom-right` names bottom-right"
+    },
+    {
+      "input": "bottomright",
+      "position": "bottom-right",
+      "note": "`bottomright` names bottom-right"
+    },
+    {
+      "input": "bottom right",
+      "position": "bottom-right",
+      "note": "`bottom right` names bottom-right"
+    },
+    {
+      "input": "TOP-LEFT",
+      "position": "top-left",
+      "note": "`TOP-LEFT`: keywords are case-insensitive"
+    },
+    {
+      "input": "Bottom Right",
+      "position": "bottom-right",
+      "note": "`Bottom Right`: keywords are case-insensitive"
+    },
+    {
+      "input": "CENTER",
+      "position": "center",
+      "note": "`CENTER`: keywords are case-insensitive"
+    },
+    {
+      "input": "TopLeft",
+      "position": "top-left",
+      "note": "`TopLeft`: keywords are case-insensitive"
+    },
+    {
+      "input": "focus:20%,62%",
+      "position": {
+        "focus": [
+          20,
+          62
+        ]
+      },
+      "note": "a focus point"
+    },
+    {
+      "input": "focus:0%,0%",
+      "position": {
+        "focus": [
+          0,
+          0
+        ]
+      },
+      "note": "focus lower bound"
+    },
+    {
+      "input": "focus:100%,100%",
+      "position": {
+        "focus": [
+          100,
+          100
+        ]
+      },
+      "note": "focus upper bound"
+    },
+    {
+      "input": "FOCUS:5%,95%",
+      "position": {
+        "focus": [
+          5,
+          95
+        ]
+      },
+      "note": "focus prefix is case-insensitive"
+    },
+    {
+      "input": "focus:007%,050%",
+      "position": {
+        "focus": [
+          7,
+          50
+        ]
+      },
+      "note": "leading zeros still read as integers"
+    },
+    {
+      "input": "focus:101%,0%",
+      "position": null,
+      "note": "x above 100"
+    },
+    {
+      "input": "focus:0%,101%",
+      "position": null,
+      "note": "y above 100"
+    },
+    {
+      "input": "focus:20%",
+      "position": null,
+      "note": "one coordinate is not a point"
+    },
+    {
+      "input": "focus:a%,b%",
+      "position": null,
+      "note": "non-numeric coordinates"
+    },
+    {
+      "input": "focus:20,30",
+      "position": null,
+      "note": "percent signs are required"
+    },
+    {
+      "input": "focus:20%,30",
+      "position": null,
+      "note": "each coordinate needs its percent sign"
+    },
+    {
+      "input": "focus:20.5%,30%",
+      "position": null,
+      "note": "fractions are not integers"
+    },
+    {
+      "input": "focus:-1%,0%",
+      "position": null,
+      "note": "negative coordinate"
+    },
+    {
+      "input": "focus:20% 30%",
+      "position": null,
+      "note": "comma is the separator"
+    },
+    {
+      "input": "focus:%,%",
+      "position": null,
+      "note": "empty coordinates"
+    },
+    {
+      "input": "focus:",
+      "position": null,
+      "note": "empty focus"
+    },
+    {
+      "input": "40%",
+      "position": null,
+      "note": "a bare percentage is not a position"
+    },
+    {
+      "input": "middle",
+      "position": null,
+      "note": "not a position word"
+    },
+    {
+      "input": "top-bottom",
+      "position": null,
+      "note": "not a position word"
+    },
+    {
+      "input": "",
+      "position": null,
+      "note": "empty input"
+    },
+    {
+      "input": "cover",
+      "position": null,
+      "note": "a fit word is not a position"
+    },
+    {
+      "input": "align-left",
+      "position": null,
+      "note": "an align word is not a position"
+    }
+  ],
+  "frame_segments": [
+    {
+      "input": "cover",
+      "fit": "cover",
+      "position": null,
+      "align": null,
+      "note": "`cover` is the fit cover"
+    },
+    {
+      "input": "contain",
+      "fit": "contain",
+      "position": null,
+      "align": null,
+      "note": "`contain` is the fit contain"
+    },
+    {
+      "input": "fill",
+      "fit": "fill",
+      "position": null,
+      "align": null,
+      "note": "`fill` is the fit fill"
+    },
+    {
+      "input": "none",
+      "fit": "none",
+      "position": null,
+      "align": null,
+      "note": "`none` is the fit none"
+    },
+    {
+      "input": "scale-down",
+      "fit": "scale-down",
+      "position": null,
+      "align": null,
+      "note": "`scale-down` is the fit scale-down"
+    },
+    {
+      "input": "scaledown",
+      "fit": "scale-down",
+      "position": null,
+      "align": null,
+      "note": "`scaledown` is the fit scale-down"
+    },
+    {
+      "input": "COVER",
+      "fit": "cover",
+      "position": null,
+      "align": null,
+      "note": "`COVER` is the fit cover"
+    },
+    {
+      "input": "Scale-Down",
+      "fit": "scale-down",
+      "position": null,
+      "align": null,
+      "note": "`Scale-Down` is the fit scale-down"
+    },
+    {
+      "input": "align-left",
+      "fit": null,
+      "position": null,
+      "align": "left",
+      "note": "`align-left` aligns left"
+    },
+    {
+      "input": "align-right",
+      "fit": null,
+      "position": null,
+      "align": "right",
+      "note": "`align-right` aligns right"
+    },
+    {
+      "input": "alignleft",
+      "fit": null,
+      "position": null,
+      "align": "left",
+      "note": "`alignleft` aligns left"
+    },
+    {
+      "input": "alignright",
+      "fit": null,
+      "position": null,
+      "align": "right",
+      "note": "`alignright` aligns right"
+    },
+    {
+      "input": "ALIGN-LEFT",
+      "fit": null,
+      "position": null,
+      "align": "left",
+      "note": "`ALIGN-LEFT` aligns left"
+    },
+    {
+      "input": "left",
+      "fit": null,
+      "position": "left",
+      "align": null,
+      "note": "bare `left` is a position, never an align"
+    },
+    {
+      "input": "right",
+      "fit": null,
+      "position": "right",
+      "align": null,
+      "note": "bare `right` is a position, never an align"
+    },
+    {
+      "input": "cover top-left",
+      "fit": "cover",
+      "position": "top-left",
+      "align": null,
+      "note": "fit and position together"
+    },
+    {
+      "input": "top left contain",
+      "fit": "contain",
+      "position": "top-left",
+      "align": null,
+      "note": "a two-word position anywhere in the segment"
+    },
+    {
+      "input": "cover focus:10%,90%",
+      "fit": "cover",
+      "position": {
+        "focus": [
+          10,
+          90
+        ]
+      },
+      "align": null,
+      "note": "fit and focus point"
+    },
+    {
+      "input": "cover align-right",
+      "fit": "cover",
+      "position": null,
+      "align": "right",
+      "note": "fit and align together"
+    },
+    {
+      "input": "top bottom",
+      "fit": null,
+      "position": "bottom",
+      "align": null,
+      "note": "the last position wins"
+    },
+    {
+      "input": "top right",
+      "fit": null,
+      "position": "top-right",
+      "align": null,
+      "note": "`top` `right` combine into one position, not two"
+    },
+    {
+      "input": "cover contain",
+      "fit": "contain",
+      "position": null,
+      "align": null,
+      "note": "the last fit wins"
+    },
+    {
+      "input": "color=black",
+      "fit": null,
+      "position": null,
+      "align": null,
+      "note": "a color token sets neither fit, position nor align"
+    },
+    {
+      "input": "banner",
+      "fit": null,
+      "position": null,
+      "align": null,
+      "note": "an unknown word sets nothing"
+    }
+  ]
+}
