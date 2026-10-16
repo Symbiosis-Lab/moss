@@ -2,7 +2,8 @@
 //!
 //! Two checks: `--math` (below) and `--surface`, which lists markdown
 //! constructs a cleaner form could replace and theme rules that style nothing
-//! (see `surface.rs`).
+//! (see `surface.rs`). `moss migrate` (`migrate.rs`) is the command that
+//! rewrites what `--surface` finds; it lives here beside it.
 //!
 //! ## Why `--math` exists
 //!
@@ -45,7 +46,9 @@
 use pulldown_cmark::{Event, Parser};
 use std::path::{Path, PathBuf};
 
+pub mod migrate;
 mod surface;
+pub(crate) use surface::page_css_regions;
 
 /// One `$`-span that the real parser would turn into math.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -223,7 +226,7 @@ fn report_summary(total_spans: usize, files_with_math: usize) {
 /// belongs to the site (`left_out_of_site`) and what becomes a page
 /// (`is_page_source`), so the report covers exactly the files that get
 /// published.
-fn markdown_files(folder: &Path) -> Vec<PathBuf> {
+pub(crate) fn markdown_files(folder: &Path) -> Vec<PathBuf> {
     use crate::build::scan::classify::{is_page_path, left_out_of_site};
     let mut files: Vec<PathBuf> = walkdir::WalkDir::new(folder)
         .into_iter()

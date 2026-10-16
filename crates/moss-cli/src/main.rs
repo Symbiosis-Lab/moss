@@ -29,6 +29,8 @@ const CROSSED: &[(&str, fn(&[String]) -> i32)] = &[
     ("agents", moss_build::cli::agents::run),
     ("list", moss_build::cli::list::run),
     ("doctor", moss_build::cli::doctor::run),
+    // Lives beside `doctor`, whose `--surface` findings it rewrites (file budget).
+    ("migrate", moss_build::cli::doctor::migrate::run),
     ("render", moss_build::cli::render::run),
     ("root", moss_build::cli::root::run),
     ("describe", |args| moss_build::cli::describe::run(args, env!("CARGO_PKG_VERSION"))),

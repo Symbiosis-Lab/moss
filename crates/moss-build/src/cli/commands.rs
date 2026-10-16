@@ -111,6 +111,11 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
             description: "Audit a vault without changing it. --math reports every $-span moss would parse as math (these render as their LaTeX source; moss does not typeset math yet), so an imported corpus can be checked before publishing. Escape false positives as \\$. --surface lists markdown constructs a cleaner form could replace: classed divs repeated on three or more pages (a fact a frontmatter field could hold), theme rules that match no element on any page of the last build, and theme selectors keyed on a page address (they break when the page is renamed). --all lists every classed div, even one on a single page, to check that a migration left none. --json prints the surface report as JSON.",
         },
         CliCommandInfo {
+            name: "migrate",
+            args: "[<folder>] [--apply] [--json] | [<folder>] --lift <class> --as <field> [--place <place>] [--apply] [--json]",
+            description: "Rewrite what `moss doctor --surface` finds. Without --apply it prints the change as a diff and writes nothing; with --apply it first saves a version of the site (undo with `moss history --restore`), then writes, changing only the frontmatter lines it names. With no --lift it removes a `translationKey` the page's path already implies, and only when a scratch copy of the site builds to the same output with and without it. --lift <class> --as <field> moves each `::: {.class}` div holding one paragraph of plain text into its page's frontmatter as <field> and declares the field in .moss/config.toml (--place eyebrow, subtitle, key-figure, facts or none says where moss draws it); a page whose div holds more than plain text, holds it twice, or whose frontmatter already gives <field> a different value is left as written and listed. --json prints the changes, skipped pages and saved version as JSON.",
+        },
+        CliCommandInfo {
             name: "list",
             args: "[<folder>] [--json]",
             description: "List every document the last build parsed: source file, the URL it publishes at, the BCP-47 tag it will carry in `<html lang>`, kind, date, title, and — in the HIDDEN column — why it is absent from generated listings (draft, unlisted, nav-item, slot). The LANG column is how you confirm a new language tree registered: an unrecognized folder name is treated as ordinary content and the build succeeds either way (`moss describe --json` lists the recognized codes under `languages`). Reports the last build, so run `moss build` first. Use --json to filter the same rows programmatically.",
@@ -130,7 +135,7 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
 
 /// The subcommands that parse `--help` themselves; [`help_for`] declines
 /// them so their per-mode usage stays authoritative.
-const OWN_HELP: [&str; 8] = ["list", "doctor", "rename", "expand", "domain", "env", "import", "history"];
+const OWN_HELP: [&str; 9] = ["list", "doctor", "migrate", "rename", "expand", "domain", "env", "import", "history"];
 
 /// Render `moss <cmd> --help` from the table `moss describe` already publishes.
 ///
@@ -195,6 +200,8 @@ const EXAMPLE_LINES: &[(&str, &str)] = &[
     ("doctor", "moss doctor --math ~/blog/            # Every $-span moss would parse as math"),
     ("doctor", "moss doctor --surface ~/blog/ --json  # Repeated classed divs, theme rules that style nothing, address-keyed selectors"),
     ("doctor", "moss doctor --surface ~/blog/ --all   # Every classed div left, even on one page"),
+    ("migrate", "moss migrate ~/blog/ --lift eyebrow --as series --place eyebrow  # Diff of moving ::: {.eyebrow} into frontmatter"),
+    ("migrate", "moss migrate ~/blog/ --lift eyebrow --as series --apply         # Save a version, then write it"),
     ("comments", "moss comments list ~/blog/          # Every comment, newest first, hidden ones marked"),
     ("comments", "moss comments hide ~/blog/ 12 13    # Keep comments 12 and 13 off the site at the next publish"),
 ];

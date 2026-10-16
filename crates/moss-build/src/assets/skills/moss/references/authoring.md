@@ -451,6 +451,8 @@ A facts row is labelled with the field's `label`, a string or a table per langua
 
 moss draws no separator in the eyebrow. The stylesheet puts one between its fields from `--moss-eyebrow-separator`, a CSS string defaulting to `" · "`, so a theme sets `--moss-eyebrow-separator: " "` or `" / "`.
 
+To move a fact that pages already write as a classed div into a field, use `moss migrate --lift <class> --as <field> [--place <place>]`. Without `--apply` it prints the diff; with it, it saves a version of the site first, then writes. Each `::: {.class}` div holding one paragraph of plain text becomes a frontmatter line on its page, the div is removed, and the field is declared in `.moss/config.toml` as `text` if it is not declared yet. A paragraph wholly in italics or bold is lifted without them, so set that style on `[data-field="…"]`. A page whose div holds a link or other formatting, holds it twice, or whose frontmatter already gives the field another value is left as written and listed. `moss doctor --surface --all` then shows whether any of the class is left, and `moss doctor --surface` names theme rules still keyed on it.
+
 ### Places
 
 `location:` is a name-list field like `author:`/`editor:`/`jury:`, feeding whichever kind's `fields` names it — but a kind that also sets `type = "place"` gets three things the others don't: a hand-edited gazetteer, a parent hierarchy, and an automatic place line.

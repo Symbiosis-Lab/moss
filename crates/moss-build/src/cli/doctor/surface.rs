@@ -79,7 +79,7 @@ struct ClassTally {
 }
 
 /// Empty-name fenced divs in one page, as the build's extractor sees them.
-fn page_css_regions(content: &str) -> Vec<CssRegionSpan> {
+pub(crate) fn page_css_regions(content: &str) -> Vec<CssRegionSpan> {
     let (body, line_offset) = super::page_body(content);
     let config = ParseConfig {
         warning_line_offset: line_offset,
