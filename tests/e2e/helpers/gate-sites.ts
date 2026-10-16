@@ -2268,6 +2268,7 @@ export function lightboxGithubShapesGate(): ScratchSiteSpec {
     name: "lightbox-github-shapes-gate",
     files: {
       "clip.mp4": syntheticTestClip(640, 360),
+      "clip-two.mp4": syntheticTestClip(640, 360),
       "index.md": `---
 title: Lightbox GitHub Shapes Gate
 uid: "lgs001a"
@@ -2275,9 +2276,12 @@ uid: "lgs001a"
 
 # Lightbox / GitHub Link Shapes
 
-A clip for the media-collection lightbox.
+Two clips for the media-collection lightbox: with one there is nothing to step to, so previous and next stay hidden.
 
 ![[clip.mp4]]
+<!-- video-meta: dispatch -->
+
+![[clip-two.mp4]]
 <!-- video-meta: dispatch -->
 
 A placeholder mark standing in for a real site's own GitHub logo — round,

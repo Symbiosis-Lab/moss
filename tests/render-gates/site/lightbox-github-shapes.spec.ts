@@ -166,6 +166,9 @@ test("each lightbox button is a real circle: at least 44x44, a radius that makes
   await page.locator('[data-type="video"]').first().focus();
   await page.keyboard.press("Enter");
   await expect(page.locator(".lightbox:not([hidden])")).toHaveCount(1);
+  // The overlay fades in; a rest reading taken mid-fade differs from the
+  // focused one by the fade alone.
+  await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)));
 
   for (const sel of [".lightbox-close", ".lightbox-prev", ".lightbox-next"]) {
     const box = await page.locator(sel).evaluate((el) => {
