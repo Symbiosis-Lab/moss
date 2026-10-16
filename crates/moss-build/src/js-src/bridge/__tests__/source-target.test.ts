@@ -44,6 +44,11 @@ describe("resolveSourceTargets", () => {
     ]);
   });
 
+  it("reports chrome as one none target when nothing nearer owns the element", () => {
+    document.body.innerHTML = '<div data-source-line="1"><footer data-source-none><span id="t">x</span></footer></div>';
+    expect(resolveSourceTargets(document.getElementById("t"))).toEqual([{ kind: "none" }]);
+  });
+
   it("returns an empty list outside any annotation", () => {
     document.body.innerHTML = '<p id="t">plain</p>';
     expect(resolveSourceTargets(document.getElementById("t"))).toEqual([]);
@@ -75,6 +80,12 @@ describe("themeSelectors", () => {
       ".moss-hero h1",
       "h1",
     ]);
+  });
+
+  it("names the matching selector of a list, not the whole list", () => {
+    const sheet = themeSheet(".a, h1, :is(h2, h3) { color: red }");
+    document.body.innerHTML = '<h1 id="t">x</h1>';
+    expect(themeSelectors(document.getElementById("t"), sheet)).toEqual(["h1"]);
   });
 
   it("descends into @media blocks", () => {

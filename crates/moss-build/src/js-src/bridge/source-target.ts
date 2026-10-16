@@ -6,7 +6,8 @@
  *   data-source-range="N-M"  shortcode line range
  *   data-source-line="N"     body markdown line
  *   data-source-file="path"  site-relative file that owns the element
- *   data-source-none         template chrome, stops the walk
+ *   data-source-none         template chrome, stops the walk; reported as
+ *                            `{ kind: 'none' }` when nothing nearer was found
  *
  * resolveSourceTarget picks one target for click, double-click and drag.
  * resolveSourceTargets lists every target from the element outward, nearest
@@ -91,7 +92,7 @@ export function resolveSourceTargets(el: Element | null): SourceTarget[] {
   let prev: Located | null = null;
   let node = el?.closest(ANNOTATED) ?? null;
   while (node) {
-    if (node.hasAttribute('data-source-none')) break;
+    if (node.hasAttribute('data-source-none')) return targets.length ? targets : [{ kind: 'none' }];
     const t = targetOnNode(node);
     if (t && !(prev && sameTarget(prev, t))) targets.push({ ...t, element: describe(node) });
     prev = t;
@@ -114,9 +115,26 @@ function themeSheet(): CSSStyleSheet | null {
  */
 function collectSelectors(rules: CSSRuleList, out: string[]): string[] {
   for (const rule of Array.from(rules)) {
-    if ("selectorText" in rule) out.push((rule as CSSStyleRule).selectorText);
+    if ("selectorText" in rule) out.push(...splitSelectorList((rule as CSSStyleRule).selectorText));
     else if ("cssRules" in rule) collectSelectors((rule as CSSGroupingRule).cssRules, out);
   }
+  return out;
+}
+
+/** `h1, :is(h2, h3)` → `['h1', ':is(h2, h3)']`: split at commas outside parentheses. */
+function splitSelectorList(list: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < list.length; i++) {
+    if (list[i] === '(') depth++;
+    else if (list[i] === ')') depth--;
+    else if (list[i] === ',' && depth === 0) {
+      out.push(list.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  out.push(list.slice(start).trim());
   return out;
 }
 
