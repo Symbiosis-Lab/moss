@@ -15,6 +15,11 @@
 //! than matching fence lines itself, so a div inside a code fence or a typed
 //! shortcode (`:::grid {.x}`) is never counted.
 //!
+//! ## Theme rules that style nothing
+//!
+//! A theme rule whose selectors match no element of the last build's pages;
+//! see `theme_rules.rs`.
+//!
 //! ## Theme selectors keyed on a page address
 //!
 //! A selector such as `body[data-path^="/housing/"]` in a theme stylesheet
@@ -26,6 +31,9 @@ use std::path::{Path, PathBuf};
 
 use moss_core::ast::shortcode_extract::{extract_shortcodes_with_config, CssRegionSpan};
 use moss_core::ast::ParseConfig;
+
+mod theme_rules;
+pub use theme_rules::{ThemeRules, UnmatchedRule};
 
 /// A class must sit on at least this many pages before it is reported, unless `--all`.
 const MIN_PAGES: usize = 3;
@@ -58,6 +66,7 @@ pub struct SurfaceReport {
     /// The fewest pages a reported class sits on: [`MIN_PAGES`], or 1 with `--all`.
     pub min_pages: usize,
     pub classed_divs: Vec<ClassedDiv>,
+    pub theme_rules: ThemeRules,
     pub address_selectors: Vec<AddressSelector>,
 }
 
@@ -137,8 +146,8 @@ fn classed_divs(folder: &Path, min_pages: usize) -> Vec<ClassedDiv> {
     out
 }
 
-/// Lines of every `.moss/theme/**/*.css` file that mention `data-path`.
-fn address_selectors(folder: &Path) -> Vec<AddressSelector> {
+/// Every `.moss/theme/**/*.css` file, as its site-relative path and text, in path order.
+fn theme_sheets(folder: &Path) -> Vec<(String, String)> {
     let theme = folder.join(".moss").join("theme");
     let mut sheets: Vec<PathBuf> = walkdir::WalkDir::new(&theme)
         .into_iter()
@@ -148,13 +157,16 @@ fn address_selectors(folder: &Path) -> Vec<AddressSelector> {
         .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("css"))
         .collect();
     sheets.sort();
+    sheets
+        .into_iter()
+        .filter_map(|sheet| Some((site_relative(folder, &sheet), std::fs::read_to_string(&sheet).ok()?)))
+        .collect()
+}
 
+/// Lines of the theme stylesheets that mention `data-path`.
+fn address_selectors(sheets: &[(String, String)]) -> Vec<AddressSelector> {
     let mut out = Vec::new();
-    for sheet in sheets {
-        let Ok(content) = std::fs::read_to_string(&sheet) else {
-            continue;
-        };
-        let rel = site_relative(folder, &sheet);
+    for (rel, content) in sheets {
         for (idx, line) in content.lines().enumerate() {
             if line.contains("data-path") {
                 out.push(AddressSelector {
@@ -168,14 +180,18 @@ fn address_selectors(folder: &Path) -> Vec<AddressSelector> {
     out
 }
 
-/// Run both detectors over the site at `folder`. `all` reports a class on any
-/// number of pages instead of [`MIN_PAGES`] or more.
+/// Run the detectors over the site at `folder`, matching theme rules against
+/// the pages of its last build. `all` reports a class on any number of pages
+/// instead of [`MIN_PAGES`] or more.
 pub fn audit(folder: &Path, all: bool) -> SurfaceReport {
     let min_pages = if all { 1 } else { MIN_PAGES };
+    let sheets = theme_sheets(folder);
+    let built = crate::moss_paths::MossPaths::new(folder).initial_serve_dir();
     SurfaceReport {
         min_pages,
         classed_divs: classed_divs(folder, min_pages),
-        address_selectors: address_selectors(folder),
+        theme_rules: theme_rules::check(&sheets, &built),
+        address_selectors: address_selectors(&sheets),
     }
 }
 
@@ -213,7 +229,22 @@ fn to_json(report: &SurfaceReport) -> serde_json::Value {
         .iter()
         .map(|s| serde_json::json!({ "path": s.path, "line": s.line, "text": s.text }))
         .collect();
-    serde_json::json!({ "min_pages": report.min_pages, "classed_divs": classed, "address_selectors": selectors })
+    let theme_rules = match &report.theme_rules {
+        ThemeRules::NoBuild => serde_json::json!({ "checked": false }),
+        ThemeRules::Checked { pages, unmatched } => {
+            let rules: Vec<serde_json::Value> = unmatched
+                .iter()
+                .map(|r| serde_json::json!({ "path": r.path, "line": r.line, "selector": r.selector, "scripted": r.scripted }))
+                .collect();
+            serde_json::json!({ "checked": true, "pages": pages, "unmatched": rules })
+        }
+    };
+    serde_json::json!({
+        "min_pages": report.min_pages,
+        "classed_divs": classed,
+        "theme_rules": theme_rules,
+        "address_selectors": selectors,
+    })
 }
 
 fn render_text(report: &SurfaceReport) -> String {
@@ -246,7 +277,7 @@ fn render_text(report: &SurfaceReport) -> String {
                     format!("{label} {n}")
                 })
                 .collect();
-            let pages = if d.pages == 1 { "1 page".to_string() } else { format!("{} pages", d.pages) };
+            let pages = pages_text(d.pages);
             out.push_str(&format!(
                 "  {:<class_width$}  {:<pages_width$}  {}  e.g. {}:{}\n",
                 format!(".{}", d.class),
@@ -257,6 +288,9 @@ fn render_text(report: &SurfaceReport) -> String {
             ));
         }
     }
+    out.push('\n');
+
+    let dead = render_theme_rules(&report.theme_rules, &mut out);
     out.push('\n');
 
     if report.address_selectors.is_empty() {
@@ -271,7 +305,7 @@ fn render_text(report: &SurfaceReport) -> String {
     }
     out.push('\n');
 
-    let kinds = usize::from(!report.classed_divs.is_empty()) + usize::from(!report.address_selectors.is_empty());
+    let kinds = usize::from(!report.classed_divs.is_empty()) + usize::from(dead) + usize::from(!report.address_selectors.is_empty());
     if kinds == 0 {
         out.push_str("Nothing found.\n");
     } else {
@@ -279,6 +313,39 @@ fn render_text(report: &SurfaceReport) -> String {
         out.push_str(&format!("{kinds} {noun} of finding. This is a report; nothing was changed.\n"));
     }
     out
+}
+
+fn pages_text(n: usize) -> String {
+    if n == 1 { "1 page".to_string() } else { format!("{n} pages") }
+}
+
+/// The theme-rules section. Returns whether it found a rule that styles nothing.
+fn render_theme_rules(rules: &ThemeRules, out: &mut String) -> bool {
+    let (pages, unmatched) = match rules {
+        ThemeRules::NoBuild => {
+            out.push_str("Theme rules were not checked: the site has no build yet. Run `moss build`, then this again.\n");
+            return false;
+        }
+        ThemeRules::Checked { pages, unmatched } => (pages, unmatched),
+    };
+    let (scripted, dead): (Vec<&UnmatchedRule>, Vec<&UnmatchedRule>) = unmatched.iter().partition(|r| !r.scripted.is_empty());
+    let loc = |r: &UnmatchedRule| format!("{}:{}", r.path, r.line);
+    let width = unmatched.iter().map(|r| loc(r).chars().count()).max().unwrap_or(0);
+    if dead.is_empty() {
+        out.push_str(&format!("Every theme rule matches an element in the last build ({}).\n", pages_text(*pages)));
+    } else {
+        out.push_str(&format!("Theme rules that match nothing in the last build ({}) — they style no element on any page:\n", pages_text(*pages)));
+        for r in &dead {
+            out.push_str(&format!("  {:<width$}  {}\n", loc(r), r.selector));
+        }
+    }
+    if !scripted.is_empty() {
+        out.push_str("Theme rules that match nothing in the built HTML but name something a script mentions — they may apply once it runs:\n");
+        for r in &scripted {
+            out.push_str(&format!("  {:<width$}  {}  (script mentions {})\n", loc(r), r.selector, r.scripted.join(", ")));
+        }
+    }
+    !dead.is_empty()
 }
 
 #[cfg(test)]
@@ -372,6 +439,29 @@ mod tests {
         assert_eq!(value["classed_divs"][0]["example"]["line"], 5);
         assert_eq!(value["address_selectors"][0]["path"], ".moss/theme/style.css");
         assert_eq!(value["address_selectors"][0]["line"], 4);
+    }
+
+    #[test]
+    fn a_theme_rule_no_built_page_matches_is_a_finding() {
+        let dir = fixture();
+        write(dir.path(), ".moss/build.nosync/staging/index.html", "<html><body><p>x</p></body></html>");
+        let report = audit(dir.path(), false);
+        let ThemeRules::Checked { pages, unmatched } = &report.theme_rules else { panic!("the staged build was read") };
+        assert_eq!(*pages, 1);
+        assert_eq!(unmatched.iter().map(|r| (r.line, r.selector.as_str())).collect::<Vec<_>>(), vec![(4, "body[data-path^=\"/housing/\"]")]);
+        let text = render_text(&report);
+        assert!(text.contains("Theme rules that match nothing in the last build (1 page)"), "{text}");
+        assert!(text.ends_with("3 kinds of finding. This is a report; nothing was changed.\n"), "{text}");
+        assert_eq!(to_json(&report)["theme_rules"]["unmatched"][0]["line"], 4);
+    }
+
+    #[test]
+    fn without_a_build_the_theme_rules_are_not_checked() {
+        let dir = fixture();
+        let report = audit(dir.path(), false);
+        assert_eq!(report.theme_rules, ThemeRules::NoBuild);
+        assert!(render_text(&report).contains("Theme rules were not checked"));
+        assert_eq!(to_json(&report)["theme_rules"]["checked"], false);
     }
 
     #[test]

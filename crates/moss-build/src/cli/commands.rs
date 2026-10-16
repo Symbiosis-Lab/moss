@@ -108,7 +108,7 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         CliCommandInfo {
             name: "doctor",
             args: "--math [<folder>] | --surface [<folder>] [--all] [--json]",
-            description: "Audit a vault without changing it. --math reports every $-span moss would parse as math (these render as their LaTeX source; moss does not typeset math yet), so an imported corpus can be checked before publishing. Escape false positives as \\$. --surface lists markdown constructs a cleaner form could replace: classed divs repeated on three or more pages (a fact a frontmatter field could hold) and theme selectors keyed on a page address (they break when the page is renamed). --all lists every classed div, even one on a single page, to check that a migration left none. --json prints the surface report as JSON.",
+            description: "Audit a vault without changing it. --math reports every $-span moss would parse as math (these render as their LaTeX source; moss does not typeset math yet), so an imported corpus can be checked before publishing. Escape false positives as \\$. --surface lists markdown constructs a cleaner form could replace: classed divs repeated on three or more pages (a fact a frontmatter field could hold), theme rules that match no element on any page of the last build, and theme selectors keyed on a page address (they break when the page is renamed). --all lists every classed div, even one on a single page, to check that a migration left none. --json prints the surface report as JSON.",
         },
         CliCommandInfo {
             name: "list",
@@ -193,7 +193,7 @@ const EXAMPLE_LINES: &[(&str, &str)] = &[
     ("import", "moss import https://blog.example.com/post/ ~/Sites/me/articles/"),
     ("import", "moss import --list urls.txt ~/Sites/me/articles/"),
     ("doctor", "moss doctor --math ~/blog/            # Every $-span moss would parse as math"),
-    ("doctor", "moss doctor --surface ~/blog/ --json  # Repeated classed divs and address-keyed theme selectors"),
+    ("doctor", "moss doctor --surface ~/blog/ --json  # Repeated classed divs, theme rules that style nothing, address-keyed selectors"),
     ("doctor", "moss doctor --surface ~/blog/ --all   # Every classed div left, even on one page"),
     ("comments", "moss comments list ~/blog/          # Every comment, newest first, hidden ones marked"),
     ("comments", "moss comments hide ~/blog/ 12 13    # Keep comments 12 and 13 off the site at the next publish"),

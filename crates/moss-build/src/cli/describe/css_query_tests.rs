@@ -22,8 +22,7 @@ fn scan_reports_the_enclosing_media_query() {
   .a { color: blue; }
 }
 ";
-    let mut out = Vec::new();
-    scan(css, ".a", &mut out);
+    let out: Vec<_> = style_rules(css).into_iter().filter(|r| rule_mentions(r, ".a")).collect();
     assert_eq!(out.len(), 2, "both rules match");
     assert!(out[0].conditions.is_empty());
     assert_eq!(out[1].conditions, vec!["@media (max-width: 32rem)"]);
@@ -43,10 +42,10 @@ fn comment_above_a_rule_is_attached_to_it() {
 /* why this cap exists */
 .a { max-height: 10px; }
 ";
-    let mut out = Vec::new();
-    scan(css, ".a", &mut out);
+    let out: Vec<_> = style_rules(css).into_iter().filter(|r| rule_mentions(r, ".a")).collect();
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].comment, Some("/* why this cap exists */"));
+    assert_eq!((out[0].prelude, &css[out[0].start..out[0].start + 2]), (".a", ".a"));
 }
 
 /// A comment trailing a declaration belongs to the line it is on, not to the
@@ -57,10 +56,24 @@ fn a_trailing_comment_is_not_attached_to_the_next_rule() {
 .a { color: red; } /* trailing */
 .b { color: blue; }
 ";
-    let mut out = Vec::new();
-    scan(css, ".b", &mut out);
+    let out: Vec<_> = style_rules(css).into_iter().filter(|r| rule_mentions(r, ".b")).collect();
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].comment, None);
+    assert_eq!((out[0].prelude, out[0].rule), (".b", ".b { color: blue; }"));
+}
+
+#[test]
+fn a_comment_inside_a_selector_list_stays_in_the_rule() {
+    let rules = style_rules(".a, /* legacy */ .b { color: red; }\n");
+    assert_eq!(rules[0].prelude, ".a, /* legacy */ .b");
+    assert!(rule_mentions(&rules[0], ".a"));
+}
+
+#[test]
+fn a_trailing_comment_does_not_hide_the_media_query_after_it() {
+    let css = ".a { color: red; } /* trailing */\n@media print { .b { color: blue; } }\n";
+    let out = style_rules(css);
+    assert_eq!(out[1].conditions, vec!["@media print"]);
 }
 
 #[test]

@@ -146,6 +146,11 @@ When a design call needs a visual treatment, stop at the first rung that reaches
    displacing. Reach here when a whole page has a different shape, not when one
    element has a different colour.
 
+After moving a theme rule onto a new selector, build and run
+`moss doctor --surface`: it names every rule in `.moss/theme/` that matches no
+element on any built page, which is how a rule left on a class the pages no
+longer carry shows up.
+
 Rung 4 exists because rungs 1–3 restyle a component and some designs need to
 re-lay-out a page. It is the last rung, not an escape hatch: `moss describe`
 lists which properties a component exposes precisely so that "override the

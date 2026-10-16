@@ -709,6 +709,11 @@ exactly this reason — `.tokens` (an object, grouped: `.tokens[]` yields groups
 `moss describe --css <selector>` answers the other question — not "what may I
 set" but "what is already set." It prints every shipped rule mentioning that
 selector across all of moss's stylesheets, with layers and comments intact.
+For your own stylesheet, `moss doctor --surface` answers "does this rule style
+anything?": it lists every rule in `.moss/theme/` whose selectors match no
+element on any page of the last build. A rule that matches nothing but names a
+class or attribute a script on the site mentions is listed apart, since the
+script may add it when the page runs.
 
 Never hardcode token names or shortcode classes from memory. They change between
 releases. The output of `moss describe` always reflects the running binary.

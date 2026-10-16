@@ -1,7 +1,8 @@
 //! `moss doctor` — read-only audits of a vault, reported never enforced.
 //!
 //! Two checks: `--math` (below) and `--surface`, which lists markdown
-//! constructs a cleaner form could replace (see `surface.rs`).
+//! constructs a cleaner form could replace and theme rules that style nothing
+//! (see `surface.rs`).
 //!
 //! ## Why `--math` exists
 //!
@@ -244,9 +245,10 @@ fn print_usage() {
     eprintln!("       moss doctor --surface [<folder>] [--all] [--json]");
     eprintln!();
     eprintln!("--surface reports classed divs repeated across pages (a fact a frontmatter");
-    eprintln!("field could hold) and theme selectors keyed on a page address. --all lists");
-    eprintln!("every classed div, even on one page. --json prints it as JSON. Both are");
-    eprintln!("accepted with --surface only.");
+    eprintln!("field could hold), theme rules that match nothing in the last build, and");
+    eprintln!("theme selectors keyed on a page address. --all lists every classed div,");
+    eprintln!("even on one page. --json prints it as JSON. Both are accepted with");
+    eprintln!("--surface only.");
     eprintln!();
     eprintln!("Reports every `$`-span in the vault that moss would parse as math.");
     eprintln!("Run it before publishing an imported corpus: pulldown's delimiter rule");

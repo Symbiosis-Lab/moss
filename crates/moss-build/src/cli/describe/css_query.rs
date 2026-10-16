@@ -58,16 +58,20 @@ fn sheets() -> Vec<(String, &'static str)> {
         .collect()
 }
 
-/// One matched rule, with the context needed to reproduce its effect.
-struct Match<'a> {
+/// One style rule of a stylesheet, with the context needed to reproduce its effect.
+pub(crate) struct StyleRule<'a> {
     /// The `@media`/`@supports`/`@layer` conditions the rule sits inside,
     /// outermost first. Without these a copied rule silently applies at every
     /// width — the single most common way a theme override goes wrong.
-    conditions: Vec<&'a str>,
+    pub conditions: Vec<&'a str>,
     /// The comment block immediately above the rule, if any.
-    comment: Option<&'a str>,
+    pub comment: Option<&'a str>,
+    /// The selector list, trimmed.
+    pub prelude: &'a str,
     /// Selector list plus declaration block, verbatim.
-    rule: &'a str,
+    pub rule: &'a str,
+    /// Byte offset of the selector list in the sheet.
+    pub start: usize,
 }
 
 /// Whether `haystack` mentions `needle` as a whole CSS token.
@@ -80,7 +84,7 @@ struct Match<'a> {
 // length of the needle matched there, which lands on the boundary just past the
 // match — neither can split a UTF-8 character.
 #[allow(clippy::string_slice)]
-fn mentions(haystack: &str, needle: &str) -> bool {
+pub(crate) fn mentions(haystack: &str, needle: &str) -> bool {
     let mut from = 0;
     while let Some(i) = haystack[from..].find(needle) {
         let start = from + i;
@@ -100,8 +104,8 @@ fn mentions(haystack: &str, needle: &str) -> bool {
     false
 }
 
-/// Walk a stylesheet by brace depth, collecting rules whose selector mentions
-/// `needle` along with the at-rule conditions enclosing them.
+/// Walk a stylesheet by brace depth, collecting every style rule along with the
+/// at-rule conditions enclosing it.
 ///
 /// Deliberately not a real CSS parser. It has one job — slice out source spans
 /// — and a parser would drop the comments, which are half the value.
@@ -111,7 +115,8 @@ fn mentions(haystack: &str, needle: &str) -> bool {
 // so those indices — and `prelude_start`, which is only ever assigned one of
 // them — are always char boundaries. None of these can panic.
 #[allow(clippy::string_slice)]
-fn scan<'a>(css: &'a str, needle: &str, out: &mut Vec<Match<'a>>) {
+pub(crate) fn style_rules<'a>(css: &'a str) -> Vec<StyleRule<'a>> {
+    let mut out = Vec::new();
     let bytes = css.as_bytes();
     // Stack of open at-rule preludes (`@media (max-width: 32rem)`), so a nested
     // rule reports every condition it is under.
@@ -136,14 +141,16 @@ fn scan<'a>(css: &'a str, needle: &str, out: &mut Vec<Match<'a>>) {
                 // the line it is on, and hoisting it above the next rule would
                 // put unrelated prose in front of half the output. The tell is
                 // a newline between the previous `}` and the comment.
+                // A comment inside a selector list stays where it is.
                 let gap = &css[prelude_start..start];
-                if gap.trim().is_empty() && (prelude_start == 0 || gap.contains('\n')) {
-                    pending_comment = Some(css[start..i].trim_end());
+                if gap.trim().is_empty() {
+                    pending_comment = (prelude_start == 0 || gap.contains('\n')).then(|| css[start..i].trim_end());
                     prelude_start = i;
                 }
             }
             b'{' => {
                 let prelude = css[prelude_start..i].trim();
+                let rule_start = prelude_start + (css[prelude_start..].len() - css[prelude_start..].trim_start().len());
                 if prelude.starts_with('@') {
                     // An at-rule block: descend, remembering the condition.
                     conditions.push(prelude);
@@ -164,22 +171,13 @@ fn scan<'a>(css: &'a str, needle: &str, out: &mut Vec<Match<'a>>) {
                     }
                     i += 1;
                 }
-                // A custom property lives in the declarations, not the
-                // selector — and "what reads --moss-grid-image-ratio?" is
-                // exactly the question an agent asks before setting one. So
-                // `--`-prefixed needles search the whole rule.
-                let haystack = if needle.starts_with("--") {
-                    &css[prelude_start..i]
-                } else {
-                    prelude
-                };
-                if mentions(haystack, needle) {
-                    out.push(Match {
-                        conditions: conditions.clone(),
-                        comment: pending_comment,
-                        rule: css[prelude_start..i].trim(),
-                    });
-                }
+                out.push(StyleRule {
+                    conditions: conditions.clone(),
+                    comment: pending_comment,
+                    prelude,
+                    rule: css[rule_start..i].trim(),
+                    start: rule_start,
+                });
                 prelude_start = i;
                 pending_comment = None;
             }
@@ -198,6 +196,15 @@ fn scan<'a>(css: &'a str, needle: &str, out: &mut Vec<Match<'a>>) {
             _ => i += 1,
         }
     }
+    out
+}
+
+/// Whether `rule` is one a query for `needle` returns. A custom property lives
+/// in the declarations, not the selector, and "what reads
+/// --moss-grid-image-ratio?" is exactly what an agent asks before setting one,
+/// so `--`-prefixed needles search the whole rule.
+fn rule_mentions(rule: &StyleRule<'_>, needle: &str) -> bool {
+    mentions(if needle.starts_with("--") { rule.rule } else { rule.prelude }, needle)
 }
 
 /// One line telling the reader whether a given site actually ships this sheet.
@@ -235,8 +242,7 @@ fn shipping_note(sheet: &str) -> &'static str {
 pub fn rules_matching(needle: &str) -> String {
     let mut out = String::new();
     for (name, css) in sheets() {
-        let mut matches = Vec::new();
-        scan(css, needle, &mut matches);
+        let matches: Vec<StyleRule<'_>> = style_rules(css).into_iter().filter(|r| rule_mentions(r, needle)).collect();
         if matches.is_empty() {
             continue;
         }

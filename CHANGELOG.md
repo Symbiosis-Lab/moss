@@ -6,6 +6,8 @@ All notable changes to moss will be documented here.
 
 ### New
 
+- `moss doctor --surface` now lists the rules in your theme's stylesheets that style nothing: rules whose selectors match no element on any page of the last build, such as a rule still keyed on a class the pages no longer carry. It ignores `:hover`, `::before` and other states a built page can't show, and lists a rule apart when a script on the site mentions one of its class or attribute names, since the script may add it at runtime. Run `moss build` first; without a build the check says so and is skipped.
+- `moss describe --css` no longer mistakes a comment at the end of the previous rule's line for part of the next selector, which could hide the `@media` query a rule sits in.
 - `moss doctor --surface --all` lists every classed div, including one used on a single page, so after moving facts into frontmatter fields you can check that none are left. Without `--all`, the report still lists only classes used on three or more pages.
 - A hero can set its words in the middle of the picture: `:::hero {align=center}` centres the panel and its text, with a shading that darkens from the centre instead of one side. `align=end` and the default bottom-start placement are unchanged.
 - An image can name the point that must stay in view when it is cropped: `focus:X%,Y%` in its options, whole percentages from the top-left, such as `![[photo.jpg|focus:20%,62%]]` or `:::hero {image="photo.jpg|focus:20%,62%"}`. `focus:50%,50%` is `center` and `focus:0%,0%` is `top-left`; the nine named positions still work.
