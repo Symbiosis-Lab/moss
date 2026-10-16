@@ -291,7 +291,7 @@ async fn a_challenge_response_reaches_the_caller_as_challenge() {
 // The seta invite gate returns `403 {error:'not_allowlisted', apply_url:'<url>'}`
 // for a verified email that isn't on the allowlist. `parse_not_allowlisted`
 // is the pure body-parser `from_failed_response` routes a 403 through so the
-// un-admitted user gets the friendly "青苔正在内测，申请免费试用" + apply link
+// un-admitted user gets the friendly "发布到 mosspub.com 需要邀请，请申请访问" + apply link
 // instead of an opaque error.
 
 #[test]

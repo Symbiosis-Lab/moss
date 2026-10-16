@@ -16,9 +16,9 @@ fn without_a_contact_the_message_is_one_sentence() {
 
 #[test]
 fn exact_text_in_english() {
-    assert_eq!(site_limit_message(1, None), "Your hosting plan includes 1 site.");
+    assert_eq!(site_limit_message(1, None), "Your mosspub.com hosting includes 1 site.");
     assert_eq!(
         site_limit_message(3, Some("help@example.com")),
-        "Your hosting plan includes 3 sites. To add more, write to help@example.com."
+        "Your mosspub.com hosting includes 3 sites. To add more, write to help@example.com."
     );
 }

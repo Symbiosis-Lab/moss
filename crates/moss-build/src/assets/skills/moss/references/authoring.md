@@ -163,7 +163,7 @@ For a homepage that must own its complete HTML document, keep `index.md` for sit
 passthrough = ["index.html"]
 ```
 
-A passthrough page receives none of moss's injected features: no visit counter, comments or subscribe form. To be counted on a site hosted by moss, it adds `<script src="/_moss/js/beacon.js" defer></script>` itself.
+A passthrough page receives none of moss's injected features: no visit counter, comments or subscribe form. To be counted on a site published to mosspub.com, it adds `<script src="/_moss/js/beacon.js" defer></script>` itself.
 
 The explicit entry makes the source HTML win only the root `index.html` output collision. moss still generates every Markdown page, and `--watch` rebuilds when either source changes. The HTML document owns its own head, styles, scripts, accessibility, and asset links. A root `index.html` without this explicit entry remains an ordinary source asset and does not replace moss's generated homepage.
 
@@ -345,7 +345,7 @@ Hi {{email}},
 Thanks for joining {{site_name}}. New posts arrive at {{site_url}}.
 ```
 
-`subject:` is required; a file without one sends nothing and the build warns. `preview:` is the line mail apps show beside the subject. `from:` and `reply_to:` are optional. The `from:` address is used only when the site's hosting has verified that sending domain; otherwise mail goes out from the hosting default, and replies still reach the `reply_to:` address if you set one. The body is markdown; `%%comments%%` are removed, so notes to yourself do not reach subscribers. Three variables are filled in per subscriber: `{{site_name}}`, `{{site_url}}` and `{{email}}`. An unsubscribe line is always added at the end for you, so do not write one. When the site is published to the moss hosting service, the build writes the file to `.moss-email/welcome.<language>.json` (`welcome.default.json` for the top-level one) and publishes it with the site; on any other host the letter is not used and nothing is written.
+`subject:` is required; a file without one sends nothing and the build warns. `preview:` is the line mail apps show beside the subject. `from:` and `reply_to:` are optional. The `from:` address is used only when the site's mosspub.com hosting has verified that sending domain; otherwise mail goes out from its default, and replies still reach the `reply_to:` address if you set one. The body is markdown; `%%comments%%` are removed, so notes to yourself do not reach subscribers. Three variables are filled in per subscriber: `{{site_name}}`, `{{site_url}}` and `{{email}}`. An unsubscribe line is always added at the end for you, so do not write one. When the site is published to mosspub.com hosting, the build writes the file to `.moss-email/welcome.<language>.json` (`welcome.default.json` for the top-level one) and publishes it with the site; on any other host the letter is not used and nothing is written.
 
 ### Term kinds
 

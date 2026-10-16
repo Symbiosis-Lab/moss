@@ -13,7 +13,7 @@ Your site already lives online. This page gives it your own address, so people r
 
 ![[custom domain.mp4|loop]]
 
-A moss subscription is required to buy an address. moss will let you know if you don't have one yet.
+A mosspub.com hosting subscription is required to buy an address. moss will let you know if you don't have one yet.
 
 ## Find a name
 

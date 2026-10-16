@@ -120,7 +120,7 @@ pub async fn verify_folder_email(
                 last_error = Some(e.to_string());
                 if refusals_in_a_row >= PERMANENT_REFUSALS {
                     return Err(format!(
-                        "The hosting service refused the sign-in status check {PERMANENT_REFUSALS} times in a row: {e}. \
+                        "The mosspub.com service refused the sign-in status check {PERMANENT_REFUSALS} times in a row: {e}. \
                          Nothing was changed."
                     ));
                 }
@@ -129,7 +129,7 @@ pub async fn verify_folder_email(
         if tokio::time::Instant::now() + interval > deadline {
             return Err(match (any_poll_succeeded, last_error) {
                 (false, Some(last)) => format!(
-                    "The hosting service could not be reached to check whether the sign-in link sent to {email} \
+                    "The mosspub.com service could not be reached to check whether the sign-in link sent to {email} \
                      was opened (last error: {last}). Check the connection and run the command again with --email."
                 ),
                 _ => format!(

@@ -740,6 +740,9 @@ fn print_json(rows: &[DisplayRow]) {
     }
 }
 
+/// A person reads the built-in target as the service it publishes to.
+fn target_label(t: &str) -> &str { if t == "moss" || t.starts_with("moss:") { "mosspub.com" } else { t } }
+
 /// Newest-first, grouped by calendar day (the day key and the header both
 /// come from the record's own `published_at`, which is always UTC — see
 /// [`record::format_date`], the same convention this reuses).
@@ -767,7 +770,7 @@ fn render_human(rows: &[DisplayRow], show_target: bool, show_counts: bool) {
             line.push_str("  live");
         }
         if show_target {
-            line.push_str(&format!("  [{}]", row.target));
+            line.push_str(&format!("  [{}]", target_label(&row.target)));
         }
         if show_counts {
             let mut parts = Vec::new();
@@ -804,6 +807,13 @@ mod tests {
         let vault = dir.path().join("vault");
         std::fs::create_dir_all(&vault).unwrap();
         (dir, vault)
+    }
+
+    #[test]
+    fn the_built_in_target_reads_as_the_service_not_the_internal_id() {
+        assert_eq!(target_label("moss"), "mosspub.com");
+        assert_eq!(target_label("moss:her-blog"), "mosspub.com");
+        assert_eq!(target_label("github-pages"), "github-pages");
     }
 
     #[test]

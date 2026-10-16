@@ -15,7 +15,7 @@ function mountApplyForm(lang = 'zh-hans'): HTMLFormElement {
           data-moss-hosted="true" data-revert="false" data-state="idle"
           method="post" action="https://api.mosspub.com/apply?lang=zh-hans">
       <input type="email" name="email" class="moss-input" required aria-label="邮箱" aria-describedby="moss-apply-email-help" />
-      <p class="moss-apply-helper" id="moss-apply-email-help">用于获取邀请及免费托管服务</p>
+      <p class="moss-apply-helper" id="moss-apply-email-help">用于获取邀请及 mosspub.com 托管服务</p>
       <input type="text" name="matters" class="moss-input moss-apply-matters" placeholder="Matters 用户名" aria-label="Matters 用户名" aria-describedby="moss-apply-matters-help">
       <p class="moss-apply-helper" id="moss-apply-matters-help">或者告诉我们你打算写什么，一句话就好</p>
       <input type="text" name="website" class="moss-apply-hp" tabindex="-1" aria-hidden="true">

@@ -1972,7 +1972,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         kind: "instance",
         parent: "moss-apply",
         data_attrs: &[],
-        example_html: r#"<p class="moss-apply-helper" id="moss-apply-email-help">用于获取邀请及免费托管服务</p>"#,
+        example_html: r#"<p class="moss-apply-helper" id="moss-apply-email-help">用于获取邀请及 mosspub.com 托管服务</p>"#,
         example_markdown: "",
         status: Status::Emerging,
         since: "0",

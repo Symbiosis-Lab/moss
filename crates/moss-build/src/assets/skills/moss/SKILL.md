@@ -199,11 +199,11 @@ model (dark mode, quiet chrome, `@layer` rules), see
   `moss guide comments`.
 - **Building a site in more than one language** →
   `moss guide authoring`, Multilingual sites.
-- **Putting the site online** → Publishing below.
+- **Putting the site online** → Publishing below. moss publishes to mosspub.com, to other built-in targets, or anywhere a deploy plugin reaches.
 
 ## Publishing
 
-- **First publish (moss hosting):** `moss env production <folder>` (or
+- **First publish (mosspub.com hosting, provided by Symbiosis Lab):** `moss env production <folder>` (or
   `staging`) **then** `moss deploy <folder> --site-id=<name>` → publishes to
   `<name>.mosspub.com`. The order matters: without a prior explicit `moss env`,
   `deploy` will not register a site, and `--site-id` alone silently does
@@ -216,7 +216,7 @@ model (dark mode, quiet chrome, `@layer` rules), see
   wrong account. Never pass `--email` unasked; it sends a real email.
 - **Every publish after the first:** `moss deploy <folder>` — the site id
   already lives in `.moss/state.toml`.
-- **Refused because the live site is newer:** `deploy` to moss hosting
+- **Refused because the live site is newer:** `deploy` to mosspub.com hosting
   (`--prebuilt` included) refuses when the site was published from another
   copy of the folder after this copy's last publish. Bring this folder up to
   date with that copy (usually `git pull`) and deploy again. `--overwrite-newer`
@@ -241,10 +241,10 @@ model (dark mode, quiet chrome, `@layer` rules), see
   example.com`.
 - **Site built by another generator:** `moss deploy <folder> --prebuilt=_site`
   skips `moss build` and uploads that directory as-is.
-- **Any non-moss host:** `moss build <folder> --site-url=https://example.com`,
+- **Any other host:** `moss build <folder> --site-url=https://example.com`,
   then upload `.moss/build.nosync/current/` yourself. `--site-url` is required there
   because canonical URLs, `og:image`, the sitemap, and RSS are all absolute and
-  otherwise derive from moss hosting deployment state, which a non-moss host
+  otherwise derive from mosspub.com deployment state, which any other host
   never sets. Flag details: `moss describe --json`.
 
 ## Harvest, don't unilaterally invent

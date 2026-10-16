@@ -13,7 +13,7 @@ A newsletter lets you send a post to readers by email, straight from your site. 
 
 ![[email sub.mp4|loop]]
 
-Newsletter sending works for sites hosted on moss. Sites hosted elsewhere cannot send from moss yet.
+Newsletter sending works for sites published to mosspub.com hosting (provided by Symbiosis Lab). Sites hosted elsewhere cannot send from moss yet.
 
 ## Turn on the newsletter
 

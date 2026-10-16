@@ -478,7 +478,7 @@ fn moss_apply_copy(lang: Language) -> MossApplyCopy {
         Language::En => MossApplyCopy {
             email_label: "Email",
             email_ph: "your@email.com",
-            email_helper: "For your invitation and free hosting",
+            email_helper: "For your invitation and mosspub.com hosting",
             matters_label: "Matters username",
             matters_ph: "Matters username",
             matters_helper: "Or tell us what you plan to write — a line is plenty.",
@@ -490,7 +490,7 @@ fn moss_apply_copy(lang: Language) -> MossApplyCopy {
         Language::De => MossApplyCopy {
             email_label: "E-Mail",
             email_ph: "ihre@email.de",
-            email_helper: "Für Ihre Einladung und das kostenlose Hosting",
+            email_helper: "Für Ihre Einladung und das mosspub.com-Hosting",
             matters_label: "Matters-Benutzername",
             matters_ph: "Matters-Benutzername",
             matters_helper: "Oder schreiben Sie uns, worüber Sie schreiben möchten – ein Satz genügt.",
@@ -502,7 +502,7 @@ fn moss_apply_copy(lang: Language) -> MossApplyCopy {
         Language::ZhHans => MossApplyCopy {
             email_label: "邮箱",
             email_ph: "邮箱",
-            email_helper: "用于获取邀请及免费托管服务",
+            email_helper: "用于获取邀请及 mosspub.com 托管服务",
             matters_label: "Matters 用户名",
             matters_ph: "Matters 用户名",
             matters_helper: "或者告诉我们你打算写什么，一句话就好",
@@ -514,7 +514,7 @@ fn moss_apply_copy(lang: Language) -> MossApplyCopy {
         Language::ZhHant => MossApplyCopy {
             email_label: "電子郵件",
             email_ph: "電子郵件",
-            email_helper: "用於獲取邀請及免費託管服務",
+            email_helper: "用於獲取邀請及 mosspub.com 託管服務",
             matters_label: "Matters 用戶名",
             matters_ph: "Matters 用戶名",
             matters_helper: "或者告訴我們你打算寫什麼，一句話就好",
@@ -1433,7 +1433,7 @@ mod scope_detection_tests {
         // Redesigned form: two placeholder-only fields with a helper under each,
         // no visible <label> and no <details>/publish disclosure.
         assert!(
-            html.contains("用于获取邀请及免费托管服务"),
+            html.contains("用于获取邀请及 mosspub.com 托管服务"),
             "zh-hans email helper must appear: {html}"
         );
         assert!(
@@ -1493,7 +1493,7 @@ mod scope_detection_tests {
             "en second-field placeholder must not be Chinese: {html}"
         );
         assert!(
-            html.contains("For your invitation and free hosting"),
+            html.contains("For your invitation and mosspub.com hosting"),
             "en email helper must appear: {html}"
         );
         assert!(

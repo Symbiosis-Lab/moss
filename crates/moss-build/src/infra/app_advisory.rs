@@ -176,9 +176,9 @@ advisory_strings! {
     // for the progress panel.
     publish_failed            => { en: "Publish failed",                                   zh_hans: "发布失败",                                         zh_hant: "發布失敗" },
     deploy_err_custom_domain  => { en: "Custom domain required",                           zh_hans: "需要自定义域名",                                   zh_hant: "需要自訂網域" },
-    not_allowlisted           => { en: "moss is in closed testing. Apply for free access.", zh_hans: "青苔正在内测，申请免费试用", zh_hant: "青苔正在內測，申請免費試用" },
-    site_limit_one            => { en: "Your hosting plan includes 1 site.", zh_hans: "你的托管方案包含 1 个网站。", zh_hant: "你的代管方案包含 1 個網站。" },
-    site_limit_many           => { en: "Your hosting plan includes {limit} sites.", zh_hans: "你的托管方案包含 {limit} 个网站。", zh_hant: "你的代管方案包含 {limit} 個網站。" },
+    not_allowlisted           => { en: "Publishing to mosspub.com is by invitation. Apply for access.", zh_hans: "发布到 mosspub.com 需要邀请，请申请访问。", zh_hant: "發布到 mosspub.com 需要邀請，請申請存取。" },
+    site_limit_one            => { en: "Your mosspub.com hosting includes 1 site.", zh_hans: "你的 mosspub.com 托管包含 1 个网站。", zh_hant: "你的 mosspub.com 託管包含 1 個網站。" },
+    site_limit_many           => { en: "Your mosspub.com hosting includes {limit} sites.", zh_hans: "你的 mosspub.com 托管包含 {limit} 个网站。", zh_hant: "你的 mosspub.com 託管包含 {limit} 個網站。" },
     site_limit_contact        => { en: "To add more, write to {contact}.", zh_hans: "如需增加，请联系 {contact}。", zh_hant: "如需增加，請聯絡 {contact}。" },
     // ── Web import Job title ─────────────────────────────────────────────────
     import_from_host          => { en: "Importing from {host}",                           zh_hans: "正在从 {host} 导入",                               zh_hant: "正在從 {host} 匯入" },
@@ -235,12 +235,12 @@ mod tests {
     #[test]
     fn site_limit_strings_read_correctly_in_each_locale() {
         let l = |lang, k| lookup(lang, k).unwrap();
-        assert_eq!(l(AppLanguage::En, "site_limit_one"), "Your hosting plan includes 1 site.");
-        assert_eq!(l(AppLanguage::En, "site_limit_many"), "Your hosting plan includes {limit} sites.");
+        assert_eq!(l(AppLanguage::En, "site_limit_one"), "Your mosspub.com hosting includes 1 site.");
+        assert_eq!(l(AppLanguage::En, "site_limit_many"), "Your mosspub.com hosting includes {limit} sites.");
         assert_eq!(l(AppLanguage::En, "site_limit_contact"), "To add more, write to {contact}.");
-        assert_eq!(l(AppLanguage::ZhHans, "site_limit_many"), "你的托管方案包含 {limit} 个网站。");
+        assert_eq!(l(AppLanguage::ZhHans, "site_limit_many"), "你的 mosspub.com 托管包含 {limit} 个网站。");
         assert_eq!(l(AppLanguage::ZhHans, "site_limit_contact"), "如需增加，请联系 {contact}。");
-        assert_eq!(l(AppLanguage::ZhHant, "site_limit_many"), "你的代管方案包含 {limit} 個網站。");
+        assert_eq!(l(AppLanguage::ZhHant, "site_limit_many"), "你的 mosspub.com 託管包含 {limit} 個網站。");
         assert_eq!(l(AppLanguage::ZhHant, "site_limit_contact"), "如需增加，請聯絡 {contact}。");
     }
 
