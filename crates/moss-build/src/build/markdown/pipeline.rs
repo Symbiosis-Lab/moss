@@ -504,9 +504,6 @@ pub fn process_markdown_file(
     // frontmatter value line is not matched too early). 0 when no frontmatter.
     let mut declared = std::collections::BTreeMap::new();
     let mut field_errors = std::collections::BTreeMap::new();
-    // The frontmatter the declared fields are read from, as authored. Taken only
-    // when the site declares fields, so a site without them parses nothing extra.
-    let mut field_source: Option<std::collections::HashMap<String, serde_yaml::Value>> = None;
     let (mut frontmatter, markdown_content_raw, raw_frontmatter, frontmatter_line_count) =
         if is_simplified_frontmatter(content) {
             let (fm, body) = parse_simplified_frontmatter(content);
@@ -573,12 +570,6 @@ pub fn process_markdown_file(
             for warning in schema_frontmatter_warnings(file_path, &parsed.frontmatter) {
                 crate::build::cli_output::cli_warn!("{}", warning);
             }
-            if !site.fields.is_empty() {
-                field_source = Some(match page.authored_source {
-                    Some(authored) => moss_core::frontmatter::parse(authored).frontmatter,
-                    None => parsed.frontmatter.clone(),
-                });
-            }
             // Body reconciliation: gray_matter's `result.content`
             // — which the downstream pipeline + every snapshot fixture were built
             // against — strips leading blank lines and drops the trailing newline,
@@ -604,6 +595,10 @@ pub fn process_markdown_file(
             }
             (fm, body, raw_fm, fm_lines)
         };
+    // The frontmatter the declared fields are read from, as authored, in either
+    // dialect. Taken only when the site declares fields.
+    let field_source = (!site.fields.is_empty())
+        .then(|| moss_core::frontmatter::frontmatter_map(page.authored_source.unwrap_or(content)));
 
     // Normalize legacy `series: [list]` form into `sort: List + series: Flag(true)`.
     // Task 5: defensive conversion for future authors who might write the old form.

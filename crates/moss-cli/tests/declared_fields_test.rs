@@ -250,3 +250,16 @@ fn a_builtin_description_placed_as_eyebrow_draws_only_the_authored_value() {
     assert!(eyebrow < h1, "{html}");
     assert!(!built(&s, "housing/plain/index.html").contains("moss-eyebrow"), "a derived description is not drawn");
 }
+
+#[test]
+fn a_page_in_the_simplified_dialect_is_drawn_and_checked_like_any_other() {
+    let page = "title: Court\nkind: Building\ndistrict: Eastbank\nyears: soon\n---\nbody\n";
+    let s = site(PLACED, &[("Housing/court.md", page)]);
+    let strict = build_strict(&s);
+    let err = String::from_utf8_lossy(&strict.stderr);
+    assert!(!strict.status.success() && err.contains("[Housing/court.md] frontmatter: field 'years'"), "{err}");
+    build_lenient(&s);
+    let html = built(&s, "housing/court/index.html");
+    assert!(html.contains("<p class=\"moss-subtitle\" data-field=\"district\">Eastbank</p>"), "{html}");
+    assert!(html.contains("<span data-field=\"kind\">Built</span>") && !html.contains("data-field=\"years\""), "{html}");
+}
