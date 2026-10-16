@@ -268,11 +268,13 @@ fn a_page_in_the_simplified_dialect_is_drawn_and_checked_like_any_other() {
 }
 
 #[test]
-fn page_masthead_after_picture_draws_the_title_block_under_the_leading_picture_in_its_folders() {
-    let config = "[fields.stage]\ntype = \"text\"\nplace = \"eyebrow\"\n\n[page]\nmasthead = \"after-picture\"\nin = [\"Piers\"]\n";
+fn title_block_after_picture_cascaded_from_a_folder_draws_the_title_block_under_the_leading_picture() {
+    let config = "[fields.stage]\ntype = \"text\"\nplace = \"eyebrow\"\n";
+    let home = "---\ntitle: Piers\ncascade:\n  title_block: after-picture\n---\nThe piers.\n";
     let pier = "---\ntitle: Pier Four\nstage: Pier 4\n---\n::: {.trail}\nThe harbour\n:::\n\n![A pier at dusk](dusk.png)\n\nThe text.\n";
     let note = "---\ntitle: A Note\n---\n![A pier at dusk](dusk.png)\n\nThe text.\n";
-    let s = site(config, &[("Piers/four.md", pier), ("Notes/note.md", note)]);
+    let own = "---\ntitle: Own\ntitle_block: after-picture\n---\n![A pier at dusk](dusk.png)\n\nThe text.\n";
+    let s = site(config, &[("Piers/index.md", home), ("Piers/four.md", pier), ("Notes/note.md", note), ("Notes/own.md", own)]);
     std::fs::write(s.root.join("Piers/dusk.png"), PNG).unwrap();
     std::fs::write(s.root.join("Notes/dusk.png"), PNG).unwrap();
     let o = build_strict(&s);
@@ -281,14 +283,18 @@ fn page_masthead_after_picture_draws_the_title_block_under_the_leading_picture_i
     let (trail, figure, eyebrow, h1, text) = (position(&html, "class=\"trail\""), position(&html, "<figure"), position(&html, "<p class=\"moss-eyebrow\""), position(&html, "<h1 class=\"moss-article-title\""), position(&html, "<p>The text.</p>"));
     assert!(trail < figure && figure < eyebrow && eyebrow < h1 && h1 < text, "{html}");
     let other = built(&s, "notes/note/index.html");
-    assert!(position(&other, "<h1 class=\"moss-article-title\"") < position(&other, "<figure"), "outside `in` the title stays first: {other}");
-    assert!(!html.contains("moss:body-start") && !other.contains("moss:body-start"));
+    assert!(position(&other, "<h1 class=\"moss-article-title\"") < position(&other, "<figure"), "outside the folder the title stays first: {other}");
+    let own = built(&s, "notes/own/index.html");
+    assert!(position(&own, "<figure") < position(&own, "<h1 class=\"moss-article-title\""), "a page can set it itself: {own}");
+    for page in [&html, &other, &own] {
+        assert!(!page.contains("moss:body-start"));
+    }
 }
 
 #[test]
-fn an_unknown_page_masthead_value_is_a_strict_failure() {
-    let s = site("[page]\nmasthead = \"below\"\n", &[]);
+fn an_unknown_title_block_value_is_a_strict_failure() {
+    let s = site("", &[("a.md", "---\ntitle: A\ntitle_block: below\n---\nx\n")]);
     let o = build_strict(&s);
     assert!(!o.status.success());
-    assert!(String::from_utf8_lossy(&o.stderr).contains("[page] masthead"), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("title_block"), "{}", String::from_utf8_lossy(&o.stderr));
 }

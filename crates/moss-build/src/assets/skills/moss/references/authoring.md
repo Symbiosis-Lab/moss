@@ -251,7 +251,7 @@ A page's listing picture is what its card shows in a folder listing, a grid card
 
 ### Folder cascade
 
-A folder's home page can declare `cascade:` to push values to every page beneath it, so a value that every page in the folder repeats is written once. The keys cascade carries are `nav`, `breadcrumb`, `footer`, `children`, `children_style`, `children_group`, `children_depth`, `tags`, `description`, `content_width`, `sort` and `timezone`. The page that declares it is not included, and a page that sets one of these keys itself keeps its own value. A key outside that list has no effect; the build warns once per source page and names the keys cascade does carry.
+A folder's home page can declare `cascade:` to push values to every page beneath it, so a value that every page in the folder repeats is written once. The keys cascade carries are `nav`, `breadcrumb`, `footer`, `children`, `children_style`, `children_group`, `children_depth`, `tags`, `description`, `content_width`, `title_block`, `sort` and `timezone`. The page that declares it is not included, and a page that sets one of these keys itself keeps its own value. A key outside that list has no effect; the build warns once per source page and names the keys cascade does carry.
 
 ### Shortcodes
 
@@ -449,15 +449,14 @@ Every placed element carries `data-field` with the field's name, and `moss descr
 
 A facts row is labelled with the field's `label`, a string or a table per language in the same form as a choice's labels (`label = { en = "Architect", de = "Architektin" }`); without one the label is the field name with its first letter capitalised. On a screen at least 76rem wide the facts sit in the right margin beside the title, in the space sidenotes use; on a narrower screen, on a vertical or full-width page, beside a sidebar, and on a page with sidenotes (which use that margin) they stay in the column under the title. The eyebrow sits right before the title. After the title come the subtitle, the page's date and byline, the key figures and the facts, all before the page body.
 
-A page whose design puts its picture first, with the title under it, says so in `.moss/config.toml`:
+A page whose design puts its picture first, with the title under it, says so in its frontmatter with `title_block: after-picture`. For every page in a folder, the folder's home page sets it once through cascade (see Folder cascade):
 
-```toml
-[page]
-masthead = "after-picture"
-in = ["Prints"]
+```yaml
+cascade:
+  title_block: after-picture
 ```
 
-On those pages moss draws the whole title block (eyebrow, title, subtitle, date and byline, key figures, facts) right after the body's leading picture: the first picture on a line of its own, when nothing but classed divs comes before it. A page whose body opens with text, a heading or a list, or has no picture, keeps the title block first, and so do folder index pages and pages that draw their own cover. `in` takes folders as a field's `in` does, and without it the setting covers every page; `masthead = "first"` is the default. A theme that needs some other order still lays out `article` as a grid.
+Such a page draws its whole title block (eyebrow, title, subtitle, date and byline, key figures, facts) right after the body's leading picture: the first picture on a line of its own, when nothing but classed divs comes before it. A page whose body opens with text, a heading or a list, or has no picture, keeps the title block first, and so do folder index pages and pages that draw their own cover. Without the key the title block comes first. A theme that needs some other order still lays out `article` as a grid.
 
 moss draws no separator in the eyebrow. The stylesheet puts one between its fields from `--moss-eyebrow-separator`, a CSS string defaulting to `" · "`, so a theme sets `--moss-eyebrow-separator: " "` or `" / "`.
 

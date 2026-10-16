@@ -83,4 +83,4 @@ translationKey: hello     translationKey: hello
 
 ## All fields
 
-For advanced fields like `cascade`, `series`, `also_in`, `content_width`, `typesetting`, and `sidebar` — and each field's type and default — see the [Frontmatter reference](/docs/writing/frontmatter/).
+For advanced fields like `cascade`, `series`, `also_in`, `content_width`, `title_block`, `typesetting`, and `sidebar` — and each field's type and default — see the [Frontmatter reference](/docs/writing/frontmatter/).

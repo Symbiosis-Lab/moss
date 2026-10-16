@@ -174,6 +174,7 @@ These fields control how the page's content is typeset and sized.
 |-------|------|---------|-------------|
 | `typesetting` | string | `"horizontal"` | `"horizontal"` or `"vertical"` (right-to-left columns for CJK) |
 | `content_width` | string | default (`67ch`) | `"wide"` (80ch, good for grids/tables) or `"full"` (site max, good for dashboards) |
+| `title_block` | string | title first | `"after-picture"` draws the title block (eyebrow, title, subtitle, date and byline, key figures, facts) under the body's leading picture |
 
 Set these in a folder's `cascade` to apply them to a whole section:
 

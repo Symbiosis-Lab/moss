@@ -352,7 +352,7 @@ mod tests {
         // (`nav_label` added 2026-10 — a shorter nav-bar name than `title`.)
         // (`inferred` added 2026-10 — fields taken from embedded files' derived facts.)
         // (`color` added 2026-10 — a folder home's section accent.)
-        assert_eq!(schema.frontmatter.fields.len(), 60);
+        assert_eq!(schema.frontmatter.fields.len(), 61);
     }
 
     #[test]

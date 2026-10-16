@@ -581,7 +581,7 @@ pub(super) fn render_page<'d>(
                 body.prepend_html(eyebrow);
             }
             let mut content = body.to_html();
-            if doc.masthead_after_picture {
+            if crate::build::components::field_places::title_block_after_picture(doc) {
                 crate::build::components::field_places::mark_body_start(&mut content);
             }
 
@@ -1336,7 +1336,7 @@ pub(super) fn render_page<'d>(
             crate::build::markdown::html_post::prepend_parent_label(&mut homepage_content, &parent);
         }
     }
-    if doc.is_some_and(|d| d.masthead_after_picture) {
+    if doc.is_some_and(crate::build::components::field_places::title_block_after_picture) {
         homepage_content = crate::build::components::field_places::after_leading_picture(&homepage_content);
     }
     // Calendar links that close the body: a folder's download and subscribe

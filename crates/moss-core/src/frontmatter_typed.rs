@@ -450,6 +450,8 @@ pub struct FrontMatter {
     pub typesetting: Option<String>,
     /// Content width preset: "wide" or "full"
     pub content_width: Option<String>,
+    /// Where the title block goes: "after-picture" puts it under the body's leading picture
+    pub title_block: Option<String>,
     /// On a folder's home page: the accent colour (`#rgb` or `#rrggbb`) of the
     /// folder's section. Validated and inherited by `build::scan::section_color`.
     #[serde(default, deserialize_with = "deserialize_string_lenient")]

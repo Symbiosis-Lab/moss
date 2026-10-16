@@ -101,7 +101,7 @@ fn an_unplaced_or_empty_field_draws_nothing() {
     assert_eq!(draw(&placed, Language::En, None, &no_pages), Placements::default());
 }
 
-mod masthead_after_picture {
+mod title_block_after_picture {
     use super::super::{after_leading_picture, mark_body_start, BODY_START};
 
     const TITLE: &str = "<p class=\"moss-eyebrow\"><span data-field=\"stage\">Pier 4</span></p>\n<h1 class=\"moss-article-title\">Harbour</h1>\n";
@@ -156,4 +156,14 @@ mod masthead_after_picture {
         let out = after_leading_picture(&page("\n<div class=\"x\"><figure class=\"moss-image\"><img></figure>"));
         assert!(out.starts_with("<p class=\"moss-eyebrow\""), "{out}");
     }
+}
+
+#[test]
+fn a_folder_index_and_a_slot_keep_their_title_first() {
+    use crate::build::components::field_places::title_block_after_picture;
+    let page = ParsedDocument { title_block: Some("after-picture".into()), kind: moss_core::page_kind::PageKind::Article, ..Default::default() };
+    assert!(title_block_after_picture(&page));
+    assert!(!title_block_after_picture(&ParsedDocument { slot_only: true, ..page.clone() }));
+    assert!(!title_block_after_picture(&ParsedDocument { kind: moss_core::page_kind::PageKind::Folder, ..page.clone() }));
+    assert!(!title_block_after_picture(&ParsedDocument { title_block: None, ..page }));
 }

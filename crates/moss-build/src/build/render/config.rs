@@ -124,8 +124,6 @@ pub struct SiteConfig {
     /// The `[fields.<name>]` declarations, read once per build; the markdown
     /// pipeline checks each page's frontmatter against them.
     pub field_decls: Vec<moss_core::fields::FieldDecl>,
-    /// `ConfigFile::masthead_after_picture`.
-    pub masthead_after_picture: Option<Vec<String>>,
     /// Decoded geography, gazetteer, place namespace and locator preference.
     pub place_maps: Option<crate::build::place_map::PlaceMapRenderContext>,
     /// What this build may reuse from the last one. Both bits are
@@ -148,7 +146,6 @@ impl SiteConfig {
             heading_anchors: self.heading_anchors,
             typesetting: self.typesetting.as_deref(),
             fields: &self.field_decls,
-            masthead_after_picture: self.masthead_after_picture.as_deref(),
         }
     }
 }
@@ -183,7 +180,6 @@ impl Default for SiteConfig {
             term_kinds: Vec::new(),
             term_nav: Vec::new(),
             field_decls: Vec::new(),
-            masthead_after_picture: None,
             place_maps: None,
             incremental: IncrementalGates::default(),
             derivations: None,

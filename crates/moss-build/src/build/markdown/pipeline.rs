@@ -368,8 +368,6 @@ pub struct SiteMarkdown<'a> {
     pub typesetting: Option<&'a str>,
     /// The parse cache fingerprint hashes this value, so a changed declaration invalidates cached parses.
     pub fields: &'a [moss_core::fields::FieldDecl],
-    /// `[page] masthead = "after-picture"`'s folders, empty for every page; `None` when it is off.
-    pub masthead_after_picture: Option<&'a [String]>,
 }
 
 /// Math, hard line breaks and heading anchors on — their absent-key answers
@@ -385,7 +383,6 @@ impl Default for SiteMarkdown<'_> {
             heading_anchors: true,
             typesetting: None,
             fields: &[],
-            masthead_after_picture: None,
         }
     }
 }
@@ -1332,8 +1329,6 @@ pub fn process_markdown_file(
             .collect()
     };
     let has_field_places = !placed_fields.is_empty();
-    let masthead_after_picture =
-        !is_index_file && !is_slot_only && site.masthead_after_picture.is_some_and(|scope| moss_core::fields::in_folders(scope, file_path));
 
     // Look up pre-computed url_path from PageMap, falling back to inline computation
     let url_path = page_map.get(file_path).cloned().unwrap_or_else(|| {
@@ -1518,7 +1513,7 @@ pub fn process_markdown_file(
         declared,
         field_errors,
         placed_fields,
-        masthead_after_picture,
+        title_block: frontmatter.title_block,
         card_credits: None,
         label,
         nav_label,

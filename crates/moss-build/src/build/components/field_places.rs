@@ -130,8 +130,15 @@ fn page_link_html(link: &PageLink, page_href: &dyn Fn(&str) -> Option<String>) -
 }
 
 /// Marks where a page's own body starts, under its title block, on a page
-/// that `[page] masthead = "after-picture"` covers.
+/// whose title block goes after its picture.
 pub const BODY_START: &str = "<!-- moss:body-start -->";
+
+/// Whether `doc` puts its title block after its leading picture
+/// (`title_block: after-picture`, its own or cascaded). A folder index and a
+/// slot such as the footer keep their title first.
+pub fn title_block_after_picture(doc: &ParsedDocument) -> bool {
+    doc.title_block.as_deref() == Some("after-picture") && doc.kind != moss_core::page_kind::PageKind::Folder && !doc.slot_only
+}
 
 /// Put [`BODY_START`] right after the title of a body that opens with moss's
 /// own title, where the rest of the title block is spliced in later. A body

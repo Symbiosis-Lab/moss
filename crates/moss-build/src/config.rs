@@ -358,40 +358,6 @@ impl ConfigFile {
         self.key_orders.get(path).and_then(|keys| keys.iter().position(|k| k == key)).unwrap_or(usize::MAX)
     }
 
-    /// `[page] masthead = "after-picture"`: the folders (site-relative, `in`)
-    /// whose pages draw the masthead after the body's leading picture, empty
-    /// for the whole site; `None` when the masthead stays first. Also the
-    /// problems found, each a sentence for the build to report.
-    pub fn masthead_after_picture(&self) -> (Option<Vec<String>>, Vec<String>) {
-        let mut problems = Vec::new();
-        let Some(page) = self.root.get("page") else {
-            return (None, problems);
-        };
-        let Some(page) = page.as_table() else {
-            return (None, vec!["[page] must be a table; ignoring it".to_string()]);
-        };
-        for key in page.keys().filter(|k| !matches!(k.as_str(), "masthead" | "in")) {
-            problems.push(format!("[page] has an unknown key \"{key}\"; it takes masthead and in"));
-        }
-        let scope = Self::string_list(page, "in", "page", &mut problems);
-        match page.get("masthead").map(|v| v.as_str()) {
-            None | Some(Some("first")) => {
-                if page.contains_key("in") {
-                    problems.push("[page] in has no effect without masthead = \"after-picture\"".to_string());
-                }
-                (None, problems)
-            }
-            Some(Some("after-picture")) => (Some(scope), problems),
-            Some(other) => {
-                problems.push(format!(
-                    "[page] masthead is {}; it is \"first\" or \"after-picture\"",
-                    other.map_or_else(|| "not text".to_string(), |s| format!("\"{s}\""))
-                ));
-                (None, problems)
-            }
-        }
-    }
-
     /// The `[fields.<name>]` declarations, and one problem string for each
     /// table or key the build cannot use. The caller reports the problems once
     /// per build. A declaration with a bad `place` or an unknown key is kept;

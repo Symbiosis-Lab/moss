@@ -800,6 +800,19 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "title_block",
+        field_type: FieldType::String,
+        widget: Widget::Select,
+        enum_values: Some(&["after-picture"]),
+        // Frequency=1, Importance=2 → score=86
+        score: 86,
+        description: "Where the title block (eyebrow, title, subtitle, date, byline, key figures, facts) goes: after-picture puts it under the body's leading picture. Absent keeps it first. A folder sets it for its pages with cascade.",
+        label: Some("Title block"),
+        label_key: "chip.title_block.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "color",
         field_type: FieldType::String,
         widget: Widget::TextInput,
