@@ -351,16 +351,16 @@ impl ConfigFile {
         }
     }
 
-    /// The `[fields.<name>]` declarations, and one problem string for each
-    /// table or key the build cannot use. The caller reports the problems once
-    /// per build. A declaration with a bad `place` or an unknown key is kept;
-    /// one with a bad type or a built-in name is dropped.
     /// Where `key` sits among the keys of the table at `path`, as the file
     /// writes them; keys the file did not order come last.
     fn written_position(&self, path: &str, key: &str) -> usize {
         self.key_orders.get(path).and_then(|keys| keys.iter().position(|k| k == key)).unwrap_or(usize::MAX)
     }
 
+    /// The `[fields.<name>]` declarations, and one problem string for each
+    /// table or key the build cannot use. The caller reports the problems once
+    /// per build. A declaration with a bad `place` or an unknown key is kept;
+    /// one with a bad type or a built-in name is dropped.
     pub fn field_decls(&self) -> (Vec<moss_core::fields::FieldDecl>, Vec<String>) {
         use moss_core::fields::{Choice, FieldDecl, FieldKind};
         let mut decls = Vec::new();

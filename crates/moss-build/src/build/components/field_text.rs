@@ -5,7 +5,7 @@
 
 use crate::build::components::date::format_display_date;
 use crate::i18n::{t, Language};
-use moss_core::date::{EdtfDate, PartialDate, Precision, Qualifier};
+use moss_core::date::{EdtfDate, Precision, Qualifier};
 use moss_core::fields::{DecimalMark, TypedValue};
 
 /// The decimal mark a language writes numbers with. Parsing a count and
@@ -15,24 +15,6 @@ pub fn decimal_mark(lang: Language) -> DecimalMark {
         Language::De => DecimalMark::Comma,
         Language::En | Language::ZhHans | Language::ZhHant => DecimalMark::Point,
     }
-}
-
-/// The date as written at its own precision: a year-precision date never
-/// gains a month or day, and a month-precision one never gains a day.
-fn at_precision(d: &EdtfDate) -> String {
-    let PartialDate { year, month, day } = d.date;
-    let mut out = format!("{year:04}");
-    if d.precision != Precision::Year {
-        if let Some(m) = month {
-            out.push_str(&format!("-{m:02}"));
-        }
-    }
-    if d.precision == Precision::Day {
-        if let Some(day) = day {
-            out.push_str(&format!("-{day:02}"));
-        }
-    }
-    out
 }
 
 /// Adds the qualifier's prefix (approximate) and suffix (uncertain).
@@ -47,7 +29,7 @@ fn qualified(body: String, q: Option<Qualifier>, lang: Language) -> String {
 }
 
 pub fn date_text(d: &EdtfDate, lang: Language, typesetting: Option<&str>) -> String {
-    qualified(format_display_date(&at_precision(d), lang, typesetting), d.qualifier, lang)
+    qualified(format_display_date(&d.value(), lang, typesetting), d.qualifier, lang)
 }
 
 pub fn period_text(
@@ -69,13 +51,13 @@ pub fn period_text(
     let (s, e) = (start.date, end.date);
     let same_month = s.year == e.year && s.month == e.month;
 
-    if start.precision == Precision::Year && end.precision == Precision::Year {
+    if start.precision() == Precision::Year && end.precision() == Precision::Year {
         if plain && s.year == e.year {
             return date_text(start, lang, typesetting);
         }
         return format!("{}–{}", date_text(start, lang, typesetting), date_text(end, lang, typesetting));
     }
-    if start.precision == Precision::Day && end.precision == Precision::Day && same_month {
+    if start.precision() == Precision::Day && end.precision() == Precision::Day && same_month {
         let (Some(month), Some(sd), Some(ed)) = (s.month, s.day, e.day) else {
             return join_spaced(start, end, lang, typesetting);
         };
@@ -146,11 +128,11 @@ pub(crate) fn number_text(n: &serde_json::Number, lang: Language) -> String {
 /// period as `start/end`, an open one as `start/..`. `None` for every other kind.
 pub fn datetime_attr(v: &TypedValue) -> Option<String> {
     match v {
-        TypedValue::Date(d) => Some(at_precision(d)),
+        TypedValue::Date(d) => Some(d.value()),
         TypedValue::Period { start, end, open, .. } => Some(match (end, open) {
-            (_, true) => format!("{}/..", at_precision(start)),
-            (Some(end), false) => format!("{}/{}", at_precision(start), at_precision(end)),
-            (None, false) => at_precision(start),
+            (_, true) => format!("{}/..", start.value()),
+            (Some(end), false) => format!("{}/{}", start.value(), end.value()),
+            (None, false) => start.value(),
         }),
         _ => None,
     }
