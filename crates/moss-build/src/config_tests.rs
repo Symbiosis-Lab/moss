@@ -340,3 +340,19 @@ fn field_decls_fields_that_is_not_a_table_of_tables_is_one_problem() {
     assert!(decls.is_empty());
     assert_eq!(problems.len(), 1);
 }
+
+#[test]
+fn page_masthead_after_picture_reads_its_folders_and_reports_what_it_cannot_use() {
+    let read = |text: &str| ConfigFile::parse(text).unwrap().masthead_after_picture();
+    assert_eq!(read(""), (None, vec![]));
+    assert_eq!(read("[page]\nmasthead = \"after-picture\"\n"), (Some(vec![]), vec![]));
+    assert_eq!(read("[page]\nmasthead = \"after-picture\"\nin = [\"Prints\"]\n").0, Some(vec!["Prints".to_string()]));
+    assert_eq!(read("[page]\nmasthead = \"first\"\n"), (None, vec![]));
+    let problem = |text: &str| read(text).1.join(" | ");
+    assert!(problem("[page]\nmasthead = \"below\"\n").contains("\"below\""));
+    assert!(problem("[page]\nmasthead = 3\n").contains("not text"));
+    assert!(problem("[page]\nmasthead = \"after-picture\"\nwidth = 2\n").contains("unknown key \"width\""));
+    assert!(problem("[page]\nmasthead = \"after-picture\"\nin = \"Prints\"\n").contains("must be a list"));
+    assert!(problem("[page]\nin = [\"Prints\"]\n").contains("no effect"));
+    assert!(problem("page = 1\n").contains("must be a table"));
+}

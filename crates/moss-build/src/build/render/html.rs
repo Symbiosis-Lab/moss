@@ -581,6 +581,9 @@ pub(super) fn render_page<'d>(
                 body.prepend_html(eyebrow);
             }
             let mut content = body.to_html();
+            if doc.masthead_after_picture {
+                crate::build::components::field_places::mark_body_start(&mut content);
+            }
 
             // Check if this is a folder index page (any non-root index page).
             // Must use doc.kind == PageKind::Folder (source was index.md/readme.md/_index.md/main.md)
@@ -1332,6 +1335,9 @@ pub(super) fn render_page<'d>(
         if let Some(parent) = crate::build::components::nav::parent_label_segment(d, all_docs, context.chrome.home_breadcrumb) {
             crate::build::markdown::html_post::prepend_parent_label(&mut homepage_content, &parent);
         }
+    }
+    if doc.is_some_and(|d| d.masthead_after_picture) {
+        homepage_content = crate::build::components::field_places::after_leading_picture(&homepage_content);
     }
     // Calendar links that close the body: a folder's download and subscribe
     // links, and an event's "Add to calendar" when no meta line carries it.

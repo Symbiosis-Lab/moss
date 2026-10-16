@@ -447,7 +447,17 @@ Dates and periods are `<time datetime>` elements carrying the EDTF value (`1927/
 
 Every placed element carries `data-field` with the field's name, and `moss describe --json` lists it among the scope attributes, so it is a guaranteed hook. Style one field with `[data-field="years"]` instead of a selector on the page's address.
 
-A facts row is labelled with the field's `label`, a string or a table per language in the same form as a choice's labels (`label = { en = "Architect", de = "Architektin" }`); without one the label is the field name with its first letter capitalised. On a screen at least 76rem wide the facts sit in the right margin beside the title, in the space sidenotes use; on a narrower screen, on a vertical or full-width page, beside a sidebar, and on a page with sidenotes (which use that margin) they stay in the column under the title. The eyebrow sits right before the title. After the title come the subtitle, the page's date and byline, the key figures and the facts, all before the page body. A theme that wants them elsewhere, such as under a cover picture, lays out `article` as a grid with named rows.
+A facts row is labelled with the field's `label`, a string or a table per language in the same form as a choice's labels (`label = { en = "Architect", de = "Architektin" }`); without one the label is the field name with its first letter capitalised. On a screen at least 76rem wide the facts sit in the right margin beside the title, in the space sidenotes use; on a narrower screen, on a vertical or full-width page, beside a sidebar, and on a page with sidenotes (which use that margin) they stay in the column under the title. The eyebrow sits right before the title. After the title come the subtitle, the page's date and byline, the key figures and the facts, all before the page body.
+
+A page whose design puts its picture first, with the title under it, says so in `.moss/config.toml`:
+
+```toml
+[page]
+masthead = "after-picture"
+in = ["Prints"]
+```
+
+On those pages moss draws the whole title block (eyebrow, title, subtitle, date and byline, key figures, facts) right after the body's leading picture: the first picture on a line of its own, when nothing but classed divs comes before it. A page whose body opens with text, a heading or a list, or has no picture, keeps the title block first, and so do folder index pages and pages that draw their own cover. `in` takes folders as a field's `in` does, and without it the setting covers every page; `masthead = "first"` is the default. A theme that needs some other order still lays out `article` as a grid.
 
 moss draws no separator in the eyebrow. The stylesheet puts one between its fields from `--moss-eyebrow-separator`, a CSS string defaulting to `" · "`, so a theme sets `--moss-eyebrow-separator: " "` or `" / "`.
 

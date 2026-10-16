@@ -142,6 +142,9 @@ fn build_lenient(s: &Site) -> Output {
         .expect("spawn moss-cli")
 }
 
+/// A 1×1 PNG.
+const PNG: &[u8] = &[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x04, 0x00, 0x00, 0x00, 0xb5, 0x1c, 0x0c, 0x02, 0x00, 0x00, 0x00, 0x0b, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64, 0x60, 0x00, 0x00, 0x00, 0x06, 0x00, 0x02, 0x30, 0x81, 0xd0, 0x2f, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82];
+
 fn position(html: &str, needle: &str) -> usize {
     html.find(needle).unwrap_or_else(|| panic!("missing {needle} in {html}"))
 }
@@ -262,4 +265,30 @@ fn a_page_in_the_simplified_dialect_is_drawn_and_checked_like_any_other() {
     let html = built(&s, "housing/court/index.html");
     assert!(html.contains("<p class=\"moss-subtitle\" data-field=\"district\">Eastbank</p>"), "{html}");
     assert!(html.contains("<span data-field=\"kind\">Built</span>") && !html.contains("data-field=\"years\""), "{html}");
+}
+
+#[test]
+fn page_masthead_after_picture_draws_the_title_block_under_the_leading_picture_in_its_folders() {
+    let config = "[fields.stage]\ntype = \"text\"\nplace = \"eyebrow\"\n\n[page]\nmasthead = \"after-picture\"\nin = [\"Piers\"]\n";
+    let pier = "---\ntitle: Pier Four\nstage: Pier 4\n---\n::: {.trail}\nThe harbour\n:::\n\n![A pier at dusk](dusk.png)\n\nThe text.\n";
+    let note = "---\ntitle: A Note\n---\n![A pier at dusk](dusk.png)\n\nThe text.\n";
+    let s = site(config, &[("Piers/four.md", pier), ("Notes/note.md", note)]);
+    std::fs::write(s.root.join("Piers/dusk.png"), PNG).unwrap();
+    std::fs::write(s.root.join("Notes/dusk.png"), PNG).unwrap();
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let html = built(&s, "piers/four/index.html");
+    let (trail, figure, eyebrow, h1, text) = (position(&html, "class=\"trail\""), position(&html, "<figure"), position(&html, "<p class=\"moss-eyebrow\""), position(&html, "<h1 class=\"moss-article-title\""), position(&html, "<p>The text.</p>"));
+    assert!(trail < figure && figure < eyebrow && eyebrow < h1 && h1 < text, "{html}");
+    let other = built(&s, "notes/note/index.html");
+    assert!(position(&other, "<h1 class=\"moss-article-title\"") < position(&other, "<figure"), "outside `in` the title stays first: {other}");
+    assert!(!html.contains("moss:body-start") && !other.contains("moss:body-start"));
+}
+
+#[test]
+fn an_unknown_page_masthead_value_is_a_strict_failure() {
+    let s = site("[page]\nmasthead = \"below\"\n", &[]);
+    let o = build_strict(&s);
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("[page] masthead"), "{}", String::from_utf8_lossy(&o.stderr));
 }

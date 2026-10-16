@@ -243,7 +243,7 @@ fn count_takes_integers_beyond_i64_as_floats() {
 }
 
 #[test]
-fn applies_to_matches_folder_prefixes_at_a_boundary() {
+fn in_folders_matches_folder_prefixes_at_a_boundary() {
     let housing = FieldDecl { scope: vec!["Housing".into()], ..decl(FieldKind::Pages) };
     let rooted = FieldDecl { scope: vec!["/Housing/".into()], ..decl(FieldKind::Pages) };
     let whole = decl(FieldKind::Text);
@@ -258,7 +258,7 @@ fn applies_to_matches_folder_prefixes_at_a_boundary() {
         (&rooted, "Housing", true),
     ];
     for (decl, path, expected) in cases {
-        assert_eq!(applies_to(decl, path), expected, "{path} with scope {:?}", decl.scope);
+        assert_eq!(in_folders(&decl.scope, path), expected, "{path} with scope {:?}", decl.scope);
     }
 }
 
@@ -297,4 +297,12 @@ fn field_label_is_a_string_a_language_table_or_the_capitalised_name() {
     assert_eq!(table.label_for("zh-hans"), "Architect", "no zh-hans label: falls back to en");
     let only_de = named(vec![("de".into(), "Architektin".into())]);
     assert_eq!(only_de.label_for("fr"), "Architect", "no en label either: the capitalised name");
+}
+
+#[test]
+fn in_folders_counts_a_language_tree_as_inside_its_folder() {
+    let scope = vec!["Housing".to_string()];
+    assert!(in_folders(&scope, "de/Housing/court.md"));
+    assert!(!in_folders(&scope, "de/Notes/court.md"));
+    assert!(in_folders(&[], "anything.md"));
 }

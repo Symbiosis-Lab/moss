@@ -282,13 +282,20 @@ pub fn parse_value(decl: &FieldDecl, value: &Value, page: PageFormat) -> Result<
     }
 }
 
-/// Whether a declaration applies to a page, by its site-relative source path.
-pub fn applies_to(decl: &FieldDecl, source_path: &str) -> bool {
-    if decl.scope.is_empty() {
+/// Whether a page, by its site-relative source path, sits in one of the
+/// folders of an `in` list. An empty list holds every page, and a page in a
+/// language tree (`de/Housing/x.md`) is also inside `Housing`.
+pub fn in_folders(scope: &[String], source_path: &str) -> bool {
+    let within_tree = crate::home::lang_tree_prefix(source_path).and_then(|_| source_path.split_once('/')).map(|(_, rest)| rest);
+    in_any(scope, source_path) || within_tree.is_some_and(|p| in_any(scope, p))
+}
+
+fn in_any(scope: &[String], source_path: &str) -> bool {
+    if scope.is_empty() {
         return true;
     }
     let path = strip_leading(source_path);
-    decl.scope.iter().any(|entry| {
+    scope.iter().any(|entry| {
         let entry = strip_leading(entry).trim_end_matches('/');
         entry.is_empty() || path == entry || path.starts_with(&format!("{entry}/"))
     })

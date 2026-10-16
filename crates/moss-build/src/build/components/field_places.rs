@@ -129,6 +129,84 @@ fn page_link_html(link: &PageLink, page_href: &dyn Fn(&str) -> Option<String>) -
     }
 }
 
+/// Marks where a page's own body starts, under its title block, on a page
+/// that `[page] masthead = "after-picture"` covers.
+pub const BODY_START: &str = "<!-- moss:body-start -->";
+
+/// Put [`BODY_START`] right after the title of a body that opens with moss's
+/// own title, where the rest of the title block is spliced in later. A body
+/// whose layout hides the title, or that has none, is left unmarked.
+pub fn mark_body_start(html: &mut String) {
+    let (eyebrow, rest) = crate::build::markdown::html_post::split_leading_eyebrow(html);
+    if !rest.starts_with("<h1 class=\"moss-article-title\"") {
+        return;
+    }
+    let Some(close) = rest.find("</h1>") else { return };
+    let at = eyebrow.len() + close + "</h1>".len();
+    html.insert_str(at, BODY_START);
+}
+
+/// `html` with its title block, everything above [`BODY_START`], moved to
+/// just after the body's leading picture: its first top-level
+/// `figure.moss-image`, when only divs come before it. Without one, the title
+/// block stays first.
+pub fn after_leading_picture(html: &str) -> String {
+    let Some((masthead, body)) = html.split_once(BODY_START) else {
+        return html.to_string();
+    };
+    match leading_picture_end(body) {
+        Some(end) => format!("{}\n{masthead}{}", &body[..end], &body[end..]),
+        None => format!("{masthead}{body}"),
+    }
+}
+
+/// Where the leading picture of `body` ends, per [`after_leading_picture`].
+fn leading_picture_end(body: &str) -> Option<usize> {
+    let mut at = 0;
+    loop {
+        at += body[at..].len() - body[at..].trim_start().len();
+        let rest = &body[at..];
+        if let Some(comment) = rest.strip_prefix("<!--") {
+            at += 4 + comment.find("-->")? + 3;
+            continue;
+        }
+        if rest.starts_with("<figure class=\"moss-image") {
+            return Some(at + rest.find("</figure>")? + "</figure>".len());
+        }
+        if !rest.starts_with("<div") {
+            return None;
+        }
+        at += element_len(rest, "div")?;
+    }
+}
+
+/// The length of the element `<tag …>…</tag>` that `html` starts with,
+/// counting nested elements of the same name.
+fn element_len(html: &str, tag: &str) -> Option<usize> {
+    let (open, close) = (format!("<{tag}"), format!("</{tag}>"));
+    let mut depth = 0usize;
+    let mut at = 0;
+    loop {
+        let next_open = html[at..].match_indices(&open).map(|(i, _)| i).find(|&i| {
+            html[at + i + open.len()..].starts_with(|c: char| c == '>' || c == '/' || c.is_whitespace())
+        });
+        let next_close = html[at..].find(&close)?;
+        match next_open {
+            Some(o) if o < next_close => {
+                depth += 1;
+                at += o + open.len();
+            }
+            _ => {
+                depth = depth.checked_sub(1)?;
+                at += next_close + close.len();
+                if depth == 0 {
+                    return Some(at);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "field_places_tests.rs"]
 mod tests;

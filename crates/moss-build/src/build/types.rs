@@ -585,6 +585,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub placed_fields: Vec<(moss_core::fields::FieldDecl, moss_core::fields::TypedValue)>,
+    /// `[page] masthead = "after-picture"` covers this page: render moves the
+    /// title block after the body's leading picture.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub masthead_after_picture: bool,
     /// Declared listing sort from frontmatter (folder index pages only;
     /// `None` on article pages).
     pub sort: Option<moss_core::sort::SortField>,

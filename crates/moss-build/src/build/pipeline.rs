@@ -1357,7 +1357,9 @@ fn build_inner(
         cfg.as_ref().unwrap_or(&crate::config::ConfigFile::empty()),
         crate::i18n::Language::from_code(&site_lang).unwrap_or(crate::i18n::Language::En),
     );
-    let (field_decls, field_problems) = cfg.as_ref().map(|c| c.field_decls()).unwrap_or_default();
+    let (field_decls, mut field_problems) = cfg.as_ref().map(|c| c.field_decls()).unwrap_or_default();
+    let (masthead_after_picture, masthead_problems) = cfg.as_ref().map(|c| c.masthead_after_picture()).unwrap_or_default();
+    field_problems.extend(masthead_problems);
     for problem in &field_problems {
         crate::build::cli_output::log_warn_problem!("{problem}");
     }
@@ -1510,6 +1512,7 @@ fn build_inner(
         term_kinds: kinds,
         term_nav: cfg.as_ref().map(|c| c.terms_nav()).unwrap_or_default(),
         field_decls,
+        masthead_after_picture,
         place_maps,
         incremental,
         derivations: derived.clone(),

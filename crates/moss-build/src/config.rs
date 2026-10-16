@@ -315,9 +315,10 @@ impl ConfigFile {
         pairs
     }
 
-    /// The strings in a `[fields.NAME]` list key. A non-list value is one
-    /// problem and yields nothing; a non-string item is one problem and is skipped.
-    fn string_list(sub: &toml::Table, key: &str, name: &str, problems: &mut Vec<String>) -> Vec<String> {
+    /// `key` of `sub` as a list of strings; `table` names `sub` in a problem
+    /// (`fields.kind`). A non-list value is one problem and yields nothing; a
+    /// non-string item is one problem and is skipped.
+    fn string_list(sub: &toml::Table, key: &str, table: &str, problems: &mut Vec<String>) -> Vec<String> {
         match sub.get(key) {
             None => Vec::new(),
             Some(Value::Array(items)) => items
@@ -325,13 +326,13 @@ impl ConfigFile {
                 .filter_map(|item| match item.as_str() {
                     Some(s) => Some(s.to_string()),
                     None => {
-                        problems.push(format!("[fields.{name}] `{key}` must hold strings; skipping {item}"));
+                        problems.push(format!("[{table}] `{key}` must hold strings; skipping {item}"));
                         None
                     }
                 })
                 .collect(),
             Some(_) => {
-                problems.push(format!("[fields.{name}] `{key}` must be a list of strings; ignoring it"));
+                problems.push(format!("[{table}] `{key}` must be a list of strings; ignoring it"));
                 Vec::new()
             }
         }
@@ -355,6 +356,40 @@ impl ConfigFile {
     /// writes them; keys the file did not order come last.
     fn written_position(&self, path: &str, key: &str) -> usize {
         self.key_orders.get(path).and_then(|keys| keys.iter().position(|k| k == key)).unwrap_or(usize::MAX)
+    }
+
+    /// `[page] masthead = "after-picture"`: the folders (site-relative, `in`)
+    /// whose pages draw the masthead after the body's leading picture, empty
+    /// for the whole site; `None` when the masthead stays first. Also the
+    /// problems found, each a sentence for the build to report.
+    pub fn masthead_after_picture(&self) -> (Option<Vec<String>>, Vec<String>) {
+        let mut problems = Vec::new();
+        let Some(page) = self.root.get("page") else {
+            return (None, problems);
+        };
+        let Some(page) = page.as_table() else {
+            return (None, vec!["[page] must be a table; ignoring it".to_string()]);
+        };
+        for key in page.keys().filter(|k| !matches!(k.as_str(), "masthead" | "in")) {
+            problems.push(format!("[page] has an unknown key \"{key}\"; it takes masthead and in"));
+        }
+        let scope = Self::string_list(page, "in", "page", &mut problems);
+        match page.get("masthead").map(|v| v.as_str()) {
+            None | Some(Some("first")) => {
+                if page.contains_key("in") {
+                    problems.push("[page] in has no effect without masthead = \"after-picture\"".to_string());
+                }
+                (None, problems)
+            }
+            Some(Some("after-picture")) => (Some(scope), problems),
+            Some(other) => {
+                problems.push(format!(
+                    "[page] masthead is {}; it is \"first\" or \"after-picture\"",
+                    other.map_or_else(|| "not text".to_string(), |s| format!("\"{s}\""))
+                ));
+                (None, problems)
+            }
+        }
     }
 
     /// The `[fields.<name>]` declarations, and one problem string for each
@@ -420,7 +455,7 @@ impl ConfigFile {
                     problems.push(format!("[fields.{name}] is a choice and needs `of`, a list or a table of labels"));
                     continue;
                 }
-                (FieldKind::Choice, Some(Value::Array(_))) => Self::string_list(sub, "of", name, &mut problems)
+                (FieldKind::Choice, Some(Value::Array(_))) => Self::string_list(sub, "of", &format!("fields.{name}"), &mut problems)
                     .into_iter()
                     .map(|v| Choice { value: v.clone(), labels: vec![("en".to_string(), v)] })
                     .collect(),
@@ -453,7 +488,7 @@ impl ConfigFile {
             };
             let place = Self::declared_place(sub, name, &mut problems);
             let label = Self::declared_label(sub, name, &mut problems);
-            let scope = Self::string_list(sub, "in", name, &mut problems);
+            let scope = Self::string_list(sub, "in", &format!("fields.{name}"), &mut problems);
             decls.push(FieldDecl { name: name.clone(), kind, choices, place, label, scope });
         }
         (decls, problems)

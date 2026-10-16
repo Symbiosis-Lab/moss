@@ -311,13 +311,8 @@ fn declared_fields(
     decls: &[moss_core::fields::FieldDecl],
     page: moss_core::fields::PageFormat,
 ) -> DeclaredFields {
-    // A page in a language tree (`de/Housing/x.md`) is also inside `Housing`.
-    let within_tree = moss_core::home::lang_tree_prefix(file_path).and_then(|_| file_path.split_once('/')).map(|(_, rest)| rest);
-    let applies = |decl: &moss_core::fields::FieldDecl| {
-        moss_core::fields::applies_to(decl, file_path) || within_tree.is_some_and(|p| moss_core::fields::applies_to(decl, p))
-    };
     let mut out = DeclaredFields::default();
-    for decl in decls.iter().filter(|decl| applies(decl)) {
+    for decl in decls.iter().filter(|decl| moss_core::fields::in_folders(&decl.scope, file_path)) {
         let Some(raw) = frontmatter.get(&decl.name) else { continue };
         let Ok(json) = serde_json::to_value(raw) else { continue };
         let builtin = moss_core::schema_fields::builtin_field(&decl.name).is_some();
@@ -373,6 +368,8 @@ pub struct SiteMarkdown<'a> {
     pub typesetting: Option<&'a str>,
     /// The parse cache fingerprint hashes this value, so a changed declaration invalidates cached parses.
     pub fields: &'a [moss_core::fields::FieldDecl],
+    /// `[page] masthead = "after-picture"`'s folders, empty for every page; `None` when it is off.
+    pub masthead_after_picture: Option<&'a [String]>,
 }
 
 /// Math, hard line breaks and heading anchors on — their absent-key answers
@@ -388,6 +385,7 @@ impl Default for SiteMarkdown<'_> {
             heading_anchors: true,
             typesetting: None,
             fields: &[],
+            masthead_after_picture: None,
         }
     }
 }
@@ -1334,6 +1332,8 @@ pub fn process_markdown_file(
             .collect()
     };
     let has_field_places = !placed_fields.is_empty();
+    let masthead_after_picture =
+        !is_index_file && !is_slot_only && site.masthead_after_picture.is_some_and(|scope| moss_core::fields::in_folders(scope, file_path));
 
     // Look up pre-computed url_path from PageMap, falling back to inline computation
     let url_path = page_map.get(file_path).cloned().unwrap_or_else(|| {
@@ -1518,6 +1518,7 @@ pub fn process_markdown_file(
         declared,
         field_errors,
         placed_fields,
+        masthead_after_picture,
         card_credits: None,
         label,
         nav_label,

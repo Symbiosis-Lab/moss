@@ -100,3 +100,60 @@ fn an_unplaced_or_empty_field_draws_nothing() {
     let placed = [(unplaced, text("x")), (decl("blank", FieldKind::Pages, Place::Facts), TypedValue::Pages(vec![]))];
     assert_eq!(draw(&placed, Language::En, None, &no_pages), Placements::default());
 }
+
+mod masthead_after_picture {
+    use super::super::{after_leading_picture, mark_body_start, BODY_START};
+
+    const TITLE: &str = "<p class=\"moss-eyebrow\"><span data-field=\"stage\">Pier 4</span></p>\n<h1 class=\"moss-article-title\">Harbour</h1>\n";
+
+    fn page(body: &str) -> String {
+        let mut html = format!("{TITLE}{body}");
+        mark_body_start(&mut html);
+        html
+    }
+
+    #[test]
+    fn the_marker_goes_right_after_the_title_and_the_eyebrow_stays_above_it() {
+        let html = page("<p>x</p>");
+        assert_eq!(html, format!("{}{BODY_START}\n<p>x</p>", TITLE.trim_end_matches('\n')));
+    }
+
+    #[test]
+    fn a_body_without_moss_title_gets_no_marker() {
+        let mut html = "<h1>Authored</h1><p>x</p>".to_string();
+        mark_body_start(&mut html);
+        assert!(!html.contains(BODY_START));
+    }
+
+    #[test]
+    fn the_title_block_moves_past_leading_blocks_to_after_the_first_figure() {
+        let html = page("\n<!-- a note -->\n<div class=\"trail\"><divider></divider><div><p>Road</p></div></div>\n<figure class=\"moss-image\"><img src=\"a.jpg\"><figcaption>Dusk</figcaption></figure>\n<blockquote><p>Note</p></blockquote>\n");
+        let out = after_leading_picture(&html);
+        let at = |s: &str| out.find(s).unwrap_or_else(|| panic!("{s} missing from {out}"));
+        assert!(at("trail") < at("<figure") && at("</figure>") < at("moss-eyebrow") && at("moss-eyebrow") < at("<h1") && at("<h1") < at("<blockquote>"), "{out}");
+        assert!(!out.contains(BODY_START));
+    }
+
+    #[test]
+    fn prose_or_a_heading_before_any_picture_keeps_the_title_block_first() {
+        let picture = "<figure class=\"moss-image\"><img></figure>";
+        let bodies = [
+            format!("\n<p>Text first</p>\n{picture}"),
+            format!("\n<h2>Section</h2>\n{picture}"),
+            format!("\n<section><p>Prose</p></section>\n{picture}"),
+            "\n<figure class=\"moss-place-map\"><svg></svg></figure>\n<figure class=\"moss-image\"><img></figure>".to_string(),
+            "\n<p>No picture</p>".to_string(),
+        ];
+        for body in &bodies {
+            let out = after_leading_picture(&page(body));
+            assert!(out.starts_with(TITLE.trim_end_matches('\n')), "{out}");
+            assert!(!out.contains(BODY_START));
+        }
+    }
+
+    #[test]
+    fn an_unclosed_block_keeps_the_title_block_first() {
+        let out = after_leading_picture(&page("\n<div class=\"x\"><figure class=\"moss-image\"><img></figure>"));
+        assert!(out.starts_with("<p class=\"moss-eyebrow\""), "{out}");
+    }
+}
