@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### New
 
+- Saving a page in the editor now rewrites only the frontmatter fields you changed. The other fields keep their order, quoting and comments, where before every save re-wrote the whole block, reordering keys and dropping quotes, so a one-word edit could show up as a change to every field. A page whose frontmatter is not valid YAML, or that uses Windows line endings, is still saved the old way.
 - `moss doctor --surface` now lists the rules in your theme's stylesheets that style nothing: rules whose selectors match no element on any page of the last build, such as a rule still keyed on a class the pages no longer carry. It ignores `:hover`, `::before` and other states a built page can't show, and lists a rule apart when a script on the site mentions one of its class or attribute names, since the script may add it at runtime. Run `moss build` first; without a build the check says so and is skipped.
 - `moss describe --css` no longer mistakes a comment at the end of the previous rule's line for part of the next selector, which could hide the `@media` query a rule sits in.
 - `moss doctor --surface --all` lists every classed div, including one used on a single page, so after moving facts into frontmatter fields you can check that none are left. Without `--all`, the report still lists only classes used on three or more pages.

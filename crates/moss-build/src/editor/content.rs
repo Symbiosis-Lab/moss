@@ -560,7 +560,10 @@ pub fn persist_editor_content(
 ) -> Result<SaveResult, String> {
     let mut fm_map = super::frontmatter::json_to_yaml_map(frontmatter)?;
     coerce_union_fields(&mut fm_map);
-    let content = moss_core::frontmatter::serialize(&fm_map, body)?;
+    let content = match std::fs::read_to_string(file_path).ok().and_then(|on_disk| edit_in_place(&on_disk, &fm_map, body)) {
+        Some(content) => content,
+        None => moss_core::frontmatter::serialize(&fm_map, body)?,
+    };
     // The destination is the author's SOURCE file (the one open in the
     // editor), not regenerable output under `.moss/build.nosync/` — its bytes were
     // just read to populate the buffer, so it is materialized.
@@ -590,6 +593,22 @@ pub fn persist_editor_content(
         .map_err(|e| format!("Bad mtime: {}", e))?
         .as_millis() as u64;
     Ok(SaveResult::Saved { mtime_ms })
+}
+
+/// The saved file as the one on disk with only the changed fields' lines
+/// rewritten, so a save keeps the author's key order, quoting and comments.
+/// `None` sends the save to the full re-serialize: the frontmatter on disk is
+/// not valid YAML (the editor then holds the raw block in `body`), the file
+/// uses CRLF (the editor's body is LF), every field was removed, or the line
+/// editor refuses the change.
+fn edit_in_place(on_disk: &str, fm_map: &std::collections::HashMap<String, serde_yaml::Value>, body: &str) -> Option<String> {
+    if fm_map.is_empty() || on_disk.contains("\r\n") || moss_core::frontmatter::parse(on_disk).frontmatter_error.is_some() {
+        return None;
+    }
+    let mut out = moss_core::frontmatter::set_fields(on_disk, fm_map).ok()?;
+    out.truncate(moss_core::frontmatter::frontmatter_span(&out)?.body);
+    out.push_str(body);
+    Some(out)
 }
 
 /// Guard the union frontmatter fields (`children`, `series`) before writing.
@@ -672,6 +691,29 @@ mod tests {
         assert_eq!(outcome, SaveResult::Gone);
         assert!(!file.exists(), "the old name must not come back");
         assert_eq!(std::fs::read_to_string(dir.path().join("field-notes.md")).unwrap(), "old");
+    }
+
+    #[test]
+    fn a_save_rewrites_only_the_changed_field_and_keeps_order_quoting_and_comments() {
+        let dir = make_test_tmpdir();
+        let file = dir.path().join("note.md");
+        let before = "---\n# shown on the card\ntitle: \"Harbour\"\nweight: 22\nratio: 1.0\ndate: 2024-01-15\nuid: \"a1b2c3d4\"\n---\nold body\n";
+        std::fs::write(&file, before).unwrap();
+        let fm = serde_json::json!({ "title": "Harbour", "weight": 23, "ratio": 1, "date": "2024-01-15", "uid": "a1b2c3d4", "stage": "Pier 4" });
+        persist_editor_content(&file.to_string_lossy(), &fm, "new body\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "---\n# shown on the card\ntitle: \"Harbour\"\nweight: 23\nratio: 1.0\ndate: 2024-01-15\nuid: \"a1b2c3d4\"\nstage: Pier 4\n---\nnew body\n"
+        );
+    }
+
+    #[test]
+    fn a_save_of_a_page_whose_frontmatter_is_broken_writes_the_editor_text() {
+        let dir = make_test_tmpdir();
+        let file = dir.path().join("note.md");
+        std::fs::write(&file, "---\ntitle: [unclosed\n---\nbody\n").unwrap();
+        persist_editor_content(&file.to_string_lossy(), &serde_json::json!({ "title": "Fixed" }), "body\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "---\ntitle: Fixed\n---\nbody\n");
     }
 
     #[test]
