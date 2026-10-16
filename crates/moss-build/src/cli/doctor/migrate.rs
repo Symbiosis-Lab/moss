@@ -86,12 +86,15 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     if out.place.is_some() && out.lift.is_none() {
         return Err("--place goes with --lift".to_string());
     }
+    if out.lift.is_some() && out.place.is_none() {
+        return Err("--lift needs --place: where moss draws the field (eyebrow, subtitle, key-figure or facts), or none to keep it in the frontmatter only".to_string());
+    }
     Ok(out)
 }
 
 fn usage() -> &'static str {
     "Usage: moss migrate [<folder>] [--apply] [--json]
-       moss migrate [<folder>] --lift <class> --as <field> [--place <place>] [--apply] [--json]
+       moss migrate [<folder>] --lift <class> --as <field> --place <place> [--apply] [--json]
 
 Rewrites what `moss doctor --surface` finds. Without --apply it prints the
 change as a diff and writes nothing; with --apply it saves a version of the
@@ -108,7 +111,9 @@ not checked, and a page renamed later pairs by key and not by path.
 --lift <class> --as <field> moves each `::: {.class}` div holding one paragraph
 of plain text into the page's frontmatter as <field>, declares <field> in
 .moss/config.toml if it is not, and lists the pages it left as written.
---place (eyebrow, subtitle, key-figure, facts or none) sets where moss draws it."
+--place says where moss draws the field instead: eyebrow, subtitle, key-figure
+or facts, or none to keep it in the frontmatter only. It sets the field's place
+for the whole site, so none also removes a place the field already has."
 }
 
 pub fn run(args: &[String]) -> i32 {
@@ -222,12 +227,11 @@ fn plan(folder: &Path, args: &Args) -> Result<Report, String> {
         (Some(class), Some(field)) => {
             let config = crate::config::ConfigFile::parse(&config_text)?;
             let (decls, _) = config.field_decls();
-            let place = match args.place.as_deref() {
-                None => None,
-                Some("none") => Some(None),
-                Some(name) => Some(Some(moss_core::fields::parse_place(name).ok_or_else(|| {
+            let place = match args.place.as_deref().ok_or("--lift needs --place")? {
+                "none" => None,
+                name => Some(moss_core::fields::parse_place(name).ok_or_else(|| {
                     format!("unknown place \"{name}\"; one of: {}, none", moss_core::fields::place_names().join(", "))
-                })?)),
+                })?),
             };
             let lang = crate::build::site_config::get_site_lang(&folder.to_string_lossy()).ok().flatten();
             let lang = crate::i18n::Language::from_code(lang.as_deref().unwrap_or("en")).unwrap_or(crate::i18n::Language::En);

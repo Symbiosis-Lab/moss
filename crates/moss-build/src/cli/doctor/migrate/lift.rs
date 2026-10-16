@@ -27,8 +27,8 @@ pub struct LiftPlan {
 pub struct LiftRequest<'a> {
     pub class: &'a str,
     pub field: &'a str,
-    /// `--place`: `None` when not given, `Some(None)` for `none`.
-    pub place: Option<Option<Place>>,
+    /// `--place`; `None` for `none`.
+    pub place: Option<Place>,
 }
 
 /// The div's lines, 0-based and inclusive, and its text.
@@ -190,7 +190,7 @@ fn remove_lines(content: &str, from: usize, to: usize) -> String {
 /// The config text with `[fields.<field>]` declared as the lift needs, or
 /// `None` when it already is.
 fn declare(config_text: &str, request: &LiftRequest, declared: Option<&FieldDecl>) -> Result<Option<String>, String> {
-    if declared.is_some_and(|d| request.place.is_none_or(|place| d.place == place)) {
+    if declared.is_some_and(|d| d.place == request.place) {
         return Ok(None);
     }
     let mut table: toml::Table = toml::from_str(config_text).map_err(|e| format!("could not read .moss/config.toml: {e}"))?;
@@ -207,14 +207,9 @@ fn declare(config_text: &str, request: &LiftRequest, declared: Option<&FieldDecl
         decl.insert("type".to_string(), toml::Value::String("text".to_string()));
     }
     match request.place {
-        Some(Some(place)) => {
-            decl.insert("place".to_string(), toml::Value::String(place.name().to_string()));
-        }
-        Some(None) => {
-            decl.remove("place");
-        }
-        None => {}
-    }
+        Some(place) => decl.insert("place".to_string(), toml::Value::String(place.name().to_string())),
+        None => decl.remove("place"),
+    };
     crate::infra::toml_rewrite::apply_changes(config_text, &table).map(Some)
 }
 

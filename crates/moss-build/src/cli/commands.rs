@@ -112,8 +112,8 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         },
         CliCommandInfo {
             name: "migrate",
-            args: "[<folder>] [--apply] [--json] | [<folder>] --lift <class> --as <field> [--place <place>] [--apply] [--json]",
-            description: "Rewrite what `moss doctor --surface` finds. Without --apply it prints the change as a diff and writes nothing; with --apply it first saves a version of the site (undo with `moss history --restore`), then writes, changing only the frontmatter lines it names. With no --lift it removes a `translationKey` the page's path already implies, and only when a scratch copy of the site builds to the same output with and without it. --lift <class> --as <field> moves each `::: {.class}` div holding one paragraph of plain text into its page's frontmatter as <field> and declares the field in .moss/config.toml (--place eyebrow, subtitle, key-figure, facts or none says where moss draws it); a page whose div holds more than plain text, holds it twice, or whose frontmatter already gives <field> a different value is left as written and listed. --json prints the changes, skipped pages and saved version as JSON.",
+            args: "[<folder>] [--apply] [--json] | [<folder>] --lift <class> --as <field> --place <place> [--apply] [--json]",
+            description: "Rewrite what `moss doctor --surface` finds. Without --apply it prints the change as a diff and writes nothing; with --apply it first saves a version of the site (undo with `moss history --restore`), then writes, changing only the frontmatter lines it names. With no --lift it removes a `translationKey` the page's path already implies, and only when a scratch copy of the site builds to the same output with and without it. --lift <class> --as <field> --place <place> moves each `::: {.class}` div holding one paragraph of plain text into its page's frontmatter as <field> and declares the field in .moss/config.toml; --place says where moss draws it instead of the div (eyebrow, subtitle, key-figure or facts), or none to keep it in the frontmatter only (it sets the field's place for the whole site, so none also removes a place the field already has); a page whose div holds more than plain text, holds it twice, or whose frontmatter already gives <field> a different value is left as written and listed. --json prints the changes, skipped pages and saved version as JSON.",
         },
         CliCommandInfo {
             name: "list",
@@ -201,7 +201,7 @@ const EXAMPLE_LINES: &[(&str, &str)] = &[
     ("doctor", "moss doctor --surface ~/blog/ --json  # Repeated classed divs, theme rules that style nothing, address-keyed selectors"),
     ("doctor", "moss doctor --surface ~/blog/ --all   # Every classed div left, even on one page"),
     ("migrate", "moss migrate ~/blog/ --lift eyebrow --as series --place eyebrow  # Diff of moving ::: {.eyebrow} into frontmatter"),
-    ("migrate", "moss migrate ~/blog/ --lift eyebrow --as series --apply         # Save a version, then write it"),
+    ("migrate", "moss migrate ~/blog/ --lift eyebrow --as series --place eyebrow --apply  # Save a version, then write it"),
     ("comments", "moss comments list ~/blog/          # Every comment, newest first, hidden ones marked"),
     ("comments", "moss comments hide ~/blog/ 12 13    # Keep comments 12 and 13 off the site at the next publish"),
 ];

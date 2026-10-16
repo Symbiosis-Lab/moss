@@ -84,7 +84,7 @@ fn lift_apply_on_a_page_without_a_uid_plans_from_the_file_the_build_stamped() {
     std::fs::create_dir_all(&home).unwrap();
     write(&root, ".moss/config.toml", "[site]\nlang = \"en\"\n");
     write(&root, "Piers/p1.md", "---\ntitle: \"Pier 1\"\n---\n\n::: {.eyebrow}\nPier 1\n:::\n\nText.\n");
-    let o = migrate(&root, &home, &["--lift", "eyebrow", "--as", "stage", "--apply", "--json"]);
+    let o = migrate(&root, &home, &["--lift", "eyebrow", "--as", "stage", "--place", "eyebrow", "--apply", "--json"]);
     assert!(o.status.success(), "{}", stdout(&o));
     let page = std::fs::read_to_string(root.join("Piers/p1.md")).unwrap();
     assert!(page.contains("\nuid: ") && page.contains("\nstage: Pier 1\n") && !page.contains(":::"), "{page}");

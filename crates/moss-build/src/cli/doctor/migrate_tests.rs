@@ -37,7 +37,7 @@ fn a_dry_run_lift_lists_every_change_and_writes_nothing() {
 #[test]
 fn applied_changes_skip_a_file_edited_since_it_was_read() {
     let dir = site();
-    let report = migrate(dir.path(), &args(&["--lift", "eyebrow", "--as", "stage"])).unwrap();
+    let report = migrate(dir.path(), &args(&["--lift", "eyebrow", "--as", "stage", "--place", "eyebrow"])).unwrap();
     let mut changes = report.changes;
     write(dir.path(), "Piers/p2.md", "edited meanwhile\n");
     let mut skipped = Vec::new();
@@ -52,7 +52,7 @@ fn applied_changes_skip_a_file_edited_since_it_was_read() {
 fn the_theme_still_styling_the_class_is_noted() {
     let dir = site();
     write(dir.path(), ".moss/theme/style.css", ".eyebrow { color: red; }\n");
-    let report = migrate(dir.path(), &args(&["--lift", "eyebrow", "--as", "stage"])).unwrap();
+    let report = migrate(dir.path(), &args(&["--lift", "eyebrow", "--as", "stage", "--place", "eyebrow"])).unwrap();
     assert!(report.notes.iter().any(|n| n.contains("[data-field=\"stage\"]")), "{:?}", report.notes);
 }
 
@@ -71,7 +71,8 @@ fn flags_that_go_together_are_checked() {
     assert!(parse(&["--as", "x"]).is_err());
     assert!(parse(&["--place", "eyebrow"]).is_err());
     assert!(parse(&["--bogus"]).is_err());
-    assert_eq!(parse(&["site", "--lift", ".x", "--as", "y"]).unwrap().lift.as_deref(), Some("x"));
+    assert!(parse(&["--lift", "x", "--as", "y"]).unwrap_err().contains("--place"));
+    assert_eq!(parse(&["site", "--lift", ".x", "--as", "y", "--place", "none"]).unwrap().lift.as_deref(), Some("x"));
 }
 
 #[test]
@@ -84,13 +85,13 @@ fn a_diff_shows_each_change_with_a_line_of_context() {
 #[test]
 fn a_value_flag_does_not_take_the_next_flag_as_its_value() {
     let parse = |list: &[&str]| parse_args(&list.iter().map(|s| s.to_string()).collect::<Vec<_>>());
-    assert!(parse(&["--lift", "--apply", "--as", "x"]).is_err());
+    assert!(parse(&["--lift", "--apply", "--as", "x", "--place", "none"]).is_err());
 }
 
 #[test]
 fn a_write_that_fails_is_listed_and_the_config_is_written_first() {
     let dir = site();
-    let report = migrate(dir.path(), &args(&["--lift", "eyebrow", "--as", "stage"])).unwrap();
+    let report = migrate(dir.path(), &args(&["--lift", "eyebrow", "--as", "stage", "--place", "eyebrow"])).unwrap();
     let mut changes = report.changes;
     changes.push(FileChange { path: "Piers/p1.md/not-a-dir.md".into(), before: String::new(), after: "x".into() });
     let mut skipped = Vec::new();

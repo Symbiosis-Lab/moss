@@ -8,7 +8,7 @@ fn page(rel: &str, text: &str) -> (String, String) {
 }
 
 fn lift(pages: &[(String, String)], config: &str, decls: &[FieldDecl], place: Option<Place>) -> LiftPlan {
-    plan(&LiftRequest { class: "eyebrow", field: "stage", place: place.map(Some) }, pages, config, decls, FORMAT).unwrap()
+    plan(&LiftRequest { class: "eyebrow", field: "stage", place }, pages, config, decls, FORMAT).unwrap()
 }
 
 const PIER: &str = "---\ntitle: \"Pier 4\"\nweight: 4\n---\n\n::: {.eyebrow}\nPier 4 of 9\n:::\n\nThe text.\n";
@@ -30,7 +30,7 @@ fn the_field_is_declared_once_with_its_place() {
 #[test]
 fn an_already_declared_field_leaves_the_config_alone() {
     let decl = FieldDecl { name: "stage".into(), kind: FieldKind::Text, choices: vec![], place: Some(Place::Eyebrow), label: vec![], scope: vec![] };
-    assert_eq!(lift(&[page("a.md", PIER)], "[fields.stage]\ntype = \"text\"\nplace = \"eyebrow\"\n", &[decl], None).config, None);
+    assert_eq!(lift(&[page("a.md", PIER)], "[fields.stage]\ntype = \"text\"\nplace = \"eyebrow\"\n", &[decl], Some(Place::Eyebrow)).config, None);
 }
 
 #[test]
@@ -117,7 +117,15 @@ fn a_list_or_empty_value_already_in_the_frontmatter_is_not_overwritten() {
 fn place_none_clears_a_declared_place() {
     let decl = FieldDecl { name: "stage".into(), kind: FieldKind::Text, choices: vec![], place: Some(Place::Eyebrow), label: vec![], scope: vec![] };
     let config = "[fields.stage]\ntype = \"text\"\nplace = \"eyebrow\"\n";
-    let request = LiftRequest { class: "eyebrow", field: "stage", place: Some(None) };
+    let request = LiftRequest { class: "eyebrow", field: "stage", place: None };
     let plan = plan(&request, &[page("a.md", PIER)], config, &[decl], FORMAT).unwrap();
     assert_eq!(plan.config.as_deref(), Some("[fields.stage]\ntype = \"text\"\n"));
+}
+
+#[test]
+fn a_different_place_replaces_the_declared_one() {
+    let decl = FieldDecl { name: "stage".into(), kind: FieldKind::Text, choices: vec![], place: Some(Place::Eyebrow), label: vec![], scope: vec![] };
+    let config = "[fields.stage]\ntype = \"text\"\nplace = \"eyebrow\"\n";
+    let plan = lift(&[page("a.md", PIER)], config, &[decl], Some(Place::Subtitle));
+    assert_eq!(plan.config.as_deref(), Some("[fields.stage]\ntype = \"text\"\nplace = \"subtitle\"\n"));
 }
