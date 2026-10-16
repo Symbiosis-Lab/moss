@@ -166,7 +166,23 @@ fn choice_label_is_the_pages_language_then_en_then_the_value() {
 #[test]
 fn choice_given_a_yaml_number_names_the_allowed_values() {
     let d = choice(&["Building", "Service"]);
-    assert_eq!(parse_value(&d, &json!(1), EN).expect_err("err"), "1 is not one of: Building, Service");
+    assert_eq!(parse_value(&d, &json!(1), EN).expect_err("err"), "\"1\" is not one of: Building, Service");
+    assert_eq!(parse_value(&d, &json!([1]), EN).expect_err("err"), "[1] is not one of: Building, Service");
+}
+
+#[test]
+fn choice_matches_an_unquoted_number_or_boolean_by_its_text() {
+    let floors = choice(&["1", "2", "3"]);
+    assert_eq!(
+        parse_value(&floors, &json!(2), EN).expect("ok"),
+        TypedValue::Choice { value: "2".into(), label: "2".into() }
+    );
+    let flag = choice(&["true", "false"]);
+    assert_eq!(
+        parse_value(&flag, &json!(true), EN).expect("ok"),
+        TypedValue::Choice { value: "true".into(), label: "true".into() }
+    );
+    assert_eq!(parse_value(&floors, &json!(4), EN).expect_err("err"), "\"4\" is not one of: 1, 2, 3");
 }
 
 #[test]

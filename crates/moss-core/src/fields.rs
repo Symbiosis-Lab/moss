@@ -176,6 +176,17 @@ pub struct PageLink {
     pub alias: Option<String>,
 }
 
+/// A scalar as the text an author wrote: YAML reads `2` and `true` as a
+/// number and a boolean, but a text or choice field compares them as written.
+fn scalar_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
+}
+
 /// Checks one raw frontmatter value against its declaration and returns the
 /// typed value plugins receive. `Err` carries a reason a person can act on;
 /// the caller adds the file and field name.
@@ -184,12 +195,7 @@ pub fn parse_value(decl: &FieldDecl, value: &Value, page: PageFormat) -> Result<
         return Err("has no value; give it one or remove the line".to_string());
     }
     match decl.kind {
-        FieldKind::Text => match value {
-            Value::String(s) => Ok(TypedValue::Text(s.clone())),
-            Value::Number(n) => Ok(TypedValue::Text(n.to_string())),
-            Value::Bool(b) => Ok(TypedValue::Text(b.to_string())),
-            _ => Err("expected text".to_string()),
-        },
+        FieldKind::Text => scalar_text(value).map(TypedValue::Text).ok_or_else(|| "expected text".to_string()),
         FieldKind::Number => match value {
             Value::Number(n) => Ok(TypedValue::Number(n.clone())),
             Value::String(s) => s
@@ -218,9 +224,8 @@ pub fn parse_value(decl: &FieldDecl, value: &Value, page: PageFormat) -> Result<
             _ => Err("expected an address starting with http://, https:// or /".to_string()),
         },
         FieldKind::Choice => {
-            let raw = match value {
-                Value::String(s) => s.as_str(),
-                other => return Err(format!("{other} is not one of: {}", allowed(decl))),
+            let Some(raw) = scalar_text(value) else {
+                return Err(format!("{value} is not one of: {}", allowed(decl)));
             };
             match decl.choices.iter().find(|c| c.value == raw) {
                 Some(choice) => {
