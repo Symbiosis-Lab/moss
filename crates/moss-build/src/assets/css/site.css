@@ -225,10 +225,10 @@
    for the current theme. The variants are computed against this stylesheet's
    own --moss-color-bg, so a theme that repaints the page checks its own. */
 [style*="--moss-section-text-light"] {
-  --moss-section-text: var(--moss-section-text-light);
+  --moss-section-text: var(--moss-section-text-light, var(--moss-section-color));
 }
 [data-theme="dark"] [style*="--moss-section-text-light"] {
-  --moss-section-text: var(--moss-section-text-dark);
+  --moss-section-text: var(--moss-section-text-dark, var(--moss-section-color));
 }
 
 /* Traditional Chinese — prioritize TC fonts.
