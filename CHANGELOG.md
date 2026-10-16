@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### New
 
+- `moss doctor --surface --all` lists every classed div, including one used on a single page, so after moving facts into frontmatter fields you can check that none are left. Without `--all`, the report still lists only classes used on three or more pages.
 - A hero can set its words in the middle of the picture: `:::hero {align=center}` centres the panel and its text, with a shading that darkens from the centre instead of one side. `align=end` and the default bottom-start placement are unchanged.
 - An image can name the point that must stay in view when it is cropped: `focus:X%,Y%` in its options, whole percentages from the top-left, such as `![[photo.jpg|focus:20%,62%]]` or `:::hero {image="photo.jpg|focus:20%,62%"}`. `focus:50%,50%` is `center` and `focus:0%,0%` is `top-left`; the nine named positions still work.
 - `moss deploy --prebuilt=<dir> --dry-run` shows what a prebuilt publish would upload and which addresses it would take offline, without building or sending anything.

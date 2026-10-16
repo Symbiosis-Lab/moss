@@ -139,10 +139,11 @@ pub fn run(args: &[String]) -> i32 {
     let math = args.iter().any(|a| a == "--math");
     let surface = args.iter().any(|a| a == "--surface");
     let json = args.iter().any(|a| a == "--json");
-    // Exactly one check. `--json` is only defined for `--surface`.
+    let all = args.iter().any(|a| a == "--all");
+    // Exactly one check. `--json` and `--all` are only defined for `--surface`.
     // 2, not 1: "you asked for a check that does not exist" is a usage
     // error, distinct from a check that ran and failed. Findings exit 0.
-    if math == surface || (json && !surface) {
+    if math == surface || ((json || all) && !surface) {
         print_usage();
         return 2;
     }
@@ -161,7 +162,7 @@ pub fn run(args: &[String]) -> i32 {
     }
 
     if surface {
-        return surface::run(&folder, json);
+        return surface::run(&folder, json, all);
     }
 
     let mut files_with_math = 0usize;
@@ -240,11 +241,12 @@ fn markdown_files(folder: &Path) -> Vec<PathBuf> {
 
 fn print_usage() {
     eprintln!("Usage: moss doctor --math [<folder>]");
-    eprintln!("       moss doctor --surface [<folder>] [--json]");
+    eprintln!("       moss doctor --surface [<folder>] [--all] [--json]");
     eprintln!();
     eprintln!("--surface reports classed divs repeated across pages (a fact a frontmatter");
-    eprintln!("field could hold) and theme selectors keyed on a page address. --json prints");
-    eprintln!("it as JSON; it is accepted with --surface only.");
+    eprintln!("field could hold) and theme selectors keyed on a page address. --all lists");
+    eprintln!("every classed div, even on one page. --json prints it as JSON. Both are");
+    eprintln!("accepted with --surface only.");
     eprintln!();
     eprintln!("Reports every `$`-span in the vault that moss would parse as math.");
     eprintln!("Run it before publishing an imported corpus: pulldown's delimiter rule");
@@ -369,6 +371,11 @@ mod tests {
     }
 
     /// The two checks are exclusive. Both flags name a mode, so neither runs.
+    #[test]
+    fn all_without_surface_is_a_usage_error() {
+        assert_eq!(run(&["--math".to_string(), "--all".to_string()]), 2);
+    }
+
     #[test]
     fn math_and_surface_together_are_a_usage_error() {
         assert_eq!(run(&["--math".to_string(), "--surface".to_string()]), 2);

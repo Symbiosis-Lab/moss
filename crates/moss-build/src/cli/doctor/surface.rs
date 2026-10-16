@@ -8,6 +8,8 @@
 //! author restated by hand because nothing else can draw it. The report lists
 //! every such class on three or more pages, with the folders it appears in, so
 //! the repeated facts can move into frontmatter fields that the theme reads.
+//! `--all` lowers the bar to one page, so after a migration the report can say
+//! whether any classed div is left at all.
 //!
 //! The detector runs the real shortcode extractor over each page body rather
 //! than matching fence lines itself, so a div inside a code fence or a typed
@@ -25,7 +27,7 @@ use std::path::{Path, PathBuf};
 use moss_core::ast::shortcode_extract::{extract_shortcodes_with_config, CssRegionSpan};
 use moss_core::ast::ParseConfig;
 
-/// A class must sit on at least this many pages before it is reported.
+/// A class must sit on at least this many pages before it is reported, unless `--all`.
 const MIN_PAGES: usize = 3;
 
 /// Folder label for pages at the site root.
@@ -53,6 +55,8 @@ pub struct AddressSelector {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SurfaceReport {
+    /// The fewest pages a reported class sits on: [`MIN_PAGES`], or 1 with `--all`.
+    pub min_pages: usize,
     pub classed_divs: Vec<ClassedDiv>,
     pub address_selectors: Vec<AddressSelector>,
 }
@@ -89,7 +93,7 @@ fn folder_of(rel: &str) -> String {
 }
 
 /// Every page the build reads, with its classed divs tallied per class.
-fn classed_divs(folder: &Path) -> Vec<ClassedDiv> {
+fn classed_divs(folder: &Path, min_pages: usize) -> Vec<ClassedDiv> {
     let mut tallies: BTreeMap<String, ClassTally> = BTreeMap::new();
     for page in super::markdown_files(folder) {
         let Ok(content) = std::fs::read_to_string(&page) else {
@@ -115,7 +119,7 @@ fn classed_divs(folder: &Path) -> Vec<ClassedDiv> {
 
     let mut out: Vec<ClassedDiv> = tallies
         .into_iter()
-        .filter(|(_, t)| t.pages >= MIN_PAGES)
+        .filter(|(_, t)| t.pages >= min_pages)
         .filter_map(|(class, t)| {
             let (example_path, example_line) = t.example?;
             let mut folders: Vec<(String, usize)> = t.folders.into_iter().collect();
@@ -164,17 +168,20 @@ fn address_selectors(folder: &Path) -> Vec<AddressSelector> {
     out
 }
 
-/// Run both detectors over the site at `folder`.
-pub fn audit(folder: &Path) -> SurfaceReport {
+/// Run both detectors over the site at `folder`. `all` reports a class on any
+/// number of pages instead of [`MIN_PAGES`] or more.
+pub fn audit(folder: &Path, all: bool) -> SurfaceReport {
+    let min_pages = if all { 1 } else { MIN_PAGES };
     SurfaceReport {
-        classed_divs: classed_divs(folder),
+        min_pages,
+        classed_divs: classed_divs(folder, min_pages),
         address_selectors: address_selectors(folder),
     }
 }
 
 /// Print the report and return the exit code. Findings exit 0.
-pub fn run(folder: &Path, json: bool) -> i32 {
-    let report = audit(folder);
+pub fn run(folder: &Path, json: bool, all: bool) -> i32 {
+    let report = audit(folder, all);
     if json {
         println!("{}", to_json(&report));
     } else {
@@ -206,21 +213,30 @@ fn to_json(report: &SurfaceReport) -> serde_json::Value {
         .iter()
         .map(|s| serde_json::json!({ "path": s.path, "line": s.line, "text": s.text }))
         .collect();
-    serde_json::json!({ "classed_divs": classed, "address_selectors": selectors })
+    serde_json::json!({ "min_pages": report.min_pages, "classed_divs": classed, "address_selectors": selectors })
 }
 
 fn render_text(report: &SurfaceReport) -> String {
     let mut out = String::new();
     if report.classed_divs.is_empty() {
-        out.push_str(&format!("No class is repeated on {MIN_PAGES} or more pages.\n"));
+        if report.min_pages == 1 {
+            out.push_str("No page has a classed div.\n");
+        } else {
+            out.push_str(&format!("No class is repeated on {} or more pages.\n", report.min_pages));
+        }
     } else {
-        out.push_str("Classed divs repeated across pages — if a div holds a fact about its page, it can be a frontmatter field:\n");
+        if report.min_pages == 1 {
+            out.push_str("Every classed div, by the pages it is on:\n");
+        } else {
+            out.push_str("Classed divs repeated across pages — if a div holds a fact about its page, it can be a frontmatter field:\n");
+        }
         let class_width = report
             .classed_divs
             .iter()
             .map(|d| d.class.chars().count() + 1)
             .max()
             .unwrap_or(0);
+        let pages_width = report.classed_divs.iter().map(|d| format!("{} pages", d.pages).len()).max().unwrap_or(0);
         for d in &report.classed_divs {
             let folders: Vec<String> = d
                 .folders
@@ -230,10 +246,11 @@ fn render_text(report: &SurfaceReport) -> String {
                     format!("{label} {n}")
                 })
                 .collect();
+            let pages = if d.pages == 1 { "1 page".to_string() } else { format!("{} pages", d.pages) };
             out.push_str(&format!(
-                "  {:<class_width$}  {} pages  {}  e.g. {}:{}\n",
+                "  {:<class_width$}  {:<pages_width$}  {}  e.g. {}:{}\n",
                 format!(".{}", d.class),
-                d.pages,
+                pages,
                 folders.join(", "),
                 d.example_path,
                 d.example_line,
@@ -296,7 +313,7 @@ mod tests {
     #[test]
     fn repeated_eyebrow_is_reported_with_its_real_example_line() {
         let dir = fixture();
-        let report = audit(dir.path());
+        let report = audit(dir.path(), false);
         let eyebrow = report.classed_divs.iter().find(|d| d.class == "eyebrow").expect("eyebrow reported");
         assert_eq!(eyebrow.pages, 3);
         assert_eq!(eyebrow.folders, vec![("Prints".to_string(), 3)]);
@@ -307,14 +324,35 @@ mod tests {
     #[test]
     fn a_class_on_one_page_is_below_the_threshold() {
         let dir = fixture();
-        let report = audit(dir.path());
+        let report = audit(dir.path(), false);
         assert!(report.classed_divs.iter().all(|d| d.class != "once"));
+    }
+
+    #[test]
+    fn all_reports_a_class_on_one_page_and_still_skips_code_fences() {
+        let dir = fixture();
+        let report = audit(dir.path(), true);
+        let once = report.classed_divs.iter().find(|d| d.class == "once").expect("one-page class reported");
+        assert_eq!((once.pages, once.example_path.as_str()), (1, "once.md"));
+        let eyebrow = report.classed_divs.iter().find(|d| d.class == "eyebrow").unwrap();
+        assert_eq!(eyebrow.pages, 3, "the fenced eyebrow in Prints/d.md is not a div");
+        let text = render_text(&report);
+        assert!(text.starts_with("Every classed div"));
+        assert!(text.contains(" 1 page  "), "{text}");
+        assert_eq!(to_json(&report)["min_pages"], 1);
+    }
+
+    #[test]
+    fn all_on_a_site_without_divs_says_none_is_left() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "a.md", "plain\n");
+        assert!(render_text(&audit(dir.path(), true)).starts_with("No page has a classed div.\n"));
     }
 
     #[test]
     fn one_address_keyed_selector_is_reported_with_its_line() {
         let dir = fixture();
-        let report = audit(dir.path());
+        let report = audit(dir.path(), false);
         assert_eq!(report.address_selectors.len(), 1);
         let s = &report.address_selectors[0];
         assert_eq!(s.path, ".moss/theme/style.css");
@@ -325,7 +363,7 @@ mod tests {
     #[test]
     fn json_output_parses_and_carries_the_findings() {
         let dir = fixture();
-        let text = to_json(&audit(dir.path())).to_string();
+        let text = to_json(&audit(dir.path(), false)).to_string();
         let value: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
         assert_eq!(value["classed_divs"][0]["class"], "eyebrow");
         assert_eq!(value["classed_divs"][0]["pages"], 3);
@@ -339,7 +377,7 @@ mod tests {
     #[test]
     fn empty_site_says_nothing_found() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(render_text(&audit(dir.path())).ends_with("Nothing found.\n"));
+        assert!(render_text(&audit(dir.path(), false)).ends_with("Nothing found.\n"));
     }
 
     #[test]
