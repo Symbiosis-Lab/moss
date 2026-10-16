@@ -127,7 +127,9 @@ const LIGHTBOX = `<button class="lightbox-close" aria-label="Close">&times;</but
 
   // The picture a click or key press on `target` belongs to, and its place in the page's sequence.
   function openFrom(target: EventTarget | null): boolean {
-    if (!(target instanceof Element)) return false;
+    // Most clicks and key presses are nowhere near a picture; answer them
+    // without walking the document.
+    if (!(target instanceof Element) || !target.closest(TRIGGERS)) return false;
     const found = collect();
     const index = found.findIndex(({ trigger }) => trigger.contains(target));
     if (index < 0) return false;
@@ -309,5 +311,9 @@ const LIGHTBOX = `<button class="lightbox-close" aria-label="Close">&times;</but
   // Give the pictures their button semantics on load and whenever the page
   // gains content, so a keyboard reader can reach them.
   collect();
-  new MutationObserver(collect).observe(document.documentElement, { childList: true, subtree: true });
+  // The viewer's own subtree changes on every step; that adds no pictures.
+  new MutationObserver((records) => {
+    const viewer = document.getElementById("lightbox");
+    if (!records.every((r) => viewer?.contains(r.target))) collect();
+  }).observe(document.documentElement, { childList: true, subtree: true });
 })();
