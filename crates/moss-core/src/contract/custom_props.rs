@@ -353,6 +353,18 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "A readable text colour for the section accent: the hue of `--moss-section-color`, adjusted until it reaches 4.5:1 contrast (WCAG 2) against moss's default page background, with one value for the light theme and one for the dark, switching with `data-theme` like moss's own colour tokens. A colour that already passes is used unchanged. moss derives it at build time and writes the two variants (`--moss-section-text-light`, `--moss-section-text-dark`) beside `--moss-section-color`, on `<body>` and on a listing card for the page; the default stylesheet picks the one for the current theme. Write `color: var(--moss-section-text, var(--moss-color-text))`. The guarantee is against moss's default `--moss-color-bg`: a theme that repaints the page background checks its own contrast. Not set on pages outside any coloured folder, so always give `var()` a fallback.",
     },
     CustomProp {
+        name: "--moss-section-text-light",
+        owner: "body",
+        default: "var(--moss-color-text)",
+        description: "The light-theme variant of `--moss-section-text`, written by moss as an inline style on `<body>` and on a listing card, beside `--moss-section-color`, when a folder's home page declares `color:`. The default stylesheet copies the variant for the current theme into `--moss-section-text`; a theme should read `--moss-section-text` instead of this.",
+    },
+    CustomProp {
+        name: "--moss-section-text-dark",
+        owner: "body",
+        default: "var(--moss-color-text)",
+        description: "The dark-theme variant of `--moss-section-text`, written by moss as an inline style on `<body>` and on a listing card, beside `--moss-section-color`, when a folder's home page declares `color:`. The default stylesheet copies the variant for the current theme into `--moss-section-text`; a theme should read `--moss-section-text` instead of this.",
+    },
+    CustomProp {
         name: "--moss-sidenote-inset",
         owner: "body",
         default: "0px",

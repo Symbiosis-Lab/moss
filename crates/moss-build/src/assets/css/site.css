@@ -224,13 +224,12 @@
    --moss-section-color (on <body> and on a listing card); this picks the one
    for the current theme. The variants are computed against this stylesheet's
    own --moss-color-bg, so a theme that repaints the page checks its own.
-   The selector matches only where the build wrote both variants, so the
-   reads need no fallback. */
+   The selector matches only where the build wrote both variants. */
 [style*="--moss-section-text-light"] {
-  --moss-section-text: var(--moss-section-text-light);
+  --moss-section-text: var(--moss-section-text-light, var(--moss-color-text));
 }
 [data-theme="dark"] [style*="--moss-section-text-light"] {
-  --moss-section-text: var(--moss-section-text-dark);
+  --moss-section-text: var(--moss-section-text-dark, var(--moss-color-text));
 }
 
 /* Traditional Chinese — prioritize TC fonts.

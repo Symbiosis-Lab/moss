@@ -247,11 +247,11 @@ fn a_coloured_page_carries_a_readable_text_colour_for_each_theme() {
     // The served stylesheet is minified; compare without whitespace.
     let css: String = css.split_whitespace().collect();
     assert!(
-        css.contains(r#"[style*="--moss-section-text-light"]{--moss-section-text:var(--moss-section-text-light)}"#),
+        css.contains(r#"[style*="--moss-section-text-light"]{--moss-section-text:var(--moss-section-text-light,var(--moss-color-text))}"#),
         "light rule: {css:.300}"
     );
     assert!(
-        css.contains(r#"[data-theme="dark"][style*="--moss-section-text-light"]{--moss-section-text:var(--moss-section-text-dark)}"#),
+        css.contains(r#"[data-theme="dark"][style*="--moss-section-text-light"]{--moss-section-text:var(--moss-section-text-dark,var(--moss-color-text))}"#),
         "dark rule: {css:.300}"
     );
 }
