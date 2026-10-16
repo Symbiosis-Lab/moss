@@ -25,7 +25,7 @@
  * `installContextMenu`.
  */
 
-import { resolveSourceTargets, type SourceTarget } from "./source-target";
+import { resolveSourceTargets, themeSelectors, type SourceTarget } from "./source-target";
 
 /** What the shell needs to build the menu. Posted to window.parent. */
 export interface PreviewContextPayload {
@@ -37,6 +37,8 @@ export interface PreviewContextPayload {
   page: string;
   /** Source targets under the cursor, nearest first; empty when none. */
   targets: SourceTarget[];
+  /** Theme-sheet selectors that style the clicked element; empty when none. */
+  styles: string[];
   /** Absolute URL of the enclosing <a>, or null. */
   link: string | null;
   /** Absolute URL of the <img> under the cursor, or null. */
@@ -120,6 +122,7 @@ export function buildContextPayload(
     y: opts.y,
     page: opts.pageHref,
     targets: resolveSourceTargets(el),
+    styles: themeSelectors(el),
     link,
     image,
     selection: selText.length > 0 ? selText : null,

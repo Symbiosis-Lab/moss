@@ -99,3 +99,55 @@ export function resolveSourceTargets(el: Element | null): SourceTarget[] {
   }
   return targets;
 }
+
+const THEME_SHEET_PATH = /^\/_moss\/theme\/style(\.[\w-]+)?\.css$/;
+const MAX_THEME_SELECTORS = 3;
+
+function themeSheet(): CSSStyleSheet | null {
+  return Array.from(document.styleSheets).find((s) => !!s.href && THEME_SHEET_PATH.test(new URL(s.href).pathname)) ?? null;
+}
+
+/**
+ * Style-rule selectors in sheet order, descending into @layer / @media /
+ * @supports. A style rule is checked first: under CSS nesting it has
+ * `cssRules` too, and its nested selectors are relative to it.
+ */
+function collectSelectors(rules: CSSRuleList, out: string[]): string[] {
+  for (const rule of Array.from(rules)) {
+    if ("selectorText" in rule) out.push((rule as CSSStyleRule).selectorText);
+    else if ("cssRules" in rule) collectSelectors((rule as CSSGroupingRule).cssRules, out);
+  }
+  return out;
+}
+
+function matchesSafely(el: Element, selector: string): boolean {
+  try {
+    return el.matches(selector);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The theme-sheet selectors that style what was clicked: walking up from `el`
+ * (stopping before body), the first element that any rule matches wins, and
+ * its matching selectors are returned in sheet order, at most three. The
+ * nearest element is the one that was clicked, so an outer rule that only
+ * matches an ancestor is left out.
+ */
+export function themeSelectors(el: Element | null, sheet = themeSheet()): string[] {
+  if (!el || !sheet) return [];
+  let selectors: string[];
+  try {
+    selectors = collectSelectors(sheet.cssRules, []);
+  } catch {
+    return [];
+  }
+  for (let node: Element | null = el; node && node.tagName !== "BODY"; node = node.parentElement) {
+    const matched = selectors.filter((sel) => matchesSafely(node, sel));
+    if (matched.length > 0) {
+      return Array.from(new Set(matched)).slice(0, MAX_THEME_SELECTORS);
+    }
+  }
+  return [];
+}

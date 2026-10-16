@@ -2,8 +2,8 @@
  * Source-target resolution for the preview bridge: which annotations an
  * element maps to, nearest first, and the owning file each one carries.
  */
-import { describe, it, expect } from "vitest";
-import { resolveSourceTargets } from "../source-target";
+import { describe, it, expect, afterEach } from "vitest";
+import { resolveSourceTargets, themeSelectors } from "../source-target";
 
 describe("resolveSourceTargets", () => {
   it("stops at data-source-none, so an annotated ancestor above chrome is not reported", () => {
@@ -48,5 +48,63 @@ describe("resolveSourceTargets", () => {
     document.body.innerHTML = '<p id="t">plain</p>';
     expect(resolveSourceTargets(document.getElementById("t"))).toEqual([]);
     expect(resolveSourceTargets(null)).toEqual([]);
+  });
+});
+
+function themeSheet(css: string): CSSStyleSheet {
+  const style = document.createElement("style");
+  style.textContent = css;
+  document.head.appendChild(style);
+  return style.sheet as CSSStyleSheet;
+}
+
+describe("themeSelectors", () => {
+  afterEach(() => {
+    document.head.innerHTML = "";
+    document.body.innerHTML = "";
+  });
+
+  it("returns the selectors of the nearest element a rule matches, in sheet order", () => {
+    const sheet = themeSheet(
+      ".moss-hero { color: green } .moss-hero h1 { color: red } " +
+        "@layer themes { h1 { color: blue } }",
+    );
+    document.body.innerHTML =
+      '<section class="moss-hero"><h1><span id="t">x</span></h1></section>';
+    expect(themeSelectors(document.getElementById("t"), sheet)).toEqual([
+      ".moss-hero h1",
+      "h1",
+    ]);
+  });
+
+  it("descends into @media blocks", () => {
+    const sheet = themeSheet("@media (min-width: 1px) { h1 { color: red } }");
+    document.body.innerHTML = '<h1 id="t">x</h1>';
+    expect(themeSelectors(document.getElementById("t"), sheet)).toEqual(["h1"]);
+  });
+
+  it("returns nothing when no rule matches the element or its ancestors", () => {
+    const sheet = themeSheet(".moss-hero h1 { color: red }");
+    document.body.innerHTML = '<p id="t">x</p>';
+    expect(themeSelectors(document.getElementById("t"), sheet)).toEqual([]);
+  });
+
+  it("skips a selector the engine rejects instead of throwing", () => {
+    const sheet = themeSheet("p:bogus-pseudo { color: red } h1 { color: blue }");
+    document.body.innerHTML = '<h1 id="t">x</h1>';
+    expect(themeSelectors(document.getElementById("t"), sheet)).toEqual(["h1"]);
+  });
+
+  it("reads a style rule that also has cssRules, as engines with CSS nesting give it", () => {
+    const rule = { selectorText: "h1", cssRules: [] };
+    const sheet = { cssRules: [{ cssRules: [rule] }] } as unknown as CSSStyleSheet;
+    document.body.innerHTML = '<h1 id="t">x</h1>';
+    expect(themeSelectors(document.getElementById("t"), sheet)).toEqual(["h1"]);
+  });
+
+  it("returns nothing when the page has no theme sheet", () => {
+    themeSheet("h1 { color: red }");
+    document.body.innerHTML = '<h1 id="t">x</h1>';
+    expect(themeSelectors(document.getElementById("t"))).toEqual([]);
   });
 });

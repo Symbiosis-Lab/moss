@@ -82,6 +82,11 @@ describe("buildContextPayload", () => {
     ]);
   });
 
+  it("carries the theme selectors for the element as an array", () => {
+    document.body.innerHTML = '<p id="t">x</p>';
+    expect(Array.isArray(payloadFor(document.getElementById("t")).styles)).toBe(true);
+  });
+
   it("trims the selection and drops whitespace-only selections", () => {
     expect(payloadFor(null, { selection: "  hello  " }).selection).toBe("hello");
     expect(payloadFor(null, { selection: "   " }).selection).toBeNull();
