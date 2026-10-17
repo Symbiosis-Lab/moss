@@ -277,6 +277,15 @@ mod tests {
         assert!(warnings.is_empty(), "expected no warnings, got: {:?}", warnings);
     }
 
+    /// `--moss-footer-end` is moss's own footer end-space hook, so a theme
+    /// that sets it (here to end the page on a picture) is not flagged.
+    #[test]
+    fn footer_end_space_property_has_no_warning() {
+        let css = "footer.container { --moss-footer-end: 0; }";
+        let warnings = lint_theme_css(css);
+        assert!(warnings.is_empty(), "expected no warnings, got: {:?}", warnings);
+    }
+
     /// A theme may declare its own custom property and read it back locally;
     /// that is ordinary CSS, not a hallucinated token.
     #[test]

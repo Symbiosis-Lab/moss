@@ -30,7 +30,7 @@ fn snapshot_with(
         let stem = crate::asset_snapshot::path_strip_extension(&key);
         s.variants.insert(
             stem,
-            VariantKindSet { webp: true, avif: false, hls: false },
+            VariantKindSet { webp: true, avif: false, hls: false, poster: false },
         );
     }
     s
@@ -1712,6 +1712,43 @@ fn scroll_shape_tags_only_when_option_and_ratio_both_say_so() {
         !html_untagged.contains("data-aspect"),
         "got: {html_untagged}"
     );
+}
+
+#[test]
+fn scroll_shape_is_not_applied_inside_a_grid_card() {
+    // A 5:1 image in a grid card is fitted to its slot, not a sideways strip:
+    // no scroll container, no tab stop, and the card's own sizes= (the value
+    // its neighbours get), not the full-width scroll value. The same image in
+    // ordinary article flow keeps the treatment.
+    let assets = snapshot_dims("logo.jpg", 2500, 500);
+    let cell = "auto, calc(min(47.25rem, 100vw) / 4)";
+    let in_card = synthesize_image_html(
+        "logo.jpg",
+        "alt",
+        &assets,
+        ImageContext::MarkdownInline,
+        &ImageRenderOptions {
+            scroll_shape: true,
+            grid_cell_sizes: Some(cell),
+            ..Default::default()
+        },
+    );
+    assert!(!in_card.contains("data-aspect"), "got: {in_card}");
+    assert!(!in_card.contains("tabindex"), "got: {in_card}");
+    assert!(in_card.contains(&format!(r#"sizes="{cell}""#)), "got: {in_card}");
+
+    let in_flow = synthesize_image_html(
+        "logo.jpg",
+        "alt",
+        &assets,
+        ImageContext::MarkdownInline,
+        &ImageRenderOptions { scroll_shape: true, ..Default::default() },
+    );
+    assert!(
+        in_flow.contains(r#"<picture data-aspect="scroll" tabindex="0">"#),
+        "got: {in_flow}"
+    );
+    assert!(in_flow.contains(r#"sizes="2400px""#), "got: {in_flow}");
 }
 
 #[test]

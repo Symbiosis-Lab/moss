@@ -2,8 +2,6 @@
 //!
 //! Generates sitemap.xml (Sitemap Protocol 0.9) and robots.txt from site pages.
 
-use crate::build::scan::article_map::to_pretty_url;
-
 /// A page entry for the sitemap.
 pub struct SitemapEntry {
     /// Relative URL path (e.g., "posts/hello/index.html")
@@ -81,12 +79,12 @@ pub fn generate_sitemap(entries: &[SitemapEntry], site_url: &str) -> String {
     xml.push_str("<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
 
     for entry in sorted {
-        let pretty = to_pretty_url(&entry.url_path);
-        // to_pretty_url("index.html") returns "index" (not empty)
-        let full_url = if pretty == "index" {
-            format!("{}/", base)
-        } else {
-            format!("{}/{}", base, pretty)
+        // The host serves `x/index.html` at `x/` but a static `foo.html` only at
+        // `foo.html`, so the extension stays on every path that is not a directory index.
+        let full_url = match entry.url_path.strip_suffix("index.html") {
+            Some("") => format!("{}/", base),
+            Some(dir) if dir.ends_with('/') => format!("{}/{}", base, dir),
+            _ => format!("{}/{}", base, entry.url_path),
         };
 
         xml.push_str("<url>\n");
@@ -115,6 +113,7 @@ pub(crate) fn entries_for_pages<'a>(
     };
     pages
         .into_iter()
+        .filter(|k| !crate::build::served_path::is_not_found_address(k))
         .filter(|k| !documents.iter().any(|d| d.url_path == **k && (!d.is_listable() || is_linkblog(d))))
         .map(|url_path| SitemapEntry {
             url_path: url_path.clone(),
@@ -229,10 +228,35 @@ mod tests {
 
         // Root index.html -> site root
         assert!(sitemap.contains("<loc>https://example.com/</loc>"));
-        // about.html -> /about
-        assert!(sitemap.contains("<loc>https://example.com/about</loc>"));
+        // about.html -> /about.html (the host serves no extensionless address)
+        assert!(sitemap.contains("<loc>https://example.com/about.html</loc>"));
         // posts/hello/index.html -> /posts/hello/
         assert!(sitemap.contains("<loc>https://example.com/posts/hello/</loc>"));
+    }
+
+    #[test]
+    fn test_static_html_page_keeps_extension_in_sitemap() {
+        let entries = vec![
+            SitemapEntry {
+                url_path: "index.html".to_string(),
+                lastmod: None,
+            },
+            SitemapEntry {
+                url_path: "docs/index.html".to_string(),
+                lastmod: None,
+            },
+            SitemapEntry {
+                url_path: "ui/editor.html".to_string(),
+                lastmod: None,
+            },
+        ];
+
+        let sitemap = generate_sitemap(&entries, "https://example.com");
+
+        assert!(sitemap.contains("<loc>https://example.com/</loc>"));
+        assert!(sitemap.contains("<loc>https://example.com/docs/</loc>"));
+        assert!(sitemap.contains("<loc>https://example.com/ui/editor.html</loc>"));
+        assert!(!sitemap.contains("<loc>https://example.com/ui/editor</loc>"));
     }
 
     #[test]
@@ -294,7 +318,7 @@ mod tests {
         let sitemap = generate_sitemap(&entries, "https://example.com/");
 
         // Should not produce double slashes
-        assert!(sitemap.contains("<loc>https://example.com/about</loc>"));
+        assert!(sitemap.contains("<loc>https://example.com/about.html</loc>"));
         assert!(!sitemap.contains("example.com//"));
     }
 
@@ -319,8 +343,8 @@ mod tests {
 
         // Root (index.html) should come first, then alphabetical
         let root_pos = sitemap.find("https://example.com/</loc>").unwrap();
-        let a_pos = sitemap.find("https://example.com/a-page</loc>").unwrap();
-        let z_pos = sitemap.find("https://example.com/z-page</loc>").unwrap();
+        let a_pos = sitemap.find("https://example.com/a-page.html</loc>").unwrap();
+        let z_pos = sitemap.find("https://example.com/z-page.html</loc>").unwrap();
         assert!(root_pos < a_pos, "Root should come before a-page");
         assert!(a_pos < z_pos, "a-page should come before z-page");
     }

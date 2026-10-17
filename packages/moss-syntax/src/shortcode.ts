@@ -4,7 +4,7 @@
  * Emits the open and close fence lines as SEPARATE single-line marker nodes;
  * the body between is left to the normal markdown parser, so images/emphasis/
  * links become real nodes the live-preview layer renders. The decoration field
- * (cm-shortcode-block.ts) pairs Open↔Close markers with an arity stack.
+ * (cm-shortcode-block.ts) pairs Open↔Close markers with a stack.
  *
  * This is the single frontend parser for shortcode blocks — it replaces the
  * regex TS tokenizer and the async render-scan. Decorations read it from
@@ -18,12 +18,12 @@
 import type { MarkdownConfig, BlockContext, Line } from '@lezer/markdown';
 import { SHORTCODES } from './contract/shortcodes.generated.js';
 
-// Opener: optional indent, >=3 colons, a name starting [A-Za-z], rest = attrs.
+// Opener: optional indent, >=3 colons, a name of letters, digits, `_` and `-` (the build's grammar), rest = attrs.
 // The name is OPTIONAL — `:::{.class}` ("Pure-CSS region") has none, only
 // an attrs block starting with `{`. A bare
 // `:::` (no name, no `{`) is a close fence, not an opener — callers must
 // still reject that case themselves (see `isOpenMatch`).
-export const SHORTCODE_OPEN_RE = /^(\s*)(:{3,})([A-Za-z][\w-]*)?(.*)$/;
+export const SHORTCODE_OPEN_RE = /^(\s*)(:{3,})([\p{L}\p{N}_-]+)?(.*)$/u;
 
 /** True when `m` (a `SHORTCODE_OPEN_RE` match) is a real opener: either it
  *  has a name, or its remainder is an attrs block (starts with `{`). Shared

@@ -387,10 +387,16 @@ pub fn refuse_publish(folder_path: &str) -> Result<(), String> {
             return Err(refusal_text(projection.missing_references.len()));
         }
     }
-    if let Some(unfulfilled) = records.promised_dead_links(folder_path) {
-        if !unfulfilled.is_empty() {
-            return Err(in_flight_refusal_text(unfulfilled.len()));
+    if let Some(promised) = records.promised_dead_links(folder_path) {
+        if !promised.in_cloud.is_empty() {
+            return Err(cloud_refusal_text(&promised.in_cloud));
         }
+        if !promised.links.is_empty() {
+            return Err(in_flight_refusal_text(promised.links.len()));
+        }
+    }
+    if let Some(pending) = records.pending_derivations(folder_path).filter(|n| *n > 0) {
+        return Err(derivations_refusal_text(pending));
     }
     if let Some(refusal) = removal_gate::refusal_for(folder_path) {
         return Err(refusal);
@@ -434,6 +440,17 @@ pub(crate) fn refusal_text(count: usize) -> String {
     )
 }
 
+/// The refusal for text a render showed as a placeholder because the file was
+/// still being read. Reads as "wait": nothing is broken.
+pub(crate) fn derivations_refusal_text(count: usize) -> String {
+    let subject = if count == 1 {
+        "1 file is still being read".to_string()
+    } else {
+        format!("{count} files are still being read")
+    };
+    format!("Nothing published — {subject}. Publish again in a moment.")
+}
+
 /// The refusal for this build's own in-flight media — see the second rule on
 /// [`refuse_publish`]. The reference is not broken, it is a moment early, so
 /// this reads as "wait" rather than "fix" — the wording is the only thing
@@ -448,6 +465,22 @@ pub(crate) fn in_flight_refusal_text(count: usize) -> String {
     format!(
         "Nothing published — {subject}. moss is still finishing a video in the background. \
          Publish again in a moment."
+    )
+}
+
+/// The refusal for a promise whose source is still in the cloud: the bytes are
+/// being downloaded, not encoded, and may never arrive, so the author decides
+/// whether to wait, download in Finder, or remove the reference. Names at most
+/// three files.
+pub(crate) fn cloud_refusal_text(names: &[String]) -> String {
+    const SHOWN: usize = 3;
+    let mut list = names.iter().take(SHOWN).cloned().collect::<Vec<_>>().join(", ");
+    if names.len() > SHOWN {
+        list.push_str(&format!(", and {} more", names.len() - SHOWN));
+    }
+    format!(
+        "Not published yet: these files are still downloading from the cloud — {list}. \
+         moss publishes as soon as they arrive. If they don't, download them in Finder or remove them from the page."
     )
 }
 
@@ -959,6 +992,9 @@ pub async fn register_moss_host_site(
         Err(crate::seta::client::SetaError::NotAllowlisted { apply_url }) => {
             return Err(not_allowlisted_message(&apply_url));
         }
+        Err(crate::seta::client::SetaError::SiteLimitReached { limit, contact }) => {
+            return Err(site_limit_message(limit, contact.as_deref()));
+        }
         Err(e) => return Err(register_failure_message(site_id, e)),
     };
 
@@ -986,11 +1022,12 @@ fn register_failure_message(site_id: &str, e: crate::seta::client::SetaError) ->
     // ACLs, so this is the typical first-publish-of-a-new-folder failure.
     if msg.contains("pubkey not verified") || msg.contains("verification") {
         return format!(
-            "Identity not yet verified for an account. \
-             Run `moss` on this folder once to verify the new identity \
-             via the magic-link email flow, then retry.\n\n\
+            "{} This folder's key has not been linked to an email yet. \
+             Re-run with `--email <address>` to be sent a sign-in link \
+             (the address must be the account the site should belong to), \
+             or open the folder in the desktop app once to verify it there.\n\n\
              Underlying error: {}",
-            msg
+            crate::identity::verify_email::UNVERIFIED_REFUSAL, msg
         );
     }
     if msg.contains("already taken") || msg.contains("must be fresh") {
@@ -1017,6 +1054,21 @@ pub fn not_allowlisted_message(apply_url: &str) -> String {
         format!("{}\n{}", base, apply_url)
     }
 }
+
+/// The "your plan's site quota is used up" message. The contact address is
+/// whatever the server sent; with none, the message ends after the first sentence.
+pub fn site_limit_message(limit: u32, contact: Option<&str>) -> String {
+    use crate::infra::app_advisory::fmt;
+    let first = match limit {
+        1 => fmt("site_limit_one", &[]),
+        n => fmt("site_limit_many", &[("limit", &n.to_string())]),
+    };
+    contact.map_or(first.clone(), |c| format!("{first} {}", fmt("site_limit_contact", &[("contact", c)])))
+}
+
+#[cfg(test)]
+#[path = "deploy/site_limit_message_tests.rs"]
+mod site_limit_message_tests;
 
 #[cfg(test)]
 mod not_allowlisted_message_tests {

@@ -21,9 +21,7 @@ fn test_render_single_article() {
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
         title: "Test Article".to_string(),
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     }];
     let html = render(&articles, false, crate::i18n::Language::En, None, false);
 
@@ -39,9 +37,7 @@ fn test_render_minimal_mode() {
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
         title: "Test Article".to_string(),
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     }];
 
     // Standard mode - shows "2025 · 11"
@@ -65,27 +61,21 @@ fn test_render_groups_by_year() {
             date_raw: Some("2025-11-17T00:00:00Z".to_string()),
             url: "post1.html".to_string(),
             title: "Post 2025 Nov".to_string(),
-            url_path: String::new(),
-            place: None,
-            when_html: None,
+            ..Default::default()
         },
         ArticleListItemProps {
             date_display: "2024 · 12".to_string(),
             date_raw: Some("2024-12-01T00:00:00Z".to_string()),
             url: "post2.html".to_string(),
             title: "Post 2024 Dec".to_string(),
-            url_path: String::new(),
-            place: None,
-            when_html: None,
+            ..Default::default()
         },
         ArticleListItemProps {
             date_display: "2025 · 01".to_string(),
             date_raw: Some("2025-01-15T00:00:00Z".to_string()),
             url: "post3.html".to_string(),
             title: "Post 2025 Jan".to_string(),
-            url_path: String::new(),
-            place: None,
-            when_html: None,
+            ..Default::default()
         },
     ];
     let html = render(&articles, false, crate::i18n::Language::En, None, false);
@@ -108,18 +98,14 @@ fn test_render_sorts_within_year() {
             date_raw: Some("2025-01-15T00:00:00Z".to_string()),
             url: "jan.html".to_string(),
             title: "January".to_string(),
-            url_path: String::new(),
-            place: None,
-            when_html: None,
+            ..Default::default()
         },
         ArticleListItemProps {
             date_display: "2025 · 11".to_string(),
             date_raw: Some("2025-11-17T00:00:00Z".to_string()),
             url: "nov.html".to_string(),
             title: "November".to_string(),
-            url_path: String::new(),
-            place: None,
-            when_html: None,
+            ..Default::default()
         },
     ];
     let html = render(&articles, false, crate::i18n::Language::En, None, false);
@@ -131,6 +117,46 @@ fn test_render_sorts_within_year() {
 }
 
 #[test]
+fn undated_rows_follow_every_dated_row_in_both_directions() {
+    let row = |date: Option<&str>, title: &str| ArticleListItemProps {
+        date_display: date.map(|_| "2025 · 01".to_string()).unwrap_or_default(),
+        date_raw: date.map(|d| d.to_string()),
+        url: format!("{title}.html"),
+        title: title.to_string(),
+        ..Default::default()
+    };
+    let articles = vec![
+        row(None, "Loose Note"),
+        row(Some("2024-03-01T00:00:00Z"), "March Concert"),
+        row(Some("2025-11-17T00:00:00Z"), "November Gala"),
+    ];
+    for ascending in [false, true] {
+        let html = render(&articles, false, crate::i18n::Language::En, None, ascending);
+        let pos = |title: &str| html.find(title).unwrap();
+        assert!(pos("Loose Note") > pos("March Concert"), "ascending={ascending}: {html}");
+        assert!(pos("Loose Note") > pos("November Gala"), "ascending={ascending}: {html}");
+    }
+}
+
+#[test]
+fn undated_rows_with_one_title_order_by_url_path_whatever_the_input_order() {
+    // Two pages can share a title. The url path settles the tie, so the
+    // build's output does not depend on the order files were read from disk.
+    let row = |url_path: &str| ArticleListItemProps {
+        url: format!("{url_path}.html"),
+        title: "Untitled".to_string(),
+        url_path: url_path.to_string(),
+        ..Default::default()
+    };
+    let (first, second) = (row("alpha/untitled"), row("beta/untitled"));
+    for input in [vec![first.clone(), second.clone()], vec![second.clone(), first.clone()]] {
+        let html = render(&input, false, crate::i18n::Language::En, None, false);
+        let pos = |url: &str| html.find(url).unwrap();
+        assert!(pos("alpha/untitled.html") < pos("beta/untitled.html"), "{html}");
+    }
+}
+
+#[test]
 fn test_render_sorts_by_precise_datetime() {
     // Test that articles in the same month are sorted by exact datetime
     let articles = vec![
@@ -139,36 +165,28 @@ fn test_render_sorts_by_precise_datetime() {
             date_raw: Some("2025-11-04T15:28:10.481Z".to_string()),
             url: "first.html".to_string(),
             title: "First (Nov 4)".to_string(),
-            url_path: String::new(),
-            place: None,
-            when_html: None,
+            ..Default::default()
         },
         ArticleListItemProps {
             date_display: "2025 · 11".to_string(),
             date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
             url: "fourth.html".to_string(),
             title: "Fourth (Nov 17)".to_string(),
-            url_path: String::new(),
-            place: None,
-            when_html: None,
+            ..Default::default()
         },
         ArticleListItemProps {
             date_display: "2025 · 11".to_string(),
             date_raw: Some("2025-11-11T00:34:33.978Z".to_string()),
             url: "second.html".to_string(),
             title: "Second (Nov 11)".to_string(),
-            url_path: String::new(),
-            place: None,
-            when_html: None,
+            ..Default::default()
         },
         ArticleListItemProps {
             date_display: "2025 · 11".to_string(),
             date_raw: Some("2025-11-13T01:06:40.170Z".to_string()),
             url: "third.html".to_string(),
             title: "Third (Nov 13)".to_string(),
-            url_path: String::new(),
-            place: None,
-            when_html: None,
+            ..Default::default()
         },
     ];
     let html = render(&articles, false, crate::i18n::Language::En, None, false);
@@ -192,18 +210,13 @@ fn test_render_handles_mixed_parseable_and_unparseable_dates() {
             date_raw: Some("2025-11-17T00:00:00Z".to_string()),
             url: "post1.html".to_string(),
             title: "Dated Article".to_string(),
-            url_path: String::new(),
-            place: None,
-            when_html: None,
+            ..Default::default()
         },
         ArticleListItemProps {
             date_display: "Unknown".to_string(),
-            date_raw: None,
             url: "post2.html".to_string(),
             title: "Undated Article".to_string(),
-            url_path: String::new(),
-            place: None,
-            when_html: None,
+            ..Default::default()
         },
     ];
     let html = render(&articles, false, crate::i18n::Language::En, None, false);
@@ -229,9 +242,7 @@ fn vertical_cjk_rows_still_group_by_year() {
         date_raw: Some(raw.to_string()),
         url: format!("/{title}/"),
         title: title.to_string(),
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let articles = vec![
         article("一七〇三年十二月", "1703-12-01", "楊柳浴禽圖"),
@@ -264,18 +275,14 @@ fn horizontal_rows_keep_arabic_headings_and_drop_the_bare_year_prefix() {
             date_raw: Some("2025-11-17".to_string()),
             url: "/a/".to_string(),
             title: "A".to_string(),
-            url_path: String::new(),
-            place: None,
-            when_html: None,
+            ..Default::default()
         },
         ArticleListItemProps {
             date_display: "2025".to_string(),
             date_raw: Some("2025".to_string()),
             url: "/b/".to_string(),
             title: "B".to_string(),
-            url_path: String::new(),
-            place: None,
-            when_html: None,
+            ..Default::default()
         },
     ];
     let html = render(&articles, true, crate::i18n::Language::En, None, false);

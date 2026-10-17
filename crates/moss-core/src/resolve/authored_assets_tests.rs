@@ -107,15 +107,17 @@ fn escapes_and_inert_regions_do_not_create_candidates() {
 }
 
 #[test]
-fn parser_adapter_does_not_adopt_a_rename_scanners_unknown_block_superset() {
-    let source = ":::typo\n:::gallery\nfalse-positive.png\n:::\n";
-    assert!(
-        crate::ast::shortcode_extract::shortcode_asset_spans(source)
-            .iter()
-            .any(|span| span.path == "false-positive.png"),
-        "rename tracking deliberately accepts this over-approximation"
-    );
-    assert!(refs(source).is_empty());
+fn an_unknown_block_around_a_gallery_leaves_the_gallery_to_the_parser() {
+    // Same colon count outside and in: the gallery's closer is the first bare
+    // colon line, the unknown block's is the second, and the renderer's
+    // parser and the rename scanner agree on who owns the image.
+    let source = ":::typo\n:::gallery\nowned.png\n:::\n:::\n";
+    assert_eq!(texts(source), ["owned.png"]);
+    // Hand-written pairing: one gallery block, closed by the first `:::`, so
+    // exactly one span. A scanner that mis-paired would see none or two.
+    let spans = crate::ast::shortcode_extract::shortcode_asset_spans(source);
+    assert_eq!(spans.len(), 1, "{spans:?}");
+    assert_eq!(spans[0].path, "owned.png");
 }
 
 #[test]
@@ -188,21 +190,18 @@ fn structural_modes_share_boundaries_but_keep_their_distinct_ownership_rules() {
     );
     assert_eq!(texts(source), ["css.png", "unknown.png", "grid.png"]);
 
-    // The parser gives the first same-arity closer to the outer grid. Its
-    // apparent inner gallery is therefore unterminated and owns no media.
-    let same_arity = ":::grid\n:::gallery\nnot-rendered.png\n:::\n";
+    // A bare colon line closes the innermost open block whatever its length:
+    // the first closer is the gallery's, and the grid it sits in is left
+    // without one, so only the gallery is a block.
+    let one_closer = ":::grid\n:::gallery\nnot-rendered.png\n:::\n";
     assert_eq!(
-        crate::ast::shortcode_extract::extract_shortcodes(same_arity).extracted.len(),
+        crate::ast::shortcode_extract::extract_shortcodes(one_closer).extracted.len(),
         1,
-        "the same-arity closer belongs to the outer grid"
+        "the only closer belongs to the gallery"
     );
-    assert!(refs(same_arity).is_empty());
-    assert!(
-        crate::ast::shortcode_extract::shortcode_asset_spans(same_arity)
-            .iter()
-            .any(|span| span.path == "not-rendered.png"),
-        "rename retains its deliberate physical-source superset"
-    );
+    // With both closers present the grid is a block around the gallery.
+    let both = ":::grid\n:::gallery\nrendered.png\n:::\n:::\n";
+    assert_eq!(texts(both), ["rendered.png"]);
 }
 
 #[test]

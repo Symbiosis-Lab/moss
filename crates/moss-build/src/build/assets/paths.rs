@@ -123,11 +123,10 @@ pub struct PathResolver {
     dir_overrides: std::collections::HashMap<String, String>,
     /// Favicon filename (e.g., "favicon.svg", "favicon.png", "favicon.ico")
     favicon_filename: String,
-    /// Whether `assets/favicon-{16,32,180}.png` were rasterized alongside the
-    /// SVG favicon. When true, `favicon_link()` emits PNG `<link>` tags for
-    /// 16x16/32x32 in addition to the SVG, and `apple_touch_icon_link()`
-    /// returns the 180x180 link.
-    favicon_has_raster_pngs: bool,
+    /// The `assets/favicon-<size>.png` files the build wrote beside the
+    /// favicon. `favicon_link()` links the 16 and 32 ones next to the icon;
+    /// `apple_touch_icon_link()` links the 180 one.
+    favicon_raster_sizes: Vec<u32>,
 }
 
 impl PathResolver {
@@ -139,7 +138,7 @@ impl PathResolver {
             user_js_version: None,
             dir_overrides: std::collections::HashMap::new(),
             favicon_filename: "favicon.svg".to_string(),
-            favicon_has_raster_pngs: false,
+            favicon_raster_sizes: Vec::new(),
         }
     }
 
@@ -179,11 +178,9 @@ impl PathResolver {
         self
     }
 
-    /// Mark that `assets/favicon-{16,32,180}.png` are available so
-    /// `favicon_link()` and `apple_touch_icon_link()` emit the additional
-    /// `<link>` tags.
-    pub fn with_favicon_has_raster_pngs(mut self, has: bool) -> Self {
-        self.favicon_has_raster_pngs = has;
+    /// Set the favicon PNG sizes the build wrote (builder pattern).
+    pub fn with_favicon_raster_sizes(mut self, sizes: Vec<u32>) -> Self {
+        self.favicon_raster_sizes = sizes;
         self
     }
 
@@ -395,13 +392,12 @@ impl PathResolver {
             mime,
             self.favicon_path()
         );
-        if self.favicon_has_raster_pngs {
-            out.push_str(
-                "\n    <link rel=\"icon\" type=\"image/png\" sizes=\"32x32\" href=\"/assets/favicon-32.png\">",
-            );
-            out.push_str(
-                "\n    <link rel=\"icon\" type=\"image/png\" sizes=\"16x16\" href=\"/assets/favicon-16.png\">",
-            );
+        for size in [32u32, 16] {
+            if self.favicon_raster_sizes.contains(&size) {
+                out.push_str(&format!(
+                    "\n    <link rel=\"icon\" type=\"image/png\" sizes=\"{size}x{size}\" href=\"/assets/favicon-{size}.png\">"
+                ));
+            }
         }
         out
     }
@@ -410,7 +406,7 @@ impl PathResolver {
     /// Returns `None` otherwise — the apple-touch-icon must be a real raster
     /// PNG (Apple Link Presentation can't use SVG and silently fails).
     pub fn apple_touch_icon_link(&self) -> Option<String> {
-        if self.favicon_has_raster_pngs {
+        if self.favicon_raster_sizes.contains(&180) {
             Some(
                 r#"<link rel="apple-touch-icon" sizes="180x180" href="/assets/favicon-180.png">"#
                     .to_string(),

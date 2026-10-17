@@ -369,6 +369,23 @@ fn test_css_nav_content_has_border() {
     );
 }
 
+/// A linked image that is a figure's or a card's whole content is a tile, so
+/// the prose image margin must not apply to it.
+#[test]
+fn test_css_linked_image_tile_has_no_prose_margin() {
+    let rule = get_css_rule(
+        DEFAULT_CSS,
+        "article :is(figure, .moss-card) > a > img:only-child, \
+         article :is(figure, .moss-card) > a > picture:only-child > img",
+    )
+    .expect("the linked-image tile rule should exist");
+    assert!(
+        rule.contains("margin-block: 0"),
+        "a linked image tile should drop the prose margin, got: {}",
+        rule
+    );
+}
+
 #[test]
 fn test_css_main_nav_has_bottom_margin() {
     // Main nav has bottom margin for spacing from content
@@ -679,13 +696,13 @@ fn test_css_nav_split_name_alone_on_row_one_then_links_and_toggles() {
     assert!(
         links.contains("order: 1")
             && links.contains("flex: 1 1 0")
-            && links.contains("justify-content: space-between"),
-        "split links open row 2 and spread across it, got: {}",
+            && links.contains("justify-content: flex-start"),
+        "split links open row 2 packed at the start edge, got: {}",
         links
     );
     assert!(
-        icons.contains("order: 2"),
-        "icons must follow links so they land at row 2's end edge, got: {}",
+        icons.contains("order: 2") && icons.contains("margin-inline-start: auto"),
+        "icons must follow links and push to row 2's end edge, got: {}",
         icons
     );
 }
@@ -894,13 +911,12 @@ fn test_css_nav_right_uses_flex() {
 
 #[test]
 fn test_css_sidebar_responsive_width() {
-    // Sidebar width should scale on wider screens using clamp()
-    // Now on main.has-sidebar instead of .page-wrapper.has-sidebar
+    // The rail's width is the --moss-sidebar-width token, so a theme can set it.
     let rule = get_css_rule(DEFAULT_CSS, "main.has-sidebar > .latest-sidebar")
         .expect(".latest-sidebar CSS rule should exist");
     assert!(
-        rule.contains("clamp(") && rule.contains("vw"),
-        "Sidebar should use clamp() with vw units for responsive width, got: {}",
+        rule.contains("width: var(--moss-sidebar-width);"),
+        "Sidebar width must read --moss-sidebar-width, got: {}",
         rule
     );
 }
@@ -1127,9 +1143,8 @@ fn test_css_footer_container_provides_default_chrome() {
     let rule = get_css_rule(DEFAULT_CSS, "footer.container")
         .expect("footer.container CSS rule should exist");
     assert!(
-        rule.contains("color: var(--moss-color-muted)")
-            || rule.contains("color:var(--moss-color-muted)"),
-        "footer.container should use muted color, got: {}",
+        rule.contains("color: var(--moss-footer-ink, var(--moss-color-muted))"),
+        "footer.container should use muted color unless --moss-footer-ink is set, got: {}",
         rule
     );
     // Block padding only: the inline inset is `.container`'s, the one owner
@@ -1150,6 +1165,27 @@ fn test_css_footer_container_provides_default_chrome() {
         before_rule.contains("border-block-start"),
         "footer.container::before should draw the divider via border-block-start, got: {}",
         before_rule
+    );
+}
+
+/// Footer paragraphs fill the footer's own width. The reading measure caps
+/// every `p` at `--moss-content-width`, and that token follows the page's
+/// `content_width`, so without this rule a footer paragraph's width changed
+/// from page to page. The article paragraph rule must keep the cap.
+#[test]
+fn test_css_footer_paragraph_is_not_measure_capped() {
+    let footer_p = get_css_rule(DEFAULT_CSS, "footer.container p")
+        .expect("footer.container p CSS rule should exist");
+    assert!(
+        footer_p.contains("max-inline-size: none"),
+        "the site footer's paragraphs should lift the reading-measure cap, got: {}",
+        footer_p
+    );
+    let body_p = get_css_rule(DEFAULT_CSS, "p").expect("p CSS rule should exist");
+    assert!(
+        body_p.contains("max-inline-size: var(--moss-content-width)"),
+        "the body p rule must keep the reading-measure cap, got: {}",
+        body_p
     );
 }
 
@@ -1226,10 +1262,33 @@ fn test_css_footer_link_underline_uses_text_muted() {
     let rule =
         get_css_rule(DEFAULT_CSS, ".footer-link").expect(".footer-link CSS rule should exist");
     assert!(
-        rule.contains("text-decoration-color: var(--moss-color-muted)"),
-        "Footer link underline should use --moss-color-muted, got: {}",
+        rule.contains("text-decoration-color: var(--moss-footer-ink, var(--moss-color-muted))"),
+        "Footer link underline should use --moss-color-muted unless --moss-footer-ink is set, got: {}",
         rule
     );
+}
+
+#[test]
+fn test_css_footer_reads_band_ink_and_rule_properties() {
+    let footer = get_css_rule(DEFAULT_CSS, "footer.container").expect("footer.container rule");
+    assert!(footer.contains("var(--moss-footer-bg, transparent)"), "band: {footer}");
+
+    let divider = get_css_rule(DEFAULT_CSS, "footer.container::before").expect("divider rule");
+    assert!(
+        divider.contains("1px solid var(--moss-footer-rule, var(--moss-border-light))"),
+        "divider: {divider}"
+    );
+
+    let links = get_css_rule(DEFAULT_CSS, ":where(footer.container) a").expect("footer link rule");
+    assert!(links.contains("color: var(--moss-footer-ink, var(--moss-color-accent))"), "links: {links}");
+
+    let hr = get_css_rule(DEFAULT_CSS, "footer.container hr").expect("footer hr rule");
+    assert!(
+        hr.contains("height: 0") && hr.contains("var(--moss-footer-rule, var(--moss-border-light))"),
+        "hairline: {hr}"
+    );
+    let ornament = get_css_rule(DEFAULT_CSS, "footer.container hr::before").expect("ornament rule");
+    assert!(ornament.contains("content: none"), "ornament: {ornament}");
 }
 
 #[test]
@@ -1538,19 +1597,6 @@ fn test_css_grid_card_link_no_underline() {
     );
 }
 
-#[test]
-fn test_css_grid_card_scroll_picture_has_no_article_margin() {
-    // A wide (`data-aspect="scroll"`) picture inside a grid card must drop the
-    // article-body block margin, or it sits lower than its neighbours' images.
-    let rule = get_css_rule(DEFAULT_CSS, ".moss-grid-card picture[data-aspect=\"scroll\"]")
-        .expect(".moss-grid-card picture[data-aspect=\"scroll\"] CSS rule should exist");
-    assert!(
-        rule.contains("margin-block: 0"),
-        "card scroll picture must zero the article margin, got: {}",
-        rule
-    );
-}
-
 // =========================================================================
 // Template: has-sidebar-layout class on <html>
 // =========================================================================
@@ -1846,6 +1892,18 @@ fn template_marks_main_nav_and_nav_island_as_source_none_in_preview_mode() {
     assert!(
         result.contains(r#"<div class="moss-nav-island" data-source-none>"#),
         "the nav island must carry data-source-none"
+    );
+}
+
+/// Pagefind indexes the page body, so the skip link's "Skip to content" text
+/// would otherwise lead every search excerpt. The rendered shell must mark it.
+#[test]
+fn rendered_shell_keeps_skip_link_out_of_the_search_index() {
+    let processor = ShellProcessor::new();
+    let result = processor.process(ShellType::Article, make_test_vars(false));
+    assert!(
+        result.contains(r##"<a class="moss-skip-link" data-pagefind-ignore href="#main-content">"##),
+        "the skip link must carry data-pagefind-ignore"
     );
 }
 
@@ -2446,6 +2504,8 @@ fn both_templates_carry_the_share_qr_attribute() {
     for kind in [ShellType::Article, ShellType::Page] {
         let vars = ShellVars {
             share_qr_attr: r#" data-share-qr="/qr/posts-a.svg""#.to_string(),
+            // A page with no body at all has no article to carry it.
+            homepage_content: "<p>Body.</p>".to_string(),
             ..test_vars()
         };
         let out = ShellProcessor::new().process(kind, vars);
@@ -2664,6 +2724,12 @@ fn minify_css_strips_comments() {
         result
     );
     assert!(result.contains("body"), "Selectors should be preserved");
+}
+
+#[test]
+fn minify_css_keeps_non_ascii_text_intact() {
+    let result = minify_css(".a::before { content: \" · \"; }\n.b { content: \"全\"; }");
+    assert_eq!(result, ".a::before{content:\" · \"}.b{content:\"全\"}");
 }
 
 #[test]
@@ -2922,7 +2988,7 @@ fn test_template_skip_link_is_first_in_body_and_localized() {
         .expect("<body ...> tag must close");
     let after_body = &SHELL_TEMPLATE[body_tag_end..];
     assert!(
-        after_body.starts_with(r##"<a class="moss-skip-link" href="#main-content">{skip_link_label}</a>"##),
+        after_body.starts_with(r##"<a class="moss-skip-link" data-pagefind-ignore href="#main-content">{skip_link_label}</a>"##),
         "Skip link must be the first element after <body ...>, got: {:?}",
         &after_body[..after_body.len().min(120)]
     );
@@ -2938,7 +3004,7 @@ fn test_template_skip_link_is_first_in_body_and_localized() {
     };
     let result = processor.process(ShellType::Page, vars);
     assert!(
-        result.contains(r##"<a class="moss-skip-link" href="#main-content">跳到内容</a>"##),
+        result.contains(r##"<a class="moss-skip-link" data-pagefind-ignore href="#main-content">跳到内容</a>"##),
         "Skip link should render with the localized label"
     );
 }
@@ -3817,4 +3883,12 @@ fn external_card_favicon_resets_image_margins_and_uses_logical_gap() {
     assert!(rule.contains("margin-inline-end: 0.35em"), "got: {rule}");
     assert!(!rule.contains("margin-right"), "physical margin leaked into favicon rule: {rule}");
     assert!(!rule.contains("margin-block"), "block margin leaked into favicon rule: {rule}");
+}
+
+#[test]
+fn gallery_rows_uses_ratio_fallback_wherever_it_reads_ar() {
+    // An item the emitter gave no dimensions has no --ar; a bare var(--ar)
+    // makes the declaration invalid and the item collapses.
+    assert!(DEFAULT_CSS.contains("var(--ar, 1.5)"));
+    assert!(!DEFAULT_CSS.contains("var(--ar)"), "a bare var(--ar) has no fallback");
 }

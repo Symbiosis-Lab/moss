@@ -1,9 +1,8 @@
-import { a as shortcodeAssetRef, i as parseAttrKvSpans, r as isOpenMatch, t as SHORTCODE_OPEN_RE } from "../shortcode-CNckZosN.mjs";
+import { a as shortcodeAssetRef, i as parseAttrKvSpans, r as isOpenMatch, t as SHORTCODE_OPEN_RE } from "../shortcode-DtxjbgXz.mjs";
 import { HighlightStyle, syntaxHighlighting, syntaxTree } from "@codemirror/language";
 import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
 import { RangeSetBuilder, StateField } from "@codemirror/state";
 import { tags } from "@lezer/highlight";
-import { linter } from "@codemirror/lint";
 
 //#region src/cm6/cm-active-lines.ts
 /**
@@ -775,7 +774,7 @@ function mossHighlightExtension() {
 //#region src/cm6/cm-shortcode-block.ts
 /**
 * Block-decoration StateField for shortcode blocks. Reads the SYNCHRONOUS Lezer
-* syntax tree and pairs Open↔Close fence markers with an arity stack, so
+* syntax tree and pairs Open↔Close fence markers with a stack, so
 * positions are always current for tr.state — no stale offsets, no glitches.
 *
 * The document alone decides how a block renders, never the caret: every
@@ -795,7 +794,7 @@ const DEFAULT_STRINGS = {
 	legacyDividerTooltip: () => "The grid still splits here, but --- is the old way to write a cell divider. Replace it with +++."
 };
 /**
-* Pair Open↔Close fence markers with an arity stack. Returns the TOP-LEVEL
+* Pair Open↔Close fence markers with a plain stack: a close pops the innermost open. Returns the TOP-LEVEL
 * blocks; each carries its nested `children` so the decoration layer can render
 * `::::buttons` inside `:::grid` instead of leaking the inner fences as raw
 * text. (Nesting parity with the Rust extractor — see cm-shortcode-scanner.)
@@ -822,9 +821,8 @@ function collectShortcodeBlocks(state) {
 				children: []
 			});
 		} else if (node.name === "ShortcodeCloseLine") {
-			const arity = state.doc.sliceString(node.from, node.to).trim().length;
-			for (let i = stack.length - 1; i >= 0; i--) if (stack[i].arity === arity) {
-				const open = stack.splice(i)[0];
+			const open = stack.pop();
+			if (open) {
 				const block = {
 					from: open.from,
 					to: node.to,
@@ -836,7 +834,6 @@ function collectShortcodeBlocks(state) {
 				};
 				if (stack.length > 0) stack[stack.length - 1].children.push(block);
 				else out.push(block);
-				break;
 			}
 		}
 	} });
@@ -1090,118 +1087,47 @@ function shortcodeBlockExtension(opts = {}) {
 }
 
 //#endregion
-//#region src/cm6/cm-link-resolver.ts
-/**
-* Map the cached LINK envelopes for every extracted link span to Diagnostic[].
-*
-* Reads the shared reference cache with is_embed:false. Targets not yet in the
-* cache (the batch hasn't landed) produce no diagnostic — the linter re-runs
-* via `needsRefresh(refsResolvedEffect)` once the batch dispatches its effect.
-*
-* Pure over (state, cache) — no async, no IPC. One diagnostic per extracted
-* span (so the same target appearing twice gets two diagnostics).
-*/
-function runLinkLintSource(view, cache) {
-	const targets = extractLinkTargets(view.state);
-	if (targets.length === 0) return [];
-	const diagnostics = [];
-	for (const { target, from, to, nodeFrom, nodeTo } of targets) {
-		if (nodeTouchesSelection(view.state, nodeFrom, nodeTo)) continue;
-		const env = cache.get(target, false);
-		if (!env) continue;
-		if (env.kind.kind === "link" && env.message) diagnostics.push({
-			from,
-			to,
-			severity: "warning",
-			message: env.message,
-			source: "link-validator"
-		});
-		else if (env.kind.kind === "moved") diagnostics.push({
-			from,
-			to,
-			severity: "error",
-			message: env.message ?? `no page at this URL any more — it lives at ${env.url ?? "?"}`,
-			source: "link-validator"
-		});
-	}
-	return diagnostics;
-}
+//#region src/cm6/cm-link-clickable.ts
 const clickableLinkDecoration = Decoration.mark({ class: "cm-link-clickable" });
-const unresolvedDimDecoration = Decoration.mark({ class: "cm-link-unresolved-dim" });
 /**
-* Build the link-feedback decorations:
-*   - `cm-link-clickable` on EVERY link NODE and every EMBED node (Cmd-held
-*     cursor affordance).
-*   - `cm-link-unresolved-dim` on not-found targets, EXCEPT the one the cursor
-*     is on (per-node) — while the user is typing toward a future page, no
-*     feedback at all for that link; sibling links keep their dim cue.
+* `cm-link-clickable` on every link NODE and every EMBED node — the class the
+* host's Cmd/Ctrl-held cursor rule keys on. Exported for unit tests.
 *
-* Embeds get the hand but never the dim, which is why they are a separate walk
-* rather than an addition to `extractLinkTargets`: that extractor skips
-* `WikilinkEmbed` on purpose because a lint underline belongs on link
-* text, not on a rendered card. The CURSOR is a different question — an embed
-* is exactly as followable as a link, and cm-link-nav has followed one since
-* `followTargetAt` learned about embeds. While the card is rendered its source
-* is hidden and nothing is painted; the moment the cursor reveals the raw
-* `![[ … ]]` above the card, the press follows it and the hand must say so.
+* Embeds are a separate walk rather than an addition to `extractLinkTargets`:
+* that extractor skips `WikilinkEmbed` on purpose, because a host may render an
+* embed in place of its text. While it is rendered its source is hidden and
+* nothing is painted; the moment the cursor reveals the raw `![[ … ]]`, a press
+* follows it and the hand must say so.
 */
-function buildLinkDecorations(state, cache) {
+function buildLinkDecorations(state) {
 	const builder = new RangeSetBuilder();
 	const ranges = [];
 	syntaxTree(state).iterate({ enter(node) {
 		if (!isEmbedNode(node.name)) return;
 		ranges.push({
 			from: node.from,
-			to: node.to,
-			deco: clickableLinkDecoration
+			to: node.to
 		});
 		return false;
 	} });
-	for (const { target, from, to, nodeFrom, nodeTo } of extractLinkTargets(state)) {
-		ranges.push({
-			from: nodeFrom,
-			to: nodeTo,
-			deco: clickableLinkDecoration
-		});
-		if (cache.get(target, false)?.kind.kind === "not-found" && !nodeTouchesSelection(state, nodeFrom, nodeTo)) ranges.push({
-			from,
-			to,
-			deco: unresolvedDimDecoration
-		});
-	}
+	for (const { nodeFrom, nodeTo } of extractLinkTargets(state)) ranges.push({
+		from: nodeFrom,
+		to: nodeTo
+	});
 	ranges.sort((a, b) => a.from - b.from || b.to - a.to);
-	for (const r of ranges) builder.add(r.from, r.to, r.deco);
+	for (const r of ranges) builder.add(r.from, r.to, clickableLinkDecoration);
 	return builder.finish();
 }
-/**
-* Create a CM6 extension that validates links by READING the shared reference
-* cache (no RPC of its own).
-*
-* - Uses Lezer-based `extractLinkTargets`.
-* - The lint source is synchronous (a pure pull over the cache); the `linter()`
-*   delay (600 ms) keeps the diagnostic paint debounced.
-* - `needsRefresh(refsResolvedEffect)` re-runs the source when the reference
-*   resolver's batch lands (initial resolve AND the post-FileChanged re-batch,
-*   which the resolver triggers by clearing its cache + re-scheduling).
-* - `@codemirror/lint` shows the diagnostic message on hover natively.
-*
-* @param opts.resolvedCache       Shared reference cache (read-only lookup).
-* @param opts.refsResolvedEffect  The effect the resolver dispatches after a batch.
-*/
-function linkValidationExtension(opts) {
-	const lintSource = (view) => runLinkLintSource(view, opts.resolvedCache);
-	return { extension: [linter(lintSource, {
-		delay: 600,
-		needsRefresh: (update) => update.docChanged || update.selectionSet || update.transactions.some((tr) => tr.effects.some((e) => e.is(opts.refsResolvedEffect)))
-	}), ViewPlugin.fromClass(class LinkDecorator {
+/** The followable-cursor mark, rebuilt as the document or the viewport changes. */
+function linkClickableExtension() {
+	return ViewPlugin.fromClass(class LinkClickable {
 		constructor(view) {
-			this.decorations = buildLinkDecorations(view.state, opts.resolvedCache);
+			this.decorations = buildLinkDecorations(view.state);
 		}
 		update(update) {
-			const batchLanded = update.transactions.some((tr) => tr.effects.some((e) => e.is(opts.refsResolvedEffect)));
-			if (update.docChanged || update.selectionSet || update.viewportChanged || batchLanded) this.decorations = buildLinkDecorations(update.state, opts.resolvedCache);
+			if (update.docChanged || update.viewportChanged) this.decorations = buildLinkDecorations(update.state);
 		}
-	}, { decorations: (v) => v.decorations })] };
+	}, { decorations: (v) => v.decorations });
 }
 
 //#endregion
@@ -1429,4 +1355,4 @@ function footnoteExtension() {
 }
 
 //#endregion
-export { buildLinkDecorations, collectShortcodeBlocks, criticmarkupExtension, dividesCellsAt, embedNodeAt, embedParts, extractImageTargets, extractLinkTargets, flattenBlocks, folderChips, folderParamsFromEmbed, footnoteDecorations, footnoteExtension, footnoteIndex, footnoteJumpTarget, footnoteTheme, footnoteViewPluginForTest, imageNodeAtWidget, inShortcodeBody, isCellDividerLine, isEmbedNode, isLegacyDividerLine, legacyDividesCellsAt, linkUnitOfEmbed, linkValidationExtension, linkedEmbedOf, mossHighlight, mossHighlightExtension, nodeTouchesSelection, parseFolderParams, parseMarks, runLinkLintSource, shortcodeBlockExtension, shortcodeBodyRanges, topLevelLegacyDividerCount, widthFromPipe };
+export { buildLinkDecorations, collectShortcodeBlocks, criticmarkupExtension, dividesCellsAt, embedNodeAt, embedParts, extractImageTargets, extractLinkTargets, flattenBlocks, folderChips, folderParamsFromEmbed, footnoteDecorations, footnoteExtension, footnoteIndex, footnoteJumpTarget, footnoteTheme, footnoteViewPluginForTest, imageNodeAtWidget, inShortcodeBody, isCellDividerLine, isEmbedNode, isLegacyDividerLine, legacyDividesCellsAt, linkClickableExtension, linkUnitOfEmbed, linkedEmbedOf, mossHighlight, mossHighlightExtension, nodeTouchesSelection, parseFolderParams, parseMarks, shortcodeBlockExtension, shortcodeBodyRanges, topLevelLegacyDividerCount, widthFromPipe };

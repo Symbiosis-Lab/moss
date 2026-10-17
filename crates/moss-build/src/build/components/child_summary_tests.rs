@@ -6,15 +6,7 @@ fn article_props(title: &str, url: &str) -> ChildItemProps {
         url: url.to_string(),
         date_display: Some("2025 · 03 · 01".to_string()),
         date_raw: Some("2025-03-01".to_string()),
-        child_count: None,
-        description: None,
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     }
 }
 
@@ -22,17 +14,8 @@ fn folder_props(title: &str, url: &str, count: usize) -> ChildItemProps {
     ChildItemProps {
         title: title.to_string(),
         url: url.to_string(),
-        date_display: None,
-        date_raw: None,
         child_count: Some(count),
-        description: None,
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     }
 }
 
@@ -46,6 +29,8 @@ fn an_event_card_wraps_its_place_after_the_time() {
         crate::i18n::Language::En,
     );
     let props = ChildItemProps {
+        credits: None,
+        tickets: None,
         place: Some("Example Hall".to_string()),
         when_html: Some(when),
         ..article_props("Opening", "/events/opening/")
@@ -178,16 +163,9 @@ fn test_render_card_escapes_html() {
         title: "<script>alert('xss')</script>".to_string(),
         url: "/test/?a=1&b=2".to_string(),
         date_display: Some("<b>bold</b>".to_string()),
-        date_raw: None,
-        child_count: None,
         description: Some("A & B < C".to_string()),
         cover: Some("/img?x=1&y=2".to_string()),
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render_with_sort(
         &props,
@@ -386,15 +364,9 @@ fn renders_permalink_star_inside_kicker_when_external_url_overrides_href() {
         url: "https://outlet.example/article".to_string(),
         date_display: Some("2024 · 12".to_string()),
         date_raw: Some("2024-12-23".to_string()),
-        child_count: None,
-        description: None,
-        cover: None,
-        cover_type: None,
         kicker: Some("The Wire China".to_string()),
         permalink: Some("/works/article/".to_string()),
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render_with_sort(
         &props,
@@ -443,17 +415,8 @@ fn omits_permalink_when_kicker_is_none_even_with_external_url() {
     let props = ChildItemProps {
         title: "Article Title".to_string(),
         url: "https://outlet.example/article".to_string(),
-        date_display: None,
-        date_raw: None,
-        child_count: None,
-        description: None,
-        cover: None,
-        cover_type: None,
-        kicker: None,
         permalink: Some("/works/article/".to_string()),
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render_with_sort(
         &props,
@@ -486,16 +449,9 @@ fn cjk_date_keeps_separate_meta_inside_card() {
         title: "Article".to_string(),
         url: "https://outlet.example/".to_string(),
         date_display: Some("二〇二四年十二月".to_string()),
-        date_raw: None,
-        child_count: None,
-        description: None,
-        cover: None,
-        cover_type: None,
         kicker: Some("遠聲媒體".to_string()),
         permalink: Some("/archive/foo/".to_string()),
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render_with_sort(
         &props,
@@ -531,17 +487,7 @@ fn omits_permalink_when_no_external_url() {
     let props = ChildItemProps {
         title: "Local Post".to_string(),
         url: "/posts/local/".to_string(),
-        date_display: None,
-        date_raw: None,
-        child_count: None,
-        description: None,
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render_with_sort(
         &props,
@@ -573,15 +519,8 @@ fn renders_kicker_above_title_horizontal() {
         url: "/posts/notes/".to_string(),
         date_display: Some("2025 · 04".to_string()),
         date_raw: Some("2025-04-01".to_string()),
-        child_count: None,
-        description: None,
-        cover: None,
-        cover_type: None,
         kicker: Some("ESSAYS".to_string()),
-        permalink: None,
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render_with_sort(
         &props,
@@ -623,15 +562,9 @@ fn kicker_absorbing_the_date_still_shows_the_place() {
         url: "/posts/notes/".to_string(),
         date_display: Some("2025 · 04".to_string()),
         date_raw: Some("2025-04-01".to_string()),
-        child_count: None,
-        description: None,
-        cover: None,
-        cover_type: None,
         kicker: Some("ESSAYS".to_string()),
-        permalink: None,
-        url_path: String::new(),
         place: Some("Cambridge".to_string()),
-        when_html: None,
+        ..Default::default()
     };
     let html = render_with_sort(
         &props,
@@ -662,16 +595,8 @@ fn vertical_head_order_matches_horizontal() {
         title: "在公開場合寫作".to_string(),
         url: "/posts/notes/".to_string(),
         date_display: Some("二〇二五·四".to_string()),
-        date_raw: None,
-        child_count: None,
-        description: None,
-        cover: None,
-        cover_type: None,
         kicker: Some("FOLDER".to_string()),
-        permalink: None,
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render_with_sort(
         &props,
@@ -708,16 +633,8 @@ fn vertical_typesetting_still_sets_the_meta_line_with_a_place_appended() {
         title: "在公開場合寫作".to_string(),
         url: "/posts/notes/".to_string(),
         date_display: Some("二〇二五·四".to_string()),
-        date_raw: None,
-        child_count: None,
-        description: None,
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
         place: Some("Cambridge".to_string()),
-        when_html: None,
+        ..Default::default()
     };
     let html = render_with_sort(
         &props,
@@ -744,15 +661,7 @@ fn meta_renders_date_when_axis_is_date() {
         url: "/h/".into(),
         date_display: Some("2025 · 03".into()),
         date_raw: Some("2025-03-01".into()),
-        child_count: None,
-        description: None,
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render_with_sort(
         &props,
@@ -774,15 +683,8 @@ fn meta_shows_the_resolved_place_next_to_the_date() {
         url: "/lectures/1924/".into(),
         date_display: Some("1924".into()),
         date_raw: Some("1924-10-01".into()),
-        child_count: None,
-        description: None,
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
         place: Some("Cambridge".into()),
-        when_html: None,
+        ..Default::default()
     };
     let html = render_with_sort(
         &props,
@@ -802,6 +704,8 @@ fn meta_shows_the_resolved_place_next_to_the_date() {
 #[test]
 fn meta_never_shows_a_place_beside_a_folders_count() {
     let props = ChildItemProps {
+        credits: None,
+        tickets: None,
         place: Some("Kyoto".into()),
         when_html: None,
         ..folder_props("Kyoto Walk", "/works/kyoto-walk/", 2)
@@ -825,16 +729,8 @@ fn meta_collapses_when_axis_is_title() {
         title: "Project".into(),
         url: "/p/".into(),
         date_display: Some("2025 · 03".into()),
-        date_raw: None,
-        child_count: None,
         description: Some("A project".into()),
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render_with_sort(
         &props,
@@ -854,17 +750,7 @@ fn meta_collapses_when_axis_is_weight() {
     let props = ChildItemProps {
         title: "Intro".into(),
         url: "/i/".into(),
-        date_display: None,
-        date_raw: None,
-        child_count: None,
-        description: None,
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render_with_sort(
         &props,
@@ -975,4 +861,64 @@ fn non_event_summary_card_is_unchanged_by_the_event_time() {
     let html = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Date);
     assert!(!html.contains("moss-when"), "got: {html}");
     assert!(html.contains(r#"<div class="moss-card-kicker">Museum Press · 2025</div><div class="moss-card-meta">Example Hall</div>"#), "got: {html}");
+}
+
+fn event_summary_props(tickets: Option<&str>) -> ChildItemProps {
+    ChildItemProps {
+        credits: None,
+        tickets: tickets.map(str::to_string),
+        date_display: None,
+        date_raw: None,
+        ..article_props("Spring Gala", "spring-gala.html")
+    }
+}
+
+#[test]
+fn event_summary_card_with_tickets_links_title_and_carries_its_own_tickets_link() {
+    let props = ChildItemProps {
+        credits: None,
+        description: Some("Doors open at seven.".to_string()),
+        ..event_summary_props(Some("https://example.test/tickets"))
+    };
+    let html = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Date);
+    assert!(html.starts_with(r#"<div class="moss-card">"#), "got: {html}");
+    assert_eq!(html.matches(r#"<a class="moss-card-link""#).count(), 1, "got: {html}");
+    assert!(
+        html.contains(r#"<a class="moss-card-link" href="spring-gala.html">Spring Gala</a>"#),
+        "got: {html}"
+    );
+    assert!(
+        html.contains(r#"<a class="moss-event-link moss-event-tickets" href="https://example.test/tickets">Tickets<span class="visually-hidden"> for Spring Gala</span></a>"#),
+        "got: {html}"
+    );
+    let title_at = html.find(r#"<a class="moss-card-link""#).unwrap();
+    let tickets_at = html.find(r#"<a class="moss-event-link moss-event-tickets""#).unwrap();
+    let description_at = html.find(r#"<p class="moss-card-description">"#).unwrap();
+    assert!(title_at < tickets_at && description_at < tickets_at, "got: {html}");
+    assert_eq!(crate::build::components::child_list::max_anchor_depth(&html), 1, "got: {html}");
+}
+
+#[test]
+fn event_summary_card_with_only_online_links_title_and_carries_its_online_link() {
+    let props = ChildItemProps {
+        online: Some("https://example.test/live".to_string()),
+        ..event_summary_props(None)
+    };
+    let html = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Date);
+    assert!(html.starts_with(r#"<div class="moss-card">"#), "got: {html}");
+    assert!(
+        html.contains(r#"<a class="moss-event-link moss-event-online" href="https://example.test/live">Online<span class="visually-hidden"> for Spring Gala</span></a>"#),
+        "got: {html}"
+    );
+    assert_eq!(crate::build::components::child_list::max_anchor_depth(&html), 1, "got: {html}");
+}
+
+#[test]
+fn event_summary_card_without_tickets_keeps_its_whole_card_anchor() {
+    let props = event_summary_props(None);
+    let html = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Date);
+    assert_eq!(
+        html,
+        r#"<a href="spring-gala.html" class="moss-card"><div class="moss-card-row"><div class="moss-card-body"><h3 class="moss-card-title">Spring Gala</h3></div></div></a>"#
+    );
 }

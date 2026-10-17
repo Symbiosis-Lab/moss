@@ -183,7 +183,7 @@ describe("Messaging Utilities", () => {
     it("invokes report_plugin_task_lifecycle_command with started lifecycle", async () => {
       setMessageContext("matters", "process");
       const task = await startTask("Importing 42 articles", {
-        hook: "import",
+        hook: "process",
         trigger: "onboarding_flow",
         hasProgress: true,
         cancellable: true,
@@ -194,7 +194,7 @@ describe("Messaging Utilities", () => {
         "report_plugin_task_lifecycle_command",
         {
           pluginName: "matters",
-          hook: "import",
+          hook: "process",
           trigger: "onboarding_flow",
           taskId: undefined,
           lifecycle: {
@@ -209,7 +209,7 @@ describe("Messaging Utilities", () => {
 
     it("threads task id into subsequent progress / succeeded calls", async () => {
       setMessageContext("matters", "process");
-      const task = await startTask("Importing", { hook: "import" });
+      const task = await startTask("Importing", { hook: "process" });
       mockInvoke.mockClear();
 
       await task.progress(0.42, "halfway");
@@ -284,13 +284,13 @@ describe("Messaging Utilities", () => {
       );
     });
 
-    it("hook defaults to 'import' and trigger defaults to 'background'", async () => {
+    it("hook defaults to 'process' and trigger defaults to 'background'", async () => {
       setMessageContext("matters", "process");
       await startTask("Default routing");
       expect(mockInvoke).toHaveBeenCalledWith(
         "report_plugin_task_lifecycle_command",
         expect.objectContaining({
-          hook: "import",
+          hook: "process",
           trigger: "background",
         })
       );
@@ -333,7 +333,7 @@ describe("Messaging Utilities", () => {
       // rejected by the Rust router as "unknown task id").
       (globalThis as unknown as { window: unknown }).window = {};
       mockInvoke.mockClear();
-      const task = await startTask("Importing", { hook: "import" });
+      const task = await startTask("Importing", { hook: "process" });
       expect(task.id).toBe("-1");
       // `startTask` itself short-circuits via isTauriAvailable()
       // before reaching invoke, so no started call either.
@@ -354,7 +354,7 @@ describe("Messaging Utilities", () => {
     it("end-to-end fake plugin: startTask().progress().succeeded()", async () => {
       // Approach A test from the dispatch plan: write a tiny fake plugin
       // that drives the API surface and inspect every emitted invoke.
-      setMessageContext("fake-plugin", "import");
+      setMessageContext("fake-plugin", "process");
       const calls: Array<{ type: string; lifecycle: unknown }> = [];
       const originalInvoke = mockInvoke.getMockImplementation();
       mockInvoke.mockImplementation(async (cmd: string, args: { lifecycle: { type: string } }) => {
@@ -364,7 +364,7 @@ describe("Messaging Utilities", () => {
       });
 
       const task = await startTask("Fake import", {
-        hook: "import",
+        hook: "process",
         trigger: "onboarding_flow",
       });
       await task.progress(0.0, "starting");

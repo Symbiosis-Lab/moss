@@ -266,6 +266,14 @@ interface LiveComment {
       return `${year}年${month}月${day}日`;
     }
 
+    if (lang === "de") {
+      const months = [
+        "???", "Januar", "Februar", "März", "April", "Mai", "Juni",
+        "Juli", "August", "September", "Oktober", "November", "Dezember",
+      ];
+      return `${day}. ${months[month] ?? "???"} ${year}`;
+    }
+
     const monthName = [
       "???", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -285,6 +293,11 @@ interface LiveComment {
       if (count === 1) return "1則留言";
       return `${count}則留言`;
     }
+    if (lang === "de") {
+      if (count === 0) return "Kommentare";
+      if (count === 1) return "1 Kommentar";
+      return `${count} Kommentare`;
+    }
     if (count === 0) return "Comments";
     if (count === 1) return "1 comment";
     return `${count} comments`;
@@ -294,6 +307,7 @@ interface LiveComment {
     const lang = langBucket(document.documentElement.lang);
     if (lang === "zh-hant") return "回覆";
     if (lang === "en") return "Reply";
+    if (lang === "de") return "Antworten";
     return "回复";
   }
 

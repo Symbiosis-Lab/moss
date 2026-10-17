@@ -52,6 +52,9 @@ pub struct GridCellParts {
     /// host fills this in (`grid_cells::apply_cell_cover_colors`) and this
     /// module only decides where the bytes land.
     pub cover_color: Option<String>,
+    /// Source lines the cell spans, published as `data-source-range` on the
+    /// card wrapper. `None` when untracked.
+    pub source_range: Option<(usize, usize)>,
 }
 
 impl GridCellParts {
@@ -68,9 +71,13 @@ impl GridCellParts {
                     )
                 })
                 .unwrap_or_default();
+            let range = self
+                .source_range
+                .map(|(a, b)| format!(r#" data-source-range="{a}-{b}""#))
+                .unwrap_or_default();
             format!(
-                r#"<div class="moss-grid-card"{}>{}</div>"#,
-                color, self.inner
+                r#"<div class="moss-grid-card"{}{}>{}</div>"#,
+                range, color, self.inner
             )
         } else {
             self.inner.clone()
@@ -84,6 +91,7 @@ impl GridCellParts {
             inner: html,
             carded: false,
             cover_color: None,
+            source_range: None,
         }
     }
 }
@@ -197,9 +205,7 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
         // `resolveSourceTarget`.
         if let Some(n) = source_line {
             open_tag.push_str(r#" data-source-range=""#);
-            open_tag.push_str(&n.to_string());
-            open_tag.push('-');
-            open_tag.push_str(&n.to_string());
+            open_tag.push_str(&args.source.range_from(n));
             open_tag.push('"');
         }
         open_tag.push('>');
@@ -214,15 +220,22 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
     let mut cells: Vec<GridCellParts> = Vec::with_capacity(args.cells.len());
     // Scope image `sizes=` to the cell track while cells render.
     hooks.begin_grid_cells(args.columns, args.width.as_deref());
-    for cell_blocks in &args.cells {
+    for (i, cell_blocks) in args.cells.iter().enumerate() {
+        let fragment = args.source.fragments.get(i);
         let mut cell_html = String::new();
-        super::render::render_blocks(hooks, &mut cell_html, cell_blocks);
+        super::render::render_blocks_with_meta(
+            hooks,
+            &mut cell_html,
+            cell_blocks,
+            fragment.map_or(&[], |f| f.blocks.as_slice()),
+        );
         let collapsed = collapse_tag_adjacent_newlines(&cell_html);
         cells.push(GridCellParts {
             inner: collapsed.trim().to_string(),
             carded: !matches!(cell_blocks.as_slice(), [Block::LinkCard { .. }]),
             // Filled in later by the host, which can read the image off disk.
             cover_color: None,
+            source_range: fragment.and_then(|f| Some((f.first_line?, f.last_line?))),
         });
     }
     hooks.end_grid_cells();

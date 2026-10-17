@@ -181,6 +181,7 @@ fn previous_route_present(
     requirement: &crate::system::folder_session::PreviewRequirement,
     previous: &crate::types::content::SiteHashes,
     current_dir: &Path,
+    evidence: &std::collections::BTreeMap<String, super::cloud_ledger::InputEntry>,
 ) -> bool {
     use crate::system::folder_session::PreviewSource;
     let output = previous.files.keys()
@@ -192,9 +193,13 @@ fn previous_route_present(
                 previous.source_to_output.get(&rel).is_some_and(|mapped| mapped == key)
             }
             PreviewSource::Generated => !previous.source_to_output.values().any(|mapped| mapped == key),
-            // An old generated page can share this URL with a newly authored
-            // source still in the cloud. The route alone proves no owner.
-            PreviewSource::Unresolved => false,
+            // The old route counts once this attempt's evidence proves its
+            // mapped source. An old generated page can share this URL with a
+            // newly authored source still in the cloud: the route alone
+            // proves no owner.
+            PreviewSource::Unresolved => matches!(
+                crate::build::manifest::proven_unresolved_source(&previous.source_to_output, evidence, Some(key)),
+                Some(PreviewSource::File(_))),
         };
         // `hashes.json` is advertised before materialization. A failed or
         // superseded promotion can leave it ahead of `current`, so verify the
@@ -398,7 +403,7 @@ fn run_notebook_processing(
     let is_headless = services.map_or(true, |s| s.reporter.is_terminal());
 
     if is_headless {
-        eprintln!("Processing {} notebook(s)...", total);
+        crate::cli_eprintln!("Processing {} notebook(s)...", total);
     }
 
     // Step 1: Resolve JupyterLite assets (download if not cached)
@@ -430,7 +435,7 @@ fn run_notebook_processing(
         Err(e) => {
             log::warn!("JupyterLite assets not available: {}. Notebooks will be copied without viewer.", e);
             if is_headless {
-                eprintln!("Warning: JupyterLite not available: {}", e);
+                crate::cli_eprintln!("Warning: JupyterLite not available: {}", e);
             }
             // Fallback: copy .ipynb files as-is without JupyterLite
             let mut fallback_paths = Vec::new();
@@ -715,7 +720,7 @@ fn run_notebook_processing(
         }
 
         if is_headless {
-            eprintln!("[{}/{}] Done: {}", i + 1, total, item.source_path);
+            crate::cli_eprintln!("[{}/{}] Done: {}", i + 1, total, item.source_path);
         }
 
         // Emit progress
@@ -799,7 +804,7 @@ fn run_notebook_processing(
     }
 
     if is_headless {
-        eprintln!(
+        crate::cli_eprintln!(
             "Notebook processing complete ({} notebook{})",
             total,
             if total == 1 { "" } else { "s" }
@@ -905,6 +910,16 @@ pub struct PipelineRunOutput {
     /// the seal tail hands to `lifecycle::promote`. `None` for a build that
     /// stopped before it rendered.
     pub render_seq: Option<u64>,
+    /// The derived-text blocks this render showed without text: files still
+    /// being read (a publish waits them out) and files whose read failed.
+    pub unready_derivations: crate::system::derive::site::UnreadyReport,
+    /// The cross-process build lock this build rendered under, still held.
+    /// Taking it again from this process before this is dropped blocks forever.
+    pub folder_lock: crate::infra::folder_lock::Held,
+    /// When this build took `folder_lock`, in wall-clock nanos: its place in
+    /// the cross-process promotion order
+    /// (`infra::folder_lock::last_promoted_epoch`).
+    pub locked_at_nanos: u64,
 }
 
 /// Resolves all native/plugin slot content after marked HTML and article-map
@@ -935,7 +950,7 @@ pub fn run(
     search_freshness: crate::build::feeds::search_lane::Freshness,
     cache_keys: &crate::build::ports::CacheKeyInputs,
 ) -> Result<PipelineRunOutput, BuildStopped> {
-    run_leased(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, None)
+    run_leased(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, None, None)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -955,6 +970,9 @@ pub(crate) fn run_leased(
     incremental: crate::build::render::IncrementalGates,
     search_freshness: crate::build::feeds::search_lane::Freshness,
     cache_keys: &crate::build::ports::CacheKeyInputs,
+    // The plugins' derivations for this build, `None` when plugins are off or
+    // none declares one.
+    derived: Option<std::sync::Arc<crate::system::derive::site::DerivedSite>>,
     // The caller's `lifecycle::CacheWriteLease`, carried into the background
     // handle so it drops when the workers have joined.
     cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
@@ -966,7 +984,7 @@ pub(crate) fn run_leased(
     }
 
     // Use inner function pattern to ensure build state is cleared on ALL exit paths
-    let result = build_inner(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, cache_lease);
+    let result = build_inner(root, site_dir_state, progress_sender, preview_port, services, slot_resolver, project_structure, site_url_override, incremental, search_freshness, cache_keys, derived, cache_lease);
 
     // Clear build state after build completes (success or error)
     if let Some(svc) = services {
@@ -1019,6 +1037,7 @@ fn build_inner(
     incremental: crate::build::render::IncrementalGates,
     search_freshness: crate::build::feeds::search_lane::Freshness,
     cache_keys: &crate::build::ports::CacheKeyInputs,
+    derived: Option<std::sync::Arc<crate::system::derive::site::DerivedSite>>,
     cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
     // `BuildStopped`, not `String`: the gate verdict is emitted from inside this
     // function, so the error type must be able to say "not yet" for the caller
@@ -1164,7 +1183,7 @@ fn build_inner(
     };
     let initial_route = initial_request.as_ref().unwrap_or(&elected_home);
     let prior_route = !(home_substituted && initial_route.url_path == "/")
-        && previous_route_present(initial_route, &previous_hashes, &paths.current_ptr());
+        && previous_route_present(initial_route, &previous_hashes, &paths.current_ptr(), &input_evidence.snapshot());
 
     // An evicted home page used to block this thread here for up to
     // HOME_PAGE_DEADLINE, polling for it to materialize before the build could
@@ -1211,13 +1230,20 @@ fn build_inner(
     // `advertise_sealed`, behind every background worker) is on this build's
     // critical path — hypothesis H-lock, against H-config
     // just below.
-    // Cross-PROCESS counterpart of `_stage_write_guard` below, for this
-    // build's own render span — see `infra::folder_lock`'s module doc for
-    // why this is a SEPARATE window from `advertise_sealed`'s, rather than
-    // one continuous hold. Acquired unconditionally, unlike
-    // `_stage_write_guard`: two separate processes with no session between
-    // them are exactly the case this exists for.
-    let _folder_build_lock = crate::infra::folder_lock::acquire(root.path())?;
+    // Cross-PROCESS counterpart of `_stage_write_guard` below. Acquired
+    // unconditionally, unlike `_stage_write_guard`: two separate processes
+    // with no session between them are exactly the case this exists for.
+    // Returned rather than dropped: how long it is held after the render is
+    // the caller's to decide — see `infra::folder_lock`'s module doc.
+    let folder_build_lock = crate::infra::folder_lock::acquire(root.path())?;
+    // Minted under the lock, so that across processes the order of these
+    // stamps is the order the builds rendered in, which is what the
+    // materialize compares them by. Minted before the lock, a build could
+    // wait out another's whole render and still carry the older stamp.
+    // `MOSS_TEST_ADMISSION_NANOS` overrides this lock-time stamp (not an
+    // admission time, despite its name) for `folder_build_lock_test.rs` only.
+    let locked_at_nanos: u64 = std::env::var("MOSS_TEST_ADMISSION_NANOS").ok().and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0));
     let t_lock = std::time::Instant::now();
     let _stage_write_guard = services
         .and_then(|s| s.session.as_ref())
@@ -1331,6 +1357,10 @@ fn build_inner(
         cfg.as_ref().unwrap_or(&crate::config::ConfigFile::empty()),
         crate::i18n::Language::from_code(&site_lang).unwrap_or(crate::i18n::Language::En),
     );
+    let (field_decls, field_problems) = cfg.as_ref().map(|c| c.field_decls()).unwrap_or_default();
+    for problem in &field_problems {
+        crate::build::cli_output::log_warn_problem!("{problem}");
+    }
     let places_toml_path = paths.places();
     input_evidence.require(&places_toml_path, super::cloud_ledger::InputRole::GeneratedData);
     let (places_toml_stat, places_read) =
@@ -1408,6 +1438,9 @@ fn build_inner(
     // which needs it again after `site_config` is consumed, read the same
     // value.
     let math = site_bool("math").unwrap_or(true);
+    // The listing styles read every declaration, and `site_config` takes
+    // `field_decls` below, so the listing gets its own copy.
+    let listing_field_decls = field_decls.clone();
     // Read site-level config from .moss/config.toml [site] section
     let site_config = crate::build::render::SiteConfig {
         lang: site_lang.clone(),
@@ -1475,8 +1508,11 @@ fn build_inner(
         // before this literal, so the gazetteer's `parent` links can be
         // attached first.
         term_kinds: kinds,
+        term_nav: cfg.as_ref().map(|c| c.terms_nav()).unwrap_or_default(),
+        field_decls,
         place_maps,
         incremental,
+        derivations: derived.clone(),
     };
     log::debug!(target: "timing", "[build] staging: config_reads (1 parse) took {:?}", t_config.elapsed());
     // Construct PendingManifest seeded with previous_hashes (carry-forward).
@@ -1499,7 +1535,7 @@ fn build_inner(
     // When the typed-AST migration completes (Phase 4+), this evolves to
     // `Vec<moss_core::ast::Document>`.
     let exits_after_build = matches!(search_freshness, crate::build::feeds::search_lane::Freshness::Now);
-    let (mut site_result, mut background_ctx, documents, carry_verification) = generate_blocking_content_for_build(root, project_structure, &stage_dir, services, progress_sender, emit_source_lines, site_config, &mut pending, exits_after_build)?;
+    let (mut site_result, mut background_ctx, documents, carry_verification) = generate_blocking_content_for_build(root, project_structure, &stage_dir, services, progress_sender, emit_source_lines, site_config, &mut pending, exits_after_build, true)?;
     log::debug!(target: "timing", "[build] staging: generate_blocking_content: {:?}", build_start.elapsed());
 
     // Places-explorer data file (`_moss/places.<hash>.json`), gated on the
@@ -1528,13 +1564,13 @@ fn build_inner(
     // marker-bearing bytes and leaves the pages for this phase to write, which
     // rewrites those entries so all downstream artifact boundaries see the
     // final HTML bytes.
-    let resolved_slots = match slot_resolver {
+    let mut resolved_slots = match slot_resolver {
         Some(resolve) => resolve(&documents, &site_lang, site_comments)?,
         None => ResolvedSlots::empty(),
     };
-    // Runs the enhance hook over the stage, re-registers every page it
-    // rewrote, and (under `MOSS_INCREMENTAL_VERIFY=1`) settles the carry
-    // check against the resulting final bytes. See `build::emit::slots`.
+    crate::build::emit::listing_style::apply(&documents, project_structure, &site_result.term_index, &listing_field_decls, &stage_dir, &mut pending, &mut resolved_slots);
+    // Injects slots (and plugin listings) over the stage, re-registers every page it
+    // rewrote, and settles the `MOSS_INCREMENTAL_VERIFY=1` carry check. See `build::emit::slots`.
     crate::build::emit::slots::apply_to_stage_and_manifest(
         &paths,
         &stage_dir,
@@ -1632,6 +1668,9 @@ fn build_inner(
             // build's generation over whatever the user opens next.
             publishable: false,
             render_seq: None,
+            unready_derivations: Default::default(),
+            folder_lock: folder_build_lock,
+            locked_at_nanos,
         });
     }
 
@@ -1654,8 +1693,14 @@ fn build_inner(
         .and_then(|s| s.preview_requirement());
     let request = current_request.as_ref().unwrap_or(&elected_home);
     let prior_route = !(home_substituted && request.url_path == "/")
-        && previous_route_present(request, &previous_hashes, &paths.current_ptr());
-    let focused_pending = matches!(pending.preview_readiness(request, &stage_dir), crate::build::manifest::PreviewReadiness::Pending);
+        && previous_route_present(request, &previous_hashes, &paths.current_ptr(), &input_evidence.snapshot());
+    // `Pending` means the page waits on a download. An attempt with nothing
+    // pending and nothing evicted has none to wait for, so whatever the
+    // request named, this stage is shown as it is (an unreadable page shows
+    // as missing) instead of being held behind the cloud waiting screen.
+    let in_the_cloud = cloud_outstanding > 0 || !project_structure.evicted_paths.is_empty();
+    let focused_pending = in_the_cloud
+        && matches!(pending.preview_readiness(request, &stage_dir), crate::build::manifest::PreviewReadiness::Pending);
     let waiting = focused_pending && !prior_route;
     if focused_pending && prior_route {
         crate::build::lifecycle::protect_current_before_rebuild(&paths);
@@ -1665,6 +1710,15 @@ fn build_inner(
     // changing the durable build baseline or promoting `current`.
     let publishable = !focused_pending;
     if waiting {
+        let source_kind = match &request.source {
+            crate::system::folder_session::PreviewSource::Unresolved => "unresolved",
+            crate::system::folder_session::PreviewSource::File(_) => "file",
+            crate::system::folder_session::PreviewSource::Generated => "generated",
+        };
+        log::info!(
+            "[diag] preview-wait: waiting url={} source={} prior_route={} pending_inputs={}",
+            request.url_path, source_kind, prior_route, cloud_outstanding
+        );
         super::cloud_readiness::mark_gated(folder_path);
         emit_cloud_gate(true, &project_structure.evicted_paths, cloud_outstanding);
     } else if super::cloud_readiness::take_gate(folder_path) {
@@ -1831,10 +1885,6 @@ fn build_inner(
     // (it covers this entire synchronous span, including notebook
     // processing, but not the detached background dispatch below).
     drop(_stage_write_guard);
-    // The cross-process counterpart releases here too — see its acquisition
-    // above for why this window ends here rather than carrying through the
-    // detached seal task.
-    drop(_folder_build_lock);
 
     // Subscribe landing pages moved to generate_blocking_content.
 
@@ -1868,6 +1918,9 @@ fn build_inner(
     let bg_handle = {
         // Clone what we need before consuming background_ctx by video dispatch.
         let image_items_empty = background_ctx.image_items.is_empty();
+        let og_requests = std::mem::take(&mut background_ctx.og_requests);
+        let og_output = background_ctx.staging_dir.clone();
+        let og_session = services.and_then(|s| s.session.clone());
         let video_items_empty = background_ctx.video_items.is_empty();
         // The asset walk reads the same context the image and video workers do;
         // clone it here, before the video dispatch below consumes the original.
@@ -1926,8 +1979,29 @@ fn build_inner(
         // copy_deferred_assets; the video worker reads it when emitting BuildComplete.
         let skipped_symlinks_for_assets = services.map(|s| s.skipped_symlinks.clone());
 
+        // Derived text the render left as a placeholder (adopt mode): read in
+        // the background, then ask for a rebuild that renders it from the cache.
+        let derive_job = derived.as_ref().and_then(|d| d.take_background_job(&paths, render_seq));
+        // The reads store into the object cache after this build's lease is
+        // gone; their own keeps a cache GC off the blobs until the rebuild
+        // has registered them.
+        let derive_lease = derive_job.as_ref().map(|_| crate::build::lifecycle::detached_cache_lease(&paths));
+        let reporter_for_derive = services.map(|s| s.reporter.clone());
+        let session_for_derive = services.and_then(|s| s.session.clone());
+
         let register_workers = |tx: tokio::sync::mpsc::Sender<crate::build::coordinator::EmitMessage>,
                                 workers: &mut tokio::task::JoinSet<Result<(), crate::build::background::BuildError>>| {
+            if !og_requests.is_empty() {
+                let tx_cards = tx.clone();
+                workers.spawn(async move {
+                    tokio::task::spawn_blocking(move || {
+                        crate::build::page::og_card::deferred::render_requests(
+                            og_requests, &og_output, tx_cards,
+                            || og_session.as_ref().is_some_and(|s| s.cancel.is_cancelled()),
+                        )
+                    }).await.map_err(crate::build::background::BuildError::from)?
+                });
+            }
             // Worker 1: Image conversion.
             // dispatch_image_conversions internally spawns its own async tasks in GUI
             // mode (via tauri::async_runtime::spawn) and runs synchronously in headless
@@ -2005,6 +2079,26 @@ fn build_inner(
                     .map_err(crate::build::background::BuildError::from)
                 });
             }
+            // Derived text (adopt mode only, so a watcher is registered to
+            // receive the rebuild): detached like the video encode, so the
+            // placeholder generation seals now instead of after every read.
+            // The finished reads trigger the rebuild that renders the text.
+            if let Some(job) = derive_job {
+                if let Some(ref s) = session_for_derive {
+                    s.begin_ui_bound();
+                }
+                let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                if let Some(s) = &session_for_derive {
+                    s.bridge_to_atomic(cancel.clone());
+                }
+                tokio::task::spawn_blocking(move || {
+                    let _derive_lease = derive_lease;
+                    job.run(reporter_for_derive.as_deref(), &cancel);
+                    if let Some(s) = session_for_derive {
+                        s.end_ui_bound();
+                    }
+                });
+            }
             // No search worker: a generation-free worker is never
             // awaited by a seal, so the previous build's index cannot land on
             // this build's critical path. Its output is adopted from a receipt.
@@ -2037,6 +2131,9 @@ fn build_inner(
         home_ready,
         publishable,
         render_seq,
+        unready_derivations: derived.as_ref().map(|d| d.unready()).unwrap_or_default(),
+        folder_lock: folder_build_lock,
+        locked_at_nanos,
     })
 }
 

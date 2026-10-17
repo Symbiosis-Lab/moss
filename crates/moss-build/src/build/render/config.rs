@@ -3,12 +3,17 @@
 use crate::build::incremental_gates::IncrementalGates;
 
 /// Resolve a logo path from frontmatter to a root-relative URL.
-/// Absolute paths and HTTP URLs pass through unchanged.
+/// HTTP URLs pass through unchanged. A local path has its `.` and `..`
+/// segments resolved (`./assets/x.png` → `/assets/x.png`) so the URL and the
+/// media lookup key both name the file in its plain form.
 pub(super) fn resolve_logo_url(path: &str) -> String {
-    if path.starts_with('/') || path.starts_with("http://") || path.starts_with("https://") {
-        path.to_string()
-    } else {
-        format!("/{}", path) // allow:served-path-url-construct (user logo path from [site].logo frontmatter, not a framework asset)
+    if path.starts_with("http://") || path.starts_with("https://") {
+        return path.to_string();
+    }
+    match moss_core::content_graph::join_written("", path) {
+        Some(clean) => format!("/{clean}"), // allow:served-path-url-construct (user logo path from [site].logo frontmatter, not a framework asset)
+        None if path.starts_with('/') => path.to_string(),
+        None => format!("/{path}"), // allow:served-path-url-construct (user logo path from [site].logo frontmatter, not a framework asset)
     }
 }
 
@@ -113,12 +118,21 @@ pub struct SiteConfig {
     /// namespace, built-in (`authors`, `tags`) and declared alike. The one
     /// thing `build::terms::derive_terms` reads to decide term membership.
     pub term_kinds: Vec<crate::build::terms::TermKind>,
+    /// The term kinds that asked for a nav-bar entry (`nav = true`), in config
+    /// order — `ConfigFile::terms_nav`.
+    pub term_nav: Vec<(String, Option<String>, Option<i32>)>,
+    /// The `[fields.<name>]` declarations, read once per build; the markdown
+    /// pipeline checks each page's frontmatter against them.
+    pub field_decls: Vec<moss_core::fields::FieldDecl>,
     /// Decoded geography, gazetteer, place namespace and locator preference.
     pub place_maps: Option<crate::build::place_map::PlaceMapRenderContext>,
     /// What this build may reuse from the last one. Both bits are
     /// resolved at the entry point (by design, the render phase reads neither the
     /// build trigger nor the environment). See [`IncrementalGates`].
     pub incremental: IncrementalGates,
+    /// The plugins' derivations (`![[file.ext#fragment]]`), `None` when plugins
+    /// are off or none declares one.
+    pub derivations: Option<std::sync::Arc<crate::system::derive::site::DerivedSite>>,
 }
 
 impl SiteConfig {
@@ -131,6 +145,7 @@ impl SiteConfig {
             hard_line_breaks: self.hard_line_breaks,
             heading_anchors: self.heading_anchors,
             typesetting: self.typesetting.as_deref(),
+            fields: &self.field_decls,
         }
     }
 }
@@ -163,8 +178,11 @@ impl Default for SiteConfig {
             ai_policy: None,
             search: false,
             term_kinds: Vec::new(),
+            term_nav: Vec::new(),
+            field_decls: Vec::new(),
             place_maps: None,
             incremental: IncrementalGates::default(),
+            derivations: None,
         }
     }
 }

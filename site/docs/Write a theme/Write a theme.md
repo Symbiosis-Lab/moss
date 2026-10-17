@@ -131,6 +131,18 @@ For JavaScript, moss sets `window.mossTheme.base` to the `/_moss/theme/` URL bef
 const url = new URL("asset.woff2", mossTheme.base);
 ```
 
+## Copy a look from another site
+
+A site's look is more than its stylesheet. Copying another site's `style.css` into yours brings its colours and fonts, but the layout also comes from three other places, so copy those too:
+
+- The whole `.moss/theme/` folder, not just `style.css`: its `script.js`, and its `fonts/` folder with the fonts' licence files.
+- The display settings in `.moss/config.toml`, such as `header` under `[site]`, which decides whether the header leads with the site name or with a row of links ([[Navigation & footer]]).
+- Frontmatter on particular pages. The home page's `home: true` and `children: false` decide whether it shows only its own text or also lists every page; a section page's `nav: true` and `weight:` put it in the header nav, in order ([[frontmatter|Frontmatter]]).
+
+A stylesheet can also expect a page's text to have a particular shape. A rule written for `body[data-page="home"] h1 + p` styles a home page whose text is a heading followed by one paragraph, and does nothing to any other. Read the selectors before you copy.
+
+Each of moss's starter sites lists what makes up its look, step by step, in its `.moss/STARTER.md`.
+
 ## Where to find every token and class
 
 For the full set:

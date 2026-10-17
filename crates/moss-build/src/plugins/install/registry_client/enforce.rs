@@ -352,7 +352,7 @@ fn refusal_without_consent(manifest: &PluginManifest, plugin_dir: &Path) -> Opti
 
 /// The code in `plugin_dir`, hashed once and remembered until it changes.
 fn code_of(manifest: &PluginManifest, plugin_dir: &Path) -> Option<Code> {
-    let stamps = ["manifest.json", manifest.entry.as_str()].map(|name| {
+    let stamps = ["manifest.json", manifest.entry.as_deref().unwrap_or("")].map(|name| {
         let meta = std::fs::metadata(plugin_dir.join(name)).ok();
         #[cfg(unix)]
         let ctime = {
@@ -363,7 +363,7 @@ fn code_of(manifest: &PluginManifest, plugin_dir: &Path) -> Option<Code> {
         let ctime = (0, 0);
         (meta.as_ref().map_or(0, |m| m.len()), meta.and_then(|m| m.modified().ok()), ctime)
     });
-    let fingerprint: Fingerprint = (manifest.entry.clone(), stamps);
+    let fingerprint: Fingerprint = (manifest.entry.clone().unwrap_or_default(), stamps);
     let memo = CODE.get_or_init(Default::default);
     if let Some((seen, code)) = memo.lock().unwrap_or_else(|e| e.into_inner()).get(plugin_dir) {
         if *seen == fingerprint {
@@ -673,5 +673,44 @@ mod tests {
         publish(CachedRegistry::default());
         assert_eq!(revoked_reason("some-third-party-plugin", "1.0.0"), None);
         assert_eq!(withheld(&manifest_of("some-third-party-plugin", "1.0.0"), false), None);
+    }
+
+    /// A plugin the user already allowed is still recognised while a cloud app
+    /// has its files out of the folder: the hash waits for them, so it matches
+    /// the recorded consent instead of coming back `None`. Before macOS 14 an
+    /// undownloaded file is absent from its own path with a `.name.icloud`
+    /// placeholder beside it; the files arrive while the hash waits.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_allowed_plugin_with_files_still_in_the_cloud_matches_its_consent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let plugin_dir = dir.path().join("allowed-demo");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        let manifest_path = plugin_dir.join("manifest.json");
+        let entry_path = plugin_dir.join("index.js");
+        let manifest_text = r#"{"name":"allowed-demo","version":"1.0.0","description":"d","capabilities":["deploy"],"entry":"index.js"}"#;
+        let manifest = PluginManifest::parse(manifest_text).unwrap();
+        std::fs::write(&manifest_path, manifest_text).unwrap();
+        std::fs::write(&entry_path, "var AllowedDemo = {};").unwrap();
+
+        let mut approvals = approval::Approvals::default();
+        approvals.grant(
+            canonical(&plugin_dir),
+            crate::plugins::bundled::code_hash(&plugin_dir, &manifest).unwrap(),
+        );
+
+        std::fs::remove_file(&manifest_path).unwrap();
+        std::fs::remove_file(&entry_path).unwrap();
+        std::fs::write(plugin_dir.join(".manifest.json.icloud"), b"").unwrap();
+        std::fs::write(plugin_dir.join(".index.js.icloud"), b"").unwrap();
+        let download = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            std::fs::write(manifest_path, manifest_text).unwrap();
+            std::fs::write(entry_path, "var AllowedDemo = {};").unwrap();
+        });
+
+        let code = code_of(&manifest, &plugin_dir).expect("the files arrive while the hash waits");
+        download.join().unwrap();
+        assert!(approvals.allows(&canonical(&plugin_dir), &code.hash));
     }
 }

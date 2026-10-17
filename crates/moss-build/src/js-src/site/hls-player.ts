@@ -12,16 +12,30 @@
  * resolve the `EXT-X-MEDIA` audio group every rung names and would play the
  * ladder silently. Anyone shrinking this is proposing to drop the audio.
  *
- * **No `startLevel`, and no ABR tuning.** hls.js's defaults already do the
- * right thing here: `startLevel` unset means auto, and auto with
- * `testBandwidth: true` fetches one fragment of the *lowest* rung purely to
- * measure the link before choosing. Pinning `startLevel` is the single change
- * that breaks that — `testBandwidth` applies only when the start level is auto,
- * so setting it disables the probe and starts everyone on the first variant in
- * the playlist regardless of their connection.
+ * **No `startLevel`.** Left unset, hls.js 1.7 runs no bandwidth probe: the
+ * first level comes from the default estimate, which it raises to the first
+ * variant's bitrate (capped at 5 Mbps) when the manifest loads, and it adapts
+ * from real fragments after that. Pinning a level would start every viewer on
+ * it whatever their connection. (The one-fragment `testBandwidth` probe runs
+ * only for an explicit `startLevel: -1`.)
+ *
+ * Where the browser has the Network Information API (Chromium), a player made
+ * before any fragment is measured starts from `navigator.connection.downlink`
+ * instead of that default: the browser's own running estimate of recent
+ * throughput, rounded and capped by the browser. It only chooses the first
+ * level; after it hls.js measures for itself.
+ *
+ * That start is a guess, and a short clip is over before the guess is
+ * corrected: a clip of a few seconds is buffered whole at the guessed rung and
+ * loops from the buffer, so nothing is left to fetch at a better one. Three
+ * small rules cover it: a video that is not playing does not load; a player
+ * that starts after another has buffered real media starts from that
+ * page-wide estimate; and a short clip that finished buffering below what the
+ * link now supports is refetched once at that rung.
  */
 
 import Hls from "hls.js";
+import type { Fragment } from "hls.js";
 
 /**
  * Play `url` in `video` through hls.js.
@@ -37,7 +51,27 @@ export function attach(video: HTMLVideoElement, url: string): void {
     fallBackToMp4(video);
     return;
   }
-  const hls = new Hls();
+  const deferred = defersLoad(video);
+  // Through the constructor: hls.js raises an estimate set later to the first
+  // variant's bitrate when the manifest loads, but leaves a configured one.
+  const fromBrowser = pageEstimate === null ? browserEstimate() : null;
+  const start = fromBrowser ?? pageEstimate;
+  const hls = new Hls({
+    ...(start !== null ? { abrEwmaDefaultEstimate: start } : {}),
+    ...(deferred ? { autoStartLoad: false } : {}),
+  });
+  const stopLoadWait = deferred ? startWhenWanted(video, hls) : () => {};
+  const stopGuard = fromBrowser !== null ? guardOptimisticStart(hls) : () => {};
+  const stopWaiting = (): void => {
+    stopLoadWait();
+    stopGuard();
+  };
+  const sharpen = shortClipSharpener(hls, video);
+  hls.on(Hls.Events.FRAG_BUFFERED, (_event, data) => {
+    if (!isMediaFragment(data.frag)) return;
+    rememberEstimate(hls);
+    sharpen(data.frag);
+  });
   // The budget is counted, not assumed. Without it a fatal NETWORK_ERROR calls
   // startLoad() forever, and on a link that has actually died the viewer sits
   // on an empty player: the MP4 fallback below is unreachable in exactly the
@@ -46,6 +80,7 @@ export function attach(video: HTMLVideoElement, url: string): void {
   hls.on(Hls.Events.ERROR, (_event, data) => {
     if (!data.fatal) return;
     if (recoveries++ >= 2) {
+      stopWaiting();
       hls.destroy();
       fallBackToMp4(video);
       return;
@@ -55,12 +90,220 @@ export function attach(video: HTMLVideoElement, url: string): void {
     } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
       hls.recoverMediaError();
     } else {
+      stopWaiting();
       hls.destroy();
       fallBackToMp4(video);
     }
   });
   hls.attachMedia(video);
   hls.loadSource(url);
+}
+
+// ── A clip that is not playing does not load ────────────────────────
+
+/**
+ * True for a video that asked not to load (`preload="none"`) and is not being
+ * played by autoplay. hls.js ignores `preload`, so without this every slide of
+ * a hero, and every article video, downloads segments at page load.
+ */
+export function defersLoad(video: HTMLVideoElement): boolean {
+  return video.preload === "none" && !video.autoplay && video.paused;
+}
+
+/**
+ * Start `hls`'s segment loading the first time the video is asked to play, or
+ * when its `preload` is raised to `auto`. The master playlist is already
+ * fetched (`autoStartLoad: false` only holds back what follows: the level
+ * playlist, the init segment, the fragments). Returns a function that drops
+ * both triggers, for when the player is destroyed first.
+ */
+function startWhenWanted(video: HTMLVideoElement, hls: Hls): () => void {
+  let done = false;
+  const stop = (): void => {
+    done = true;
+    observer.disconnect();
+    video.removeEventListener("play", start);
+  };
+  const start = (): void => {
+    if (done) return;
+    stop();
+    // Another player may have measured the link since this one was created.
+    // The manifest is parsed by now, so this is not overwritten.
+    if (pageEstimate !== null) hls.bandwidthEstimate = pageEstimate;
+    hls.startLoad();
+  };
+  const observer = new MutationObserver(() => {
+    if (video.preload === "auto") start();
+  });
+  observer.observe(video, { attributes: true, attributeFilter: ["preload"] });
+  video.addEventListener("play", start);
+  return stop;
+}
+
+// ── Later players start from what earlier ones learned ───────────────
+
+/**
+ * Bits per second measured on a real media fragment of any player on this
+ * page. Two known limits, accepted: a fragment answered from a cache records
+ * an inflated rate, and a link that slows later leaves a stale value until
+ * the next fragment. Either way the next player starts one fragment too high
+ * and hls.js steps down.
+ */
+let pageEstimate: number | null = null;
+
+/**
+ * The browser's own figure for the link, in bits per second, or `null` to leave
+ * hls.js's default alone. `downlink` is megabits per second and, as the browser
+ * rounds and caps it, 0.8 of it is the starting guess. Unused under `saveData`
+ * (the visitor asked for less data) and below 1 Mbps, where the figure is too
+ * coarse to beat the default.
+ */
+export function browserEstimate(): number | null {
+  const connection = (navigator as Navigator & {
+    connection?: { downlink?: number; saveData?: boolean };
+  }).connection;
+  if (!connection || connection.saveData === true) return null;
+  const { downlink } = connection;
+  if (typeof downlink !== "number" || !Number.isFinite(downlink) || downlink < 1) return null;
+  return Math.round(downlink * 800_000);
+}
+
+/** The most a first fragment may take before an optimistic start is given up. */
+const OPTIMISTIC_DEADLINE_MS = 3000;
+
+/**
+ * Guard for a player that started from the browser's figure (`browserEstimate`),
+ * which can be wrong (a fresh profile, a VPN, a link that just degraded): hls.js
+ * will not abandon the first fragment of a video that has not started playing,
+ * so a top-rung start on a slow link would sit there. If the first media
+ * fragment has not finished loading by the deadline, give the start up once:
+ * `loadLevel = 0` makes the next fetch the lowest level (the in-flight fragment
+ * is aborted only when that level's playlist arrives, so until then the large
+ * fragment keeps downloading) and `loadLevel = -1` returns to automatic
+ * selection when a media fragment has arrived. Chosen over stopLoad/startLoad,
+ * which would also restart the playlists, and over `startLevel`, which hls.js
+ * reads only once.
+ *
+ * Deadline: a fragment of D seconds should arrive in well under D seconds on a
+ * link that can carry its level, so the smaller of 3 s and half of D, from the
+ * moment hls.js reports it loading (so a deferred player's clock starts with its
+ * load). The cost: a link that can only just carry the top rung may trip it and
+ * start low, which is how every start behaved before the browser's figure.
+ *
+ * Decided when the load starts, not at construction: a player whose estimate was
+ * replaced by a measured page estimate in the meantime (a deferred hero clip) was
+ * not started from the browser's figure and is left alone. On giving up it also
+ * resets the estimate to the lowest rung's bitrate, and an error that comes
+ * after the restart (the interrupted load raises one) does not release it.
+ *
+ * Returns `cancel`, which only stops the guard (no write to the player), for
+ * destroy and the MP4 fallback.
+ */
+export function guardOptimisticStart(hls: Hls): () => void {
+  let phase: "idle" | "watching" | "restarted" | "done" = "idle";
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cancel = (): void => {
+    clearTimeout(timer);
+    phase = "done";
+  };
+  hls.on(Hls.Events.FRAG_LOADING, (_event, data) => {
+    if (phase !== "idle" || !isMediaFragment(data.frag)) return;
+    if (pageEstimate !== null) return cancel();
+    phase = "watching";
+    const duration = data.frag.duration;
+    const ms = duration > 0 ? Math.min(OPTIMISTIC_DEADLINE_MS, duration * 500) : OPTIMISTIC_DEADLINE_MS;
+    timer = setTimeout(() => {
+      phase = "restarted";
+      // The browser's figure was just shown wrong, and it is still hls.js's
+      // estimate: left alone, selection returns to the top rung as soon as the
+      // low fragment lands. Start the estimate at that lowest rung's own bitrate
+      // instead; real fragments move it from there.
+      const floor = hls.levels[0]?.bitrate;
+      if (floor > 0) hls.bandwidthEstimate = floor;
+      hls.loadLevel = 0;
+    }, ms);
+  });
+  hls.on(Hls.Events.FRAG_LOADED, (_event, data) => {
+    if (!isMediaFragment(data.frag)) return;
+    const release = phase === "restarted";
+    cancel();
+    if (release) hls.loadLevel = -1;
+  });
+  hls.on(Hls.Events.ERROR, () => {
+    if (phase !== "restarted") cancel();
+  });
+  return cancel;
+}
+
+/** Real media only: not an init segment, not alternate audio. */
+function isMediaFragment(frag: Fragment): boolean {
+  return frag.type === "main" && frag.sn !== "initSegment";
+}
+
+/** Keep `hls`'s estimate for the next player. Called only once a real fragment is buffered. */
+export function rememberEstimate(hls: Hls): void {
+  const estimate = hls.bandwidthEstimate;
+  if (Number.isFinite(estimate) && estimate > 0) pageEstimate = estimate;
+}
+
+// ── A short clip buffered below what the link supports is refetched ──
+
+/**
+ * The level to refetch at, or `null` to leave things alone. Only a clip that is
+ * whole (its last fragment is buffered) or short enough to be buffered in one
+ * go qualifies, and only upward: `best` is hls.js's own pick for the current
+ * estimate, and `floor` is the highest level already played or asked for, so a
+ * slow link keeps its low rung and no step is taken twice.
+ */
+export function upgradeTarget(s: {
+  floor: number;
+  best: number;
+  duration: number;
+  whole: boolean;
+  bufferTarget: number;
+}): number | null {
+  if (!(s.duration > 0)) return null;
+  if (!s.whole && s.duration > s.bufferTarget) return null;
+  return s.best > s.floor ? s.best : null;
+}
+
+/**
+ * Returns the handler to call with each real fragment as it is buffered: if
+ * the clip is short or whole and sits below the level the estimate now
+ * supports, switch to that level at once. `currentLevel` (not
+ * `nextLevel`/`loadLevel`) because only it flushes the buffer, and the buffered
+ * picture is exactly what must be replaced; it also pins the level manually,
+ * where hls.js's own abandon rules are off. So the pin is released
+ * (`loadLevel = -1`, no second flush) as soon as the clip is whole again at
+ * that level (its last fragment buffered, or end of stream), and on any error.
+ */
+function shortClipSharpener(hls: Hls, video: HTMLVideoElement): (frag: Fragment) => void {
+  let pinned: number | null = null;
+  let lastTarget = -1;
+  const release = (): void => {
+    if (pinned === null) return;
+    pinned = null;
+    hls.loadLevel = -1;
+  };
+  hls.on(Hls.Events.BUFFER_EOS, release);
+  hls.on(Hls.Events.ERROR, release);
+  return (frag) => {
+    const whole = frag.sn === hls.levels[frag.level]?.details?.endSN;
+    if (pinned !== null) {
+      if (frag.level === pinned && whole) release();
+      return;
+    }
+    const target = upgradeTarget({
+      floor: Math.max(frag.level, lastTarget),
+      best: hls.nextAutoLevel,
+      duration: video.duration,
+      whole,
+      bufferTarget: hls.config.maxBufferLength,
+    });
+    if (target === null) return;
+    pinned = lastTarget = target;
+    hls.currentLevel = target;
+  };
 }
 
 function fallBackToMp4(video: HTMLVideoElement): void {

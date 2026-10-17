@@ -4,6 +4,7 @@
  * target scale itself once the bake finishes.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { FIT, EDGE_FADE } from "./explorer-fit";
 import { mountPlacesMap } from "../map";
 import { TileLayer } from "../tiles";
 
@@ -46,7 +47,7 @@ describe("mountPlacesMap — the world raster after a bake that outlasted a resi
     const figure = document.createElement("figure");
     document.body.append(figure);
     mountPlacesMap(figure, {
-      worldSvgText: WORLD_SVG, tilesBaseUrl: "/_moss/map.abc/", tileCells: [], tileK: 4, tileOrigins: {}, tileColumns: 36, tileRows: 18,
+      worldSvgText: WORLD_SVG, tilesBaseUrl: "/_moss/map.abc/", tileCells: [], tileK: 4, tileOrigins: {}, tileColumns: 36, tileRows: 18, fit: FIT, edgeFade: EDGE_FADE,
       places: { works: [], places: [] } as any, lang: "en",
     });
     await vi.advanceTimersByTimeAsync(500);
@@ -72,7 +73,8 @@ describe("mountPlacesMap — the world raster after a bake that outlasted a resi
   test.each(["before", "after"])("accepts a deeper camera %s the initial bake resolves before a same-scale resize", async (timing) => {
     history.replaceState(null, "", "/places/?p=patterson&x=421&y=240&z=1.6");
     vi.stubGlobal("devicePixelRatio", 1);
-    vi.spyOn(TileLayer.prototype, "hasVisibleTiles").mockReturnValue(true);
+    vi.spyOn(TileLayer.prototype, "hasCellAt").mockReturnValue(true);
+    vi.spyOn(TileLayer.prototype, "coversView").mockReturnValue(true);
     let resolveFirst!: () => void;
     const surface = () => ({ el: document.createElement("canvas"), release: vi.fn() });
     rasterizeSpy.mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = () => resolve(surface()); }));
@@ -83,7 +85,7 @@ describe("mountPlacesMap — the world raster after a bake that outlasted a resi
     const figure = document.createElement("figure");
     document.body.append(figure);
     const controller = mountPlacesMap(figure, {
-      worldSvgText: WORLD_SVG, tilesBaseUrl: "/_moss/map.abc/", tileCells: [], tileK: 4, tileOrigins: {}, tileColumns: 36, tileRows: 18,
+      worldSvgText: WORLD_SVG, tilesBaseUrl: "/_moss/map.abc/", tileCells: [], tileK: 4, tileOrigins: {}, tileColumns: 36, tileRows: 18, fit: FIT, edgeFade: EDGE_FADE,
       places: {
         works: [{ id: "w", title: "Work", byline: [], authors: [], companions: [], places: ["p"], url: "/work/" }],
         places: [{ id: "p", name: "Place", lat: 10, lng: 10, precision: "city" }],
@@ -115,7 +117,7 @@ describe("mountPlacesMap — the world raster after a bake that outlasted a resi
     const figure = document.createElement("figure");
     document.body.append(figure);
     mountPlacesMap(figure, {
-      worldSvgText: WORLD_SVG, tilesBaseUrl: "/_moss/map.abc/", tileCells: [], tileK: 4, tileOrigins: {}, tileColumns: 36, tileRows: 18,
+      worldSvgText: WORLD_SVG, tilesBaseUrl: "/_moss/map.abc/", tileCells: [], tileK: 4, tileOrigins: {}, tileColumns: 36, tileRows: 18, fit: FIT, edgeFade: EDGE_FADE,
       places: { works: [], places: [] } as any, lang: "en",
     });
     await vi.advanceTimersByTimeAsync(0);
@@ -138,7 +140,7 @@ describe("mountPlacesMap — the world raster after a bake that outlasted a resi
     const figure = document.createElement("figure");
     document.body.append(figure);
     mountPlacesMap(figure, {
-      worldSvgText: WORLD_SVG, tilesBaseUrl: "/_moss/map.abc/", tileCells: [], tileK: 4, tileOrigins: {}, tileColumns: 36, tileRows: 18,
+      worldSvgText: WORLD_SVG, tilesBaseUrl: "/_moss/map.abc/", tileCells: [], tileK: 4, tileOrigins: {}, tileColumns: 36, tileRows: 18, fit: FIT, edgeFade: EDGE_FADE,
       places: { works: [], places: [] } as any, lang: "en",
     });
     await vi.advanceTimersByTimeAsync(500);
@@ -160,7 +162,7 @@ describe("mountPlacesMap — the world raster after a bake that outlasted a resi
     const figure = document.createElement("figure");
     document.body.append(figure);
     mountPlacesMap(figure, {
-      worldSvgText: WORLD_SVG, tilesBaseUrl: "/_moss/map.abc/", tileCells: [], tileK: 4, tileOrigins: {}, tileColumns: 36, tileRows: 18,
+      worldSvgText: WORLD_SVG, tilesBaseUrl: "/_moss/map.abc/", tileCells: [], tileK: 4, tileOrigins: {}, tileColumns: 36, tileRows: 18, fit: FIT, edgeFade: EDGE_FADE,
       places: { works: [], places: [] } as any, lang: "en",
     });
     expect(rasterizeSpy).toHaveBeenCalledTimes(1); // the first bake, still decoding

@@ -120,6 +120,7 @@ fn plan_reassembles_with_source_lines_on() {
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
+        warning_line_offset: 0,
         math: true,
         hard_line_breaks: false,
     };
@@ -346,6 +347,13 @@ fn first_text_block_skips_leading_media_and_a_rule() {
         Some(4),
         "figure, rule, table and code block are all media/rules, not text"
     );
+}
+
+#[test]
+fn first_text_block_is_a_leading_definition_list() {
+    // A definition list is prose, so it is the locator's insertion point
+    // rather than being skipped as if it were media.
+    assert_eq!(first_text_block_of("Term\n: Its definition.\n"), Some(0));
 }
 
 #[test]

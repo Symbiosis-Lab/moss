@@ -2,6 +2,7 @@
 //!
 //! Handles the creation of the main site navigation.
 
+use moss_core::frontmatter_typed::BreadcrumbSetting;
 use crate::build::types::ParsedDocument;
 
 use crate::i18n::Language;
@@ -13,8 +14,10 @@ use crate::i18n::link::TranslationLink;
 mod breadcrumb;
 /// The floating nav island. A child module for the same reason.
 mod island;
-/// `generate_footer`. A child module for the same reason as the two above.
-mod footer;
+/// `generate_footer`, and `strip_empty_footer`, which settles the footer it
+/// emits once slots are resolved. A child module for the same reason as the
+/// two above.
+pub(crate) mod footer;
 /// `[site].header` — see `HeaderMode`. Not a private-state module like the
 /// two above (nothing here reads `NavigationBuilder`'s privates), just a
 /// sibling kept close to its one reader.
@@ -59,6 +62,9 @@ pub struct NavigationBuilder<'a> {
     current_lang_tag: String,
     /// Optional logo path (e.g., "/assets/logo.svg")
     logo_path: Option<String>,
+    /// Snapshot the logo's intrinsic size is read from. `None` leaves the
+    /// logo without `width`/`height`.
+    assets: Option<&'a moss_core::asset_snapshot::AssetSnapshot>,
     /// Whether the site has content subfolders (organized mode vs flat mode)
     has_content_folders: bool,
     /// Whether this build has a live search index (`LayoutConfig::assets.search` —
@@ -76,6 +82,8 @@ pub struct NavigationBuilder<'a> {
     fm_logo: bool,
     /// `[site].header`, resolved. See `HeaderMode`.
     header_mode: HeaderMode,
+    /// Term-kind roots that are nav entries: `(namespace key, label, weight)`.
+    term_nav: Vec<(String, String, Option<i32>)>,
 }
 
 impl<'a> NavigationBuilder<'a> {
@@ -97,12 +105,20 @@ impl<'a> NavigationBuilder<'a> {
             current_lang: lang,
             current_lang_tag: lang.as_bcp47_attr().to_string(),
             logo_path: None,
+            assets: None,
             has_content_folders,
             has_search: false,
             fm_breadcrumb: false,
             fm_logo: false,
             header_mode: HeaderMode::Brand,
+            term_nav: Vec::new(),
         }
+    }
+
+    /// Add term-kind roots as nav entries after the content entries.
+    pub fn with_term_nav(mut self, term_nav: Vec<(String, String, Option<i32>)>) -> Self {
+        self.term_nav = term_nav;
+        self
     }
 
     /// Editor-preview `data-source-fm` annotations — see the field docs.
@@ -154,6 +170,12 @@ impl<'a> NavigationBuilder<'a> {
         self
     }
 
+    /// Read the logo's intrinsic size from this snapshot.
+    pub fn with_asset_snapshot(mut self, assets: &'a moss_core::asset_snapshot::AssetSnapshot) -> Self {
+        self.assets = Some(assets);
+        self
+    }
+
     /// Set the site logo path (rendered before site name in nav).
     pub fn with_logo(mut self, logo_path: String) -> Self {
         self.logo_path = Some(logo_path);
@@ -199,11 +221,21 @@ impl<'a> NavigationBuilder<'a> {
     /// through one shape-defining seam. Byte shape is preserved exactly:
     /// `<img class="site-logo" src="..." alt="" aria-hidden="true">`.
     fn logo_html(&self) -> String {
+        // Without a snapshot the logo is synthesized with an empty one, so its
+        // size is unknown and the bare shape comes out.
+        let empty;
+        let assets = match self.assets {
+            Some(assets) => assets,
+            None => {
+                empty = moss_core::asset_snapshot::AssetSnapshot::new();
+                &empty
+            }
+        };
         self.logo_path.as_ref().map(|path| {
             moss_core::render::image::synthesize_image_html(
                 path,
                 "",
-                &moss_core::asset_snapshot::AssetSnapshot::new(),
+                assets,
                 moss_core::render::image::ImageContext::SiteLogo,
                 &moss_core::render::image::ImageRenderOptions {
                     // Editor preview: name the `logo:` field — only when this
@@ -257,21 +289,7 @@ impl<'a> NavigationBuilder<'a> {
             })
             .collect();
 
-        nav_documents.sort_by(|a, b| {
-            match (a.weight, b.weight) {
-                // Tied weights fall through to alphabetical so the order is
-                // independent of filesystem walk order. Without the tiebreaker
-                // macOS and Linux scan_folder() produce different nav orders
-                // for items with the same explicit weight.
-                (Some(aw), Some(bw)) => aw.cmp(&bw).then_with(|| a.nav_text().cmp(b.nav_text())),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                // Sort alphabetically by the plain-text chrome label.
-                (None, None) => a.nav_text().cmp(b.nav_text()),
-            }
-        });
-
-        let mut page_items: Vec<String> = nav_documents.iter()
+        let mut entries: Vec<(Option<i32>, &str, String)> = nav_documents.iter()
             .map(|doc| {
                 // Nav link text: `nav_label` if the page set one, else the
                 // chrome label. Both are plain text, so escape at the write.
@@ -298,9 +316,55 @@ impl<'a> NavigationBuilder<'a> {
                 } else {
                     ""
                 };
-                format!(r#"<a href="{}"{attrs}>{}</a>"#, href, label)
+                // Editor preview: the entry's settings (`nav`, `nav_label`,
+                // `weight`) live in that page's frontmatter, not the open file's.
+                let source = match &doc.source_path {
+                    Some(path) => format!(
+                        r#" data-source-file="{}" data-source-fm="nav""#,
+                        crate::build::features::html_escape(path)
+                    ),
+                    _ => String::new(),
+                };
+                (doc.weight, doc.nav_text(), format!(r#"<a href="{}"{attrs}{source}>{}</a>"#, href, label))
             })
             .collect();
+
+        // Term kinds that asked for a place in the nav. Only for pages of the
+        // site language: a term root is not part of a language tree. One with
+        // a `weight` is ordered among the entries by the rule below; one
+        // without follows every page entry, in config order.
+        let mut unweighted_terms: Vec<String> = Vec::new();
+        if effective_lang == self.lang {
+            for (key, label, weight) in &self.term_nav {
+                let is_current = self.current_page_url == Some(format!("{key}/index.html").as_str());
+                let attrs = if is_current { r#" class="active""# } else { "" };
+                let item = format!(
+                    r#"<a href="/{}/"{attrs}>{}</a>"#, // allow:served-path-url-construct (nav href to a term kind's root page, not a framework asset)
+                    crate::build::features::html_escape(key),
+                    crate::build::features::html_escape(label),
+                );
+                match weight {
+                    Some(_) => entries.push((*weight, label.as_str(), item)),
+                    None => unweighted_terms.push(item),
+                }
+            }
+        }
+
+        entries.sort_by(|a, b| {
+            match (a.0, b.0) {
+                // Tied weights fall through to alphabetical so the order is
+                // independent of filesystem walk order. Without the tiebreaker
+                // macOS and Linux scan_folder() produce different nav orders
+                // for items with the same explicit weight.
+                (Some(aw), Some(bw)) => aw.cmp(&bw).then_with(|| a.1.cmp(b.1)),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                // Sort alphabetically by the plain-text chrome label.
+                (None, None) => a.1.cmp(b.1),
+            }
+        });
+        let mut page_items: Vec<String> = entries.into_iter().map(|(_, _, item)| item).collect();
+        page_items.extend(unweighted_terms);
 
         // `nav` header mode always opens the link list with Home, ahead of
         // the site's own nav items and outside their weight order — it is
@@ -461,7 +525,7 @@ pub struct NavFacts {
 /// Does this document render as an item in the top navigation bar?
 ///
 /// Single source of truth for "is a top-nav item": `generate_navigation`,
-/// `has_nav_items`, and title-injection suppression all consult this. NOT the
+/// `has_nav_items`, and the nav body-heading rule all consult this. NOT the
 /// same question as `is_listing_nav_item` (article-listing exclusion), which
 /// intentionally diverges in flat mode.
 ///
@@ -626,6 +690,85 @@ pub fn compute_breadcrumb_segments(
     has_content_folders: bool,
     force: bool,
 ) -> Option<Vec<BreadcrumbSegment>> {
+    // Rule 1: the home page's setting decides the header trail. `label` moves
+    // the parent link above the title instead (`parent_label_segment`), so the
+    // trail stays off there.
+    let has_nav = has_nav_items(all_docs, has_content_folders);
+    let breadcrumb_enabled = match home_breadcrumb_setting(all_docs) {
+        Some(BreadcrumbSetting::On) => true,
+        Some(BreadcrumbSetting::Off | BreadcrumbSetting::Label) => force && !has_nav,
+        None => !has_nav,
+    };
+    if !breadcrumb_enabled {
+        return None;
+    }
+
+    // Rule 2: per-page override — breadcrumb: false disables
+    if doc.breadcrumb == Some(BreadcrumbSetting::Off) {
+        return None;
+    }
+
+    trail_segments(doc, all_docs, site_title)
+}
+
+/// The parent-section link shown above `doc`'s title when the home page says
+/// `breadcrumb: label`: the trail's segment just above the current page, which
+/// is the folder that holds it. `None` on the home page, on a top-level page
+/// (the trail has no folder above the current page), and where the page says
+/// `breadcrumb: false`.
+pub fn parent_label_segment(
+    doc: &ParsedDocument,
+    all_docs: &[ParsedDocument],
+    home_setting: Option<BreadcrumbSetting>,
+) -> Option<BreadcrumbSegment> {
+    if home_setting != Some(BreadcrumbSetting::Label) {
+        return None;
+    }
+    if doc.breadcrumb == Some(BreadcrumbSetting::Off) {
+        return None;
+    }
+    let (_, mut tail) = trail_tail(doc, all_docs)?;
+    // [parent folder, ..., current page]: a parent exists from two on.
+    if tail.len() < 2 {
+        return None;
+    }
+    let parent = tail.len() - 2;
+    tail.into_iter().nth(parent)
+}
+
+/// The home page's `breadcrumb:` value, which decides the setting for the site.
+/// Read once per build, not per page.
+pub(crate) fn home_breadcrumb_setting(all_docs: &[ParsedDocument]) -> Option<BreadcrumbSetting> {
+    all_docs
+        .iter()
+        .find(|d| d.url_path == "index.html")
+        .and_then(|d| d.breadcrumb)
+}
+
+/// The trail for `doc` before any enable rule: the site name, each folder above
+/// the page, and the page. Callers decide whether it is shown.
+fn trail_segments(
+    doc: &ParsedDocument,
+    all_docs: &[ParsedDocument],
+    site_title: &str,
+) -> Option<Vec<BreadcrumbSegment>> {
+    let (home_url, tail) = trail_tail(doc, all_docs)?;
+    // First segment: site name linking (language-specific) home
+    let mut segments = vec![BreadcrumbSegment {
+        title: site_title.to_string(),
+        url: home_url,
+        is_current: false,
+    }];
+    segments.extend(tail);
+    Some(segments)
+}
+
+/// The trail below the site name — each folder above the page, then the page —
+/// with the URL the site name links to (a translation root, else `/`).
+fn trail_tail(
+    doc: &ParsedDocument,
+    all_docs: &[ParsedDocument],
+) -> Option<(String, Vec<BreadcrumbSegment>)> {
     // Parse URL path into folder parts
     let parts: Vec<&str> = doc.url_path.split('/').collect();
     let folder_parts = &parts[..parts.len() - 1];
@@ -633,6 +776,9 @@ pub fn compute_breadcrumb_segments(
 
     // Detect translation root: if the first folder's index is a translation of the
     // root homepage, skip it from breadcrumb segments and use its URL as home.
+    // This reads linked translations (keyed or by path) on purpose: it only
+    // shapes presentation. `FolderIndexPlan` decides from authored keys so the
+    // set of generated pages never moves.
     let (effective_parts, home_url) = if !folder_parts.is_empty() {
         let first_folder_index = format!("{}/index.html", folder_parts[0]);
         let is_translation_root = all_docs.iter()
@@ -658,38 +804,7 @@ pub fn compute_breadcrumb_segments(
         return None;
     }
 
-    // Rule 1: breadcrumb enable logic.
-    // Explicit homepage setting wins. Otherwise auto-enable when no nav items exist
-    // (the nav bar only has site name + theme toggle, so breadcrumbs provide orientation).
-    let homepage_breadcrumb = all_docs
-        .iter()
-        .find(|d| d.url_path == "index.html")
-        .and_then(|d| d.breadcrumb);
-
-    let has_nav = has_nav_items(all_docs, has_content_folders);
-    let breadcrumb_enabled = match homepage_breadcrumb {
-        Some(true) => true,
-        Some(false) => force && !has_nav,
-        None => !has_nav,
-    };
-
-    if !breadcrumb_enabled {
-        return None;
-    }
-
-    // Rule 2: per-page override — breadcrumb: false disables
-    if doc.breadcrumb == Some(false) {
-        return None;
-    }
-
     let mut segments = Vec::new();
-
-    // First segment: site name linking (language-specific) home
-    segments.push(BreadcrumbSegment {
-        title: site_title.to_string(),
-        url: home_url.clone(),
-        is_current: false,
-    });
 
     // Determine the lang prefix for reconstructing full paths (if translation root was stripped)
     let lang_prefix = if home_url != "/" {
@@ -760,7 +875,7 @@ pub fn compute_breadcrumb_segments(
         }
     }
 
-    Some(segments)
+    Some((home_url, segments))
 }
 
 #[cfg(test)]

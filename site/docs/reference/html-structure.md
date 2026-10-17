@@ -24,7 +24,10 @@ Every page moss builds shares this DOM layout, mirroring the `shell.html`, `arti
         <!-- page content -->
       </article>
     </main>
-    <footer class="moss-colophon">...</footer>
+    <footer class="container">
+      ...
+      <div class="moss-colophon">...</div>
+    </footer>
   </body>
 </html>
 ```
@@ -38,7 +41,7 @@ Every page moss builds shares this DOM layout, mirroring the `shell.html`, `arti
 | `article` | Page content area |
 | `.article-title` | Page heading |
 | `.article-meta` | Date and metadata |
-| `.moss-colophon` | Footer |
+| `.moss-colophon` | The moss credit, the last child of the footer (after `</main>` on a page with no footer) |
 <!-- auto:end -->
 
 Content inside `article` and `.moss-colophon` is safe to modify from `script.js`. The navigation structure is managed by moss — add styles, but do not remove or reorder its children.

@@ -35,7 +35,96 @@ pub(crate) fn write_status_line(mut w: impl std::io::Write, args: std::fmt::Argu
 /// Broken-pipe-safe replacement for `eprintln!` in the CLI build path.
 /// Prefer the [`cli_eprintln!`] macro at call sites.
 pub fn eprint_status_line(args: std::fmt::Arguments<'_>) {
+    // A problem is `note_cli_problem()` followed by its line on the same thread,
+    // so this is the one place the problem's text is at hand.
+    if PENDING_PROBLEM.with(|p| p.take()) {
+        let first_time = with_reported(|r| {
+            // Bounded: a long-lived host that never drains the count must not grow it forever.
+            r.len() >= 1000 || r.insert(args.to_string())
+        });
+        if quiet_now() {
+            // Held problem, not yet counted: a repeat of one already shown is dropped,
+            // a new one is shown and counted.
+            if !first_time {
+                return;
+            }
+            with_problem_count(|n| n.fetch_add(1, Ordering::Relaxed));
+        }
+    } else if quiet_now() {
+        return;
+    }
     write_status_line(std::io::stderr(), args);
+}
+
+thread_local! {
+    /// A problem was noted on this thread and its line has not been printed yet.
+    static PENDING_PROBLEM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The text of every problem line printed since the count was last taken.
+/// Process-wide, because the passes of a build run their problems on different
+/// threads; per thread under test, for the reason `CLI_PROBLEMS` is.
+#[cfg(not(test))]
+static REPORTED: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+thread_local! {
+    static REPORTED: std::cell::RefCell<std::collections::HashSet<String>> = Default::default();
+}
+
+fn with_reported<R>(f: impl FnOnce(&mut std::collections::HashSet<String>) -> R) -> R {
+    #[cfg(not(test))]
+    {
+        let mut guard = REPORTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        f(guard.get_or_insert_with(Default::default))
+    }
+    #[cfg(test)]
+    REPORTED.with(|r| f(&mut r.borrow_mut()))
+}
+
+#[cfg(not(test))]
+static QUIET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+// Per thread under test, for the reason `CLI_PROBLEMS` is.
+#[cfg(test)]
+thread_local! {
+    static QUIET: std::sync::atomic::AtomicBool = const { std::sync::atomic::AtomicBool::new(false) };
+}
+
+fn set_quiet(on: bool) {
+    #[cfg(not(test))]
+    QUIET.store(on, Ordering::Relaxed);
+    #[cfg(test)]
+    QUIET.with(|q| q.store(on, Ordering::Relaxed));
+}
+
+fn quiet_now() -> bool {
+    #[cfg(not(test))]
+    return QUIET.load(Ordering::Relaxed);
+    #[cfg(test)]
+    QUIET.with(|q| q.load(Ordering::Relaxed))
+}
+
+/// Holds the CLI's status lines and problem count silent until dropped.
+pub struct Quiet(());
+
+impl Drop for Quiet {
+    fn drop(&mut self) {
+        set_quiet(false);
+    }
+}
+
+/// Silence the status lines `cli_eprintln!` prints, and every problem line that
+/// repeats one already printed, for a pass that re-renders what an earlier pass
+/// already reported. A problem whose text is new is still printed and counted.
+///
+/// The text is compared as printed, so two problems that differ only by a
+/// timestamp or a counter would both show. A problem that is noted and then
+/// never printed (its log level filtered out) is not counted under `quiet`.
+pub fn quiet() -> Quiet {
+    PENDING_PROBLEM.with(|p| p.set(false));
+    set_quiet(true);
+    Quiet(())
 }
 
 /// Drop-in for `eprintln!` in CLI status/progress output that must not abort
@@ -83,6 +172,12 @@ fn with_problem_count<R>(f: impl FnOnce(&AtomicUsize) -> R) -> R {
 /// [`cli_warn!`] and [`log_warn_problem!`] — never call this directly and
 /// print separately, or the count can drift from what was actually shown.
 pub fn note_cli_problem() {
+    PENDING_PROBLEM.with(|p| p.set(true));
+    // Under `quiet`, counting waits for the line: a problem the first pass
+    // already printed is dropped, a new one is counted when it is printed.
+    if quiet_now() {
+        return;
+    }
     with_problem_count(|n| n.fetch_add(1, Ordering::Relaxed));
 }
 
@@ -90,6 +185,7 @@ pub fn note_cli_problem() {
 /// `--watch` rebuild) must start counting from zero, or problems from an
 /// earlier build would be double-reported in a later summary.
 pub fn take_cli_problems() -> usize {
+    with_reported(|r| r.clear());
     with_problem_count(|n| n.swap(0, Ordering::Relaxed))
 }
 

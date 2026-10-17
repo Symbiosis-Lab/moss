@@ -9,79 +9,28 @@
 use crate::build::types::ParsedDocument;
 use crate::i18n::Language;
 
-/// A date parsed to whatever precision it was written at — year, year+month,
-/// or a full year+month+day. The one parser six formatters used to each
-/// re-implement by splitting on `-`/`/`/`T` and re-validating the parts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PartialDate {
-    pub year: i32,
-    pub month: Option<u32>,
-    pub day: Option<u32>,
-}
+pub use moss_core::date::{parse_partial_date, PartialDate};
 
-/// Parses `YYYY`, `YYYY-MM`, or `YYYY-MM-DD` (also accepting `/` as the
-/// separator, and dropping anything from a `T` or a space onward, so a full
-/// ISO datetime or a "YYYY · MM" display string reduces to its date part).
-/// The year must be exactly 4 numeric digits; a present month or day must be
-/// numeric and in range (`1..=12`, `1..=31`). Anything else is `None`.
-///
-/// A 4th+ dash-separated segment is ignored rather than rejected — a leaf
-/// page's date-stamped filename (`2021-04-09-spring.html`) carries its slug
-/// in the same string the date is read from, and only the leading
-/// year-month(-day) run needs to parse.
-pub fn parse_partial_date(s: &str) -> Option<PartialDate> {
-    let trimmed = s.trim();
-    let mut end = trimmed.len();
-    if let Some(i) = trimmed.find('T') {
-        end = end.min(i);
-    }
-    if let Some(i) = trimmed.find(' ') {
-        end = end.min(i);
-    }
-    let date_part = trimmed.get(..end)?.replace('/', "-");
-    let parts: Vec<&str> = date_part.split('-').collect();
-    if parts.is_empty() {
-        return None;
-    }
-
-    let year_part = parts[0];
-    if year_part.len() != 4 || !year_part.chars().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    let year: i32 = year_part.parse().ok()?;
-
-    let parse_part = |part: &str, range: std::ops::RangeInclusive<u32>| -> Option<u32> {
-        if part.is_empty() || !part.chars().all(|c| c.is_ascii_digit()) {
-            return None;
-        }
-        part.parse::<u32>().ok().filter(|v| range.contains(v))
-    };
-
-    let month = match parts.get(1) {
-        Some(m) => Some(parse_part(m, 1..=12)?),
-        None => None,
-    };
-    let day = match parts.get(2) {
-        Some(d) => Some(parse_part(d, 1..=31)?),
-        None => None,
-    };
-
-    Some(PartialDate { year, month, day })
-}
-
-impl PartialDate {
+/// The calendar dates a partial date can denote, as chrono dates. Kept here
+/// rather than in moss-core, which has no chrono dependency.
+pub trait PartialDateRange {
     /// The earliest calendar date this partial date could denote: a missing
     /// day defaults to the 1st, a missing month to January.
-    pub fn earliest(&self) -> Option<chrono::NaiveDate> {
-        chrono::NaiveDate::from_ymd_opt(self.year, self.month.unwrap_or(1), self.day.unwrap_or(1))
-    }
-
+    fn earliest(&self) -> Option<chrono::NaiveDate>;
     /// The latest calendar date this partial date could denote: a missing
     /// day defaults to the last day of the month, a missing month to
     /// December 31st. Used by a `since:` cutoff — a post dated only to the
     /// month is excluded only once every day that month could name is past
     /// the cutoff, not just the 1st.
-    pub fn latest(&self) -> Option<chrono::NaiveDate> {
+    fn latest(&self) -> Option<chrono::NaiveDate>;
+}
+
+impl PartialDateRange for PartialDate {
+    fn earliest(&self) -> Option<chrono::NaiveDate> {
+        chrono::NaiveDate::from_ymd_opt(self.year, self.month.unwrap_or(1), self.day.unwrap_or(1))
+    }
+
+    fn latest(&self) -> Option<chrono::NaiveDate> {
         match (self.month, self.day) {
             (Some(month), Some(day)) => chrono::NaiveDate::from_ymd_opt(self.year, month, day),
             (Some(month), None) => {
@@ -274,6 +223,10 @@ fn format_long_date(year: i32, month: u32, day: Option<u32>, lang: Language) -> 
     match lang {
         Language::En => match day {
             Some(day) => format!("{month_name} {day}, {year}"),
+            None => format!("{month_name} {year}"),
+        },
+        Language::De => match day {
+            Some(day) => format!("{day}. {month_name} {year}"),
             None => format!("{month_name} {year}"),
         },
         Language::ZhHans | Language::ZhHant => match day {

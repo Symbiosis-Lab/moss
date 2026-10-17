@@ -39,10 +39,10 @@ Whether browser is currently open
 ### openedUrls
 
 ```ts
-openedUrls: string[];
+openedUrls: (string | null)[];
 ```
 
-URLs that were opened in action panel
+URLs opened in the action panel; null when it was opened in its loading state
 
 ***
 

@@ -312,6 +312,8 @@ fn resolve_shortcode_image_urls(
         // Callout, Grid inside a list, etc.) are reached.
         Block::Callout { children, .. }
         | Block::BlockQuote(children)
+        | Block::DefinitionList(children)
+        | Block::DefinitionDefinition(children)
         | Block::FootnoteDefinition { children, .. } => {
             for nested in children {
                 resolve_shortcode_image_urls(nested, graph, source_path, found);
@@ -332,6 +334,7 @@ fn resolve_shortcode_image_urls(
         // Leaf / inline-only blocks: nothing structural to resolve here.
         Block::Heading { .. }
         | Block::Paragraph(_)
+        | Block::DefinitionTitle(_)
         | Block::Table { .. }
         | Block::Figure { .. }
         | Block::CodeBlock { .. }
@@ -631,13 +634,15 @@ where
     F: FnMut(&mut Inline),
 {
     match block {
-        Block::Heading { children, .. } | Block::Paragraph(children) => {
+        Block::Heading { children, .. } | Block::Paragraph(children) | Block::DefinitionTitle(children) => {
             for inline in children {
                 walk_images_in_inline(inline, f);
             }
         }
         Block::Callout { children, .. }
         | Block::BlockQuote(children)
+        | Block::DefinitionList(children)
+        | Block::DefinitionDefinition(children)
         | Block::FootnoteDefinition { children, .. } => {
             for nested in children {
                 walk_images_in_block(nested, f);
@@ -691,11 +696,13 @@ where
     match sc {
         Shortcode::Subscribe(_) | Shortcode::Buttons(_) | Shortcode::Recent(_) | Shortcode::Apply(_) => {}
         Shortcode::Gallery(args) => {
-            // Gallery items carry their src as a structural `Url` on
-            // GalleryItem, not as an `Inline::Image`. The Inline-image
-            // walker has nothing to do here; the structural URL is
-            // resolved by `resolve_shortcode_image_urls` instead.
-            let _ = args;
+            // An item's src is a structural `Url`, resolved by
+            // `resolve_shortcode_image_urls`; only its caption holds inlines.
+            for item in &mut args.items {
+                for inline in &mut item.caption {
+                    walk_images_in_inline(inline, f);
+                }
+            }
         }
         Shortcode::Hero(args) => {
             // Hero's image is a structural `Url` field, not an
@@ -705,6 +712,14 @@ where
             // the inline walker.
             for block in &mut args.overlay {
                 walk_images_in_block(block, f);
+            }
+            for inline in &mut args.caption {
+                walk_images_in_inline(inline, f);
+            }
+            for caption in &mut args.slide_captions {
+                for inline in caption {
+                    walk_images_in_inline(inline, f);
+                }
             }
         }
         Shortcode::Grid(args) => {
@@ -763,13 +778,15 @@ where
     F: FnMut(&mut Url, &str, bool),
 {
     match block {
-        Block::Heading { children, .. } | Block::Paragraph(children) => {
+        Block::Heading { children, .. } | Block::Paragraph(children) | Block::DefinitionTitle(children) => {
             for inline in children {
                 walk_links_in_inline(inline, f);
             }
         }
         Block::Callout { children, .. }
         | Block::BlockQuote(children)
+        | Block::DefinitionList(children)
+        | Block::DefinitionDefinition(children)
         | Block::FootnoteDefinition { children, .. } => {
             for nested in children {
                 walk_links_in_block(nested, f);
@@ -838,13 +855,26 @@ where
                 f(&mut item.url, &text, false);
             }
         }
-        Shortcode::Gallery(_) => {
-            // Gallery items use src URLs (image-kind), not link URLs.
-            // No link-walk action.
+        Shortcode::Gallery(args) => {
+            // An item's src is an image URL; a link can only be in its caption.
+            for item in &mut args.items {
+                for inline in &mut item.caption {
+                    walk_links_in_inline(inline, f);
+                }
+            }
         }
         Shortcode::Hero(args) => {
             for block in &mut args.overlay {
                 walk_links_in_block(block, f);
+            }
+            // Captions are inline markdown: their links are body links.
+            for inline in &mut args.caption {
+                walk_links_in_inline(inline, f);
+            }
+            for caption in &mut args.slide_captions {
+                for inline in caption {
+                    walk_links_in_inline(inline, f);
+                }
             }
         }
         Shortcode::Grid(args) => {
@@ -942,7 +972,7 @@ fn gather_text_blocks(blocks: &[Block]) -> String {
 
 fn gather_text_block(block: &Block, out: &mut String) {
     match block {
-        Block::Heading { children, .. } | Block::Paragraph(children) => {
+        Block::Heading { children, .. } | Block::Paragraph(children) | Block::DefinitionTitle(children) => {
             for inline in children {
                 gather_text_inline(inline, out);
             }

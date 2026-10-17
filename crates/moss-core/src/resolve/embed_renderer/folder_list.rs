@@ -9,6 +9,11 @@ use crate::sort::SortAxis;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FolderEmbedParams {
+    /// Internal, never typed by an author: the card grid's covers all load
+    /// lazily. Set when the page's one eager image is elsewhere on the page.
+    /// The pothole grammar has no key for it, so `![[/|lazy_cards]]` is a
+    /// caption, not this flag.
+    pub lazy_cards: bool,
     pub limit: Option<usize>,
     pub sort: Option<SortAxis>,
     pub style: Option<String>,   // "list" | "summary" | "grid"
@@ -31,6 +36,10 @@ pub struct FolderEmbedParams {
     /// frontmatter already can; `synthesize_children_marker` sets this
     /// field from `children_more` too, so both sources share one field.
     pub more: Option<String>,
+    /// Internal, set from the `children_count:` frontmatter key: what the
+    /// listing's folder cards say they count. The embed grammar has no key
+    /// for it, since its text carries the `|` and `,` that grammar splits on.
+    pub count: Option<crate::frontmatter_union::ChildrenCount>,
     /// Internal: this is the root homepage's own depth=all self-listing, so scope it
     /// to the default language tree — on a multilingual site (gated at render time by
     /// `ProjectStructure.has_language_trees`) drop docs under a language-prefix folder
@@ -208,6 +217,31 @@ fn is_size_token(tok: &str) -> bool {
 /// current document's location.
 pub const MARKER_FOLDER_LIST: &str = "<!--MOSS_MARKER_FOLDER_LIST:";
 pub const MARKER_END: &str = "-->";
+/// The bare marker token that makes a card grid load every cover lazily; see
+/// [`FolderEmbedParams::lazy_cards`].
+pub const LAZY_CARDS_TOKEN: &str = "lazy_cards";
+
+
+/// Mark every folder-list marker in `html` as lazy-carded, in place of the
+/// marker text only. Used by the page planner, which owns the one eager slot.
+pub fn mark_cards_lazy(html: &str) -> String {
+    let mut out = String::with_capacity(html.len() + 16);
+    let mut rest = html;
+    while let Some(start) = rest.find(MARKER_FOLDER_LIST) {
+        let (before, after) = rest.split_at(start);
+        let Some(end) = after.find(MARKER_END) else { break };
+        let (marker, tail) = after.split_at(end);
+        out.push_str(before);
+        out.push_str(marker);
+        if !marker.contains(&format!("|{LAZY_CARDS_TOKEN}")) {
+            out.push('|');
+            out.push_str(LAZY_CARDS_TOKEN);
+        }
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
+}
 
 /// Percent-encode the characters that would otherwise end a marker field or
 /// the marker itself.
@@ -272,6 +306,9 @@ pub fn emit_marker(path: &str, from: &str, params: &FolderEmbedParams) -> String
     if let Some(ref m) = params.more {
         parts.push(format!("more={}", marker_encode(m)));
     }
+    if let Some(c) = &params.count {
+        parts.push(format!("count={}", marker_encode(&c.0)));
+    }
     if let Some(w) = params.placement.width {
         parts.push(format!("width={}", w));
     }
@@ -297,6 +334,9 @@ pub fn emit_marker(path: &str, from: &str, params: &FolderEmbedParams) -> String
     }
     if let Some(n) = params.limit {
         parts.push(format!("limit={}", n));
+    }
+    if params.lazy_cards {
+        parts.push(LAZY_CARDS_TOKEN.to_string());
     }
     if params.scope_default_tree {
         parts.push("scope_default_tree".to_string());

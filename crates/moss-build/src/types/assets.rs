@@ -89,6 +89,35 @@ pub struct AssetRegistry {
         std::sync::RwLock<std::collections::HashMap<String, std::path::PathBuf>>,
 }
 
+/// Why a promised asset will never arrive. The only ways in are the named
+/// constructors below, so an I/O error cannot reach `Failed` unclassified.
+pub struct Failure(String);
+
+impl Failure {
+    /// The encoder, decoder or a conversion step failed on bytes that were present.
+    pub fn encode(msg: impl Into<String>) -> Self {
+        Self(msg.into())
+    }
+
+    /// A variant this build deliberately never produces.
+    pub fn skip(reason: impl Into<String>) -> Self {
+        Self(reason.into())
+    }
+
+    /// A source that could not be read. `None` while the file is still coming
+    /// back from the cloud: that is a promise to keep, not a failure.
+    pub fn unreadable(context: &str, u: crate::build::outcome::Unreadable) -> Option<Self> {
+        match u {
+            crate::build::outcome::Unreadable::NotYet => None,
+            crate::build::outcome::Unreadable::Broken(e) => Some(Self(format!("{context}: {e}"))),
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        &self.0
+    }
+}
+
 impl AssetRegistry {
     pub fn new() -> Self {
         Self {
@@ -155,9 +184,9 @@ impl AssetRegistry {
     /// (bazel.build/remote/caching). Failed is the negative form of the same
     /// rule: when materialization fails, the promise must be retracted, not
     /// silently swallowed.
-    pub fn set_failed(&self, path: String, error: String) {
+    pub fn set_failed(&self, path: String, why: Failure) {
         let mut assets = self.assets.write().unwrap();
-        assets.insert(path, AssetState::Failed(error));
+        assets.insert(path, AssetState::Failed(why.message().to_string()));
     }
     pub fn get(&self, path: &str) -> Option<AssetState> {
         let assets = self.assets.read().unwrap();
@@ -268,6 +297,16 @@ impl AssetRegistry {
                 continue;
             }
 
+            // A hero poster is `<stem>.poster.jpg`: match the whole suffix, or
+            // the one-extension strip below would key it as `<stem>.poster`.
+            if let Some(stem) = moss_core::asset_paths::poster_stem(url) {
+                by_stem
+                    .entry(moss_core::asset_snapshot::variant_key(stem))
+                    .or_default()
+                    .poster = true;
+                continue;
+            }
+
             let url_path = PathBuf::from(url);
             let ext = url_path
                 .extension()
@@ -295,6 +334,18 @@ impl AssetRegistry {
 #[cfg(test)]
 mod asset_registry_tests {
     use super::*;
+
+    /// A `<stem>.poster.jpg` marks the video's own stem, not `<stem>.poster`.
+    #[test]
+    fn a_hero_poster_marks_its_videos_stem() {
+        let r = AssetRegistry::new();
+        r.set_ready("/v/clip.poster.jpg".to_string());
+        r.set_ready("/v/other.thumb.jpg".to_string());
+        let variants = r.iter_registered_variants();
+        assert!(variants.get(&std::path::PathBuf::from("v/clip")).is_some_and(|v| v.poster));
+        assert!(!variants.get(&std::path::PathBuf::from("v/other")).is_some_and(|v| v.poster));
+        assert!(!variants.contains_key(&std::path::PathBuf::from("v/clip.poster")));
+    }
 
     /// The bridge between a registered URL and the emitter's question "does
     /// this video have a ladder?". A dotted filename used to defeat the match
@@ -405,7 +456,7 @@ mod asset_registry_tests {
         r.set_pending("assets/ok.webp".into(), None, None);
         r.set_ready("assets/ok.webp".into());
         r.set_pending("assets/bad.webp".into(), None, None);
-        r.set_failed("assets/bad.webp".into(), "encode error".into());
+        r.set_failed("assets/bad.webp".into(), Failure::encode("encode error"));
 
         let pending = r.pending_keys();
         assert_eq!(pending.len(), 1);
@@ -424,8 +475,8 @@ mod asset_registry_tests {
         r.set_pending("assets/ok.webp".into(), None, None);
         r.set_pending("assets/waiting.webp".into(), None, None);
         r.set_ready("assets/ok.webp".into());
-        r.set_failed("assets/bad.webp".into(), "encode error".into());
-        r.set_failed("assets/bad.w800.webp".into(), "encode error".into());
+        r.set_failed("assets/bad.webp".into(), Failure::encode("encode error"));
+        r.set_failed("assets/bad.w800.webp".into(), Failure::encode("encode error"));
 
         let failed = r.failed_keys();
         assert_eq!(failed.len(), 2);

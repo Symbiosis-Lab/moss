@@ -507,6 +507,11 @@ const COPY: Record<Lang, { alt: string; share: string; download: string }> = {
     share: "Share",
     download: "Download",
   },
+  de: {
+    alt: "Karte zum Teilen",
+    share: "Teilen",
+    download: "Herunterladen",
+  },
   "zh-hans": {
     alt: "分享卡片",
     share: "分享",

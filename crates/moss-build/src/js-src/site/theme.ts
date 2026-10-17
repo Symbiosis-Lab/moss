@@ -406,6 +406,12 @@ import "./nav/hint-place";
 // a breadcrumb trail.
 import "./nav/nav-island";
 
+// The blurred placeholder an image is painted with until it loads. Its own
+// module so the scan and the load listener can be tested without this
+// bundle's side effects; wired here because theme.js is on every page.
+import { initImagePlaceholders } from "./image-placeholder";
+initImagePlaceholders();
+
 // ==========================================================================
 // Vertical typesetting: remap wheel/trackpad to horizontal scroll
 // In writing-mode: vertical-rl, content overflows horizontally but browsers

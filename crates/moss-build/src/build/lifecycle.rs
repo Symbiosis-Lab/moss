@@ -231,8 +231,11 @@ impl SweepPermit {
 
 /// The permit for a one-shot build's reclaim of its own staging, after its
 /// seal: that caller drops the runtime as soon as the tail returns, so no
-/// server and no later build will read staging in this process again. Minted
-/// at exactly that call site (`staging_unlink_invariant_test` pins it).
+/// server and no other build reads staging afterwards. The one reader left is
+/// the same process's own second pass (`build::drive_passes`), which starts
+/// from the manifest this seal just wrote; the sweep keeps every file that
+/// manifest names, so that pass finds exactly what it would after a restart.
+/// Minted at exactly that call site (`staging_unlink_invariant_test` pins it).
 pub(crate) fn final_build_permit(mp: &MossPaths) -> SweepPermit {
     SweepPermit { _record: lock_for(mp), encode_outputs: Default::default() }
 }
@@ -335,6 +338,17 @@ pub(crate) fn show_render(mp: &MossPaths, publishable: bool) -> (u64, Option<Pat
     }
     st.shown_render = Some(seq);
     (seq, Some(staging))
+}
+
+/// Whether `render` is still the newest render admitted for this folder: the
+/// test a detached background read makes between files, so a build that
+/// superseded it is the one that asks for the rebuild. `None` (no render was
+/// minted) cannot be told apart from newest, and counts as it.
+pub(crate) fn is_latest_render(mp: &MossPaths, render: Option<u64>) -> bool {
+    match render {
+        Some(render) => lock_for(mp).state().next_render == render,
+        None => true,
+    }
 }
 
 /// Reveal a render whose required outputs became ready after its initial

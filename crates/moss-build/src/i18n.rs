@@ -41,9 +41,14 @@ pub enum Language {
     En,
     ZhHans,
     ZhHant,
+    De,
 }
 
 impl Language {
+    /// Every interface language, so a caller that must cover them all
+    /// (a per-language digest, a table test) reads one list.
+    pub const ALL: [Language; 4] = [Language::En, Language::De, Language::ZhHans, Language::ZhHant];
+
     /// Returns true for CJK languages that benefit from Chinese numeral formatting.
     pub fn is_cjk(&self) -> bool {
         matches!(self, Language::ZhHans | Language::ZhHant)
@@ -51,12 +56,17 @@ impl Language {
 
     /// Parse a language code string into a Language.
     ///
-    /// Accepts codes like "en", "zh-hans", "zh-hant" (case-insensitive).
+    /// Accepts codes like "en", "de", "zh-hans", "zh-hant" (case-insensitive).
+    /// German is "de" and its regional forms "de-de", "de-at", "de-ch".
     /// Bare "zh" is treated as shorthand for Simplified Chinese (zh-hans);
     /// `zh-hant` / `zh-tw` remain distinct for Traditional Chinese.
     /// Returns None if the code is not recognized.
     pub fn from_code(code: &str) -> Option<Language> {
-        match code.to_lowercase().as_str() {
+        let lower = code.to_lowercase();
+        if lower == "de" || lower.starts_with("de-") {
+            return Some(Language::De);
+        }
+        match lower.as_str() {
             "en" => Some(Language::En),
             "zh" | "zh-hans" | "zh-cn" => Some(Language::ZhHans),
             "zh-hant" | "zh-tw" => Some(Language::ZhHant),
@@ -66,7 +76,7 @@ impl Language {
 
     /// Parse an arbitrary BCP-47 language tag into a Language, never failing.
     ///
-    /// Matches any `zh-*` tag by region into Simplified vs. Traditional
+    /// Any `de` tag (`de-AT`, `de_CH`, `de-1996`) is German. Matches any `zh-*` tag by region into Simplified vs. Traditional
     /// (`zh-hk` / `zh-mo` are Traditional in practice). Unknown tags fall
     /// back to `En`. Use this when the input is untrusted or comes from
     /// web APIs (`document.documentElement.lang`, `Accept-Language`, HTML
@@ -85,14 +95,16 @@ impl Language {
     /// locale strings: underscores (`zh_TW` from POSIX `LANG` / older Windows),
     /// a `Hant`/`Hans` script subtag in any position, the ISO-639-3 Sinitic
     /// language codes macOS/browsers occasionally report (`cmn`, `yue`, …), and
-    /// a bare script subtag. Anything not recognizably Chinese → `En` (moss's
-    /// only non-Chinese UI language).
+    /// a bare script subtag. Anything not recognizably Chinese or German → `En`.
     pub fn from_bcp47_lenient(tag: &str) -> Language {
         // Normalize: lowercase, and treat `_` as `-` so `zh_TW` still buckets as
         // Traditional instead of silently falling through to Simplified.
         let normalized = tag.to_ascii_lowercase().replace('_', "-");
         let subtags: Vec<&str> = normalized.split('-').filter(|s| !s.is_empty()).collect();
         let primary = subtags.first().copied().unwrap_or("");
+        if primary == "de" || primary == "deu" {
+            return Language::De;
+        }
 
         // Primary-subtag codes that denote Chinese: the `zh` macrolanguage
         // (+ ISO-639-3 `zho`), the individual Sinitic languages that may be
@@ -130,6 +142,7 @@ impl Language {
             Language::En => "en",
             Language::ZhHans => "zh-hans",
             Language::ZhHant => "zh-hant",
+            Language::De => "de",
         }
     }
 
@@ -145,6 +158,7 @@ impl Language {
             Language::En => "en",
             Language::ZhHans => "zh-Hans",
             Language::ZhHant => "zh-Hant",
+            Language::De => "de",
         }
     }
 
@@ -154,11 +168,12 @@ impl Language {
             Language::En => "EN",
             Language::ZhHans => "简",
             Language::ZhHant => "繁",
+            Language::De => "DE",
         }
     }
 }
 
-pub use strings::{t, term_root_title};
+pub use strings::{sources_headings, t, term_root_title};
 
 /// A folder card's article count as displayed text — `3 articles`, `三篇`.
 ///
@@ -175,6 +190,27 @@ pub fn article_count_label(lang: Language, count: usize, typesetting: Option<&st
     } else {
         format!("{} {}", count, counter)
     }
+}
+
+/// A folder card's count text under the listing's `children_count:` setting,
+/// or `None` when it hides the count. No setting is the built-in
+/// [`article_count_label`]; a custom text takes its `{n}` in the same
+/// numerals the built-in one would use.
+pub fn card_count_label(
+    lang: Language,
+    count: usize,
+    typesetting: Option<&str>,
+    setting: Option<&moss_core::frontmatter_union::ChildrenCount>,
+) -> Option<String> {
+    let Some(setting) = setting else {
+        return Some(article_count_label(lang, count, typesetting));
+    };
+    let number = if use_cjk_numerals(typesetting, lang) {
+        numerals::to_chinese_numeral(count)
+    } else {
+        count.to_string()
+    };
+    setting.render(count, &number)
 }
 
 /// The one predicate that decides whether a piece of UI chrome is written in
@@ -265,26 +301,30 @@ pub fn resolve_document_language(
 /// The `<html lang>` tag for a language CODE — the one canonicalizer, so a
 /// site's declaration and a page's declaration cannot disagree about the same
 /// string. `zh-tw` must emit `zh-Hant`, the edition moss ships, not the region
-/// `zh-TW`; only a code with no `Language` variant takes the general rule.
+/// `zh-TW`; a code with no `Language` variant takes the general rule, and so
+/// does German, whose regional tags (`de-AT`) keep their region in the markup.
 pub fn lang_tag(code: &str) -> String {
     match Language::from_code(code) {
+        Some(Language::De) | None => canonical_bcp47(code),
         Some(lang) => lang.as_bcp47_attr().to_string(),
-        None => canonical_bcp47(code),
     }
 }
 
 /// The chip a language switcher shows for a declared tag.
 ///
-/// The three languages moss translates its interface into keep their own short
-/// labels (`繁`, `简`, `EN`) — they are what the existing switcher shows and
-/// changing them would change every multilingual moss site. Every other
-/// declared language gets its endonym, because a reader looking for the German
-/// edition is looking for "Deutsch"; `DE` would be a code, not a name.
+/// Each edition has its own short label (`EN`, `DE`, `简`, `繁`), so the
+/// chips of a switcher read alike. Every language moss has no interface for
+/// shows its endonym instead, and so does a regional German tag (`de-AT`),
+/// since two German editions side by side need telling apart.
 ///
 /// Total for any tag that passed the allowlist, which is every tag that can
 /// reach a switcher.
 pub fn switcher_label(tag: &str) -> &'static str {
     match Language::from_code(tag) {
+        // Two German editions side by side need telling apart.
+        Some(Language::De) if !tag.eq_ignore_ascii_case("de") => {
+            moss_core::home::endonym(tag).unwrap_or_else(|| Language::De.display_name())
+        }
         Some(lang) => lang.display_name(),
         None => moss_core::home::endonym(tag).unwrap_or(""),
     }
@@ -505,9 +545,24 @@ mod tests {
         for tag in ["zh-Hant", "zh-TW", "zh-HK", "zh-MO", "zh-Hant-TW"] {
             assert_eq!(Language::from_bcp47_lenient(tag), Language::ZhHant, "{tag}");
         }
-        for tag in ["en", "en-US", "", "fr", "de-DE"] {
+        for tag in ["en", "en-US", "", "fr"] {
             assert_eq!(Language::from_bcp47_lenient(tag), Language::En, "{tag}");
         }
+    }
+
+    #[test]
+    fn german_codes_and_tags_are_the_german_edition() {
+        for code in ["de", "DE", "de-de", "de-at", "de-ch", "de-LU", "de-LI"] {
+            assert_eq!(Language::from_code(code), Some(Language::De), "{code}");
+        }
+        for tag in ["de", "de-DE", "de-AT", "de_CH", "de-1996", "deu"] {
+            assert_eq!(Language::from_bcp47_lenient(tag), Language::De, "{tag}");
+        }
+        assert_eq!(Language::De.code(), "de");
+        assert_eq!(Language::De.as_bcp47_attr(), "de");
+        assert_eq!(switcher_label("de"), "DE");
+        assert_eq!(lang_tag("de-at"), "de-AT");
+        assert!(!Language::De.is_cjk());
     }
 
     #[test]
@@ -911,7 +966,8 @@ impl AppLanguage {
     /// keeping the two enums from drifting silently.
     pub fn from_bcp47(tag: &str) -> AppLanguage {
         match crate::i18n::Language::from_bcp47_lenient(tag) {
-            crate::i18n::Language::En => AppLanguage::En,
+            // German is a site edition only; the editor has no German UI.
+            crate::i18n::Language::En | crate::i18n::Language::De => AppLanguage::En,
             crate::i18n::Language::ZhHans => AppLanguage::ZhHans,
             crate::i18n::Language::ZhHant => AppLanguage::ZhHant,
         }

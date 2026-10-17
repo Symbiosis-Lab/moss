@@ -844,6 +844,7 @@ pub(crate) fn test_project() -> ProjectStructure {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
+        empty_folders: Vec::new(),
     }
 }
 
@@ -1998,7 +1999,7 @@ fn year_groups_under_non_date_axis_skip_resort() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
-        &Default::default(),
+        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
     );
 
     // Year sections must appear.
@@ -2081,7 +2082,7 @@ fn date_asc_year_groups_lead_with_the_oldest_year() {
         Some(moss_core::sort::SortAxis::DateAsc),
         true,
         false,
-        &Default::default(),
+        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
     );
 
     let pos_1924 = out.find("<h2>1924</h2>").expect("1924 heading present");
@@ -2179,7 +2180,7 @@ fn a_dated_subfolder_sorts_by_its_own_date_and_shows_it_in_its_meta() {
         Some(moss_core::sort::SortAxis::DateAsc),
         true,
         false,
-        &Default::default(),
+        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
     );
 
     let pos_1924 = out.find(r#"href="/lectures/cambridge-1924""#).expect("1924 lecture present");
@@ -2229,7 +2230,7 @@ fn year_groups_skip_resort_keeps_folders_flat_above() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
-        &Default::default(),
+        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
     );
 
     // Sections exist for the articles.
@@ -2282,7 +2283,7 @@ fn no_group_skip_resort_stays_flat() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
-        &Default::default(),
+        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
     );
 
     assert!(
@@ -2361,7 +2362,7 @@ fn skip_resort_summary_still_separates_folders_from_articles() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
-        &Default::default(),
+        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
     );
 
     // Both folders must precede both articles.
@@ -2430,7 +2431,7 @@ fn skip_resort_summary_year_still_groups_by_year() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
-        &Default::default(),
+        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
     );
 
     assert!(
@@ -2485,7 +2486,7 @@ fn undated_grid_puts_folders_first_then_folds_case() {
         Some(moss_core::sort::SortAxis::Title),
         true,
         false,
-        &Default::default(),
+        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
     );
 
     let order: Vec<&str> = ["Zebra", "Alpha", "mao", "Scarly"]
@@ -2767,6 +2768,7 @@ fn a_caption_with_marker_breaking_characters_reaches_the_page_intact() {
 #[test]
 fn pseudo_folder_place_embed_lists_its_derived_members() {
     let kind = crate::build::terms::TermKind {
+        cards: false,
         key: "places".to_string(),
         fields: vec!["location".to_string()],
         title: "Places".to_string(),
@@ -2797,6 +2799,7 @@ fn pseudo_folder_place_embed_lists_its_derived_members() {
 #[test]
 fn place_map_embed_emits_svg_with_placement_and_caption() {
     let kind = crate::build::terms::TermKind {
+        cards: false,
         key: "places".to_string(),
         fields: vec!["location".to_string()],
         title: "Places".to_string(),
@@ -2835,6 +2838,7 @@ fn place_map_embed_emits_svg_with_placement_and_caption() {
 #[test]
 fn pseudo_folder_rollup_ancestor_embed_lists_its_descendants() {
     let kind = crate::build::terms::TermKind {
+        cards: false,
         key: "places".to_string(),
         fields: vec!["location".to_string()],
         title: "Places".to_string(),
@@ -3014,4 +3018,350 @@ fn children_more_target_with_an_ampersand_resolves_to_its_page() {
         "children_more [[Q&A]] should link to /qanda/: {}",
         out
     );
+}
+
+fn trips_folder_note() -> ParsedDocument {
+    ParsedDocument {
+        url_path: "notes/trips/index.html".to_string(),
+        source_path: Some("notes/Trips/Trips.md".to_string()),
+        label: "Trips".to_string(),
+        title: "Trips".to_string(),
+        clean_stem: "trips".to_string(),
+        kind: PageKind::Folder,
+        direct_children_sort: Some(ResolvedSort {
+            axis: SortAxis::Date,
+            explicit_order: None,
+            series_default: false,
+        }),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn folder_note_can_embed_its_own_folder_by_name() {
+    // `notes/Trips/Trips/` does not exist, so `Trips/` falls back to the note's
+    // parent folder and lists `notes/Trips/`.
+    let docs = vec![
+        trips_folder_note(),
+        make_doc("notes/trips/lisbon.html", "Lisbon", Some("2026-01-02")),
+        make_doc("notes/trips/kyoto.html", "Kyoto", Some("2026-01-01")),
+    ];
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams::default();
+    let marker = moss_core::resolve::embed_renderer::folder_list::emit_marker(
+        "Trips/",
+        "notes/Trips/Trips.md",
+        &params,
+    );
+    let out = resolve_markers(
+        &marker,
+        "notes/Trips/Trips.md",
+        &docs,
+        &test_project(),
+        &std::collections::HashMap::new(),
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(!out.contains("moss-embed-missing"), "got: {}", out);
+    assert!(out.contains("Lisbon") && out.contains("Kyoto"), "got: {}", out);
+}
+
+#[test]
+fn folder_note_self_embed_by_name_truncated_has_no_more_link() {
+    // `Opera/` falls back to the note's own folder; a truncated listing of
+    // that folder must not link to the page the reader is already on.
+    let folder = ParsedDocument {
+        url_path: "work/opera/index.html".to_string(),
+        source_path: Some("work/Opera/Opera.md".to_string()),
+        label: "Opera".to_string(),
+        title: "Opera".to_string(),
+        clean_stem: "opera".to_string(),
+        kind: PageKind::Folder,
+        ..Default::default()
+    };
+    let docs = vec![
+        folder,
+        make_doc("work/opera/a.html", "A", Some("2026-01-03")),
+        make_doc("work/opera/b.html", "B", Some("2026-01-02")),
+        make_doc("work/opera/c.html", "C", Some("2026-01-01")),
+    ];
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams {
+        limit: Some(2),
+        ..Default::default()
+    };
+    let marker = moss_core::resolve::embed_renderer::folder_list::emit_marker(
+        "Opera/",
+        "work/Opera/Opera.md",
+        &params,
+    );
+    let out = resolve_markers(
+        &marker,
+        "work/Opera/Opera.md",
+        &docs,
+        &test_project(),
+        &std::collections::HashMap::new(),
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(out.contains("A") && out.contains("B"), "got: {}", out);
+    assert!(!out.contains("moss-embed-more"), "got: {}", out);
+}
+
+#[test]
+fn truncated_embed_of_a_sibling_folder_from_a_folder_note_keeps_more_link() {
+    // Guard for the self-listing fix: a different folder reached with `../`
+    // from the same folder note still links to its own page.
+    let folder = ParsedDocument {
+        url_path: "work/opera/index.html".to_string(),
+        source_path: Some("work/Opera/Opera.md".to_string()),
+        label: "Opera".to_string(),
+        title: "Opera".to_string(),
+        clean_stem: "opera".to_string(),
+        kind: PageKind::Folder,
+        ..Default::default()
+    };
+    let other = make_folder_doc("work/other/index.html", "Other");
+    let docs = vec![
+        folder,
+        other,
+        make_doc("work/other/a.html", "A", Some("2026-01-03")),
+        make_doc("work/other/b.html", "B", Some("2026-01-02")),
+        make_doc("work/other/c.html", "C", Some("2026-01-01")),
+    ];
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams {
+        limit: Some(2),
+        ..Default::default()
+    };
+    let marker = moss_core::resolve::embed_renderer::folder_list::emit_marker(
+        "../Other/",
+        "work/Opera/Opera.md",
+        &params,
+    );
+    let out = resolve_markers(
+        &marker,
+        "work/Opera/Opera.md",
+        &docs,
+        &test_project(),
+        &std::collections::HashMap::new(),
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(
+        out.contains(r#"<p class="moss-embed-more"><a href="/work/other/">More →</a></p>"#),
+        "got: {}",
+        out
+    );
+}
+
+#[test]
+fn folder_note_self_name_prefers_a_real_subfolder_of_that_name() {
+    // A real `notes/Trips/Trips/` folder keeps the folder-relative meaning.
+    let docs = vec![
+        trips_folder_note(),
+        make_folder_doc("notes/trips/trips/index.html", "Trips"),
+        make_doc("notes/trips/trips/inner.html", "Inner", Some("2026-01-03")),
+        make_doc("notes/trips/lisbon.html", "Lisbon", Some("2026-01-02")),
+    ];
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams::default();
+    let marker = moss_core::resolve::embed_renderer::folder_list::emit_marker(
+        "Trips/",
+        "notes/Trips/Trips.md",
+        &params,
+    );
+    let out = resolve_markers(
+        &marker,
+        "notes/Trips/Trips.md",
+        &docs,
+        &test_project(),
+        &std::collections::HashMap::new(),
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(out.contains("Inner"), "got: {}", out);
+    assert!(!out.contains("Lisbon"), "got: {}", out);
+}
+
+#[test]
+fn unresolved_folder_embed_names_the_resolved_path_it_tried() {
+    // `Gone` is not the note's own folder name, so no fallback applies and the
+    // missing folder is reported at the path it was resolved to beside the note.
+    let docs = vec![trips_folder_note()];
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams::default();
+    let marker = moss_core::resolve::embed_renderer::folder_list::emit_marker(
+        "Gone/",
+        "notes/Trips/Trips.md",
+        &params,
+    );
+    let out = resolve_markers(
+        &marker,
+        "notes/Trips/Trips.md",
+        &docs,
+        &test_project(),
+        &std::collections::HashMap::new(),
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(out.contains("moss-embed-missing"), "got: {}", out);
+    assert!(out.contains("notes/Trips/Gone/"), "got: {}", out);
+}
+
+#[test]
+fn own_name_embed_in_a_non_index_note_excludes_its_host_page() {
+    // `work/Opera/Opera.md` is a plain page here (the folder index is
+    // `index.md`). Its `![[Opera/]]` falls back to the folder `work/Opera/`,
+    // and the listing must still leave out the page that hosts the embed.
+    let index = ParsedDocument {
+        url_path: "work/opera/index.html".to_string(),
+        source_path: Some("work/Opera/index.md".to_string()),
+        label: "Opera".to_string(),
+        title: "Opera".to_string(),
+        clean_stem: "opera".to_string(),
+        kind: PageKind::Folder,
+        ..Default::default()
+    };
+    let mut host = make_doc("work/opera/opera.html", "HostNote", Some("2026-01-04"));
+    host.source_path = Some("work/Opera/Opera.md".to_string());
+    let docs = vec![
+        index,
+        host,
+        make_doc("work/opera/a.html", "SiblingA", Some("2026-01-03")),
+        make_doc("work/opera/b.html", "SiblingB", Some("2026-01-02")),
+    ];
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams::default();
+    let marker = moss_core::resolve::embed_renderer::folder_list::emit_marker(
+        "Opera/",
+        "work/Opera/Opera.md",
+        &params,
+    );
+    let out = resolve_markers(
+        &marker,
+        "work/Opera/Opera.md",
+        &docs,
+        &test_project(),
+        &std::collections::HashMap::new(),
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(out.contains("SiblingA") && out.contains("SiblingB"), "got: {}", out);
+    assert!(!out.contains("HostNote"), "host page listed itself: {}", out);
+}
+
+/// A folder page's own children listing is a second listing on the page, so
+/// it shares the page's one eager slot with its hero or opening content: once
+/// the body has claimed it, the rendered cards carry no `loading="eager"`.
+#[test]
+fn children_listing_is_lazy_only_when_the_body_already_claimed_eager() {
+    let mut folder = make_folder_doc("journal/index.html", "Journal");
+    folder.children_style = Some(moss_core::Resolved::frontmatter("grid".to_string()));
+    let mut alpha = make_doc("journal/a.html", "Alpha", Some("2025-02-01"));
+    alpha.cover = Some("a.jpg".to_string());
+    let docs = vec![folder.clone(), alpha];
+    let render_listing = |claimed: bool| {
+        let doc = ParsedDocument { body_claims_eager: claimed, ..folder.clone() };
+        let marker = super::synthesize_children_marker(&doc, "journal", "journal/index.md");
+        let out = resolve_markers(
+            &marker,
+            "journal/index.md",
+            &docs,
+            &test_project(),
+            &std::collections::HashMap::new(),
+            crate::i18n::Language::En,
+            None,
+            None,
+            true,
+        );
+        (marker, out)
+    };
+    let (claimed_marker, claimed_out) = render_listing(true);
+    assert!(claimed_marker.contains("lazy_cards"), "{claimed_marker}");
+    assert!(!claimed_out.contains(r#"loading="eager""#), "{claimed_out}");
+    let (open_marker, open_out) = render_listing(false);
+    assert!(!open_marker.contains("lazy_cards"), "{open_marker}");
+    assert!(open_out.contains(r#"loading="eager""#), "{open_out}");
+}
+
+/// A `stage/` listing with two folder cards: `productions` holds two pages,
+/// `solo` holds one.
+fn count_listing(style: &str, count: Option<moss_core::frontmatter_union::ChildrenCount>) -> String {
+    let mut host = make_folder_doc("stage/index.html", "Stage");
+    host.children_style = Some(moss_core::Resolved::frontmatter(style.to_string()));
+    host.children_count = count;
+    let docs = vec![
+        host.clone(),
+        make_folder_doc("stage/productions/index.html", "Productions"),
+        make_doc("stage/productions/a.html", "A", None),
+        make_doc("stage/productions/b.html", "B", None),
+        make_folder_doc("stage/solo/index.html", "Solo"),
+        make_doc("stage/solo/c.html", "C", None),
+    ];
+    let marker = super::synthesize_children_marker(&host, "stage", "stage/index.md");
+    resolve_markers(
+        &marker,
+        "stage/index.md",
+        &docs,
+        &test_project(),
+        &std::collections::HashMap::new(),
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    )
+}
+
+#[test]
+fn children_count_absent_keeps_the_article_counter() {
+    let grid = count_listing("grid", None);
+    assert!(grid.contains(">2 articles<") && grid.contains(">1 article<"), "{grid}");
+}
+
+#[test]
+fn children_count_text_replaces_the_counter_with_singular_and_plural() {
+    use moss_core::frontmatter_union::ChildrenCount;
+    let setting = || Some(ChildrenCount("{n} production|{n} productions".into()));
+    let grid = count_listing("grid", setting());
+    assert!(grid.contains(">2 productions<") && grid.contains(">1 production<"), "{grid}");
+    assert!(!grid.contains("articles"), "{grid}");
+    let summary = count_listing("summary", setting());
+    assert!(summary.contains(">2 productions<") && summary.contains(">1 production<"), "{summary}");
+    let list = count_listing("list", setting());
+    assert!(list.contains(">2 productions<") && list.contains(">1 production<"), "{list}");
+}
+
+#[test]
+fn children_count_text_without_a_bar_serves_every_number() {
+    use moss_core::frontmatter_union::ChildrenCount;
+    let grid = count_listing("grid", Some(ChildrenCount("{n} 部作品".into())));
+    assert!(grid.contains(">2 部作品<") && grid.contains(">1 部作品<"), "{grid}");
+}
+
+#[test]
+fn children_count_false_emits_no_count_and_no_empty_meta() {
+    use moss_core::frontmatter_union::ChildrenCount;
+    for style in ["grid", "summary", "list"] {
+        let out = count_listing(style, Some(ChildrenCount(String::new())));
+        assert!(out.contains("Productions") && out.contains("Solo"), "{style}: cards must still list: {out}");
+        assert!(!out.contains("article"), "{style}: {out}");
+        assert!(!out.contains("moss-card-meta"), "{style}: {out}");
+        assert!(!out.contains("moss-prefix-link-prefix"), "{style}: {out}");
+        assert!(!out.contains("moss-prefix-link-suffix"), "{style}: {out}");
+    }
+}
+
+#[test]
+fn children_count_with_an_empty_form_hides_just_that_count() {
+    use moss_core::frontmatter_union::ChildrenCount;
+    let grid = count_listing("grid", Some(ChildrenCount("|{n} items".into())));
+    assert!(grid.contains(">2 items<"), "{grid}");
+    assert!(!grid.contains("<span class=\"moss-card-meta\"></span>"), "{grid}");
 }

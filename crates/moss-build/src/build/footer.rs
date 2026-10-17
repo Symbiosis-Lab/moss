@@ -94,8 +94,13 @@ pub fn language_tree_split(rel_path: &str) -> (Option<String>, &str) {
 /// predicate is consulted at page-emission time only.
 pub fn is_excluded_from_pages(rel_path: &str) -> bool {
     let (_, within_tree) = language_tree_split(rel_path);
-    slot_from_filename(within_tree).is_some()
+    slot_from_filename(within_tree).is_some() || within_tree == WELCOME_EMAIL_FILE
 }
+
+/// Reserved filename of the welcome email at a language-tree root. It is
+/// slot-only like `footer.md` but fills no slot: it feeds
+/// `emit::welcome_email` instead, so `slot_from_filename` does not know it.
+pub const WELCOME_EMAIL_FILE: &str = "welcome-email.md";
 
 /// Whether this document's rendered HTML lands in a slot — by reserved name
 /// (`footer.md`) or by `slot:` frontmatter.
@@ -673,6 +678,34 @@ mod tests {
             "slot_only suppresses article H1 regardless of title: {}",
             doc.html_content
         );
+    }
+
+    /// A heading in slot HTML renders without the permalink mark; the same
+    /// heading in a page body keeps it.
+    #[test]
+    fn heading_in_footer_slot_has_no_permalink_mark() {
+        let render = |path: &str, frontmatter: &str| {
+            let empty_map = HashMap::new();
+            crate::build::markdown::process_markdown_file(
+                path,
+                &format!("{frontmatter}## Contact\n\nWrite to us."),
+                "",
+                &empty_map,
+                false,
+                crate::i18n::Language::En,
+                None,
+                crate::build::markdown::SiteMarkdown::default(),
+                None,
+                None,
+                None,
+                crate::build::markdown::PageContext::default(),
+            )
+            .expect("parses")
+            .html_content
+        };
+        assert!(!render("footer.md", "").contains("moss-heading-anchor"));
+        assert!(!render("note.md", "---\nslot: footer-left\n---\n\n").contains("moss-heading-anchor"));
+        assert!(render("note.md", "").contains("moss-heading-anchor"));
     }
 
     // -----------------------------------------------------------------

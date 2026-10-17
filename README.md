@@ -6,7 +6,7 @@
 
 moss turns a folder of markdown into a website. The folder on your disk is the site: there is no database, no CMS and no project to configure. Write in any editor, and moss builds the pages, the navigation, the styling and dark mode, then publishes them.
 
-<img src="site/assets/animations/new%20folder.gif" width="720" alt="A folder of markdown files becomes a website in the moss app">
+<img src="assets/new-folder.gif" width="720" alt="A folder of markdown files becomes a website in the moss app">
 
 ## Why moss
 
@@ -17,13 +17,13 @@ Like its namesake, moss thrives in the spaces others overlook. It doesn't compet
 - **No setup.** Point moss at a folder. Sensible defaults stand in for a build config.
 - **Any editor.** moss's own app, Obsidian, Typora, or anything else that saves markdown.
 - **Media handled.** Images, video, HTML and Jupyter notebooks. Drop them in the folder.
-- **Publish and syndicate.** To a `*.mosspub.com` address or a domain you own, then on to other platforms, with comments synced back.
+- **Publish and syndicate.** To mosspub.com hosting (provided by Symbiosis Lab), or anywhere a deploy target or plugin reaches, then on to other platforms, with comments synced back.
 - **Yours to extend.** CSS, JavaScript and plugins, with no generator config to learn.
 - **Ready for coding agents.** `moss guide` and `moss describe` give an agent the conventions, the contract and the checks it needs to build a site correctly.
 
 ## Status
 
-moss is in beta. Building, previewing and editing are open to everyone. Publishing a new site to `*.mosspub.com` is by invitation while the beta is closed: [request access](https://mosspub.com). The built site is plain static files, so you can also host it anywhere yourself.
+moss is in beta. Building, previewing and editing are open to everyone. Publishing a new site to mosspub.com hosting is by invitation while the beta is closed: [request access](https://mosspub.com). The built site is plain static files, so you can host it anywhere you choose.
 
 ## Install
 

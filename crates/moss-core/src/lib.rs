@@ -98,6 +98,7 @@ pub mod csv_table;
 pub mod date;
 pub mod dep_graph;
 pub mod event;
+pub mod fields;
 pub mod home;
 pub mod frontmatter;
 pub mod frontmatter_union;

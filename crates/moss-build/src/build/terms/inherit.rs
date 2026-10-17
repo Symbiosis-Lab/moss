@@ -314,6 +314,7 @@ mod tests {
         // this also pins that `derive_terms` runs the inheritance pass
         // before its own membership derivation.
         let kinds = vec![super::super::TermKind {
+            cards: false,
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),

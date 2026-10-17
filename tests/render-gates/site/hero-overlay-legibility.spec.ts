@@ -282,6 +282,23 @@ test.describe("hero overlay panel sizing and placement", () => {
     await assertPanelAtInlineEnd(page);
   });
 
+  test("align=center sets the panel in the middle of the hero, and focus: sets the crop point", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/align-center/");
+
+    await assertPanelHugsContent(page);
+    const hero = await rectOf(page, ".moss-hero");
+    const content = await rectOf(page, ".moss-hero-content");
+    const mid = (a: number, b: number) => (a + b) / 2;
+    expect(mid(content.left, content.right), "panel is not centred horizontally").toBeCloseTo(mid(hero.left, hero.right), 0);
+    expect(mid(content.top, content.bottom), "panel is not centred vertically").toBeCloseTo(mid(hero.top, hero.bottom), 0);
+    expect(
+      await page.evaluate(() => getComputedStyle(document.querySelector(".moss-hero img")!).objectPosition),
+    ).toBe("20% 62%");
+  });
+
   /**
    * `align=end` moves the panel away from the start side specifically so
    * the subject there stays unobscured — a scrim still darkening the start

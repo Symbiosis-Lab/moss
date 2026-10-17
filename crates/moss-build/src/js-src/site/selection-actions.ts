@@ -62,6 +62,7 @@ function loadShareCard(): Promise<typeof import("./share-card")> {
 /** Shown when the chunk cannot be fetched or the card cannot be drawn. */
 const SHARE_FAILED: Record<Lang, string> = {
   en: "Could not create the image",
+  de: "Das Bild konnte nicht erstellt werden",
   "zh-hans": "无法生成图片",
   "zh-hant": "無法產生圖片",
 };
@@ -82,6 +83,11 @@ const COPY: Record<Lang, { share: string; comment: string; copy: string }> = {
     share: "Share",
     comment: "Comment",
     copy: "Copy",
+  },
+  de: {
+    share: "Teilen",
+    comment: "Kommentieren",
+    copy: "Kopieren",
   },
   "zh-hans": {
     share: "分享",
@@ -118,7 +124,7 @@ export function initSelectionActions(): void {
   // Detect language bucket for button labels
   const lang = langBucket(document.documentElement.lang);
   const labels = COPY[lang];
-  const isZh = lang !== "en";
+  const isZh = lang === "zh-hans" || lang === "zh-hant";
 
   // Create UI elements
   const popover = createPopover(labels, hasComments);

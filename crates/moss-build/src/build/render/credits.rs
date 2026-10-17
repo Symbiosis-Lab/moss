@@ -174,8 +174,10 @@ pub fn splice_page_masthead(
     layout: &crate::build::page::layout::LayoutConfig,
     emit_source_lines: bool,
     placement: LocatorPlacement,
+    fields: &crate::build::components::field_places::Placements,
 ) -> String {
     let masthead = render_page_masthead(doc, layout, emit_source_lines, placement);
+    let masthead = format!("{}{masthead}{}", fields.subtitle, fields.after_masthead());
     if masthead.is_empty() {
         content
     } else {
@@ -243,6 +245,49 @@ pub fn splice_byline_at_page_head(
     crate::build::markdown::html_post::splice_after_title_block(&content, &byline)
 }
 
+/// Byte offset just past the `</h1>` of the first heading, when the body opens
+/// with a `:::grid` block and that heading sits inside it. A heading moved into
+/// a cell is still the page's title, so the title block follows it there.
+pub(crate) fn first_h1_end_in_leading_grid(body: &str) -> Option<usize> {
+    let body_start = body.len() - body.trim_start().len();
+    let rest = &body[body_start..];
+    if !(rest.starts_with("<div class=\"moss-grid\"")
+        || rest.starts_with("<div class=\"moss-grid "))
+    {
+        return None;
+    }
+    let h1_close = rest.find("</h1>")? + "</h1>".len();
+    // The grid's own closing `</div>` is where its `<div>` depth returns to zero.
+    let mut depth = 0usize;
+    let mut at = 0;
+    loop {
+        let open = match (rest[at..].find("<div "), rest[at..].find("<div>")) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        let close = rest[at..].find("</div>");
+        let (i, opens) = match (open, close) {
+            (Some(o), Some(c)) if o < c => (o, true),
+            (_, Some(c)) => (c, false),
+            _ => return None,
+        };
+        at += i;
+        if at >= h1_close {
+            return Some(body_start + h1_close);
+        }
+        if opens {
+            depth += 1;
+            at += 4;
+        } else {
+            depth -= 1;
+            if depth == 0 {
+                return None;
+            }
+            at += 6;
+        }
+    }
+}
+
 /// The shared body of both renderers.
 fn render_rows(
     block_class: &str,
@@ -275,14 +320,6 @@ fn render_rows(
 /// is not a good enough reason for a second. When the row does not render as
 /// one plain paragraph, its literal text is escaped instead.
 ///
-/// Public under the name `render_display_row` for the one other place moss
-/// shows a short authored line that may carry a link: a hero's
-/// `caption="…"`. A cover credit and a colophon credit are the same kind of
-/// text and must not diverge in what markdown they accept.
-pub(crate) fn render_display_row(row: &str) -> String {
-    render_row(row)
-}
-
 fn render_row(row: &str) -> String {
     let html = crate::build::markdown::render_markdown_to_html(row);
     let trimmed = html.trim();

@@ -453,7 +453,12 @@ async fn arm_validate_content(ctx: &Session, args: Value) -> ArmResult {
         return to_value(Vec::<crate::editor::validation::EditorDiagnostic>::new());
     };
     let doc = moss_core::frontmatter::parse(&content);
-    let schema = crate::editor::validation::compose_schema(&[]);
+    let declared = match crate::build::site_config::read_project_config(&root.to_string_lossy()) {
+        Ok(cfg) => crate::build::terms::declared_name_list_fields(&cfg),
+        Err(_) => Vec::new(),
+    };
+    let plugins = crate::plugins::discovery::discover_installed_plugins(&root.to_string_lossy()).unwrap_or_default();
+    let schema = crate::editor::validation::compose_schema(&plugins, &declared);
     to_value(crate::editor::validation::diagnose(
         Some(&root),
         &path,
@@ -1141,6 +1146,7 @@ mod tests {
 
         let mut map = crate::build::scan::article_map::ArticleMap::new();
         map.kinds = vec![crate::build::terms::TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["author".to_string()],
             title: "People".to_string(),

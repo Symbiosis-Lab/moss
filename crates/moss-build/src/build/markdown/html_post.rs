@@ -403,13 +403,49 @@ pub fn strip_html_tags(html: &str) -> String {
 ///
 /// Injection is article-only, and the `moss-article-title` class is a stable
 /// contract.
-pub(crate) fn inject_article_title_h1(html_body: &str, title: &str, emit_source_lines: bool) -> String {
+pub(crate) fn inject_article_title_h1(html_body: &str, title: &str, emit_source_lines: bool, visually_hidden: bool) -> String {
     let escaped = html_escape(title);
     let fm_attr = if emit_source_lines { r#" data-source-fm="title""# } else { "" };
+    let class = if visually_hidden { "moss-article-title visually-hidden" } else { "moss-article-title" };
     if html_body.is_empty() {
-        format!("<h1 class=\"moss-article-title\"{fm_attr}>{escaped}</h1>\n")
+        format!("<h1 class=\"{class}\"{fm_attr}>{escaped}</h1>\n")
     } else {
-        format!("<h1 class=\"moss-article-title\"{fm_attr}>{escaped}</h1>\n{html_body}")
+        format!("<h1 class=\"{class}\"{fm_attr}>{escaped}</h1>\n{html_body}")
+    }
+}
+
+/// Splits off a leading `<p class="moss-eyebrow">…</p>` line, the one block a
+/// declared field draws above the page title. Every check for "the body starts
+/// with its title" steps past it through this, so an eyebrow never hides the
+/// title block. Returns `("", html)` when there is none.
+pub(crate) fn split_leading_eyebrow(html: &str) -> (&str, &str) {
+    const OPEN: &str = "<p class=\"moss-eyebrow\">";
+    let lead = html.len() - html.trim_start().len();
+    if !html[lead..].starts_with(OPEN) {
+        return ("", html);
+    }
+    let Some(close) = html[lead..].find("</p>") else { return ("", html) };
+    let end = lead + close + "</p>".len();
+    let end = end + html[end..].len() - html[end..].trim_start_matches('\n').len();
+    html.split_at(end)
+}
+
+/// Put the parent-section link (`breadcrumb: label`) above the finished
+/// title block of `content`. Content that does not open with the injected
+/// title heading (its layout hides the title, or it has none) gets no link: the
+/// link is there to name the title it sits above. Call it after the date row
+/// and byline are spliced in, so those never have to step past the link.
+pub(crate) fn prepend_parent_label(
+    content: &mut String,
+    parent: &crate::build::components::nav::BreadcrumbSegment,
+) {
+    if split_leading_eyebrow(content).1.starts_with("<h1 class=\"moss-article-title\"") {
+        let link = format!(
+            "<a class=\"moss-parent-label\" href=\"{}\">{}</a>\n",
+            html_escape(&parent.url),
+            html_escape(&parent.title),
+        );
+        content.insert_str(0, &link);
     }
 }
 
@@ -436,12 +472,15 @@ pub(crate) fn inject_article_title_h1(html_body: &str, title: &str, emit_source_
 /// anchored: no leading `<h1`, no title block.
 ///
 /// A claimed leaf's own cover (`folder_cover::render`) wraps that same
-/// leading `<h1>` behind an EMPTY, CSS-collapsed `<h1 class="moss-folder-title">`
-/// inside `.moss-collection-cover-row` > `-cover-body` — so the body no
-/// longer literally starts with the real title. [`split_empty_folder_title_prefix`]
-/// steps past exactly that placeholder first, so the anchored test still
-/// finds the real title instead of falling through to prepend (which would
-/// land the date row and byline above the cover image).
+/// leading `<h1>` inside `.moss-collection-cover-row` > `-cover-body` — so the
+/// body no longer literally starts with the real title. [`split_cover_body_prefix`]
+/// steps past that wrapper first, so the anchored test still finds the real
+/// title instead of falling through to prepend (which would land the date row
+/// and byline above the cover image).
+///
+/// A body that opens with a `:::grid` whose first `<h1>` is inside it counts as
+/// having its title block there: the fragment follows that `</h1>` inside the
+/// cell. A grid that comes after other content is not recognised.
 ///
 /// With no title block the fragment is prepended, which puts it at the top of
 /// `<article>` — under a hero, since the hero is hoisted out of the body and
@@ -452,8 +491,16 @@ pub(crate) fn splice_after_title_block(html_body: &str, fragment: &str) -> Strin
     if fragment.is_empty() {
         return html_body.to_string();
     }
-    let (prefix, body) = split_empty_folder_title_prefix(html_body);
+    let (eyebrow, rest) = split_leading_eyebrow(html_body);
+    format!("{eyebrow}{}", splice_below_eyebrow(rest, fragment))
+}
+
+fn splice_below_eyebrow(html_body: &str, fragment: &str) -> String {
+    let (prefix, body) = split_cover_body_prefix(html_body);
     if !body.trim_start().starts_with("<h1") {
+        if let Some(end) = crate::build::render::credits::first_h1_end_in_leading_grid(body) {
+            return format!("{}\n{}{}", &body[..end], fragment, &body[end..]);
+        }
         return format!("{}{}{}", prefix, fragment, body);
     }
     let Some((before, after)) = body.split_once("</h1>") else {
@@ -470,18 +517,15 @@ pub(crate) fn splice_after_title_block(html_body: &str, fragment: &str) -> Strin
     result
 }
 
-/// Splits off a leading `.moss-collection-cover-row` > `-cover-body` wrapper
-/// up through its collapsed, empty `<h1 class="moss-folder-title">` — the
-/// exact shape `folder_cover::render` emits for a claimed leaf's own cover.
-/// Returns `("", html_body)` unchanged for every other caller: a folder
-/// index's own non-empty title never matches this, nor does an ordinary
-/// article's `<h1>` with no cover wrapper.
-fn split_empty_folder_title_prefix(html_body: &str) -> (&str, &str) {
+/// Splits off a leading `.moss-collection-cover-row` > `-cover-body` opening
+/// up to where the page's own `<h1>` begins — the shape `folder_cover::render`
+/// emits for a claimed leaf's own cover, which has no heading of its own.
+/// Returns `("", html_body)` unchanged for every other caller.
+fn split_cover_body_prefix(html_body: &str) -> (&str, &str) {
     let leading_ws = html_body.len() - html_body.trim_start().len();
     let rest = &html_body[leading_ws..];
     const ROW_OPEN: &str = "<div class=\"moss-collection-cover-row\">";
     const BODY_OPEN: &str = "<div class=\"moss-collection-cover-body\">";
-    const TITLE_OPEN: &str = "<h1 class=\"moss-folder-title\"";
     if !rest.starts_with(ROW_OPEN) {
         return ("", html_body);
     }
@@ -490,17 +534,9 @@ fn split_empty_folder_title_prefix(html_body: &str) -> (&str, &str) {
     let Some(body_rel) = rest.find(BODY_OPEN) else {
         return ("", html_body);
     };
-    let after_body_open = body_rel + BODY_OPEN.len();
-    let tail = &rest[after_body_open..];
-    if !tail.starts_with(TITLE_OPEN) {
-        return ("", html_body);
-    }
-    let Some(gt) = tail[TITLE_OPEN.len()..].find('>') else {
-        return ("", html_body);
-    };
-    let tag_end = TITLE_OPEN.len() + gt + 1; // just past the opening tag's '>'
-    if tail[tag_end..].starts_with("</h1>") {
-        let split_at = leading_ws + after_body_open + tag_end + "</h1>".len();
+    let split_at = leading_ws + body_rel + BODY_OPEN.len();
+    let split_at = split_at + split_leading_eyebrow(&html_body[split_at..]).0.len();
+    if html_body[split_at..].starts_with("<h1") {
         (&html_body[..split_at], &html_body[split_at..])
     } else {
         ("", html_body)
@@ -1728,7 +1764,7 @@ mod tests {
     #[test]
     fn inject_article_title_h1_prepends_heading_with_class() {
         let body = "<p>Hello world.</p>";
-        let result = inject_article_title_h1(body, "AI 带来写作的黄金时代", false);
+        let result = inject_article_title_h1(body, "AI 带来写作的黄金时代", false, false);
         assert_eq!(
             result,
             "<h1 class=\"moss-article-title\">AI 带来写作的黄金时代</h1>\n<p>Hello world.</p>"
@@ -1736,9 +1772,18 @@ mod tests {
     }
 
     #[test]
+    fn inject_article_title_h1_visually_hidden_adds_the_utility_class() {
+        let result = inject_article_title_h1("<p>x</p>", "Stub", false, true);
+        assert_eq!(
+            result,
+            "<h1 class=\"moss-article-title visually-hidden\">Stub</h1>\n<p>x</p>"
+        );
+    }
+
+    #[test]
     fn inject_article_title_h1_html_escapes_title() {
         let body = "<p>x</p>";
-        let result = inject_article_title_h1(body, "A & B <script>alert(1)</script>", false);
+        let result = inject_article_title_h1(body, "A & B <script>alert(1)</script>", false, false);
         assert!(
             result.starts_with("<h1 class=\"moss-article-title\">A &amp; B &lt;script&gt;alert(1)&lt;/script&gt;</h1>"),
             "title not properly HTML-escaped: {}",
@@ -1749,13 +1794,13 @@ mod tests {
     #[test]
     fn inject_article_title_h1_handles_empty_body() {
         // No body content (rare but possible for stub pages).
-        let result = inject_article_title_h1("", "Stub", false);
+        let result = inject_article_title_h1("", "Stub", false, false);
         assert_eq!(result, "<h1 class=\"moss-article-title\">Stub</h1>\n");
     }
 
     #[test]
     fn inject_article_title_h1_emits_source_fm_when_flag_on() {
-        let result = inject_article_title_h1("", "My Title", true);
+        let result = inject_article_title_h1("", "My Title", true, false);
         assert!(
             result.contains(r#"data-source-fm="title""#),
             "emit_source_lines=true should add data-source-fm=\"title\", got: {result}"
@@ -1764,7 +1809,7 @@ mod tests {
 
     #[test]
     fn inject_article_title_h1_omits_source_fm_when_flag_off() {
-        let result = inject_article_title_h1("", "My Title", false);
+        let result = inject_article_title_h1("", "My Title", false, false);
         assert!(
             !result.contains("data-source-fm"),
             "emit_source_lines=false must not emit data-source-fm, got: {result}"
@@ -1772,6 +1817,35 @@ mod tests {
     }
 
     // --- splice_after_title_block ---
+
+    #[test]
+    fn prepend_parent_label_sits_before_the_title() {
+        let parent = crate::build::components::nav::BreadcrumbSegment {
+            title: "Opera & Co".to_string(),
+            url: "/opera/".to_string(),
+            is_current: false,
+        };
+        let mut content = inject_article_title_h1("", "Botez", false, false);
+        prepend_parent_label(&mut content, &parent);
+        assert_eq!(
+            content,
+            "<a class=\"moss-parent-label\" href=\"/opera/\">Opera &amp; Co</a>\n<h1 class=\"moss-article-title\">Botez</h1>\n"
+        );
+    }
+
+    #[test]
+    fn prepend_parent_label_skips_content_with_no_visible_title() {
+        let parent = crate::build::components::nav::BreadcrumbSegment {
+            title: "Opera".to_string(),
+            url: "/opera/".to_string(),
+            is_current: false,
+        };
+        for body in ["<p>Body</p>".to_string(), inject_article_title_h1("", "Hidden", false, true)] {
+            let mut content = body.clone();
+            prepend_parent_label(&mut content, &parent);
+            assert_eq!(content, body);
+        }
+    }
 
     #[test]
     fn splice_after_title_block_inserts_after_lone_h1() {
@@ -1823,9 +1897,8 @@ mod tests {
     }
 
     /// A claimed leaf's own cover wraps its title: `folder_cover::render`
-    /// puts an EMPTY `<h1 class="moss-folder-title">` first (collapsed by
-    /// `.moss-folder-title:empty`), then the page's real `<h1>`, inside
-    /// `.moss-collection-cover-body`. The fragment must land after the REAL
+    /// puts the page's real `<h1>` first inside `.moss-collection-cover-body`
+    /// and emits no heading of its own. The fragment must land after the REAL
     /// title, still inside that column — not before the whole cover row,
     /// which is what the old anchored "starts with h1" test did here (the
     /// body starts with `<div`, not `<h1`).
@@ -1835,7 +1908,6 @@ mod tests {
             r#"<div class="moss-collection-cover-row">"#,
             r#"<div class="moss-collection-cover"><img src="ada.png" /></div>"#,
             r#"<div class="moss-collection-cover-body">"#,
-            r#"<h1 class="moss-folder-title"></h1>"#,
             r#"<h1 class="moss-article-title">Ada Lin</h1>"#,
             r#"<p>Body.</p></div></div>"#,
         );
@@ -1847,7 +1919,6 @@ mod tests {
                 r#"<div class="moss-collection-cover-row">"#,
                 r#"<div class="moss-collection-cover"><img src="ada.png" /></div>"#,
                 r#"<div class="moss-collection-cover-body">"#,
-                r#"<h1 class="moss-folder-title"></h1>"#,
                 r#"<h1 class="moss-article-title">Ada Lin</h1>"#,
                 "\n",
                 r#"<div class="date-line">2026-04</div>"#,
@@ -1856,21 +1927,48 @@ mod tests {
         );
     }
 
-    /// The `data-source-fm="title"` editor-preview variant of the empty
-    /// placeholder must be recognized too, not just the bare tag.
+    /// A cover column whose title is a non-empty `moss-folder-title` (a folder
+    /// index's own title, rendered through the same cover component) takes the
+    /// fragment after that title, inside the column, the same as a claimed
+    /// leaf's article title — not above the whole cover row.
     #[test]
-    fn splice_after_title_block_recognizes_empty_folder_title_with_source_fm() {
+    fn splice_after_title_block_lands_after_a_folder_title_inside_cover_column() {
+        let body = concat!(
+            r#"<div class="moss-collection-cover-row">"#,
+            r#"<div class="moss-collection-cover"><img src="travel.png" /></div>"#,
+            r#"<div class="moss-collection-cover-body">"#,
+            r#"<h1 class="moss-folder-title">Travel</h1>"#,
+            r#"<p>Body.</p></div></div>"#,
+        );
+        let out = splice_after_title_block(body, "<div>D</div>");
+        assert_eq!(
+            out,
+            concat!(
+                r#"<div class="moss-collection-cover-row">"#,
+                r#"<div class="moss-collection-cover"><img src="travel.png" /></div>"#,
+                r#"<div class="moss-collection-cover-body">"#,
+                r#"<h1 class="moss-folder-title">Travel</h1>"#,
+                "\n",
+                r#"<div>D</div>"#,
+                r#"<p>Body.</p></div></div>"#,
+            )
+        );
+    }
+
+    /// The editor-preview `data-source-fm="title"` on the page's real title
+    /// must not stop the fragment from landing after it inside the column.
+    #[test]
+    fn splice_after_title_block_handles_source_fm_title_in_cover_column() {
         let body = concat!(
             r#"<div class="moss-collection-cover-row">"#,
             r#"<div class="moss-collection-cover"></div>"#,
             r#"<div class="moss-collection-cover-body">"#,
-            r#"<h1 class="moss-folder-title" data-source-fm="title"></h1>"#,
-            r#"<h1 class="moss-article-title">Ada Lin</h1>"#,
+            r#"<h1 class="moss-article-title" data-source-fm="title">Ada Lin</h1>"#,
             r#"<p>Body.</p></div></div>"#,
         );
         let out = splice_after_title_block(body, "<div>D</div>");
         assert!(
-            out.contains("<h1 class=\"moss-article-title\">Ada Lin</h1>\n<div>D</div><p>Body.</p>"),
+            out.contains("<h1 class=\"moss-article-title\" data-source-fm=\"title\">Ada Lin</h1>\n<div>D</div><p>Body.</p>"),
             "got: {}",
             out
         );

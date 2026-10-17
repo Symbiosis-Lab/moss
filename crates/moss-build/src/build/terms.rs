@@ -24,8 +24,12 @@ use regex::Regex;
 use crate::build::scan::article_map::to_pretty_url;
 use crate::build::types::ParsedDocument;
 
+mod roles;
+mod listing_placement;
+pub(crate) use listing_placement::insert_before_sources;
+pub use roles::{set_card_credits, term_role_heading, term_role_label};
 mod kinds;
-pub use kinds::{term_kinds, TermKind, BUILTIN_DEFAULT_FIELDS};
+pub use kinds::{declared_name_list_fields, term_kinds, TermKind, BUILTIN_DEFAULT_FIELDS};
 // The editor's chip-completion readout of a finished build's kinds table —
 // a pure reader of `ArticleMap`, never a deriver. Sibling file for the same
 // reason `kinds.rs` and `rollup.rs` are: it grows from a different concern
@@ -47,6 +51,8 @@ pub mod places;
 // build resolution that reads pass 2's finished memberships. See its own
 // doc comment for why it is a sibling file rather than inline here.
 mod rollup;
+mod stubs;
+pub use stubs::{claim_stubs, kind_move_stubs};
 
 /// `[text](url)` and `[[wikilink]]` spans — what [`linked_spans`] scans for.
 static LINK_SPAN_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -211,6 +217,26 @@ impl TermIndex {
         self.kinds.iter().map(|k| k.key.as_str()).filter(move |ns| self.namespace_in_use(ns))
     }
 
+    /// The nav-bar entries of the kinds in `nav` (see
+    /// `ConfigFile::terms_nav`) that have a root page: `(namespace key,
+    /// label, weight)`, in the order given. The label is the kind's explicit `title`,
+    /// else its resolved title for a built-in kind, else its key capitalized.
+    pub fn nav_entries(&self, nav: &[(String, Option<String>, Option<i32>)]) -> Vec<(String, String, Option<i32>)> {
+        nav.iter()
+            .filter(|(key, _, _)| self.namespace_in_use(key))
+            .map(|(key, title, weight)| {
+                let label = title.clone().unwrap_or_else(|| match self.kinds.iter().find(|k| k.key == *key) {
+                    Some(k) if key == moss_core::terms::AUTHOR_NS || key == moss_core::terms::TAGS_NS => k.title.clone(),
+                    _ => {
+                        let mut chars = key.chars();
+                        chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+                    }
+                });
+                (key.clone(), label, *weight)
+            })
+            .collect()
+    }
+
     /// Every pseudo-folder that needs a synthetic folder document and an
     /// index page: the unclaimed terms, plus the root of each namespace in
     /// use. The one list both folder-index synthesis blocks in
@@ -237,52 +263,54 @@ impl TermIndex {
     }
 }
 
-/// This doc's values for a name-list field (`author`, `tags`, `editor`,
-/// `jury`), or an empty slice for a field name this build doesn't
-/// recognize. The one accessor every name-list-field consumer in this
-/// module goes through, so a schema addition needs exactly one new arm —
-/// pinned by `every_name_list_field_has_a_real_accessor_arm`, which fails on
-/// a wildcard silently standing in for a real one.
-fn field_names<'a>(doc: &'a ParsedDocument, field: &str) -> &'a [String] {
+/// This doc's values for a name-list field. A name outside the five built-ins
+/// is site-declared, read from the page's own frontmatter like `author:`.
+pub(crate) fn field_names(doc: &ParsedDocument, field: &str) -> Vec<String> {
     match field {
-        "author" => &doc.author,
+        "author" => doc.author.clone(),
         // Frontmatter tags only — inline #hashtags are prose, not
         // cataloguing (see `fm_tags` on ParsedDocument).
-        "tags" => doc.fm_tags.as_deref().unwrap_or(&[]),
-        "editor" => &doc.editor,
-        "jury" => &doc.jury,
-        "location" => &doc.location,
-        _ => &[],
+        "tags" => doc.fm_tags.clone().unwrap_or_default(),
+        "editor" => doc.editor.clone(),
+        "jury" => doc.jury.clone(),
+        "location" => doc.location.clone(),
+        declared => raw_frontmatter_value(doc, declared)
+            .and_then(|v| moss_core::frontmatter_union::normalize_name_list(&v).ok())
+            .unwrap_or_default(),
     }
 }
 
-/// This doc's term-page claim for a name-list field (`author_page`,
-/// `tag_page`, `editor_page`, `jury_page`), or `None` for a field name this
-/// build doesn't recognize. Companion to [`field_names`].
-fn term_claim_of<'a>(doc: &'a ParsedDocument, field: &str) -> Option<&'a moss_core::terms::TermClaim> {
+/// A raw frontmatter value as the YAML value the shared normalizers take.
+fn raw_frontmatter_value(doc: &ParsedDocument, key: &str) -> Option<serde_yaml::Value> {
+    let value = doc.raw_frontmatter.get(key)?;
+    serde_json::from_value(value.clone()).ok()
+}
+
+/// This doc's term-page claim for a name-list field, or `None`. Companion to
+/// [`field_names`].
+fn term_claim_of(doc: &ParsedDocument, field: &str) -> Option<moss_core::terms::TermClaim> {
     match field {
-        "author" => doc.author_page.as_ref(),
-        "tags" => doc.tag_page.as_ref(),
-        "editor" => doc.editor_page.as_ref(),
-        "jury" => doc.jury_page.as_ref(),
-        "location" => doc.place_page.as_ref(),
-        _ => None,
+        "author" => doc.author_page.clone(),
+        "tags" => doc.tag_page.clone(),
+        "editor" => doc.editor_page.clone(),
+        "jury" => doc.jury_page.clone(),
+        "location" => doc.place_page.clone(),
+        declared => {
+            let key = claim_field_key(declared);
+            let value = raw_frontmatter_value(doc, &key)?;
+            moss_core::frontmatter_union::normalize_term_claim(&value).ok().flatten()
+        }
     }
 }
 
-/// The frontmatter key a page claims this field's term page with. Almost
-/// always `<field>_page`; `tags` is the one irregular pair, because the
-/// field is plural and a claim is of one tag (`tag_page`). Anything that
-/// WRITES a claim goes through here rather than concatenating the suffix,
-/// which is how `tags_page` — a key nothing reads — got written once.
-pub fn claim_field_key(field: &str) -> Option<&'static str> {
+/// The frontmatter key a page claims this field's term page with. `<field>_page`,
+/// except `tags` (`tag_page`) and `location` (`place_page`). Anything that writes
+/// a claim goes through here, not by concatenating the suffix.
+pub fn claim_field_key(field: &str) -> String {
     match field {
-        "author" => Some("author_page"),
-        "tags" => Some("tag_page"),
-        "editor" => Some("editor_page"),
-        "jury" => Some("jury_page"),
-        "location" => Some("place_page"),
-        _ => None,
+        "tags" => "tag_page".to_string(),
+        "location" => "place_page".to_string(),
+        other => format!("{other}_page"),
     }
 }
 
@@ -873,88 +901,6 @@ pub fn render_term_sections<'a>(
     )
 }
 
-/// Old-URL → new-URL pairs for every term whose namespace moved when a
-/// declared kind took a built-in's default field: naming `author` in
-/// `[terms.people]` moves everyone out of `authors/<slug>/` and into the
-/// `people` namespace, and the old URL is already out there in links and
-/// search results.
-///
-/// Recomputed from the kinds table on every build and never stored. There is
-/// no move event to record and nothing to merge: the pairs exist exactly
-/// while the config says the field belongs to another kind. Revert the
-/// config and the next build simply stops emitting them — a build writes a
-/// fresh generation rather than editing the last one, so the stub is not
-/// left behind locally, and a published site's old URL is retracted by the
-/// deploy pipeline's own removal of outputs that no page backs any more.
-/// This function is only one of that mechanism's inputs; it adds nothing to
-/// it. For the same reason none of this touches `redirects.json`, whose
-/// rename detection is UID-based and structurally cannot see a namespace
-/// move — a term has no UID and is not in `.articles`.
-///
-/// URLs are in the format the redirect emitter already uses: pretty, with a
-/// trailing slash and no leading one for the source, root-relative for the
-/// target.
-pub fn kind_move_stubs(index: &TermIndex) -> Vec<(String, String)> {
-    let mut stubs = Vec::new();
-    for (builtin_ns, field) in BUILTIN_DEFAULT_FIELDS {
-        // Moved, rather than merely switched off: the built-in has lost the
-        // field AND some declared kind has gained it. `[terms] author =
-        // false` empties the built-in too, and owes no redirect — those
-        // pages are gone, not relocated.
-        let builtin_kept_it =
-            index.kinds.iter().any(|k| k.key == builtin_ns && k.fields.iter().any(|f| f == field));
-        if builtin_kept_it {
-            continue;
-        }
-        let Some(new_kind) = index
-            .kinds
-            .iter()
-            .find(|k| k.key != builtin_ns && k.fields.iter().any(|f| f == field))
-        else {
-            continue;
-        };
-        // The per-name stubs below cover every member's old `authors/<slug>/`
-        // URL, but the old namespace ROOT — `authors/` itself, the listing an
-        // external link may point at directly — has no member to inherit one
-        // from. It simply stops being emitted once the field moves (the
-        // generated namespace-index loop only emits pages for namespaces
-        // still in use), so without this it 404s even though every page it
-        // used to list has a working forward. One stateless stub, same as
-        // the per-name ones, to the new kind's own root.
-        stubs.push((format!("{}/", builtin_ns), format!("/{}/", new_kind.key))); // allow:served-path-url-construct (term-namespace-root redirect target)
-        for (key, site) in &index.sites {
-            let Some((ns, slug)) = key.split_once('/') else { continue };
-            if ns != new_kind.key {
-                continue;
-            }
-            // Reachable through the moved field specifically. A person in
-            // this namespace only through `editor:` never had an `authors/`
-            // URL, so forwarding one would invent a page that never existed.
-            let reached_through_moved_field = index
-                .members_by_field
-                .get(&(key.clone(), field.to_string()))
-                .is_some_and(|members| !members.is_empty());
-            if !reached_through_moved_field {
-                continue;
-            }
-            let Some(target) = index.term_url(&new_kind.key, &site.display) else { continue };
-            stubs.push((format!("{}/{}/", builtin_ns, slug), target));
-        }
-    }
-    stubs
-}
-
-/// The `<h2>` above one field's group on a term page — "Editor" over the
-/// pages that named this person through `editor:`. The class is in
-/// moss-core's component table; the copy is `term_role_<field>` in
-/// `i18n::strings`.
-pub fn term_role_heading(lang: crate::i18n::Language, field: &str) -> String {
-    format!(
-        "<h2 class=\"moss-term-role\">{}</h2>",
-        crate::build::media::cover::html_escape(crate::i18n::t(lang, &format!("term_role_{}", field)))
-    )
-}
-
 fn claimed_key(doc: &ParsedDocument, kinds: &[TermKind], index: &TermIndex) -> Option<String> {
     let mut found: Option<String> = None;
     for kind in kinds {
@@ -1002,8 +948,8 @@ mod tests {
     /// kinds table (task A4).
     fn both_kinds() -> Vec<TermKind> {
         vec![
-            TermKind { key: AUTHOR_NS.to_string(), fields: vec!["author".to_string()], title: "Authors".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
-            TermKind { key: TAGS_NS.to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: AUTHOR_NS.to_string(), fields: vec!["author".to_string()], title: "Authors".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: TAGS_NS.to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
         ]
     }
 
@@ -1038,6 +984,7 @@ mod tests {
     fn place_namespace_roots_are_the_bare_keys_whose_kind_is_place() {
         let kinds = vec![
             TermKind {
+                cards: false,
                 key: "places".to_string(),
                 fields: vec!["location".to_string()],
                 title: "Places".to_string(),
@@ -1045,6 +992,7 @@ mod tests {
                 parents: Default::default(), explorer: None, line: None,
             },
             TermKind {
+                cards: false,
                 key: TAGS_NS.to_string(),
                 fields: vec!["tags".to_string()],
                 title: "Tags".to_string(),
@@ -1068,6 +1016,7 @@ mod tests {
     #[test]
     fn a_real_index_at_the_place_root_is_flagged_a_deeper_one_is_not() {
         let kinds = vec![TermKind {
+            cards: false,
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
@@ -1259,6 +1208,7 @@ mod tests {
     #[test]
     fn claim_through_jury_page_hosts_the_listing() {
         let kinds = vec![TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["jury".to_string()],
             title: "People".to_string(),
@@ -1276,6 +1226,7 @@ mod tests {
     #[test]
     fn claim_through_place_page_hosts_the_listing() {
         let kinds = vec![TermKind {
+            cards: false,
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
@@ -1294,6 +1245,7 @@ mod tests {
 
     fn places_kind_with_parents(parents: &[(&str, &str)]) -> TermKind {
         TermKind {
+            cards: false,
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
@@ -1394,6 +1346,7 @@ mod tests {
             parents.insert(key, parent_name);
         }
         let kinds = vec![TermKind {
+            cards: false,
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
@@ -1442,6 +1395,7 @@ mod tests {
         // recorded for it — the emptiness check the render layer applies is
         // the only guard, replacing the dropped `is_place` gate.
         let kinds = vec![TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["jury".to_string()],
             title: "People".to_string(),
@@ -1549,6 +1503,7 @@ mod tests {
     #[test]
     fn members_by_field_records_which_field_a_member_came_through() {
         let kinds = vec![TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string()],
             title: "People".to_string(),
@@ -1577,6 +1532,7 @@ mod tests {
     #[test]
     fn term_sections_keeps_a_trailing_group_for_hand_authored_also_in() {
         let kinds = vec![TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["author".to_string()],
             title: "People".to_string(),
@@ -1599,7 +1555,7 @@ mod tests {
 
     #[test]
     fn every_name_list_field_has_a_real_accessor_arm() {
-        // Companion to A2's name_list_fields_is_exactly_the_four_name_list_fields:
+        // Companion to the name-list flag test in moss-core's schema_fields_tests:
         // that test pins the SET; this one pins that `field_names` has a real
         // arm for each member of it, so a `_ => &[]` wildcard could not pass
         // as a match for a name the set still yields.
@@ -1609,7 +1565,7 @@ mod tests {
         d.editor = vec!["Kane".to_string()];
         d.jury = vec!["Kaneda".to_string()];
         d.location = vec!["Kyoto".to_string()];
-        for field in moss_core::schema_fields::name_list_fields() {
+        for field in ["author", "tags", "editor", "jury", "location"] {
             assert!(
                 !field_names(&d, field).is_empty(),
                 "field_names(doc, \"{field}\") returned an empty slice — a wildcard arm \
@@ -1626,6 +1582,7 @@ mod tests {
         // no fields. A real `authors/` directory on that site is an ordinary
         // folder and keeps its own name.
         let off = vec![TermKind {
+            cards: false,
             key: "authors".to_string(),
             fields: Vec::new(),
             title: "作者".to_string(),
@@ -1640,6 +1597,7 @@ mod tests {
 
         // The same kind, switched on and in use, does title its root.
         let on = vec![TermKind {
+            cards: false,
             key: "authors".to_string(),
             fields: vec!["author".to_string()],
             title: "作者".to_string(),
@@ -1659,6 +1617,7 @@ mod tests {
         // put "Author" over the derived half. develop renders one flat list,
         // and every such site's output is byte-identical or it is not.
         let kinds = vec![TermKind {
+            cards: false,
             key: "authors".to_string(),
             fields: vec!["author".to_string()],
             title: "Authors".to_string(),
@@ -1682,6 +1641,7 @@ mod tests {
         // plain listing with no heading, which is what keeps a single-field
         // kind byte-identical to any other folder index.
         let kinds = vec![TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string(), "jury".to_string()],
             title: "People".to_string(),
@@ -1699,6 +1659,7 @@ mod tests {
     #[test]
     fn two_fields_with_members_split_into_labelled_groups_in_kind_order() {
         let kinds = vec![TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string(), "jury".to_string()],
             title: "People".to_string(),
@@ -1728,6 +1689,7 @@ mod tests {
     #[test]
     fn a_generated_term_page_reads_the_same_sections_its_claimed_twin_would() {
         let kinds = vec![TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["author".to_string(), "jury".to_string()],
             title: "People".to_string(),
@@ -1759,6 +1721,7 @@ mod tests {
         // the claiming document, and the index — and both render it here, so
         // the same kind cannot come out headed differently on the two.
         let kinds = vec![TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string()],
             title: "People".to_string(),
@@ -1804,16 +1767,15 @@ mod tests {
         // derivation reads, and the frontmatter key a caller writes to claim
         // its term page. `tags`/`tag_page` is the pair that does not follow
         // the suffix rule, and the only way to know is to look it up.
-        for field in moss_core::schema_fields::name_list_fields() {
-            let key = claim_field_key(field)
-                .unwrap_or_else(|| panic!("name-list field `{field}` has no claim key"));
+        for field in ["author", "tags", "editor", "jury", "location"] {
+            let key = claim_field_key(field);
             assert!(
                 moss_core::schema_fields::BUILTIN_FIELDS.iter().any(|f| f.name == key),
                 "claim key `{key}` for `{field}` is not a declared schema field"
             );
         }
-        assert_eq!(claim_field_key("tags"), Some("tag_page"), "the irregular pair");
-        assert_eq!(claim_field_key("byline"), None, "not a name-list field");
+        assert_eq!(claim_field_key("tags"), "tag_page", "the irregular pair");
+        assert_eq!(claim_field_key("conductor"), "conductor_page", "a declared field follows the suffix rule");
     }
 
     // ── task A10: kind-move redirect stubs ───────────────────────────────
@@ -1822,9 +1784,10 @@ mod tests {
     /// the built-in loses the field, the declared kind gains it.
     fn author_moved_to_people() -> Vec<TermKind> {
         vec![
-            TermKind { key: "authors".to_string(), fields: Vec::new(), title: "Authors".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
-            TermKind { key: "tags".to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: "authors".to_string(), fields: Vec::new(), title: "Authors".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: "tags".to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
             TermKind {
+                cards: false,
                 key: "people".to_string(),
                 fields: vec!["author".to_string(), "editor".to_string()],
                 title: "People".to_string(),
@@ -1860,6 +1823,23 @@ mod tests {
     }
 
     #[test]
+    fn a_claimed_term_gets_a_stub_to_its_claiming_page_and_an_unclaimed_one_does_not() {
+        let mut docs = vec![
+            doc("ada-example/index.html", "Ada Example"),
+            doc("posts/a/index.html", "A"),
+            doc("posts/b/index.html", "B"),
+        ];
+        docs[0].author_page = Some(TermClaim::UseTitle);
+        docs[1].author = vec!["Ada Example".to_string()];
+        docs[2].author = vec!["Sam Example".to_string()];
+        let index = derive_terms(&mut docs, both_kinds());
+        assert_eq!(
+            claim_stubs(&index),
+            vec![("authors/ada-example/".to_string(), "/ada-example/".to_string())]
+        );
+    }
+
+    #[test]
     fn a_term_reached_only_through_a_field_that_did_not_move_gets_no_per_name_stub() {
         // Kane is in `people` through `editor:`, which was never `authors/`'s
         // field. Forwarding `authors/kane/` would invent a page that never
@@ -1881,9 +1861,10 @@ mod tests {
     #[test]
     fn a_moved_tags_namespace_root_also_gets_a_redirect() {
         let moved = vec![
-            TermKind { key: "authors".to_string(), fields: vec!["author".to_string()], title: "Authors".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
-            TermKind { key: "tags".to_string(), fields: Vec::new(), title: "Tags".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: "authors".to_string(), fields: vec!["author".to_string()], title: "Authors".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: "tags".to_string(), fields: Vec::new(), title: "Tags".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
             TermKind {
+                cards: false,
                 key: "topics".to_string(),
                 fields: vec!["tags".to_string()],
                 title: "Topics".to_string(),
@@ -1908,12 +1889,13 @@ mod tests {
         // — the pairs only ever existed while the config said so.
         let reverted = vec![
             TermKind {
+                cards: false,
                 key: "authors".to_string(),
                 fields: vec!["author".to_string()],
                 title: "Authors".to_string(),
                 is_place: false, parents: Default::default(), explorer: None, line: None,
             },
-            TermKind { key: "tags".to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: "tags".to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
         ];
         let mut docs = vec![doc("posts/a/index.html", "A")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -1926,6 +1908,7 @@ mod tests {
         // `[terms] author = false` empties the built-in with no declared kind
         // taking the field. Those pages are gone, not relocated.
         let off = vec![TermKind {
+            cards: false,
             key: "authors".to_string(),
             fields: Vec::new(),
             title: "Authors".to_string(),
@@ -1942,6 +1925,7 @@ mod tests {
     #[test]
     fn a_member_named_through_two_fields_of_one_kind_lists_only_once() {
         let kinds = vec![TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string()],
             title: "People".to_string(),
@@ -2017,6 +2001,7 @@ mod tests {
         // stopped linking, even though derive_terms itself already handled
         // the move correctly.
         let kinds = vec![TermKind {
+            cards: false,
             key: "people".to_string(),
             fields: vec!["author".to_string()],
             title: "People".to_string(),

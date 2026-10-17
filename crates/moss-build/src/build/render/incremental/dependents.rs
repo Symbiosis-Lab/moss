@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::build::components::nav::{compute_breadcrumb_segments, is_nav_bar_item_doc};
+use crate::build::components::nav::{compute_breadcrumb_segments, home_breadcrumb_setting, is_nav_bar_item_doc, parent_label_segment};
 use crate::build::facade::debug_hash;
 use crate::build::types::ParsedDocument;
 use crate::i18n::Language;
@@ -89,6 +89,17 @@ pub fn nav_globals(documents: &[ParsedDocument], has_content_folders: bool) -> B
         .collect()
 }
 
+/// Fold the nav-bar term kinds (`[terms.<key>] nav = true`, with a root page)
+/// into the site language's nav digest: they are nav entries too, and they
+/// appear on exactly that language's pages. A no-op for a site with none.
+pub fn fold_term_nav(globals: &mut BTreeMap<String, String>, site_lang: Language, term_nav: &[(String, String, Option<i32>)]) {
+    if term_nav.is_empty() {
+        return;
+    }
+    let digest = globals.entry(site_lang.code().to_string()).or_default();
+    *digest = debug_hash(&(digest.as_str(), term_nav));
+}
+
 /// The document that serves as `lang`'s home page: `index.html` for the
 /// site's own language, `{lang.code()}/index.html` for any other —
 /// mirrors `render::html::find_homepage_doc` exactly (duplicated rather than
@@ -111,10 +122,10 @@ fn home_doc_for_lang<'a>(
 /// Every language a document could plausibly declare — used to seed the two
 /// per-lang home digests below so a language's key still moves when its home
 /// page is DELETED (present last build, absent this one), not only when it is
-/// edited. `Language` has exactly three interface variants (`i18n.rs`), so
-/// this is a fixed, cheap enumeration rather than a corpus scan.
-fn every_language() -> [Language; 3] {
-    [Language::En, Language::ZhHans, Language::ZhHant]
+/// edited. `Language` has a fixed set of interface variants (`Language::ALL`), so
+/// this is a cheap enumeration rather than a corpus scan.
+fn every_language() -> [Language; 4] {
+    Language::ALL
 }
 
 /// Per-language digest of that language's home-page title —
@@ -162,6 +173,7 @@ pub fn breadcrumb_ancestor_descendants(
         Some(p) => p.to_string(),
         None => return Vec::new(),
     };
+    let home_setting = home_breadcrumb_setting(documents);
     documents
         .iter()
         .filter(|d| d.url_path != folder.url_path && d.url_path.starts_with(&prefix))
@@ -170,7 +182,10 @@ pub fn breadcrumb_ancestor_descendants(
         // nav.rs`'s own doc), so a descendant that happens to be one must be
         // treated as showing a trail today even when the site-wide answer
         // alone would have said no.
-        .filter(|d| compute_breadcrumb_segments(d, documents, "", has_content_folders, d.is_place_namespace_root).is_some())
+        .filter(|d| {
+            compute_breadcrumb_segments(d, documents, "", has_content_folders, d.is_place_namespace_root).is_some()
+                || parent_label_segment(d, documents, home_setting).is_some()
+        })
         .map(|d| crate::build::facade::PageKey::for_document(d).cache_key().into_owned())
         .collect()
 }

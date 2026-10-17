@@ -43,7 +43,7 @@ These fields describe what the page is.
 | `lang` | string | auto-detected | Language override (`"en"`, `"zh-hans"`, `"zh-hant"`) |
 <!-- auto:end:frontmatter-identity -->
 
-`title:` is the page's title. On article pages moss always renders it as `<h1 class="moss-article-title">` above the body, using the filename (title-cased) when `title:` is absent. If the body itself opens with `# Same Title`, that body H1 is deduplicated so the reader sees one title, not two.
+`title:` is the page's title. On article pages moss always renders it as `<h1 class="moss-article-title">` above the body, using the filename (title-cased) when `title:` is absent. If the body opens with a `# H1` whose text equals the title, moss adds no injected copy above it, so the reader sees one title; an opening `# H1` with different text sits below the injected title.
 
 Body H1s anywhere else are section headers, not document titles. moss does not infer the title from body structure. Write the title in `title:` or rely on the filename.
 
@@ -77,8 +77,8 @@ These fields control how the page appears in the site's navigation and chrome.
 <!-- auto:start:frontmatter-visibility -->
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `draft` | boolean | `false` | Skip generation entirely |
-| `unlisted` | boolean | `false` | Generate but hide from lists and sitemap |
+| `draft` | boolean | `false` | Publish at its own address only: left out of lists, feeds and the sitemap, and marked `noindex` |
+| `listed` | boolean | `true` | Set `false` to leave the page out of lists, feeds and the sitemap; it is still published at its own address |
 <!-- auto:end:frontmatter-visibility -->
 
 ## Children
@@ -89,10 +89,11 @@ These fields control how a [[structure#^folder-page|folder page]] displays its c
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `children` | boolean | `true` | Show child page list on section pages |
-| `children_style` | string | `"list"` | `"list"`, `"summary"`, `"card"`, or `"minimal"` |
+| `children_style` | string | (none) | How child pages are rendered. When absent, moss picks from the children: `summary` if most of them have a cover or a description (or all but three do), otherwise `list` if any child has a date, otherwise `grid`. Values: `"list"`, `"summary"`, `"grid"` |
 | `children_group` | string | `"none"` | Group by `"year"`, `"none"`, or `"upcoming"` |
 | `children_depth` | string | `"direct"` | `"direct"` (immediate children) or `"all"` (all descendants) |
 | `children_source` | string | (none) | Wikilink to folder whose children to show instead |
+| `children_count` | `false` or string | (none) | What the folder cards in this listing say they count. `false` hides it; text such as `"{n} productions"` replaces "N articles" (`{n}` is the number; the first `|` always splits a singular form, used for 1, from the plural, so `"{n} production|{n} productions"`; an empty form hides the count) |
 <!-- auto:end:frontmatter-children -->
 
 `children_source` takes a wikilink target, e.g. `children_source: "[[news]]"`.
@@ -173,6 +174,7 @@ These fields control how the page's content is typeset and sized.
 |-------|------|---------|-------------|
 | `typesetting` | string | `"horizontal"` | `"horizontal"` or `"vertical"` (right-to-left columns for CJK) |
 | `content_width` | string | default (`67ch`) | `"wide"` (80ch, good for grids/tables) or `"full"` (site max, good for dashboards) |
+| `title_block` | string | title first | `"after-picture"` draws the title block (eyebrow, title, subtitle, date and byline, key figures, facts) under the body's leading picture |
 
 Set these in a folder's `cascade` to apply them to a whole section:
 
@@ -227,6 +229,7 @@ You can also opt a single child out by setting `series: false` on that article's
 | `review_of` | string | (none) | URL of the work being reviewed |
 | `rating` | integer | (none) | Rating (1–5) for reviews |
 | `comments` | boolean | `true` | Show comments section |
+| `inferred` | list | (none) | Fields this page takes from the files it embeds when it does not set them itself. `title` takes the first embedded file's derived title; a title written in the page always wins |
 | `map` | boolean | `true` | Show the place term map on a claimed term page or a real page at a place namespace root — the geographic map, not `cascade`'s key-value map |
 
 ### uid

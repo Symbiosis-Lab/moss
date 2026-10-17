@@ -42,6 +42,24 @@ export function hasPoint(place: Place): place is Place & { lat: number; lng: num
   return place.lat !== undefined && place.lng !== undefined;
 }
 
+/** How the explorer fits places: `tiles.json`'s `fit`, chosen by the build together with the cells it emits. */
+export interface ExplorerFit {
+  /** Degrees of longitude per CSS px at the deepest the opening view of all places goes. */
+  openingDegreesPerPx: number;
+  /** Breathing room per edge, as a share of the fitted frame's smaller side. */
+  edgePad: number;
+  /** How much wider and taller than its places' bounding box a fit is. */
+  boxPadding: number;
+  /** The fewest degrees of longitude a fit shows. */
+  minSpanDegrees: number;
+}
+
+/** `tiles.json`'s `edgeFade`, in world units: how far a tile fades at an outer edge of a site's cells, and the margin a covered frame keeps past it. */
+export interface EdgeFade {
+  width: number;
+  margin: number;
+}
+
 /** A work's companion page: folded into the work's own card, never its own dot. */
 export interface Companion {
   title: string;

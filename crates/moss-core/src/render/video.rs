@@ -36,6 +36,10 @@
 //! - `poster` and `data-thumb-src` both reference `to_thumb(original_src)`.
 //!   The iframe-bridge listens for `moss-asset-ready` and swaps `poster`
 //!   in when the thumbnail lands.
+//! - A hero's video (the ambient loop, a rotation's video slide, every slide of
+//!   a sequence) swaps `poster` alone for `to_poster(original_src)`, the same
+//!   frame at the video's own size, once the build has that file; until then
+//!   it keeps the thumbnail. `data-thumb-src` is unchanged.
 //!
 //! # `.mov` → `.mp4` source-extension swap
 //!
@@ -67,9 +71,11 @@
 //! - The iframe-bridge's transcode-pending hydration swaps `src`, and the
 //!   ladder form has no `src` to swap. So the ladder form is emitted only once
 //!   the ladder is already **built and registered** — never merely planned.
-//!   moss renders HTML before the video worker runs, so a video's first build
-//!   ships the single-src form with live hydration and the ladder appears on
-//!   the next build, off the transform cache. That ordering is also what keeps
+//!   moss renders HTML before the video worker runs, so a render that precedes
+//!   the encode ships the single-src form with live hydration, and the ladder
+//!   appears in the render that follows it: the watch loop's re-render when
+//!   the media settles, or, for `moss build` and `moss deploy`, the second pass
+//!   the build runs itself before it exits. That ordering is also what keeps
 //!   the never-404 rule. A `<video>` does advance past a failed
 //!   `<source>` (that is what the MP4 last-resort below relies on), but only
 //!   before `readyState` reaches HAVE_METADATA; after that the resource is
@@ -79,7 +85,7 @@
 //! The progressive MP4 is always the last `<source>`, so a browser that
 //! understands neither HLS natively nor hls.js still plays the video.
 
-use crate::asset_paths::{to_hls_master, to_mp4, to_thumb};
+use crate::asset_paths::{to_hls_master, to_mp4, to_poster, to_thumb};
 use crate::asset_snapshot::AssetSnapshot;
 use crate::media::Placement;
 use crate::render::placement::placement_attrs;
@@ -115,6 +121,83 @@ pub fn synthesize_video_html(
     src: &str,
     assets: &AssetSnapshot,
 ) -> String {
+    video_embed(params, placement, src, assets, None, false)
+}
+
+/// Synthesize a hero's looping background video: the ambient loop of
+/// `![[clip.mp4|loop]]`, with the hero's poster (see [`video_embed`]).
+///
+/// Its own entry point rather than a flag the caller sets on
+/// [`synthesize_video_html`]: an inline loop in an article is the same markup
+/// and must keep the 800-pixel thumbnail, so only a hero call site says "hero".
+pub fn synthesize_hero_video_html(
+    placement: &Placement,
+    src: &str,
+    assets: &AssetSnapshot,
+) -> String {
+    let mut params = TitleParams::default();
+    params.params.insert("loop".to_string(), "1".to_string());
+    video_embed(&params, placement, src, assets, None, true)
+}
+
+/// Synthesize one slide of an all-video hero sequence.
+///
+/// The slide plays once: no `loop`, no `data-loop`, so `ended` fires and the
+/// hero can move on. Only the first slide autoplays; the others wait with
+/// `preload="none"` until the hero starts them. A progressive ladder adds a
+/// 640-wide rung for phones when the source is at least that wide.
+pub fn synthesize_sequence_video_html(
+    placement: &Placement,
+    src: &str,
+    assets: &AssetSnapshot,
+    first: bool,
+) -> String {
+    video_embed(&TitleParams::default(), placement, src, assets, Some(first), true)
+}
+
+/// The ladder's 640x360-box file as a phone-only `<source>`, or nothing.
+///
+/// The file's frame follows the source's own shape (a 4:3 clip gets 480x360).
+/// Only sequence slides get one, never for a portrait source (its frame in
+/// that box is a narrow strip, 202x360 for a 9:16 clip, that a phone would
+/// enlarge), and only when that box is a rung below the source's own size: a
+/// source close to 640 wide has no such rung, and its full-size file is what
+/// a phone would get anyway. The ladder names its rungs by position
+/// (`v{i}.m4s`), and the rows below the top are the table's first rows, so
+/// the box's index in the table is its file's. A missing file would fall
+/// through to the next `<source>`, so a rung the size budget dropped costs
+/// nothing but the lighter file.
+fn phone_rung_source(src: &str, source_key: &PathBuf, assets: &AssetSnapshot, sequence: bool) -> String {
+    if !sequence {
+        return String::new();
+    }
+    let display = match assets.dims(source_key) {
+        Some((w, h)) if w >= h => (w, h),
+        _ => return String::new(),
+    };
+    let rungs = crate::asset_paths::video_ladder_rungs(display);
+    let below_top = &rungs[..rungs.len() - 1];
+    let Some(idx) = below_top.iter().position(|r| r.width == 640) else {
+        return String::new();
+    };
+    let master = crate::asset_paths::to_hls_master(src);
+    let Some(dir) = master.strip_suffix(crate::asset_paths::HLS_MASTER_NAME) else {
+        return String::new();
+    };
+    format!(
+        r#"<source media="(max-width: 600px)" src="{}" type="video/mp4">"#,
+        html_escape_attr(&format!("{dir}v{idx}.m4s"))
+    )
+}
+
+fn video_embed(
+    params: &TitleParams,
+    placement: &Placement,
+    src: &str,
+    assets: &AssetSnapshot,
+    sequence: Option<bool>,
+    hero: bool,
+) -> String {
     let place = placement_attrs(placement);
     let align = place.align_suffix();
     // .mov → .mp4 source-extension swap (idempotent for .mp4 / .webm).
@@ -122,11 +205,29 @@ pub fn synthesize_video_html(
     // data layer is the single source of truth for the served URL.
     let converted_src = to_mp4(src);
 
+    // The build records what it made for a video under the video's file
+    // path, and `src` is a root-relative URL: `/new%20folder.mp4` for
+    // `new folder.mp4`. Every lookup below goes by the path; every URL
+    // written keeps `src`.
+    let source_key = crate::asset_snapshot::variant_key(crate::resolve::fuzzy_path::percent_decode_path(src));
+
     // Thumbnail path — used for both `poster` (initial frame before
     // transcode lands) and `data-thumb-src` (iframe-bridge swap target
     // when `moss-asset-ready` fires). Mirrors the regex behaviour at
     // `placeholder.rs:444-446`.
     let thumb = to_thumb(src);
+
+    // `poster` is the still shown until the first frame plays. A hero fills the
+    // window, so it takes the full-size still when the build has one on disk
+    // (`has_poster_for_source`), and the thumbnail otherwise: a URL for a file
+    // that is not there would be a broken image under the playing video.
+    // `data-thumb-src` stays the thumbnail either way; it is the preview
+    // bridge's swap target, not a display choice.
+    let poster = if hero && assets.has_poster_for_source(&source_key) {
+        to_poster(src)
+    } else {
+        thumb.clone()
+    };
 
     // Width/height priority:
     //   (1) TitleParams alias (e.g. `|640x360` → `width="640px" height="360px"`)
@@ -147,7 +248,7 @@ pub fn synthesize_video_html(
             String::new(),
         )
     } else {
-        match assets.dims(&PathBuf::from(src)) {
+        match assets.dims(&source_key) {
             Some((w, h)) if w > 0 && h > 0 => (
                 format!(r#" width="{}""#, w),
                 format!(r#" height="{}""#, h),
@@ -159,24 +260,27 @@ pub fn synthesize_video_html(
     // Ambient loop branch: `![[clip.mp4|loop]]` → autoplay + ambient set,
     // no controls, data-loop JS/CSS hook. Default branch keeps controls.
     let is_loop = params.get("loop").is_some();
-    let (playback, data_loop) = if is_loop {
-        (
+    let (playback, data_loop) = match sequence {
+        Some(true) => (r#"autoplay muted playsinline preload="metadata""#.to_string(), ""),
+        Some(false) => (r#"muted playsinline preload="none""#.to_string(), ""),
+        None if is_loop => (
             format!("autoplay {}", AMBIENT_PLAYBACK_ATTRS),
             r#" data-loop"#,
-        )
-    } else {
-        (r#"controls playsinline preload="metadata""#.to_string(), "")
+        ),
+        None => (r#"controls playsinline preload="metadata""#.to_string(), ""),
     };
 
     let label = params.label_attr("aria-label");
 
-    if assets.has_hls_for_source(&PathBuf::from(src)) {
+    if assets.has_hls_for_source(&source_key) {
         // Ladder form. `src` is deliberately absent — a <video> carrying it
         // ignores its <source> children — and the progressive MP4 is last so a
         // browser with neither native HLS nor hls.js still plays something.
+        let phone = phone_rung_source(src, &source_key, assets, sequence.is_some());
         return format!(
-            r#"<video class="moss-embed moss-embed-video{align}" data-type="video"{dw}{data_loop}{label} data-placeholder-src="{orig}" poster="{thumb}" data-thumb-src="{thumb}" {playback}{w}{h}{size}><source src="{hls}" type="{HLS_MIME}"><source src="{src}" type="video/mp4"></video>"#,
+            r#"<video class="moss-embed moss-embed-video{align}" data-type="video"{dw}{data_loop}{label} data-placeholder-src="{orig}" poster="{poster}" data-thumb-src="{thumb}" {playback}{w}{h}{size}><source src="{hls}" type="{HLS_MIME}">{phone}<source src="{src}" type="video/mp4"></video>"#,
             align = align,
+            phone = phone,
             dw = place.data_width_attr,
             size = place.size_style_attr,
             data_loop = data_loop,
@@ -185,6 +289,7 @@ pub fn synthesize_video_html(
             src = html_escape_attr(&converted_src),
             orig = html_escape_attr(src),
             thumb = html_escape_attr(&thumb),
+            poster = html_escape_attr(&poster),
             playback = playback,
             w = width_attr,
             h = height_attr,
@@ -192,7 +297,7 @@ pub fn synthesize_video_html(
     }
 
     format!(
-        r#"<video class="moss-embed moss-embed-video{align}" data-type="video"{dw}{data_loop}{label} src="{src}" data-placeholder-src="{orig}" poster="{thumb}" data-thumb-src="{thumb}" {playback}{w}{h}{size}></video>"#,
+        r#"<video class="moss-embed moss-embed-video{align}" data-type="video"{dw}{data_loop}{label} src="{src}" data-placeholder-src="{orig}" poster="{poster}" data-thumb-src="{thumb}" {playback}{w}{h}{size}></video>"#,
         align = align,
         dw = place.data_width_attr,
         size = place.size_style_attr,
@@ -201,6 +306,7 @@ pub fn synthesize_video_html(
         src = html_escape_attr(&converted_src),
         orig = html_escape_attr(src),
         thumb = html_escape_attr(&thumb),
+        poster = html_escape_attr(&poster),
         playback = playback,
         w = width_attr,
         h = height_attr,
@@ -298,6 +404,7 @@ mod tests {
                 webp: false,
                 avif: false,
                 hls: true,
+                poster: false,
             },
         );
         s
@@ -601,5 +708,135 @@ mod tests {
         let p = params_with(&[("kind", "video")]);
         let out = synthesize_video_html(&p, &Placement::default(), "clip.mp4", &empty_snapshot());
         assert!(out.contains(r#"data-type="video""#), "missing data-type=video on default branch, got: {}", out);
+    }
+}
+
+#[cfg(test)]
+mod phone_rung_tests {
+    use super::*;
+    use crate::asset_snapshot::VariantKindSet;
+
+    fn snapshot(width: u32, hls: bool) -> AssetSnapshot {
+        let mut s = AssetSnapshot::new();
+        s.dimensions.insert("clip.mp4".into(), (width, 720));
+        if hls {
+            s.variants.insert("clip".into(), VariantKindSet { webp: false, avif: false, hls: true, poster: false });
+        }
+        s
+    }
+
+    #[test]
+    fn sequence_slide_gets_the_640_phone_rung_before_the_progressive_file() {
+        let html = synthesize_sequence_video_html(&Placement::default(), "clip.mp4", &snapshot(1280, true), false);
+        assert!(
+            html.contains(r#"<source media="(max-width: 600px)" src="clip.hls/v2.m4s" type="video/mp4"><source src="clip.mp4" type="video/mp4"></video>"#),
+            "got: {html}"
+        );
+    }
+
+    #[test]
+    fn plain_video_embed_gets_no_phone_rung() {
+        let html = synthesize_video_html(&TitleParams::default(), &Placement::default(), "clip.mp4", &snapshot(1280, true));
+        assert!(!html.contains("max-width: 600px"), "got: {html}");
+    }
+
+    #[test]
+    fn sequence_slide_from_a_source_narrower_than_640_gets_no_phone_rung() {
+        let html = synthesize_sequence_video_html(&Placement::default(), "clip.mp4", &snapshot(320, true), true);
+        assert!(!html.contains("max-width"), "got: {html}");
+    }
+
+    #[test]
+    fn sequence_slide_from_a_640_wide_source_gets_no_phone_rung() {
+        // A 640x360 source's top rung is the 640 row itself: v2 is its
+        // full-size file, not a lighter one for phones.
+        let mut s = snapshot(640, true);
+        s.dimensions.insert("clip.mp4".into(), (640, 360));
+        let html = synthesize_sequence_video_html(&Placement::default(), "clip.mp4", &s, false);
+        assert!(!html.contains("max-width"), "got: {html}");
+    }
+
+    #[test]
+    fn sequence_slide_from_a_portrait_source_gets_no_phone_rung() {
+        let mut s = snapshot(1080, true);
+        s.dimensions.insert("clip.mp4".into(), (1080, 1920));
+        let html = synthesize_sequence_video_html(&Placement::default(), "clip.mp4", &s, false);
+        assert!(!html.contains("max-width"), "its row-3 frame is a 360px-tall strip: {html}");
+    }
+}
+
+#[cfg(test)]
+mod encoded_name_tests {
+    use super::*;
+    use crate::asset_snapshot::VariantKindSet;
+
+    /// An embed's `src` arrives URL-encoded (`new%20folder.mp4`) while the
+    /// build records a video's ladder, poster and size under its file name
+    /// (`new folder`). Looked up by the encoded form, a video whose name has
+    /// a space or any non-ASCII character never got its ladder or its size.
+    #[test]
+    fn a_video_whose_name_has_a_space_finds_its_ladder_poster_and_size() {
+        let mut s = AssetSnapshot::new();
+        s.dimensions.insert("new folder.mp4".into(), (1280, 720));
+        s.variants.insert("new folder".into(), VariantKindSet { webp: false, avif: false, hls: true, poster: true });
+        // Root-relative, as a page's embed arrives.
+        let html = synthesize_sequence_video_html(&Placement::default(), "/new%20folder.mp4", &s, true);
+        assert!(html.contains(r#"<source src="/new%20folder.hls/master.m3u8""#), "{html}");
+        assert!(html.contains(r#"poster="/new%20folder.poster.jpg""#), "{html}");
+        assert!(html.contains(r#"src="/new%20folder.hls/v2.m4s""#), "the phone file: {html}");
+        assert!(html.contains(r#"width="1280""#), "{html}");
+    }
+}
+
+#[cfg(test)]
+mod hero_poster_tests {
+    use super::*;
+    use crate::asset_snapshot::VariantKindSet;
+
+    fn snapshot(poster: bool) -> AssetSnapshot {
+        let mut s = AssetSnapshot::new();
+        s.variants.insert("clip".into(), VariantKindSet { poster, ..Default::default() });
+        s
+    }
+
+    fn loop_params() -> TitleParams {
+        let mut p = TitleParams::default();
+        p.params.insert("loop".to_string(), "1".to_string());
+        p
+    }
+
+    #[test]
+    fn a_hero_loop_and_every_sequence_slide_take_the_full_size_poster() {
+        let s = snapshot(true);
+        for html in [
+            synthesize_hero_video_html(&Placement::default(), "clip.mp4", &s),
+            synthesize_sequence_video_html(&Placement::default(), "clip.mp4", &s, true),
+            synthesize_sequence_video_html(&Placement::default(), "clip.mp4", &s, false),
+        ] {
+            assert!(html.contains(r#"poster="clip.poster.jpg""#), "got: {html}");
+            assert!(html.contains(r#"data-thumb-src="clip.thumb.jpg""#), "the swap target stays the thumbnail: {html}");
+        }
+    }
+
+    #[test]
+    fn a_video_outside_a_hero_keeps_the_thumbnail_even_when_a_poster_exists() {
+        // An inline `|loop` is the same markup as a hero's loop; only the hero
+        // call site changes the poster.
+        let s = snapshot(true);
+        let inline_loop = synthesize_video_html(&loop_params(), &Placement::default(), "clip.mp4", &s);
+        let plain = synthesize_video_html(&TitleParams::default(), &Placement::default(), "clip.mp4", &s);
+        for html in [inline_loop, plain] {
+            assert!(html.contains(r#"poster="clip.thumb.jpg""#), "got: {html}");
+            assert!(!html.contains("poster.jpg"), "got: {html}");
+        }
+    }
+
+    #[test]
+    fn a_hero_without_a_poster_on_disk_falls_back_to_the_thumbnail() {
+        for s in [snapshot(false), AssetSnapshot::new()] {
+            let html = synthesize_hero_video_html(&Placement::default(), "clip.mp4", &s);
+            assert!(html.contains(r#"poster="clip.thumb.jpg""#), "got: {html}");
+            assert!(!html.contains("poster.jpg"), "a dead URL is worse than a small poster: {html}");
+        }
     }
 }

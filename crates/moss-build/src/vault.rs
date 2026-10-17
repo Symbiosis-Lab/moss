@@ -29,3 +29,8 @@ pub mod synced_siblings;
 // `.moss/places.toml`'s reader: the gazetteer a `location:` frontmatter
 // value looks a place name up in (task A1, places build slice).
 pub mod places;
+// Which folders of plugin-derivable files the author chose to show as pages
+// or keep as files, and the stubs and state that follow from that choice.
+pub mod derive_folders;
+pub mod derive_state;
+pub mod derive_stubs;

@@ -591,3 +591,26 @@ describe("iframe-bridge morph handler (shipped bundle regression)", () => {
     expect(src).toContain("notFound");
   });
 });
+
+// Drive the shipped handler rather than mirroring its acknowledgement logic.
+describe("shipped morph failure correlation", () => {
+  it.each(["script-change", "fetch-error"])("echoes the request generation on %s", async (failure) => {
+    const { JSDOM } = await import("jsdom");
+    const dom = new JSDOM('<!doctype html><html><head><script src="old.js"></script></head><body></body></html>', { url: "http://localhost/page/", runScripts: "outside-only", pretendToBeVisual: true });
+    const w = dom.window;
+    const replies: unknown[] = [];
+    w.postMessage = (message) => { replies.push(message); };
+    w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) as any;
+    (w as any).ResizeObserver = class { observe() {} disconnect() {} };
+    (w as any).IntersectionObserver = class { observe() {} disconnect() {} };
+    (w as any).fetch = async () => failure === "fetch-error"
+      ? { ok: false, status: 404 }
+      : { ok: true, text: async () => '<html><head><script src="new.js"></script></head><body></body></html>' };
+    try {
+      w.eval(readFileSync(BUNDLE_PATH, "utf8"));
+      w.dispatchEvent(new w.MessageEvent("message", { data: { type: "moss-morph", gen: 42 } }));
+      for (let i = 0; i < 12; i++) await Promise.resolve();
+      expect(replies).toContainEqual(expect.objectContaining({ type: "moss-morph-failed", gen: 42 }));
+    } finally { w.close(); }
+  });
+});

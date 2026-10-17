@@ -46,12 +46,13 @@ pub use crate::build::served_path::{transform_for, ShipTransform};
 /// longer produces, and deploy, which byte-verifies each upload against the
 /// manifest hash, refuses the whole publish. This constant is part of the cache
 /// key, so bumping it invalidates those records instead.
-pub const SHIP_TRANSFORM_REV: u32 = 3;
+pub const SHIP_TRANSFORM_REV: u32 = 4;
 
 /// Strips preview-only `data-source-*` attributes from HTML.
-/// Matches: data-source-line="N", data-source-range="N-M", data-source-fm="field", data-source-none.
+/// Matches: data-source-line="N", data-source-range="N-M", data-source-fm="field",
+/// data-source-file="path", data-source-none.
 static STRIP_SOURCE_LINE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r#"\s+data-source-(?:line="\d+"|range="\d+-\d+"|fm="[^"]*"|none)"#).unwrap()
+    regex::Regex::new(r#"\s+data-source-(?:line="\d+"|range="\d+-\d+"|fm="[^"]*"|file="[^"]*"|none)"#).unwrap()
 });
 
 /// Strips the preview-only `data-moss-preview` attribute from `<body>`.
@@ -790,8 +791,9 @@ pub(crate) fn prune_orphaned_webp_before_ship(
 ///
 /// `sealed` must be the FINAL manifest — call this after every pass that can
 /// drop an entry (`degrade::repair_staged_html`), never before. The permit is
-/// `lifecycle::final_build_permit`, minted where the caller proves nothing
-/// reads `stage_dir` again.
+/// `lifecycle::final_build_permit`, minted where the caller proves no server
+/// and no other build reads `stage_dir`; a second pass of the same one-shot
+/// build starts from this manifest and so loses nothing it needs.
 pub(crate) fn reclaim_staging_now(
     stage_dir: &std::path::Path,
     sealed: &crate::build::manifest::SealedManifest,
@@ -1069,6 +1071,7 @@ mod tests {
             r#"<div data-source-fm="breadcrumb">trail</div>"#,
             r#"<img data-source-fm="logo" src="logo.svg">"#,
             r#"<nav data-source-none>nav content</nav>"#,
+            r#"<a href="/about/" data-source-file="posts/first.md" data-source-fm="nav">About</a>"#,
         ];
         for input in &cases {
             let stripped = STRIP_SOURCE_LINE.replace_all(input, "");

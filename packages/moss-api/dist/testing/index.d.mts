@@ -197,8 +197,8 @@ declare function createMockSecretStorage(): MockSecretStorage;
  * Tracks browser open/close calls for testing
  */
 interface MockBrowserTracker {
-  /** URLs that were opened in action panel */
-  openedUrls: string[];
+  /** URLs opened in the action panel; null when it was opened in its loading state */
+  openedUrls: (string | null)[];
   /** URLs that were opened in system browser */
   systemBrowserUrls: string[];
   /** HTML content passed to openBrowserWithHtml */

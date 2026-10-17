@@ -17,8 +17,8 @@ export interface GestureCallbacks {
   onSettle(): void;
   /** A gesture has just started moving the camera (promote the world layer to its own compositing layer). */
   onGestureStart(): void;
-  /** The current detail ceiling (zoom units) — the world ceiling, or the raised tile ceiling once the camera has tiles in view. */
-  maxZoom(): number;
+  /** The current detail ceiling (zoom units) for a zoom anchored at the world point `anchor` (the view's centre when absent). */
+  maxZoom(anchor?: Point): number;
   /**
    * True while this map should run cooperative gestures, for a small
    * embed sharing its page with the reader's own scroll: a single-finger
@@ -73,7 +73,7 @@ function zoomAt(viewport: HTMLElement, callbacks: GestureCallbacks, factor: numb
     y: anchorWorld.y - (anchorScreen.y - viewportSize.height / 2) / scaleAtTarget,
     zoom: targetZoom,
   };
-  callbacks.setCamera(clampCamera(candidate, viewportSize, callbacks.maxZoom()));
+  callbacks.setCamera(clampCamera(candidate, viewportSize, callbacks.maxZoom(anchorWorld)));
 }
 
 /** Attaches every pan/zoom gesture this module owns to `viewport`. Listeners live as long as the element does — the same boot-and-forget wiring every other site runtime uses. */

@@ -81,6 +81,11 @@ pub const CSS_PARTIALS: &[CssPartial] = &[
         gate: |a| a.has_footnotes,
     },
     CssPartial {
+        name: "field-places",
+        source: include_str!("../../assets/css/site/field-places.css"),
+        gate: |a| a.field_places,
+    },
+    CssPartial {
         name: "vertical",
         source: include_str!("../../assets/css/site/vertical.css"),
         gate: |a| a.vertical,

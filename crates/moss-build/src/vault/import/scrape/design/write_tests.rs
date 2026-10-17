@@ -168,12 +168,65 @@ async fn footer_links_to_written_pages_become_note_links() {
 
 #[test]
 fn the_icon_kind_comes_from_the_bytes_not_the_link() {
-    assert_eq!(sniff(b"<?xml version='1.0'?>\n<!-- c --><svg xmlns='x'/>"), Some(IconKind::Svg));
-    assert_eq!(sniff("\u{FEFF}  <svg/>".as_bytes()), Some(IconKind::Svg));
-    assert_eq!(sniff(&[0x89, b'P', b'N', b'G', 13]), Some(IconKind::Png));
-    assert_eq!(sniff(&[0, 0, 1, 0, 1]), Some(IconKind::Ico));
+    assert_eq!(sniff(b"<?xml version='1.0'?>\n<!-- c --><svg xmlns='x'/>"), Some(Sniffed::Icon(IconKind::Svg)));
+    assert_eq!(sniff("\u{FEFF}  <svg/>".as_bytes()), Some(Sniffed::Icon(IconKind::Svg)));
+    assert_eq!(sniff(&[0x89, b'P', b'N', b'G', 13]), Some(Sniffed::Icon(IconKind::Png)));
+    assert_eq!(sniff(&[0, 0, 1, 0, 1]), Some(Sniffed::Icon(IconKind::Ico)));
     assert_eq!(sniff(b"<html><body><svg></svg></body></html>"), None);
     assert_eq!(sniff(b"<html>Not found</html>"), None);
     let late = format!("{}<svg/>", " ".repeat(2000));
     assert_eq!(sniff(late.as_bytes()), None, "beyond the first KB is not a document start");
+}
+
+fn encoded(format: image::ImageFormat, img: &image::DynamicImage) -> Vec<u8> {
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, format).unwrap();
+    out.into_inner()
+}
+
+fn two_by_two() -> image::DynamicImage {
+    image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(2, 2, image::Rgba([200, 30, 30, 255])))
+}
+
+/// The same 2x2 picture as WebP, JPEG and GIF bytes, in that order.
+fn rasters() -> [Vec<u8>; 3] {
+    let rgba = two_by_two();
+    [
+        encoded(image::ImageFormat::WebP, &rgba),
+        encoded(image::ImageFormat::Jpeg, &image::DynamicImage::ImageRgb8(rgba.to_rgb8())),
+        encoded(image::ImageFormat::Gif, &rgba),
+    ]
+}
+
+#[test]
+fn a_webp_jpeg_or_gif_icon_is_sniffed_as_a_raster() {
+    for bytes in rasters() {
+        assert_eq!(sniff(&bytes), Some(Sniffed::Raster));
+    }
+}
+
+#[test]
+fn a_webp_jpeg_or_gif_icon_is_written_as_a_png_of_the_same_size() {
+    for bytes in rasters() {
+        let (png, kind) = icon_to_write(bytes).unwrap();
+        assert_eq!(kind, IconKind::Png);
+        assert_eq!(&png[..4], &[0x89, b'P', b'N', b'G']);
+        let back = image::load_from_memory_with_format(&png, image::ImageFormat::Png).unwrap();
+        assert_eq!((back.width(), back.height()), (2, 2));
+    }
+    let (png, _) = icon_to_write(rasters()[0].clone()).unwrap();
+    let back = image::load_from_memory_with_format(&png, image::ImageFormat::Png).unwrap();
+    assert!(back.color().has_alpha(), "a WebP icon's alpha survives the conversion");
+}
+
+#[test]
+fn a_png_icon_is_written_unchanged() {
+    let png = encoded(image::ImageFormat::Png, &two_by_two());
+    assert_eq!(icon_to_write(png.clone()), Some((png, IconKind::Png)));
+}
+
+#[test]
+fn bytes_that_are_no_image_or_a_raster_that_does_not_decode_are_not_written() {
+    assert_eq!(icon_to_write(vec![7, 200, 3, 9, 0xFF, 0x10]), None);
+    assert_eq!(icon_to_write(b"RIFF\0\0\0\0WEBPjunk".to_vec()), None);
 }

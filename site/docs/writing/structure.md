@@ -27,15 +27,11 @@ index.md                →  /
 
 Set `breadcrumb: true` on the homepage and every page gets an automatic trail (`Home / Work / Farewell`). No hand-rolled breadcrumb blocks needed.
 
-### Excluded folders
+### Skipped folders
 
-The following folder names are reserved for static assets and are **not** treated as content:
+moss skips `node_modules/` and any folder whose name starts with `.` (such as `.git`): their Markdown never becomes pages and their files are not copied into the built site.
 
-`assets/`, `images/`, `static/`, `public/`, `img/`, `css/`, `js/`, `fonts/`, `node_modules/`
-
-Any folder whose name starts with `.` (dot) or `_` (underscore) is also excluded.
-
-Files inside these folders are served as-is but will not become pages. Put images here and reference them with `![](assets/filename.ext)` or the `![[filename.ext]]` wikilink; moss resolves them regardless of where the source page lives.
+Every other folder is part of the site, whatever its name, including `assets/`, `images/` and `static/`. Markdown inside it becomes pages, other files are served at their path (`assets/portrait.jpg` stays at `/assets/portrait.jpg`), and a folder that holds no Markdown, such as `assets/`, still gets a page of its own at `/assets/`. Reference an image with `![](assets/filename.ext)` or the `![[filename.ext]]` wikilink; moss resolves it regardless of where the source page lives.
 
 ## Folder pages
 
@@ -92,10 +88,10 @@ Each line is the old address on the left and the new one on the right, both star
 | Setting | Built | In lists | In sitemap |
 |---------|-------|----------|------------|
 | _(default)_ | yes | yes | yes |
-| `unlisted: true` | yes | no | no |
-| `draft: true` | no | no | no |
+| `listed: false` | yes | no | no |
+| `draft: true` | yes | no | no |
 
-Prefix a folder with `_` to exclude it entirely: `_drafts/` is ignored.
+A draft is still published at its own address: it is left out of lists, feeds and the sitemap and marked `noindex`, but anyone who has the link can open it. A page with `listed: false` is left out of the same places but not marked `noindex`. To keep a file out of the site entirely, start its name, or the name of its folder, with a `.`. A leading `_` does not hide anything: `_drafts/` is built like any other folder, at `/drafts/`.
 
 ## Sort order
 

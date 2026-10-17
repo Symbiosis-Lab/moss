@@ -141,7 +141,7 @@ fn an_emitted_asset_and_the_site_root_are_satisfied() {
 }
 
 /// A redirect stub is an ordinary emitted file, which is the whole reason this
-/// module never reads `.moss/data/redirects.json`: a link to a renamed page's
+/// module never reads `.moss/redirects.json`: a link to a renamed page's
 /// old URL finds the stub in the manifest like any other page.
 #[test]
 fn a_link_to_a_redirect_stub_is_not_dead() {

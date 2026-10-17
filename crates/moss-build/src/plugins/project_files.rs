@@ -213,7 +213,7 @@ pub async fn read_plugin_file_impl(
 ) -> Result<String, String> {
     let stored = PluginPath::storage(plugin_name, relative_path)?;
     let file_path = build_plugin_storage_path(project_path, plugin_name, &stored)?;
-    fs::read_to_string(&file_path)
+    crate::build::cloud_readiness::read_to_string_with_materialize_wait(&file_path, crate::build::cloud_readiness::INTERACTIVE_DEADLINE)
         .map_err(|e| format!("Failed to read file: {}", e))
 }
 
@@ -342,7 +342,7 @@ pub async fn read_project_file_impl(
     relative_path: &str,
 ) -> Result<String, String> {
     let file_path = resolve_plugin_project_path(project_path, plugin_id, relative_path)?;
-    fs::read_to_string(&file_path)
+    crate::build::cloud_readiness::read_to_string_with_materialize_wait(&file_path, crate::build::cloud_readiness::INTERACTIVE_DEADLINE)
         .map_err(|e| format!("Failed to read file: {}", e))
 }
 

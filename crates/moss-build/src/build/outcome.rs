@@ -206,36 +206,68 @@ impl From<std::io::Error> for BuildStopped {
 /// reported a raw OS error instead of raising the waiting screen.
 pub fn io_stop(root: &Path, context: &str, path: &Path, e: std::io::Error) -> BuildStopped {
     let message = format!("Failed to {context} {}: {e}", path.display());
-    if !crate::build::icloud::is_offline_not_absent(path, &e) {
-        return BuildStopped::from(message);
-    }
-    match disposition(root, path) {
-        Disposition::Discard => {
-            let removed = std::fs::remove_file(path).is_ok();
-            log::warn!(
-                "{} was evicted from the build stage{} — the next build will \
-                 re-render it",
-                path.display(),
-                if removed { ", and has been discarded" } else { " (could not discard it)" }
-            );
-            // Only a removal earns the rebuild: if the file is still there the
-            // second attempt reads the same evicted inode and stops in the
-            // same place.
-            if removed { BuildStopped::discarded(message) } else { BuildStopped::from(message) }
-        }
-        Disposition::Wait => {
-            crate::build::cloud_readiness::request_download(path);
-            BuildStopped::deferred(message)
-        }
-        Disposition::Report => {
-            log::warn!(
+    if crate::build::icloud::is_offline_not_absent(path, &e) {
+        match disposition(root, path) {
+            Disposition::Discard => {
+                let removed = std::fs::remove_file(path).is_ok();
+                log::warn!(
+                    "{} was evicted from the build stage{} — the next build will \
+                     re-render it",
+                    path.display(),
+                    if removed { ", and has been discarded" } else { " (could not discard it)" }
+                );
+                // Only a removal earns the rebuild: if the file is still there the
+                // second attempt reads the same evicted inode and stops in the
+                // same place.
+                return if removed { BuildStopped::discarded(message) } else { BuildStopped::from(message) };
+            }
+            Disposition::Report => log::warn!(
                 "{} is still in the cloud, but its arrival would not trigger a rebuild \
                  — reporting rather than raising an unclearable waiting screen",
                 path.display()
-            );
-            BuildStopped::from(message)
+            ),
+            Disposition::Wait => {
+                request_wait(path);
+                return BuildStopped::deferred(message);
+            }
         }
     }
+    BuildStopped::from(message)
+}
+
+/// Why a vault source could not be read. `NotYet` is returned only after
+/// [`classify_unreadable`] has requested the download.
+pub enum Unreadable {
+    /// The bytes are still in the cloud and a download has been requested.
+    NotYet,
+    /// Anything else: a path that is positively absent, a file that is offline
+    /// but whose arrival would not trigger a rebuild, or any other failure.
+    Broken(std::io::Error),
+}
+
+/// Classify a read failure on `path` inside the vault at `root`.
+///
+/// Calls `request_download` exactly once when it returns [`Unreadable::NotYet`].
+pub fn classify_unreadable(root: &Path, path: &Path, e: std::io::Error) -> Unreadable {
+    if crate::build::icloud::is_offline_not_absent(path, &e) && disposition(root, path) == Disposition::Wait {
+        request_wait(path);
+        return Unreadable::NotYet;
+    }
+    Unreadable::Broken(e)
+}
+
+/// The no-error form of [`classify_unreadable`], for a caller that checks
+/// before reading. Requests the download once when it returns `true`.
+pub fn not_yet(root: &Path, path: &Path) -> bool {
+    let waiting = crate::build::icloud::is_still_in_the_cloud(path) && disposition(root, path) == Disposition::Wait;
+    if waiting {
+        request_wait(path);
+    }
+    waiting
+}
+
+fn request_wait(path: &Path) {
+    crate::build::cloud_readiness::request_download(path);
 }
 
 /// What to do about a file the cloud has not handed back.

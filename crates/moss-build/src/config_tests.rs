@@ -206,3 +206,138 @@ fn a_redirects_value_that_is_not_a_table_is_an_advisory_not_a_crash() {
     assert!(cfg.declared_redirects().is_empty());
     assert_eq!(crate::build::cli_output::take_cli_problems(), 1);
 }
+
+#[test]
+fn field_decls_reads_a_choice_with_a_label_table() {
+    let config = ConfigFile::parse(
+        "[fields.kind]\ntype = \"choice\"\nof = { Building = { en = \"Built\", de = \"Errichtet\" }, Service = \"Founded\" }\nplace = \"eyebrow\"\nin = [\"Housing\"]\n",
+    )
+    .unwrap();
+    let (decls, problems) = config.field_decls();
+    assert!(problems.is_empty(), "got: {problems:?}");
+    assert_eq!(decls.len(), 1);
+    let kind = &decls[0];
+    assert_eq!(kind.name, "kind");
+    assert_eq!(kind.kind, moss_core::fields::FieldKind::Choice);
+    assert_eq!(
+        kind.choices,
+        vec![
+            moss_core::fields::Choice {
+                value: "Building".into(),
+                labels: vec![("de".into(), "Errichtet".into()), ("en".into(), "Built".into())],
+            },
+            moss_core::fields::Choice { value: "Service".into(), labels: vec![("en".into(), "Founded".into())] },
+        ]
+    );
+    assert_eq!(kind.place, Some(moss_core::fields::Place::Eyebrow));
+    assert_eq!(kind.scope, vec!["Housing".to_string()]);
+}
+
+#[test]
+fn field_decls_plumbing_builtin_cannot_take_a_place() {
+    let config = ConfigFile::parse("[fields.url]\nplace = \"eyebrow\"\n").unwrap();
+    let (decls, problems) = config.field_decls();
+    assert!(decls.is_empty());
+    assert!(problems.iter().any(|p| p.contains("[fields.url]") && p.contains("description and publisher")), "got: {problems:?}");
+}
+
+#[test]
+fn field_decls_choice_table_keeps_the_order_the_file_writes() {
+    let config = ConfigFile::parse(
+        "[fields.kind]\ntype = \"choice\"\nof = { Service = \"Founded\", Building = \"Built\", Event = \"Held\" }\n",
+    )
+    .unwrap();
+    let (decls, _) = config.field_decls();
+    let values: Vec<&str> = decls[0].choices.iter().map(|c| c.value.as_str()).collect();
+    assert_eq!(values, ["Service", "Building", "Event"]);
+}
+
+#[test]
+fn field_decls_keep_the_order_the_file_writes_and_read_a_label() {
+    let config = ConfigFile::parse(
+        "[fields.years]\ntype = \"period\"\n[fields.architect]\ntype = \"text\"\nlabel = { en = \"Architect\", de = \"Architektin\" }\n[fields.district]\ntype = \"text\"\nlabel = \"Quarter\"\n",
+    )
+    .unwrap();
+    let (decls, problems) = config.field_decls();
+    assert!(problems.is_empty(), "got: {problems:?}");
+    let names: Vec<&str> = decls.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(names, ["years", "architect", "district"]);
+    assert_eq!(decls[1].label_for("de"), "Architektin");
+    assert_eq!(decls[2].label_for("de"), "Quarter");
+    assert_eq!(decls[0].label_for("de"), "Years");
+}
+
+#[test]
+fn field_decls_choice_from_a_list_labels_each_value_with_itself() {
+    let config = ConfigFile::parse("[fields.kind]\ntype = \"choice\"\nof = [\"Building\", \"Service\"]\n").unwrap();
+    let (decls, problems) = config.field_decls();
+    assert!(problems.is_empty(), "got: {problems:?}");
+    assert_eq!(
+        decls[0].choices,
+        vec![
+            moss_core::fields::Choice { value: "Building".into(), labels: vec![("en".into(), "Building".into())] },
+            moss_core::fields::Choice { value: "Service".into(), labels: vec![("en".into(), "Service".into())] },
+        ]
+    );
+}
+
+#[test]
+fn field_decls_unknown_type_is_a_problem_and_dropped() {
+    let config = ConfigFile::parse("[fields.size]\ntype = \"integer\"\n").unwrap();
+    let (decls, problems) = config.field_decls();
+    assert!(decls.is_empty());
+    assert_eq!(problems.len(), 1, "got: {problems:?}");
+    assert!(problems[0].contains("[fields.size] has an unknown type \"integer\"; one of: text, number"), "{}", problems[0]);
+}
+
+#[test]
+fn field_decls_description_takes_a_place() {
+    let config = ConfigFile::parse("[fields.description]\nplace = \"eyebrow\"\nlabel = \"Summary\"\n").unwrap();
+    let (decls, problems) = config.field_decls();
+    assert!(problems.is_empty(), "got: {problems:?}");
+    assert_eq!(decls.len(), 1);
+    assert_eq!(decls[0].kind, moss_core::fields::FieldKind::Text);
+    assert_eq!(decls[0].place, Some(moss_core::fields::Place::Eyebrow));
+    assert_eq!(decls[0].label_for("en"), "Summary");
+}
+
+#[test]
+fn field_decls_a_builtin_takes_only_place_and_label() {
+    let config = ConfigFile::parse("[fields.description]\ntype = \"text\"\nin = [\"Housing\"]\nplace = \"subtitle\"\n").unwrap();
+    let (decls, problems) = config.field_decls();
+    assert_eq!(decls.len(), 1, "the declaration is kept: {problems:?}");
+    assert_eq!(decls[0].place, Some(moss_core::fields::Place::Subtitle));
+    assert!(decls[0].scope.is_empty());
+    assert_eq!(problems.len(), 2, "{problems:?}");
+    assert!(problems.iter().any(|p| p.contains("has \"type\"; built-in fields take only place and label")), "{problems:?}");
+    assert!(problems.iter().any(|p| p.contains("has \"in\"; built-in fields take only place and label")), "{problems:?}");
+}
+
+#[test]
+fn field_decls_unknown_key_and_bad_place_keep_the_declaration() {
+    let config = ConfigFile::parse("[fields.years]\ntype = \"period\"\nsize = 3\n[fields.mood]\ntype = \"text\"\nplace = \"sidebar\"\n")
+        .unwrap();
+    let (decls, problems) = config.field_decls();
+    assert_eq!(decls.len(), 2, "both declarations are kept");
+    assert!(problems.iter().any(|p| p.contains("[fields.years] has an unknown key \"size\"")), "{problems:?}");
+    assert!(problems.iter().any(|p| p.contains("[fields.mood] has an unknown place")), "{problems:?}");
+    let mood = decls.iter().find(|d| d.name == "mood").unwrap();
+    assert_eq!(mood.place, None);
+}
+
+#[test]
+fn field_decls_choice_without_of_is_dropped() {
+    let config = ConfigFile::parse("[fields.kind]\ntype = \"choice\"\n").unwrap();
+    let (decls, problems) = config.field_decls();
+    assert!(decls.is_empty());
+    assert_eq!(problems.len(), 1, "{problems:?}");
+}
+
+#[test]
+fn field_decls_fields_that_is_not_a_table_of_tables_is_one_problem() {
+    let config = ConfigFile::parse("fields = \"kind\"\n").unwrap();
+    let (decls, problems) = config.field_decls();
+    assert!(decls.is_empty());
+    assert_eq!(problems.len(), 1);
+}
+

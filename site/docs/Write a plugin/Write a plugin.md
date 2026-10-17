@@ -137,6 +137,10 @@ Two algorithms: `ed25519` (IPNS's key type, and the right default for most proto
 
 Why moss holds the bytes instead of handing them to you: a key is the durable identity behind a name you publish — an IPNS name *is* its public key and can't be rotated. Left in your plugin's folder it would be committed to the user's repo and pushed. moss keeps it out of git and lets the user back it up, while you keep full use of it. Worth telling your users that a site's identity lives in `.moss/`, which is worth backing up.
 
+## A plugin with no script
+
+A plugin that only turns one kind of file into text needs no JavaScript. It declares `contributes.derivations` in its manifest: the file extensions it accepts, the names of the text pieces it returns, and a pinned binary that reads one file and prints JSON. moss runs the binary once per file, in a sandbox, and caches the answer by the file's content. The manifest reference has the fields and the stdin/stdout protocol; the author's side is [[Links & Embeds#Text from a file]].
+
 ## Reference
 
 Field tables, hook context signatures, slot positions, and CLI flags are in the Reference section. Start with [[manifest]] for the full `manifest.json` field list, then [[hooks]] for context shapes and the plugin runtime lifecycle, [[slots]] for slot positions, and [[cli]] for headless build and automation commands.

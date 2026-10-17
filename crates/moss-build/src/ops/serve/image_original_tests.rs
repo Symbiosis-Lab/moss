@@ -57,7 +57,7 @@ impl Site {
 
     async fn server(&self, probe: super::super::router::EvictedProbe) -> (u16, tokio::sync::oneshot::Sender<()>) {
         let registry = Arc::new(crate::types::assets::AssetRegistry::new());
-        registry.set_failed(ALIAS.into(), "a newer attempt failed".into());
+        registry.set_failed(ALIAS.into(), crate::types::assets::Failure::encode("a newer attempt failed"));
         registry.set_source_passthrough(ALIAS.into(), self.mp.project_root().join("unrelated.jpg"));
         start_server(ServeConfig {
             asset_registry: Some(registry), is_evicted: probe,

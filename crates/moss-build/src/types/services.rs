@@ -43,6 +43,8 @@ use super::runtime::{
 /// 4. Background task converts videos and emits `asset_ready` events
 #[derive(Debug, Clone)]
 pub struct BackgroundContext {
+    /// Title-only sharing cards planned during HTML rendering.
+    pub og_requests: Vec<crate::build::page::og_card::deferred::CardRequest>,
     /// Videos that need MOV→MP4 conversion
     pub video_items: Vec<String>,
     /// Images that need WebP variant generation
@@ -100,7 +102,7 @@ pub struct BackgroundContext {
     pub search_enabled: bool,
     /// Pre-resolved FFmpeg binary path from scan phase (Task 4: lazy resolution).
     /// When Some, `run_video_conversion` reuses this path instead of calling
-    /// `FFmpegManager::get_or_download()` again (which would trigger a second download log).
+    /// `FFmpegManager::find()` again.
     pub ffmpeg_bin_path: Option<String>,
     /// Notebook files (.ipynb) that need JupyterLite processing in background.
     /// When non-empty, `run_notebook_processing` downloads JupyterLite assets
@@ -135,6 +137,7 @@ impl BackgroundContext {
     #[cfg(test)]
     pub(crate) fn for_test() -> Self {
         Self {
+            og_requests: Vec::new(),
             video_items: Vec::new(),
             image_items: Vec::new(),
             source_path: String::new(),
@@ -683,6 +686,7 @@ mod tests {
     #[test]
     fn test_background_context_creation() {
         let ctx = BackgroundContext {
+            og_requests: Vec::new(),
             video_items: vec![],
             image_items: Vec::new(),
             source_path: "/test".to_string(),

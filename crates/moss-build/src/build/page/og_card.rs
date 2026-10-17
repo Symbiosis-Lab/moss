@@ -47,9 +47,9 @@ pub struct CardInputs<'a> {
 /// beside it, the way a museum hangs a plate next to its label.
 ///
 /// `width`/`height` are the SCANNED dimensions (`MediaMetadata.dimensions`),
-/// not a probe: they size the layout, and they are part of the cache key so a
-/// re-crop of the same filename re-renders. `len` and `mtime` complete that
-/// key for an edit that keeps the dimensions.
+/// not a probe: they size the layout. `digest` is the SHA-256 of the picture's
+/// bytes, so a moved or re-copied folder keeps its card, and an edited picture
+/// re-renders even when its dimensions do not change.
 #[derive(Debug, Clone, Copy)]
 pub struct CardPlate<'a> {
     pub source: &'a Path,
@@ -63,8 +63,7 @@ pub struct CardPlate<'a> {
     pub relative_path: &'a str,
     pub width: u32,
     pub height: u32,
-    pub len: u64,
-    pub mtime_secs: i64,
+    pub digest: [u8; 32],
 }
 
 /// Which regional glyph forms a card is set in. There are two; `Language::En`
@@ -106,7 +105,7 @@ fn card_script(lang: crate::i18n::Language, title: &str) -> Option<CardScript> {
     let script_of = |l| match l {
         crate::i18n::Language::ZhHant => Some(CardScript::Traditional),
         crate::i18n::Language::ZhHans => Some(CardScript::Simplified),
-        crate::i18n::Language::En => None,
+        crate::i18n::Language::En | crate::i18n::Language::De => None,
     };
     script_of(lang).or_else(|| {
         // `detect_language` counts Han blocks and knows nothing of kana, so a
@@ -154,6 +153,7 @@ pub struct OgSink<'a> {
     previous_files: &'a std::collections::HashMap<String, String>,
     filename_covers: &'a crate::build::page::cover::FilenameCovers,
     cards: Vec<CardOutput>,
+    requests: Option<Vec<deferred::CardRequest>>,
 }
 
 impl<'a> OgSink<'a> {
@@ -161,28 +161,49 @@ impl<'a> OgSink<'a> {
         previous_files: &'a std::collections::HashMap<String, String>,
         filename_covers: &'a crate::build::page::cover::FilenameCovers,
     ) -> Self {
-        Self { previous_files, filename_covers, cards: Vec::new() }
+        Self { previous_files, filename_covers, cards: Vec::new(), requests: None }
+    }
+
+    pub fn deferred(
+        previous_files: &'a std::collections::HashMap<String, String>,
+        filename_covers: &'a crate::build::page::cover::FilenameCovers,
+    ) -> Self {
+        Self { requests: Some(Vec::new()), ..Self::new(previous_files, filename_covers) }
     }
 
     pub fn filename_covers(&self) -> &'a crate::build::page::cover::FilenameCovers {
         self.filename_covers
     }
 
-    /// Render (or carry) one card and record its receipt, returning the served
-    /// path for the `og:image` tag.
+    /// Render, carry, or plan a card, returning its `og:image` path.
+    /// Build callers settle planned title cards before the manifest seals.
     pub fn render(
         &mut self,
         inputs: &CardInputs,
         output_root: &Path,
     ) -> Result<&ServedPath, CardError> {
+        // Plates retain the synchronous decode/fallback contract in og_choice.
+        if inputs.plate.is_none() {
+            if let Some(requests) = self.requests.as_mut() {
+                let (served_path, _) = card_identity(inputs)?;
+                if let Some(entry) = self.previous_files.get(served_path.as_str())
+                    .filter(|_| output_present(&served_path.to_disk(output_root))) {
+                    self.cards.push(CardOutput::Carried { served_path, entry: entry.clone() });
+                    return Ok(self.cards.last().expect("just pushed").served_path());
+                }
+                requests.push(deferred::CardRequest::new(inputs, served_path));
+                return Ok(&requests.last().expect("just pushed").served_path);
+            }
+        }
         let out = render_card(inputs, output_root, self.previous_files)?;
         self.cards.push(out);
         Ok(self.cards.last().expect("just pushed").served_path())
     }
 
-    pub fn into_cards(self) -> Vec<CardOutput> {
-        self.cards
+    pub fn into_parts(self) -> (Vec<CardOutput>, Vec<deferred::CardRequest>) {
+        (self.cards, self.requests.unwrap_or_default())
     }
+
 }
 
 /// What a card call produced — a manifest receipt, never a promise the caller
@@ -242,24 +263,7 @@ pub fn render_card(
     output_root: &Path,
     previous_files: &std::collections::HashMap<String, String>,
 ) -> Result<CardOutput, CardError> {
-    // Validate colors before any work. Hex strings are interpolated raw into
-    // SVG attributes, so reject anything that could break out of the quote.
-    for (name, value) in [
-        ("bg_color", inputs.bg_color),
-        ("fg_color", inputs.fg_color),
-        ("accent_color", inputs.accent_color),
-    ] {
-        if !is_valid_hex_color(value) {
-            return Err(CardError::Svg(format!("invalid color for {}: {}", name, value)));
-        }
-    }
-
-    // Resolved ONCE and passed down: the cache key and the font chain must
-    // describe the same card, and they are the same fact.
-    let script = card_script(inputs.lang, inputs.title);
-    let hash = content_hash(inputs, script);
-    let served_path = ServedPath::for_og_card(&hash)
-        .map_err(|e| CardError::Svg(format!("served path: {}", e)))?;
+    let (served_path, script) = card_identity(inputs)?;
     let disk_path = served_path.to_disk(output_root);
 
     // Idempotency: reuse the on-disk card only when the previous manifest can
@@ -309,6 +313,29 @@ pub fn render_card(
     Ok(CardOutput::Rendered { served_path, bytes })
 }
 
+fn card_identity(inputs: &CardInputs) -> Result<(ServedPath, Option<CardScript>), CardError> {
+    // Validate colors before any work. Hex strings are interpolated raw into
+    // SVG attributes, so reject anything that could break out of the quote.
+    for (name, value) in [
+        ("bg_color", inputs.bg_color),
+        ("fg_color", inputs.fg_color),
+        ("accent_color", inputs.accent_color),
+    ] {
+        if !is_valid_hex_color(value) {
+            return Err(CardError::Svg(format!("invalid color for {}: {}", name, value)));
+        }
+    }
+
+    // The cache key and the font chain must describe the same card.
+    let script = card_script(inputs.lang, inputs.title);
+    let hash = content_hash(inputs, script);
+    ServedPath::for_og_card(&hash)
+        .map(|path| (path, script))
+        .map_err(|e| CardError::Svg(format!("served path: {}", e)))
+}
+
+pub mod deferred;
+
 fn content_hash(inputs: &CardInputs, script: Option<CardScript>) -> String {
     let mut h = Sha256::new();
     // Renderer-version salt: cards are cached on disk by this hash alone
@@ -342,17 +369,15 @@ fn content_hash(inputs: &CardInputs, script: Option<CardScript>) -> String {
     if inputs.vertical {
         h.update(b"\0vertical");
     }
-    // The plate's BYTES are what changed, and hashing a 20 MB scan per card
-    // would cost more than the render. Dimensions + length + mtime is the
-    // same stat triple `extract_media_metadata_cached` keys its scan on, so a
-    // cover the scan re-read is a cover this card re-renders.
+    // The key holds the picture's content digest, not its mtime: mtime
+    // changes whenever a folder is copied or synced, which renamed the card
+    // and re-uploaded it on every publish from the new location.
     if let Some(plate) = inputs.plate {
         h.update(b"\0plate\0");
         h.update(plate.relative_path.as_bytes());
         h.update(plate.width.to_le_bytes());
         h.update(plate.height.to_le_bytes());
-        h.update(plate.len.to_le_bytes());
-        h.update(plate.mtime_secs.to_le_bytes());
+        h.update(plate.digest);
     }
     let bytes = h.finalize();
     bytes.iter().take(8).map(|b| format!("{:02x}", b)).collect::<String>()
@@ -735,8 +760,7 @@ mod tests {
                 relative_path: source.to_str().unwrap_or("unused"),
                 width: w,
                 height: h,
-                len: 0,
-                mtime_secs: 0,
+                digest: [0; 32],
             }),
             ..sample_inputs()
         }
@@ -867,8 +891,7 @@ mod tests {
             relative_path: "images/cover.jpg",
             width: 2000,
             height: 800,
-            len: 12345,
-            mtime_secs: 1_700_000_000,
+            digest: [7; 32],
         };
         let plate_b = CardPlate {
             source: std::path::Path::new("/var/other/checkout-b/images/cover.jpg"),
@@ -892,6 +915,61 @@ mod tests {
             hash_of(&same_relative),
             hash_of(&different_relative),
             "a genuinely different relative path must still change the hash"
+        );
+    }
+
+    /// A plate's card key follows the picture's bytes, not its mtime or
+    /// length: a folder copied or synced elsewhere keeps its card names, and
+    /// an edited picture of the same length and shape still re-renders.
+    #[test]
+    fn content_hash_ignores_the_plates_mtime_and_stat() {
+        use crate::build::page::cover::plate_source;
+        use crate::build::page::meta::CoverRef;
+        use crate::build::served_path::ServedPath;
+        use crate::types::content::MediaMetadata;
+
+        let scanned = vec![MediaMetadata {
+            path: "images/scroll.png".into(),
+            file_type: "png".into(),
+            size: 0,
+            modified: None,
+            dimensions: Some((3000, 600)),
+            dominant_color: None,
+            lqip_data_uri: None,
+            is_animated: false,
+        }];
+        let cover = CoverRef::Local(ServedPath::from_source("images/scroll.png").unwrap());
+        let picture: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
+        let served = |bytes: &[u8], mtime: Option<std::time::SystemTime>| -> String {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let file = dir.path().join("images/scroll.png");
+            std::fs::create_dir_all(file.parent().unwrap()).expect("mkdir");
+            std::fs::write(&file, bytes).expect("write plate");
+            if let Some(t) = mtime {
+                std::fs::File::options()
+                    .write(true)
+                    .open(&file)
+                    .and_then(|f| f.set_modified(t))
+                    .expect("set mtime");
+            }
+            let source = plate_source(&scanned, &cover, &no_previous(), dir.path()).expect("plate");
+            let inputs = CardInputs { plate: Some(source.as_plate()), ..sample_inputs() };
+            card_identity(&inputs).expect("identity").0.as_str().to_string()
+        };
+
+        let later = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        assert_eq!(
+            served(&picture, None),
+            served(&picture, Some(later)),
+            "the same picture, copied later, must keep its card name"
+        );
+
+        let mut edited = picture.clone();
+        edited[2000] ^= 0xff;
+        assert_ne!(
+            served(&picture, None),
+            served(&edited, None),
+            "an edited picture of the same length must re-render its card"
         );
     }
 

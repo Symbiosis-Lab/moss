@@ -164,7 +164,7 @@ pub fn validate_frontmatter(
             }
             Some(value) => {
                 // Type check.
-                if !value_matches_def(value, def) {
+                if !value_matches_def(value, def) && !is_false_opt_out(name, value) {
                     diags.push(Diagnostic {
                         severity: Severity::Error,
                         message: format!(
@@ -284,6 +284,12 @@ pub fn validate_frontmatter(
     diags
 }
 
+/// `cover: false` says the page has no listing picture. The field is a path, so
+/// the schema calls it a string; the build reads `false` as the opt-out.
+fn is_false_opt_out(name: &str, value: &serde_yaml::Value) -> bool {
+    name == "cover" && value.as_bool() == Some(false)
+}
+
 /// Check if a YAML value satisfies a field definition. For `OneOf` unions the
 /// value must match at least one member; otherwise it's a plain type check.
 fn value_matches_def(value: &serde_yaml::Value, def: &crate::schema::FieldDefinition) -> bool {
@@ -294,6 +300,14 @@ fn value_matches_def(value: &serde_yaml::Value, def: &crate::schema::FieldDefini
             // treat as permissive to avoid false positives on malformed schemas.
             None => true,
         };
+    }
+    // Mirrors deserialize_string_lenient: a year alone is a valid date, and
+    // YAML reads `date: 2018` as an integer.
+    if def.field_type == FieldType::String
+        && def.format.as_deref() == Some("date")
+        && (value.is_i64() || value.is_u64())
+    {
+        return true;
     }
     value_matches_type(value, &def.field_type)
 }
@@ -480,6 +494,20 @@ mod tests {
             .filter(|d| d.severity == Severity::Error && d.message.contains("title"))
             .collect();
         assert_eq!(missing.len(), 1);
+    }
+
+    #[test]
+    fn a_year_alone_is_a_valid_date() {
+        let schema = builtin_schema();
+        let fm = make_fm(&[
+            ("title", str_val("Test")),
+            ("date", serde_yaml::Value::Number(serde_yaml::Number::from(2018))),
+        ]);
+        let wrong: Vec<_> = validate_frontmatter(&fm, &schema)
+            .into_iter()
+            .filter(|d| d.severity == Severity::Error && d.message.contains("date"))
+            .collect();
+        assert!(wrong.is_empty(), "{wrong:?}");
     }
 
     #[test]

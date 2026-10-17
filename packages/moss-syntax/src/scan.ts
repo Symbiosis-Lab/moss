@@ -6,11 +6,11 @@
  *
  * The line predicates are REUSED from ./shortcode.ts, not copied: an open
  * fence is exactly `SHORTCODE_OPEN_RE` + `isOpenMatch`, a close fence is
- * exactly `isCloseFence`, and open↔close pairing uses the same arity stack as
+ * exactly `isCloseFence`, and open↔close pairing uses the same stack as
  * the editor's tree walk (`collectShortcodeBlocks` in
- * ./cm6/cm-shortcode-block.ts): a close fence of arity N closes
- * the TOPMOST open of arity N (`::::` inside `:::` nests); opens above the
- * matched one never got a close and are reported as unclosed children.
+ * ./cm6/cm-shortcode-block.ts): a close fence closes the innermost open
+ * block whatever its colon count (pandoc's rule); with nothing open it is
+ * ordinary text.
  *
  * Two deliberate differences from the Lezer path, both on degenerate input:
  *
@@ -97,32 +97,21 @@ export function scanShortcodeBlocks(text: string): ShortcodeBlock[] {
         children: [],
       });
     } else if (isCloseFence(line)) {
-      const arity = line.trim().length;
-      for (let i = stack.length - 1; i >= 0; i--) {
-        if (stack[i].arity === arity) {
-          const removed = stack.splice(i);
-          const open = removed[0];
-          // Opens between the matched one and its close never closed: fold
-          // them into a chain (each opened inside the previous one's body)
-          // ending as children of the matched block.
-          for (let j = removed.length - 1; j >= 1; j--) {
-            removed[j - 1].children.push(unclosed(removed[j], prevLineEnd));
-          }
-          const block: ShortcodeBlock = {
-            from: open.from,
-            to: lineEnd,
-            name: open.name,
-            attrs: open.attrs,
-            arity: open.arity,
-            closeFrom: lineFrom,
-            children: open.children,
-          };
-          if (stack.length > 0) stack[stack.length - 1].children.push(block);
-          else out.push(block);
-          break;
-        }
-        // No open of this arity → the close line is ordinary text (matches
-        // the tree walk, which ignores an unpaired ShortcodeCloseLine).
+      // A bare colon line closes the innermost open block, whatever its
+      // colon count; with nothing open it is ordinary text.
+      const open = stack.pop();
+      if (open) {
+        const block: ShortcodeBlock = {
+          from: open.from,
+          to: lineEnd,
+          name: open.name,
+          attrs: open.attrs,
+          arity: open.arity,
+          closeFrom: lineFrom,
+          children: open.children,
+        };
+        if (stack.length > 0) stack[stack.length - 1].children.push(block);
+        else out.push(block);
       }
     }
 

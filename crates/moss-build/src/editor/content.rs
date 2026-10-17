@@ -49,12 +49,18 @@ pub fn panic_message_from_payload(p: &(dyn std::any::Any + Send)) -> String {
 
 // ── Wire types ─────────────────────────────────────────────────────────────
 
-/// Result of a successful editor save — exposes the new mtime so the
-/// frontend's FrontmatterStore can register the self-write and drop the
-/// subsequent file-watcher echo.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
-pub struct SaveResult {
-    pub mtime_ms: u64,
+/// What an editor save did. A failure to write is an `Err`; this is the
+/// outcome of a save that did not fail.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub enum SaveResult {
+    /// Written. The new mtime lets the editor recognise the file watcher's
+    /// echo of its own write.
+    Saved { mtime_ms: u64 },
+    /// Nothing written: the file is no longer at this path, renamed or deleted
+    /// outside moss since it was opened. Not a failure — the file event that
+    /// follows says which, and the text stays unsaved in the editor until then.
+    Gone,
 }
 
 /// Frontmatter parsing result exposed to the frontend.
@@ -536,9 +542,9 @@ pub fn describe_source_role_inner(
 
 /// Pure byte-writing core of `save_editor_content`: serialize `frontmatter` +
 /// `body` and persist to `file_path`, returning the file's new mtime. Owns NO
-/// Tauri types, NO `TaskRegistry`, NO window model — just the same
-/// frontmatter-serialize → `fs::write` → read-mtime sequence the Save command
-/// has always performed.
+/// Tauri types, NO `TaskRegistry`, NO window model — just the
+/// frontmatter-serialize → write → read-mtime sequence the Save command
+/// performs. It writes only over a file that exists.
 ///
 /// Split out of `save_editor_content_with_task`'s `run_safely` closure so the
 /// bytes-to-disk logic has exactly ONE definition, reached by two carriers: the
@@ -554,13 +560,30 @@ pub fn persist_editor_content(
 ) -> Result<SaveResult, String> {
     let mut fm_map = super::frontmatter::json_to_yaml_map(frontmatter)?;
     coerce_union_fields(&mut fm_map);
-    let content = moss_core::frontmatter::serialize(&fm_map, body)?;
+    let content = match std::fs::read_to_string(file_path).ok().and_then(|on_disk| edit_in_place(&on_disk, &fm_map, body)) {
+        Some(content) => content,
+        None => moss_core::frontmatter::serialize(&fm_map, body)?,
+    };
     // The destination is the author's SOURCE file (the one open in the
     // editor), not regenerable output under `.moss/build.nosync/` — its bytes were
     // just read to populate the buffer, so it is materialized.
+    //
+    // Opened without `create`: a save writes over the document that is open. If
+    // it was renamed or deleted outside moss a moment ago (or its folder was),
+    // writing would put the old file back beside the renamed one.
     // allow:raw_write vault user state, not .moss/build.nosync output
-    std::fs::write(file_path, &content)
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(file_path)
+    {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(SaveResult::Gone),
+        Err(e) => return Err(format!("Failed to write file '{}': {}", file_path, e)),
+    };
+    std::io::Write::write_all(&mut file, content.as_bytes())
         .map_err(|e| format!("Failed to write file '{}': {}", file_path, e))?;
+    drop(file);
     let meta = std::fs::metadata(file_path)
         .map_err(|e| format!("Failed to read mtime for '{}': {}", file_path, e))?;
     let mtime_ms = meta
@@ -569,7 +592,23 @@ pub fn persist_editor_content(
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| format!("Bad mtime: {}", e))?
         .as_millis() as u64;
-    Ok(SaveResult { mtime_ms })
+    Ok(SaveResult::Saved { mtime_ms })
+}
+
+/// The saved file as the one on disk with only the changed fields' lines
+/// rewritten, so a save keeps the author's key order, quoting and comments.
+/// `None` sends the save to the full re-serialize: the frontmatter on disk is
+/// not valid YAML (the editor then holds the raw block in `body`), the file
+/// uses CRLF (the editor's body is LF), every field was removed, or the line
+/// editor refuses the change.
+fn edit_in_place(on_disk: &str, fm_map: &std::collections::HashMap<String, serde_yaml::Value>, body: &str) -> Option<String> {
+    if fm_map.is_empty() || on_disk.contains("\r\n") || moss_core::frontmatter::parse(on_disk).frontmatter_error.is_some() {
+        return None;
+    }
+    let mut out = moss_core::frontmatter::set_fields(on_disk, fm_map).ok()?;
+    out.truncate(moss_core::frontmatter::frontmatter_span(&out)?.body);
+    out.push_str(body);
+    Some(out)
 }
 
 /// Guard the union frontmatter fields (`children`, `series`) before writing.
@@ -635,6 +674,55 @@ mod tests {
         tempfile::Builder::new()
             .tempdir_in(&tmp_root)
             .expect("could not create temp dir in target/test-tmp")
+    }
+
+    /// A save writes over the document that is open, never into the place it
+    /// used to be: renamed or deleted outside moss in the moment before an
+    /// autosave, it must not re-create the old file beside the renamed one.
+    #[test]
+    fn a_save_to_a_file_that_is_gone_writes_nothing_and_says_so() {
+        let dir = make_test_tmpdir();
+        let file = dir.path().join("note.md");
+        std::fs::write(&file, "old").unwrap();
+        std::fs::rename(&file, dir.path().join("field-notes.md")).unwrap();
+
+        let outcome = persist_editor_content(&file.to_string_lossy(), &serde_json::json!({}), "typed")
+            .expect("a vanished file is an outcome, not a write failure");
+        assert_eq!(outcome, SaveResult::Gone);
+        assert!(!file.exists(), "the old name must not come back");
+        assert_eq!(std::fs::read_to_string(dir.path().join("field-notes.md")).unwrap(), "old");
+    }
+
+    #[test]
+    fn a_save_rewrites_only_the_changed_field_and_keeps_order_quoting_and_comments() {
+        let dir = make_test_tmpdir();
+        let file = dir.path().join("note.md");
+        let before = "---\n# shown on the card\ntitle: \"Harbour\"\nweight: 22\nratio: 1.0\ndate: 2024-01-15\nuid: \"a1b2c3d4\"\n---\nold body\n";
+        std::fs::write(&file, before).unwrap();
+        let fm = serde_json::json!({ "title": "Harbour", "weight": 23, "ratio": 1, "date": "2024-01-15", "uid": "a1b2c3d4", "stage": "Pier 4" });
+        persist_editor_content(&file.to_string_lossy(), &fm, "new body\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "---\n# shown on the card\ntitle: \"Harbour\"\nweight: 23\nratio: 1.0\ndate: 2024-01-15\nuid: \"a1b2c3d4\"\nstage: Pier 4\n---\nnew body\n"
+        );
+    }
+
+    #[test]
+    fn a_save_of_a_page_whose_frontmatter_is_broken_writes_the_editor_text() {
+        let dir = make_test_tmpdir();
+        let file = dir.path().join("note.md");
+        std::fs::write(&file, "---\ntitle: [unclosed\n---\nbody\n").unwrap();
+        persist_editor_content(&file.to_string_lossy(), &serde_json::json!({ "title": "Fixed" }), "body\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "---\ntitle: Fixed\n---\nbody\n");
+    }
+
+    #[test]
+    fn a_save_replaces_the_whole_file() {
+        let dir = make_test_tmpdir();
+        let file = dir.path().join("note.md");
+        std::fs::write(&file, "a much longer body than the one that replaces it").unwrap();
+        persist_editor_content(&file.to_string_lossy(), &serde_json::json!({}), "short").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "short");
     }
 
     /// BUG 3 editor surface: parsing a file with a malformed `---...---` block

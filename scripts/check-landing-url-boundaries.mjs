@@ -16,15 +16,15 @@ try {
         await page.goto(new URL(`ui/shell.html?preview=${encodeURIComponent(preview)}`, server.baseURL).href);
         await page.waitForFunction(() => document.documentElement.dataset.ready === '1');
         assert.equal(await page.evaluate(() => window.__previewExecuted), undefined, `${name}: query preview executed script`);
-        assert.equal(await page.locator('iframe').getAttribute('src'), null, `${name}: query preview accepted ${preview}`);
+        assert.equal(await page.locator('#moss-preview-iframe').getAttribute('src'), null, `${name}: query preview accepted ${preview}`);
       }
       await page.evaluate(() => window.__shell.setPreview('/assets/brand/favicon.svg'));
-      await page.waitForFunction(() => document.querySelector('iframe').contentDocument?.documentElement.localName === 'svg');
+      await page.waitForFunction(() => document.querySelector('#moss-preview-iframe').contentDocument?.documentElement.localName === 'svg');
       const validPreview = new URL('/assets/brand/favicon.svg', server.baseURL).href;
-      assert.equal(await page.locator('iframe').getAttribute('src'), validPreview);
+      assert.equal(await page.locator('#moss-preview-iframe').getAttribute('src'), validPreview);
       for (const preview of [...hostile, validPreview.replace('://', '://user:pass@')]) {
         await page.evaluate(src => window.__shell.setPreview(src), preview);
-        assert.equal(await page.locator('iframe').getAttribute('src'), validPreview, `${name}: API preview accepted ${preview}`);
+        assert.equal(await page.locator('#moss-preview-iframe').getAttribute('src'), validPreview, `${name}: API preview accepted ${preview}`);
       }
       assert.equal(await page.evaluate(() => window.__previewExecuted), undefined);
 

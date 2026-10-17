@@ -26,7 +26,7 @@
 //! mutate the registry without emitting.
 //!
 //! The router (`route_plugin_task`) is exhaustive over the closed
-//! `(PluginHook, TriggerContext)` cross product — 24 rows, no wildcard.
+//! `(PluginHook, TriggerContext)` cross product — 16 rows, no wildcard.
 //! Adding a `PluginHook` or `TriggerContext` variant is a compile-time
 //! event that requires explicit routing decisions for every combination.
 //!
@@ -47,6 +47,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::advisory::{Action, Advisory, AppOp, Scope, Severity};
+use crate::build::assets::binary_resolver::Tool;
 use crate::plugins::types::{PluginHook, TriggerContext};
 
 // ─────────────────────── Job value objects (Step 3 R2) ─────────────────────
@@ -346,8 +347,20 @@ pub fn advisory_from_error(what: impl Into<String>, recoverable: bool) -> Adviso
 ///   re-check-an-out-of-band-state affordance).
 /// - `"resend:<label>"` → `Action::InApp { op: SignIn, label }` (re-trigger
 ///   the awaited action; routed through the in-app op table).
+/// - `"download-tool:<name>"` → `Action::InApp { op: DownloadTool, label }`
+///   only when `<name>` is a tool moss can download; any other name falls
+///   through to `Action::None`, so a plugin never gets a button that does nothing.
 pub fn escape_spec_to_action(spec: &str) -> Action {
     match spec.split_once(':') {
+        Some(("download-tool", name))
+            if Tool::from_name(name).is_some_and(Tool::download_available) =>
+        {
+            Action::InApp {
+                op: AppOp::DownloadTool,
+                args: serde_json::json!({ "tool": name }),
+                label: format!("Download {name}"),
+            }
+        }
         Some(("recheck", label)) => Action::InApp {
             op: AppOp::RecheckDns,
             args: serde_json::Value::Null,
@@ -414,8 +427,9 @@ pub enum TaskKind {
     Build,
     Rebuild,
     AssetTransform,
-    // ── Pluggable (matches PluginHook 1:1) ────────────────────────────
+    /// Content brought in from outside by moss itself (a URL scrape).
     Import,
+    // ── Pluggable (matches PluginHook 1:1, except Import above) ───────
     Publish,
     Deploy,
     Syndicate,
@@ -425,7 +439,6 @@ pub enum TaskKind {
 impl From<PluginHook> for TaskKind {
     fn from(h: PluginHook) -> TaskKind {
         match h {
-            PluginHook::Import => TaskKind::Import,
             PluginHook::Publish => TaskKind::Publish,
             PluginHook::Deploy => TaskKind::Deploy,
             PluginHook::Syndicate => TaskKind::Syndicate,
@@ -632,7 +645,7 @@ pub struct PluginTaskSignal {
 }
 
 /// Routes a plugin task signal to `(scope, kind, tone)`. Exhaustive over
-/// the closed `(PluginHook, TriggerContext)` cross product — 24 rows, no
+/// the closed `(PluginHook, TriggerContext)` cross product — 16 rows, no
 /// wildcard arm. Adding a variant of either enum is a compile-time event
 /// that requires explicit routing decisions for every combination.
 ///
@@ -648,14 +661,9 @@ pub fn route_plugin_task(signal: PluginTaskSignal) -> (TaskScope, TaskKind, Task
 
     let kind: TaskKind = signal.hook.into();
 
-    // Base (scope, tone) from (hook, trigger). Exhaustive: 6 hooks × 4
-    // triggers = 24 rows. No wildcard — adding a variant fails compile.
+    // Base (scope, tone) from (hook, trigger). Exhaustive: 4 hooks × 4
+    // triggers = 16 rows. No wildcard — adding a variant fails compile.
     let (scope, tone) = match (signal.hook, signal.trigger) {
-        (Import, OnboardingFlow) => (TaskScope::ActionPanel, TaskTone::Ambient),
-        (Import, SettingsManual) => (TaskScope::Workspace, TaskTone::Narrated),
-        (Import, Background) => (TaskScope::Workspace, TaskTone::Ambient),
-        (Import, ManualOne) => (TaskScope::ActionPanel, TaskTone::Inline),
-
         (Publish, OnboardingFlow) => (TaskScope::Preview, TaskTone::Inline),
         (Publish, SettingsManual) => (TaskScope::Preview, TaskTone::Inline),
         (Publish, Background) => (TaskScope::Workspace, TaskTone::Ambient),

@@ -728,3 +728,30 @@ async fn upload_file_gives_up_after_bounded_attempts() {
         "expected 1 try + 3 retries then give up"
     );
 }
+
+#[test]
+fn sync_manifest_response_internal_remove_decides_whether_to_commit() {
+    let parse = |json: &str| serde_json::from_str::<SyncManifestResponse>(json).unwrap();
+    // Older server: field absent, nothing to do.
+    assert!(!parse(r#"{"need": [], "remove": []}"#).needs_commit());
+    assert!(!parse(r#"{"need": [], "remove": [], "internal_remove": 0}"#).needs_commit());
+    assert!(parse(r#"{"need": [], "remove": [], "internal_remove": 1}"#).needs_commit());
+    assert!(parse(r#"{"need": ["a.html"], "remove": []}"#).needs_commit());
+    assert!(parse(r#"{"need": [], "remove": ["a.html"]}"#).needs_commit());
+}
+
+#[test]
+fn event_row_round_trips_the_visitor_code() {
+    let json = r#"{"id":7,"ts":1700000000,"path":"/","referrer":null,"country":null,"browser":null,"os":null,"screen":null,"utmSource":null,"utmMedium":null,"event":null,"visitor":"0123456789abcdef"}"#;
+    let row: EventRow = serde_json::from_str(json).unwrap();
+    assert_eq!(row.visitor.as_deref(), Some("0123456789abcdef"));
+    let back = serde_json::to_value(&row).unwrap();
+    assert_eq!(back["visitor"], "0123456789abcdef");
+}
+
+#[test]
+fn event_row_without_visitor_parses_as_none() {
+    let json = r#"{"id":7,"ts":1700000000,"path":"/","referrer":null,"country":null,"browser":null,"os":null,"screen":null,"utmSource":null,"utmMedium":null,"event":null}"#;
+    let row: EventRow = serde_json::from_str(json).unwrap();
+    assert_eq!(row.visitor, None);
+}

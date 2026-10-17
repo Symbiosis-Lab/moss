@@ -29,16 +29,20 @@ impl Built {
 
 const HOME: &str = "---\ntitle: Home\n---\n\n# Home\n";
 
+fn write_all(dir: &std::path::Path, files: &[(&str, &str)]) {
+    for (rel, body) in files {
+        let path = dir.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, body).unwrap();
+    }
+}
+
 /// Build `files` (path, contents) as a deployed site, plus a home page.
 fn build(files: &[(&str, &str)]) -> Built {
     // Not `tempdir()`: its `.tmpXXXX` name is hidden, and the scan skips hidden folders.
     let dir = tempfile::Builder::new().prefix("moss_redirect_table_").tempdir().unwrap();
     fs::write(dir.path().join("index.md"), HOME).unwrap();
-    for (rel, contents) in files {
-        let path = dir.path().join(rel);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, contents).unwrap();
-    }
+    write_all(dir.path(), files);
     let out = dir.path().join(".moss").join("build.nosync").join("site");
     fs::create_dir_all(&out).unwrap();
     let structure = crate::build::scan_folder(dir.path().to_str().unwrap()).unwrap();
@@ -63,6 +67,7 @@ fn build(files: &[(&str, &str)]) -> Built {
         },
         &mut pending,
         true,
+        false,
     )
     .unwrap();
     crate::build::emit::slots::write_as_rendered(&out, pending.take_unwritten_pages()).unwrap();
@@ -76,9 +81,13 @@ fn config(redirects: &str) -> String {
 
 const ABOUT: (&str, &str) = ("about.md", "---\ntitle: About\n---\n\n# About\n");
 
+fn page(title: &str) -> String {
+    format!("---\ntitle: {title}\n---\n\n# {title}\n")
+}
+
 #[test]
 fn a_recorded_rename_still_gets_its_stub() {
-    let b = build(&[ABOUT, (".moss/data/redirects.json", r#"{"old-about/": "about/"}"#)]);
+    let b = build(&[ABOUT, (".moss/redirects.json", r#"{"old-about/": "about/"}"#)]);
     assert!(b.read("old-about/index.html").contains("url=/about/"));
     assert_eq!(b.problems, 0);
 }
@@ -86,8 +95,90 @@ fn a_recorded_rename_still_gets_its_stub() {
 /// The recorded history may aim at a section of the new page.
 #[test]
 fn a_target_fragment_survives_into_the_stub() {
-    let b = build(&[ABOUT, (".moss/data/redirects.json", r##"{"old-team/": "about/#team"}"##)]);
+    let b = build(&[ABOUT, (".moss/redirects.json", r##"{"old-team/": "about/#team"}"##)]);
     assert!(b.read("old-team/index.html").contains("url=/about/#team"));
+    assert_eq!(b.problems, 0);
+}
+
+/// A rename recorded inside a language edition outlives its target when the
+/// translated page is later deleted. The old address keeps answering: at the
+/// translation while it exists, else at the default-language page in the same
+/// place, never at the deleted address.
+#[test]
+fn a_recorded_rename_whose_translation_is_gone_lands_on_the_default_language_page() {
+    let history = r#"{"zh-hans/old-kept/": "zh-hans/kept/", "zh-hans/old-gone/": "zh-hans/gone/?from=old"}"#;
+    let b = build(&[
+        ("kept.md", &page("Kept")),
+        ("zh-hans/kept.md", &page("保留")),
+        ("gone.md", &page("Gone")),
+        (".moss/redirects.json", history),
+    ]);
+    assert!(b.read("zh-hans/old-kept/index.html").contains("url=/zh-hans/kept/"));
+    assert!(b.read("zh-hans/old-gone/index.html").contains("url=/gone/?from=old"));
+    assert!(b.table().contains(r#"{"from":"/zh-hans/old-gone/","to":"/gone/?from=old","status":301}"#), "{}", b.table());
+}
+
+/// A language's home is its folder, written with or without the slash; when
+/// that edition is gone, the default language's home is the same place.
+#[test]
+fn a_gone_language_home_lands_on_the_site_home_in_either_spelling() {
+    let history = r#"{"zh-hans/start/": "zh-hans/", "zh-hant/start/": "zh-hant"}"#;
+    let b = build(&[ABOUT, (".moss/redirects.json", history)]);
+    assert!(b.read("zh-hans/start/index.html").contains("url=/\""));
+    assert!(b.read("zh-hant/start/index.html").contains("url=/\""));
+}
+
+/// The default-language page must be one this build serves itself. Another
+/// entry's stub at that place is not followed: the old address is left as
+/// recorded and the dead-link audit names it.
+#[test]
+fn a_fallback_that_is_itself_only_a_redirect_is_not_followed() {
+    let history = r#"{"zh-hans/old/": "zh-hans/mid/", "mid/": "new/"}"#;
+    let b = build(&[("new.md", &page("New")), (".moss/redirects.json", history)]);
+    assert!(b.read("mid/index.html").contains("url=/new/"));
+    assert!(b.read("zh-hans/old/index.html").contains("url=/zh-hans/mid/"));
+}
+
+/// Only a language edition falls back. On a single-language site a missing
+/// target is left as recorded, and an ordinary first folder is not stripped.
+#[test]
+fn a_missing_target_outside_a_language_edition_is_left_as_recorded() {
+    let history = r#"{"old-guide/": "guides/gone/"}"#;
+    let b = build(&[ABOUT, ("gone.md", &page("Gone")), (".moss/redirects.json", history)]);
+    assert!(b.read("old-guide/index.html").contains("url=/guides/gone/"));
+}
+
+/// A notebook's viewer page is written after the table is planned, beside its
+/// `.ipynb`; only a notebook the scan publishes gets one.
+#[test]
+fn a_notebook_viewer_is_served_only_for_a_published_notebook() {
+    let notebook = r#"{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}"#;
+    let cfg = config(
+        r#""/old-notebook.html" = "/analysis.html"
+"/old-hidden.html" = "/node_modules/hidden.html""#,
+    );
+    let b = build(&[
+        ABOUT,
+        ("analysis.ipynb", notebook),
+        ("node_modules/hidden.ipynb", notebook),
+        (".moss/config.toml", &cfg),
+    ]);
+    assert!(b.read("old-notebook.html").contains("url=/analysis.html"));
+    assert!(!b.has("old-hidden.html"), "the scan skips node_modules, so no viewer is written there");
+    assert_eq!(b.problems, 1);
+}
+
+/// A generated page registered late in the blocking phase, like a media
+/// collection page, is an address the site serves.
+#[test]
+fn a_declared_redirect_to_a_media_collection_page_is_kept() {
+    let cfg = config(r#""/old-photos/" = "/photography/""#);
+    let b = build(&[
+        ("essay.md", "---\ntitle: Essay\n---\n\n![A photo](photo.png)\n<!-- photography -->\n"),
+        (".moss/config.toml", &cfg),
+    ]);
+    assert!(b.has("photography/index.html"), "premise: the collection page is built");
+    assert!(b.read("old-photos/index.html").contains("url=/photography/"));
     assert_eq!(b.problems, 0);
 }
 
@@ -174,7 +265,7 @@ fn the_shipped_table_lists_every_source_in_order() {
     let b = build(&[
         ABOUT,
         ("assets/data.csv", "x"),
-        (".moss/data/redirects.json", r#"{"old-about/": "about/"}"#),
+        (".moss/redirects.json", r#"{"old-about/": "about/"}"#),
         (".moss/config.toml", &cfg),
     ]);
     assert_eq!(
@@ -205,7 +296,7 @@ fn a_target_cannot_inject_markup_into_a_stub() {
     );
     let b = build(&[
         ABOUT,
-        (".moss/data/redirects.json", r##"{"old-c/": "about/#\"><script>alert(2)</script>"}"##),
+        (".moss/redirects.json", r##"{"old-c/": "about/#\"><script>alert(2)</script>"}"##),
         (".moss/config.toml", &cfg),
     ]);
     for stub in ["a/index.html", "b/index.html", "old-c/index.html"] {
@@ -297,15 +388,7 @@ fn declared_entries_come_from_the_inputs_not_from_the_file() {
 fn the_pipeline_passes_the_configs_redirects_to_the_build() {
     use crate::build::pipeline::{run, PipelineRunOutput};
     let dir = tempfile::Builder::new().prefix("moss_redirect_pipeline_").tempdir().unwrap();
-    for (rel, body) in [
-        ("index.md", HOME),
-        ("about.md", "---\ntitle: About\n---\n\n# About\n"),
-        (".moss/config.toml", &config(r#""/old/" = "/about/""#)),
-    ] {
-        let path = dir.path().join(rel);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, body).unwrap();
-    }
+    write_all(dir.path(), &[ABOUT, ("index.md", HOME), (".moss/config.toml", &config(r#""/old/" = "/about/""#))]);
     let folder = dir.path().to_str().unwrap();
     let ps = crate::build::scan::scan::scan_folder(folder).unwrap();
     let root = crate::vault::paths::VaultRoot::resolve(folder);

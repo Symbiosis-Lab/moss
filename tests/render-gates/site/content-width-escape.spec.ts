@@ -119,6 +119,19 @@ test.describe('horizontal', () => {
     });
   }
 
+  test('a fenced-div band spans the viewport and keeps its text at the reading width, centred', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto('/band/');
+    const band = await box(page, 'article.container > div.band');
+    const p = await box(page, 'article.container > div.band > p');
+    const readingWidth = await lengthInMain(page, 'var(--moss-content-width)');
+    expect(Math.abs(band.left)).toBeLessThanOrEqual(1);
+    expect(Math.abs(band.right - 1280)).toBeLessThanOrEqual(1);
+    expect(p.width).toBeLessThanOrEqual(readingWidth + 1);
+    expect(p.width).toBeGreaterThan(readingWidth / 2);
+    expect(Math.abs((p.left + p.right) / 2 - (band.left + band.right) / 2)).toBeLessThanOrEqual(1);
+  });
+
   test('|wide under dir="rtl" is centred on the column too, with no sideways scroll', async ({ page }) => {
     await page.goto('/h-wide/');
     await page.evaluate(() => { document.documentElement.dir = 'rtl'; });
@@ -167,6 +180,12 @@ test.describe('horizontal, phone width', () => {
       expect(Math.abs(fig.right - col.right)).toBeLessThanOrEqual(1);
     });
   }
+
+  test('a fenced-div band causes no sideways scroll', async ({ page }) => {
+    await page.goto('/band/');
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+  });
 
   test('a hand-written band narrowed by an inline width stays centred', async ({ page }) => {
     await page.goto('/raw/');

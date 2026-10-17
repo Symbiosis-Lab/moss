@@ -258,6 +258,7 @@ pub(super) fn restore(blocks: &mut [Block], embeds: &LinkedEmbeds, config: &Pars
             emit_source_lines: false,
             implicit_figure: false,
             source_line_offset: 0,
+            warning_line_offset: 0,
             math: config.math,
             hard_line_breaks: false,
         },
@@ -305,7 +306,7 @@ impl Restore<'_> {
                     *id = Some(crate::heading::anchor::obsidian_heading_anchor(&text));
                 }
             }
-            Block::Paragraph(children) => {
+            Block::Paragraph(children) | Block::DefinitionTitle(children) => {
                 self.in_inlines(children);
             }
             Block::Figure {
@@ -342,7 +343,9 @@ impl Restore<'_> {
                     self.in_block(nested);
                 }
             }
-            Block::BlockQuote(children) => {
+            Block::BlockQuote(children)
+            | Block::DefinitionList(children)
+            | Block::DefinitionDefinition(children) => {
                 for nested in children {
                     self.in_block(nested);
                 }

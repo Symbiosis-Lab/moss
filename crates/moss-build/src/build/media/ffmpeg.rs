@@ -11,7 +11,7 @@
 //! ```rust,ignore
 //! use moss::build::media::ffmpeg::{FFmpegManager, VideoCompressionConfig};
 //!
-//! let ffmpeg = FFmpegManager::detect()?;
+//! let ffmpeg = FFmpegManager::find()?;
 //! let config = VideoCompressionConfig::default();
 //! ffmpeg.convert_to_mp4_with_config(Path::new("input.mov"), Path::new("output.mp4"), &config)?;
 //! ```
@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::build::assets::binary_resolver::{
@@ -33,10 +33,11 @@ use crate::types::{content::ProjectStructure, runtime::ChildProcessRegistry};
 ///
 /// # What is NOT here
 ///
-/// Delivery quality — resolution, frame rate, video bitrate, audio bitrate —
-/// is not configuration. It lives in `asset_paths::VIDEO_LADDER`, one table
-/// that states the floor, the rungs and the ceiling together. This struct
-/// carries only what the ladder cannot: the hosting-cost bound and how the
+/// Delivery policy is not configuration. The sizes, frame rates, audio and
+/// rate ceilings live in `asset_paths::VIDEO_LADDER`, one table that states
+/// the floor, the rungs and the ceiling together, and the picture quality
+/// every encode aims at under those ceilings is [`VIDEO_QUALITY_CRF`]. This
+/// struct carries only what those cannot: the hosting-cost bound and how the
 /// encoder is run.
 ///
 /// `max_size_mb` bounds what the **site owner** has to host, and it is the one
@@ -55,7 +56,6 @@ use crate::types::{content::ProjectStructure, runtime::ChildProcessRegistry};
 ///
 /// # References
 /// - Rate Control: https://slhck.info/video/2017/03/01/rate-control.html
-/// - Two-Pass: https://gist.github.com/hsab/7c9219c4d57e13a42e06bf1cab90cd44
 #[derive(Debug, Clone)]
 pub struct VideoCompressionConfig {
     /// Maximum output file size in megabytes.
@@ -70,7 +70,7 @@ pub struct VideoCompressionConfig {
     /// file for the whole video, so `max_size_mb` bounds it directly. The HLS
     /// ladder is `-hls_flags single_file`: every rung's video is its OWN file,
     /// and so is each audio rendition (`alo.m4s`, `ahi.m4s`) — a rung's file
-    /// size is its bitrate times the video's whole duration, which the width
+    /// can reach its rate ceiling times the video's whole duration, which the width
     /// truncation `asset_paths::video_ladder_rungs` already applies cannot see.
     /// A 15-minute, 1280 px source whose every rung fit the width still wrote
     /// a 221 MB top-rung file and a 123 MB rung below it — hosting rejects any
@@ -84,8 +84,8 @@ pub struct VideoCompressionConfig {
     pub preset: String,
 
 
-    /// Target fill percentage of max_size_mb budget (0.0-1.0).
-    /// Default: 0.97 (target 97% of budget to avoid edge cases)
+    /// The share of `max_size_mb` a rung's rate ceiling may fill (0.0-1.0).
+    /// Default: 0.97, leaving room for container overhead.
     pub target_fill_percentage: f64,
 
     /// Max x264 encoder threads. Default: half the logical cores (floor 2),
@@ -137,6 +137,14 @@ impl VideoCompressionConfig {
             // keep serving renditions encoded under the old table. The table's
             // own contents are therefore part of the key.
             "ladder": asset_paths::video_ladder_fingerprint(),
+            // 3: the top size is the source's own picture; 2 fitted it into
+            // the table row below it, and 1 forced a fixed 16:9 frame.
+            // Nothing in the table changed when these did, so the key must
+            // say so.
+            "frame": 3,
+            // The quality every encode aims at. A file encoded to hit its
+            // rung's rate instead carries no such field and is rebuilt once.
+            "crf": VIDEO_QUALITY_CRF,
         })
     }
 }
@@ -146,45 +154,83 @@ impl VideoCompressionConfig {
 /// Indicates which encoding path was taken and the resulting file size.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EncodingResult {
-    /// Video was two-pass encoded at the planned bitrate.
-    TwoPassSuccess { size_bytes: u64 },
+    /// Video was encoded; `size_bytes` is the file written.
+    Encoded { size_bytes: u64 },
 
     /// The source already satisfies the rung it would be encoded to, so no
-    /// output was written and the caller ships the original bytes. Re-encoding
-    /// could only lose a generation.
+    /// output was written and the caller ships the original bytes (see
+    /// [`EncodePlan::KeepOriginal`] for why).
     KeptOriginal,
 }
 
 /// What ffprobe tells us about a source, and everything the delivery decision
 /// needs. Gathered in ONE probe rather than three — the encode used to shell
 /// out separately for duration and codec.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SourceVideo {
     pub duration_secs: f64,
+    /// Coded width and height, as stored (rotation applied: a phone clip
+    /// recorded upright reports its upright size here).
     pub width: u32,
+    pub height: u32,
+    /// Sample (pixel) aspect ratio, width over height of one pixel; 1.0 when
+    /// the source declares none. See [`SourceVideo::display`].
+    pub sar: f64,
     pub fps: f64,
     /// Whether the source carries an audio stream at all. A ladder that maps
     /// `a:0` on a silent source fails the entire encode.
     pub has_audio: bool,
     /// Container bitrate in kbps — video plus audio plus overhead, i.e. what a
-    /// viewer actually has to sustain. This, not `video_kbps`, is what a rung
-    /// promises, so this is what decides whether a source already meets one
+    /// viewer actually has to sustain. This is what a rung promises, so this
+    /// is what decides whether a source already meets one
     /// ([`plan_video_encode`]).
     pub total_kbps: Option<f64>,
-    /// The source's own VIDEO-stream bitrate in kbps, read from the video
-    /// stream's `bit_rate` — distinct from `total_kbps`, which also carries
-    /// audio and container overhead. `None` when the container states no
-    /// per-stream figure, which is common for mkv/webm. This is what the HLS
-    /// ladder clamps a rung against (`asset_paths::video_ladder_rungs_within`,
-    /// applied in `hls::produce_ladder`): re-encoding a rung above what the
-    /// source's own picture carries cannot add detail the source never had,
-    /// it only inflates the file. `total_kbps` is the fallback there when this
-    /// is `None` — looser, since it is not the picture alone, but still
-    /// tighter than no clamp at all.
-    pub video_kbps: Option<f64>,
     /// A codec every target browser decodes, in a container they all open. The
     /// container alone does not prove this: HEVC-in-mp4 does not play in Firefox.
     pub web_playable: bool,
+}
+
+/// ffprobe's `sample_aspect_ratio` text ("64:45"); `0:1`, `N/A` or anything
+/// unparseable means the source declares none, i.e. square pixels.
+pub(crate) fn parse_sar(v: Option<&str>) -> f64 {
+    v.and_then(|v| {
+        let (n, d) = v.split_once(':')?;
+        let (n, d) = (n.parse::<f64>().ok()?, d.parse::<f64>().ok()?);
+        (n > 0.0 && d > 0.0).then_some(n / d)
+    })
+    .unwrap_or(1.0)
+}
+
+/// Whether a display-matrix rotation (degrees, either sign) turns the picture
+/// a quarter turn, swapping its width and height.
+pub(crate) fn is_quarter_turn(rotation: Option<&str>) -> bool {
+    rotation
+        .and_then(|v| v.parse::<f64>().ok())
+        .is_some_and(|deg| (deg.rem_euclid(180.0) - 90.0).abs() < 1.0)
+}
+
+/// Whether the file can ship as-is: a container and video codec every target
+/// browser opens, 8-bit 4:2:0 pixels (10-bit and HDR phone footage does not
+/// play everywhere), and audio that is AAC or absent. Anything else is
+/// re-encoded, which normalises it.
+pub(crate) fn is_web_playable(
+    container_ok: bool,
+    video_codec: Option<&str>,
+    pix_fmt: Option<&str>,
+    audio_codecs: &[String],
+) -> bool {
+    container_ok
+        && video_codec.is_some_and(|c| matches!(c, "h264" | "vp8" | "vp9" | "av1"))
+        && pix_fmt.is_some_and(|p| matches!(p, "yuv420p" | "yuvj420p"))
+        && audio_codecs.iter().all(|a| a == "aac")
+}
+
+impl SourceVideo {
+    /// The shape the viewer sees: coded width stretched by the pixel aspect
+    /// ratio, over the height. What a rung's box is compared against.
+    pub fn display(&self) -> (u32, u32) {
+        asset_paths::display_size(self.width, self.height, self.sar)
+    }
 }
 
 /// How to encode (or not encode) a video.
@@ -197,9 +243,12 @@ pub struct SourceVideo {
 pub enum EncodePlan {
     /// Encode at this rung.
     Encode { rung: VideoRung },
-    /// The source ALREADY is the rung it would be encoded to — web-playable,
-    /// no wider, no fatter. Re-encoding could only lose a generation, so the
-    /// source bytes ship.
+    /// The source is already something every browser plays, no larger than
+    /// the delivery ceiling and no heavier than its own size is allowed or
+    /// the size budget holds. It plays everywhere within the rate a viewer
+    /// was promised, so the source bytes ship: a re-encode might come out
+    /// smaller, but it would cost the picture a generation for a saving no
+    /// viewer needs.
     KeepOriginal,
 }
 
@@ -210,15 +259,22 @@ pub enum EncodePlan {
 /// **duration**. Neither was the right question. The right one is whether the
 /// source already satisfies the delivery policy — and the policy is the ladder.
 ///
-/// Two things pull the choice below the source's own top rung: the source being
-/// narrower (handled by `video_ladder_rungs`) and the hosting size budget
-/// (handled here). If not even the bottom rung fits the budget, the bottom rung
-/// ships anyway — an over-budget file that plays beats a video nobody can
-/// watch, and the alternative, shipping the multi-gigabyte original, is worse
-/// for the viewer *and* the bill.
+/// One thing pulls the choice below the source's own picture
+/// (`video_top_rung`): the hosting size budget. If not even the bottom rung
+/// fits the budget, the bottom rung ships anyway — an over-budget file that
+/// plays beats a video nobody can watch, and the alternative, shipping the
+/// multi-gigabyte original, is worse for the viewer *and* the bill.
 ///
-/// This is the progressive MP4's own decision, over ONE file whose size is
-/// `total_kbps * duration`. The HLS ladder's analogous truncation
+/// The original is kept on what it costs, not on which box it happens to
+/// match. It is judged against its own top rung and against the budget
+/// directly, so a lean recording between two table sizes, or one long enough
+/// that the budget would place a re-encode several sizes down, ships as the
+/// file it already is. A 20-minute 1708x1080 screen recording at 220 kbps is
+/// 33 MB; measured against the rung the budget picks for a 20-minute encode
+/// (640x360) it was "too large" and was re-encoded to that size.
+///
+/// This is the progressive MP4's own decision, over ONE file that can weigh
+/// up to `total_kbps * duration`. The HLS ladder's analogous truncation
 /// (`asset_paths::video_ladder_rungs_within`, applied in `hls::produce_ladder`)
 /// answers a different question — not "which single rung", but "which PREFIX
 /// of rungs", because a ladder ships every surviving rung as its own file — so
@@ -228,29 +284,44 @@ pub fn plan_video_encode(source: &SourceVideo, config: &VideoCompressionConfig) 
         config.max_size_mb as f64 * 1024.0 * 1024.0 * config.target_fill_percentage;
     let budget_kbps = (budget_bytes * 8.0 / 1024.0) / source.duration_secs.max(0.001);
 
-    let rungs = video_ladder_rungs(source.width);
+    let display = source.display();
+    let rungs = video_ladder_rungs(display);
+    let top = rungs[rungs.len() - 1];
+    let ceiling = asset_paths::VIDEO_LADDER[asset_paths::VIDEO_LADDER.len() - 1];
+
+    // Judged on what the viewer must sustain, in the same unit the budget
+    // uses: the container total. Testing the video stream alone would keep a
+    // 300 kbps picture wrapped in a 320 kbps audio track and call it a 365 kbps
+    // rung. Frame rate counts too — the bottom rung is 15 fps because 30 fps at
+    // that bitrate measured as a smear, so a 30 fps original is not that rung
+    // however small its file is.
+    let keep = source.web_playable
+        && display.0 <= ceiling.width
+        && display.1 <= ceiling.height
+        && source.fps <= top.fps as f64 + 0.5
+        && source
+            .total_kbps
+            .is_some_and(|kbps| kbps <= (top.total_kbps() as f64).min(budget_kbps));
+    if keep {
+        return EncodePlan::KeepOriginal;
+    }
+
     let rung = rungs
         .iter()
         .rev()
         .find(|r| r.total_kbps() as f64 <= budget_kbps)
         .copied()
         .unwrap_or(rungs[0]);
+    EncodePlan::Encode { rung }
+}
 
-    // Judged on what the viewer must sustain, in the same unit the budget above
-    // uses: the container total. Testing the video stream alone would keep a
-    // 300 kbps picture wrapped in a 320 kbps audio track and call it a 365 kbps
-    // rung. Frame rate counts too — the bottom rung is 15 fps because 30 fps at
-    // that bitrate measured as a smear, so a 30 fps original is not that rung
-    // however small its file is.
-    let already_within = source.web_playable
-        && source.width <= rung.width
-        && source.fps <= rung.fps as f64 + 0.5
-        && source.total_kbps.is_some_and(|kbps| kbps <= rung.total_kbps() as f64);
-
-    if already_within {
-        EncodePlan::KeepOriginal
-    } else {
-        EncodePlan::Encode { rung }
+/// The rung of the web file [`plan_video_encode`] decides on: the source's
+/// own top when it is kept, the rung it is encoded at otherwise. An HLS
+/// ladder is played instead of this file, so it must hold this rung.
+pub(crate) fn progressive_rung(source: &SourceVideo, config: &VideoCompressionConfig) -> VideoRung {
+    match plan_video_encode(source, config) {
+        EncodePlan::KeepOriginal => asset_paths::video_top_rung(source.display()),
+        EncodePlan::Encode { rung } => rung,
     }
 }
 
@@ -297,7 +368,9 @@ pub fn get_moss_bin_dir() -> Result<PathBuf, String> {
 
 /// Returns a `BinaryConfig` for FFmpeg.
 ///
-/// Defines download sources for macOS (arm64, x64) and Windows (x64).
+/// Defines download sources for macOS (arm64, x64) and Windows (x64). The macOS
+/// builds are moss's own releases, built by the `ffmpeg-build` workflow and
+/// pinned to a version with a SHA-256 for each architecture.
 /// Linux users should install FFmpeg via their package manager since
 /// the Linux distribution uses tar.xz which is not supported by `binary_resolver`.
 pub fn ffmpeg_binary_config() -> BinaryConfig {
@@ -313,10 +386,8 @@ pub fn ffmpeg_binary_config() -> BinaryConfig {
                 "darwin-arm64".to_string(),
                 BinarySource {
                     github: None,
-                    direct_url: Some(
-                        "https://evermeet.cx/ffmpeg/getrelease/zip".to_string(),
-                    ),
-                    sha256: None,
+                    direct_url: Some("https://github.com/Symbiosis-Lab/moss/releases/download/ffmpeg-7.1.5-moss.1/ffmpeg-macos-arm64.zip".to_string()),
+                    sha256: Some("e92f5ba2a8138afeda79c3d82f3c3024f5bfda0f765554d8e92945d4cc4e0039".to_string()),
                     archive_format: Some(ArchiveFormat::Zip),
                 },
             ),
@@ -324,10 +395,8 @@ pub fn ffmpeg_binary_config() -> BinaryConfig {
                 "darwin-x64".to_string(),
                 BinarySource {
                     github: None,
-                    direct_url: Some(
-                        "https://evermeet.cx/ffmpeg/getrelease/zip".to_string(),
-                    ),
-                    sha256: None,
+                    direct_url: Some("https://github.com/Symbiosis-Lab/moss/releases/download/ffmpeg-7.1.5-moss.1/ffmpeg-macos-x86_64.zip".to_string()),
+                    sha256: Some("9db13e87646b56cffb75a1779b50a29d87828b98e1b7a449694eba3ece0f3d8b".to_string()),
                     archive_format: Some(ArchiveFormat::Zip),
                 },
             ),
@@ -358,10 +427,10 @@ pub fn ffmpeg_binary_config() -> BinaryConfig {
 /// ffprobe ships from the same ffmpeg project but is distributed as its own
 /// download. moss must own provisioning it separately: assuming a sibling next
 /// to the ffmpeg binary is the root cause of a real site's video 404s — the
-/// macOS evermeet `getrelease/zip` contains ffmpeg ONLY, so the derived ffprobe
+/// macOS ffmpeg archive contains ffmpeg ONLY, so the derived ffprobe
 /// path did not exist and conversion failed with `Failed to run ffprobe`.
 ///
-/// - macOS: evermeet serves ffprobe as its own single-binary zip.
+/// - macOS: moss's pinned release ships ffprobe as its own single-binary zip.
 /// - Windows: the gyan "essentials" zip bundles both ffmpeg.exe and ffprobe.exe;
 ///   the resolver's zip extractor selects `ffprobe.exe` by the config `name`.
 /// - Linux: omitted (package managers install both binaries co-located).
@@ -378,10 +447,8 @@ pub fn ffprobe_binary_config() -> BinaryConfig {
                 "darwin-arm64".to_string(),
                 BinarySource {
                     github: None,
-                    direct_url: Some(
-                        "https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip".to_string(),
-                    ),
-                    sha256: None,
+                    direct_url: Some("https://github.com/Symbiosis-Lab/moss/releases/download/ffmpeg-7.1.5-moss.1/ffprobe-macos-arm64.zip".to_string()),
+                    sha256: Some("9a84899a65c2735e43d27042c2cf88f708310026eb88dadb3d2ff89b67e1512f".to_string()),
                     archive_format: Some(ArchiveFormat::Zip),
                 },
             ),
@@ -389,10 +456,8 @@ pub fn ffprobe_binary_config() -> BinaryConfig {
                 "darwin-x64".to_string(),
                 BinarySource {
                     github: None,
-                    direct_url: Some(
-                        "https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip".to_string(),
-                    ),
-                    sha256: None,
+                    direct_url: Some("https://github.com/Symbiosis-Lab/moss/releases/download/ffmpeg-7.1.5-moss.1/ffprobe-macos-x86_64.zip".to_string()),
+                    sha256: Some("18ea144dc8d313495a8714f6fd0657c535506245957fb9a6da3172c8fbc480f1".to_string()),
                     archive_format: Some(ArchiveFormat::Zip),
                 },
             ),
@@ -434,8 +499,8 @@ fn ffprobe_filename() -> &'static str {
 /// 1. If `ffmpeg_bin_path` is absolute, the sibling `ffprobe` beside it — covers
 ///    Homebrew/system installs and a `~/.moss/bin` cache that already holds both.
 /// 2. Otherwise (bare name from PATH, or no sibling), the shared binary
-///    resolver: system PATH → `~/.moss/bin` cache → download from evermeet
-///    (macOS) / gyan (Windows) via [`ffprobe_binary_config`].
+///    resolver: system PATH → install directories → `~/.moss/bin` cache. It
+///    never downloads; a missing ffprobe is an error.
 fn resolve_ffprobe_path(ffmpeg_bin_path: &str) -> Result<String, String> {
     let ffmpeg = Path::new(ffmpeg_bin_path);
     if ffmpeg.is_absolute() {
@@ -444,31 +509,8 @@ fn resolve_ffprobe_path(ffmpeg_bin_path: &str) -> Result<String, String> {
             return Ok(sibling.to_string_lossy().into_owned());
         }
     }
-    let resolution = resolve_binary(&ffprobe_binary_config(), None, true, None)?;
+    let resolution = resolve_binary(&ffprobe_binary_config(), None)?;
     Ok(resolution.path)
-}
-
-/// Copies a video file as-is when conversion fails or is unavailable.
-///
-/// This implements graceful degradation: when FFmpeg is unavailable or
-/// conversion fails, we copy the original video to the output location.
-/// The video will still play (browsers can handle MOV files), just without
-/// optimization.
-///
-/// # Arguments
-/// * `source` - Path to the source video file
-/// * `output` - Path to the output location
-///
-/// # Returns
-/// * `Ok(())` - File copied successfully
-/// * `Err(String)` - Copy failed
-pub fn copy_video_as_fallback(source: &Path, output: &Path) -> Result<(), String> {
-    // `copy_output`: the destination is build output, so a cloud-evicted one
-    // is discarded rather than materialized. Parent dirs included.
-    crate::build::io_utils::copy_output(source, output)
-        .map_err(|e| format!("Failed to copy video: {}", e))?;
-
-    Ok(())
 }
 
 /// Parses FFmpeg's `time=HH:MM:SS.ff` progress field from a stderr line.
@@ -535,7 +577,7 @@ const MAX_STDERR_ERROR_LINES: usize = 200;
 /// ffmpeg overwrites its progress report in place with `\r`, not `\n`, so a
 /// blob captured whole (see [`spawn_ffmpeg_streaming`]) carries hundreds of
 /// `frame=…` updates run together on what looks like one enormous line. That
-/// blob is embedded verbatim into the `Err(String)` a failed two-pass returns
+/// blob is embedded verbatim into the `Err(String)` a failed encode returns
 /// — which is what a real failure showed eating the log-tail budget: the
 /// actual diagnostic (`[mp4 @ …] Unable to re-open …`, `Error writing
 /// trailer`, `Conversion failed!`, the libx264 stats block) was almost
@@ -796,31 +838,77 @@ pub(crate) fn spawn_ffmpeg_streaming(
 /// belongs with a segmented ladder, where rungs must align.
 const MAX_KEYFRAME_INTERVAL_FRAMES: &str = "60";
 
-/// Arguments common to both passes of a two-pass encode.
+/// The picture quality every video encode aims at: libx264's constant rate
+/// factor, where lower is better and larger.
 ///
-/// Pass 1's rate control IS pass 2's, by construction. The statistics pass 1
-/// writes are only meaningful for the encode they were measured against, so a
-/// flag that changes bit allocation and appears on only one pass leaves the
-/// second steered by a description of a different encode. The two passes used
-/// to be separate literal lists, which is a drift hazard maintained by
-/// diligence; one shared builder removes the hazard instead of documenting it.
-fn common_encode_args(
+/// A rung's `video_kbps` only caps it. Aiming at the rate instead spends it
+/// whether or not the picture needs it, and how much a picture needs has
+/// little to do with its size. A 91-second screen recording encoded at
+/// 1708x1080 is 6.1 MB at this quality (527 kbps, SSIM 0.998 against the
+/// source) and was 22.5 MB aimed at its rung's 4000 kbps; a clip of slowly
+/// drifting gradients is 203 kbps here and 2026 aimed at a 2000 kbps rung.
+/// Footage that does need the rate (a film scan measured 2990 kbps at 1080p, a
+/// 4K camera clip ran into the 4000 kbps cap) is bounded by the cap as before.
+///
+/// 23 is libx264's own default. Measured at the `slow` preset against each
+/// source scaled to the same frame, it kept SSIM at 0.9993 for the first half
+/// minute of that screen recording and 0.994 for the film scan; 21 cost
+/// 12-19% more bytes for a difference in the fourth decimal.
+pub(crate) const VIDEO_QUALITY_CRF: u32 = 23;
+
+/// The rate-control flags every video encode carries, for the progressive
+/// file (`stream` empty) and for each ladder rung (`stream` like `:v:3`).
+///
+/// The encoder aims at [`VIDEO_QUALITY_CRF`], and `cap_kbps` is what it may
+/// not exceed getting there. A picture that needs less spends less; one that
+/// needs more is held to the rate a viewer was promised. `-maxrate` bounds
+/// the sustained rate and `-bufsize` is how much short-window overshoot is
+/// allowed: 2x is the knee, where 1x bought ~4% less peak for ~10% less
+/// delivered bitrate. Without the pair a high-motion passage bursts far above
+/// the rung (an uncapped 1489 kbps average measured a 3797 kbps peak), and a
+/// viewer's buffer drains on the peak.
+pub(crate) fn rate_control_args(stream: &str, cap_kbps: u32) -> [String; 6] {
+    [
+        format!("-crf{stream}"),
+        VIDEO_QUALITY_CRF.to_string(),
+        format!("-maxrate{stream}"),
+        format!("{cap_kbps}k"),
+        format!("-bufsize{stream}"),
+        format!("{}k", cap_kbps.saturating_mul(2)),
+    ]
+}
+
+/// Build the argument list for the progressive encode.
+///
+/// Pure function so tests can assert on the actual command line. The
+/// `-threads` cap scopes the x264 encoder (it precedes the output target).
+///
+/// One pass. A second pass exists to hit an average bitrate exactly, and this
+/// encode has no average to hit: it aims at a quality and is only bounded by
+/// the rung's rate.
+pub(crate) fn build_encode_args(
     input: &str,
+    output: &str,
     rung: VideoRung,
     source_fps: f64,
+    display: (u32, u32),
     config: &VideoCompressionConfig,
 ) -> Vec<String> {
     // Downsample the frame rate only when the source is faster than the rung
     // asks for. Forcing 30 on a 24 fps source would duplicate frames and spend
     // bitrate on them; MIN_BITS_PER_PIXEL_PER_FRAME is computed against the
     // rung's fps, so arriving under it is the safe direction.
+    //
+    // The frame is the source's display size fitted into the rung's box, as
+    // explicit even numbers with square pixels, so a source of another shape
+    // keeps it and a declared pixel aspect ratio is baked into the picture.
+    let (w, h) = rung.fitted_frame(display);
     let vf = if source_fps > rung.fps as f64 {
-        format!("scale='min({},iw)':-2,fps={}", rung.width, rung.fps)
+        format!("scale={w}:{h},setsar=1,fps={}", rung.fps)
     } else {
-        format!("scale='min({},iw)':-2", rung.width)
+        format!("scale={w}:{h},setsar=1")
     };
-    let bitrate_kbps = rung.video_kbps;
-    vec![
+    let mut args: Vec<String> = vec![
         "-i".into(),
         input.into(),
         "-vf".into(),
@@ -829,21 +917,9 @@ fn common_encode_args(
         "libx264".into(),
         "-threads".into(),
         config.encode_threads.to_string(),
-        // `-b:v` alone is only an average: it lets a high-motion passage
-        // borrow bits banked on a still one and burst far above it. Measured
-        // on a bimodal clip, an uncapped 1489 kbps average carried a
-        // 3797 kbps peak; the deployed video this change was written for
-        // averaged 2.15 Mbps and peaked at 4.1 Mbps. A viewer's buffer drains
-        // on the peak. `-maxrate` turns the number into a bound on the
-        // sustained rate; `-bufsize` is how much short-window overshoot is
-        // allowed, and 2x is the knee — 1x buys ~4% less peak for ~10% less
-        // delivered bitrate.
-        "-b:v".into(),
-        format!("{}k", bitrate_kbps),
-        "-maxrate".into(),
-        format!("{}k", bitrate_kbps),
-        "-bufsize".into(),
-        format!("{}k", bitrate_kbps.saturating_mul(2)),
+    ];
+    args.extend(rate_control_args("", rung.video_kbps));
+    args.extend([
         "-g".into(),
         MAX_KEYFRAME_INTERVAL_FRAMES.into(),
         // 8-bit 4:2:0 High profile. libx264 already picks these for an 8-bit
@@ -859,58 +935,6 @@ fn common_encode_args(
         "high".into(),
         "-preset".into(),
         config.preset.clone(),
-    ]
-}
-
-/// Build the argument list for pass 1 (analysis) of a two-pass encode.
-///
-/// Pure function so tests can assert on the actual command line. The
-/// `-threads` cap scopes the x264 encoder (it precedes the output target).
-///
-/// Reference: https://gist.github.com/hsab/7c9219c4d57e13a42e06bf1cab90cd44
-pub(crate) fn build_two_pass_first_args(
-    input: &str,
-    rung: VideoRung,
-    source_fps: f64,
-    config: &VideoCompressionConfig,
-    passlogfile: &str,
-    null_output: &str,
-) -> Vec<String> {
-    let mut args = common_encode_args(input, rung, source_fps, config);
-    args.extend([
-        "-pass".into(),
-        "1".into(),
-        "-passlogfile".into(),
-        passlogfile.into(),
-        "-an".into(), // No audio in pass 1 (faster)
-        "-f".into(),
-        "null".into(),
-        "-y".into(),
-        null_output.into(),
-    ]);
-    args
-}
-
-/// Build the argument list for pass 2 (actual encode) of a two-pass encode.
-///
-/// Pure function so tests can assert on the actual command line. The
-/// `-threads` cap scopes the x264 encoder (it precedes the output target).
-///
-/// Reference: https://gist.github.com/hsab/7c9219c4d57e13a42e06bf1cab90cd44
-pub(crate) fn build_two_pass_second_args(
-    input: &str,
-    output: &str,
-    rung: VideoRung,
-    source_fps: f64,
-    config: &VideoCompressionConfig,
-    passlogfile: &str,
-) -> Vec<String> {
-    let mut args = common_encode_args(input, rung, source_fps, config);
-    args.extend([
-        "-pass".into(),
-        "2".into(),
-        "-passlogfile".into(),
-        passlogfile.into(),
         "-c:a".into(),
         "aac".into(),
         "-ac".into(),
@@ -940,12 +964,11 @@ pub(crate) enum EncodeOutcome<'a> {
 /// One INFO line naming the source and the rung it is about to be encoded
 /// at — the "start" half of a start/end pair a shared, interleaved log can
 /// correlate against wall-clock time.
-pub(crate) fn encode_start_line(source: &Path, rung: VideoRung) -> String {
+pub(crate) fn encode_start_line(source: &Path, rung: VideoRung, display: (u32, u32)) -> String {
+    let (w, h) = rung.fitted_frame(display);
     format!(
-        "Encoding {} at {}x{}@{}fps ({} kbps)",
+        "Encoding {} at {w}x{h}@{}fps (up to {} kbps)",
         source.display(),
-        rung.width,
-        rung.height,
         rung.fps,
         rung.video_kbps,
     )
@@ -987,6 +1010,17 @@ pub(crate) fn thumbnail_seek_secs(duration_secs: f64) -> f64 {
     }
 }
 
+/// The frame a hero poster is cut at: the video's display size fitted into the
+/// top ladder rung's box, so at most 1920x1080 and never enlarged, with both
+/// sides even like every other frame the ladder makes.
+pub(crate) fn poster_frame(display: (u32, u32)) -> (u32, u32) {
+    asset_paths::VIDEO_LADDER[asset_paths::VIDEO_LADDER.len() - 1].fitted_frame(display)
+}
+
+/// ffmpeg's `-q:v` for a hero poster (2 best, 31 worst). A 1920x1080 still
+/// measured about 90 to 250 KB (footage and a grainy test pattern).
+pub(crate) const POSTER_JPEG_QUALITY: &str = "5";
+
 /// Manager for FFmpeg operations.
 ///
 /// Provides methods for video conversion and thumbnail generation.
@@ -997,9 +1031,9 @@ pub struct FFmpegManager {
     /// Path to the ffprobe binary, resolved lazily on first probe and cached.
     ///
     /// ffprobe is a SEPARATE binary from ffmpeg and is NOT included in moss's
-    /// downloaded ffmpeg (evermeet/gyan), so it cannot be assumed to sit beside
-    /// every ffmpeg. Resolved on demand via [`resolve_ffprobe_path`] (which may
-    /// download it) and cached here. `OnceLock` (not `Cell`/`OnceCell`) because
+    /// downloaded ffmpeg (moss's pinned macOS build, or gyan on Windows), so it cannot be assumed to sit beside
+    /// every ffmpeg. Resolved on demand via [`resolve_ffprobe_path`] and cached
+    /// here. `OnceLock` (not `Cell`/`OnceCell`) because
     /// a manager is shared by reference across the background conversion threads.
     ffprobe: OnceLock<String>,
 }
@@ -1019,26 +1053,13 @@ impl FFmpegManager {
         &self.bin_path
     }
 
-    /// Returns the path to the ffprobe binary, resolving (and downloading if
-    /// necessary) on first use and caching the result.
+    /// Returns the path to the ffprobe binary, resolving it on first use and
+    /// caching the result.
     ///
     /// See [`resolve_ffprobe_path`] for the resolution order. ffprobe is owned
     /// and provisioned by moss separately from ffmpeg — never assumed to be a
     /// sibling of the ffmpeg binary.
     fn ffprobe_path(&self) -> Result<PathBuf, String> {
-        if let Some(p) = self.ffprobe.get() {
-            return Ok(PathBuf::from(p));
-        }
-        // Serialize the first-time resolution across threads. The video pipeline
-        // converts several videos concurrently (encode semaphore), all sharing
-        // one FFmpegManager; without this lock each would independently call
-        // resolve_binary and race the ffprobe DOWNLOAD — and the resolver writes
-        // the single-file zip artifact to its final cache path non-atomically,
-        // so concurrent writers could corrupt ~/.moss/bin/ffprobe. The lock makes
-        // exactly one thread download; the rest hit the cache it just populated.
-        static RESOLVE_LOCK: Mutex<()> = Mutex::new(());
-        let _guard = RESOLVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Another thread may have resolved while we waited on the lock.
         if let Some(p) = self.ffprobe.get() {
             return Ok(PathBuf::from(p));
         }
@@ -1056,70 +1077,33 @@ impl FFmpegManager {
         Self::new(path)
     }
 
-    /// Gets FFmpeg from system PATH, cache, or downloads it.
+    /// Finds an installed FFmpeg without downloading one.
     ///
-    /// Delegates to the unified binary resolver which tries in order:
-    /// 1. System FFmpeg (in PATH)
-    /// 2. Previously downloaded FFmpeg (~/.moss/bin/ffmpeg)
-    /// 3. Downloads FFmpeg to ~/.moss/bin/
+    /// Delegates to the binary resolver, which searches the configured path,
+    /// the system PATH, the standard install directories and `~/.moss/bin/`.
     ///
     /// # Returns
     /// * `Ok(FFmpegManager)` - Ready to convert videos
-    /// * `Err(String)` - FFmpeg unavailable and download failed
-    pub fn get_or_download(
-        on_progress: Option<&crate::build::assets::download::DownloadProgress>,
-    ) -> Result<Self, String> {
+    /// * `Err(String)` - FFmpeg is not installed
+    pub fn find() -> Result<Self, String> {
         let config = ffmpeg_binary_config();
         let resolution =
-            crate::build::assets::binary_resolver::resolve_binary(&config, None, true, on_progress)?;
+            crate::build::assets::binary_resolver::resolve_binary(&config, None)?;
         Ok(Self::new(resolution.path))
-    }
-
-    /// Detects FFmpeg in the system PATH.
-    ///
-    /// Returns an FFmpegManager if ffmpeg is found, otherwise an error.
-    #[allow(dead_code)]
-    pub fn detect() -> Result<Self, String> {
-        // Try to find ffmpeg in PATH
-        let ffmpeg_path = if cfg!(target_os = "windows") {
-            "ffmpeg.exe"
-        } else {
-            "ffmpeg"
-        };
-
-        // Verify ffmpeg is available
-        let output = background_command(Path::new(ffmpeg_path))
-            .arg("-version")
-            .output()
-            .map_err(|_| {
-                "FFmpeg not found in PATH. Please install FFmpeg to enable video conversion."
-                    .to_string()
-            })?;
-
-        if !output.status.success() {
-            return Err("FFmpeg found but failed to execute".to_string());
-        }
-
-        Ok(Self::new(ffmpeg_path.to_string()))
     }
 
     /// Encodes a video into moss's single web rendition.
     ///
     /// # Algorithm
-    /// 1. Get video duration via ffprobe.
-    /// 2. `plan_video_encode` picks the bitrate: the lower of the delivery
-    ///    ceiling and the size budget, or `KeepOriginal` when neither can be
-    ///    met and the source already plays on the web.
-    /// 3. Two-pass encode at that bitrate, hard-capped by VBV.
-    /// 4. Validate; on failure retry once at 90% (never below the floor).
-    ///
-    /// The doc here described an adaptive-CRF first attempt with a two-pass
-    /// fallback until 2026-08-27. No such attempt was ever made — `run_crf_encode`
-    /// existed but had no callers, so every video took the two-pass path. The
-    /// function and the claim were removed together.
+    /// 1. Probe the source once.
+    /// 2. `plan_video_encode` picks the rung: the best one the source fills
+    ///    that the size budget allows, or `KeepOriginal` when the source
+    ///    already plays everywhere and costs no more than its own size and
+    ///    the budget allow.
+    /// 3. One encode aimed at `VIDEO_QUALITY_CRF`, capped at the rung's rate.
+    /// 4. Validate; on failure retry once, one rung down.
     ///
     /// # References
-    /// - Two-Pass: https://gist.github.com/hsab/7c9219c4d57e13a42e06bf1cab90cd44
     /// - Rate Control: https://slhck.info/video/2017/03/01/rate-control.html
     ///
     /// # Arguments
@@ -1167,14 +1151,15 @@ impl FFmpegManager {
             EncodePlan::Encode { rung } => rung,
         };
 
-        let top = asset_paths::video_top_rung(probe.width);
-        if rung.width < top.width {
+        let top = asset_paths::video_top_rung(probe.display());
+        if rung != top {
+            let (w, h) = rung.fitted_frame(probe.display());
+            let (tw, th) = top.fitted_frame(probe.display());
             log::info!(
-                "{} is {:.0} minutes, so the {} MB budget places it at {}x{} rather than {}x{}",
+                "{} is {:.0} minutes, so the {} MB budget places it at {w}x{h} rather than {tw}x{th}",
                 source.display(),
                 probe.duration_secs / 60.0,
                 config.max_size_mb,
-                rung.width, rung.height, top.width, top.height,
             );
         }
 
@@ -1194,36 +1179,10 @@ impl FFmpegManager {
         // rather than needing one hand-placed at each of the half-dozen
         // return sites.
         let encode_started_at = std::time::Instant::now();
-        log::info!("{}", encode_start_line(source, rung));
+        log::info!("{}", encode_start_line(source, rung, probe.display()));
 
         let outcome = (|| -> Result<(u64, bool), String> {
-            // Create unique temp directory for pass logs to avoid conflicts
-            let temp_dir = output.parent()
-                .ok_or_else(|| "Output path has no parent directory".to_string())?
-                .join(format!("temp-{}", uuid::Uuid::new_v4()));
-
-            crate::build::io_utils::create_output_dir_all(&temp_dir)
-                .map_err(|e| format!("Failed to create temp dir: {}", e))?;
-
-            // Run two-pass encoding
-            let encode_result = self.run_two_pass_encode(
-                source,
-                output,
-                rung,
-                probe.fps,
-                config,
-                &temp_dir,
-                probe.duration_secs,
-                on_progress,
-                registry,
-                cancel_flag,
-            );
-
-            // Clean up temp directory
-            // allow:unlink two-pass scratch this encode created under cache/tmp
-            let _ = crate::build::io_utils::remove_output_dir_all(&temp_dir);
-
-            encode_result?;
+            self.run_encode(source, output, rung, &probe, config, on_progress, registry, cancel_flag)?;
 
             let mut retried = false;
 
@@ -1251,29 +1210,7 @@ impl FFmpegManager {
                 );
                 retried = true;
 
-                let temp_dir_retry = output.parent()
-                    .ok_or_else(|| "Output path has no parent directory".to_string())?
-                    .join(format!("temp-retry-{}", uuid::Uuid::new_v4()));
-
-                crate::build::io_utils::create_output_dir_all(&temp_dir_retry)
-                    .map_err(|e| format!("Failed to create retry temp dir: {}", e))?;
-
-                let retry_result = self.run_two_pass_encode(
-                    source,
-                    output,
-                    lower,
-                    probe.fps,
-                    config,
-                    &temp_dir_retry,
-                    probe.duration_secs,
-                    on_progress,
-                    registry,
-                    cancel_flag,
-                );
-
-                // allow:unlink two-pass scratch this encode created under cache/tmp
-                let _ = crate::build::io_utils::remove_output_dir_all(&temp_dir_retry);
-                retry_result?;
+                self.run_encode(source, output, lower, &probe, config, on_progress, registry, cancel_flag)?;
 
                 if !self.validate_encoded_video(output)? {
                     return Err(format!("Failed to encode valid video after retry: {}", source.display()));
@@ -1295,155 +1232,44 @@ impl FFmpegManager {
         };
         log::info!("{}", encode_end_line(source, encode_started_at.elapsed(), &log_outcome));
 
-        outcome.map(|(size_bytes, _retried)| EncodingResult::TwoPassSuccess { size_bytes })
+        outcome.map(|(size_bytes, _retried)| EncodingResult::Encoded { size_bytes })
     }
 
-    /// Run two-pass encoding with specified bitrate.
-    ///
-    /// Performs analysis pass followed by actual encode using calculated bitrate.
-    /// Pass log files are stored in the provided temp directory.
-    /// Both passes use `spawn_ffmpeg_streaming()` for real-time progress reporting.
-    fn run_two_pass_encode(
+    /// Run the one encode for `rung`, streaming ffmpeg's stderr for progress.
+    #[allow(clippy::too_many_arguments)]
+    fn run_encode(
         &self,
         input: &Path,
         output: &Path,
         rung: VideoRung,
-        source_fps: f64,
+        probe: &SourceVideo,
         config: &VideoCompressionConfig,
-        temp_dir: &Path,
-        duration_secs: f64,
         on_progress: &dyn Fn(f64),
         registry: Option<&ChildProcessRegistry>,
         cancel_flag: Option<&AtomicBool>,
     ) -> Result<(), String> {
-        let passlogfile = temp_dir.join("ffmpeg2pass");
-
-        // Pass 1: Analysis (streams stderr for progress reporting)
-        // We scale Pass 1 progress to 0.0..0.3 (it's typically faster than Pass 2)
-        let pass1_progress = |fraction: f64| {
-            on_progress(fraction * 0.3);
-        };
-        self.run_two_pass_first(
-            input,
+        let args = build_encode_args(
+            input.to_str().ok_or("Invalid input path")?,
+            output.to_str().ok_or("Invalid output path")?,
             rung,
-            source_fps,
+            probe.fps,
+            probe.display(),
             config,
-            &passlogfile,
-            duration_secs,
-            &pass1_progress,
-            registry,
-            cancel_flag,
-        )?;
-
-        // Pass 2: Actual encode (streams stderr for progress)
-        // We scale Pass 2 progress to 0.3..1.0
-        let pass2_progress = |fraction: f64| {
-            on_progress(0.3 + fraction * 0.7);
-        };
-        self.run_two_pass_second(
-            input,
-            output,
-            rung,
-            source_fps,
-            config,
-            &passlogfile,
-            duration_secs,
-            &pass2_progress,
-            registry,
-            cancel_flag,
-        )?;
-
-        Ok(())
-    }
-
-    /// Run first pass of two-pass encoding (analysis only).
-    ///
-    /// Analyzes the video to determine optimal bit allocation.
-    /// Output goes to /dev/null - we only care about the log files.
-    /// Uses `spawn_ffmpeg_streaming()` for real-time progress reporting.
-    ///
-    /// Reference: https://gist.github.com/hsab/7c9219c4d57e13a42e06bf1cab90cd44
-    fn run_two_pass_first(
-        &self,
-        input: &Path,
-        rung: VideoRung,
-        source_fps: f64,
-        config: &VideoCompressionConfig,
-        passlogfile: &Path,
-        duration_secs: f64,
-        on_progress: &dyn Fn(f64),
-        registry: Option<&ChildProcessRegistry>,
-        cancel_flag: Option<&AtomicBool>,
-    ) -> Result<(), String> {
-        let input_str = input.to_str().ok_or("Invalid input path")?;
-        let passlogfile_str = passlogfile.to_str().ok_or("Invalid passlogfile path")?;
-
-        let null_output = if cfg!(target_os = "windows") {
-            "NUL"
-        } else {
-            "/dev/null"
-        };
-
-        let args =
-            build_two_pass_first_args(input_str, rung, source_fps, config, passlogfile_str, null_output);
+        );
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
 
-        let output = spawn_ffmpeg_streaming(
+        let out = spawn_ffmpeg_streaming(
             Path::new(&self.bin_path),
             &arg_refs,
-            duration_secs,
+            probe.duration_secs,
             on_progress,
             registry,
             cancel_flag,
         )?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("Two-pass first pass failed: {}", strip_ffmpeg_progress(&stderr)));
-        }
-
-        Ok(())
-    }
-
-    /// Run second pass of two-pass encoding (actual encode).
-    ///
-    /// Uses statistics from pass 1 to allocate bits optimally.
-    /// Uses `spawn_ffmpeg_streaming()` for real-time progress reporting.
-    ///
-    /// Reference: https://gist.github.com/hsab/7c9219c4d57e13a42e06bf1cab90cd44
-    fn run_two_pass_second(
-        &self,
-        input: &Path,
-        output: &Path,
-        rung: VideoRung,
-        source_fps: f64,
-        config: &VideoCompressionConfig,
-        passlogfile: &Path,
-        duration_secs: f64,
-        on_progress: &dyn Fn(f64),
-        registry: Option<&ChildProcessRegistry>,
-        cancel_flag: Option<&AtomicBool>,
-    ) -> Result<(), String> {
-        let input_str = input.to_str().ok_or("Invalid input path")?;
-        let output_str = output.to_str().ok_or("Invalid output path")?;
-        let passlogfile_str = passlogfile.to_str().ok_or("Invalid passlogfile path")?;
-
-        let args =
-            build_two_pass_second_args(input_str, output_str, rung, source_fps, config, passlogfile_str);
-        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-
-        let output = spawn_ffmpeg_streaming(
-            Path::new(&self.bin_path),
-            &arg_refs,
-            duration_secs,
-            on_progress,
-            registry,
-            cancel_flag,
-        )?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("Two-pass second pass failed: {}", strip_ffmpeg_progress(&stderr)));
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            return Err(format!("Video encode failed: {}", strip_ffmpeg_progress(&stderr)));
         }
 
         Ok(())
@@ -1486,7 +1312,11 @@ impl FFmpegManager {
                 // Every stream, not just `v:0`: whether the source HAS audio
                 // decides the ladder's `-map a:0`, and mapping an audio stream
                 // that is not there fails the whole encode.
-                "-show_entries", "stream=codec_type,codec_name,width,r_frame_rate,bit_rate",
+                "-show_entries", "stream=codec_type,codec_name,pix_fmt,width,height,sample_aspect_ratio,r_frame_rate,bit_rate",
+                // Display-matrix rotation (phone clips): ffmpeg turns the
+                // picture upright when it decodes, so the shape to plan
+                // against is the rotated one.
+                "-show_entries", "stream_side_data=rotation",
                 "-show_entries", "format=duration,bit_rate",
                 // Section wrappers stay ON: `bit_rate` appears in BOTH the
                 // stream and the format section, and they mean different
@@ -1536,7 +1366,21 @@ impl FFmpegManager {
             .filter(|d| *d > 0.0)
             .ok_or_else(|| format!("ffprobe reported no duration for {}", input.display()))?;
 
-        let width = stream("width").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+        let (mut width, mut height) = (
+            stream("width").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0),
+            stream("height").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0),
+        );
+        let sar = parse_sar(stream("sample_aspect_ratio").as_deref());
+        let quarter_turn = is_quarter_turn(stream("rotation").as_deref());
+        let sar = if quarter_turn { 1.0 / sar } else { sar };
+        if quarter_turn {
+            std::mem::swap(&mut width, &mut height);
+        }
+        // A video stream with no size cannot be planned or scaled: fitting a
+        // zero side would "succeed" on a 2-pixel-tall frame.
+        if width == 0 || height == 0 {
+            return Err(format!("ffprobe reported no video size for {}", input.display()));
+        }
 
         // "30000/1001" — a rational, not a decimal.
         let fps = stream("r_frame_rate")
@@ -1552,30 +1396,34 @@ impl FFmpegManager {
         // the safe direction — the other error ships an unstreamable video.
         // `> 0.0`, mirroring the `duration_secs` guard above: a zero or
         // negative figure is not a real bitrate, and treating it as one would
-        // clamp every rung to nothing. The fallback to `total_kbps` still
-        // applies when this filters a bogus `video_kbps` out.
+        // keep any web-playable source.
         let total_kbps = format("bit_rate").and_then(kbps).filter(|v| *v > 0.0);
-
-        // Missing for a container whose video stream states no per-stream
-        // figure — mkv/webm commonly don't. The HLS ladder falls back to
-        // `total_kbps` when this is `None`.
-        let video_kbps = stream("bit_rate").and_then(kbps).filter(|v| *v > 0.0);
 
         let container_ok = input
             .extension()
             .and_then(|e| e.to_str())
             .is_some_and(|e| matches!(e.to_lowercase().as_str(), "mp4" | "m4v" | "webm"));
-        let codec_ok = stream("codec_name")
-            .is_some_and(|c| matches!(c.as_str(), "h264" | "vp8" | "vp9" | "av1"));
+        let audio_codecs: Vec<String> = blocks
+            .iter()
+            .filter(|b| is_kind(b, "audio"))
+            .filter_map(|b| field_in(b, "codec_name"))
+            .collect();
+        let web_playable = is_web_playable(
+            container_ok,
+            stream("codec_name").as_deref(),
+            stream("pix_fmt").as_deref(),
+            &audio_codecs,
+        );
 
         Ok(SourceVideo {
             duration_secs,
             width,
+            height,
+            sar,
             fps,
             total_kbps,
-            video_kbps,
             has_audio,
-            web_playable: container_ok && codec_ok,
+            web_playable,
         })
     }
 
@@ -1677,6 +1525,49 @@ impl FFmpegManager {
         registry: Option<&ChildProcessRegistry>,
         cancel_flag: Option<&AtomicBool>,
     ) -> Result<bool, String> {
+        self.extract_still(video, output, "scale=800:-1", &[], registry, cancel_flag)
+    }
+
+    /// Generates a hero's poster: the thumbnail's frame (same
+    /// [`thumbnail_seek_secs`]) at the video's display size fitted into the
+    /// top ladder rung's box ([`poster_frame`]), square pixels, JPEG at
+    /// [`POSTER_JPEG_QUALITY`]. Returns as [`Self::generate_thumbnail`] does.
+    pub fn generate_poster(
+        &self,
+        video: &Path,
+        output: &Path,
+        registry: Option<&ChildProcessRegistry>,
+        cancel_flag: Option<&AtomicBool>,
+    ) -> Result<bool, String> {
+        // Cancelled before the probe, so a stale run does not spawn ffprobe.
+        if cancel_flag.map_or(false, |f| f.load(Ordering::SeqCst)) {
+            return Err("Cancelled".to_string());
+        }
+        let (w, h) = poster_frame(self.probe_source(video)?.display());
+        let vf = format!("scale={w}:{h},setsar=1");
+        self.extract_still(
+            video,
+            output,
+            &vf,
+            &["-q:v", POSTER_JPEG_QUALITY],
+            registry,
+            cancel_flag,
+        )
+    }
+
+    /// One JPEG still of `video` at [`thumbnail_seek_secs`] of its duration,
+    /// through the filter `vf`; `quality` is extra encoder arguments. The one
+    /// owner of the seek, the pixel format and the 0-byte check, so a still
+    /// that is not the thumbnail cannot drift from it.
+    fn extract_still(
+        &self,
+        video: &Path,
+        output: &Path,
+        vf: &str,
+        quality: &[&str],
+        registry: Option<&ChildProcessRegistry>,
+        cancel_flag: Option<&AtomicBool>,
+    ) -> Result<bool, String> {
         // Check cancellation before starting
         if cancel_flag.map_or(false, |f| f.load(Ordering::SeqCst)) {
             return Err("Cancelled".to_string());
@@ -1696,15 +1587,9 @@ impl FFmpegManager {
         let duration = self.get_duration(video).unwrap_or(0.0);
         let seek = format!("{:.3}", thumbnail_seek_secs(duration));
 
-        let args: Vec<&str> = vec![
-            "-i",
-            video_str,
-            "-ss",
-            &seek,
-            "-vframes",
-            "1",
-            "-vf",
-            "scale=800:-1",
+        let mut args: Vec<&str> = vec!["-i", video_str, "-ss", &seek, "-vframes", "1", "-vf", vf];
+        args.extend_from_slice(quality);
+        args.extend_from_slice(&[
             // JPEG is full-range YUV; without this the mjpeg encoder warns
             // "Non full-range YUV is non-standard" and some builds refuse a
             // testsrc-style source outright under strict compliance.
@@ -1712,7 +1597,7 @@ impl FFmpegManager {
             "yuvj420p",
             "-y",
             output_str,
-        ];
+        ]);
 
         let result = spawn_ffmpeg_tracked(
             Path::new(&self.bin_path),
@@ -1768,13 +1653,7 @@ pub(crate) fn real_ffmpeg() -> Option<String> {
     out.status.success().then(|| "ffmpeg".to_string())
 }
 #[cfg(test)]
-/// Synthesise a short test video (with audio) at `size` (e.g. `"320x240"`).
-///
-/// Encoded with no explicit `-b:v`: a busy `testsrc` pattern at `-preset
-/// ultrafast` measures only a few hundred kbps (well under
-/// `asset_paths::VIDEO_LADDER`'s higher rungs), which is fine for a test that
-/// doesn't care about the source's own bitrate — but see
-/// [`synthesise_high_bitrate`] for one that does.
+/// Synthesise a 4-second test video (with audio) at `size` (e.g. `"320x240"`).
 pub(crate) fn synthesise(bin: &str, dest: &Path, size: &str) -> bool {
     std::process::Command::new(bin)
         .args([
@@ -1790,38 +1669,10 @@ pub(crate) fn synthesise(bin: &str, dest: &Path, size: &str) -> bool {
         .unwrap_or(false)
 }
 #[cfg(test)]
-/// Synthesise a short test video at `size` with its video stream forced,
-/// via a CBR-style VBV cap (`nal-hrd=cbr`), to a bitrate comfortably above
-/// `asset_paths::VIDEO_LADDER`'s own top rung — measured at ~7.8 Mbps for a
-/// 1280x720 clip. A plain `-b:v` ceiling is not enough: measured, a simple
-/// `testsrc` pattern under `-preset ultrafast` undershoots even an 8 Mbps
-/// ceiling by 5-6x, because the content is not complex enough to need it.
-/// For a test exercising the per-file BYTE budget in isolation, without also
-/// exercising the source's own bitrate clamp, [`synthesise`]'s default
-/// (unforced) bitrate is too low — it sits under several of the table's own
-/// rungs and would clamp them.
-pub(crate) fn synthesise_high_bitrate(bin: &str, dest: &Path, size: &str, duration_secs: u32) -> bool {
-    let d = duration_secs.to_string();
-    std::process::Command::new(bin)
-        .args([
-            "-hide_banner", "-loglevel", "error", "-y",
-            "-f", "lavfi", "-i", &format!("testsrc=size={size}:rate=30:duration={d}"),
-            "-f", "lavfi", "-i", &format!("sine=frequency=440:duration={d}"),
-            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-            "-b:v", "8000k", "-minrate", "8000k", "-maxrate", "8000k", "-bufsize", "8000k",
-            "-x264-params", "nal-hrd=cbr:force-cfr=1",
-            "-c:a", "aac", "-shortest",
-        ])
-        .arg(dest)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-#[cfg(test)]
 /// Synthesise a short test video with NO audio stream at all — distinct from
 /// a quiet one: [`probe_source`]'s `has_audio` is a stream-presence check,
-/// not a loudness measurement, and this is the only one of the three
-/// synthesisers that leaves it false.
+/// not a loudness measurement, and this is the only synthesiser that leaves
+/// it false.
 pub(crate) fn synthesise_silent(bin: &str, dest: &Path, size: &str) -> bool {
     std::process::Command::new(bin)
         .args([

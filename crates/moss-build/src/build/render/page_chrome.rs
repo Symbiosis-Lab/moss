@@ -4,7 +4,9 @@ use crate::build::assets::paths::PathResolver;
 use crate::build::components::nav::{NavigationBuilder, compute_breadcrumb_segments};
 use crate::build::emit::scripts::ScriptAssets;
 use crate::build::page::layout::LayoutConfig;
+use crate::build::page::meta::escape_html_attr;
 use crate::build::page::shell::ShellVars;
+use crate::build::served_path::served_address;
 use crate::build::types::ParsedDocument;
 use crate::i18n::Language;
 use crate::types::content::ProjectStructure;
@@ -34,6 +36,10 @@ pub(super) struct PageChromeContext<'a, 'd> {
     pub show_rss_in_footer: bool,
     pub emit_source_lines: bool,
     pub has_sidebar_layout: bool,
+    /// The home page's `breadcrumb:` value, read once per build.
+    pub home_breadcrumb: Option<moss_core::frontmatter_typed::BreadcrumbSetting>,
+    /// The build's media lookup, for the logo's intrinsic size.
+    pub media_lookup: &'a crate::build::media::dimensions::MediaDimensionLookup,
 }
 
 impl PageChromeContext<'_, '_> {
@@ -75,7 +81,8 @@ impl PageChromeContext<'_, '_> {
         let mut nav = NavigationBuilder::new(
             self.documents, &site_title, doc.map(|d| d.url_path.as_str()),
             if generated { ui_lang } else { self.site_lang }, self.project.has_content_folders,
-        ).with_search(self.layout.assets.search).with_header_mode(self.layout.header);
+        ).with_search(self.layout.assets.search).with_header_mode(self.layout.header).with_term_nav(self.layout.term_nav.clone())
+            .with_asset_snapshot(self.media_lookup.asset_snapshot());
         if !generated {
             nav = nav.with_source_fm(self.emit_source_lines, self.emit_source_lines && logo_is_own_field);
         }
@@ -107,6 +114,16 @@ impl PageChromeContext<'_, '_> {
         let mut body_attrs = String::new();
         if self.emit_source_lines { body_attrs.push_str(" data-moss-preview"); }
         if is_homepage { body_attrs.push_str(r#" data-page="home""#); }
+        // The page's published address, spelled as the sitemap and links spell
+        // it. A page with no document is the synthetic homepage.
+        let address = served_address(doc.map(|d| d.url_path.as_str()).unwrap_or("index.html"));
+        body_attrs.push_str(&format!(r#" data-path="{}""#, escape_html_attr(&address)));
+        if let Some(section) = doc.and_then(|d| d.section.as_ref()) {
+            if !section.segment.is_empty() {
+                body_attrs.push_str(&format!(r#" data-section="{}""#, escape_html_attr(&section.segment)));
+            }
+            body_attrs.push_str(&format!(r#" style="{}""#, escape_html_attr(&crate::build::scan::section_text::section_style(section))));
+        }
         let homepage = self.project.homepage_file.as_ref()
             .and_then(|_| self.documents.iter().find(|d| d.url_path == "index.html"));
         // Generated indexes have always read root analytics even when the

@@ -14,7 +14,7 @@
  * path text only, not the surrounding `(…)`.
  * For wikilink embeds the `from`/`to` span is the WHOLE node — i.e.
  * `![[file.png]]` in its entirety. (A `WikilinkTarget` child exists, but
- * narrowing to it would shrink every hover/lint/dim span; deliberately not
+ * narrowing to it would shrink every hover and problem span; deliberately not
  * done here.)
  *
  * This module is PURE — it only reads `EditorState` and returns data.
@@ -202,7 +202,7 @@ export function embedParts(node: EmbedNodeRef, doc: DocSlice): EmbedParts | null
     syntax: 'wikilink-embed',
     target,
     // The WHOLE node, not the WikilinkTarget child: narrowing would shrink
-    // every hover/lint/unresolved-dim span this feeds.
+    // every hover and problem span this feeds.
     targetFrom: node.from,
     targetTo: node.to,
     // A PRESENT pothole wins even when empty — `![[a.png|]]` has alt ''.

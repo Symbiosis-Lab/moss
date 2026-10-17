@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use super::{
-    expand_with_home_carry, map_path, walk_all_files, AppliedEdit, PlannedEdit, RenameApplyResult, RenamePlan,
+    map_path, moved_files, walk_all_files, MovedFiles, AppliedEdit, PlannedEdit, PlannedMove, RenameApplyResult, RenamePlan,
     ResolvedMove, SkippedFile, UndoResult,
 };
 use crate::editor::ref_rewrite::{apply_edits, Edit};
@@ -28,7 +28,28 @@ pub fn apply_planned_moves(project_root: &Path, plan: &RenamePlan) -> Result<Ren
     // Not the temp-file-and-rename helper: that replaces the file, and a page
     // in a synced folder must keep its identity, mode and extended attributes.
     // allow:raw_write the vault's own .md source, rewritten in place after a rename -- not build output
-    apply_planned_moves_with(project_root, plan, &|path, text| std::fs::write(path, text))
+    let applied = apply_planned_moves_with(project_root, plan, &|path, text| std::fs::write(path, text))?;
+        carry_folder_decisions(project_root, applied.moves.iter().map(|m| (m, false)));
+    Ok(applied)
+}
+
+/// A renamed folder keeps what the author decided about showing its files as
+/// pages (`[derive]` in `config.toml`, keyed by folder path). `reversed` reads
+/// each move backwards, for an undo. Only folders can be keys, so a batch of
+/// file renames never touches the config. A failure is logged, not raised: the
+/// rename itself has happened.
+fn carry_folder_decisions<'a>(project_root: &Path, moves: impl Iterator<Item = (&'a PlannedMove, bool)>) {
+    let pairs: Vec<(String, String)> = moves
+        .filter(|(m, _)| m.is_dir)
+        .map(|(m, reversed)| if reversed { (m.new_path.clone(), m.old_path.clone()) } else { (m.old_path.clone(), m.new_path.clone()) })
+        .collect();
+    if pairs.is_empty() {
+        return;
+    }
+    let site = crate::moss_paths::MossPaths::new(project_root);
+    if let Err(e) = crate::vault::derive_folders::heal_renamed_folders(&site, &pairs) {
+        log::warn!(target: "derive", "could not follow a renamed folder in config.toml: {e}");
+    }
 }
 
 /// [`apply_planned_moves`] with the page writer passed in.
@@ -196,7 +217,31 @@ fn roll_back(canonical_root: &Path, applied: &RenameApplyResult, failure: &Write
 /// rewrite escalated a bare reference to an explicit path.
 pub fn undo_applied(project_root: &Path, applied: &RenameApplyResult) -> Result<UndoResult, String> {
     // allow:raw_write undoing a rename's own reference rewrite -- not build output
-    undo_applied_with(project_root, applied, &|path, text| std::fs::write(path, text))
+    let undone = undo_applied_with(project_root, applied, &|path, text| std::fs::write(path, text))?;
+    carry_folder_decisions(project_root, applied.moves.iter().rev().map(|m| (m, true)));
+    Ok(undone)
+}
+
+/// The files [`undo_applied`] will move, as `(current, restored)` root-relative
+/// paths, worked out before anything is moved. A directory move lists every
+/// file under it, and a self-named home page appears under the name it will
+/// get back.
+pub fn undo_file_moves(project_root: &Path, applied: &RenameApplyResult) -> Result<Vec<(String, String)>, String> {
+    let canonical_root =
+        std::fs::canonicalize(project_root).map_err(|e| format!("Cannot canonicalize root: {}", e))?;
+    Ok(reverse_moved_files(&canonical_root, applied).pairs)
+}
+
+/// The reverse move-set, built from the CURRENT (post-apply, pre-undo) file
+/// list so the folder-note carry prediction sees the state the forward apply
+/// actually left behind.
+fn reverse_moved_files(canonical_root: &Path, applied: &RenameApplyResult) -> MovedFiles {
+    let reversed_top: Vec<ResolvedMove> = applied
+        .moves
+        .iter()
+        .map(|m| ResolvedMove { old: m.new_path.clone(), new: m.old_path.clone(), is_dir: m.is_dir })
+        .collect();
+    moved_files(&reversed_top, &walk_all_files(canonical_root))
 }
 
 /// [`undo_applied`] with the page writer passed in.
@@ -207,17 +252,7 @@ fn undo_applied_with(
 ) -> Result<UndoResult, String> {
     let canonical_root =
         std::fs::canonicalize(project_root).map_err(|e| format!("Cannot canonicalize root: {}", e))?;
-
-    // The reverse move-set, built from the CURRENT (post-apply, pre-undo)
-    // file list so the folder-note carry prediction sees the state the
-    // forward apply actually left behind.
-    let current_files = walk_all_files(&canonical_root);
-    let reversed_top: Vec<ResolvedMove> = applied
-        .moves
-        .iter()
-        .map(|m| ResolvedMove { old: m.new_path.clone(), new: m.old_path.clone(), is_dir: m.is_dir })
-        .collect();
-    let expanded_reverse = expand_with_home_carry(&reversed_top, &current_files);
+    let MovedFiles { expanded: expanded_reverse, .. } = reverse_moved_files(&canonical_root, applied);
 
     for mv in applied.moves.iter().rev() {
         let cur_abs = canonical_root.join(&mv.new_path);

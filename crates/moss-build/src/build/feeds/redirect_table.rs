@@ -20,13 +20,18 @@
 //!
 //! A hand-declared entry is checked and reported on; the other two sources are
 //! the build's own record and are trusted, so they skip quietly when they
-//! would sit on a real output.
+//! would sit on a real output. A trusted entry is also re-targeted, whichever
+//! of the two it comes from: when its target sits in a language folder
+//! (`/zh-hans/new/`) and this build no longer serves it, the entry goes to the
+//! default language's page at the same place (`/new/`) if that one is served.
+//! The recorded history is not changed, so a translation published there again
+//! is pointed at again.
 
 use crate::build::cli_output::log_warn_problem;
 use crate::build::manifest::PendingManifest;
 use crate::build::served_path::ServedPath;
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// Paths the generator used to write and must keep answering, old address to
@@ -150,16 +155,43 @@ impl Target {
 pub(crate) struct Probe<'a> {
     pub pending: &'a PendingManifest,
     pub source_root: &'a Path,
+    /// Pages the background phase writes after this table is planned, at
+    /// addresses the scan already fixes (static `.html` pages, notebook viewers).
+    pub written_later: &'a BTreeSet<String>,
 }
 
 impl Probe<'_> {
-    /// This build writes it, or the site folder provides it (the folder's own
-    /// files are copied in after this phase, so the folder is asked directly).
-    /// The stage is not asked: it keeps what the previous build left there,
-    /// including this table's own copies.
+    /// The address is taken. Asked after every page this build registers
+    /// before its background phase: rendered, generated (folder indexes, media
+    /// collections, subscribe pages) and carried forward from the last build
+    /// because the source is still in the cloud. Pages the background phase
+    /// writes come from `written_later`, and the folder's other files, copied
+    /// in as they are, from the site folder itself. The stage is not asked: it
+    /// keeps what the previous build left there, including this table's own
+    /// copies.
     fn serves(&self, a: &Addr) -> bool {
         self.pending.is_registered(a.key())
+            || self.written_later.contains(a.key())
             || [a.key(), a.raw.as_str()].iter().any(|rel| self.source_root.join(rel).is_file())
+    }
+
+    /// Where a target stands. A target inside a language folder that this
+    /// build does not serve is answered with the default language's address at
+    /// the same place, when that one is served: the page the translation stood
+    /// in for. Only an address this build serves itself counts, never another
+    /// entry's stub.
+    fn locate(&self, t: &Addr) -> Found {
+        if self.serves(t) {
+            return Found::Served;
+        }
+        // The written form, which keeps a page's trailing slash, so `zh-hans`
+        // and `zh-hans/` are both the language's home.
+        let written = t.literal.trim_start_matches('/');
+        let twin = moss_core::home::lang_tree_prefix(written).and_then(|lang| Addr::parse(&written[lang.len()..]).ok());
+        match twin {
+            Some(twin) if self.serves(&twin) => Found::DefaultLanguage(twin),
+            _ => Found::Missing,
+        }
     }
 
     /// Where the bytes of a file target are: the stage if this build wrote
@@ -175,6 +207,13 @@ impl Probe<'_> {
             .find(|p| p.is_file())
             .map(CopySource::Folder)
     }
+}
+
+enum Found {
+    Served,
+    /// Not served, but the default language's page at the same place is.
+    DefaultLanguage(Addr),
+    Missing,
 }
 
 pub(crate) enum CopySource {
@@ -233,19 +272,25 @@ pub(crate) fn plan(candidates: Vec<Candidate>, probe: &Probe) -> Vec<Planned> {
             }
             continue;
         }
-        if c.declared {
-            let refusal = match &to {
-                Target::Internal(t, _) if t.key() == from.key() => Some("it points at itself".to_string()),
-                Target::Internal(t, _) if !probe.serves(t) => {
-                    Some(format!("'{}' is not an address this site serves", t.served()))
+        // A hand-declared entry must name an address this site serves. An
+        // entry from the build's own record is kept whatever its target, and
+        // goes to the default language's page when its translation is gone.
+        let to = match to {
+            Target::Internal(t, suffix) => match (c.declared, probe.locate(&t)) {
+                (true, _) if t.key() == from.key() => {
+                    log_warn_problem!("redirect '{}' skipped: it points at itself", from.served());
+                    continue;
                 }
-                _ => None,
-            };
-            if let Some(why) = refusal {
-                log_warn_problem!("redirect '{}' skipped: {why}", from.served());
-                continue;
-            }
-        }
+                (true, Found::Served) => Target::Internal(t, suffix),
+                (true, _) => {
+                    log_warn_problem!("redirect '{}' skipped: '{}' is not an address this site serves", from.served(), t.served());
+                    continue;
+                }
+                (false, Found::DefaultLanguage(twin)) => Target::Internal(twin, suffix),
+                (false, _) => Target::Internal(t, suffix),
+            },
+            external => external,
+        };
         let form = match (&from.kind, &to) {
             // A stub at the rewritten path would leave the real old address dead
             // while looking as if the redirect worked.

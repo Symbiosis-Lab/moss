@@ -46,12 +46,13 @@ import {
   resizeCamera,
   screenScale,
   tileDetailMaxZoom,
+  worldCleanMaxZoom,
   worldToScreen,
 } from "./camera";
 import { CardRow, worksForRow } from "./cards";
 import { ScopeChip } from "./chip";
 import { LabelLayer } from "./labels";
-import { MarkerLayer, pointsForWorks, workIdOf } from "./markers";
+import { MarkerLayer, pointsForWorks, workIdOf, worldCentroid } from "./markers";
 import { project, WORLD_HEIGHT, WORLD_WIDTH } from "./projection";
 import { rasterizeOrFallback, splitMapSvg, WORLD_RASTER_ZOOM_CAP, type Surface } from "./raster";
 import { inScope } from "./scope";
@@ -59,7 +60,7 @@ import { copyFor } from "./strings";
 import { attachGestures } from "./gestures";
 import { TileLayer } from "./tiles";
 import * as urlState from "./state";
-import { hasPoint, type Camera, type LabelsData, type PlacesData, type Place, type Point, type Rect, type Scope, type Viewport } from "./types";
+import { hasPoint, type Camera, type EdgeFade, type ExplorerFit, type LabelsData, type PlacesData, type Place, type Point, type Rect, type Scope, type Viewport } from "./types";
 
 /** Device pixel ratio honoured up to this for the world raster — a 3x phone gains nothing from tripling an already roomy budget. */
 const WORLD_RASTER_DPR_CAP = 2;
@@ -101,11 +102,17 @@ export interface MountOptions {
   /** The tile grid's size in cells (`tiles.json`'s own `columns` and `rows`) — read off the build so the draw order follows the grid the emitter cut. */
   tileColumns: number;
   tileRows: number;
+  /** How places are fitted and how a tile fades at an outer edge (`tiles.json`'s `fit` and `edgeFade`): the build chose the opening view's cells for these. */
+  fit: ExplorerFit;
+  edgeFade: EdgeFade;
   places: PlacesData;
   /** `labels.json`'s own parsed body — `null`/`undefined` when the handshake carried no `data-labels` or that fetch failed; the label layer then simply never places anything (progressive enhancement, same posture as a missing locator). */
   labels?: LabelsData | null;
   lang: string;
 }
+
+/** A camera to show, and the deeper one it holds short of until the tiles that view needs have decoded. */
+type Fit = { camera: Camera; deeper?: Camera };
 
 export interface PlacesMapController {
   /** The scope seam: `all` or `place` this landing, the breadcrumb chip's own dig-down included. Re-fits the camera and re-renders. */
@@ -300,6 +307,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     origins: options.tileOrigins,
     columns: options.tileColumns,
     rows: options.tileRows,
+    edgeFade: options.edgeFade,
   });
   const initial = urlState.readUrlState();
 
@@ -322,10 +330,16 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     return { width: rect.width, height: rect.height };
   }
 
-  function currentMaxZoom(viewport: Viewport): number {
-    return tileLayer.hasVisibleTiles(camera, viewport)
-      ? tileDetailMaxZoom(viewport)
-      : detailMaxZoom(viewport);
+  /** Zooming in past the world layer's clean depth needs a regional cell under the zoom's anchor (the cursor, the pinch centre, or the view's centre); anywhere else the world layer alone would carry the deeper frame. */
+  function currentMaxZoom(viewport: Viewport, anchor: Point = camera): number {
+    return tileLayer.hasCellAt(anchor) ? tileDetailMaxZoom(viewport) : worldCleanMaxZoom(viewport);
+  }
+
+  /** `fit` at `deepest` when that frame can be drawn without enlarging the world layer past its clean depth (it is no deeper, or regional cells cover all of it), and the same fit at the clean depth. */
+  function fitCleanly(fit: (maxZoom: number) => Camera, deepest: number, viewport: Viewport): { deep: Camera | null; clean: Camera } {
+    const deep = fit(deepest);
+    if (deep.zoom <= worldCleanMaxZoom(viewport) + 1e-9) return { deep, clean: deep };
+    return { deep: tileLayer.coversView(deep, viewport) ? deep : null, clean: fit(worldCleanMaxZoom(viewport)) };
   }
 
   function announce(message: string): void {
@@ -337,12 +351,13 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     {
       fitPoints(points) {
         const viewport = getViewport();
-        camera = fitPoints(points, viewport, currentMaxZoom(viewport), freeFrame(viewport));
+        camera = fitPointsCleanly(points, viewport, currentMaxZoom(viewport, worldCentroid(points)), freeFrame(viewport));
         applyCamera(true);
       },
       focusPoint(point, zoom) {
         const viewport = getViewport();
-        camera = clampCamera({ x: point.x, y: point.y, zoom }, viewport, currentMaxZoom(viewport));
+        const { deep, clean } = fitCleanly((maxZoom) => clampCamera({ ...point, zoom }, viewport, maxZoom), currentMaxZoom(viewport, point), viewport);
+        camera = deep ?? clean;
         applyCamera(true);
       },
       selectWork,
@@ -351,7 +366,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
         applyCamera(true);
       },
       announce,
-      maxZoom: () => currentMaxZoom(getViewport()),
+      maxZoom: (anchor) => currentMaxZoom(getViewport(), anchor),
     },
     strings,
     options.lang,
@@ -429,15 +444,19 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   }
 
   /** The camera the current `scope` fits to, within `frame` — shared by the initial mount, the re-fit once the card row has real content (both below), and `setScope`'s own fit for every later scope change. An `article` scope (the embed/full-page article locator) fits that one work's own places with `fitWork` — the same REGIONAL framing a marker or card click on that work lands at (`selectWork`, below), never the world's own detail ceiling. A plain `all` scope with a work already selected (the full-page `?article=` locator, which never sets a scope of its own — `state.ts`'s own doc: article is a selection, not a scope) fits that selection the same way, so the only page that ever reaches this branch with a selection still opens framed on it. */
-  function fitForScope(viewport: Viewport, frame?: Rect): Camera {
-    if (scope.kind === "article" || scope.kind !== "place") {
+  function fitForScope(viewport: Viewport, frame?: Rect): Fit {
+    if (scope.kind !== "place") {
       const points = workPoints(scope.kind === "article" ? scope.id : selectedId);
-      return points.length ? fitWorkCamera(points, viewport, frame && workFrame(viewport)) : fitAllCamera(viewport, frame);
+      return points.length ? { camera: fitWorkCamera(points, viewport, frame && workFrame(viewport)) } : fitAllCamera(viewport, frame);
     }
     const points = pointsForWorks(options.places.works, options.places.places, scope);
-    return points.length
-      ? fitPoints(points, viewport, detailMaxZoom(viewport), frame)
-      : fitAllCamera(viewport, frame);
+    // `fitPoints` takes a lone place to whatever ceiling it gets, so a place scope keeps the world's detail ceiling where a work's regional span may use the tile one.
+    return points.length ? { camera: fitPointsCleanly(points, viewport, detailMaxZoom(viewport), frame) } : fitAllCamera(viewport, frame);
+  }
+
+  function fitPointsCleanly(points: Point[], viewport: Viewport, deepest: number, frame?: Rect): Camera {
+    const { deep, clean } = fitCleanly((maxZoom) => fitPoints(points, viewport, maxZoom, frame), deepest, viewport);
+    return deep ?? clean;
   }
 
   /** The collapsed embed is too small to give up any of itself to overlays, so a work's fit uses the whole frame there. */
@@ -445,27 +464,46 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     return viewportEl.closest('[data-moss-places-embed-mode="collapsed"]') ? undefined : freeFrame(viewport);
   }
 
-  /** A work's fit may go as deep as the tile ceiling only where tiles cover the fit's own target; elsewhere it stops at the world's detail ceiling, since deeper would only upscale the world image. */
+  /** A work's fit goes as deep as the tile ceiling only where tiles cover its whole frame; elsewhere it stops at the world layer's clean depth. */
   function fitWorkCamera(points: Point[], viewport: Viewport, frame: Rect | undefined): Camera {
-    const deep = fitWork(points, viewport, frame, tileDetailMaxZoom(viewport));
-    return tileLayer.hasVisibleTiles(deep, viewport) ? deep : fitWork(points, viewport, frame, detailMaxZoom(viewport));
+    const { deep, clean } = fitCleanly((maxZoom) => fitWork(points, viewport, options.fit, frame, maxZoom), tileDetailMaxZoom(viewport), viewport);
+    return deep ?? clean;
   }
 
-  /** Set once the tiles under the opening view have decoded (or never, if they fail): until then the opening view stays within the world layer's own resolution, since past it the world image is a stretched, low-poly picture. */
-  let openingTilesReady = false;
-
-  /** The opening and reset view of every place: fitted to their bounds, so places in one region open on that region. Places spread wider than the viewport fall back to the cover view panned to their densest window. */
-  function fitAllCamera(viewport: Viewport, frame?: Rect): Camera {
+  /** The opening and reset view of every place: fitted to their bounds, so places in one region open on that region. Places spread wider than the viewport, or whose fitted frame reaches past the regional tiles, fall back to the cover view panned to their densest window. Until the deeper fit's tiles have decoded, the view holds at the world layer's clean depth and names the deeper camera as `deeper`. */
+  function fitAllCamera(viewport: Viewport, frame?: Rect): Fit {
     const points = allPoints();
     // One frame for both cameras, so comparing their zooms compares like with like (the collapsed embed gives up no part of itself to overlays).
     const fitFrame = frame && workFrame(viewport);
     const cover = coverCamera(points, viewport, fitFrame);
-    if (!points.length) return cover;
-    // Past the world layer's ceiling only once tiles can draw it, and never past the depth where the bundled data still looks clean.
-    const world = fitWork(points, viewport, fitFrame, detailMaxZoom(viewport));
-    const deep = openingTilesReady ? fitWork(points, viewport, fitFrame, openingMaxZoom(viewport)) : world;
-    const fitted = tileLayer.hasVisibleTiles(deep, viewport) ? deep : world;
-    return fitted.zoom > cover.zoom ? fitted : cover;
+    if (!points.length) return { camera: cover };
+    const { deep, clean } = fitCleanly((maxZoom) => fitWork(points, viewport, options.fit, fitFrame, maxZoom), openingMaxZoom(viewport, options.fit.openingDegreesPerPx), viewport);
+    if (!deep) return { camera: cover };
+    const shown = deep === clean || tileLayer.hasOpaqueViewportCoverage(deep, viewport) ? deep : clean;
+    const opened = shown.zoom > cover.zoom ? shown : cover;
+    return deep.zoom > opened.zoom ? { camera: opened, deeper: deep } : { camera: opened };
+  }
+
+  /** The view held short of a deeper fit; the tile layer loads the deeper fit's cells, hidden, meanwhile. */
+  let held: { camera: Camera; deeper: Camera } | null = null;
+
+  /** Shows `fit`. A held view moves to its deeper camera once the tiles that view needs have decoded, unless the reader moved or the frame resized meanwhile; a failure keeps the held view. */
+  function showFit(fit: Fit): void {
+    camera = fit.camera;
+    const hold = fit.deeper ? { camera: fit.camera, deeper: fit.deeper } : null;
+    held = hold;
+    applyCamera(true);
+    if (!hold) return;
+    const heldViewport = getViewport();
+    void (async () => {
+      let result = await tileLayer.waitForVisibleTiles();
+      while (result === "superseded" && held === hold) result = await tileLayer.waitForVisibleTiles();
+      if (held !== hold) return;
+      const { width, height } = getViewport();
+      if (result === "ready" && width === heldViewport.width && height === heldViewport.height) return showFit({ camera: hold.deeper });
+      held = null;
+      applyCamera(true);
+    })();
   }
 
   function selectWork(id: string | null): void {
@@ -496,8 +534,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     markerLayer.closeRing();
     urlState.writeScope(next);
     const viewport = getViewport();
-    camera = restored ?? fitForScope(viewport, freeFrame(viewport));
-    applyCamera(true);
+    showFit(restored ? { camera: restored } : fitForScope(viewport, freeFrame(viewport)));
   }
 
   // The chip's own hover/focus highlight: exempt one child place's works
@@ -531,20 +568,11 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     options.lang,
   );
 
-  // The saved camera (`?p=patterson&z&x&y`) always wins over a scope fit —
-  // a reader who panned/zoomed and copied the link gets exactly that view
-  // back, not the scope's own re-fit. Only a `place` scope with no saved
-  // camera fits to its own points; `all` and a missing/malformed save both
-  // fall back to the plain cover camera. The fit itself uses the plain
-  // world ceiling (never `currentMaxZoom`, which reads `camera` — not yet
-  // initialized here): no tile has had a chance to matter before the first
-  // real `applyCamera(true)` call right below re-clamps against it.
-  // No `frame` here: the card row has not rendered anything yet (the first
-  // `applyCamera(true)` call, at the bottom of this function, is what
-  // populates it), so `freeFrame` would read it as empty and reserve
-  // nothing. The re-fit right after that first call corrects this once the
-  // row's real height is known.
-  let camera: Camera = initial.camera ?? fitForScope(getViewport());
+  // A saved camera (`?p=patterson&z&x&y`) wins over the scope's fit, so a
+  // copied link reopens on exactly that view. No `frame` yet: the card row
+  // is empty until the first `applyCamera(true)` below, and the re-fit after
+  // it frames against the row's real height.
+  let camera: Camera = initial.camera ?? fitForScope(getViewport()).camera;
   // An embed mounted while hidden fits against a 0x0 frame (a cover camera);
   // the first real size, from the resize paths, re-fits it.
   /** The viewport size `camera` was last applied at; see `onResize`. */
@@ -563,20 +591,13 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     lastViewport = viewport;
     if (fitPending) {
       fitPending = false;
-      camera = fitForScope(viewport, freeFrame(viewport));
+      return showFit(fitForScope(viewport, freeFrame(viewport)));
     }
-    // Never force a zoom OUT here: every path that actually zooms IN (wheel,
-    // pinch, the capsule buttons, fitPoints/focusPoint) already clamps its
-    // own candidate against `currentMaxZoom` at its own call site, before
-    // this re-clamp ever runs — so by the time a camera reaches here, its
-    // zoom is already within whatever ceiling was correct when it was
-    // chosen. A pure pan (drag, keyboard arrows) never changes zoom at all;
-    // `currentMaxZoom` depends on `camera` (`tileLayer.hasVisibleTiles`), so
-    // recomputing it AFTER the pan, once a reader has dragged off the tile
-    // patch that justified a raised ceiling, would otherwise snap the zoom
-    // back down mid-drag. `Math.max` keeps this clamp doing its other job
-    // (the position/floor clamp below, which still needs a real scale) while
-    // never lowering a zoom that was already valid.
+    // Never force a zoom out here: every zoom-in path already clamps its own
+    // candidate against `currentMaxZoom`, and `currentMaxZoom` reads the
+    // camera, so recomputing it after a pan off the tiles that raised the
+    // ceiling would snap the zoom down mid-drag. A camera restored from the
+    // URL keeps its zoom too, even past the world layer's clean depth.
     camera = clampCamera(camera, viewport, Math.max(currentMaxZoom(viewport), camera.zoom));
     const unitScale = screenScale({ x: camera.x, y: camera.y, zoom: 1 }, viewport);
     const scale = screenScale(camera, viewport);
@@ -590,7 +611,8 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     const ceiling = currentMaxZoom(viewport);
     figure.style.setProperty("--moss-place-river-scale", String(Math.min(1, MIN_ZOOM / camera.zoom)));
 
-    tileLayer.render(camera, viewport, unitScale, settled);
+    if (held && (held.camera.x !== camera.x || held.camera.y !== camera.y || held.camera.zoom !== camera.zoom)) held = null;
+    tileLayer.render(held?.deeper ?? camera, viewport, unitScale, { settled, preload: held !== null });
 
     const visiblePoints = pointsForWorks(options.places.works, options.places.places, scope).filter((point) => {
       const screen = worldToScreen(point, camera, viewport);
@@ -635,7 +657,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     },
     onSettle: () => applyCamera(true),
     onGestureStart: () => worldEl.setAttribute("data-gesture", ""),
-    maxZoom: () => currentMaxZoom(getViewport()),
+    maxZoom: (anchor) => currentMaxZoom(getViewport(), anchor),
     cooperative: () => cooperativeGestures,
     // The same deselect a card or marker click on the open work performs; `selectWork(null)` leaves the camera alone.
     onDismiss: () => {
@@ -677,7 +699,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
       return screen.x < -MARGIN || screen.x > viewport.width + MARGIN || screen.y < -MARGIN || screen.y > viewport.height + MARGIN;
     });
     if (clipped) {
-      camera = fitPoints(points, viewport, currentMaxZoom(viewport));
+      camera = fitPointsCleanly(points, viewport, detailMaxZoom(viewport));
       applyCamera(true);
     }
   }
@@ -717,8 +739,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     markerLayer.closeRing();
     scopedIds = null;
     const viewport = getViewport();
-    camera = fitAllCamera(viewport, freeFrame(viewport));
-    applyCamera(true);
+    showFit(fitAllCamera(viewport, freeFrame(viewport)));
   });
 
   // A resize keeps the scale (px per degree) and centre, so a bigger
@@ -732,10 +753,9 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     const resized = viewport.width !== lastViewport.width || viewport.height !== lastViewport.height;
     if (refitOnResize && resized && viewport.width > 0 && viewport.height > 0) {
       refitOnResize = false;
-      camera = fitForScope(viewport, freeFrame(viewport));
-    } else {
-      camera = resizeCamera(camera, lastViewport, viewport);
+      return showFit(fitForScope(viewport, freeFrame(viewport)));
     }
+    camera = resizeCamera(camera, lastViewport, viewport);
     applyCamera(true);
   }
   if (typeof ResizeObserver === "function") {
@@ -766,27 +786,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   // it, could not have known to avoid.
   if (!initial.camera) {
     const viewport = getViewport();
-    camera = fitForScope(viewport, freeFrame(viewport));
-    applyCamera(true);
-    // The deeper opening fit waits for the tiles under this first view. If a clear supersedes that wait, retry only while the captured camera and viewport are still current; a failure keeps the shallow view.
-    const opening = { ...camera };
-    const openingViewport = getViewport();
-    void (async () => {
-      let result = await tileLayer.waitForVisibleTiles();
-      while (result === "superseded") {
-        const viewport = getViewport();
-        if (camera.x !== opening.x || camera.y !== opening.y || camera.zoom !== opening.zoom || viewport.width !== openingViewport.width || viewport.height !== openingViewport.height) return;
-        result = await tileLayer.waitForVisibleTiles();
-      }
-      if (result !== "ready") return;
-      const latest = getViewport();
-      if (latest.width !== openingViewport.width || latest.height !== openingViewport.height) return;
-      openingTilesReady = true;
-      // Only this opening view's completed tile wait unlocks the deeper fit; any user move or resize leaves the current camera alone.
-      if (camera.x !== opening.x || camera.y !== opening.y || camera.zoom !== opening.zoom) return;
-      camera = fitForScope(latest, freeFrame(latest));
-      applyCamera(true);
-    })();
+    showFit(fitForScope(viewport, freeFrame(viewport)));
   }
   return {
     setScope,

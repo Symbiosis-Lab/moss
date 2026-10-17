@@ -1017,7 +1017,7 @@ mod tests {
         // `[site] lang = "fr"` is a statement about the site, and it leaves the
         // machine: it labels the root email audience and rides in the
         // syndication payload. Routing the declared rungs through `Language`
-        // would collapse them onto moss's three UI languages and relabel a
+        // would collapse them onto moss's few UI languages and relabel a
         // French site English on the way out. The render path does that
         // collapse itself, where "no translation" is what English means.
         let files: Vec<crate::types::content::FileInfo> = vec![];

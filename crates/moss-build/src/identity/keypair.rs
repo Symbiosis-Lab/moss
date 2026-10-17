@@ -454,13 +454,24 @@ impl Identity {
     /// lock, no migration of an older file format, no key file. For read-only
     /// callers; `None` when there is no readable identity.
     pub fn read_pubkey(project_path: &Path) -> Option<String> {
+        Self::read_public_field(project_path, "pubkey")
+    }
+
+    /// The email recorded in the project's identity, read like
+    /// [`read_pubkey`](Self::read_pubkey). `None` when there is no readable
+    /// identity or no email has been linked.
+    pub fn read_email(project_path: &Path) -> Option<String> {
+        Self::read_public_field(project_path, "email")
+    }
+
+    fn read_public_field(project_path: &Path, field: &str) -> Option<String> {
         let contents = crate::build::cloud_readiness::read_to_string_with_materialize_wait(
             &Self::identity_path(project_path),
             crate::build::cloud_readiness::INTERACTIVE_DEADLINE,
         )
         .ok()?;
         let raw: serde_json::Value = serde_json::from_str(&contents).ok()?;
-        raw.get("pubkey")?.as_str().map(str::to_string)
+        raw.get(field)?.as_str().map(str::to_string)
     }
 
     /// Get the path to the identity file.

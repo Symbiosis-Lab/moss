@@ -513,8 +513,12 @@ fn first_paragraph_excerpt(content: &str, strip_callout_marker: bool, math: bool
     // Consolidating onto the real parser (rather than hand-patching a parallel
     // scanner) keeps the excerpt view and the rendered view from drifting:
     // the shortcode grammar has one source of truth.
+    //
+    // A derived-text block with no text (pending, declined, failed) is a status
+    // note, not prose; as an HTML block it would surface as escaped markup.
+    let content = moss_core::resolve::embeds::derived::without_derived_markup(content);
     let processed =
-        moss_core::ast::shortcode_extract::extract_shortcodes(content).markdown_with_placeholders;
+        moss_core::ast::shortcode_extract::extract_shortcodes(&content).markdown_with_placeholders;
 
     let mut paragraphs: Vec<String> = Vec::new();
     let mut current_lines: Vec<&str> = Vec::new();
@@ -1659,6 +1663,31 @@ pub fn build_hreflang_link_tags(
     }
 
     Some(links.join("\n    "))
+}
+
+/// Build the manifest entry for one page, or `None` when the page has nothing
+/// beyond its title. The hover card shows the title and then the excerpt, so a
+/// title-only entry would only repeat the words the link already shows.
+pub fn preview_entry(
+    label: &str,
+    description: Option<&str>,
+    preview_text: &str,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let description = description
+        .map(strip_markdown_inline)
+        .filter(|d| !d.is_empty());
+    if description.is_none() && preview_text.is_empty() {
+        return None;
+    }
+    let mut entry = serde_json::Map::new();
+    entry.insert("title".into(), serde_json::Value::String(label.to_string()));
+    if let Some(desc) = description {
+        entry.insert("description".into(), serde_json::Value::String(desc));
+    }
+    if !preview_text.is_empty() {
+        entry.insert("preview".into(), serde_json::Value::String(preview_text.to_string()));
+    }
+    Some(entry)
 }
 
 #[cfg(test)]

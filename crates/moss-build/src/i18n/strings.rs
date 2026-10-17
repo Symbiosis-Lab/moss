@@ -15,128 +15,168 @@ pub fn term_root_title(lang: Language, ns: &str) -> &'static str {
     t(lang, if ns == moss_core::terms::AUTHOR_NS { "term_authors_title" } else { "term_tags_title" })
 }
 
+/// The headings that name a page's sources section, compared
+/// case-insensitively against a heading's text. `lang_tag` is the page's
+/// declared language.
+pub fn sources_headings(lang: Language) -> &'static [&'static str] {
+    match lang {
+        Language::ZhHans => &["来源", "参考资料"],
+        Language::ZhHant => &["來源", "參考資料"],
+        Language::De => &["Quellen", "Literatur"],
+        Language::En => &["Sources", "References"],
+    }
+}
+
 pub fn t(lang: Language, key: &str) -> &'static str {
     match key {
         // Month names (full)
         "month_1" => match lang {
             Language::En => "January",
+            Language::De => "Januar",
             Language::ZhHans | Language::ZhHant => "1月",
         },
         "month_2" => match lang {
             Language::En => "February",
+            Language::De => "Februar",
             Language::ZhHans | Language::ZhHant => "2月",
         },
         "month_3" => match lang {
             Language::En => "March",
+            Language::De => "März",
             Language::ZhHans | Language::ZhHant => "3月",
         },
         "month_4" => match lang {
             Language::En => "April",
+            Language::De => "April",
             Language::ZhHans | Language::ZhHant => "4月",
         },
         "month_5" => match lang {
             Language::En => "May",
+            Language::De => "Mai",
             Language::ZhHans | Language::ZhHant => "5月",
         },
         "month_6" => match lang {
             Language::En => "June",
+            Language::De => "Juni",
             Language::ZhHans | Language::ZhHant => "6月",
         },
         "month_7" => match lang {
             Language::En => "July",
+            Language::De => "Juli",
             Language::ZhHans | Language::ZhHant => "7月",
         },
         "month_8" => match lang {
             Language::En => "August",
+            Language::De => "August",
             Language::ZhHans | Language::ZhHant => "8月",
         },
         "month_9" => match lang {
             Language::En => "September",
+            Language::De => "September",
             Language::ZhHans | Language::ZhHant => "9月",
         },
         "month_10" => match lang {
             Language::En => "October",
+            Language::De => "Oktober",
             Language::ZhHans | Language::ZhHant => "10月",
         },
         "month_11" => match lang {
             Language::En => "November",
+            Language::De => "November",
             Language::ZhHans | Language::ZhHant => "11月",
         },
         "month_12" => match lang {
             Language::En => "December",
+            Language::De => "Dezember",
             Language::ZhHans | Language::ZhHant => "12月",
         },
 
         // Month names (abbreviated, for RSS)
         "month_abbr_1" => match lang {
             Language::En => "Jan",
+            Language::De => "Jan",
             Language::ZhHans | Language::ZhHant => "1月",
         },
         "month_abbr_2" => match lang {
             Language::En => "Feb",
+            Language::De => "Feb",
             Language::ZhHans | Language::ZhHant => "2月",
         },
         "month_abbr_3" => match lang {
             Language::En => "Mar",
+            Language::De => "Mär",
             Language::ZhHans | Language::ZhHant => "3月",
         },
         "month_abbr_4" => match lang {
             Language::En => "Apr",
+            Language::De => "Apr",
             Language::ZhHans | Language::ZhHant => "4月",
         },
         "month_abbr_5" => match lang {
             Language::En => "May",
+            Language::De => "Mai",
             Language::ZhHans | Language::ZhHant => "5月",
         },
         "month_abbr_6" => match lang {
             Language::En => "Jun",
+            Language::De => "Jun",
             Language::ZhHans | Language::ZhHant => "6月",
         },
         "month_abbr_7" => match lang {
             Language::En => "Jul",
+            Language::De => "Jul",
             Language::ZhHans | Language::ZhHant => "7月",
         },
         "month_abbr_8" => match lang {
             Language::En => "Aug",
+            Language::De => "Aug",
             Language::ZhHans | Language::ZhHant => "8月",
         },
         "month_abbr_9" => match lang {
             Language::En => "Sep",
+            Language::De => "Sep",
             Language::ZhHans | Language::ZhHant => "9月",
         },
         "month_abbr_10" => match lang {
             Language::En => "Oct",
+            Language::De => "Okt",
             Language::ZhHans | Language::ZhHant => "10月",
         },
         "month_abbr_11" => match lang {
             Language::En => "Nov",
+            Language::De => "Nov",
             Language::ZhHans | Language::ZhHant => "11月",
         },
         "month_abbr_12" => match lang {
             Language::En => "Dec",
+            Language::De => "Dez",
             Language::ZhHans | Language::ZhHant => "12月",
         },
 
         // Collection counter (plural)
         "article_counter" => match lang {
             Language::En => "articles",
+            Language::De => "Artikel",
             Language::ZhHans | Language::ZhHant => "篇",
         },
 
         // Collection counter (singular)
         "article_counter_singular" => match lang {
             Language::En => "article",
+            Language::De => "Artikel",
             Language::ZhHans | Language::ZhHant => "篇",
         },
 
         // Navigation
         "toggle_dark_mode" => match lang {
             Language::En => "Toggle dark mode",
+            Language::De => "Dunkelmodus umschalten",
             Language::ZhHans => "切换深色模式",
             Language::ZhHant => "切換深色模式",
         },
         "nav_toggle_menu" => match lang {
             Language::En => "Toggle menu",
+            Language::De => "Menü umschalten",
             Language::ZhHans => "切换菜单",
             Language::ZhHant => "切換選單",
         },
@@ -144,6 +184,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // replacing the brand link that mode drops.
         "nav_home" => match lang {
             Language::En => "Home",
+            Language::De => "Startseite",
             Language::ZhHans => "首页",
             Language::ZhHant => "首頁",
         },
@@ -153,16 +194,19 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // `moss-skip-link` in site.css / components.rs.
         "skip_to_content" => match lang {
             Language::En => "Skip to content",
+            Language::De => "Zum Inhalt springen",
             Language::ZhHans => "跳到内容",
             Language::ZhHant => "跳到內容",
         },
         "nav_language" => match lang {
             Language::En => "Language",
+            Language::De => "Sprache",
             Language::ZhHans => "语言",
             Language::ZhHant => "語言",
         },
         "nav_search" => match lang {
             Language::En => "Search",
+            Language::De => "Suche",
             Language::ZhHans => "搜索",
             Language::ZhHant => "搜尋",
         },
@@ -171,6 +215,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // caller replaces them one at a time.
         "series_position" => match lang {
             Language::En => "{n} of {total}",
+            Language::De => "{n} von {total}",
             Language::ZhHans => "第 {n} 篇，共 {total} 篇",
             Language::ZhHant => "第 {n} 篇，共 {total} 篇",
         },
@@ -179,16 +224,19 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // for the levels the trail had to drop, and the sections glyph.
         "nav_breadcrumb" => match lang {
             Language::En => "Breadcrumb",
+            Language::De => "Navigationspfad",
             Language::ZhHans => "路径",
             Language::ZhHant => "路徑",
         },
         "nav_hidden_levels" => match lang {
             Language::En => "Show hidden levels",
+            Language::De => "Ausgeblendete Ebenen anzeigen",
             Language::ZhHans => "显示省略的层级",
             Language::ZhHant => "顯示省略的層級",
         },
         "nav_sections" => match lang {
             Language::En => "Sections on this page",
+            Language::De => "Abschnitte dieser Seite",
             Language::ZhHans => "本页章节",
             Language::ZhHant => "本頁章節",
         },
@@ -198,56 +246,67 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // client and Rust never drift.
         "search_placeholder" => match lang {
             Language::En => "Search this site",
+            Language::De => "Diese Website durchsuchen",
             Language::ZhHans => "搜索本站",
             Language::ZhHant => "搜尋本站",
         },
         "search_no_matches" => match lang {
             Language::En => "No matches for \"{query}\".",
+            Language::De => "Keine Treffer für „{query}“.",
             Language::ZhHans => "没有找到与“{query}”相关的内容。",
             Language::ZhHant => "沒有找到與「{query}」相關的內容。",
         },
         "search_results_label" => match lang {
             Language::En => "Search results",
+            Language::De => "Suchergebnisse",
             Language::ZhHans => "搜索结果",
             Language::ZhHant => "搜尋結果",
         },
         "nav_toggle_theme" => match lang {
             Language::En => "Toggle theme",
+            Language::De => "Darstellung umschalten",
             Language::ZhHans => "切换主题",
             Language::ZhHant => "切換主題",
         },
         "hero_pause" => match lang {
             Language::En => "Pause the changing pictures",
+            Language::De => "Bildwechsel anhalten",
             Language::ZhHans => "暂停图片轮播",
             Language::ZhHant => "暫停圖片輪播",
         },
         "reading_preferences" => match lang {
             Language::En => "Reading preferences",
+            Language::De => "Leseeinstellungen",
             Language::ZhHans => "阅读偏好",
             Language::ZhHant => "閱讀偏好",
         },
         "text_small" => match lang {
             Language::En => "Small text",
+            Language::De => "Kleine Schrift",
             Language::ZhHans => "小号文字",
             Language::ZhHant => "小型文字",
         },
         "text_standard" => match lang {
             Language::En => "Standard text",
+            Language::De => "Normale Schrift",
             Language::ZhHans => "标准文字",
             Language::ZhHant => "標準文字",
         },
         "text_large" => match lang {
             Language::En => "Large text",
+            Language::De => "Große Schrift",
             Language::ZhHans => "大号文字",
             Language::ZhHant => "大型文字",
         },
         "text_xlarge" => match lang {
             Language::En => "Extra large text",
+            Language::De => "Sehr große Schrift",
             Language::ZhHans => "超大文字",
             Language::ZhHant => "特大文字",
         },
         "permalink_to" => match lang {
             Language::En => "Permalink to {}",
+            Language::De => "Dauerhafter Link zu {}",
             Language::ZhHans => "固定链接：{}",
             Language::ZhHant => "永久連結：{}",
         },
@@ -255,11 +314,13 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // Term namespace roots (generated /authors/ and /tags/ index pages)
         "term_authors_title" => match lang {
             Language::En => "Authors",
+            Language::De => "Autorinnen und Autoren",
             Language::ZhHans => "作者",
             Language::ZhHant => "作者",
         },
         "term_tags_title" => match lang {
             Language::En => "Tags",
+            Language::De => "Schlagwörter",
             Language::ZhHans => "标签",
             Language::ZhHant => "標籤",
         },
@@ -268,41 +329,47 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // task A9), looked up by frontmatter field name.
         "term_role_author" => match lang {
             Language::En => "Author",
+            Language::De => "Autorin oder Autor",
             Language::ZhHans | Language::ZhHant => "作者",
         },
         // A declared kind may list `tags` beside a person field; the heading
         // is the dimension's own name, same as its namespace root.
         "term_role_tags" => match lang {
             Language::En => "Tags",
+            Language::De => "Schlagwörter",
             Language::ZhHans => "标签",
             Language::ZhHant => "標籤",
         },
         "term_role_editor" => match lang {
             Language::En => "Editor",
+            Language::De => "Redaktion",
             Language::ZhHans => "编辑",
             Language::ZhHant => "編輯",
         },
         "term_role_jury" => match lang {
             Language::En => "Jury",
+            Language::De => "Jury",
             Language::ZhHans => "评审",
             Language::ZhHant => "評審",
         },
         // Event meta line: weekday names (Monday first), link labels, status labels.
-        "weekday_0" => match lang { Language::En => "Monday", Language::ZhHans => "星期一", Language::ZhHant => "星期一" },
-        "weekday_1" => match lang { Language::En => "Tuesday", Language::ZhHans => "星期二", Language::ZhHant => "星期二" },
-        "weekday_2" => match lang { Language::En => "Wednesday", Language::ZhHans => "星期三", Language::ZhHant => "星期三" },
-        "weekday_3" => match lang { Language::En => "Thursday", Language::ZhHans => "星期四", Language::ZhHant => "星期四" },
-        "weekday_4" => match lang { Language::En => "Friday", Language::ZhHans => "星期五", Language::ZhHant => "星期五" },
-        "weekday_5" => match lang { Language::En => "Saturday", Language::ZhHans => "星期六", Language::ZhHant => "星期六" },
-        "weekday_6" => match lang { Language::En => "Sunday", Language::ZhHans => "星期日", Language::ZhHant => "星期日" },
-        "event_tickets" => match lang { Language::En => "Tickets", Language::ZhHans => "购票", Language::ZhHant => "購票" },
-        "event_online" => match lang { Language::En => "Online", Language::ZhHans => "线上参加", Language::ZhHant => "線上參加" },
-        "event_status_cancelled" => match lang { Language::En => "Cancelled", Language::ZhHans => "已取消", Language::ZhHant => "已取消" },
-        "event_status_postponed" => match lang { Language::En => "Postponed", Language::ZhHans => "已延期", Language::ZhHant => "已延期" },
-        "event_status_moved-online" => match lang { Language::En => "Moved online", Language::ZhHans => "改为线上", Language::ZhHant => "改為線上" },
-        "event_status_rescheduled" => match lang { Language::En => "Rescheduled", Language::ZhHans => "已改期", Language::ZhHant => "已改期" },
+        "weekday_0" => match lang { Language::En => "Monday", Language::De => "Montag", Language::ZhHans => "星期一", Language::ZhHant => "星期一" },
+        "weekday_1" => match lang { Language::En => "Tuesday", Language::De => "Dienstag", Language::ZhHans => "星期二", Language::ZhHant => "星期二" },
+        "weekday_2" => match lang { Language::En => "Wednesday", Language::De => "Mittwoch", Language::ZhHans => "星期三", Language::ZhHant => "星期三" },
+        "weekday_3" => match lang { Language::En => "Thursday", Language::De => "Donnerstag", Language::ZhHans => "星期四", Language::ZhHant => "星期四" },
+        "weekday_4" => match lang { Language::En => "Friday", Language::De => "Freitag", Language::ZhHans => "星期五", Language::ZhHant => "星期五" },
+        "weekday_5" => match lang { Language::En => "Saturday", Language::De => "Samstag", Language::ZhHans => "星期六", Language::ZhHant => "星期六" },
+        "weekday_6" => match lang { Language::En => "Sunday", Language::De => "Sonntag", Language::ZhHans => "星期日", Language::ZhHant => "星期日" },
+        "event_tickets" => match lang { Language::En => "Tickets", Language::De => "Tickets", Language::ZhHans => "购票", Language::ZhHant => "購票" },
+        "event_tickets_for" => match lang { Language::En => " for {}", Language::De => " für {}", Language::ZhHans => "：{}", Language::ZhHant => "：{}" },
+        "event_online" => match lang { Language::En => "Online", Language::De => "Online-Teilnahme", Language::ZhHans => "线上参加", Language::ZhHant => "線上參加" },
+        "event_status_cancelled" => match lang { Language::En => "Cancelled", Language::De => "Abgesagt", Language::ZhHans => "已取消", Language::ZhHant => "已取消" },
+        "event_status_postponed" => match lang { Language::En => "Postponed", Language::De => "Verschoben", Language::ZhHans => "已延期", Language::ZhHant => "已延期" },
+        "event_status_moved-online" => match lang { Language::En => "Moved online", Language::De => "Findet online statt", Language::ZhHans => "改为线上", Language::ZhHant => "改為線上" },
+        "event_status_rescheduled" => match lang { Language::En => "Rescheduled", Language::De => "Neuer Termin", Language::ZhHans => "已改期", Language::ZhHant => "已改期" },
         "term_role_location" => match lang {
             Language::En => "Location",
+            Language::De => "Ort",
             Language::ZhHans => "地点",
             Language::ZhHant => "地點",
         },
@@ -311,49 +378,58 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // language controls it the same way every other i18n string does.
         "place_line_separator" => match lang {
             Language::En => ": ",
+            Language::De => ": ",
             Language::ZhHans | Language::ZhHant => "：",
         },
 
         // RSS / Subscribe
         "subscribe" => match lang {
             Language::En => "Subscribe",
+            Language::De => "Abonnieren",
             Language::ZhHans => "订阅",
             Language::ZhHant => "訂閱",
         },
         // Calendar files for events
         "add_to_calendar" => match lang {
             Language::En => "Add to calendar",
+            Language::De => "Zum Kalender hinzufügen",
             Language::ZhHans => "添加到日历",
             Language::ZhHant => "加入行事曆",
         },
         "download_calendar" => match lang {
             Language::En => "Download calendar",
+            Language::De => "Kalender herunterladen",
             Language::ZhHans => "下载日历",
             Language::ZhHant => "下載行事曆",
         },
         "subscribe_to_calendar" => match lang {
             Language::En => "Subscribe to calendar",
+            Language::De => "Kalender abonnieren",
             Language::ZhHans => "订阅日历",
             Language::ZhHant => "訂閱行事曆",
         },
         "rss" => "RSS",
         "subscribe_via_rss" => match lang {
             Language::En => "Subscribe via RSS",
+            Language::De => "Per RSS abonnieren",
             Language::ZhHans => "通过 RSS 订阅",
             Language::ZhHant => "透過 RSS 訂閱",
         },
         "follow_via" => match lang {
             Language::En => "Subscribe via",
+            Language::De => "Abonnieren über",
             Language::ZhHans => "通过以下方式订阅",
             Language::ZhHant => "透過以下方式訂閱",
         },
         "enter_your_email" => match lang {
             Language::En => "Enter your email",
+            Language::De => "E-Mail-Adresse eingeben",
             Language::ZhHans => "输入你的邮箱",
             Language::ZhHant => "輸入你的電子郵件",
         },
         "sign_up" => match lang {
             Language::En => "Sign up",
+            Language::De => "Abonnieren",
             Language::ZhHans => "订阅",
             Language::ZhHant => "訂閱",
         },
@@ -361,16 +437,19 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // Media pages
         "photography" => match lang {
             Language::En => "Photography",
+            Language::De => "Fotografie",
             Language::ZhHans => "摄影",
             Language::ZhHant => "攝影",
         },
         "videos" => match lang {
             Language::En => "Videos",
+            Language::De => "Videos",
             Language::ZhHans => "视频",
             Language::ZhHant => "影片",
         },
         "experiments" => match lang {
             Language::En => "Experiments",
+            Language::De => "Experimente",
             Language::ZhHans => "实验",
             Language::ZhHant => "實驗",
         },
@@ -378,27 +457,38 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // Lightbox controls
         "close" => match lang {
             Language::En => "Close",
+            Language::De => "Schließen",
             Language::ZhHans => "关闭",
             Language::ZhHant => "關閉",
         },
+        "image_viewer" => match lang {
+            Language::En => "Image viewer",
+            Language::De => "Bildansicht",
+            Language::ZhHans => "图片查看器",
+            Language::ZhHant => "圖片檢視器",
+        },
         "previous" => match lang {
             Language::En => "Previous",
+            Language::De => "Zurück",
             Language::ZhHans => "上一个",
             Language::ZhHant => "上一個",
         },
         "next" => match lang {
             Language::En => "Next",
+            Language::De => "Weiter",
             Language::ZhHans => "下一个",
             Language::ZhHant => "下一個",
         },
         // Gallery image link name; {n} is the 1-based position, {m} the total.
         "gallery_open_image" => match lang {
             Language::En => "Open image {n} of {m}",
+            Language::De => "Bild {n} von {m} öffnen",
             Language::ZhHans => "打开第 {n} 张图片，共 {m} 张",
             Language::ZhHant => "開啟第 {n} 張圖片，共 {m} 張",
         },
         "view_in_article" => match lang {
             Language::En => "View in article",
+            Language::De => "Im Artikel ansehen",
             Language::ZhHans => "在文章中查看",
             Language::ZhHant => "在文章中查看",
         },
@@ -408,12 +498,14 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // placeholder (`comment_placeholder`); the header is just a plain noun.
         "comment_count_zero" => match lang {
             Language::En => "Comments",
+            Language::De => "Kommentare",
             Language::ZhHans => "评论",
             // zh-Hant: 留言 (comment), NOT 評論 (review/critique). Glossary SSOT.
             Language::ZhHant => "留言",
         },
         "comment_count_one" => match lang {
             Language::En => "1 comment",
+            Language::De => "1 Kommentar",
             Language::ZhHans => "1条评论",
             Language::ZhHant => "1則留言",
         },
@@ -421,39 +513,47 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // (comment::format_comment_count).
         "comment_count_many" => match lang {
             Language::En => "{} comments",
+            Language::De => "{} Kommentare",
             Language::ZhHans => "{}条评论",
             Language::ZhHant => "{}則留言",
         },
         "comment_placeholder" => match lang {
             Language::En => "Leave your thoughts",
+            Language::De => "Teilen Sie Ihre Gedanken",
             Language::ZhHans | Language::ZhHant => "留下你的想法",
         },
         "comment_name" => match lang {
             Language::En => "Name",
+            Language::De => "Name",
             Language::ZhHans | Language::ZhHant => "名字",
         },
         "comment_email" => match lang {
             Language::En => "Email",
+            Language::De => "E-Mail",
             Language::ZhHans => "邮箱",
             Language::ZhHant => "電子郵件",
         },
         "comment_website" => match lang {
             Language::En => "Website (optional)",
+            Language::De => "Website (optional)",
             Language::ZhHans => "网站（选填）",
             Language::ZhHant => "網站（選填）",
         },
         "comment_reply" => match lang {
             Language::En => "Reply",
+            Language::De => "Antworten",
             Language::ZhHans => "回复",
             Language::ZhHant => "回覆",
         },
         "anonymous" => match lang {
             Language::En => "Anonymous",
+            Language::De => "Anonym",
             Language::ZhHans | Language::ZhHant => "匿名",
         },
         // `{}` is replaced with the source display name (e.g. Matters, 豆瓣).
         "comment_reply_on" => match lang {
             Language::En => "Reply on {} ↗",
+            Language::De => "Auf {} antworten ↗",
             Language::ZhHans => "去 {} 回复 ↗",
             Language::ZhHant => "去 {} 回覆 ↗",
         },
@@ -461,26 +561,31 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // Defaults / fallbacks
         "untitled" => match lang {
             Language::En => "Untitled",
+            Language::De => "Ohne Titel",
             Language::ZhHans => "无标题",
             Language::ZhHant => "無標題",
         },
         "untitled_site" => match lang {
             Language::En => "Untitled Site",
+            Language::De => "Website ohne Titel",
             Language::ZhHans => "无标题站点",
             Language::ZhHant => "無標題網站",
         },
         "site" => match lang {
             Language::En => "Site",
+            Language::De => "Website",
             Language::ZhHans => "站点",
             Language::ZhHant => "網站",
         },
         "collection" => match lang {
             Language::En => "Collection",
+            Language::De => "Sammlung",
             Language::ZhHans => "合集",
             Language::ZhHant => "合集",
         },
         "unknown" => match lang {
             Language::En => "Unknown",
+            Language::De => "Unbekannt",
             Language::ZhHans => "未知",
             Language::ZhHant => "未知",
         },
@@ -488,11 +593,13 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // Navigation / listing chrome
         "site_latest" => match lang {
             Language::En => "Latest",
+            Language::De => "Neueste Beiträge",
             Language::ZhHans => "最新",
             Language::ZhHant => "最新",
         },
         "more_link" => match lang {
             Language::En => "More →",
+            Language::De => "Mehr →",
             Language::ZhHans => "更多 →",
             Language::ZhHant => "更多 →",
         },
@@ -500,11 +607,13 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // Embed error messages (use {} as placeholder, replaced at call site)
         "notebook_not_found" => match lang {
             Language::En => "Notebook not found: {}",
+            Language::De => "Notebook nicht gefunden: {}",
             Language::ZhHans => "找不到笔记本：{}",
             Language::ZhHant => "找不到筆記本：{}",
         },
         "table_not_found" => match lang {
             Language::En => "Table not found: {}",
+            Language::De => "Tabelle nicht gefunden: {}",
             Language::ZhHans => "找不到表格：{}",
             Language::ZhHant => "找不到表格：{}",
         },
@@ -512,6 +621,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // cloud yet. The page publishes now and rebuilds when it arrives.
         "embed_downloading" => match lang {
             Language::En => "Downloading from the cloud: {}",
+            Language::De => "Wird aus der Cloud heruntergeladen: {}",
             Language::ZhHans => "正在从云端下载：{}",
             Language::ZhHant => "正在從雲端下載：{}",
         },
@@ -523,11 +633,13 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // because the announced name still contains the visible one.
         "colophon_name" => match lang {
             Language::En => "moss",
+            Language::De => "moss",
             Language::ZhHans => "青苔",
             Language::ZhHant => "青苔",
         },
         "published_with_moss" => match lang {
             Language::En => "Published with moss",
+            Language::De => "Veröffentlicht mit moss",
             Language::ZhHans => "青苔发布",
             Language::ZhHant => "青苔發佈",
         },
@@ -535,6 +647,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // Service placeholders
         "available_after_publishing" => match lang {
             Language::En => "Available after publishing",
+            Language::De => "Nach der Veröffentlichung verfügbar",
             Language::ZhHans => "发布后启用",
             Language::ZhHant => "發佈後啟用",
         },
@@ -543,8 +656,24 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         // every slugged heading by moss-core's `render_heading`).
         "permalink_section" => match lang {
             Language::En => "Permalink to this section",
+            Language::De => "Dauerhafter Link zu diesem Abschnitt",
             Language::ZhHans => "本节固定链接",
             Language::ZhHant => "本節永久連結",
+        },
+
+        // A declared field's open-ended period, `{start}` being the start date's text.
+        "field_open_from" => match lang {
+            Language::En => "from {start}",
+            Language::De => "ab {start}",
+            Language::ZhHans => "{start}起",
+            Language::ZhHant => "{start}起",
+        },
+        // The prefix a declared field's approximate date carries.
+        "field_approximate" => match lang {
+            Language::En => "c. ",
+            Language::De => "um ",
+            Language::ZhHans => "约",
+            Language::ZhHant => "約",
         },
 
         // Unrecognized key — return the key itself.
@@ -578,6 +707,14 @@ mod tests {
     #[test]
     fn test_published_with_moss_zh_hant() {
         assert_eq!(t(Language::ZhHant, "published_with_moss"), "青苔發佈");
+    }
+
+    #[test]
+    fn german_has_its_own_text_for_every_key() {
+        assert_eq!(t(Language::De, "skip_to_content"), "Zum Inhalt springen");
+        assert_eq!(t(Language::De, "month_3"), "März");
+        assert_eq!(t(Language::De, "weekday_6"), "Sonntag");
+        assert_eq!(t(Language::De, "search_no_matches"), "Keine Treffer für „{query}“.");
     }
 
     /// Regression: `term_role_jury` copy-pasted `term_role_author`'s

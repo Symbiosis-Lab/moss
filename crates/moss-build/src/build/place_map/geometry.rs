@@ -9,7 +9,7 @@ mod selection_tests;
 pub const VIEWBOX_WIDTH: f64 = 720.0;
 pub const VIEWBOX_HEIGHT: f64 = 480.0;
 const POLAR_LIMIT: f64 = 85.0;
-const MIN_FRAME_DEGREES: f64 = 10.0;
+pub(super) const MIN_FRAME_DEGREES: f64 = 10.0;
 /// A frame's latitude floor as a share of its longitude floor, so the
 /// narrowest frame fills the 3:2 canvas.
 const LATITUDE_SHARE: f64 = 0.68;

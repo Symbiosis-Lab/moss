@@ -16,7 +16,7 @@
 //!    Redirect stubs are in here too — `feeds::redirects::emit_redirect_table`
 //!    writes a real meta-refresh file through the same `emit`, so a link to a
 //!    renamed page's OLD url resolves against the stub and this module needs no
-//!    knowledge of `.moss/data/redirects.json` at all.
+//!    knowledge of `.moss/redirects.json` at all.
 //! 2. **A file in the stage**, for the same candidates. The manifest is meant to
 //!    cover everything moss ships, but a passthrough root is a directory moss
 //!    copies rather than renders, and an advisory that cries wolf gets muted —

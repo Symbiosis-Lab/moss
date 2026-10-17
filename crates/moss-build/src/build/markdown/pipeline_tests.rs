@@ -399,10 +399,42 @@ fn article_with_frontmatter_title_injects_title() {
     );
 }
 
-/// A root-level non-index file in organized mode is a nav page; the nav bar
-/// shows its title, so the auto-injected article title is suppressed.
+/// A body that opens with its own `# Heading` is the page's one h1: no title
+/// is injected above it, and the title text still reaches `doc.title`.
 #[test]
-fn nav_page_suppresses_injected_article_title() {
+fn article_opening_with_body_h1_has_exactly_one_h1() {
+    let doc = parse_for_test("Page.md", "---\ntitle: Custom\n---\n\n# Custom\n\ntext\n", None);
+    assert_eq!(doc.html_content.matches("<h1").count(), 1, "got: {}", doc.html_content);
+    assert!(doc.html_content.contains("<h1 id=\"custom\">Custom</h1>"), "got: {}", doc.html_content);
+    assert!(!doc.html_content.contains("moss-article-title"), "got: {}", doc.html_content);
+    assert_eq!(doc.title, "Custom");
+}
+
+/// A body that opens with a `# Heading` whose text differs from the title
+/// keeps the injected title above it; `doc.title` comes from `title:`.
+#[test]
+fn article_opening_with_different_body_h1_keeps_injected_title() {
+    let doc = parse_for_test("Page.md", "---\ntitle: Custom\n---\n\n# Something Else\n\ntext\n", None);
+    assert!(doc.html_content.contains("<h1 class=\"moss-article-title\">Custom</h1>"), "got: {}", doc.html_content);
+    assert!(doc.html_content.contains("<h1 id=\"something-else\">Something Else</h1>"), "got: {}", doc.html_content);
+    assert_eq!(doc.html_content.matches("<h1").count(), 2, "got: {}", doc.html_content);
+    assert_eq!(doc.title, "Custom");
+}
+
+/// A body whose first block is a paragraph keeps the injected title above a
+/// later `# Heading`, as before.
+#[test]
+fn article_with_paragraph_before_body_h1_keeps_injected_title() {
+    let doc = parse_for_test("Page.md", "---\ntitle: Custom\n---\n\nIntro.\n\n# Custom\n\ntext\n", None);
+    assert!(doc.html_content.contains("<h1 class=\"moss-article-title\">Custom</h1>"), "got: {}", doc.html_content);
+    assert_eq!(doc.html_content.matches("<h1").count(), 2, "got: {}", doc.html_content);
+}
+
+/// A root-level non-index file in organized mode is a nav page. It shows its
+/// title like any other page: the nav label may differ from the title, and a
+/// visitor who arrives by search needs the heading.
+#[test]
+fn nav_page_shows_its_article_title() {
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
         "about.md",
@@ -416,14 +448,48 @@ fn nav_page_suppresses_injected_article_title() {
         None,
         None,
         None,
-        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, is_homepage: false },
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, derived_facts: &Default::default(), authored_source: None },
     )
     .expect("should parse");
     assert!(
-        !doc.html_content.contains("moss-article-title"),
-        "nav page must not inject an article title, got: {}",
+        doc.html_content.contains(r#"<h1 class="moss-article-title">about</h1>"#),
+        "nav page must show its title, got: {}",
         doc.html_content
     );
+}
+
+/// A nav page whose body opens with its own `# Title` keeps only that heading:
+/// the injected title is withheld so the title does not appear twice.
+#[test]
+fn nav_page_with_body_heading_has_exactly_one_h1() {
+    let empty_map = HashMap::new();
+    let doc = process_markdown_file(
+        "support.md",
+        "# Support Us\n\nBody paragraph.\n",
+        "site",
+        &empty_map,
+        false,
+        Language::En,
+        None,
+        crate::build::markdown::SiteMarkdown::default(),
+        None,
+        None,
+        None,
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, derived_facts: &Default::default(), authored_source: None },
+    )
+    .expect("should parse");
+    assert_eq!(
+        doc.html_content.matches("<h1").count(),
+        1,
+        "nav page with a body # heading must have exactly one h1, got: {}",
+        doc.html_content
+    );
+    assert!(
+        !doc.html_content.contains(r#"class="moss-article-title""#),
+        "nav page must not inject a title over its body heading, got: {}",
+        doc.html_content
+    );
+    assert!(doc.html_content.contains("Support Us</h1>"));
 }
 
 /// A nested file is never an auto nav page, so it still injects its title.
@@ -442,7 +508,7 @@ fn non_nav_article_still_injects_title() {
         None,
         None,
         None,
-        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, is_homepage: false },
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, derived_facts: &Default::default(), authored_source: None },
     )
     .expect("should parse");
     assert!(
@@ -471,7 +537,7 @@ fn nav_false_restores_article_title() {
         None,
         None,
         None,
-        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, is_homepage: false },
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, derived_facts: &Default::default(), authored_source: None },
     )
     .expect("should parse");
     assert!(
@@ -481,7 +547,36 @@ fn nav_false_restores_article_title() {
     );
 }
 
-/// Suppression drops only the AUTO-injected title; an authored body H1 stays.
+/// A body that opens with an image and then `# Title` already supplies the
+/// page's heading, so a nav page must not add a second one.
+#[test]
+fn nav_page_with_leading_image_then_h1_has_one_h1() {
+    let empty_map = HashMap::new();
+    let doc = process_markdown_file(
+        "about.md",
+        "![cover](cover.jpg)\n\n# Harbour Notes\n\nBody.\n",
+        "site",
+        &empty_map,
+        false,
+        Language::En,
+        None,
+        crate::build::markdown::SiteMarkdown::default(),
+        None,
+        None,
+        None,
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, derived_facts: &Default::default(), authored_source: None },
+    )
+    .expect("should parse");
+    assert_eq!(
+        doc.html_content.matches("<h1").count(),
+        1,
+        "the authored H1 is the page's only heading, got: {}",
+        doc.html_content
+    );
+}
+
+/// On a nav page a body `# Heading` replaces the auto-injected title; the
+/// authored H1 is the one that stays.
 #[test]
 fn nav_page_keeps_authored_body_h1() {
     let empty_map = HashMap::new();
@@ -497,30 +592,32 @@ fn nav_page_keeps_authored_body_h1() {
         None,
         None,
         None,
-        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, is_homepage: false },
+        PageContext { has_content_folders: true, seta_url: None, folder_lang: None, derived_facts: &Default::default(), authored_source: None },
     )
     .expect("should parse");
     assert!(
         !doc.html_content.contains("moss-article-title"),
-        "nav page suppresses the injected title"
+        "nav page with a body # heading must not inject a title"
     );
     assert!(
         doc.html_content.contains("My Heading"),
         "authored body H1 must survive, got: {}",
         doc.html_content
     );
+    assert_eq!(
+        doc.html_content.matches("<h1").count(),
+        1,
+        "a body H1 is the only heading, got: {}",
+        doc.html_content
+    );
 }
 
-/// Regression: an article whose body opens with a section-number H1
-/// (`# 1.`) MUST inject the filename heading above the body. An earlier
-/// 2026-04-28 inference rule suppressed injection when the body's lead
-/// block was an H1; the 2026-04-29 contract removed that inference and
-/// always injects (gated only on `heading: false` and hero-H1).
-///
-/// Original screenshot: 不要去自动化你爱的事 — opened with `# 1.`
-/// and got no visible heading.
+/// An article whose body opens with a section-number H1 (`# 1.`) keeps the
+/// injected title from the filename above that body heading: the body's
+/// opening heading shows as the page's title only when its text equals the
+/// resolved title.
 #[test]
-fn strict_contract_section_number_h1_does_not_suppress_injection() {
+fn strict_contract_section_number_h1_keeps_injected_title() {
     let md = "---\nuid: x\n---\n\n# 1.\n\nIntro text.\n";
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
@@ -601,12 +698,10 @@ fn strict_contract_leading_blockquote_then_section_h1_injects_title() {
     );
 }
 
-/// Obsidian-match: an article whose body opens with `# Title` matching the
-/// resolved title (frontmatter or filename) renders BOTH the injected
-/// `moss-article-title` and the authored body H1 — no dedup. (Replaces the
-/// pre-2026-05-30 `strict_contract_dedup_strips_matching_leading_body_h1`.)
+/// An article whose body opens with `# Title` matching the resolved title
+/// renders that body H1 as the page's only h1.
 #[test]
-fn matching_leading_body_h1_is_kept_alongside_injected_title() {
+fn matching_leading_body_h1_is_the_only_h1() {
     let md = "---\ntitle: Architecture\n---\n\n# Architecture\n\nBody content.\n";
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
@@ -624,24 +719,21 @@ fn matching_leading_body_h1_is_kept_alongside_injected_title() {
         PageContext::default(),
     )
     .expect("should parse");
-    // Two H1s now: the injected article title AND the authored body H1.
     let h1_count = doc.html_content.matches("<h1").count();
     assert_eq!(
-        h1_count, 2,
-        "expected injected title + body H1 (no dedup), got {} in: {}",
+        h1_count, 1,
+        "expected the body H1 as the only h1, got {} in: {}",
         h1_count, doc.html_content
     );
     assert!(
-        doc.html_content
-            .contains("<h1 class=\"moss-article-title\">Architecture</h1>"),
-        "the injected article title must be present, got: {}",
+        !doc.html_content.contains("moss-article-title"),
+        "no title may be injected above a body H1, got: {}",
         doc.html_content
     );
 }
 
-/// Body H1s are never stripped (Obsidian-match). An article whose body's
-/// leading H1 differs from the injected title keeps both the injected
-/// `moss-article-title` and the authored body H1.
+/// An article whose body opens with a `# H1` that differs from `title:`
+/// keeps the injected title above it; `doc.title` still comes from `title:`.
 #[test]
 fn dedup_does_not_strip_when_text_differs() {
     let md = "---\ntitle: Outer\n---\n\n# Inner\n\nBody.\n";
@@ -715,9 +807,8 @@ fn dedup_does_not_strip_buried_h1_matching_filename() {
         );
 }
 
-/// Article with a body H1 whose text differs from `title:`. Under the
-/// 2026-05-06 consolidated rule, the resolved heading (title: value)
-/// is injected, and the differing body H1 survives as a section header.
+/// Article whose body opens with a `# H1` that differs from `title:`: the
+/// injected title stays above the body heading, and `doc.title` comes from `title:`.
 #[test]
 fn article_with_differing_body_h1_renders_both() {
     let md = "---\ntitle: Resolved Title\n---\n\n# Body Heading\n\nContent.\n";
@@ -957,17 +1048,12 @@ fn homepage_body_h1_is_kept_verbatim_no_injection() {
     );
 }
 
-/// The home page (`process_markdown_file`'s `is_homepage: true`, the same
-/// fact that makes `build/render/html.rs` emit `<body data-page="home">`)
-/// suppresses every heading's `#` permalink anchor, not only level 1's. A
-/// reader lands on the home page by visiting the site, never by a deep link
-/// into one of its sections, so a `## Section` there gets no anchor either
-/// — contrast with `ordinary_page_heading_keeps_h2_permalink_anchor` below,
-/// where the identical body renders WITH the anchor because `is_homepage`
-/// is false.
+/// The home page gets the same section permalinks as any other page: each
+/// `##` section has an id and a `#` anchor, so a reader can link to it. The
+/// page's `# Title` (level 1) is never anchored, on the home page or elsewhere.
 #[test]
-fn homepage_heading_suppresses_h2_permalink_anchor() {
-    let md = "---\n---\n## Section\n\nhome body\n";
+fn homepage_sections_keep_permalink_anchors_and_title_has_none() {
+    let md = "---\n---\n# Hero Title\n\n## First\n\nbody\n\n## Second\n\nbody\n";
     let empty_map = HashMap::new();
     let doc = process_markdown_file(
         "index.md",
@@ -981,17 +1067,27 @@ fn homepage_heading_suppresses_h2_permalink_anchor() {
         None,
         None,
         None,
-        PageContext { has_content_folders: false, seta_url: None, folder_lang: None, is_homepage: true },
+        PageContext { has_content_folders: false, seta_url: None, folder_lang: None, derived_facts: &Default::default(), authored_source: None },
     )
     .expect("should parse");
     assert!(
-        doc.html_content.contains("<h2 id=\"section\">Section</h2>"),
-        "home page H2 must keep its id, just not the permalink anchor, got: {}",
+        doc.html_content.contains(
+            "<h2 id=\"first\">First<a class=\"moss-heading-anchor\" href=\"#first\" aria-label=\"Permalink to this section\"></a></h2>"
+        ),
+        "home page H2 must keep its permalink anchor, got: {}",
         doc.html_content
     );
     assert!(
-        !doc.html_content.contains("moss-heading-anchor"),
-        "home page headings must carry no permalink anchor at any level, got: {}",
+        doc.html_content.contains(
+            "<h2 id=\"second\">Second<a class=\"moss-heading-anchor\" href=\"#second\" aria-label=\"Permalink to this section\"></a></h2>"
+        ),
+        "second home page H2 must keep its permalink anchor, got: {}",
+        doc.html_content
+    );
+    assert_eq!(
+        doc.html_content.matches("moss-heading-anchor").count(),
+        2,
+        "only the two sections are anchored; the level-1 title is not, got: {}",
         doc.html_content
     );
 }
@@ -1028,24 +1124,21 @@ fn ordinary_page_heading_keeps_h2_permalink_anchor() {
     );
 }
 
-/// Article (non-index): body H1 text equals the filename-derived title.
-/// `filename_text("posts/my post.md")` == "my post" (stem verbatim, no
-/// title-casing). Both the injected `moss-article-title` and the body H1
-/// render — Obsidian-match: no dedup.
+/// Article whose body opens with a `# H1` equal to the filename-derived
+/// title: the body heading is the page's one h1, with no injected title.
 #[test]
-fn article_body_h1_matching_title_is_not_deduped() {
+fn article_body_h1_matching_title_is_the_only_h1() {
     let md = "---\n---\n# my post\n\nbody\n";
     let doc = parse_for_test("posts/my post.md", md, Some("VaultRoot"));
     assert!(
-        doc.html_content.contains("moss-article-title"),
-        "article title still injected, got: {}",
+        !doc.html_content.contains("moss-article-title"),
+        "no title may be injected above a body H1, got: {}",
         doc.html_content
     );
-    let count = doc.html_content.matches("my post").count();
-    assert!(
-        count >= 2,
-        "expected both injected title and body H1 (no dedup), got {} in: {}",
-        count,
+    assert_eq!(
+        doc.html_content.matches("<h1").count(),
+        1,
+        "got: {}",
         doc.html_content
     );
 }
@@ -1747,7 +1840,7 @@ fn test_pipeline_sets_features_inline_apply_when_shortcode_present() {
         None,
         None,
         None,
-        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, is_homepage: false },
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, derived_facts: &Default::default(), authored_source: None },
     )
     .expect("pipeline should succeed");
     assert!(doc.features.inline_apply, "inline_apply flag must be set");
@@ -2210,8 +2303,8 @@ fn process_markdown_file_omits_data_source_line_when_flag_off() {
     );
 }
 
-/// Task E1 (source-annotation-completeness): shortcode blocks carry a
-/// point `data-source-range="N-N"` on their outermost element when
+/// Shortcode blocks carry `data-source-range="N-M"` (opening through closing
+/// fence) on their outermost element when
 /// `emit_source_lines=true`, so the editor bridge's `resolveSourceTarget`
 /// routes a click on a `:::grid` / `:::hero` back to its source line.
 /// Grid renders inline (Hero is hoisted to the heading slot), so the
@@ -2235,10 +2328,15 @@ fn process_markdown_file_emits_data_source_range_on_shortcode_when_flag_on() {
         PageContext::default(),
     )
     .expect("pipeline should succeed");
-    // The :::grid opener is on body line 3.
+    // The :::grid fence runs from body line 3 to 6; the cell's text is on 4-5.
     assert!(
-        doc.html_content.contains(r#"data-source-range="3-3""#),
-        "grid should carry a point source range on body line 3, got: {}",
+        doc.html_content.contains(r#"data-source-range="3-6""#),
+        "grid should carry its fence range, got: {}",
+        doc.html_content
+    );
+    assert!(
+        doc.html_content.contains(r#"data-source-range="4-5"><p data-source-line="4">left"#),
+        "the cell should carry its range and the line of its paragraph, got: {}",
         doc.html_content
     );
 }
@@ -2683,6 +2781,24 @@ fn render_markdown_to_html_with_respects_heading_anchors_param() {
         "no permalink anchor may appear when heading_anchors=false, got: {}",
         off
     );
+}
+
+#[test]
+fn standalone_document_uses_original_lines_math_and_authored_markdown_links() {
+    let source = "---\ntitle: Preview\n---\n# Heading\n\n[Guide](../guide.md) and $E=mc^2$.\n";
+    let (html, css) = crate::build::markdown::render_standalone_document(source);
+    assert!(html.contains("data-source-line=\"4\""), "frontmatter lines must count: {html}");
+    assert!(html.contains("href=\"../guide.md\""), "standalone links retain .md: {html}");
+    assert!(html.contains("class=\"moss-math\""), "math uses the production typesetter: {html}");
+    assert!(html.contains("<svg"), "math must be typeset by the build hook: {html}");
+    assert!(css.contains("@layer tokens"), "CSS includes moss tokens");
+    assert!(css.contains(".callout"), "CSS includes document callout styles");
+}
+
+#[test]
+fn standalone_document_preserves_raw_html_for_the_embedding_boundary() {
+    let (html, _) = crate::build::markdown::render_standalone_document("<script>example()</script>\n");
+    assert!(html.contains("<script>example()</script>"), "renderer leaves raw HTML to caller policy: {html}");
 }
 
 /// Parse with production defaults and return the doc's merged tag set.
@@ -3378,6 +3494,36 @@ fn parse_with_graph_cfg(
     .expect("should parse")
 }
 
+/// A click inside a hoisted hero must reach the line it came from: the
+/// section spans the fence, and the overlay's blocks carry their own lines.
+#[test]
+fn hoisted_hero_spans_its_fence_and_annotates_overlay_lines() {
+    let md = "\n:::hero {align=center}\n![[busy.png]]\n# Short heading\n\nOne line of overlay text.\n:::\n\nBody text below the hero.\n";
+    let mut b = moss_core::content_graph::ContentGraphBuilder::new();
+    b.add_file("busy.png", "busy");
+    let graph = b.build();
+    let doc = process_markdown_file(
+        "test.md",
+        md,
+        "site",
+        &HashMap::new(),
+        true,
+        crate::i18n::Language::En,
+        None,
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
+        None,
+        None,
+        Some(&graph),
+        PageContext::default(),
+    )
+    .expect("should parse");
+    let hero = doc.hero_html.expect("hero hoisted");
+    assert!(hero.contains(r#"data-source-range="2-7""#), "got: {hero}");
+    assert!(hero.contains(r#"<h1 id="short-heading" data-source-line="4""#), "got: {hero}");
+    assert!(hero.contains(r#"<p data-source-line="6">One line"#), "got: {hero}");
+    assert!(doc.html_content.contains(r#"<p data-source-line="9">Body text"#), "got: {}", doc.html_content);
+}
+
 #[test]
 fn video_embed_plain_end_to_end() {
     let html = render_with_graph("![[clip.mov]]\n", &["clip.mov"]);
@@ -3451,6 +3597,27 @@ fn wikilink_image_sizing_survives_hero_overlay_end_to_end() {
     );
 }
 
+/// The first embed on a hero fence's first line is the primary slide, so the
+/// alt text the author wrote on it is the picture's alt. Without alt text the
+/// picture stays decorative (`alt=""`).
+#[test]
+fn hero_first_embed_alt_text_becomes_the_picture_alt() {
+    let hero = render_hero_with_graph(
+        ":::hero\n![A concert hall with its stage lit](hall.jpg)\n# Title\n:::\n",
+        &["hall.jpg"],
+    );
+    assert!(
+        hero.contains(r#"alt="A concert hall with its stage lit""#),
+        "hero picture lost the author's alt text: {hero}"
+    );
+
+    let decorative = render_hero_with_graph(":::hero\n![](hall.jpg)\n# Title\n:::\n", &["hall.jpg"]);
+    assert!(
+        decorative.contains(r#"alt="""#) && !decorative.contains("concert"),
+        "an embed without alt text must keep alt=\"\": {decorative}"
+    );
+}
+
 // ---- per-page language tests ----
 
 /// A `:::apply` shortcode on a `zh-hans/` page in an English-default site
@@ -3473,7 +3640,7 @@ fn per_page_language_apply_in_zh_hans_subdir() {
         None,
         None,
         None,
-        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, is_homepage: false },
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, derived_facts: &Default::default(), authored_source: None },
     )
     .expect("should parse");
     assert!(
@@ -3516,7 +3683,7 @@ fn per_page_language_subscribe_in_zh_hans_subdir() {
         None,
         None,
         None,
-        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, is_homepage: false },
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, derived_facts: &Default::default(), authored_source: None },
     )
     .expect("should parse");
     assert!(
@@ -3555,7 +3722,7 @@ fn per_page_language_apply_en_page_in_zh_hans_site() {
         None,
         None,
         None,
-        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, is_homepage: false },
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, derived_facts: &Default::default(), authored_source: None },
     )
     .expect("should parse");
     assert!(
@@ -3671,13 +3838,21 @@ fn schema_type_mismatch_warns_at_build() {
 #[test]
 fn schema_enum_violation_warns_at_build() {
     let warnings =
-        schema_frontmatter_warnings("index.md", &fm_of("title: Hi\nchildren_style: carousel"));
+        schema_frontmatter_warnings("index.md", &fm_of("title: Hi\nchildren_group: sideways"));
     assert_eq!(warnings.len(), 1, "got: {warnings:?}");
     assert!(
-        warnings[0].contains("'children_style'") && warnings[0].contains("carousel"),
+        warnings[0].contains("'children_group'") && warnings[0].contains("sideways"),
         "warning must name the field and the bad value, got: {}",
         warnings[0]
     );
+}
+
+/// A plugin may contribute a `children_style` value this static schema cannot
+/// know, so the build's listing pass judges it, not the schema.
+#[test]
+fn children_style_is_judged_by_the_listing_pass_not_the_static_schema() {
+    let warnings = schema_frontmatter_warnings("index.md", &fm_of("title: Hi\nchildren_style: carousel"));
+    assert!(warnings.is_empty(), "got: {warnings:?}");
 }
 
 /// Date-format problems are `Warning`, not `Error` — both severities surface.
@@ -3837,4 +4012,489 @@ fn italic_line_under_an_image_in_a_grid_cell_is_a_caption() {
     assert!(html.contains(r#"alt="A lake at dusk""#), "got: {html}");
     assert!(html.contains("Credit. CC0."), "got: {html}");
     assert!(html.contains("<figcaption>"), "got: {html}");
+}
+
+#[test]
+fn bare_trailing_pipe_renders_alt_without_a_figcaption() {
+    let html = render_markdown_to_html("![Two dancers face each other on a pink stage|](x.jpg)\n");
+    assert!(html.contains(r#"alt="Two dancers face each other on a pink stage""#), "got: {html}");
+    assert!(!html.contains("figcaption"), "got: {html}");
+}
+
+#[test]
+fn hero_header_over_marks_only_the_opening_hero() {
+    let opening = render_hero_with_graph(
+        ":::hero {image=h.jpg header=over}\n# Title\n:::\n\nBody.\n",
+        &["h.jpg"],
+    );
+    assert!(opening.contains(r#"data-header="over""#), "got: {opening}");
+
+    let later = render_hero_with_graph(
+        "Intro.\n\n:::hero {image=h.jpg header=over}\n# Title\n:::\n",
+        &["h.jpg"],
+    );
+    assert!(!later.contains("data-header"), "got: {later}");
+}
+
+#[test]
+fn header_over_is_not_applied_to_a_later_hero_after_a_plain_opening_hero() {
+    let parsed = parse_with_graph(
+        ":::hero {image=h.jpg}\n# Title\n:::\n\nIntro.\n\n:::hero {image=h.jpg header=over}\n# Later\n:::\n",
+        &["h.jpg"],
+    );
+    let opening = parsed.hero_html.expect("opening hero");
+    assert!(!opening.contains("data-header"), "got: {opening}");
+    assert!(!parsed.html_content.contains("data-header"), "got: {}", parsed.html_content);
+}
+
+#[test]
+fn header_over_marks_only_the_first_of_two_opening_heroes() {
+    let parsed = parse_with_graph(
+        ":::hero {image=h.jpg header=over}\n# A\n:::\n\n:::hero {image=h.jpg header=over}\n# B\n:::\n",
+        &["h.jpg"],
+    );
+    let first = parsed.hero_html.expect("first hero");
+    assert!(first.contains(r#"data-header="over""#), "got: {first}");
+    assert!(!parsed.html_content.contains("data-header"), "got: {}", parsed.html_content);
+}
+
+#[test]
+fn alt_only_with_a_placement_keeps_the_width_and_drops_the_caption() {
+    let page = render_markdown_to_html("![A lake|page|](p.jpg)\n");
+    assert!(page.contains(r#"alt="A lake""#), "got: {page}");
+    assert!(page.contains(r#"data-width="page""#), "got: {page}");
+    assert!(!page.contains("figcaption"), "got: {page}");
+    assert!(!page.contains('|'), "got: {page}");
+
+    let percent = render_markdown_to_html("![A lake|55%|](p.jpg)\n");
+    assert!(percent.contains(r#"alt="A lake""#), "got: {percent}");
+    assert!(percent.contains("width:55%"), "got: {percent}");
+    assert!(!percent.contains("figcaption"), "got: {percent}");
+    assert!(!percent.contains('|'), "got: {percent}");
+}
+
+// ---- the page's opening image loads eagerly ----
+
+/// A media lookup that knows each path at 1200x800, so body images take the
+/// snapshot path (`<picture>`, dimensions, `loading=`) rather than the bare
+/// fallback that carries no loading attribute.
+fn lookup_for(paths: &[&str]) -> crate::build::media::dimensions::MediaDimensionLookup {
+    let images: Vec<crate::types::content::MediaMetadata> = paths
+        .iter()
+        .map(|p| crate::types::content::MediaMetadata {
+            is_animated: false,
+            path: p.to_string(),
+            file_type: "jpg".to_string(),
+            size: 0,
+            modified: None,
+            dimensions: Some((1200, 800)),
+            dominant_color: None,
+            lqip_data_uri: None,
+        })
+        .collect();
+    crate::build::media::dimensions::MediaDimensionLookup::new(&images, &[], &HashMap::new(), None)
+}
+
+fn parse_with_lookup(
+    md: &str,
+    lookup: &crate::build::media::dimensions::MediaDimensionLookup,
+) -> crate::build::types::ParsedDocument {
+    let empty_map = HashMap::new();
+    process_markdown_file(
+        "test.md",
+        md,
+        "site",
+        &empty_map,
+        false,
+        Language::En,
+        None,
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
+        Some(lookup),
+        None,
+        None,
+        PageContext::default(),
+    )
+    .expect("should parse")
+}
+
+/// Every `<img …>` tag in an HTML fragment, in document order.
+fn img_tags(html: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = html;
+    while let Some(start) = rest.find("<img ") {
+        let after = &rest[start..];
+        let end = after.find('>').map_or(after.len(), |e| e + 1);
+        out.push(&after[..end]);
+        rest = &after[end..];
+    }
+    out
+}
+
+fn is_eager(img: &str) -> bool {
+    img.contains(r#"loading="eager""#) && img.contains(r#"fetchpriority="high""#)
+}
+
+fn is_lazy(img: &str) -> bool {
+    img.contains(r#"loading="lazy""#) && !img.contains("fetchpriority")
+}
+
+#[test]
+fn leading_body_image_loads_eagerly_and_later_images_stay_lazy() {
+    let lookup = lookup_for(&["harbour.jpg", "second.jpg"]);
+    let doc = parse_with_lookup(
+        "![Harbour](harbour.jpg)\n\nSome text.\n\n![Second](second.jpg)\n",
+        &lookup,
+    );
+    let imgs = img_tags(&doc.html_content);
+    assert_eq!(imgs.len(), 2, "expected two body images: {}", doc.html_content);
+    assert!(is_eager(imgs[0]), "leading image must load eagerly: {}", imgs[0]);
+    assert!(is_lazy(imgs[1]), "later image must stay lazy: {}", imgs[1]);
+}
+
+#[test]
+fn body_image_after_two_text_blocks_is_not_the_leading_image() {
+    let lookup = lookup_for(&["late.jpg"]);
+    let doc = parse_with_lookup("First paragraph.\n\nSecond paragraph.\n\n![Late](late.jpg)\n", &lookup);
+    let imgs = img_tags(&doc.html_content);
+    assert_eq!(imgs.len(), 1, "{}", doc.html_content);
+    assert!(is_lazy(imgs[0]), "image below two text blocks must stay lazy: {}", imgs[0]);
+}
+
+#[test]
+fn body_image_stays_lazy_when_a_hero_already_loads_eagerly() {
+    let lookup = lookup_for(&["harbour.jpg", "second.jpg"]);
+    let doc = parse_with_lookup(
+        ":::hero\n![Cover](harbour.jpg)\n# Title\n:::\n\n![Second](second.jpg)\n",
+        &lookup,
+    );
+    let hero = doc.hero_html.as_deref().expect("source declares a :::hero block");
+    let hero_imgs = img_tags(hero);
+    assert_eq!(hero_imgs.len(), 1, "{hero}");
+    assert!(is_eager(hero_imgs[0]), "hero image must stay eager: {}", hero_imgs[0]);
+    let imgs = img_tags(&doc.html_content);
+    assert_eq!(imgs.len(), 1, "{}", doc.html_content);
+    assert!(is_lazy(imgs[0]), "body image must stay lazy beside a hero: {}", imgs[0]);
+}
+
+#[test]
+fn grid_cell_image_neither_loads_eagerly_nor_takes_the_leading_slot() {
+    let lookup = lookup_for(&["harbour.jpg", "cell.jpg"]);
+    let doc = parse_with_lookup(
+        ":::grid 2\n![Cell](cell.jpg)\n+++\nPlain text\n:::\n\n![Harbour](harbour.jpg)\n",
+        &lookup,
+    );
+    let imgs = img_tags(&doc.html_content);
+    assert_eq!(imgs.len(), 2, "{}", doc.html_content);
+    assert!(is_lazy(imgs[0]), "grid cell image must stay lazy: {}", imgs[0]);
+    assert!(is_eager(imgs[1]), "the body image after the grid is the opening image: {}", imgs[1]);
+}
+
+#[test]
+fn body_image_sharing_a_grid_cells_file_name_takes_the_eager_slot() {
+    let lookup = lookup_for(&["cell.jpg"]);
+    let doc = parse_with_lookup(
+        ":::grid 2\n![Cell](cell.jpg)\n+++\nPlain text\n:::\n\n![Body](cell.jpg)\n",
+        &lookup,
+    );
+    let imgs = img_tags(&doc.html_content);
+    assert_eq!(imgs.len(), 2, "{}", doc.html_content);
+    assert!(is_lazy(imgs[0]), "grid cell must stay lazy: {}", imgs[0]);
+    assert!(is_eager(imgs[1]), "the body image is the opening image: {}", imgs[1]);
+}
+
+#[test]
+fn a_page_of_five_images_has_exactly_one_eager_image() {
+    let names = ["a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg"];
+    let lookup = lookup_for(&names);
+    let md: String = names
+        .iter()
+        .map(|n| format!("![{n}]({n})\n\nSome text about {n}.\n\n"))
+        .collect();
+    let doc = parse_with_lookup(&md, &lookup);
+    let imgs = img_tags(&doc.html_content);
+    assert_eq!(imgs.len(), 5, "{}", doc.html_content);
+    assert!(is_eager(imgs[0]), "the first image is eager: {}", imgs[0]);
+    assert_eq!(
+        imgs.iter().filter(|img| img.contains(r#"loading="eager""#)).count(),
+        1,
+        "{}",
+        doc.html_content
+    );
+}
+
+#[test]
+fn footer_partial_image_never_loads_eagerly() {
+    let lookup = lookup_for(&["harbour.jpg", "second.jpg"]);
+    let empty_map = HashMap::new();
+    let doc = process_markdown_file(
+        "footer.md",
+        "![Harbour](harbour.jpg)\n\nSome footer text.\n\n![Second](second.jpg)\n",
+        "site",
+        &empty_map,
+        false,
+        Language::En,
+        None,
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
+        Some(&lookup),
+        None,
+        None,
+        PageContext::default(),
+    )
+    .expect("should parse");
+    let imgs = img_tags(&doc.html_content);
+    assert_eq!(imgs.len(), 2, "{}", doc.html_content);
+    assert!(imgs.iter().all(|img| is_lazy(img)), "partial images must stay lazy: {}", doc.html_content);
+}
+
+// ---- one eager image per page, including folder embeds ----
+
+fn parse_page_with_graph(
+    md: &str,
+    lookup: &crate::build::media::dimensions::MediaDimensionLookup,
+) -> crate::build::types::ParsedDocument {
+    let mut b = moss_core::content_graph::ContentGraphBuilder::new();
+    b.add_file("journal/a.md", "a");
+    let graph = b.build();
+    // Production resolves folder embeds into markers before parsing the page.
+    let handlers = crate::build::embed_handlers::builtin_marker_handlers(
+        std::path::PathBuf::from("."),
+        Language::En,
+    );
+    let resolved = moss_core::resolve::resolve_content_with_derivations(
+        "test.md",
+        md,
+        &graph,
+        &|_| None,
+        &handlers,
+        &moss_core::asset_snapshot::AssetSnapshot::new(),
+        None,
+    );
+    process_markdown_file(
+        "test.md",
+        &resolved.content_markdown,
+        "site",
+        &HashMap::new(),
+        false,
+        Language::En,
+        None,
+        crate::build::markdown::SiteMarkdown { implicit_figure: true, ..Default::default() },
+        Some(lookup),
+        None,
+        Some(&graph),
+        PageContext::default(),
+    )
+    .expect("should parse")
+}
+
+/// The journal that `![[journal/|style:grid]]` embeds: two dated articles,
+/// each with a cover unless `covers` is false.
+fn journal_docs_with(covers: bool) -> Vec<crate::build::types::ParsedDocument> {
+    let article = |path: &str, label: &str, date: &str, cover: &str| {
+        crate::build::types::ParsedDocument {
+            url_path: path.to_string(),
+            label: label.to_string(),
+            title: label.to_string(),
+            clean_stem: label.to_lowercase(),
+            date: Some(date.to_string()),
+            kind: moss_core::PageKind::Article,
+            cover: covers.then(|| cover.to_string()),
+            ..Default::default()
+        }
+    };
+    vec![
+        crate::build::folder_embed::tests::make_folder_doc("journal/index.html", "Journal"),
+        article("journal/a.html", "Alpha", "2025-02-01", "a.jpg"),
+        article("journal/b.html", "Beta", "2025-01-01", "b.jpg"),
+    ]
+}
+
+/// The page's HTML with its folder embeds resolved against `docs`, as the
+/// build emits it.
+fn resolved_body_in(
+    doc: &crate::build::types::ParsedDocument,
+    lookup: &crate::build::media::dimensions::MediaDimensionLookup,
+    docs: &[crate::build::types::ParsedDocument],
+) -> String {
+    crate::build::folder_embed::resolve_markers(
+        &doc.html_content,
+        "test.md",
+        docs,
+        &crate::build::folder_embed::tests::test_project(),
+        &HashMap::new(),
+        Language::En,
+        None,
+        Some(lookup),
+        false,
+    )
+}
+
+fn resolved_body(
+    doc: &crate::build::types::ParsedDocument,
+    lookup: &crate::build::media::dimensions::MediaDimensionLookup,
+) -> String {
+    resolved_body_in(doc, lookup, &journal_docs_with(true))
+}
+
+fn eager_count(html: &str) -> usize {
+    html.matches(r#"loading="eager""#).count()
+}
+
+fn lookup_with_covers() -> crate::build::media::dimensions::MediaDimensionLookup {
+    lookup_for(&["harbour.jpg", "a.jpg", "b.jpg"])
+}
+
+#[test]
+fn hero_and_folder_embed_leave_one_eager_image_the_heros() {
+    let lookup = lookup_with_covers();
+    let doc = parse_page_with_graph(
+        ":::hero\n![Cover](harbour.jpg)\n# Title\n:::\n\nIntro.\n\n![[journal/|style:grid]]\n",
+        &lookup,
+    );
+    assert!(doc.html_content.contains("lazy_cards"), "the embed's cards must be marked lazy");
+    let hero = doc.hero_html.as_deref().expect("source declares a :::hero block");
+    let body = resolved_body(&doc, &lookup);
+    assert_eq!(eager_count(hero), 1, "the hero keeps its eager image: {hero}");
+    assert_eq!(eager_count(&body), 0, "the embed's covers must not be eager: {body}");
+}
+
+#[test]
+fn hero_and_folder_embed_inside_a_grid_cell_leave_one_eager_image() {
+    let lookup = lookup_with_covers();
+    let doc = parse_page_with_graph(
+        ":::hero\n![Cover](harbour.jpg)\n# Title\n:::\n\n:::grid 2\n![[journal/|style:grid]]\n+++\nPlain text\n:::\n",
+        &lookup,
+    );
+    let hero = doc.hero_html.as_deref().expect("source declares a :::hero block");
+    let body = resolved_body(&doc, &lookup);
+    assert_eq!(eager_count(hero), 1, "the hero keeps its eager image: {hero}");
+    assert_eq!(eager_count(&body), 0, "a nested embed's covers must not be eager: {body}");
+}
+
+#[test]
+fn hero_and_inline_folder_embed_leave_one_eager_image() {
+    let lookup = lookup_with_covers();
+    let doc = parse_page_with_graph(
+        ":::hero\n![Cover](harbour.jpg)\n# Title\n:::\n\nSee the journal ![[journal/|style:grid]] for more.\n",
+        &lookup,
+    );
+    let hero = doc.hero_html.as_deref().expect("source declares a :::hero block");
+    let body = resolved_body(&doc, &lookup);
+    assert!(doc.html_content.contains("lazy_cards"), "an inline embed's cards must be marked lazy");
+    assert_eq!(eager_count(hero), 1, "the hero keeps its eager image: {hero}");
+    assert_eq!(eager_count(&body), 0, "an inline embed's covers must not be eager: {body}");
+}
+
+#[test]
+fn folder_embed_after_a_paragraph_gets_the_eager_slot() {
+    // Pins existing behaviour: this passes without the change too, since the
+    // embed's first cover was already eager. It guards that the change does not
+    // take the slot from the page's opening embed.
+    let lookup = lookup_with_covers();
+    let doc = parse_page_with_graph("A paragraph.\n\n![[journal/|style:grid]]\n", &lookup);
+    assert!(!doc.html_content.contains("lazy_cards"), "the opening embed is not lazy");
+    let body = resolved_body(&doc, &lookup);
+    assert_eq!(eager_count(&body), 1, "the first cover is the page's eager image: {body}");
+}
+
+#[test]
+fn leading_image_before_a_folder_embed_keeps_the_only_eager_slot() {
+    let lookup = lookup_with_covers();
+    let doc = parse_page_with_graph(
+        "![Harbour](harbour.jpg)\n\nText here.\n\n![[journal/|style:grid]]\n",
+        &lookup,
+    );
+    let imgs = img_tags(&doc.html_content);
+    assert!(is_eager(imgs[0]), "the leading image is eager: {}", doc.html_content);
+    assert_eq!(eager_count(&doc.html_content), 1, "{}", doc.html_content);
+    let body = resolved_body(&doc, &lookup);
+    assert_eq!(eager_count(&body), 1, "only the leading image is eager: {body}");
+    assert!(
+        img_tags(&body).iter().filter(|img| is_eager(img)).all(|img| img.contains("harbour.jpg")),
+        "the eager image must be the leading one: {body}"
+    );
+}
+
+#[test]
+fn only_the_first_folder_embed_of_a_page_is_eager() {
+    let lookup = lookup_with_covers();
+    let doc = parse_page_with_graph(
+        "![[journal/|style:grid]]\n\nSome text.\n\n![[journal/|style:grid]]\n",
+        &lookup,
+    );
+    let body = resolved_body(&doc, &lookup);
+    assert_eq!(eager_count(&body), 1, "two embeds, one eager cover: {body}");
+}
+
+#[test]
+fn an_opening_embed_without_covers_takes_the_slot_and_the_page_has_no_eager_image() {
+    let lookup = lookup_with_covers();
+    let doc = parse_page_with_graph(
+        "A paragraph.\n\n![[journal/|style:grid]]\n\nMore text.\n\n![[journal/|style:grid]]\n",
+        &lookup,
+    );
+    assert_eq!(
+        doc.html_content.matches("lazy_cards").count(),
+        1,
+        "only the later embed is lazy: {}",
+        doc.html_content
+    );
+    let body = resolved_body_in(&doc, &lookup, &journal_docs_with(false));
+    assert_eq!(eager_count(&body), 0, "no cover, no eager image: {body}");
+}
+
+#[test]
+fn an_author_cannot_turn_on_the_lazy_flag_from_the_embed_options() {
+    // Pins existing behaviour: `lazy_cards` is not a pothole key, so it is
+    // caption text and the first embed keeps the page's eager slot. This
+    // passes without the change too.
+    let lookup = lookup_with_covers();
+    let doc = parse_page_with_graph(
+        "A paragraph.\n\n![[journal/|style:grid|lazy_cards]]\n",
+        &lookup,
+    );
+    let body = resolved_body(&doc, &lookup);
+    assert_eq!(eager_count(&body), 1, "a typed flag must not take the slot away: {body}");
+}
+
+#[test]
+fn a_blank_title_or_description_takes_the_inferred_fact_and_a_written_one_wins() {
+    let facts = moss_core::resolve::embeds::derived::DerivedFacts {
+        title: Some("Derived title".into()),
+        description: Some("Derived words".into()),
+    };
+    let parse = |source: &str| {
+        process_markdown_file(
+            "about.md",
+            source,
+            "site",
+            &HashMap::new(),
+            false,
+            Language::En,
+            None,
+            crate::build::markdown::SiteMarkdown::default(),
+            None,
+            None,
+            None,
+            PageContext { has_content_folders: true, seta_url: None, folder_lang: None, derived_facts: &facts, authored_source: None },
+        )
+        .expect("should parse")
+    };
+    let blank = parse("---\ntitle: \"\"\ndescription: \"\"\ninferred: [title, description]\n---\nBody paragraph.\n");
+    assert_eq!(blank.title, "Derived title");
+    assert_eq!(blank.description.as_deref(), Some("Derived words"));
+    let written = parse("---\ntitle: Mine\ndescription: Mine too\ninferred: [title, description]\n---\nBody paragraph.\n");
+    assert_eq!((written.title.as_str(), written.description.as_deref()), ("Mine", Some("Mine too")));
+    let unlisted = parse("---\ntitle: \"\"\n---\nBody paragraph.\n");
+    assert_ne!(unlisted.title, "Derived title");
+}
+
+#[test]
+fn children_count_text_without_a_placeholder_warns() {
+    use moss_core::frontmatter_union::ChildrenCount;
+    let warning = children_count_warning("index.md", Some(&ChildrenCount("productions".into())))
+        .expect("a text with no {n} warns");
+    assert!(warning.contains("index.md") && warning.contains("children_count"), "{warning}");
+    assert_eq!(children_count_warning("index.md", Some(&ChildrenCount("{n} productions".into()))), None);
+    assert_eq!(children_count_warning("index.md", Some(&ChildrenCount(String::new()))), None);
+    assert_eq!(children_count_warning("index.md", None), None);
 }

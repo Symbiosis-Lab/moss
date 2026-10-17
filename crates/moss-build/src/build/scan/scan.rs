@@ -1071,9 +1071,13 @@ pub fn scan_folder_with_dedup_emit_with_error(
     let mut video_files = Vec::new();
     let mut notebook_files = Vec::new();
     let mut other_files = Vec::new();
-    // Every non-excluded content directory (project-relative, raw path). Lets
-    // the renderer emit an index page for EVERY folder, including empty ones.
+    // Every non-excluded directory (project-relative, raw path) that holds a
+    // file beneath it. Narrowed to those after the walk.
     let mut dirs: Vec<String> = Vec::new();
+    let folders_holding_files = crate::build::scan::classify::folders_holding_files(
+        entries.iter().filter(|(e, _)| !e.file_type().is_dir()).map(|(e, _)| e.path()),
+        path,
+    );
     let mut evicted_count: usize = 0;
     let mut evicted_paths: Vec<std::path::PathBuf> = Vec::new();
     let mut found_count: usize = 0;
@@ -1082,9 +1086,10 @@ pub fn scan_folder_with_dedup_emit_with_error(
 
     for (entry, metadata) in entries {
         // Skip directories, only process files — but first record the
-        // directory path so empty/childless folders still get an index page.
-        // The WalkDir `filter_entry` above already pruned excluded dirs
-        // (`.moss`, `.git`, dotfiles, `node_modules`), so any directory entry
+        // directory path as a candidate folder (narrowed to the ones holding
+        // a file once the walk is done). The WalkDir `filter_entry` above
+        // already pruned excluded dirs (`.moss`, `.git`, dotfiles,
+        // `node_modules`), so any directory entry
         // reaching here is an allowed content folder — this mirrors the file
         // exclusions exactly. Skip the scanned root itself (depth 0), whose
         // page is the homepage rather than a folder index. Symlinks and other
@@ -1184,10 +1189,10 @@ pub fn scan_folder_with_dedup_emit_with_error(
             }
             ScanBucket::Video => {
                 // Videos use FFmpeg for dimensions and dominant color, with caching.
-                // Lazy resolution (Task 4): FFmpeg is only downloaded/detected when
+                // Lazy resolution (Task 4): FFmpeg is only detected when
                 // the first video file is encountered during the directory walk.
                 let ffmpeg = ffmpeg_cell.get_or_init(|| {
-                    match FFmpegManager::get_or_download(None) {
+                    match FFmpegManager::find() {
                         Ok(mgr) => Some(mgr),
                         Err(e) => {
                             log::debug!("FFmpeg not available during scan: {}", e);
@@ -1485,9 +1490,16 @@ pub fn scan_folder_with_dedup_emit_with_error(
         video_files.retain(|f| !crate::build::scan::classify::is_in_passthrough(&f.path, &passthrough_roots));
     }
 
+    // A folder is shown only once something lives beneath it. Git does not track
+    // empty folders, so a folder emptied by moving its pages out would otherwise
+    // publish a blank page with a sitemap entry.
     // Narrow `dirs` to what it is FOR — see `classify::gets_index_page`.
     let attachment_folder = crate::build::site_config::load_attachment_folder(folder_path);
     dirs.retain(|d| crate::build::scan::classify::gets_index_page(d, &passthrough_roots, &attachment_folder));
+    // Name only folders that would have a page once they hold something (not an
+    // empty attachment folder or a folder inside a passthrough root).
+    let empty_folders = crate::build::scan::classify::topmost_empty_folders(&dirs, &folders_holding_files);
+    dirs.retain(|d| folders_holding_files.contains(d));
     // Skip the listing of a folder that only carries a pre-built app (see
     // `classify::holds_only_prebuilt_apps`). Empty and asset-only folders keep
     // theirs: `folder_index_plan_tests` pins that.
@@ -1519,6 +1531,7 @@ pub fn scan_folder_with_dedup_emit_with_error(
         has_language_trees,
         passthrough_roots,
         dirs,
+        empty_folders,
     };
     crate::build::scan::case_collision::warn_case_colliding_files(&structure);
     Ok(structure)

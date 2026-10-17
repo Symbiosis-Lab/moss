@@ -21,6 +21,7 @@
   "files": [
     "dist",
     "src/cm6/cm-shortcode-block.css",
+    "fixtures",
     "README.md"
   ],
   "scripts": {
@@ -45,7 +46,6 @@
   },
   "peerDependencies": {
     "@codemirror/language": "^6",
-    "@codemirror/lint": "^6",
     "@codemirror/state": "^6",
     "@codemirror/view": "^6",
     "@lezer/highlight": "^1",
@@ -54,7 +54,6 @@
   "devDependencies": {
     "@codemirror/lang-markdown": "^6.5.1",
     "@codemirror/language": "^6.12.4",
-    "@codemirror/lint": "6.9.5",
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.43.6",
     "@lezer/highlight": "^1.2.3",

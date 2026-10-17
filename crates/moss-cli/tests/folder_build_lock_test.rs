@@ -180,23 +180,21 @@ fn a_second_process_waits_for_the_folder_build_lock_the_first_process_holds() {
     }
 }
 
-/// Cross-process promotion ORDER, not just exclusion. `infra::folder_lock`
-/// keeps two processes' render-then-promote windows from overlapping in
-/// time, but says nothing on its own about which one runs first: an OLDER
-/// admission whose tail is merely slower to reach its own promote can still
-/// arrive AFTER a NEWER admission already promoted, and (without checking
+/// Cross-process promotion ORDER, not just exclusion. A long-lived runtime
+/// (the app, `moss build --serve --watch`) releases `infra::folder_lock`
+/// after its render and promotes later, from a debounced materialize. A
+/// build that rendered EARLIER can therefore reach its promote AFTER one that
+/// rendered later already promoted, and (without checking
 /// `infra::folder_lock::last_promoted_epoch`) overwrite that newer output
 /// with its own stale one.
 ///
-/// Reproducing the RACE itself with two real `moss-cli build` children
-/// fighting over the actual wall clock is not reliable: window 1 (render)
-/// and window 2 (promote) share ONE lock per folder, so nothing this test
-/// could hold or signal to stall one child's window 2 can do so without also
-/// stalling a second child's window 1 — there is no way to let a second
-/// build run its own render-then-promote to completion while the first is
-/// paused on that very same lock. So instead of racing two children through
-/// the lock, this test assigns each child's admission explicitly via
-/// `MOSS_TEST_ADMISSION_NANOS` (see its doc in `build.rs`), independent of
+/// Reproducing the RACE itself with two real `moss-cli build` children is
+/// not possible: a one-shot build holds the folder lock from its render
+/// through its promotion, so a second child cannot render, let alone
+/// promote, while the first is anywhere in between. So instead of racing two
+/// children through the lock, this test assigns each child's lock-time stamp
+/// explicitly via `MOSS_TEST_ADMISSION_NANOS` (see its doc in
+/// `build/pipeline.rs`), independent of
 /// which one actually RUNS first — the same way `MOSS_HOME` already makes a
 /// folder path independent of who set it. Running the higher-admission
 /// child first and the lower-admission one second is exactly "an older
@@ -205,7 +203,7 @@ fn a_second_process_waits_for_the_folder_build_lock_the_first_process_holds() {
 ///
 /// Verifies the persisted epoch file directly
 /// (`infra::folder_lock::last_promoted_epoch`), the same public primitive
-/// `advertise_sealed` itself reads and writes — `record_promoted_epoch` is
+/// `run_materialize_phase` itself reads and writes — `record_promoted_epoch` is
 /// called if and only if `materialize_and_promote` just returned
 /// `Promoted`, so the epoch value after the older admission's attempt is a
 /// direct check of whether that attempt was refused.

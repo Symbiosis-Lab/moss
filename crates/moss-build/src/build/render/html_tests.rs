@@ -31,6 +31,7 @@ fn render_for_build(
         site_config,
         &mut pending,
         exits_after_build,
+        false,
     )
     .expect("generate_blocking_content_for_build should succeed");
     crate::build::emit::slots::write_as_rendered(&output_dir, pending.take_unwritten_pages()).unwrap();
@@ -1611,6 +1612,45 @@ mod auto_folder_index_tests {
             if zh_synthetic { "get" } else { "skip" }
         );
     }
+
+    /// A folder index marked `nav: true` with no body heading shows its title.
+    #[test]
+    fn nav_folder_index_shows_visible_folder_title() {
+        let (test_dir, _cleanup) = create_test_dir("nav_folder_visible_title");
+
+        fs::write(test_dir.join("index.md"), "# My Site").unwrap();
+        let folder = test_dir.join("Projects");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("index.md"), "---\nnav: true\n---\n\nWelcome.\n").unwrap();
+        fs::write(
+            folder.join("First Project.md"),
+            "---\ntitle: First Project\ndate: 2024-01-01\n---\nA project.",
+        )
+        .unwrap();
+
+        let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
+        fs::create_dir_all(&output_dir).unwrap();
+        let project_structure =
+            scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");
+        generate_blocking_content(
+            &crate::vault::paths::VaultRoot::resolve(&test_dir),
+            &project_structure,
+            &output_dir,
+            None,
+            None,
+            true,
+            SiteConfig::default(),
+            &mut crate::build::render::html::tests::pending_for_render(SiteHashes::default(), &output_dir),
+        )
+        .expect("generate_blocking_content should succeed");
+
+        let content = fs::read_to_string(output_dir.join("projects").join("index.html"))
+            .expect("folder index should be rendered");
+        assert!(
+            content.contains(r#"<h1 class="moss-folder-title" data-source-fm="title">Projects</h1>"#),
+            "nav folder must show a visible folder title, got:\n{content}"
+        );
+    }
 }
 
 // (removed) comments_attr_tests asserted the three-way `data-comments` logic
@@ -2790,6 +2830,7 @@ mod children_field_tests {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
+            empty_folders: Vec::new(),
         }
     }
 
@@ -3198,8 +3239,32 @@ mod children_field_tests {
         let html = render_page(Some(&homepage), &all_docs, true);
 
         assert!(
-            html.contains(r#"<body data-page="home">"#),
-            "homepage should carry data-page=\"home\""
+            html.contains(r#"<body data-page="home" data-path="/">"#),
+            "homepage should carry data-page=\"home\" and its address"
+        );
+    }
+
+    /// `data-path` is the page's published address, so a theme can scope one
+    /// inner page (or a section) without guessing at its markup. The language
+    /// prefix is part of the address, as it is in the sitemap and in links.
+    #[test]
+    fn an_inner_page_says_its_published_address_on_its_body_tag() {
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+        let article = make_doc("My Article", "articles/my-article/index.html");
+        let all_docs = vec![homepage, article.clone()];
+        let html = render_page(Some(&article), &all_docs, false);
+        assert!(
+            html.contains(r#"<body data-path="/articles/my-article/">"#),
+            "an inner page's body carries its address. Got: {html}"
+        );
+
+        let mut localized = make_doc("Localized", "zh-hans/about/index.html");
+        localized.lang = Language::ZhHans;
+        let html = render_page(Some(&localized), &all_docs, false);
+        assert!(
+            html.contains(r#"<body data-path="/zh-hans/about/">"#),
+            "a language-prefixed page keeps the prefix in its address. Got: {html}"
         );
     }
 
@@ -3505,6 +3570,56 @@ mod children_field_tests {
         }
     }
 
+    #[test]
+    fn breadcrumb_label_sits_above_the_title_of_a_page_in_a_folder() {
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+        homepage.breadcrumb = Some(moss_core::frontmatter_typed::BreadcrumbSetting::Label);
+        let folder = make_doc("Opera", "opera/index.html");
+        let mut page = make_doc("Botez", "opera/botez.html");
+        page.html_content = "<h1 class=\"moss-article-title\">Botez</h1>\n<p>Body</p>".to_string();
+
+        let all_docs = vec![homepage, folder, page.clone()];
+        let html = render_page(Some(&page), &all_docs, false);
+
+        let label = html
+            .find(r#"<a class="moss-parent-label" href="/opera/">Opera</a>"#)
+            .expect("the parent label is rendered");
+        let title = html
+            .find(r#"<h1 class="moss-article-title">Botez</h1>"#)
+            .expect("the title is rendered");
+        assert!(label < title, "the label sits above the title");
+        assert!(!html.contains("breadcrumb-separator"), "label mode draws no header trail");
+    }
+
+    #[test]
+    fn breadcrumb_label_keeps_the_date_and_byline_under_the_title() {
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+        homepage.breadcrumb = Some(moss_core::frontmatter_typed::BreadcrumbSetting::Label);
+        let folder = make_doc("Opera", "opera/index.html");
+        let mut page = make_doc("Persona", "opera/persona.html");
+        page.html_content = "<h1 class=\"moss-article-title\">Persona</h1>\n<p>Body</p>".to_string();
+        page.date = Some("2026-03-01".to_string());
+        page.byline = vec!["Cast Member".to_string()];
+
+        let all_docs = vec![homepage, folder, page.clone()];
+        let html = render_page(Some(&page), &all_docs, false);
+
+        let label = html
+            .find(r#"<a class="moss-parent-label" href="/opera/">Opera</a>"#)
+            .expect("the parent label is rendered");
+        let title = html
+            .find(r#"<h1 class="moss-article-title">Persona</h1>"#)
+            .expect("the title is rendered");
+        let date = html.find(r#"<div class="date-line">"#).expect("the date row is rendered");
+        let byline = html.find(r#"<div class="moss-byline">"#).expect("the byline is rendered");
+        assert!(
+            label < title && title < date && date < byline,
+            "expected label < title < date-line < byline. Got: {html}"
+        );
+    }
+
     /// The published site carries none of it. The annotations exist for the
     /// editor preview only; `emit_source_lines: false` is the shipped shape.
     #[test]
@@ -3514,7 +3629,7 @@ mod children_field_tests {
         // Turn on everything that WOULD be annotated in the editor preview —
         // breadcrumb trail, folder cover, children listing — so this negative
         // covers every fm emitter, not just byline/colophon/title.
-        homepage.breadcrumb = Some(true);
+        homepage.breadcrumb = Some(moss_core::frontmatter_typed::BreadcrumbSetting::On);
 
         let mut folder_index = make_doc("發佈會", "events/index.html");
         folder_index.kind = PageKind::Folder;
@@ -3542,7 +3657,7 @@ mod children_field_tests {
     fn cover_children_breadcrumb_and_logo_name_their_fields() {
         let mut homepage = make_doc("Test Site", "index.html");
         homepage.is_root_level = true;
-        homepage.breadcrumb = Some(true); // site-wide breadcrumb enable
+        homepage.breadcrumb = Some(moss_core::frontmatter_typed::BreadcrumbSetting::On); // site-wide breadcrumb enable
         homepage.logo = Some("assets/logo.svg".to_string());
 
         let mut folder_index = make_doc("Events", "events/index.html");
@@ -3643,6 +3758,232 @@ mod children_field_tests {
         assert!(
             h1_at < byline_at && byline_at < body_at,
             "with a heading: h1 → byline → body. Got: {html}"
+        );
+    }
+
+    const GRID_CELL_PAGE: &str = concat!(
+        r#"<div class="moss-grid" data-columns="2" style="--moss-grid-ratio:minmax(0, 1fr) minmax(0, 2fr)">"#,
+        r#"<div class="moss-grid-card"><img src="portrait.jpg" alt="Portrait"></div>"#,
+        "\n",
+        r#"<div class="moss-grid-card"><h1>Ada Harbor</h1>"#,
+        "\n<p>Text.</p></div></div>"
+    );
+
+    /// The byline follows the page's first `<h1>` into the grid cell that holds
+    /// it, instead of printing above the grid, where it would read above the
+    /// heading it belongs to.
+    #[test]
+    fn a_byline_follows_a_heading_moved_into_a_grid_cell() {
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+        homepage.byline = vec!["Costume Design".to_string()];
+        homepage.html_content = GRID_CELL_PAGE.to_string();
+        let all_docs = vec![homepage.clone()];
+        let html = render_page(Some(&homepage), &all_docs, true);
+
+        assert_eq!(html.matches(r#"class="moss-byline""#).count(), 1, "Got: {html}");
+        assert!(
+            html.contains(concat!(
+                "<h1>Ada Harbor</h1>\n",
+                r#"<div class="moss-byline"><div class="moss-byline-row">Costume Design</div></div>"#,
+                "\n<p>Text.</p></div></div>"
+            )),
+            "byline must sit right after the h1, inside its cell. Got: {html}"
+        );
+        let grid_at = html.find(r#"class="moss-grid""#).expect("grid renders");
+        let byline_at = html.find(r#"class="moss-byline""#).unwrap();
+        assert!(grid_at < byline_at, "no byline above the grid. Got: {html}");
+    }
+
+    /// An article whose body opens with a grid holding its h1 gets no injected
+    /// title: the in-cell h1 is the page's one title and the byline follows it
+    /// inside the cell.
+    #[test]
+    fn an_article_opening_with_a_grid_holding_its_heading_places_the_byline() {
+        let md = "---\ntitle: Contact\nlayout: article\nbyline: \"Costume Design\"\n---\n:::grid 2 1:2\n![Portrait](portrait.jpg)\n+++\n# Contact\n\nText.\n:::\n";
+        let mut article = crate::build::markdown::process_markdown_file(
+            "contact.md", md, "", &std::collections::HashMap::new(), false,
+            crate::i18n::Language::En, None, crate::build::markdown::SiteMarkdown::default(),
+            None, None, None, crate::build::markdown::PageContext::default(),
+        )
+        .expect("parses");
+        article.byline = vec!["Costume Design".to_string()];
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+        let html = render_page(Some(&article), &[homepage, article.clone()], false);
+        assert_eq!(html.matches("<h1").count(), 1, "one title h1. Got: {html}");
+        assert!(!html.contains("moss-article-title"), "no injected title. Got: {html}");
+        assert_eq!(html.matches(r#"class="moss-byline""#).count(), 1, "Got: {html}");
+        let h1_at = html.find(r#"<h1 id="contact">Contact</h1>"#).expect("in-cell title");
+        let byline_at = html.find(r#"class="moss-byline""#).unwrap();
+        let grid_at = html.find(r#"class="moss-grid""#).expect("grid renders");
+        assert!(grid_at < h1_at && h1_at < byline_at, "grid, h1, byline. Got: {html}");
+        assert!(html[h1_at..byline_at].contains("</h1>\n"), "byline directly after the h1. Got: {html}");
+    }
+
+    /// A grid heading whose text differs from the title is not the title: the
+    /// pipeline keeps its own title above the grid, and the byline goes under it.
+    #[test]
+    fn a_differing_grid_heading_leaves_the_title_and_byline_above_the_grid() {
+        let md = "---\ntitle: Contact\nlayout: article\n---\n:::grid 2 1:2\n![Portrait](portrait.jpg)\n+++\n# Other\n\nText.\n:::\n";
+        let mut article = crate::build::markdown::process_markdown_file(
+            "contact.md", md, "", &std::collections::HashMap::new(), false,
+            crate::i18n::Language::En, None, crate::build::markdown::SiteMarkdown::default(),
+            None, None, None, crate::build::markdown::PageContext::default(),
+        )
+        .expect("parses");
+        article.byline = vec!["Costume Design".to_string()];
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+        let html = render_page(Some(&article), &[homepage, article.clone()], false);
+        assert_eq!(html.matches(r#"class="moss-article-title""#).count(), 1, "Got: {html}");
+        assert!(
+            html.contains(concat!(
+                r#"<h1 class="moss-article-title">Contact</h1>"#,
+                "\n",
+                r#"<div class="moss-byline">"#
+            )),
+            "byline directly under the injected title. Got: {html}"
+        );
+        let byline_at = html.find(r#"class="moss-byline""#).unwrap();
+        let grid_at = html.find(r#"class="moss-grid""#).expect("grid renders");
+        assert!(byline_at < grid_at, "byline above the grid. Got: {html}");
+        assert!(html.contains(r#"<h1 id="other">Other</h1><p>Text.</p>"#), "grid h1 unchanged. Got: {html}");
+    }
+
+    /// A heading in the normal flow keeps the byline directly under it, and a
+    /// page with no body heading keeps it at the top of the content.
+    #[test]
+    fn a_byline_is_unchanged_without_a_heading_in_a_grid_cell() {
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+        homepage.byline = vec!["Costume Design".to_string()];
+        let byline = r#"<div class="moss-byline"><div class="moss-byline-row">Costume Design</div></div>"#;
+
+        homepage.html_content = "<h1>Ada Harbor</h1>\n<div class=\"moss-grid\" data-columns=\"1\"><div class=\"moss-grid-card\"><p>Cell.</p></div></div>".to_string();
+        let html = render_page(Some(&homepage), &[homepage.clone()], true);
+        assert!(
+            html.contains(&format!("<h1>Ada Harbor</h1>\n{byline}\n<div class=\"moss-grid\"")),
+            "Got: {html}"
+        );
+
+        homepage.html_content = "<div class=\"moss-grid\" data-columns=\"1\"><div class=\"moss-grid-card\"><p>Cell.</p></div></div>".to_string();
+        let html = render_page(Some(&homepage), &[homepage.clone()], true);
+        assert!(html.contains(&format!("{byline}<div class=\"moss-grid\"")), "Got: {html}");
+    }
+
+    /// A site whose `logo:` names a raster file renders the logo with that
+    /// file's size, so the header does not move when the image arrives.
+    #[test]
+    fn a_raster_site_logo_renders_with_its_width_and_height() {
+        let dir = tempfile::TempDir::new().unwrap();
+        image::RgbaImage::new(24, 8).save(dir.path().join("mark.png")).unwrap();
+        let dimensions = image::image_dimensions(dir.path().join("mark.png")).unwrap();
+        let mut project = make_project();
+        project.image_files.push(crate::types::content::MediaMetadata {
+            is_animated: false,
+            path: "mark.png".to_string(),
+            file_type: "png".to_string(),
+            size: 0,
+            modified: None,
+            dimensions: Some(dimensions),
+            dominant_color: None,
+            lqip_data_uri: None,
+        });
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+        homepage.html_content = "<p>Welcome.</p>".to_string();
+        let all_docs = vec![homepage.clone()];
+        let layout = make_layout().with_logo("/mark.png".to_string());
+        let html = generate_html(
+            Some(&homepage),
+            &all_docs,
+            &project,
+            &layout,
+            true,
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            false,
+            None,
+            false,
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &localhost_url(),
+            true,
+            false,
+            "favicon.svg",
+            None,
+            std::path::Path::new(""),
+        )
+        .expect("generate_html should succeed");
+        assert!(
+            html.contains(
+                r#"<img class="site-logo" src="/mark.png" width="24" height="8" alt="" aria-hidden="true">"#
+            ),
+            "the logo must carry the file's size. Got: {html}"
+        );
+    }
+
+    /// A logo written as `./assets/mark.png` in frontmatter is resolved the way
+    /// the homepage's layout resolves it, so its address has no `/./` segment
+    /// and the size lookup finds the file.
+    #[test]
+    fn a_logo_written_with_a_dot_slash_finds_its_size_and_has_no_dot_segment() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("assets")).unwrap();
+        image::RgbaImage::new(24, 8).save(dir.path().join("assets/mark.png")).unwrap();
+        let dimensions = image::image_dimensions(dir.path().join("assets/mark.png")).unwrap();
+        let mut project = make_project();
+        project.image_files.push(crate::types::content::MediaMetadata {
+            is_animated: false,
+            path: "assets/mark.png".to_string(),
+            file_type: "png".to_string(),
+            size: 0,
+            modified: None,
+            dimensions: Some(dimensions),
+            dominant_color: None,
+            lqip_data_uri: None,
+        });
+        let mut homepage = make_doc("Test Site", "index.html");
+        homepage.is_root_level = true;
+        homepage.logo = Some("./assets/mark.png".to_string());
+        homepage.html_content = "<p>Welcome.</p>".to_string();
+        let all_docs = vec![homepage.clone()];
+        let layout = make_layout().with_logo(crate::build::render::config::resolve_logo_url("./assets/mark.png"));
+        let html = generate_html(
+            Some(&homepage),
+            &all_docs,
+            &project,
+            &layout,
+            true,
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            false,
+            None,
+            false,
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &localhost_url(),
+            true,
+            false,
+            "favicon.svg",
+            None,
+            std::path::Path::new(""),
+        )
+        .expect("generate_html should succeed");
+        assert!(
+            html.contains(
+                r#"<img class="site-logo" src="/assets/mark.png" width="24" height="8" alt="" aria-hidden="true">"#
+            ),
+            "a `./` logo must lose its `/./` and gain its size. Got: {html}"
         );
     }
 
@@ -4820,18 +5161,86 @@ mod children_field_tests {
              gets, not a bare row: {}",
             html
         );
-        assert!(
-            html.contains(r#"<h1 class="moss-folder-title"></h1>"#),
-            "the folder-cover component's own title slot must be passed an \
-             empty label and collapse (site.css `.moss-folder-title:empty`) \
-             — the claiming leaf's visible heading is its own, not a second \
-             one from this component: {}",
-            html
+        let column = cover_body_column(&html);
+        assert_eq!(
+            column.matches("<h1").count(),
+            1,
+            "a claiming leaf page with a cover must carry exactly one <h1> in its \
+             cover column, its own title; an empty folder-title <h1> ahead of it \
+             is a second, blank heading in the page's outline: {}",
+            column
         );
         assert!(
             html.contains(r#"<h1 class="moss-article-title">Ada Lin</h1>"#),
             "the page's own heading must survive, inside the cover column: {}",
             html
+        );
+    }
+
+    /// The text of a claimed leaf's cover column: from its opening tag to the
+    /// first `</div></div>` after it, which closes the column and the row.
+    fn cover_body_column(html: &str) -> &str {
+        let start = html
+            .find(r#"<div class="moss-collection-cover-body">"#)
+            .expect("the cover column must be rendered");
+        let rest = &html[start..];
+        &rest[..rest.find("</div></div>").unwrap_or(rest.len())]
+    }
+
+    /// A claiming leaf whose body has no heading of its own (a hero with no
+    /// `# H1`, or a page with `title:` left empty) gets no title from the
+    /// pipeline. Its cover column must still hold one heading, the page's
+    /// title, visually hidden, rather than none.
+    #[test]
+    fn test_claimed_leaf_page_with_cover_and_headingless_body_keeps_one_heading() {
+        let mut claimant = make_doc("Ada Lin", "people/ada-lin/index.html");
+        claimant.cover = Some("ada.png".to_string());
+        claimant.term_listing = Some("people/ada-lin".to_string());
+        claimant.html_content =
+            "<div class=\"moss-hero\"><a href=\"/concerts/\">Read</a></div>\n<p>Ada Lin content</p>".to_string();
+
+        let all_docs = vec![claimant.clone()];
+        let project = make_project();
+        let layout = make_layout();
+
+        let html = generate_html(
+            Some(&claimant),
+            &all_docs,
+            &project,
+            &layout,
+            false,
+            None,
+            None,
+            Language::En,
+            None,
+            false,
+            false,
+            None,
+            false,
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &localhost_url(),
+            true,
+            false,
+            "favicon.svg",
+            None,
+            std::path::Path::new(""),
+        )
+        .expect("generate_html should succeed");
+
+        let column = cover_body_column(&html);
+        assert_eq!(
+            column.matches("<h1").count(),
+            1,
+            "a claiming leaf with a cover and no heading in its body must still \
+             carry one <h1> in the cover column, the page's title, visually hidden: {}",
+            column
+        );
+        assert!(
+            column.contains(r#"<h1 class="moss-folder-title visually-hidden">Ada Lin</h1>"#),
+            "the heading must be the page's title: {}",
+            column
         );
     }
 
@@ -5594,6 +6003,7 @@ mod typesetting_tests {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
+            empty_folders: Vec::new(),
         }
     }
 
@@ -6109,49 +6519,22 @@ fn folder_index_without_cover_prepends_folder_title_h1() {
 }
 
 #[test]
-fn no_cover_folder_heading_hidden_for_nav_folder() {
-    // A folder index that is a nav item (nav: true) hides its folder title —
-    // the nav bar already shows it — but keeps the `<h1>` for screen readers.
-    let doc = crate::build::types::ParsedDocument {
-        nav: Some(true),
-        ..Default::default()
-    };
+fn no_cover_folder_heading_shows_visible_title() {
+    let doc = crate::build::types::ParsedDocument::default();
     assert_eq!(
-        super::no_cover_folder_heading(&doc, "Projects", true, false),
-        r#"<h1 class="moss-folder-title visually-hidden">Projects</h1>"#
-    );
-}
-
-#[test]
-fn no_cover_folder_heading_present_for_non_nav_folder() {
-    // A non-nav folder index (nested, nav: None) keeps its moss-folder-title.
-    let doc = crate::build::types::ParsedDocument {
-        nav: None,
-        is_root_level: false,
-        ..Default::default()
-    };
-    assert!(
-        super::no_cover_folder_heading(&doc, "Projects", true, false)
-            .contains(r#"<h1 class="moss-folder-title">Projects</h1>"#),
-        "non-nav folder index must keep its title"
+        super::no_cover_folder_heading(&doc, "Projects", false),
+        r#"<h1 class="moss-folder-title">Projects</h1>"#
     );
 }
 
 #[test]
 fn no_cover_folder_heading_empty_when_body_opens_with_h1() {
-    // The body's own `# Title` is already the page's h1, nav folder or not.
-    for nav in [Some(true), None] {
-        let doc = crate::build::types::ParsedDocument {
-            nav,
-            content: "# Projects\n\nBody.".to_string(),
-            ..Default::default()
-        };
-        assert_eq!(
-            super::no_cover_folder_heading(&doc, "Projects", true, false),
-            "",
-            "nav = {nav:?}"
-        );
-    }
+    // The body's own `# Title` is already the page's h1.
+    let doc = crate::build::types::ParsedDocument {
+        content: "# Projects\n\nBody.".to_string(),
+        ..Default::default()
+    };
+    assert_eq!(super::no_cover_folder_heading(&doc, "Projects", false), "");
 }
 
 // home_file_winner_tests have been moved to page_map.rs
@@ -6516,6 +6899,7 @@ mod og_url_tests {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
+            empty_folders: Vec::new(),
         }
     }
 
@@ -7189,7 +7573,7 @@ mod og_url_tests {
             !html.contains(r#"og:image:width" content="1200""#),
             "no auto-card means no og:image:width 1200 should be emitted"
         );
-        let cards = og_outputs.into_cards();
+        let (cards, _) = og_outputs.into_parts();
         assert!(
             cards.is_empty(),
             "no auto-card PNG should be tracked when frontmatter cover wins, got: {:?}",
@@ -7291,6 +7675,7 @@ mod listable_page_card_tests {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
+            empty_folders: Vec::new(),
         }
     }
 
@@ -7649,6 +8034,7 @@ mod place_locator_position_tests {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
+            empty_folders: Vec::new(),
         }
     }
 
@@ -7684,7 +8070,7 @@ mod place_locator_position_tests {
             }
         });
         let mut plan = render_segmented(&doc, &DefaultHooks::new());
-        plan.prepend_html(inject_article_title_h1("", "Research", false));
+        plan.prepend_html(inject_article_title_h1("", "Research", false, false));
         plan
     }
 
@@ -7906,6 +8292,7 @@ mod place_namespace_root_map_tests {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
+            empty_folders: Vec::new(),
         }
     }
 
@@ -8074,6 +8461,7 @@ mod folder_index_meta_tests {
             has_language_trees: false,
             passthrough_roots: std::collections::HashSet::new(),
             dirs: Vec::new(),
+            empty_folders: Vec::new(),
         }
     }
 
@@ -8762,6 +9150,8 @@ mod homepage_translation_tests {
     fn localized_root_title_names_authored_and_synthetic_pages() {
         let (test_dir, _cleanup) = create_test_dir();
         let output_dir = test_dir.join(".moss/build/staging");
+        // The tree's home is not named `index`, so it is not the translation of the
+        // site home: a tree that is one gets no generated folder pages.
         fs::create_dir_all(test_dir.join("zh-hant/guide")).unwrap();
         fs::write(
             test_dir.join("index.md"),
@@ -8769,7 +9159,7 @@ mod homepage_translation_tests {
         )
         .unwrap();
         fs::write(
-            test_dir.join("zh-hant/index.md"),
+            test_dir.join("zh-hant/README.md"),
             "---\ntitle: 青苔\nlang: zh-hant\n---\n# 首頁\n",
         )
         .unwrap();
@@ -8800,7 +9190,12 @@ mod homepage_translation_tests {
         let synthetic = fs::read_to_string(output_dir.join("zh-hant/guide/index.html"))
             .expect("synthetic Traditional Chinese folder page");
         assert!(synthetic.contains(" - 青苔</title>"));
-        assert!(synthetic.contains(r#"class="site-name"#) && synthetic.contains(">青苔</a>"));
+        // The tree pairs with the site home by path, so its pages get the
+        // translation-tree breadcrumb, as a keyed tree's do.
+        assert!(
+            synthetic.contains(r#"<a href="/zh-hant/" class="breadcrumb-segment""#)
+                && synthetic.contains(r#"<span class="breadcrumb-label">青苔</span>"#)
+        );
         assert!(!synthetic.contains(" - moss</title>"));
     }
 
@@ -9223,7 +9618,7 @@ mod registry_clear_tests {
         // An earlier build's failure, surviving on the shared registry.
         let services = BuildServices::headless();
         let registry = services.assets.clone().expect("headless has a registry");
-        registry.set_failed("images/from-a-deleted-page.webp".to_string(), "encode failed".to_string());
+        registry.set_failed("images/from-a-deleted-page.webp".to_string(), crate::types::assets::Failure::encode("encode failed"));
 
         let project_structure =
             scan_folder(test_dir.to_str().unwrap()).expect("scan_folder should succeed");

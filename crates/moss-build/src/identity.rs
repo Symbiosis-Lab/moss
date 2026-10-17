@@ -6,5 +6,6 @@ pub mod keypair;
 pub mod keystore;
 pub mod secrets;
 pub mod service;
+pub mod verify_email;
 
 pub use keypair::Identity;

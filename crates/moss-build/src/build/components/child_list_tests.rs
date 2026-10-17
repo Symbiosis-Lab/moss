@@ -8,9 +8,7 @@ fn test_render_basic_article() {
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
         title: "My Post".to_string(),
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render(&props, false, false, Language::En, None);
 
@@ -30,9 +28,8 @@ fn render_shows_the_resolved_place_next_to_the_date() {
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
         title: "My Post".to_string(),
-        url_path: String::new(),
         place: Some("Cambridge".to_string()),
-        when_html: None,
+        ..Default::default()
     };
     let html = render(&props, false, false, Language::En, None);
 
@@ -51,9 +48,8 @@ fn render_omits_the_place_when_no_date_is_shown() {
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
         title: "Series Item".to_string(),
-        url_path: String::new(),
         place: Some("Cambridge".to_string()),
-        when_html: None,
+        ..Default::default()
     };
     let html = render(&props, false, true, Language::En, None);
     assert!(!html.contains("Cambridge"));
@@ -63,12 +59,9 @@ fn render_omits_the_place_when_no_date_is_shown() {
 fn test_render_escapes_html_in_title() {
     let props = ArticleListItemProps {
         date_display: "2025 · 11".to_string(),
-        date_raw: None,
         url: "post.html".to_string(),
         title: "<script>alert('xss')</script>".to_string(),
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render(&props, false, false, Language::En, None);
 
@@ -80,12 +73,9 @@ fn test_render_escapes_html_in_title() {
 fn test_render_escapes_html_in_url() {
     let props = ArticleListItemProps {
         date_display: "2025 · 11".to_string(),
-        date_raw: None,
         url: "post.html?a=1&b=2".to_string(),
         title: "Test".to_string(),
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render(&props, false, false, Language::En, None);
 
@@ -99,9 +89,7 @@ fn test_render_minimal_shows_month_only() {
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
         title: "My Post".to_string(),
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render(&props, true, false, Language::En, None);
 
@@ -114,12 +102,9 @@ fn test_render_minimal_shows_month_only() {
 fn test_render_minimal_fallback_without_raw_date() {
     let props = ArticleListItemProps {
         date_display: "2025-11-17".to_string(),
-        date_raw: None,
         url: "post.html".to_string(),
         title: "Test".to_string(),
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render(&props, true, false, Language::En, None);
 
@@ -136,9 +121,7 @@ fn test_render_uses_prefix_link_classes() {
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
         title: "My Post".to_string(),
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render(&props, false, false, Language::En, None);
 
@@ -168,9 +151,7 @@ fn test_render_no_date_omits_date_span() {
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
         title: "Series Item".to_string(),
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render(&props, false, true, Language::En, None);
 
@@ -202,15 +183,7 @@ fn test_render_child_article() {
         url: "/blog/my-article/".to_string(),
         date_display: Some("2025 · 11".to_string()),
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
-        child_count: None,
-        description: None,
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card">"#));
@@ -228,22 +201,51 @@ fn render_child_shows_the_resolved_place_next_to_a_leafs_date() {
     let props = ChildItemProps {
         title: "Lecture".to_string(),
         url: "/lectures/1924.html".to_string(),
-        date_display: None,
         date_raw: Some("1924-10-01".to_string()),
-        child_count: None,
-        description: None,
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
         place: Some("Cambridge".to_string()),
-        when_html: None,
+        ..Default::default()
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
         html.contains(r#"<span class="moss-prefix-link-prefix date">1924 · 10 · Cambridge</span>"#),
         "{html}"
+    );
+}
+
+/// A dateless, placeless leaf's meta is the credits alone: no separator
+/// before them. Deleting the empty-base arm of `leaf_meta` makes this fail.
+#[test]
+fn leaf_meta_with_no_date_or_place_is_the_credits_alone() {
+    let credits = r#"<span class="moss-card-credits">X</span>"#;
+    assert_eq!(leaf_meta("", None, None, Some(credits)), credits);
+}
+
+/// A term kind's names on cards come after the date and place, in the same
+/// meta slot, and the row's date span carries them.
+#[test]
+fn render_child_puts_the_listed_names_after_the_date_and_place() {
+    let credits = r#"<span class="moss-card-credits"><span class="moss-credit">Ada Example<span class="moss-credit-role">, conductor</span></span></span>"#;
+    let props = ChildItemProps {
+        credits: Some(credits.to_string()),
+        title: "Lecture".to_string(),
+        url: "/lectures/1924.html".to_string(),
+        date_raw: Some("1924-10-01".to_string()),
+        place: Some("Cambridge".to_string()),
+        ..Default::default()
+    };
+    let html = render_child(&props, crate::i18n::Language::En, None);
+    let expected = format!(r#"<span class="moss-prefix-link-prefix date">1924 · 10 · Cambridge<span class="moss-event-sep"> · </span>{credits}</span>"#);
+    assert!(html.contains(&expected), "{html}");
+}
+
+/// The separator before an event's credits is a span, as the one before its
+/// place is, so a theme can drop it.
+#[test]
+fn leaf_meta_separates_credits_from_an_event_time_with_a_span() {
+    let credits = r#"<span class="moss-card-credits">c</span>"#;
+    assert_eq!(
+        leaf_meta("", Some("<time>x</time>"), None, Some(credits)),
+        format!(r#"<time>x</time><span class="moss-event-sep"> · </span>{credits}"#)
     );
 }
 
@@ -259,17 +261,10 @@ fn render_child_wraps_an_event_place_in_its_own_span() {
     let props = ChildItemProps {
         title: "Opening".to_string(),
         url: "/events/opening.html".to_string(),
-        date_display: None,
         date_raw: Some("2026-11-01".to_string()),
-        child_count: None,
-        description: None,
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
         place: Some("Example Hall".to_string()),
         when_html: Some(when),
+        ..Default::default()
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
@@ -279,6 +274,26 @@ fn render_child_wraps_an_event_place_in_its_own_span() {
     assert!(!html.contains("</time> · "), "bare separator text must not remain: {html}");
 }
 
+/// An event row whose page has only `online:` keeps its title as the link and
+/// carries the Online link after it, with no anchor around the whole row.
+#[test]
+fn render_child_event_row_with_only_online_links_title_and_carries_its_online_link() {
+    let props = ChildItemProps {
+        online: Some("https://example.test/live".to_string()),
+        title: "Spring Gala".to_string(),
+        url: "spring-gala.html".to_string(),
+        date_raw: Some("2026-11-01".to_string()),
+        ..Default::default()
+    };
+    let html = render_child(&props, crate::i18n::Language::En, None);
+    assert!(html.contains(r#"<a class="moss-card-link" href="spring-gala.html">Spring Gala</a>"#), "{html}");
+    assert!(
+        html.contains(r#"<a class="moss-event-link moss-event-online" href="https://example.test/live">Online<span class="visually-hidden"> for Spring Gala</span></a>"#),
+        "{html}"
+    );
+    assert_eq!(max_anchor_depth(&html), 1, "{html}");
+}
+
 /// A folder's count is not a date — its own `location:` (e.g. a self-named
 /// work folder) must never leak into the count slot.
 #[test]
@@ -286,17 +301,9 @@ fn render_child_never_shows_a_place_beside_a_folders_count() {
     let props = ChildItemProps {
         title: "Kyoto Walk".to_string(),
         url: "/works/kyoto-walk/".to_string(),
-        date_display: None,
-        date_raw: None,
         child_count: Some(2),
-        description: None,
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
         place: Some("Kyoto".to_string()),
-        when_html: None,
+        ..Default::default()
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
@@ -314,17 +321,8 @@ fn flat_row_shows_year_for_month_precision_date() {
     let props = ChildItemProps {
         title: "June Entry".to_string(),
         url: "/writings/journal/june.html".to_string(),
-        date_display: None,
         date_raw: Some("1793-06".to_string()),
-        child_count: None,
-        description: None,
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
@@ -342,16 +340,7 @@ fn flat_row_passes_through_display_only_date_as_is() {
         title: "Display Only".to_string(),
         url: "/writings/display-only.html".to_string(),
         date_display: Some("1793 · 06".to_string()),
-        date_raw: None,
-        child_count: None,
-        description: None,
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
@@ -366,17 +355,8 @@ fn flat_row_shows_bare_year_for_year_precision_date() {
     let props = ChildItemProps {
         title: "1793 Entry".to_string(),
         url: "/writings/journal/year.html".to_string(),
-        date_display: None,
         date_raw: Some("1793".to_string()),
-        child_count: None,
-        description: None,
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
@@ -393,17 +373,8 @@ fn folder_count_uses_chinese_numerals_in_vertical_cjk() {
     let props = ChildItemProps {
         title: "書".to_string(),
         url: "/書/".to_string(),
-        date_display: None,
-        date_raw: None,
         child_count: Some(38),
-        description: None,
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let vertical = render_child(&props, crate::i18n::Language::ZhHant, Some("vertical"));
     assert!(vertical.contains("三十八篇"), "{vertical}");
@@ -417,17 +388,9 @@ fn test_render_child_folder_without_description() {
     let props = ChildItemProps {
         title: "Tutorials".to_string(),
         url: "/tutorials/".to_string(),
-        date_display: None,
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         child_count: Some(4),
-        description: None,
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card">"#));
@@ -445,17 +408,10 @@ fn test_render_child_folder_with_description() {
     let props = ChildItemProps {
         title: "Tutorials".to_string(),
         url: "/tutorials/".to_string(),
-        date_display: None,
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         child_count: Some(4),
         description: Some("Learn the basics of moss".to_string()),
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card moss-folder-item">"#));
@@ -474,17 +430,8 @@ fn test_render_child_folder_escapes_html() {
     let props = ChildItemProps {
         title: "<b>Bold</b> & \"Quoted\"".to_string(),
         url: "/test/?a=1&b=2".to_string(),
-        date_display: None,
-        date_raw: None,
         child_count: Some(2),
-        description: None,
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains("&lt;b&gt;Bold&lt;/b&gt; &amp; &quot;Quoted&quot;"));
@@ -497,17 +444,7 @@ fn test_render_child_article_no_date() {
     let props = ChildItemProps {
         title: "Dateless Article".to_string(),
         url: "/blog/dateless/".to_string(),
-        date_display: None,
-        date_raw: None,
-        child_count: None,
-        description: None,
-        cover: None,
-        cover_type: None,
-        kicker: None,
-        permalink: None,
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card">"#));
@@ -525,9 +462,7 @@ fn test_render_no_date_ignores_minimal_flag() {
         date_raw: Some("2025-11-17T00:50:43.135Z".to_string()),
         url: "post.html".to_string(),
         title: "Series Item".to_string(),
-        url_path: String::new(),
-        place: None,
-        when_html: None,
+        ..Default::default()
     };
     let html_minimal = render(&props, true, true, Language::En, None);
     let html_normal = render(&props, false, true, Language::En, None);
@@ -747,27 +682,27 @@ fn props_for_document_has_no_place_when_the_page_names_none() {
 
 #[test]
 fn meta_text_is_a_leafs_date_and_place() {
-    assert_eq!(meta_text(Some("1924 · 05"), None, Some("Cambridge"), None), "1924 · 05 · Cambridge");
+    assert_eq!(meta_text(Some("1924 · 05"), None, Some("Cambridge"), None, None), "1924 · 05 · Cambridge");
 }
 
 #[test]
 fn meta_text_is_a_bare_folders_count_alone_even_with_a_place() {
     // A folder with no date of its own: its `location:` (if any) is not a
     // date to sit beside — only the count shows.
-    assert_eq!(meta_text(None, None, Some("Kyoto"), Some("2 articles")), "2 articles");
+    assert_eq!(meta_text(None, None, Some("Kyoto"), Some("2 articles"), None), "2 articles");
 }
 
 #[test]
 fn meta_text_is_a_dated_folders_date_and_place_then_its_count() {
     assert_eq!(
-        meta_text(Some("1928 · 10"), None, Some("Cambridge"), Some("6 articles")),
+        meta_text(Some("1928 · 10"), None, Some("Cambridge"), Some("6 articles"), None),
         "1928 · 10 · Cambridge · 6 articles"
     );
 }
 
 #[test]
 fn meta_text_is_a_dated_folders_date_then_count_with_no_place() {
-    assert_eq!(meta_text(Some("1928 · 10"), None, None, Some("6 articles")), "1928 · 10 · 6 articles");
+    assert_eq!(meta_text(Some("1928 · 10"), None, None, Some("6 articles"), None), "1928 · 10 · 6 articles");
 }
 
 // ── `with_place`: the one owner of "date text plus resolved place" ────────
@@ -805,4 +740,77 @@ fn with_place_escapes_an_unsafe_place_name() {
 #[test]
 fn with_place_ignores_a_blank_place() {
     assert_eq!(with_place("2025", Some("   ")), "2025");
+}
+
+fn event_row_props(tickets: Option<&str>) -> ChildItemProps {
+    ChildItemProps {
+        tickets: tickets.map(str::to_string),
+        title: "Spring Gala".to_string(),
+        url: "spring-gala.html".to_string(),
+        date_display: Some("2026 · 11".to_string()),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn event_row_with_tickets_links_title_and_carries_its_own_tickets_link() {
+    let props = event_row_props(Some("https://example.test/tickets"));
+    let html = render_child(&props, Language::En, None);
+    assert_eq!(
+        html,
+        r#"<div class="moss-card"><div class="moss-prefix-link"><span class="moss-prefix-link-prefix date">2026 · 11</span><span class="moss-prefix-link-title"><a class="moss-card-link" href="spring-gala.html">Spring Gala</a></span><a class="moss-event-link moss-event-tickets" href="https://example.test/tickets">Tickets<span class="visually-hidden"> for Spring Gala</span></a></div></div>"#
+    );
+    let title_at = html.find(r#"<a class="moss-card-link""#).unwrap();
+    let tickets_at = html.find(r#"<a class="moss-event-link moss-event-tickets""#).unwrap();
+    assert!(title_at < tickets_at, "got: {html}");
+    assert_eq!(max_anchor_depth(&html), 1, "got: {html}");
+}
+
+#[test]
+fn event_row_without_tickets_keeps_its_whole_row_anchor() {
+    let props = event_row_props(None);
+    let html = render_child(&props, Language::En, None);
+    assert_eq!(
+        html,
+        r#"<div class="moss-card"><a href="spring-gala.html" class="moss-prefix-link"><span class="moss-prefix-link-prefix date">2026 · 11</span><span class="moss-prefix-link-title">Spring Gala</span></a></div>"#
+    );
+}
+
+// ── data-source-file ───────────────────────────────────────────────────
+//
+// A card is rendered into the listing page but belongs to another file, so
+// its root names that file for click-to-source.
+
+#[test]
+fn every_card_style_names_the_file_it_stands_for() {
+    use crate::build::components::{child_summary, grid_card};
+    let d = ParsedDocument {
+        date: Some("2024-03-02".into()),
+        source_path: Some("posts/first & last.md".into()),
+        ..doc("posts/first/index.html", "First")
+    };
+    let p = props(&d, std::slice::from_ref(&d));
+    assert_eq!(p.source_file.as_deref(), Some("posts/first & last.md"));
+    let attr = r#"data-source-file="posts/first &amp; last.md""#;
+
+    let row = render_child(&p, Language::En, None);
+    assert!(row.starts_with(&format!(r#"<div class="moss-card" {attr}>"#)), "{row}");
+    let summary = child_summary::render_with_sort(&p, Language::En, None, None, moss_core::sort::SortAxis::Date);
+    assert!(summary.contains(&format!(r#"class="moss-card" {attr}>"#)), "{summary}");
+    let grid = grid_card::render_item_with_typesetting(&p, None, Language::En, None, None, false, false);
+    assert!(grid.starts_with("<a ") && grid.contains(&format!(r#" {attr}>"#)), "{grid}");
+    let year_row = render(
+        &ArticleListItemProps {
+            source_file: p.source_file.clone(),
+            url: p.url.clone(),
+            title: p.title.clone(),
+            url_path: p.url_path.clone(),
+            ..Default::default()
+        },
+        true,
+        false,
+        Language::En,
+        None,
+    );
+    assert!(year_row.starts_with(&format!(r#"<p class="moss-card" {attr}>"#)), "{year_row}");
 }

@@ -55,107 +55,6 @@ pub struct ActionPanelOpened {
     pub is_login_browser: bool,
 }
 
-/// Classification of a transport-level network failure, for class-specific
-/// localized error toasts. The classifier that walks an error's source chain
-/// stays app-side (`updater.rs::classify_network_failure`); the enum crosses
-/// because `UpdateCheckResult` carries it.
-///
-/// Serializes snake_case to match the hand-written `NetworkFailureClass` in
-/// the desktop app's bindings module (central `pnpm run bindings` regen is
-/// the source of truth and must reproduce this).
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
-#[serde(rename_all = "snake_case")]
-pub enum NetworkFailureClass {
-    /// No internet at all — DNS lookup failed AND we cannot attribute it to a
-    /// specific blocked host. In practice DNS failure is the offline signal.
-    Offline,
-    /// Name resolution failed (getaddrinfo / public resolver marker matched).
-    Dns,
-    /// The request timed out (`reqwest::Error::is_timeout`).
-    Timeout,
-    /// The TCP connection was actively refused / unreachable
-    /// (`reqwest::Error::is_connect` with no DNS marker).
-    ConnectionRefused,
-    /// A TLS/secure-connection failure (handshake / cert).
-    Tls,
-    /// The host was reachable but the HTTP exchange was blocked/rejected.
-    HttpBlocked,
-    /// A captive portal is intercepting traffic (login/redirect page). Only the
-    /// consolidated diagnosis can detect this; the fast classifier never returns it.
-    CaptivePortal,
-    /// Could not be classified from the available signals.
-    Unknown,
-}
-
-/// Payload for `MossEvent::UpdateAvailable`.
-#[derive(Serialize, Deserialize, Debug, Clone, Type)]
-pub struct UpdateAvailable {
-    pub version: String,
-    pub notes: Option<String>,
-    /// True if triggered by the user via "Check for Updates..." menu item.
-    /// False if discovered by the background check at startup.
-    pub manual: bool,
-    /// True when the verified installer is already parked on disk, so the
-    /// button the user is about to see only has to restart. The background
-    /// path announces nothing until this is true (or the pre-download has
-    /// failed); a manual check announces immediately and reports whatever the
-    /// spool happens to hold.
-    pub ready: bool,
-}
-
-/// Payload for `MossEvent::UpdateCheckResult`. Discriminated on `kind`.
-#[derive(Serialize, Deserialize, Debug, Clone, Type)]
-#[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
-pub enum UpdateCheckResult {
-    /// Manual check completed; no update available.
-    UpToDate { version: String },
-    /// Manual check failed (network / signature / etc.). The user sees a toast.
-    /// `class` carries the transport classification so the frontend can show a
-    /// class-specific localized message instead of one generic string.
-    Error {
-        message: String,
-        class: NetworkFailureClass,
-    },
-}
-
-/// Progress of the installer download, for the frontend's update toast.
-///
-/// Emitted as `MossEvent::UpdateDownloadProgress`. `content_length` is
-/// `Option` because a server may answer without `Content-Length`; the toast
-/// then stays indeterminate rather than inventing a percentage.
-///
-/// Byte counts are `f64`, not `u64`: specta renders `u64` as a JS `string` to
-/// stay bigint-safe, and the frontend does arithmetic on these. An `f64` is
-/// exact to 2^53 bytes — nine petabytes past any installer.
-#[derive(Serialize, Deserialize, Debug, Clone, Type)]
-pub struct UpdateDownloadProgress {
-    /// Bytes received so far.
-    pub downloaded: f64,
-    /// Total bytes, when the server declared one.
-    pub content_length: Option<f64>,
-    /// True on the final event: the bytes are downloaded AND their signature
-    /// verified. What remains is the install, which is not a transfer and has
-    /// no percentage.
-    ///
-    /// Emitted by `ensure_downloaded` after `download()` resolves `Ok`, NOT
-    /// from the plugin's `on_download_finish` callback — that callback runs
-    /// before `verify_signature` (tauri-plugin-updater 2.10.1
-    /// `src/updater.rs:710` vs `:712`), so wiring `done` to it would tell the
-    /// frontend "ready to install" about bytes that then fail verification.
-    pub done: bool,
-    /// The release these bytes install, on the `done` event; `None` on progress
-    /// ticks, which carry no release identity.
-    ///
-    /// Present because "the download finished" is not by itself enough for the
-    /// button to promise a restart. A pre-download of 0.9.2 can still be in
-    /// flight when a manual check announces 0.9.3; without a version here, that
-    /// `done` is indistinguishable from 0.9.3's own, and the button would offer
-    /// an instant restart backed by bytes for a different release — which Rust
-    /// then correctly treats as a cache miss and re-downloads. The frontend
-    /// compares this against the version it is offering.
-    pub version: Option<String>,
-}
-
 /// One `publish-verdict` wire payload. `state` transitions are the ONLY thing
 /// emitted — elapsed is a frontend-local timer, and the mount-time drain pulls
 /// the same shape through `get_publish_verdict`. The verification supervisor
@@ -660,8 +559,8 @@ pub struct StarterProgress {
 /// What a starter is doing. One owner app-side holds these; nothing else
 /// decides whether a starter's preview is there.
 ///
-/// Byte counts and the retry time are `f64`, as in [`UpdateDownloadProgress`]:
-/// specta renders 64-bit integers as JS strings.
+/// Byte counts and the retry time are `f64`: specta renders 64-bit integers
+/// as JS strings, and the frontend does arithmetic on these.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StarterState {

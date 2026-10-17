@@ -91,6 +91,11 @@ pub struct DeployFlags {
     /// `--site-id=<name>`: the site ID to register on a first publish, over
     /// the one derived from the folder name.
     pub site_id: Option<String>,
+    /// `--email <address>`: when the publish is refused because this folder's
+    /// key is not verified for an account, send a sign-in link to this
+    /// address, wait for it to be opened, and try again. Never sent without
+    /// the flag.
+    pub email: Option<String>,
     /// `--allow-plugins`: this command is the consent for the plugins the
     /// folder carries, exactly as it is for `moss build`. Without
     /// it a plugin the app has never been told to allow is refused — which,
@@ -130,8 +135,14 @@ impl DeployArgs {
     pub fn parse(args: &[String]) -> Result<DeployArgs, String> {
         let mut folder: Option<&str> = None;
         let mut flags = DeployFlags::default();
-        for arg in args {
+        let mut args = args.iter();
+        while let Some(arg) = args.next() {
             match arg.as_str() {
+                a if a.starts_with("--email=") => flags.email = Some(a["--email=".len()..].to_string()),
+                "--email" => match args.next() {
+                    Some(address) => flags.email = Some(address.clone()),
+                    None => return Err(format!("error: --email needs an address\n{}", usage())),
+                },
                 a if a.starts_with("--prebuilt=") => {
                     flags.prebuilt = Some(a["--prebuilt=".len()..].to_string())
                 }
@@ -152,6 +163,9 @@ impl DeployArgs {
                     folder = Some(a);
                 }
             }
+        }
+        if let Some(address) = &flags.email {
+            crate::identity::verify_email::validate_email(address)?;
         }
         if flags.dry_run && flags.accept_removals {
             return Err(
@@ -275,15 +289,38 @@ async fn dispatch(
     // everything after the gate left out, so it never reaches the match.
     if flags.dry_run {
         return match route {
-            DeployRoute::Prebuilt { .. } => Err(
-                "--dry-run needs a build to describe, and a prebuilt folder is uploaded as it is."
-                    .to_string(),
-            ),
+            DeployRoute::Prebuilt { dir } => crate::deploy::dry_run::run_prebuilt_dry_run(
+                folder,
+                dir,
+                flags.site_id.as_deref(),
+                flags.accept_removals,
+            )
+            .await
+            .map(|dry| DeployReport::DryRun(Box::new(dry))),
             _ => crate::deploy::dry_run::run_dry_run(folder, route, flags.site_id.as_deref(), host_ports, plugins)
                 .await
                 .map(|dry| DeployReport::DryRun(Box::new(dry))),
         };
     }
+    crate::identity::verify_email::retrying_after_verification(
+        folder,
+        flags.email.as_deref(),
+        crate::identity::verify_email::POLL_INTERVAL,
+        crate::identity::verify_email::WAIT_LIMIT,
+        || send(folder, route, host_ports, plugins, flags, sink),
+    )
+    .await
+}
+
+/// The route's own send, once.
+async fn send(
+    folder: &std::path::Path,
+    route: &DeployRoute,
+    host_ports: &(dyn Fn(&str) -> crate::build::HostPorts + Send + Sync),
+    plugins: crate::build::PluginMode,
+    flags: &DeployFlags,
+    sink: &Arc<dyn DeploySink>,
+) -> Result<DeployReport, String> {
     match route {
         DeployRoute::Prebuilt { dir } => {
             crate::deploy::prebuilt::run_prebuilt_deploy(
@@ -291,6 +328,7 @@ async fn dispatch(
                 dir,
                 flags.site_id.as_deref(),
                 flags.overwrite_newer,
+                flags.accept_removals,
                 sink,
             )
                 .await
@@ -542,6 +580,15 @@ mod removal_flag_tests {
         assert!(!plain.dry_run && !plain.accept_removals);
     }
 
+    #[test]
+    fn email_is_accepted_both_ways_and_must_look_like_an_address() {
+        assert_eq!(parse(&["site", "--email", "a@b.co"]).unwrap().flags.email.as_deref(), Some("a@b.co"));
+        assert_eq!(parse(&["site", "--email=a@b.co"]).unwrap().flags.email.as_deref(), Some("a@b.co"));
+        assert_eq!(parse(&["site"]).unwrap().flags.email, None);
+        assert!(parse(&["site", "--email"]).unwrap_err().contains("needs an address"));
+        assert!(parse(&["site", "--email", "nope"]).unwrap_err().contains("not an email address"));
+    }
+
     /// A dry run records nothing, so it cannot also record an acceptance.
     #[test]
     fn a_dry_run_cannot_accept_removals() {
@@ -647,6 +694,19 @@ mod dry_run_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dry_run_leaves_the_source_folder_byte_identical() {
+        let fx = Fixture::new(false);
+        let note = "---\ntitle: Note\n---\n\nShared text.\n";
+        std::fs::write(fx.dir.path().join("note.md"), note).unwrap();
+        let index_before = std::fs::read(fx.dir.path().join("index.md")).unwrap();
+
+        fx.run(true).await.expect("a dry run reports");
+
+        assert_eq!(std::fs::read_to_string(fx.dir.path().join("note.md")).unwrap(), note);
+        assert_eq!(std::fs::read(fx.dir.path().join("index.md")).unwrap(), index_before);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_dry_run_that_a_real_deploy_would_refuse_exits_non_zero_and_sends_nothing() {
         let fx = Fixture::new(true);
         let before = fx.record_bytes();
@@ -655,6 +715,11 @@ mod dry_run_tests {
         let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
 
         assert!(dry.refusal.as_deref().is_some_and(|r| r.contains("/legacy-feed.xml")), "{dry:?}");
+        assert!(
+            matches!(&dry.transfer, crate::deploy::dry_run::Transfer::SinceLastPublish { removed, .. } if removed == &["legacy-feed.xml"]),
+            "{:?}",
+            dry.transfer
+        );
         assert_eq!(report_code(report), 1);
         assert!(!fx.contacted_the_server(), "a dry run must not contact the hosting server");
         assert_eq!(fx.record_bytes(), before, "a dry run must not write a published record");
@@ -698,6 +763,19 @@ mod dry_run_tests {
         let err = fx.run(true).await.expect_err("a deploy would say this folder has no site yet");
         assert!(err.contains("has no site yet") && err.contains("moss env"), "{err}");
         assert!(!fx.contacted_the_server());
+    }
+
+    /// The refusal a first publish would meet is knowable from the folder: no
+    /// email is recorded for its key. Saying so sends nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_first_publish_dry_run_says_verification_would_be_needed_and_sends_nothing() {
+        let fx = unpublished(true);
+        let report = fx.run(true).await.expect("a dry run reports");
+        let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
+
+        assert!(dry.needs_verification, "{dry:?}");
+        assert!(dry.render().contains("--email <address>"), "{}", dry.render());
+        assert!(!fx.contacted_the_server(), "a dry run must not contact the server");
     }
 
     /// A deploy creates a signing key when the site has none, so the dry run
@@ -759,16 +837,20 @@ mod dry_run_tests {
         assert!(!fx.contacted_the_server());
     }
 
-    /// A prebuilt folder is uploaded as it is: there is no build to describe.
+    /// A prebuilt folder is described from the files on disk, not refused.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_dry_run_of_a_prebuilt_folder_is_a_usage_error() {
-        let fx = Fixture::new(false);
+    async fn a_dry_run_of_a_prebuilt_folder_describes_it_and_contacts_no_server() {
+        let fx = Fixture::new(true);
+        let site = fx.dir.path().join("_site");
+        std::fs::create_dir_all(&site).unwrap();
+        std::fs::write(site.join("index.html"), "<p>hi</p>").unwrap();
         let flags = DeployFlags { dry_run: true, ..DeployFlags::default() };
-        let route = DeployRoute::Prebuilt { dir: fx.dir.path().join("_site") };
-        let err = dispatch(fx.dir.path(), &route, &crate::cli::host::cli_host_ports, crate::build::PluginMode::Skip, &flags, &printing())
+        let route = DeployRoute::Prebuilt { dir: site };
+        let report = dispatch(fx.dir.path(), &route, &crate::cli::host::cli_host_ports, crate::build::PluginMode::Skip, &flags, &printing())
             .await
-            .expect_err("nothing to build");
-        assert!(err.starts_with("--dry-run needs a build"), "{err}");
+            .expect("a prebuilt dry run reports");
+        let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
+        assert!(dry.prebuilt && dry.refusal.is_some(), "{dry:?}");
         assert!(!fx.contacted_the_server());
     }
 
@@ -797,5 +879,58 @@ mod dry_run_tests {
 
     fn report_code(report: DeployReport) -> i32 {
         super::report(Ok(report), "site")
+    }
+}
+
+/// `moss deploy --email` reaches the verification through `dispatch`, the
+/// function every deploy goes through after the flags are parsed.
+#[cfg(test)]
+mod email_wiring_tests {
+    use super::*;
+    use crate::identity::verify_email::verify_email_tests::{Folder, Seta};
+
+    async fn deploy(folder: &Folder, email: Option<&str>) -> Result<DeployReport, String> {
+        std::fs::create_dir_all(folder.dir.path().join(".moss")).unwrap();
+        std::fs::write(folder.dir.path().join(".moss/config.toml"), "environment = \"staging\"\n").unwrap();
+        let site = folder.dir.path().join("_site");
+        std::fs::create_dir_all(&site).unwrap();
+        std::fs::write(site.join("index.html"), "<p>hi</p>").unwrap();
+        let flags = DeployFlags {
+            email: email.map(str::to_string),
+            overwrite_newer: true,
+            ..DeployFlags::default()
+        };
+        dispatch(
+            folder.dir.path(),
+            &DeployRoute::Prebuilt { dir: site },
+            &crate::cli::host::cli_host_ports,
+            crate::build::PluginMode::Skip,
+            &flags,
+            &printing(),
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_refused_first_publish_with_email_requests_the_link_then_registers_again() {
+        let seta = Seta::start(1, "verified").await;
+        let folder = Folder::new(&seta);
+
+        let result = deploy(&folder, Some("ada@example.test")).await;
+
+        assert_eq!(seta.count("POST /auth/request"), 1, "{result:?}");
+        assert_eq!(seta.count_exact("POST /api/sites"), 2, "refused once, registered on the retry: {result:?}");
+        assert!(result.is_ok(), "the retry publishes: {result:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_refused_first_publish_without_email_requests_nothing_and_names_the_flag() {
+        let seta = Seta::start(1, "verified").await;
+        let folder = Folder::new(&seta);
+
+        let err = deploy(&folder, None).await.expect_err("the key is not verified");
+
+        assert_eq!(seta.count("POST /auth/request"), 0);
+        assert!(err.contains("--email <address>"), "{err}");
     }
 }

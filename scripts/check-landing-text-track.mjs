@@ -19,6 +19,17 @@ for (const engine of [chromium, webkit]) {
         }, { scene, fraction });
         const expected = scene + Math.max(0, Math.min(1, fraction));
         await page.waitForFunction(expected => Math.abs(__state().progress - expected) < .005, expected);
+        // The copy drives a wash only with the prints it needs on hand: the print of the scene it leaves,
+        // and for the Publish bridge between scenes 3 and 4 both. Standing in a scene is what takes them,
+        // one a warm tick, the scene's own first, and the page promises them within a tick and the idle
+        // wait past the one that takes each. A phone that crosses without them fades the live scene
+        // instead, which check-landing-wash-recovery.mjs covers.
+        const stands = fraction === -.01 ? scene : fraction === 1.01 ? scene + 1 : null;
+        if (stands !== null && scene < 3) {
+          const need = scene === 2 ? [2, 3] : [stands], within = await page.evaluate((n) => (n + 1) * WARM_MS + IDLE_WAIT, need.length);
+          await page.waitForFunction((need) => need.every((n) => __onHand[n]), need, { timeout: within })
+            .catch(() => { throw Error(`scene ${stands + 1}: a reader standing in it still had no print of scene ${need.map((n) => n + 1).join(' and ')} after ${within}ms`); });
+        }
         await page.waitForTimeout(300);
         if (fraction === .5) {
           await page.waitForFunction(scene => {

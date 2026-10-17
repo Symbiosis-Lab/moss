@@ -16,7 +16,7 @@ fn empty_attrs() -> MediaAttrs {
 fn test_render_image_cover_wraps_content_in_row() {
     let html = render(
         Some("assets/photo.jpg"),
-        "Travel",
+        Some("Travel"),
         "Travel",
         "<p>Hello</p>",
         CoverType::Image,
@@ -45,7 +45,7 @@ fn test_render_image_cover_wraps_content_in_row() {
 fn test_render_video_cover_uses_thumbnail() {
     let html = render(
         Some("clip.mp4"),
-        "Demo",
+        Some("Demo"),
         "Demo",
         "<p>text</p>",
         CoverType::Video,
@@ -69,7 +69,7 @@ fn test_render_video_cover_uses_thumbnail() {
 fn test_render_iframe_cover() {
     let html = render(
         Some("widget.html"),
-        "Interactive",
+        Some("Interactive"),
         "Interactive",
         "<p>text</p>",
         CoverType::Iframe,
@@ -99,7 +99,7 @@ fn editor_preview_cover_wrapper_names_the_cover_field() {
     for (path, ct) in [("assets/photo.jpg", CoverType::Image), ("clip.mp4", CoverType::Video)] {
         let html = render(
             Some(path),
-            "Travel",
+            Some("Travel"),
             "Travel",
             "<p>Hello</p>",
             ct,
@@ -127,7 +127,7 @@ fn editor_preview_cover_wrapper_names_the_cover_field() {
     // Publish shape: no annotations at all.
     let off = render(
         Some("assets/photo.jpg"),
-        "Travel",
+        Some("Travel"),
         "Travel",
         "<p>Hello</p>",
         CoverType::Image,
@@ -142,7 +142,7 @@ fn editor_preview_cover_wrapper_names_the_cover_field() {
 fn test_render_without_cover_returns_content_unchanged() {
     let html = render(
         None,
-        "Travel",
+        Some("Travel"),
         "Travel",
         "<p>Hello</p>",
         CoverType::Image,
@@ -158,7 +158,7 @@ fn test_render_escapes_html_in_label() {
     // Label must be escaped for both the alt attribute and the visible h1.
     let html = render(
         Some("cover.jpg"),
-        "Code & Tips",
+        Some("Code & Tips"),
         "Code & Tips",
         "",
         CoverType::Image,
@@ -190,7 +190,7 @@ fn test_render_with_media_attrs() {
     };
     let html = render(
         Some("photo.jpg"),
-        "Travel",
+        Some("Travel"),
         "Travel",
         "<p>Hello</p>",
         CoverType::Image,
@@ -218,7 +218,7 @@ fn test_render_with_fit_and_position() {
     };
     let html = render(
         Some("photo.jpg"),
-        "Travel",
+        Some("Travel"),
         "Travel",
         "<p>text</p>",
         CoverType::Image,

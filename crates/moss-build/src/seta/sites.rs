@@ -32,10 +32,11 @@ pub struct RegisterSiteResponse {
 /// Response from POST /api/sites/{id}/sync (manifest diff).
 ///
 /// Wire contract (pinned across moss/moss-seta, 2026-07-22):
-///   { "need": string[], "remove": string[], "server_total": number }
+///   { "need": string[], "remove": string[], "server_total": number, "internal_remove"?: number }
 /// `remove` excludes `_moss/` internal derived assets on new setas (filtered
 /// at the server's response boundary); it is informational only — actual file
 /// removal happens implicitly via the server's generation swap at commit.
+/// `internal_remove` (optional) counts the `_moss/` paths that filter dropped.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SyncManifestResponse {
     pub need: Vec<String>,
@@ -45,6 +46,21 @@ pub struct SyncManifestResponse {
     /// deploy guard. `serde(default)` because older seta servers omit it.
     #[serde(default)]
     pub server_total: Option<u64>,
+    /// How many `_moss/` paths the server left out of `remove`. They are not
+    /// wipe evidence, but a publish whose only change is one of them
+    /// vanishing still has to commit. Absent on older servers, which counts
+    /// as 0.
+    #[serde(default)]
+    pub internal_remove: Option<u64>,
+}
+
+impl SyncManifestResponse {
+    /// Whether this publish changes anything the new generation must carry:
+    /// files to upload, content to remove, or theme and internal files that
+    /// disappeared. When false the live site already matches.
+    pub fn needs_commit(&self) -> bool {
+        !self.need.is_empty() || !self.remove.is_empty() || self.internal_remove.unwrap_or(0) > 0
+    }
 }
 
 /// Response from POST /api/sites/{id}/commit (finalize sync).
@@ -121,6 +137,9 @@ pub struct EventRow {
     #[serde(rename = "utmMedium")]
     pub utm_medium: Option<String>,
     pub event: Option<String>,
+    /// Daily visitor code, a hash the server computes per reader and day.
+    /// Rows written before the server carried it have none.
+    pub visitor: Option<String>,
 }
 
 /// Response from GET /api/sites/{id}/events (batch of raw events for delta sync).

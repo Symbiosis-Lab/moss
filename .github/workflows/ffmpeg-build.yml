@@ -1,0 +1,156 @@
+# Builds the static ffmpeg and ffprobe that moss downloads on macOS and
+# publishes them as a GitHub release. Run by hand, once per FFmpeg version or
+# build change. The tag must match FFMPEG_VERSION in scripts/ffmpeg/build.sh,
+# so a release can only carry the version its build script pins.
+#
+# The release is created with --latest=false, and release.yml and
+# announce-release.yml ignore ffmpeg- tags, so this release neither publishes
+# packages nor announces a moss version.
+
+name: FFmpeg build
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag, e.g. ffmpeg-7.1.5-moss.1"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Check tag against the pinned version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.parse.outputs.version }}
+      x264_commit: ${{ steps.parse.outputs.x264_commit }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: parse
+        name: Parse the tag
+        env:
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^ffmpeg-([0-9]+\.[0-9]+\.[0-9]+)-moss\.[0-9]+$ ]]; then
+            echo "release_tag must look like ffmpeg-7.1.5-moss.1, got: $TAG" >&2
+            exit 1
+          fi
+          VERSION="${BASH_REMATCH[1]}"
+          if ! grep -qx "FFMPEG_VERSION=$VERSION" scripts/ffmpeg/build.sh; then
+            echo "scripts/ffmpeg/build.sh does not pin FFmpeg $VERSION" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "x264_commit=$(sed -n 's/^X264_COMMIT=//p' scripts/ffmpeg/build.sh)" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: prepare
+    runs-on: macos-14
+    timeout-minutes: 90
+    strategy:
+      fail-fast: true
+      matrix:
+        arch: [arm64, x86_64]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install nasm for the x86 assembly
+        run: brew install nasm
+
+      - name: Build
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: scripts/ffmpeg/build.sh "$ARCH" dist
+
+      - name: Smoke test the arm64 binaries
+        if: matrix.arch == 'arm64'
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/smoke"
+          mkdir -p "$work/hls"
+          unzip -q dist/ffmpeg-macos-arm64.zip -d "$work"
+          unzip -q dist/ffprobe-macos-arm64.zip -d "$work"
+          "$work/ffmpeg" -hide_banner -loglevel error \
+            -f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i sine=sample_rate=48000 \
+            -t 5 -c:v libx264 -pix_fmt yuv420p -profile:v high -preset slow -crf 23 \
+            -c:a aac -movflags +faststart -shortest "$work/t.mp4"
+          "$work/ffprobe" -v error -show_entries format=duration -of csv=p=0 "$work/t.mp4"
+          "$work/ffmpeg" -hide_banner -loglevel error -i "$work/t.mp4" \
+            -c:v libx264 -c:a aac -f hls -hls_time 4 -hls_playlist_type vod \
+            "$work/hls/index.m3u8"
+          test -s "$work/hls/index.m3u8"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ffmpeg-build-${{ matrix.arch }}
+          path: dist/*-macos-${{ matrix.arch }}.zip
+          if-no-files-found: error
+
+      - name: Source and license files (uploaded once, from the arm64 leg)
+        if: matrix.arch == 'arm64'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ffmpeg-sources
+          path: |
+            dist/*.tar.xz
+            dist/*.tar.gz
+            dist/ffmpeg-COPYING.GPLv2
+            dist/ffmpeg-LICENSE.md
+            dist/x264-COPYING
+          if-no-files-found: error
+
+  release:
+    name: Publish the release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ffmpeg-*
+          path: dist
+          merge-multiple: true
+
+      - name: Write SHA256SUMS and create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          X264_COMMIT: ${{ needs.prepare.outputs.x264_commit }}
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum ./* > SHA256SUMS
+          cd ..
+          NOTES=$(cat <<EOF
+          FFmpeg $VERSION built for moss: static ffmpeg and ffprobe for macOS 12.0 and later, arm64 and x86_64.
+          moss downloads these binaries. This release is a tool build, not a moss version.
+
+          Configure (both architectures; the x86_64 build cross-compiles on an arm64 host):
+
+          \`\`\`
+          ./configure --enable-gpl --enable-libx264 --disable-autodetect --disable-network \\
+            --disable-doc --disable-ffplay --enable-static --disable-shared \\
+            --pkg-config-flags=--static --arch=<arch> --target-os=darwin --cc=clang
+          \`\`\`
+
+          libx264 is built from x264 commit $X264_COMMIT with --enable-static --disable-shared --disable-cli --enable-pic.
+
+          Corresponding source: ffmpeg-$VERSION.tar.xz and the x264 source tarball are attached, with the FFmpeg and x264 license texts.
+          EOF
+          )
+          gh release create "$TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "FFmpeg $VERSION for moss" \
+            --notes "$NOTES" \
+            --latest=false

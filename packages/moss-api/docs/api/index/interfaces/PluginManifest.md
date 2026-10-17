@@ -28,11 +28,13 @@ optional domain?: string;
 
 ***
 
-### entry
+### entry?
 
 ```ts
-entry: string;
+optional entry?: string;
 ```
+
+Omit only for a plugin that declares nothing but `contributes.derivations`.
 
 ***
 

@@ -81,6 +81,17 @@ pub struct ParseConfig {
     /// coordinate-system mismatch.
     pub source_line_offset: usize,
 
+    /// How many lines of the author's file sit above the parser's line 1
+    /// (frontmatter, plus any blank lines between it and the body), so a
+    /// warning can name a line of the file rather than a line of the body.
+    ///
+    /// It differs from `source_line_offset` on purpose. That one follows the
+    /// editor's buffer, which holds the body without its frontmatter, so it
+    /// excludes the frontmatter and is only used when source lines are
+    /// emitted. This one is always the real file line, because a warning is
+    /// read against the file, not the editor.
+    pub warning_line_offset: usize,
+
     /// When true, `$…$` / `$$…$$` parse as math ([`Options::ENABLE_MATH`])
     /// and render as escaped LaTeX source in `<code class="moss-math">`.
     /// When false (default), `$` is an ordinary character and math source
@@ -115,6 +126,7 @@ impl Default for ParseConfig {
             // callers all assume figure promotion happens.
             implicit_figure: true,
             source_line_offset: 0,
+            warning_line_offset: 0,
             // Off by default so the ~40 in-crate `parse()` callers and every
             // committed snapshot fixture are untouched by math landing.
             // Production opts in via `[site].math`.
@@ -162,6 +174,10 @@ pub fn parser_options(math: bool) -> Options {
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_FOOTNOTES);
     options.insert(Options::ENABLE_TASKLISTS);
+    // `Term` line then `: definition` lines. Without the flag the `: ` line
+    // is an ordinary paragraph, so the arms in `parse_block_with_tag` never see
+    // the events.
+    options.insert(Options::ENABLE_DEFINITION_LIST);
     // Phase 3 PR2: pulldown-cmark emits `LinkType::WikiLink` events for
     // `[[…]]` / `![[…]]` natively. The typed-AST parser preserves them as
     // `Inline::Link`/`Inline::Image` with `Url::Unresolved`; resolution
@@ -254,23 +270,10 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
 
     let options = parser_options(config.math);
 
-    // Source-line tracking requires the `into_offset_iter` form of the
-    // parser, which yields (Event, Range<usize>). When tracking is off,
-    // we use the plain iterator (no per-event offset overhead).
-    let (events, offsets): (Vec<Event<'_>>, Vec<Option<std::ops::Range<usize>>>) =
-        if config.emit_source_lines {
-            let mut evs = Vec::new();
-            let mut offs = Vec::new();
-            for (event, range) in Parser::new_ext(&source, options).into_offset_iter() {
-                evs.push(event);
-                offs.push(Some(range));
-            }
-            (evs, offs)
-        } else {
-            let evs: Vec<Event<'_>> = Parser::new_ext(&source, options).collect();
-            let len = evs.len();
-            (evs, vec![None; len])
-        };
+    // Offsets are always collected: source-line tracking reads them, and so
+    // does the alt-only image rule (it needs the bracket text as written).
+    let (events, offsets): (Vec<Event<'_>>, Vec<std::ops::Range<usize>>) =
+        Parser::new_ext(&source, options).into_offset_iter().unzip();
 
     // Build the prefix-sum line table once (only when needed).
     //
@@ -295,28 +298,26 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
         None
     };
 
-    // Line-tracking context handed to every recursive parser entry; the
-    // Tag::List / Tag::Table arms consult it to annotate per-item / per-row
-    // source lines. `None` when `emit_source_lines` is off; the inner
-    // arms see this as "skip annotation" and emit empty parallel vecs.
-    let line_ctx: Option<LineCtx<'_>> = line_lookup.as_ref().map(|lookup| LineCtx {
-        lookup,
+    // Context handed to every recursive parser entry. The Tag::List /
+    // Tag::Table arms consult its line lookup to annotate per-item / per-row
+    // source lines (`None` when `emit_source_lines` is off: they emit empty
+    // parallel vecs); the paragraph arm reads bracket text from `source`.
+    let line_ctx = LineCtx {
+        lookup: line_lookup.as_ref(),
         offsets: &offsets,
-    });
+        source: &source,
+    };
 
     let mut blocks = Vec::new();
     let mut block_meta: Vec<BlockMeta> = Vec::new();
     let mut i = 0;
     while i < events.len() {
         let event_start_idx = i;
-        let (block, advance) = parse_block(&events, i, line_ctx.as_ref());
+        let (block, advance) = parse_block(&events, i, &line_ctx);
         if let Some(b) = block {
             // Compute source_line from the first event's byte offset, if
             // we collected offsets and a lookup is in scope.
-            let source_line = match (line_lookup.as_ref(), offsets.get(event_start_idx)) {
-                (Some(lookup), Some(Some(range))) => Some(lookup.line_at(range.start)),
-                _ => None,
-            };
+            let source_line = line_ctx.line_at_event(event_start_idx);
             blocks.push(b);
             block_meta.push(BlockMeta { source_line });
         }
@@ -362,6 +363,12 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
     // Carry the extractor's findings out of the parse. Collected since the
     // unknown-name fallback landed, dropped here until now.
     doc.warnings = extraction.warnings;
+    // `Number` marks a top-level parse. The scan reads the whole source, fenced
+    // divs and grid cells included, so embedded fragments are covered by their host's scan.
+    if heading_ids == HeadingIds::Number {
+        doc.warnings.extend(crate::heading::attrs::warnings(markdown, config.warning_line_offset));
+    }
+    doc.advisories = extraction.advisories;
 
     // Obsidian parity: a single newline inside a paragraph becomes `<br>`.
     // Runs last, over the finished tree, because pulldown-cmark 0.13 has no
@@ -497,28 +504,54 @@ pub fn unwrap_implicit_figures(doc: &mut Document) {
     }
 }
 
-/// Bundle of borrowed line-tracking state threaded through recursive
-/// parser entries. Constructed once per `parse_with_config` when
-/// `emit_source_lines` is true; `None` everywhere else.
+/// Bundle of borrowed source state threaded through recursive parser
+/// entries, constructed once per `parse_with_config`. `lookup` is `Some`
+/// only when `emit_source_lines` is true.
 ///
 /// `parse_block` / `parse_block_with_tag` consult `line_at_event` to
 /// annotate per-`<li>` and per-`<tr>` source lines. The outer
 /// top-level-block source line is computed at the parse loop itself
 /// (already in place), not here.
 struct LineCtx<'a> {
-    lookup: &'a LineLookup,
-    offsets: &'a [Option<std::ops::Range<usize>>],
+    lookup: Option<&'a LineLookup>,
+    offsets: &'a [std::ops::Range<usize>],
+    source: &'a str,
 }
 
 impl<'a> LineCtx<'a> {
     /// 1-based source line of the event at `event_index`, or `None` if
-    /// the offset is missing (defensive — shouldn't happen when the
-    /// parser is operating with `emit_source_lines: true`).
+    /// when line tracking is off.
     fn line_at_event(&self, event_index: usize) -> Option<usize> {
-        match self.offsets.get(event_index) {
-            Some(Some(range)) => Some(self.lookup.line_at(range.start)),
-            _ => None,
+        let range = self.offsets.get(event_index)?;
+        Some(self.lookup?.line_at(range.start))
+    }
+
+    /// The first image's bracket text as written in the source, so an escape
+    /// is still visible (`![a\\|](x)` gives `a\\|`). `None` for an image with
+    /// no text.
+    fn bracket_text(&self, events: &[Event<'_>], para_start: usize) -> Option<&'a str> {
+        let start = (para_start + 1..events.len())
+            .find(|&i| matches!(events[i], Event::Start(Tag::Image { .. })))?;
+        let mut depth = 0;
+        let end = (start..events.len()).find(|&i| {
+            // allow:math-events-ignored — this only counts image nesting to
+            // find the image's closing event; math inside the brackets is
+            // read from the source text, not from events.
+            match events[i] {
+                Event::Start(Tag::Image { .. }) => depth += 1,
+                Event::End(TagEnd::Image) => depth -= 1,
+                _ => {}
+            }
+            depth == 0
+        })?;
+        if end == start + 1 {
+            return None;
         }
+        // The last child's range stops short of an escape's backslash, so
+        // read on to the closing bracket.
+        let last = self.offsets[end - 1].end;
+        let close = last + self.source.get(last..)?.find(']')?;
+        self.source.get(self.offsets[start].start + 2..close)
     }
 }
 
@@ -611,7 +644,7 @@ fn substitute_shortcode_placeholders(
 fn parse_block(
     events: &[Event<'_>],
     start: usize,
-    line_ctx: Option<&LineCtx<'_>>,
+    line_ctx: &LineCtx<'_>,
 ) -> (Option<Block>, usize) {
     // Block-level dispatch. pulldown always wraps loose inlines (math
     // included) in Tag::Paragraph at top level, so no math event ever reaches
@@ -642,7 +675,7 @@ fn parse_block_with_tag(
     events: &[Event<'_>],
     start: usize,
     tag: &Tag<'_>,
-    line_ctx: Option<&LineCtx<'_>>,
+    line_ctx: &LineCtx<'_>,
 ) -> (Option<Block>, usize) {
     match tag {
         Tag::Heading { level, .. } => {
@@ -693,7 +726,7 @@ fn parse_block_with_tag(
             // for the analogous shape decision at the inline image hook
             // level: inline images use `MarkdownInline` (no figure wrap);
             // only the standalone figure case here uses the figure wrap.
-            let block = match try_promote_to_figure(children, events, start) {
+            let block = match try_promote_to_figure(children, events, start, line_ctx) {
                 Ok(figure) => figure,
                 Err(original_inlines) => Block::Paragraph(original_inlines),
             };
@@ -765,7 +798,7 @@ fn parse_block_with_tag(
             // `Event::Start(Tag::Item)`'s byte offset → line. The renderer
             // emits `<li data-source-line="N">` for entries that are Some.
             let mut item_source_lines: Vec<Option<usize>> = Vec::new();
-            let track_lines = line_ctx.is_some();
+            let track_lines = line_ctx.lookup.is_some();
             let mut i = start + 1;
             while i < events.len() {
                 match &events[i] {
@@ -776,7 +809,7 @@ fn parse_block_with_tag(
                     Event::End(TagEnd::List(_)) => break,
                     Event::Start(Tag::Item) => {
                         if track_lines {
-                            item_source_lines.push(line_ctx.and_then(|ctx| ctx.line_at_event(i)));
+                            item_source_lines.push(line_ctx.line_at_event(i));
                         }
                         let (item_blocks, end) = collect_item_blocks(events, i + 1, line_ctx);
                         items.push(item_blocks);
@@ -828,7 +861,7 @@ fn parse_block_with_tag(
             // Both stay empty / None when `line_ctx` is None.
             let mut header_source_line: Option<usize> = None;
             let mut row_source_lines: Vec<Option<usize>> = Vec::new();
-            let track_lines = line_ctx.is_some();
+            let track_lines = line_ctx.lookup.is_some();
             let mut current_row: Vec<Vec<Inline>> = Vec::new();
             let mut in_head = false;
             let mut in_body_row = false;
@@ -848,7 +881,7 @@ fn parse_block_with_tag(
                         // to the `TableHead` event itself (line of the
                         // markdown `| h |` row).
                         if track_lines {
-                            header_source_line = line_ctx.and_then(|ctx| ctx.line_at_event(i));
+                            header_source_line = line_ctx.line_at_event(i);
                         }
                         i += 1;
                     }
@@ -863,7 +896,7 @@ fn parse_block_with_tag(
                             // pulldown-cmark only emits `TableRow` for body
                             // rows (header cells live directly inside
                             // `TableHead`). Always push to body lines here.
-                            row_source_lines.push(line_ctx.and_then(|ctx| ctx.line_at_event(i)));
+                            row_source_lines.push(line_ctx.line_at_event(i));
                         }
                         i += 1;
                     }
@@ -929,6 +962,39 @@ fn parse_block_with_tag(
                 end - start + 1,
             )
         }
+        // `Term` / `: definition` pairs. Pulldown emits the term and each
+        // definition as flat siblings inside the list, so the arms walk them in
+        // order. A definition goes through the item collector, which handles
+        // both the tight (inline) and loose (paragraph) shapes.
+        Tag::DefinitionList => {
+            let mut children = Vec::new();
+            let mut i = start + 1;
+            while i < events.len() {
+                match &events[i] {
+                    // allow:math-events-ignored — structural walk over term and
+                    // definition boundaries; their content is collected by the
+                    // math-aware collect_inlines_until and collect_flow_until.
+                    // Pinned by `math_survives_inside_a_definition`.
+                    Event::End(TagEnd::DefinitionList) => break,
+                    Event::Start(Tag::DefinitionListTitle) => {
+                        let (inlines, end) = collect_inlines_until(events, i + 1, |e| {
+                            matches!(e, Event::End(TagEnd::DefinitionListTitle))
+                        });
+                        children.push(Block::DefinitionTitle(inlines));
+                        i = end + 1;
+                    }
+                    Event::Start(Tag::DefinitionListDefinition) => {
+                        let (blocks, end) = collect_flow_until(events, i + 1, line_ctx, |e| {
+                            matches!(e, Event::End(TagEnd::DefinitionListDefinition))
+                        });
+                        children.push(Block::DefinitionDefinition(blocks));
+                        i = end + 1;
+                    }
+                    _ => i += 1,
+                }
+            }
+            (Some(Block::DefinitionList(children)), i - start + 1)
+        }
         // Unmodeled containers: skip to End and emit nothing. The events
         // inside are dropped — anything moss cares about should be modeled
         // explicitly.
@@ -960,16 +1026,50 @@ fn parse_block_with_tag(
 /// can fall back to constructing the standard `Block::Paragraph` without
 /// re-walking events.
 fn try_promote_to_figure(
-    mut inlines: Vec<Inline>,
+    inlines: Vec<Inline>,
     events: &[Event<'_>],
     para_start: usize,
+    line_ctx: &LineCtx<'_>,
 ) -> Result<Block, Vec<Inline>> {
     // `![Description](x.jpg)` followed on the next line by one italic line is
     // a figure whose caption is the italic line and whose alt stays the
     // bracket text, so the two can differ. A refusal hands the paragraph back
     // untouched.
-    let italic_at = italic_caption_index(&inlines);
-    try_promote_image_only(inlines, events, para_start, italic_at)
+    let source = italic_caption_index(&inlines).map_or(Caption::FromAlt, Caption::Italic);
+    try_promote_image_only(inlines, events, para_start, line_ctx, source)
+}
+
+/// Where a promoted figure's caption comes from.
+enum Caption {
+    /// The image's alt text (`![Description](x.jpg)`).
+    FromAlt,
+    /// The italic line at this inline index, which follows the image.
+    Italic(usize),
+    /// None: the bracket text ended in a bare `|` (`![Description|](x.jpg)`).
+    /// The figure exists only when a placement needs it.
+    None,
+}
+
+/// The alt a bracket text means when it ends in a bare `|`, with any
+/// placement taken out: `A lake|` is `A lake`, and `A lake|page|` is also
+/// `A lake` (the caller reads the placement from the text itself). `None` when
+/// there is no trailing pipe, when the pipe is escaped (`\|`), or when the
+/// text before it is only a placement (`55%|`), which is a media attribute and
+/// not alt text. This is the one place the rule lives: the standalone-image
+/// parser runs it on the bracket text as written, so the backslash is still
+/// there, and the `:::gallery` line parser runs it on its own line text.
+pub(crate) fn alt_only_text(bracket_text: &str) -> Option<String> {
+    let head = bracket_text.trim_end().strip_suffix('|')?;
+    // An odd run of backslashes ends in an escape; an even run is escaped
+    // backslashes and leaves the pipe bare.
+    if (head.len() - head.trim_end_matches('\\').len()) % 2 == 1 {
+        return None;
+    }
+    let (placement, rest) = crate::media::extract_placement_from_alias(head.trim());
+    if !placement.is_empty() && rest.is_empty() {
+        return None;
+    }
+    Some(rest)
 }
 
 /// Index of the italic line when the paragraph is exactly `image`, a line
@@ -988,14 +1088,19 @@ fn italic_caption_index(inlines: &[Inline]) -> Option<usize> {
     .then_some(em)
 }
 
-/// `italic_at` is the index of an italic caption line that follows the image;
-/// everything from it on is dropped from the paragraph once it promotes.
+/// With `Caption::Italic`, everything from the italic line on is dropped from
+/// the paragraph once it promotes.
 fn try_promote_image_only(
     mut inlines: Vec<Inline>,
     events: &[Event<'_>],
     para_start: usize,
-    italic_at: Option<usize>,
+    line_ctx: &LineCtx<'_>,
+    mut source: Caption,
 ) -> Result<Block, Vec<Inline>> {
+    let italic_at = match source {
+        Caption::Italic(at) => Some(at),
+        _ => None,
+    };
     let mut image_count = 0;
     for inline in &inlines[..italic_at.unwrap_or(inlines.len())] {
         match inline {
@@ -1032,6 +1137,24 @@ fn try_promote_image_only(
         };
         if crate::resolve::ext_kind::embed_stays_paragraph(*is_wikilink, dest) {
             return Err(inlines);
+        }
+    }
+
+    // A bare `|` ending the bracket text of this lone standard image means alt
+    // only: drop the pipe from the alt (a placement before it stays, for the
+    // extraction below) and, unless an italic line is the caption, the figure
+    // has none. An inline image in prose never gets here and keeps its pipe.
+    let bare_pipe = line_ctx
+        .bracket_text(events, para_start)
+        .is_some_and(|raw| alt_only_text(raw).is_some());
+    if let (true, Some(Inline::Image { alt, is_wikilink: false, .. })) =
+        (bare_pipe, inlines.iter_mut().find(|i| matches!(i, Inline::Image { .. })))
+    {
+        if let Some(head) = alt.trim_end().strip_suffix('|') {
+            *alt = head.trim().to_string();
+            if matches!(source, Caption::FromAlt) {
+                source = Caption::None;
+            }
         }
     }
 
@@ -1112,7 +1235,10 @@ fn try_promote_image_only(
     // original `<p><img></p>` shape with its whitespace siblings) — UNLESS it
     // carries a width, which needs a figure to hold the inline
     // `style="width:NN%"` / `data-width=`.
-    if alt_text.is_empty() && placement.is_empty() && italic_at.is_none() {
+    if (alt_text.is_empty() || matches!(source, Caption::None))
+        && placement.is_empty()
+        && italic_at.is_none()
+    {
         return Err(inlines);
     }
 
@@ -1148,7 +1274,7 @@ fn try_promote_image_only(
     let has_italic_caption = italic_caption.is_some();
     let caption = if has_italic_caption {
         italic_caption
-    } else if alt_text.is_empty() {
+    } else if matches!(source, Caption::None) || alt_text.is_empty() {
         None
     } else {
         Some(build_caption_inlines(
@@ -1569,7 +1695,7 @@ fn parse_inline(events: &[Event<'_>], start: usize) -> (Option<Inline>, usize) {
 fn collect_blocks_until<F>(
     events: &[Event<'_>],
     start: usize,
-    line_ctx: Option<&LineCtx<'_>>,
+    line_ctx: &LineCtx<'_>,
     is_end: F,
 ) -> (Vec<Block>, usize)
 where
@@ -1611,13 +1737,30 @@ where
 fn collect_item_blocks(
     events: &[Event<'_>],
     start: usize,
-    line_ctx: Option<&LineCtx<'_>>,
+    line_ctx: &LineCtx<'_>,
 ) -> (Vec<Block>, usize) {
+    collect_flow_until(events, start, line_ctx, |e| {
+        matches!(e, Event::End(TagEnd::Item))
+    })
+}
+
+/// [`collect_item_blocks`] for any container whose content is flow content
+/// (a list item, a definition): the same inline-vs-block handling, stopping
+/// at the event that `is_end` accepts. Returns that event's index.
+fn collect_flow_until<F>(
+    events: &[Event<'_>],
+    start: usize,
+    line_ctx: &LineCtx<'_>,
+    is_end: F,
+) -> (Vec<Block>, usize)
+where
+    F: Fn(&Event<'_>) -> bool,
+{
     let mut out: Vec<Block> = Vec::new();
     let mut pending_inlines: Vec<Inline> = Vec::new();
     let mut i = start;
     while i < events.len() {
-        if matches!(&events[i], Event::End(TagEnd::Item)) {
+        if is_end(&events[i]) {
             flush_pending_paragraph(&mut out, &mut pending_inlines);
             return (out, i);
         }
@@ -1668,7 +1811,7 @@ fn collect_item_blocks(
 fn detect_and_assemble_callout(
     events: &[Event<'_>],
     start: usize,
-    line_ctx: Option<&LineCtx<'_>>,
+    line_ctx: &LineCtx<'_>,
 ) -> Option<(Block, usize)> {
     if !matches!(events.get(start), Some(Event::Start(Tag::Paragraph))) {
         return None;
@@ -2073,6 +2216,8 @@ fn collect_heading_id_slots<'a>(
             // LinkCard counts: it is the compound-link grid cell, and its
             // children include headings.
             Block::BlockQuote(children)
+            | Block::DefinitionList(children)
+            | Block::DefinitionDefinition(children)
             | Block::Callout { children, .. }
             | Block::LinkCard { children, .. } => {
                 collect_heading_id_slots(children, sink, hoisted, notes, scope);
@@ -2113,7 +2258,7 @@ fn collect_heading_id_slots<'a>(
             // children, and the next `Block` variant that gains a
             // `Vec<Block>` must fail to compile HERE rather than silently
             // leak duplicate ids onto the page.
-            Block::Paragraph(_)
+            Block::Paragraph(_) | Block::DefinitionTitle(_)
             | Block::CodeBlock { .. }
             | Block::Table { .. }
             | Block::ThematicBreak

@@ -12,12 +12,18 @@ export interface SearchStrings {
   resultsLabel: string;
 }
 
-export const STRINGS: Record<"en" | "zh-hans" | "zh-hant", SearchStrings> = {
+export const STRINGS: Record<"en" | "de" | "zh-hans" | "zh-hant", SearchStrings> = {
   "en": {
     label: "Search",
     placeholder: "Search this site",
     empty: "No matches for \"{query}\".",
     resultsLabel: "Search results",
+  },
+  "de": {
+    label: "Suche",
+    placeholder: "Diese Website durchsuchen",
+    empty: "Keine Treffer für „{query}“.",
+    resultsLabel: "Suchergebnisse",
   },
   "zh-hans": {
     label: "搜索",

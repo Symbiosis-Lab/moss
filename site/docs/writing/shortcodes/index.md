@@ -15,9 +15,9 @@ Column two content.
 :::
 ```
 
-## Arity rule for nesting
+## Nesting
 
-When one shortcode lives inside another, the inner fence uses more colons than the outer. A `:::grid` (3 colons) contains `::::buttons` (4 colons); `::::buttons` could contain `:::::callout` (5 colons), and so on. Each fence's closing delimiter must match its opener exactly.
+A fence with a name or `{attributes}` opens a block, and a bare line of three or more colons closes the innermost open block. The number of colons does not matter, so use more of them only if you like the look: `:::grid` can contain `::::buttons`, or another `:::` block, and every closer can be plain `:::`.
 
 ```markdown
 :::grid 2 2:3 {.hero-split}
@@ -32,9 +32,7 @@ Contact info
 :::
 ```
 
-Pages that never nested fences continue to work unchanged.
-
-Nesting two fences at the same colon count emits a build warning and renders as literal text.
+A block that is never closed, and a closing line with nothing left to close, each produce a build warning naming the line, and `--strict` fails on them.
 
 ## Cell dividers
 

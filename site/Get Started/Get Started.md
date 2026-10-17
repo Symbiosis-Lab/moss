@@ -6,6 +6,8 @@ weight: 0
 translationKey: docs-start
 children: false
 ---
+![[Intro to moss.mp4|100%|A one-minute tour of moss: make a folder your website, write a first post, start from a starter folder, and publish.]]
+
 moss packs the markdown files and other media in your folder into a website. You can use any markdown editor, such as [Obsidian](https://obsidian.md/), or moss's built-in editor, to write and add other material. moss is macOS-only for now; Linux and Windows are coming in later releases.
 
 Please submit bugs and feature suggestions [on Github](https://github.com/Symbiosis-Lab/moss/issues).
@@ -14,13 +16,13 @@ Please submit bugs and feature suggestions [on Github](https://github.com/Symbio
 
 [Download](https://github.com/Symbiosis-Lab/moss/releases/latest/download/moss.dmg) and install moss.
 
-Create a folder and name it after your site. Right-click it and choose **Publish**, or double-click the moss icon and pick the folder — either one launches the moss preview. moss opens the editor automatically, so you can start writing and watch the preview update live.
+Create a folder and name it after your site. Right-click it and choose **Preview Website**, or double-click the moss icon and pick the folder; either one opens the moss preview with the editor beside it. In an empty folder the editor offers **Start writing**, which creates your home page, or a **Starter**, a **URL** to import from, or a **Plugin** to begin with. As you write, the preview updates live.
+
+To begin from a starter folder instead, choose **Starter**. Browse the starters, open **See demo site** to look through one in full, then click **Use this starter**: moss copies its pages into your folder, ready for you to rewrite as your own.
 
 In the preview window on the right, your site is already generated, with light and dark styles built in. Drag the divider left or right to close the editor or the preview and cut distractions.
 
-%%demo%%
-
-![[new folder.gif|Create a new folder and a site]]
+![[new folder.mp4|loop|100%|Create a new folder and a site]]
 
 ## Formatting & media
 
@@ -38,20 +40,20 @@ Your site's structure is your folder structure: every folder and markdown file b
 
 Create new folders and files in the editor and each becomes a new page:
 
-- Click **New Page** above the tree. [▶](#scene=create-page)
-- Above every page is a **+** — click it and search for a property, such as **Cover**, to [[Define pages with frontmatter|add it]]; date and subpage style work the same way. [▶](#scene=properties)
+- Click the new-page button, a page with a plus at the top right of the editor.
+- Above every page is a **+** — click it and search for a property, such as **Cover**, to [[Define pages with frontmatter|add it]]; date and subpage style work the same way.
 
-![[editing.gif|Add and edit pages]]
+![[editing.mp4|loop|100%|Add and edit pages]]
 
 ## Publishing & domains
 
-Once your site takes shape, click Publish in the preview window and it goes live. The first time you publish, moss verifies your email and lets you pick a free `mosspub.com` subdomain for your site.
+Once your site takes shape, click Publish in the preview window and it goes live. The first time you publish, you verify your email and pick a subdomain for your site. Hosting at `yourname.mosspub.com` is provided by Symbiosis Lab: one site, free for six months.
 
-![[first time publish.gif|First publish: verify your email and pick a subdomain]]
+![[first time publish.mp4|loop|100%|First publish: verify your email and pick a subdomain]]
 
 At any time, open the menu at the top-right of the site icon and go to Settings to buy a custom domain. Once you do, moss configures the domain and CDN (content delivery network) for you automatically.
 
-![[custom domain.gif|Search for and buy your own domain]]
+![[custom domain.mp4|loop|100%|Search for and buy your own domain]]
 
 
 ## Mailing list
@@ -60,7 +62,7 @@ Enable a mailing list so readers can subscribe to your work by email.
 
 Click the "+" on the right of the preview and add the email channel, and a subscribe box appears in your site's footer automatically. When you finish a new post, tick the email channel; after moss deploys the site, it opens the email composer so you can preview and confirm.
 
-![[email sub.gif|Enable email subscriptions]]
+![[email sub.mp4|loop|100%|Enable email subscriptions]]
 
 
 

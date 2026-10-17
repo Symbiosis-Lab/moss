@@ -46,7 +46,7 @@ use crate::editor::ref_rewrite::{
 use path_list_folder_index::{collect_dirs, PathListFolderIndex};
 use served_address::Addresses;
 
-pub use apply::{apply_planned_moves, undo_applied};
+pub use apply::{apply_planned_moves, undo_applied, undo_file_moves};
 
 // ── Public, serializable plan/apply/undo types ──────────────────────────────
 // Derives mirror `FileReferenceHit` (ref_scan.rs): the desktop passes these
@@ -83,6 +83,10 @@ pub struct PlannedEdit {
 pub struct RenamePlan {
     pub moves: Vec<PlannedMove>,
     pub edits: Vec<PlannedEdit>,
+    /// Root-relative `(old, new)` of every file whose path changes, including
+    /// each file under a moved folder and its carried home page.
+    #[serde(default)]
+    pub file_moves: Vec<(String, String)>,
 }
 
 /// One edit actually written by [`apply_planned_moves`], with its position
@@ -198,6 +202,19 @@ fn expand_with_home_carry(top_level: &[ResolvedMove], files: &[String]) -> Vec<R
     out
 }
 
+/// What a batch of moves does to a file list: the moves with home carries
+/// added, the list afterwards (same order), and each changed `(before, after)`.
+struct MovedFiles { expanded: Vec<ResolvedMove>, post: Vec<String>, pairs: Vec<(String, String)> }
+
+/// The one rule for which files a batch of moves relocates and where they land,
+/// for planning (the tree now) and undoing (the tree the forward moves left).
+fn moved_files(top_level: &[ResolvedMove], files: &[String]) -> MovedFiles {
+    let expanded = expand_with_home_carry(top_level, files);
+    let post: Vec<String> = files.iter().map(|p| map_path(p, &expanded)).collect();
+    let pairs = files.iter().zip(&post).filter(|(a, b)| a != b).map(|(a, b)| (a.clone(), b.clone())).collect();
+    MovedFiles { expanded, post, pairs }
+}
+
 // ── Which entry the BUILD uses for this reference ──────────────────────────
 //
 // Every reference form names its file through `ContentGraph::resolve_path`, so
@@ -269,6 +286,14 @@ fn resolve_by_route(
             }
         }
     }
+}
+
+/// Whether a destination names an address outside this tree: a scheme and
+/// host, a protocol-relative `//host`, or a non-path scheme. Mirrors the
+/// external short-circuit in `classify_reference`, which the page-graph route
+/// does not call.
+fn is_external_destination(text: &str) -> bool {
+    ["http://", "https://", "//", "mailto:", "tel:", "data:"].iter().any(|p| text.starts_with(p))
 }
 
 /// Split a reference's `?query`/`#anchor` suffix off its path (earliest of
@@ -344,6 +369,13 @@ fn plan_one_ref(
     expanded_moves: &[ResolvedMove],
     addresses: &Addresses,
 ) -> Result<Option<String>, String> {
+    // A destination with a scheme and host (or a protocol-relative `//host`)
+    // names another site's address. Its tail is not a path in this tree, so
+    // no matching below may read it: `https://…/events/2026/11/20` would
+    // otherwise find the page at `events/2019/11/20.md` by its file stem.
+    if is_external_destination(raw_text) {
+        return Ok(None);
+    }
     let (base_text, suffix) = split_ref_suffix(raw_text);
     let wiki = form == DestForm::Wiki;
     // `/` is the site's front door whatever file is served there.
@@ -405,6 +437,21 @@ fn plan_one_ref(
         None if synthetic_auto_index => None,
         None => exact_of(dirname(from_source_pre), &t),
     };
+    // A markdown path that names no file exactly (from the page, from the
+    // root, or as an address) was found by the resolver's suffix or stem
+    // fallback: `/archive/events/2019/11/20.md` finds `events/2019/11/20.md`
+    // there, though the build serves the link as broken. Such a link is
+    // left as authored, like any other unresolved one. A destination with a
+    // scheme or host is decided by the host check above, never here.
+    if route == RefRoute::PageGraph
+        && !wiki
+        && base_text.trim_start_matches('/').contains('/')
+        && !is_external_destination(raw_text)
+        && exact.is_none()
+        && !synthetic_auto_index
+    {
+        return Ok(None);
+    }
     let resolves_post = resolve_by_route(route, raw_text, from_source_post, ctx_post, graph_post).as_deref()
         == Some(map_t.as_str());
     let unchanged = match &exact {
@@ -669,8 +716,7 @@ pub fn plan_moves(project_root: &Path, moves: &[(String, String)]) -> Result<Ren
     }
 
     let pre_files = walk_all_files(&canonical_root);
-    let expanded = expand_with_home_carry(&resolved, &pre_files);
-    let post_files: Vec<String> = pre_files.iter().map(|p| map_path(p, &expanded)).collect();
+    let MovedFiles { expanded, post: post_files, pairs: file_moves } = moved_files(&resolved, &pre_files);
 
     let idx_pre = Indexes::build(&pre_files);
     let urls_pre = NoUrlIndex;
@@ -745,6 +791,7 @@ pub fn plan_moves(project_root: &Path, moves: &[(String, String)]) -> Result<Ren
     Ok(RenamePlan {
         moves: resolved.into_iter().map(|m| PlannedMove { old_path: m.old, new_path: m.new, is_dir: m.is_dir }).collect(),
         edits,
+        file_moves,
     })
 }
 

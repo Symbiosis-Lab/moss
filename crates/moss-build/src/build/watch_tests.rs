@@ -3348,7 +3348,9 @@ async fn a_theme_css_file_rewritten_on_disk_between_two_real_builds_is_in_modifi
     std::fs::create_dir_all(folder.join(".moss").join("theme")).unwrap();
     std::fs::write(folder.join("index.md"), "# Home\n\nbody\n").unwrap();
     let css_path = folder.join(".moss").join("theme").join("style.css");
-    std::fs::write(&css_path, "body { color: black; }\n").unwrap();
+    std::fs::write(&css_path, "@font-face { src: url(f.woff2); }\nbody { color: black; }\n").unwrap();
+    let font_path = folder.join(".moss").join("theme").join("f.woff2");
+    std::fs::write(&font_path, b"font one").unwrap();
 
     let root = crate::vault::paths::VaultRoot::resolve(&folder);
     let folder_key = root.as_str().to_string();
@@ -3384,13 +3386,24 @@ async fn a_theme_css_file_rewritten_on_disk_between_two_real_builds_is_in_modifi
     let before = stash().expect("build 1 stashes its hashes");
     wait_for_seal(&folder_key, USER_CSS_SOURCE_KEY, &before).await;
 
-    std::fs::write(&css_path, "body { color: midnightblue; }\n").unwrap();
+    std::fs::write(&css_path, "@font-face { src: url(f.woff2); }\nbody { color: midnightblue; }\n").unwrap();
     build(BuildTrigger::ContentOnly(vec![css_path.clone()])).await.expect("build 2");
     let after = stash().expect("build 2 stashes its hashes");
     wait_for_seal(&folder_key, USER_CSS_SOURCE_KEY, &after).await;
 
-    let event = decide_rebuild_event(Some(after), &folder_key, &before, &[])
+    let event = decide_rebuild_event(Some(after.clone()), &folder_key, &before, &[])
         .expect("a style.css edit on disk emits a rebuild event");
+    assert_eq!(event.modified_paths, Some(vec![USER_CSS_SOURCE_KEY.to_string()]));
+
+    // A font the stylesheet points at changes the stylesheet's address while
+    // `style.css` is untouched; the preview must still be told.
+    std::fs::write(&font_path, b"font two").unwrap();
+    build(BuildTrigger::ContentOnly(vec![font_path.clone()])).await.expect("build 3");
+    let third = stash().expect("build 3 stashes its hashes");
+    wait_for_seal(&folder_key, USER_CSS_SOURCE_KEY, &third).await;
+
+    let event = decide_rebuild_event(Some(third), &folder_key, &after, &[])
+        .expect("a font edit emits a rebuild event");
     assert_eq!(event.modified_paths, Some(vec![USER_CSS_SOURCE_KEY.to_string()]));
 }
 
@@ -4020,4 +4033,207 @@ fn every_page_extension_is_a_page_to_the_pump() {
         assert_eq!(pump_gate(modify, root.to_str().unwrap(), std::slice::from_ref(&page)), PumpGate::DeferHashCheck, "{name}");
         assert!(source_asset_request_paths(root, EventKind::Create(CreateKind::File), &[page]).is_empty(), "{name}");
     }
+}
+
+fn manifest(pages: &[(&str, &str)], lingering: &[&str]) -> SiteHashes {
+    let mut h = SiteHashes::new();
+    for (src, out) in pages {
+        h.insert((*out).into(), "hash".into());
+        h.source_to_output.insert((*src).into(), (*out).into());
+    }
+    for out in lingering {
+        h.insert((*out).into(), "hash".into());
+    }
+    h
+}
+
+fn pairs_of(list: &[(&str, &str)]) -> Vec<(String, String)> {
+    list.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+}
+
+/// Renamed and then renamed back: the earlier pair's new source is gone and
+/// its output still lingers in `files` until the generation is sealed. The
+/// preview must not be told to follow the page that no longer exists.
+#[test]
+fn a_rename_and_its_reversal_move_nothing() {
+    let prev = manifest(&[("a.md", "a/index.html")], &[]);
+    let new = manifest(&[("a.md", "a/index.html")], &["b/index.html"]);
+    let pairs = pairs_of(&[("a.md", "b.md"), ("b.md", "a.md")]);
+
+    let event = build_rebuild_event_with_renames(&new, &prev, &pairs);
+    let moved = event.as_ref().and_then(|e| e.moved_output_paths.as_ref());
+    assert!(moved.is_none(), "no output moved, got {moved:?}");
+    assert!(event.is_none_or(|e| e.source_renames.is_none()), "stale pairs must not be reported as renames");
+}
+
+/// Renamed twice in one window: neither pair is resolvable (the first one's
+/// new source is gone, the second one's old source was never in the previous
+/// manifest), so the event reports the net result as a delete plus a create.
+#[test]
+fn a_chain_of_renames_reports_a_delete_and_a_create_not_a_move() {
+    let prev = manifest(&[("a.md", "a/index.html")], &[]);
+    let new = manifest(&[("c.md", "c/index.html")], &["b/index.html"]);
+    let pairs = pairs_of(&[("a.md", "b.md"), ("b.md", "c.md")]);
+
+    let event = build_rebuild_event_with_renames(&new, &prev, &pairs).expect("the net change emits an event");
+    assert_eq!(event.moved_output_paths, None);
+    assert_eq!(event.source_renames, None);
+    assert_eq!(event.source_creates, Some(vec!["c.md".to_string()]));
+    assert_eq!(event.source_deletes, Some(vec!["a.md".to_string()]));
+}
+
+#[test]
+fn a_stale_pair_does_not_hide_a_real_create_or_delete() {
+    let prev = manifest(&[("gone.md", "gone/index.html"), ("kept.md", "kept/index.html")], &[]);
+    let new = manifest(&[("kept.md", "kept/index.html"), ("fresh.md", "fresh/index.html")], &[]);
+    // `gone.md` was deleted and `fresh.md` created, but the pairs name an
+    // intermediate source neither manifest holds.
+    let pairs = pairs_of(&[("gone.md", "middle.md"), ("middle.md", "fresh.md")]);
+
+    let event = build_rebuild_event_with_renames(&new, &prev, &pairs).expect("event");
+    assert_eq!(event.source_deletes, Some(vec!["gone.md".to_string()]));
+    assert_eq!(event.source_creates, Some(vec!["fresh.md".to_string()]));
+    assert_eq!(event.source_renames, None);
+}
+
+/// A page renamed to a non-page extension has no output on the new side, but
+/// the rename is still the file's identity: it is echoed as a rename and the
+/// vanished page is not also reported as deleted.
+#[test]
+fn a_page_renamed_to_a_non_page_extension_is_a_rename_not_a_delete() {
+    let prev = manifest(&[("a.md", "a/index.html")], &[]);
+    let new = manifest(&[("other.md", "other/index.html")], &[]);
+    let pairs = pairs_of(&[("a.md", "a.txt")]);
+
+    let event = build_rebuild_event_with_renames(&new, &prev, &pairs).expect("event");
+    assert_eq!(event.source_renames, Some(pairs.clone()));
+    assert_eq!(event.source_deletes, None);
+    assert_eq!(event.moved_output_paths, None);
+}
+
+#[test]
+fn a_non_page_renamed_to_a_page_extension_is_a_rename_not_a_create() {
+    let prev = manifest(&[("other.md", "other/index.html")], &[]);
+    let new = manifest(&[("other.md", "other/index.html"), ("a.md", "a/index.html")], &[]);
+    let pairs = pairs_of(&[("a.txt", "a.md")]);
+
+    let event = build_rebuild_event_with_renames(&new, &prev, &pairs).expect("event");
+    assert_eq!(event.source_renames, Some(pairs.clone()));
+    assert_eq!(event.source_creates, None);
+    assert_eq!(event.moved_output_paths, None);
+}
+
+/// Before the manifest carried `source_to_output`, outputs are found by the
+/// stem guess; a rename between such manifests still moves the output.
+#[test]
+fn a_legacy_manifest_resolves_a_rename_through_the_stem_guess() {
+    let mut prev = SiteHashes::new();
+    prev.insert("a/index.html".into(), "hash".into());
+    let mut new = SiteHashes::new();
+    new.insert("b/index.html".into(), "hash".into());
+    let pairs = pairs_of(&[("a.md", "b.md")]);
+
+    let event = build_rebuild_event_with_renames(&new, &prev, &pairs).expect("event");
+    assert_eq!(event.moved_output_paths, Some(vec![("a/index.html".to_string(), "b/index.html".to_string())]));
+}
+
+/// A page that owns no output (a footer slot) is recorded only in the source
+/// hashes. Renaming it is still a rename, not a delete plus a create.
+#[test]
+fn a_renamed_page_that_owns_no_output_is_still_reported_as_a_rename() {
+    let meta = |hash: &str| SourceMetadata {
+        hash: hash.into(),
+        size: 1,
+        mtime: 0,
+        mtime_nanos: None,
+        ctime: None,
+        inode: None,
+    };
+    let mut prev = manifest(&[("other.md", "other/index.html")], &[]);
+    prev.sources.insert("footer.md".into(), meta("h"));
+    let mut new = manifest(&[("other.md", "other/index.html")], &[]);
+    new.sources.insert("footer2.md".into(), meta("h"));
+    let pairs = pairs_of(&[("footer.md", "footer2.md")]);
+
+    let event = build_rebuild_event_with_renames(&new, &prev, &pairs).expect("event");
+    assert_eq!(event.source_renames, Some(pairs.clone()));
+    assert_eq!(event.source_creates, None);
+    assert_eq!(event.source_deletes, None);
+}
+
+// ── A rename the watcher could not pair, recognised by identity ─────────────
+//
+// macOS does not always report a rename made in Finder as one event; the
+// rebuild then sees a page vanish and another appear. The same inode with the
+// same content is the same file, so it is a rename, and the open document
+// follows it. Anything less certain stays a delete plus a create.
+
+fn page_hashes(path: &str, out: &str, inode: Option<u64>, hash: &str) -> SiteHashes {
+    let mut h = SiteHashes::new();
+    h.insert(out.into(), "out_hash".into());
+    h.source_to_output.insert(path.into(), out.into());
+    h.sources.insert(path.into(), crate::build::types::SourceMetadata {
+        hash: hash.into(), size: 1, mtime: 1, mtime_nanos: None, ctime: None, inode,
+    });
+    h
+}
+
+#[test]
+fn an_unpaired_rename_with_the_same_inode_and_content_is_a_rename() {
+    let prev = page_hashes("note.md", "note/index.html", Some(42), "same");
+    let new = page_hashes("field-notes.md", "field-notes/index.html", Some(42), "same");
+    let event = build_rebuild_event_with_renames(&new, &prev, &[]).expect("event");
+    assert_eq!(event.source_renames, Some(vec![("note.md".to_string(), "field-notes.md".to_string())]));
+    assert_eq!(event.source_deletes, None);
+    assert_eq!(event.source_creates, None);
+}
+
+#[test]
+fn a_reused_inode_with_different_content_is_not_a_rename() {
+    // Linux filesystems hand a freed inode number to the next new file.
+    let prev = page_hashes("note.md", "note/index.html", Some(42), "old text");
+    let new = page_hashes("other.md", "other/index.html", Some(42), "unrelated text");
+    let event = build_rebuild_event_with_renames(&new, &prev, &[]).expect("event");
+    assert_eq!(event.source_renames, None);
+    assert_eq!(event.source_deletes, Some(vec!["note.md".to_string()]));
+    assert_eq!(event.source_creates, Some(vec!["other.md".to_string()]));
+}
+
+#[test]
+fn without_an_inode_on_both_sides_nothing_is_paired() {
+    let prev = page_hashes("note.md", "note/index.html", None, "same");
+    let new = page_hashes("field-notes.md", "field-notes/index.html", Some(42), "same");
+    let event = build_rebuild_event_with_renames(&new, &prev, &[]).expect("event");
+    assert_eq!(event.source_renames, None);
+}
+
+#[test]
+fn two_new_pages_claiming_one_identity_pair_with_neither() {
+    let prev = page_hashes("note.md", "note/index.html", Some(42), "same");
+    let mut new = page_hashes("a.md", "a/index.html", Some(42), "same");
+    let b = page_hashes("b.md", "b/index.html", Some(42), "same");
+    new.source_to_output.extend(b.source_to_output);
+    new.sources.extend(b.sources);
+    let event = build_rebuild_event_with_renames(&new, &prev, &[]).expect("event");
+    assert_eq!(event.source_renames, None);
+}
+
+#[test]
+fn two_vanished_pages_sharing_one_identity_pair_with_neither() {
+    let mut prev = page_hashes("a.md", "a/index.html", Some(42), "same");
+    let b = page_hashes("b.md", "b/index.html", Some(42), "same");
+    prev.source_to_output.extend(b.source_to_output);
+    prev.sources.extend(b.sources);
+    let new = page_hashes("c.md", "c/index.html", Some(42), "same");
+    let event = build_rebuild_event_with_renames(&new, &prev, &[]).expect("event");
+    assert_eq!(event.source_renames, None);
+}
+
+#[test]
+fn a_page_the_watcher_already_paired_is_not_paired_again() {
+    let prev = page_hashes("note.md", "note/index.html", Some(42), "same");
+    let new = page_hashes("field-notes.md", "field-notes/index.html", Some(42), "same");
+    let watcher = [("note.md".to_string(), "field-notes.md".to_string())];
+    let event = build_rebuild_event_with_renames(&new, &prev, &watcher).expect("event");
+    assert_eq!(event.source_renames, Some(watcher.to_vec()));
 }

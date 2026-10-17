@@ -26,6 +26,7 @@ fn project() -> ProjectStructure {
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
+        empty_folders: Vec::new(),
     }
 }
 
@@ -113,6 +114,7 @@ impl Harness {
                 site_lang: crate::i18n::Language::En,
                 typesetting: None,
                 math: false,
+                term_nav: &[],
             },
         )
     }
@@ -573,6 +575,7 @@ fn a_places_toml_only_edit_full_renders_via_surface_changed_and_moves_membership
     let h = Harness::new();
 
     let places_kind = |parent_of_kyoto: &str| crate::build::terms::TermKind {
+        cards: false,
         key: "places".to_string(),
         fields: vec!["location".to_string()],
         title: "Places".to_string(),
@@ -762,7 +765,7 @@ fn a_homepage_title_edit_widens_to_its_language_not_the_site() {
 fn a_folder_indexs_label_edit_widens_to_its_breadcrumb_descendants_only() {
     let h = Harness::new();
     let mut docs = vault();
-    docs[0].breadcrumb = Some(true);
+    docs[0].breadcrumb = Some(moss_core::frontmatter_typed::BreadcrumbSetting::On);
     docs.push(doc("other/index.html", PageKind::Folder, "other body", Some("Other")));
     docs.push(doc("other/leaf/index.html", PageKind::Article, "leaf body", Some("Leaf")));
     h.run(&docs);
@@ -790,7 +793,7 @@ fn a_homepage_breadcrumb_toggle_widens_the_whole_site() {
     h.run(&docs);
 
     let mut flipped = docs.clone();
-    flipped[0].breadcrumb = Some(true);
+    flipped[0].breadcrumb = Some(moss_core::frontmatter_typed::BreadcrumbSetting::On);
     let verdict = h.run(&flipped);
     assert_incremental(&verdict);
     for src in ["index.md", "writings/index.md", "writings/alpha/index.md", "writings/beta/index.md"] {
@@ -880,4 +883,36 @@ fn an_image_gaining_its_placeholder_renders_only_the_pages_that_show_it() {
     for carried in ["index.md", "writings/alpha/index.md", "writings/beta/index.md"] {
         assert!(verdict.may_skip(carried), "{carried} does not show the image");
     }
+}
+
+/// The not-found page is rendered every build, never carried: its `/404.html`
+/// copy is registered from the render, and a carried page has no render to
+/// copy. The proof is where that is decided, so every caller agrees.
+#[test]
+fn the_not_found_page_is_never_carried_even_when_the_verdict_and_output_allow_it() {
+    use crate::build::render::incremental::CarryProof;
+    let h = Harness::new();
+    let docs = vec![
+        doc("index.html", PageKind::Folder, "home body", Some("Home")),
+        doc("about/index.html", PageKind::Article, "About us.", None),
+        doc("404/index.html", PageKind::Article, "Nothing here.", None),
+    ];
+    assert_full(&h.run(&docs), FullCause::ColdCache);
+    let verdict = h.run(&docs);
+
+    let site_url = crate::build::site_url::SiteUrl::parse("https://example.com").unwrap();
+    let mut previous = crate::types::content::SiteHashes::default();
+    for d in &docs[1..] {
+        let qr = crate::build::media::qr::share_qr_for_page(&d.url_path, d.is_public_page(), &site_url);
+        for out in std::iter::once(d.url_path.clone()).chain(qr.map(|q| q.served_path)) {
+            previous.files.insert(out.clone(), "100644:0123456789abcdef".to_string());
+            std::fs::create_dir_all(h.output.join(&out).parent().unwrap()).unwrap();
+            std::fs::write(h.output.join(&out), "x").unwrap();
+        }
+    }
+    let proof = |d: &ParsedDocument| CarryProof::for_document(d, &verdict, &previous, &h.output, &site_url);
+
+    assert!(proof(&docs[1]).is_some(), "a plain page with all its outputs is carried");
+    assert!(verdict.may_skip_document(&docs[2]), "the verdict alone would carry the not-found page");
+    assert!(proof(&docs[2]).is_none(), "the not-found page must be rendered, not carried");
 }

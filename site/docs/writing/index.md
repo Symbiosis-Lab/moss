@@ -28,7 +28,7 @@ When a page needs a specific visual treatment, try in this order:
 | Kicker / eyebrow before the title | `::: {.eyebrow}` fenced div before the H1 |
 | Pull quote inside a section | `> quote` styled differently from callouts via `h2 ~ blockquote` |
 | Clickable compound card in a grid | Wrap cell content in `[…](/url)`; moss emits one `<a>` with block children |
-| Repeated block across pages | Extract as a partial (`unlisted: true, nav: false, children: false`), transclude via `![[partial-name]]` |
+| Repeated block across pages | Extract as a partial (`listed: false, nav: false, children: false`), transclude via `![[partial-name]]` |
 | Placeholder / in-progress section | `> [!pending] Title` callout |
 
 ### Markdown attributes that do NOT work

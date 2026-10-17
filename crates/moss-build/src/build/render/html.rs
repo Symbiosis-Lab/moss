@@ -191,10 +191,9 @@ pub fn generate_html_collect_og<'d>(
 ///   then both the visible title and the heading landmark: nothing is
 ///   emitted, for nav and non-nav folders alike,
 /// - the body opens with a `:::hero` that carries its own heading: nothing is
-///   emitted, since the hero already supplies the `<h1>`, or
-/// - the folder renders as a nav item, so the nav bar shows its title: the
-///   title is still emitted, visually hidden, because a page with no `<h1>`
-///   leaves screen-reader navigation with no heading landmark.
+///   emitted, since the hero already supplies the `<h1>`.
+///
+/// A nav folder shows its title like any other folder.
 ///
 /// Covered folder indexes bypass this helper entirely (they render the label
 /// inside the cover via `folder_cover::render`), and synthetic folder indexes
@@ -203,15 +202,13 @@ pub fn generate_html_collect_og<'d>(
 fn no_cover_folder_heading(
     doc: &crate::build::types::ParsedDocument,
     h1_text: &str,
-    has_content_folders: bool,
     emit_source_fm: bool,
 ) -> String {
-    if moss_core::heading::body_supplies_title(&doc.content) {
-        String::new()
-    } else if crate::build::components::nav::is_nav_bar_item_doc(doc, has_content_folders) {
-        crate::build::components::folder_title::render(h1_text, emit_source_fm, true)
-    } else {
-        crate::build::components::folder_title::render(h1_text, emit_source_fm, false)
+    use moss_core::heading::TitleOutcome;
+    match moss_core::heading::title_outcome(&doc.content, true) {
+        TitleOutcome::None => String::new(),
+        TitleOutcome::Hidden => crate::build::components::folder_title::render(h1_text, emit_source_fm, true),
+        TitleOutcome::Visible => crate::build::components::folder_title::render(h1_text, emit_source_fm, false),
     }
 }
 
@@ -356,7 +353,12 @@ fn generate_html_inner<'d>(
         };
         let pr = pr.with_js_version(shared.scripts.hash("theme"));
         pr.with_favicon_filename(favicon_filename)
-            .with_favicon_has_raster_pngs(favicon_has_raster_pngs)
+            // This entry point takes one flag for the whole SVG-style set.
+            .with_favicon_raster_sizes(if favicon_has_raster_pngs {
+                crate::build::site_meta::favicon::SIZES.to_vec()
+            } else {
+                Vec::new()
+            })
             .with_dir_overrides(dir_overrides.clone())
     };
 
@@ -365,6 +367,8 @@ fn generate_html_inner<'d>(
             documents: all_docs, project, layout: layout_config, site_lang,
             assets: ChromeAssets { paths: path_resolver, scripts: &shared.scripts, has_user_css, has_user_js, head_alternates },
             show_rss_in_footer, emit_source_lines, has_sidebar_layout,
+            home_breadcrumb: crate::build::components::nav::home_breadcrumb_setting(all_docs),
+            media_lookup: &shared.media_lookup,
         },
         content_graph, dir_overrides, site_url, output_dir, source_root, shared,
     };
@@ -431,6 +435,13 @@ pub(super) fn render_page<'d>(
         LocatorPlacement::Masthead
     };
 
+    // The declared fields the page draws: the eyebrow goes into the body above
+    // the title, the rest into the masthead that follows it.
+    let mut fields = doc.map_or_else(Default::default, |d| {
+        crate::build::components::field_places::draw_for_page(d, all_docs, content_graph, resolved_typesetting)
+    });
+    let eyebrow = std::mem::take(&mut fields.eyebrow);
+
     // True when the page should advertise a social share card + be indexed: a
     // real public page (not draft/slot_only). `listed: false` pages are still
     // public, so they keep their card. Shared by the og/twitter/cover/
@@ -479,12 +490,12 @@ pub(super) fn render_page<'d>(
             // under; render/credits.rs says where it goes instead, and why a
             // `layout: article` homepage is the article path's page, not this one.
             if !is_article_page {
-                content = credits::splice_page_masthead(content, doc, layout_config, emit_source_lines, locator_placement);
+                content = credits::splice_page_masthead(content, doc, layout_config, emit_source_lines, locator_placement, &fields);
 
                 // The home injects no visible title of its own, but a page
                 // needs one top-level heading: when the body supplies none,
                 // add the folder-index heading, visually hidden.
-                if !moss_core::heading::body_supplies_title(&doc.content) {
+                if moss_core::heading::title_outcome(&doc.content, true) != moss_core::heading::TitleOutcome::None {
                     let h1 = crate::build::components::folder_title::render(&doc.label, emit_source_lines, true);
                     content = format!("{h1}\n{content}");
                 }
@@ -535,7 +546,10 @@ pub(super) fn render_page<'d>(
                     Some(media_lookup),
                     layout_config.assets.math,
                 );
-                content.push_str(&annotate_children_listing(resolved_html, emit_source_lines));
+                content.push_str(&crate::build::emit::listing_style::wrap(
+                    doc,
+                    annotate_children_listing(resolved_html, emit_source_lines),
+                ));
             }
 
             // Colophon at the very foot, after the children listing.
@@ -563,7 +577,13 @@ pub(super) fn render_page<'d>(
             // it is splitting, same as any other segment, rather than
             // needing its own case.
             splice_body_locator(&mut body, doc, layout_config, locator_placement);
+            if !eyebrow.is_empty() {
+                body.prepend_html(eyebrow);
+            }
             let mut content = body.to_html();
+            if crate::build::components::field_places::title_block_after_picture(doc) {
+                crate::build::components::field_places::mark_body_start(&mut content);
+            }
 
             // Check if this is a folder index page (any non-root index page).
             // Must use doc.kind == PageKind::Folder (source was index.md/readme.md/_index.md/main.md)
@@ -690,7 +710,7 @@ pub(super) fn render_page<'d>(
                     // Byline between the folder title and the body, in-column.
                     let cover_row_html = components::folder_cover::render(
                         resolved_cover.as_deref(),
-                        h1_text,
+                        Some(h1_text),
                         h1_text,
                         &format!("{}{}", folder_byline, lead),
                         cover_type,
@@ -701,10 +721,10 @@ pub(super) fn render_page<'d>(
                     content = format!("{}{}", cover_row_html, trailer);
                 } else {
                     // No-cover branch: prepend the <h1 class="moss-folder-title">
-                    // unless this folder is a nav item — the nav bar already
-                    // shows its title. An explorer root gets a hidden one
-                    // instead (no byline), bypassing `no_cover_folder_heading`'s
-                    // own nav/hero dedup below — that guards a second VISIBLE
+                    // unless the body or an opening hero already supplies the
+                    // heading. An explorer root gets a hidden one instead (no
+                    // byline), bypassing `no_cover_folder_heading`'s own
+                    // body/hero dedup below — that guards a second VISIBLE
                     // title, moot for a hidden one.
                     let heading = if is_explorer_root {
                         crate::build::components::folder_title::render(h1_text, emit_source_lines, true)
@@ -714,7 +734,6 @@ pub(super) fn render_page<'d>(
                             no_cover_folder_heading(
                                 doc,
                                 h1_text,
-                                project.has_content_folders,
                                 emit_source_lines,
                             ),
                             folder_byline,
@@ -737,20 +756,32 @@ pub(super) fn render_page<'d>(
                 // fix now applies here too). `folder_cover::render` takes an
                 // empty label rather than `h1_text`: this shell's own visible
                 // `<h1>` is already the head of `lead` (the pipeline-injected
-                // article title, or the author's own body `# H1`), so an
-                // empty `<h1 class="moss-folder-title">` is emitted and
-                // immediately collapsed by `.moss-folder-title:empty` in
-                // site.css — one visible title, not two.
+                // article title, or the author's own body `# H1`), and an
+                // empty label emits no heading of its own, so the page keeps
+                // exactly one `<h1>`.
                 if term_listing.is_some() {
                     if let Some(c) = doc.cover.as_deref() {
                         let (resolved, cover_attrs) = resolve_page_cover(c, &path_resolver);
                         let cover_type = crate::build::media::cover::detect_cover_type(&resolved, doc.cover_type.as_deref());
                         let (lead, trailer) = body.split_at_lede();
+                        // A body with no heading of its own (a hero with no
+                        // `# H1`, or an empty `title:`) gets none from the
+                        // pipeline, so the column supplies the page's title,
+                        // visually hidden, to keep one `<h1>` on the page.
+                        let lead = if lead.contains("<h1") || trailer.contains("<h1") {
+                            lead
+                        } else {
+                            format!(
+                                "{}{}",
+                                components::folder_title::render(&doc.title, emit_source_lines, true),
+                                lead,
+                            )
+                        };
                         content = format!(
                             "{}{}",
                             components::folder_cover::render(
                                 Some(&resolved),
-                                "",
+                                None,
                                 &doc.title,
                                 &lead,
                                 cover_type,
@@ -771,7 +802,7 @@ pub(super) fn render_page<'d>(
                     // and lands the byline beside the real title inside it,
                     // the same as it would for an unwrapped page — one splice
                     // site for both shapes.
-                    content = credits::splice_page_masthead(content, doc, layout_config, emit_source_lines, locator_placement);
+                    content = credits::splice_page_masthead(content, doc, layout_config, emit_source_lines, locator_placement, &fields);
                 }
             }
 
@@ -821,6 +852,9 @@ pub(super) fn render_page<'d>(
                 // flag). The two cases can never both apply to one page — a
                 // term claim always resolves to a sub-key, never the bare
                 // namespace root `is_place_namespace_root` marks.
+                // Where the page's own body ends: a claimed term page's map and
+                // listing are placed relative to it (see `insert_before_sources`).
+                let body_end = content.len();
                 let root_map_key = doc.is_place_namespace_root.then(|| folder_path.as_str());
                 let map_key = term_listing.or(root_map_key).filter(|_| doc.shows_own_map(true));
                 if let Some(map) = map_key.and_then(|key| {
@@ -867,7 +901,14 @@ pub(super) fn render_page<'d>(
                         Some(media_lookup),
                         layout_config.assets.math,
                     );
-                    content.push_str(&annotate_children_listing(resolved_html, emit_source_lines));
+                    content.push_str(&crate::build::emit::listing_style::wrap(
+                        doc,
+                        annotate_children_listing(resolved_html, emit_source_lines),
+                    ));
+                }
+                if term_listing.is_some() && !is_explorer_root {
+                    let hosted = content.split_off(body_end);
+                    content = crate::build::terms::insert_before_sources(&content, &hosted, doc.lang);
                 }
             }
 
@@ -1093,6 +1134,7 @@ pub(super) fn render_page<'d>(
                 .map(|d| {
                     let (date_display, date_raw, _explicit) = components::extract_date_from_doc(d, &project.root_path);
                     components::ArticleListItemProps {
+                        credits: None,
                         date_display,
                         date_raw,
                         url: crate::build::scan::article_map::to_pretty_url(&d.url_path),
@@ -1101,6 +1143,7 @@ pub(super) fn render_page<'d>(
                         url_path: d.url_path.clone(),
                         place: d.place_names.clone(),
                         when_html: None,
+                        source_file: d.source_path.clone(),
                     }
                 })
                 .collect();
@@ -1253,7 +1296,8 @@ pub(super) fn render_page<'d>(
     // splice_after_title_block in html_post.rs for the title-block detection
     // (matches the # H1 + > blockquote deck pattern).
     if is_article_page {
-        let mut after_title_block = article_date_line_html.unwrap_or_default();
+        let mut after_title_block = fields.subtitle.clone();
+        after_title_block.push_str(&article_date_line_html.unwrap_or_default());
         // Byline rows (frontmatter `byline:`) sit between the date row and the
         // after-title slot: they belong to the masthead, but they are not part
         // of `.date-line`, which is a single flex row owning the reading-size
@@ -1274,6 +1318,7 @@ pub(super) fn render_page<'d>(
             }
         }
         after_title_block.push_str("<!-- slot:after-title -->");
+        after_title_block.push_str(&fields.after_masthead());
         homepage_content = splice_after_title_block(&homepage_content, &after_title_block);
         // Colophon rows go at the very end of the article body — after the
         // prose and any footnote section, inside `<article>`. Where the piece
@@ -1283,10 +1328,28 @@ pub(super) fn render_page<'d>(
             credits::push_colophon(&mut homepage_content, &d.colophon, emit_source_lines);
         }
     }
+    // The `breadcrumb: label` link is chrome around the finished title block,
+    // so it goes on last: the date row and byline splices above see the title
+    // at the head of the content and need not step past anything.
+    if let Some(d) = doc {
+        if let Some(parent) = crate::build::components::nav::parent_label_segment(d, all_docs, context.chrome.home_breadcrumb) {
+            crate::build::markdown::html_post::prepend_parent_label(&mut homepage_content, &parent);
+        }
+    }
+    if doc.is_some_and(crate::build::components::field_places::title_block_after_picture) {
+        homepage_content = crate::build::components::field_places::after_leading_picture(&homepage_content);
+    }
     // Calendar links that close the body: a folder's download and subscribe
     // links, and an event's "Add to calendar" when no meta line carries it.
+    // A page with its listing off shows no events here; its embedded listings
+    // carry their own folders' links (`folder_embed`).
     if let Some(d) = doc {
-        homepage_content.push_str(&context.shared.calendar.links_html(d, site_url, d.lang, calendar_at_body_end.as_deref()));
+        if let Some(href) = calendar_at_body_end.as_deref() {
+            homepage_content.push_str(&context.shared.calendar.event_link_html(href, d.lang));
+        }
+        if d.prints_folder_calendar_links() {
+            homepage_content.push_str(&context.shared.calendar.folder_links_html(d, site_url, d.lang));
+        }
     }
 
     // Resolve the share-card description once for the page, using the
@@ -1536,7 +1599,7 @@ pub(super) fn render_page<'d>(
             resolved_cover_for_og.as_ref(), site_url, &homepage_meta_url, &page_lang_tag,
         )?,
         embed_head_assets,
-        lightbox: if doc.is_some_and(|d| d.features.galleries) {
+        lightbox: if doc.is_some_and(|d| d.features.viewer) {
             format!("{}\n    ", crate::build::media_collection::lightbox_html(chrome.ui_lang))
         } else {
             String::new()

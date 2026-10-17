@@ -282,11 +282,26 @@ pub struct ShellVars {
     /// identical on every page of a build.
     pub runtime_js_tags: String,
     /// The full-screen viewer's markup (`media_collection::lightbox_html`),
-    /// set only on a page that has a `:::gallery`; empty elsewhere. Dropped in
+    /// set only on a page that has a picture the viewer opens; empty elsewhere. Dropped in
     /// just before the runtime scripts, which `fullscreen.js` finds it through.
     pub lightbox: String,
     /// Robots meta tag (e.g. noindex for drafts). Empty when omitted.
     pub robots_meta: Option<String>,
+}
+
+impl ShellVars {
+    /// A Page with nothing after its hero (a home made only of an opening
+    /// hero): no text beyond the visually hidden page heading, and no comments. The heading stays, directly in
+    /// `<main>`, so the page keeps its `<h1>`.
+    fn has_no_body(&self) -> bool {
+        let body = self.homepage_content.trim();
+        let only_hidden_title = body
+            .strip_prefix(r#"<h1 class="moss-folder-title visually-hidden""#)
+            .is_some_and(|rest| rest.find("</h1>").is_some_and(|i| rest[i + 5..].trim().is_empty()));
+        // The share attributes are dropped with the article: they let a reader
+        // quote the page's text onto a card, and there is none to quote.
+        (body.is_empty() || only_hidden_title) && self.comments_attr.is_empty()
+    }
 }
 
 /// Shell processor for centralized template variable replacement
@@ -312,7 +327,11 @@ impl ShellProcessor {
         // template text (no user-derived value is in the string yet), so the
         // combined result is still pure template — safe for the single
         // substitution pass below.
-        let fragment = self.registry.get_shell(shell_type);
+        let fragment = if shell_type == ShellType::Page && vars.has_no_body() {
+            PAGE_CONTENT_NO_BODY
+        } else {
+            self.registry.get_shell(shell_type)
+        };
         let template = SHELL_TEMPLATE.replace("{main_content}", fragment);
 
         // Preview flag for the chrome post-passes; read before the map takes `body_attrs`.
@@ -541,7 +560,7 @@ pub const DEFAULT_CSS: &str = include_str!("../../assets/css/site.css");
 /// unnecessary characters. This is a simple, regex-free minifier that covers
 /// the most impactful optimizations without needing a full CSS parser.
 pub fn minify_css(css: &str) -> String {
-    let mut result = String::with_capacity(css.len());
+    let mut result: Vec<u8> = Vec::with_capacity(css.len());
     let bytes = css.as_bytes();
     let len = bytes.len();
     let mut i = 0;
@@ -561,18 +580,18 @@ pub fn minify_css(css: &str) -> String {
         // Preserve quoted strings as-is
         if bytes[i] == b'"' || bytes[i] == b'\'' {
             let quote = bytes[i];
-            result.push(bytes[i] as char);
+            result.push(bytes[i]);
             i += 1;
             while i < len && bytes[i] != quote {
                 if bytes[i] == b'\\' && i + 1 < len {
-                    result.push(bytes[i] as char);
+                    result.push(bytes[i]);
                     i += 1;
                 }
-                result.push(bytes[i] as char);
+                result.push(bytes[i]);
                 i += 1;
             }
             if i < len {
-                result.push(bytes[i] as char);
+                result.push(bytes[i]);
                 i += 1;
             }
             continue;
@@ -592,23 +611,23 @@ pub fn minify_css(css: &str) -> String {
             // hovered), which is a different set of elements entirely. Property-value
             // colons ("color: red") never have whitespace before them in well-formed
             // source CSS, so they are not affected by this rule.
-            let last = result.as_bytes().last().copied().unwrap_or(0);
+            let last = result.last().copied().unwrap_or(0);
             let next = if i < len { bytes[i] } else { 0 };
             if !matches!(last, b'{' | b'}' | b';' | b':' | b',' | b'>' | b'(' | 0)
                 && !matches!(next, b'{' | b'}' | b';' | b',' | b')' | 0)
             {
-                result.push(' ');
+                result.push(b' ');
             }
             continue;
         }
 
-        result.push(bytes[i] as char);
+        result.push(bytes[i]);
         i += 1;
     }
 
     // Pass 2: remove last semicolons before } and spaces around certain chars
-    let mut final_result = String::with_capacity(result.len());
-    let rbytes = result.as_bytes();
+    let mut final_result: Vec<u8> = Vec::with_capacity(result.len());
+    let rbytes = &result[..];
     let rlen = rbytes.len();
     i = 0;
     while i < rlen {
@@ -624,11 +643,12 @@ pub fn minify_css(css: &str) -> String {
                 continue;
             }
         }
-        final_result.push(rbytes[i] as char);
+        final_result.push(rbytes[i]);
         i += 1;
     }
 
-    final_result
+    // Only ASCII bytes are dropped or added, so whole characters survive intact.
+    String::from_utf8(final_result).expect("minify_css keeps every multibyte character whole")
 }
 /// Shared HTML shell: full `<head>` + chrome (header/nav, hero, footer,
 /// colophon, scripts) with a single `{main_content}` slot for the per-type
@@ -652,6 +672,9 @@ const MOSS_MARK_SVG: &str = include_str!("../../../icons/mark-small.svg");
 pub const ARTICLE_CONTENT: &str = include_str!("../../assets/templates/article-content.html");
 /// `<main>` content fragment for Page pages (homepage / folders / nav pages).
 pub const PAGE_CONTENT: &str = include_str!("../../assets/templates/page-content.html");
+/// The same fragment for a Page with nothing after its hero: `<main>` stays (the
+/// skip link targets it) but there is no empty `<article class="container">`.
+pub const PAGE_CONTENT_NO_BODY: &str = include_str!("../../assets/templates/page-content-no-body.html");
 pub const DEFAULT_FAVICON: &str = include_str!("../../../icons/icon.svg");
 
 // `pub(crate)` for one item: `tests::blanked`, the CSS reader the stylesheet

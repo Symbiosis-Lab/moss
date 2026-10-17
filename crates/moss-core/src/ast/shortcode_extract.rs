@@ -22,11 +22,12 @@
 
 use super::attrs::gather_multi_line_attrs;
 use super::cells::split_cells;
-use super::node::Block;
+use super::document::{BlockMeta, Document};
+use super::node::{Block, Inline};
 use super::parser::{parse_fragment_with_config, ParseConfig};
 use super::shortcode::{
     ApplyShortcode, ButtonItem, ButtonsShortcode, GalleryItem, GalleryShortcode, GridShortcode,
-    RecentShortcode, Shortcode, SubscribeShortcode,
+    RecentShortcode, Shortcode, ShortcodeSource, SourceFragment, SubscribeShortcode,
 };
 use super::url::Url;
 use crate::resolve::md_extract::{
@@ -62,6 +63,68 @@ pub struct ExtractionResult {
     /// names). Each entry is a one-line human-readable string. Caller
     /// surfaces these in the build log; presence does not abort the build.
     pub warnings: Vec<String>,
+    /// Advisories that are not build problems: the author wrote something
+    /// that parses but has no effect on the output. They are logged at the
+    /// plain warning level, outside the problem count `--strict` reads.
+    pub advisories: Vec<String>,
+    /// One entry per empty-name fenced div (`:::{.x}`) the extractor wrapped,
+    /// in source order of their openers, nested regions included. Lets a
+    /// caller audit which classes a page uses without re-parsing the fences.
+    pub css_regions: Vec<CssRegionSpan>,
+}
+
+/// An empty-name fenced div the extractor wrapped in a plain `<div>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CssRegionSpan {
+    /// The classes written on the opener, without the leading dot.
+    pub classes: Vec<String>,
+    /// 1-based source line of the opener, counted with
+    /// `ParseConfig::warning_line_offset` applied.
+    pub line: usize,
+}
+
+/// What a shortcode's parse reports back to the extractor. `warnings` are
+/// build problems and are counted by `--strict`; `advisories` are notes that
+/// change nothing in the output and are logged without being counted.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct Diagnostics {
+    pub(crate) warnings: Vec<String>,
+    pub(crate) advisories: Vec<String>,
+}
+
+/// Split a fragment `Document` into its blocks, their source positions and the
+/// diagnostics its own parse raised, so nothing a nested body reports is
+/// dropped on the way out.
+pub(crate) fn fragment_parts(doc: Document) -> (Vec<Block>, Vec<BlockMeta>, Diagnostics) {
+    (doc.blocks, doc.block_meta, Diagnostics { warnings: doc.warnings, advisories: doc.advisories })
+}
+
+/// `config` for a fragment whose first line is `body_line` (0-based) of the
+/// body `config` describes. The one place a fragment's start is carried, so
+/// the fragment's blocks and warnings report document lines instead of
+/// fragment lines.
+pub(crate) fn config_at_body_line(config: &ParseConfig, body_line: usize) -> ParseConfig {
+    ParseConfig {
+        source_line_offset: config.source_line_offset + body_line,
+        warning_line_offset: config.warning_line_offset + body_line,
+        ..*config
+    }
+}
+
+/// The source position of a fragment whose first line is `body_line` and
+/// which holds `raw`.
+pub(crate) fn source_fragment(
+    config: &ParseConfig,
+    body_line: usize,
+    raw: &str,
+    metas: Vec<BlockMeta>,
+) -> SourceFragment {
+    let first = config.emit_source_lines.then(|| config.source_line_offset + body_line + 1);
+    SourceFragment {
+        first_line: first,
+        last_line: first.map(|f| f + raw.lines().count().saturating_sub(1)),
+        blocks: metas,
+    }
 }
 
 /// Names recognized by the typed AST. Other names fall through to the
@@ -79,20 +142,20 @@ fn is_typed_known(name: &str) -> bool {
 /// (e.g. for `:::buttons {.primary}`, args is `{.primary}`).
 ///
 /// Returns `(Some(Shortcode), Vec<String>)` where the second element is
-/// parse-time deprecation warnings. An empty warning vec means the block
+/// parse-time deprecation warnings. An empty `warnings` means the block
 /// used only current-grammar syntax.
 fn parse_shortcode_block(
     name: &str,
     args: &str,
     body: &str,
     config: &ParseConfig,
-) -> (Option<Shortcode>, Vec<String>) {
+) -> (Option<Shortcode>, Diagnostics) {
     match name {
-        "subscribe" => (Some(Shortcode::Subscribe(parse_subscribe_args(args))), vec![]),
-        "buttons" => (Some(Shortcode::Buttons(parse_buttons_body(args, body))), vec![]),
+        "subscribe" => (Some(Shortcode::Subscribe(parse_subscribe_args(args))), Diagnostics::default()),
+        "buttons" => (Some(Shortcode::Buttons(parse_buttons_body(args, body))), Diagnostics::default()),
         "gallery" => {
-            let (sc, warns) = parse_gallery_body(args, body);
-            (Some(Shortcode::Gallery(sc)), warns)
+            let (sc, warns) = parse_gallery_body(args, body, config);
+            (Some(Shortcode::Gallery(sc)), Diagnostics { warnings: warns, ..Default::default() })
         }
         "hero" => {
             // Body media lines are the CANONICAL multi-slide grammar (the
@@ -103,17 +166,25 @@ fn parse_shortcode_block(
             let mut warns = fragment_warnings;
             if let Some(ref v) = sc.mobile {
                 if v != "overlay" {
-                    warns.push(format!(
+                    warns.warnings.push(format!(
                         "shortcode `:::hero` has unrecognized `mobile={v}`. \
                          Only `mobile=overlay` is recognized. The attribute is ignored."
                     ));
                 }
             }
             if let Some(ref v) = sc.align {
-                if v != "end" {
-                    warns.push(format!(
+                if v != "end" && v != "center" {
+                    warns.warnings.push(format!(
                         "shortcode `:::hero` has unrecognized `align={v}`. \
-                         Only `align=end` is recognized. The attribute is ignored."
+                         Only `align=end` and `align=center` are recognized. The attribute is ignored."
+                    ));
+                }
+            }
+            if let Some(ref v) = sc.header {
+                if v != "over" {
+                    warns.warnings.push(format!(
+                        "shortcode `:::hero` has unrecognized `header={v}`. \
+                         Only `header=over` is recognized. The attribute is ignored."
                     ));
                 }
             }
@@ -122,18 +193,18 @@ fn parse_shortcode_block(
         "grid" => {
             let (sc, legacy, fragment_warnings) = parse_grid(args, body, config);
             let mut warns = fragment_warnings;
-            if legacy {
-                warns.push(
-                    "shortcode `:::grid` uses `---` cell dividers (deprecated). Migrate to `+++`.\n\
-                     `---` support will be removed in a future release."
-                        .to_string(),
-                );
+            if let Some(body_line) = legacy {
+                warns.warnings.push(format!(
+                    "`---` on line {} divides `:::grid` cells but is deprecated: write `+++` instead \
+                     (`---` support will be removed in a future release).",
+                    config.warning_line_offset + body_line + 1
+                ));
             }
             (Some(Shortcode::Grid(sc)), warns)
         }
-        "recent" => (Some(Shortcode::Recent(parse_recent_args(args, body))), vec![]),
-        "apply" => (Some(Shortcode::Apply(parse_apply_args(args))), vec![]),
-        _ => (None, vec![]),
+        "recent" => (Some(Shortcode::Recent(parse_recent_args(args, body))), Diagnostics::default()),
+        "apply" => (Some(Shortcode::Apply(parse_apply_args(args))), Diagnostics::default()),
+        _ => (None, Diagnostics::default()),
     }
 }
 
@@ -183,6 +254,11 @@ fn cols_alias_warning(shortcode_name: &str) -> String {
     )
 }
 
+/// Most columns a `:::grid` can lay out. The site stylesheet has a column
+/// rule for each count from 1 to this value; a larger count would match no
+/// rule and collapse to one column without a word.
+pub const MAX_GRID_COLUMNS: u32 = 6;
+
 /// Parse a `:::grid` block.
 ///
 /// Args parsing supports both:
@@ -205,7 +281,7 @@ fn cols_alias_warning(shortcode_name: &str) -> String {
 /// re-parsing cell bodies as fragments (e.g. a misspelled shortcode nested
 /// inside a cell) — see [`parse_cell_to_blocks`] — plus the `cols=`
 /// deprecation warning when that alias was written.
-fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, bool, Vec<String>) {
+fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, Option<usize>, Diagnostics) {
     let trimmed = args.trim();
     let (positional, attr_block): (&str, &str) = if let Some(pos) = trimmed.find('{') {
         // char-aligned: pos points to ASCII '{' from str::find — safe to slice.
@@ -254,7 +330,8 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
         }
     }
 
-    let (raw_cells, found_legacy_dash) = split_grid_cells(body);
+    let (raw_cells, legacy_dash_line) = split_grid_cells(body);
+    let mut fragments = Vec::with_capacity(raw_cells.len());
 
     // Phase 4 PR4.5 (2026-05-28): cells become Vec<Vec<Block>>. Each raw
     // cell string is either:
@@ -270,17 +347,26 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
     // - A plain markdown cell. Parse via [`super::parser::parse`] (which
     //   re-runs extract_shortcodes so any nested `::::buttons` etc. get
     //   substituted) and drop the wrapping `Document`.
-    let mut fragment_warnings: Vec<String> = Vec::new();
+    let mut fragment = Diagnostics::default();
     let cells: Vec<Vec<Block>> = raw_cells
         .iter()
-        .map(|raw| {
-            let (blocks, warns) = parse_cell_to_blocks(raw, config);
-            fragment_warnings.extend(warns);
+        .map(|(raw, body_line)| {
+            let (blocks, metas, diag) =
+                parse_cell_to_blocks(raw, &config_at_body_line(config, *body_line));
+            fragment.warnings.extend(diag.warnings);
+            fragment.advisories.extend(diag.advisories);
+            fragments.push(source_fragment(config, *body_line, raw, metas));
             blocks
         })
         .collect();
     if used_cols_alias {
-        fragment_warnings.push(cols_alias_warning("grid"));
+        fragment.warnings.push(cols_alias_warning("grid"));
+    }
+    if columns > MAX_GRID_COLUMNS {
+        fragment.warnings.push(format!(
+            "shortcode `:::grid` asks for {columns} columns, but the layout supports up to {MAX_GRID_COLUMNS}; this grid uses {MAX_GRID_COLUMNS}."
+        ));
+        columns = MAX_GRID_COLUMNS;
     }
 
     (
@@ -289,12 +375,13 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
             ratio,
             classes,
             cells,
+            source: ShortcodeSource { extra_lines: 0, fragments },
             width,
             scroll,
             label,
         },
-        found_legacy_dash,
-        fragment_warnings,
+        legacy_dash_line,
+        fragment,
     )
 }
 
@@ -308,14 +395,10 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
 /// content is appended as sibling blocks after the card. On no match,
 /// parses the cell directly via [`super::parser::parse`].
 ///
-/// Returns `(Vec<Block>, Vec<String>)`: the parsed blocks, plus any
-/// warnings collected by the fragment parse(s) underneath (e.g. a
-/// misspelled `:::name` shortcode nested inside this cell). Each internal
-/// [`parse_fragment_with_config`] call produces its own independent
-/// `Document`, whose `warnings` would otherwise be dropped on the floor —
-/// this is the plumbing that carries them out to [`parse_shortcode_block`],
-/// which already merges its `Vec<String>` into `doc.warnings`.
-fn parse_cell_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Vec<String>) {
+/// Returns the parsed blocks, their positions, and the warnings and advisories
+/// the fragment parses raised (e.g. a misspelled `:::name` nested in the cell),
+/// which [`parse_shortcode_block`] merges into `doc.warnings`.
+fn parse_cell_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Vec<BlockMeta>, Diagnostics) {
     if let Some((url, inner, trailing)) = detect_compound_link(raw) {
         let inner_trimmed = inner.trim();
         let trailing_trimmed = trailing.trim();
@@ -341,11 +424,12 @@ fn parse_cell_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Vec<Str
             // Re-emit as standard markdown link inside a paragraph so the
             // host's link-preview pass owns the rendering.
             let linkified = format!("[{}]({})", inner_trimmed, url);
-            let doc = parse_fragment_with_config(&linkified, config);
-            return (doc.blocks, doc.warnings);
+            return fragment_parts(parse_fragment_with_config(&linkified, config));
         }
+        // A card's inner text is cut out of the cell, so its lines are not
+        // tracked; the cell's own range still reaches the card.
         let inner_doc = parse_fragment_with_config(inner_trimmed, config);
-        let mut warnings = inner_doc.warnings;
+        let mut diag = Diagnostics { warnings: inner_doc.warnings, advisories: inner_doc.advisories };
         let mut blocks = vec![Block::LinkCard {
             url: Url::unresolved(url),
             children: inner_doc.blocks,
@@ -353,9 +437,11 @@ fn parse_cell_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Vec<Str
         if !trailing_trimmed.is_empty() {
             let trailing_doc = parse_fragment_with_config(trailing_trimmed, config);
             blocks.extend(trailing_doc.blocks);
-            warnings.extend(trailing_doc.warnings);
+            diag.warnings.extend(trailing_doc.warnings);
+            diag.advisories.extend(trailing_doc.advisories);
         }
-        return (blocks, warnings);
+        let metas = vec![BlockMeta::default(); blocks.len()];
+        return (blocks, metas, diag);
     }
     // Phase 4 PR4.5 (2026-05-28): bare-URL cell auto-promotion. When the
     // entire cell content is a single bare URL on its own line (no
@@ -372,11 +458,9 @@ fn parse_cell_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Vec<Str
     // parse time so the bytes flow through the typed AST.
     if let Some(url) = detect_bare_url_cell(raw) {
         let linkified = format!("[]({})", url);
-        let doc = parse_fragment_with_config(&linkified, config);
-        return (doc.blocks, doc.warnings);
+        return fragment_parts(parse_fragment_with_config(&linkified, config));
     }
-    let doc = parse_fragment_with_config(raw, config);
-    (doc.blocks, doc.warnings)
+    fragment_parts(parse_fragment_with_config(raw, config))
 }
 
 /// Detect a "bare URL cell": the entire cell content (after trim) is a
@@ -643,18 +727,17 @@ pub(super) fn detect_compound_link(cell_text: &str) -> Option<(String, String, S
 /// the grammar recommends — handed the inner grid's cells to the outer one,
 /// with no warning and plausible-looking output. Nested bodies pass through
 /// verbatim and are re-extracted when the cell is parsed, which is where the
-/// inner block gets its own dividers. Depth is tracked as
-/// [`super::editor_scan`] tracks it: an opener pushes its arity, a closer of
-/// the innermost arity pops it. Same-arity nesting is a different bug with
-/// its own warning (`nested_arity_warning`).
+/// inner block gets its own dividers. Depth is a plain counter: an opener
+/// adds one, a bare colon line takes one off, colon counts are ignored (the
+/// same rule as [`find_block_end`]).
 ///
-/// Returns `(cells, found_legacy_dash)` where `found_legacy_dash` is
-/// `true` when at least one `---` divider **of this grid** was encountered,
+/// Returns `(cells, legacy_dash_line)` where `legacy_dash_line` is the
+/// 0-based body line of the first `---` divider **of this grid**, if any,
 /// signaling the caller to emit a deprecation warning. A `---` belonging to
 /// a nested block is reported when that block is parsed, not here.
-fn split_grid_cells(body: &str) -> (Vec<String>, bool) {
+fn split_grid_cells(body: &str) -> (Vec<(String, usize)>, Option<usize>) {
     if body.is_empty() {
-        return (vec![String::new()], false);
+        return (vec![(String::new(), 0)], None);
     }
     // One flag per line, aligned with `str::lines`, which agrees index-for-
     // index with `split_inclusive('\n')` for every input.
@@ -662,37 +745,40 @@ fn split_grid_cells(body: &str) -> (Vec<String>, bool) {
     let mut cells = Vec::new();
     let mut current = String::new();
     let mut first_line_in_cell = true;
-    let mut found_legacy_dash = false;
-    // Arities of the nested blocks we are currently inside; empty means
-    // "at this grid's own depth", which is the only place a divider counts.
-    let mut nested_arities: Vec<usize> = Vec::new();
+    let mut legacy_dash_line = None;
+    // Body line the current cell's text starts on.
+    let mut cell_start = 0;
+    // Blocks we are currently inside; 0 means "at this grid's own depth",
+    // which is the only place a divider counts.
+    let mut depth: usize = 0;
 
     for (idx, line) in body.split_inclusive('\n').enumerate() {
         let content_no_eol = line.strip_suffix('\n').unwrap_or(line);
         let trimmed = content_no_eol.trim();
         let live = !inert.get(idx).copied().unwrap_or(false);
         if live {
-            if let Some((inner_arity, _, _)) = parse_shortcode_opener(trimmed) {
-                nested_arities.push(inner_arity);
-            } else if let Some(&innermost) = nested_arities.last() {
-                if is_close_fence(trimmed, innermost) {
-                    nested_arities.pop();
+            match fence_step(trimmed) {
+                1 => depth += 1,
+                -1 if depth > 0 => depth -= 1,
+                _ if depth == 0 && (trimmed == "+++" || trimmed == "---") => {
+                    if trimmed == "---" && legacy_dash_line.is_none() {
+                        legacy_dash_line = Some(idx);
+                    }
+                    if let Some(stripped) = current.strip_suffix('\n') {
+                        current.truncate(stripped.len());
+                    }
+                    cells.push((std::mem::take(&mut current), cell_start));
+                    cell_start = idx + 1;
+                    first_line_in_cell = true;
+                    continue;
                 }
-            } else if trimmed == "+++" || trimmed == "---" {
-                if trimmed == "---" {
-                    found_legacy_dash = true;
-                }
-                if let Some(stripped) = current.strip_suffix('\n') {
-                    current.truncate(stripped.len());
-                }
-                cells.push(std::mem::take(&mut current));
-                first_line_in_cell = true;
-                continue;
+                _ => {}
             }
         }
         if first_line_in_cell {
             first_line_in_cell = false;
             if trimmed.is_empty() {
+                cell_start = idx + 1;
                 continue;
             }
         }
@@ -701,8 +787,8 @@ fn split_grid_cells(body: &str) -> (Vec<String>, bool) {
     if let Some(stripped) = current.strip_suffix('\n') {
         current.truncate(stripped.len());
     }
-    cells.push(current);
-    (cells, found_legacy_dash)
+    cells.push((current, cell_start));
+    (cells, legacy_dash_line)
 }
 
 /// Byte-offset asset paths inside `:::gallery` / `:::hero` blocks.
@@ -798,9 +884,13 @@ fn collect_structural_asset_spans(
         };
         match block.name {
             "gallery" => {
-                for line in block.body_start..close {
-                    if let Some(span) = gallery_body_span(source, table, line) {
-                        out.push(span);
+                let lines = (block.body_start..close).map(|k| gallery_line_text(source, table, k));
+                let kinds = gallery_lines(lines, &ParseConfig::default());
+                for (k, kind) in (block.body_start..close).zip(kinds) {
+                    if let Some(GalleryLine::Item(it)) = kind {
+                        if let Some(span) = gallery_body_span(table, k, it) {
+                            out.push(span);
+                        }
                     }
                 }
             }
@@ -838,25 +928,34 @@ struct StructuralBlock<'a> {
 }
 
 /// Parse one block boundary using the same multi-line-attribute and
-/// same-arity-closer rules as `extract_with_state`.
+/// closer rules as `extract_with_state`.
 fn structural_block_at<'a>(
     mask_lines: &'a [&str],
     opener: usize,
     end: usize,
 ) -> Option<StructuralBlock<'a>> {
     let line = mask_lines.get(opener)?;
-    let (arity, name, args) = parse_shortcode_opener(line.trim())?;
+    let (name, args) = parse_shortcode_opener(line.trim())?;
     let (_, attrs_lines) = gather_multi_line_attrs(args, &mask_lines[opener + 1..end]);
     let body_start = opener + 1 + attrs_lines;
     if body_start > end {
         return Some(StructuralBlock { name, body_start, close: None });
     }
-    let close = (body_start..end)
-        .find(|&line| is_close_fence(mask_lines.get(line).map_or("", |line| line.trim()), arity));
+    let close = find_block_end(&mask_lines[..end], body_start, |_| false);
     Some(StructuralBlock { name, body_start, close })
 }
 
-/// One `:::gallery` body line → an [`AssetPathSpan`], or `None`.
+/// The text of physical line `k`, without its terminator.
+fn gallery_line_text<'a>(source: &'a str, table: &[(usize, usize, usize)], k: usize) -> &'a str {
+    let Some(&(base, content_len, _)) = table.get(k) else { return "" };
+    #[allow(clippy::string_slice)]
+    // `base` and `base + content_len` are line boundaries from `line_table`,
+    // which splits on ASCII '\n'/'\r' only.
+    &source[base..base + content_len]
+}
+
+/// One `:::gallery` item line (`it`, read from physical line `k`) → an
+/// [`AssetPathSpan`], or `None`.
 ///
 /// The **emission filter** lives here, not in [`gallery_item_span`]: a
 /// gallery body line is only reported as an asset reference when it carried
@@ -865,16 +964,11 @@ fn structural_block_at<'a>(
 /// rename tracking). Without it, every line of prose in a gallery body would
 /// show up in the delete-confirmation modal.
 fn gallery_body_span(
-    source: &str,
     table: &[(usize, usize, usize)],
     k: usize,
+    it: MediaLineSpan,
 ) -> Option<AssetPathSpan> {
     let (base, content_len, term_len) = *table.get(k)?;
-    #[allow(clippy::string_slice)]
-    // `base` and `base + content_len` are line boundaries from `line_table`,
-    // which splits on ASCII '\n'/'\r' only.
-    let line = &source[base..base + content_len];
-    let it = gallery_item_span(line)?;
     if !it.is_token && !super::extract_hero::is_bare_hero_media(&it.path) {
         return None;
     }
@@ -890,12 +984,13 @@ fn gallery_body_span(
 
 /// Recognize one `:::gallery` body line, with LINE-RELATIVE byte offsets.
 ///
-/// This is the single grammar for a gallery body line: [`parse_gallery_body`]
-/// is a thin loop over it, and [`shortcode_asset_spans`] lifts its offsets to
-/// absolute. The three arms and their ORDER mirror the historical parser
-/// exactly — `![[…]]` first, then the pipe split, then the markdown-image
-/// pattern — because that ordering is observable (`![alt](x.png|cover)`
-/// splits on the pipe first and therefore is NOT a markdown image).
+/// This is the single grammar for one gallery item line: [`gallery_lines`]
+/// reads every body line through it (adding the caption rule), and
+/// [`shortcode_asset_spans`] lifts its offsets to absolute. The three arms and
+/// their ORDER mirror the historical parser exactly — `![[…]]` first, then the
+/// pipe split, then the markdown-image pattern — because that ordering is
+/// observable (`![alt](x.png|cover)` splits on the pipe first and therefore is
+/// NOT a markdown image).
 ///
 /// Returns a span for every non-blank line, prose included; the media filter
 /// lives in [`shortcode_asset_spans`], which is what must not put prose in
@@ -976,6 +1071,42 @@ pub(crate) fn gallery_item_span(line: &str) -> Option<MediaLineSpan> {
     }
 }
 
+/// The inside of a line that is one `*italic*` span and nothing else, parsed as
+/// inline markdown: the caption rule a figure in running text follows.
+fn italic_line(line: &str, config: &ParseConfig) -> Option<Vec<Inline>> {
+    match super::extract_hero::parse_caption_inlines(line.trim(), config).as_mut_slice() {
+        [Inline::Emphasis(inner)] if !inner.is_empty() => Some(std::mem::take(inner)),
+        _ => None,
+    }
+}
+
+/// What a `:::gallery` body line is, once read in order.
+enum GalleryLine {
+    Item(MediaLineSpan),
+    /// The italic line directly under an item.
+    Caption(Vec<Inline>),
+}
+
+/// Read the body lines of a gallery in order: the one place that decides
+/// whether a line is an item or the caption of the item above it, shared by
+/// [`parse_gallery_body`] and the asset-span enumerator. Blank lines are `None`.
+fn gallery_lines<'a>(lines: impl Iterator<Item = &'a str>, config: &ParseConfig) -> Vec<Option<GalleryLine>> {
+    let mut after_item = false;
+    lines
+        .map(|line| {
+            if after_item {
+                if let Some(caption) = italic_line(line, config) {
+                    after_item = false;
+                    return Some(GalleryLine::Caption(caption));
+                }
+            }
+            let item = gallery_item_span(line);
+            after_item = item.is_some();
+            item.map(GalleryLine::Item)
+        })
+        .collect()
+}
+
 /// Parse a `:::gallery` block.
 ///
 /// Args: `N {.classes width per-line=N}` where `N` is optional column
@@ -986,24 +1117,51 @@ pub(crate) fn gallery_item_span(line: &str) -> Option<MediaLineSpan> {
 ///
 /// Returns the shortcode plus any deprecation warnings (currently just the
 /// `cols=` alias warning, when that key was written).
-fn parse_gallery_body(args: &str, body: &str) -> (GalleryShortcode, Vec<String>) {
+fn parse_gallery_body(args: &str, body: &str, config: &ParseConfig) -> (GalleryShortcode, Vec<String>) {
     let attrs = split_positional_classes_width_and_per_line(args);
-    let columns = attrs
+    let mut warnings = Vec::new();
+    // `rows` is a layout word, not a count: `:::gallery rows` is justified rows.
+    let (rows, count_text) = match attrs.positional.strip_prefix("rows") {
+        Some(rest) if rest.is_empty() || rest.starts_with(char::is_whitespace) => {
+            (true, rest.trim())
+        }
+        _ => (false, attrs.positional.as_str()),
+    };
+    if rows && (attrs.per_line.is_some() || !count_text.is_empty()) {
+        warnings.push(
+            "`:::gallery rows` lays out justified rows, so the column count is ignored"
+                .to_string(),
+        );
+    }
+    let count = attrs
         .per_line
         .as_deref()
-        .or(if attrs.positional.is_empty() { None } else { Some(attrs.positional.as_str()) })
+        .or(if count_text.is_empty() { None } else { Some(count_text) })
         .and_then(|v| v.parse::<u32>().ok());
+    let columns = if rows { None } else { count };
     let mut items: Vec<GalleryItem> = Vec::new();
-    for line in body.lines() {
-        if let Some(it) = gallery_item_span(line) {
-            items.push(GalleryItem {
-                src: Url::unresolved(it.path),
-                alt: it.alt,
-                attrs: it.attrs,
-            });
+    for line in gallery_lines(body.lines(), config).into_iter().flatten() {
+        match line {
+            GalleryLine::Caption(caption) => {
+                if let Some(item) = items.last_mut() {
+                    item.caption = caption;
+                }
+            }
+            GalleryLine::Item(it) => {
+                let (alt, alt_only) = match super::parser::alt_only_text(&it.alt) {
+                    Some(alt) => (alt, true),
+                    None => (it.alt, false),
+                };
+                items.push(GalleryItem {
+                    src: Url::unresolved(it.path),
+                    alt,
+                    alt_only,
+                    attrs: it.attrs,
+                    caption: Vec::new(),
+                });
+            }
         }
     }
-    let mut warnings = Vec::new();
     if attrs.used_cols_alias {
         warnings.push(cols_alias_warning("gallery"));
     }
@@ -1013,6 +1171,7 @@ fn parse_gallery_body(args: &str, body: &str) -> (GalleryShortcode, Vec<String>)
             classes: attrs.classes,
             items,
             width: attrs.width,
+            rows,
         },
         warnings,
     )
@@ -1317,15 +1476,27 @@ pub fn extract_shortcodes_with_config(
     config: &ParseConfig,
 ) -> ExtractionResult {
     let nonce = compute_nonce(markdown);
-    let mut extracted: Vec<ExtractedShortcode> = Vec::new();
-    let mut warnings: Vec<String> = Vec::new();
-    let output = extract_with_state(markdown, &nonce, &mut extracted, &mut warnings, config);
+    let mut collected = Collected::default();
+    let output = extract_with_state(markdown, &nonce, &mut collected, config);
     ExtractionResult {
         markdown_with_placeholders: output,
-        extracted,
+        extracted: collected.extracted,
         nonce,
-        warnings,
+        warnings: collected.warnings,
+        advisories: collected.advisories,
+        css_regions: collected.css_regions,
     }
+}
+
+/// What one extraction pass accumulates across every nesting level. The
+/// levels share one instance, so placeholder indices, the nonce-indexed
+/// `extracted` list and every diagnostic come out flat.
+#[derive(Default)]
+struct Collected {
+    extracted: Vec<ExtractedShortcode>,
+    warnings: Vec<String>,
+    advisories: Vec<String>,
+    css_regions: Vec<CssRegionSpan>,
 }
 
 /// Recursive worker for [`extract_shortcodes`]. Walks `markdown`
@@ -1337,8 +1508,7 @@ pub fn extract_shortcodes_with_config(
 fn extract_with_state(
     markdown: &str,
     nonce: &str,
-    extracted: &mut Vec<ExtractedShortcode>,
-    warnings: &mut Vec<String>,
+    collected: &mut Collected,
     config: &ParseConfig,
 ) -> String {
     let mut output = String::with_capacity(markdown.len());
@@ -1352,6 +1522,9 @@ fn extract_with_state(
     let inert = crate::inert_regions::inert_lines(markdown);
     let is_inert = |idx: usize| inert.get(idx).copied().unwrap_or(false);
     let mut i = 0;
+    // (opener, closer) line indices of the last block closed at this level,
+    // so a stray closer can point at the block it most likely doubles.
+    let mut last_closed: Option<(usize, usize)> = None;
 
     while i < lines.len() {
         let line = lines[i];
@@ -1366,7 +1539,7 @@ fn extract_with_state(
         }
 
         // Try to recognize a `:::name` (or `::::name`, etc.) opener.
-        if let Some((arity, name, single_line_args)) = parse_shortcode_opener(trimmed) {
+        if let Some((name, single_line_args)) = parse_shortcode_opener(trimmed) {
             // Multi-line attribute block support: if the args contain an
             // unclosed `{`, gather subsequent lines into the args string
             // until the brace closes (respecting quoted strings). The
@@ -1380,53 +1553,23 @@ fn extract_with_state(
             let args: &str = args_owned.as_deref().unwrap_or(single_line_args);
             let body_start = i + 1 + opener_lines_consumed;
 
-            // Look for the matching closer (same arity) on a subsequent line.
-            //
-            // While scanning, remember the first body line that is itself an
-            // OPENER at the same arity. First-closer-wins means the closer we
-            // are about to accept is that inner block's, not ours — see
-            // `nested_same_arity` below.
-            let mut body_lines: Vec<&str> = Vec::new();
-            let mut j = body_start;
-            let mut closed = false;
-            let mut nested_same_arity: Option<&str> = None;
-            while j < lines.len() {
-                // An inert line cannot close the block either: a bare `:::`
-                // inside a code fence or a comment in the body used to end
-                // the shortcode early and strand the rest of it as prose.
-                let body_trimmed = lines[j].trim();
-                if !is_inert(j) && is_close_fence(body_trimmed, arity) {
-                    closed = true;
-                    break;
-                }
-                if nested_same_arity.is_none() && !is_inert(j) {
-                    if let Some((inner_arity, _, _)) = parse_shortcode_opener(body_trimmed) {
-                        if inner_arity == arity {
-                            nested_same_arity = Some(body_trimmed);
-                        }
-                    }
-                }
-                body_lines.push(lines[j]);
-                j += 1;
-            }
-
-            if !closed {
-                // Unclosed block: emit verbatim, let the legacy rewriter
-                // surface the syntax error.
+            // The block ends at the first bare colon line that no nested
+            // opener claims (an inert line cannot close it either: a `:::`
+            // inside a code fence or a comment used to end the shortcode
+            // early and strand the rest as prose).
+            let Some(j) = find_block_end(&lines, body_start, is_inert) else {
+                // Unclosed block: emit verbatim, and say where it opened.
+                collected.warnings.push(unclosed_opener_warning(
+                    trimmed,
+                    config.warning_line_offset + i + 1,
+                ));
                 output.push_str(line);
                 output.push('\n');
                 i += 1;
                 continue;
-            }
-
-            // The block closed — but if a same-arity opener sat in the body,
-            // the fence we just stopped on belongs to THAT block, and this
-            // one ended early. Nothing about the parse changes; the author
-            // just gets told, because the page still builds and only looks
-            // wrong (stray `+++`, cells outside the grid).
-            if let Some(inner) = nested_same_arity {
-                warnings.push(nested_arity_warning(arity, trimmed, inner));
-            }
+            };
+            last_closed = Some((i, j));
+            let body_lines = lines.get(body_start..j).unwrap_or_default();
 
             let body = body_lines.join("\n");
 
@@ -1450,12 +1593,42 @@ fn extract_with_state(
                 // shortcodes nested inside the styling wrapper (the
                 // common site pattern of `:::{.support-band}` around
                 // `::::buttons`) also get extracted into sentinels.
-                // Higher-arity inner blocks survive because the outer
-                // closer-search only matches the outer's exact arity;
-                // the recursive call then handles the inner.
-                let parsed = super::attrs::parse_attrs(args).unwrap_or_default();
-                let body_processed = extract_with_state(&body, nonce, extracted, warnings, config);
-                output.push_str(&render_div_open(&parsed.classes, parsed.id.as_deref(), None));
+                // The body is balanced (see `find_block_end`), so the
+                // recursive call sees every inner block whole.
+                let parsed = match super::attrs::parse_attrs(args) {
+                    Ok(block) => block,
+                    Err(_) => {
+                        collected.advisories.push(format!(
+                            "fenced div attributes `{}` could not be read; the div renders without its classes, id and width",
+                            args.trim()
+                        ));
+                        Default::default()
+                    }
+                };
+                // A plain div renders only classes, an id and a width word,
+                // so any other key on the fence is read and then thrown away.
+                if !parsed.kvs.is_empty() {
+                    let keys: Vec<&str> = parsed.kvs.iter().map(|(k, _)| k.as_str()).collect();
+                    collected.advisories.push(format!(
+                        "fenced div `:::{{...}}` does not render attribute(s) {}; only classes, an id and a width word reach the output",
+                        keys.join(", ")
+                    ));
+                }
+                collected.css_regions.push(CssRegionSpan {
+                    classes: parsed.classes.clone(),
+                    line: config.warning_line_offset + i + 1,
+                });
+                // The body's first line sits `body_start` lines into this
+                // level, so the recursion's line numbers are shifted by it.
+                let body_config = config_at_body_line(config, body_start);
+                let body_processed =
+                    extract_with_state(&body, nonce, collected, &body_config);
+                output.push_str(&render_div_open(
+                    &parsed.classes,
+                    parsed.id.as_deref(),
+                    parsed.width,
+                    None,
+                ));
                 output.push_str("\n\n");
                 output.push_str(&body_processed);
                 if !body_processed.is_empty() && !body_processed.ends_with('\n') {
@@ -1467,9 +1640,15 @@ fn extract_with_state(
             }
 
             if is_typed_known(name) {
-                if let (Some(sc), parse_warnings) = parse_shortcode_block(name, args, &body, config) {
-                    warnings.extend(parse_warnings);
-                    let index = extracted.len();
+                // The body's first line is `body_start` lines into this level.
+                let body_config = config_at_body_line(config, body_start);
+                if let (Some(mut sc), diag) = parse_shortcode_block(name, args, &body, &body_config) {
+                    if let Some(source) = sc.source_mut() {
+                        source.extra_lines = j - i;
+                    }
+                    collected.warnings.extend(diag.warnings);
+                    collected.advisories.extend(diag.advisories);
+                    let index = collected.extracted.len();
                     output.push_str(&placeholder_for(&nonce, index));
                     output.push('\n');
                     // Preserve the block's original line count. The block spanned
@@ -1485,7 +1664,7 @@ fn extract_with_state(
                     for _ in 0..(j - i) {
                         output.push('\n');
                     }
-                    extracted.push(ExtractedShortcode {
+                    collected.extracted.push(ExtractedShortcode {
                         index,
                         shortcode: sc,
                     });
@@ -1506,12 +1685,14 @@ fn extract_with_state(
             // into the body so a misspelled outer doesn't strand any
             // valid typed shortcodes nested inside it.
             let parsed = super::attrs::parse_attrs(args).unwrap_or_default();
-            warnings.push(format!("unknown shortcode `:::{}`", name));
+            collected.warnings.push(format!("unknown shortcode `:::{}`", name));
             let mut classes = vec!["moss-unknown-shortcode".to_string()];
             classes.extend(parsed.classes.iter().cloned());
             let extra_attrs = format!(r#" data-name="{}""#, html_escape_attr(name));
-            let body_processed = extract_with_state(&body, nonce, extracted, warnings, config);
-            output.push_str(&render_div_open(&classes, parsed.id.as_deref(), Some(&extra_attrs)));
+            let body_config = config_at_body_line(config, body_start);
+            let body_processed =
+                extract_with_state(&body, nonce, collected, &body_config);
+            output.push_str(&render_div_open(&classes, parsed.id.as_deref(), None, Some(&extra_attrs)));
             output.push_str("\n\n");
             output.push_str(&body_processed);
             if !body_processed.is_empty() && !body_processed.ends_with('\n') {
@@ -1522,7 +1703,23 @@ fn extract_with_state(
             continue;
         }
 
-        // Regular content line.
+        // Regular content line. A live bare colon line here closed nothing.
+        // Inside a raw HTML block or display math it is more likely literal
+        // text than a miscount, so it stays quiet there; a list-item
+        // continuation is NOT exempt, because the extractor reads that line
+        // like any other and an author who wrote it meant a closer.
+        if fence_step(trimmed) < 0 {
+            let quiet = crate::inert_regions::html_and_math_lines(markdown, &inert);
+            if !quiet.get(i).copied().unwrap_or(false) {
+                collected.warnings.push(stray_closer_warning(
+                    trimmed,
+                    config.warning_line_offset + i + 1,
+                    last_closed.map(|(o, c)| {
+                        (config.warning_line_offset + o + 1, config.warning_line_offset + c + 1)
+                    }),
+                ));
+            }
+        }
         output.push_str(line);
         output.push('\n');
         i += 1;
@@ -1531,26 +1728,28 @@ fn extract_with_state(
     output
 }
 
-/// Word the "this block ended at someone else's fence" warning.
-///
-/// `arity` and `outer_line` describe the OUTER opener; `inner_line` is the
-/// trimmed text of the nested opener that has the same colon count. Says what
-/// went wrong in plain words first, then exactly what to type: one more colon
-/// on the outer fence, nested fences left alone.
-///
-/// The suggestion is built by prefixing one `:` to the author's own opener
-/// line, so it reads back in their words (`:::grid 2` → `::::grid 2`) and
-/// works for a nameless CSS region (`:::{.band}` → `::::{.band}`) too.
-fn nested_arity_warning(arity: usize, outer_line: &str, inner_line: &str) -> String {
-    let colons = ":".repeat(arity);
-    let wider = ":".repeat(arity + 1);
-    let outer_short = clip_for_warning(outer_line);
-    let inner_short = clip_for_warning(inner_line);
+/// Word the warning for an opener no bare colon line ever closes.
+fn unclosed_opener_warning(opener: &str, line: usize) -> String {
     format!(
-        "shortcode `{outer_short}` ends at the nested `{inner_short}` block's closing fence \
-         instead of its own, so everything after that point falls outside the block.\n\
-         A nested fence needs FEWER colons than the block around it: write `:{outer_short}` … \
-         `{wider}` for the outer block and leave the nested one as `{colons}`."
+        "`{}` on line {line} is never closed: a bare `:::` line closes the innermost \
+         open block, and none follows, so the block is shown as plain text.",
+        clip_for_warning(opener)
+    )
+}
+
+/// Word the warning for a bare colon line with nothing left to close.
+/// `last_closed` is the (opener line, closer line) of the block closed just
+/// above, which an extra closer most often doubles.
+fn stray_closer_warning(closer: &str, line: usize, last_closed: Option<(usize, usize)>) -> String {
+    let hint = match last_closed {
+        Some((open, close)) => {
+            format!(" The last block closed on line {close} and started on line {open}.")
+        }
+        None => String::new(),
+    };
+    format!(
+        "`{}` on line {line} closes nothing: every block opened above it is already closed.{hint}",
+        clip_for_warning(closer)
     )
 }
 
@@ -1566,9 +1765,15 @@ fn clip_for_warning(line: &str) -> String {
 
 /// Render the opening `<div>` tag for a CssRegion or Unknown wrapper.
 ///
-/// `extra_attrs` (already with leading space) is appended before `>`,
-/// used by the unknown-name renderer to add `data-name="..."`.
-fn render_div_open(classes: &[String], id: Option<&str>, extra_attrs: Option<&str>) -> String {
+/// `width` is a fenced div's width word (`body` emits nothing); `extra_attrs`
+/// (already with leading space) is appended before `>`, used by the
+/// unknown-name renderer to add `data-name="..."`.
+fn render_div_open(
+    classes: &[String],
+    id: Option<&str>,
+    width: Option<&str>,
+    extra_attrs: Option<&str>,
+) -> String {
     let mut out = String::from("<div");
     if !classes.is_empty() {
         out.push_str(" class=\"");
@@ -1583,6 +1788,11 @@ fn render_div_open(classes: &[String], id: Option<&str>, extra_attrs: Option<&st
     if let Some(id_val) = id {
         out.push_str(" id=\"");
         out.push_str(&html_escape_attr(id_val));
+        out.push('"');
+    }
+    if let Some(w) = width.filter(|w| *w != "body") {
+        out.push_str(" data-width=\"");
+        out.push_str(&html_escape_attr(w));
         out.push('"');
     }
     if let Some(extra) = extra_attrs {
@@ -1609,19 +1819,19 @@ fn html_escape_attr(s: &str) -> String {
     out
 }
 
-/// Parse an opening fence line into (colon_count, name, args). Returns
-/// `None` if the line is not an opener.
+/// Parse an opening fence line into (name, args). Returns `None` if the line
+/// is not an opener.
 ///
-/// Accepts any colon count >= 3 (`:::name`, `::::name`, `:::::name`, ...).
-/// The colon count is preserved so the closer must match the same arity
-/// (allows nested shortcodes like `::::buttons` inside `:::grid`).
+/// Accepts any colon count >= 3 (`:::name`, `::::name`, `:::::name`, ...);
+/// the count is not returned, because a bare colon line of any length closes
+/// the block.
 ///
 /// **Pure-CSS region opener** — `:::{.class}` (no name, attrs only) is
 /// also recognized. The returned `name` is empty, signaling the caller
 /// to render the block as a plain styling wrapper. Empty name without
 /// a following `{` is rejected (just colons followed by content is not
 /// an opener).
-pub(crate) fn parse_shortcode_opener(trimmed: &str) -> Option<(usize, &str, &str)> {
+pub(crate) fn parse_shortcode_opener(trimmed: &str) -> Option<(&str, &str)> {
     let colons = trimmed.chars().take_while(|&c| c == ':').count();
     if colons < 3 {
         return None;
@@ -1642,7 +1852,7 @@ pub(crate) fn parse_shortcode_opener(trimmed: &str) -> Option<(usize, &str, &str
         if !after_ws.starts_with('{') {
             return None;
         }
-        return Some((colons, "", rest.trim()));
+        return Some(("", rest.trim()));
     }
     // char-aligned: name_end is a byte index returned by str::find with a
     // char predicate, which is guaranteed to be a char boundary (or rest.len()).
@@ -1650,35 +1860,68 @@ pub(crate) fn parse_shortcode_opener(trimmed: &str) -> Option<(usize, &str, &str
     let name = &rest[..name_end];
     #[allow(clippy::string_slice)]
     let args = rest[name_end..].trim();
-    Some((colons, name, args))
+    Some((name, args))
 }
 
-/// True if `trimmed` is a closing fence with the specified arity (`:::`
-/// for arity 3, `::::` for arity 4, etc.).
+/// True if `trimmed` is a closing fence: three or more colons and nothing
+/// else. The count does not matter; a closer closes the innermost open block.
 ///
-/// Closer semantics: N colons followed by optional whitespace only. A
-/// line like `::: extra` is NOT a closer (it's body content). This was
-/// the legacy `parse_fence_close` contract; the typed extractor preserves
-/// it so author content with trailing text after `:::` still parses the
-/// same way.
-///
-/// Implemented via char iteration (NOT `split_at(arity)`) because the
-/// `arity` is a count of `:` characters (always ASCII, 1 byte each), but
-/// the `trimmed` line might start with multi-byte UTF-8 characters
-/// (e.g. `[申请测试版](...)` from Chinese-language buttons). `split_at`
-/// is byte-indexed and would panic mid-character on such lines. Char
-/// iteration sidesteps the issue and is also slightly faster — we early-exit
-/// on the first non-`:` character.
-fn is_close_fence(trimmed: &str, arity: usize) -> bool {
+/// A line like `::: extra` is NOT a closer (it's body content). Iterates
+/// chars, never byte offsets, because the line may begin with multi-byte
+/// UTF-8 (a byte-indexed split panicked mid-character on Chinese button
+/// text).
+pub(crate) fn is_close_fence(trimmed: &str) -> bool {
+    let mut colons = 0;
     let mut chars = trimmed.chars();
-    for _ in 0..arity {
-        match chars.next() {
-            Some(':') => {}
-            _ => return false,
+    for c in chars.by_ref() {
+        if c != ':' {
+            return colons >= 3 && c.is_whitespace() && chars.all(char::is_whitespace);
+        }
+        colons += 1;
+    }
+    colons >= 3
+}
+
+/// What one live line does to block depth: `1` for an opener, `-1` for a
+/// closer, `0` for anything else. The single place that decides which of the
+/// two wins, shared by every walk that tracks nesting.
+pub(crate) fn fence_step(trimmed: &str) -> i8 {
+    if parse_shortcode_opener(trimmed).is_some() {
+        1
+    } else if is_close_fence(trimmed) {
+        -1
+    } else {
+        0
+    }
+}
+
+/// Index of the line that closes a block whose body starts at `from`, or
+/// `None` when nothing closes it.
+///
+/// Pandoc's rule: an opener (a name or `{attributes}` after the colons) opens
+/// a nested block, and a bare colon line closes the innermost open one. The
+/// colon count is only for the eye. Every caller that asks "where does this
+/// block end" goes through here, so the build, the grid splitter and the
+/// rename scanner cannot disagree. A body between opener and closer is
+/// balanced, which is what lets bodies be re-scanned on their own.
+pub(crate) fn find_block_end(
+    lines: &[&str],
+    from: usize,
+    is_inert: impl Fn(usize) -> bool,
+) -> Option<usize> {
+    let mut depth = 0usize;
+    for (j, line) in lines.iter().enumerate().skip(from) {
+        if is_inert(j) {
+            continue;
+        }
+        match fence_step(line.trim()) {
+            1 => depth += 1,
+            -1 if depth == 0 => return Some(j),
+            -1 => depth -= 1,
+            _ => {}
         }
     }
-    // Remaining chars (if any) must all be whitespace.
-    chars.all(char::is_whitespace)
+    None
 }
 
 #[cfg(test)]

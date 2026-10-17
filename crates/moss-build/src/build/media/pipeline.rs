@@ -556,7 +556,7 @@ impl SweepReport {
             "html" => self.html += 1,
             "webp" => self.webp += 1,
             "mp4" | "m3u8" | "ts" | "m4s" => self.video += 1,
-            _ if key.ends_with(".thumb.jpg") => self.video += 1,
+            _ if moss_core::asset_paths::is_video_still(key) => self.video += 1,
             _ => self.other += 1,
         }
         if self.sample.len() < 3 {

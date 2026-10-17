@@ -93,7 +93,11 @@ How serious the plugin proposes an advisory is. moss CLAMPS this (R13): a
 ### EscapeSpec
 
 ```ts
-type EscapeSpec = "cancel" | `resend:${string}` | `recheck:${string}`;
+type EscapeSpec = 
+  | "cancel"
+  | `resend:${string}`
+  | `recheck:${string}`
+  | `download-tool:${string}`;
 ```
 
 Escape kind for `awaiting()` calls. The string variants take a
@@ -101,12 +105,16 @@ free-text affordance label after the colon, mirroring the dev harness
 dialect (e.g., `"resend:Resend email"`, `"recheck:Recheck DNS"`).
 Plain `"cancel"` carries no label.
 
+`"download-tool:<name>"` shows a Download button that fetches the named
+tool moss can download (e.g. `"git"`, `"ffmpeg"`); the name is a tool
+identifier, not a display label.
+
 ***
 
 ### PluginHook
 
 ```ts
-type PluginHook = "import" | "publish" | "deploy" | "syndicate" | "process";
+type PluginHook = "publish" | "deploy" | "syndicate" | "process";
 ```
 
 `PluginHook` mirrors the closed Rust enum in
@@ -259,7 +267,7 @@ Preferred over `reportProgress()` for new code.
 
 ```ts
 const task = await startTask("Importing 42 articles", {
-  hook: "import",
+  hook: "process",
   trigger: "onboarding_flow",
 });
 for (let i = 0; i < articles.length; i++) {
@@ -918,10 +926,15 @@ Close the action panel
 ### openBrowser()
 
 ```ts
-function openBrowser(url): Promise<BrowserHandle>;
+function openBrowser(url?): Promise<BrowserHandle>;
 ```
 
 Open a URL in the action panel
+
+With a URL, the panel opens (or navigates in place) to that page. With no URL,
+the panel opens in its loading state, showing the app's own loader, until a
+later `openBrowser(url)` call loads a page. The returned handle is the same
+either way.
 
 Returns a BrowserHandle that can be used to detect when the window is closed.
 
@@ -929,7 +942,7 @@ Returns a BrowserHandle that can be used to detect when the window is closed.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `url` | `string` | The URL to open |
+| `url?` | `string` | The URL to open. Omit it to open the panel in its loading state. |
 
 #### Returns
 
@@ -1610,6 +1623,30 @@ is the production default, not an error.
 
 ## Plugin manifest
 
+### ArtifactSource
+
+```ts
+type ArtifactSource = 
+  | {
+  binary: string;
+  kind: "path";
+  platform?: string;
+}
+  | {
+  archive_format: string;
+  executable?: string;
+  kind: "download";
+  platform?: string;
+  sha256: string;
+  url: string;
+};
+```
+
+A pinned binary source, as a stack declares it. A `download` source must
+carry a `sha256`.
+
+***
+
 ### PluginCategory
 
 ```ts
@@ -1717,6 +1754,15 @@ secp256k1-schnorr: BIP-340). Any protocol framing (an IPNS record's
 #### Returns
 
 `Promise`\<`Uint8Array`\<`ArrayBufferLike`\>\>
+
+## Listing styles
+
+| Interface | Description |
+| ------ | ------ |
+| [FieldDeclaration](interfaces/FieldDeclaration.md) | One `[fields.<name>]` declaration. `choices` is present only for a choice, in declared order. |
+| [ListingContext](interfaces/ListingContext.md) | The argument of the `listing` export. |
+| [ListingResult](interfaces/ListingResult.md) | What the `listing` export returns. A malformed result, a throw or a timeout leaves moss's own listing in place with one build warning. |
+| [PageRecord](interfaces/PageRecord.md) | One page, as a listing plugin sees it. The listing page itself, every page it lists and every subfolder's home page have this shape. |
 
 ## Secrets
 

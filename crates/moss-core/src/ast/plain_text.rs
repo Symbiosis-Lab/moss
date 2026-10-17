@@ -335,6 +335,17 @@ fn render_block(
             out.push_str(&quote_prefix_lines(body.trim_end_matches('\n')));
             out.push_str("\n\n");
         }
+        Block::DefinitionList(children) => {
+            render_blocks(children, index, hoisted, list_depth, out);
+            out.push('\n');
+        }
+        Block::DefinitionTitle(children) => {
+            render_inlines_plain(children, index, out);
+            out.push_str("\n\n");
+        }
+        Block::DefinitionDefinition(children) => {
+            render_blocks(children, index, hoisted, list_depth, out);
+        }
         Block::Shortcode(_) => {
             // Shortcodes are stripped or expanded out of the raw markdown
             // upstream (e.g. newsletter.rs's `expand_recent_then_strip`)

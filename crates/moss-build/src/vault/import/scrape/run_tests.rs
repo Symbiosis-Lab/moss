@@ -1984,7 +1984,9 @@ async fn widget_counts_reach_the_scrape_result() {
         .expect("the crawl itself succeeds");
     index.assert_async().await;
 
-    assert_eq!((res.widgets_carried, res.widgets_dropped), (1, 1));
+    assert_eq!(res.widgets_carried, 1);
+    assert_eq!(dropped_widgets(&res.widget_gaps), 1);
+    assert_eq!(res.widget_gaps, vec![PageGap { page: "/".into(), kinds: vec!["contact form".into()] }]);
     let note = std::fs::read_dir(tmp.path())
         .unwrap()
         .filter_map(|e| e.ok())

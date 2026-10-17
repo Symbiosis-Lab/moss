@@ -14,7 +14,7 @@
 
 use std::path::Path;
 
-use super::child_list::ChildItemProps;
+use super::child_list::{event_card_links, ChildItemProps};
 use crate::i18n::{self, Language};
 use crate::build::media::cover::{self, html_escape, CoverType};
 use crate::build::page::meta::render_description_html_in_link;
@@ -67,9 +67,10 @@ pub fn render_item_with_typesetting(
 ///
 /// `list_has_covers`: when true and THIS card has no cover of its own, the
 /// cover slot becomes a quote card (`data-cover="quote"`) carrying the
-/// page's description — or its title, with no description — instead of
-/// the empty `.moss-card-no-cover` placeholder. A
-/// uniformly coverless list (e.g. a term index) keeps the plain
+/// page's description instead of the empty `.moss-card-no-cover`
+/// placeholder. With no description the slot is an empty `aria-hidden` tile:
+/// the title is already printed below, so repeating it would show it twice.
+/// A uniformly coverless list (e.g. a term index) keeps the plain
 /// placeholder, because there every card is the same shape and the
 /// placeholder is invisible CSS (`moss-card-cover { display: none }`);
 /// the quote slot exists only to fill the gap a MIXED list would
@@ -90,14 +91,13 @@ fn render_item(
     // `child_list::meta_text`, which also HTML-escapes the result (this slot
     // used to print the count unescaped, safe only because it was always
     // machine-generated text).
-    let count_label = props
-        .child_count
-        .map(|count| i18n::article_count_label(lang, count, typesetting));
+    let count_label = props.count_label(lang, typesetting);
     let count_text = super::child_list::meta_text(
         props.date_display.as_deref(),
         props.when_html.as_deref(),
         props.place.as_deref(),
         count_label.as_deref(),
+        props.credits.as_deref(),
     );
 
     let cover_type = CoverType::resolve(props.cover.as_deref(), props.cover_type);
@@ -106,19 +106,20 @@ fn render_item(
         (Some(url), Some(ct)) => {
             let (cover_path, attrs_str) = moss_core::media::split_pipe(url);
             let cover_attrs = moss_core::media::parse_media_attrs(attrs_str);
-            cover::render_cover_html(cover_path, ct, &format!("{} cover", props.title), "moss-card-cover", &cover_attrs, true, media_lookup, eager)
+            // The link is named by its title (aria-label below), so a cover
+            // with a title is decorative. Without a title the link has no name,
+            // and the cover supplies one.
+            let cover_alt = if props.title.trim().is_empty() { "cover" } else { "" };
+            cover::render_cover_html(cover_path, ct, cover_alt, "moss-card-cover", &cover_attrs, true, media_lookup, eager)
         }
         _ if list_has_covers => {
             // The description is markdown (`ChildItemProps::description`'s
-            // contract, per `child_list.rs`), rendered safely inline; the
-            // title fallback is plain chrome text, so it stays a bare escape.
-            let quote_html = match props.description.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                Some(desc) => render_description_html_in_link(desc),
-                None => html_escape(&props.title),
-            };
+            // contract), rendered safely inline.
+            let quote = props.description.as_deref().map(str::trim).filter(|s| !s.is_empty());
             format!(
-                r#"<div class="moss-card-cover" data-cover="quote"><p>{}</p></div>"#,
-                quote_html
+                r#"<div class="moss-card-cover" data-cover="quote"{}>{}</div>"#,
+                if quote.is_none() { r#" aria-hidden="true""# } else { "" },
+                quote.map(|d| format!("<p>{}</p>", render_description_html_in_link(d))).unwrap_or_default(),
             )
         }
         _ => r#"<div class="moss-card-cover moss-card-no-cover"></div>"#.to_string(),
@@ -126,14 +127,24 @@ fn render_item(
 
     // One shared ladder for every cover type: `|color=` override →
     // cache/extract by type → iframe dark default.
-    let cover_color_attrs = super::color_extract::resolve_card_color(
+    let cover_color = super::color_extract::resolve_card_color(
         props.cover.as_deref(),
         cover_type,
         root,
         media_lookup,
-    )
-        .map(|c| format!(r#" data-cover-color style="--item-cover-color: {}""#, html_escape(&c)))
-        .unwrap_or_default();
+    );
+    // One `style` attribute carries both the cover's band colour and the
+    // page's section colour.
+    let style_decls: Vec<String> = cover_color
+        .iter()
+        .map(|c| format!("--item-cover-color: {}", html_escape(c)))
+        .chain(props.section_color.iter().map(|a| html_escape(&crate::build::scan::section_text::section_style(a))))
+        .collect();
+    let cover_color_attrs = format!(
+        "{}{}",
+        if cover_color.is_some() { " data-cover-color" } else { "" },
+        if style_decls.is_empty() { String::new() } else { format!(r#" style="{}""#, style_decls.join("; ")) },
+    );
 
     let kicker_html = props.kicker.as_deref()
         .filter(|s| !s.is_empty())
@@ -170,15 +181,52 @@ fn render_item(
         .map(|d| format!(r#"<p class="moss-card-description">{}</p>"#, render_description_html_in_link(d)))
         .unwrap_or_default();
 
+    // An event with `tickets:` or `online:` is a `<div>` whose title is the
+    // page link, with its own action links after the meta (see
+    // `event_card_links`). Otherwise the card is one link, whose accessible
+    // name is the title alone: meta, description and the cover's quote are not
+    // part of it. An empty title leaves the link unnamed.
+    let event = event_card_links(props, lang);
+    let (open, close, title_html, actions_html) = match &event {
+        Some(links) => (
+            format!(r#"<div class="moss-card"{}{}>"#, props.source_file_attr(), cover_color_attrs),
+            "</div>",
+            format!(r#"<span class="moss-card-title">{}</span>"#, links.title),
+            links.actions.as_str(),
+        ),
+        None => {
+            let label_attr = if props.title.trim().is_empty() {
+                String::new()
+            } else {
+                format!(r#" aria-label="{}""#, html_escape(&props.title))
+            };
+            (
+                format!(r#"<a href="{}" class="moss-card"{}{}{}>"#, html_escape(&props.url), label_attr, props.source_file_attr(), cover_color_attrs),
+                "</a>",
+                format!(r#"<span class="moss-card-title">{}</span>"#, html_escape(&props.title)),
+                "",
+            )
+        }
+    };
+
+    // A folder card that hides its count and has nothing else to say gets no
+    // meta element; every other card keeps its (possibly empty) slot.
+    let meta_html = if props.child_count.is_some() && count_text.is_empty() {
+        String::new()
+    } else {
+        format!(r#"<span class="moss-card-meta">{}</span>"#, count_text)
+    };
+
     format!(
-        r#"<a href="{}" class="moss-card"{}>{}<div class="moss-card-content">{}<span class="moss-card-meta">{}</span><span class="moss-card-title">{}</span>{}</div></a>"#,
-        html_escape(&props.url),
-        cover_color_attrs,
+        r#"{}{}<div class="moss-card-content">{}{}{}{}{}</div>{}"#,
+        open,
         cover_html,
         kicker_html,
-        count_text,
-        html_escape(&props.title),
+        meta_html,
+        title_html,
         description_html,
+        actions_html,
+        close,
     )
 }
 
@@ -207,6 +255,9 @@ pub fn render_list_with_typesetting<C: std::borrow::Borrow<ChildItemProps>>(
     sort_axis: moss_core::sort::SortAxis,
     is_embed: bool,
     placement: &moss_core::media::Placement,
+    // The page already has its one eager image elsewhere: no card here is
+    // marked eager, not even the first covered one.
+    lazy_cards: bool,
 ) -> String {
     if cards.is_empty() {
         return String::new();
@@ -217,7 +268,7 @@ pub fn render_list_with_typesetting<C: std::borrow::Borrow<ChildItemProps>>(
     // quote slot — see `render_item`'s `list_has_covers` doc.
     let has_covers = cards.iter().any(|c| c.borrow().cover.is_some());
 
-    let mut found_first_cover = false;
+    let mut found_first_cover = lazy_cards;
     let items: String = cards
         .iter()
         .map(|c| {

@@ -114,8 +114,8 @@ pub fn should_inject_places_explorer(
 /// This produces ResolvedSlots that can be merged with plugin slots and
 /// injected into staged HTML before final build artifacts are sealed.
 ///
-/// `cached_deploy_config` — if provided, reuses an already-loaded domain
-/// config instead of re-reading .moss/state.toml from disk.
+/// `cached_deploy_config` — the domain config the build already read, so the
+/// visit counter tag here and its file come from one value.
 ///
 /// `pages` — the parsed documents in the build set, used to detect features
 /// like inline `:::subscribe` shortcodes that trigger asset injection
@@ -190,7 +190,7 @@ pub fn generate_native_slots(
     pages: &[crate::build::types::ParsedDocument],
     lang: &str,
     domain: Option<&str>,
-    cached_deploy_config: Option<DomainDeploymentConfig>,
+    cached_deploy_config: &DomainDeploymentConfig,
     start_server: bool,
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     // The site-wide `[site] comments` default, resolved by the caller from
@@ -227,8 +227,7 @@ pub fn generate_native_slots(
         pages.iter().map(|p| (p.url_path.as_str(), p.lang)).collect();
 
     let mut slots = ResolvedSlots::empty();
-    let deploy_config = cached_deploy_config
-        .unwrap_or_else(|| crate::build::site_config::get_domain_config(project_path).unwrap_or_default());
+    let deploy_config = cached_deploy_config;
 
     // Resolve the hosting environment once for the entire slot-generation pass.
     // Used by: subscribe form action URL and the comment server URL.
@@ -506,84 +505,24 @@ pub fn generate_native_slots(
         }
     }
 
-    // Beacon script → head-end (static, all pages)
-    // Auto-injected for moss deployments, regardless of analytics config.
-    // Sends a fire-and-forget pageview POST to the beacon endpoint.
-    // Mode-INDEPENDENT: injected in every mode. Preview safety is layered:
-    // - The `data-moss-deploy-only` attribute on the script element (see
-    //   `mark_deploy_only`, same mechanism as the analytics pixel): the
-    //   preview server strips any script carrying it from every response it
-    //   serves, regardless of whether that response originated from fresh
-    //   staging output or a ship-transformed generation — ship's
-    //   StripPreviewAttrs pass leaves the attribute alone by design, so
-    //   there is no generation the strip is blind to.
-    // - The loopback-origin gate below covers ship output served OUTSIDE the
-    //   preview server (the documented `python3 -m http.server` flow,
-    //   file:// opens): those pages are un-middlewared, so the strip above
-    //   cannot reach them. Local-env deploys live on *.localhost subdomains
-    //   and still pass.
-    //
-    // There used to be a third layer, a runtime `data-moss-preview`
-    // self-gate inside this script: it existed only to cover frozen
-    // generations the OLD `<!--moss:no-preview-->` marker-based strip
-    // couldn't see (ship removed the marker but kept the script). That gap
-    // is what the attribute-based strip above closes, so the self-gate had
-    // nothing left to guard and was removed rather than kept as a fourth,
-    // now-redundant layer.
-    {
-        if deploy_config.deploy_method.as_deref() == Some("moss") {
-            if let Some(ref site_id) = deploy_config.site_id {
-                let beacon_script = format!(
-                    concat!(
-                        "<script id=\"moss-beacon\">(function(){{",
-                        "document.addEventListener('DOMContentLoaded',function(){{",
-                        "var h=location.hostname;",
-                        "if(location.protocol==='file:'||h==='localhost'||h==='127.0.0.1'||h==='[::1]')return;",
-                        // Absolute URL with the environment's own scheme
-                        // (https for prod/staging, http for local seta) —
-                        // never protocol-relative: an http page origin would
-                        // POST to http://, whose 308 https-upgrade redirect
-                        // is fatal to the CORS preflight.
-                        "var b='{}/api/sites/{}/beacon';",
-                        "var u=new URLSearchParams(location.search);",
-                        "var s=function(d){{fetch(b,{{",
-                        "method:'POST',",
-                        "headers:{{'Content-Type':'application/json'}},",
-                        "body:JSON.stringify(d),",
-                        "keepalive:true",
-                        // Analytics is fire-and-forget: a failed ping must not
-                        // surface as an unhandled rejection on readers' consoles.
-                        "}}).catch(function(){{}})}};
-",
-                        "s({{",
-                        "path:location.pathname,",
-                        "referrer:document.referrer||null,",
-                        "screen_bucket:innerWidth<768?'mobile':innerWidth<1024?'tablet':'desktop',",
-                        "utm_source:u.get('utm_source'),",
-                        "utm_medium:u.get('utm_medium')",
-                        "}});
-",
-                        "document.querySelectorAll('[data-track]').forEach(function(el){{",
-                        "el.addEventListener('click',function(){{",
-                        "s({{path:location.pathname,event:el.getAttribute('data-track')}})",
-                        "}})",
-                        "}})",
-                        "}});",
-                        "}})()</script>"
-                    ),
-                    seta_url,
-                    html_escape(site_id)
-                );
-                let result = EnhanceResult {
-                    success: true,
-                    slots: HashMap::from([(
-                        Slot::HeadEnd.as_str().into(),
-                        EnhanceContent::Static { html: mark_deploy_only(&beacon_script) },
-                    )]),
-                };
-                slots.merge(&result, 0, "__native_beacon");
-            }
-        }
+    // Visit counter: one tag for `_moss/js/beacon.js`, which `emit::beacon`
+    // writes under the same gate. Mode-independent, like the analytics pixel.
+    // The `data-moss-deploy-only` attribute has the preview server strip the
+    // tag from every response, so previews never post. The hosting server decides what counts.
+    if crate::build::emit::beacon::is_enabled(&deploy_config) {
+        let src = crate::build::served_path::ServedPath::for_runtime_js("beacon")
+            .expect("'beacon' is a valid JS name")
+            .to_relative_url();
+        let result = EnhanceResult {
+            success: true,
+            slots: HashMap::from([(
+                Slot::HeadEnd.as_str().into(),
+                EnhanceContent::Static {
+                    html: mark_deploy_only(&format!("<script src=\"{src}\" defer></script>")),
+                },
+            )]),
+        };
+        slots.merge(&result, 0, "__native_beacon");
     }
 
     // Subscribe CSS+JS and seta form: injected in both preview and build.

@@ -111,9 +111,14 @@ function injectBridgeScript(html: string): string {
 /**
  * Open a URL in the action panel
  *
+ * With a URL, the panel opens (or navigates in place) to that page. With no URL,
+ * the panel opens in its loading state, showing the app's own loader, until a
+ * later `openBrowser(url)` call loads a page. The returned handle is the same
+ * either way.
+ *
  * Returns a BrowserHandle that can be used to detect when the window is closed.
  *
- * @param url - The URL to open
+ * @param url - The URL to open. Omit it to open the panel in its loading state.
  * @returns BrowserHandle with a `closed` promise
  *
  * @example
@@ -132,8 +137,8 @@ function injectBridgeScript(html: string): string {
  * ```
  * @category Browser
  */
-export async function openBrowser(url: string): Promise<BrowserHandle> {
-  await getTauriCore().invoke("open_action_panel", { url, belowTitlebar: true });
+export async function openBrowser(url?: string): Promise<BrowserHandle> {
+  await getTauriCore().invoke("open_action_panel", { url: url ?? null, belowTitlebar: true });
 
   // Create a promise that resolves when the browser-closed event is received
   const closed = new Promise<BrowserCloseReason>((resolve) => {

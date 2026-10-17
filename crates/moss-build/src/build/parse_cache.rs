@@ -357,6 +357,8 @@ pub struct ParseSession {
     began_at: Option<u64>,
     /// Decisions taken during Loop A: `path → hit`.
     decisions: Mutex<HashMap<String, bool>>,
+    /// Pages that showed a block that is not final (derived text still being read).
+    withheld: Mutex<std::collections::HashSet<String>>,
     stats: Mutex<ParseCacheStats>,
     #[cfg(test)]
     publish_global_cache: bool,
@@ -412,6 +414,7 @@ impl ParseSession {
             hasher: FileHasher::new(root, HashIndex::load(index_path)),
             began_at: crate::build::stat::recording_clock(),
             decisions: Mutex::new(HashMap::new()),
+            withheld: Mutex::new(std::collections::HashSet::new()),
             stats: Mutex::new(stats),
             #[cfg(test)]
             publish_global_cache: enabled && cache_test_is_active(),
@@ -498,6 +501,11 @@ impl ParseSession {
         }
     }
 
+    /// Keep `path`'s parse out of this build's cache entries.
+    pub fn withhold(&self, path: &str) {
+        self.withheld.lock().map(|mut w| w.insert(path.to_string())).ok();
+    }
+
     /// Record this build's Loop A output as the next build's cache, publish
     /// stats, and persist the hash index.
     ///
@@ -516,9 +524,10 @@ impl ParseSession {
             .collect();
         let graph = DepGraph::default().with_embed_pairs(pairs);
 
+        let withheld = self.withheld.lock().map(|w| w.clone()).unwrap_or_default();
         let mut entries: HashMap<String, ParseCacheEntry> = HashMap::new();
         for doc in documents {
-            let Some(path) = doc.source_path.as_ref() else {
+            let Some(path) = doc.source_path.as_ref().filter(|p| !withheld.contains(*p)) else {
                 continue;
             };
             let Some(content_hash) = self.hasher.hash(path) else {
@@ -1019,6 +1028,30 @@ mod tests {
         assert!(disabled.is_cold());
         assert!(disabled.lookup("a.md").is_none());
         disabled.finish(std::slice::from_ref(&doc));
+        reset_for_tests();
+    }
+
+    #[test]
+    fn a_withheld_page_is_not_replayed_by_the_next_session() {
+        let _guard = store_lock_for_tests();
+        let dir = tempfile::tempdir().unwrap();
+        let index = dir.path().join("hash-index.json");
+        for name in ["a.md", "b.md"] {
+            std::fs::write(dir.path().join(name), "hello").unwrap();
+        }
+        reset_for_tests();
+        let docs: Vec<ParsedDocument> = ["a.md", "b.md"]
+            .iter()
+            .map(|p| ParsedDocument { source_path: Some(p.to_string()), ..Default::default() })
+            .collect();
+
+        let first = ParseSession::begin(dir.path(), &index, true, "fp".to_string());
+        first.withhold("a.md");
+        first.finish(&docs);
+
+        let second = ParseSession::begin(dir.path(), &index, true, "fp".to_string());
+        assert!(second.lookup("a.md").is_none(), "a page that showed a placeholder must be rendered again");
+        assert!(second.lookup("b.md").is_some());
         reset_for_tests();
     }
 

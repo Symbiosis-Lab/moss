@@ -472,6 +472,8 @@
 
 <script>document.documentElement.classList.add('js'); history.scrollRestoration = 'manual';</script>
 <script src="landing-i18n.js"></script>
+<!-- Mirrors the beacon moss injects into rendered pages; these pages are copied verbatim, so it is repeated here. -->
+<script src="/_moss/js/beacon.js" defer></script>
 </head>
 <body>
 
@@ -540,22 +542,22 @@
     <section class="scene" id="c1"><div class="scene-text">
       <h2>隨處寫作，<br>隨處發布。</h2>
       <p class="lede">青苔將你的資料夾發布成網站。在本機資料夾裡寫 Markdown，用任何雲端硬碟協作。按一下就能預覽，再按一下就能發布到任何地方。</p>
-      <div class="btns"><a class="moss-btn" data-role="primary" href="#beta">申請封閉測試</a><a class="moss-btn" data-role="secondary" href="/zh-hant/開始使用/">開始使用 →</a></div>
+      <div class="btns"><a class="moss-btn" data-role="primary" data-track="cta-download" href="#downloads">下載青苔</a><a class="moss-btn" data-role="secondary" data-track="cta-get-started" href="/zh-hant/開始使用/">開始使用 →</a></div>
     </div></section>
     <section class="scene" id="c2"><div class="scene-text">
       <h2>柔軟如人，<br>強大如機器。</h2>
       <p class="lede">所有資料都保存在本機檔案中，你慣用的編輯器、程式助理都能直接使用。直覺的介面，讓你的網站始終易讀、好維護。</p>
-      <div class="btns"><a class="moss-btn" data-role="secondary" href="/zh-hant/開始使用/editor/">青苔編輯器 →</a><a class="moss-btn" data-role="secondary" href="/zh-hant/開始使用/design/">編寫主題 →</a></div>
+      <div class="btns"><a class="moss-btn" data-role="secondary" data-track="cta-editor" href="/zh-hant/開始使用/editor/">青苔編輯器 →</a><a class="moss-btn" data-role="secondary" data-track="cta-theme" href="/zh-hant/開始使用/design/">編寫主題 →</a></div>
     </div></section>
     <section class="scene" id="c3"><div class="scene-text">
       <h2 id="c3-h2">廣如網路，<br>輕如資料夾。</h2>
       <p class="lede">從文章、影片到 JavaScript 作品與 Jupyter 筆記本，青苔會最佳化檔案並打包成網站。</p>
-      <div class="btns"><a class="moss-btn" data-role="secondary" href="/zh-hant/開始使用/links/">媒體檔案類型 →</a><a class="moss-btn" data-role="secondary" href="https://github.com/Symbiosis-Lab/moss/issues/new?title=Media%20type%20request%3A%20&amp;labels=enhancement">申請檔案支援</a></div>
+      <div class="btns"><a class="moss-btn" data-role="secondary" data-track="cta-media-types" href="/zh-hant/開始使用/links/">媒體檔案類型 →</a><a class="moss-btn" data-role="secondary" data-track="cta-request-types" href="https://github.com/Symbiosis-Lab/moss/issues/new?title=Media%20type%20request%3A%20&amp;labels=enhancement">申請檔案支援</a></div>
     </div></section>
     <section class="scene" id="c4"><div class="scene-text">
       <h2>用你的方式，<br>發布到你的網路。</h2>
       <p class="lede">選擇網站代管服務，將同一份內容同步到多個管道。自行編寫外掛，或從外掛目錄安裝，連接電子報、IPFS 與 Nostr。</p>
-      <div class="btns"><a class="moss-btn" data-role="secondary" href="/zh-hant/開始使用/extend/">編寫外掛 →</a><a class="moss-btn" data-role="secondary" href="https://github.com/Symbiosis-Lab/moss-registry">青苔外掛目錄</a></div>
+      <div class="btns"><a class="moss-btn" data-role="secondary" data-track="cta-plugin" href="/zh-hant/開始使用/extend/">編寫外掛 →</a><a class="moss-btn" data-role="secondary" data-track="cta-registry" href="https://github.com/Symbiosis-Lab/moss-registry">青苔外掛目錄</a></div>
     </div></section>
     <section class="scene" id="c5" aria-hidden="true"><div class="edge"></div></section>
   </div>
@@ -567,12 +569,12 @@
 <section id="five" aria-labelledby="five-headline">
   <div id="closing-film" aria-hidden="true"><video id="loop" muted playsinline loop preload="none" tabindex="-1"></video><div id="scrim"></div></div>
   <div id="five-in">
-    <noscript><style>.signup, [data-copy] { display: none; }</style><p>To request beta access, enable JavaScript. Downloads and installation commands work without it.</p></noscript>
-    <h2 id="five-headline">你的網路發布器。</h2>
+    <noscript><style>.signup, [data-copy] { display: none; }</style><p>To subscribe for updates, enable JavaScript. Downloads and installation commands work without it.</p></noscript>
+    <h2 id="five-headline">加入公測。</h2>
     <p class="closing-lede">網路不只用來瀏覽，也用來創作。這裡是你的網路發布器。</p>
     <div id="install">
       <div id="downloads" aria-label="下載青苔">
-        <div class="download-choice"><a class="moss-btn" data-role="primary" data-platform="macos" href="https://github.com/Symbiosis-Lab/moss/releases/download/v0.14.1/moss_0.14.1_universal.dmg">macOS</a><small class="availability">macOS 12 或更新版本</small></div>
+        <div class="download-choice"><a class="moss-btn" data-role="primary" data-platform="macos" data-track="download-macos" href="https://github.com/Symbiosis-Lab/moss/releases/latest/download/moss.dmg">macOS</a><small class="availability">macOS 12 或更新版本</small></div>
         <div class="download-choice"><button class="moss-btn" data-role="secondary" data-platform="windows" type="button" disabled>Windows</button><small class="availability">即將推出</small></div>
         <div class="download-choice"><button class="moss-btn" data-role="secondary" data-platform="linux" type="button" disabled>Linux</button><small class="availability">即將推出</small></div>
       </div>
@@ -583,8 +585,8 @@
       <p class="copy-status" id="copy-status" role="status" aria-live="polite"></p>
     </div>
     <section id="beta" aria-labelledby="beta-title" tabindex="-1">
-      <div><h3 id="beta-title">一起打磨青苔</h3><p>接收不定期的更新消息，並免費試用青苔的預設網站代管服務。</p></div>
-      <p class="static-signup-note">啟用 JavaScript 即可申請封閉測試。</p><form id="beta-form" class="signup" data-subscription="beta"><label class="sr-only" for="beta-email">你的電子郵件地址</label><div class="input-row"><input id="beta-email" name="email" type="email" autocomplete="email" placeholder="你的電子郵件地址" required><button type="submit">申請封閉測試</button></div><p class="form-status" role="status" aria-live="polite"></p></form>
+      <div><h3 id="beta-title">取得更新</h3><p>不定期一封，來自青苔團隊的消息。</p></div>
+      <p class="static-signup-note">啟用 JavaScript 即可訂閱。</p><form id="beta-form" class="signup" data-subscription="beta"><label class="sr-only" for="beta-email">你的電子郵件地址</label><div class="input-row"><input id="beta-email" name="email" type="email" autocomplete="email" placeholder="你的電子郵件地址" required><button type="submit" data-track="subscribe-submit">訂閱</button></div><p class="form-status" role="status" aria-live="polite"></p></form>
     </section>
     <footer id="footer">
       <nav aria-label="頁尾"><a href="/zh-hant/privacy/">隱私權</a><span aria-hidden="true">·</span><a href="https://symbiosis-lab.org/">Symbiosis Lab</a><span aria-hidden="true">·</span><span>2026</span><a class="github-link" href="https://github.com/Symbiosis-Lab/moss" aria-label="在 GitHub 查看青苔"><img src="assets/platforms/github.svg" alt=""></a></nav>
@@ -672,7 +674,7 @@ const FAN_OUT_MS = PUB_OUT_DELAY + PUB_MS;
 const arg = (k, d) => new URLSearchParams(location.search).get(k) || d;
 const LOOP_SRC = arg('loopVideo', 'scene5-loop/out/v8-press.mp4');
 const LOOP_POSTER = arg('loopPoster', 'scene5-loop/out/v8-press-poster.jpg');
-const HEADLINE = arg('headline', 'Your internet publisher is here.');
+const HEADLINE = arg('headline', 'Join the beta test.');
 const SCRIM = 0.72, XF_SPAN = 0.1;
 // The one window radius every sheet on the stage wears (--win-r in the
 // stylesheet); mirrored here for the same reason GEOM mirrors --cell-w — a
@@ -995,7 +997,8 @@ scatterPlates(plateEls);
 // page has no module bundler). createSim/advance below are that package's.
 //
 // Phones display the wash at less than half its design size.
-const sim = MossWatercolor.createSim({ canvas, texW: BASE_TEX_W, texH: BASE_TEX_H, divisor: mobileLayout() ? 4 : 2, diagMode: DIAG, rect: () => printRect });
+const simOptions = () => ({ canvas, texW: BASE_TEX_W, texH: BASE_TEX_H, divisor: mobileLayout() ? 4 : 2, diagMode: DIAG, rect: () => printRect });
+let sim = MossWatercolor.createSim(simOptions());
 // Wherever the cursor is, a scroll gesture moves the page and nothing else. The
 // editor and the preview are live documents with their own scroll containers,
 // so each frame has its own scrolling switched off and the browser chains the
@@ -1177,9 +1180,9 @@ function groundToward(to, dryness, dtReal) {
 // and where every target orbits.
 const fanEl = $('fan');
 let pubR = 25;
+const publishButton = () => vdFrame.contentDocument?.querySelector('.moss-publish-button');
 function measurePub() {
-  const doc = vdFrame.contentDocument;
-  const btn = doc && doc.querySelector('.moss-publish-button');
+  const btn = publishButton();
   const r = btn && btn.getBoundingClientRect();
   if (!r || !r.width) return false;
   const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
@@ -1653,9 +1656,12 @@ function syncLoop() {
   if (want) loopVid.play().catch(() => {}); else loopVid.pause();
 }
 // How far the last join has run, and the only thing it moves.
-const setCross = (q) => { xf = q; document.documentElement.style.setProperty('--xf', q.toFixed(3)); syncLoop(); };
-// The close takes the pointer and the tab order only where it is settled: during
-// the scrub it is paint, and behind the page it is not there at all. The join
+// Once the close is more than half there it takes the pointer, and gives it back below that on the
+// way out: a button the reader can see must answer a click, and the page behind it is by then faded.
+const TAKES_POINTER = .5;
+const setCross = (q) => { if (q === xf) return; xf = q; document.documentElement.style.setProperty('--xf', q.toFixed(3)); syncLoop(); fiveOn(q >= TAKES_POINTER); };
+// The close takes the pointer and the tab order only where it is mostly there: while it is
+// still faint it is paint, and behind the page it is not there at all. The join
 // has two sides and the page is the other one: where the close is settled the
 // page is faded to nothing, and a control faded to nothing is still a tab stop
 // until the element it sits in is inert.
@@ -1733,7 +1739,7 @@ function mobileInkProgress(text) {
 // second: on a phone the copy crossing the visual, on desktop the page between
 // the two rests, so a scene is whole exactly when its copy has arrived.
 const washAt = (from, to, y = pos()) => mobileLayout() ? clamp01((progressAt() - from) / (to - from)) : clamp01((y - restY(from)) / (restY(to) - restY(from)));
-function closingProgress(y) { return mobileLayout() ? mobileInkProgress(scenesEl[DEPLOY].firstElementChild) : washAt(DEPLOY, SHARE, y); }
+function closingProgress() { return mobileLayout() ? mobileInkProgress(scenesEl[DEPLOY].firstElementChild) : washAt(DEPLOY, SHARE); }
 function mobileVisualBand() {
   const visual = document.getElementById('vis');
   const top = parseFloat(getComputedStyle(visual).top);
@@ -1742,7 +1748,18 @@ function mobileVisualBand() {
 }
 // The crossfade that whitens the copy and brings in the film runs over the
 // last part of the close, after the logos have gone to pigment.
-function xfAt(y) { return smooth(.45, 1, closingProgress(y)); }
+const crossAt = (q) => smooth(.45, 1, q);
+const xfAt = () => crossAt(closingProgress());
+// How far into the close the page stands, read back from the crossfade (crossAt inverted): the one
+// part of a close that outlives it, and before boot the only part drawn, following the page. Short
+// of its span the crossfade reads as the close's start.
+const closeShown = () => xf <= 0 ? 0 : xf >= 1 ? 1 : .45 + .55 * (.5 - Math.sin(Math.asin(1 - 2 * xf) / 3));
+// Whether scene 5 may stand on the reader reaching past the close: once the close has drawn itself to
+// its end, and at once where nothing draws it — before boot, where the crossfade follows the page
+// directly, and on desktop, whose picture follows the page at its own pace. On a booted phone a reader
+// who flings past the close's end runs the paced close first, so the film never comes up over art the
+// dissolve has not reached.
+const closeDrawn = () => xf >= 1 || !booted || !mobileLayout();
 // Scene 5's own scrolling: from the close's rest down to the footer, the page is the browser's.
 const inClose = () => scrollY >= restY(SHARE) - 2;
 // The scene on the far side of this join arrives already standing rather than
@@ -1754,6 +1771,14 @@ function snapStage() {
   stage.classList.add('snap');
   requestAnimationFrame(() => requestAnimationFrame(() => { if (token === snapToken) stage.classList.remove('snap'); }));
 }
+// The close is the third way across a crossing (crossing()), beside the wash and the live fade: its
+// drawing is the close's own progress, which sets both the crossfade and scene 4's dissolve, so the two
+// stay in step. Read straight off the position, a close that started with the reader already deep in it
+// (after a fling, or after a crossing into scene 4 that landed late) drew that depth on its first frame,
+// the art going from whole to mostly gone between two frames. Paced, it covers the art in no fewer than
+// four frames a close and no faster than one dissolve, the rate of the print's own dissolve, which also
+// keeps the drawing behind the recording the dissolve is played from. Desktop's is unpaced, like its
+// wash: the picture it reads keeps its own pace. A close starts from where the crossfade stands.
 async function fade(to) {
   // Restore the centred composition under pigment, never replay its entrance.
   if (shown === SHARE) {
@@ -1762,16 +1787,15 @@ async function fade(to) {
   }
   mountLoop();
   if (reduce) { setCross(to === SHARE ? 1 : 0); return to; }
-  const settled = await new Promise(done => {
-    // the close's own progress, not the crossfade's: the crossfade is only its last part
-    const frame = () => {
-      const q = closingProgress(); setCross(xfAt()); updateFinalDissolve();
-      if (q >= 1 && target !== DEPLOY) done(SHARE);
-      else if (q <= 0 && target !== SHARE) done(DEPLOY);
-      else requestAnimationFrame(frame);
-    };
-    requestAnimationFrame(frame);
+  // the close's progress from the crossing's: it runs from scene 4 to scene 5 whichever way it is crossed
+  const q = shown === DEPLOY ? (pos) => pos : (pos) => 1 - pos;
+  const settled = await crossing(to, {
+    pace: mobileLayout() ? 1 : null,
+    start: q(closeShown()),
+    frame(pos) { setCross(crossAt(q(pos))); updateFinalDissolve(q(pos)); return { at: pos }; },
   });
+  // ended by a throw, a close back to scene 4 can stop short of drawing its start
+  if (settled === DEPLOY) updateFinalDissolve(0);
   setCross(settled === SHARE ? 1 : 0); snapStage();
   return settled;
 }
@@ -1800,13 +1824,129 @@ const legToward = (from, want, onHand) => {
 // interiors belong to the scene the reader arrives at, which `still` sets: the
 // one scene that carries a fan sits next to the one join that never washes, so
 // it is always a leg's end and never a scene passed over.
-// How far a wash can go toward `want` with the prints on hand. On mobile a wash
-// does not wait for the next print (pour's half pair), so the next boundary is
-// reachable without it — except the Publish bridge, which needs both prints.
+// How far a wash can go toward `want` with the prints on hand. A boundary that is not a wash stops it
+// where it stands, whatever lies beyond: the close carries no print and has its own mechanism, and a
+// wash re-pointed across it walked the stage to scene 5 with the close never drawn. On mobile a wash
+// does not wait for the next print (pour's half pair), so the next boundary is reachable without it —
+// except the Publish bridge, which needs both prints.
 const reachToward = (from, want) => {
-  const to = legToward(from, want, true), next = stepToward(from, want);
-  return to === from && mobileLayout() && next !== from && joinAt(from, next).wash && Math.min(from, next) !== SHIPS ? next : to;
+  const next = stepToward(from, want);
+  if (next === from || !joinAt(from, next).wash) return from;
+  const to = legToward(from, want, true);
+  return to === from && mobileLayout() && Math.min(from, next) !== SHIPS ? next : to;
 };
+// A join the morph cannot make (no GPU, or a print not yet taken) used to pop: the stage changed scene
+// between two frames. With the print of the scene being left in hand, that print is laid over the
+// canvas's own place first and thinned away while the live scene stands beneath, which needs no GPU.
+// A phone fades the live scene itself instead (fadeLive), on the same curve.
+let dissolvesRun = 0;
+const DISSOLVE = { duration: 360, easing: 'ease-out' };
+function dissolveFrom(print) {
+  if (!print || reduce) return;
+  const veil = document.createElement('canvas');
+  veil.width = print.width; veil.height = print.height;
+  veil.getContext('2d').drawImage(print, 0, 0);
+  veil.setAttribute('aria-hidden', 'true');
+  veil.style.cssText = `position:absolute;left:${printRect.x}px;top:${printRect.y}px;width:${printRect.w}px;height:${printRect.h}px;z-index:6;pointer-events:none;`;
+  cell.append(veil); dissolvesRun++;
+  const gone = () => veil.remove();
+  veil.animate([{ opacity: 1 }, { opacity: 0 }], DISSOLVE).finished.then(gone, gone);
+}
+// One crossing from the scene shown toward `to`, frame by frame, for every way a scene is left: a
+// wash (pour), a fade of the live stage (fadeLive) and the close (fade). The way across draws; this
+// decides when it is over, the same for all three:
+// - the clock is the reader's position (washAt), and a rest's pixel rounding, the .002 targetAt uses,
+//   counts as arrival, or a crossing resting a hair short of its end would hold every later join;
+// - it has arrived once the position has and the drawing has caught up with it;
+// - it is back where it began once the drawing is back at its start and the target no longer lies
+//   ahead, so a drawing that runs behind the position plays back rather than dropping what it shows;
+// - the scene asked for comes into the stage at the drawing's own midpoint (showScene);
+// - past the close, it ends there, and the close stands;
+// - a frame that throws ends it at its target and says so in ?washdbg, rather than holding the join
+//   open for the rest of the visit.
+// - a paced drawing follows the position in no fewer than four frames a crossing, so a fling past a
+//   whole crossing in one frame cannot change the scenes between two frames, and no faster than
+//   `way.pace` dissolves a crossing where it has one, whichever is slower: the fade takes two, one out
+//   and one in, the close one; the phone's wash has none (see pour). A frame that
+//   comes well past the recent frame interval counts for no more than twice it, so one stall cannot
+//   carry a drawing across, while a page that is slow throughout still runs in real time. Desktop's
+//   wash and close are unpaced: the picture they read their position from keeps its own pace. A
+//   drawing starts at 0, or where `way.start` says it already stands.
+const toward = (x, goal, step) => goal > x ? Math.min(goal, x + step) : Math.max(goal, x - step);
+async function crossing(to, way) {
+  const from = shown;
+  let on = from, last = performance.now(), interval = 1000 / 60, pos = way.start ?? 0, snap = false;
+  return new Promise((finish) => {
+    const frame = (now) => {
+      if (way.lost?.()) { finish(to); return; }
+      if (target === SHARE && xfAt() >= 1 && closeDrawn()) { finish(SHARE); return; }
+      if (way.held?.()) { requestAnimationFrame(f); return; }
+      const raw = now - last, dt = Math.min(raw, 2 * interval + 1000 / 60); last = now; interval += (raw - interval) / 4;
+      const aimed = way.aim?.(to) ?? to;
+      if (aimed !== to) { to = aimed; snap = true; }   // a re-pointed drawing starts from the position
+      const w = washAt(from, to) > .998 ? 1 : washAt(from, to), goal = way.goal ? way.goal(w) : w;
+      pos = snap || way.pace == null ? goal : toward(pos, goal, Math.min(way.pace ? dt / (way.pace * DISSOLVE.duration) : 1, 1 / 4));
+      snap = false;
+      const { at, stand } = way.frame(pos, raw, to);
+      if (stand != null && stand !== on) { showScene(stand, way); on = stand; }
+      if (at >= 1 - 1e-6 && (w >= 1 || way.unclocked?.())) finish(to);
+      else if (at <= 0 && stepToward(from, target) !== stepToward(from, to)) finish(from);
+      else requestAnimationFrame(f);
+    };
+    const f = (now) => { try { frame(now); } catch (e) { washError = e.message; console.error('crossing frame failed; ending it at its target:', e); finish(to); } };
+    requestAnimationFrame(f);
+  });
+}
+// The scene a crossing has reached comes into the stage already standing. Under a wash's cover scene
+// 3's sketch and film stay off; in a fade it is seen, so they run.
+function showScene(scene, { covered, keepPhase }) {
+  snapStage();
+  sceneClasses(scene);
+  groundAt(scene);
+  if (!keepPhase?.(scene)) scenes(PHASE[scene]);
+  if (scene === SHIPS) { sketchVisible(!covered); videoActive(!covered); }
+}
+// A phone takes a print only while the reader stands in a scene, so a reader who scrolled or flung
+// through one has none of it, and waiting for one held its art up until the reader stopped. A phone
+// fades the live scene instead, as it does wherever a join cannot wash: out over the first half of the
+// crossing and the scene asked for up over the second, one after the other, because the two share one
+// stage. It moves no faster than the print's dissolve, on the same curve, so a fling past the whole
+// crossing fades rather than pops. A reader who stops partway would otherwise stand before a scene
+// partly faded, or before bare paper, so once the page has been still for IDLE_REST the fade settles
+// on the scene whose half of the crossing the reader stopped in, whole, and from there fades over what
+// is left of the crossing in either direction. It never lands mid-crossing: targetAt names the far end
+// of the crossing from the scene shown, so a scene that landed there would have the target point
+// straight back, and the join back would land and be pointed back in turn. The fade is an animation,
+// which a print's clone of the stage does not carry, and no print is taken while a join runs.
+async function fadeLive(to) {
+  const from = shown;
+  dissolvesRun++;
+  // k runs 0 to 1 as the scene being left fades and 1 to 2 as the scene asked for comes up
+  let k = 0, settled = null, thin = null;
+  const fadeTo = (k) => {
+    const gone = k <= 1 ? k : 2 - k;
+    if (gone <= 0) { thin?.cancel(); thin = null; return; }
+    if (!thin) { thin = cell.animate([{ opacity: 1 }, { opacity: 0 }], { ...DISSOLVE, fill: 'both' }); thin.pause(); }
+    thin.currentTime = gone * DISSOLVE.duration;
+  };
+  try {
+    return await crossing(to, {
+      covered: false,
+      pace: 2,   // one dissolve out and one in
+      goal(w) {
+        if (performance.now() - restSince >= IDLE_REST) settled = { w, end: w >= .5 ? 1 : 0 };
+        // settled, the scene shown stays whole on its own side and fades over the distance left on the other
+        return !settled ? w : settled.end ? (w >= settled.w ? 1 : w / Math.max(settled.w, 1e-3))
+          : (w <= settled.w ? 0 : (w - settled.w) / Math.max(1 - settled.w, 1e-3));
+      },
+      frame(pos) {
+        k = 2 * pos;
+        fadeTo(k);
+        return { at: pos, stand: k > 1 ? to : from };
+      },
+    });
+  } finally { thin?.cancel(); }
+}
 const passThrough = (from, to) => { for (let s = stepToward(from, to); s !== to; s = stepToward(s, to)) { sceneClasses(s); groundAt(s); } };
 // A scene change: one mechanism at a time, and never two at once. The target is
 // read whole off the scroll position, so a jump is not a queue of joins to walk
@@ -1838,12 +1978,13 @@ async function runJoin() {
         // a cut. The warmer has the others by the next rest.
         const reach = washing() && join.wash && sheets[shown] ? reachToward(shown, target) : shown;
         // With no simulation (reduced motion, or no float render targets) a
-        // wash is a cut, and so is a boundary whose print never arrived; a wash
-        // that runs may be re-pointed or turned around inside.
+        // wash is a cut, and so is a boundary whose print never arrived, which
+        // a phone fades live; a wash that runs may be re-pointed or turned around inside.
         if (reach !== shown) { shown = await pour(reach); }
-        else { passThrough(shown, to); shown = to; }
+        else if (mobileLayout() && !reduce) shown = await fadeLive(to);
+        else { dissolveFrom(sheets[shown]); passThrough(shown, to); shown = to; }
       }
-      if (target === SHARE && xfAt() >= 1) { standAtTerminalClose(); break; }
+      if (target === SHARE && xfAt() >= 1 && closeDrawn()) { standAtTerminalClose(); break; }
       still(shown);
     }
   } finally { driving = false; flushPrintRect(); }
@@ -1856,7 +1997,7 @@ function advanceMobilePigment(state, goal, fwd, stir, tilt, relift, paint) {
 }
 function publishBridge(from, to, prints) {
   if (Math.min(from, to) !== SHIPS || Math.max(from, to) !== DEPLOY) return null;
-  const button = vdFrame.contentDocument.querySelector('.moss-publish-button');
+  const button = publishButton();
   if (!button) return null;
   const r = button.getBoundingClientRect(), size = r.width;
   const clone = button.cloneNode(true);
@@ -1909,7 +2050,7 @@ let playPair = null;
 // when the art stops answering the scroll (a join waits on running, on the
 // prints being on hand, and on no capture being in progress).
 if (new URLSearchParams(location.search).has('washdbg')) {
-  window.__playback = { sim, pair: () => playPair };
+  window.__playback = { get sim() { return sim; }, pair: () => playPair };
   const hud = document.createElement('pre');
   hud.setAttribute('style', 'position:fixed;left:6px;bottom:6px;z-index:9999;margin:0;padding:6px 8px;font:11px/1.35 ui-monospace,monospace;background:rgba(0,0,0,.72);color:#fff;border-radius:6px;pointer-events:none;white-space:pre');
   let frames = 0, fps = 0, last = performance.now();
@@ -1931,7 +2072,6 @@ function playbackPair(lo, hi, only = null) {
 function dropPlaybackPair() { if (playPair) { sim.free(playPair.rec); playPair = null; } }
 async function pour(to) {
   const from = shown;
-  let terminal = false;
   let fwd = to > from;
   washesRun++;
   // The prints are on hand (below), so the first drops land on the frame the
@@ -1963,17 +2103,8 @@ async function pour(to) {
   const playback = !bridge;
   let rec = playback ? playbackPair(...inOrder(), half ? fwd : null) : null;
   if (mobileHandoff && from === SHIPS) { sketchVisible(false); videoActive(false); }
-  let liveScene = from, lastCover = -1, drawnT = -1;
+  let lastCover = -1, drawnT = -1;
   const pigment = { t: 0, drawn: -1 };
-  const showUnderCover = (scene) => {
-    if (scene === liveScene) return;
-    snapStage();
-    sceneClasses(scene);
-    groundAt(scene);
-    if (!(bridge && scene === DEPLOY)) scenes(PHASE[scene]);
-    if (scene === SHIPS) { sketchVisible(false); videoActive(false); }
-    liveScene = scene;
-  };
   // The scenes' classes all land in this frame, under the canvas: the ones a
   // jump passes over, and the target's. The wash used to take a fresh print of
   // the scene it was leaving first, so the poem under the splash was the poem as
@@ -1985,50 +2116,52 @@ async function pour(to) {
   // reader leaves it and is whole exactly when the next copy has arrived, and a
   // turnaround plays the same frames back. Speed still agitates the live
   // bridge's film and tilts its sheet the way the page is pushed.
-  let t = 0, acc = 0, relift = 0, last = performance.now();
+  let t = 0, acc = 0, relift = 0;
   steps = 0; washT = 0;
-  await new Promise((finish) => {
-    const frame = (now) => {
-      // a lost GPU context draws nothing: end at the target, and later joins cut
-      if (simLost) { finish(); return; }
-      if (target === SHARE && xfAt() >= 1) { terminal = true; finish(); return; }
-      const stepClock = window.__stepClock;
-      if (stepClock && window.__stepLimit != null && steps >= window.__stepLimit) { requestAnimationFrame(f); return; }
-      const dtReal = Math.min(0.1, (now - last) / 1000); last = now;
-      // The newest target, however far off it is: this wash is re-pointed at
-      // it rather than finishing and handing on to a second one.
+  const end = await crossing(to, {
+    covered: true,
+    keepPhase: (scene) => bridge && scene === DEPLOY,
+    lost: () => simLost,   // a lost GPU context draws nothing: end at the target, and later joins cut
+    held: () => window.__stepClock && window.__stepLimit != null && steps >= window.__stepLimit,
+    unclocked: () => !!window.__stepClock,   // the harness steps the wash itself
+    // On a phone the wash keeps only the four-frame floor. A dissolve a crossing, as the fade has,
+    // would hold every crossing a fling passes for that time, one after another: a fling from the top
+    // reached the close 0.77 s after it stopped in WebKit, against 0.17 s with the floor alone.
+    pace: mobileLayout() ? 0 : null,
+    // The newest target, however far off it is: this wash is re-pointed at it rather than finishing
+    // and handing on to a second one. On desktop the recorded wash goes by the position alone: turned
+    // back, it finishes at the scene it left; gone on, it finishes at its own scene and the next join
+    // takes over from there. A turn back to the scene it began on plays the wash back, on either
+    // layout: pointed at its own start, a wash would clock itself by a crossing of no length, and on
+    // desktop, with the picture resting exactly there, that held the join open until the reader moved.
+    aim(goal) {
       const turn = reachToward(from, target);
-      if (mobileLayout() && turn === from) { to = from; finish(); return; }
-      // On desktop the position alone says where the wash is: turned back, it
-      // finishes at the scene it left; gone on, it finishes at its own scene and
-      // the next join takes over from there.
-      const byPosition = playback && !mobileLayout();
-      if (byPosition && t <= 0 && (turn - from) * (to - from) <= 0) { to = from; finish(); return; }
-      if (turn !== to && !byPosition) {
-        // Back across the scene it began on is the turnaround it always was:
-        // the water is poured again and what it laid down lifts. Anything else
-        // is a re-point — the film keeps its pigment and its motion, and only
-        // the print it is drying onto changes.
-        const back = (turn - from) * (to - from) <= 0;
-        to = turn; fwd = to > from;
-        half = mobileLayout() && !sheets[to];
-        if (!pr[to]) pr[to] = sheets[to] || pr[from];
-        if (back) { t = 0; acc = 0; relift = 1; }
-        sim.setPrints(...inOrder());
-        if (playback) rec = playbackPair(...inOrder(), half ? fwd : null);
-        if (!mobileHandoff) { scenes('morph'); passThrough(from, to); sceneClasses(to); }
-      }
+      if (turn === goal || turn === from || (playback && !mobileLayout())) return goal;
+      // Back across the scene it began on is the turnaround it always was:
+      // the water is poured again and what it laid down lifts. Anything else
+      // is a re-point — the film keeps its pigment and its motion, and only
+      // the print it is drying onto changes.
+      const back = (turn - from) * (goal - from) <= 0;
+      to = turn; fwd = to > from;
+      half = mobileLayout() && !sheets[to];
+      if (!pr[to]) pr[to] = sheets[to] || pr[from];
+      if (back) { t = 0; acc = 0; relift = 1; }
+      sim.setPrints(...inOrder());
+      if (playback) rec = playbackPair(...inOrder(), half ? fwd : null);
+      if (!mobileHandoff) { scenes('morph'); passThrough(from, to); sceneClasses(to); }
+      return to;
+    },
+    frame(clock, raw) {
+      const stepClock = window.__stepClock;
+      const dtReal = Math.min(0.1, raw / 1000);
       const v = stepClock ? (window.__scrollV || 0) : scrollV;   // the harness can hold a scroll speed
       const stir = Math.min(2, 3 * Math.abs(v)), tilt = -0.35 * Math.max(-1.2, Math.min(1.2, v));
-      if (!stepClock) acc = T_TOTAL * washAt(from, to);
+      if (!stepClock) acc = T_TOTAL * clock;
       washDbg = { acc: +acc.toFixed(3), dtReal: +dtReal.toFixed(3), fps: Math.round(1 / Math.max(dtReal, 1e-3)) };
       if (playback && !stepClock) {
-        // the position is the clock; the recording runs ahead of it, the outgoing side first
+        // the clock is the position; the recording runs ahead of it, the outgoing side first
         sim.record(rec, fwd, STEPS_PER_FRAME);
-        // A rest's pixel rounding leaves the position a hair short of the end
-        // (targetAt's .002): that is arrival, or the wash would never finish and
-        // would hold every later join.
-        t = T_TOTAL - acc < .002 * T_TOTAL ? T_TOTAL : acc;
+        t = acc;
       } else if (mobileHandoff && !stepClock) {
         pigment.t = t;
         const advanced = advanceMobilePigment(pigment, acc, fwd, stir, tilt, relift, () => {});
@@ -2039,6 +2172,7 @@ async function pour(to) {
       }
       washT = t;
       const caughtUp = t >= acc - DT;
+      let stand = null;
       if (mobileHandoff && caughtUp) {
         // All source furniture stays put while the cover rises. Both live
         // compositions switch only under opaque pigment, including reversal.
@@ -2052,7 +2186,7 @@ async function pour(to) {
           stage.style.setProperty('--wash-cover', cover.toFixed(3));
           lastCover = cover;
         }
-        showUnderCover((playback ? p < .5 : t < .35) ? from : to);
+        stand = (playback ? p < .5 : t < .35) ? from : to;
         bridge?.draw(t);
         if (bridge && mobileLayout() && to === DEPLOY && t > .35 &&
             textBottom(scenesEl[SHIPS]) <= stage.getBoundingClientRect().top + GEOM.cellH * SCALE / 2) {
@@ -2072,21 +2206,18 @@ async function pour(to) {
         drawnT = t;
       }
       if (!mobileHandoff) groundToward(to, smooth(T_DRY, T_TOTAL, t), stepClock ? DT * SPF : dtReal);
-      if (t >= T_TOTAL - 1e-6) finish(); else requestAnimationFrame(f);
-    };
-    // A frame that throws must not leave the join awaiting a wash that never
-    // finishes: that holds `driving` for good and every later join is refused,
-    // so the art stops answering the scroll for the rest of the visit.
-    const f = (now) => { try { frame(now); } catch (e) { washError = e.message; console.error('wash frame failed; ending the transition at its target:', e); finish(); } };
-    requestAnimationFrame(f);
+      // The live wash steps its own film in DT and, sent back to the start, stops within a step of it:
+      // that is its start, or a wash turned back to where it began would never finish.
+      return { at: acc === 0 && t <= DT ? 0 : t / T_TOTAL, stand };
+    },
   });
   if (mobileHandoff) releasePigmentCover();
   bridge?.remove();
   fanEl.style.filter = '';
   fanEl.style.zIndex = '';
-  if (terminal) return SHARE;
-  if (!bridge && !half) setSheet(to, pr[to]);   // the scene now on screen, at rest
-  return to;
+  if (end === SHARE) return SHARE;
+  if (!bridge && !half) setSheet(end, pr[end]);   // the scene now on screen, at rest
+  return end;
 }
 // The wash needs the scene as pixels, and a browser will not hand over its own
 // rendering, so the scene is re-rendered by the same engine: each document
@@ -2598,12 +2729,25 @@ const setSheet = (scene, c) => {
 // Prints are the wash's. Reduced motion cuts, a machine without float render
 // targets cuts, and a scene whose print has proved impossible cuts too; none of
 // them needs a capture, and the retake loop was taking one every second anyway.
-let printable = true;
+let printable = true, printFailures = 0, printRetryAt = 0;
 // A phone short of GPU memory can take the context away. Nothing then draws,
 // so the washes stop and the joins cut: a page that answers is better than a
 // canvas frozen over it.
 let simLost = false, washError = null;
-canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); simLost = true; console.warn('watercolor: GPU context lost; transitions cut from here'); });
+canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); simLost = true; console.warn('watercolor: GPU context lost; transitions cut until it returns'); });
+// The browser hands a lost context back, but the programs, textures and recordings of the old one died
+// with it. Without building the simulation again the joins stayed cut until the page was reloaded.
+canvas.addEventListener('webglcontextrestored', () => {
+  try {
+    const next = MossWatercolor.createSim(simOptions());
+    if (!next) return;
+    sim = next; playPair = null; finalPrints = null;
+    if (finalWash) { cancelAnimationFrame(finalWash.raf); finalWash = null; releasePigmentCover(); }
+    simLost = false;
+    console.info('watercolor: GPU context restored; transitions wash again');
+    warmSoon();
+  } catch (e) { console.warn('watercolor: could not build again after the GPU context returned:', e.message); }
+});
 const washing = () => !!sim && !reduce && printable && !simLost;
 const primed = () => !washing() || needed(shown).every((n) => sheets[n]);   // a cut needs no prints
 // The article iframe nested inside a scene's own shell (the preview pane),
@@ -2704,8 +2848,14 @@ async function takeOthers(list = neighbours(shown)) {
     // An unprintable neighbour must not lock every transition behind primed()
     // and repeatedly switch the live stage while retrying. Use the existing
     // cut fallback for this visit, then restore the visible scene below.
-    try { setSheet(other, await capture(other)); }
-    catch (e) { printable = false; console.warn('Watercolor unavailable:', e.message); break; }
+    try { setSheet(other, await capture(other)); printFailures = 0; }
+    catch (e) {
+      // Cut for now, and try again a little later: a print that failed while images and fonts were still
+      // arriving is not one that is impossible, and switching the morph off for the whole visit is why a
+      // first visit could cut where a reload washed.
+      printable = false; printFailures++; printRetryAt = performance.now() + 4000 * printFailures;
+      console.warn('Watercolor unavailable:', e.message); break;
+    }
     finally { restoreImgs(); }
   }
   // The reader may have crossed a boundary while the foreignObject capture was
@@ -2782,14 +2932,16 @@ const atRest = () => !running() && !document.hidden && performance.now() - restS
 // moment old than cut, and `takeOthers` never re-enters a scene that has one.
 let warmTimer = null;
 function warmSoon(ms = WARM_MS) { if (warmTimer != null) return; warmTimer = setTimeout(() => { warmTimer = null; whenIdle(warm); }, ms); }
+const PRINT_TRIES = 4;
 async function warm() {
   if (document.documentElement.dataset.static) return;
   warmSoon();            // the next tick is a second from this one's start, not from its end
+  if (!printable && printFailures < PRINT_TRIES && performance.now() >= printRetryAt) printable = true;
   // On mobile nothing is captured while the reader crosses a boundary — a
   // capture holds the canvas still over a moving page, and a wash no longer
   // waits for one — but a reader standing in a scene is enough, rest or not.
   const standing = mobileLayout() && !running() && target === shown && Math.abs(progressAt() - shown) < .002;
-  if (!atRest() && !standing && !(target !== shown && !primed() && !mobileLayout())) return;
+  if (!atRest() && !standing && !heldForPrints()) return;
   // One thing a tick, in this order: a print a jump may ask for that nobody has
   // taken, then the scene on screen, whose print goes off because the scene moves.
   if (!await fillPrints()) await retakeShown();
@@ -2800,9 +2952,17 @@ warmSoon();
 // being taken used to be dropped on the floor and wait for the reader to move
 // again; the warmer knocks here after every print it lands, so the join the
 // prints were holding shut runs as soon as they are on hand.
-function maybeJoin() { if (!running() && !retaking && target !== shown && (primed() || (mobileLayout() && washing() && sheets[shown]))) runJoin(); }
+function maybeJoin() { if (!running() && !retaking && target !== shown && !heldForPrints()) runJoin(); }
+// A join is owed and waits for prints. What it waits for is the join's own: primed() asks what the
+// scene needs, and a scene beside a wash needs prints even where the join being started (the close's
+// crossfade) carries none. A phone never waits: its wash goes with the outgoing print alone, and
+// without that print the live scene fades (fadeLive).
+function heldForPrints() {
+  if (mobileLayout() || target === shown || !joinAt(shown, stepToward(shown, target)).wash) return false;
+  return !primed();
+}
 function setTarget(t) {
-  if (t === SHARE && xfAt() >= 1) {
+  if (t === SHARE && xfAt() >= 1 && closeDrawn()) {
     target = t;
     // Closing copy and its poster are independent of the active join.
     mountLoop(); setCross(1); fiveOn(true);
@@ -3002,13 +3162,13 @@ function sceneKey(e, fromDemo) {
   const dir = e.key === ' ' && e.shiftKey ? -1 : KEY_STEP[e.key];
   if (dir == null || (inClose() && !(dir < 0 && scrollY <= restY(SHARE) + 2))) return;
   e.preventDefault();
-  widenSnap();
+  widenSnap(); endCarry();
   const far = e.key === 'Home' || e.key === 'End';
   scrollToRest(far ? (dir < 0 ? -1 : SHARE) : Math.max(-1, Math.min(SHARE, (aimed ?? nearestRest()) + dir)));
 }
 addEventListener('keydown', (e) => sceneKey(e, false));
 // pointerdown on the page itself (a frame's own never reaches here): no demo is in use
-addEventListener('pointerdown', () => { demoInUse = false; aimed = null; widenSnap(); }, true);
+addEventListener('pointerdown', () => { demoInUse = false; aimed = null; widenSnap(); endCarry(); }, true);
 // Chrome snaps a short scroll back to the rest it started from: one 100px wheel notch moves the
 // page about 90px within 100 ms and has it back within 200 ms, and only two quick notches
 // advance (measured on Chrome 154). So a short scroll is carried on to the next rest: the first
@@ -3024,9 +3184,13 @@ addEventListener('pointerdown', () => { demoInUse = false; aimed = null; widenSn
 // already taking the page back (86px of backward travel, measured). So while a scroll is
 // carried the snap is off (html.carried), and drivePicture puts it back once the page has come
 // to rest on a rest. These are the only writes the page makes in response to the wheel, and
-// they never take the wheel from the reader.
+// they never take the wheel from the reader. carried names the rest a carry is heading for, and is
+// null when there is none.
 const ONWARD_QUIET_MS = 60, ONWARD_MIN_PX = 24, NOTCH_PX = 40;
-let stood = scrollY, carried = false, wheelOpen = false, wheelSum = 0, wheelQuiet = 0;
+let stood = scrollY, carried = null, wheelOpen = false, wheelSum = 0, wheelQuiet = 0;
+// A key or a click takes the page elsewhere, so an instant carry in progress has nothing left to
+// finish. A smooth carry is left to drivePicture as it always was.
+function endCarry() { if (!reduce) return; carried = null; document.documentElement.classList.remove('carried'); }
 // One swipe moves at most one scene. A swipe's momentum is the browser's, and so is the snap
 // point it picks: the one nearest where the momentum would carry the page. scroll-snap-stop asks
 // it to stop at the first, but Safari's momentum passes it: scene 1 stands a third of a screen
@@ -3085,7 +3249,7 @@ function goOnward() {
   if (i < 0) return;
   const after = ys[i + dir];
   if (after != null && Math.abs(scrollY - after) < Math.abs(scrollY - ys[i])) return;
-  carried = true; document.documentElement.classList.add('carried');
+  carried = i - 1; document.documentElement.classList.add('carried');
   restSince = performance.now();   // the page's stillness is counted from here, not from before the gesture
   scrollToRest(i - 1);
 }
@@ -3203,14 +3367,28 @@ function deployPrint() {
     }
     g.restore();
   }
-  const source = sheets[DEPLOY];
-  if (source) {
-    const cs = getComputedStyle(stage), cx = parseFloat(cs.getPropertyValue('--pub-cx')), cy = parseFloat(cs.getPropertyValue('--pub-cy'));
-    const k = source.width / printW(), r = pubR, diameter = r * 2 * PUB_SCALE;
-    g.drawImage(source, (-32 + cx - r + ox) * k, (cy - r + oy) * k, r * 2 * k, r * 2 * k,
-      GEOM.cellW / 2 + ox - diameter / 2, GEOM.cellH / 2 + oy - diameter / 2, diameter, diameter);
-  }
+  drawControl(g, GEOM.cellW / 2 + ox, GEOM.cellH / 2 + oy);
   return copy;
+}
+// The grown control, drawn from its own markup rather than cut from scene 4's print, so the close
+// never waits for a capture: the disc in its colour and the icon's paths where the button places them.
+// The shell's icon is paths alone; another element in it would be left out of the close.
+function drawControl(g, x, y) {
+  const button = publishButton(), b = button?.getBoundingClientRect();
+  if (!b?.width) return;
+  const style = button.ownerDocument.defaultView.getComputedStyle(button), k = PUB_SCALE;
+  g.save();
+  g.beginPath(); g.arc(x, y, b.width / 2 * k, 0, Math.PI * 2); g.fillStyle = style.backgroundColor; g.fill();
+  const icon = [...button.querySelectorAll('svg')].find((svg) => svg.getClientRects().length), r = icon?.getBoundingClientRect();
+  const box = icon?.viewBox.baseVal || (r && { x: 0, y: 0, width: r.width, height: r.height });
+  if (box?.width) {
+    // the icon's rendered box, its CSS nudge included, placed relative to the button's centre
+    g.translate(x + (r.left + r.width / 2 - b.left - b.width / 2) * k, y + (r.top + r.height / 2 - b.top - b.height / 2) * k);
+    g.scale(r.width * k / box.width, r.height * k / box.height); g.translate(-box.x - box.width / 2, -box.y - box.height / 2);
+    g.strokeStyle = style.color; g.lineWidth = +icon.getAttribute('stroke-width') || 2; g.lineCap = g.lineJoin = 'round';
+    for (const path of icon.querySelectorAll('path')) g.stroke(new Path2D(path.getAttribute('d')));
+  }
+  g.restore();
 }
 function closingPigmentPrint() {
   const sheet = document.createElement('canvas'); sheet.width = printW(); sheet.height = printH();
@@ -3236,15 +3414,15 @@ function closingPigmentPrint() {
 // colour before the blooms meet, each keeping more of it (CLOSE_STIR of the
 // usual mixing, and never thinned); that wash turns into the film's, and the
 // film's print gathers over the rest of the close, darkening in step with the
-// crossfade that whitens the copy and brings in the movie itself (xfAt), never
-// ahead of it.
+// crossfade that whitens the copy and brings in the movie itself (crossAt), never
+// ahead of it. `at` is the close's progress as the close draws it (fade), not
+// the reader's position, which the drawing follows at its own pace.
 const CLOSE_HOLD = .04, CLOSE_DOSE = 30, CLOSE_LIFT = .3, CLOSE_STIR = .12;
-function updateFinalDissolve() {
-  if (!sim || reduce || simLost || !sheets[DEPLOY]) return;
-  const active = shown >= DEPLOY && +stage.dataset.scene === DEPLOY;
-  const q = active ? closingProgress() : 0;
-  finalDissolve = q;
-  if (!q) {
+function updateFinalDissolve(at) {
+  finalDissolve = at;
+  // The release comes before every other gate: a close that lost the GPU mid-way still has its cover
+  // raised, and leaving it raised on the way back to scene 4 leaves scene 4 invisible.
+  if (!at) {
     if (finalWash) {
       cancelAnimationFrame(finalWash.raf); finalWash = null;
       releasePigmentCover();
@@ -3252,8 +3430,8 @@ function updateFinalDissolve() {
     }
     return;
   }
+  if (!sim || reduce || simLost) return;
   if (!finalWash) {
-    if (!active) return;
     orbitSim?.stop(); orbitFrozen = true; holdVisual(true);
     // The frozen targets and these exact pixels hold through scene 5 and the
     // return trip, until releaseClose(). The close's recording lives with its
@@ -3264,9 +3442,9 @@ function updateFinalDissolve() {
       dropPlaybackPair(); finalPrints.rec = sim.pair({ dose: CLOSE_DOSE, lift: CLOSE_LIFT, stir: CLOSE_STIR, rinse: 0 });
     }
     holdCanvas(finalPrints.source, finalPrints.film, DEPLOY, true, true);
-    finalWash = { goal: q * T_TOTAL, raf: 0, covered: true, rec: finalPrints.rec };
+    finalWash = { goal: at * T_TOTAL, raf: 0, covered: true, rec: finalPrints.rec };
   }
-  const wash = finalWash; wash.goal = q * T_TOTAL;
+  const wash = finalWash; wash.goal = at * T_TOTAL;
   if (wash.raf) return;
   const frame = () => {
     if (finalWash !== wash) return;
@@ -3316,13 +3494,19 @@ function drivePicture(now) {
   // stopped short of a rest is first finished on the nearest, waiting 1.5 s of true stillness so
   // a smooth scroll merely slow to start is not sent prematurely (measured: 400 ms was too
   // short). A window that became the phone layout has no snap to return.
-  if (carried) {
-    const rest = nearestRest(), there = Math.abs(scrollY - restY(rest)) <= 1;
-    if (mobileLayout() || there) { carried = false; document.documentElement.classList.remove('carried'); }
-    else if (now - restSince > 1500) { restSince = now; scrollToRest(rest); }
+  // With reduced motion the carry is an instant scroll, which is at its rest by the next frame, but
+  // Chromium does not cancel a scroll it already had running (the wheel's own, or its snap back
+  // toward where the gesture began): that one goes on from the rest for whatever distance it had
+  // left, with the snap off (measured: a snap back 29px into its 99px, carried to the rest, went on
+  // to stop 70px short of it, and every later gesture was carried to the same rest again). So an
+  // instant carry ends only once the page stands still on the rest it was carried to (carried),
+  // and one that stopped elsewhere is put back on it; an instant scroll is never slow to start.
+  if (carried != null) {
+    const rest = reduce ? carried : nearestRest(), there = Math.abs(scrollY - restY(rest)) <= 1;
+    if (mobileLayout() || (there && !(reduce && real))) { carried = null; document.documentElement.classList.remove('carried'); }
+    else if (now - restSince > (reduce ? 150 : 1500)) { restSince = now; scrollToRest(rest); }
   }
   onScroll(dy);
-  updateFinalDissolve();
   syncHeldVisual();
   const dt = Math.min(0.1, Math.max(0, (now - lastWatchT) / 1000)); lastWatchT = now;
   scrollV *= Math.exp(-dt / V_TAU);
@@ -3705,7 +3889,7 @@ window.__onHand = sheets;
 window.__restY = restY;   // the rests' own geometry, so a rest check reads it rather than keeping a second copy
 window.__targetAt = targetAt;   // what a rested position names, read the same way the wash reads it
 window.__plateBounds = plateBounds;   // the region a scattered/dragged plate must stay inside, the same formula the drag clamp and the initial scatter both read
-window.__state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +(mobileLayout() ? progressAt() : restProgress()).toFixed(3), travel, view: +pos().toFixed(1), primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg });
+window.__state = () => ({ shown, target, running: running(), phase, steps, joins: joinsRun, washes: washesRun, dissolves: dissolvesRun, fanned: stage.classList.contains('fanned'), xf: +xf.toFixed(3), loop: !loopMounted ? 'unmounted' : loopVid.error ? 'error' : loopVid.paused ? 'paused' : 'playing', washT: +washT.toFixed(2), captureMs, scrollV: +scrollV.toFixed(2), progress: +(mobileLayout() ? progressAt() : restProgress()).toFixed(3), travel, view: +pos().toFixed(1), primed: primed(), sim: !!sim, ready: !!(ed && sh) && primed(), dbg: washDbg });
 // window.__s3 is defined with the rest of scene 3's own script, above.
 // How the print pipeline is doing: captures started, how many are drawing now,
 // the most that ever drew at once, and how old the print on hand is.
@@ -3730,7 +3914,7 @@ async function ready() {
   // scenes cut, which is the path reduced motion already takes
   if (washing() && needed(shown).length) { try { setSheet(shown, await capture(shown)); await takeOthers(mobileLayout() ? neighbours(shown) : washable.filter((scene) => scene !== shown)); } catch (e) { printable = false; console.warn('no prints:', e.message); } }
   booted = true;
-  onScroll(0); if (target !== shown && primed()) runJoin(); else still(shown);
+  onScroll(0); if (target !== shown && !heldForPrints()) runJoin(); else still(shown);
   document.documentElement.dataset.ready = '1';
 }
 // Every frame must be there before the first prints are taken: a print of a

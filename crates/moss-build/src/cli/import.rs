@@ -8,11 +8,14 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::vault::import::scrape::import_local::import_local_file;
-use crate::vault::import::scrape::run::{scrape_to_folder, ScrapeProgress, ScrapeResult};
+use crate::vault::import::scrape::run::{dropped_widgets, scrape_to_folder, PageGap, ScrapeProgress, ScrapeResult};
 use crate::vault::import::scrape::service::{ScrapeConfig, DEFAULT_MAX_PAGES};
 
 /// Top-level dispatcher for `moss import …`. Returns a process exit code.
 pub fn run(args: &[String]) -> i32 {
+    if let Some(code) = super::import_folder::dispatch(args) {
+        return code;
+    }
     let parsed = match parse_args(args) {
         Ok(p) => p,
         Err(msg) => {
@@ -115,10 +118,11 @@ pub fn run(args: &[String]) -> i32 {
                 // Widgets a static site cannot run: say what was kept as a
                 // link and what had no static form (each of those also
                 // logged by page and kind).
-                if res.widgets_carried > 0 || res.widgets_dropped > 0 {
+                let dropped = dropped_widgets(&res.widget_gaps);
+                if res.widgets_carried > 0 || dropped > 0 {
                     eprintln!(
-                        "  ↳ {} widget(s) carried as links, {} with no static form",
-                        res.widgets_carried, res.widgets_dropped
+                        "  ↳ {} widget(s) carried to their hosted page, {} with no static form",
+                        res.widgets_carried, dropped
                     );
                 }
                 if let Some(line) = res.chrome.line() {
@@ -179,6 +183,12 @@ pub fn run(args: &[String]) -> i32 {
         }
     }
 
+    // One line per page that lost a widget the importer cannot run, before
+    // the closing line.
+    for line in widget_gap_lines(&totals.widget_gaps) {
+        eprintln!("{line}");
+    }
+
     eprintln!(
         "Done: {} page(s) imported into {} ({} failed, {} skipped as non-HTML, {} duplicate(s) skipped{}{}{}{}{}{})",
         totals.pages,
@@ -206,10 +216,11 @@ pub fn run(args: &[String]) -> i32 {
         } else {
             String::new()
         },
-        if totals.widgets_carried > 0 || totals.widgets_dropped > 0 {
+        if totals.widgets_carried > 0 || totals.widgets_dropped() > 0 {
             format!(
-                ", {} widget(s) carried as links, {} with no static form",
-                totals.widgets_carried, totals.widgets_dropped
+                ", {} widget(s) carried to their hosted page, {} with no static form",
+                totals.widgets_carried,
+                totals.widgets_dropped()
             )
         } else {
             String::new()
@@ -222,6 +233,21 @@ pub fn run(args: &[String]) -> i32 {
     );
 
     totals.exit_code()
+}
+
+/// The summary's widget lines: one per page that lost a widget, then a count
+/// of the pages past the cap, so a site built from script widgets stays readable.
+fn widget_gap_lines(gaps: &[PageGap]) -> Vec<String> {
+    const CAP: usize = 20;
+    let mut lines: Vec<String> = gaps
+        .iter()
+        .take(CAP)
+        .map(|g| format!("  ↳ {}: not carried: {}", g.page, g.kinds.join(", ")))
+        .collect();
+    if gaps.len() > CAP {
+        lines.push(format!("  ↳ and {} more page(s) with widgets not carried", gaps.len() - CAP));
+    }
+    lines
 }
 
 /// Running counts across every URL passed to one `moss import` invocation.
@@ -240,7 +266,8 @@ struct ImportTotals {
     linked_files_downloaded: usize,
     oversized_files: usize,
     widgets_carried: usize,
-    widgets_dropped: usize,
+    /// Pages that lost widgets with no static form, across every URL.
+    widget_gaps: Vec<PageGap>,
     capped_leftovers: usize,
     hard_errors: usize,
 }
@@ -256,10 +283,14 @@ impl ImportTotals {
         self.linked_files_downloaded += res.linked_files_downloaded;
         self.oversized_files += res.oversized_files;
         self.widgets_carried += res.widgets_carried;
-        self.widgets_dropped += res.widgets_dropped;
+        self.widget_gaps.extend(res.widget_gaps.iter().cloned());
         if res.capped {
             self.capped_leftovers += res.remaining_urls;
         }
+    }
+
+    fn widgets_dropped(&self) -> usize {
+        dropped_widgets(&self.widget_gaps)
     }
 
     fn any_failed(&self) -> bool {
@@ -430,6 +461,8 @@ fn is_remote_url(arg: &str) -> bool {
 fn print_usage() {
     eprintln!("Usage: moss import <url|file> [<folder>] [-r|--recursive]");
     eprintln!("       moss import --list <file> [<folder>] [-r|--recursive]");
+    eprintln!("       moss import <folder> [--with <derivation-id>]");
+    eprintln!("       moss import --status [<site>] [--json]");
     eprintln!();
     eprintln!("Imports your own content — published on the web or saved as a file —");
     eprintln!("as markdown into <folder> (default: current directory).");
@@ -467,6 +500,8 @@ fn print_usage() {
     eprintln!("file (a PDF, an image, ...), in which case it is counted as \"linked");
     eprintln!("file(s) unreachable\" instead, same as a non-HTML response that was");
     eprintln!("actually fetched.");
+    eprintln!();
+    eprintln!("{}", super::import_folder::USAGE);
     eprintln!();
     eprintln!("The vault copy is canonical; the source URL is recorded in `origin`");
     eprintln!("frontmatter as provenance, not as a claim that the content also lives");
@@ -587,5 +622,17 @@ mod tests {
         let resolved = resolve_folder(target.to_str()).expect("a missing folder is created");
         assert!(target.is_dir());
         assert!(resolved.ends_with("site"));
+    }
+
+    #[test]
+    fn widget_gap_lines_name_twenty_pages_then_count_the_rest() {
+        let gaps: Vec<PageGap> = (0..25)
+            .map(|i| PageGap { page: format!("/p{i}/"), kinds: vec!["contact form".into()] })
+            .collect();
+        let lines = widget_gap_lines(&gaps);
+        assert_eq!(lines.len(), 21);
+        assert_eq!(lines[0], "  ↳ /p0/: not carried: contact form");
+        assert_eq!(lines[19], "  ↳ /p19/: not carried: contact form");
+        assert_eq!(lines[20], "  ↳ and 5 more page(s) with widgets not carried");
     }
 }

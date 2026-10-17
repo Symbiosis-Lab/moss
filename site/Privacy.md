@@ -6,7 +6,7 @@ description: What moss collects, why, and your choices — in plain language.
 lang: en
 translationKey: privacy
 ---
-moss is a local‑first tool for building and publishing websites. In one line: **your content stays on your own computer**, we collect as little data as we can, and there are **no ads and no usage tracking**.
+moss is a local‑first tool for building and publishing websites. In one line: **your content stays on your own computer**, we collect as little data as we can, and there are **no ads and no tracking of individuals**.
 
 This is an early policy. moss is in active development, and we'll keep refining it as the product grows. If anything here is unclear, [get in touch](#contact).
 
@@ -38,7 +38,9 @@ If you enable comments through moss, then when someone comments on your publishe
 
 ## Website analytics
 
-For published sites we keep basic, aggregate traffic stats: country, browser, OS, and which pages were viewed. These stats contain no cookies, no cross‑site tracking, and no IP addresses.
+For published sites, and for this site, we keep basic traffic stats: the pages viewed, the referring site (its name only, not the full address), country, browser and OS family, a screen‑size bucket (phone, tablet, or desktop), campaign tags in the link (utm_source and utm_medium), and named clicks on buttons a site marks for counting, such as a download button. To count unique visitors without cookies, our server turns each visitor's IP address and browser details into a short code, using a secret that is replaced every day and never stored. The same visitor gets the same code on one site for one day, and an unrelated code on another site or another day, so no one can follow a reader across sites or over time. The IP address itself is never stored. These stats contain no cookies and no cross‑site tracking. We keep them on our server for 400 days and then delete them. We process them on the basis of a legitimate interest: letting each site understand its own readers with as little data as that takes.
+
+On this site only (mosspub.com), we also run Cloudflare Web Analytics, a cookieless counter from our hosting provider, so we can compare its numbers with our own. Sites published with moss do not run it.
 
 If you turn on the analytics dashboard, your site's stats sync from our server to your device and are kept locally, so you can analyze them on your own machine.
 
@@ -46,13 +48,13 @@ If you turn on the analytics dashboard, your site's stats sync from our server t
 
 If moss hits an error, it can send a crash report to our own server so we can fix the bug. It's the only thing moss reports automatically, and it does not track how you use the app. We strip personal data: your IP isn't stored (we mask it before it reaches our error tracker) and file paths are scrubbed. You can turn this off any time in **moss → Settings → Crash reporting**, and we delete crash reports after 90 days.
 
-![[crash report.gif|Toggle crash report]]
+![[crash report.mp4|loop|100%|Toggle crash report]]
 
 ## Support logs
 
 If you use **"Send Logs"** to report a problem, moss uploads your recent app log (scrubbed of personal data) and gives you a log number to quote when you tell us about the error, so we can fix it quickly. We delete these logs after 30 days.
 
-![[send logs.gif|Send logs manually]]
+![[send logs.mp4|loop|100%|Send logs manually]]
 
 
 ## Where your data is processed

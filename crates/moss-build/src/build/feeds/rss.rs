@@ -274,7 +274,8 @@ pub fn generate_rss_feed(
         // one document holding every article), rewrite internal links with
         // UTM, add optional tracking pixel.
         let scope = footnote_scope(&article.url_path, index, &mut used_scopes);
-        let scoped_html = scope_footnote_anchors(&article.html_content, &scope);
+        let body = crate::build::feeds::calendar::strip_links_paragraphs(&article.html_content);
+        let scoped_html = scope_footnote_anchors(&body, &scope);
         let mut description_html = add_utm_to_internal_links(&scoped_html, site_url);
 
         // The website HTML inlines typeset math as <svg>, which

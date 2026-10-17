@@ -422,7 +422,7 @@ pub fn materialize_input(path: &Path, deadline: Duration) -> std::io::Result<()>
 /// is `Err`, after one bounded materialize wait.
 ///
 /// The distinction is load-bearing wherever the caller's *next* move is a
-/// write. `.moss/data/redirects.json` is a site's whole rename history, and
+/// write. `.moss/redirects.json` is a site's whole rename history, and
 /// the caller that reads it merges the result and writes it back: an unreadable
 /// file read as "empty" does not degrade the build, it **erases the history**.
 /// Same shape at `.moss/.gitignore` (an "empty" read would drop the user's own
@@ -489,7 +489,7 @@ pub fn probe_input(path: &Path) -> std::io::Result<Found> {
 }
 
 /// [`probe_input`] for the callers that want text. `Ok(None)` is `InCloud`.
-fn probe_input_to_string(path: &Path) -> std::io::Result<Option<String>> {
+pub(crate) fn probe_input_to_string(path: &Path) -> std::io::Result<Option<String>> {
     match probe_input(path)? {
         Found::Bytes(bytes) => String::from_utf8(bytes)
             .map(Some)

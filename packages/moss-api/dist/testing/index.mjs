@@ -585,7 +585,7 @@ function setupMockTauri(options) {
 				return null;
 			}
 			case "open_action_panel": {
-				const url = payload?.url;
+				const url = payload?.url ?? null;
 				browserTracker.openedUrls.push(url);
 				browserTracker.isOpen = true;
 				return null;

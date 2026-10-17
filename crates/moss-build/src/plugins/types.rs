@@ -33,8 +33,11 @@ pub struct PluginManifest {
     /// Plugin author
     pub author: Option<String>,
 
-    /// Entry point file (relative to plugin directory)
-    pub entry: String,
+    /// Entry point file (relative to plugin directory). Absent only for a
+    /// plugin that declares nothing but `contributes.derivations` and so has
+    /// no JavaScript to run.
+    #[serde(default)]
+    pub entry: Option<String>,
 
     /// Plugin capabilities - which hooks this plugin implements
     /// Each capability maps to a hook function with the same name
@@ -203,18 +206,6 @@ pub enum Capability {
     /// Hook function: `syndicate(ctx)`
     Syndicate,
 
-    /// Marks a channel that imports content from an external source into the
-    /// project folder (e.g., Matters profile, RSS feed, URL scrape). Not
-    /// independently dispatched — a plugin that declares this still
-    /// implements `process(ctx)`, which is what actually runs; `Import`
-    /// exists for onboarding-catalog filtering (see `OpenPluginsView`) and
-    /// for `fold_contributions_into_capabilities` to derive from a legacy
-    /// manifest's `channel.imports`.
-    ///
-    /// Added 2026-05-28 alongside `PluginHook::Import` to support the
-    /// onboarding flow's "Plugin" card.
-    Import,
-
     /// Plugin requires a user login to operate and exposes a standalone
     /// `login` export that moss invokes via `connect_account`.
     ///
@@ -239,7 +230,6 @@ impl Capability {
             Capability::Process => "process",
             Capability::Deploy => "deploy",
             Capability::Syndicate => "syndicate",
-            Capability::Import => "import",
             // Login is dispatched out-of-band via connect_account; it has no
             // named build hook. Return the export name for informational use.
             Capability::Login => "login",
@@ -265,8 +255,6 @@ impl Capability {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
 pub enum PluginHook {
-    /// Import content from an external source.
-    Import,
     /// Publish content to the active distribution surface.
     Publish,
     /// Deploy the built site to a hosting platform.
@@ -282,7 +270,6 @@ impl PluginHook {
     /// the watchdog activity map. Mirrors `Capability::hook_name()`.
     pub fn hook_name(&self) -> &'static str {
         match self {
-            PluginHook::Import => "import",
             PluginHook::Publish => "publish",
             PluginHook::Deploy => "deploy",
             PluginHook::Syndicate => "syndicate",

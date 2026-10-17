@@ -209,6 +209,22 @@ pub fn render_blocks<H: RenderHooks + ?Sized>(hooks: &H, out: &mut String, block
     render_blocks_with(hooks, out, blocks, &mut FootnoteCtx::default());
 }
 
+/// [`render_blocks`] for a fragment whose blocks have positions (`metas`
+/// parallel to `blocks`; a missing entry renders unannotated), so a hero
+/// overlay or grid cell keeps its `data-source-line`s.
+pub fn render_blocks_with_meta<H: RenderHooks + ?Sized>(
+    hooks: &H,
+    out: &mut String,
+    blocks: &[Block],
+    metas: &[BlockMeta],
+) {
+    let mut fnotes = FootnoteCtx::default();
+    for (i, block) in blocks.iter().enumerate() {
+        let meta = metas.get(i).copied().unwrap_or_default();
+        render_block(hooks, out, block, &meta, &mut fnotes);
+    }
+}
+
 /// The in-document nested-block walk: same as [`render_blocks`] but keeps
 /// the caller's footnote state, so a marker inside a blockquote, callout,
 /// multi-paragraph list item or link card is numbered like any other.
@@ -226,6 +242,15 @@ pub(super) fn render_blocks_with<H: RenderHooks + ?Sized>(
         // for now; the iframe-bridge consumer picks the outer wrapper
         // when no inner annotation exists.
         render_block(hooks, out, block, &BlockMeta::default(), fnotes);
+    }
+}
+
+/// The inlines of a block list that is one bare paragraph: a tight list item or
+/// definition, which renders without a `<p>`.
+fn tight_inlines(blocks: &[Block]) -> Option<&[Inline]> {
+    match blocks {
+        [Block::Paragraph(inlines)] => Some(inlines),
+        _ => None,
     }
 }
 
@@ -343,8 +368,9 @@ fn render_block<H: RenderHooks + ?Sized>(
                 let mut item = String::new();
                 // Single-paragraph items render their inline content inline
                 // (no extra <p>). Mirrors pulldown-cmark's "tight list" output.
-                let tight = matches!(item_blocks.as_slice(), [Block::Paragraph(_)]);
-                if let [Block::Paragraph(inlines)] = item_blocks.as_slice() {
+                let inline_body = tight_inlines(item_blocks);
+                let tight = inline_body.is_some();
+                if let Some(inlines) = inline_body {
                     render_inlines(hooks, &mut item, inlines, fnotes);
                 } else {
                     render_blocks_with(hooks, &mut item, item_blocks, fnotes);
@@ -501,6 +527,28 @@ fn render_block<H: RenderHooks + ?Sized>(
                 out.push_str(&body);
                 out.push_str("</blockquote>\n");
             }
+        }
+        Block::DefinitionList(children) => {
+            out.push_str("<dl");
+            push_source_line_attr(out, meta.source_line);
+            out.push_str(">\n");
+            render_blocks_with(hooks, out, children, fnotes);
+            out.push_str("</dl>\n");
+        }
+        Block::DefinitionTitle(children) => {
+            out.push_str("<dt>");
+            render_inlines(hooks, out, children, fnotes);
+            out.push_str("</dt>\n");
+        }
+        Block::DefinitionDefinition(children) => {
+            out.push_str("<dd>");
+            if let Some(inlines) = tight_inlines(children) {
+                render_inlines(hooks, out, inlines, fnotes);
+            } else {
+                out.push('\n');
+                render_blocks_with(hooks, out, children, fnotes);
+            }
+            out.push_str("</dd>\n");
         }
         Block::Shortcode(sc) => {
             hooks.render_shortcode(out, sc, meta.source_line);
@@ -751,6 +799,15 @@ fn push_source_line_attr(out: &mut String, source_line: Option<usize>) {
         // returns Result. Keep this honest.
         let _ = write!(out, r#" data-source-line="{}""#, n);
     }
+}
+
+/// Render a run of inline markdown on its own, outside any document: a hero
+/// caption. Footnote markers in it are not numbered, because a caption has no
+/// endnote section of its own.
+pub fn render_inlines_html<H: RenderHooks + ?Sized>(hooks: &H, inlines: &[Inline]) -> String {
+    let mut out = String::new();
+    render_inlines(hooks, &mut out, inlines, &mut FootnoteCtx::default());
+    out
 }
 
 pub(super) fn render_inlines<H: RenderHooks + ?Sized>(

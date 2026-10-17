@@ -345,8 +345,8 @@ pub fn remove_output_dir_all(dir: &Path) -> io::Result<()> {
 
 /// A scratch directory under `cache/tmp` that one encode run or image batch
 /// owns, removed when the owner drops it. Runs used to share `cache/tmp`, and
-/// each new video run wiped it on entry — taking the temps and two-pass logs of
-/// an image batch, or of the run it had just joined, mid-write.
+/// each new video run wiped it on entry — taking the temps of an image batch,
+/// or of the run it had just joined, mid-write.
 pub struct ScratchDir(PathBuf);
 
 impl ScratchDir {

@@ -117,7 +117,8 @@ pub struct BuiltinField {
     /// entry can name. `false` for every other field. Schema-derived rather
     /// than inferred from `one_of_members` identity — `tags` has no
     /// `one_of_members` at all, so a predicate keyed on that would silently
-    /// exclude it. Read by `name_list_fields()`.
+    /// exclude it. A site's name-list set adds its declared fields on top
+    /// (`build::terms::declared_name_list_fields`).
     pub name_list: bool,
     /// Whether this field is a term-page claim (`author_page`, `tag_page`,
     /// `editor_page`, `jury_page`, `place_page`): a page claiming the term
@@ -154,6 +155,22 @@ const FIELD_DEFAULTS: BuiltinField = BuiltinField {
 /// Union members for `children`: a boolean toggle OR a single wikilink/path
 /// pointing at the folder whose articles to render. Materialized into
 /// `FieldDefinition::one_of` by `builtin_schema()`.
+const BREADCRUMB_MEMBERS: &[BuiltinField] = &[
+    BuiltinField {
+        name: "",
+        field_type: FieldType::Boolean,
+        widget: Widget::Checkbox,
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "",
+        field_type: FieldType::String,
+        widget: Widget::Select,
+        enum_values: Some(&["label"]),
+        ..FIELD_DEFAULTS
+    },
+];
+
 const CHILDREN_MEMBERS: &[BuiltinField] = &[
     BuiltinField {
         name: "",
@@ -165,6 +182,23 @@ const CHILDREN_MEMBERS: &[BuiltinField] = &[
         name: "",
         field_type: FieldType::String,
         widget: Widget::WikilinkPicker,
+        ..FIELD_DEFAULTS
+    },
+];
+
+/// Union members for `children_count`: `false` to hide the count, or the
+/// text to show instead.
+const CHILDREN_COUNT_MEMBERS: &[BuiltinField] = &[
+    BuiltinField {
+        name: "",
+        field_type: FieldType::Boolean,
+        widget: Widget::Checkbox,
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
         ..FIELD_DEFAULTS
     },
 ];
@@ -384,7 +418,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         widget: Widget::FilePicker,
         // Frequency=5, Importance=4 → score = 100 - (5*6 + 4*4) = 100 - 46 = 54
         score: 54,
-        description: "Cover image path",
+        description: "The page's listing picture: a path, or `false` for none. Listing and grid cards show it, and a folder home or a page that claims a name draws it beside its title; a leaf page does not draw it in its body. With no cover, listings use the page's own first picture (opening hero, else the first figure, gallery or grid-cell picture in the body)",
         label_key: "chip.cover.label",
         group: "This Page",
         file_kinds: Some(&[ExtKind::Image, ExtKind::Video, ExtKind::Iframe]),
@@ -727,11 +761,13 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
     },
     BuiltinField {
         name: "breadcrumb",
-        field_type: FieldType::Boolean,
-        widget: Widget::Checkbox,
+        field_type: FieldType::OneOf,
+        widget: Widget::Union,
+        one_of_members: Some(BREADCRUMB_MEMBERS),
         // Frequency=1, Importance=2 → score = 100 - (1*6 + 2*4) = 100 - 14 = 86
         score: 86,
-        description: "Home page: true turns breadcrumbs on for the whole site, false turns them off for it. Other pages: false hides them on this page only; true does nothing.",
+        description: "Breadcrumb style. Home page: true shows the trail in the header on every page, false hides it, and label hides the trail and shows each page's parent section as a small link above its title instead. Other pages: false hides the breadcrumb on this page only; true and label do nothing.",
+
         label_key: "chip.breadcrumb.label",
         group: "This Page",
         ..FIELD_DEFAULTS
@@ -760,6 +796,30 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "Page width: default (67ch) for prose, wide (80ch) for grids/tables, full (site max) for dashboards",
         label: Some("Width"),
         label_key: "chip.content_width.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "title_block",
+        field_type: FieldType::String,
+        widget: Widget::Select,
+        enum_values: Some(&["after-picture"]),
+        // Frequency=1, Importance=2 → score=86
+        score: 86,
+        description: "Where the title block (eyebrow, title, subtitle, date, byline, key figures, facts) goes: after-picture puts it under the body's leading picture. Absent keeps it first. A folder sets it for its pages with cascade.",
+        label: Some("Title block"),
+        label_key: "chip.title_block.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "color",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        // Frequency=1, Importance=1 → score=90
+        score: 90,
+        description: "Section accent colour (`#rgb` or `#rrggbb`). Only a folder's home page reads it: the colour then applies to that page and every page under the folder, down to a nested folder that sets its own. Pages carry it as `--moss-section-color` on `<body>`, with the folder's name in `data-section`; no default style uses it",
+        label: Some("Section colour"),
         group: "This Page",
         ..FIELD_DEFAULTS
     },
@@ -798,6 +858,18 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "Cross-list this page in other folder listings",
         label: Some("Cross-list In"),
         label_key: "chip.also_in.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "inferred",
+        field_type: FieldType::Array,
+        widget: Widget::TagInput,
+        items_type: Some(FieldType::String),
+        score: 99,
+        description: "Fields this page takes from the files it embeds when it does not set them itself. `title` and `description` take the first embedded file's derived title and description; one written in the page always wins.",
+        label: Some("Inferred"),
+        label_key: "chip.inferred.label",
         group: "This Page",
         ..FIELD_DEFAULTS
     },
@@ -896,10 +968,10 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         field_type: FieldType::String,
         widget: Widget::Select,
         enum_values: Some(&["list", "summary", "grid"]),
-        default_json: Some("\"list\""),
+        default_json: None,
         // Frequency=3, Importance=3 → score=70
         score: 70,
-        description: "How child pages are rendered",
+        description: "How child pages are rendered. When absent, moss picks from the children: `summary` if most of them have a cover or a description (or all but three do), otherwise `list` if any child has a date, otherwise `grid`. An installed plugin can add styles of its own (its `contributes.listing_styles`); name one by its id",
         label: Some("Child Layout"),
         label_key: "chip.children_style.label",
         group: "Child Styles",
@@ -958,6 +1030,18 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "children_count",
+        field_type: FieldType::OneOf,
+        widget: Widget::Union,
+        one_of_members: Some(CHILDREN_COUNT_MEMBERS),
+        score: 88,
+        description: "What this listing's folder cards say they count. false hides the count; text replaces \"N articles\", with {n} standing for the number, e.g. \"{n} productions\". Put a singular form first, split by |, to use it when the number is 1 (the first | always splits; an empty form hides the count): \"{n} production|{n} productions\". Applies to the cards this page lists, not to the folder's own page.",
+        label: Some("Card Count"),
+        label_key: "chip.children_count.label",
+        group: "Child Styles",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "children_more",
         field_type: FieldType::String,
         widget: Widget::TextInput,
@@ -976,7 +1060,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         enum_values: Some(&["only"]),
         // Frequency=1, Importance=2 → score=86
         score: 87,
-        description: "Keep only pages with a cover. \"only\" — e.g. the home page of an artist's site lists the latest works that have a picture. Absent = no filter.",
+        description: "Keep only pages with a cover or a first picture. \"only\" — e.g. the home page of an artist's site lists the latest works that have a picture. Absent = no filter.",
         label: Some("Covers"),
         label_key: "chip.children_covers.label",
         group: "Child Styles",
@@ -1090,14 +1174,6 @@ pub fn asset_field_names() -> impl Iterator<Item = &'static str> {
         .map(|f| f.name)
 }
 
-/// Frontmatter fields that feed a term kind's derivation loop: `author`,
-/// `tags`, `editor`, `jury`. The SSOT `build::terms::term_kinds` filters a
-/// declared `[terms.<key>] fields = [...]` list through this, so an
-/// unrecognized name is a diagnostic rather than a silent no-op.
-pub fn name_list_fields() -> impl Iterator<Item = &'static str> {
-    BUILTIN_FIELDS.iter().filter(|f| f.name_list).map(|f| f.name)
-}
-
 /// Frontmatter fields that are a term-page claim: `author_page`, `tag_page`,
 /// `editor_page`, `jury_page`, `place_page`. The schema-derived replacement
 /// for a hand-maintained claim-field list — `template.rs`'s instantiate-reset
@@ -1106,6 +1182,15 @@ pub fn name_list_fields() -> impl Iterator<Item = &'static str> {
 pub fn term_claim_fields() -> impl Iterator<Item = &'static str> {
     BUILTIN_FIELDS.iter().filter(|f| f.term_claim).map(|f| f.name)
 }
+
+/// The built-in field a declaration with this name redeclares, if any.
+pub fn builtin_field(name: &str) -> Option<&'static BuiltinField> {
+    BUILTIN_FIELDS.iter().find(|f| f.name == name)
+}
+
+/// The built-in fields a site may give a `place`: page text a reader would
+/// see. Plain-string plumbing such as `url`, `slot` or `uid` is not on it.
+pub const PLACEABLE_BUILTINS: &[&str] = &["description", "publisher"];
 
 #[cfg(test)]
 #[path = "schema_fields_tests.rs"]

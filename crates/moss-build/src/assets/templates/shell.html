@@ -20,7 +20,7 @@
     <link rel="stylesheet" href="{css_path}">{user_css_link}
     <!-- slot:head-end -->
 </head>
-<body{body_attrs}{content_width_attr}{typesetting_attr}><a class="moss-skip-link" href="#main-content">{skip_link_label}</a>{nav_island}
+<body{body_attrs}{content_width_attr}{typesetting_attr}><a class="moss-skip-link" data-pagefind-ignore href="#main-content">{skip_link_label}</a>{nav_island}
     <header>
         <nav class="main-nav container">
             <div class="nav-content">
@@ -34,12 +34,12 @@
 
     {footer}
 
-    <div class="moss-colophon">
+    <!-- moss:colophon --><div class="moss-colophon">
         <a href="https://mosspub.com" target="_blank" rel="noopener" aria-label="{colophon_text}" lang="{colophon_lang}">
             <span class="moss-colophon-icon moss-mark" aria-hidden="true">{moss_mark}</span>
             <span class="moss-colophon-label moss-wordmark">{colophon_name}</span>
         </a>
-    </div>
+    </div><!-- /moss:colophon -->
 
     {lightbox}<script src="{js_path}"{lazy_chunk_attrs}></script>{runtime_js_tags}{user_js_tag}
     <!-- slot:body-end -->

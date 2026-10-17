@@ -111,7 +111,7 @@ uuid = { version = "1.11", features = ["v4"] }
 walkdir = "2.4"
 whatlang = "0.18.0"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
-zip = "0.6"
+zip = { version = "9", default-features = false, features = ["deflate"] }
 tempfile = "3.0"
 ammonia = "4"
 async-trait = "0.1"

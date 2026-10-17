@@ -97,6 +97,7 @@ impl FolderIndexPlan {
     pub fn resolve(
         documents: &mut Vec<ParsedDocument>,
         project: &ProjectStructure,
+        verbatim_dirs: &HashSet<String>,
         dir_overrides: &HashMap<String, String>,
         terms: &TermIndex,
         input_evidence: &crate::build::cloud_ledger::InputEvidence,
@@ -140,12 +141,32 @@ impl FolderIndexPlan {
                 pending_only || authored_index_pending
             }).map(|(_, key)| key).collect();
 
+        // A folder whose `index.html` is copied verbatim already has its page.
+        let verbatim: HashSet<String> =
+            verbatim_dirs
+                .iter()
+                .filter_map(|dir| {
+                    let mapped = crate::build::scan::page_map::resolve_path_with_overrides(
+                        &format!("{dir}/index.html"),
+                        dir_overrides,
+                    );
+                    mapped.strip_suffix("/index.html").map(str::to_string)
+                })
+                .collect();
+
         let authored: HashSet<String> = documents.iter()
             .filter(|d| d.source_path.is_some())
             .filter_map(|d| d.url_path.strip_suffix("/index.html").map(str::to_string))
             .collect();
+        // Follows authored keys, not `translations`, so pairing by path never
+        // changes which pages are built. The breadcrumb's translation-root test
+        // (`trail_tail` in components/nav.rs) reads linked translations instead,
+        // because it only affects presentation.
+        let home_key = documents.iter()
+            .find(|d| d.url_path == "index.html")
+            .and_then(|d| d.translation_key.as_deref());
         let translation_roots: HashSet<&str> = documents.iter()
-            .filter(|d| d.translations.iter().any(|t| t.url_path == "index.html"))
+            .filter(|d| home_key.is_some() && d.translation_key.as_deref() == home_key)
             .filter_map(|d| d.url_path.strip_suffix("/index.html"))
             .filter(|root| !root.contains('/'))
             .collect();
@@ -156,7 +177,7 @@ impl FolderIndexPlan {
             let top = folder.split('/').next().unwrap_or(&folder);
             let empty_language = !has_children
                 && crate::i18n::path::resolve_language_from_folder(top).is_some();
-            (!authored.contains(&folder) && !suppressed.contains(&folder)
+            (!authored.contains(&folder) && !suppressed.contains(&folder) && !verbatim.contains(&folder)
                 && !empty_language && !translation_roots.contains(top))
                 .then_some(folder)
         }).collect();
@@ -167,6 +188,36 @@ impl FolderIndexPlan {
             FolderIndexEntry { folder, document_index }
         }).collect();
         Self { entries }
+    }
+}
+
+/// Report each page whose address is also the output path of a source `.html`
+/// file. The asset copy serves the page and drops the file, so one of them is
+/// lost: a build problem, not a quiet override.
+///
+/// A file named exactly in `[build].passthrough` replaces its page by the
+/// author's own declaration and is not reported.
+pub(super) fn report_verbatim_collisions(
+    documents: &[ParsedDocument],
+    project: &ProjectStructure,
+    dir_overrides: &HashMap<String, String>,
+) {
+    let (html_files, passthrough_roots) = (&project.html_files, &project.passthrough_roots);
+    let sources: HashMap<String, &str> = html_files
+        .iter()
+        .filter(|f| !passthrough_roots.contains(&f.path))
+        .map(|f| (crate::build::scan::page_map::resolve_path_with_overrides(&f.path, dir_overrides), f.path.as_str()))
+        .collect();
+    for doc in documents.iter().filter(|d| !d.slot_only) {
+        let Some(&file) = sources.get(&doc.url_path) else { continue };
+        let page = match &doc.source_path {
+            Some(source) => format!("`{source}`"),
+            None => "a generated folder page".to_string(),
+        };
+        crate::build::cli_output::log_warn_problem!(
+            "{page} and `{file}` are both published at {}: the page is served and the file is lost",
+            crate::build::served_path::served_address(&doc.url_path)
+        );
     }
 }
 

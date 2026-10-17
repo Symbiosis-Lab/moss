@@ -111,11 +111,10 @@ pub struct AssetsSettled {
 /// Fine-grained video conversion progress for real-time UI updates.
 ///
 /// Emitted during background video conversion to show per-video progress
-/// with phase information (analyzing vs encoding) and fraction complete.
+/// with the fraction complete.
 ///
 /// The overall_fraction formula for video `i` (0-based) of N total:
 ///   overall = (i + video_fraction) / N
-/// Pass 1 stays at fraction 0.0 (it's fast). Pass 2 streams 0.0 -> 1.0.
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
 pub struct VideoConversionProgress {
     /// Filename of the video being converted (e.g., "clip.mov")
@@ -124,7 +123,9 @@ pub struct VideoConversionProgress {
     pub current_video: u32,
     /// Total number of videos to convert
     pub total_videos: u32,
-    /// Conversion phase: "analyzing" | "encoding"
+    /// Conversion phase, always "encoding". Kept because the desktop app's
+    /// event contract carries it; the "analyzing" value it also handles was
+    /// the first pass of a two-pass encode that no longer exists.
     pub phase: String,
     /// Progress fraction within current video (0.0..1.0)
     pub video_fraction: f64,
@@ -711,21 +712,6 @@ mod tests {
     }
 
     #[test]
-    fn test_video_conversion_progress_analyzing_phase() {
-        let progress = VideoConversionProgress {
-            filename: "intro.mov".to_string(),
-            current_video: 1,
-            total_videos: 3,
-            phase: "analyzing".to_string(),
-            video_fraction: 0.0,
-            overall_fraction: 0.0,
-        };
-        assert_eq!(progress.phase, "analyzing");
-        assert_eq!(progress.video_fraction, 0.0);
-        assert_eq!(progress.overall_fraction, 0.0);
-    }
-
-    #[test]
     fn test_video_conversion_progress_overall_fraction_formula() {
         // For video i (0-based) of N total: overall = (i + video_fraction) / N
         let total: u32 = 4;
@@ -1163,6 +1149,25 @@ fn advisory_event(task: &str, advisories: Vec<Advisory>) -> Option<PipelineEvent
     })
 }
 
+/// One notice per folder the scan left out because nothing sits beneath it
+/// (`ProjectStructure::empty_folders`). An empty folder publishes no page, so
+/// an author who has just made one learns here why it is not on the site yet.
+pub fn make_empty_folder_advisory(folders: &[String]) -> Option<PipelineEvent> {
+    let advisories = folders
+        .iter()
+        .map(|folder| {
+            Advisory::for_source(
+                Scope::File,
+                Severity::ShippedDegraded,
+                folder,
+                crate::infra::app_advisory::fmt("empty_folder_not_published", &[("folder", folder)]),
+                Action::None,
+            )
+        })
+        .collect();
+    advisory_event("scan", advisories)
+}
+
 /// The other half of [`advisory_event`]: an explicit "this build's check ran
 /// and found nothing" signal for `task` — a `completed: true` tick with an
 /// EMPTY `advisories` vec, in place of `advisory_event`'s `None`.
@@ -1369,6 +1374,18 @@ pub fn make_duplicate_uid_advisory(
 mod route_tests {
     use super::*;
     use crate::advisory::{Action, Advisory, Scope, Severity};
+
+    #[test]
+    fn an_empty_folder_gets_a_notice_naming_it() {
+        assert!(make_empty_folder_advisory(&[]).is_none());
+        let Some(PipelineEvent::BackgroundProgress { advisories, .. }) = make_empty_folder_advisory(&["drafts".to_string()]) else {
+            panic!("an empty folder must produce a notice");
+        };
+        assert_eq!(advisories.len(), 1);
+        assert_eq!(advisories[0].item.as_deref(), Some("drafts"));
+        assert!(advisories[0].what.contains("drafts"), "{}", advisories[0].what);
+        assert_eq!(advisories[0].severity, Severity::ShippedDegraded);
+    }
 
     #[test]
     fn content_only_rebuild_births_zero_jobs() {

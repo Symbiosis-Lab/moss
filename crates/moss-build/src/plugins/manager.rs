@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
 pub mod engine_adapter;
+pub mod listing;
 mod hook_context;
 pub mod signal_route;
 
@@ -219,9 +220,12 @@ pub(crate) fn bundle_source_for_project(
         let plugin_dir = crate::plugins::plugin_dir(&project_path, plugin_name);
         let plugin = crate::plugins::discovery::load_plugin(&plugin_dir)
             .map_err(|e| format!("load plugin '{plugin_name}': {e}"))?;
-        let entry = plugin.path.join(&plugin.manifest.entry);
-        // Sync ~100 KB read inside an async dispatch; acceptable, noted.
-        let bundle = std::fs::read_to_string(&entry)
+        let Some(entry) = &plugin.manifest.entry else {
+            return Err(format!("plugin '{plugin_name}' has no script to run"));
+        };
+        let entry = plugin.path.join(entry);
+        // Sync ~100 KB read inside an async dispatch; acceptable, noted. Can wait up to 15 s for a cloud download.
+        let bundle = crate::build::cloud_readiness::read_to_string_with_materialize_wait(&entry, crate::build::cloud_readiness::INTERACTIVE_DEADLINE)
             .map_err(|e| format!("read bundle {}: {e}", entry.display()))?;
         let global_name = plugin.manifest.global_name.clone()
             .unwrap_or_else(|| derive_global_name(plugin_name));
@@ -794,7 +798,7 @@ impl PluginManager {
     ) -> Result<Option<HookResult>, String> {
         match self.run_hook(plugin, hook_name, context_json, &self.host.state.hooks).await {
             HookRun::NeverRan(e) => Err(e),
-            HookRun::Finished(result) => result,
+            HookRun::Finished(result) => result.map(|(hook_result, _)| hook_result),
         }
     }
 
@@ -881,7 +885,7 @@ impl PluginManager {
                     break match completion {
                         Ok(completion_result) => {
                             if completion_result.success {
-                                Ok(completion_result.result)
+                                Ok((completion_result.result, completion_result.returned))
                             } else {
                                 // Prefer .error (set for throw-path failures), then fall
                                 // back to .result.message (set when success:false is
@@ -958,7 +962,7 @@ impl PluginManager {
 /// success or timeout) → complete, so waiters share the result.
 enum HookRun {
     NeverRan(String),
-    Finished(Result<Option<HookResult>, String>),
+    Finished(Result<(Option<HookResult>, Option<serde_json::Value>), String>),
 }
 
 /// Derive the JavaScript global name from a plugin name.
@@ -1027,6 +1031,7 @@ mod tests {
             success: false,
             error: Some("network timeout".to_string()),
             result: None,
+            returned: None,
         };
         let msg = with_error.error
             .or_else(|| with_error.result.as_ref().and_then(|r| r.message.clone()))
@@ -1046,6 +1051,7 @@ mod tests {
             success: false,
             error: None,
             result: Some(hook_result),
+            returned: None,
         };
         let msg = with_message.error
             .or_else(|| with_message.result.as_ref().and_then(|r| r.message.clone()))
@@ -1057,6 +1063,7 @@ mod tests {
             success: false,
             error: None,
             result: None,
+            returned: None,
         };
         let msg = neither.error
             .or_else(|| neither.result.as_ref().and_then(|r| r.message.clone()))
@@ -1150,7 +1157,7 @@ mod tests {
             manifest: PluginManifest {
                 name: name.to_string(),
                 version: "1.0.0".to_string(),
-                entry: "main.js".to_string(),
+                entry: Some("main.js".to_string()),
                 capabilities: vec![Capability::Syndicate],
                 contributes: Some(PluginContributes {
                     frontmatter: None,
@@ -1159,6 +1166,8 @@ mod tests {
                     processor: None,
                     jobs: Some(ContributedJobs { descriptors }),
                     stack: None,
+                    derivations: None,
+                    listing_styles: None,
                 }),
                 ..Default::default()
             },

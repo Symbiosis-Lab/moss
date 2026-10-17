@@ -8,13 +8,14 @@ fn all_on() -> SiteAssets {
         heading_anchors: true,
         math: true,
         media_pages: true,
-        galleries: true,
+        viewer: true,
         search: true,
         vertical: true,
         has_footnotes: true,
         scroll_rows: true,
         video_ladder: true,
         places_explorer: true,
+        field_places: true,
     }
 }
 
@@ -119,7 +120,7 @@ fn each_gate_reads_a_distinct_fact() {
         ("math-copy", |a| a.math = true),
         ("search", |a| a.search = true),
         ("fullscreen", |a| a.media_pages = true),
-        ("fullscreen", |a| a.galleries = true),
+        ("fullscreen", |a| a.viewer = true),
     ];
     for (name, set) in fields {
         let mut assets = SiteAssets::default();
@@ -308,4 +309,25 @@ fn shell_tags_omit_what_the_gates_turn_off() {
 fn asking_for_a_tag_on_the_lazy_chunk_panics() {
     let resolver = crate::build::assets::paths::PathResolver::new();
     let _ = ScriptAssets::resolve().tag("share-card", &all_on(), &resolver);
+}
+
+/// `isInProse` treats a link inside any listed container as chrome, so every
+/// class a renderer wraps links in must be listed, or a card opens over it.
+#[test]
+fn link_preview_not_prose_lists_each_component_class() {
+    let src = include_str!("../../js-src/site/link-preview.ts");
+    let start = src.find("const NOT_PROSE").expect("NOT_PROSE is declared");
+    let body = &src[start..];
+    let body = &body[..body.find(';').expect("NOT_PROSE ends")];
+    let selectors: BTreeSet<&str> = body
+        .split(|c: char| matches!(c, '"' | ',' | ' ' | '\n' | '+'))
+        .filter(|s| !s.is_empty())
+        .collect();
+    for class in [
+        "moss-hero", "moss-embed-figure", "moss-cards", "moss-card", "moss-card-grid",
+        "moss-card-list", "moss-card-row", "moss-grid", "moss-credit", "moss-series-nav", "moss-byline",
+    ] {
+        let selector = format!(".{class}");
+        assert!(selectors.contains(selector.as_str()), "{selector} is missing from NOT_PROSE");
+    }
 }

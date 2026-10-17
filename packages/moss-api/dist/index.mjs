@@ -247,7 +247,7 @@ async function invokeLifecycle(pluginName, hook, trigger, taskId, lifecycle) {
 *
 * @example
 * const task = await startTask("Importing 42 articles", {
-*   hook: "import",
+*   hook: "process",
 *   trigger: "onboarding_flow",
 * });
 * for (let i = 0; i < articles.length; i++) {
@@ -258,7 +258,7 @@ async function invokeLifecycle(pluginName, hook, trigger, taskId, lifecycle) {
 * @category Messaging
 */
 async function startTask(label, options = {}) {
-	const hook = options.hook ?? "import";
+	const hook = options.hook ?? "process";
 	const trigger = options.trigger ?? "background";
 	const hasProgress = options.hasProgress ?? true;
 	const cancellable = options.cancellable ?? false;
@@ -376,9 +376,14 @@ function injectBridgeScript(html) {
 /**
 * Open a URL in the action panel
 *
+* With a URL, the panel opens (or navigates in place) to that page. With no URL,
+* the panel opens in its loading state, showing the app's own loader, until a
+* later `openBrowser(url)` call loads a page. The returned handle is the same
+* either way.
+*
 * Returns a BrowserHandle that can be used to detect when the window is closed.
 *
-* @param url - The URL to open
+* @param url - The URL to open. Omit it to open the panel in its loading state.
 * @returns BrowserHandle with a `closed` promise
 *
 * @example
@@ -399,7 +404,7 @@ function injectBridgeScript(html) {
 */
 async function openBrowser(url) {
 	await getTauriCore().invoke("open_action_panel", {
-		url,
+		url: url ?? null,
 		belowTitlebar: true
 	});
 	const closed = new Promise((resolve) => {

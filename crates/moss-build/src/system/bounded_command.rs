@@ -26,22 +26,49 @@ pub const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 /// Drain a child pipe on its own thread, handing bytes over in chunks rather
 /// than as one `read_to_end` at the end: the read may never reach EOF (see
 /// [`run_bounded_with_tick`]), and chunks are what survives that.
+///
+/// With a `cap`, the thread stops reading once the child has written more than
+/// that many bytes, raises `overflow` and drops the pipe, so memory holds at
+/// the cap whatever the child prints and the waiting loop can stop the child.
 fn drain_pipe<R: std::io::Read + Send + 'static>(
     pipe: Option<R>,
+    cap: Option<usize>,
+    overflow: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> std::sync::mpsc::Receiver<Vec<u8>> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let Some(mut pipe) = pipe else { return };
         let mut buf = [0u8; 8192];
+        let mut total = 0usize;
         // Ends on EOF, on a read error, and on the receiver going away — the
         // last is what lets an abandoned thread exit instead of leaking.
         while let Ok(n) = pipe.read(&mut buf) {
+            total += n;
+            if cap.is_some_and(|cap| total > cap) {
+                overflow.store(true, std::sync::atomic::Ordering::SeqCst);
+                return;
+            }
             if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
                 return;
             }
         }
     });
     rx
+}
+
+/// Byte limits on what a child may print. `None` is unbounded.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OutputCaps {
+    pub stdout: Option<usize>,
+    pub stderr: Option<usize>,
+}
+
+fn human_bytes(n: usize) -> String {
+    match n {
+        n if n >= 1024 * 1024 && n % (1024 * 1024) == 0 => format!("{} MiB", n / (1024 * 1024)),
+        n if n >= 1024 && n % 1024 == 0 => format!("{} KiB", n / 1024),
+        n => format!("{n} bytes"),
+    }
 }
 
 /// What a drain thread has handed over, waiting at most [`STOP_GRACE`] for it
@@ -262,6 +289,34 @@ pub fn run_bounded_with_tick(
     cmd: &mut std::process::Command,
     timeout: std::time::Duration,
     what: &str,
+    tick: impl FnMut(),
+) -> Result<BoundedOutput, String> {
+    run_bounded_feeding(cmd, None, timeout, what, tick)
+}
+
+/// [`run_bounded_with_tick`] for a child that reads a request on stdin: the
+/// bytes are written on their own thread and stdin is then closed, so a child
+/// that never reads cannot stall the deadline and one that reads to EOF sees
+/// the end of its input. `None` keeps stdin at `/dev/null`.
+pub fn run_bounded_feeding(
+    cmd: &mut std::process::Command,
+    stdin_bytes: Option<Vec<u8>>,
+    timeout: std::time::Duration,
+    what: &str,
+    tick: impl FnMut(),
+) -> Result<BoundedOutput, String> {
+    run_bounded_capped(cmd, stdin_bytes, timeout, what, OutputCaps::default(), tick)
+}
+
+/// [`run_bounded_feeding`] that also stops the child, with its whole process
+/// group, as soon as it prints more than `caps` allows. A child that talks
+/// without end otherwise fills memory for as long as its deadline lasts.
+pub fn run_bounded_capped(
+    cmd: &mut std::process::Command,
+    stdin_bytes: Option<Vec<u8>>,
+    timeout: std::time::Duration,
+    what: &str,
+    caps: OutputCaps,
     mut tick: impl FnMut(),
 ) -> Result<BoundedOutput, String> {
     #[cfg(unix)]
@@ -272,17 +327,40 @@ pub fn run_bounded_with_tick(
         cmd.process_group(0);
     }
     let mut child = cmd
-        .stdin(std::process::Stdio::null())
+        .stdin(if stdin_bytes.is_some() {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        })
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| format!("failed to run {what}: {e}"))?;
 
-    let out = drain_pipe(child.stdout.take());
-    let err = drain_pipe(child.stderr.take());
+    if let (Some(bytes), Some(mut stdin)) = (stdin_bytes, child.stdin.take()) {
+        // A child that exits without reading ends this with a broken pipe,
+        // which is its answer to the request, not a failure of ours.
+        std::thread::spawn(move || {
+            use std::io::Write;
+            let _ = stdin.write_all(&bytes);
+        });
+    }
+
+    let out_over = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let err_over = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let out = drain_pipe(child.stdout.take(), caps.stdout, out_over.clone());
+    let err = drain_pipe(child.stderr.take(), caps.stderr, err_over.clone());
 
     let deadline = std::time::Instant::now() + timeout;
     let stopped = loop {
+        let over = |flag: &std::sync::atomic::AtomicBool, stream: &str, cap: Option<usize>| {
+            flag.load(std::sync::atomic::Ordering::SeqCst).then(|| {
+                format!("{what} wrote more than {} to {stream} and was stopped", human_bytes(cap.unwrap_or(0)))
+            })
+        };
+        if let Some(msg) = over(&out_over, "stdout", caps.stdout).or_else(|| over(&err_over, "stderr", caps.stderr)) {
+            break Err(msg);
+        }
         match child.try_wait() {
             Ok(Some(status)) => break Ok(status),
             // A `try_wait` that errors leaves a child nobody is waiting on;
@@ -306,11 +384,17 @@ pub fn run_bounded_with_tick(
         // The child is gone, but its pipes may not be: collection is bounded
         // on the success path too, because a background grandchild holding
         // them open is the ordinary case, not the failure case.
-        Ok(status) => Ok(BoundedOutput {
-            status,
-            stdout: collect_drained(&out),
-            stderr: collect_drained(&err),
-        }),
+        Ok(status) => {
+            let (stdout, stderr) = (collect_drained(&out), collect_drained(&err));
+            // The cap can be crossed by what the child left in the pipe as it
+            // exited; the check above would not have seen it yet.
+            for (flag, stream, cap) in [(&out_over, "stdout", caps.stdout), (&err_over, "stderr", caps.stderr)] {
+                if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err(format!("{what} wrote more than {} to {stream}", human_bytes(cap.unwrap_or(0))));
+                }
+            }
+            Ok(BoundedOutput { status, stdout, stderr })
+        }
         Err(msg) => {
             stop_process_group(&mut child);
             // The receivers drop with this frame, which is what ends the drain
@@ -364,6 +448,37 @@ mod tests {
         assert_eq!(out.stdout.len(), 1_000_000, "stdout drained in full");
         assert_eq!(out.stderr.len(), 200_000, "stderr drained too");
         assert_eq!(out.status.code(), Some(3), "the real exit status survives");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_child_that_prints_past_its_cap_is_stopped_long_before_its_deadline() {
+        // 100 MB on stdout against a 64 KiB cap, and a long deadline: only the
+        // cap can end this quickly, and what was read stays under it.
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg("-c").arg("dd if=/dev/zero bs=1000 count=100000 2>/dev/null");
+        let caps = OutputCaps { stdout: Some(64 * 1024), stderr: None };
+        let started = std::time::Instant::now();
+        let err = run_bounded_capped(&mut cmd, None, std::time::Duration::from_secs(120), "talker", caps, || {})
+            .expect_err("output past the cap is a failure");
+        assert!(err.contains("more than 64 KiB to stdout"), "{err}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(20), "{:?}", started.elapsed());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn stderr_has_its_own_cap_and_output_under_the_caps_is_untouched() {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg("-c").arg("dd if=/dev/zero bs=1000 count=2000 >&2 2>/dev/null");
+        let caps = OutputCaps { stdout: Some(1024), stderr: Some(100_000) };
+        let err = run_bounded_capped(&mut cmd, None, std::time::Duration::from_secs(60), "talker", caps, || {})
+            .expect_err("stderr past its cap is a failure");
+        assert!(err.contains("to stderr"), "{err}");
+
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg("-c").arg("echo hi; echo oops >&2");
+        let out = run_bounded_capped(&mut cmd, None, std::time::Duration::from_secs(60), "quiet", caps, || {}).unwrap();
+        assert_eq!((out.stdout.trim(), out.stderr.trim()), ("hi", "oops"));
     }
 
     #[test]
@@ -542,5 +657,35 @@ mod tests {
         let out = run_bounded(&mut cmd, std::time::Duration::from_secs(30), "prompting child")
             .expect("must not hang waiting for input");
         assert_eq!(out.stdout.trim(), "got:[]");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_fed_child_reads_its_request_to_eof_and_a_child_that_ignores_it_still_finishes() {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg("-c").arg("cat");
+        let out = run_bounded_feeding(
+            &mut cmd,
+            Some(b"{\"path\":\"/x\"}".to_vec()),
+            std::time::Duration::from_secs(30),
+            "echo",
+            || {},
+        )
+        .expect("cat ends when stdin closes");
+        assert_eq!(out.stdout, "{\"path\":\"/x\"}");
+
+        // 1 MiB overflows the pipe buffer; a child that never reads must not
+        // leave the writer, or us, waiting.
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg("-c").arg("echo done");
+        let out = run_bounded_feeding(
+            &mut cmd,
+            Some(vec![b'x'; 1 << 20]),
+            std::time::Duration::from_secs(30),
+            "deaf",
+            || {},
+        )
+        .expect("a child that ignores stdin is not stalled by it");
+        assert_eq!(out.stdout.trim(), "done");
     }
 }

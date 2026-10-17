@@ -1758,3 +1758,136 @@ fn a_link_to_a_redirect_source_is_left_alone() {
     do_move(&root, "events.md", "archive/events.md");
     assert_eq!(r(&root, "index.md"), "[a](/old-events/) [b](/old-events)\n");
 }
+
+// ── Links that name another host ─────────────────────────────────────────
+
+#[test]
+fn external_link_whose_path_tail_matches_a_moved_page_is_left_byte_identical() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "events/2019/11/20.md", "# Show\n");
+    w(root, "events/2019/11/notes.md", "[Near](./20.md)\n");
+    w(root, "index.md", "[Tickets](https://tickets.example.org/events/2026/11/20) and [Root](/events/2019/11/20/)\n");
+    fs::create_dir_all(root.join("events/2019-2020")).unwrap();
+
+    do_move(root, "events/2019/11/20.md", "events/2019-2020/2019-11-20.md");
+
+    let index = r(root, "index.md");
+    assert!(index.contains("[Tickets](https://tickets.example.org/events/2026/11/20)"), "{index}");
+    assert!(index.contains("[Root](/events/2019-2020/2019-11-20/)"), "{index}");
+    assert!(!r(root, "events/2019/11/notes.md").contains("(./20.md)"), "relative link must follow the file");
+}
+
+#[test]
+fn root_relative_path_that_only_ends_in_the_moved_page_is_not_rewritten() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "events/2019/11/20.md", "# Show\n");
+    w(root, "index.md", "[Gone](/archive/events/2019/11/20.md) and [Also](archive/events/2019/11/20.md)\n");
+    fs::create_dir_all(root.join("events/2019-2020")).unwrap();
+
+    do_move(root, "events/2019/11/20.md", "events/2019-2020/2019-11-20.md");
+
+    assert_eq!(
+        r(root, "index.md"),
+        "[Gone](/archive/events/2019/11/20.md) and [Also](archive/events/2019/11/20.md)\n"
+    );
+}
+
+#[test]
+fn one_segment_external_link_is_left_byte_identical_when_a_moved_page_shares_its_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "events/2019/11/20.md", "# Show\n");
+    w(root, "index.md", "[Tickets](https://tickets.example.org/20)\n");
+    fs::create_dir_all(root.join("events/2019-2020")).unwrap();
+
+    do_move(root, "events/2019/11/20.md", "events/2019-2020/2019-11-20.md");
+
+    assert_eq!(r(root, "index.md"), "[Tickets](https://tickets.example.org/20)\n");
+}
+
+fn sorted(mut pairs: Vec<(String, String)>) -> Vec<(String, String)> {
+    pairs.sort();
+    pairs
+}
+
+fn pair(a: &str, b: &str) -> (String, String) {
+    (a.to_string(), b.to_string())
+}
+
+fn plan_for(root: &Path, old_rel: &str, new_rel: &str) -> RenamePlan {
+    let old = root.join(old_rel).to_string_lossy().to_string();
+    let new = root.join(new_rel).to_string_lossy().to_string();
+    plan_moves(root, &[(old, new)]).expect("plan")
+}
+
+#[test]
+fn plan_lists_a_single_file_move_as_one_pair() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(tmp.path()).unwrap();
+    w(&root, "a.md", "# A\n");
+    w(&root, "other.md", "# Other\n");
+
+    let plan = plan_for(&root, "a.md", "b.md");
+    assert_eq!(plan.file_moves, vec![pair("a.md", "b.md")]);
+}
+
+#[test]
+fn plan_lists_every_file_under_a_moved_folder_including_its_home_page() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(tmp.path()).unwrap();
+    w(&root, "posts/posts.md", "# Posts\n");
+    w(&root, "posts/first.md", "# First\n");
+    w(&root, "posts/deep/second.md", "# Second\n");
+    w(&root, "unrelated.md", "# Unrelated\n");
+
+    let plan = plan_for(&root, "posts", "essays");
+    assert_eq!(plan.moves.len(), 1);
+    assert_eq!(
+        sorted(plan.file_moves),
+        vec![
+            pair("posts/deep/second.md", "essays/deep/second.md"),
+            pair("posts/first.md", "essays/first.md"),
+            pair("posts/posts.md", "essays/essays.md"),
+        ]
+    );
+}
+
+#[test]
+fn undo_file_moves_reports_the_reverse_pairs_before_the_undo_runs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(tmp.path()).unwrap();
+    w(&root, "posts/posts.md", "# Posts\n");
+    w(&root, "posts/first.md", "# First\n");
+    w(&root, "posts/deep/second.md", "# Second\n");
+
+    let applied = do_move(&root, "posts", "essays");
+    let reverse = undo_file_moves(&root, &applied).expect("reverse pairs");
+    assert!(root.join("essays/essays.md").exists(), "nothing has been undone yet");
+    assert_eq!(
+        sorted(reverse),
+        vec![
+            pair("essays/deep/second.md", "posts/deep/second.md"),
+            pair("essays/essays.md", "posts/posts.md"),
+            pair("essays/first.md", "posts/first.md"),
+        ]
+    );
+
+    undo_applied(&root, &applied).expect("undo");
+    assert!(root.join("posts/posts.md").exists());
+}
+
+#[test]
+fn readme_in_an_app_folder_is_a_page_at_its_own_address_when_links_are_rewritten() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "app/index.html", "<!doctype html><p>app</p>");
+    w(root, "app/README.md", "# Readme\n");
+    w(root, "index.md", "[Readme](/app/readme/)\n");
+
+    do_move(root, "app/README.md", "app/guide.md");
+
+    let index = r(root, "index.md");
+    assert!(index.contains("[Readme](/app/guide/)"), "{index}");
+}

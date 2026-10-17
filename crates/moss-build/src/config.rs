@@ -59,6 +59,10 @@ use toml::Value;
 #[derive(Debug, Clone)]
 pub struct ConfigFile {
     root: toml::Table,
+    /// Keys of the tables whose written order matters, in the order the file
+    /// writes them, by dotted path (`terms`, `fields.kind.of`). `root` reads
+    /// tables back sorted by key, so this is the only record of that order.
+    key_orders: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 impl ConfigFile {
@@ -84,7 +88,7 @@ impl ConfigFile {
         if let Err(e) = crate::config::migrations::migrate_to_current(&mut table) {
             log::warn!(target: "config", "in-memory config migration failed, reading raw values: {e}");
         }
-        Ok(Self { root: table })
+        Ok(Self { root: table, key_orders: written_key_orders(text) })
     }
 
     /// The config of a project that has none — every lookup answers `None`.
@@ -96,6 +100,7 @@ impl ConfigFile {
     pub fn empty() -> Self {
         Self {
             root: toml::Table::new(),
+            key_orders: Default::default(),
         }
     }
 
@@ -200,9 +205,9 @@ impl ConfigFile {
     /// Every `[terms.<key>]` table, plus a built-in `RawKind` for each of
     /// `authors`/`tags` that NO declared table already used — the one
     /// unified config read `build::terms::term_kinds` turns into
-    /// `TermKind`s. Raw here: `fields` is not yet filtered through
-    /// `moss_core::schema_fields::name_list_fields()`, and `title` is not
-    /// yet resolved — both happen exactly once, in `term_kinds`, not here.
+    /// `TermKind`s. Raw here: `fields` is not yet checked against the
+    /// built-in schema, and `title` is not yet resolved — both happen exactly
+    /// once, in `term_kinds`, not here.
     ///
     /// A declared `[terms.authors]` or `[terms.tags]` table IS that kind —
     /// its own `fields` and `title` win outright, not just its own
@@ -239,7 +244,8 @@ impl ConfigFile {
                 let kind_type = table.get("type").and_then(|v| v.as_str()).map(str::to_string);
                 let explorer = table.get("explorer").and_then(|v| v.as_bool());
                 let line = table.get("line").and_then(|v| v.as_bool());
-                declared.push(RawKind { key: key.clone(), fields, title, kind_type, explorer, line });
+                let cards = table.get("cards").cloned();
+                declared.push(RawKind { key: key.clone(), fields, title, kind_type, explorer, line, cards });
             }
         }
         let declared_keys: std::collections::HashSet<&str> =
@@ -259,11 +265,32 @@ impl ConfigFile {
                 },
                 title: None,
                 kind_type: None,
-                explorer: None, line: None,
+                explorer: None, line: None, cards: None,
             });
         }
         kinds.extend(declared);
         kinds
+    }
+
+    /// The kinds whose `[terms.<key>]` block says `nav = true`, in the order
+    /// the file writes them, each with its explicit `title` and `weight` if it set them.
+    /// Whether a kind has a root page to link is decided later, from the terms
+    /// the site actually has (`TermIndex::nav_entries`).
+    pub fn terms_nav(&self) -> Vec<(String, Option<String>, Option<i32>)> {
+        let Some(terms) = self.root.get("terms").and_then(|v| v.as_table()) else { return Vec::new() };
+        let mut nav: Vec<(usize, String, Option<String>, Option<i32>)> = terms
+            .iter()
+            .filter_map(|(key, value)| {
+                let table = value.as_table()?;
+                table.get("nav")?.as_bool().filter(|on| *on)?;
+                let title = table.get("title").and_then(|v| v.as_str()).map(str::to_string);
+                let order = self.written_position("terms", key);
+                let weight = table.get("weight").and_then(|v| v.as_integer()).and_then(|w| i32::try_from(w).ok());
+                Some((order, key.clone(), title, weight))
+            })
+            .collect();
+        nav.sort();
+        nav.into_iter().map(|(_, key, title, weight)| (key, title, weight)).collect()
     }
 
     /// The `[redirects]` table: old address, new address, as the author wrote
@@ -288,6 +315,180 @@ impl ConfigFile {
         pairs
     }
 
+    /// `key` of `sub` as a list of strings; `table` names `sub` in a problem
+    /// (`fields.kind`). A non-list value is one problem and yields nothing; a
+    /// non-string item is one problem and is skipped.
+    fn string_list(sub: &toml::Table, key: &str, table: &str, problems: &mut Vec<String>) -> Vec<String> {
+        match sub.get(key) {
+            None => Vec::new(),
+            Some(Value::Array(items)) => items
+                .iter()
+                .filter_map(|item| match item.as_str() {
+                    Some(s) => Some(s.to_string()),
+                    None => {
+                        problems.push(format!("[{table}] `{key}` must hold strings; skipping {item}"));
+                        None
+                    }
+                })
+                .collect(),
+            Some(_) => {
+                problems.push(format!("[{table}] `{key}` must be a list of strings; ignoring it"));
+                Vec::new()
+            }
+        }
+    }
+
+    /// One choice's label: a string for every language, or a table of
+    /// `language tag = label`. `None` when the value is neither, or a table
+    /// holds a non-string.
+    fn choice_labels(label: &Value) -> Option<Vec<(String, String)>> {
+        match label {
+            Value::String(s) => Some(vec![("en".to_string(), s.clone())]),
+            Value::Table(by_lang) => by_lang
+                .iter()
+                .map(|(lang, l)| l.as_str().map(|l| (lang.clone(), l.to_string())))
+                .collect(),
+            _ => None,
+        }
+    }
+
+    /// Where `key` sits among the keys of the table at `path`, as the file
+    /// writes them; keys the file did not order come last.
+    fn written_position(&self, path: &str, key: &str) -> usize {
+        self.key_orders.get(path).and_then(|keys| keys.iter().position(|k| k == key)).unwrap_or(usize::MAX)
+    }
+
+    /// The `[fields.<name>]` declarations, and one problem string for each
+    /// table or key the build cannot use. The caller reports the problems once
+    /// per build. A declaration with a bad `place` or an unknown key is kept;
+    /// one with a bad type or a built-in name is dropped.
+    pub fn field_decls(&self) -> (Vec<moss_core::fields::FieldDecl>, Vec<String>) {
+        use moss_core::fields::{Choice, FieldDecl, FieldKind};
+        let mut decls = Vec::new();
+        let mut problems = Vec::new();
+        let Some(value) = self.root.get("fields") else {
+            return (decls, problems);
+        };
+        let Some(table) = value.as_table() else {
+            problems.push("[fields] must be a table of [fields.NAME] tables; ignoring it".to_string());
+            return (decls, problems);
+        };
+        let mut written: Vec<_> = table.iter().collect();
+        written.sort_by_key(|(name, _)| self.written_position("fields", name));
+        for (name, value) in written {
+            let Some(sub) = value.as_table() else {
+                problems.push(format!("[fields.{name}] must be a table; ignoring it"));
+                continue;
+            };
+            if moss_core::schema_fields::builtin_field(name).is_some() {
+                if !moss_core::schema_fields::PLACEABLE_BUILTINS.contains(&name.as_str()) {
+                    problems.push(format!(
+                        "[fields.{name}] is a moss field and cannot be redeclared; of moss's fields only {} can take a place",
+                        moss_core::schema_fields::PLACEABLE_BUILTINS.join(" and ")
+                    ));
+                    continue;
+                }
+                for key in sub.keys() {
+                    if !matches!(key.as_str(), "place" | "label") {
+                        problems.push(format!(
+                            "[fields.{name}] has \"{key}\"; built-in fields take only place and label"
+                        ));
+                    }
+                }
+                let place = Self::declared_place(sub, name, &mut problems);
+                let label = Self::declared_label(sub, name, &mut problems);
+                decls.push(FieldDecl { name: name.clone(), kind: FieldKind::Text, choices: Vec::new(), place, label, scope: Vec::new() });
+                continue;
+            }
+            let Some(type_name) = sub.get("type").and_then(|v| v.as_str()) else {
+                problems.push(format!("[fields.{name}] has no type; one of: {}", FieldKind::names().join(", ")));
+                continue;
+            };
+            let Some(kind) = FieldKind::from_name(type_name) else {
+                problems.push(format!(
+                    "[fields.{name}] has an unknown type \"{type_name}\"; one of: {}",
+                    FieldKind::names().join(", ")
+                ));
+                continue;
+            };
+            for key in sub.keys() {
+                if !matches!(key.as_str(), "type" | "of" | "place" | "label" | "in") {
+                    problems.push(format!("[fields.{name}] has an unknown key \"{key}\""));
+                }
+            }
+            let choices = match (kind, sub.get("of")) {
+                (FieldKind::Choice, None) => {
+                    problems.push(format!("[fields.{name}] is a choice and needs `of`, a list or a table of labels"));
+                    continue;
+                }
+                (FieldKind::Choice, Some(Value::Array(_))) => Self::string_list(sub, "of", &format!("fields.{name}"), &mut problems)
+                    .into_iter()
+                    .map(|v| Choice { value: v.clone(), labels: vec![("en".to_string(), v)] })
+                    .collect(),
+                (FieldKind::Choice, Some(Value::Table(values))) => {
+                    let path = format!("fields.{name}.of");
+                    let mut written: Vec<_> = values.iter().collect();
+                    written.sort_by_key(|(v, _)| self.written_position(&path, v));
+                    written
+                        .into_iter()
+                        .filter_map(|(v, label)| match Self::choice_labels(label) {
+                            Some(labels) => Some(Choice { value: v.clone(), labels }),
+                            None => {
+                                problems.push(format!(
+                                    "[fields.{name}] label for \"{v}\" must be a string or a table of language labels; skipping it"
+                                ));
+                                None
+                            }
+                        })
+                        .collect()
+                }
+                (FieldKind::Choice, Some(_)) => {
+                    problems.push(format!("[fields.{name}] `of` must be a list or a table of labels"));
+                    continue;
+                }
+                (_, Some(_)) => {
+                    problems.push(format!("[fields.{name}] has `of`, which only a choice takes; ignoring it"));
+                    Vec::new()
+                }
+                (_, None) => Vec::new(),
+            };
+            let place = Self::declared_place(sub, name, &mut problems);
+            let label = Self::declared_label(sub, name, &mut problems);
+            let scope = Self::string_list(sub, "in", &format!("fields.{name}"), &mut problems);
+            decls.push(FieldDecl { name: name.clone(), kind, choices, place, label, scope });
+        }
+        (decls, problems)
+    }
+
+    /// A declaration's `place`, when it names one. `none` and an absent key both mean no place.
+    fn declared_place(sub: &toml::Table, name: &str, problems: &mut Vec<String>) -> Option<moss_core::fields::Place> {
+        use moss_core::fields::{parse_place, place_names};
+        match sub.get("place").and_then(|v| v.as_str()) {
+            None | Some("none") => None,
+            Some(v) => match parse_place(v) {
+                Some(place) => Some(place),
+                None => {
+                    problems.push(format!(
+                        "[fields.{name}] has an unknown place \"{v}\"; one of: {}, none",
+                        place_names().join(", ")
+                    ));
+                    None
+                }
+            },
+        }
+    }
+
+    /// A declaration's `label`, as `(language tag, label)` pairs; empty when absent or malformed.
+    fn declared_label(sub: &toml::Table, name: &str, problems: &mut Vec<String>) -> Vec<(String, String)> {
+        match sub.get("label") {
+            None => Vec::new(),
+            Some(v) => Self::choice_labels(v).unwrap_or_else(|| {
+                problems.push(format!("[fields.{name}] `label` must be a string or a table of language labels; ignoring it"));
+                Vec::new()
+            }),
+        }
+    }
+
     /// A boolean field under `[terms]`, e.g. `author`, `tags`: the legacy,
     /// pre-kinds toggle `terms_kinds` folds into the two built-ins' `fields`.
     /// `None` means the key is absent, which is not the same as `false` —
@@ -309,8 +510,8 @@ pub struct RawKind {
     /// URL namespace / pseudo-folder prefix (`authors`, `tags`, or a
     /// declared key like `people`).
     pub key: String,
-    /// Frontmatter field names as configured, not yet checked against
-    /// `moss_core::schema_fields::name_list_fields()`.
+    /// Frontmatter field names as configured, not yet checked by
+    /// `build::terms::term_kinds`.
     pub fields: Vec<String>,
     /// Explicit `title` from the table, when the author set one. `None` for
     /// the two built-ins (their title comes from `i18n::term_root_title`)
@@ -330,6 +531,30 @@ pub struct RawKind {
     /// `[terms.<key>] line`, unvalidated and gated on `kind_type` the same
     /// way as `explorer`: `term_kinds` keeps it only for the place-typed kind.
     pub line: Option<bool>,
+    /// `[terms.<key>] cards`, unvalidated: the raw TOML value, so that
+    /// `build::terms::term_kinds` is the one place that reports a value that
+    /// is not a bool. `None` when the key is absent and for the two built-ins.
+    pub cards: Option<toml::Value>,
+}
+
+/// The written key order of `[terms]`, of `[fields]`, and of each `[fields.<name>]` table's
+/// `of`, read with `toml_edit`, which keeps the order `toml` discards.
+fn written_key_orders(text: &str) -> std::collections::BTreeMap<String, Vec<String>> {
+    let mut orders = std::collections::BTreeMap::new();
+    let Ok(doc) = text.parse::<toml_edit::Document>() else { return orders };
+    let keys = |t: &dyn toml_edit::TableLike| t.iter().map(|(k, _)| k.to_string()).collect::<Vec<_>>();
+    if let Some(terms) = doc.get("terms").and_then(|v| v.as_table_like()) {
+        orders.insert("terms".to_string(), keys(terms));
+    }
+    if let Some(fields) = doc.get("fields").and_then(|v| v.as_table_like()) {
+        orders.insert("fields".to_string(), keys(fields));
+        for (name, field) in fields.iter() {
+            if let Some(of) = field.as_table_like().and_then(|f| f.get("of")).and_then(|v| v.as_table_like()) {
+                orders.insert(format!("fields.{name}.of"), keys(of));
+            }
+        }
+    }
+    orders
 }
 
 #[cfg(test)]

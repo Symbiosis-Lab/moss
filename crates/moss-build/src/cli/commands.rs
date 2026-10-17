@@ -32,8 +32,8 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         },
         CliCommandInfo {
             name: "deploy",
-            args: "<folder> [--prebuilt=<dir>] [--site-id=<name>] [--allow-plugins] [--overwrite-newer] [--dry-run] [--accept-removals]",
-            description: "Build and deploy the site. Where it goes is the folder's to say: a prebuilt directory wins, then a `[hooks] deploy` plugin, otherwise moss hosting. A folder publishing for the first time needs `moss env <staging|production|local>` first, and then registers a site named after the folder (or --site-id) — a site ID cannot be un-minted, so moss will not pick one for a folder that never named an environment. A plugin that came with the folder and was never allowed in the moss app is refused unless --allow-plugins is passed, exactly as in `moss build`. A publish to moss hosting, --prebuilt included, is refused when the live site was published from another copy after this folder last published — deploying would undo that publish. Bring this folder up to date with that copy (for example, git pull) and deploy again, or pass --overwrite-newer to replace the live site anyway. A publish that would stop serving an address the site has served, for a reason other than you deleting its source (a moved page with no redirect, a generated file no longer produced), is refused with each address and its cause; add the redirect it shows under [redirects] in .moss/config.toml, or pass --accept-removals to accept losing exactly those addresses. Run with --dry-run first to see what a deploy would do: it builds exactly as a deploy builds, including any plugin the flags allow (the build may use the network as any build does: a plugin's requests, and link previews fetched from third-party sites), and prints the pages added, edited and deleted, the addresses that would go offline, the upload and remove counts measured against this folder's last publish record (unknown when there is none), and whether the publish check passes. It uploads nothing and records nothing, runs the checks a deploy makes locally (the folder has a site, the config is not from a newer moss), says when a deploy would register a site or create a signing key, exits 1 where those or the removed-address check would refuse the deploy, and says that it did not check what needs the server, such as whether another copy published since.",
+            args: "<folder> [--prebuilt=<dir>] [--site-id=<name>] [--email <address>] [--allow-plugins] [--overwrite-newer] [--dry-run] [--accept-removals]",
+            description: "Build and deploy the site. Where it goes is the folder's to say: a prebuilt directory wins, then a `[hooks] deploy` plugin, otherwise seta, Symbiosis Lab's hosting service. moss also publishes to any other target a deploy plugin reaches. A folder publishing for the first time needs `moss env <staging|production|local>` first, and then registers a site named after the folder (or --site-id) — a site ID cannot be un-minted, so moss will not pick one for a folder that never named an environment. A first publish is refused until this folder's key is linked to an account whose email has been confirmed; pass --email <address> to be sent a sign-in link, wait for it to be opened (up to 15 minutes), and continue. The address must be the account the site should belong to: a wrong one can leave this folder's key linked to the wrong account. No message is sent without --email. A plugin that came with the folder and was never allowed in the moss app is refused unless --allow-plugins is passed, exactly as in `moss build`. A publish to that hosting destination, --prebuilt included, is refused when the live site was published from another copy after this folder last published — deploying would undo that publish. Bring this folder up to date with that copy (for example, git pull) and deploy again, or pass --overwrite-newer to replace the live site anyway. A publish that would stop serving an address the site has served, for a reason other than you deleting its source (a moved page with no redirect, a generated file no longer produced), is refused with each address and its cause; add the redirect it shows under [redirects] in .moss/config.toml, or pass --accept-removals to accept losing exactly those addresses. Run with --dry-run first to see what a deploy would do: it builds exactly as a deploy builds, including any plugin the flags allow (the build may use the network as any build does: a plugin's requests, and link previews fetched from third-party sites), and prints the pages added, edited and deleted, the addresses that would go offline, the upload and remove counts measured against this folder's last publish record (unknown when there is none), and whether the publish check passes. It uploads nothing and records nothing, runs the checks a deploy makes locally (the folder has a site, the config is not from a newer moss), says when a deploy would register a site, create a signing key or need --email to verify the folder, exits 1 where those or the removed-address check would refuse the deploy, and says that it did not check what needs the server, such as whether another copy published since.",
         },
         CliCommandInfo {
             name: "preview",
@@ -58,7 +58,7 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         CliCommandInfo {
             name: "env",
             args: "<staging|production|local> <folder>  |  <folder>",
-            description: "Set or show the hosting environment (staging / production / local) for a project.",
+            description: "Set or show which seta environment (staging / production / local) a project publishes to.",
         },
         CliCommandInfo {
             name: "describe",
@@ -66,9 +66,24 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
             description: "Print the moss contract surface (tokens, components, custom properties, frontmatter, plugin hooks, slots, CLI). --json for machine-readable output. --css <selector> prints the default CSS rules mentioning that selector or custom property, with their enclosing media queries and the comments explaining them — what a theme override has to displace.",
         },
         CliCommandInfo {
+            name: "render",
+            args: "--json",
+            description: "Render standalone Markdown documents from newline-delimited JSON on stdin. Each {id, source} request returns {id, html, css}; malformed requests return an error and do not stop later lines. Input is limited to 8 MiB per line. Raw HTML is preserved in the returned HTML and must be sanitized by the embedding application before displaying untrusted documents.",
+        },
+        CliCommandInfo {
+            name: "tools",
+            args: "download <ffmpeg|git>",
+            description: "Download a command-line tool moss needs, into moss's own cache (~/.moss/bin). Running it is the consent: moss downloads nothing else without asking. The download is checked against a pinned SHA-256 before it is used. Exits 0 when the tool is available, 1 when the download or check fails.",
+        },
+        CliCommandInfo {
+            name: "root",
+            args: "<path> --json",
+            description: "Print the moss site that owns a path as {\"root\": string|null}. Uses the canonical .moss ownership check, stops at the home directory, and does not scan or change files.",
+        },
+        CliCommandInfo {
             name: "import",
-            args: "<url> [<folder>] [-r|--recursive]  |  --list <file> [<folder>] [-r|--recursive]",
-            description: "Import a URL (or batch of URLs) into a project folder as markdown.",
+            args: "<url> [<folder>] [-r|--recursive]  |  --list <file> [<folder>] [-r|--recursive]  |  <folder> [-r|--recursive] [--with <derivation-id>] [--allow-plugins]  |  --status [<site>] [--json] [--allow-plugins]",
+            description: "Import a URL (or batch of URLs) into a project folder as markdown. Given an existing folder instead, show the files in it that an installed plugin can turn into pages (for example documents): records the choice in .moss/config.toml and writes a page beside each file, never overwriting one; `--with` picks a derivation when several accept the folder. `-r`/`--recursive` covers the folder and every folder beneath it (hidden folders and `.moss` skipped): each folder holding files the derivation accepts and with no decision yet is shown and gets its pages, a folder already decided (shown or kept) is left exactly as it is, and one line per folder (folder, what was done, pages written) plus a total is printed. A plugin the site carries runs only if allowed, as in a build: without `--allow-plugins` a plugin not yet allowed in the app is refused with the same sentence a build prints, and nothing is written. `--status` lists every folder holding such files with its decision (undecided, show, keep), file count, pages still missing and files a plugin declined; `--json` prints {\"folders\": [{folder, derivation_id, noun_one, noun_other, count, decision, stubs_missing, skipped: [{file, reason, message}], failed: [{file, message}]}]}.",
         },
         CliCommandInfo {
             name: "agents",
@@ -86,9 +101,19 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
             description: "Rename a file or folder and rewrite every [[wikilink]] and [text](link) that points at it, project-wide. Scriptable, so it is the safe way to bulk-rename (e.g. localizing filenames) without breaking links. `mv` is an alias.",
         },
         CliCommandInfo {
+            name: "expand",
+            args: "<page.md|folder> [--dry-run] [--allow-plugins]",
+            description: "Write embeds out as text. Each line holding only a `![[file.ext#fragment]]` embed of a file a plugin derives text from (once its text has been derived; missing text is derived first) or only a `![[note]]` / `![[note#heading]]` transclusion is replaced with the text it stands for, so the page can be edited as plain markdown. Embeds whose text is not available (skipped, unreadable, unresolved) are left as written, frontmatter is kept byte for byte, and a file is written only when something changed. --dry-run reports without writing. A plugin that derives the text must be allowed, as in a build: without `--allow-plugins` one not yet allowed in the app is refused with the same sentence a build prints.",
+        },
+        CliCommandInfo {
             name: "doctor",
-            args: "--math [<folder>]",
-            description: "Audit a vault without changing it. --math reports every $-span moss would parse as math (these render as their LaTeX source; moss does not typeset math yet), so an imported corpus can be checked before publishing. Escape false positives as \\$.",
+            args: "--math [<folder>] | --surface [<folder>] [--all] [--json]",
+            description: "Audit a vault without changing it. --math reports every $-span moss would parse as math (these render as their LaTeX source; moss does not typeset math yet), so an imported corpus can be checked before publishing. Escape false positives as \\$. --surface lists markdown constructs a cleaner form could replace: classed divs repeated on three or more pages (a fact a frontmatter field could hold), theme rules that match no element on any page of the last build, and theme selectors keyed on a page address (they break when the page is renamed). --all lists every classed div, even one on a single page, to check that a migration left none. --json prints the surface report as JSON.",
+        },
+        CliCommandInfo {
+            name: "migrate",
+            args: "[<folder>] [--apply] [--json] | [<folder>] --lift <class> --as <field> --place <place> [--apply] [--json]",
+            description: "Rewrite what `moss doctor --surface` finds. Without --apply it prints the change as a diff and writes nothing; with --apply it first saves a version of the site (undo with `moss history --restore`), then writes, changing only the frontmatter lines it names. With no --lift it removes a `translationKey` the page's path already implies, and only when a scratch copy of the site builds to the same output with and without it. --lift <class> --as <field> --place <place> moves each `::: {.class}` div holding one paragraph of plain text into its page's frontmatter as <field> and declares the field in .moss/config.toml; --place says where moss draws it instead of the div (eyebrow, subtitle, key-figure or facts), or none to keep it in the frontmatter only (it sets the field's place for the whole site, so none also removes a place the field already has); a page whose div holds more than plain text, holds it twice, or whose frontmatter already gives <field> a different value is left as written and listed. --json prints the changes, skipped pages and saved version as JSON.",
         },
         CliCommandInfo {
             name: "list",
@@ -110,7 +135,7 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
 
 /// The subcommands that parse `--help` themselves; [`help_for`] declines
 /// them so their per-mode usage stays authoritative.
-const OWN_HELP: [&str; 7] = ["list", "doctor", "rename", "domain", "env", "import", "history"];
+const OWN_HELP: [&str; 9] = ["list", "doctor", "migrate", "rename", "expand", "domain", "env", "import", "history"];
 
 /// Render `moss <cmd> --help` from the table `moss describe` already publishes.
 ///
@@ -145,6 +170,8 @@ pub fn help_for(cmd: &str) -> Option<String> {
 /// it. Not rendered from [`cli_commands`] because an example is a second thing
 /// to know about a command, not a restatement of its grammar.
 const EXAMPLE_LINES: &[(&str, &str)] = &[
+    ("root", "moss root ~/blog/posts/essay.md --json  # Find the site that owns this path"),
+    ("render", "printf '%s\\n' '{\"id\":1,\"source\":\"# Hello\"}' | moss render --json"),
     ("build", "moss build docs/public/              # Build with plugins"),
     ("build", "moss build ~/blog/ --serve           # Build with plugins and serve"),
     ("build", "moss build ~/blog/ --no-plugins      # Fast build for CI/CD"),
@@ -164,12 +191,17 @@ const EXAMPLE_LINES: &[(&str, &str)] = &[
     ("preview", "moss                                 # Launch the app window"),
     ("domain", "moss domain list ~/blog/             # Show domains linked to this project's site"),
     ("domain", "moss domain link ~/blog/ example.com # Link a custom domain (same path as the UI)"),
-    ("env", "moss env staging ~/blog/             # Set the hosting environment to staging"),
-    ("env", "moss env ~/blog/                     # Show the hosting environment"),
+    ("env", "moss env staging ~/blog/             # Set the mosspub.com environment to staging"),
+    ("env", "moss env ~/blog/                     # Show the mosspub.com environment"),
+    ("tools", "moss tools download ffmpeg         # Fetch FFmpeg so videos are optimized"),
     ("import", "moss import https://example.com/     # Mirror a site into the current directory"),
     ("import", "moss import https://blog.example.com/post/ ~/Sites/me/articles/"),
     ("import", "moss import --list urls.txt ~/Sites/me/articles/"),
     ("doctor", "moss doctor --math ~/blog/            # Every $-span moss would parse as math"),
+    ("doctor", "moss doctor --surface ~/blog/ --json  # Repeated classed divs, theme rules that style nothing, address-keyed selectors"),
+    ("doctor", "moss doctor --surface ~/blog/ --all   # Every classed div left, even on one page"),
+    ("migrate", "moss migrate ~/blog/ --lift eyebrow --as series --place eyebrow  # Diff of moving ::: {.eyebrow} into frontmatter"),
+    ("migrate", "moss migrate ~/blog/ --lift eyebrow --as series --place eyebrow --apply  # Save a version, then write it"),
     ("comments", "moss comments list ~/blog/          # Every comment, newest first, hidden ones marked"),
     ("comments", "moss comments hide ~/blog/ 12 13    # Keep comments 12 and 13 off the site at the next publish"),
 ];

@@ -970,6 +970,7 @@ fn article_map_persists_kinds_and_fields_with_members() {
     use crate::build::terms::{derive_terms, TermKind};
 
     let kinds = vec![TermKind {
+        cards: false,
         key: "people".to_string(),
         fields: vec![
             "author".to_string(),
@@ -1007,6 +1008,7 @@ fn article_map_omits_a_term_no_field_claims_a_member_for() {
     use crate::build::terms::{derive_terms, TermKind};
 
     let kinds = vec![TermKind {
+        cards: false,
         key: "people".to_string(),
         fields: vec!["author".to_string(), "editor".to_string()],
         title: "People".to_string(),

@@ -18,6 +18,7 @@
 //! isolation.
 
 pub mod anchor;
+pub mod attrs;
 pub mod extract;
 pub mod state;
 pub mod text;
@@ -25,6 +26,6 @@ pub mod text;
 pub use anchor::obsidian_heading_anchor;
 pub use extract::{extract_headings, extract_headings_with_config, HeadingInfo};
 pub use state::{
-    body_supplies_title, hero_at_top_owns_title, compute, filename_text, filename_text_with_root, HeadingInputs,
+    article_title_outcome, body_supplies_title, hero_at_top_owns_title, title_outcome, compute, TitleOutcome, filename_text, filename_text_with_root, HeadingInputs,
     HeadingSource, HeadingState,
 };

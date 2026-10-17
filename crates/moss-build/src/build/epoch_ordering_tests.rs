@@ -167,3 +167,184 @@ async fn a_higher_open_epoch_would_wrongly_promote_over_the_workers_generation()
          test (and the ordering fix's rationale) needs re-checking, not deleting"
     );
 }
+
+/// Every `/_moss/style.<hash>.css` a page in `dir` links, with whether `dir`
+/// holds that file.
+fn linked_stylesheets(dir: &std::path::Path) -> Vec<(String, bool)> {
+    let mut linked = std::collections::BTreeSet::new();
+    for entry in walkdir::WalkDir::new(dir).follow_links(true).into_iter().filter_map(Result::ok) {
+        if entry.path().extension().is_some_and(|e| e == "html") {
+            let html = std::fs::read_to_string(entry.path()).unwrap_or_default();
+            linked.extend(
+                crate::build::manifest::link_audit::url_attr_values(&html)
+                    .into_iter()
+                    .filter(|href| href.starts_with("/_moss/style.") && href.ends_with(".css")),
+            );
+        }
+    }
+    linked.into_iter().map(|href| {
+        let present = dir.join(href.trim_start_matches('/')).is_file();
+        (href, present)
+    }).collect()
+}
+
+/// The default stylesheet a sealed manifest names.
+fn sealed_stylesheet(sealed: &crate::build::manifest::SealedManifest) -> String {
+    sealed
+        .files()
+        .keys()
+        .find(|key| key.starts_with("_moss/style.") && key.ends_with(".css"))
+        .cloned()
+        .expect("a sealed build names its stylesheet")
+}
+
+/// Whether another process could take `folder`'s build lock right now: a
+/// separate open of the lock file contends exactly as another process would.
+fn folder_lock_is_free(folder: &std::path::Path) -> bool {
+    use fs2::FileExt;
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(crate::infra::folder_lock::lock_path_for(folder).unwrap())
+        .unwrap();
+    let free = lock.try_lock_exclusive().is_ok();
+    if free {
+        FileExt::unlock(&lock).unwrap();
+    }
+    free
+}
+
+/// A second moss process that starts building a folder while a one-shot build
+/// of it (`moss build`, `moss deploy`) is between its render and its
+/// promotion must wait for that promotion.
+///
+/// The stylesheet is named by its content hash, so two builds with different
+/// stylesheets name different files. When the second build ran in that span,
+/// each build's final sweep deleted the other's stylesheet from staging, and
+/// the first build's seal saw pages naming a file it never wrote: the publish
+/// it was building for refused, or a generation without its stylesheet was
+/// promoted.
+///
+/// The second process is simulated in-process: the second build runs inside
+/// the span only if the lock is free there.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_build_waits_for_a_one_shot_build_to_promote_before_it_renders() {
+    // The lock file lives under `MOSS_HOME`, which other tests set.
+    let _home = crate::infra::home::MOSS_HOME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (_tmp, folder) = fixture();
+    let mp = crate::moss_paths::MossPaths::new(&folder);
+    let _record = crate::build::lifecycle::lock_for(&mp);
+    std::fs::write(folder.join("a.md"), "# A\n\nplain\n").unwrap();
+
+    let first_epoch = crate::build::ship::next_promotion_epoch();
+    let second_epoch = crate::build::ship::next_promotion_epoch();
+    // A callout ships the callout styles: the second build's stylesheet has
+    // a different name from the first's.
+    let second_stylesheet = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+    let second_build = {
+        let (folder, second_stylesheet) = (folder.clone(), second_stylesheet.clone());
+        move || {
+            std::fs::write(folder.join("a.md"), "# A\n\n> [!note]\n> A callout.\n").unwrap();
+            let (folder, second_stylesheet) = (folder.clone(), second_stylesheet.clone());
+            std::thread::spawn(move || {
+                let mut second = cfg(&folder, second_epoch);
+                let sealed = crate::deploy::one_shot::capture_seal(&mut second.host);
+                let runtime = tokio::runtime::Runtime::new().unwrap();
+                runtime.block_on(run_pipeline(second)).expect("second build");
+                *second_stylesheet.lock().unwrap() = sealed.lock().unwrap().as_ref().map(sealed_stylesheet);
+            })
+            .join()
+            .unwrap();
+        }
+    };
+
+    // Each point the hook was called at, and whether the lock was free there.
+    let points = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(String, bool)>::new()));
+    let hook: std::sync::Arc<dyn Fn(&str) + Send + Sync> = {
+        let (folder, points, second_build) = (folder.clone(), points.clone(), second_build.clone());
+        std::sync::Arc::new(move |point: &str| {
+            let free = folder_lock_is_free(&folder);
+            points.lock().unwrap().push((point.to_string(), free));
+            if point == "rendered" && free {
+                second_build();
+            }
+        })
+    };
+
+    let mut first = cfg(&folder, first_epoch);
+    let sealed = crate::deploy::one_shot::capture_seal(&mut first.host);
+    crate::build::ONE_SHOT_TAIL_TEST_HOOK
+        .scope(hook, run_pipeline(first))
+        .await
+        .expect("first build");
+    let first_sealed = sealed.lock().unwrap().take();
+    let points = points.lock().unwrap().clone();
+    let names: Vec<&str> = points.iter().map(|(point, _)| point.as_str()).collect();
+    assert_eq!(
+        names,
+        ["rendered", "sealed", "shipping"],
+        "the hook must run before the first build's seal, after it, and before its ship"
+    );
+    if !points[0].1 {
+        second_build();
+    }
+
+    let current = std::fs::canonicalize(mp.current_ptr()).expect("current must point somewhere");
+    for dir in [mp.staging_dir(), current] {
+        let linked = linked_stylesheets(&dir);
+        assert!(!linked.is_empty(), "precondition: pages in {} link a stylesheet", dir.display());
+        assert!(
+            linked.iter().all(|(_, present)| *present),
+            "every stylesheet a page in {} links must be there: {linked:?}",
+            dir.display()
+        );
+    }
+    assert!(
+        points.iter().all(|(_, free)| !free),
+        "the first build must hold the folder build lock from its render through its ship: {points:?}"
+    );
+    let first_sealed = first_sealed.expect("the first build must promote what it rendered");
+    let second = second_stylesheet.lock().unwrap().clone().expect("the second build must promote too");
+    assert_ne!(
+        sealed_stylesheet(&first_sealed),
+        second,
+        "precondition: the two builds must name different stylesheets, or nothing could go missing"
+    );
+}
+
+/// A build's place in the cross-process promotion order is taken when it gets
+/// the folder build lock, not when it starts.
+///
+/// A build that started first but waited out another process's whole render
+/// rendered second, and must promote second. Stamped at its start, it carried
+/// the older stamp, so the other build's later materialize still saw itself as
+/// the newer one and promoted over it, from a staging directory the waiting
+/// build's sweep had since emptied of its stylesheet.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_build_that_waited_for_the_folder_build_lock_is_ordered_after_the_wait() {
+    let _home = crate::infra::home::MOSS_HOME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (_tmp, folder) = fixture();
+    let _record = crate::build::lifecycle::lock_for(&crate::moss_paths::MossPaths::new(&folder));
+
+    let held = crate::infra::folder_lock::acquire(&folder).expect("folder build lock");
+    let build = {
+        let folder = folder.clone();
+        let epoch = crate::build::ship::next_promotion_epoch();
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            runtime.block_on(run_pipeline(cfg(&folder, epoch))).expect("build");
+        })
+    };
+    // Long enough for the build to start and reach the lock.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let released_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64;
+    drop(held);
+    tokio::task::spawn_blocking(move || build.join().unwrap()).await.unwrap();
+
+    let promoted = crate::infra::folder_lock::last_promoted_epoch(&folder);
+    assert_ne!(promoted, 0, "the build never promoted");
+    assert!(promoted >= released_at, "the build promoted under a stamp older than the moment it got the lock");
+}

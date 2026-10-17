@@ -1203,6 +1203,19 @@ fn summary_cells_render_through_the_summary_card_emitter() {
     );
 }
 
+/// A hand-picked card is the picked page's, not the hosting page's: its root
+/// names that page's source file.
+#[test]
+fn a_picked_summary_card_names_the_file_of_its_page() {
+    let docs = vec![ParsedDocument {
+        source_path: Some("works/ink-study.md".into()),
+        ..make_page_doc("Ink Study", "works/ink-study/index.html", "2024-03-02", "A study.")
+    }];
+    let page = Page::new("index.html", &docs);
+    let html = page.summary(":::grid {.summary}\n[Ink Study](works/ink-study/)\n:::\n");
+    assert!(html.contains(r#"class="moss-card" data-source-file="works/ink-study.md""#), "got: {html}");
+}
+
 /// `.summary` REPLACES the grid's container. Summary styling rides entirely on
 /// `.moss-cards[data-layout="list"]`; a `.moss-grid` that merely contained
 /// `.moss-card` elements would need a second stylesheet.

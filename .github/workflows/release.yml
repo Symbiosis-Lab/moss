@@ -30,9 +30,10 @@ permissions:
   contents: read
 
 jobs:
+  # An ffmpeg- release hosts the video tool moss downloads, not a moss version: publish nothing for it.
   release-plz-release:
     if: >-
-      github.event_name == 'release' ||
+      (github.event_name == 'release' && !startsWith(github.event.release.tag_name, 'ffmpeg-')) ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'crates-io')
     concurrency:
       group: release-plz
@@ -61,7 +62,7 @@ jobs:
 
   changesets-release:
     if: >-
-      github.event_name == 'release' ||
+      (github.event_name == 'release' && !startsWith(github.event.release.tag_name, 'ffmpeg-')) ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'npm')
     concurrency:
       group: changesets

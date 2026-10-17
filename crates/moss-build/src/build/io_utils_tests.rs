@@ -127,6 +127,16 @@ fn copy_output_creates_parent_dirs() {
 }
 
 #[test]
+fn copy_output_errs_on_a_missing_source() {
+    let dir = tempdir().unwrap();
+    let dst = dir.path().join("out/x.mov");
+    assert!(copy_output(&dir.path().join("missing.mov"), &dst).is_err());
+    assert!(!dst.exists());
+    let leftovers: Vec<_> = fs::read_dir(dir.path().join("out")).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+#[test]
 fn skips_when_content_identical() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("same.txt");

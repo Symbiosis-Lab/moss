@@ -1,32 +1,15 @@
-//! Git binary management: detection and download-on-demand.
+//! Git binary configuration.
 //!
-//! This module provides a thin wrapper around the unified [`binary_resolver`]
-//! pipeline for locating or downloading a portable git binary. It defines the
-//! dugite-native `BinaryConfig` and exposes `GitManager` as a convenience API.
-//!
-//! Resolution order (handled by `binary_resolver::resolve_binary`):
-//!
-//! 1. Check system PATH for `git`
-//! 2. Check `~/.moss/bin/git-portable/bin/git` cache
-//! 3. Download dugite-native pre-built git from GitHub Releases
-//!
-//! # Usage
-//!
-//! ```rust,ignore
-//! use moss::build::assets::git::GitManager;
-//!
-//! // Quick: use system git or download if needed
-//! let git = GitManager::get_or_download(None)?;
-//! println!("Using git at: {}", git.bin_path);
-//! ```
+//! Defines the dugite-native `BinaryConfig` for a portable git. Finding git
+//! and downloading it are handled by [`binary_resolver`]: `resolve_binary`
+//! looks for an installed git, and `download_tool(Tool::Git, ..)` fetches the
+//! dugite-native build from GitHub Releases when the user asks for it.
 
 use std::collections::HashMap;
-use std::process::Command;
 
 use super::binary_resolver::{
     ArchiveFormat, ArchiveLayout, BinaryConfig, BinarySource, VersionCheck,
 };
-use super::download::DownloadProgress;
 
 // =============================================================================
 // Constants — dugite-native release
@@ -50,8 +33,7 @@ const CHECKSUM_X64: &str = "d01649772ec5b997b01d9c605ac39ca7a782e4fb37584058c323
 
 /// Returns a `BinaryConfig` for portable git (dugite-native).
 ///
-/// This config is consumed by `binary_resolver::resolve_binary()` to locate,
-/// cache, and download git. Sources are pinned to a specific dugite-native
+/// This config is consumed by `binary_resolver::resolve_binary()` to locate and cache git. `download_tool(Tool::Git, ..)` fetches it after the user agrees. Sources are pinned to a specific dugite-native
 /// release with SHA-256 checksums for reproducible builds.
 pub fn git_binary_config() -> BinaryConfig {
     let arm64_url = format!(
@@ -94,116 +76,12 @@ pub fn git_binary_config() -> BinaryConfig {
 }
 
 // =============================================================================
-// GitManager
-// =============================================================================
-
-/// Manages a git binary — either system-installed or downloaded portable.
-#[allow(dead_code)]
-pub struct GitManager {
-    /// Path to the git binary (either `"git"` for system, or absolute path).
-    pub bin_path: String,
-}
-
-#[allow(dead_code)]
-impl GitManager {
-    /// Detects git in the system PATH.
-    ///
-    /// Runs `git --version` to verify git is available and functional.
-    ///
-    /// # Returns
-    /// * `Ok(GitManager)` - git found in PATH
-    /// * `Err(String)` - git not found or not functional
-    pub fn detect() -> Result<Self, String> {
-        let output = Command::new("git")
-            .arg("--version")
-            .output()
-            .map_err(|e| format!("git not found: {}", e))?;
-
-        if output.status.success() {
-            Ok(Self {
-                bin_path: "git".to_string(),
-            })
-        } else {
-            Err("git --version failed".to_string())
-        }
-    }
-
-    /// Gets git from system PATH, previously downloaded portable, or downloads it.
-    ///
-    /// Delegates to `binary_resolver::resolve_binary()` with the dugite-native
-    /// `BinaryConfig`. Resolution order:
-    /// 1. System git (in PATH)
-    /// 2. Previously downloaded portable git (`~/.moss/bin/git-portable/bin/git`)
-    /// 3. Download dugite-native portable git
-    ///
-    /// # Arguments
-    /// * `on_progress` - Optional progress callback for the download step.
-    ///
-    /// # Returns
-    /// * `Ok(GitManager)` - Ready to use git
-    /// * `Err(String)` - git unavailable and download failed
-    pub fn get_or_download(
-        on_progress: Option<&DownloadProgress>,
-    ) -> Result<Self, String> {
-        let config = git_binary_config();
-        let resolution =
-            super::binary_resolver::resolve_binary(&config, None, true, on_progress)?;
-        Ok(Self {
-            bin_path: resolution.path,
-        })
-    }
-}
-
-// =============================================================================
 // Tests
 // =============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // -------------------------------------------------------------------------
-    // detect() tests
-    // -------------------------------------------------------------------------
-
-    #[test]
-    fn test_git_detect_returns_result() {
-        // detect() should not panic. On most dev machines git is installed,
-        // but we only assert it returns a Result (not that it's Ok).
-        let result = GitManager::detect();
-        // If git is on the system, it should succeed
-        if result.is_ok() {
-            assert_eq!(result.unwrap().bin_path, "git");
-        }
-        // If git is not installed, it should return Err (not panic)
-    }
-
-    // -------------------------------------------------------------------------
-    // get_or_download() tests
-    // -------------------------------------------------------------------------
-
-    #[test]
-    fn test_git_get_or_download() {
-        // On a dev machine with git installed, this should succeed via detect().
-        // This test exercises the full resolution chain — at minimum step 1 (system git).
-        #[cfg(windows)]
-        if crate::running_under_wine() {
-            eprintln!("SKIP test_git_get_or_download: Wine ships no git.exe (real Windows CI has one)");
-            return;
-        }
-        let result = GitManager::get_or_download(None);
-        assert!(
-            result.is_ok(),
-            "get_or_download should succeed on a dev machine: {:?}",
-            result.err()
-        );
-        let manager = result.unwrap();
-        // The bin_path should be non-empty
-        assert!(
-            !manager.bin_path.is_empty(),
-            "bin_path should be non-empty"
-        );
-    }
 
     // -------------------------------------------------------------------------
     // git_binary_config() tests

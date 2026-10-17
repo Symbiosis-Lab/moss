@@ -30,13 +30,13 @@ Pass a wikilink, markdown image, or bare filename as the first line to set a bac
 
 :::grid 2 {.sc-demo}
 ```markdown
-:::hero {image=/assets/animations/editing.gif}
+:::hero {image=/assets/animations/editing.png}
 # Welcome to my site
 A personal corner of the web.
 :::
 ```
 +++
-::::hero {image=/assets/animations/editing.gif}
+::::hero {image=/assets/animations/editing.png}
 # Welcome to my site
 A personal corner of the web.
 ::::
@@ -49,12 +49,12 @@ Use pipe syntax on the image reference to control how the image fills the hero a
 :::grid 2 {.sc-demo}
 ```markdown
 :::hero
-![[/assets/animations/new folder.gif|contain top]]
+![[/assets/animations/new folder.png|contain top]]
 :::
 ```
 +++
 ::::hero
-![[/assets/animations/new folder.gif|contain top]]
+![[/assets/animations/new folder.png|contain top]]
 ::::
 :::
 
@@ -65,14 +65,14 @@ Any content after the first line becomes overlay text rendered on top of the bac
 :::grid 2 {.sc-demo}
 ```markdown
 :::hero
-![[/assets/animations/first time publish.gif]]
+![[/assets/animations/first time publish.png]]
 # Our work
 Community theatre rooted in lived experience.
 :::
 ```
 +++
 ::::hero
-![[/assets/animations/first time publish.gif]]
+![[/assets/animations/first time publish.png]]
 # Our work
 Community theatre rooted in lived experience.
 ::::
@@ -82,7 +82,7 @@ The picture line can be a standard Markdown image as well. A space in the file n
 
 ```markdown
 :::hero
-![](assets/animations/first%20time%20publish.gif)
+![](assets/animations/first%20time%20publish.png)
 # Our work
 :::
 ```

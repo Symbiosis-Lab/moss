@@ -184,13 +184,15 @@ fn normalize_html(content: &str) -> String {
 
     // Strip staging/ preview annotation attributes so snapshot golden files
     // remain valid. staging/ carries data-source-line, data-source-fm,
-    // data-source-none, and data-moss-preview for editor scroll-sync.
+    // data-source-file, data-source-none, and data-moss-preview for editor scroll-sync.
     // ship_phase strips them for deploy-ready output; normalize_html must
     // strip them too so snapshots are portable between staging/ and deploy.
     let anno_line_re = regex::Regex::new(r#" data-source-line="\d+""#).unwrap();
     normalized = anno_line_re.replace_all(&normalized, "").to_string();
     let anno_fm_re = regex::Regex::new(r#" data-source-fm="[^"]*""#).unwrap();
     normalized = anno_fm_re.replace_all(&normalized, "").to_string();
+    let anno_file_re = regex::Regex::new(r#" data-source-file="[^"]*""#).unwrap();
+    normalized = anno_file_re.replace_all(&normalized, "").to_string();
     let anno_none_re = regex::Regex::new(r#" data-source-none"#).unwrap();
     normalized = anno_none_re.replace_all(&normalized, "").to_string();
     let anno_preview_re = regex::Regex::new(r#" data-moss-preview"#).unwrap();
@@ -673,33 +675,21 @@ fn snapshot_places_route_site() {
 /// The places explorer's world/tile SVGs (`place_map::emit_world_svg`/
 /// `emit_tile_svg`, emitted by `emit::place_map_assets`) land under one
 /// `_moss/map.<hash>/` directory — exactly one, since for a given pack and
-/// generator version the hash is a function of the gazetteer's cells alone,
-/// not of page content (see `place_map_assets::assets_hash`'s own tests for
-/// the gazetteer half of that claim). Their brotli-q11 size is page weight
+/// generator version the hash is a function of `tiles.json` (the
+/// gazetteer's cells and the fit they were chosen for), not of page content
+/// (see `place_map_assets::assets_hash`'s own tests for the gazetteer half
+/// of that claim). Their brotli-q11 size is page weight
 /// the explorer's later task will actually serve, so it is pinned here the
 /// same way `svg.rs`'s own `the_world_map_stays_under_its_inline_budget`
 /// pins the places-root aggregate map: measured at landing (this commit)
 /// and allowed only to shrink without a reviewed reason for growth.
 ///
-/// Measured at landing, on the `places-site` fixture: world.svg = 89,077
-/// brotli bytes (up from 83,325 — the explorer's world SVG now carries its
-/// full, uncropped Patterson extent instead of the page map's cropped
-/// 720-wide canvas, about 26 degrees more on each side; still under the
-/// pinned ceiling of 96 KiB, matching the aggregate map's own budget,
-/// since the two emitters share a rendering body); this fixture's
-/// Kansai-region places all fall in one 3x3 neighbourhood, so its 9 tiles
-/// combined = 51,886 brotli bytes (pinned ceiling 512 KiB) — down from
-/// 134,854 when each tile still drew a full 720x480 `FlatProjection`
-/// canvas: a tile's own viewBox is now its cell's Patterson rectangle
-/// times `TILE_K` (about 94x88 viewBox units near the equator, smaller
-/// toward the poles), a fraction of the old fixed canvas's area, for the
-/// same fine-tier detail. Before tiles were scoped to the gazetteer's own
-/// cells, every one of the pack's 648 tiles was emitted regardless of this
-/// site's places — 6,678,052 brotli bytes, 50x this fixture's actual
-/// footprint and the same for every site regardless of how many places it
-/// names. `tiles.json` lists exactly the tiles emitted, plus `k` (the
-/// factor each tile was drawn at over the world's own scale), so the
-/// explorer can know which cells exist without probing and can never
+/// On the `places-site` fixture, world.svg stays under 96 KiB, the
+/// aggregate map's own budget, since the two emitters share a rendering
+/// body. The fixture's Kansai-region places need their 3x3 neighbourhood
+/// plus the cells under their opening view: 15 tiles, 160,852 brotli bytes
+/// (ceiling 512 KiB). `tiles.json` lists exactly the tiles emitted, plus
+/// `k`, so the explorer knows which cells exist without probing and cannot
 /// disagree with the build about the scale it rendered them at.
 #[test]
 fn place_map_explorer_assets_land_in_one_hashed_directory_within_budget() {
@@ -743,7 +733,10 @@ fn place_map_explorer_assets_land_in_one_hashed_directory_within_budget() {
         tiles_brotli_total += brotli_len(&fs::read(entry.path()).unwrap());
     }
     assert!(tile_count > 0, "expected at least one tile SVG");
-    assert!(tile_count < 20, "expected a small Kansai-region neighbourhood, not the whole pack: {tile_count} tiles");
+    assert!(
+        tile_count <= 15,
+        "expected the Kansai neighbourhood and its opening view's cells, not the whole pack: {tile_count} tiles"
+    );
     assert!(
         tiles_brotli_total <= TILES_BROTLI_CEILING,
         "{tile_count} tiles total {tiles_brotli_total} brotli bytes, over the {TILES_BROTLI_CEILING} ceiling"
@@ -1040,6 +1033,35 @@ fn language_homes_list_only_their_own_language_tree() {
 #[test]
 fn language_home_with_children_depth_all_lists_only_its_own_tree() {
     assert_homes_list_only_their_own_language("children_depth: all\n");
+}
+
+/// moss's colophon is the footer's last child, so a theme's footer layout can
+/// place the mark. Without a footer it stays after `</main>`.
+#[test]
+fn colophon_is_the_footers_last_child_when_the_page_has_a_footer() {
+    let (_cleanup, out) = build_inline_site(&[
+        (".moss/config.toml", "[site]\ndomain = \"example.com\"\n"),
+        ("index.md", "---\ntitle: Lantern Notes\n---\n\nHello.\n"),
+        ("footer.md", "Written by the quarry committee.\n"),
+    ]);
+    let html = fs::read_to_string(out.join("index.html")).expect("index.html");
+    let footer_start = html.find("<footer").expect("footer rendered");
+    let footer_end = html.find("</footer>").expect("footer closed");
+    let colophon = html.find("<div class=\"moss-colophon\"").expect("colophon rendered");
+    assert!(
+        footer_start < colophon && colophon < footer_end,
+        "the colophon must sit inside <footer>: {html}"
+    );
+    assert_eq!(html.matches("moss-colophon\"").count(), 1, "exactly one colophon");
+    let after_colophon = &html[colophon..footer_end];
+    assert!(
+        after_colophon.trim_end().ends_with("</div>"),
+        "the colophon is the footer's last child: {after_colophon}"
+    );
+    assert!(
+        html.find("Written by the quarry committee.").unwrap() < colophon,
+        "authored footer content comes before the colophon"
+    );
 }
 
 #[test]
@@ -2376,6 +2398,12 @@ fn date_line(html: &str) -> &str {
     &rest[..rest.find(r#"<div class="font-anchor""#).expect("meta line has the size control")]
 }
 
+/// The text a reader sees in `html`, with the tags dropped.
+fn visible_text(html: &str) -> String {
+    let re = regex::Regex::new(r"<[^>]*>").unwrap();
+    re.replace_all(html, "").into_owned()
+}
+
 /// A page with `start` shows its event facts in the ordinary meta line under
 /// the title, in place of the posted date; a dated article is unchanged.
 #[test]
@@ -2386,7 +2414,7 @@ fn event_page_shows_event_facts_in_the_meta_line() {
     let concert = page("events/concert");
     let line = date_line(&concert);
     assert!(
-        line.contains(r#"<time class="moss-event-time" datetime="2026-11-01T14:00">Sunday, November 1, 2026, 2:00–4:00 PM</time>"#),
+        line.contains(r#"<time class="moss-event-time" datetime="2026-11-01T14:00"><span class="moss-when-weekday">Sunday</span>, <span class="moss-when-month">November</span> <span class="moss-when-day">1</span>, <span class="moss-when-year">2026</span><span class="moss-when-sep">, </span><span class="moss-when-time">2:00–4:00 PM</span></time>"#),
         "{line}"
     );
     assert!(line.contains(r#"<span class="moss-event-place">Town Hall</span>"#), "{line}");
@@ -2401,11 +2429,12 @@ fn event_page_shows_event_facts_in_the_meta_line() {
         cancelled.find("moss-event-status").unwrap() < cancelled.find("moss-event-time").unwrap(),
         "the status is read before the struck time: {cancelled}"
     );
-    assert!(cancelled.contains("Sunday, March 14, 2027, 7:30 PM"), "{cancelled}");
+    assert!(visible_text(&cancelled).contains("Sunday, March 14, 2027, 7:30 PM"), "{cancelled}");
 
     let festival = date_line(&page("events/festival")).to_string();
     assert!(
-        festival.contains(r#"datetime="2026-12-04">Friday, December 4, 2026 – Sunday, December 6, 2026</time>"#),
+        festival.contains(r#"datetime="2026-12-04">"#)
+            && visible_text(&festival).contains("Friday, December 4, 2026 – Sunday, December 6, 2026"),
         "{festival}"
     );
 
@@ -2416,7 +2445,7 @@ fn event_page_shows_event_facts_in_the_meta_line() {
 
 /// Titles of the listing items in `html`, in document order.
 fn listing_titles(html: &str) -> Vec<String> {
-    let re = regex::Regex::new(r#"moss-prefix-link-title">([^<]*)<"#).unwrap();
+    let re = regex::Regex::new(r#"moss-prefix-link-title">(?:<a [^>]*>)?([^<]*)<"#).unwrap();
     re.captures_iter(html).map(|c| c[1].to_string()).collect()
 }
 
@@ -2437,7 +2466,7 @@ fn upcoming_group_orders_events_by_when_and_marks_the_time() {
         assert!(html.contains(r#"<section class="moss-cards-group" data-group="upcoming">"#), "{page}");
         assert!(html.contains(r#"<section class="moss-cards-group" data-group="earlier">"#), "{page}");
         assert!(
-            html.contains(r#"<time class="moss-when" datetime="2099-03-01T19:30"><span class="moss-when-weekday">Sunday</span>, <span class="moss-when-month">March</span> <span class="moss-when-day">1</span>, <span class="moss-when-year">2099</span>, <span class="moss-when-time">7:30–10:00 PM</span></time><span class="moss-event-sep"> · </span><span class="moss-event-place">Grand Hall</span>"#),
+            html.contains(r#"<time class="moss-when" datetime="2099-03-01T19:30"><span class="moss-when-weekday">Sunday</span>, <span class="moss-when-month">March</span> <span class="moss-when-day">1</span>, <span class="moss-when-year">2099</span><span class="moss-when-sep">, </span><span class="moss-when-time">7:30–10:00 PM</span></time><span class="moss-event-sep"> · </span><span class="moss-event-place">Grand Hall</span>"#),
             "{page}"
         );
     }

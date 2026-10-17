@@ -7,15 +7,13 @@ description: "Send your writing to readers by email: turn on the newsletter, add
 translationKey: docs-start-newsletter
 ---
 
-# Send a newsletter
-
 > Already have readers? Email your latest post straight to their inbox, from your own site.
 
 A newsletter lets you send a post to readers by email, straight from your site. Turn it on once, add your readers, then send any post you like.
 
-![[email sub.gif]]
+![[email sub.mp4|loop]]
 
-Newsletter sending works for sites hosted on moss. Sites hosted elsewhere cannot send from moss yet.
+Newsletter sending works for sites published to mosspub.com hosting (provided by Symbiosis Lab). Sites hosted elsewhere cannot send from moss yet.
 
 ## Turn on the newsletter
 

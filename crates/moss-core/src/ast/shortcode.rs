@@ -8,7 +8,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::node::Block;
+use super::document::BlockMeta;
+use super::node::{Block, Inline};
 use super::url::Url;
 
 /// A typed shortcode block.
@@ -129,6 +130,10 @@ pub struct GalleryShortcode {
     /// a width — the emitter omits `data-width` so the HTML stays sparse.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<String>,
+    /// `:::gallery rows` — lay the items out as justified rows (each row fills
+    /// the width and every photo keeps its proportions) instead of the grid.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rows: bool,
 }
 
 /// One image in a [`GalleryShortcode`].
@@ -138,10 +143,61 @@ pub struct GalleryItem {
     pub src: Url,
     /// Alt text (from `![alt](...)` syntax). Empty if author used bare path.
     pub alt: String,
+    /// `![alt|](...)`: the alt text is the whole story, so the item has no
+    /// visible title in the full-screen viewer. Without this flag the viewer
+    /// would caption the item with its alt text.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub alt_only: bool,
     /// Pipe-suffix media attributes verbatim (e.g. "cover top",
     /// "1.5:1 contain"). Empty if no pipe in the source.
     /// The renderer parses this via `moss_core::media::parse_media_attrs`.
     pub attrs: String,
+    /// The visible caption: the italic line under the image, as under a figure
+    /// in running text. Inline markdown, so a link in it goes through the same
+    /// URL resolution as body links. Empty when the item has none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub caption: Vec<Inline>,
+}
+
+/// Where a fenced shortcode's inner content sits in the page source, so a click
+/// in the preview can reach the line inside a hero overlay or a grid cell.
+/// Default (nothing tracked) renders no inner annotations.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShortcodeSource {
+    /// Lines between the opening fence and the closing fence, so the block
+    /// spans `start..=start + extra_lines`.
+    pub extra_lines: usize,
+    /// One per grid cell; one for a hero's overlay.
+    pub fragments: Vec<SourceFragment>,
+}
+
+/// The source position of one fragment (a grid cell, a hero overlay) and of
+/// each top-level block in it, in the same line coordinates as
+/// [`BlockMeta::source_line`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceFragment {
+    pub first_line: Option<usize>,
+    pub last_line: Option<usize>,
+    /// Parallel to the fragment's blocks.
+    pub blocks: Vec<BlockMeta>,
+}
+
+impl Shortcode {
+    /// The source record of a shortcode that renders fragments (grid, hero).
+    pub fn source_mut(&mut self) -> Option<&mut ShortcodeSource> {
+        match self {
+            Shortcode::Grid(g) => Some(&mut g.source),
+            Shortcode::Hero(h) => Some(&mut h.source),
+            _ => None,
+        }
+    }
+}
+
+impl ShortcodeSource {
+    /// The `data-source-range` value for a block that opens at `start`.
+    pub fn range_from(&self, start: usize) -> String {
+        format!("{start}-{}", start + self.extra_lines)
+    }
 }
 
 /// Arguments for [`Shortcode::Grid`].
@@ -174,6 +230,9 @@ pub struct GridShortcode {
     /// `vec![Block::LinkCard { url, children }]`. See
     /// [`Block::LinkCard`](crate::ast::Block::LinkCard) for the rationale.
     pub cells: Vec<Vec<Block>>,
+    /// Source positions of the fence and of each cell's blocks.
+    #[serde(default)]
+    pub source: ShortcodeSource,
     /// Spec § P9 width attribute: `body | wide | page | screen` (with
     /// `full` aliased to `screen`). `None` means the author did not set
     /// a width — the emitter omits `data-width` so the HTML stays sparse.
@@ -244,6 +303,12 @@ pub struct HeroShortcode {
     /// rendering. With `extra_images`, this is the first slide and the
     /// reduced-motion/static fallback.
     pub image: Option<Url>,
+    /// Alt text the author wrote on the primary slide's embed
+    /// (`![alt](path)` on a leading body line of the fence). Empty for a bare
+    /// filename, a wikilink embed, or an `image=` hero, where the picture is
+    /// decorative.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub image_alt: String,
     /// Remaining background slides (2026-07-27 multi-image hero): every
     /// consecutive leading body media line after the first. Non-empty →
     /// the hero renders an ambient crossfade (one slide visible at a
@@ -251,6 +316,14 @@ pub struct HeroShortcode {
     /// don't).
     /// Empty for `image=`-attribute and directive-line heroes.
     pub extra_images: Vec<Url>,
+    /// Caption of each slide, in slide order (`image`, then `extra_images`):
+    /// the slide embed's pipe text when that text is not media attributes.
+    /// Empty when no slide carries one, and for `image=` and directive-line
+    /// heroes, whose pipe is the frame's attributes. Parsed inline markdown,
+    /// so links in a caption go through the same URL resolution as body links;
+    /// an empty entry means that slide has no caption.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slide_captions: Vec<Vec<Inline>>,
     /// Pipe-suffix media attributes verbatim (e.g. "cover top",
     /// "1.5:1 contain"). Empty if no pipe in the source.
     pub attrs: String,
@@ -263,6 +336,9 @@ pub struct HeroShortcode {
     /// [`crate::ast::parser::parse`] recursion in
     /// [`crate::ast::shortcode_extract::parse_hero`].
     pub overlay: Vec<Block>,
+    /// Source positions of the fence and of the overlay's blocks.
+    #[serde(default)]
+    pub source: ShortcodeSource,
     /// Plain-text overlay source for downstream OG-fallback extraction.
     ///
     /// PR4.5 (2026-05-28): captured at parse time alongside the typed
@@ -293,6 +369,11 @@ pub struct HeroShortcode {
     /// (image full-width at natural ratio, text block below).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mobile: Option<String>,
+    /// Opt-in header treatment (`:::hero {header=over}`): the site header is
+    /// laid over this hero instead of sitting in a band above it. Honoured
+    /// only for the hero that opens the page; see `extract_hero`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
     /// Which inline edge the overlay panel sits at. `Some("end")` moves it
     /// to the END of the inline axis — right in LTR, left in RTL — instead
     /// of the default start. For a portrait subject in a wide frame, the
@@ -315,11 +396,11 @@ pub struct HeroShortcode {
     /// carrying a cover credit («封面：…（拍攝：…）») has somewhere to put it
     /// that is not on top of the subject.
     ///
-    /// A display string, rendered as inline markdown by the host — the same
-    /// treatment `byline:` / `colophon:` rows get — so a credit can be a link.
+    /// Parsed inline markdown, so a credit can be a link and that link goes
+    /// through the same URL resolution as a body link.
     /// Empty when the author wrote no caption.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub caption: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub caption: Vec<Inline>,
 }
 
 /// Arguments for [`Shortcode::Apply`].
@@ -586,15 +667,20 @@ mod tests {
                 GalleryItem {
                     src: Url::unresolved("a.jpg"),
                     alt: "A".to_string(),
+                    alt_only: false,
                     attrs: String::new(),
+                    caption: Vec::new(),
                 },
                 GalleryItem {
                     src: Url::unresolved("b.jpg"),
                     alt: "B".to_string(),
+                    alt_only: false,
                     attrs: "cover top".to_string(),
+                    caption: Vec::new(),
                 },
             ],
             width: None,
+            rows: false,
         });
         match &sc {
             Shortcode::Gallery(args) => {
@@ -623,9 +709,12 @@ mod tests {
             items: vec![GalleryItem {
                 src: Url::unresolved("p.png"),
                 alt: "Photo".to_string(),
+                alt_only: false,
                 attrs: "1:1 contain".to_string(),
+                caption: Vec::new(),
             }],
             width: None,
+            rows: false,
         });
         let s = serde_json::to_string(&sc).expect("serialize");
         let back: Shortcode = serde_json::from_str(&s).expect("deserialize");

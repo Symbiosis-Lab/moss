@@ -34,7 +34,10 @@ impl CarryProof {
         output_dir: &Path,
         site_url: &SiteUrl,
     ) -> Option<Self> {
-        if !verdict.may_skip_document(doc) {
+        // The not-found page is always rendered: its root `/404.html` copy is
+        // a second output this proof does not know about, registered from the
+        // render, and a carried page has no render to copy.
+        if doc.is_not_found_page() || !verdict.may_skip_document(doc) {
             return None;
         }
 

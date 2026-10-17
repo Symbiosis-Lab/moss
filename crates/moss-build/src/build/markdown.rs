@@ -34,6 +34,7 @@ pub use pipeline::{
     PageContext,
     SiteMarkdown,
     render_markdown_to_html_with,
+    render_standalone_document,
 };
 
 // ── html_post ──────────────────────────────────────────────────────────

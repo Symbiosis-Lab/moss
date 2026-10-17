@@ -14,6 +14,7 @@ use std::path::Path;
 
 use super::super::crawl_state::HostPacer;
 use crate::build::components::nav::is_navigational_page;
+use crate::build::media::decode::sniff_decode_bytes;
 use super::super::crawler::host_of;
 use super::super::fetch::{download_asset, fetch_raw_bytes, observe_pace};
 use super::super::finalize::{with_fields_absent, with_title};
@@ -217,13 +218,28 @@ fn has_favicon(out_dir: &Path) -> bool {
 }
 
 /// What the bytes are, whatever the link declared: a 404 page served with a
-/// 200, or a stray HTML shell, is none of the three and not an icon.
-fn sniff(bytes: &[u8]) -> Option<IconKind> {
+/// 200, or a stray HTML shell, is none of these and not an icon.
+#[derive(Debug, PartialEq, Eq)]
+enum Sniffed {
+    /// Written as-is under the extension its kind names.
+    Icon(IconKind),
+    /// WebP, JPEG or GIF: decoded and written as a PNG.
+    Raster,
+}
+
+fn sniff(bytes: &[u8]) -> Option<Sniffed> {
     if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
-        return Some(IconKind::Png);
+        return Some(Sniffed::Icon(IconKind::Png));
     }
     if bytes.starts_with(&[0, 0, 1, 0]) {
-        return Some(IconKind::Ico);
+        return Some(Sniffed::Icon(IconKind::Ico));
+    }
+    if bytes.starts_with(b"GIF87a")
+        || bytes.starts_with(b"GIF89a")
+        || bytes.starts_with(&[0xFF, 0xD8, 0xFF])
+        || (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"))
+    {
+        return Some(Sniffed::Raster);
     }
     // `<svg` must open the document: only a BOM, whitespace, comments, an XML
     // prolog and a doctype may come first, all within the first KB.
@@ -232,7 +248,23 @@ fn sniff(bytes: &[u8]) -> Option<IconKind> {
     while rest.starts_with("<?") || rest.starts_with("<!") {
         rest = rest.split_once('>')?.1.trim_start();
     }
-    rest.starts_with("<svg").then_some(IconKind::Svg)
+    rest.starts_with("<svg").then_some(Sniffed::Icon(IconKind::Svg))
+}
+
+/// The bytes to write for a fetched favicon and the kind they are written as,
+/// or `None` when they are not an icon moss can use or a raster will not decode.
+fn icon_to_write(bytes: Vec<u8>) -> Option<(Vec<u8>, IconKind)> {
+    match sniff(&bytes)? {
+        Sniffed::Icon(kind) => Some((bytes, kind)),
+        Sniffed::Raster => {
+            // Decoding is bounded by the same allocation ceiling as every other
+            // image decode in moss-build (media/decode.rs).
+            let img = sniff_decode_bytes(&bytes).ok()?;
+            let mut out = std::io::Cursor::new(Vec::new());
+            img.write_to(&mut out, image::ImageFormat::Png).ok()?;
+            Some((out.into_inner(), IconKind::Png))
+        }
+    }
 }
 
 async fn write_favicon(
@@ -249,10 +281,10 @@ async fn write_favicon(
     let host = host_of(url);
     pacer.wait(&host).await;
     let (bytes, kind) = match fetch_raw_bytes(url, capture.user_agent).await {
-        Ok(b) => match sniff(&b) {
-            Some(kind) => (b, kind),
+        Ok(b) => match icon_to_write(b) {
+            Some(found) => found,
             None => {
-                log::warn!("import: favicon {url} is not an SVG, PNG or ICO file; skipped");
+                log::warn!("import: favicon {url} is not an image moss can use as an icon (SVG, PNG, ICO, WebP, JPEG or GIF); skipped");
                 return;
             }
         },

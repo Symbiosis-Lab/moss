@@ -26,7 +26,6 @@ function payloadFor(
     y: 20,
     pageHref: PAGE,
     selection: null,
-    resolveSourceTarget: () => null,
     ...overrides,
   });
 }
@@ -74,14 +73,18 @@ describe("buildContextPayload", () => {
     expect(p.image).toBe("http://localhost:4832/img/a.png");
   });
 
-  it("includes the resolved source target from the injected resolver", () => {
-    document.body.innerHTML = '<p id="t" data-source-line="7">x</p>';
-    const el = document.getElementById("t");
-    const target = { kind: "body-line", line: 7 };
-    const resolve = vi.fn(() => target);
-    const p = payloadFor(el, { resolveSourceTarget: resolve });
-    expect(resolve).toHaveBeenCalledWith(el);
-    expect(p.target).toEqual(target);
+  it("carries every source target under the cursor, nearest first", () => {
+    document.body.innerHTML =
+      '<article data-source-file="posts/a.md"><p id="t" data-source-line="7">x</p></article>';
+    expect(payloadFor(document.getElementById("t")).targets).toEqual([
+      { kind: "body-line", line: 7, path: "posts/a.md", element: "p" },
+      { kind: "page", path: "posts/a.md", element: "article" },
+    ]);
+  });
+
+  it("carries the theme selectors for the element as an array", () => {
+    document.body.innerHTML = '<p id="t">x</p>';
+    expect(Array.isArray(payloadFor(document.getElementById("t")).styles)).toBe(true);
   });
 
   it("trims the selection and drops whitespace-only selections", () => {
@@ -124,7 +127,7 @@ describe("installContextMenu", () => {
         return typeof v === "function" ? v.bind(target) : v;
       },
     }) as unknown as Window;
-    installContextMenu(win, () => ({ kind: "none" }));
+    installContextMenu(win);
     return post;
   }
 

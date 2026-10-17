@@ -184,7 +184,7 @@ async fn push_site_inner_impl(
         .await
         .map_err(|e| e.to_string())?;
 
-    if diff.need.is_empty() && diff.remove.is_empty() {
+    if !diff.needs_commit() {
         let url = view_site_url(&folder_path_str, &site_id, environment);
         return Ok(PushResult::Success {
             url,
@@ -1617,7 +1617,7 @@ mod tests {
 
         let result = with_seta_url(
             addr,
-            crate::deploy::prebuilt::run_prebuilt_deploy(folder.path(), site.path(), None, false, &progress::silent()),
+            crate::deploy::prebuilt::run_prebuilt_deploy(folder.path(), site.path(), None, false, false, &progress::silent()),
         )
         .await;
 
@@ -1659,7 +1659,7 @@ mod tests {
         .await;
         let published = with_seta_url(
             addr,
-            crate::deploy::prebuilt::run_prebuilt_deploy(folder.path(), site.path(), None, false, &progress::silent()),
+            crate::deploy::prebuilt::run_prebuilt_deploy(folder.path(), site.path(), None, false, false, &progress::silent()),
         )
         .await;
         assert!(matches!(published, Ok(PushResult::Success { files_uploaded: 1, .. })), "got: {published:?}");
@@ -1674,6 +1674,45 @@ mod tests {
         let result = with_seta_url(addr, cli_deploy(folder.path(), false)).await;
 
         assert!(matches!(result, Ok(PushResult::Success { .. })), "got: {result:?}");
+    }
+
+    /// The server leaves `_moss/` paths out of `remove` and counts them in
+    /// `internal_remove`. A publish whose only change is such a file vanishing
+    /// must still commit; with the count 0 or absent it must not. Ablated by
+    /// putting `diff.need.is_empty() && diff.remove.is_empty()` back in
+    /// `push_site_inner_impl`.
+    async fn last_call_of_a_publish_answered_by(sync_body: &'static str) -> String {
+        let _latch = crate::deploy::freeze::single_flight_tests::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let folder = folder_that_last_published(true);
+        let (addr, last) = mock_seta_sequence_capturing(vec![
+            json_200(r#"{"generation_id":"ours","deployed_at":1790000000}"#),
+            json_200(r#"{"generation_id":"ours","deployed_at":1790000000}"#),
+            json_200(sync_body),
+            json_200(r#"{"url":"https://behind-test.mosspub.com","files_updated":1,"files_removed":0,"timestamp":1790258580,"generation_id":"ours"}"#),
+        ])
+        .await;
+        let result = with_seta_url(addr, cli_deploy(folder.path(), false)).await;
+        assert!(matches!(result, Ok(PushResult::Success { .. })), "got: {result:?}");
+        let raw = tokio::time::timeout(std::time::Duration::from_millis(300), last).await;
+        match raw {
+            Ok(Ok(bytes)) => String::from_utf8_lossy(&bytes).lines().next().unwrap_or("").to_string(),
+            _ => "no commit".to_string(),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_hosted_publish_whose_only_change_is_removed_internal_files_commits() {
+        let line = last_call_of_a_publish_answered_by(r#"{"need":[],"remove":[],"internal_remove":1}"#).await;
+        assert!(line.contains("/commit"), "got: {line}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_hosted_publish_with_no_internal_removal_does_not_commit() {
+        let with_zero = last_call_of_a_publish_answered_by(r#"{"need":[],"remove":[],"internal_remove":0}"#).await;
+        assert_eq!(with_zero, "no commit");
+        let absent = last_call_of_a_publish_answered_by(r#"{"need":[],"remove":[]}"#).await;
+        assert_eq!(absent, "no commit");
     }
 
     /// The hosting server's commit response counts every file in the site; the
@@ -1697,7 +1736,7 @@ mod tests {
         .await;
         let published = with_seta_url(
             addr,
-            crate::deploy::prebuilt::run_prebuilt_deploy(folder.path(), site.path(), None, false, &progress::silent()),
+            crate::deploy::prebuilt::run_prebuilt_deploy(folder.path(), site.path(), None, false, false, &progress::silent()),
         )
         .await;
         assert!(matches!(published, Ok(PushResult::Success { files_uploaded: 1, .. })), "got: {published:?}");

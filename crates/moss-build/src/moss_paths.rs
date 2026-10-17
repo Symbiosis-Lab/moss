@@ -259,6 +259,11 @@ impl MossPaths {
         self.root.join("state.toml")
     }
 
+    /// Every old address the site still answers; tracked, so every checkout serves the same ones.
+    pub fn redirects(&self) -> PathBuf {
+        self.root.join("redirects.json")
+    }
+
     /// `.moss/places.toml` — the hand-edited place-name gazetteer a
     /// `location:` frontmatter value looks a name up in.
     ///
@@ -808,11 +813,6 @@ pub const MOSS_PATH_RULES: &[MossPathRule] = &[
     // `data/` holds non-regenerable user state moss reads and WRITES BACK —
     // reading an evicted one as empty turns a merge into an erase
     // (`feeds::redirects`).
-    //
-    // Emitted as `data/*`: `redirects.json` records the old URLs a site still
-    // answers, which is site content, and a site that keeps it in git wants
-    // every checkout to serve the same redirects. The one directory here with a
-    // file worth committing, so the one rule spelled so the user can.
     r_negatable(".moss/data/", true, CloudPolicy::Synced, false, true),
     // What the last publish put live: one record per target, holding the page
     // hashes the change set is computed from and the note ID that was live at
@@ -859,6 +859,7 @@ pub const MOSS_PATH_RULES: &[MossPathRule] = &[
     // The record of where this site is published. Read as empty, a deployed
     // site looks undeployed and the build bakes localhost into every page.
     r(".moss/state.toml", false, CloudPolicy::Synced, false, true),
+    r(".moss/redirects.json", false, CloudPolicy::Synced, false, true),
     // Root agent-instruction files — tooling, not content, whoever wrote them.
     // Kept in step with the app crate's `build::scan::classify::ROOT_AGENT_CONFIG_FILES`
     // by `moss::infra::moss_paths::tests::root_agent_files_match_the_classifier`,
@@ -1289,7 +1290,8 @@ mod tests {
         const DELIBERATELY_SHARED: &[(&str, &str)] = &[
             (".moss/identity/", "the site's signing identity: a second machine cannot publish the same site without it, so it MUST travel"),
             (".moss/keys/", "same — the keystore is the site's identity, and the alternative is a site only one computer can ever publish"),
-            (".moss/data/", "site state the site itself owns: redirects.json is a rename history every checkout should serve. Its reader already distinguishes unreadable from absent (feeds::redirects)"),
+            (".moss/data/", "site state the site itself owns (comment-sync results, plugin data), which moss reads back and writes"),
+            (".moss/redirects.json", "the old addresses the site still answers: every checkout and machine must serve the same ones. Its reader keeps unreadable apart from absent (feeds::redirects)"),
             (".moss/plugins/", "installed plugin bundles — re-installable, and an evicted bundle simply fails to load"),
             (".moss/state.toml", "where this site is published: wanted on a second machine, which would otherwise bake localhost into pages"),
             (".moss/config.toml", "the user's own configuration — content, not machine state"),
@@ -1888,6 +1890,31 @@ keys/
 agents/
 history/
 ";
+
+    /// The redirect history is tracked; the rest of `data/` is not.
+    #[test]
+    fn the_generated_gitignore_keeps_the_redirect_history_and_ignores_data() {
+        let tmp = make_tmp();
+        let repo = tmp.path();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_WORK_TREE")
+                .output()
+                .expect("run git")
+        };
+        assert!(git(&["init", "-q"]).status.success());
+        let moss_root = repo.join(".moss");
+        std::fs::create_dir_all(&moss_root).unwrap();
+        ensure_moss_gitignore(&moss_root).unwrap();
+
+        let ignored = |rel: &str| git(&["check-ignore", "-q", rel]).status.success();
+        assert!(!ignored(".moss/redirects.json"), "the redirect history must be trackable");
+        assert!(ignored(".moss/data/social/feed.json"), "comments pulled from other platforms stay local");
+        assert!(ignored(".moss/data/comment-sync-state.json"));
+    }
 
     /// The regression. A build must not touch the user's rule, and must not
     /// append a line that shadows it.

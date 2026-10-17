@@ -25,7 +25,7 @@ Each plugin lives in `.moss/plugins/<name>/` inside the project.
 |---|---|---|---|
 | `name` | `string` | yes | Plugin identifier (e.g. "matters"). Must match the plugin directory name. |
 | `version` | `string` | yes | Plugin version in semver format (e.g. "1.0.0"). |
-| `entry` | `string` | yes | Entry point JavaScript file path, relative to the plugin directory. |
+| `entry` | `string` | no | Entry point JavaScript file path, relative to the plugin directory. Required unless the plugin declares only contributes.derivations, which run a pinned binary and need no script. |
 | `capabilities` | `string[]` | no | Hook names this plugin implements (e.g. ["process", "syndicate"]). Each must be a valid hook name. An empty or omitted capabilities field is valid (plugin implements no hooks). |
 | `description` | `string` | no | Human-readable description of what the plugin does. |
 | `author` | `string` | no | Plugin author name or contact. |
@@ -40,7 +40,7 @@ Each plugin lives in `.moss/plugins/<name>/` inside the project.
 | `config_descriptions` | `object` | no | Legacy alias: field name -> help text, folded into settings[].description. |
 | `config_options` | `object` | no | Legacy alias: field name -> allowed values, folded into settings[].options on a string field. |
 | `config_placeholders` | `object` | no | Legacy alias: field name -> placeholder text, folded into settings[].placeholder. |
-| `contributes` | `object` | no | Contributions (deploy targets, frontmatter fields, embed renderers, job descriptors, stack declarations), VS Code style. Each contribution may carry a setup block — needs (host-checked preconditions like "stack"), settings (fields moss draws, the Field vocabulary), credentials, and check (the plugin implements the check_setup hook). A stack contribution carries its own artifact pin (id, version, sources) instead of a setup block. |
+| `contributes` | `object` | no | Contributions (deploy targets, frontmatter fields, embed renderers, job descriptors, stack declarations, derivations, listing styles), VS Code style. Each contribution may carry a setup block — needs (host-checked preconditions like "stack"), settings (fields moss draws, the Field vocabulary), credentials, and check (the plugin implements the check_setup hook). A stack contribution carries its own artifact pin (id, version, sources) instead of a setup block. A derivation (contributes.derivations[id]) names the file extensions it accepts, the fragments it produces, and a pinned one-shot binary that turns a file into markdown fragments an author embeds as ![[file.ext#fragment]]. A listing style (contributes.listing_styles[id] = {label, description, content_width}) is a way of listing a folder that the plugin's `listing` export draws; authors choose it with `children_style: <id>` on the folder's home page. |
 | `min_moss_version` | `string` | no | Minimum moss version this plugin supports (semver). The registry client checks it at install and load; older moss ignores the field. |
 | `repository` | `string` | no | Source repository URL. Display and provenance only. |
 | `homepage` | `string` | no | Homepage URL. Display only. |

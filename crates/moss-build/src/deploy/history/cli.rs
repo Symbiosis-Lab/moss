@@ -267,7 +267,7 @@ fn open_store(root: &VaultRoot) -> HistoryStore {
 /// gone (`resolve_input` never touches the filesystem beyond a `..`
 /// component, so a deleted page's stem still resolves).
 fn relative_source_path(root: &VaultRoot, raw: &str) -> Result<String, String> {
-    let abs = resolve_input(raw);
+    let abs = Some(resolve_input(raw)).filter(|abs| abs.starts_with(root.path()) || Path::new(raw).is_absolute()).unwrap_or_else(|| root.path().join(raw));
     let rel = abs
         .strip_prefix(root.path())
         .map_err(|_| format!("'{raw}' is not inside the site at '{}'", root.as_str()))?;
@@ -315,15 +315,19 @@ fn resolve_id<'a>(records: &'a [(String, PublishRecord)], needle: &str) -> Resul
 /// No `--allow-plugins` here — this command has no such flag — so a
 /// sideloaded plugin is refused exactly as a plain `moss build` refuses one;
 /// a plugin the app has already approved still runs.
-fn headless_build_sealed(root: &VaultRoot) -> Result<SealedManifest, String> {
+pub(crate) fn headless_build_sealed(root: &VaultRoot) -> Result<SealedManifest, String> {
     crate::build::cli_output::install_headless_logger();
     crate::plugins::install::registry_client::enforce::install_headless(false);
-    let _session = crate::system::folder_session::register_session(root.as_str());
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|e| format!("failed to start runtime: {e}"))?;
+    // In the runtime: a second build in this process spawns the first one's shutdown.
+    let _session = {
+        let _context = runtime.enter();
+        crate::system::folder_session::register_session(root.as_str())
+    };
 
     runtime.block_on(crate::deploy::one_shot::build_sealed_now(root))
 }
@@ -346,23 +350,9 @@ fn run_save(root: &VaultRoot, name: Option<String>, json: bool) -> i32 {
     if let Err(msg) = crate::cli::site_guard::guard_cli_open(root.as_str(), "history") {
         return fail(&msg, json);
     }
-    let store = open_store(root);
     let label = name.filter(|s| !s.trim().is_empty());
-
-    let sealed = match headless_build_sealed(root) {
-        Ok(s) => s,
-        Err(e) => return fail(&build_failure_message(&e), json),
-    };
-
-    let target = current_target(root);
-    if let Err(e) = store.snapshot_manual(root.path(), &sealed, &target, label) {
-        return fail(&build_failure_message(&format!("could not save a version: {e}")), json);
-    }
-
-    // `list_records` sorts by filename, which sorts chronologically (see its
-    // own doc) — the record `snapshot_manual` just wrote is always last.
-    match store.list_records().pop() {
-        Some((id, record)) => {
+    match save_version(root, label) {
+        Ok((id, record)) => {
             if json {
                 match saved_json(&id, &record) {
                     Ok(s) => println!("{s}"),
@@ -373,11 +363,20 @@ fn run_save(root: &VaultRoot, name: Option<String>, json: bool) -> i32 {
             }
             0
         }
-        None => {
-            // Unreachable in practice (the write above just succeeded), but
-            // an empty listing is not this function's place to explain.
-            fail("saved a version but could not find it afterward", json)
-        }
+        Err(e) => fail(&build_failure_message(&e), json),
+    }
+}
+
+/// Build `root` and save a version now, as `--save` does; its id and record.
+pub(crate) fn save_version(root: &VaultRoot, label: Option<String>) -> Result<(String, PublishRecord), String> {
+    let store = open_store(root);
+    let earlier: HashSet<String> = store.list_records().into_iter().map(|(id, _)| id).collect();
+    let sealed = headless_build_sealed(root)?;
+    store.snapshot_manual(root.path(), &sealed, &current_target(root), label).map_err(|e| format!("could not save a version: {e}"))?;
+    // Newest last; with history off, the snapshot writes nothing and the last record is older.
+    match store.list_records().pop() {
+        Some((id, record)) if !earlier.contains(&id) => Ok((id, record)),
+        _ => Err("no version was saved; is history turned off with [history] enabled = false?".to_string()),
     }
 }
 
@@ -740,6 +739,9 @@ fn print_json(rows: &[DisplayRow]) {
     }
 }
 
+/// A person reads the built-in target as the service it publishes to.
+fn target_label(t: &str) -> &str { if t == "moss" || t.starts_with("moss:") { "mosspub.com" } else { t } }
+
 /// Newest-first, grouped by calendar day (the day key and the header both
 /// come from the record's own `published_at`, which is always UTC — see
 /// [`record::format_date`], the same convention this reuses).
@@ -767,7 +769,7 @@ fn render_human(rows: &[DisplayRow], show_target: bool, show_counts: bool) {
             line.push_str("  live");
         }
         if show_target {
-            line.push_str(&format!("  [{}]", row.target));
+            line.push_str(&format!("  [{}]", target_label(&row.target)));
         }
         if show_counts {
             let mut parts = Vec::new();
@@ -804,6 +806,13 @@ mod tests {
         let vault = dir.path().join("vault");
         std::fs::create_dir_all(&vault).unwrap();
         (dir, vault)
+    }
+
+    #[test]
+    fn the_built_in_target_reads_as_the_service_not_the_internal_id() {
+        assert_eq!(target_label("moss"), "mosspub.com");
+        assert_eq!(target_label("moss:her-blog"), "mosspub.com");
+        assert_eq!(target_label("github-pages"), "github-pages");
     }
 
     #[test]
@@ -934,6 +943,13 @@ mod tests {
 
     /// A page's history must be reachable after the page itself is gone —
     /// that is the whole point of "restore a deleted page".
+    #[test]
+    fn a_relative_path_from_outside_the_site_is_read_from_the_site() {
+        let (_dir, vault) = tmp_vault();
+        let root = VaultRoot::resolve(&vault);
+        assert_eq!(relative_source_path(&root, "articles/hello.md").unwrap(), "articles/hello.md");
+    }
+
     #[test]
     fn relative_source_path_does_not_require_the_file_to_exist() {
         let (_dir, vault) = tmp_vault();

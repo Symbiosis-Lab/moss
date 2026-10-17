@@ -17,9 +17,13 @@ pub mod list;
 // `env` reads and writes the environment through `vault::config`, the one
 // config writer both binaries share.
 pub mod env;
+pub mod tools;
 // `rename` is the editor's rename-with-refs from the terminal; its whole body
 // is `editor::ref_scan`, which crossed with it.
 pub mod rename;
+pub mod render;
+// Read-only project ownership lookup for hosts opening an arbitrary path.
+pub mod root;
 // `guide` reads nothing but the binary — no project, no network, no window —
 // and its whole body was already `agents::skill_package`, so it belongs beside
 // what it prints rather than one crate up behind a shim.
@@ -34,6 +38,11 @@ pub mod domain;
 // Argument parsing for `moss import`, over the engine in
 // `vault::import::scrape::run`.
 pub mod import;
+// `moss import <folder>` / `--status`: show a folder's files as pages and report
+// where each folder stands, over `vault::derive_*`.
+pub mod import_folder;
+// `moss expand`: write embeds out as text.
+pub mod expand;
 // `moss deploy --prebuilt` over the shared driver in `deploy::prebuilt`; the
 // app's own deploy mode calls the same one with a Tauri sink instead of a
 // printing one (track C4c).

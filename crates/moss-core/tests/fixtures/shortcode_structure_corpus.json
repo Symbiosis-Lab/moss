@@ -7,9 +7,11 @@
     "Both must match this corpus, so the editor live-view parse can never drift from",
     "the build without a red test. Structural facts only (names + nesting + grid cell",
     "counts) — language-neutral, no byte offsets. `gridCells` is asserted for grid",
-    "blocks only (buttons store items, not cells, on the build side). Keep `+++`",
-    "unambiguous: never inside a nested block, where build cell-splitting is not",
-    "nesting-aware (tracked separately)."
+    "blocks only (buttons store items, not cells, on the build side). Only the",
+    "typed shortcodes are listed: a closed block with any other name (an unknown",
+    "name, a nameless {.class} region) is a wrapper whose contents are not listed,",
+    "and an unclosed opener is plain text, so what it holds is listed as if it were",
+    "not there. A `+++` inside a nested block divides that block, not the grid."
   ],
   "cases": [
     {
@@ -59,6 +61,61 @@
       "name": "gallery (no cells, no children)",
       "input": ":::gallery 3\n![](one.jpg)\n![](two.jpg)\n:::\n",
       "blocks": [{ "name": "gallery", "gridCells": null, "children": [] }]
+    },
+    {
+      "name": "same-length nesting: a bare closer closes the innermost block",
+      "input": ":::grid 2\nleft\n:::buttons\n[a](/a)\n:::\n+++\nright\n:::\n",
+      "blocks": [{ "name": "grid", "gridCells": 2, "children": [{ "name": "buttons", "gridCells": null, "children": [] }] }]
+    },
+    {
+      "name": "mixed lengths nest the same as equal ones",
+      "input": ":::::grid 2\nleft\n::::grid 2\na\n+++\nb\n:::\n+++\nright\n::::\n",
+      "blocks": [{ "name": "grid", "gridCells": 2, "children": [{ "name": "grid", "gridCells": 2, "children": [] }] }]
+    },
+    {
+      "name": "three levels, every closer is three colons",
+      "input": ":::grid 2\none\n:::grid 2\na\n+++\n:::buttons\n[a](/a)\n:::\n:::\n+++\ntwo\n:::\n",
+      "blocks": [{ "name": "grid", "gridCells": 2, "children": [{ "name": "grid", "gridCells": 2, "children": [{ "name": "buttons", "gridCells": null, "children": [] }] }] }]
+    },
+    {
+      "name": "a closer of another length still closes",
+      "input": "::::gallery 3\n![](one.jpg)\n:::\n",
+      "blocks": [{ "name": "gallery", "gridCells": null, "children": [] }]
+    },
+    {
+      "name": "a name starting with a digit opens a nested block",
+      "input": ":::grid 2\nleft\n:::1col\nx\n:::\n+++\nright\n:::\n",
+      "blocks": [{ "name": "grid", "gridCells": 2, "children": [] }]
+    },
+    {
+      "name": "a non-ASCII name opens a nested block",
+      "input": ":::grid 2\nleft\n:::你好\nx\n:::\n+++\nright\n:::\n",
+      "blocks": [{ "name": "grid", "gridCells": 2, "children": [] }]
+    },
+    {
+      "name": "a nameless attribute fence opens a nested block",
+      "input": ":::grid 2\nleft\n::: {.note}\nx\n:::\n+++\nright\n:::\n",
+      "blocks": [{ "name": "grid", "gridCells": 2, "children": [] }]
+    },
+    {
+      "name": "a stray closer after a closed block is ignored",
+      "input": ":::grid 2\na\n+++\nb\n:::\n:::\n",
+      "blocks": [{ "name": "grid", "gridCells": 2, "children": [] }]
+    },
+    {
+      "name": "an unclosed opener is plain text",
+      "input": ":::grid 2\na\n+++\nb\n",
+      "blocks": []
+    },
+    {
+      "name": "an unclosed outer leaves the inner block it shares a closer with",
+      "input": ":::hero\nx\n:::grid 2\na\n+++\nb\n:::\n",
+      "blocks": [{ "name": "grid", "gridCells": 2, "children": [] }]
+    },
+    {
+      "name": "colons followed by a plain word are body text, not a closer",
+      "input": ":::grid 2\na\n::: extra\n+++\nb\n:::\n",
+      "blocks": [{ "name": "grid", "gridCells": 2, "children": [] }]
     }
   ]
 }

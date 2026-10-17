@@ -11,7 +11,7 @@ use std::path::Path;
 
 use super::converter::extract_article;
 use super::fetch::{content_type_to_extension, hash_url, strip_query};
-use super::run::{compose_note, write_note, ScrapeResult, ASSETS_SUBDIR};
+use super::run::{compose_note, write_note, PageGap, ScrapeResult, ASSETS_SUBDIR};
 use super::writer::{rename_for_collision, sanitize_filename};
 
 /// Import a local file (MHTML web-archive or plain `.html`) into `output_dir`.
@@ -156,7 +156,13 @@ pub(crate) async fn import_local_file(path: &Path, output_dir: &Path) -> Result<
         linked_files_downloaded: 0,
         oversized_files: 0,
         widgets_carried: article.widgets.carried,
-        widgets_dropped: article.widgets.dropped,
+        widget_gaps: if article.widgets.dropped_kinds.is_empty() {
+            Vec::new()
+        } else {
+            // A local file has no address, so it is named as the author gave it.
+            let page = path.file_name().map_or_else(|| "imported".into(), |n| n.to_string_lossy().into_owned());
+            vec![PageGap { page, kinds: article.widgets.dropped_kinds.clone() }]
+        },
         capped: false,
         remaining_urls: 0,
         sitemap_urls: 0,

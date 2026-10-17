@@ -399,7 +399,11 @@ pub async fn acquire_for_site_dir(
                 }
                 crate::cli_eprintln!("{}", preview_ready_line(&existing.url));
                 crate::cli_eprintln!("{}", standing_by_message(&existing));
-                wait_for_owner_to_leave(&folder).await;
+                if wait_for_owner_to_leave_or_interrupt(&folder).await {
+                    crate::cli_eprintln!("Stopping...");
+                    crate::cli_eprintln!("Stopped");
+                    std::process::exit(0);
+                }
             }
         }
     }
@@ -433,6 +437,20 @@ pub async fn wait_for_owner_to_leave(folder: &Path) {
         if find_live_owner(folder).await.is_none() {
             return;
         }
+    }
+}
+
+/// [`wait_for_owner_to_leave`], or Ctrl-C, whichever comes first. Returns
+/// `true` when interrupted.
+///
+/// A job backgrounded by a non-interactive shell inherits SIGINT ignored, and
+/// once any `ctrl_c` handler exists, an await outside a `select` swallows the
+/// signal. Every standby wait goes through here so the signal is never
+/// swallowed.
+pub async fn wait_for_owner_to_leave_or_interrupt(folder: &Path) -> bool {
+    tokio::select! {
+        _ = wait_for_owner_to_leave(folder) => false,
+        _ = tokio::signal::ctrl_c() => true,
     }
 }
 

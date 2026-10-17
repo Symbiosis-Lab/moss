@@ -16,11 +16,36 @@ fn doc(start: &str, end: Option<&str>) -> ParsedDocument {
     }
 }
 
-fn time_text(d: &ParsedDocument, lang: Language) -> String {
+fn time_element(d: &ParsedDocument, lang: Language) -> String {
     let html = render(d, lang, false, None).unwrap();
-    let from = html.find("\">").unwrap() + 2;
-    let from = html[from..].find("\">").unwrap() + from + 2;
-    html[from..html.find("</time>").unwrap()].to_string()
+    let from = html.find(r#"<time class="moss-event-time""#).unwrap();
+    let to = from + html[from..].find("</time>").unwrap() + "</time>".len();
+    html[from..to].to_string()
+}
+
+fn time_text(d: &ParsedDocument, lang: Language) -> String {
+    let element = time_element(d, lang);
+    let inner = &element[element.find('>').unwrap() + 1..element.len() - "</time>".len()];
+    let mut text = String::new();
+    let mut in_tag = false;
+    for c in inner.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => text.push(c),
+            _ => {}
+        }
+    }
+    text
+}
+
+#[test]
+fn the_page_time_carries_the_listing_date_parts() {
+    let d = doc("2026-11-01 14:00", Some("2026-11-01 16:00"));
+    let element = time_element(&d, Language::En);
+    assert!(element.contains(r#"<span class="moss-when-day">1</span>"#), "{element}");
+    assert!(element.contains(r#"<span class="moss-when-time">2:00–4:00 PM</span>"#), "{element}");
+    assert_eq!(time_text(&d, Language::En), "Sunday, November 1, 2026, 2:00–4:00 PM");
 }
 
 #[test]
@@ -73,4 +98,35 @@ fn a_page_without_an_event_renders_nothing() {
 fn end_before_start_is_treated_as_no_end() {
     let d = doc("2026-11-01 14:00", Some("2026-11-01 09:00"));
     assert_eq!(time_text(&d, Language::En), "Sunday, November 1, 2026, 2:00 PM");
+}
+
+#[test]
+fn the_separator_before_a_clock_time_is_its_own_span() {
+    let d = doc("2026-11-01 14:00", Some("2026-11-01 16:00"));
+    let element = time_element(&d, Language::En);
+    assert!(
+        element.contains(r#"<span class="moss-when-year">2026</span><span class="moss-when-sep">, </span><span class="moss-when-time">"#),
+        "{element}"
+    );
+}
+
+#[test]
+fn a_date_only_event_has_no_separator_span() {
+    let d = doc("2026-11-01", None);
+    assert!(!time_element(&d, Language::En).contains("moss-when-sep"));
+}
+
+#[test]
+fn both_date_to_time_separators_of_a_timed_multi_day_range_are_spans() {
+    let d = doc("2026-11-01 14:00", Some("2026-11-03 16:00"));
+    let element = time_element(&d, Language::En);
+    assert_eq!(element.matches(r#"<span class="moss-when-sep">"#).count(), 2, "{element}");
+    assert!(
+        element.contains(r#"<span class="moss-when-time">2:00 PM</span> – <span class="moss-when-weekday">Tuesday</span>"#),
+        "{element}"
+    );
+    assert!(
+        element.contains(r#"<span class="moss-when-year">2026</span><span class="moss-when-sep">, </span><span class="moss-when-time">4:00 PM</span>"#),
+        "{element}"
+    );
 }

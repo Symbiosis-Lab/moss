@@ -41,6 +41,15 @@ export const COPY: Record<Lang, CommentWidgetCopy> = {
     justNow: 'just now',
     errorPrefix: 'Error: ',
   },
+  de: {
+    nameRequired: 'Bitte geben Sie einen Namen an',
+    submitting: 'Wird gesendet …',
+    verifying: 'Wird überprüft …',
+    posted: 'Gesendet',
+    anonymous: 'Anonym',
+    justNow: 'gerade eben',
+    errorPrefix: 'Fehler: ',
+  },
   'zh-hans': {
     nameRequired: '请填写名字',
     submitting: '提交中…',

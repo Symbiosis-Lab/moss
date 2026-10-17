@@ -42,7 +42,7 @@ try {
   await page.addInitScript(() => {
     window.__pace = [];
     const tick = (now) => {
-      try { if (window.__state) { const s = __state(); __pace.push({ t: now, y: scrollY, washT: s.washT, running: s.running, shown: s.shown, q: finalDissolve, xf: s.xf, stage: document.getElementById('stage').getBoundingClientRect().top, v: s.view }); } } catch (e) {}
+      try { if (window.__state) { const s = __state(); __pace.push({ t: now, vt: viewT, y: scrollY, washT: s.washT, running: s.running, shown: s.shown, q: finalDissolve, xf: s.xf, stage: document.getElementById('stage').getBoundingClientRect().top, v: pos() }); } } catch (e) {}
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
@@ -99,13 +99,17 @@ try {
   await page.waitForFunction(() => [0, 1].every((i) => __onHand[i]), null, { timeout: 30000 });
   const join = await gesture(0, 1);
   const [r0, r1] = join.rests;
-  // the picture sets off the frame the page moves and arrives still, about two seconds later
+  // The recorder runs before the page in each frame, so a sample's v is where the page put the picture
+  // in the frame before, at time vt. Every time and speed of the picture is read from vt, not t.
+  // The picture sets off in the frame the page moves and arrives still, about two seconds later.
   const set = join.frames.find((r) => r.y !== r0), arrival = join.frames.find((r) => Math.abs(r.v - r1) <= 1);
-  const travel = arrival.t - set.t, pace = await page.evaluate(() => WASH_PACE * innerHeight);
+  const travel = arrival.vt - set.t, [pace, maxLag] = await page.evaluate(() => [WASH_PACE * innerHeight, WASH_MAX_LAG]);
   assert(travel >= 1600, `scene 1 to 2 was travelled by the picture in ${Math.round(travel)}ms, too fast to watch`);
-  // read over a quarter second, so a frame that arrives late does not read as a burst of speed
-  const speeds = join.frames.map((r, i) => { const from = join.frames.slice(0, i).findLast((f) => r.t - f.t >= 250); return from ? Math.abs(r.v - from.v) / (r.t - from.t) * 1000 : 0; });
-  assert(Math.max(...speeds) <= pace * 1.15 + 20, `the picture travelled at ${Math.round(Math.max(...speeds))}px/s, faster than its pace of ${Math.round(pace)}`);
+  // From one frame to the next the picture moves at its pace, or faster only to stay within
+  // WASH_MAX_LAG seconds of the page. The picture may still be on its way from the title here.
+  const speeds = join.frames.slice(1).map((r, i) => { const p = join.frames[i]; return r.vt > p.vt && { speed: Math.abs(r.v - p.v) / (r.vt - p.vt) * 1000, limit: Math.max(pace, Math.abs(p.y - p.v) / maxLag) }; }).filter(Boolean);
+  const fastest = Math.max(...speeds.map((s) => s.speed)), over = speeds.find((s) => s.speed > s.limit * 1.05);
+  assert(!over, `the picture travelled at ${over && Math.round(over.speed)}px/s, faster than its pace of ${Math.round(pace)}${over && over.limit > pace ? ` or the ${Math.round(over.limit)}px/s it may go to catch up` : ''}`);
   assert(join.frames.some((r) => r.running && Math.abs(r.v - r0) < 60), 'the wash did not start with the gesture');
   const T = await page.evaluate(() => T_TOTAL);
   // the wash is drawn in the frame after the picture moves, so one frame of lag is the position's own
@@ -114,7 +118,7 @@ try {
   assert(drift.length && Math.max(...drift) < .04, `the wash did not follow the picture between the rests: worst drift ${Math.max(...drift).toFixed(3)}`);
   const early = join.frames.find((r) => r.washT >= T - .01 && r.v < r1 - 3);
   assert(!early, `scene 2 was whole ${early && Math.round(r1 - early.v)}px before the picture arrived`);
-  console.log(`webkit 1440×900: scene 1 to 2: the picture travels over ${Math.round(travel)}ms at no more than its pace; the wash tracks it and is whole on arrival`);
+  console.log(`webkit 1440×900: scene 1 to 2: the picture travels over ${Math.round(travel)}ms at no more than its pace (fastest ${Math.round(fastest)}px/s, pace ${Math.round(pace)}, catching up at up to ${Math.round(Math.max(...speeds.map((s) => s.limit)))}); the wash tracks it and is whole on arrival`);
   // Standing in scene 2, one hairline ring at a time leaves the demo's Publish
   // button and crosses the page on the page's own canvas; the next leaves only
   // once the last has gone. Nothing else is redrawn for nothing meanwhile: the

@@ -1037,3 +1037,12 @@ fn image_bare_unchanged_from_today() {
         "/assets/photo.jpg"
     );
 }
+
+#[test]
+fn dotted_folder_link_emits_no_unresolved_diagnostic() {
+    let graph = graph_with(&["reports/index.md", "audits/dept-b/index.md"]);
+    let mut doc = parse("[one](../../reports/)");
+    let res = resolve_urls(&mut doc, &graph, "audits/dept-b/index.md");
+    assert!(res.diagnostics.is_empty(), "{:?}", res.diagnostics);
+    assert_eq!(first_link_href(&doc), "moss-resolved:reports/index.md");
+}

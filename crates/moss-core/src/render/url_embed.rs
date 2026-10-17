@@ -13,8 +13,7 @@
 use crate::asset_snapshot::AssetSnapshot;
 use crate::media::{extract_placement_from_alias, Placement};
 use crate::render::iframe::synthesize_iframe_html;
-use crate::resolve::embed_renderer::Sizing;
-use crate::resolve::title_params::TitleParams;
+use crate::resolve::title_params::{apply_frame_alias, TitleParams};
 use crate::resolve::wikilink_dispatch::PotholeContent;
 
 /// Provider-specific iframe configuration for a matched URL.
@@ -38,20 +37,8 @@ pub struct ProviderEmbed {
 /// Matched providers: `youtube`, `vimeo`, `codepen`.
 /// Everything else returns a generic passthrough with empty policy strings.
 pub fn detect_provider(url: &str) -> ProviderEmbed {
-    let after_scheme = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .unwrap_or(url);
-
-    let (host, path_and_query) = match after_scheme
-        .find('/')
-        .and_then(|i| after_scheme.split_at_checked(i))
-    {
-        Some(split) => split,
-        None => (after_scheme, ""),
-    };
-
-    let bare_host = host.strip_prefix("www.").unwrap_or(host);
+    let (host, path_and_query) = split_host_path(url);
+    let bare_host = bare_host(host);
 
     // YouTube
     if bare_host == "youtube.com" || bare_host == "youtu.be" {
@@ -106,6 +93,26 @@ pub fn detect_provider(url: &str) -> ProviderEmbed {
     }
 }
 
+/// The host without a leading `www.`, the form a visitor reads.
+fn bare_host(host: &str) -> &str {
+    host.strip_prefix("www.").unwrap_or(host)
+}
+
+/// Splits an http(s) URL into its host and the `/path?query` that follows.
+fn split_host_path(url: &str) -> (&str, &str) {
+    let after_scheme = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    match after_scheme
+        .find('/')
+        .and_then(|i| after_scheme.split_at_checked(i))
+    {
+        Some(split) => split,
+        None => (after_scheme, ""),
+    }
+}
+
 /// Synthesize `<iframe>` HTML for an external URL embed.
 ///
 /// 1. Detects the provider and rewrites the URL to the canonical embed form.
@@ -129,7 +136,7 @@ pub fn synthesize_url_embed_html(
             placement.align = rest_placement.align;
             placement.size = rest_placement.size;
             if !rest.is_empty() {
-                apply_alias_to_params(&rest, &mut params);
+                apply_frame_alias(&rest, &mut params);
             }
         }
         PotholeContent::Alias(alias) => {
@@ -138,7 +145,7 @@ pub fn synthesize_url_embed_html(
             let (found, rest) = extract_placement_from_alias(alias.as_str());
             placement = found;
             if !rest.is_empty() {
-                apply_alias_to_params(&rest, &mut params);
+                apply_frame_alias(&rest, &mut params);
             }
         }
         PotholeContent::Params(kv) => {
@@ -148,6 +155,9 @@ pub fn synthesize_url_embed_html(
         }
     }
 
+    if params.get("title").is_none() {
+        params.insert("title", fallback_frame_title(provider.provider_name, &provider.embed_url));
+    }
     if !provider.allow.is_empty() {
         params.insert("allow", provider.allow);
     }
@@ -168,17 +178,16 @@ pub fn synthesize_url_embed_html(
 // Private helpers
 // ---------------------------------------------------------------------------
 
-fn apply_alias_to_params(alias: &str, params: &mut TitleParams) {
-    match Sizing::parse(alias) {
-        Some(Sizing::Width(w)) => {
-            params.insert("width", w.to_css());
-        }
-        Some(Sizing::Box(w, h)) => {
-            params.insert("width", w.to_css());
-            params.insert("height", h.to_css());
-        }
-        None => {
-            params.insert("title", alias);
+/// A frame's name when the author gave none, so a screen reader can announce
+/// it: the provider's player by name, any other page by the host it shows.
+fn fallback_frame_title(provider_name: &str, url: &str) -> String {
+    match provider_name {
+        "youtube" => "YouTube video".to_string(),
+        "vimeo" => "Vimeo video".to_string(),
+        "codepen" => "CodePen".to_string(),
+        _ => {
+            let (host, _) = split_host_path(url);
+            format!("Embedded page from {}", bare_host(host))
         }
     }
 }
@@ -622,5 +631,77 @@ mod tests {
         let p = detect_provider("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=30s");
         assert!(p.embed_url.contains("start=30"), "s-suffix timestamp should be normalised, got: {}", p.embed_url);
         assert!(!p.embed_url.contains("30s"), "raw 30s must not appear, got: {}", p.embed_url);
+    }
+
+    // Wiki-form pipe parts after the URL: title and size, either order.
+    fn embed_from_pothole(url: &str, raw: &str) -> String {
+        use crate::resolve::wikilink_dispatch::parse_pothole_params;
+        synthesize_url_embed_html(url, &parse_pothole_params(raw), &empty_snapshot())
+    }
+
+    #[test]
+    fn url_embed_title_then_size_splits_both() {
+        let out = embed_from_pothole("https://example.test/form", "Sign-up form|420x620");
+        assert!(out.contains(r#"title="Sign-up form""#), "got: {out}");
+        assert!(out.contains(r#"width="420px""#), "got: {out}");
+        assert!(out.contains(r#"height="620px""#), "got: {out}");
+    }
+
+    #[test]
+    fn url_embed_size_then_title_splits_both() {
+        let out = embed_from_pothole("https://example.test/form", "420x620|Sign-up form");
+        assert!(out.contains(r#"title="Sign-up form""#), "got: {out}");
+        assert!(out.contains(r#"width="420px""#), "got: {out}");
+        assert!(out.contains(r#"height="620px""#), "got: {out}");
+    }
+
+    #[test]
+    fn url_embed_size_only_gets_host_title() {
+        let out = embed_from_pothole("https://www.example.test/form", "420x620");
+        assert!(out.contains(r#"title="Embedded page from example.test""#), "got: {out}");
+        assert!(out.contains(r#"height="620px""#), "got: {out}");
+    }
+
+    #[test]
+    fn url_embed_no_pothole_gets_host_title() {
+        let out = synthesize_url_embed_html(
+            "https://www.example.test/form",
+            &PotholeContent::Empty,
+            &empty_snapshot(),
+        );
+        assert!(out.contains(r#"title="Embedded page from example.test""#), "got: {out}");
+    }
+
+    #[test]
+    fn url_embed_provider_frame_without_title_is_named_after_its_player() {
+        let out = embed_from_pothole("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "");
+        assert!(out.contains(r#"title="YouTube video""#), "got: {out}");
+    }
+
+    #[test]
+    fn url_embed_host_title_is_escaped() {
+        let out = embed_from_pothole("https://a&b.example.test/form", "");
+        assert!(out.contains(r#"title="Embedded page from a&amp;b.example.test""#), "got: {out}");
+    }
+
+    #[test]
+    fn url_embed_empty_parts_are_skipped() {
+        let out = embed_from_pothole("https://example.test/form", "Sign-up form|420x620|");
+        assert!(out.contains(r#"title="Sign-up form""#), "got: {out}");
+        assert!(out.contains(r#"height="620px""#), "got: {out}");
+    }
+
+    #[test]
+    fn url_embed_pipes_only_gets_fallback_title() {
+        let out = embed_from_pothole("https://example.test/form", "||");
+        assert!(out.contains(r#"title="Embedded page from example.test""#), "got: {out}");
+    }
+
+    #[test]
+    fn url_embed_provider_title_and_size_both_apply() {
+        let out = embed_from_pothole("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "Intro|640x360");
+        assert!(out.contains(r#"title="Intro""#), "got: {out}");
+        assert!(out.contains(r#"width="640px""#), "got: {out}");
+        assert!(out.contains(r#"data-provider="youtube""#), "got: {out}");
     }
 }

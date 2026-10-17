@@ -59,9 +59,14 @@ use crate::vault::places::Gazetteer;
 /// units (`1 / k` world units): every tile rounds its vertices to integers
 /// from an origin on that one lattice, so the runtime must place it exactly
 /// there.
+/// `fit` and `edgeFade` are the fit and outer-edge fade the opening view's
+/// cells were chosen for (`place_map::relevant_tiles`).
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct TileIndex<'a> {
     k: f64,
+    fit: place_map::ExplorerFit,
+    edge_fade: place_map::EdgeFade,
     columns: u32,
     rows: u32,
     cells: &'a [(i16, i16)],
@@ -124,9 +129,11 @@ mod generator_version_guard {
 /// The hash naming this build's `_moss/map.<hash>/` directory: the pack's
 /// own fingerprint (its source manifest digest, from the embedded
 /// `MOSSPLM1` header — changes only when the compiled-in pack data
-/// changes), [`GENERATOR_VERSION`], and the set of regional cells
-/// `place_map::relevant_tiles` derives from `gazetteer` (sorted, so
-/// iteration order never matters). Never a function of site config beyond
+/// changes), [`GENERATOR_VERSION`], and the bytes of `tiles.json`, which
+/// list the regional cells `place_map::relevant_tiles` derives from
+/// `gazetteer` (sorted, so iteration order never matters). The explorer
+/// caches `tiles.json` for good under this name, so any change to it must
+/// move the directory. Never a function of site config beyond
 /// the gazetteer, or of page content at all, so a page edit never moves
 /// this directory and a `.moss/places.toml` edit moves it only when it
 /// actually changes which cells matter — see
@@ -143,11 +150,22 @@ pub fn assets_hash(context: &place_map::PlaceMapContext, gazetteer: &Gazetteer) 
     // bytes, not the pack fingerprint above, are what catches a
     // generator-only change.
     buf.extend_from_slice(context.labels_bytes());
-    for (x, y) in place_map::relevant_tiles(gazetteer, context.pack()) {
-        buf.extend_from_slice(&x.to_le_bytes());
-        buf.extend_from_slice(&y.to_le_bytes());
-    }
+    buf.extend_from_slice(&tile_index_json(&place_map::relevant_tiles(gazetteer, context.pack())));
     compute_binary_hash(&buf)
+}
+
+/// `tiles.json` for `cells`.
+fn tile_index_json(cells: &[(i16, i16)]) -> Vec<u8> {
+    serde_json::to_vec(&TileIndex {
+        k: TILE_K,
+        fit: place_map::EXPLORER_FIT,
+        edge_fade: place_map::EDGE_FADE,
+        columns: TILE_COLUMNS,
+        rows: TILE_ROWS,
+        cells,
+        origins: cells.iter().map(|&(x, y)| (format!("{x},{y}"), place_map::tile_origin_units(x, y))).collect(),
+    })
+    .expect("a tile index of integers and finite numbers serializes")
 }
 
 /// One asset this module can emit, and how to render it when the cache
@@ -332,14 +350,7 @@ pub fn emit(
     // caching on its own.
     let index_sp = ServedPath::for_place_map_asset(&hash, "tiles.json")
         .map_err(|e| format!("Invalid place-map tile index path: {e}"))?;
-    let index_json = serde_json::to_vec(&TileIndex {
-        k: TILE_K,
-        columns: TILE_COLUMNS,
-        rows: TILE_ROWS,
-        cells: &regional_tiles,
-        origins: regional_tiles.iter().map(|&(x, y)| (format!("{x},{y}"), place_map::tile_origin_units(x, y))).collect(),
-    })
-        .map_err(|e| format!("Failed to serialize tiles.json: {e}"))?;
+    let index_json = tile_index_json(&regional_tiles);
     BuildContext::for_render(output_dir, pending)
         .emit(&index_sp, &index_json, HashBucket::Files)
         .map_err(|e| format!("Failed to emit place-map tile index: {e}"))?;
@@ -480,6 +491,27 @@ mod tests {
         assert_eq!(assets_hash(&context, &before), assets_hash(&context, &after));
     }
 
+    /// The explorer fetches `tiles.json` with `force-cache`, so a change to
+    /// any of its fields, not only to its cells, must move the directory:
+    /// otherwise a returning reader pairs a cached index with a new explorer.
+    #[test]
+    fn directory_name_covers_every_byte_of_tiles_json() {
+        let context = place_map::PlaceMapContext::embedded().unwrap();
+        let gaz = gazetteer("[\"Port\"]\nlat = 33.89\nlng = 35.5\nprecision = \"city\"\n");
+        let (_dir, paths) = scratch_paths("index-bytes");
+        let output_dir = tempfile::tempdir().unwrap();
+        let mut pending = PendingManifest::new(SiteHashes::default());
+        emit(&context, &gaz, &paths, output_dir.path(), &mut pending).unwrap();
+        let dir = output_dir.path().join("_moss").join(format!("map.{}", assets_hash(&context, &gaz)));
+        let index = std::fs::read(dir.join("tiles.json")).unwrap();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&context.pack_fingerprint());
+        expected.extend_from_slice(&GENERATOR_VERSION.to_le_bytes());
+        expected.extend_from_slice(context.labels_bytes());
+        expected.extend_from_slice(&index);
+        assert_eq!(assets_hash(&context, &gaz), compute_binary_hash(&expected));
+    }
+
     /// The second call (warm transform cache) renders nothing; the first
     /// renders the world map plus the gazetteer's regional tiles.
     #[test]
@@ -573,6 +605,16 @@ mod tests {
         assert_eq!(std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).count(), 2, "world.svg + tiles.json only");
     }
 
+    /// Waits until no owned cache publication holds the cache, as the next build would find it.
+    #[cfg(target_os = "macos")]
+    fn wait_for_cache_publications(paths: &MossPaths, what: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while crate::build::lifecycle::try_begin_cache_gc(paths).is_err() {
+            assert!(std::time::Instant::now() < deadline, "{what} did not settle");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn cloud_only_cache_folders_do_not_remove_maps_from_the_build() {
@@ -624,21 +666,21 @@ mod tests {
             }
             assert!(crate::build::lifecycle::try_begin_cache_gc(&paths).is_err(), "the admitted owned publication retains its local source through completion");
             drop(cloud);
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-            loop {
-                if let Ok(token) = crate::build::lifecycle::try_begin_cache_gc(&paths) { drop(token); break; }
-                assert!(std::time::Instant::now() < deadline, "owned map cache publication did not settle after the actual write became available");
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
+            wait_for_cache_publications(&paths, "owned map cache publication after the actual write became available");
             assert_eq!(std::fs::read(objects.blob_path(&oid)).unwrap(), tile.as_bytes(), "the shared object is available only after verified owned publication");
             let record = transforms.get_with(&Asset::Tile(x, y).cache_key(&context), crate::build::cache::RecordMode::Request).expect("owned record publication settles without another build");
             assert_eq!(record.transforms[&Asset::Tile(x, y).name()].oid, oid);
-            for expected in [0, 0] {
+            // Record publications past the background queue's bound are skipped, not failed: the next build renders those tiles again and caches them.
+            let mut rendered = Vec::new();
+            for _ in 0..3 {
                 let next = tempfile::tempdir().unwrap();
                 let mut pending = PendingManifest::new(SiteHashes::default());
-                assert_eq!(emit(&context, &gaz, &paths, next.path(), &mut pending).unwrap(), expected);
+                rendered.push(emit(&context, &gaz, &paths, next.path(), &mut pending).unwrap());
                 assert_eq!(pending.seal().site_hashes_view().files.len(), cells.len() + 2);
+                wait_for_cache_publications(&paths, "the rebuild's cache publication");
             }
+            assert!(rendered[0] < cells.len(), "the settled records spare the first rebuild: {rendered:?}");
+            assert_eq!(rendered[1..], [0, 0], "{rendered:?}");
         }
     }
 

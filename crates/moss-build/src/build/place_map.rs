@@ -18,6 +18,9 @@ mod svg;
 
 pub use context::{LocatorPlacement, PlaceMapContext, PlaceMapRenderContext, PlaceMapTarget, ResolvedPlace};
 pub use explorer::{emit_tile_svg, emit_world_svg, relevant_tiles, tile_origin_units};
+// `tiles.json` carries these, so the explorer fits and fades the way
+// `relevant_tiles` chose its cells for.
+pub(crate) use explorer::{EdgeFade, ExplorerFit, EDGE_FADE, EXPLORER_FIT};
 pub use geometry::{marker_radius, privacy_floor, Frame, FrameTier, ProjectedPoint, Projection, TileSelection};
 pub use labels::{Labels, PointLabel, RiverLabel};
 pub use svg::{

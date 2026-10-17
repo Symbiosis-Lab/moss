@@ -69,13 +69,14 @@ fn render(s: &Site, md: &str) -> String {
     );
     let snap = moss_core::asset_snapshot::AssetSnapshot::new();
     let root = s.root.clone();
-    let resolved = moss_core::resolve::resolve_content_with_handlers_and_snapshot(
+    let resolved = moss_core::resolve::resolve_content_with_derivations(
         PAGE,
         md,
         &s.graph,
         &|p| std::fs::read_to_string(root.join(p)).ok(),
         &handlers,
         &snap,
+        None,
     );
     process_markdown_file(
         PAGE,
@@ -110,7 +111,7 @@ fn embed_cases() -> Vec<(String, String, String)> {
     // kind, wiki name, std path, attribute texts that apply to the kind
     let kinds: [(&str, &str, &str, &[&str]); 12] = [
         ("image", "photo.jpg", "photos/photo.jpg", &["", "A caption", "400", "align-right 50%", "A caption|400", "align-right 50%|A caption"]),
-        ("video", "clip.mp4", "media/clip.mp4", &["", "640x360 loop", "400", "a label", "align-right 50%|A caption", "a label loop"]),
+        ("video", "clip.mp4", "media/clip.mp4", &["", "640x360 loop", "400", "a label", "align-right 50%|A caption", "a label loop", "loop|100%|A caption", "100%|The Möbius loop"]),
         ("audio", "song.mp3", "media/song.mp3", &["", "a label", "loop", "align-right 50%|A caption"]),
         ("pdf", "paper.pdf", "docs/paper.pdf", &["", "wide", "a label", "align-right 50%|A caption"]),
         ("html", "page.html", "widgets/page.html", &["", "600x400", "My Widget", "align-right 50%|A caption"]),

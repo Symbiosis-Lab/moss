@@ -708,3 +708,128 @@ fn frontmatter_map_reads_both_dialects() {
     assert_eq!(simplified.get("title").and_then(|v| v.as_str()), Some("Hi"));
     assert!(parse("date: 2025-11-15\nhome\n---\nbody\n").frontmatter.is_empty());
 }
+
+mod edit_fields_tests {
+    use super::super::*;
+    use serde_yaml::Value;
+
+    fn set(key: &str, value: &str) -> FieldEdit {
+        FieldEdit::Set { key: key.into(), value: Value::String(value.into()) }
+    }
+    fn remove(key: &str) -> FieldEdit {
+        FieldEdit::Remove { key: key.into() }
+    }
+
+    /// Comments, mixed quoting, a list, a block scalar and an order no
+    /// serializer would choose.
+    const PAGE: &str = "---\n# about this photo\ntitle: \"Harbour: Dusk\"\nweight: 22\ntags:\n  - road\n  - mountain\nplace: 'Port Ellen, Islay'  # town\nnote: |\n  first\n  second\npier_no: \"4 of 9\"\n---\n\n::: {.eyebrow}\nPier 4\n:::\n";
+
+    #[test]
+    fn a_new_key_is_one_line_at_the_end_and_nothing_else_moves() {
+        let out = edit_fields(PAGE, &[set("stage", "Pier 4")]).unwrap();
+        assert_eq!(out, PAGE.replacen("pier_no: \"4 of 9\"\n", "pier_no: \"4 of 9\"\nstage: Pier 4\n", 1));
+    }
+
+    #[test]
+    fn removing_a_key_takes_its_value_lines_and_leaves_its_neighbours() {
+        let out = edit_fields(PAGE, &[remove("tags"), remove("note"), remove("absent")]).unwrap();
+        assert_eq!(out, PAGE.replacen("tags:\n  - road\n  - mountain\n", "", 1).replacen("note: |\n  first\n  second\n", "", 1));
+    }
+
+    #[test]
+    fn setting_a_one_line_value_keeps_its_comment() {
+        let out = edit_fields(PAGE, &[set("place", "Port Ellen")]).unwrap();
+        assert!(out.contains("\nplace: Port Ellen  # town\n"), "{out}");
+        assert_eq!(out.len(), PAGE.len() - "'Port Ellen, Islay'".len() + "Port Ellen".len());
+    }
+
+    #[test]
+    fn an_unchanged_value_keeps_its_quoting() {
+        assert_eq!(edit_fields(PAGE, &[set("pier_no", "4 of 9")]).unwrap(), PAGE);
+    }
+
+    #[test]
+    fn text_yaml_would_read_as_something_else_is_quoted() {
+        let out = edit_fields("---\ntitle: a\n---\n", &[set("year", "1927"), set("flag", "yes: no"), set("x", "true")]).unwrap();
+        assert_eq!(out, "---\ntitle: a\nflag: \"yes: no\"\nx: \"true\"\nyear: \"1927\"\n---\n");
+        let fm = parse(&out).frontmatter;
+        assert_eq!(fm["year"], Value::String("1927".into()));
+    }
+
+    #[test]
+    fn crlf_files_stay_crlf() {
+        let out = edit_fields("---\r\ntitle: a\r\n---\r\nbody\r\n", &[set("stage", "b")]).unwrap();
+        assert_eq!(out, "---\r\ntitle: a\r\nstage: b\r\n---\r\nbody\r\n");
+    }
+
+    #[test]
+    fn a_page_without_frontmatter_gets_a_block() {
+        assert_eq!(edit_fields("# Hi\n", &[set("stage", "b")]).unwrap(), "---\nstage: b\n---\n# Hi\n");
+        assert_eq!(edit_fields("# Hi\n", &[remove("stage")]).unwrap(), "# Hi\n");
+    }
+
+    #[test]
+    fn setting_a_multi_line_entry_rewrites_only_its_lines() {
+        let out = edit_fields(PAGE, &[set("note", "one line")]).unwrap();
+        assert_eq!(out, PAGE.replacen("note: |\n  first\n  second\n", "note: one line\n", 1));
+    }
+
+    #[test]
+    fn a_list_is_written_as_a_block_list() {
+        let tags = Value::Sequence(vec![Value::String("road".into()), Value::String("2024".into())]);
+        let out = edit_fields(PAGE, &[FieldEdit::Set { key: "tags".into(), value: tags }]).unwrap();
+        assert_eq!(out, PAGE.replacen("  - mountain\n", "  - \"2024\"\n", 1));
+    }
+
+    #[test]
+    fn a_map_value_is_refused() {
+        let map = serde_yaml::from_str::<Value>("a: 1").unwrap();
+        assert!(edit_fields(PAGE, &[FieldEdit::Set { key: "x".into(), value: map }]).is_err());
+    }
+
+    #[test]
+    fn removing_a_key_takes_the_comment_right_above_it() {
+        let page = "---\n# kept: it is above a blank line\n\n# about weight\nweight: 22\ntitle: x\n---\n";
+        assert_eq!(edit_fields(page, &[remove("weight")]).unwrap(), "---\n# kept: it is above a blank line\n\ntitle: x\n---\n");
+    }
+
+    #[test]
+    fn new_keys_are_appended_in_key_order() {
+        let out = edit_fields("---\nt: 1\n---\n", &[set("b", "2"), set("a", "1")]).unwrap();
+        assert_eq!(out, "---\nt: 1\na: \"1\"\nb: \"2\"\n---\n");
+    }
+
+    #[test]
+    fn a_number_written_as_a_float_is_the_same_whole_number() {
+        let fields = HashMap::from([("ratio".to_string(), Value::Number(1.into()))]);
+        assert_eq!(set_fields("---\nratio: 1.0\n---\n", &fields).unwrap(), "---\nratio: 1.0\n---\n");
+    }
+
+    #[test]
+    fn a_key_with_only_a_comment_after_it_is_set_on_its_own_line() {
+        let out = edit_fields("---\nkey: # note\nt: 1\n---\n", &[set("key", "v")]).unwrap();
+        assert_eq!(out, "---\nkey: v\nt: 1\n---\n");
+    }
+
+    #[test]
+    fn set_fields_removes_what_the_new_fields_lack() {
+        let fields = HashMap::from([("title".to_string(), Value::String("Harbour: Dusk".into()))]);
+        assert_eq!(set_fields("---\ntitle: \"Harbour: Dusk\"\nold: 1\n---\nbody\n", &fields).unwrap(), "---\ntitle: \"Harbour: Dusk\"\n---\nbody\n");
+    }
+
+    #[test]
+    fn a_key_written_twice_is_refused() {
+        assert!(edit_fields("---\na: 1\na: 2\n---\n", &[set("b", "x")]).is_err());
+    }
+
+    #[test]
+    fn simplified_frontmatter_is_refused() {
+        assert!(edit_fields("title: a\n---\nbody\n", &[set("b", "x")]).is_err());
+    }
+
+    #[test]
+    fn removing_an_anchor_an_alias_still_uses_is_refused() {
+        let page = "---\nbase: &b hello\nother: *b\n---\n";
+        assert!(edit_fields(page, &[remove("base")]).is_err());
+    }
+}

@@ -20,9 +20,9 @@ pub struct ResolvedAsset {
     /// How the path was resolved: literal, bare-fuzzy, separator-fallback, or
     /// case-mismatch. Carried from the shared engine.
     ///
-    /// Read directly by the editor's asset-advisory lint (cm-asset-lint.ts),
-    /// which pulls `env.resolved.provenance` off the unified reference envelope
-    /// (`EditorReferenceResolution`) to warn on separator-fallback / case-mismatch.
+    /// Read by the editor off the unified reference envelope
+    /// (`EditorReferenceResolution`), which marks a separator-fallback or
+    /// case-mismatch path as a problem and offers the file's real path.
     /// Also exposed by the singular `editor_resolve_asset` (chip-bar) command.
     pub provenance: AssetProvenance,
 }

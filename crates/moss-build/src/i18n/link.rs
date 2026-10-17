@@ -64,21 +64,23 @@ pub fn build_translation_links(docs: &[DocumentInfo]) -> Vec<Vec<TranslationLink
         }
     }
 
-    // Merge groups: combine stem and key groups, dedup
-    let mut all_groups: Vec<Vec<usize>> = Vec::new();
+    // Merge groups: combine stem and key groups, dedup. Each group remembers
+    // whether it came from an authored key.
+    let mut all_groups: Vec<(bool, Vec<usize>)> = Vec::new();
     for (_, indices) in stem_groups {
         if indices.len() > 1 {
-            all_groups.push(indices);
+            all_groups.push((false, indices));
         }
     }
     for (_, indices) in key_groups {
         if indices.len() > 1 {
-            all_groups.push(indices);
+            all_groups.push((true, indices));
         }
     }
 
     // For each group, create cross-links
-    for group in &all_groups {
+    let mut keyed: Vec<Vec<bool>> = vec![vec![]; docs.len()];
+    for (from_key, group) in &all_groups {
         for &doc_idx in group {
             for &other_idx in group {
                 if doc_idx == other_idx {
@@ -94,11 +96,24 @@ pub fn build_translation_links(docs: &[DocumentInfo]) -> Vec<Vec<TranslationLink
                     display_name: crate::i18n::switcher_label(&other.lang_tag),
                 };
                 // Avoid duplicates (same url_path)
-                if !result[doc_idx].iter().any(|l| l.url_path == link.url_path) {
-                    result[doc_idx].push(link);
+                match result[doc_idx].iter().position(|l| l.url_path == link.url_path) {
+                    Some(at) => keyed[doc_idx][at] |= *from_key,
+                    None => {
+                        result[doc_idx].push(link);
+                        keyed[doc_idx].push(*from_key);
+                    }
                 }
             }
         }
+    }
+
+    // One link per language: an authored key names the twin, so it outranks a
+    // twin found only by path when both are in the same language.
+    for (links, from_key) in result.iter_mut().zip(&keyed) {
+        let keyed_tags: Vec<String> = links.iter().zip(from_key)
+            .filter(|(_, k)| **k).map(|(l, _)| l.lang_tag.clone()).collect();
+        let mut flags = from_key.iter();
+        links.retain(|l| *flags.next().unwrap() || !keyed_tags.contains(&l.lang_tag));
     }
 
     // Sort each link list by url_path for deterministic output. `all_groups` is

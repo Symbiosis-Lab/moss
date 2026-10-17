@@ -39,7 +39,7 @@ pub fn render(doc: &ParsedDocument, lang: Language, emit_source_lines: bool, cal
     html.push_str(&format!(
         r#"<time class="moss-event-time" datetime="{}">{}</time>"#,
         start.sort_key(),
-        html_escape(&format_range(start, end, lang)),
+        time_parts(start, end, lang),
     ));
     // A resolved place already has its own linked line under the meta line.
     if doc.place_line.is_none() && !doc.location.is_empty() {
@@ -48,18 +48,11 @@ pub fn render(doc: &ParsedDocument, lang: Language, emit_source_lines: bool, cal
             html_escape(&doc.location.join(", ")),
         ));
     }
-    for (url, key, class) in [
-        (&ev.tickets, "event_tickets", "moss-event-tickets"),
-        (&ev.online, "event_online", "moss-event-online"),
-    ] {
-        if let Some(url) = url.as_deref().map(str::trim).filter(|u| is_web_url(u)) {
-            html.push_str(&format!(
-                r#"<a class="moss-event-link {}" href="{}">{}</a>"#,
-                class,
-                html_escape(url),
-                t(lang, key),
-            ));
-        }
+    if let Some(link) = ev.tickets.as_deref().and_then(|u| tickets_link(u, lang, None)) {
+        html.push_str(&link);
+    }
+    if let Some(link) = ev.online.as_deref().and_then(|u| online_link(u, lang, None)) {
+        html.push_str(&link);
     }
     if let Some(href) = calendar_href {
         html.push_str(&format!(
@@ -77,8 +70,47 @@ fn is_web_url(u: &str) -> bool {
     l.starts_with("https://") || l.starts_with("http://")
 }
 
-/// A run of the written time. `Part` runs are the pieces a theme may lay out
-/// on their own (a large day numeral, a small weekday); `Text` is punctuation.
+/// The Tickets link for an event's `tickets:` address, or `None` when the
+/// address is not http or https. The event page passes `None`. A listing card
+/// passes the event's title, which is read after the label for assistive
+/// technology.
+pub(crate) fn tickets_link(url: &str, lang: Language, label_suffix: Option<&str>) -> Option<String> {
+    action_link(url, lang, label_suffix, "moss-event-tickets", "event_tickets")
+}
+
+/// The Online link for an event's `online:` address, or `None` when the
+/// address is not http or https. The label suffix works as for
+/// [`tickets_link`].
+pub(crate) fn online_link(url: &str, lang: Language, label_suffix: Option<&str>) -> Option<String> {
+    action_link(url, lang, label_suffix, "moss-event-online", "event_online")
+}
+
+/// One of the event's action links: an http or https address, labelled by
+/// `label_key`, with the `event_tickets_for` suffix when a title is given.
+fn action_link(url: &str, lang: Language, label_suffix: Option<&str>, class: &str, label_key: &str) -> Option<String> {
+    let url = url.trim();
+    if !is_web_url(url) {
+        return None;
+    }
+    let suffix = label_suffix
+        .map(|title| {
+            format!(
+                r#"<span class="visually-hidden">{}</span>"#,
+                html_escape(&t(lang, "event_tickets_for").replace("{}", title)),
+            )
+        })
+        .unwrap_or_default();
+    Some(format!(
+        r#"<a class="moss-event-link {class}" href="{}">{}{}</a>"#,
+        html_escape(url),
+        t(lang, label_key),
+        suffix,
+    ))
+}
+
+/// A run of the written time. A `Part` is a piece a theme may style on its own
+/// (a large day numeral, a small weekday), and that includes the one separator
+/// before a clock time; `Text` is the remaining punctuation.
 enum Seg {
     Text(String),
     Part(&'static str, String),
@@ -88,7 +120,7 @@ fn text(s: &str) -> Seg {
     Seg::Text(s.to_string())
 }
 
-/// `Sunday, November 1, 2026` / `2026年11月1日 星期日`, as runs.
+/// `Sunday, November 1, 2026` / `Sonntag, 1. November 2026` / `2026年11月1日 星期日`, as runs.
 fn long_date(t: EventTime, lang: Language) -> Vec<Seg> {
     let (y, m, d) = t.ymd();
     let month = crate::i18n::t(lang, &format!("month_{m}")).to_string();
@@ -106,6 +138,21 @@ fn long_date(t: EventTime, lang: Language) -> Vec<Seg> {
                 text(" "),
                 Seg::Part("day", d.to_string()),
                 text(", "),
+                Seg::Part("year", y.to_string()),
+            ]);
+            v
+        }
+        Language::De => {
+            let mut v = Vec::new();
+            if let Some(wd) = weekday {
+                v.push(Seg::Part("weekday", wd.to_string()));
+                v.push(text(", "));
+            }
+            v.extend([
+                Seg::Part("day", format!("{d}.")),
+                text(" "),
+                Seg::Part("month", month),
+                text(" "),
                 Seg::Part("year", y.to_string()),
             ]);
             v
@@ -132,15 +179,24 @@ fn clock(h: u8, m: u8, lang: Language, meridiem: bool) -> String {
             let suffix = if meridiem { if h < 12 { " AM" } else { " PM" } } else { "" };
             format!("{h12}:{m:02}{suffix}")
         }
+        // `meridiem` marks the last clock of a time, which carries the unit:
+        // "14:00–16:00 Uhr".
+        Language::De => format!("{h:02}:{m:02}{}", if meridiem { " Uhr" } else { "" }),
         Language::ZhHans | Language::ZhHant => format!("{h:02}:{m:02}"),
     }
 }
 
+/// The separator between a date and its clock time: a comma in English, a
+/// space in Chinese. A `Part`, so a theme can hide it.
 fn sep(lang: Language) -> Seg {
-    text(match lang {
-        Language::En => ", ",
-        Language::ZhHans | Language::ZhHant => " ",
-    })
+    Seg::Part(
+        "sep",
+        match lang {
+            Language::En | Language::De => ", ",
+            Language::ZhHans | Language::ZhHant => " ",
+        }
+        .to_string(),
+    )
 }
 
 /// The event's written time as runs: a date, a time of day when the start has
@@ -166,7 +222,11 @@ fn segments(start: EventTime, end: Option<EventTime>, lang: Language) -> Vec<Seg
         (Some((h, m)), Some(e)) => match e.hm() {
             Some((eh, em)) if same_day => {
                 // "2:00–4:00 PM" when both fall in the same half of the day.
-                let shared = lang == Language::En && (h < 12) == (eh < 12);
+                let shared = match lang {
+                    Language::En => (h < 12) == (eh < 12),
+                    Language::De => true,
+                    _ => false,
+                };
                 time(&mut out, format!("{}–{}", clock(h, m, lang, !shared), clock(eh, em, lang, true)));
             }
             end_time => {
@@ -183,22 +243,13 @@ fn segments(start: EventTime, end: Option<EventTime>, lang: Language) -> Vec<Seg
     out
 }
 
-fn format_range(start: EventTime, end: Option<EventTime>, lang: Language) -> String {
-    segments(start, end, lang)
-        .into_iter()
-        .map(|s| match s {
-            Seg::Text(t) | Seg::Part(_, t) => t,
-        })
-        .collect()
-}
-
-/// The same written time as [`render`] puts in the page's meta line, as a
-/// `<time>` whose pieces (`moss-when-weekday`, `-day`, `-month`, `-year`,
-/// `-time`) sit in their own spans so a theme can lay a listing's date out as
-/// it likes. `datetime` is the start as written; the visible text is the same
-/// words the page shows.
-pub fn render_when(start: EventTime, end: Option<EventTime>, lang: Language) -> String {
-    let mut html = format!(r#"<time class="moss-when" datetime="{}">"#, start.sort_key());
+/// The written time as inner HTML: each part in its `moss-when-*` span, the
+/// punctuation as bare text. The one exception is the separator before the
+/// clock time, `moss-when-sep`, so a theme that sets the time on its own line
+/// can hide it. Shared by the page's meta line and listings, so
+/// both show the same words in the same pieces.
+fn time_parts(start: EventTime, end: Option<EventTime>, lang: Language) -> String {
+    let mut html = String::new();
     for seg in segments(start, end, lang) {
         match seg {
             Seg::Text(t) => html.push_str(&html_escape(&t)),
@@ -207,8 +258,16 @@ pub fn render_when(start: EventTime, end: Option<EventTime>, lang: Language) -> 
             }
         }
     }
-    html.push_str("</time>");
     html
+}
+
+/// The same written time as [`render`] puts in the page's meta line, as a
+/// `<time>` whose pieces (`moss-when-weekday`, `-day`, `-month`, `-year`,
+/// `-time`) sit in their own spans so a theme can lay a listing's date out as
+/// it likes. `datetime` is the start as written; the visible text is the same
+/// words the page shows.
+pub fn render_when(start: EventTime, end: Option<EventTime>, lang: Language) -> String {
+    format!(r#"<time class="moss-when" datetime="{}">{}</time>"#, start.sort_key(), time_parts(start, end, lang))
 }
 
 #[cfg(test)]

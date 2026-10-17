@@ -30,10 +30,12 @@
 
 use super::document::Document;
 use super::hooks::RenderHooks;
-use super::node::Block;
+use super::node::{Block, Inline};
 use super::parser::{parse_fragment_with_config, ParseConfig};
 use crate::resolve::md_extract::{AssetPathSpan, MediaLineSpan, PathContainer};
 use super::shortcode::{HeroShortcode, Shortcode};
+use super::shortcode::ShortcodeSource;
+use super::shortcode_extract::{config_at_body_line, fragment_parts, source_fragment, Diagnostics};
 use super::url::Url;
 
 /// Captured Hero data after extraction.
@@ -134,7 +136,22 @@ pub fn extract_hero(doc: &mut Document, hooks: &dyn RenderHooks) -> Option<HeroE
     // Hero is hoisted out of the body to the article template's hero slot.
     // The slot IS in the preview DOM and clickable, so we pass source_line
     // so the rendered section carries data-source-range for click-to-source.
-    hooks.render_shortcode(&mut html, hero_shortcode, hero_source_line);
+    // `header=over` lays the header over the page's opening hero only. Every
+    // hero left in the body keeps the header band, so the option is dropped
+    // from all of them, and from the extracted one unless it opens the page.
+    for block in doc.blocks.iter_mut() {
+        if let Block::Shortcode(Shortcode::Hero(later)) = block {
+            later.header = None;
+        }
+    }
+    let cleared;
+    let render_target = if hero_idx != 0 && hero_args.header.is_some() {
+        cleared = Shortcode::Hero(HeroShortcode { header: None, ..hero_args.clone() });
+        &cleared
+    } else {
+        hero_shortcode
+    };
+    hooks.render_shortcode(&mut html, render_target, hero_source_line);
 
     Some(HeroExtraction {
         html,
@@ -248,7 +265,7 @@ pub(crate) fn hero_body_has_overlay_content(args: &str, body: &str) -> bool {
 /// collected while re-parsing the overlay body as a fragment (e.g. a
 /// misspelled `:::name` shortcode nested inside the overlay) — see
 /// [`parse_overlay_to_blocks`].
-pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroShortcode, bool, Vec<String>) {
+pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroShortcode, bool, Diagnostics) {
     let (positional, parsed) = split_hero_directive_args(args);
     let classes = parsed.class_string();
     let width = parsed.width.map(str::to_string);
@@ -256,13 +273,17 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
     let align = parsed.get("align").map(str::to_string);
     // Read once, for all three image-source branches below — a caption belongs
     // to the hero, not to whichever syntax named its image.
-    let caption = parsed.get("caption").unwrap_or_default().trim().to_string();
+    let caption = parse_caption_inlines(parsed.get("caption").unwrap_or_default().trim(), config);
+    // The `alt` key is the only way to describe an `image=` or directive-form
+    // hero picture; on a body embed it overrides the embed's own `![alt]`.
+    let alt_attr = parsed.get("alt").unwrap_or_default().to_string();
+    let header = parsed.get("header").map(str::to_string);
 
     // Priority 1: `image=` attribute.
     if let Some(image_value) = parsed.get("image") {
         let (path, attrs_str) = crate::media::split_pipe(image_value);
         let overlay_text = body.trim().to_string();
-        let (overlay, overlay_warnings) = parse_overlay_to_blocks(&overlay_text, config);
+        let (overlay, source, overlay_warnings) = parse_overlay_to_blocks(&overlay_text, body, config);
         return (
             HeroShortcode {
                 image: if path.trim().is_empty() {
@@ -270,15 +291,19 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 } else {
                     Some(Url::unresolved(path.trim().to_string()))
                 },
+                image_alt: alt_attr.clone(),
                 extra_images: Vec::new(),
                 attrs: attrs_str.to_string(),
                 classes,
                 overlay,
+                source,
                 overlay_text,
                 width,
                 mobile,
                 align,
                 caption,
+                slide_captions: Vec::new(),
+                header: header.clone(),
             },
             false,
             overlay_warnings,
@@ -291,7 +316,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
     if !positional.is_empty() {
         let (path, attrs_str) = crate::media::split_pipe(positional);
         let overlay_text = body.trim().to_string();
-        let (overlay, overlay_warnings) = parse_overlay_to_blocks(&overlay_text, config);
+        let (overlay, source, overlay_warnings) = parse_overlay_to_blocks(&overlay_text, body, config);
         return (
             HeroShortcode {
                 image: if path.trim().is_empty() {
@@ -299,15 +324,19 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 } else {
                     Some(Url::unresolved(path.trim().to_string()))
                 },
+                image_alt: alt_attr.clone(),
                 extra_images: Vec::new(),
                 attrs: attrs_str.to_string(),
                 classes,
                 overlay,
+                source,
                 overlay_text,
                 width,
                 mobile,
                 align,
                 caption,
+                slide_captions: Vec::new(),
+                header: header.clone(),
             },
             false,
             overlay_warnings,
@@ -326,17 +355,28 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
     let run = hero_media_run(&lines);
 
     let mut image_path: Option<String> = None;
+    let mut image_alt = String::new();
     let mut image_attrs = String::new();
     let mut extra_images: Vec<Url> = Vec::new();
+    let mut slide_captions: Vec<Vec<Inline>> = Vec::new();
     for &k in &run.media {
         let Some(m) = hero_media_line_span(lines[k]) else {
             continue;
         };
+        // A pipe made only of media keywords (`cover top`) is attributes; any
+        // other pipe text is that slide's caption.
+        let (slide_attrs, caption) = if is_media_attrs_pipe(&m.attrs) {
+            (m.attrs, Vec::new())
+        } else {
+            (String::new(), parse_caption_inlines(m.attrs.trim(), config))
+        };
+        slide_captions.push(caption);
         if image_path.is_none() {
             image_path = Some(m.path);
+            image_alt = m.alt;
             // Frame-level media attrs (object-fit/position) come from the
             // primary slide and apply to every slide.
-            image_attrs = m.attrs;
+            image_attrs = slide_attrs;
         } else {
             extra_images.push(Url::unresolved(m.path));
         }
@@ -350,23 +390,59 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
         .join("\n")
         .trim()
         .to_string();
-    let (overlay, overlay_warnings) = parse_overlay_to_blocks(&overlay_text, config);
+    let (overlay, source, overlay_warnings) = parse_overlay_to_blocks(&overlay_text, body, config);
     (
         HeroShortcode {
             image: image_path.map(Url::unresolved),
+            image_alt: if alt_attr.is_empty() { image_alt } else { alt_attr },
             extra_images,
             attrs: image_attrs,
             classes,
             overlay,
+            source,
             overlay_text,
             width,
             mobile,
             align,
             caption,
+            slide_captions: if slide_captions.iter().any(|c| !c.is_empty()) {
+                slide_captions
+            } else {
+                Vec::new()
+            },
+            header,
         },
         used_priority_3,
         overlay_warnings,
     )
+}
+
+/// Whether a slide's pipe text is media attributes (`cover top`, `color=#333`)
+/// rather than a caption: every word must be a keyword the attribute parser
+/// reads. One unknown word makes the whole pipe a caption, so a caption never
+/// loses words to the keyword parser.
+fn is_media_attrs_pipe(pipe: &str) -> bool {
+    let tokens: Vec<&str> = pipe.split_whitespace().collect();
+    let mut i = 0;
+    while i < tokens.len() {
+        if i + 1 < tokens.len()
+            && crate::media::Position::from_keyword(&format!("{} {}", tokens[i], tokens[i + 1]))
+                .is_some()
+        {
+            i += 2;
+            continue;
+        }
+        let token = tokens[i];
+        let known = crate::media::Fit::from_keyword(token).is_some()
+            || crate::media::Position::from_keyword(token).is_some()
+            || crate::media::AlignSide::from_keyword(token).is_some()
+            || token.strip_prefix("color=").is_some_and(|v| !v.is_empty());
+        if !known {
+            return false;
+        }
+        i += 1;
+    }
+    true
 }
 
 /// Parse a hero overlay's raw markdown source into `Vec<Block>`.
@@ -380,12 +456,38 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
 /// overlay body) are carried out here rather than dropped, so they reach
 /// [`parse_hero`] → [`super::shortcode_extract::parse_shortcode_block`],
 /// which already merges its `Vec<String>` into `doc.warnings`.
-fn parse_overlay_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Vec<String>) {
+///
+/// `body` is the hero's whole body, which the overlay text is cut from; the
+/// overlay's first line is where its text first appears there.
+fn parse_overlay_to_blocks(
+    raw: &str,
+    body: &str,
+    config: &ParseConfig,
+) -> (Vec<Block>, ShortcodeSource, Diagnostics) {
     if raw.is_empty() {
-        return (Vec::new(), Vec::new());
+        return (Vec::new(), ShortcodeSource::default(), Diagnostics::default());
     }
-    let doc = parse_fragment_with_config(raw, config);
-    (doc.blocks, doc.warnings)
+    let body_line = body.find(raw).map_or(0, |at| body.split_at(at).0.matches('\n').count());
+    let (blocks, metas, diag) =
+        fragment_parts(parse_fragment_with_config(raw, &config_at_body_line(config, body_line)));
+    let source = ShortcodeSource {
+        extra_lines: 0,
+        fragments: vec![source_fragment(config, body_line, raw, metas)],
+    };
+    (blocks, source, diag)
+}
+
+/// A caption is one line of inline markdown. Anything that does not parse to
+/// a single paragraph (a heading-like line, a list marker) is kept as plain
+/// text, so it renders as the author wrote it.
+pub(super) fn parse_caption_inlines(raw: &str, config: &ParseConfig) -> Vec<Inline> {
+    if raw.is_empty() {
+        return Vec::new();
+    }
+    match parse_fragment_with_config(raw, config).blocks.as_slice() {
+        [Block::Paragraph(children)] => children.clone(),
+        _ => vec![Inline::Text(raw.to_string())],
+    }
 }
 
 /// File extensions recognized as media for hero body-image fallback.
@@ -583,7 +685,7 @@ pub(crate) fn hero_asset_spans(
     // Priority 2: a positional path on the directive line, before any `{`.
     // `parse_shortcode_opener` already stripped the colons and the name.
     let opener_trimmed = opener_masked.trim();
-    if let Some((_, _name, args)) = super::shortcode_extract::parse_shortcode_opener(opener_trimmed) {
+    if let Some((_name, args)) = super::shortcode_extract::parse_shortcode_opener(opener_trimmed) {
         let cut = args.find('{').unwrap_or(args.len());
         #[allow(clippy::string_slice)]
         // `find` on ASCII '{' → char boundary; `args` is a suffix of the line.

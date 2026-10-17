@@ -7,6 +7,7 @@
 //! menus, dialogs, commands) stays app-side; the reqwest adapter over
 //! [`proxy`] stays there too, so this crate carries no reqwest.
 pub mod bounded_command;
+pub mod derive;
 pub mod build_records;
 pub mod folder_session;
 pub mod large_download;

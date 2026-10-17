@@ -29,14 +29,20 @@ const CROSSED: &[(&str, fn(&[String]) -> i32)] = &[
     ("agents", moss_build::cli::agents::run),
     ("list", moss_build::cli::list::run),
     ("doctor", moss_build::cli::doctor::run),
+    // Lives beside `doctor`, whose `--surface` findings it rewrites (file budget).
+    ("migrate", moss_build::cli::doctor::migrate::run),
+    ("render", moss_build::cli::render::run),
+    ("root", moss_build::cli::root::run),
     ("describe", |args| moss_build::cli::describe::run(args, env!("CARGO_PKG_VERSION"))),
     ("env", moss_build::cli::env::run),
+    ("tools", moss_build::cli::tools::run),
     ("domain", moss_build::cli::domain::run),
     ("import", moss_build::cli::import::run),
     ("deploy", moss_build::cli::deploy::run),
     // `mv` is the app binary's alias for `rename` (`startup/run_mode.rs`).
     ("rename", moss_build::cli::rename::run),
     ("mv", moss_build::cli::rename::run),
+    ("expand", moss_build::cli::expand::run),
     // Lives under `deploy/history/`, not `cli/` (file budget — see the
     // publish-history design's "Placement and budgets").
     ("history", moss_build::deploy::history::cli::run),
@@ -55,9 +61,12 @@ fn usage() -> String {
 }
 
 fn main() {
-    // The app binary does this before dispatch too, so a crossed verb reads the
-    // same `MOSS_ENV` / `MOSS_SETA_URL` in both binaries.
-    dotenvy::dotenv().ok();
+    let args: Vec<String> = std::env::args().collect();
+    // Rendering a supplied buffer is independent of the current directory and
+    // environment files; every other crossed verb keeps app-binary parity.
+    if !matches!(args.get(1).map(String::as_str), Some("render" | "root")) {
+        dotenvy::dotenv().ok();
+    }
 
     // `build`, `deploy` and `history` already install this logger themselves
     // (inside moss-build, since the app binary's own headless interception
@@ -70,7 +79,6 @@ fn main() {
     // three verbs that already call it internally are unaffected.
     moss_build::build::cli_output::install_headless_logger();
 
-    let args: Vec<String> = std::env::args().collect();
     // `--help` only when it is the whole request, so `<cmd> --help` falls
     // through to the per-command table below instead of printing this one.
     if args.len() <= 2 && args.iter().any(|a| a == "--help" || a == "-h") {

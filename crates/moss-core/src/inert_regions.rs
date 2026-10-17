@@ -23,8 +23,9 @@
 //!
 //! Deliberately NOT inert: raw HTML tags and HTML blocks other than comments
 //! (`<div>` wrappers are a documented moss authoring idiom and shortcodes
-//! nest inside them), and math spans (`$…$` is handled by the parser, and
-//! `:::` inside math is not a shape anyone writes).
+//! nest inside them), and math spans (`$…$` is handled by the parser).
+//! [`html_and_math_lines`] marks those regions for diagnostics that must stay
+//! quiet there.
 //!
 //! # UTF-8 safety
 //!
@@ -68,6 +69,46 @@ pub struct InertRegions {
 /// See [`InertRegions::mask`] for the guarantees.
 pub fn mask_inert(markdown: &str) -> String {
     InertRegions::scan(markdown).mask(markdown)
+}
+
+/// Lines that sit in a raw HTML block (from a line opening with a tag up to
+/// the next blank line) or a `$$` display-math block, one flag per line of
+/// `markdown` aligned with [`str::lines`]. `inert` is [`inert_lines`] of the
+/// same text; those lines are skipped.
+///
+/// These regions are NOT inert for extraction: a `:::` opener inside a
+/// `<div>` wrapper is a live shortcode. They are the places where a bare
+/// `:::` that closes nothing is more likely literal text than a mistake, so
+/// diagnostics that would flag such a line ask here first.
+pub fn html_and_math_lines(markdown: &str, inert: &[bool]) -> Vec<bool> {
+    let mut out = Vec::new();
+    let (mut in_html, mut in_math) = (false, false);
+    for (i, line) in markdown.lines().enumerate() {
+        let t = line.trim();
+        if inert.get(i).copied().unwrap_or(false) {
+            out.push(false);
+            continue;
+        }
+        if t.is_empty() {
+            in_html = false;
+        } else if !in_html && !in_math && opens_html_block(t) {
+            in_html = true;
+        }
+        let toggles_math = t.strip_prefix("$$").is_some_and(|r| !r.contains("$$"));
+        let flagged = in_html || in_math || toggles_math;
+        if toggles_math {
+            in_math = !in_math;
+        }
+        out.push(flagged);
+    }
+    out
+}
+
+/// `<tag …` or `</tag …`: a letter right after the angle bracket.
+fn opens_html_block(trimmed: &str) -> bool {
+    let rest = trimmed.strip_prefix('<').unwrap_or("");
+    let rest = rest.strip_prefix('/').unwrap_or(rest);
+    rest.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
 }
 
 /// Convenience for line-based scanners: one flag per line of `markdown`,

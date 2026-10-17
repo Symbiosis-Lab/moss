@@ -228,6 +228,9 @@ pub trait RenderHooks {
                     out.push_str(w);
                     out.push('"');
                 }
+                if args.rows {
+                    out.push_str(r#" data-layout="rows""#);
+                }
                 out.push('>');
                 // Phase 4 PR1 (2026-05-27): every gallery item routes
                 // through `render::image::synthesize_image_html` with
@@ -262,11 +265,28 @@ pub trait RenderHooks {
                     // The link is what the shared full-screen viewer binds to
                     // (`fullscreen.js` reads `href` and `data-title`); without
                     // the script it is a plain link to the full-size image.
-                    out.push_str(r#"<div class="moss-gallery-item"><a class="moss-gallery-link" href=""#);
+                    // The row layout sizes each item by its ratio. Unknown or zero
+                    // dimensions fall back to 1.5, not the 800x600 placeholder.
+                    let item_style = if args.rows {
+                        let ar = match crate::render::image::lookup_dims(assets_for_synth, &src_str) {
+                            Some((w, h)) if w > 0 && h > 0 => f64::from(w) / f64::from(h),
+                            _ => 1.5,
+                        };
+                        format!(r#" style="--ar: {ar:.3}""#)
+                    } else {
+                        String::new()
+                    };
+                    out.push_str(r#"<div class="moss-gallery-item""#);
+                    out.push_str(&item_style);
+                    out.push_str(r#"><a class="moss-gallery-link" href=""#);
                     out.push_str(&escape_attr(&src_str));
-                    out.push_str(r#"" data-title=""#);
-                    out.push_str(&escape_attr(&item.alt));
                     out.push('"');
+                    // `![alt|](…)` has no visible title, so the viewer shows no caption.
+                    if !item.alt_only {
+                        out.push_str(r#" data-title=""#);
+                        out.push_str(&escape_attr(&item.alt));
+                        out.push('"');
+                    }
                     // Without alt text the link has no name of its own, so it
                     // is announced as "link" alone.
                     if item.alt.is_empty() {
@@ -303,7 +323,13 @@ pub trait RenderHooks {
                         &opts,
                     );
                     out.push_str(&item_html);
-                    out.push_str("</a></div>");
+                    out.push_str("</a>");
+                    if !item.caption.is_empty() {
+                        out.push_str(r#"<p class="moss-gallery-caption">"#);
+                        out.push_str(&super::render::render_inlines_html(self, &item.caption));
+                        out.push_str("</p>");
+                    }
+                    out.push_str("</div>");
                 }
                 out.push_str("</div>");
             }
@@ -443,9 +469,7 @@ pub trait RenderHooks {
                 // line. Same start/end = point range (mirrors the Grid arm).
                 if let Some(n) = source_line {
                     out.push_str(r#" data-source-range=""#);
-                    out.push_str(&n.to_string());
-                    out.push('-');
-                    out.push_str(&n.to_string());
+                    out.push_str(&args.source.range_from(n));
                     out.push('"');
                 }
                 out.push('>');
@@ -532,6 +556,7 @@ pub trait RenderHooks {
                     render_hero_overlay_blocks(
                         self.gallery_assets(),
                         &args.overlay,
+                        args.source.fragments.first().map_or(&[], |f| f.blocks.as_slice()),
                         &mut overlay_html,
                     );
                     let collapsed = collapse_tag_adjacent_newlines(&overlay_html);
@@ -764,12 +789,24 @@ pub struct DefaultHooks<'a> {
     vertical: bool,
     /// Overrides [`RenderHooks::gallery_link_template`] when set.
     gallery_link_template: Option<&'a str>,
+    /// Body images emitted by [`RenderHooks::render_image`] load eagerly
+    /// (`loading="eager" fetchpriority="high"`). Set per call by the caller
+    /// that knows the image is the page's opening one; see
+    /// [`DefaultHooks::eager_image`].
+    eager_image: bool,
 }
 
 impl<'a> DefaultHooks<'a> {
     /// Mark the page as vertically typeset; only body images' `sizes=` reads it.
     pub fn vertical(mut self, vertical: bool) -> Self {
         self.vertical = vertical;
+        self
+    }
+
+    /// Load the body images this instance renders eagerly. The caller decides
+    /// which image that is; this only carries the decision.
+    pub fn eager_image(mut self, eager: bool) -> Self {
+        self.eager_image = eager;
         self
     }
 
@@ -940,6 +977,7 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
             // source. Hero/GalleryThumb/FolderCardCover route through their
             // own `ImageContext` variants, never this method.
             scroll_shape: true,
+            eager: self.eager_image,
             ..Default::default()
         };
         let html = crate::render::image::synthesize_image_html(
@@ -1010,9 +1048,10 @@ fn push_bare_img(
 fn render_hero_overlay_blocks(
     snapshot: Option<&crate::asset_snapshot::AssetSnapshot>,
     blocks: &[super::node::Block],
+    metas: &[super::document::BlockMeta],
     out: &mut String,
 ) {
-    super::render::render_blocks(&DefaultHooks::hero_overlay(snapshot), out, blocks);
+    super::render::render_blocks_with_meta(&DefaultHooks::hero_overlay(snapshot), out, blocks, metas);
 }
 
 /// Collapse `\n` that follows a heading or paragraph closing tag when the
@@ -1417,13 +1456,46 @@ mod tests {
     }
 
     #[test]
+    fn gallery_caption_sits_under_the_link_not_inside_it() {
+        let item = |src: &str, caption: Vec<Inline>| GalleryItem {
+            src: Url::resolved(src, UrlKind::Asset),
+            alt: "Alt".to_string(),
+            alt_only: false,
+            attrs: String::new(),
+            caption,
+        };
+        let link = Inline::Link {
+            url: Url::resolved("../quay/", UrlKind::Internal),
+            title: None,
+            children: vec![Inline::Text("Quay".to_string())],
+            is_wikilink: false,
+            has_pothole: false,
+        };
+        let sc = Shortcode::Gallery(GalleryShortcode {
+            items: vec![
+                item("a.jpg", vec![Inline::Text("Dusk, ".to_string()), link]),
+                item("b.jpg", Vec::new()),
+            ],
+            ..Default::default()
+        });
+        let html = render_shortcode_html(&sc);
+        assert_eq!(html.matches("moss-gallery-caption").count(), 1, "only the captioned item: {html}");
+        assert!(
+            html.contains(r#"</a><p class="moss-gallery-caption">Dusk, <a href="../quay/">Quay</a></p></div>"#),
+            "the caption follows the image link and keeps its own link: {html}"
+        );
+    }
+
+    #[test]
     fn gallery_with_width_page_emits_data_width() {
         let sc = Shortcode::Gallery(GalleryShortcode {
             width: Some("page".to_string()),
             items: vec![GalleryItem {
                 src: Url::resolved("a.jpg", UrlKind::Asset),
                 alt: String::new(),
+                alt_only: false,
                 attrs: String::new(),
+                caption: Vec::new(),
             }],
             ..Default::default()
         });
@@ -1456,7 +1528,9 @@ mod tests {
             items: vec![GalleryItem {
                 src: Url::resolved("a.jpg", UrlKind::Asset),
                 alt: String::new(),
+                alt_only: false,
                 attrs: String::new(),
+                caption: Vec::new(),
             }],
             ..Default::default()
         });
@@ -1476,6 +1550,139 @@ mod tests {
             "count-less gallery must stay on the auto-fill rule, got: {html}"
         );
         assert!(!html.contains("--moss-gallery-columns"), "got: {html}");
+    }
+
+    /// `:::gallery rows` marks the container and gives each item its image's
+    /// aspect ratio, read from the snapshot; the CSS sizes items from `--ar`.
+    #[test]
+    fn gallery_rows_sets_layout_and_item_aspect_ratio() {
+        let mut snap = AssetSnapshot::new();
+        snap.dimensions.insert(PathBuf::from("a.jpg"), (1600, 900));
+        snap.dimensions.insert(PathBuf::from("b.jpg"), (900, 1200));
+        let item = |src: &str| GalleryItem {
+            src: Url::resolved(src, UrlKind::Asset),
+            alt: String::new(),
+            alt_only: false,
+            attrs: String::new(),
+            caption: Vec::new(),
+        };
+        let sc = Shortcode::Gallery(GalleryShortcode {
+            rows: true,
+            items: vec![item("a.jpg"), item("b.jpg")],
+            ..Default::default()
+        });
+        let mut out = String::new();
+        DefaultHooks::with_snapshot(&snap).render_shortcode(&mut out, &sc, None);
+        assert!(out.contains(r#"data-layout="rows""#), "got: {out}");
+        assert!(
+            out.contains(r#"<div class="moss-gallery-item" style="--ar: 1.778"><a"#),
+            "got: {out}"
+        );
+        assert!(
+            out.contains(r#"<div class="moss-gallery-item" style="--ar: 0.750"><a"#),
+            "got: {out}"
+        );
+    }
+
+    /// Without dimensions in the snapshot the ratio is 1.5, not the 800x600
+    /// placeholder that the image synthesizer uses for the `<img>` itself.
+    #[test]
+    fn gallery_rows_unknown_dimensions_fall_back_to_ratio_1_5() {
+        let sc = Shortcode::Gallery(GalleryShortcode {
+            rows: true,
+            items: vec![GalleryItem {
+                src: Url::resolved("missing.jpg", UrlKind::Asset),
+                alt: String::new(),
+                alt_only: false,
+                attrs: String::new(),
+                caption: Vec::new(),
+            }],
+            ..Default::default()
+        });
+        let mut out = String::new();
+        DefaultHooks::new().render_shortcode(&mut out, &sc, None);
+        assert!(out.contains(r#"data-layout="rows""#), "got: {out}");
+        assert!(
+            out.contains(r#"<div class="moss-gallery-item" style="--ar: 1.500"><a"#),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn gallery_rows_zero_width_falls_back_to_ratio_1_5() {
+        let mut snap = AssetSnapshot::new();
+        snap.dimensions.insert(PathBuf::from("flat.jpg"), (0, 900));
+        let sc = Shortcode::Gallery(GalleryShortcode {
+            rows: true,
+            items: vec![GalleryItem {
+                src: Url::resolved("flat.jpg", UrlKind::Asset),
+                alt: String::new(),
+                alt_only: false,
+                attrs: String::new(),
+                caption: Vec::new(),
+            }],
+            ..Default::default()
+        });
+        let mut out = String::new();
+        DefaultHooks::with_snapshot(&snap).render_shortcode(&mut out, &sc, None);
+        assert!(
+            out.contains(r#"<div class="moss-gallery-item" style="--ar: 1.500"><a"#),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn gallery_without_rows_has_no_layout_hook_or_ratio() {
+        let sc = Shortcode::Gallery(GalleryShortcode {
+            items: vec![GalleryItem {
+                src: Url::resolved("a.jpg", UrlKind::Asset),
+                alt: String::new(),
+                alt_only: false,
+                attrs: String::new(),
+                caption: Vec::new(),
+            }],
+            ..Default::default()
+        });
+        let mut out = String::new();
+        DefaultHooks::new().render_shortcode(&mut out, &sc, None);
+        assert!(!out.contains("data-layout"), "got: {out}");
+        assert!(!out.contains("--ar"), "got: {out}");
+        assert!(out.contains(r#"<div class="moss-gallery-item"><a class="moss-gallery-link""#), "got: {out}");
+    }
+
+    #[test]
+    fn gallery_alt_only_item_has_no_data_title_and_keeps_its_alt() {
+        let sc = Shortcode::Gallery(GalleryShortcode {
+            items: vec![GalleryItem {
+                src: Url::resolved("a.jpg", UrlKind::Asset),
+                alt: "Two dancers".to_string(),
+                alt_only: true,
+                attrs: String::new(),
+                caption: Vec::new(),
+            }],
+            ..Default::default()
+        });
+        let html = render_shortcode_html(&sc);
+        assert!(!html.contains("data-title"), "got: {html}");
+        assert!(!html.contains("Open image"), "got: {html}");
+        assert!(html.contains(r#"alt="Two dancers""#), "got: {html}");
+    }
+
+    #[test]
+    fn gallery_plain_alt_item_keeps_data_title_and_no_fallback_label() {
+        let sc = Shortcode::Gallery(GalleryShortcode {
+            items: vec![GalleryItem {
+                src: Url::resolved("a.jpg", UrlKind::Asset),
+                alt: "Two dancers".to_string(),
+                alt_only: false,
+                attrs: String::new(),
+                caption: Vec::new(),
+            }],
+            ..Default::default()
+        });
+        let html = render_shortcode_html(&sc);
+        assert!(html.contains(r#"data-title="Two dancers""#), "got: {html}");
+        assert!(!html.contains("aria-label"), "got: {html}");
     }
 
     #[test]
@@ -1540,7 +1747,9 @@ mod tests {
             items: vec![GalleryItem {
                 src: Url::resolved(src, UrlKind::Asset),
                 alt: "photo".to_string(),
+                alt_only: false,
                 attrs: String::new(),
+                caption: Vec::new(),
             }],
             ..Default::default()
         })
@@ -1576,7 +1785,7 @@ mod tests {
         let mut snap = AssetSnapshot::new();
         snap.variants.insert(
             PathBuf::from("photos/cat"),
-            VariantKindSet { webp: true, avif: false, hls: false },
+            VariantKindSet { webp: true, avif: false, hls: false, poster: false },
         );
 
         let sc = gallery_with_one_item(src);
@@ -1664,7 +1873,7 @@ mod tests {
         snap.dimensions.insert(PathBuf::from(src), (1920, 1080));
         snap.variants.insert(
             PathBuf::from("hero"),
-            VariantKindSet { webp: true, avif: false, hls: false },
+            VariantKindSet { webp: true, avif: false, hls: false, poster: false },
         );
 
         let sc = hero_with_image(src);
@@ -1699,7 +1908,7 @@ mod tests {
         snap.dimensions.insert(PathBuf::from(src), (2400, 316));
         snap.variants.insert(
             PathBuf::from("scroll"),
-            VariantKindSet { webp: true, avif: false, hls: false },
+            VariantKindSet { webp: true, avif: false, hls: false, poster: false },
         );
         let sc = Shortcode::Hero(HeroShortcode {
             image: Some(Url::resolved(src, UrlKind::Asset)),
@@ -1742,7 +1951,7 @@ mod tests {
         snap.dimensions.insert(PathBuf::from(src), (800, 600));
         snap.variants.insert(
             PathBuf::from("photos/cat"),
-            VariantKindSet { webp: true, avif: false, hls: false },
+            VariantKindSet { webp: true, avif: false, hls: false, poster: false },
         );
 
         let hooks = DefaultHooks::with_snapshot(&snap);
@@ -1934,7 +2143,7 @@ mod tests {
         snap.dimensions.insert(PathBuf::from(src), (2400, 1200));
         snap.variants.insert(
             PathBuf::from("photos/cat"),
-            VariantKindSet { webp: true, avif: false, hls: false },
+            VariantKindSet { webp: true, avif: false, hls: false, poster: false },
         );
         let grid = || {
             Shortcode::Grid(GridShortcode {
@@ -2119,6 +2328,7 @@ mod tests {
         let snap = ladder_snapshot("photo.jpg");
         let hooks = DefaultHooks::with_snapshot(&snap);
         let grid = Shortcode::Grid(crate::ast::GridShortcode {
+            source: Default::default(),
             columns: 3,
             ratio: None,
             classes: String::new(),
@@ -2149,6 +2359,7 @@ mod tests {
         let snap = ladder_snapshot("photo.jpg");
         let hooks = DefaultHooks::with_snapshot(&snap);
         let grid = Shortcode::Grid(crate::ast::GridShortcode {
+            source: Default::default(),
             columns: 2,
             ratio: None,
             classes: String::new(),

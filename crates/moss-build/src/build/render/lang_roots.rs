@@ -145,7 +145,7 @@ pub(crate) fn site_lang_roots(
 /// A third narrowing is gone with the enum. Evidence 3 used to require the
 /// folder's code to resolve through [`Language::from_code`], which knows six
 /// codes against `lang_tree_prefix`'s ~51 — a guard against the folder name
-/// coinciding with a detected language, and the reason a `de/`, `ja/`,
+/// coinciding with a detected language, and the reason a `fr/`, `ja/`,
 /// `en-us/` or `en-gb/` tree got no switcher at all. Comparing
 /// declared tags needs no such guard: an `it/` folder on an all-Chinese site
 /// declares `it` only if its pages actually say so.
@@ -528,13 +528,13 @@ mod tests {
     // edition like any other. Routing evidence 3 through
     // `Language::from_code`, which knows six codes, silently excluded every
     // tree `lang_tree_prefix` accepts and `from_code` does not — `en-gb/`,
-    // `de/`, `ja/` — so those readers got no switcher at all. Comparing
+    // `fr/`, `ja/` — so those readers got no switcher at all. Comparing
     // declared tags has no such ceiling.
     #[test]
     fn a_tree_in_a_language_moss_has_no_interface_for_is_still_an_edition() {
-        for (folder, tag) in [("en-gb", "en-GB"), ("de", "de"), ("ja", "ja")] {
+        for (folder, tag) in [("en-gb", "en-GB"), ("fr", "fr"), ("ja", "ja")] {
             let url = format!("{folder}/about/index.html");
-            assert_eq!(Language::from_code(folder), None, "not one of the UI three");
+            assert_eq!(Language::from_code(folder), None, "not one of the UI languages");
             let docs = vec![
                 doc_with_lang_url(Language::ZhHans, "index.html"),
                 declaring(Language::ZhHans, tag, &url),

@@ -1,4 +1,4 @@
-import { a as shortcodeAssetRef, i as parseAttrKvSpans, n as isCloseFence, o as shortcodeBlockConfig, r as isOpenMatch, s as SHORTCODES, t as SHORTCODE_OPEN_RE } from "./shortcode-CNckZosN.mjs";
+import { a as shortcodeAssetRef, i as parseAttrKvSpans, n as isCloseFence, o as shortcodeBlockConfig, r as isOpenMatch, s as SHORTCODES, t as SHORTCODE_OPEN_RE } from "./shortcode-DtxjbgXz.mjs";
 
 //#region src/wikilink-grammar.ts
 const BANG = 33;
@@ -543,11 +543,11 @@ function findEnclosingBlockName(doc, lineNumber) {
 *
 * The line predicates are REUSED from ./shortcode.ts, not copied: an open
 * fence is exactly `SHORTCODE_OPEN_RE` + `isOpenMatch`, a close fence is
-* exactly `isCloseFence`, and open↔close pairing uses the same arity stack as
+* exactly `isCloseFence`, and open↔close pairing uses the same stack as
 * the editor's tree walk (`collectShortcodeBlocks` in
-* ./cm6/cm-shortcode-block.ts): a close fence of arity N closes
-* the TOPMOST open of arity N (`::::` inside `:::` nests); opens above the
-* matched one never got a close and are reported as unclosed children.
+* ./cm6/cm-shortcode-block.ts): a close fence closes the innermost open
+* block whatever its colon count (pandoc's rule); with nothing open it is
+* ordinary text.
 *
 * Two deliberate differences from the Lezer path, both on degenerate input:
 *
@@ -600,11 +600,8 @@ function scanShortcodeBlocks(text) {
 			children: []
 		});
 		else if (isCloseFence(line)) {
-			const arity = line.trim().length;
-			for (let i = stack.length - 1; i >= 0; i--) if (stack[i].arity === arity) {
-				const removed = stack.splice(i);
-				const open = removed[0];
-				for (let j = removed.length - 1; j >= 1; j--) removed[j - 1].children.push(unclosed(removed[j], prevLineEnd));
+			const open = stack.pop();
+			if (open) {
 				const block = {
 					from: open.from,
 					to: lineEnd,
@@ -616,7 +613,6 @@ function scanShortcodeBlocks(text) {
 				};
 				if (stack.length > 0) stack[stack.length - 1].children.push(block);
 				else out.push(block);
-				break;
 			}
 		}
 		prevLineEnd = lineEnd;

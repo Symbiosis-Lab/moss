@@ -63,7 +63,7 @@ pub mod link_audit;
 pub mod published_record;
 /// Selected-page input and required-output readiness projections for preview.
 mod preview_readiness;
-pub(crate) use preview_readiness::required_page_outputs_present;
+pub(crate) use preview_readiness::{proven_unresolved_source, required_page_outputs_present};
 pub use preview_readiness::PreviewReadiness;
 use preview_readiness::preview_readiness_for;
 /// How `ship_phase` reads one entry's staged bytes: [`ShipSource`] and its accessors.
@@ -92,9 +92,9 @@ pub enum HashBucket {
     /// Source-derived page artifacts: HTML, CSS, JS, XML, JSON, SVG.
     /// Tracking: `blocking_keys` (HTML-page ordering for stale-cleanup).
     Files,
-    /// Generated image outputs produced during the blocking phase (e.g., OG card PNGs).
-    /// Tracking: `image_outputs` (stale-cleanup) + `blocking_keys` (HTML ordering).
-    /// Distinct from `ImageVariants`: OG cards block rendering and enter `blocking_keys`;
+    /// Generated sharing images (e.g., OG card PNGs), including deferred cards.
+    /// Tracking: `image_outputs` (stale-cleanup) + `blocking_keys` (cleanup ownership).
+    /// Distinct from `ImageVariants`: OG cards enter `blocking_keys` for cleanup;
     /// background `.webp` variants do not.
     ImageOutputs,
     /// Background-phase generated image variants (e.g., `.webp` from `run_image_conversion`).
@@ -802,7 +802,7 @@ impl PendingManifest {
                 self.blocking_keys.insert(rel_path);
             }
             HashBucket::ImageOutputs => {
-                // OG cards: image_outputs (stale-cleanup) + blocking_keys (HTML ordering).
+                // OG cards: image_outputs (stale-cleanup) + blocking_keys (cleanup ownership).
                 self.inner.image_outputs.insert(rel_path.clone());
                 self.blocking_keys.insert(rel_path);
             }
@@ -944,22 +944,16 @@ impl SealedManifest {
             .find(|key| crate::build::served_path::served_address(key) == requirement.url_path)
         else { return false; };
         match &requirement.source {
-            PreviewSource::Unresolved => {
-                let mapped_source = self.inner.source_to_output.iter()
-                    .find(|(_, mapped)| *mapped == output).map(|(source, _)| source);
-                if let Some(source) = mapped_source {
-                    return self.input_evidence.as_ref()
-                        .and_then(|entries| entries.get(source))
-                        .is_some_and(|entry| matches!(entry.state,
-                            crate::build::cloud_ledger::InputState::Read { .. }
-                            | crate::build::cloud_ledger::InputState::Pending { retained: true }
-                            | crate::build::cloud_ledger::InputState::ReadError { retained: true, .. }));
-                }
-                let generated = crate::system::folder_session::PreviewRequirement {
-                    source: PreviewSource::Generated, ..requirement.clone()
-                };
-                self.preview_readiness(&generated) == PreviewReadiness::Usable
-            }
+            // A proven `File` is the source mapped to this very output.
+            PreviewSource::Unresolved => match self.input_evidence.as_ref()
+                .and_then(|evidence| proven_unresolved_source(&self.inner.source_to_output, evidence, Some(output)))
+            {
+                Some(PreviewSource::File(_)) => true,
+                Some(source) => self.preview_readiness(&crate::system::folder_session::PreviewRequirement {
+                    source, ..requirement.clone()
+                }) == PreviewReadiness::Usable,
+                None => false,
+            },
             PreviewSource::Generated => self.preview_readiness(requirement) == PreviewReadiness::Usable,
             PreviewSource::File(source) => {
                 let rel = moss_core::slug::normalize_separators(&source.to_string_lossy());

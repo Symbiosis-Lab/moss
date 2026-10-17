@@ -526,6 +526,29 @@ fn dispatch_model_extension_routes_to_synth() {
 }
 
 #[test]
+fn dispatch_local_iframe_title_and_size_split() {
+    // `![[widget.html|Sign-up form|420x620]]` shares the alias rule with the
+    // URL form: the size part sets width/height and the rest is the title.
+    let graph = build_graph(&["widget.html"]);
+    let emit = dispatch_wikilink_embed(
+        "widget.html",
+        Some("Sign-up form|420x620"),
+        true,
+        &graph,
+        "index.md",
+        &empty_snapshot(),
+    );
+    match emit.output {
+        EmitKind::Html(s) => {
+            assert!(s.contains(r#"title="Sign-up form""#), "got: {}", s);
+            assert!(s.contains(r#"width="420px""#), "got: {}", s);
+            assert!(s.contains(r#"height="620px""#), "got: {}", s);
+        }
+        other => panic!("expected Html, got: {:?}", other),
+    }
+}
+
+#[test]
 fn dispatch_iframe_alias_carries_title() {
     // `![[widget.html|Embedded Widget]]` — non-sizing alias text
     // surfaces on the iframe as the `title=` accessible name. The
@@ -766,6 +789,18 @@ fn dispatch_image_two_word_position_combines() {
             let style = img_style.as_deref().expect("style present");
             assert!(style.contains("object-fit:cover"), "got: {style}");
             assert!(style.contains("object-position:top left"), "got: {style}");
+        }
+        other => panic!("expected Figure, got {other:?}"),
+    }
+}
+
+#[test]
+fn dispatch_image_focus_point_sets_object_position() {
+    use crate::ast::node::Block;
+    let emit = dispatch_img(Some("focus:20%,62%"));
+    match figure_of(&emit) {
+        Block::Figure { img_style, .. } => {
+            assert_eq!(img_style.as_deref(), Some("object-position:20% 62%"));
         }
         other => panic!("expected Figure, got {other:?}"),
     }
@@ -1040,6 +1075,44 @@ fn a_pothole_with_no_placement_keeps_meaning_exactly_what_it_did() {
     let html = expect_bare(dispatch_embed("clip.mp4", Some("wide|640x360")));
     assert!(html.contains(r#"width="640px""#), "got: {html}");
     assert!(!html.contains("figcaption"), "got: {html}");
+}
+
+#[test]
+fn a_looping_video_takes_a_caption_when_loop_is_its_own_segment() {
+    for alias in ["loop|100%|A caption", "100%|loop|A caption", "100%|A caption|loop", "100%| LOOP |A caption"] {
+        let html = expect_figure(dispatch_embed("clip.mp4", Some(alias)));
+        assert!(
+            html.starts_with(r#"<figure class="moss-embed-figure" style="width:100%">"#),
+            "{alias}: {html}"
+        );
+        assert!(html.contains("<figcaption>A caption</figcaption>"), "{alias}: {html}");
+        assert!(html.contains("data-loop"), "{alias}: {html}");
+        assert!(html.contains(" loop"), "{alias}: {html}");
+        assert!(!html.contains("controls"), "{alias}: {html}");
+    }
+}
+
+#[test]
+fn a_caption_that_contains_the_word_loop_keeps_its_text_and_does_not_loop() {
+    for caption in ["A loop of rope", "The Möbius loop", "Loop the loop", "loop A caption", "A caption loop"] {
+        let html = expect_figure(dispatch_embed("clip.mp4", Some(&format!("100%|{caption}"))));
+        assert!(html.contains(&format!("<figcaption>{caption}</figcaption>")), "{caption}: {html}");
+        assert!(html.contains("controls"), "{caption}: {html}");
+        assert!(!html.contains("data-loop"), "{caption}: {html}");
+    }
+}
+
+#[test]
+fn loop_without_a_caption_renders_as_it_always_did() {
+    for alias in ["loop", "640x360 loop", "100%|loop", "loop|100%"] {
+        let html = expect_bare(dispatch_embed("clip.mp4", Some(alias)));
+        assert!(html.contains("data-loop"), "{alias}: {html}");
+        assert!(!html.contains("figcaption"), "{alias}: {html}");
+    }
+    // No placement: still a label, no figure.
+    let html = expect_bare(dispatch_embed("clip.mp4", Some("loop A label")));
+    assert!(html.contains(r#"aria-label="A label""#), "got: {html}");
+    assert!(html.contains("data-loop"), "got: {html}");
 }
 
 // --- External URL dispatch ---

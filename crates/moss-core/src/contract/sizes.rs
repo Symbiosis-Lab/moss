@@ -13,7 +13,7 @@
 //!   suboptimal (never broken) fetches, same framing as theme overrides above.
 //! - nav/content breakpoint: 48rem (see .claude/CLAUDE.md § "Navigation
 //!   Responsive Breakpoints")
-//! - `.moss-grid` runs 1–4 columns via data-columns within the content/wide
+//! - `.moss-grid` runs 1–6 columns via data-columns within the content/wide
 //!   column; a horizontal site collapses to 1 column below 768px, a
 //!   vertical one never does (site.css) — see `sizes_for_grid_cell`'s
 //!   `auto,` lead, which reads the real width instead of guessing it

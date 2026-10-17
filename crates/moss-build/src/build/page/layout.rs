@@ -40,13 +40,16 @@ pub struct LayoutConfig {
     /// The SITE's declared language as a BCP-47 tag — what `<html lang>` says
     /// on a page that declares none of its own.
     ///
-    /// A tag, not a [`Language`]: moss draws its interface in three languages
+    /// A tag, not a [`Language`]: moss draws its interface in a few languages
     /// and `lang` describes the content, so `[site] lang = "fr"`
     /// belongs here in full even though the chrome falls back to English.
     /// Before 2026-09-01 the render path only had the three-variant enum, so
     /// a French site's artifact said `fr` while its pages said `en`.
     pub lang_tag: String,
     pub place_maps: Option<crate::build::place_map::PlaceMapRenderContext>,
+    /// Term kinds that asked for a nav-bar entry (`[terms.<key>] nav = true`)
+    /// and have a root page: `(namespace key, label)`, in config order.
+    pub term_nav: Vec<(String, String, Option<i32>)>,
 }
 
 impl LayoutConfig {
@@ -77,7 +80,14 @@ impl LayoutConfig {
             header: crate::build::components::nav::HeaderMode::Brand,
             lang_tag: "en".to_string(),
             place_maps: None,
+            term_nav: Vec::new(),
         }
+    }
+
+    /// Set the term kinds that are nav-bar entries — see [`Self::term_nav`].
+    pub fn with_term_nav(mut self, term_nav: Vec<(String, String, Option<i32>)>) -> Self {
+        self.term_nav = term_nav;
+        self
     }
 
     /// Set the site's declared language tag (from the resolved site language).

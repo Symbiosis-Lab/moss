@@ -68,7 +68,13 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-hero-max-height",
         owner: "moss-hero",
         default: "70vb",
-        description: "Cap on hero media block size on desktop (height horizontally, width under vertical typesetting). `none` removes the crop entirely rather than raising it — the image renders at its own intrinsic size instead of a taller band; to make the band taller, give this a longer length (e.g. `120vb`) instead. Note the wrapper has its own cap — `.moss-hero { max-block-size: min(80vb, 800px) }` reads the same property, so setting it once lifts both.",
+        description: "Cap on hero media block size on desktop (height horizontally, width under vertical typesetting). `none` removes the crop entirely rather than raising it — the image renders at its own intrinsic size instead of a taller band; to make the band taller, give this a longer length (e.g. `120vb`) instead. Note the wrapper has its own cap — `.moss-hero { max-block-size: min(80vb, 800px) }` reads the same property, so setting it once lifts both. It is also the minimum height of a `mobile=overlay` hero on a phone, so `100svh` makes that hero fill the first screen.",
+    },
+    CustomProp {
+        name: "--moss-hero-progress",
+        owner: "moss-hero-indicator-segment",
+        default: "0",
+        description: "How far the playing clip of a sequence hero has played, 0 to 1. Set by the script on each indicator segment from the video's time; the segment's bar fills by that fraction. Read-only for a theme: restyle the bar, do not set this.",
     },
     CustomProp {
         name: "--moss-hero-object-position",
@@ -107,6 +113,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Width of the right-hand gutter reserved for margin sidenotes. It is the note column's measure, not how far the page moves: core derives `--moss-sidenote-inset` from it in site.css and pads <body> by that, so the page gives up only the width the window is short of fitting the gutter — nothing at all from about 1316px up, where a centred column already has margin enough — and every centred block moves half of what it gives up. The sidenotes stylesheet (shipped only on sites with footnotes) sets the reserve at wide viewports to a measured clamp, on every page except the front page, full-width pages and sidebar pages — those keep the bottom-sheet presentation at any width. A theme can override the clamp to widen or narrow the note column, and the shift follows it; setting it on a site without footnotes reserves a gutter nothing fills.",
     },
     CustomProp {
+        name: "--moss-eyebrow-separator",
+        owner: ".moss-eyebrow",
+        default: "\" · \"",
+        description: "The text drawn between the fields of the eyebrow line above a page title, as a CSS string. The markup holds no separator, so a theme sets this to change it: `\" / \"` for a slash, or `\" \"` for a plain space.",
+    },
+    CustomProp {
         name: "--moss-hint-x",
         owner: "[data-tooltip]",
         default: "0px",
@@ -122,7 +134,19 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-grid-ratio",
         owner: "moss-grid",
         default: "repeat(N, minmax(0, 1fr))",
-        description: "Track widths for a `:::grid`, as a `grid-template-columns` value. moss sets it on the element when the author writes a ratio (`:::grid 2 1:2` → `2fr 1fr`); the fallback is the even split for whatever `data-columns` says, and a ratio-less grid with no `data-columns` falls back to `initial`. It is a property rather than an inline `grid-template-columns` on purpose: an inline declaration beats every stylesheet rule, so a theme rule could never override it if it arrived inline. A theme setting this custom property by hand overrides the author's ratio at every width, same as any other cascade value.",
+        description: "Track widths for a `:::grid`, as a `grid-template-columns` value. moss sets it on the element when the author writes a ratio (`:::grid 2 1:2` → `minmax(0, 1fr) minmax(0, 2fr)`: one part for the first column, two for the second); the fallback is the even split for whatever `data-columns` says, and a ratio-less grid with no `data-columns` falls back to `initial`. It is a property rather than an inline `grid-template-columns` on purpose: an inline declaration beats every stylesheet rule, so a theme rule could never override it if it arrived inline. A theme setting this custom property by hand overrides the author's ratio at every width, same as any other cascade value.",
+    },
+    CustomProp {
+        name: "--moss-gallery-row-height",
+        owner: "moss-gallery",
+        default: "16rem",
+        description: "Height of each row in a `:::gallery rows` (the justified layout). Every photo in a row is scaled to this height, so the row's widths fill the container and each photo keeps its proportions. Set it on the gallery or on an ancestor; a narrow screen (600px and under) overrides it with 9rem so a row holds about two photos.",
+    },
+    CustomProp {
+        name: "--moss-gallery-gap",
+        owner: "moss-gallery",
+        default: "6px",
+        description: "Space between photos in a `:::gallery rows` block, on both the row and the column axis. The grid layout keeps its own gap; this only applies to the justified rows.",
     },
     CustomProp {
         name: "--moss-grid-scroll-peek",
@@ -158,7 +182,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-card-cover-ratio",
         owner: "moss-card-cover",
         default: "4 / 3",
-        description: "Aspect ratio of card cover images. Same reasoning as `--moss-grid-image-ratio`, for `:::cards` rather than `:::grid`. `aspect-ratio` has no logical spelling, so vertical typesetting overrides this to the transposed `3 / 4` in `site/vertical.css` rather than expressing the ratio once.",
+        description: "Aspect ratio of card cover images. Same reasoning as `--moss-grid-image-ratio`, for the cards of a folder listing rather than the cells of a `:::grid`. `aspect-ratio` has no logical spelling, so vertical typesetting overrides this to the transposed `3 / 4` in `site/vertical.css` rather than expressing the ratio once.",
     },
     CustomProp {
         name: "--moss-card-cover-fit",
@@ -177,6 +201,54 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         owner: "moss-card",
         default: "var(--moss-bg, var(--moss-color-bg, #fff))",
         description: "Background behind card content when the card carries `data-cover-color`. moss does not set this itself: it publishes each card's colour from the cover image's dominant colour as `--item-cover-color` and paints with `var(--moss-cover-color, var(--item-cover-color))`, so a theme that sets `--moss-cover-color` (on `:root`, or on `.moss-card`) wins over the extracted tint — set it to `transparent` to opt out of the tint entirely. The same `--item-cover-color` is published on a `.moss-grid-card` whose cell opens with an image, where moss paints nothing, so a hand-built cell can wear the same band with `background: var(--moss-cover-color, var(--item-cover-color))`.",
+    },
+    CustomProp {
+        name: "--moss-cover-ink",
+        owner: "moss-card",
+        default: "#fff",
+        description: "Text colour on a card's tinted content band (title, and the kicker, meta and description derived from it at 75%, 70% and 85% opacity), and on the text block of a hero stacked below its image on a phone. Pairs with `--moss-cover-color`: `--moss-cover-color: transparent; --moss-cover-ink: var(--moss-color-text)` gives plain cards on the page background with readable text and no class selectors. Set it on `:root`, or on `.moss-card` for one scope.",
+    },
+    CustomProp {
+        name: "--moss-header-bg",
+        owner: "body > header",
+        default: "transparent",
+        description: "Background of the site header's band. Unset, the header has none. A page whose opening hero says `header=over` keeps its header transparent over the photo whatever this is set to, so a theme that only sets this token never needs to know about `header=over`. Set it on `:root`, with its dark-mode pair under `:root[data-theme=\"dark\"]`.",
+    },
+    CustomProp {
+        name: "--moss-header-ink",
+        owner: "body > header",
+        default: "var(--moss-color-text-secondary)",
+        description: "Colour of the nav links in the header, and of the site name beside them (whose own default is `var(--moss-color-text)`). Hover and the current page keep the accent colour, and the opened phone menu, which sits on the page background rather than on the band, keeps its own. Under `header=over` the links take the light colour of the photo whatever this is set to. Use it with `--moss-header-bg` so the text stays readable on the band.",
+    },
+    CustomProp {
+        name: "--moss-header-rule",
+        owner: "body > header",
+        default: "var(--moss-border-light)",
+        description: "Colour of the hairline under the header's navigation. Set it to `transparent` when `--moss-header-bg` gives the header a band, since the band's own edge already divides it from the page; the hairline would otherwise draw inside the band.",
+    },
+    CustomProp {
+        name: "--moss-footer-bg",
+        owner: "footer.container",
+        default: "transparent",
+        description: "Background colour of the site footer's band, which runs the full page width although the footer's content stays in its column. It takes a colour, not a gradient or image. Unset, the footer has none. Set it on `:root`, with its dark-mode pair under `:root[data-theme=\"dark\"]`.",
+    },
+    CustomProp {
+        name: "--moss-footer-ink",
+        owner: "footer.container",
+        default: "var(--moss-color-muted)",
+        description: "Colour of the text, links and headings in the footer. Hover and focus keep the accent colour, and the colophon keeps its own. The footer's own text defaults to `var(--moss-color-muted)`, its authored links to `var(--moss-color-accent)` and its headings and generated link list to `var(--moss-color-text)`; setting this replaces all of them with one colour. Use it with `--moss-footer-bg` so the text stays readable on the band.",
+    },
+    CustomProp {
+        name: "--moss-footer-rule",
+        owner: "footer.container",
+        default: "var(--moss-border-light)",
+        description: "Colour of the hairline at the top of the footer and of any horizontal rule (`---`) inside it, which is a plain line in the footer rather than the three-dot ornament. Set it to `transparent` when `--moss-footer-bg` gives the footer a band, since the band's own edge already divides it from the page.",
+    },
+    CustomProp {
+        name: "--moss-footer-end",
+        owner: "footer.container",
+        default: "var(--moss-space-2xl)",
+        description: "The space at the very end of the page, below the footer's last content. moss's colophon (the \"Published with moss\" line) puts the same space above itself, and the footer keeps it when a theme hides the colophon. Set it to `0` when the footer ends on a picture that should touch the page end; the value is smaller on a phone.",
     },
     CustomProp {
         name: "--moss-bg",
@@ -269,6 +341,30 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Scale applied to a river path's own baked stroke-width (`--river-w`, set once per path by raster.ts's `splitMapSvg`), so rivers keep a constant on-screen width as `applyCamera` zooms the world layer instead of thickening with it. Not a theme hook: a hand-set value is overwritten on the next camera settle.",
     },
     CustomProp {
+        name: "--moss-section-color",
+        owner: "body",
+        default: "unset",
+        description: "The accent colour of the section a page sits in, written by moss as an inline style on `<body>` (and on a listing card for such a page, on the card's root element) when a folder's home page declares `color:`; the nearest coloured ancestor folder wins. No moss style reads it, so nothing changes until a theme does: `var(--moss-section-color, var(--moss-color-accent))`. Not set on pages outside any coloured folder, so always give `var()` a fallback.",
+    },
+    CustomProp {
+        name: "--moss-section-text",
+        owner: "body",
+        default: "unset",
+        description: "A readable text colour for the section accent: the hue of `--moss-section-color`, adjusted until it reaches 4.5:1 contrast (WCAG 2) against moss's default page background, with one value for the light theme and one for the dark, switching with `data-theme` like moss's own colour tokens. A colour that already passes is used unchanged. moss derives it at build time and writes the two variants (`--moss-section-text-light`, `--moss-section-text-dark`) beside `--moss-section-color`, on `<body>` and on a listing card for the page; the default stylesheet picks the one for the current theme. Write `color: var(--moss-section-text, var(--moss-color-text))`. The guarantee is against moss's default `--moss-color-bg`: a theme that repaints the page background checks its own contrast. Not set on pages outside any coloured folder, so always give `var()` a fallback.",
+    },
+    CustomProp {
+        name: "--moss-section-text-light",
+        owner: "body",
+        default: "var(--moss-color-text)",
+        description: "The light-theme variant of `--moss-section-text`, written by moss as an inline style on `<body>` and on a listing card, beside `--moss-section-color`, when a folder's home page declares `color:`. The default stylesheet copies the variant for the current theme into `--moss-section-text`; a theme should read `--moss-section-text` instead of this.",
+    },
+    CustomProp {
+        name: "--moss-section-text-dark",
+        owner: "body",
+        default: "var(--moss-color-text)",
+        description: "The dark-theme variant of `--moss-section-text`, written by moss as an inline style on `<body>` and on a listing card, beside `--moss-section-color`, when a folder's home page declares `color:`. The default stylesheet copies the variant for the current theme into `--moss-section-text`; a theme should read `--moss-section-text` instead of this.",
+    },
+    CustomProp {
         name: "--moss-sidenote-inset",
         owner: "body",
         default: "0px",
@@ -311,6 +407,18 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         description: "Present as `home` on the front page of EVERY language the site publishes, not just the site-default locale's — a multilingual site's `zh-hans/` front page carries this exactly like the default-locale one at the root. Scope front-page-only rules to `body[data-page=\"home\"]` rather than to something merely unique to your homepage today — a hero that fills the screen, a suppressed footer, a different nav treatment.",
     },
     ScopeAttr {
+        selector: "body",
+        name: "data-path",
+        values: &[],
+        description: "The page's published address, with a leading and trailing slash, exactly as the sitemap and links spell it: `/` on the front page, `/contact/` for a page at that address, `/zh-hans/about/` for a language edition. It is the address as moss writes it, so a folder named `Film & Sound` is `/film-and-sound/`, and characters outside ASCII appear as written, not percent-encoded. Scope one page with `body[data-path=\"/contact/\"]` and a whole section with `body[data-path^=\"/work/\"]`. A selector on an address breaks when the page is renamed, because the address changes with it.",
+    },
+    ScopeAttr {
+        selector: "body",
+        name: "data-section",
+        values: &[],
+        description: "The url path segment of the folder whose home page sets `color:` for this page: `work` for every page under `/work/`, the nearest coloured folder when they nest. Absent on pages outside any coloured folder, and on a site-wide colour set by the front page. Scope a section with `body[data-section=\"work\"]` and tint it with `var(--moss-section-color)`, instead of `body[data-path^=\"/work/\"]`, which breaks when the folder is renamed.",
+    },
+    ScopeAttr {
         selector: "html",
         name: "data-theme",
         values: &["light", "dark"],
@@ -320,7 +428,7 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         selector: "article > [data-width]",
         name: "data-width",
         values: &["body", "wide", "page", "screen"],
-        description: "Set by block shortcodes to escape the text column. The width resolves through `--moss-escape`, clamped by `min(…, 100cqi)` so a narrow viewport stays safe.",
+        description: "Set by block shortcodes, and by a fenced div that carries a width word (`:::{.band screen}`), to escape the text column. The width resolves through `--moss-escape`, clamped by `min(…, 100cqi)` so a narrow viewport stays safe.",
     },
     ScopeAttr {
         selector: "body",
@@ -333,5 +441,11 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         name: "data-content-width",
         values: &["wide", "full"],
         description: "Present when a page widens its column via `content_width:` frontmatter; absent at the default reading measure. This is what `--moss-content-width` — and therefore `--moss-nav-width`, which tracks it — resolves against, so it is the hook for a layout that should respond to the preset rather than to a fixed width.",
+    },
+    ScopeAttr {
+        selector: ".moss-eyebrow > span, .moss-subtitle, .moss-key-figure, .moss-facts > div",
+        name: "data-field",
+        values: &[],
+        description: "The declared field's name, on each element a placed field draws: each eyebrow span, the subtitle, each key figure and each facts row. Scope one field with `[data-field=\"ja\"]` rather than a selector on the page's address.",
     },
 ];

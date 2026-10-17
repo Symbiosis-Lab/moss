@@ -31,6 +31,11 @@ const IMMERSIVE_COPY = {
     exitFullscreen: "Exit fullscreen",
     openInNewWindow: "Open in new window",
   },
+  de: {
+    enterFullscreen: "Vollbild öffnen",
+    exitFullscreen: "Vollbild beenden",
+    openInNewWindow: "In neuem Fenster öffnen",
+  },
   "zh-hans": {
     enterFullscreen: "进入全屏",
     exitFullscreen: "退出全屏",

@@ -27,7 +27,8 @@ export interface ProjectInfo {
 export interface PluginManifest {
   name: string;
   version: string;
-  entry: string;
+  /** Omit only for a plugin that declares nothing but `contributes.derivations`. */
+  entry?: string;
   category: PluginCategory;
   global_name?: string;
   icon?: string;
@@ -42,3 +43,53 @@ export type PluginCategory =
   | "syndicator"
   | "enhancer"
   | "processor";
+
+/**
+ * A pinned binary source, as a stack declares it. A `download` source must
+ * carry a `sha256`.
+ *
+ * @category Plugin manifest
+ */
+export type ArtifactSource =
+  | { kind: "path"; platform?: string; binary: string }
+  | {
+      kind: "download";
+      platform?: string;
+      url: string;
+      sha256: string;
+      archive_format: string;
+      executable?: string;
+    };
+
+/**
+ * `contributes.derivations[id]`: a file type the plugin turns into embeddable
+ * fragments by running a pinned one-shot binary.
+ *
+ * @category Plugin manifest
+ */
+export interface DerivationContribution {
+  /** Lowercase file extensions without the dot. */
+  accepts: string[];
+  noun: { one: string; other: string };
+  /** Fragments the binary may produce, by name. Only "markdown" exists. */
+  fragments: Record<string, "markdown">;
+  /** Placeholder lines: each is empty or `#<fragment name>`. */
+  stub?: string[];
+  run: { binary: string; artifact: ArtifactSource[] };
+}
+
+/**
+ * `contributes.listing_styles[id]`: a way of listing a folder that the
+ * plugin's `listing` export draws. An author picks it with
+ * `children_style: <id>` on the folder's home page.
+ *
+ * @category Plugin manifest
+ */
+export interface ListingStyleContribution {
+  /** Name shown in the editor's select. */
+  label?: string;
+  /** One sentence for the select's hint. */
+  description?: string;
+  /** The page width this style wants; applies to a page that sets none. */
+  content_width?: "wide" | "full";
+}

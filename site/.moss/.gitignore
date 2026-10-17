@@ -1,5 +1,5 @@
 identity/
-data/
+data/*
 build/
 keys/
 agents/

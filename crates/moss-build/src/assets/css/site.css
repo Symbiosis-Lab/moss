@@ -117,6 +117,10 @@
 .moss-input:focus {
   border-block-end-color: var(--moss-color-text);
 }
+.moss-input:focus-visible { outline: none; }
+@media (forced-colors: active) {
+  .moss-input:focus { border-block-end-color: Highlight; }
+}
 .moss-input:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -214,6 +218,18 @@
 
 [data-theme="dark"] ::selection {
   background: rgba(106, 154, 90, 0.25);
+}
+
+/* A section's readable text colour. The build writes both variants beside
+   --moss-section-color (on <body> and on a listing card); this picks the one
+   for the current theme. The variants are computed against this stylesheet's
+   own --moss-color-bg, so a theme that repaints the page checks its own.
+   The selector matches only where the build wrote both variants. */
+[style*="--moss-section-text-light"] {
+  --moss-section-text: var(--moss-section-text-light, var(--moss-color-text));
+}
+[data-theme="dark"] [style*="--moss-section-text-light"] {
+  --moss-section-text: var(--moss-section-text-dark, var(--moss-color-text));
 }
 
 /* Traditional Chinese — prioritize TC fonts.
@@ -719,6 +735,26 @@ ol { list-style-type: decimal; }
 ol ol { list-style-type: lower-latin; }
 ol ol ol { list-style-type: lower-roman; }
 
+/* Definition lists. Browsers default `dd` to a 40px start indent, which pushes
+   a definition off the term's edge and reads as a second column in a narrow
+   reading measure. The explicit rules keep each term and its definition on
+   the text edge in the body face, and space consecutive pairs like list items. */
+dl {
+  margin: var(--moss-space-md) 0;
+}
+
+dt {
+  margin-block: var(--moss-space-xs) 0;
+  font-weight: 400;
+  color: var(--moss-color-text);
+}
+
+dd {
+  margin: 0 0 var(--moss-space-xs);
+  padding: 0;
+  color: var(--moss-color-text);
+}
+
 /* Task lists. The renderer emits a bare disabled
    `<input type="checkbox">` as the item's first inline — no class, because the
    checkbox itself is the selector. Dropping the marker keeps the box from
@@ -776,6 +812,13 @@ a:where(:not(.moss-btn)):focus {
 header {
   padding-block-start: var(--moss-space-lg);
   padding-block-end: var(--moss-space-sm);
+}
+
+/* The site header's band. Transparent unless a theme sets --moss-header-bg, so
+   a theme that wants a coloured band states it with one token instead of a
+   `body > header` rule that would also beat the `header=over` rule below. */
+body > header {
+  background: var(--moss-header-bg, transparent);
 }
 
 /* Chrome clearance is NOT applied here. The moss app shell insets its
@@ -886,7 +929,7 @@ main.has-sidebar > .moss-comments {
 }
 
 main.has-sidebar > .latest-sidebar {
-  width: clamp(200px, 22vw, 320px);
+  width: var(--moss-sidebar-width);
   flex-shrink: 0;
   position: sticky;
   top: var(--moss-space-lg);
@@ -947,14 +990,22 @@ footer.container {
      correct subsumed both patches; do not reintroduce padding-bottom on
      main to "fix" spacing for some new trailing element. */
   margin-block: 5rem 0;
-  padding-block: 0 var(--moss-space-2xl);
-  color: var(--moss-color-muted);
+  /* The footer owns its end space, so a theme that hides the colophon keeps
+     it; a visible colophon cancels it with a negative end margin
+     (`.moss-colophon`) and puts the same space above itself. */
+  padding-block: 0 var(--moss-footer-end);
+  --moss-footer-end: var(--moss-space-2xl);
+  color: var(--moss-footer-ink, var(--moss-color-muted));
   text-align: start;
+  /* The band runs the full page width though the box is the content column:
+     an image border outset sideways paints outside the box without moving
+     layout, clipping its children, or catching the pointer. */
+  border-image: linear-gradient(var(--moss-footer-bg, transparent), var(--moss-footer-bg, transparent)) fill 1 / 0 / 0 100vmax;
 }
 footer.container::before {
   content: "";
   display: block;
-  border-block-start: 1px solid var(--moss-border-light);
+  border-block-start: 1px solid var(--moss-footer-rule, var(--moss-border-light));
   /* Breathing room between the divider and footer content (link list,
      subscribe form, or richer footer.md). Tightening to xs makes the
      muted footer chrome feel cramped against the divider, especially in
@@ -972,8 +1023,20 @@ footer.container::before {
 footer.container > :first-child {
   margin-block-start: 0;
 }
-footer.container > :last-child {
+/* The colophon is the last child, hidden or not, so the clamp also reaches the
+   element before it: otherwise a theme that hides the colophon leaves the
+   footer's last text with its own bottom margin on top of the end space. */
+footer.container > :last-child:not(.moss-colophon),
+footer.container > :has(+ .moss-colophon) {
   margin-block-end: 0;
+}
+
+/* The reading measure is for article prose. A footer's paragraphs fill the
+   footer's own width, so a theme's wider footer is not cut back to the
+   article column, and the same footer does not change width between pages
+   with different `content_width`. */
+footer.container p {
+  max-inline-size: none;
 }
 
 /* A page whose footer has nothing to show — no footer.md, no `footer: true`
@@ -1027,7 +1090,8 @@ footer.container:has(> .moss-subscribe) {
  * shifts the link list off the start edge. `flex-basis: 100%` claims a full
  * row so the divider spans the width and the link list + form wrap below it.
  */
-footer.container:has(> .moss-subscribe)::before {
+footer.container:has(> .moss-subscribe)::before,
+footer.container:has(> .moss-subscribe) > .moss-colophon {
   flex-basis: 100%;
 }
 
@@ -1326,10 +1390,30 @@ footer.container:has(> .moss-subscribe)::before {
 }
 
 .footer-link {
-  color: var(--moss-color-text);
+  color: var(--moss-footer-ink, var(--moss-color-text));
   text-decoration: underline;
-  text-decoration-color: var(--moss-color-muted);
+  text-decoration-color: var(--moss-footer-ink, var(--moss-color-muted));
   text-underline-offset: 3px;
+}
+
+/* --moss-footer-ink reaches an author's classless footer links and headings
+   at the element rules' own specificity (`:where`), so hover, focus and the
+   colophon keep theirs. */
+:where(footer.container) a {
+  color: var(--moss-footer-ink, var(--moss-color-accent));
+}
+:where(footer.container) :is(h1, h2, h3, h4, h5, h6) {
+  color: var(--moss-footer-ink, var(--moss-color-text));
+}
+
+/* A footer rule is a plain hairline in the footer's rule colour, not the
+   three-dot ornament. */
+footer.container hr {
+  height: 0;
+  border-block-start: 1px solid var(--moss-footer-rule, var(--moss-border-light));
+}
+footer.container hr::before {
+  content: none;
 }
 
 /* Touch floor: `footer.container a`, not `.footer-link` — the generated
@@ -1385,7 +1469,8 @@ footer.container:has(> .moss-subscribe)::before {
   footer.container a {
     position: relative;
   }
-  footer.container a::after {
+  /* The colophon's link carries its own padded hit area. */
+  footer.container a:where(:not(.moss-colophon a))::after {
     content: "";
     position: absolute;
     inset-block: -16px;
@@ -1551,12 +1636,17 @@ footer.container:has(> .moss-subscribe)::before {
   top: 0;
 }
 
-/* A stretched flex item of body: `text-align: center` centres the anchor on
-   the page's inline axis in both writing modes — across the page here, down
-   the content band under vertical-rl (the colophon column is as tall as the
-   band, so the mark sits at its middle). */
+/* The footer's last child, or on a page with no footer a stretched flex item
+   of body: `text-align: center` centres the anchor on the inline axis in both
+   writing modes — across the page here, down the content band under
+   vertical-rl (the colophon column is as tall as the band, so the mark sits
+   at its middle). */
 .moss-colophon {
   text-align: center;
+  /* Unset outside a footer, which makes both margins 0. Inside one, the gap
+     above the mark is the footer's end space and the negative end margin
+     cancels the footer's end padding, so the mark closes the footer. */
+  margin-block: var(--moss-footer-end) calc(-1 * var(--moss-footer-end));
   padding-block: var(--moss-space-lg) var(--moss-space-xl);
 }
 
@@ -1763,6 +1853,13 @@ footer.container:has(> .moss-subscribe)::before {
   white-space: nowrap;
 }
 
+/* --moss-header-ink: the nav links' colour on the header band. Not applied
+   inside the opened phone menu, which sits on the page background rather than
+   on the band. Hover and active (below) keep the accent. */
+.main-nav a:not(.mobile-open *) {
+  color: var(--moss-header-ink, var(--moss-color-text-secondary));
+}
+
 .main-nav a:hover {
   color: var(--moss-color-ui-accent);
 }
@@ -1783,8 +1880,9 @@ footer.container:has(> .moss-subscribe)::before {
    When overflow: site-name + toggle on row 1, nav-links on row 2 */
 .nav-content {
   /* The header rule, on the block-end edge: below the strip across the page,
-     to its LEFT under vertical-rl. One spelling lays out both. */
-  border-block-end: 1px solid var(--moss-border-light);
+     to its LEFT under vertical-rl. One spelling lays out both. The token sets
+     the rule's colour, and `transparent` hides it. */
+  border-block-end: 1px solid var(--moss-header-rule, var(--moss-border-light));
   padding-block-end: var(--moss-space-md);
   display: flex;
   flex-wrap: wrap;
@@ -1808,6 +1906,51 @@ header:has(+ .moss-hero) {
 
 header:has(+ .moss-hero) .main-nav {
   margin-block-end: 0;
+}
+
+/* header=over (`:::hero {header=over}` on the page's opening hero): the header
+   leaves the flow so the hero starts at the page top, under it. */
+header:has(+ .moss-hero[data-header="over"]) {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline: 0;
+  z-index: 3;
+  /* No band: the photo is the header's background. */
+  background: transparent;
+  border-block-end: none;
+  /* Light text, the same white the hero overlay text uses. */
+  color: #ffffff;
+}
+
+/* Nav links and the site name set their own colour from the base sheet, which
+   would stay dark over the photo; they take the header's light colour back.
+   The opened mobile panel sits on the page background, so its links keep the
+   base colour. */
+header:has(+ .moss-hero[data-header="over"]) :where(a, button, .site-name):not(.mobile-open *) {
+  color: inherit;
+}
+
+/* Focus rings sit on the photo, so they use the light header colour rather
+   than the accent, which can fall below contrast on a dark image. The opened
+   mobile panel keeps the accent ring, since it sits on the page background. */
+header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.mobile-open *) {
+  outline-color: #ffffff;
+}
+
+/* A soft dark wash across the top of the photo keeps the light nav legible
+   over a pale image. */
+.moss-hero[data-header="over"] {
+  --moss-hero-wash-size: 6rem;
+}
+.moss-hero[data-header="over"]::after {
+  content: "";
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline: 0;
+  block-size: var(--moss-hero-wash-size);
+  background: linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0));
+  pointer-events: none;
+  z-index: 1;
 }
 
 /* nav-left: single-row flex; breadcrumb segments (below) shrink with ellipsis
@@ -1924,6 +2067,12 @@ header:has(+ .moss-hero) .main-nav {
   margin: 0 0.3em 0 0;
   position: relative;
   top: -0.1em;
+}
+
+/* The site name in the header takes the same --moss-header-ink as the links
+   (the floating nav island's trail sits on the page, not the band). */
+body > header .site-name {
+  color: var(--moss-header-ink, var(--moss-color-text));
 }
 
 .site-name:hover {
@@ -2345,14 +2494,24 @@ header:has(+ .moss-hero) .main-nav {
   flex: 1 1 100%;
 }
 
+/* The name has row 1 to itself here, so it wraps inside it. The base rule's
+   flex-shrink: 0 keeps it at its one-line width, `.main-nav a` sets nowrap on
+   it, and .nav-left's overflow: clip then cuts the rest off. */
+.nav-content[data-nav-split] .site-name {
+  flex-shrink: 1;
+  min-inline-size: 0;
+  white-space: normal;
+}
+
 .nav-content[data-nav-split] .nav-links {
   order: 1;
   flex: 1 1 0;
-  justify-content: space-between;
+  justify-content: flex-start;
 }
 
 .nav-content[data-nav-split] .nav-icons {
   order: 2;
+  margin-inline-start: auto;
 }
 
 /* Same box as .nav-search-btn (search.css): a 2.25rem pill, transparent at
@@ -4340,6 +4499,14 @@ article img {
   margin-block: calc(var(--moss-read-line) * 1.25);
 }
 
+/* An image that is the whole content of a link inside a figure or card is a
+   tile: the figure or card already spaces it, so the prose margin above would
+   open a gap around the tile. */
+article :is(figure, .moss-card) > a > img:only-child,
+article :is(figure, .moss-card) > a > picture:only-child > img {
+  margin-block: 0;
+}
+
 /* Standalone images — Step 8 of the structural-html-emission migration.
    Markdown `![]()` paragraphs are emitted in one of two shapes depending
    on whether a caption-pattern detector fires:
@@ -4559,6 +4726,15 @@ article .moss-cards-container.moss-align-right:not([data-width]) {
   max-width: 50%;
 }
 
+/* An un-floated captioned embed would keep the browser's default 40px side
+ * margins on a `<figure>`, pushing a full-width one 40px past the text
+ * column. Zero them the way a captioned image does: full width sits flush,
+ * a narrower one is centred. */
+article .moss-embed-figure:not(.moss-align-left):not(.moss-align-right):not([data-width]) {
+  margin-inline: auto;
+  max-width: 100%;
+}
+
 /* `.moss-cards-container` carries `container-type: inline-size` (below, so
  * `.moss-cards` can use `@container` instead of `@media`), which makes its
  * own inline-size intrinsically indeterminate for layout purposes:
@@ -4673,6 +4849,15 @@ article.container > [data-width="screen"] {
   }
 }
 
+/* A fenced-div band (`:::{.band screen}`) takes the escape width above; its
+ * children keep the reading measure, centred, so text inside a full-width
+ * band does not run edge to edge. moss's own components carry a `moss-`
+ * class and size their children themselves. */
+article.container > div[data-width]:not([class^="moss-"]):not([class*=" moss-"]) > * {
+  max-inline-size: var(--moss-content-width);
+  margin-inline: auto;
+}
+
 /* Direct-child article-body headings + horizontal rules clear floats so
  * wrap scope ends predictably at the next section. Direct-child scope
  * avoids hitting headings inside cards/callouts/year-groups. */
@@ -4762,7 +4947,7 @@ article.container > hr {
 /* The scroll-shadow technique itself, shared with any other horizontally-
    scrollable region that wants the same "hint only when there's more to
    see" affordance — currently `data-aspect="scroll"` (render::image::
-   is_scroll_shape, a handscroll/hanging-scroll body image past 3x its
+   is_scroll_shape, a handscroll past 4x or hanging-scroll body image past 3x its
    short edge; see that rule for the picture-specific structural properties
    this doesn't cover). `.moss-grid[data-scroll]`'s own scroll row uses a
    different cue (a peeking next card) and doesn't join this one.
@@ -5047,6 +5232,33 @@ hr::before {
    per page (e.g. `display: none` on a hero-led landing) or globally.
    .article-title is retained for any pre-existing themes that target the
    un-prefixed class. */
+/* The parent-section link above a page's title (`breadcrumb: label`). Small
+   spaced capitals in the muted colour keep it a label rather than a second
+   heading. It underlines only on hover or focus, and its focus ring is drawn
+   explicitly because it is the one link on the page back up the section. */
+.moss-parent-label {
+  display: block;
+  width: fit-content;
+  margin-block: 0 var(--moss-space-sm);
+  font-size: 0.8125rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--moss-color-muted);
+  text-decoration: none;
+}
+
+.moss-parent-label:hover,
+.moss-parent-label:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.moss-parent-label:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 .moss-article-title,
 .article-title {
   font-family: var(--moss-font-heading);
@@ -5081,12 +5293,9 @@ hr::before {
   margin-block: 0 var(--moss-space-md);
 }
 
-/* Hide empty folder-title h1s. Most callers pass a non-empty label (filename
-   or title cascade); a claimed leaf page rendering its cover through the same
-   book-open layout passes "" instead, because that shell's own visible <h1>
-   is already the head of its content — this rule is what keeps the page down
-   to one visible title instead of an empty heading reserving typography
-   space above it. */
+/* Hide empty folder-title h1s. Callers pass a non-empty label (filename or
+   title cascade); the one exception that once passed "" (a claimed leaf page's
+   cover row) now emits no heading at all, so this rule is a guard only. */
 .moss-folder-title:empty {
   display: none;
 }
@@ -5179,7 +5388,7 @@ article a:where(:not(.moss-btn)):focus {
 
   footer.container {
     /* Tighter spacing on narrow viewports. */
-    padding-block-end: var(--moss-space-lg);
+    --moss-footer-end: var(--moss-space-lg);
   }
 
   .article-date {
@@ -5966,8 +6175,9 @@ article a:where(:not(.moss-btn)):focus {
 /* Quote card: a coverless card's cover slot in a list where OTHER cards do
    have one (grid_card.rs — `data-cover="quote"` on the same `.moss-card-cover`
    box, no new class). Keeps the box every sibling has (aspect-ratio,
-   background) but sets the description (or the title, with none) as a print
-   in its mat: top-aligned, more room below the text than above. */
+   background) but sets the description as a print in its mat: top-aligned,
+   more room below the text than above. With no description the tile is
+   empty, so the title is not printed twice. */
 .moss-card-cover[data-cover="quote"] {
   display: flex;
   align-items: flex-start;
@@ -6019,7 +6229,7 @@ article a:where(:not(.moss-btn)):focus {
   opacity: 0.85;
 }
 [data-cover-color] .moss-card-content .moss-card-kicker {
-  color: rgba(255, 255, 255, 0.75);
+  color: color-mix(in srgb, var(--moss-cover-ink, #fff) 75%, transparent);
 }
 
 .moss-card-meta {
@@ -6029,6 +6239,31 @@ article a:where(:not(.moss-btn)):focus {
 
 .moss-card-meta:empty {
   display: none;
+}
+
+/* Event card with `tickets:` or `online:` (see child_list::event_card_links):
+ * the title is the one link, stretched over the whole card by its ::after, and
+ * the card's own Tickets and Online links sit above that stretch. */
+.moss-card:has(.moss-card-link) {
+  position: relative;
+}
+.moss-card-link {
+  color: inherit;
+  text-decoration: none;
+}
+.moss-card-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.moss-card-link:focus-visible::after {
+  outline: 2px solid var(--moss-color-accent);
+  outline-offset: -2px;
+}
+.moss-card .moss-event-tickets,
+.moss-card .moss-event-online {
+  position: relative;
+  z-index: 1;
 }
 
 /* Linkblog permalink: `★` lives INSIDE the `.moss-card-kicker` div
@@ -6057,13 +6292,15 @@ article a:where(:not(.moss-btn)):focus {
   color: var(--moss-color-accent);
 }
 
-/* When content has dominant color background, use white text */
+/* When content has dominant color background, use white text — or the theme's
+   --moss-cover-ink, which a theme that clears --moss-cover-color sets to its
+   own text colour. The muted lines derive from it by opacity. */
 [data-cover-color] .moss-card-content .moss-card-title {
-  color: #fff;
+  color: var(--moss-cover-ink, #fff);
 }
 
 [data-cover-color] .moss-card-content .moss-card-meta {
-  color: rgba(255, 255, 255, 0.7);
+  color: color-mix(in srgb, var(--moss-cover-ink, #fff) 70%, transparent);
 }
 
 /* Description on a dominant-color (covered) card: the content band sets
@@ -6071,7 +6308,7 @@ article a:where(:not(.moss-btn)):focus {
    var(--moss-color-text-secondary) (dark) and would otherwise render
    dark-on-dark. Whiten it to match the title/meta overrides above. */
 [data-cover-color] .moss-card-content .moss-card-description {
-  color: rgba(255, 255, 255, 0.85);
+  color: color-mix(in srgb, var(--moss-cover-ink, #fff) 85%, transparent);
 }
 
 /* Cover color background: applied when parent card carries a dominant color
@@ -6083,7 +6320,7 @@ article a:where(:not(.moss-btn)):focus {
    build/render/grid_cells.rs — the selector is gated on the same attribute. */
 [data-cover-color] .moss-card-content {
     background: var(--moss-cover-color, var(--item-cover-color));
-    color: #fff;
+    color: var(--moss-cover-ink, #fff);
 }
 
 /* Child summary — full-width text-dominant summary for children lists.
@@ -6181,10 +6418,10 @@ article a:where(:not(.moss-btn)):focus {
 /* List-layout cards with a cover color: restore white text for meta and kicker
    (beats the 0-3-0 list muted overrides above). */
 .moss-cards[data-layout="list"] [data-cover-color] .moss-card-meta {
-  color: rgba(255, 255, 255, 0.70);
+  color: color-mix(in srgb, var(--moss-cover-ink, #fff) 70%, transparent);
 }
 .moss-cards[data-layout="list"] [data-cover-color] .moss-card-kicker {
-  color: rgba(255, 255, 255, 0.75);
+  color: color-mix(in srgb, var(--moss-cover-ink, #fff) 75%, transparent);
 }
 
 .moss-card-description {
@@ -6521,6 +6758,107 @@ article a:where(:not(.moss-btn)):focus {
   line-height: 1.5;
 }
 
+/* Slide captions are words over the picture, not a credit line below it, so
+   they reset the credit rules above. They stack in one grid cell: a hidden
+   caption keeps its place, and the container is as tall as the tallest one.
+   The scrim keeps white text readable over a bright or moving frame. z-index 3
+   puts them above the overlay panel (2). */
+.moss-hero-captions {
+  position: absolute;
+  inset-block-end: 0;
+  inset-inline-start: 0;
+  z-index: 3;
+  display: grid;
+  max-inline-size: min(36rem, 100%);
+  padding: 2.5rem 5% 1rem;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.5), transparent);
+}
+.moss-hero-captions > .moss-hero-caption {
+  grid-area: 1 / 1;
+  margin: 0;
+  max-inline-size: none;
+  padding: 0;
+  color: #ffffff;
+  font-size: var(--moss-size-md);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+/* A caption link keeps the caption's colour, so the underline is what marks it
+   as a link (WCAG 1.4.1). Same line as the article links: 1px, 2px offset. The
+   line thickens on hover and focus. */
+.moss-hero-captions a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.moss-hero-captions a:hover,
+.moss-hero-captions a:focus-visible {
+  text-decoration-thickness: 2px;
+}
+
+/* The clip indicator of a sequence hero (added by the script): one thin bar
+   per clip, in the caption's colour, directly above the caption at its inline
+   start. The bar is the look; the button is the target (34 x 24px, the bar
+   2px tall inside it). The first grid row is the indicator, the caption takes
+   the second. The current clip's bar is lit and fills as the clip plays. */
+.moss-hero-indicator {
+  grid-area: 1 / 1;
+  display: flex;
+  color: #ffffff;
+}
+.moss-hero-captions:has(.moss-hero-indicator) > .moss-hero-caption {
+  grid-row: 2;
+}
+.moss-hero-indicator-segment {
+  position: relative;
+  inline-size: 2.125rem;
+  block-size: 1.5rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.moss-hero-indicator-segment::before,
+.moss-hero-indicator-segment::after {
+  content: "";
+  position: absolute;
+  inset-block-start: calc(50% - 1px);
+  inset-inline: 3px;
+  block-size: 2px;
+  background: currentColor;
+}
+.moss-hero-indicator-segment::before {
+  opacity: 0.4;
+  transition: opacity 0.8s ease;
+}
+.moss-hero-indicator-segment[aria-current="true"]::before {
+  opacity: 0.7;
+}
+.moss-hero-indicator-segment::after {
+  transform: scaleX(var(--moss-hero-progress, 0));
+  transform-origin: left center;
+  transition: transform 0.25s linear;
+}
+:dir(rtl) .moss-hero-indicator-segment::after {
+  transform-origin: right center;
+}
+.moss-hero-indicator-segment:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .moss-hero-indicator-segment::before,
+  .moss-hero-indicator-segment::after { transition: none; }
+}
+/* Legibility is painted once. A hero with content has its own bottom scrim
+   (`.moss-hero::before`); a second gradient here would end at the caption's
+   box and show as a step, or as a band over the content. Without that scrim
+   (no content, or a pale cover) the caption keeps its own. */
+.moss-hero:has(.moss-hero-content):not([data-hero-tone="light"]) .moss-hero-captions {
+  background: none;
+}
+
 /* Video backgrounds share the image sizing contract (kept in sync with
    .moss-hero img above — the template test pins that selector verbatim). */
 .moss-hero video {
@@ -6589,6 +6927,9 @@ article a:where(:not(.moss-btn)):focus {
   background:
     linear-gradient(to top, rgba(0,0,0,0.62) 0%, rgba(0,0,0,0.30) 32%, transparent 62%),
     linear-gradient(to right, rgba(0,0,0,0.30) 0%, transparent 55%);
+}
+.moss-hero[data-align="center"]::before {
+  background: radial-gradient(ellipse at center, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0.22) 50%, transparent 78%);
 }
 
 .moss-hero:has(.moss-hero-content)::before { content: ''; }
@@ -6701,11 +7042,25 @@ article a:where(:not(.moss-btn)):focus {
 .moss-hero[data-slides] .moss-hero-slide:nth-child(4) { animation-delay: 21s; }
 .moss-hero[data-slides] .moss-hero-slide:nth-child(5) { animation-delay: 28s; }
 .moss-hero[data-slides] .moss-hero-slide:nth-child(6) { animation-delay: 35s; }
-.moss-hero[data-slides="2"] .moss-hero-slide { animation: moss-hero-fade-2 14s ease-in-out infinite; }
-.moss-hero[data-slides="3"] .moss-hero-slide { animation: moss-hero-fade-3 21s ease-in-out infinite; }
-.moss-hero[data-slides="4"] .moss-hero-slide { animation: moss-hero-fade-4 28s ease-in-out infinite; }
-.moss-hero[data-slides="5"] .moss-hero-slide { animation: moss-hero-fade-5 35s ease-in-out infinite; }
-.moss-hero[data-slides="6"] .moss-hero-slide { animation: moss-hero-fade-6 42s ease-in-out infinite; }
+.moss-hero[data-slides="2"] :is(.moss-hero-slide, .moss-hero-caption) { animation: moss-hero-fade-2 14s ease-in-out infinite; }
+.moss-hero[data-slides="3"] :is(.moss-hero-slide, .moss-hero-caption) { animation: moss-hero-fade-3 21s ease-in-out infinite; }
+.moss-hero[data-slides="4"] :is(.moss-hero-slide, .moss-hero-caption) { animation: moss-hero-fade-4 28s ease-in-out infinite; }
+.moss-hero[data-slides="5"] :is(.moss-hero-slide, .moss-hero-caption) { animation: moss-hero-fade-5 35s ease-in-out infinite; }
+.moss-hero[data-slides="6"] :is(.moss-hero-slide, .moss-hero-caption) { animation: moss-hero-fade-6 42s ease-in-out infinite; }
+/* A caption fades in with its slide: same keyframes and delay, so the words
+   change when the picture does. */
+.moss-hero[data-slides] .moss-hero-caption:not([data-slide="0"]) { opacity: 0; }
+.moss-hero[data-slides] .moss-hero-caption[data-slide="1"] { animation-delay: 7s; }
+.moss-hero[data-slides] .moss-hero-caption[data-slide="2"] { animation-delay: 14s; }
+.moss-hero[data-slides] .moss-hero-caption[data-slide="3"] { animation-delay: 21s; }
+.moss-hero[data-slides] .moss-hero-caption[data-slide="4"] { animation-delay: 28s; }
+.moss-hero[data-slides] .moss-hero-caption[data-slide="5"] { animation-delay: 35s; }
+/* An all-video hero is a sequence, not a timed rotation: only the slide and
+   caption marked `data-current` show. The renderer marks slide 0 (no script,
+   reduced motion); the script moves the marker as each video ends. */
+.moss-hero[data-sequence] .moss-hero-slide:not(:first-child) { position: absolute; inset: 0; }
+.moss-hero[data-sequence] .moss-hero-slide:not([data-current]) { opacity: 0; }
+.moss-hero[data-sequence] .moss-hero-caption:not([data-current]) { display: none; }
 /* The per-count `animation:` shorthand implies delay 0s, but the nth-child
    delay longhands above win on specificity (0,4,0 vs 0,3,0) regardless of
    source order. */
@@ -6735,12 +7090,12 @@ article a:where(:not(.moss-btn)):focus {
    unchecked), and so does hover, but only where hover is real: on touch it
    would stay stuck after a tap. Block-end inline-end corner, opposite the
    default panel (inline-start with `align=end`). */
-.moss-hero[data-slides]:has(.moss-hero-pause input:checked) .moss-hero-slide,
-.moss-hero[data-slides]:has(:focus-visible:not(.moss-hero-pause input)) .moss-hero-slide {
+.moss-hero[data-slides]:has(.moss-hero-pause input:checked) :is(.moss-hero-slide, .moss-hero-caption),
+.moss-hero[data-slides]:has(:focus-visible:not(.moss-hero-pause input)) :is(.moss-hero-slide, .moss-hero-caption) {
   animation-play-state: paused;
 }
 @media (hover: hover) {
-  .moss-hero[data-slides]:hover .moss-hero-slide {
+  .moss-hero[data-slides]:hover :is(.moss-hero-slide, .moss-hero-caption) {
     animation-play-state: paused;
   }
 }
@@ -6758,12 +7113,20 @@ article a:where(:not(.moss-btn)):focus {
   color: #fff;
   opacity: 0.7;
 }
-.moss-hero[data-align="end"] .moss-hero-pause {
+/* Content at the end puts the control at the start, unless captions live
+   there: then it stays at the end corner. */
+.moss-hero[data-align="end"]:not(:has(.moss-hero-captions)) .moss-hero-pause {
   inset-inline: 0.5rem auto;
 }
 @media (width < 48rem) { /* the panel spans the block end (stacked or overlaid): keep the control on the picture */
   .moss-hero .moss-hero-pause {
     inset-block: 0.5rem auto;
+  }
+  /* header=over puts the site header's controls on the picture's top edge
+     (its dark wash, `--moss-hero-wash-size`, is that tall); the control sits just below them. The bottom
+     corner is under the full-width panel, so it is not an option here. */
+  .moss-hero[data-header="over"] .moss-hero-pause {
+    inset-block-start: var(--moss-hero-wash-size);
   }
 }
 .moss-hero-pause:is(:hover, :has(input:focus-visible)) {
@@ -6809,8 +7172,9 @@ article a:where(:not(.moss-btn)):focus {
 /* Ambient motion is atmosphere, not information: honor reduced motion by
    pinning the first slide. Nothing moves, so the control goes too. */
 @media (prefers-reduced-motion: reduce) {
-  .moss-hero[data-slides] .moss-hero-slide { animation: none; }
+  .moss-hero[data-slides] :is(.moss-hero-slide, .moss-hero-caption) { animation: none; }
   .moss-hero[data-slides] .moss-hero-slide:not(:first-child) { opacity: 0; }
+  .moss-hero[data-slides] .moss-hero-caption:not([data-slide="0"]) { opacity: 0; }
   .moss-hero-pause { display: none; }
 }
 
@@ -6824,7 +7188,7 @@ article a:where(:not(.moss-btn)):focus {
    exactly 768px. `:not([data-fit="plate"])`: a plate's own rules promise
    never to crop or upscale, which this would break. */
 @media (width >= 48rem) {
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) {
+  .moss-hero[data-overlay] {
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
@@ -6833,15 +7197,22 @@ article a:where(:not(.moss-btn)):focus {
   }
 
   /* `align=end` moves the panel to the inline-end (flex-end resolves per direction). */
-  .moss-hero[data-align="end"]:has(.moss-hero-content):not([data-fit="plate"]) {
+  .moss-hero[data-overlay][data-align="end"] {
     align-items: flex-end;
   }
 
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) > picture,
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) > img,
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) > video,
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) > .moss-ambient-video,
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) > .moss-hero-slides {
+  /* `align=center` sets the panel in the middle of the picture, its text centred. */
+  .moss-hero[data-overlay][data-align="center"] {
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+  }
+
+  .moss-hero[data-overlay] > picture,
+  .moss-hero[data-overlay] > img,
+  .moss-hero[data-overlay] > video,
+  .moss-hero[data-overlay] > .moss-ambient-video,
+  .moss-hero[data-overlay] > .moss-hero-slides {
     position: absolute;
     inset: 0;
     inline-size: 100%;
@@ -6849,11 +7220,25 @@ article a:where(:not(.moss-btn)):focus {
     z-index: -1; /* not 0/auto: that still paints above flow content */
   }
 
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) img,
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) video,
-  .moss-hero:has(.moss-hero-content):not([data-fit="plate"]) .moss-ambient-video video[data-loop] {
+  .moss-hero[data-overlay] img,
+  .moss-hero[data-overlay] video,
+  .moss-hero[data-overlay] .moss-ambient-video video[data-loop] {
     max-block-size: none;
     object-position: var(--moss-hero-object-position, top);
+  }
+
+  /* Every slide fills the slides box and its picture covers it. Without this
+     the first slide stays in flow at the video's own 16:9 height, which falls
+     short of a taller hero (`--moss-hero-max-height: 100svh`) and leaves a band
+     with no picture. The later slides are already absolute. */
+  .moss-hero[data-overlay] .moss-hero-slide {
+    position: absolute;
+    inset: 0;
+  }
+  .moss-hero[data-overlay] .moss-hero-slide :is(picture, img, video, .moss-ambient-video) {
+    inline-size: 100%;
+    block-size: 100%;
+    object-fit: cover;
   }
 
   .moss-hero:has(.moss-hero-content) .moss-hero-content {
@@ -6862,6 +7247,23 @@ article a:where(:not(.moss-btn)):focus {
     inset-inline-start: auto;
     z-index: 2; /* not auto: else this flex item paints below the scrim */
     flex: none; /* hugs its own content; never stretch to the hero's height */
+  }
+
+  /* Captions join the same bottom stack, directly above the content, so the
+     two can never overlap. Whenever the content is not at the bottom-start
+     (`align=end` and `align=center`), captions stay absolute at bottom-start
+     so they keep clear of it. */
+  .moss-hero[data-overlay]:not([data-align="end"], [data-align="center"]) > .moss-hero-captions {
+    position: static;
+    flex: none;
+    align-self: flex-start;
+    inline-size: min(36rem, 100%);
+  }
+
+  /* With captions the pause control stays at the bottom end: leave it room
+     beside end-aligned content. */
+  .moss-hero[data-align="end"]:has(.moss-hero-captions):has(.moss-hero-pause) .moss-hero-content {
+    margin-inline-end: 3.75rem;
   }
 }
 
@@ -6948,7 +7350,7 @@ article a:where(:not(.moss-btn)):focus {
   }
 
   [data-cover-color] .moss-hero-content {
-    color: #fff;
+    color: var(--moss-cover-ink, #fff);
   }
 
   /* Stacked mobile: the text block sits BELOW the image on the page
@@ -6974,6 +7376,30 @@ article a:where(:not(.moss-btn)):focus {
     font-size: var(--moss-size-sm);
   }
 
+  /* Captions are in flow in both phone layouts (stacked and overlay): an item
+     of the hero's column, so they cannot land on the content. */
+  .moss-hero:has(.moss-hero-content) .moss-hero-captions {
+    position: static;
+    flex: none;
+    max-inline-size: none;
+  }
+  .moss-hero:has(.moss-hero-content) .moss-hero-captions > .moss-hero-caption {
+    font-size: var(--moss-size-sm);
+  }
+  /* Stacked only: a credit line between the picture and the text block, in
+     page colours with no scrim. Overlay keeps the base caption look. */
+  .moss-hero:has(.moss-hero-content):not([data-mobile="overlay"]) .moss-hero-captions {
+    padding: var(--moss-space-sm) var(--moss-container-padding) 0;
+    background: none;
+  }
+  .moss-hero:has(.moss-hero-content):not([data-mobile="overlay"]) .moss-hero-captions > .moss-hero-caption {
+    color: var(--moss-color-muted);
+    text-shadow: none;
+  }
+  .moss-hero:has(.moss-hero-content):not([data-mobile="overlay"]) .moss-hero-indicator {
+    color: var(--moss-color-muted);
+  }
+
   /* Stacked layout: reduce the section's bottom margin — the text block
      itself provides visual separation from the content below. */
   .moss-hero:has(.moss-hero-content) {
@@ -6994,7 +7420,7 @@ article a:where(:not(.moss-btn)):focus {
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
-    min-block-size: min(60vb, 480px);
+    min-block-size: var(--moss-hero-max-height, min(60vb, 480px));
     max-block-size: none;
     padding-block-start: var(--moss-hero-mobile-band, min(45vb, 320px));
   }
@@ -7115,7 +7541,7 @@ article a:where(:not(.moss-btn)):focus {
   margin-block: var(--moss-space-md) var(--moss-space-lg);
   margin-inline: 0;
   /* Reset derived values here so nested grids use their own count. Counts
-     outside the built-in 1–4 range still accept an authored ratio. */
+     outside the built-in 1–6 range still accept an authored ratio. */
   --_grid-count: initial;
   --_grid-template: var(--moss-grid-ratio, repeat(var(--_grid-count), minmax(0, 1fr)));
   --_grid-authored-track: calc(
@@ -7150,6 +7576,8 @@ article a:where(:not(.moss-btn)):focus {
 .moss-grid[data-columns="2"] { --_grid-count: 2; }
 .moss-grid[data-columns="3"] { --_grid-count: 3; }
 .moss-grid[data-columns="4"] { --_grid-count: 4; }
+.moss-grid[data-columns="5"] { --_grid-count: 5; }
+.moss-grid[data-columns="6"] { --_grid-count: 6; }
 
 /* Grid card styling */
 .moss-grid-card {
@@ -7559,6 +7987,71 @@ a.moss-grid-card:hover {
       auto-fill,
       minmax(min(max(88px, var(--moss-gallery-share)), 100%), 1fr)
     );
+  }
+}
+
+/* Justified rows (`:::gallery rows`). Flex wraps the items into rows, and
+   each item's flex-grow equals its ratio, so the widths stay in proportion
+   and every item in a row gets the same height. */
+.moss-gallery[data-layout="rows"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--moss-gallery-gap, 6px);
+  /* Items share their top edge: a caption under one must not shift the photos
+     of its row, which the grid's centring would do. */
+  align-items: flex-start;
+}
+
+/* Basis is the row height scaled by the item's ratio, so a wide photo takes
+   more of the row than a portrait at the same height. --ar is set inline on
+   each item by the emitter; the 1.5 fallback covers an item without dimensions. */
+.moss-gallery[data-layout="rows"] > .moss-gallery-item {
+  flex: var(--ar, 1.5) 1 calc(var(--ar, 1.5) * var(--moss-gallery-row-height, 16rem));
+}
+
+/* The picture is inline by default, which leaves a descender gap under the
+   image and makes items in one row differ in height. */
+.moss-gallery[data-layout="rows"] .moss-gallery-item picture {
+  display: block;
+}
+
+/* An item's visible caption, set like a figure's. `min-width: 0` lets a row of
+   the justified layout keep its proportions however long the caption is. */
+.moss-gallery[data-layout="rows"] .moss-gallery-item {
+  min-width: 0;
+}
+
+.moss-gallery-caption {
+  margin: var(--moss-space-xs) 0 0;
+  font-size: var(--moss-read-caption);
+  line-height: 1.4;
+  color: var(--moss-color-muted, var(--moss-color-text-secondary, #666));
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.moss-gallery[data-layout="rows"] .moss-gallery-item img {
+  width: 100%;
+  height: auto;
+  aspect-ratio: var(--ar, 1.5);
+  object-fit: cover;
+  display: block;
+}
+
+/* A zero-width trailing item that takes the slack in the last row, so its
+   photos keep the row height instead of stretching across the full width. */
+.moss-gallery[data-layout="rows"]::after {
+  content: '';
+  flex-grow: 1e9;
+  /* Flex puts a gap before the filler too. Cancelling it lets the filler fit on
+     a row the photos fill exactly; otherwise it wraps and adds an empty line. */
+  margin-left: calc(var(--moss-gallery-gap, 6px) * -1);
+}
+
+/* At phone width a 16rem row holds one photo; 9rem holds about two. */
+@media (max-width: 600px) {
+  .moss-gallery[data-layout="rows"] {
+    --moss-gallery-row-height: 9rem;
   }
 }
 
@@ -8000,6 +8493,38 @@ main.has-sidebar > .moss-series-nav {
   right: calc(var(--moss-space-sm) + 7.449px);
 }
 
+/* One picture on the page: nothing to step to. */
+.lightbox-nav[hidden] {
+  display: none;
+}
+
+/* A caption copied from the page keeps its links, readable on the dark overlay. */
+.lightbox-title a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+/* fullscreen.js marks the page pictures it opens; without the script they
+   stay plain images. */
+img[data-viewer] {
+  cursor: zoom-in;
+}
+
+img[data-viewer]:focus-visible {
+  outline: 2px solid var(--moss-color-ui-accent, currentColor);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .lightbox:not([hidden]) {
+    animation: moss-lightbox-in 0.15s ease-out;
+  }
+}
+
+@keyframes moss-lightbox-in {
+  from { opacity: 0; }
+}
+
 /* Video figure styling */
 .video-figure {
   margin: var(--moss-space-lg) 0;
@@ -8114,13 +8639,6 @@ article picture[data-aspect="scroll"] {
   margin-block: calc(var(--moss-read-line) * 1.25);
 }
 
-/* The article-body margin above would push a wide image down inside a grid
-   card, out of line with its neighbours' images (`.moss-grid-card img` is
-   flush at the top of the cell). */
-.moss-grid-card picture[data-aspect="scroll"] {
-  margin-block: 0;
-}
-
 /* No upscale past natural size (`inline-size: auto`, the same never-
    upscale pattern the hero-plate rules below use): a source shorter than
    60vh already just shows at its own height. `max-block-size` is the
@@ -8201,13 +8719,15 @@ article video {
   width: 100%;
 }
 
-/* The <video> itself — fills the container, maintains aspect ratio */
+/* The <video> itself — fills the container. `auto 16 / 9` takes the video's
+   own shape once its poster or metadata is known and holds 16:9 only until
+   then, so a clip that is not 16:9 is not cropped by `object-fit: cover`. */
 .moss-ambient-video video[data-loop],
 article video[data-loop] {
   display: block;
   width: 100%;
   height: auto;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: auto 16 / 9;
   border-radius: 6px;
   background: var(--moss-color-surface);
   object-fit: cover;
@@ -8933,6 +9453,32 @@ body:not([data-moss-preview]) .moss-service-inactive {
 body[data-moss-preview] .moss-service-inactive {
   pointer-events: none;
   cursor: not-allowed;
+}
+
+/* ── Derived text ──────────────────────────────────────────────── */
+/* `![[file.ext#fragment]]` stands for text a plugin reads out of the file.
+   When the text is ready it sits inside a bare `.moss-derived` wrapper
+   (`data-fragment` names the fragment) that a theme may style; only the
+   block margin below applies to it. Until then a pending block holds the place with a faint grid; a skipped
+   block says, in a plain note, why no text will appear. */
+.moss-derived {
+  margin-block: 1.5em;
+  border-radius: 4px;
+}
+.moss-derived--pending {
+  min-block-size: 12rem;
+  background-color: var(--moss-color-surface);
+  background-image:
+    linear-gradient(var(--moss-border-light) 1px, transparent 1px),
+    linear-gradient(90deg, var(--moss-border-light) 1px, transparent 1px);
+  background-size: 10px 10px;
+}
+.moss-derived--skipped {
+  padding: 0.75em 1em;
+  color: var(--moss-text-secondary);
+  background: var(--moss-color-surface);
+  border: 1px solid var(--moss-border-medium);
+  border-inline-start: 3px solid var(--moss-border-strong);
 }
 
 } /* @layer shortcodes */

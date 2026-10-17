@@ -85,7 +85,7 @@ mod tests {
     fn expand(docs: &mut [ParsedDocument], maps: &PlaceMapRenderContext) {
         super::super::expand_markers_in_documents_with_place_maps(
             docs, &super::super::tests::test_project(), &Default::default(), false,
-            &crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &Default::default(), None), None, Some(maps),
+            &crate::build::media::dimensions::MediaDimensionLookup::new(&[], &[], &Default::default(), None), None, Some(maps), None,
         );
     }
 
@@ -140,6 +140,7 @@ mod tests {
     fn article_and_place_maps_share_a_unique_svg_sequence() {
         let (mut docs, maps) = fixture("![[story|style:map]]\n\n![[/places/kyoto/|style:map]]\n\n![[/places/kyoto/|style:map]]", "other.md");
         let kind = crate::build::terms::TermKind {
+            cards: false,
             key: "places".into(), fields: vec!["location".into()], title: "Places".into(),
             is_place: true, parents: Default::default(), explorer: None, line: None,
         };

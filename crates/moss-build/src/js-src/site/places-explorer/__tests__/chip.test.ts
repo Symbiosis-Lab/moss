@@ -9,6 +9,8 @@
  * than just calling a mocked callback.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { FIT, EDGE_FADE } from "./explorer-fit";
+import "./armed-timers";
 import { deriveCrumbs } from "../chip";
 import { mountPlacesMap } from "../map";
 import { readUrlState } from "../state";
@@ -72,15 +74,18 @@ describe("deriveCrumbs", () => {
 const WORLD_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 842.035025 480"></svg>';
 const VIEWPORT = { width: 1200, height: 800 };
 
-function mount(articlePlaces: { works: Work[]; places: Place[] } = { works, places }, embedArticle: string | null = null) {
+/** Every cell of the grid, so a fit is never held at the world layer's clean depth. */
+const EVERY_CELL: Array<[number, number]> = Array.from({ length: 36 * 18 }, (_, index) => [index % 36, Math.floor(index / 36)]);
+
+function mount(articlePlaces: { works: Work[]; places: Place[] } = { works, places }, embedArticle: string | null = null, tileCells: Array<[number, number]> = []) {
   const figure = document.createElement("figure");
   document.body.append(figure);
   const controller = mountPlacesMap(figure, {
     worldSvgText: WORLD_SVG,
     tilesBaseUrl: "/_moss/map.abc/",
-    tileCells: [],
+    tileCells,
     tileK: 4,
-    tileOrigins: {}, tileColumns: 36, tileRows: 18,
+    tileOrigins: {}, tileColumns: 36, tileRows: 18, fit: FIT, edgeFade: EDGE_FADE,
     places: articlePlaces,
     lang: "en",
   });
@@ -301,7 +306,7 @@ describe("the article scope switch", () => {
   });
 
   test("leaving All articles remembers its place scope and camera, and This article → All articles restores both", () => {
-    const figure = mount(data, "two-places");
+    const figure = mount(data, "two-places", EVERY_CELL);
     option(figure, "all").click();
     option(figure, "all").click(); // opens the place menu
     figure.querySelector<HTMLButtonElement>(".moss-places-chip-menu-item")!.click(); // into Portugal

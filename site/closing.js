@@ -15,7 +15,7 @@
     document.documentElement.dataset.closingWired = 'true';
     const downloads = document.querySelector('#downloads');
     const release = {
-      macos: 'https://github.com/Symbiosis-Lab/moss/releases/download/v0.14.1/moss_0.14.1_universal.dmg',
+      macos: 'https://github.com/Symbiosis-Lab/moss/releases/latest/download/moss.dmg',
     };
     const icon = { macos: 'apple.svg', windows: 'windows.svg', linux: 'linux.svg' };
     const platformLabel = { macos: 'macOS', windows: 'Windows', linux: 'Linux' };
@@ -32,7 +32,7 @@
 
         if (platform === 'macos') {
           link.href = release.macos;
-          link.title = window.__landingI18n?.t('macTitle') || 'Download moss 0.14.1 for macOS (universal DMG)';
+          link.title = window.__landingI18n?.t('macTitle') || 'Download moss for macOS (universal DMG)';
         } else {
           link.title = window.__landingI18n?.t(platform === 'windows' ? 'windowsAria' : 'linuxAria') || `${label} desktop app — Coming soon`;
           link.setAttribute('aria-label', window.__landingI18n?.t(platform === 'windows' ? 'windowsAria' : 'linuxAria') || `${label} desktop app, Coming soon`);
@@ -157,21 +157,23 @@
         : (window.__landingI18n?.t('success') || 'Check your email to confirm your subscription.')
     );
 
-    document.querySelectorAll('a[href="#beta"]').forEach((link) => {
+    document.querySelectorAll('a[href="#downloads"]').forEach((link) => {
       link.addEventListener('click', (event) => {
         event.preventDefault();
-        const beta = document.querySelector('#beta');
-        const email = document.querySelector('#beta-email');
-        beta?.scrollIntoView({ behavior: 'auto', block: 'center' });
+        const downloads = document.querySelector('#downloads');
+        downloads?.scrollIntoView({ behavior: 'auto', block: 'center' });
         window.mossLanding?.openSignup();
         const started = performance.now();
-        const focusEmail = () => {
+        // The buttons live inside the staged closing scene, so they take the pointer only once it
+        // has settled: the focus waits for the scene, not for the scroll.
+        const focusDownload = () => {
           const state = window.__state?.();
-          if (email && !email.closest('[inert]') && state?.shown === 4 && !state.running) email.focus({ preventScroll: true });
-          else if (performance.now() - started < 10000) setTimeout(focusEmail, 50);
+          const first = downloads?.querySelector('a');
+          if (first && !first.closest('[inert]') && state?.shown === 4 && !state.running) first.focus({ preventScroll: true });
+          else if (performance.now() - started < 10000) setTimeout(focusDownload, 50);
         };
-        focusEmail();
-        if ('onscrollend' in window) addEventListener('scrollend', focusEmail, { once: true });
+        focusDownload();
+        if ('onscrollend' in window) addEventListener('scrollend', focusDownload, { once: true });
       });
     });
   });

@@ -1334,6 +1334,7 @@ fn parse_with_source_lines_assigns_1_based_line_numbers() {
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
+        warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
     };
@@ -1359,6 +1360,7 @@ fn source_line_offset_is_applied_additively() {
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 7,
+        warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
     };
@@ -1388,6 +1390,7 @@ fn source_lines_not_collapsed_across_multiline_shortcode() {
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
+        warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
     };
@@ -1412,6 +1415,7 @@ fn parse_with_source_lines_lists_and_blockquotes() {
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
+        warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
     };
@@ -1435,6 +1439,7 @@ fn parse_with_source_lines_populates_item_lines_on_list() {
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
+        warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
     };
@@ -1491,6 +1496,7 @@ fn parse_with_source_lines_populates_row_lines_on_table() {
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
+        warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
     };
@@ -1670,6 +1676,7 @@ fn parse_with_source_lines_handles_list_after_blank_line_offset() {
         emit_source_lines: true,
         implicit_figure: true,
         source_line_offset: 0,
+        warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
     };
@@ -1705,6 +1712,7 @@ fn parse_implicit_figure_off_leaves_image_paragraph_unpromoted() {
         emit_source_lines: false,
         implicit_figure: false,
         source_line_offset: 0,
+        warning_line_offset: 0,
         math: false,
         hard_line_breaks: false,
     };
@@ -1811,6 +1819,7 @@ fn implicit_figure_caption_carries_link_and_math_nodes() {
         emit_source_lines: false,
         implicit_figure: true,
         source_line_offset: 0,
+        warning_line_offset: 0,
         math: true,
         hard_line_breaks: false,
     };
@@ -1851,6 +1860,7 @@ fn implicit_figure_caption_only_math_is_a_math_node() {
         emit_source_lines: false,
         implicit_figure: true,
         source_line_offset: 0,
+        warning_line_offset: 0,
         math: true,
         hard_line_breaks: false,
     };
@@ -2248,6 +2258,40 @@ fn unknown_shortcode_inside_a_valid_shortcode_warns() {
     );
 }
 
+/// A plain fenced div renders only classes and an id, so a `lang=` or
+/// `data-*` key on it is advised rather than silently dropped. A class-only
+/// fence stays quiet.
+#[test]
+fn fenced_div_keys_a_plain_div_cannot_render_are_advised() {
+    let doc = crate::ast::parse(":::{.note lang=fr data-tone=warm}\nBody.\n:::\n");
+    assert!(
+        doc.advisories
+            .iter()
+            .any(|a| a.contains("lang") && a.contains("data-tone")),
+        "dropped keys must be named, got {:?}",
+        doc.advisories
+    );
+    assert!(
+        doc.warnings.is_empty(),
+        "a dropped key is an advisory, not a counted warning, got {:?}",
+        doc.warnings
+    );
+    let quiet = crate::ast::parse(":::{.note}\nBody.\n:::\n");
+    assert!(quiet.advisories.is_empty(), "got {:?}", quiet.advisories);
+}
+
+/// A grid cell is parsed as its own fragment, so an advisory raised inside a
+/// cell must reach the outer document, not die with the fragment.
+#[test]
+fn fenced_div_advisory_inside_a_grid_cell_surfaces() {
+    let doc = crate::ast::parse("::::grid\n:::{.note lang=fr}\nBody.\n:::\n::::\n");
+    assert!(
+        doc.advisories.iter().any(|a| a.contains("lang")),
+        "a cell's advisory must reach the document, got {:?}",
+        doc.advisories
+    );
+}
+
 /// The hero-overlay counterpart: `parse_hero`'s body is re-parsed via
 /// `parse_overlay_to_blocks`, a second, independent call site that used to
 /// drop the fragment's warnings the same way `parse_cell_to_blocks` did.
@@ -2274,4 +2318,187 @@ fn valid_shortcodes_produce_no_warnings() {
         "registered shortcode names must not warn, got {:?}",
         doc.warnings
     );
+}
+
+#[test]
+fn parses_definition_list_into_title_and_tight_definition() {
+    match first_block("Set Design\n: Ines Varga\n") {
+        Block::DefinitionList(children) => {
+            assert_eq!(children.len(), 2, "{children:?}");
+            assert_eq!(
+                children[0],
+                Block::DefinitionTitle(vec![Inline::Text("Set Design".into())])
+            );
+            assert_eq!(
+                children[1],
+                Block::DefinitionDefinition(vec![Block::Paragraph(vec![Inline::Text(
+                    "Ines Varga".into()
+                )])])
+            );
+        }
+        other => panic!("expected DefinitionList, got {other:?}"),
+    }
+}
+
+#[test]
+fn bare_trailing_pipe_makes_the_bracket_text_alt_only() {
+    // A `|` ending the brackets means alt only: the image stays a plain
+    // image, with no figure and so no caption.
+    match first_block("![A lake|](p.jpg)\n") {
+        Block::Paragraph(children) => {
+            assert!(
+                children.iter().any(|i| matches!(i, Inline::Image { alt, .. } if alt == "A lake")),
+                "{children:?}"
+            );
+        }
+        other => panic!("expected Paragraph, got {other:?}"),
+    }
+}
+
+#[test]
+fn bare_trailing_pipe_trims_the_spaces_around_it() {
+    match first_block("![A lake | ](p.jpg)\n") {
+        Block::Paragraph(children) => {
+            assert!(
+                children.iter().any(|i| matches!(i, Inline::Image { alt, .. } if alt == "A lake")),
+                "{children:?}"
+            );
+        }
+        other => panic!("expected Paragraph, got {other:?}"),
+    }
+}
+
+#[test]
+fn bracket_text_without_a_pipe_is_still_the_caption() {
+    match first_block("![A lake](p.jpg)\n") {
+        Block::Figure { caption, .. } => {
+            let cap = caption.expect("caption from alt text");
+            assert!(matches!(&cap[0], Inline::Text(t) if t == "A lake"), "{cap:?}");
+        }
+        other => panic!("expected Figure, got {other:?}"),
+    }
+}
+
+#[test]
+fn alt_only_image_followed_by_an_italic_line_keeps_the_line_as_caption() {
+    match first_block("![A lake|](p.jpg)\n*Credit. CC0.*\n") {
+        Block::Figure { image, caption, .. } => {
+            assert!(matches!(&image, Inline::Image { alt, .. } if alt == "A lake"), "{image:?}");
+            let cap = caption.expect("italic line becomes the caption");
+            assert_eq!(crate::ast::inlines_to_plain_text(&cap), "Credit. CC0.");
+        }
+        other => panic!("expected Figure, got {other:?}"),
+    }
+}
+
+#[test]
+fn escaped_pipe_before_the_bracket_end_is_caption_text() {
+    // `\|` is a literal pipe in the bracket text, not the alt-only marker.
+    match first_block("![Cats \\|](x.jpg)\n") {
+        Block::Figure { caption, .. } => {
+            let cap = caption.expect("caption from alt text");
+            assert_eq!(crate::ast::inlines_to_plain_text(&cap), "Cats |");
+        }
+        other => panic!("expected Figure, got {other:?}"),
+    }
+}
+
+#[test]
+fn alt_only_with_a_placement_is_a_figure_with_no_caption() {
+    match first_block("![A lake|page|](p.jpg)\n") {
+        Block::Figure { image, caption, width, .. } => {
+            assert!(caption.is_none(), "{caption:?}");
+            assert_eq!(width.as_deref(), Some("page"));
+            assert!(matches!(&image, Inline::Image { alt, .. } if alt == "A lake"), "{image:?}");
+        }
+        other => panic!("expected Figure, got {other:?}"),
+    }
+}
+
+#[test]
+fn escaped_pipe_after_markup_or_alone_is_literal_not_alt_only() {
+    // The pipe is escaped, so the bracket text keeps it and the image is
+    // captioned from it. pulldown's events alone cannot tell these from
+    // `![*em*|](x)`: both end in an `End(Emphasis)` then a lone `|`.
+    for src in ["![*em*\\|](x.jpg)\n", "![\\|](x.jpg)\n"] {
+        match first_block(src) {
+            Block::Figure { image, caption, .. } => {
+                let cap = caption.unwrap_or_else(|| panic!("{src:?} lost its caption"));
+                assert!(crate::ast::inlines_to_plain_text(&cap).ends_with('|'), "{src:?}: {cap:?}");
+                assert!(matches!(&image, Inline::Image { alt, .. } if alt.ends_with('|')), "{src:?}: {image:?}");
+            }
+            other => panic!("{src:?}: expected Figure, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn bare_pipe_after_markup_is_alt_only() {
+    match first_block("![a *b*|](x.jpg)\n") {
+        Block::Paragraph(children) => {
+            assert!(
+                children.iter().any(|i| matches!(i, Inline::Image { alt, .. } if alt == "a b")),
+                "{children:?}"
+            );
+        }
+        other => panic!("expected Paragraph, got {other:?}"),
+    }
+}
+
+#[test]
+fn inline_image_in_prose_keeps_its_trailing_pipe() {
+    // The alt-only form is the standalone image; inside a sentence the pipe
+    // stays part of the alt, as the authoring guide says.
+    match first_block("see ![icon|](x.png) here\n") {
+        Block::Paragraph(children) => {
+            assert!(
+                children.iter().any(|i| matches!(i, Inline::Image { alt, .. } if alt == "icon|")),
+                "{children:?}"
+            );
+        }
+        other => panic!("expected Paragraph, got {other:?}"),
+    }
+}
+
+fn tracked_html(md: &str, offset: usize) -> String {
+    let config = ParseConfig { emit_source_lines: true, source_line_offset: offset, ..ParseConfig::default() };
+    let doc = parse_with_config(md, &config);
+    crate::ast::render::render_document(&doc, &crate::ast::hooks::DefaultHooks::new())
+}
+
+#[test]
+fn hero_spans_its_fence_and_annotates_the_lines_inside() {
+    let md = "\n:::hero {align=center}\n# Short heading\n\nOne line of overlay text.\n:::\n\nBody text below the hero.\n";
+    let html = tracked_html(md, 0);
+    assert!(html.contains(r#"data-source-range="2-6""#), "fence 2..6: {html}");
+    assert!(html.contains(r#"<h1 id="short-heading" data-source-line="3""#), "h1 on 3: {html}");
+    assert!(html.contains(r#"<p data-source-line="5">One line"#), "p on 5: {html}");
+    assert!(html.contains(r#"<p data-source-line="8">Body text"#), "body p on 8: {html}");
+}
+
+#[test]
+fn fragment_lines_follow_the_frontmatter_offset() {
+    let md = ":::hero\n# Title\n:::\n";
+    let html = tracked_html(md, 4);
+    assert!(html.contains(r#"data-source-range="5-7""#), "{html}");
+    assert!(html.contains(r#"data-source-line="6""#), "{html}");
+}
+
+#[test]
+fn grid_cells_carry_their_range_and_inner_lines() {
+    let md = "intro\n\n:::grid 2\nleft one\n\nleft two\n---\nright\n:::\n";
+    let html = tracked_html(md, 0);
+    assert!(html.contains(r#"class="moss-grid" data-columns="2" data-source-range="3-9""#), "{html}");
+    assert!(html.contains(r#"<div class="moss-grid-card" data-source-range="4-6"><p data-source-line="4">left one"#), "{html}");
+    assert!(html.contains(r#"<p data-source-line="6">left two"#), "{html}");
+    assert!(html.contains(r#"<div class="moss-grid-card" data-source-range="8-8"><p data-source-line="8">right"#), "{html}");
+}
+
+#[test]
+fn fragments_are_unannotated_when_tracking_is_off() {
+    let html = crate::ast::render::render_document(
+        &parse(":::grid 2\nleft\n---\nright\n:::\n"),
+        &crate::ast::hooks::DefaultHooks::new(),
+    );
+    assert!(!html.contains("data-source"), "{html}");
 }

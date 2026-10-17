@@ -101,9 +101,15 @@ const GATE_PORT_KEYS = [
   'places-explorer-vertical',
   'places-explorer-single',
   'hero-pause',
+  'hero-caption-stack',
   'bridge-capture',
   'contents-ruler',
   'nav-split-order',
+  'nav-split-pack',
+  'theme-floor-hooks',
+  'hls-short-clip',
+  'footer-end-space:hidden',
+  'footer-end-space:default',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

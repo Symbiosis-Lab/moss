@@ -18,7 +18,7 @@ use crate::build::media::cover::{detect_cover_type, html_escape, CoverType};
 use crate::build::types::ParsedDocument;
 
 /// Properties for rendering an article list item
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ArticleListItemProps {
     /// Formatted date display (e.g., "2025 · 09" or "September 2, 2025")
     pub date_display: String,
@@ -38,6 +38,10 @@ pub struct ArticleListItemProps {
     /// An event's written time as a `<time>` with its parts in spans
     /// (`event_meta::render_when`); shown in place of `date_display`.
     pub when_html: Option<String>,
+    /// The page's listed names, pre-rendered (`ChildItemProps::credits`).
+    pub credits: Option<String>,
+    /// Source path of the page this row stands for (`ParsedDocument::source_path`).
+    pub source_file: Option<String>,
 }
 
 impl ArticleListItemProps {
@@ -49,6 +53,12 @@ impl ArticleListItemProps {
             url_path: &self.url_path,
         }
     }
+}
+
+/// ` data-source-file="…"` for an element whose source is another page, or
+/// nothing when the path is unknown.
+pub(crate) fn source_file_attr(path: Option<&str>) -> String {
+    path.map(|p| format!(r#" data-source-file="{}""#, html_escape(p))).unwrap_or_default()
 }
 
 /// Renders an article list item as HTML.
@@ -86,7 +96,8 @@ pub fn render(
 ) -> String {
     if no_date {
         return format!(
-            r#"<p class="moss-card"><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-title title">{}</span></a></p>"#,
+            r#"<p class="moss-card"{}><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-title title">{}</span></a></p>"#,
+            source_file_attr(props.source_file.as_deref()),
             html_escape(&props.url),
             html_escape(&props.title)
         );
@@ -111,7 +122,7 @@ pub fn render(
     // before the empty check below: a bare-year row under a `minimal` month
     // prefix can have no month text at all, and a place is still worth a row
     // on its own rather than vanishing alongside the empty date.
-    let date_display = leaf_meta(&date_display, props.when_html.as_deref(), props.place.as_deref());
+    let date_display = leaf_meta(&date_display, props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref());
 
     // An empty prefix means a year-only date under its own year heading, and
     // no place either; emit no span at all rather than one that lays out as
@@ -125,7 +136,8 @@ pub fn render(
         )
     };
     format!(
-        r#"<p class="moss-card"><a href="{}" class="moss-prefix-link">{}<span class="moss-prefix-link-title title">{}</span></a></p>"#,
+        r#"<p class="moss-card"{}><a href="{}" class="moss-prefix-link">{}<span class="moss-prefix-link-title title">{}</span></a></p>"#,
+        source_file_attr(props.source_file.as_deref()),
         html_escape(&props.url),
         prefix,
         html_escape(&props.title)
@@ -133,7 +145,7 @@ pub fn render(
 }
 
 /// Properties for rendering a child list item (article or folder)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ChildItemProps {
     pub title: String,
     pub url: String,
@@ -179,9 +191,49 @@ pub struct ChildItemProps {
     /// An event's written time as a `<time>` with its parts in spans
     /// (`event_meta::render_when`); shown in place of `date_display`.
     pub when_html: Option<String>,
+    /// The names a term kind with `cards = true` lists on this page, as one
+    /// pre-rendered `moss-card-credits` span (`terms::roles`). Shown in a
+    /// leaf's meta after its date and place; `None` for a folder.
+    pub credits: Option<String>,
+    /// An event's `tickets:` address. A card with a web address here gets its
+    /// own Tickets link and its title is the page link (`event_card_links`).
+    pub tickets: Option<String>,
+    /// An event's `online:` address. Like `tickets`, a web address here gives
+    /// the card its own Online link after Tickets (`event_card_links`).
+    pub online: Option<String>,
+    /// The accent colour of the section the page sits in
+    /// (`ParsedDocument::section`), published on the card as
+    /// `--moss-section-color` (with its readable text variants) so a theme can tint cards by section.
+    pub section_color: Option<crate::build::types::SectionAccent>,
+    /// Source path of the page this card stands for (`ParsedDocument::source_path`),
+    /// published as `data-source-file` on the card's root so a click in the
+    /// preview opens that page rather than the listing.
+    pub source_file: Option<String>,
+    /// The listing's `children_count:` setting, applied to a folder's count.
+    pub count_setting: Option<moss_core::frontmatter_union::ChildrenCount>,
 }
 
 impl ChildItemProps {
+    /// A folder card's count text, or `None` for a leaf or a listing that
+    /// hides the count. The one place the setting is applied.
+    pub(crate) fn count_label(&self, lang: crate::i18n::Language, typesetting: Option<&str>) -> Option<String> {
+        let count = self.child_count?;
+        crate::i18n::card_count_label(lang, count, typesetting, self.count_setting.as_ref())
+    }
+
+    pub(crate) fn source_file_attr(&self) -> String {
+        source_file_attr(self.source_file.as_deref())
+    }
+
+    /// The card's ` style="--moss-section-color: …"` attribute, or nothing for
+    /// a page outside any coloured section.
+    pub(crate) fn section_style_attr(&self) -> String {
+        self.section_color
+            .as_ref()
+            .map(|a| format!(r#" style="{}""#, html_escape(&crate::build::scan::section_text::section_style(a))))
+            .unwrap_or_default()
+    }
+
     pub(crate) fn date_sort_key(&self) -> moss_core::sort::DateSortKey<'_> {
         moss_core::sort::DateSortKey {
             date: self.date_raw.as_deref(),
@@ -219,11 +271,17 @@ fn with_place_html(date_html: &str, place: Option<&str>) -> String {
 }
 
 /// A leaf's date-and-place text: the event's `<time>` when it has one, else
-/// the plain date. The one choice between the two, for every listing form.
-pub(crate) fn leaf_meta(date_text: &str, when_html: Option<&str>, place: Option<&str>) -> String {
-    match when_html {
+/// the plain date, then the page's listed names when a term kind shows them
+/// on cards. The one choice between the two, for every listing form.
+pub(crate) fn leaf_meta(date_text: &str, when_html: Option<&str>, place: Option<&str>, credits: Option<&str>) -> String {
+    let base = match when_html {
         Some(h) => with_event_place(h, place),
         None => with_place(date_text, place),
+    };
+    match credits {
+        None => base,
+        Some(c) if base.is_empty() => c.to_string(),
+        Some(c) => format!(r#"{}<span class="moss-event-sep"> · </span>{}"#, base, c),
     }
 }
 
@@ -252,18 +310,21 @@ fn with_event_place(time_html: &str, place: Option<&str>) -> String {
 /// `count_label` is `None` for a leaf (no count at all) and `Some` for a
 /// folder (always shown, with or without a date of its own) — a folder's
 /// place only ever shows beside ITS OWN date, never beside a bare count.
+/// `credits` is a leaf's listed names; a folder never shows them, so the
+/// count arm ignores it.
 pub(crate) fn meta_text(
     date_display: Option<&str>,
     when_html: Option<&str>,
     place: Option<&str>,
     count_label: Option<&str>,
+    credits: Option<&str>,
 ) -> String {
     match count_label {
         Some(count) => match date_display {
             Some(date) => format!("{} · {}", with_place(date, place), html_escape(count)),
             None => html_escape(count),
         },
-        None => leaf_meta(date_display.unwrap_or(""), when_html, place),
+        None => leaf_meta(date_display.unwrap_or(""), when_html, place, credits),
     }
 }
 
@@ -347,7 +408,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
 
     // Split pipe-encoded cover to resolve only the path part. Rejoin with
     // attrs so downstream renderers can extract them.
-    let (cover, cover_path_for_type) = match doc.cover.as_deref() {
+    let (cover, cover_path_for_type) = match doc.listing_cover() {
         Some(c) => {
             let (path_part, attrs_str) = moss_core::media::split_pipe(c);
             let resolved = path_resolver.resolve_url(path_part);
@@ -387,6 +448,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         kicker: crate::build::scan::page_map::publisher(&doc.raw_frontmatter),
         permalink,
         url_path: doc.url_path.clone(),
+        count_setting: None,
         place: doc.place_names.clone().or_else(|| {
             // An event's place is shown even when it names no place page.
             doc.event.as_ref()?;
@@ -395,6 +457,85 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         when_html: doc.event.as_ref().map(|e| {
             crate::build::components::event_meta::render_when(e.start, e.end, doc.lang)
         }),
+        credits: doc.card_credits.clone(),
+        tickets: doc.event.as_ref().and_then(|e| e.tickets.clone()),
+        online: doc.event.as_ref().and_then(|e| e.online.clone()),
+        section_color: doc.section.clone(),
+        source_file: doc.source_path.clone(),
+    }
+}
+
+/// The links of an event card whose page has a web `tickets:` or `online:`
+/// address. Such a card is not one anchor: its title links to the page, and
+/// the action links sit beside it. Every card kind (summary, grid, list row)
+/// builds its markup from these two strings, so the shape is decided here once.
+pub(crate) struct EventCardLinks {
+    /// `<a class="moss-card-link">` around the escaped title.
+    pub title: String,
+    /// The Tickets and Online links, in that order, each naming the event for
+    /// assistive technology.
+    pub actions: String,
+}
+
+/// `None` for every card without a web `tickets:` or `online:` address; those
+/// keep their whole-card anchor and render byte-identically to before.
+pub(crate) fn event_card_links(props: &ChildItemProps, lang: crate::i18n::Language) -> Option<EventCardLinks> {
+    let tickets = props
+        .tickets
+        .as_deref()
+        .and_then(|u| super::event_meta::tickets_link(u, lang, Some(&props.title)));
+    let online = props
+        .online
+        .as_deref()
+        .and_then(|u| super::event_meta::online_link(u, lang, Some(&props.title)));
+    if tickets.is_none() && online.is_none() {
+        return None;
+    }
+    Some(EventCardLinks {
+        title: format!(
+            r#"<a class="moss-card-link" href="{}">{}</a>"#,
+            html_escape(&props.url),
+            html_escape(&props.title),
+        ),
+        actions: format!("{}{}", tickets.unwrap_or_default(), online.unwrap_or_default()),
+    })
+}
+
+/// The deepest `<a>` nesting in `html`, for tests that assert a card holds no
+/// anchor inside another.
+#[cfg(test)]
+pub(crate) fn max_anchor_depth(html: &str) -> usize {
+    let (mut depth, mut deepest) = (0usize, 0usize);
+    let mut rest = html;
+    while let Some(i) = rest.find('<') {
+        rest = &rest[i..];
+        if rest.starts_with("<a ") {
+            depth += 1;
+            deepest = deepest.max(depth);
+        } else if rest.starts_with("</a>") {
+            depth = depth.saturating_sub(1);
+        }
+        rest = &rest[1..];
+    }
+    deepest
+}
+
+/// The opening element, title markup and closing element of a list row. An
+/// ordinary row is one anchor around its whole text; an event row keeps the
+/// same flex box as a `<div>`, links only its title, and carries its action
+/// links after the title.
+fn row_parts(props: &ChildItemProps, event: Option<&EventCardLinks>, row_class: &str, title_class: &str) -> (String, String, &'static str) {
+    match event {
+        Some(links) => (
+            format!(r#"<div class="{row_class}">"#),
+            format!(r#"<span class="{title_class}">{}</span>{}"#, links.title, links.actions),
+            "</div>",
+        ),
+        None => (
+            format!(r#"<a href="{}" class="{row_class}">"#, html_escape(&props.url)),
+            format!(r#"<span class="{title_class}">{}</span>"#, html_escape(&props.title)),
+            "</a>",
+        ),
     }
 }
 
@@ -409,25 +550,30 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
 ///   [`meta_text`].
 /// - For articles without date: renders title only
 pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typesetting: Option<&str>) -> String {
-    let escaped_url = html_escape(&props.url);
-    let escaped_title = html_escape(&props.title);
+    let event = event_card_links(props, lang);
+    let event = event.as_ref();
 
-    if let Some(count) = props.child_count {
-        let count_label = crate::i18n::article_count_label(lang, count, typesetting);
-        let count_text = meta_text(props.date_display.as_deref(), None, props.place.as_deref(), Some(&count_label));
+    if props.child_count.is_some() {
+        let count_label = props.count_label(lang, typesetting);
+        let count_text = meta_text(props.date_display.as_deref(), None, props.place.as_deref(), count_label.as_deref(), None);
+        let meta_span = |class: &str| {
+            if count_text.is_empty() { String::new() } else { format!(r#"<span class="{}">{}</span>"#, class, count_text) }
+        };
 
         if let Some(ref desc) = props.description {
             // Folder WITH description: title + count suffix, description below
+            let (open, title, close) = row_parts(props, event, "moss-prefix-link moss-folder-link", "moss-prefix-link-title");
             format!(
-                r#"<div class="moss-card moss-folder-item"><a href="{}" class="moss-prefix-link moss-folder-link"><span class="moss-prefix-link-title">{}</span><span class="moss-prefix-link-suffix">{}</span></a><p class="moss-folder-description">{}</p></div>"#,
-                escaped_url, escaped_title, count_text,
+                r#"<div class="moss-card moss-folder-item"{}>{}{}{}{}<p class="moss-folder-description">{}</p></div>"#,
+                props.source_file_attr(), open, title, meta_span("moss-prefix-link-suffix"), close,
                 crate::build::page::meta::render_description_html(desc)
             )
         } else {
             // Folder WITHOUT description: count in prefix slot
+            let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
             format!(
-                r#"<div class="moss-card"><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-prefix">{}</span><span class="moss-prefix-link-title">{}</span></a></div>"#,
-                escaped_url, count_text, escaped_title
+                r#"<div class="moss-card"{}>{}{}{}{}</div>"#,
+                props.source_file_attr(), open, meta_span("moss-prefix-link-prefix"), title, close
             )
         }
     } else if let Some(ref date_raw) = props.date_raw {
@@ -437,25 +583,28 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
         // it has. Same compact form grid cards use. The page's resolved
         // place, if any, goes right next to it — see `with_place`.
         let date = date_formatters::format_compact_date(date_raw, lang, typesetting);
-        let date = leaf_meta(&date, props.when_html.as_deref(), props.place.as_deref());
+        let date = leaf_meta(&date, props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref());
+        let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
         format!(
-            r#"<div class="moss-card"><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-prefix date">{}</span><span class="moss-prefix-link-title">{}</span></a></div>"#,
-            escaped_url, date, escaped_title
+            r#"<div class="moss-card"{}>{}<span class="moss-prefix-link-prefix date">{}</span>{}{}</div>"#,
+            props.source_file_attr(), open, date, title, close
         )
     } else if let Some(ref date_display) = props.date_display {
         // Article with a display date but no raw date. `date_display` is
         // already the compact "year · month"/"year" form —
         // `props_for_document` formatted it with `format_compact_date`.
-        let date = leaf_meta(date_display, props.when_html.as_deref(), props.place.as_deref());
+        let date = leaf_meta(date_display, props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref());
+        let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
         format!(
-            r#"<div class="moss-card"><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-prefix date">{}</span><span class="moss-prefix-link-title">{}</span></a></div>"#,
-            escaped_url, date, escaped_title
+            r#"<div class="moss-card"{}>{}<span class="moss-prefix-link-prefix date">{}</span>{}{}</div>"#,
+            props.source_file_attr(), open, date, title, close
         )
     } else {
         // Article without any date
+        let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
         format!(
-            r#"<div class="moss-card"><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-title">{}</span></a></div>"#,
-            escaped_url, escaped_title
+            r#"<div class="moss-card"{}>{}{}{}</div>"#,
+            props.source_file_attr(), open, title, close
         )
     }
 }

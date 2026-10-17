@@ -91,7 +91,7 @@ declarations that fight each other.
   also write a body `# Heading` repeating the title — it renders as well, so
   the title would show twice. One exception: a `:::hero` block at the very
   top of the body takes over the title slot itself, so a heading written
-  inside it does not duplicate anything. Nothing else does this — a
+  inside it does not duplicate anything. A page in the navigation shows its title too. Nothing else does this — a
   `:::grid` or any other block opening the page still leaves the
   auto-injected title in place, so a heading after it shows the title twice
   the same as if the grid weren't there.
@@ -132,7 +132,11 @@ When a design call needs a visual treatment, stop at the first rung that reaches
    set `--moss-color-ui-accent: var(--moss-color-text)`.
 2. **Selector on semantic HTML.** Target the existing semantic structure (a
    heading, a blockquote, a list) with a plain CSS rule. No new markup.
-3. **Named-class fenced div.** `::: {.your-class}` wraps markdown in a `<div>`
+3. **A declared field with a `place`, or a named-class fenced div.** First ask
+   whether the content is a fact about the page (a year, a count, a role, a
+   place). If it is, declare it as a field and give it a `place` (see `moss guide authoring`, Declared fields),
+   so moss draws it from frontmatter instead of a classed block repeated on
+   every page. Otherwise `::: {.your-class}` wraps markdown in a `<div>`
    with that class. Write the CSS under the class name. One descriptive class,
    not three stacked utilities.
 4. **Structural override.** Re-lay-out a page against moss's defaults: scope to
@@ -141,6 +145,11 @@ When a design call needs a visual treatment, stop at the first rung that reaches
    layout, and read `moss describe --css <selector>` for the rules you are
    displacing. Reach here when a whole page has a different shape, not when one
    element has a different colour.
+
+After moving a theme rule onto a new selector, build and run
+`moss doctor --surface`: it names every rule in `.moss/theme/` that matches no
+element on any built page, which is how a rule left on a class the pages no
+longer carry shows up.
 
 Rung 4 exists because rungs 1–3 restyle a component and some designs need to
 re-lay-out a page. It is the last rung, not an escape hatch: `moss describe`
@@ -183,7 +192,7 @@ model (dark mode, quiet chrome, `@layer` rules), see
 
 - **Starting a new site** → read `moss guide example`
   for the canonical folder shape and file content to copy.
-- **Authoring or styling a site** → read `moss guide authoring`.
+- **Authoring or styling a site** → read `moss guide authoring` (hero, gallery, captions, definition lists and listings are there too).
 - **Building a plugin** (deploy, syndicate, comments — anything needing the
   network or an external API) → read `moss guide plugins`.
 - **Converting an existing site** (a URL, or local files) into moss → read
@@ -195,18 +204,24 @@ model (dark mode, quiet chrome, `@layer` rules), see
   `moss guide comments`.
 - **Building a site in more than one language** →
   `moss guide authoring`, Multilingual sites.
-- **Putting the site online** → Publishing below.
+- **Putting the site online** → Publishing below. moss publishes to mosspub.com, to other built-in targets, or anywhere a deploy plugin reaches.
 
 ## Publishing
 
-- **First publish (moss hosting):** `moss env production <folder>` (or
+- **First publish (mosspub.com hosting, provided by Symbiosis Lab):** `moss env production <folder>` (or
   `staging`) **then** `moss deploy <folder> --site-id=<name>` → publishes to
   `<name>.mosspub.com`. The order matters: without a prior explicit `moss env`,
   `deploy` will not register a site, and `--site-id` alone silently does
   nothing. The invite allowlist can also refuse registration.
+- **First publish refused as "Identity not yet verified":** the folder's key is
+  not linked to an account yet. `moss deploy <folder> --site-id=<name> --email
+  <address>` emails a sign-in link, waits up to 15 minutes for it to be opened,
+  then registers. Ask the human for the address first, and use the account the
+  site should belong to: a wrong one can leave the folder's key linked to the
+  wrong account. Never pass `--email` unasked; it sends a real email.
 - **Every publish after the first:** `moss deploy <folder>` — the site id
   already lives in `.moss/state.toml`.
-- **Refused because the live site is newer:** `deploy` to moss hosting
+- **Refused because the live site is newer:** `deploy` to mosspub.com hosting
   (`--prebuilt` included) refuses when the site was published from another
   copy of the folder after this copy's last publish. Bring this folder up to
   date with that copy (usually `git pull`) and deploy again. `--overwrite-newer`
@@ -231,10 +246,10 @@ model (dark mode, quiet chrome, `@layer` rules), see
   example.com`.
 - **Site built by another generator:** `moss deploy <folder> --prebuilt=_site`
   skips `moss build` and uploads that directory as-is.
-- **Any non-moss host:** `moss build <folder> --site-url=https://example.com`,
+- **Any other host:** `moss build <folder> --site-url=https://example.com`,
   then upload `.moss/build.nosync/current/` yourself. `--site-url` is required there
   because canonical URLs, `og:image`, the sitemap, and RSS are all absolute and
-  otherwise derive from moss hosting deployment state, which a non-moss host
+  otherwise derive from mosspub.com deployment state, which any other host
   never sets. Flag details: `moss describe --json`.
 
 ## Harvest, don't unilaterally invent

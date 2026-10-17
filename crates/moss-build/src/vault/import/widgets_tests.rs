@@ -47,15 +47,57 @@ fn other_video_hosts_keep_their_player_url() {
 fn hosted_page_iframe_becomes_a_titled_link() {
     let html = page("", r#"<iframe src="https://pay.example/donate/123" title="Give to the studio"></iframe>"#);
     let (md, count) = run(&html);
+    assert!(md.contains("![[https://pay.example/donate/123|Give to the studio]]"), "{md}");
     assert!(md.contains("[Give to the studio](https://pay.example/donate/123)"), "{md}");
-    assert_eq!(count, WidgetCount { carried: 1, dropped: 0 });
+    assert_eq!(count, WidgetCount { carried: 1, ..Default::default() });
+}
+
+#[test]
+fn hosted_page_iframe_with_pixel_size_becomes_a_sized_frame_above_its_link() {
+    let html = page("", r#"<iframe src="https://forms.example/f/2" title="Sign-up form" width="420" height="620"></iframe>"#);
+    let md = run(&html).0;
+    let frame = md.find("![[https://forms.example/f/2|Sign-up form|420x620]]").unwrap_or_else(|| panic!("{md}"));
+    let link = md.find("[Sign-up form](https://forms.example/f/2)").unwrap_or_else(|| panic!("{md}"));
+    assert!(frame < link, "{md}");
+}
+
+#[test]
+fn hosted_page_iframe_with_percentage_width_is_a_frame_without_size() {
+    let html = page("", r#"<iframe src="https://pay.example/donate/9" title="Give" width="100%" height="700"></iframe>"#);
+    let md = run(&html).0;
+    assert!(md.contains("![[https://pay.example/donate/9|Give]]"), "{md}");
+    assert!(!md.contains("100%"), "{md}");
+}
+
+#[test]
+fn a_pipe_or_bracket_in_a_frame_label_cannot_break_the_embed() {
+    let html = page("", r#"<iframe src="https://tix.example/e/1" title="Tix | ] now" width="300" height="400"></iframe>"#);
+    let md = run(&html).0;
+    assert!(md.contains("![[https://tix.example/e/1|Tix     now|300x400]]"), "{md}");
+}
+
+#[test]
+fn google_forms_iframe_without_a_row_is_a_frame_labelled_by_its_host() {
+    let html = page(
+        "",
+        r#"<iframe src="https://docs.google.com/forms/d/e/1FAIpQLSc/viewform?embedded=true" width="640" height="800px"></iframe>"#,
+    );
+    let (md, count) = run(&html);
+    assert!(
+        md.contains("![[https://docs.google.com/forms/d/e/1FAIpQLSc/viewform?embedded=true|docs.google.com|640x800]]"),
+        "{md}"
+    );
+    assert!(md.contains("[docs.google.com](https://docs.google.com/forms/d/e/1FAIpQLSc/viewform?embedded=true)"), "{md}");
+    assert_eq!(count.carried, 1);
 }
 
 #[test]
 fn untitled_iframe_is_labelled_by_its_row_then_its_host() {
     let html = page("", r#"<iframe src="https://donorbox.org/embed/x"></iframe><iframe src="https://forms.example/f/1"></iframe>"#);
     let (md, count) = run(&html);
+    assert!(md.contains("![[https://donorbox.org/embed/x|Donate]]"), "{md}");
     assert!(md.contains("[Donate](https://donorbox.org/embed/x)"), "{md}");
+    assert!(md.contains("![[https://forms.example/f/1|forms.example]]"), "{md}");
     assert!(md.contains("[forms.example](https://forms.example/f/1)"), "{md}");
     assert_eq!(count.carried, 2);
 }
@@ -66,7 +108,7 @@ fn contact_form_becomes_the_footer_mailto() {
     let (md, count) = run(&html);
     assert!(md.contains("[hello@studio.example](mailto:hello@studio.example)"), "{md}");
     assert!(!md.contains("<form"));
-    assert_eq!(count, WidgetCount { carried: 1, dropped: 0 });
+    assert_eq!(count, WidgetCount { carried: 1, ..Default::default() });
 }
 
 #[test]
@@ -90,7 +132,7 @@ fn contact_form_falls_back_to_the_json_ld_email() {
 fn contact_form_with_no_route_is_dropped_and_counted() {
     let (md, count) = run(&page("", CONTACT_FORM));
     assert!(!md.contains("<form") && !md.contains("Send") && !md.contains("mailto"), "{md}");
-    assert_eq!(count, WidgetCount { carried: 0, dropped: 1 });
+    assert_eq!(count, WidgetCount { dropped_kinds: vec!["contact form".into()], ..Default::default() });
 }
 
 #[test]
@@ -258,4 +300,128 @@ fn a_gallery_whose_lightbox_links_name_only_a_query_is_one_gallery() {
     let md = run(&html).0;
     let block = ":::gallery\n![](https://site.example/i/a.jpg)\n![](https://site.example/i/b.jpg)\n:::";
     assert!(md.contains(block), "{md}");
+}
+
+#[test]
+fn a_paren_or_pipe_in_a_hosted_url_cannot_end_the_link_or_the_embed() {
+    let html = page("", r#"<iframe src="https://pay.example/give/a)b|c" title="Give" width="420" height="620"></iframe>"#);
+    let md = run(&html).0;
+    assert!(md.contains("![[https://pay.example/give/a%29b%7Cc|Give|420x620]]"), "{md}");
+    assert!(md.contains("[Give](https://pay.example/give/a%29b%7Cc)"), "{md}");
+}
+
+#[test]
+fn a_newline_in_a_frame_title_is_one_space() {
+    let html = page("", "<iframe src=\"https://forms.example/n\" title=\"Sign-up\n   form\" width=\"420\" height=\"620\"></iframe>");
+    let md = run(&html).0;
+    assert!(md.contains("![[https://forms.example/n|Sign-up form|420x620]]"), "{md}");
+}
+
+#[test]
+fn a_size_shaped_title_is_replaced_by_the_row_label_or_the_host() {
+    let html = page(
+        "",
+        r#"<iframe src="https://forms.example/s/1" title="800x600" width="420" height="620"></iframe><iframe src="https://donorbox.org/embed/y" title="2024"></iframe>"#,
+    );
+    let md = run(&html).0;
+    assert!(md.contains("![[https://forms.example/s/1|forms.example|420x620]]"), "{md}");
+    assert!(md.contains("![[https://donorbox.org/embed/y|Donate]]"), "{md}");
+}
+
+fn map_block(json_escaped: &str) -> String {
+    format!(r#"<div class="sqs-block map-block sqs-block-map" data-block-json="{json_escaped}"></div>"#)
+}
+
+#[test]
+fn map_block_with_an_address_title_becomes_a_map_frame_with_directions() {
+    let json = r#"{&quot;location&quot;:{&quot;addressTitle&quot;:&quot;Example Hall&quot;,&quot;addressLine1&quot;:&quot;1 Example Street&quot;,&quot;mapLat&quot;:51.5,&quot;mapLng&quot;:-0.12,&quot;mapZoom&quot;:14,&quot;markerLat&quot;:51.501,&quot;markerLng&quot;:-0.121}}"#;
+    let (md, count) = run(&page("", &map_block(json)));
+    assert!(md.contains("![[https://www.google.com/maps?q=51.501,-0.121&z=14&output=embed|Map of Example Hall]]"), "{md}");
+    assert!(md.contains("[Directions](https://www.google.com/maps/dir/?api=1&destination=51.501,-0.121)"), "{md}");
+    assert_eq!(count.carried, 1);
+}
+
+#[test]
+fn map_block_with_only_coordinates_uses_the_centre_and_default_zoom() {
+    let json = r#"{&quot;location&quot;:{&quot;mapLat&quot;:51.5,&quot;mapLng&quot;:-0.12}}"#;
+    let md = run(&page("", &map_block(json))).0;
+    assert!(md.contains("![[https://www.google.com/maps?q=51.5,-0.12&z=15&output=embed|Map]]"), "{md}");
+    assert!(md.contains("[Directions](https://www.google.com/maps/dir/?api=1&destination=51.5,-0.12)"), "{md}");
+}
+
+#[test]
+fn map_block_with_broken_json_is_dropped_without_an_empty_element() {
+    let (md, count) = run(&page("", &map_block(r#"{&quot;location&quot;:"#)));
+    assert!(!md.contains("google.com") && !md.contains("Directions"), "{md}");
+    assert_eq!(count.dropped(), 1);
+}
+
+#[test]
+fn map_block_in_the_current_markup_reads_its_location_from_data_context() {
+    let html = page(
+        "",
+        r#"<div class="sqs-block website-component-block sqs-block-website-component sqs-block-map map-block" data-block-type="1337" data-definition-name="website.components.map"><div class="sqs-block-content"> <div data-context="{&quot;blockId&quot;:&quot;b1&quot;,&quot;location&quot;:{&quot;mapLat&quot;:40.0,&quot;mapLng&quot;:-73.0,&quot;mapZoom&quot;:12,&quot;markerLat&quot;:40.0,&quot;markerLng&quot;:-73.0,&quot;addressLine1&quot;:&quot;1 Example Street&quot;,&quot;addressLine2&quot;:&quot;&quot;,&quot;addressCountry&quot;:&quot;&quot;,&quot;addressTitle&quot;:&quot;Example Hall&quot;}}"> &nbsp; </div></div></div>"#,
+    );
+    let (md, count) = run(&html);
+    assert!(md.contains("![[https://www.google.com/maps?q=40,-73&z=12&output=embed|Map of Example Hall]]"), "{md}");
+    assert!(md.contains("[Directions](https://www.google.com/maps/dir/?api=1&destination=40,-73)"), "{md}");
+    assert_eq!(count.carried, 1);
+}
+
+#[test]
+fn map_block_zoom_outside_0_to_21_uses_the_default_15() {
+    let md = run(&page("", &map_block(r#"{&quot;location&quot;:{&quot;mapLat&quot;:51.5,&quot;mapLng&quot;:-0.12,&quot;mapZoom&quot;:-3}}"#))).0;
+    assert!(md.contains("&z=15&output=embed"), "{md}");
+}
+
+#[test]
+fn map_block_reads_the_first_data_context_that_has_a_location() {
+    let html = page(
+        "",
+        r#"<div class="sqs-block-map map-block"><div data-context="{&quot;blockId&quot;:&quot;b0&quot;}"></div><div data-context="{&quot;location&quot;:{&quot;mapLat&quot;:40.0,&quot;mapLng&quot;:-73.0,&quot;mapZoom&quot;:12}}"></div></div>"#,
+    );
+    let md = run(&html).0;
+    assert!(md.contains("https://www.google.com/maps?q=40,-73&z=12&output=embed|Map]]"), "{md}");
+}
+
+#[test]
+fn a_script_widget_and_an_external_script_are_listed_as_not_carried() {
+    let main = r#"<donate-widget id="x"></donate-widget>
+<div class="sqs-block-code"><div class="sqs-block-content"><script src="https://cdn.example/embed.js"></script></div></div>"#;
+    let (md, count) = run(&page("", main));
+    assert_eq!(count.dropped(), 2);
+    assert_eq!(count.dropped_kinds, ["script widget donate-widget", "embedded script from cdn.example"]);
+    assert!(!md.contains("cdn.example"), "{md}");
+}
+
+#[test]
+fn chat_and_tracking_widgets_are_not_listed() {
+    let main = r#"<chat-widget></chat-widget><intercom-messenger></intercom-messenger>
+<div class="sqs-block-code"><script src="https://widget.intercom.io/widget/abc"></script><script src="https://www.googletagmanager.com/gtag/js?id=G-1"></script></div>"#;
+    let (md, count) = run(&page("", main));
+    assert_eq!(count, WidgetCount::default());
+    assert!(!md.contains("intercom") && !md.contains("googletagmanager"), "{md}");
+}
+
+#[test]
+fn a_hyphenated_tag_with_a_carry_token_row_is_carried_not_listed() {
+    let html = page("", r#"<calendly-inline-widget data-url="https://calendly.com/example/intro"></calendly-inline-widget>"#);
+    let (md, count) = run(&html);
+    assert!(md.contains("[Book a time](https://calendly.com/example/intro)"), "{md}");
+    assert_eq!(count, WidgetCount { carried: 1, ..Default::default() });
+}
+
+#[test]
+fn an_iframe_inside_a_custom_element_is_carried_and_the_element_is_not_listed() {
+    let html = page("", r#"<my-embed><iframe src="https://pay.example/donate/9" title="Give"></iframe></my-embed>"#);
+    let (md, count) = run(&html);
+    assert!(md.contains("[Give](https://pay.example/donate/9)"), "{md}");
+    assert_eq!(count, WidgetCount { carried: 1, ..Default::default() });
+}
+
+#[test]
+fn a_clutter_named_custom_element_is_not_listed() {
+    let base = Url::parse("https://example.test/page/").unwrap();
+    let (_, count) = carry_widgets("<p>Text.</p><cookie-banner></cookie-banner>", &base);
+    assert!(count.dropped_kinds.is_empty(), "got: {:?}", count.dropped_kinds);
 }

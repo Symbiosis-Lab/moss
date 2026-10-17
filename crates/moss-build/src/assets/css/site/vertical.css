@@ -272,6 +272,12 @@ body[data-typesetting="vertical"] picture[data-aspect="scroll"] img {
    with 青苔 written top-to-bottom on the block-end side of the mark — its
    left. */
 
+/* The footer band's sideways reach is physical; the footer's long axis is
+   vertical here, so the band reaches up and down instead. */
+body[data-typesetting="vertical"] footer.container {
+  border-image-outset: 100vmax 0;
+}
+
 /* site.css carries the reveal motion as `--moss-colophon-rise`; `translate`
    is physical, so the rotation happens here: the drift goes along x, and
    away from the mark is leftward. */
@@ -412,7 +418,7 @@ body[data-typesetting="vertical"] .moss-table-scroll {
    `writing-mode: horizontal-tb` on the description regardless of the card's
    own vertical-rl — the legacy multi-line-truncation box lays out along the
    PHYSICAL horizontal axis no matter what. Undone here for every card shape
-   that class reaches (:::cards grid and list layouts, :::grid cells), not
+   that class reaches (folder-listing grid and list layouts, :::grid cells), not
    just list below: core cannot scope the ellipsis away from vertical
    typesetting itself, because core CSS never references `data-typesetting`
    at all (gates_change_what_ships/gates_are_independent rely on that for

@@ -98,18 +98,27 @@ pub(crate) struct PendingSeal {
     /// exists to shrink the *count* of, not to hide.
     pub sealed_at: std::time::Instant,
     pub promotion_epoch: u64,
-    /// `promotion_epoch`'s cross-process-comparable counterpart — wall-clock
-    /// nanos, since `promotion_epoch` is process-local and cannot be compared
-    /// against a second `moss` process's own admission. Read in this phase,
-    /// against `infra::folder_lock::last_promoted_epoch`, immediately before
+    /// When this build took the cross-process folder lock, in wall-clock
+    /// nanos: its place in render order across processes. Not the same order
+    /// as `promotion_epoch`, which is admission order within one process; a
+    /// build admitted first can render second. Read in this phase, against
+    /// `infra::folder_lock::last_promoted_epoch`, immediately before
     /// `materialize_and_promote`.
-    pub admission_nanos: u64,
+    pub locked_at_nanos: u64,
     pub render_seq: Option<u64>,
     pub freshness: Freshness,
     pub is_pinned: Arc<dyn Fn(&str) -> bool + Send + Sync>,
     pub session: Option<Arc<FolderSession>>,
     pub cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
     pub build_root_identity: Option<crate::build::lifecycle::root_identity::RootIdentity>,
+    /// `Some` from the one-shot arm only: the cross-process build lock its
+    /// render took, held through its seal and released once this phase has
+    /// promoted. `None` makes this phase take it itself.
+    pub folder_lock: Option<crate::infra::folder_lock::Held>,
+    /// This build settled media its own pages could not yet name (see
+    /// `media::promise`). The long-lived arm has already enqueued the rebuild; the
+    /// one-shot arm reads this to run a second pass.
+    pub media_rerender_owed: bool,
 }
 
 /// One debounce lane per open folder (`.moss` directory), keyed the same way
@@ -197,13 +206,15 @@ async fn run_materialize_phase(req: PendingSeal) {
         stage_dir,
         sealed_at,
         promotion_epoch,
-        admission_nanos,
+        locked_at_nanos,
         render_seq,
         freshness,
         is_pinned,
         session,
         cache_lease,
         build_root_identity,
+        folder_lock,
+        media_rerender_owed: _,
     } = req;
     let mut sealed = sealed;
     let mut verdict = verdict;
@@ -212,6 +223,18 @@ async fn run_materialize_phase(req: PendingSeal) {
     let announcer = ports.announcer.as_ref();
     let reporter = ports.events.as_ref();
     let sealed_as = sealed.generation_id().to_string();
+
+    // Cross-PROCESS counterpart of the stage-write guard below. A one-shot
+    // build arrives still holding the one its render took; a long-lived
+    // runtime's phase, often run long after its render behind the debounce,
+    // takes it freshly here — see `infra::folder_lock`. Taken BEFORE the
+    // guard, the order `build_inner` takes them in: a one-shot build in a
+    // serving process holds this lock while its seal waits for the guard, so
+    // waiting for this lock while holding the guard would deadlock with it.
+    let folder_build_lock = match folder_lock {
+        held @ Some(_) => held,
+        None => crate::infra::folder_lock::acquire_async(Path::new(&folder_path)).await,
+    };
 
     // Re-acquire the per-folder stage-write guard, freshly — see
     // `advertise_sealed`'s own doc for why it is not carried across from
@@ -274,22 +297,19 @@ async fn run_materialize_phase(req: PendingSeal) {
     #[cfg(test)]
     let materialize_test_delay = MATERIALIZE_TEST_DELAY.try_with(|d| *d).ok();
     let folder_path_for_materialize = folder_path.clone();
-    // Cross-PROCESS counterpart of the stage-write guard just re-acquired
-    // above — see `infra::folder_lock`'s module doc for why its own window,
-    // freshly taken HERE rather than carried over from `advertise_sealed`
-    // (which ran this build's per-build half, possibly long before the
-    // debounce fired this phase).
-    let folder_build_lock = crate::infra::folder_lock::acquire_async(Path::new(&folder_path)).await;
-    // Order, not just exclusion: a slower phase can land here after a newer
-    // admission already promoted, which `promotion_epoch` (process-local)
-    // can't catch — compare `admission_nanos` against the cross-process record.
+    // Order, not just exclusion: a slower phase can land here after a build
+    // that rendered later already promoted, which `promotion_epoch`
+    // (process-local) can't catch — compare `locked_at_nanos` against the
+    // cross-process record.
     let cross_process_verdict: Option<Promotion> = folder_build_lock.as_ref().and_then(|_| {
         let persisted = crate::infra::folder_lock::last_promoted_epoch(Path::new(&folder_path));
-        (admission_nanos <= persisted).then(|| {
-            log::info!("promotion refused (cross-process): epoch {admission_nanos} <= persisted {persisted}");
+        (locked_at_nanos <= persisted).then(|| {
+            log::info!("promotion refused (cross-process): locked at {locked_at_nanos} <= last promoted {persisted}");
             Promotion::Superseded
         })
     });
+    #[cfg(test)]
+    let _ = crate::build::ONE_SHOT_TAIL_TEST_HOOK.try_with(|hook| hook("shipping"));
     let blocking_result = tokio::task::spawn_blocking(move || {
         #[cfg(test)]
         if let Some(delay) = materialize_test_delay {
@@ -310,7 +330,7 @@ async fn run_materialize_phase(req: PendingSeal) {
         // Record a real promotion before the lock drops, so read+promote+write
         // land in one held window.
         if matches!(promotion, Ok(Promotion::Promoted)) {
-            if let Err(e) = crate::infra::folder_lock::record_promoted_epoch(Path::new(&folder_path_for_materialize), admission_nanos) {
+            if let Err(e) = crate::infra::folder_lock::record_promoted_epoch(Path::new(&folder_path_for_materialize), locked_at_nanos) {
                 log::error!("run_materialize_phase: could not record the cross-process promotion epoch: {e}");
             }
         }

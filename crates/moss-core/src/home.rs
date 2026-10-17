@@ -42,10 +42,11 @@ pub const INDEX_STEMS: &[&str] = &["index", "readme", "_index", "main"];
 /// are recognized as languages at all.
 const KNOWN_LANGUAGES: &[(&str, &str)] = &[
     // (code, endonym). The endonym is what a language switcher shows for a
-    // language moss has no interface for: a reader who wants the German
-    // edition is looking for "Deutsch", not "DE". The three moss DOES
-    // translate its interface into keep their own short chips (`i18n`'s
-    // `Language::display_name`), so this column is only consulted for the rest.
+    // language moss has no interface for: a reader who wants the French
+    // edition is looking for "Français", not "FR". English and the two Chinese
+    // editions keep their own short chips (`i18n`'s `Language::display_name`),
+    // and German's chip is this same endonym, so this column is only consulted
+    // for the rest.
     //
     // One table, not a list plus a lookup: a code with no endonym would render
     // a blank chip, and the two could only drift apart.
@@ -69,6 +70,8 @@ const KNOWN_LANGUAGES: &[(&str, &str)] = &[
     ("zh-hans", "简体中文"), ("zh-hant", "繁體中文"), ("zh-cn", "简体中文"),
     ("zh-tw", "繁體中文"), ("pt-br", "Português (Brasil)"),
     ("en-us", "English (US)"), ("en-gb", "English (UK)"),
+    ("de-de", "Deutsch (Deutschland)"), ("de-at", "Deutsch (Österreich)"),
+    ("de-ch", "Deutsch (Schweiz)"),
 ];
 
 
@@ -153,7 +156,7 @@ pub fn lang_suffix(stem: &str) -> Option<&str> {
 /// Whether `code` is a language moss recognizes at all.
 ///
 /// "Recognizes" is a wider question than "has an interface for". moss ships UI
-/// strings in three languages; it recognizes ~50 as tree names and filename
+/// strings in four languages; it recognizes ~50 as tree names and filename
 /// suffixes. A `ja/` tree is real — wikilinks resolve within it,
 /// [`strip_lang_suffix`] honors it, [`lang_tree_prefix`] returns it — it simply
 /// gets the default edition's chrome, because there are no Japanese strings to

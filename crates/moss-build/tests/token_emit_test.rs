@@ -116,3 +116,57 @@ fn heading_rules_consume_font_heading_weight_token() {
         count
     );
 }
+
+/// The phone overlay floor reads the same token as the desktop one, so a site's
+/// `--moss-hero-max-height: 100svh` can fill the first screen; and slide
+/// captions are in-flow items of the hero's column rather than absolute boxes
+/// that land on the hero's words. The painted result is pinned by the
+/// `hero-caption-stack` render gate; this keeps the declarations from drifting.
+#[test]
+fn hero_phone_overlay_floor_and_caption_stack_declarations() {
+    let css = fs::read_to_string(site_css_path()).expect("site.css must exist");
+    assert!(
+        css.contains("min-block-size: var(--moss-hero-max-height, min(60vb, 480px));"),
+        "mobile overlay floor must honour --moss-hero-max-height"
+    );
+    assert!(
+        css.contains(r#".moss-hero[data-overlay]:not([data-align="end"], [data-align="center"]) > .moss-hero-captions {"#),
+        "wide captions must join the flex stack unless align=end or align=center"
+    );
+    assert!(
+        css.contains(r#".moss-hero[data-align="end"]:not(:has(.moss-hero-captions)) .moss-hero-pause"#),
+        "the pause moves to the start only when no captions live there"
+    );
+}
+
+/// Slides fill a hero made taller than the video's own shape, in-flow captions
+/// leave legibility to the hero's scrim, and header=over keeps the phone pause
+/// below the header's controls. Painted result: the `hero-caption-stack` gate.
+#[test]
+fn hero_slides_fill_captions_unscrimmed_pause_below_header_declarations() {
+    let css = fs::read_to_string(site_css_path()).expect("site.css must exist");
+    for needle in [
+        r#".moss-hero[data-overlay] .moss-hero-slide {"#,
+        r#".moss-hero:has(.moss-hero-content):not([data-hero-tone="light"]) .moss-hero-captions {"#,
+        r#".moss-hero[data-header="over"] .moss-hero-pause {"#,
+    ] {
+        assert!(css.contains(needle), "site.css lost: {needle}");
+    }
+}
+
+/// A caption link is drawn in the caption's own colour, so the underline is the
+/// only cue that it is a link (WCAG 1.4.1). The base `a` rule removes underlines,
+/// so the caption rule has to put one back.
+#[test]
+fn hero_caption_links_are_underlined() {
+    let css = fs::read_to_string(site_css_path()).expect("site.css must exist");
+    let start = css
+        .find(".moss-hero-captions a {")
+        .expect("site.css must style .moss-hero-captions a");
+    let rule = &css[start..];
+    let rule = &rule[..rule.find('}').expect("the caption link rule must close")];
+    assert!(
+        rule.contains("text-decoration: underline;"),
+        "caption links must be underlined, found: {rule}"
+    );
+}

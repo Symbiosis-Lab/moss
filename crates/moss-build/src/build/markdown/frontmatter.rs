@@ -104,7 +104,7 @@ Some content.
         assert_eq!(frontmatter.sidebar, Some("[[News]]".to_string()));
         assert_eq!(frontmatter.children_style, Some("card".to_string()));
         assert_eq!(frontmatter.children_depth, Some("all".to_string()));
-        assert_eq!(frontmatter.breadcrumb, Some(true));
+        assert_eq!(frontmatter.breadcrumb, Some(moss_core::frontmatter_typed::BreadcrumbSetting::On));
         assert_eq!(frontmatter.description, Some("A test page".to_string()));
         assert_eq!(frontmatter.tags, Some(vec!["rust".to_string(), "moss".to_string()]));
         assert_eq!(
@@ -149,7 +149,7 @@ breadcrumb: "true"
         let frontmatter: FrontMatter = parse_typed_frontmatter(markdown);
 
         assert_eq!(frontmatter.title, Some("山居".to_string()));
-        assert_eq!(frontmatter.breadcrumb, Some(true));
+        assert_eq!(frontmatter.breadcrumb, Some(moss_core::frontmatter_typed::BreadcrumbSetting::On));
     }
 
     #[test]
@@ -157,7 +157,7 @@ breadcrumb: "true"
         let markdown = "---\nbreadcrumb: \"false\"\n---\n";
         let frontmatter: FrontMatter = parse_typed_frontmatter(markdown);
 
-        assert_eq!(frontmatter.breadcrumb, Some(false));
+        assert_eq!(frontmatter.breadcrumb, Some(moss_core::frontmatter_typed::BreadcrumbSetting::Off));
     }
 
     #[test]
@@ -767,4 +767,40 @@ analytics: "https://analytics.mysite.com/script.js"
         assert!(matches!(fm.series, Some(crate::build::types::SeriesField::Flag(true))),
             "series should still flip to Flag(true) since chrome was implied");
     }
+}
+
+/// The body the build parses from `content`, with its frontmatter block
+/// removed. The simplified `key: value` dialect and the `---` YAML block each
+/// have their own split; the doctor reads pages through this same one.
+pub(crate) fn frontmatter_body(content: &str) -> String {
+    if is_simplified_frontmatter(content) {
+        parse_simplified_frontmatter(content).1
+    } else {
+        moss_core::frontmatter::parse(content).render_body().to_string()
+    }
+}
+
+/// Lines of `content` that its frontmatter block occupies, given the `body`
+/// the build split off from it.
+pub(crate) fn frontmatter_block_lines(content: &str, body: &str) -> usize {
+    content.lines().count().saturating_sub(body.lines().count())
+}
+
+/// Lines of `content` above the first non-blank line of `body`, the prepared
+/// markdown the build parses. A body line `n` is file line `offset + n`.
+/// `frontmatter_line_count` skips the block so a body line that matches a
+/// frontmatter value line is not taken for the body's first line.
+pub(crate) fn raw_body_line_offset(content: &str, body: &str, frontmatter_line_count: usize) -> usize {
+    let lookup_leading_blanks = body.lines().take_while(|l| l.trim().is_empty()).count();
+    body.lines()
+        .find(|l| !l.trim().is_empty())
+        .and_then(|first| {
+            content
+                .lines()
+                .skip(frontmatter_line_count)
+                .position(|l| l.trim_end() == first.trim_end())
+                .map(|p| p + frontmatter_line_count)
+        })
+        .map(|pos| pos.saturating_sub(lookup_leading_blanks))
+        .unwrap_or(0)
 }

@@ -45,7 +45,8 @@ pub fn build_thread_tree(
 
 /// Format a date string for display.
 /// Input: ISO 8601 (e.g., "2026-03-24 11:36:57" or "2026-03-24T11:36:57Z")
-/// Output: localized date (e.g., "2026年3月24日" for zh, "Mar 24, 2026" for en)
+/// Output: localized date (e.g., "2026年3月24日" for zh, "Mar 24, 2026" for en,
+/// "24. März 2026" for de)
 pub fn format_date(date_str: &str, lang: Language) -> String {
     // Parse year, month, day from the date string
     let clean = date_str.replace('T', " ");
@@ -60,6 +61,8 @@ pub fn format_date(date_str: &str, lang: Language) -> String {
 
     if lang.is_cjk() {
         format!("{}年{}月{}日", year, month, day)
+    } else if lang == Language::De {
+        format!("{}. {} {}", day, crate::i18n::t(lang, &format!("month_{month}")), year)
     } else {
         let month_name = match month {
             1 => "Jan",

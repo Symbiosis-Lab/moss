@@ -1,7 +1,7 @@
-//! The home page needs exactly one top-level heading. A home whose body has no
-//! heading of its own gets a visually hidden one carrying the page title; a
-//! home that opens with `# Title` or a hero that draws its own heading already
-//! has one, and adds none.
+//! Every page needs exactly one top-level heading. A home or folder page whose
+//! body has no heading gets its title as a visually hidden `<h1>` when an
+//! opening hero stands in for the masthead, and a visible one otherwise; a
+//! page that opens with `# Title` already has one and adds none.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -91,4 +91,74 @@ fn home_opening_with_an_image_then_its_own_h1_adds_none() {
 fn home_whose_first_heading_is_an_h2_still_gets_the_hidden_h1() {
     let html = home_html("## Latest\n\nHello.");
     assert_eq!(h1s(&html), vec!["moss-folder-title visually-hidden|Harbor Notes"], "{html}");
+}
+
+#[test]
+fn home_whose_hero_holds_only_an_image_and_a_link_gets_a_visually_hidden_h1() {
+    let html = home_html(":::hero\n![cover](cover.jpg)\n\n[Read the posts](/posts/first/)\n:::\n\nHello.");
+    assert_eq!(h1s(&html), vec!["moss-folder-title visually-hidden|Harbor Notes"], "{html}");
+}
+
+fn folder_page_html(folder_note_body: &str) -> String {
+    let tmp = std::env::temp_dir().join(format!("moss_folder_h1_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&tmp).unwrap();
+    let _cleanup = Cleanup(tmp.clone());
+    write(&tmp, ".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\n");
+    write(&tmp, "index.md", "---\ntitle: Harbor Notes\n---\n\nWelcome.\n");
+    write(&tmp, "notes/Notes.md", &format!("---\ntitle: Field Notes\n---\n\n{folder_note_body}\n"));
+    write(&tmp, "notes/first.md", "---\ntitle: First\n---\n\nHello.\n");
+    let result = build_sync(&tmp.to_string_lossy());
+    assert!(result.is_ok(), "build failed: {result:?}");
+    fs::read_to_string(tmp.join(".moss/build.nosync/staging/notes/index.html")).unwrap()
+}
+
+#[test]
+fn folder_page_whose_hero_holds_only_a_link_gets_a_visually_hidden_h1() {
+    let html = folder_page_html(":::hero {image=cover.jpg}\nA link\n:::");
+    assert_eq!(h1s(&html), vec!["moss-folder-title visually-hidden|Field Notes"], "{html}");
+}
+
+#[test]
+fn plain_folder_page_without_a_heading_keeps_its_visible_title() {
+    let html = folder_page_html("Some notes about the harbor.");
+    assert_eq!(h1s(&html), vec!["moss-folder-title|Field Notes"], "{html}");
+}
+
+fn article_html(article_body: &str, nav: bool) -> String {
+    let tmp = std::env::temp_dir().join(format!("moss_article_h1_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&tmp).unwrap();
+    let _cleanup = Cleanup(tmp.clone());
+    write(&tmp, ".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\n");
+    write(&tmp, "index.md", "---\ntitle: Harbor Notes\n---\n\nWelcome.\n");
+    let nav_line = if nav { "nav: true\n" } else { "" };
+    write(&tmp, "posts/story.md", &format!("---\ntitle: The Story\n{nav_line}---\n\n{article_body}\n"));
+    write(&tmp, "posts/other.md", "---\ntitle: Other\n---\n\nHello.\n");
+    let result = build_sync(&tmp.to_string_lossy());
+    assert!(result.is_ok(), "build failed: {result:?}");
+    fs::read_to_string(tmp.join(".moss/build.nosync/staging/posts/story/index.html")).unwrap()
+}
+
+#[test]
+fn article_whose_hero_holds_only_an_image_and_a_link_gets_a_visually_hidden_h1() {
+    let html = article_html(":::hero {image=cover.jpg}\n[A link](/posts/other/)\n:::\n\nHello.", false);
+    assert_eq!(h1s(&html), vec!["moss-article-title visually-hidden|The Story"], "{html}");
+}
+
+#[test]
+fn plain_article_keeps_its_visible_title() {
+    let html = article_html("Hello.", false);
+    assert_eq!(h1s(&html), vec!["moss-article-title|The Story"], "{html}");
+}
+
+#[test]
+fn article_whose_hero_draws_a_heading_adds_none() {
+    let html = article_html(":::hero\n# Overlay\n:::\n\nHello.", false);
+    assert!(!html.contains("moss-article-title"), "{html}");
+    assert_eq!(h1s(&html).len(), 1, "{html}");
+}
+
+#[test]
+fn nav_article_whose_hero_holds_only_a_link_gets_a_visually_hidden_h1() {
+    let html = article_html(":::hero {image=cover.jpg}\n[A link](/posts/other/)\n:::\n\nHello.", true);
+    assert_eq!(h1s(&html), vec!["moss-article-title visually-hidden|The Story"], "{html}");
 }

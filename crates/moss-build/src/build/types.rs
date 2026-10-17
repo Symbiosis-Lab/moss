@@ -49,6 +49,19 @@ impl EventFields {
     }
 }
 
+/// The accent a folder's `color:` gives the pages under it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionAccent {
+    /// The validated colour, as written (`#rgb` or `#rrggbb`).
+    pub color: String,
+    /// The same hue as a text colour on the default light page, `#rrggbb`.
+    pub text_light: String,
+    /// The same hue as a text colour on the default dark page, `#rrggbb`.
+    pub text_dark: String,
+    /// The coloured folder's own url path segment; empty for the site root.
+    pub segment: String,
+}
+
 /// Parsed markdown document with frontmatter and content.
 ///
 /// Represents a processed markdown file ready for HTML generation.
@@ -112,6 +125,12 @@ pub struct ParsedDocument {
     pub logo: Option<String>,
     /// Cover image URL for collections
     pub cover: Option<String>,
+    /// The page's own first picture as a source path, kept for listing cards
+    /// when the page names no `cover:` and has not opted out with `cover: false`.
+    /// Read through [`Self::listing_cover`]; never drawn on the page itself.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub card_cover: Option<String>,
     /// Explicit cover type override ("video", "iframe", or "image")
     pub cover_type: Option<String>,
     /// Media items marked for collection pages (photography, video, interactive)
@@ -301,6 +320,14 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub place_names: Option<String>,
+    /// The names this page shows on listing cards, pre-rendered as one
+    /// `moss-card-credits` span: every term kind with `cards = true`, its
+    /// fields in order, each name with its role. `None` when no such kind
+    /// names this page. Set by `build::terms::roles::set_card_credits` once
+    /// per build; `props_for_document` copies it into the card props.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub card_credits: Option<String>,
     /// True for a folder-index page sitting exactly at a place-typed term
     /// namespace root — an authored `places/index.md` with no `place_page:`
     /// claim, or a synthetic one when no such file exists. An authored page
@@ -383,6 +410,11 @@ pub struct ParsedDocument {
     /// when ITS OWN index page (the same `ParsedDocument`) has a cover —
     /// no special-casing needed, `cover` is already that page's field.
     pub children_covers: Option<String>,
+    /// What this listing's folder cards say they count; absent = the built-in
+    /// "N articles" text. Left out of the exported bindings: the listing
+    /// reads it, no UI does.
+    #[specta(skip)]
+    pub children_count: Option<moss_core::frontmatter_union::ChildrenCount>,
     /// Internal: marks documents whose `children_*` fields came from the deprecated
     /// `sidebar:` alias. Sidebar callsite uses this to apply the legacy default-3
     /// limit on cross-ref. Skip-serialize so it never round-trips into stored frontmatter.
@@ -391,7 +423,7 @@ pub struct ParsedDocument {
     /// Series declaration: bool for weight-based, Vec<String> for explicit wikilink order
     pub series: Option<SeriesField>,
     /// Override site-wide breadcrumb setting
-    pub breadcrumb: Option<bool>,
+    pub breadcrumb: Option<moss_core::frontmatter_typed::BreadcrumbSetting>,
     /// Override site-wide footer setting
     pub footer: Option<bool>,
     /// Frontmatter values to cascade to all descendants
@@ -443,6 +475,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub hero_html: Option<String>,
+    /// The page's one eager image is its hero or its opening body content, so
+    /// its own children listing loads lazily. Set by the body planner.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub body_claims_eager: bool,
     /// Hero image URL — populated at hoisting time from `HeroShortcode.image`
     /// (post-resolution). `None` when the hero had no `image=` attribute
     /// (text-only overlay) or the page has no hero. Feeds the homepage-hero
@@ -507,6 +544,16 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub layout: Option<String>,
+    /// `color:` as written in frontmatter. Only a folder's home page's is read;
+    /// the resolved colour a page inherits from it is [`Self::section`].
+    #[serde(skip)]
+    #[specta(skip)]
+    pub color: Option<String>,
+    /// The section this page sits in, when its folder (or an ancestor folder)
+    /// declares a valid `color:`. Set by `build::scan::section_color`.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub section: Option<SectionAccent>,
     /// Original relative file path (e.g. "友链.md") for filesystem fallbacks like creation date
     #[serde(skip)]
     #[specta(skip)]
@@ -522,6 +569,27 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub raw_frontmatter: std::collections::BTreeMap<String, serde_json::Value>,
+    /// The site's declared fields this page's own frontmatter carries, parsed
+    /// at the markdown stage. Folder `cascade:` values are not included.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub declared: std::collections::BTreeMap<String, moss_core::fields::TypedValue>,
+    /// For each declared field whose value does not fit, the reason, as the
+    /// build warning states it. Filled in the same pass as `declared`.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub field_errors: std::collections::BTreeMap<String, String>,
+    /// The declared fields this page draws: each declaration with a `place`
+    /// and the page's valid value for it, in declaration order. Empty on a
+    /// folder index. Drawn at render by `components::field_places`.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub placed_fields: Vec<(moss_core::fields::FieldDecl, moss_core::fields::TypedValue)>,
+    /// `title_block:` — `after-picture` draws the title block after the body's
+    /// leading picture. Set on the page or cascaded from a folder.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub title_block: Option<String>,
     /// Declared listing sort from frontmatter (folder index pages only;
     /// `None` on article pages).
     pub sort: Option<moss_core::sort::SortField>,
@@ -670,6 +738,13 @@ impl ParsedDocument {
         moss_core::sort::resolve_folder_sort(self, scope)
     }
 
+    /// The picture listings show for this page: its `cover:`, or else its own
+    /// first picture. The page body and the folder cover row read `cover`
+    /// itself, so an inferred picture is never drawn twice on its own page.
+    pub fn listing_cover(&self) -> Option<&str> {
+        self.cover.as_deref().or(self.card_cover.as_deref())
+    }
+
     /// Whether this document appears on moss's auto-generated *listing*
     /// surfaces — page lists, folder embeds, year-grouped article lists,
     /// home/folder children, auto-index pages, RSS, llms.txt, sitemap, and the
@@ -686,6 +761,8 @@ impl ParsedDocument {
     ///    layout slot rather than rendering as a page. Structurally detected by
     ///    `crate::build::footer::is_excluded_from_pages`; see
     ///    `ParsedDocument::slot_only`.
+    /// 4. `is_not_found_page()` — the site's `404.md`, which a host shows for
+    ///    an address that does not exist.
     ///
     /// All list-emitting sites call this helper so any future visibility flag
     /// is added in one place.
@@ -695,17 +772,25 @@ impl ParsedDocument {
     /// pages both render — emission only branches on `slot_only`); or
     /// `noindex`/share-card gating (use `is_public_page`).
     pub fn is_listable(&self) -> bool {
-        self.draft != Some(true) && self.listed != Some(false) && !self.slot_only
+        self.draft != Some(true) && self.listed != Some(false) && !self.slot_only && !self.is_not_found_page()
+    }
+
+    /// The site's `404.md`: the page a host shows for an unknown address. It
+    /// is a page at `/404/` and a copy at `/404.html`, and it is no part of
+    /// the site's content, so no listing surface carries it.
+    pub fn is_not_found_page(&self) -> bool {
+        self.url_path == crate::build::served_path::NOT_FOUND_PAGE
     }
 
     /// Whether this is a real reader-facing page: indexable (no `noindex`) and
     /// eligible for an og/twitter share card + JSON-LD + QR + hover preview.
     /// Independent of *listing* membership — a `listed: false` page is still a
-    /// public page. Only `draft` (work-in-progress) and `slot_only` (layout
-    /// chrome) are excluded. Gates per-page public affordances, where
+    /// public page. Only `draft` (work-in-progress), `slot_only` (layout
+    /// chrome) and the not-found page (which a crawler should never be sent
+    /// to) are excluded. Gates per-page public affordances, where
     /// `is_listable` gates multi-page listing surfaces.
     pub fn is_public_page(&self) -> bool {
-        self.draft != Some(true) && !self.slot_only
+        self.draft != Some(true) && !self.slot_only && !self.is_not_found_page()
     }
 }
 
@@ -747,26 +832,15 @@ pub struct PageFeatures {
     /// runtime script via [`SiteAssets`]. Read from the typed AST
     /// (`moss_core::ast::has_scroll_row_recursive`).
     pub scroll_rows: bool,
-    /// True if the page has a `:::gallery`. Gates the full-screen viewer
-    /// (`fullscreen.js`) via [`SiteAssets`] and puts the viewer's markup on
-    /// this page. Read from the typed AST
-    /// (`moss_core::ast::has_shortcode_recursive`).
-    pub galleries: bool,
-}
-
-impl PageFeatures {
-    /// Merge two feature sets, taking the OR of each flag. Used to aggregate
-    /// per-page flags into a per-build summary.
-    pub fn union(self, other: Self) -> Self {
-        Self {
-            inline_subscribe: self.inline_subscribe || other.inline_subscribe,
-            inline_apply: self.inline_apply || other.inline_apply,
-            callouts: self.callouts || other.callouts,
-            footnotes: self.footnotes || other.footnotes,
-            scroll_rows: self.scroll_rows || other.scroll_rows,
-            galleries: self.galleries || other.galleries,
-        }
-    }
+    /// True if the page may have a picture the full-screen viewer opens: a
+    /// figure, an image or a `:::gallery`. A coarse superset; `fullscreen.js`
+    /// decides which pictures actually open. Gates the viewer via
+    /// [`SiteAssets`] and puts the viewer's markup on this page. Read from the typed AST
+    /// (`moss_core::ast::has_viewable_picture_recursive`).
+    pub viewer: bool,
+    /// True if a declared field was drawn on the page. Gates the
+    /// `field-places` stylesheet partial via [`SiteAssets`].
+    pub field_places: bool,
 }
 
 /// Which optional asset partials this build ships — the site-level union of
@@ -816,9 +890,11 @@ pub struct SiteAssets {
     /// (`/photography`, `/videos`, `/experiments`), which is what
     /// `fullscreen.js` attaches to.
     pub media_pages: bool,
-    /// Some page has a `:::gallery`, whose images open in the same
-    /// full-screen viewer (`fullscreen.js`) as the media collection pages.
-    pub galleries: bool,
+    /// Some page has a picture that opens in the same full-screen viewer
+    /// (`fullscreen.js`) as the media collection pages.
+    pub viewer: bool,
+    /// Some page draws declared fields (`place`). Gates the `field-places` stylesheet partial.
+    pub field_places: bool,
     /// The site ships the search overlay: `[site].search`, resolved once by the config phase
     /// (`LayoutConfig::with_search`) and read from `LayoutConfig::assets` by
     /// the nav button, the search-index emitter and `search.js`'s tag alike.
@@ -873,7 +949,8 @@ impl SiteAssets {
             callouts: false,
             has_footnotes: false,
             scroll_rows: false,
-            galleries: false,
+            viewer: false,
+            field_places: false,
             vertical: site_typesetting == Some("vertical"),
             ..from_config
         };
@@ -885,7 +962,8 @@ impl SiteAssets {
             ) == Some("vertical");
             out.has_footnotes |= page.features.footnotes;
             out.scroll_rows |= page.features.scroll_rows;
-            out.galleries |= page.features.galleries;
+            out.viewer |= page.features.viewer;
+            out.field_places |= page.features.field_places;
         }
         out
     }

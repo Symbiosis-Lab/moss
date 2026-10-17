@@ -8,7 +8,7 @@
 //! lines it lacks, and a file with no mergeable shape keeps the canonical copy
 //! and says so in the log. A sibling with no canonical beside it becomes the
 //! canonical. Only the synced state moss itself writes is reconciled:
-//! `state.toml`, and everything under `.moss/deploy/` and `.moss/data/`.
+//! `state.toml`, `redirects.json`, and everything under `.moss/deploy/` and `.moss/data/`.
 
 use std::path::{Path, PathBuf};
 
@@ -27,7 +27,7 @@ pub fn reconcile_synced_state(mp: &MossPaths) {
     }
     for path in files {
         let Some(canonical) = canonical_of(&path) else { continue };
-        if canonical == mp.state() || canonical.starts_with(mp.deploy_dir()) || canonical.starts_with(mp.data_dir()) {
+        if canonical == mp.state() || canonical == mp.redirects() || canonical.starts_with(mp.deploy_dir()) || canonical.starts_with(mp.data_dir()) {
             reconcile(&canonical, &path);
         }
     }
@@ -225,7 +225,7 @@ mod tests {
         write(&mp.data_dir().join("events 2.jsonl"), "{\"n\":2}\n{\"n\":3}\n");
         write(&mp.social_dir().join("feed.json"), "[1]");
         write(&mp.social_dir().join("feed 2.json"), "[2]");
-        write(&mp.data_dir().join("redirects 2.json"), r#"{"/old/": "/new/"}"#);
+        write(&moss.join("redirects 2.json"), r#"{"/old/": "/new/"}"#);
 
         reconcile_synced_state(&mp);
 
@@ -237,8 +237,8 @@ mod tests {
         assert_eq!(map["b"]["url"], "/b/");
         assert_eq!(std::fs::read_to_string(mp.data_dir().join("events.jsonl")).unwrap(), "{\"n\":1}\n{\"n\":2}\n{\"n\":3}\n");
         assert_eq!(std::fs::read_to_string(mp.social_dir().join("feed.json")).unwrap(), "[1]", "no mergeable shape: canonical kept");
-        assert_eq!(std::fs::read_to_string(mp.data_dir().join("redirects.json")).unwrap(), r#"{"/old/": "/new/"}"#, "a lone sibling becomes canonical");
-        for gone in ["state 2.toml", "deploy/deployed-article-map 2.json", "data/events 2.jsonl", "data/social/feed 2.json", "data/redirects 2.json"] {
+        assert_eq!(std::fs::read_to_string(mp.redirects()).unwrap(), r#"{"/old/": "/new/"}"#, "a lone sibling becomes canonical");
+        for gone in ["state 2.toml", "deploy/deployed-article-map 2.json", "data/events 2.jsonl", "data/social/feed 2.json", "redirects 2.json"] {
             assert!(!moss.join(gone).exists(), "{gone} should be gone");
         }
         reconcile_synced_state(&mp);

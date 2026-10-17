@@ -46,19 +46,21 @@ pub fn resolve_page_source(url_path: &str, folder_path: &Path) -> Result<PageSou
             .and_then(|v| v.as_array())
             .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
             .unwrap_or_default();
-        return Ok(PageSource {
-            source_path,
-            is_dir: false,
-            is_article: true,
-            syndicated,
-            takeover: None,
-            source_pending: false,
-        });
+        if source_path.is_some() {
+            return Ok(PageSource {
+                source_path,
+                is_dir: false,
+                is_article: true,
+                syndicated,
+                takeover: None,
+                source_pending: false,
+            });
+        }
     }
 
-    if let Some(src) = map.pages.get(normalized) {
+    if let Some(source_path) = map.pages.get(normalized).and_then(|src| existing(src)) {
         return Ok(PageSource {
-            source_path: existing(src),
+            source_path: Some(source_path),
             is_dir: true,
             is_article: false,
             syndicated: vec![],

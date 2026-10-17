@@ -4,7 +4,7 @@
 //! The meta slot is sort-driven: it surfaces a date on Date-axis listings
 //! and is omitted entirely on Weight/Title axes (no empty div).
 
-use super::child_list::{self, ChildItemProps};
+use super::child_list::{self, event_card_links, ChildItemProps};
 use super::date::extract_year;
 use crate::build::media::cover::{self, html_escape, CoverType};
 use crate::build::page::meta::render_description_html_in_link;
@@ -89,27 +89,34 @@ pub fn render_with_sort(
         // Folder: the count is always shown, on every sort axis — a bare
         // folder's own `location:` is not a date to sit beside, but its own
         // `date:`, if any, is exactly that.
-        (Some(count), _) => {
-            let count_label = crate::i18n::article_count_label(lang, count, typesetting);
-            let text = child_list::meta_text(props.date_display.as_deref(), None, props.place.as_deref(), Some(&count_label));
-            format!(r#"<div class="moss-card-meta">{}</div>"#, text)
+        (Some(_), _) => {
+            let count_label = props.count_label(lang, typesetting);
+            let text = child_list::meta_text(props.date_display.as_deref(), None, props.place.as_deref(), count_label.as_deref(), None);
+            if text.is_empty() { String::new() } else { format!(r#"<div class="moss-card-meta">{}</div>"#, text) }
         }
         (None, axis) if axis.shows_date() && date_merged_into_kicker => {
             // The kicker carries the year; the meta slot keeps the event's
-            // time (when it has one) and the place, and is never empty.
-            let text = child_list::leaf_meta("", props.when_html.as_deref(), props.place.as_deref());
+            // time (when it has one), the place and the listed names, and is
+            // never empty.
+            let text = child_list::leaf_meta("", props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref());
             if text.is_empty() {
                 String::new()
             } else {
                 format!(r#"<div class="moss-card-meta">{}</div>"#, text)
             }
         }
-        (None, axis) if axis.shows_date() && (props.date_display.is_some() || props.when_html.is_some()) => {
+        (None, axis) if axis.shows_date() && (props.date_display.is_some() || props.when_html.is_some() || props.credits.is_some()) => {
             let date = props.date_display.as_deref().unwrap_or("");
-            format!(r#"<div class="moss-card-meta">{}</div>"#, child_list::leaf_meta(date, props.when_html.as_deref(), props.place.as_deref()))
+            format!(r#"<div class="moss-card-meta">{}</div>"#, child_list::leaf_meta(date, props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref()))
         }
         _ => String::new(),
     };
+
+    // An event with `tickets:` or `online:` is not one anchor (see
+    // `event_card_links`): its title is the page link and it carries its own
+    // action links. Linkblog cards keep their own per-part anchors and do not
+    // take this shape.
+    let event_links = if is_linkblog { None } else { event_card_links(props, lang) };
 
     // Title: wrapped in an anchor for linkblog cards (so it stays
     // clickable now that the outer card is a `<div>`, not an `<a>`);
@@ -121,6 +128,8 @@ pub fn render_with_sort(
             html_escape(&props.url),
             html_escape(&props.title),
         )
+    } else if let Some(links) = &event_links {
+        format!(r#"<h3 class="moss-card-title">{}</h3>"#, links.title)
     } else {
         format!(r#"<h3 class="moss-card-title">{}</h3>"#, html_escape(&props.title))
     };
@@ -147,6 +156,10 @@ pub fn render_with_sort(
         } else {
             body.push_str(&desc_inner);
         }
+    }
+    // Actions last: a reader meets when, then what, then the action.
+    if let Some(links) = &event_links {
+        body.push_str(&links.actions);
     }
 
     let cover_type = CoverType::resolve(props.cover.as_deref(), props.cover_type);
@@ -186,14 +199,26 @@ pub fn render_with_sort(
     // CLAUDE.md "Tooltips" rule applies to the editor UI only).
     if is_linkblog {
         format!(
-            r#"<div class="moss-card" data-linkblog><div class="moss-card-row"><div class="moss-card-body">{}</div>{}</div></div>"#,
+            r#"<div class="moss-card" data-linkblog{}{}><div class="moss-card-row"><div class="moss-card-body">{}</div>{}</div></div>"#,
+            props.source_file_attr(),
+            props.section_style_attr(),
+            body,
+            cover_html,
+        )
+    } else if event_links.is_some() {
+        format!(
+            r#"<div class="moss-card"{}{}><div class="moss-card-row"><div class="moss-card-body">{}</div>{}</div></div>"#,
+            props.source_file_attr(),
+            props.section_style_attr(),
             body,
             cover_html,
         )
     } else {
         format!(
-            r#"<a href="{}" class="moss-card"><div class="moss-card-row"><div class="moss-card-body">{}</div>{}</div></a>"#,
+            r#"<a href="{}" class="moss-card"{}{}><div class="moss-card-row"><div class="moss-card-body">{}</div>{}</div></a>"#,
             html_escape(&props.url),
+            props.source_file_attr(),
+            props.section_style_attr(),
             body,
             cover_html,
         )

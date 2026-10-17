@@ -1124,7 +1124,7 @@ Scratch site; the assertions run against the probe page.
 </head>
 <body>
   <!-- Pale cover, overlaid. No scrim; dark type. -->
-  <section class="moss-hero" data-hero-tone="light" id="light-hero">
+  <section class="moss-hero" data-overlay data-hero-tone="light" id="light-hero">
     <img src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==" alt="">
     <div class="moss-hero-content">
       <h2 id="light-heading">Pale cover heading</h2>
@@ -1133,7 +1133,7 @@ Scratch site; the assertions run against the probe page.
   </section>
 
   <!-- No tone attribute: moss's default. Scrim on, white type. -->
-  <section class="moss-hero" id="dark-hero">
+  <section class="moss-hero" data-overlay id="dark-hero">
     <img src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==" alt="">
     <div class="moss-hero-content">
       <h2 id="dark-heading">Default heading</h2>
@@ -1141,7 +1141,7 @@ Scratch site; the assertions run against the probe page.
   </section>
 
   <!-- Pale cover in mobile overlay mode: still on the picture, so still dark. -->
-  <section class="moss-hero" data-hero-tone="light" data-mobile="overlay" id="light-overlay-hero">
+  <section class="moss-hero" data-overlay data-hero-tone="light" data-mobile="overlay" id="light-overlay-hero">
     <img src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==" alt="">
     <div class="moss-hero-content">
       <h2 id="light-overlay-heading">Overlay heading</h2>
@@ -1150,7 +1150,7 @@ Scratch site; the assertions run against the probe page.
 
   <!-- Pale cover, stacked on mobile with a cover tint: text is BELOW the image
        on the darkened band, so it must stay white. -->
-  <section class="moss-hero" data-hero-tone="light" data-cover-color
+  <section class="moss-hero" data-overlay data-hero-tone="light" data-cover-color
            style="--item-cover-color: hsla(203, 73%, 14%, 1)" id="light-stacked-hero">
     <img src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==" alt="">
     <div class="moss-hero-content">
@@ -1760,6 +1760,18 @@ Home.
         [`v-${t}.md`, escapePage(t, true)],
       ]),
     ),
+    "band.md": `---
+title: Band
+---
+
+Before the band.
+
+:::{.band screen}
+A paragraph inside the band that is long enough to run past the reading width when nothing holds it back. ${"It keeps going with more words so the line wraps. ".repeat(12)}
+:::
+
+After the band.
+`,
     "sized.md": `---
 title: Sized
 ---
@@ -2256,6 +2268,7 @@ export function lightboxGithubShapesGate(): ScratchSiteSpec {
     name: "lightbox-github-shapes-gate",
     files: {
       "clip.mp4": syntheticTestClip(640, 360),
+      "clip-two.mp4": syntheticTestClip(640, 360),
       "index.md": `---
 title: Lightbox GitHub Shapes Gate
 uid: "lgs001a"
@@ -2263,9 +2276,12 @@ uid: "lgs001a"
 
 # Lightbox / GitHub Link Shapes
 
-A clip for the media-collection lightbox.
+Two clips for the media-collection lightbox: with one there is nothing to step to, so previous and next stay hidden.
 
 ![[clip.mp4]]
+<!-- video-meta: dispatch -->
+
+![[clip-two.mp4]]
 <!-- video-meta: dispatch -->
 
 A placeholder mark standing in for a real site's own GitHub logo — round,
@@ -2921,6 +2937,22 @@ One line of overlay text.
 
 Body text below the hero.
 `,
+    // A centred overlay over an image with a free focus point: the panel
+    // sits in the middle of the frame, and the crop keeps the named point.
+    "align-center.md": `---
+title: Hero align center gate
+uid: "hol00104"
+---
+
+:::hero {align=center}
+![[busy.png|focus:20%,62%]]
+# Short heading
+
+One line of overlay text.
+:::
+
+Body text below the hero.
+`,
     // Image-only: no overlay text, so the scrim never paints at all (search
     // data-page="home" -- no, search ":has()" above) -- the ground truth
     // for "undarkened pixel" the align=end scrim-direction test compares
@@ -3151,4 +3183,298 @@ lng = 135.7681
 precision = "city"
 `,
   },
+};
+
+export const NAV_SPLIT_PACK_GATE: ScratchSiteSpec = {
+  name: "nav-split-pack-gate",
+  files: {
+    "index.md": `---
+title: Nav Split Pack Gate Site With An Exceptionally Long Name That Must Wrap Rather Than Clip
+uid: "nso00101"
+---
+
+# Nav Split Order Gate Site
+
+Scratch site for the split-masthead row render gate.
+`,
+    "Essays.md": `---
+title: Essays
+uid: "nso00102"
+nav: true
+---
+
+# Essays
+`,
+    "FieldNotes.md": `---
+title: Field Notes
+uid: "nso00103"
+nav: true
+---
+
+# Field Notes
+`,
+    "Photographs.md": `---
+title: Photographs
+uid: "nso00104"
+nav: true
+---
+
+# Photographs
+`,
+    "places/index.md": `---
+title: Places
+uid: "nso00201"
+---
+
+Every place this site names.
+`,
+    "kyoto.md": `---
+title: Kyoto
+uid: "nso00202"
+location: Kyoto
+---
+
+# Kyoto
+
+A located page, so the places root has a place to list.
+`,
+    ".moss/config.toml": `schema_version = 6
+
+[site]
+lang = "en"
+
+[terms.places]
+type = "place"
+fields = ["location"]
+title = "Places"
+`,
+    ".moss/places.toml": `["Kyoto"]
+lat = 35.0116
+lng = 135.7681
+precision = "city"
+`,
+  },
+};
+
+// ── Hero captions stack with the hero content ────────────────────────────────
+// A multi-slide hero's captions and its overlay content (a link) used to be
+// two absolutely-placed boxes at the same bottom corner, drawn on top of each
+// other unless `align=end` pushed the content aside. Whether they overlap is a
+// painted-layout question. A function for the same reason as videoEmbedShapeGate:
+// ffmpeg is only needed by the config that builds this site.
+// Served by playwright/hero-caption-stack.config.ts.
+export function heroCaptionStackGate(): ScratchSiteSpec {
+  const hero = (opts: string) => `---
+title: Stack
+uid: "hcs00001"
+---
+
+:::hero {${opts}}
+![[a.mp4|*Title one* · Venue · 2018]]
+![[b.mp4|*Title two* · Venue · 2025]]
+[See the work →](/work/)
+:::
+
+Body text.
+`;
+  return {
+    name: "hero-caption-stack-gate",
+    files: {
+      "a.mp4": syntheticTestClip(640, 360),
+      "b.mp4": syntheticTestClip(640, 360),
+      "end.md": hero("header=over align=end mobile=overlay"),
+      "start.md": hero("header=over mobile=overlay"),
+      "stacked.md": hero("header=over"),
+      "c.mp4": syntheticTestClip(640, 360),
+      "three.md": `---
+title: Three
+uid: "hcs00004"
+---
+
+:::hero {header=over mobile=overlay}
+![[a.mp4|*Title one* · Venue · 2018]]
+![[b.mp4|*Title two* · Venue · 2025]]
+![[c.mp4|*Title three* · Venue · 2026]]
+[See the work →](/work/)
+:::
+
+Body text.
+`,
+      "s1.svg": HERO_LANDSCAPE_SVG,
+      "s2.svg": HERO_LANDSCAPE_SVG,
+      "images.md": `---
+title: Images
+uid: "hcs00003"
+---
+
+:::hero {header=over align=end mobile=overlay}
+![[s1.svg|One]]
+![[s2.svg|Two]]
+[See the work →](/work/)
+:::
+
+Body text.
+`,
+      "work.md": `---\ntitle: Work\nuid: "hcs00002"\n---\n\nWork.\n`,
+      ".moss/config.toml": CONFIG_TOML,
+      ".moss/theme/style.css": null,
+    },
+  };
+}
+
+// ── Theme floor hooks ────────────────────────────────────────────────────────
+// A theme that states its design with tokens alone: a coloured header band with
+// its own link colour, and plain cards on the page. Nothing here is a class
+// selector, so the pages show what moss does with the tokens. The home page is
+// only its opening hero (nothing listed under it: the other pages are
+// `listed: false`), and `about` joins the footer so there is a footer to
+// measure the gap to. Served by playwright/theme-floor-hooks.config.ts.
+const POSTER_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR4nGMwSFiAFTEMLQkAlntMAXEm5KkAAAAASUVORK5CYII=",
+  "base64",
+);
+
+export const THEME_FLOOR_HOOKS_GATE: ScratchSiteSpec = {
+  name: "theme-floor-hooks-gate",
+  files: {
+    "poster.png": POSTER_PNG,
+    "index.md": `---
+title: Home
+uid: "tfh00001"
+---
+
+:::hero
+![](/poster.png)
+
+Overlay words
+:::
+`,
+    "about.md": `---
+title: About
+uid: "tfh00002"
+listed: false
+footer: true
+---
+
+Some body text.
+`,
+    "over.md": `---
+title: Over
+uid: "tfh00003"
+listed: false
+---
+
+:::hero {header=over}
+![](/poster.png)
+
+Overlay words
+:::
+
+Body text.
+`,
+    "one.md": `---
+title: One
+uid: "tfh00004"
+listed: false
+cover: /poster.png
+description: A short line.
+---
+
+Body.
+`,
+    "cards.md": `---
+title: Cards
+uid: "tfh00005"
+listed: false
+---
+
+:::grid 1
+[[one]]
+:::
+`,
+    "footer.md": `## Contact
+
+[Write to us](https://example.com/hello)
+
+---
+
+Small print.
+`,
+    ".moss/config.toml": CONFIG_TOML,
+    ".moss/theme/style.css": `:root {
+  --moss-footer-bg: rgb(20, 20, 20);
+  --moss-footer-ink: rgb(240, 240, 240);
+  --moss-footer-rule: rgb(90, 90, 90);
+  --moss-header-bg: rgb(200, 0, 0);
+  --moss-header-ink: rgb(0, 0, 255);
+  --moss-header-rule: transparent;
+  --moss-cover-color: transparent;
+  --moss-cover-ink: var(--moss-color-text);
+}
+`,
+  },
+};
+
+// ── Short hero clips sharpen, and idle ones do not load ──────────────────────
+// Two 8 s 1280x720 clips in an all-video hero. Whether the playing clip climbs
+// the ladder, and whether the second clip's media requests wait for its turn,
+// are facts about a real hls.js player on a real network stack. Served by
+// playwright/hls-short-clip.config.ts. A function for the same reason as
+// `videoEmbedShapeGate`: it shells out to ffmpeg.
+export function hlsShortClipGate(): ScratchSiteSpec {
+  return {
+    name: "hls-short-clip-gate",
+    files: {
+      "a.mp4": syntheticTestClip(1280, 720, { seconds: 8, source: "testsrc2", rich: true }),
+      "b.mp4": syntheticTestClip(1280, 720, { seconds: 8, source: "testsrc", rich: true }),
+      "index.md": `---
+title: Short clips
+uid: "hsc00101"
+---
+
+:::hero
+![[a.mp4]]
+![[b.mp4]]
+# Two clips
+:::
+
+Body text.
+`,
+      ".moss/config.toml": CONFIG_TOML,
+      ".moss/theme/style.css": null,
+    },
+  };
+}
+
+// ── The footer's end space: a hidden colophon keeps it, a visible one closes the footer ──
+// Two sites that differ only in the theme rule `.moss-colophon { display: none }`
+// (moss has no setting that hides its mark, so sites do it in theme CSS).
+// Served by playwright/footer-end-space.config.ts.
+const footerEndSpaceFiles = {
+  "index.md": `---
+title: Footer end space
+uid: "fes00101"
+---
+
+# Footer end space
+
+Body text.
+`,
+  "footer.md": `Written by [an editor](/editor) for this scratch site.
+`,
+  ".moss/config.toml": CONFIG_TOML,
+};
+
+export const FOOTER_END_SPACE_HIDDEN: ScratchSiteSpec = {
+  name: "footer-end-space-hidden-gate",
+  files: {
+    ...footerEndSpaceFiles,
+    ".moss/theme/style.css": `.moss-colophon { display: none; }
+`,
+  },
+};
+
+export const FOOTER_END_SPACE_DEFAULT: ScratchSiteSpec = {
+  name: "footer-end-space-default-gate",
+  files: { ...footerEndSpaceFiles, ".moss/theme/style.css": null },
 };

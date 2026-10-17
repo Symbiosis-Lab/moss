@@ -107,7 +107,7 @@ pub struct CommentI18n {
 }
 
 /// Get i18n strings for the given language, sourced from the central
-/// registry (`crate::i18n::strings`) so all three languages — including
+/// registry (`crate::i18n::strings`) so every language — including
 /// Traditional Chinese — stay in one place.
 pub fn get_i18n(lang: Language) -> CommentI18n {
     CommentI18n {

@@ -73,7 +73,11 @@ try {
     await page.evaluate(() => scrollTo(0, window.__restY(1)));
     await page.waitForFunction(() => window.__state().running, null, { timeout: 5000 });
     await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
-    await page.waitForFunction(() => { const s = window.__state(); return s.shown === 4 && s.xf === 1 && !s.running; }, null, { timeout: test.mobile ? 2000 : 8000 }).catch(async error => { throw new Error(`${test.name}: active jump failed ${JSON.stringify(await state(page))}`, {cause:error}); });
+    // A jump to the bottom from scene 2 plays what it passes: a wash for each boundary whose print is
+    // on hand, the live fade for each that has none, and the close itself, each paced in frames. A cold
+    // phone holds no prints of scenes 3 and 4 yet, so it plays four crossings of four frames and a
+    // dissolve, which a software-rendered Chromium at ten frames a second draws in about four seconds.
+    await page.waitForFunction(() => { const s = window.__state(); return s.shown === 4 && s.xf === 1 && !s.running; }, null, { timeout: 8000 }).catch(async error => { throw new Error(`${test.name}: active jump failed ${JSON.stringify(await state(page))}`, {cause:error}); });
     const activeJoin = await state(page);
     assert(activeJoin.closing, `${test.name}: closing remained queued behind active join`);
     results.push({ name: test.name, cold, coldReverse, activeJoin });

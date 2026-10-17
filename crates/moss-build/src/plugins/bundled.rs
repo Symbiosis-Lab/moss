@@ -99,7 +99,7 @@ fn bundled_file(plugin_name: &str, rel: &str) -> Option<&'static [u8]> {
 /// Read and parse the manifest.json from an installed plugin
 pub fn read_installed_manifest(plugin_path: &Path) -> Option<PluginManifest> {
     let manifest_path = plugin_path.join("manifest.json");
-    let content = fs::read_to_string(&manifest_path).ok()?;
+    let content = crate::build::cloud_readiness::read_to_string_with_materialize_wait(&manifest_path, crate::build::cloud_readiness::INTERACTIVE_DEADLINE).ok()?;
     PluginManifest::parse(&content).ok()
 }
 
@@ -195,9 +195,16 @@ fn compute_installed_hash(plugin_name: &str, plugin_dir: &Path) -> Option<String
 /// something. `None` when either file cannot be read, which no caller treats
 /// as a match.
 pub fn code_hash(plugin_dir: &Path, manifest: &PluginManifest) -> Option<String> {
-    let manifest_bytes = fs::read(plugin_dir.join("manifest.json")).ok()?;
-    let entry_bytes = fs::read(plugin_dir.join(&manifest.entry)).ok()?;
-    Some(hash_code(&manifest_bytes, &manifest.entry, &entry_bytes))
+    let manifest_bytes = crate::build::cloud_readiness::read_with_materialize_wait(&plugin_dir.join("manifest.json"), crate::build::cloud_readiness::INTERACTIVE_DEADLINE).ok()?;
+    // A derivation-only plugin has no code beyond the manifest. A pinned
+    // download carries its hash there; a `path` binary is only named, so its
+    // content joins the hash and changing it asks for consent again.
+    let entry_bytes = match &manifest.entry {
+        Some(entry) => crate::build::cloud_readiness::read_with_materialize_wait(&plugin_dir.join(entry), crate::build::cloud_readiness::INTERACTIVE_DEADLINE).ok()?,
+        None => Vec::new(),
+    };
+    let binaries = crate::system::derive::binary::local_binary_hashes(plugin_dir, manifest);
+    Some(hash_code(&manifest_bytes, manifest.entry.as_deref().unwrap_or(""), &entry_bytes, &binaries))
 }
 
 /// [`code_hash`] of the copy this binary ships under `plugin_name`, or
@@ -208,15 +215,22 @@ pub fn code_hash(plugin_dir: &Path, manifest: &PluginManifest) -> Option<String>
 pub fn bundled_code_hash(plugin_name: &str) -> Option<String> {
     let manifest = read_bundled_manifest(plugin_name)?;
     let manifest_bytes = bundled_file(plugin_name, "manifest.json")?;
-    let entry_bytes = bundled_file(plugin_name, &manifest.entry)?;
-    Some(hash_code(manifest_bytes, &manifest.entry, entry_bytes))
+    let entry = manifest.entry.as_deref().unwrap_or("");
+    let entry_bytes = if entry.is_empty() { &[][..] } else { bundled_file(plugin_name, entry)? };
+    Some(hash_code(manifest_bytes, entry, entry_bytes, &[]))
 }
 
-fn hash_code(manifest_bytes: &[u8], entry: &str, entry_bytes: &[u8]) -> String {
+fn hash_code(manifest_bytes: &[u8], entry: &str, entry_bytes: &[u8], local_binaries: &[String]) -> String {
     let mut hasher = Sha256::new();
     for (name, bytes) in [("manifest.json", manifest_bytes), (entry, entry_bytes)] {
         hasher.update(name.as_bytes());
         hasher.update(bytes);
+    }
+    // Absent for every plugin without a local binary, so those hashes are
+    // exactly what they were.
+    for binary in local_binaries {
+        hasher.update(b"local-binary");
+        hasher.update(binary.as_bytes());
     }
     format!("{:x}", hasher.finalize())
 }
@@ -254,7 +268,7 @@ fn collect_installed_files(
             collect_installed_files(base, &path, files)?;
         } else {
             let rel_path = path.strip_prefix(base).unwrap_or(&path);
-            let contents = fs::read(&path)?;
+            let contents = crate::build::cloud_readiness::read_with_materialize_wait(&path, crate::build::cloud_readiness::INTERACTIVE_DEADLINE)?;
             files.push((rel_path.to_string_lossy().into_owned(), contents));
         }
     }
@@ -274,7 +288,7 @@ fn read_auto_update_plugins_config(project_path: &str) -> bool {
         return true; // default: auto-update enabled
     }
 
-    let content = match fs::read_to_string(&config_path) {
+    let content = match crate::build::cloud_readiness::read_to_string_with_materialize_wait(&config_path, crate::build::cloud_readiness::INTERACTIVE_DEADLINE) {
         Ok(c) => c,
         Err(_) => return true,
     };

@@ -17,6 +17,7 @@
 //! `union_members_round_trip` sync test and by the per-row unit tests at the
 //! bottom of this file. Changing a row means changing both.
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::Value;
 
 /// Canonical resolved form of the `children` field.
@@ -259,6 +260,81 @@ fn shape_name(v: &Value) -> &'static str {
     }
 }
 
+// ── `children_count:` — what a listing's folder cards say they count ──
+
+/// `children_count:` on a listing page — what its folder cards say they
+/// count. A string replaces the text; `{n}` stands for the number, and the
+/// first `|` always splits the singular form (used when the number is 1) from
+/// the rest. An empty text, which `false` stands for, hides the count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChildrenCount(pub String);
+
+pub const PLACEHOLDER: &str = "{n}";
+
+impl ChildrenCount {
+    /// The card's count text for `number` (already formatted for the page's
+    /// numerals), or `None` when the chosen form is empty.
+    pub fn render(&self, count: usize, number: &str) -> Option<String> {
+        let form = match self.0.split_once('|') {
+            Some((singular, _)) if count == 1 => singular,
+            Some((_, plural)) => plural,
+            None => &self.0,
+        };
+        let text = form.replace(PLACEHOLDER, number);
+        (!text.trim().is_empty()).then_some(text)
+    }
+
+    /// Whether the text forgot `{n}` and so prints the same words on every
+    /// card: the plural form (or the whole text without a `|`) lacks it. A
+    /// singular form may say "one production" without it.
+    pub fn lacks_placeholder(&self) -> bool {
+        let plural = self.0.split_once('|').map_or(self.0.as_str(), |(_, p)| p);
+        !plural.trim().is_empty() && !plural.contains(PLACEHOLDER)
+    }
+}
+
+impl Serialize for ChildrenCount {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if self.0.is_empty() {
+            serializer.serialize_bool(false)
+        } else {
+            serializer.serialize_str(&self.0)
+        }
+    }
+}
+
+/// `false` hides, a string sets the text. Anything else is a per-field error,
+/// which `project_typed` reports as a build warning and drops.
+impl<'de> Deserialize<'de> for ChildrenCount {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de;
+
+        struct CountVisitor;
+
+        impl de::Visitor<'_> for CountVisitor {
+            type Value = ChildrenCount;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("false, or text such as \"{n} productions\"")
+            }
+
+            fn visit_bool<E: de::Error>(self, v: bool) -> Result<Self::Value, E> {
+                if v {
+                    Err(E::invalid_value(de::Unexpected::Bool(true), &self))
+                } else {
+                    Ok(ChildrenCount(String::new()))
+                }
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                Ok(ChildrenCount(v.to_string()))
+            }
+        }
+
+        deserializer.deserialize_any(CountVisitor)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -475,5 +551,66 @@ mod tests {
         assert!(err.contains("a number"), "message names the shape: {err}");
         let err = normalize_name_list(&Value::Sequence(vec![Value::Bool(true)])).unwrap_err();
         assert!(err.contains("list holding"), "message names the offending item: {err}");
+    }
+}
+
+#[cfg(test)]
+mod children_count_tests {
+    use super::*;
+
+    fn text(s: &str) -> ChildrenCount {
+        ChildrenCount(s.to_string())
+    }
+
+    #[test]
+    fn empty_text_renders_nothing() {
+        assert_eq!(text("").render(3, "3"), None);
+    }
+
+    #[test]
+    fn text_without_a_bar_serves_every_number() {
+        let t = text("{n} 部作品");
+        assert_eq!(t.render(1, "1").as_deref(), Some("1 部作品"));
+        assert_eq!(t.render(2, "2").as_deref(), Some("2 部作品"));
+    }
+
+    #[test]
+    fn bar_splits_singular_from_plural_at_one() {
+        let t = text("{n} production|{n} productions");
+        assert_eq!(t.render(1, "1").as_deref(), Some("1 production"));
+        assert_eq!(t.render(2, "2").as_deref(), Some("2 productions"));
+        assert_eq!(t.render(0, "0").as_deref(), Some("0 productions"));
+    }
+
+    #[test]
+    fn an_empty_chosen_form_hides_the_count() {
+        let t = text("|{n} items");
+        assert_eq!(t.render(1, "1"), None);
+        assert_eq!(t.render(2, "2").as_deref(), Some("2 items"));
+        assert_eq!(text("{n} item|").render(2, "2"), None);
+    }
+
+    #[test]
+    fn placeholder_check_reads_the_plural_form() {
+        assert!(text("productions").lacks_placeholder());
+        assert!(text("{n} works | archive").lacks_placeholder());
+        assert!(!text("{n} productions").lacks_placeholder());
+        assert!(!text("one production|{n} productions").lacks_placeholder());
+        assert!(!text("").lacks_placeholder());
+    }
+
+    #[test]
+    fn yaml_forms() {
+        #[derive(Deserialize)]
+        struct W {
+            c: Option<ChildrenCount>,
+        }
+        let parse = |y: &str| serde_yaml::from_str::<W>(y).map(|w| w.c);
+        assert_eq!(parse("c: false").unwrap(), Some(text("")));
+        assert_eq!(parse("c: '{n} x'").unwrap(), Some(text("{n} x")));
+        assert_eq!(parse("c: ~").unwrap(), None);
+        assert!(parse("c: true").is_err());
+        assert!(parse("c: 3").is_err());
+        assert!(parse("c: [a]").is_err());
     }
 }

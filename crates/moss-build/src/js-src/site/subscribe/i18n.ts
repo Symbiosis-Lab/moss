@@ -2,12 +2,12 @@
  * Copy table for the moss-hosted subscribe form.
  *
  * Intentionally duplicated from the Rust `SubscribeI18n` in
- * `crates/moss-build/src/build/features/email.rs`: the set is tiny (5 strings × 3
+ * `crates/moss-build/src/build/features/email.rs`: the set is tiny (5 strings × 4
  * locales) and both sides only need read access. Keeping them in sync by hand
  * is cheaper than plumbing the strings through the DOM as data- attributes.
  */
 
-export type Lang = 'en' | 'zh-hans' | 'zh-hant';
+export type Lang = 'en' | 'de' | 'zh-hans' | 'zh-hant';
 
 export interface SubscribeCopy {
   /** Placeholder inside the email input. */
@@ -29,6 +29,13 @@ export const COPY: Record<Lang, SubscribeCopy> = {
     checkEmail: 'Check your email to confirm.',
     alreadySubscribed: "You're already subscribed.",
     error: 'Something went wrong. Try again?',
+  },
+  de: {
+    placeholder: 'ihre@email.de',
+    label: 'Abonnieren',
+    checkEmail: 'Bitte bestätigen Sie das Abonnement in Ihrer E-Mail.',
+    alreadySubscribed: 'Sie haben bereits abonniert.',
+    error: 'Es ist ein Fehler aufgetreten. Bitte versuchen Sie es erneut.',
   },
   'zh-hans': {
     placeholder: '邮箱',
@@ -68,6 +75,13 @@ export const APPLY_COPY: Record<Lang, ApplyCopy> = {
     received: "Thanks for applying. Please confirm the email we just sent; we'll email you when your turn comes.",
     error: 'Something went wrong. Try again?',
   },
+  de: {
+    label: 'Bewerben',
+    labelSuccess: 'Bewerbung gesendet',
+    mattersPh: 'Matters-Benutzername',
+    received: 'Danke für Ihre Bewerbung. Bitte bestätigen Sie die E-Mail, die wir Ihnen gerade geschickt haben; wir melden uns, sobald Sie an der Reihe sind.',
+    error: 'Es ist ein Fehler aufgetreten. Bitte versuchen Sie es erneut.',
+  },
   'zh-hans': {
     label: '申请',
     labelSuccess: '申请已提交',
@@ -85,7 +99,7 @@ export const APPLY_COPY: Record<Lang, ApplyCopy> = {
 };
 
 /**
- * Bucket an arbitrary BCP-47 language tag into one of the three copy keys.
+ * Bucket an arbitrary BCP-47 language tag into one of the four copy keys.
  *
  * The blessed TS twin of Rust's `Language::from_bcp47_lenient` in
  * `crates/moss-build/src/i18n.rs` — any change here needs a corresponding Rust
@@ -99,6 +113,11 @@ export function langBucket(raw: string | null | undefined): Lang {
   const normalized = (raw ?? '').toLowerCase().replace(/_/g, '-');
   const subtags = normalized.split('-').filter((s) => s.length > 0);
   const primary = subtags[0] ?? '';
+
+  // German tags (`de`, `de-AT`, `deu`) are the German edition.
+  if (primary === 'de' || primary === 'deu') {
+    return 'de';
+  }
 
   const SINITIC = ['zh', 'zho', 'cmn', 'yue', 'wuu', 'nan', 'hak', 'gan', 'hsn', 'lzh', 'czh'];
   const isChinese = SINITIC.includes(primary) || primary === 'hans' || primary === 'hant';

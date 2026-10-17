@@ -4,7 +4,7 @@
 // a second `@codemirror/state` breaks facet identity) plus the package's own
 // core layer. Host specifics arrive through options: strings as thunks
 // (cm-shortcode-block), the reference cache + resolution envelope declared
-// structurally (cm-link-resolver).
+// structurally (cm-link-clickable).
 //
 // The module set is collision-free by construction (verified at L2): each
 // module exports a disjoint name set, so a flat re-export is unambiguous.
@@ -15,5 +15,5 @@ export * from './cm-image-extract.js';
 export * from './cm-criticmarkup.js';
 export * from './cm-highlight.js';
 export * from './cm-shortcode-block.js';
-export * from './cm-link-resolver.js';
+export * from './cm-link-clickable.js';
 export * from './cm-footnote.js';

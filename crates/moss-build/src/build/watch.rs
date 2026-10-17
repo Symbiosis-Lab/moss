@@ -291,12 +291,15 @@ fn compute_rebuild_event(
 /// translation-home promotion via page_map, and duplicate-slug
 /// dedup-with-suffix.
 ///
-/// Fallback (for manifests written by moss versions before this field
-/// existed, where `source_to_output` deserializes to empty): try the two
-/// stem-based forms `{stem}/index.html` and `{stem}.html` against
-/// `hashes.files`. This heuristic only catches sources whose stem already
-/// matches the slug (lowercase-kebab ASCII with no overrides), but provides
-/// a graceful degradation until the next build heals the manifest.
+/// Fallback, only for a manifest whose `source_to_output` is empty (written
+/// by moss versions before this field existed): try the two stem-based forms
+/// `{stem}/index.html` and `{stem}.html` against `hashes.files`. This
+/// heuristic only catches sources whose stem already matches the slug
+/// (lowercase-kebab ASCII with no overrides), but provides a graceful
+/// degradation until the next build heals the manifest. A manifest that has
+/// the map never guesses: `files` can still list the output of a page that no
+/// longer exists until the generation is sealed, so a guess could name a page
+/// that is gone.
 ///
 /// Returns `None` for non-`.md` sources, synthetic pages without a
 /// `source_path`, or sources whose output isn't in this manifest at all.
@@ -304,7 +307,9 @@ fn find_output_for_source(source: &str, hashes: &SiteHashes) -> Option<String> {
     if let Some(out) = hashes.source_to_output.get(source) {
         return Some(out.clone());
     }
-    // Backward-compat fallback for manifests without source_to_output.
+    if !hashes.source_to_output.is_empty() {
+        return None;
+    }
     let stem = source.strip_suffix(".md")?;
     let pretty = format!("{}/index.html", stem);
     if hashes.files.contains_key(&pretty) {
@@ -398,6 +403,69 @@ fn compute_source_change_set(
     SourceChanges { creates, deletes, modified }
 }
 
+/// A pair is stale when a markdown side is unknown to its manifest: the old side
+/// to the previous one, or the new side to the new one. A side is unknown when
+/// it is in neither the manifest's page map (`source_to_output`) nor its source
+/// hashes, because a file that owns no output, such as a footer, is recorded
+/// only in the source hashes and its rename must still be reported. A manifest
+/// with an empty page map is a legacy one and makes no side stale.
+fn pair_is_stale(old_src: &str, new_src: &str, new_hashes: &SiteHashes, previous_hashes: &SiteHashes) -> bool {
+    use crate::build::manifest::is_page_source_key;
+    let unknown = |src: &str, h: &SiteHashes| {
+        !h.source_to_output.is_empty()
+            && is_page_source_key(src)
+            && !h.source_to_output.contains_key(src)
+            && !h.sources.contains_key(src)
+    };
+    unknown(old_src, previous_hashes) || unknown(new_src, new_hashes)
+}
+
+/// Renames the watcher could not pair, recognised by identity: a page the
+/// previous build served that is gone, and a page this build serves that is new,
+/// carrying the same inode AND the same content hash. The inode alone is not
+/// enough — Linux filesystems hand a freed inode number to the next new file —
+/// and a rename that also changed the text stays a delete plus a create, which
+/// is safe. Only a match unique on both sides pairs. Off unix no inode is
+/// recorded, so nothing pairs there.
+fn identity_pairs(
+    new_hashes: &SiteHashes,
+    previous_hashes: &SiteHashes,
+    already: &[(String, String)],
+) -> Vec<(String, String)> {
+    let identity = |h: &SiteHashes, src: &str| {
+        h.sources.get(src).and_then(|m| Some((m.inode?, m.hash.clone())))
+    };
+    let paired_old: std::collections::HashSet<&str> = already.iter().map(|(o, _)| o.as_str()).collect();
+    let paired_new: std::collections::HashSet<&str> = already.iter().map(|(_, n)| n.as_str()).collect();
+    let mut gone: std::collections::HashMap<(u64, String), Vec<&String>> = std::collections::HashMap::new();
+    for src in previous_hashes.source_to_output.keys() {
+        if new_hashes.source_to_output.contains_key(src) || paired_old.contains(src.as_str()) {
+            continue;
+        }
+        if let Some(id) = identity(previous_hashes, src) {
+            gone.entry(id).or_default().push(src);
+        }
+    }
+    let mut appeared: std::collections::HashMap<(u64, String), Vec<&String>> = std::collections::HashMap::new();
+    for src in new_hashes.source_to_output.keys() {
+        if previous_hashes.source_to_output.contains_key(src) || paired_new.contains(src.as_str()) {
+            continue;
+        }
+        if let Some(id) = identity(new_hashes, src) {
+            appeared.entry(id).or_default().push(src);
+        }
+    }
+    let mut pairs: Vec<(String, String)> = gone
+        .iter()
+        .filter_map(|(id, olds)| match (olds.as_slice(), appeared.get(id).map(Vec::as_slice)) {
+            ([old], Some([new])) => Some(((*old).clone(), (*new).clone())),
+            _ => None,
+        })
+        .collect();
+    pairs.sort();
+    pairs
+}
+
 /// Compose a `FileChangeEvent` from the output-hash diff plus the watcher's
 /// stitched rename pairs. Wraps [`compute_rebuild_event`] with these
 /// behaviors:
@@ -427,20 +495,30 @@ fn compute_source_change_set(
 ///    otherwise direct-match the old output path and redirect home,
 ///    shadowing the rename signal.
 ///
-/// If a pair can't be resolved to both old and new output paths (e.g. the
-/// rebuild ran but didn't see the rename, or the source produces no output —
-/// notebook/asset renames where the manifest doesn't carry a source mapping),
-/// the pair is silently dropped. `deleted_paths` keeps the entry and the
-/// iframe redirects home, which is the pre-fix fallback: better to redirect
-/// home than to navigate to a non-existent URL.
+/// A pair that cannot resolve to both an old and a new output path (the source
+/// produces no output, such as an asset rename or a footer) still counts as a
+/// rename: it only contributes nothing to `moved_output_paths`, and is reported
+/// in `source_renames`.
+///
+/// A pair is first dropped as stale when a markdown side is known to neither
+/// the page map nor the source hashes of its manifest (see [`pair_is_stale`]).
 fn build_rebuild_event_with_renames(
     new_hashes: &SiteHashes,
     previous_hashes: &SiteHashes,
     rename_pairs: &[(String, String)],
 ) -> Option<FileChangeEvent> {
+    let mut rename_pairs: Vec<(String, String)> = rename_pairs
+        .iter()
+        .filter(|(old_src, new_src)| !pair_is_stale(old_src, new_src, new_hashes, previous_hashes))
+        .cloned()
+        .collect();
+    let by_identity = identity_pairs(new_hashes, previous_hashes, &rename_pairs);
+    rename_pairs.extend(by_identity);
+    let rename_pairs = rename_pairs.as_slice();
+
     // Resolve each source-domain pair to output-domain paths via the manifest.
-    // Pairs that can't resolve to BOTH old and new outputs are dropped — see
-    // the function doc-comment for rationale.
+    // A pair that can't resolve to BOTH old and new outputs adds nothing here;
+    // it is still reported as a source rename below.
     let mut output_pairs: Vec<(String, String)> = rename_pairs
         .iter()
         .filter_map(|(old_src, new_src)| {

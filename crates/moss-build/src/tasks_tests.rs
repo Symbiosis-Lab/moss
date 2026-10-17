@@ -422,7 +422,6 @@ fn task_id_deserializes_inside_command_arg_shape() {
 #[test]
 fn plugin_hook_maps_to_task_kind_1_to_1() {
     let cases = [
-        (PluginHook::Import, TaskKind::Import),
         (PluginHook::Publish, TaskKind::Publish),
         (PluginHook::Deploy, TaskKind::Deploy),
         (PluginHook::Syndicate, TaskKind::Syndicate),
@@ -446,7 +445,7 @@ fn router_covers_every_cell() {
     use PluginHook::*;
     use TriggerContext::*;
 
-    let hooks = [Import, Publish, Deploy, Syndicate, Process];
+    let hooks = [Publish, Deploy, Syndicate, Process];
     let triggers = [OnboardingFlow, SettingsManual, Background, ManualOne];
 
     let mut seen = 0;
@@ -465,25 +464,13 @@ fn router_covers_every_cell() {
             seen += 1;
         }
     }
-    assert_eq!(seen, 20, "router must cover every (hook, trigger) pair");
+    assert_eq!(seen, 16, "router must cover every (hook, trigger) pair");
 }
 
 /// Spot-check specific router rows from the Layer 2 table.
 #[test]
 fn router_spot_checks_match_layer2_table() {
     let cases = [
-        (
-            PluginHook::Import,
-            TriggerContext::OnboardingFlow,
-            TaskScope::ActionPanel,
-            TaskTone::Ambient,
-        ),
-        (
-            PluginHook::Import,
-            TriggerContext::SettingsManual,
-            TaskScope::Workspace,
-            TaskTone::Narrated,
-        ),
         (
             PluginHook::Publish,
             TriggerContext::Background,
@@ -549,7 +536,7 @@ fn awaiting_preserves_scope_across_all_rows() {
     use PluginHook::*;
     use TriggerContext::*;
 
-    let hooks = [Import, Publish, Deploy, Syndicate, Process];
+    let hooks = [Publish, Deploy, Syndicate, Process];
     let triggers = [OnboardingFlow, SettingsManual, Background, ManualOne];
 
     for &hook in &hooks {
@@ -1221,6 +1208,36 @@ fn awaiting_serializes_action_on_the_wire() {
     assert!(json.contains("\"state\":\"awaiting\""), "got {json}");
     assert!(json.contains("\"action\""), "got {json}");
     assert!(!json.contains("escape"), "escape must be gone: {json}");
+}
+
+#[test]
+fn escape_download_tool_drops_unknown_tools() {
+    assert_eq!(
+        crate::tasks::escape_spec_to_action("download-tool:bogus"),
+        Action::None
+    );
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn escape_download_tool_maps_a_tool_with_a_source_here() {
+    match crate::tasks::escape_spec_to_action("download-tool:ffmpeg") {
+        Action::InApp { op, args, label } => {
+            assert_eq!(op, crate::advisory::AppOp::DownloadTool);
+            assert_eq!(args, serde_json::json!({ "tool": "ffmpeg" }));
+            assert_eq!(label, "Download ffmpeg");
+        }
+        other => panic!("expected a DownloadTool action, got {other:?}"),
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn escape_download_tool_drops_a_tool_without_a_source_here() {
+    assert_eq!(
+        crate::tasks::escape_spec_to_action("download-tool:ffmpeg"),
+        Action::None
+    );
 }
 
 // ── parent/child Jobs (Step 3 Phase 4 — media nests under Build) ──────

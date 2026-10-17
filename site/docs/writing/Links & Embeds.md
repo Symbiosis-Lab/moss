@@ -57,7 +57,7 @@ Embed an image with standard Markdown, or with a wikilink by putting `!` before 
 
 The standard form is the default: write the path relative to the page, and spell a space as `%20` (`![](my%20photo.jpg)`). If nothing is at that path, moss tries the same path from the site root, then falls back to the nearest file with that name, so a path that has gone stale still finds its file. The wikilink needs only the file name and searches the entire content tree, so no path is needed at all. The same two spellings work for video, audio, PDF and 3D model files (`![](clip.mp4)` or `![[clip.mp4]]`).
 
-Put images in an excluded asset folder (`assets/`, `images/`, `static/`, `public/`) so they are served but not treated as content pages, then reference them from any markdown file.
+Put images in any folder, such as `assets/` or `images/`, and reference them from any markdown file.
 
 ```
 work/
@@ -91,6 +91,20 @@ This inserts the referenced paragraph directly into the current page. Embeds wor
 
 moss detects circular embeds and stops before an infinite loop.
 
+## Text from a file
+
+Some plugins can read a kind of file you keep in the folder (a PDF, a slide deck, a spreadsheet) and hand back its text. Embed that text with the fragment name the plugin declares:
+
+```markdown
+![[annual-report.pdf#text]]
+```
+
+The text appears in the page as ordinary markdown, so it is searchable and can be linked to. While moss is still reading the file the page shows a placeholder, and if the plugin could not read it the page says so instead of failing the build. The text comes from a file someone else wrote, so moss shows HTML tags, `$` amounts and `[[brackets]]` in it as plain text.
+
+To show every file in a folder as its own page, run `moss import reports/ --allow-plugins` (add `--recursive` to cover the folders beneath it too). moss writes a short page beside each file (`annual-report.md` next to `annual-report.pdf`) that embeds the file and takes its title and description from the file, and remembers the choice for that folder. It never overwrites a page you already have, and a file that another page already embeds gets none. `moss import --status` lists each folder, how many files it holds, and any file the plugin declined to read, with its reason. To keep the text and drop the file, run `moss expand reports/annual-report.md`: each line holding only an embed is replaced by the text it stands for.
+
+A page can take its title and description from the first file it embeds instead of repeating them: write `inferred: [title, description]` in the frontmatter, and a `title:` or `description:` you write yourself still wins.
+
 ## HTML and interactive embeds
 
 Embed an interactive or animated `.html` file (an animation, a small demo, a widget) with the same `![[...]]` syntax (a standard `![](folder-to-site.html)` that points at an HTML file in your site embeds it the same way):
@@ -99,7 +113,7 @@ Embed an interactive or animated `.html` file (an animation, a small demo, a wid
 ![[folder-to-site.html]]
 ```
 
-moss serves the file as-is inside an iframe, so its own CSS and animation run normally. Keep the file in an excluded asset folder (`assets/`, `static/`) and reference it by bare filename. moss resolves the path and keeps the URL correct wherever the page is deployed. A query string passes straight through: `![[chart.html?series=a,b]]`.
+moss serves the file as-is inside an iframe, so its own CSS and animation run normally. Keep the file in a folder such as `assets/` and reference it by bare filename. moss resolves the path and keeps the URL correct wherever the page is deployed. A query string passes straight through: `![[chart.html?series=a,b]]`.
 
 This is the preferred way to embed interactive content. Do not hand-write a raw `<iframe>` or an absolute `/assets/...` URL. The wikilink computes the right relative path. The same `![[folder-to-site.html]]` resolves to a per-language copy via the language-tree rule: put the default file at `assets/animations/folder-to-site.html` and a translation at `zh-hant/assets/animations/folder-to-site.html`, and each page picks its own.
 

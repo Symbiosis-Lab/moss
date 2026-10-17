@@ -19,7 +19,8 @@
 <link>https://example.com/harbor/index.html?utm_source=rss&amp;utm_medium=feed</link>
 <guid>https://example.com/harbor/index.html?utm_source=rss&amp;utm_medium=feed</guid>
 <pubDate>01 Mar 2026 00:00:00 +0000</pubDate>
-<description><![CDATA[<p>Notes from the harbor.</p>
+<description><![CDATA[<h1 class="moss-article-title">Harbor Notes</h1>
+<p>Notes from the harbor.</p>
 ]]></description>
 </item>
 </channel>

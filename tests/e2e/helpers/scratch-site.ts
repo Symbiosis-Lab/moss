@@ -243,6 +243,10 @@ export function findLinkHref(html: string, pattern: RegExp): string | null {
  * `macos-latest`), so this needs no extra CI setup, and on a dev machine that
  * already needs it to run moss's own video pipeline.
  *
+ * `seconds` (default 2), `source` (the lavfi pattern, so two clips can differ)
+ * and `rich` (noise at 3.5 Mbps, so moss builds a full quality ladder from it:
+ * a plain test pattern encodes too cheaply and gets a single rung) are optional.
+ *
  * At least 2 seconds long: `FFmpegManager::generate_thumbnail` seeks to a
  * fixed `-ss 00:00:01` to grab the poster frame. A 1-second clip lands that
  * seek at-or-past EOF, so the poster comes out 0 bytes and the built page
@@ -257,13 +261,24 @@ export function findLinkHref(html: string, pattern: RegExp): string | null {
  * config once per worker process, and re-encoding on every parse would pay
  * the ffmpeg cost that many times over for bytes that never change.
  */
-export function syntheticTestClip(width: number, height: number): Buffer {
-  const cachePath = path.join(WORKTREE, `target/test-tmp/fixtures/clip-${width}x${height}.mp4`);
+export function syntheticTestClip(
+  width: number,
+  height: number,
+  {
+    seconds = 2,
+    source = "testsrc",
+    rich = false,
+  }: { seconds?: number; source?: "testsrc" | "testsrc2"; rich?: boolean } = {},
+): Buffer {
+  // The original 2 s `testsrc` clip keeps its cache name, so existing caches stay valid.
+  const tag = seconds === 2 && source === "testsrc" && !rich ? "" : `-${source}-${seconds}s${rich ? "-rich" : ""}`;
+  const cachePath = path.join(WORKTREE, `target/test-tmp/fixtures/clip-${width}x${height}${tag}.mp4`);
   if (fs.existsSync(cachePath)) return fs.readFileSync(cachePath);
   fs.mkdirSync(path.dirname(cachePath), { recursive: true });
   try {
     execSync(
-      `ffmpeg -y -f lavfi -i "testsrc=size=${width}x${height}:rate=15" -t 2 -pix_fmt yuv420p "${cachePath}"`,
+      `ffmpeg -y -f lavfi -i "${source}=size=${width}x${height}:rate=15${rich ? ",noise=alls=25:allf=t" : ""}" -t ${seconds} ` +
+        `${rich ? "-c:v libx264 -preset veryfast -b:v 3500k -maxrate 3500k -bufsize 7000k " : ""}-pix_fmt yuv420p "${cachePath}"`,
       { stdio: "pipe" },
     );
   } catch (e) {

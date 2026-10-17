@@ -4,13 +4,10 @@
  * See tests/e2e/helpers/gate-sites.ts → HEADING_ANCHOR_GATE for why this needs
  * a browser, and why it needs both of them.
  *
- * d0b0be5f dropped the `#` permalink anchor from every home-page heading (at
- * any level), not just from level-1 titles — a reader reaches the home page
- * by visiting the site rather than by a deep link into one of its sections.
- * The selection/permalink tests below exercise an author-written `##`
- * heading that still gets an anchor, so they run against `/page/`, an
- * ordinary non-home page; the home page's own heading is checked separately,
- * for the absence the fix is about.
+ * A home-page `##` section carries the same permalink as any page's, so a
+ * site owner can link to a section of the home page; only a level-1 title
+ * goes without one. The selection tests run against `/page/`; the home page
+ * is checked separately.
  */
 import { test, expect } from "@playwright/test";
 
@@ -83,18 +80,16 @@ test.describe("heading anchor", () => {
     expect(painted).toBe('"#"');
   });
 
-  test("the home page's heading carries no permalink at all", async ({
+  test("a home-page section carries a permalink, like any page's", async ({
     page,
   }) => {
-    // Locks d0b0be5f's home-page half: unlike `/page/` above, the home
-    // page's own `##` heading gets no `.moss-heading-anchor`, at any level.
     await page.goto("/");
 
     const h = page.locator("h2#introduction");
     await expect(h).toHaveCount(1);
     await expect(
       page.locator("h2#introduction .moss-heading-anchor"),
-    ).toHaveCount(0);
+    ).toHaveCount(1);
   });
 
   test("a grid cell's heading is a card title and carries no permalink", async ({

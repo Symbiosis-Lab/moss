@@ -42,6 +42,7 @@ fn cli_warn_increments_the_problem_counter() {
 #[test]
 fn duplicate_name_in_one_row_warns() {
     let kinds = vec![crate::build::terms::TermKind {
+        cards: false,
         key: "people".to_string(),
         fields: vec!["author".to_string(), "editor".to_string()],
         title: "People".to_string(),
@@ -92,6 +93,7 @@ fn gazetteer_diagnostics_count_as_cli_problems() {
 #[test]
 fn unclaimed_typo_diagnostic_counts_as_a_cli_problem() {
     let kinds = vec![crate::build::terms::TermKind {
+        cards: false,
         key: "authors".to_string(),
         fields: vec!["author".to_string()],
         title: "Authors".to_string(),
@@ -113,6 +115,7 @@ fn unclaimed_typo_diagnostic_counts_as_a_cli_problem() {
 #[test]
 fn declared_name_absent_from_any_byline_row_warns() {
     let kinds = vec![crate::build::terms::TermKind {
+        cards: false,
         key: "authors".to_string(),
         fields: vec!["author".to_string()],
         title: "Authors".to_string(),
@@ -144,12 +147,14 @@ fn declared_name_absent_from_any_byline_row_warns() {
 fn place_names_never_warn_or_link_in_bylines() {
     let kinds = vec![
         crate::build::terms::TermKind {
+            cards: false,
             key: "authors".to_string(),
             fields: vec!["author".to_string()],
             title: "Authors".to_string(),
             is_place: false, parents: Default::default(), explorer: None, line: None,
         },
         crate::build::terms::TermKind {
+            cards: false,
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
@@ -189,12 +194,14 @@ fn place_names_never_warn_or_link_in_bylines() {
 fn place_name_present_in_a_byline_row_is_left_unlinked() {
     let kinds = vec![
         crate::build::terms::TermKind {
+            cards: false,
             key: "authors".to_string(),
             fields: vec!["author".to_string()],
             title: "Authors".to_string(),
             is_place: false, parents: Default::default(), explorer: None, line: None,
         },
         crate::build::terms::TermKind {
+            cards: false,
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
@@ -359,9 +366,8 @@ fn a_redirect_entry_outside_the_site_counts_as_a_cli_problem() {
     let mut redirects = std::collections::BTreeMap::new();
     redirects.insert("../old-page/".to_string(), "new-page/".to_string());
     redirects.insert("good-page/".to_string(), "new-page/".to_string());
-    crate::build::feeds::redirects::save_redirects(&data_dir, &redirects).unwrap();
-
     let paths = crate::moss_paths::MossPaths::from_moss_dir(moss_dir);
+    crate::build::feeds::redirects::save_redirects(&paths, &redirects).unwrap();
     let current_map = crate::build::scan::article_map::ArticleMap::new();
     let mut pending =
         crate::build::manifest::PendingManifest::new(crate::types::content::SiteHashes::default());

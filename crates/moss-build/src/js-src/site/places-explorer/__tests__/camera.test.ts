@@ -4,6 +4,7 @@
  */
 
 import { describe, test, expect } from "vitest";
+import { FIT, OPENING_FRAMES } from "./explorer-fit";
 import { WORLD_WIDTH, WORLD_HEIGHT, project } from "../projection";
 import {
   DETAIL_MAX_SCALE,
@@ -15,10 +16,12 @@ import {
   coverCamera,
   fitPoints,
   fitWork,
+  openingMaxZoom,
   resizeCamera,
   worldToScreen,
   screenToWorld,
 } from "../camera";
+
 
 describe("coverCamera", () => {
   test.each([
@@ -192,7 +195,7 @@ describe("fitPoints", () => {
 describe("fitWork", () => {
   test("a zero-size viewport (a hidden embed) yields a finite camera, never NaN", () => {
     for (const viewport of [{ width: 0, height: 0 }, { width: 0, height: 231 }, { width: 346, height: 0 }]) {
-      const camera = fitWork([{ x: 300, y: 200 }], viewport);
+      const camera = fitWork([{ x: 300, y: 200 }], viewport, FIT);
       expect(Number.isFinite(camera.x)).toBe(true);
       expect(Number.isFinite(camera.y)).toBe(true);
       expect(Number.isFinite(camera.zoom)).toBe(true);
@@ -203,7 +206,7 @@ describe("fitWork", () => {
     const viewport = { width: 1000, height: 600 };
     const a = { x: 300, y: 200 };
     const b = { x: 700, y: 360 };
-    const camera = fitWork([a, b], viewport);
+    const camera = fitWork([a, b], viewport, FIT);
     const scale = screenScale(camera, viewport);
     for (const point of [a, b]) {
       const screenX = viewport.width / 2 + (point.x - camera.x) * scale;
@@ -219,7 +222,7 @@ describe("fitWork", () => {
     const viewport = { width: 1000, height: 600 };
     const frame = { x: 0, y: 0, width: 1000, height: 450 };
     const point = { x: 500, y: 280 };
-    const framed = fitWork([point], viewport, frame);
+    const framed = fitWork([point], viewport, FIT, frame);
     const scale = screenScale(framed, viewport);
     const screenY = viewport.height / 2 + (point.y - framed.y) * scale;
     expect(screenY).toBeLessThan(frame.height);
@@ -243,22 +246,22 @@ describe("fitWork framing", () => {
   ];
   for (const [name, viewport, frame, upper] of cases) {
     test(`two places 2 degrees apart frame regionally in ${name}`, () => {
-      const camera = fitWork([a, b], viewport, frame);
+      const camera = fitWork([a, b], viewport, FIT, frame);
       const span = degreesWide(camera, viewport);
       expect(span).toBeGreaterThan(4);
       expect(span).toBeLessThan(upper);
       expect(inside(camera, viewport, a) && inside(camera, viewport, b)).toBe(true);
     });
     test(`one place frames regionally in ${name}`, () => {
-      const span = degreesWide(fitWork([a], viewport, frame), viewport);
+      const span = degreesWide(fitWork([a], viewport, FIT, frame), viewport);
       expect(span).toBeGreaterThan(4);
       expect(span).toBeLessThan(upper);
     });
   }
   test("a tiny free rectangle (overlays eating an embed) falls back to the whole viewport", () => {
     const viewport = { width: 346, height: 231 };
-    const small = fitWork([a, b], viewport, { x: 0, y: 150, width: 346, height: 40 });
-    expect(small).toEqual(fitWork([a, b], viewport));
+    const small = fitWork([a, b], viewport, FIT, { x: 0, y: 150, width: 346, height: 40 });
+    expect(small).toEqual(fitWork([a, b], viewport, FIT));
   });
 });
 
@@ -310,5 +313,19 @@ describe("resizeCamera", () => {
     const camera = { x: 700, y: 180, zoom: 20 };
     expect(resizeCamera(camera, { width: 0, height: 0 }, large)).toEqual(camera);
     expect(resizeCamera(camera, small, { width: 0, height: 0 })).toEqual(camera);
+  });
+});
+
+describe("the opening fit of all places", () => {
+  // The build chooses the opening view's cells from the same rectangles (`place_map::explorer`'s golden-vector test).
+  test.each(OPENING_FRAMES.cases.map((frame) => [`${frame.name} on ${frame.map.width}x${frame.map.height}`, frame] as const))("draws the shared golden rectangle for %s", (_label, frame) => {
+    const viewport = { width: frame.map.width, height: frame.map.height };
+    const [top, bottom] = frame.map.bands;
+    const free = { x: 0, y: top, width: viewport.width, height: viewport.height - top - bottom };
+    const camera = fitWork(frame.points.map(([lat, lng]) => project(lat, lng)), viewport, FIT, free, openingMaxZoom(viewport, FIT.openingDegreesPerPx));
+    const scale = screenScale(camera, viewport);
+    const view = camera.zoom <= MIN_ZOOM ? null : [camera.x - viewport.width / 2 / scale, camera.y - viewport.height / 2 / scale, camera.x + viewport.width / 2 / scale, camera.y + viewport.height / 2 / scale];
+    if (frame.view === null) return expect(view).toBeNull();
+    view!.forEach((edge, index) => expect(edge).toBeCloseTo(frame.view![index], 4));
   });
 });

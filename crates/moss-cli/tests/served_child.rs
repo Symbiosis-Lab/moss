@@ -111,11 +111,30 @@ pub struct ServedChild {
 
 #[allow(dead_code)]
 pub fn spawn_served_build(site_dir: &Path, moss_home: &Path, extra_args: &[&str]) -> ServedChild {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_moss-cli"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_moss-cli"));
+    command.arg("build").arg(site_dir).arg("--serve").args(extra_args);
+    spawn_piped(command, moss_home)
+}
+
+/// [`spawn_served_build`], but the child starts with SIGINT ignored, as any
+/// job backgrounded by a non-interactive shell does. The shell's `trap ''`
+/// sets the disposition and `exec` carries it into moss-cli.
+#[allow(dead_code)]
+pub fn spawn_served_build_sigint_ignored(site_dir: &Path, moss_home: &Path, extra_args: &[&str]) -> ServedChild {
+    let mut command = Command::new("sh");
+    command
+        .arg("-c")
+        .arg(r#"trap '' INT; exec "$0" "$@""#)
+        .arg(env!("CARGO_BIN_EXE_moss-cli"))
         .arg("build")
         .arg(site_dir)
         .arg("--serve")
-        .args(extra_args)
+        .args(extra_args);
+    spawn_piped(command, moss_home)
+}
+
+fn spawn_piped(mut command: Command, moss_home: &Path) -> ServedChild {
+    let mut child = command
         .env("MOSS_HOME", moss_home)
         .env("MOSS_LOG_LEVEL", "info")
         .stdin(Stdio::null())

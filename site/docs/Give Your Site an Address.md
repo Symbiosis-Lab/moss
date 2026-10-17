@@ -7,15 +7,13 @@ description: Buy your own web address and connect it to your site, all inside mo
 translationKey: docs-start-domain
 ---
 
-# Give Your Site an Address
-
 > Want your site at your own name, like yourname.com? Find one, buy it, and connect it without leaving moss.
 
 Your site already lives online. This page gives it your own address, so people reach it at a name you choose instead of a longer default one. moss helps you find a name, buy it, and set it up.
 
-![[custom domain.gif]]
+![[custom domain.mp4|loop]]
 
-A moss subscription is required to buy an address. moss will let you know if you don't have one yet.
+A mosspub.com hosting subscription is required to buy an address. moss will let you know if you don't have one yet.
 
 ## Find a name
 

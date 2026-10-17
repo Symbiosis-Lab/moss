@@ -19,6 +19,8 @@
  * the Rust synthesizer stays HTML-only and the JS owns the interactive layer.
  */
 
+import { initHeroSequences } from "./hero-sequence";
+
 const PAUSE_LABEL = "Pause video";
 const PLAY_LABEL = "Play video";
 const PAUSE_ICON = "⏸";
@@ -92,6 +94,7 @@ function wrapAndInit(video: HTMLVideoElement): void {
  * times (idempotent wrapper guard).
  */
 export function initAmbientVideos(): void {
+  initHeroSequences();
   const videos = document.querySelectorAll<HTMLVideoElement>("video[data-loop]");
   if (!videos.length) return;
 

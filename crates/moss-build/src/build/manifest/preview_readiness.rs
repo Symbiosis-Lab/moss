@@ -14,6 +14,27 @@ pub enum PreviewReadiness {
     Missing,
 }
 
+/// What a request that named no source stands for in one manifest, as far as
+/// its input evidence proves: the source mapped to the URL's output once that
+/// source was read (or its last output retained), a generated page when no
+/// source maps to it, and `None` while the mapped source is still unread.
+/// Every reader of an unresolved request asks this, so a page whose source is
+/// already local can never wait on a request that simply did not name it.
+pub(crate) fn proven_unresolved_source(
+    source_to_output: &HashMap<String, String>,
+    evidence: &std::collections::BTreeMap<String, crate::build::cloud_ledger::InputEntry>,
+    output: Option<&str>,
+) -> Option<crate::system::folder_session::PreviewSource> {
+    use crate::build::cloud_ledger::InputState;
+    use crate::system::folder_session::PreviewSource;
+    let mapped = output.and_then(|output| source_to_output.iter()
+        .find(|(_, mapped)| mapped.as_str() == output).map(|(source, _)| source));
+    let Some(source) = mapped else { return Some(PreviewSource::Generated); };
+    evidence.get(source).is_some_and(|entry| matches!(entry.state,
+        InputState::Read { .. } | InputState::Pending { retained: true } | InputState::ReadError { retained: true, .. }))
+        .then(|| PreviewSource::File(source.into()))
+}
+
 pub(super) fn preview_readiness_for(
     files: &HashMap<String, String>,
     source_to_output: &HashMap<String, String>,
@@ -24,14 +45,20 @@ pub(super) fn preview_readiness_for(
     registered: impl Fn(&str) -> bool,
 ) -> PreviewReadiness {
     use crate::build::cloud_ledger::{InputState, unresolved_preview_entries};
-    use crate::system::folder_session::PreviewSource;
+    use crate::system::folder_session::{PreviewRequirement, PreviewSource};
     let Some(evidence) = evidence else { return PreviewReadiness::Pending; };
     let output = files.keys()
         .filter(|key| registered(key))
         .find(|key| crate::build::served_path::served_address(key) == requirement.url_path);
-    if matches!(&requirement.source, PreviewSource::Unresolved) {
-        return PreviewReadiness::Pending;
-    }
+    let proven;
+    let requirement = if matches!(&requirement.source, PreviewSource::Unresolved) {
+        let Some(source) = proven_unresolved_source(source_to_output, evidence, output.map(String::as_str))
+        else { return PreviewReadiness::Pending; };
+        proven = PreviewRequirement { source, ..requirement.clone() };
+        &proven
+    } else {
+        requirement
+    };
     let mut needed = std::collections::BTreeSet::new();
     // Authored pages also compose nav and child/card listings from the
     // corpus. Until the renderer records a narrower per-page metadata read

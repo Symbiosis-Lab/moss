@@ -42,7 +42,10 @@ fn css_files(dir: &std::path::Path) -> Vec<PathBuf> {
 }
 
 /// Classes moss emits that are deliberately NOT part of the site contract.
-const EMITTER_ALLOWLIST: &[(&str, &str)] = &[];
+const EMITTER_ALLOWLIST: &[(&str, &str)] = &[(
+    "visually-hidden",
+    "a utility from the base layer of site.css, shared with theme markup; not a moss-* component",
+)];
 
 /// This crate's own emitter root.
 const EMITTER_ROOT: &str = "src";
@@ -367,4 +370,40 @@ fn strip_css_comments(css: &str) -> String {
     }
     out.push_str(&css[copy_from..len.min(css.len())]);
     out
+}
+
+/// Every column count the grid parser accepts needs a stylesheet rule that
+/// sets `--_grid-count`; a count without one falls back to a single column.
+#[test]
+fn grid_column_rules_cover_every_count_the_parser_allows() {
+    let css_dir = workspace_root().join(SITE_CSS_DIR);
+    let css: String = css_files(&css_dir)
+        .iter()
+        .map(|path| std::fs::read_to_string(path).expect("read stylesheet"))
+        .collect();
+    for n in 1..=moss_core::ast::shortcode_extract::MAX_GRID_COLUMNS {
+        let rule = format!(r#".moss-grid[data-columns="{n}"] {{ --_grid-count: {n}; }}"#);
+        assert!(css.contains(&rule), "no column rule for {n} columns: {rule}");
+    }
+}
+
+/// The contract's `data-columns` values for `.moss-grid` must be exactly the
+/// column counts the grid parser allows, so the table neither advertises a
+/// count that renders as one column nor omits one that lays out.
+#[test]
+fn grid_data_columns_values_match_the_parser_cap() {
+    let grid = COMPONENTS
+        .iter()
+        .find(|c| c.class == "moss-grid")
+        .expect("moss-grid entry");
+    let attr = grid
+        .data_attrs
+        .iter()
+        .find(|a| a.name == "data-columns")
+        .expect("data-columns entry");
+    let expected: Vec<String> = (1..=moss_core::ast::shortcode_extract::MAX_GRID_COLUMNS)
+        .map(|n| n.to_string())
+        .collect();
+    let actual: Vec<String> = attr.values.iter().map(|v| v.to_string()).collect();
+    assert_eq!(actual, expected);
 }

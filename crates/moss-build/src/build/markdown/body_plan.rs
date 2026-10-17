@@ -68,7 +68,7 @@ pub struct BodyPlan {
     /// the question `html_prefix_is_balanced` existed to answer never arises.
     pub lede_segments: usize,
     /// How many LEADING segments come before the body's first text block (a
-    /// paragraph, list or blockquote) — see [`first_text_block`]. `0` when
+    /// paragraph, list, definition list or blockquote) — see [`first_text_block`]. `0` when
     /// the first segment already opens with one, which is also the fallback
     /// for a body with no text block at all: nothing to skip past, so an
     /// insertion lands at the very front, same place moss has always put a
@@ -231,6 +231,24 @@ impl BodyPlan {
         (join(&self.segments[..cut]), join(&self.segments[cut..]))
     }
 
+    /// Read every emitted piece, in the order [`map_html`] rewrites them.
+    ///
+    /// [`map_html`]: BodyPlan::map_html
+    pub fn for_each_html(&self, f: &mut dyn FnMut(&str)) {
+        for seg in &self.segments {
+            match seg {
+                BodySegment::Html(s) => f(s),
+                BodySegment::Grid(g) => {
+                    f(&g.open_tag);
+                    for cell in &g.cells {
+                        f(&cell.parts.inner);
+                    }
+                }
+                BodySegment::Subscribe(s) => f(&s.html),
+            }
+        }
+    }
+
     /// Rewrite every emitted piece with `f`.
     ///
     /// Used for the per-page HTML fixups that run after rendering
@@ -359,8 +377,8 @@ pub fn lede_end(blocks: &[Block]) -> usize {
     blocks.len()
 }
 
-/// Index into `blocks` of the body's first text block — a paragraph, list
-/// or blockquote — the place-map locator's insertion point (see
+/// Index into `blocks` of the body's first text block — a paragraph, list,
+/// definition list or blockquote — the place-map locator's insertion point (see
 /// `render::credits`). `None` when the body has none: every block is a
 /// heading, a rule, or media (a figure, a table, a code block, or a
 /// shortcode like `:::grid`/`:::gallery`).
@@ -372,9 +390,71 @@ pub fn lede_end(blocks: &[Block]) -> usize {
 /// parser already promotes that syntax to its own `Block::Callout` at parse
 /// time, so there is nothing here for it to reach.
 pub fn first_text_block(blocks: &[Block]) -> Option<usize> {
-    blocks.iter().position(|block| {
-        matches!(block, Block::Paragraph(_) | Block::List { .. } | Block::BlockQuote(_))
-    })
+    blocks.iter().position(is_text_block)
+}
+
+fn is_text_block(block: &Block) -> bool {
+    matches!(
+        block,
+        Block::Paragraph(_) | Block::List { .. } | Block::DefinitionList(_) | Block::BlockQuote(_)
+    )
+}
+
+/// Whether a raw HTML node is a folder-embed marker. The one predicate every
+/// folder-embed decision in the page planner goes through.
+pub fn is_folder_embed(html: &str) -> bool {
+    html.contains(moss_core::resolve::embed_renderer::folder_list::MARKER_FOLDER_LIST)
+}
+
+/// The opening content that holds the page's eager slot.
+pub enum Opening<'a> {
+    /// An image node, returned as the node itself so the render can tell it
+    /// apart from a repeat of the same file elsewhere on the page.
+    Image(&'a moss_core::ast::ResolvedUrl),
+    /// A folder embed, by its index in `blocks`.
+    Embed(usize),
+}
+
+/// The page's opening content that is entitled to the one eager slot: the
+/// first image or folder embed among the top-level blocks that comes before the
+/// second text block (see [`first_text_block`] for what counts as text).
+/// Headings, rules, figures without an image, and shortcodes such as `:::grid`
+/// or `:::gallery` are neither text nor opening content, so content after them
+/// still counts. `None` when the first two text blocks come before any of it.
+///
+/// A folder embed takes the slot even when none of its cards has a cover. The
+/// page then has no eager image, which costs nothing: a lazy cover only gives
+/// up a head start.
+pub fn opening_content(blocks: &[Block]) -> Option<Opening<'_>> {
+    let mut text_blocks = 0;
+    for (index, block) in blocks.iter().enumerate() {
+        if let Block::Other(html) = block {
+            if is_folder_embed(html) {
+                return Some(Opening::Embed(index));
+            }
+        }
+        let image = match block {
+            Block::Figure { image, .. } => Some(image),
+            Block::Paragraph(inlines) => inlines
+                .iter()
+                .find(|inline| matches!(inline, moss_core::ast::Inline::Image { .. })),
+            _ => None,
+        };
+        if let Some(moss_core::ast::Inline::Image {
+            src: moss_core::ast::Url::Resolved(resolved),
+            ..
+        }) = image
+        {
+            return Some(Opening::Image(resolved));
+        }
+        if is_text_block(block) {
+            text_blocks += 1;
+            if text_blocks == 2 {
+                return None;
+            }
+        }
+    }
+    None
 }
 
 /// The nearest heading's text before index `i` in `blocks` — the accessible

@@ -18,8 +18,11 @@
 //!
 //! - `stage_dir/` (`.moss/build.nosync/staging/`) — writer surface + at-rest reader.
 //!   All emits write here. HTML carries preview-only annotations
-//!   (`data-source-line`, `data-source-range`, `data-source-fm`, `data-source-none`,
-//!   `data-moss-preview`) used by editor↔preview scroll-sync and click-to-source.
+//!   (`data-source-line`, `data-source-range`, `data-source-fm`, `data-source-file`,
+//!   `data-source-none`, `data-moss-preview`) used by editor↔preview scroll-sync
+//!   and click-to-source. `data-source-file` names the page (path from the site
+//!   root) that owns an element rendered into another page: a listing card, a
+//!   navigation entry. Lines and fields then refer to that file, not this one.
 //!   The preview server reads from stage when no rebuild is in progress.
 //!
 //! - `generations/<gen-id>/` — immutable frozen deploy output. Written once by
@@ -558,7 +561,7 @@ fn collect_native_slots_for_documents(
         &pages,
         &site_lang,
         domain.as_deref(),
-        Some(cached_domain_config),
+        &cached_domain_config,
         start_server,
         Some(&media_lookup),
         site_comments,
@@ -667,8 +670,7 @@ pub(crate) fn should_stash_hashes(publishable: bool, cancelled: bool) -> bool {
 /// returns, not read after the fact from a task that no longer exists.
 pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
     let pipeline_start = std::time::Instant::now();
-    let (result, collector) =
-        crate::build::phase::with_collector(run_pipeline_body(config)).await;
+    let (result, collector) = crate::build::phase::with_collector(run_passes(&config)).await;
     crate::build::phase::log_build_summary(
         &collector,
         pipeline_start.elapsed(),
@@ -677,7 +679,33 @@ pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
     result
 }
 
-async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
+use crate::build::media::promise::{drive_passes, Pass, PassOutcome};
+
+async fn run_passes(config: &PipelineConfig) -> Result<String, String> {
+    let (outcome, completion_held) = drive_passes(config.plugins, |pass| run_pipeline_body(config, pass)).await?;
+    if completion_held {
+        emit_build_complete(&config.progress, outcome.port, outcome.is_empty);
+    }
+    Ok(outcome.message)
+}
+
+/// The "Build complete" progress event. `port` is what the preview server is
+/// listening on right now, if one is.
+fn emit_build_complete(progress: &ProgressSink, port: Option<u16>, is_empty: bool) {
+    progress::emit_event(
+        progress,
+        &progress::PipelineEvent::Progress {
+            step: "build".to_string(),
+            message: "Build complete".to_string(),
+            percentage: 100,
+            completed: true,
+            port,
+            is_empty: Some(is_empty),
+        },
+    );
+}
+
+async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOutcome, String> {
     use crate::build::phase::PhaseTrace;
     let _pipeline_trace = PhaseTrace::start("run_pipeline");
     let folder_path = config.root.as_str().to_string();
@@ -692,9 +720,6 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     let build_generation = config
         .admission_epoch
         .unwrap_or_else(crate::build::ship::next_promotion_epoch);
-    // `build_generation`'s cross-process-comparable counterpart; override for `folder_build_lock_test.rs` only.
-    let admission_nanos: u64 = std::env::var("MOSS_TEST_ADMISSION_NANOS").ok().and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0));
 
     // This build may write the object store and staging from here until its
     // background workers join: scan stores blobs, render and the media workers
@@ -764,7 +789,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // multi-thread runtime that worker is unavailable for other tasks for
     // the duration. Today CLI mode has nothing else on the runtime, but
     // future watch/serve paths might.
-    if config.exits_after_build {
+    if config.exits_after_build && !pass.repeat {
         let _trace = PhaseTrace::start("link_meta_prewarm");
         let moss_dir = Path::new(&folder_path).join(".moss");
         let (seen, fetched) = tokio::task::block_in_place(|| {
@@ -807,7 +832,9 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
 
     // Keep this project's coding-agent guidance current — see `SYNC_TRIGGERS`.
     let full_build = matches!(config.trigger, BuildTrigger::Full);
-    crate::cli::agents::sync::sync_after_build(config.source(), full_build);
+    if !pass.repeat {
+        crate::cli::agents::sync::sync_after_build(config.source(), full_build);
+    }
 
     // What to serve from the moment the server is ready, before this rebuild
     // produces annotated /staging: the last frozen generation (current → gen)
@@ -943,8 +970,8 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     drop(_scan_trace);
 
     // Derive plugin wait behavior from PluginMode
-    let skip_plugins = matches!(config.plugins, PluginMode::Skip);
-    let skip_process = matches!(config.plugins, PluginMode::SlotsOnly);
+    let skip_plugins = matches!(pass.plugins, PluginMode::Skip);
+    let skip_process = matches!(pass.plugins, PluginMode::SlotsOnly);
 
     // Honor PluginMode::NonBlocking's contract ("Fire process hooks, don't wait
     // — preview mode") on the LIVE-PREVIEW path (NonBlocking + a running server).
@@ -962,7 +989,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     //    included) on the complete on-disk output (see the detached branch below).
     //  - A NonBlocking build with no server (rare, non-preview) stays one-shot.
     let detach_process =
-        matches!(config.plugins, PluginMode::NonBlocking) && config.start_server;
+        matches!(pass.plugins, PluginMode::NonBlocking) && config.start_server;
     let wait_process = !detach_process;
 
     // Execute process hooks (unless plugins are skipped or SlotsOnly).
@@ -1024,6 +1051,10 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // `build_parity_test` cannot see because it compares emitted bytes rather
     // than what was reused. See `ports::CacheKeyInputs`.
     let cache_keys = sample_cache_keys();
+
+    // Derivations come from the same admitted plugins the hooks above ran
+    // from, read after them: a hook may have installed one.
+    let derived_site = crate::system::derive::site::DerivedSite::load(!skip_plugins, std::path::Path::new(&folder_path));
 
     // --- RE-SCAN after content-producing process hooks ---
     // Process hooks (e.g. the Matters import) may have written .md / asset files
@@ -1154,14 +1185,16 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // through the `enhance` capability until that capability was retired,
     // having gone three months with no implementation in any plugin, bundled
     // or WIP.
+    let listing_host = (!skip_plugins).then(|| crate::build::emit::listing_style::ListingHost::new(&config.host.plugins, &folder_path));
     let make_slot_resolver = |folder_path_for_slots: String,
                               cached_domain_config_for_slots: crate::config::deployment::DomainDeploymentConfig,
                               project_structure_for_slots: ProjectStructure|
      -> pipeline::SlotResolver {
         let start_server_for_slots = config.start_server;
+        let listing_host = listing_host.clone();
         Box::new(move |pages, site_lang, site_comments| {
             let _slots_trace = PhaseTrace::start("slot_resolution");
-            Ok(collect_native_slots_for_documents(
+            let mut slots = collect_native_slots_for_documents(
                 &folder_path_for_slots,
                 cached_domain_config_for_slots,
                 &project_structure_for_slots,
@@ -1169,17 +1202,13 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                 start_server_for_slots,
                 site_lang,
                 site_comments,
-            ))
+            );
+            slots.set_listing_host(listing_host);
+            Ok(slots)
         })
     };
 
-    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, unresolved_inputs, cancelled, home_ready: _home_ready, publishable, render_seq } = {
-        // moss's own generator, always. A plugin could replace it wholesale
-        // through the `generate` capability until that capability was
-        // retired: three months, no implementation, and the branch had
-        // already decayed into
-        // a GUI-only path whose headless arm re-ran this same code with a
-        // warning.
+    let pipeline::PipelineRunOutput { is_empty: _is_empty, bg_handle: _bg_handle, build_documents, content_hashes, missing_references, unresolved_inputs, cancelled, home_ready: _home_ready, publishable, render_seq, unready_derivations, folder_lock, locked_at_nanos } = {
         // One attempt: its own clones, its own `SlotResolver`.
         let attempt = || {
             let root_owned = config.root.clone();
@@ -1201,6 +1230,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
             let search_freshness = search_lane::Freshness::of(config.exits_after_build);
             let slot_resolver = make_slot_resolver(folder_path.clone(), cached_domain_config.clone(), ps.clone());
             let cache_keys_owned = cache_keys.clone();
+            let derived_owned = derived_site.clone();
             let (services, port_owned) = (services.clone(), port_owned.clone());
             // Bridge the current build.summary collector (if any) onto the
             // spawn_blocking closure's own OS thread: spawn_blocking does not
@@ -1211,7 +1241,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
             async move {
                 tokio::task::spawn_blocking(move || {
                     let _blocking_scope = crate::build::phase::enter_blocking_scope(phase_collector_for_blocking);
-                    pipeline::run_leased(&root_owned, Some(&state_owned), reporter_owned.as_deref(), &port_owned, Some(&services), Some(slot_resolver), &ps, site_url_override, incremental, search_freshness, &cache_keys_owned, Some(lease))
+                    pipeline::run_leased(&root_owned, Some(&state_owned), reporter_owned.as_deref(), &port_owned, Some(&services), Some(slot_resolver), &ps, site_url_override, incremental, search_freshness, &cache_keys_owned, derived_owned, Some(lease))
                 }).await.map_err(|e| BuildStopped::from(format!("Build task panicked: {}", e)))?
             }
         };
@@ -1264,6 +1294,15 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
         },
     );
 
+    // Beside the other seal-time gate records: how many derived-text blocks
+    // this render showed as a placeholder (a publish waits for zero), counted
+    // from what it rendered. Written on every build, zero included, so a
+    // rebuild that finds the text clears the refusal. A build that stopped
+    // because the folder closed rendered nothing to count.
+    if !cancelled {
+        crate::system::build_records::records().record_pending_derivations(&folder_path, unready_derivations.pending);
+    }
+
     // And which structural sources this build had to carry forward rather
     // than read. Same unconditional-write reasoning as the preflight projection:
     // a source that arrives fixes nothing if the CLEAN verdict never lands
@@ -1288,8 +1327,12 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // The seal+persist task must populate the slot before Publish is
     // attempted.
 
+    let mut media_rerender_owed = false;
     if let Some(handle) = _bg_handle {
         if config.host.shell_attached || !config.exits_after_build {
+            // A long-lived runtime takes the lock again for its materialize;
+            // see `infra::folder_lock`'s module doc.
+            drop(folder_lock);
             // Long-lived runtime — the desktop app, or a headless
             // `moss build --serve --watch` rebuild. Detached seal task,
             // announced through whichever ports fit the shell: the app's
@@ -1377,7 +1420,7 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                             std::sync::Arc::new(move |g: &str| store.is_pinned(g)),
                             session_opt.clone(),
                             promotion_epoch,
-                            admission_nanos,
+                            locked_at_nanos,
                             render_seq,
                             seal_freshness,
                             &folder_path_for_mat,
@@ -1438,9 +1481,10 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
             // 2026-08-24; `run_cli_build` (the path an ordinary `moss build`
             // takes) registered none until then, and an earlier version of this
             // comment named only `start_cli_build`. So the tail takes the same
-            // stage-write guard the build's own span took — uncontended here
-            // (this arm exists because nothing else will run), and that is the
-            // price of one tail rather than a second code path.
+            // stage-write guard the build's own span took. A plain CLI process
+            // has no other build to contend for it; a serving process that runs
+            // a one-shot build (a version saved through its HTTP carrier) does,
+            // which is why every path takes the folder lock before this guard.
             let wait = SealWait::start();
             match handle.await_completion().await {
                 Ok((sealed, cache_lease)) => {
@@ -1450,9 +1494,11 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                         sealed.files().len(),
                         wait.finish()
                     );
+                    #[cfg(test)]
+                    let _ = ONE_SHOT_TAIL_TEST_HOOK.try_with(|hook| hook("rendered"));
                     let mp = crate::moss_paths::MossPaths::new(std::path::Path::new(&folder_path));
                     let session = crate::system::folder_session::registry().get(&folder_path);
-                    let pending = advertise_sealed(
+                    let mut pending = advertise_sealed(
                         &SealPorts {
                             events: config.host.events.clone(),
                             announcer: config.host.announcer.clone(),
@@ -1466,25 +1512,35 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
                         std::sync::Arc::new(|_: &str| false),
                         session.clone(),
                         promotion_epoch,
-                        admission_nanos,
+                        locked_at_nanos,
                         render_seq,
                         crate::build::feeds::search_lane::Freshness::Now,
                         &folder_path,
                         SealGuards {
                             // Inline arm: per the comment above, the caller
                             // drops the tokio runtime as soon as this
-                            // returns — nothing reads `stage_dir` again in
-                            // this process. Reclaim now or never.
+                            // returns. The only later reader of `stage_dir` is
+                            // this process's own second pass, which starts from
+                            // the manifest sealed here; the sweep keeps what
+                            // that manifest names. Reclaim now or never.
                             final_sweep: Some(crate::build::lifecycle::final_build_permit(&mp)),
                             cache_lease,
                             build_root_identity: start_identity,
                         },
                     )
                     .await;
+                    #[cfg(test)]
+                    let _ = ONE_SHOT_TAIL_TEST_HOOK.try_with(|hook| hook("sealed"));
+                    // Held across the seal above; released by the materialize
+                    // once `current` has moved. See `infra::folder_lock`.
+                    pending.folder_lock = Some(folder_lock);
                     // CLI / one-shot arm: keep sealing synchronously, exactly
                     // as before this split — the caller drops the tokio
                     // runtime as soon as `run_pipeline` returns, so a
                     // debounced materialize would never get to run.
+                    // Only here: this arm is a build that exits, and the owed flag is
+                    // false when a watch worker took the re-render instead.
+                    media_rerender_owed = pending.media_rerender_owed;
                     crate::build::seal_phase::run_now(pending).await;
                 }
                 Err(e) => {
@@ -1514,18 +1570,10 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
     // the frontend) — emitting it here could flip the CURRENT (different)
     // folder's preview to a spurious "ready, empty site" state while its own
     // build is still in flight.
-    if !cancelled {
-        progress::emit_event(
-            &config.progress,
-            &progress::PipelineEvent::Progress {
-                step: "build".to_string(),
-                message: "Build complete".to_string(),
-                percentage: 100,
-                completed: true,
-                port: port_now(), // again about NOW: this runs later still
-                is_empty: Some(_is_empty),
-            },
-        );
+    //
+    // Held back while a second pass is owed: `run_passes` emits it after the last.
+    if !cancelled && !media_rerender_owed {
+        emit_build_complete(&config.progress, port_now(), _is_empty); // port: again about NOW
     }
 
     let folder_name = config.root.name_opt().unwrap_or("unnamed-site");
@@ -1535,9 +1583,14 @@ async fn run_pipeline_body(config: PipelineConfig) -> Result<String, String> {
 
     if let Some(p) = port_now() {
         let preview_url = format!("http://localhost:{}", p);
-        Ok(format!("{}\n{}", base_message, crate::ops::serve::ownership::preview_ready_line(&preview_url)))
+        Ok(PassOutcome {
+            message: format!("{}\n{}", base_message, crate::ops::serve::ownership::preview_ready_line(&preview_url)),
+            owed: media_rerender_owed,
+            is_empty: _is_empty,
+            port: Some(p),
+        })
     } else {
-        Ok(base_message)
+        Ok(PassOutcome { message: base_message, owed: media_rerender_owed, is_empty: _is_empty, port: None })
     }
 }
 
@@ -1648,7 +1701,7 @@ pub fn diff_settled_assets(
     // the previous manifest didn't (new or re-encoded). asset_type is taken
     // from the bucket the path lives in — authoritative, not an extension guess:
     // image_outputs → "image"; video_outputs → "video", refined to "thumbnail"
-    // for the poster frame (`.thumb.jpg`). These strings match the canonical
+    // for the poster frames (`.thumb.jpg`, `.poster.jpg`). These strings match the canonical
     // asset_type the real-time AssetReady path emits and iframe-bridge swaps on.
     let is_settled = |path: &str| {
         let new_entry = sealed.files.get(path);
@@ -1662,7 +1715,7 @@ pub fn diff_settled_assets(
     }
     for path in &sealed.video_outputs {
         if is_settled(path) {
-            let asset_type = if path.ends_with(".thumb.jpg") { "thumbnail" } else { "video" };
+            let asset_type = if moss_core::asset_paths::is_video_still(path) { "thumbnail" } else { "video" };
             changed.push(SettledAsset { path: path.clone(), asset_type: asset_type.to_string() });
         }
     }
@@ -1730,8 +1783,9 @@ pub(crate) struct SealPorts {
 pub(crate) struct SealGuards {
     /// `Some` only from the `exits_after_build` call site (CLI / `build_sync` /
     /// the snapshot-test harness), whose caller drops the runtime as soon as
-    /// this returns: no later build will sweep what this one orphaned, so the
-    /// tail reclaims it now (`ship::reclaim_staging_now`).
+    /// this returns: no later build will sweep what this one orphaned (a second
+    /// pass in the same process starts from the sealed manifest, so it inherits
+    /// the sweep), so the tail reclaims it now (`ship::reclaim_staging_now`).
     pub final_sweep: Option<crate::build::lifecycle::SweepPermit>,
     /// The identity `root_identity::log_build_root` observed for this
     /// build's root at "start", carried here because this is the one value
@@ -1810,9 +1864,47 @@ fn record_promise_gate(
 
     let unfulfilled =
         crate::build::manifest::link_audit::dead_links_among_promises(&dead_links, &promised);
-    crate::system::build_records::records()
-        .record_promised_dead_links(folder_path, unfulfilled.clone());
+    let in_cloud = promised_sources_in_cloud(assets, &unfulfilled);
+    crate::system::build_records::records().record_promised_dead_links(
+        folder_path,
+        crate::system::build_records::PromisedDeadLinks {
+            links: unfulfilled.clone(),
+            in_cloud,
+        },
+    );
     unfulfilled
+}
+
+/// Base names of the sources behind the unfulfilled promises that are still in
+/// the cloud. A promise is waiting on a download, not an encode, when its
+/// source is dataless; the author needs to hear that, so the refusal names the
+/// file. A poster is not registry-tracked, so each pending key's source is also
+/// indexed under its derived poster key.
+fn promised_sources_in_cloud(
+    assets: Option<&std::sync::Arc<crate::types::assets::AssetRegistry>>,
+    unfulfilled: &[crate::build::manifest::link_audit::DeadLink],
+) -> Vec<String> {
+    let Some(registry) = assets else { return Vec::new() };
+    let mut sources: std::collections::HashMap<String, std::path::PathBuf> =
+        std::collections::HashMap::new();
+    for key in registry.pending_keys() {
+        let Some(source) = registry.source_passthrough(&key) else { continue };
+        if let Some(poster) = moss_core::asset_paths::to_thumb_if_video(&key) {
+            sources.insert(poster, source.clone());
+        }
+        sources.insert(key, source);
+    }
+    let mut names: Vec<String> = unfulfilled
+        .iter()
+        .filter_map(|link| crate::build::manifest::link_audit::candidate_keys(&link.href))
+        .flatten()
+        .filter_map(|key| sources.get(&key))
+        .filter(|source| crate::build::icloud::is_still_in_the_cloud(source))
+        .filter_map(|source| source.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .collect();
+    names.sort();
+    names.dedup();
+    names
 }
 
 // Test-only rendezvous for `cache_lease_ship_tests.rs`. A task-local rather
@@ -1829,6 +1921,14 @@ fn record_promise_gate(
 #[cfg(test)]
 tokio::task_local! {
     pub(crate) static SHIP_PHASE_LEASE_SAMPLE: std::sync::Arc<std::sync::atomic::AtomicUsize>;
+}
+
+// Test-only: called by a one-shot build's inline tail with "rendered" before
+// its seal, "sealed" after it, and "shipping" just before its materialize
+// copies the generation: the span another moss process could build in.
+#[cfg(test)]
+tokio::task_local! {
+    pub(crate) static ONE_SHOT_TAIL_TEST_HOOK: std::sync::Arc<dyn Fn(&str) + Send + Sync>;
 }
 
 /// The seal's per-build half: everything that depends only on `stage_dir` and
@@ -1854,7 +1954,7 @@ async fn advertise_sealed(
     is_pinned: std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>,
     session: Option<std::sync::Arc<crate::system::folder_session::FolderSession>>,
     promotion_epoch: u64,
-    admission_nanos: u64, // `promotion_epoch`'s cross-process-comparable counterpart.
+    locked_at_nanos: u64, // When this build took the folder lock: render order across processes, not `promotion_epoch`'s admission order.
     // The render `lifecycle::show_render` minted for this build.
     render_seq: Option<u64>,
     freshness: crate::build::feeds::search_lane::Freshness,
@@ -2048,13 +2148,15 @@ async fn advertise_sealed(
         Some(previous) => diff_settled_assets(previous, view),
         None => diff_settled_assets(&Default::default(), view),
     };
+    let mut media_rerender_owed = false;
     if verdict == crate::build::ship::ShipVerdict::Ship && !settled_changed.is_empty() {
         // Two settle kinds have no catch-up path once a page has already
         // shipped a placeholder that consumed them — see
         // `trigger_media_settle_rerender`'s doc for the full case-by-case
         // reasoning. Reuses the render's own existing trigger path rather
         // than growing a second one here.
-        trigger_media_settle_rerender(folder_path, &settled_changed, previous_hashes.as_ref());
+        media_rerender_owed =
+            media::promise::trigger_media_settle_rerender(folder_path, &settled_changed, previous_hashes.as_ref());
         ports.events.report(&crate::build::progress::PipelineEvent::AssetsSettled {
             changed: settled_changed,
         });
@@ -2074,92 +2176,16 @@ async fn advertise_sealed(
         stage_dir: stage_dir.to_path_buf(),
         sealed_at,
         promotion_epoch,
-        admission_nanos,
+        locked_at_nanos,
         render_seq,
         freshness,
         is_pinned,
         session,
         cache_lease: guards.cache_lease,
         build_root_identity: guards.build_root_identity,
+        folder_lock: None,
+        media_rerender_owed,
     }
-}
-
-/// Enqueue exactly one full re-render on `folder_path`'s rebuild worker when
-/// `settled` contains an asset a placeholder-consuming page can never
-/// self-heal from on its own:
-///
-/// - **Every video poster** (`asset_type == "thumbnail"`).
-///   `color_extract::resolve_card_color`'s video branch and
-///   `media::cover::render_cover_html`'s `<img class="cover-thumb">` both
-///   read straight from the OUTPUT thumb file with no source-file fallback,
-///   and no swap signal reaches the client either: `iframe-bridge.ts`'s
-///   `"thumbnail"` case only rewrites a `<video data-thumb-src>` element's
-///   `poster` attribute, and the grid-card markup emits neither that
-///   attribute nor any handle for the colour band (a static inline style).
-///   The colour and the thumbnail both resolve correctly on a fresh render —
-///   the same output-file lookup every render already makes.
-///
-/// - **A brand-new image** (`asset_type == "image"` AND `path` was absent
-///   from the PREVIOUS sealed manifest). `resolve_card_color`'s image branch
-///   decodes the SOURCE file on a cache miss, so a page bakes an empty
-///   `data-cover-color` only when that decode fails at render time (a
-///   dataless/not-yet-materialized source) — a client swap can't fix it for
-///   the same reason as the poster case: no colour payload ever reaches the
-///   browser. A RE-encode of an image this folder has settled before is
-///   excluded: any image with a PRIOR successful settle already enriched the
-///   persisted stat-cache entry `extract_media_metadata_cached` reads
-///   (scan.rs), so its color was already available to every render since —
-///   re-triggering on every such re-encode would Full-rebuild a large site
-///   on ordinary content-image churn the client already swaps live via
-///   `AssetsSettled`/`AssetReady`. This is the coarser of the two checks:
-///   without threading a live "which cover keys baked empty" set from the
-///   render phase through to here (a wider change across every
-///   `resolve_card_color` call site — grid_card.rs, grid_cells.rs,
-///   folder_embed.rs, child_summary.rs — for a condition this rare), "newly
-///   added" is the closest correlate this function's two existing inputs
-///   (the settle diff and the previous manifest) can compute. A share card
-///   under `_moss/og/` never counts: it is drawn by the render of the page it
-///   belongs to, from that page's own text, so no page baked anything from it
-///   before it existed. Its path is a content hash, so every `title:` edit
-///   produces a "new" one, and counting it cost a full re-render per edit.
-///
-/// A no-op when nothing is watching `folder_path` (`ops::watch::worker::get`
-/// returns `None` for a deploy, CLI build, or plugin install — none of which
-/// have a live preview to refresh). Self-limiting: the follow-up build
-/// reuses the SAME rebuild path a file edit already drives
-/// (`ops::watch::worker`), and that build's own `diff_settled_assets`
-/// compares against the manifest THIS build just sealed — an unchanged
-/// re-encode reports nothing new, so it triggers no further rebuild.
-///
-/// `previous` is `None` when the last manifest could not be read: every variant
-/// then diffs as settled, and a rebuild enqueued on that is a rebuild for
-/// nothing — under active cloud management, one per seal.
-fn trigger_media_settle_rerender(
-    folder_path: &str,
-    settled: &[crate::build::progress::SettledAsset],
-    previous: Option<&crate::types::content::SiteHashes>,
-) {
-    let Some(previous) = previous else {
-        return;
-    };
-    let needs_rerender = settled.iter().any(|a| {
-        a.asset_type == "thumbnail"
-            || (a.asset_type == "image"
-                && !a.path.starts_with(crate::build::served_path::OG_CARD_PREFIX)
-                && !previous.files.contains_key(&a.path))
-    });
-    if !needs_rerender {
-        return;
-    }
-    let Some(worker) = crate::ops::watch::worker::get(folder_path) else {
-        return;
-    };
-    log::info!(
-        "media settle: a video poster or a brand-new image landed for '{}' — \
-         enqueueing a full re-render so grid-card covers pick up the color band and thumbnail",
-        folder_path
-    );
-    worker.enqueue(crate::ops::watch::worker::RebuildRequest::full());
 }
 
 /// Retain generations and sweep the content-addressed cache after a successful
@@ -2198,155 +2224,6 @@ pub(crate) fn collect_build_store(
     store_gc::maybe_gc_cache(mp);
 }
 
-#[cfg(test)]
-mod media_settle_rerender_tests {
-    use super::trigger_media_settle_rerender;
-    use crate::build::progress::SettledAsset;
-    use crate::ops::watch::worker;
-    use crate::types::content::{file_entry, SiteHashes};
-
-    fn thumbnail(path: &str) -> SettledAsset {
-        SettledAsset { path: path.to_string(), asset_type: "thumbnail".to_string() }
-    }
-
-    fn image(path: &str) -> SettledAsset {
-        SettledAsset { path: path.to_string(), asset_type: "image".to_string() }
-    }
-
-    fn video(path: &str) -> SettledAsset {
-        SettledAsset { path: path.to_string(), asset_type: "video".to_string() }
-    }
-
-    /// A previous manifest that already knows `paths` — the "this image has
-    /// settled before" state `trigger_media_settle_rerender`'s image branch
-    /// reads to tell a re-encode from a brand-new arrival.
-    fn previous_knowing(paths: &[&str]) -> SiteHashes {
-        let mut h = SiteHashes::default();
-        for p in paths {
-            h.files.insert(p.to_string(), file_entry("prior-hash"));
-        }
-        h
-    }
-
-    /// A settled video poster is exactly the case `resolve_card_color`'s video
-    /// branch and the grid-card `<img class="cover-thumb">` cannot self-heal
-    /// without a fresh render (see `trigger_media_settle_rerender`'s doc) — so
-    /// it must enqueue on the SAME slot a file edit would.
-    #[test]
-    fn a_settled_thumbnail_enqueues_a_full_rebuild() {
-        let folder = "/tmp/media-settle-rerender-test-thumbnail";
-        let handle = worker::register(folder);
-        assert!(!handle.slot_occupied(), "clean start");
-
-        trigger_media_settle_rerender(
-            folder,
-            &[thumbnail("videos/clip.thumb.jpg")],
-            Some(&SiteHashes::default()),
-        );
-
-        assert!(
-            handle.slot_occupied(),
-            "a settled thumbnail must enqueue a follow-up rebuild"
-        );
-        worker::deregister(folder, &handle);
-    }
-
-    /// A re-encode of an image this folder has settled before is excluded —
-    /// its color was already available to every render since the FIRST
-    /// settle (the persisted stat-cache entry `resolve_card_color`'s image
-    /// branch reads on a cache hit), so re-triggering here would pay a
-    /// full-site reload for ordinary content-image churn the client already
-    /// swaps live via `AssetsSettled`/`AssetReady`.
-    #[test]
-    fn a_reencoded_image_previously_settled_does_not_enqueue() {
-        let folder = "/tmp/media-settle-rerender-test-reencoded-image";
-        let handle = worker::register(folder);
-
-        trigger_media_settle_rerender(
-            folder,
-            &[image("assets/pic.webp"), video("videos/clip.mp4")],
-            Some(&previous_knowing(&["assets/pic.webp"])),
-        );
-
-        assert!(
-            !handle.slot_occupied(),
-            "a re-encode of an already-known image, and a plain video settle, must not trigger a full re-render"
-        );
-        worker::deregister(folder, &handle);
-    }
-
-    /// A brand-new image (absent from the previous manifest) IS the case
-    /// `trigger_media_settle_rerender`'s doc names: its source may have been
-    /// unreadable (dataless) at the render that first referenced it, baking
-    /// an empty `data-cover-color` with no client-side fix. Must enqueue.
-    #[test]
-    fn a_brand_new_image_settle_enqueues_a_full_rebuild() {
-        let folder = "/tmp/media-settle-rerender-test-new-image";
-        let handle = worker::register(folder);
-
-        trigger_media_settle_rerender(
-            folder,
-            &[image("assets/new-cover.webp")],
-            Some(&SiteHashes::default()), // previous manifest has never seen this path
-        );
-
-        assert!(
-            handle.slot_occupied(),
-            "a brand-new image settle must enqueue a follow-up rebuild"
-        );
-        worker::deregister(folder, &handle);
-    }
-
-    /// A share card is drawn by its own page's render, so a new one (every
-    /// `title:` edit makes one, its path being a content hash) is never media
-    /// another page baked a placeholder from.
-    #[test]
-    fn a_new_share_card_does_not_enqueue() {
-        let folder = "/tmp/media-settle-rerender-test-og-card";
-        let handle = worker::register(folder);
-
-        trigger_media_settle_rerender(
-            folder,
-            &[image("_moss/og/0123456789abcdef.png")],
-            Some(&SiteHashes::default()),
-        );
-
-        assert!(!handle.slot_occupied(), "a new share card must not trigger a full re-render");
-        worker::deregister(folder, &handle);
-    }
-
-    /// An unreadable previous manifest is not an empty one. Diffed against
-    /// empty, every poster reads as newly settled, and a rebuild enqueued on
-    /// that is one rebuild per seal for as long as the file stays unreadable.
-    #[test]
-    fn an_unreadable_previous_manifest_enqueues_nothing() {
-        let folder = "/tmp/media-settle-rerender-test-unreadable-previous";
-        let handle = worker::register(folder);
-
-        trigger_media_settle_rerender(folder, &[thumbnail("videos/clip.thumb.jpg")], None);
-
-        assert!(
-            !handle.slot_occupied(),
-            "a settle diffed against a manifest nobody could read must not enqueue"
-        );
-        worker::deregister(folder, &handle);
-    }
-
-    /// Deploy, `moss build`, and plugin-install builds never register a
-    /// worker (no live preview to refresh) — the function must not panic or
-    /// otherwise assume one exists.
-    #[test]
-    fn no_registered_worker_is_a_noop() {
-        let folder = "/tmp/media-settle-rerender-test-no-worker";
-        assert!(worker::get(folder).is_none(), "precondition: nothing registered");
-        trigger_media_settle_rerender(
-            folder,
-            &[thumbnail("videos/clip.thumb.jpg")],
-            Some(&SiteHashes::default()),
-        );
-        assert!(worker::get(folder).is_none(), "still nothing registered");
-    }
-}
 
 #[cfg(test)]
 #[path = "build/epoch_ordering_tests.rs"]

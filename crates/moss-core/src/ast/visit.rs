@@ -17,6 +17,43 @@ use super::node::{Block, Inline};
 use super::shortcode::{Shortcode, ShortcodeKind};
 use super::url::Url;
 
+/// One mutable walk over the typed tree: every URL, and every piece of raw
+/// HTML a block or an inline carries (a folder embed's marker is one of them).
+trait MutVisitor {
+    fn url(&mut self, url: &mut Url);
+    fn raw_html(&mut self, html: &mut String);
+}
+
+/// Visits URLs only.
+struct UrlVisitor<F>(F);
+
+impl<F: FnMut(&mut Url)> MutVisitor for UrlVisitor<F> {
+    fn url(&mut self, url: &mut Url) {
+        (self.0)(url);
+    }
+    fn raw_html(&mut self, _html: &mut String) {}
+}
+
+/// Visits raw HTML only.
+struct RawHtmlVisitor<F>(F);
+
+impl<F: FnMut(&mut String)> MutVisitor for RawHtmlVisitor<F> {
+    fn url(&mut self, _url: &mut Url) {}
+    fn raw_html(&mut self, html: &mut String) {
+        (self.0)(html);
+    }
+}
+
+/// Visit every raw-HTML node in `block` and everything nested under it (a
+/// callout, a list item, a grid cell, a link's text), with a callback that may
+/// rewrite the HTML in place.
+pub fn visit_block_raw_html_mut<F>(block: &mut Block, callback: F)
+where
+    F: FnMut(&mut String),
+{
+    visit_urls_in_block(block, &mut RawHtmlVisitor(callback));
+}
+
 /// Visit every URL in the document with a callback that may mutate it
 /// in place. Walks links, image srcs, and all nested block/inline content.
 ///
@@ -24,120 +61,136 @@ use super::url::Url;
 /// has already rewritten markdown sources so URLs come out as one of the
 /// shapes documented in [`crate::ast::url::Url`]. The callback inspects the
 /// raw string and replaces it with a [`crate::ast::url::Url::Resolved`].
-pub fn visit_urls_mut<F>(doc: &mut Document, mut callback: F)
+pub fn visit_urls_mut<F>(doc: &mut Document, callback: F)
 where
     F: FnMut(&mut Url),
 {
+    let mut visitor = UrlVisitor(callback);
     for block in &mut doc.blocks {
-        visit_urls_in_block(block, &mut callback);
+        visit_urls_in_block(block, &mut visitor);
     }
 }
 
-fn visit_urls_in_block<F>(block: &mut Block, callback: &mut F)
+fn visit_urls_in_block<V>(block: &mut Block, v: &mut V)
 where
-    F: FnMut(&mut Url),
+    V: MutVisitor,
 {
     match block {
         Block::Heading { children, .. } => {
             for inline in children {
-                visit_urls_in_inline(inline, callback);
+                visit_urls_in_inline(inline, v);
             }
         }
-        Block::Paragraph(children) => {
+        Block::Paragraph(children) | Block::DefinitionTitle(children) => {
             for inline in children {
-                visit_urls_in_inline(inline, callback);
+                visit_urls_in_inline(inline, v);
             }
         }
         Block::Callout { children, .. } | Block::FootnoteDefinition { children, .. } => {
             for nested in children {
-                visit_urls_in_block(nested, callback);
+                visit_urls_in_block(nested, v);
             }
         }
         Block::List { items, .. } => {
             for item_blocks in items {
                 for nested in item_blocks {
-                    visit_urls_in_block(nested, callback);
+                    visit_urls_in_block(nested, v);
                 }
             }
         }
         Block::Table { header, rows, .. } => {
             for cell in header {
                 for inline in cell {
-                    visit_urls_in_inline(inline, callback);
+                    visit_urls_in_inline(inline, v);
                 }
             }
             for row in rows {
                 for cell in row {
                     for inline in cell {
-                        visit_urls_in_inline(inline, callback);
+                        visit_urls_in_inline(inline, v);
                     }
                 }
             }
         }
-        Block::BlockQuote(children) => {
+        Block::BlockQuote(children)
+        | Block::DefinitionList(children)
+        | Block::DefinitionDefinition(children) => {
             for nested in children {
-                visit_urls_in_block(nested, callback);
+                visit_urls_in_block(nested, v);
             }
         }
         Block::Shortcode(sc) => {
-            visit_urls_in_shortcode(sc, callback);
+            visit_urls_in_shortcode(sc, v);
         }
         Block::Figure { image, caption, .. } => {
             // Descend into the image's src (the load-bearing URL); the
             // caption is a Vec<Inline> that may itself carry links —
             // unlikely in practice (captions default to alt text) but the
             // visitor must not silently skip them.
-            visit_urls_in_inline(image, callback);
+            visit_urls_in_inline(image, v);
             if let Some(cap_inlines) = caption {
                 for inline in cap_inlines {
-                    visit_urls_in_inline(inline, callback);
+                    visit_urls_in_inline(inline, v);
                 }
             }
         }
         Block::LinkCard { url, children } => {
             // Phase 4 PR4.5: the wrapping URL (compound-link href) +
             // every URL inside the inner block content.
-            callback(url);
+            v.url(url);
             for nested in children {
-                visit_urls_in_block(nested, callback);
+                visit_urls_in_block(nested, v);
             }
         }
-        Block::CodeBlock { .. } | Block::ThematicBreak | Block::Other(_) => {
+        Block::Other(html) => v.raw_html(html),
+        Block::CodeBlock { .. } | Block::ThematicBreak => {
             // No URLs in these.
         }
     }
 }
 
-fn visit_urls_in_shortcode<F>(sc: &mut super::shortcode::Shortcode, callback: &mut F)
+fn visit_urls_in_shortcode<V>(sc: &mut super::shortcode::Shortcode, v: &mut V)
 where
-    F: FnMut(&mut Url),
+    V: MutVisitor,
 {
     use super::shortcode::Shortcode;
     match sc {
         Shortcode::Subscribe(_) => {} // No URLs.
         Shortcode::Buttons(args) => {
             for item in &mut args.items {
-                callback(&mut item.url);
+                v.url(&mut item.url);
             }
         }
         Shortcode::Gallery(args) => {
             for item in &mut args.items {
-                callback(&mut item.src);
+                v.url(&mut item.src);
+                for inline in &mut item.caption {
+                    visit_urls_in_inline(inline, v);
+                }
             }
         }
         Shortcode::Hero(args) => {
             if let Some(image) = args.image.as_mut() {
-                callback(image);
+                v.url(image);
             }
             for image in &mut args.extra_images {
-                callback(image);
+                v.url(image);
             }
             // Phase 4 PR4.5 (2026-05-28): descend into the typed overlay
             // blocks so URLs inside `:::hero` overlay markdown (e.g. a
             // `[Read more](/x)` link in the overlay copy) get classified
             // by the same visitor pass.
             for block in &mut args.overlay {
-                visit_urls_in_block(block, callback);
+                visit_urls_in_block(block, v);
+            }
+            // Captions are inline markdown too; a link in one is a body link.
+            for inline in &mut args.caption {
+                visit_urls_in_inline(inline, v);
+            }
+            for caption in &mut args.slide_captions {
+                for inline in caption {
+                    visit_urls_in_inline(inline, v);
+                }
             }
         }
         Shortcode::Grid(args) => {
@@ -147,7 +200,7 @@ where
             // walks both the wrapping href and the inner children.
             for cell_blocks in &mut args.cells {
                 for block in cell_blocks {
-                    visit_urls_in_block(block, callback);
+                    visit_urls_in_block(block, v);
                 }
             }
         }
@@ -156,31 +209,31 @@ where
     }
 }
 
-fn visit_urls_in_inline<F>(inline: &mut Inline, callback: &mut F)
+fn visit_urls_in_inline<V>(inline: &mut Inline, v: &mut V)
 where
-    F: FnMut(&mut Url),
+    V: MutVisitor,
 {
     match inline {
         Inline::Link { url, children, .. } => {
-            callback(url);
+            v.url(url);
             for nested in children {
-                visit_urls_in_inline(nested, callback);
+                visit_urls_in_inline(nested, v);
             }
         }
         Inline::Image { src, .. } => {
-            callback(src);
+            v.url(src);
         }
         Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strikethrough(children) => {
             for nested in children {
-                visit_urls_in_inline(nested, callback);
+                visit_urls_in_inline(nested, v);
             }
         }
+        Inline::Other(html) => v.raw_html(html),
         Inline::Text(_)
         | Inline::Code(_)
         | Inline::LineBreak
         | Inline::FootnoteRef(_)
-        | Inline::TaskMarker(_)
-        | Inline::Other(_) => {}
+        | Inline::TaskMarker(_) => {}
     }
 }
 
@@ -206,75 +259,45 @@ fn visit_block<F>(block: &Block, callback: &mut F) -> bool
 where
     F: FnMut(&Block) -> bool,
 {
-    if !callback(block) {
-        return false;
-    }
+    callback(block) && for_each_child_sequence(block, |blocks| blocks.iter().all(|nested| visit_block(nested, callback)))
+}
+
+/// Hand each block sequence `block` directly owns to `f`, in document order,
+/// stopping at the first `false`. The one list of block containers the
+/// read-only walks share, public so a query that needs a block's neighbours
+/// (a marker comment that applies to the image before it) can recurse at the
+/// block and keep page order. Every variant is named, so a new container
+/// fails to compile here instead of being skipped by every walk at once.
+pub fn for_each_child_sequence(block: &Block, mut f: impl FnMut(&[Block]) -> bool) -> bool {
+    use super::shortcode::Shortcode;
     match block {
+        // A footnote definition is a block container like any other: a walk
+        // that skipped a note's body would answer "does any block …?" with a
+        // No that only means "not anywhere I looked".
         Block::Callout { children, .. }
         | Block::BlockQuote(children)
-        // A footnote definition is a block container like any other. It is
-        // listed here rather than left to the catch-all because the catch-all
-        // is for blocks with no block children at all, and a walk that skipped
-        // a note's body would answer "does any block …?" with a No that only
-        // means "not anywhere I looked".
-        | Block::FootnoteDefinition { children, .. } => {
-            for nested in children {
-                if !visit_block(nested, callback) {
-                    return false;
-                }
-            }
-        }
-        Block::List { items, .. } => {
-            for item_blocks in items {
-                for nested in item_blocks {
-                    if !visit_block(nested, callback) {
-                        return false;
-                    }
-                }
-            }
-        }
-        Block::LinkCard { children, .. } => {
-            // Phase 4 PR4.5: descend into the compound-link cell's inner
-            // block content (image + heading + paragraphs).
-            for nested in children {
-                if !visit_block(nested, callback) {
-                    return false;
-                }
-            }
-        }
-        Block::Shortcode(super::shortcode::Shortcode::Grid(args)) => {
-            // Phase 4 PR4.5: cells are typed Vec<Block>; descend so
-            // `has_shortcode_recursive(_, Subscribe)` etc. find shortcodes
-            // nested inside grid cells.
-            for cell_blocks in &args.cells {
-                for nested in cell_blocks {
-                    if !visit_block(nested, callback) {
-                        return false;
-                    }
-                }
-            }
-        }
-        Block::Shortcode(super::shortcode::Shortcode::Hero(args)) => {
-            // Phase 4 PR4.5: overlay is typed Vec<Block>; descend so
-            // `has_shortcode_recursive(_, Subscribe)` etc. find shortcodes
-            // nested inside `:::hero` overlays.
-            for nested in &args.overlay {
-                if !visit_block(nested, callback) {
-                    return false;
-                }
-            }
-        }
-        // Headings, paragraphs, code blocks, tables, other shortcode
-        // variants, thematic breaks, figures, raw HTML — terminal at the
-        // block level. Inline children of headings/paragraphs are visited
-        // by inline visitors, not block visitors.
-        //
-        // Every variant that OWNS a `Vec<Block>` must be named above, not
-        // left to fall through here: this arm reads as "no block children",
-        // and a container that lands in it is skipped in silence.
-        _ => {}
+        | Block::DefinitionList(children)
+        | Block::DefinitionDefinition(children)
+        | Block::FootnoteDefinition { children, .. }
+        // The compound-link cell's inner content (image, heading, paragraphs).
+        | Block::LinkCard { children, .. } => f(children),
+        Block::List { items, .. } => items.iter().all(|item| f(item)),
+        Block::Shortcode(Shortcode::Grid(args)) => args.cells.iter().all(|cell| f(cell)),
+        Block::Shortcode(Shortcode::Hero(args)) => f(&args.overlay),
+        Block::Shortcode(
+            Shortcode::Subscribe(_) | Shortcode::Buttons(_) | Shortcode::Gallery(_) | Shortcode::Recent(_) | Shortcode::Apply(_),
+        ) => true,
+        // No block children. Inline children of headings, paragraphs, terms,
+        // tables and figures are visited by inline visitors, not block ones.
+        Block::Heading { .. }
+        | Block::Paragraph(_)
+        | Block::DefinitionTitle(_)
+        | Block::CodeBlock { .. }
+        | Block::Table { .. }
+        | Block::ThematicBreak
+        | Block::Figure { .. }
+        | Block::Other(_) => true,
     }
-    true
 }
 
 /// Core of every single-predicate `has_*_recursive` query below: true if any
@@ -454,7 +477,7 @@ fn markdown_has_callout(markdown: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::node::Inline;
+    use super::super::node::{CalloutKind, Inline};
     use super::super::url::{Url, UrlKind};
     use super::*;
 
@@ -503,6 +526,23 @@ mod tests {
             true
         });
         assert_eq!(seen, seen_control, "identical content, different container");
+    }
+
+    /// A definition list owns its terms' definitions, and a definition owns
+    /// its blocks; both are walked like any other container.
+    #[test]
+    fn visit_blocks_descends_into_a_definition_list() {
+        let doc = Document::from_blocks(vec![Block::DefinitionList(vec![Block::DefinitionDefinition(vec![
+            Block::ThematicBreak,
+        ])])]);
+        let mut seen = 0usize;
+        visit_blocks(&doc, |b| {
+            if matches!(b, Block::ThematicBreak) {
+                seen += 1;
+            }
+            true
+        });
+        assert_eq!(seen, 1, "the definition's block was never visited");
     }
 
     #[test]
@@ -955,6 +995,63 @@ mod tests {
             _ => {}
         });
         assert_eq!(seen, vec!["fig.png".to_string(), "credit".to_string()]);
+    }
+
+    #[test]
+    fn raw_html_walker_reaches_nodes_nested_in_lists_callouts_captions_and_links() {
+        let mut blocks = vec![
+            Block::List {
+                ordered: false,
+                start: None,
+                items: vec![vec![Block::Other("<li-raw>".into())]],
+                item_source_lines: vec![],
+            },
+            Block::Callout {
+                kind: CalloutKind::Note,
+                fold: None,
+                title: None,
+                children: vec![Block::Other("<callout-raw>".into())],
+            },
+            Block::Figure {
+                image: Inline::Image {
+                    src: Url::unresolved("fig.png"),
+                    alt: "".into(),
+                    title: None,
+                    is_wikilink: false,
+                    wikilink_pothole: None,
+                },
+                caption: Some(vec![Inline::Other("<caption-raw>".into())]),
+                width: None,
+                align: None,
+                class_names: Vec::new(),
+                img_style: None,
+                italic_caption: false,
+            },
+            Block::Paragraph(vec![
+                Inline::Link {
+                    url: Url::unresolved("x"),
+                    title: None,
+                    children: vec![Inline::Other("<link-raw>".into())],
+                    is_wikilink: false,
+                    has_pothole: false,
+                },
+                Inline::Emphasis(vec![Inline::Other("<em-raw>".into())]),
+            ]),
+        ];
+        let mut seen: Vec<String> = Vec::new();
+        for block in &mut blocks {
+            visit_block_raw_html_mut(block, |html| seen.push(html.clone()));
+        }
+        assert_eq!(
+            seen,
+            vec![
+                "<li-raw>".to_string(),
+                "<callout-raw>".to_string(),
+                "<caption-raw>".to_string(),
+                "<link-raw>".to_string(),
+                "<em-raw>".to_string(),
+            ]
+        );
     }
 
     #[test]

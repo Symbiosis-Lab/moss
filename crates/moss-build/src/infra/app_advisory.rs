@@ -50,7 +50,9 @@ advisory_strings! {
     published               => { en: "Published!",                 zh_hans: "已发布！",           zh_hant: "已發佈！" },
     uploaded_checking_live  => { en: "Uploaded — checking your site is live…", zh_hans: "已上传 —— 正在确认网站已上线……", zh_hant: "已上傳 —— 正在確認網站已上線……" },
     // ── Advisories + receipts (Phase 1b) ────────────────────────────────────
-    shipped_unoptimized => { en: "Videos shipped full-size — FFmpeg isn't installed ({err})", zh_hans: "视频以原始大小发布 —— 未安装 FFmpeg（{err}）", zh_hant: "影片以原始大小發佈 —— 尚未安裝 FFmpeg（{err}）" },
+    ffmpeg_offer => { en: "Videos ship full-size because FFmpeg isn't installed. Download it and moss will optimize them.", zh_hans: "没有安装 FFmpeg，视频将以原始大小发布。下载它后，青苔会为视频做优化。", zh_hant: "沒有安裝 FFmpeg，影片將以原始大小發佈。下載它後，青苔會為影片做最佳化。" },
+    ffmpeg_install => { en: "Videos ship full-size because FFmpeg isn't installed. Install it with your system's package manager and moss will optimize them.", zh_hans: "没有安装 FFmpeg，视频将以原始大小发布。请用系统的包管理器安装它，青苔会随后为视频做优化。", zh_hant: "沒有安裝 FFmpeg，影片將以原始大小發佈。請用系統的套件管理員安裝它，青苔會隨後為影片做最佳化。" },
+    download_ffmpeg => { en: "Download FFmpeg", zh_hans: "下载 FFmpeg", zh_hant: "下載 FFmpeg" },
     copy => { en: "Copy", zh_hans: "复制", zh_hant: "複製" },
     // Two files carry the same `url:` — usually a folder copied in Finder,
     // which keeps the original's frontmatter verbatim. Shown on the `url`
@@ -62,11 +64,6 @@ advisory_strings! {
         zh_hant: "另一個頁面已經在用這個網址：{keeper}。這個頁面暫時發佈在 /{moved_to}。請修改這裡的 url，給它一個自己的網址。"
     },
     not_found => { en: "not found", zh_hans: "未找到", zh_hant: "找不到" },
-    still_downloading_icloud => { en: "still downloading from iCloud — will optimize on next preview", zh_hans: "仍在从 iCloud 下载，将在下次预览时优化", zh_hant: "仍在從 iCloud 下載，將在下次預覽時最佳化" },
-    // Provider-neutral twin of `still_downloading_icloud`, for the image
-    // pipeline: the vaults this fires on are as often Google Drive or Dropbox
-    // as iCloud, and naming the wrong provider reads as a different bug.
-    still_downloading_cloud => { en: "still downloading — will optimize once it arrives", zh_hans: "仍在下载 —— 到达后会自动优化", zh_hant: "仍在下載 —— 抵達後會自動最佳化" },
     could_not_read_file => { en: "could not read file", zh_hans: "无法读取文件", zh_hant: "無法讀取檔案" },
     shipped_without_optimizing => { en: "shipped without optimizing — {err}", zh_hans: "已发布但未优化 —— {err}", zh_hant: "已發佈但未最佳化 —— {err}" },
     // The floor under every can't-encode path gave way: not even the original
@@ -142,7 +139,6 @@ advisory_strings! {
     sending_site => { en: "Sending your site…", zh_hans: "正在发送网站……", zh_hant: "正在傳送網站……" },
     registering_site => { en: "Registering site…", zh_hans: "正在注册网站……", zh_hant: "正在註冊網站……" },
     uploading => { en: "Uploading {name}", zh_hans: "正在上传 {name}", zh_hant: "正在上傳 {name}" },
-    downloading_from_icloud => { en: "Downloading {name} from iCloud…", zh_hans: "正在从 iCloud 下载 {name}……", zh_hant: "正在從 iCloud 下載 {name}……" },
     rechecking => { en: "Rechecking...", zh_hans: "重新检查……", zh_hant: "重新檢查……" },
     resending => { en: "Resending...", zh_hans: "重新发送……", zh_hant: "重新傳送……" },
     plugin_could_not_run => { en: "Plugin ‘{name}’ could not run — {detail} (content sync may be stale)", zh_hans: "插件“{name}”无法运行 —— {detail}（内容同步可能已过期）", zh_hant: "插件「{name}」無法執行 —— {detail}（內容同步可能已過時）" },
@@ -150,6 +146,7 @@ advisory_strings! {
     processing_notebook       => { en: "Processing notebook {n}/{total}: {name}",          zh_hans: "正在处理笔记本 {n}/{total}：{name}",                 zh_hant: "正在處理筆記本 {n}/{total}：{name}" },
     processing_notebook_short => { en: "Processing notebook {n}/{total}",                  zh_hans: "正在处理笔记本 {n}/{total}",                         zh_hant: "正在處理筆記本 {n}/{total}" },
     skipped_notebook          => { en: "Skipped notebook {n}/{total} after {secs}s timeout: {name}", zh_hans: "已跳过笔记本 {n}/{total}（{secs} 秒后超时）：{name}", zh_hant: "已略過筆記本 {n}/{total}（{secs} 秒後逾時）：{name}" },
+    empty_folder_not_published => { en: "‘{folder}’ holds nothing yet, so it is not on the site; it appears once a page or file is in it", zh_hans: "“{folder}”里还没有任何内容，所以没有出现在网站上；放进页面或文件后就会出现", zh_hant: "「{folder}」裡還沒有任何內容，所以沒有出現在網站上；放進頁面或檔案後就會出現" },
     notebook_skip_advisory    => { en: "skipped after {secs}s of blocked I/O — next rebuild retries", zh_hans: "已跳过（{secs} 秒 I/O 阻塞后）—— 下次重新构建时重试", zh_hant: "已略過（{secs} 秒 I/O 阻塞後）—— 下次重新建置時重試" },
     // ── Build completion ──────────────────────────────────────────────────────
     build_complete            => { en: "Build complete",                                   zh_hans: "构建完成",                                           zh_hant: "建置完成" },
@@ -179,7 +176,10 @@ advisory_strings! {
     // for the progress panel.
     publish_failed            => { en: "Publish failed",                                   zh_hans: "发布失败",                                         zh_hant: "發布失敗" },
     deploy_err_custom_domain  => { en: "Custom domain required",                           zh_hans: "需要自定义域名",                                   zh_hant: "需要自訂網域" },
-    not_allowlisted           => { en: "moss is in closed testing. Apply for free access.", zh_hans: "青苔正在内测，申请免费试用", zh_hant: "青苔正在內測，申請免費試用" },
+    not_allowlisted           => { en: "Publishing to mosspub.com is by invitation. Apply for access.", zh_hans: "发布到 mosspub.com 需要邀请，请申请访问。", zh_hant: "發布到 mosspub.com 需要邀請，請申請存取。" },
+    site_limit_one            => { en: "Your mosspub.com hosting includes 1 site.", zh_hans: "你的 mosspub.com 托管包含 1 个网站。", zh_hant: "你的 mosspub.com 託管包含 1 個網站。" },
+    site_limit_many           => { en: "Your mosspub.com hosting includes {limit} sites.", zh_hans: "你的 mosspub.com 托管包含 {limit} 个网站。", zh_hant: "你的 mosspub.com 託管包含 {limit} 個網站。" },
+    site_limit_contact        => { en: "To add more, write to {contact}.", zh_hans: "如需增加，请联系 {contact}。", zh_hant: "如需增加，請聯絡 {contact}。" },
     // ── Web import Job title ─────────────────────────────────────────────────
     import_from_host          => { en: "Importing from {host}",                           zh_hans: "正在从 {host} 导入",                               zh_hant: "正在從 {host} 匯入" },
 }
@@ -230,6 +230,18 @@ mod tests {
             assert_eq!(lookup(AppLanguage::ZhHans, key), Some(*hans), "{key} zh-hans drifted");
             assert_eq!(lookup(AppLanguage::ZhHant, key), Some(*hant), "{key} zh-hant drifted");
         }
+    }
+
+    #[test]
+    fn site_limit_strings_read_correctly_in_each_locale() {
+        let l = |lang, k| lookup(lang, k).unwrap();
+        assert_eq!(l(AppLanguage::En, "site_limit_one"), "Your mosspub.com hosting includes 1 site.");
+        assert_eq!(l(AppLanguage::En, "site_limit_many"), "Your mosspub.com hosting includes {limit} sites.");
+        assert_eq!(l(AppLanguage::En, "site_limit_contact"), "To add more, write to {contact}.");
+        assert_eq!(l(AppLanguage::ZhHans, "site_limit_many"), "你的 mosspub.com 托管包含 {limit} 个网站。");
+        assert_eq!(l(AppLanguage::ZhHans, "site_limit_contact"), "如需增加，请联系 {contact}。");
+        assert_eq!(l(AppLanguage::ZhHant, "site_limit_many"), "你的 mosspub.com 託管包含 {limit} 個網站。");
+        assert_eq!(l(AppLanguage::ZhHant, "site_limit_contact"), "如需增加，請聯絡 {contact}。");
     }
 
     #[test]

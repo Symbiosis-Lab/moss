@@ -60,6 +60,9 @@ fn undescribed_images_are_named_with_their_page_and_are_not_strict_problems() {
     assert!(warnings_for("![A lake](lake.jpg)\n").iter().all(|w| !w.contains("lake.jpg")));
     assert!(warnings_for("![](lake.jpg)\n*Credit*\n").iter().all(|w| !w.contains("lake.jpg")));
 
+    // A pipe with nothing before it leaves the image with no alt text.
+    assert!(warnings_for("![|](lake.jpg)\n").iter().any(|w| w.contains("lake.jpg")));
+
     // Not an image file: a video written in the image form takes its label elsewhere.
     assert!(warnings_for("![](clip.mp4)\n").iter().all(|w| !w.contains("clip.mp4")));
 

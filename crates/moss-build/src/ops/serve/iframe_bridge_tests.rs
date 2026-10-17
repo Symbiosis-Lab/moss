@@ -678,7 +678,7 @@ fn strip_matches_between_staging_and_a_ship_transformed_generation() {
         &[],
         "en",
         None,
-        Some(deploy),
+        &deploy,
         false,
         None,
         None,
@@ -696,7 +696,7 @@ fn strip_matches_between_staging_and_a_ship_transformed_generation() {
     );
     let shipped_page = String::from_utf8(shipped_bytes).expect("shipped page is UTF-8");
     assert!(
-        shipped_page.contains("moss-beacon"),
+        shipped_page.contains("/_moss/js/beacon.js"),
         "precondition: ship must keep the beacon for deploy, got: {shipped_page}"
     );
 
@@ -704,11 +704,11 @@ fn strip_matches_between_staging_and_a_ship_transformed_generation() {
     let shipped_served = ensure_preview_body_attr(&strip_preview_only_scripts(&shipped_page));
 
     assert!(
-        !shipped_served.contains("moss-beacon"),
+        !shipped_served.contains("/_moss/js/beacon.js"),
         "a page from a ship-transformed generation must not carry the beacon, got: {shipped_served}"
     );
     assert!(
-        !staging_served.contains("moss-beacon"),
+        !staging_served.contains("/_moss/js/beacon.js"),
         "a page from staging must not carry the beacon either, got: {staging_served}"
     );
     assert_eq!(
@@ -817,19 +817,19 @@ fn strip_removes_the_real_beacon_emitter_output() {
         &[],
         "en",
         None,
-        Some(deploy),
+        &deploy,
         false,
         None,
         None, // no site-wide [site] comments preference in this fixture
     );
     let head_end = slots.get_html("head-end", "index.html").unwrap_or_default();
     assert!(
-        head_end.contains("moss-beacon"),
+        head_end.contains("/_moss/js/beacon.js"),
         "precondition: emitter injects the beacon, got: {head_end}"
     );
     let out = strip_preview_only_scripts(&head_end);
     assert!(
-        !out.contains("moss-beacon") && !out.contains("/beacon"),
+        !out.contains("/_moss/js/beacon.js") && !out.contains("/beacon"),
         "served preview HTML must not carry the beacon, got: {out}"
     );
 }
@@ -1073,7 +1073,7 @@ fn build_deploy_only_fixture_pages() -> (String, String) {
         &[],
         "en",
         None,
-        Some(deploy),
+        &deploy,
         false,
         None,
         None,

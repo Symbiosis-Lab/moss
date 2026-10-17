@@ -63,15 +63,6 @@ fn page_output(doc: &ParsedDocument) -> Option<ServedPath> {
     ServedPath::from_source(&doc.url_path).ok()
 }
 
-/// The folder a folder page lists: its own served directory.
-fn own_dir(doc: &ParsedDocument) -> Option<String> {
-    let out = page_output(doc)?;
-    if out.as_str() == "index.html" {
-        return Some(String::new());
-    }
-    out.as_str().strip_suffix("/index.html").map(str::to_string)
-}
-
 /// The folders a served page sits in, from the site root down:
 /// `events/talk/index.html` is in `""`, `events` and `events/talk`.
 fn ancestor_dirs(served: &str) -> impl Iterator<Item = &str> {
@@ -147,7 +138,7 @@ fn event_of(doc: &ParsedDocument, site_url: &SiteUrl, problems: &mut Problems) -
         problems.bad_end.push(page.clone());
     }
     let zone_name = ev.timezone.as_deref();
-    let tzid = zone_name.filter(|z| zone::load(z).is_some()).map(str::to_string);
+    let tzid = zone_name.filter(|z| zone::is_known(z)).map(str::to_string);
     if let (Some(name), None) = (zone_name, &tzid) {
         problems.bad_zone.push(format!("`{name}` ({page})"));
     }
@@ -207,6 +198,18 @@ fn render(name: &str, events: &[Event], subscribable: bool) -> String {
     ics::calendar_text(name, &zones, events, subscribable)
 }
 
+impl ParsedDocument {
+    /// Whether this page's body ends with its own folder's calendar links.
+    /// `render/html.rs` prints them whenever the page has a planned calendar
+    /// (`folder_href`) and this holds; the embed pass relies on that and leaves
+    /// a self-embed of the page's own folder without links, so they are never
+    /// printed twice. A page with `children: false` shows no listing of its
+    /// own, so its links belong under the listings it embeds instead.
+    pub fn prints_folder_calendar_links(&self) -> bool {
+        self.children != Some(false)
+    }
+}
+
 struct PlannedEvent {
     path: ServedPath,
     event: Event,
@@ -233,7 +236,7 @@ impl CalendarPlan {
     /// Plans the calendars and warns, once each, about event fields it had to
     /// drop or could not use.
     pub fn build(documents: &[ParsedDocument], project: &ProjectStructure, site_url: &SiteUrl) -> Self {
-        use crate::build::render::incremental::listing::{groups_read_by, Depth};
+        use crate::build::folder_embed::members::{is_folder_home, listed_unfiltered, own_dir};
         let mut problems = Problems::default();
         let mut plan = CalendarPlan::default();
         let mut floating = 0usize;
@@ -247,7 +250,7 @@ impl CalendarPlan {
             let Some(page) = page_output(doc) else { continue };
             let Some(path) = ServedPath::for_event_ics(&page) else { continue };
             dirs_with_events.extend(ancestor_dirs(page.as_str()).map(str::to_string));
-            if event.tzid.is_none() && !event.start.is_all_day() && raw_str(doc, "timezone").is_none() {
+            if event.tzid.is_none() && !event.start.is_all_day() && doc.event.as_ref().is_some_and(|ev| ev.timezone.is_none()) {
                 floating += 1;
             }
             parsed.insert(doc.url_path.as_str(), event.clone());
@@ -256,30 +259,20 @@ impl CalendarPlan {
 
         for host in documents {
             // A synthesized folder index has no source file; a home page has one.
-            let is_home = host.source_path.is_some() && (host.kind == moss_core::PageKind::Folder || host.url_path == "index.html");
-            let Some(dir) = own_dir(host).filter(|_| is_home) else { continue };
+            let Some(dir) = own_dir(host).filter(|_| is_folder_home(host)) else { continue };
             if !dirs_with_events.contains(dir.as_str()) {
                 continue;
             }
             let mut seen = std::collections::BTreeSet::new();
             let mut events = Vec::new();
-            let keys = groups_read_by(host, documents).unwrap_or_else(|| {
+            let members = listed_unfiltered(host, documents, project).unwrap_or_else(|| {
                 log::warn!("Folder `{}` lists a folder that does not exist, so its calendar file is left out", host.url_path);
                 Vec::new()
             });
-            for key in keys.into_iter().filter(|k| k.folder_slug == dir) {
-                for member in crate::build::folder_embed::select_children_by_slug(
-                    &key.folder_slug,
-                    key.depth == Depth::All,
-                    key.scope_default_tree,
-                    key.exclude_nav,
-                    documents,
-                    project,
-                ) {
-                    if let Some(e) = parsed.get(member.url_path.as_str()) {
-                        if seen.insert(e.uid.clone()) {
-                            events.push(e.clone());
-                        }
+            for member in members {
+                if let Some(e) = parsed.get(member.url_path.as_str()) {
+                    if seen.insert(e.uid.clone()) {
+                        events.push(e.clone());
                     }
                 }
             }
@@ -350,29 +343,65 @@ impl CalendarPlan {
         out
     }
 
-    /// The calendar links that close a page's body: `event_href` (the caller
-    /// passes it only when the meta line did not carry the event's link), then
-    /// a folder's calendar file and, when the site is deployed, its `webcal://`
-    /// subscribe link. Empty when there is nothing to link.
-    pub fn links_html(&self, doc: &ParsedDocument, site_url: &SiteUrl, lang: crate::i18n::Language, event_href: Option<&str>) -> String {
-        let t = |key| crate::i18n::t(lang, key);
-        let mut links = Vec::new();
-        if let Some(href) = event_href {
-            links.push(format!(r#"<a class="moss-calendar-link" href="{href}" type="text/calendar">{}</a>"#, t("add_to_calendar")));
+    /// The "Add to calendar" paragraph for an event page whose meta line did
+    /// not carry the link.
+    pub fn event_link_html(&self, href: &str, lang: crate::i18n::Language) -> String {
+        links_paragraph(vec![format!(
+            r#"<a class="moss-calendar-link" href="{href}" type="text/calendar">{}</a>"#,
+            crate::i18n::t(lang, "add_to_calendar")
+        )])
+    }
+
+    /// A folder page's download link and, on a deployed site, its `webcal://`
+    /// subscribe link. Empty when the page has no calendar.
+    pub fn folder_links_html(&self, doc: &ParsedDocument, site_url: &SiteUrl, lang: crate::i18n::Language) -> String {
+        match self.folder_href(doc) {
+            Some(href) => links_paragraph(folder_links(&href, site_url, lang)),
+            None => String::new(),
         }
-        if let Some(href) = self.folder_href(doc) {
-            links.push(format!(r#"<a class="moss-calendar-link" href="{href}" type="text/calendar">{}</a>"#, t("download_calendar")));
-            if site_url.is_deployed() {
-                links.push(format!(
-                    r#"<a class="moss-calendar-link" href="webcal://{}{href}">{}</a>"#,
-                    site_url.host(),
-                    t("subscribe_to_calendar")
-                ));
-            }
-        }
-        if links.is_empty() {
+    }
+
+    /// The links that follow an embedded listing of the folder whose home page
+    /// is `home_url_path`: empty unless that folder has a calendar and at least
+    /// one of its events has not ended at `now`.
+    pub fn embed_links_html(&self, home_url_path: &str, site_url: &SiteUrl, lang: crate::i18n::Language, now: chrono::NaiveDateTime) -> String {
+        let Some(folder) = self.folders.get(home_url_path) else { return String::new() };
+        if !folder.events.iter().any(|e| crate::build::folder_embed::upcoming::span_is_upcoming(e.start, e.end, now)) {
             return String::new();
         }
-        format!("\n<p class=\"moss-calendar-links\">{}</p>\n", links.join(" · "))
+        links_paragraph(folder_links(&folder.path.to_relative_url(), site_url, lang))
     }
+}
+
+fn folder_links(href: &str, site_url: &SiteUrl, lang: crate::i18n::Language) -> Vec<String> {
+    let t = |key| crate::i18n::t(lang, key);
+    let mut links = vec![format!(r#"<a class="moss-calendar-link" href="{href}" type="text/calendar">{}</a>"#, t("download_calendar"))];
+    if site_url.is_deployed() {
+        links.push(format!(
+            r#"<a class="moss-calendar-link" href="webcal://{}{href}">{}</a>"#,
+            site_url.host(),
+            t("subscribe_to_calendar")
+        ));
+    }
+    links
+}
+
+const LINKS_OPEN: &str = "\n<p class=\"moss-calendar-links\">";
+const LINKS_CLOSE: &str = "</p>\n";
+
+fn links_paragraph(links: Vec<String>) -> String {
+    format!("{LINKS_OPEN}{}{LINKS_CLOSE}", links.join(" · "))
+}
+
+/// `html` without any calendar-links paragraph, for text that leaves the
+/// page (a feed entry), where "Download calendar" has nothing to act on.
+pub fn strip_links_paragraphs(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some((before, after)) = rest.split_once(LINKS_OPEN) {
+        out.push_str(before);
+        rest = after.split_once(LINKS_CLOSE).map_or("", |(_, tail)| tail);
+    }
+    out.push_str(rest);
+    out
 }

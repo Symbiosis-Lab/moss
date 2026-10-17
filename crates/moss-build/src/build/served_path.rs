@@ -39,6 +39,19 @@ use std::fmt;
 /// trigger (`build.rs`), both of which recognize cards by this prefix alone.
 pub const OG_CARD_PREFIX: &str = "_moss/og/";
 
+/// Where the not-found page is built: the page at `/404/`.
+pub const NOT_FOUND_PAGE: &str = "404/index.html";
+
+/// Where a static host looks for the page to show for an unknown address: a copy
+/// of the not-found page at the site root.
+pub const NOT_FOUND_FILE: &str = "404.html";
+
+/// Whether `rel`, a path relative to the site root, is one of the two addresses
+/// the not-found page is served at.
+pub fn is_not_found_address(rel: &str) -> bool {
+    rel == NOT_FOUND_PAGE || rel == NOT_FOUND_FILE
+}
+
 /// Is this output path an address a visitor can have stored — anything outside
 /// the content-addressed, rotating `_moss/` namespace?
 pub fn is_public_address(path: &str) -> bool {
@@ -354,6 +367,19 @@ impl ServedPath {
         out.strip_suffix(".html").map(|stem| ServedPath(format!("{stem}.ics")))
     }
 
+    /// The welcome email of one language tree, read by the hosting server
+    /// when a subscriber is confirmed. `edition` is the language-tree folder
+    /// name, or `default` for the root tree.
+    pub fn for_welcome_email(edition: &str) -> Result<Self, ServedPathError> {
+        if edition.is_empty() {
+            return Err(ServedPathError::Empty);
+        }
+        if !edition.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            return Err(ServedPathError::InvalidInput("welcome-email edition must be a bare language-tree name"));
+        }
+        Ok(ServedPath(format!(".moss-email/welcome.{edition}.json")))
+    }
+
     /// The redirect table a host that can answer a real 301 reads.
     pub fn for_redirects_manifest() -> Self {
         ServedPath("_moss/redirects.json".to_string())
@@ -362,6 +388,12 @@ impl ServedPath {
     /// LLMs.txt. Path is fixed.
     pub fn for_llms_txt() -> Self {
         ServedPath("llms.txt".to_string())
+    }
+
+    /// The not-found page at the site root, where a static host looks for the
+    /// page to show for an unknown address. Path is fixed.
+    pub fn for_not_found() -> Self {
+        ServedPath(NOT_FOUND_FILE.to_string())
     }
 
     /// robots.txt. Path is fixed.

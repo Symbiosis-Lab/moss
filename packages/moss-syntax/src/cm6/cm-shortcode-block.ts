@@ -1,6 +1,6 @@
 /**
  * Block-decoration StateField for shortcode blocks. Reads the SYNCHRONOUS Lezer
- * syntax tree and pairs Open↔Close fence markers with an arity stack, so
+ * syntax tree and pairs Open↔Close fence markers with a stack, so
  * positions are always current for tr.state — no stale offsets, no glitches.
  *
  * The document alone decides how a block renders, never the caret: every
@@ -52,7 +52,7 @@ export interface ShortcodeBlockInfo {
 }
 
 /**
- * Pair Open↔Close fence markers with an arity stack. Returns the TOP-LEVEL
+ * Pair Open↔Close fence markers with a plain stack: a close pops the innermost open. Returns the TOP-LEVEL
  * blocks; each carries its nested `children` so the decoration layer can render
  * `::::buttons` inside `:::grid` instead of leaking the inner fences as raw
  * text. (Nesting parity with the Rust extractor — see cm-shortcode-scanner.)
@@ -77,20 +77,16 @@ export function collectShortcodeBlocks(state: EditorState): ShortcodeBlockInfo[]
         }
         stack.push({ from: lineFrom, arity, name, attrs, children: [] });
       } else if (node.name === 'ShortcodeCloseLine') {
-        const arity = state.doc.sliceString(node.from, node.to).trim().length;
-        for (let i = stack.length - 1; i >= 0; i--) {
-          if (stack[i].arity === arity) {
-            // splice from i: take the matched open and discard any unclosed inner
-            // opens above it (malformed nesting → never half-rendered).
-            const open = stack.splice(i)[0];
-            const block: ShortcodeBlockInfo = {
-              from: open.from, to: node.to, name: open.name, attrs: open.attrs,
-              closeFrom: node.from, arity: open.arity, children: open.children,
-            };
-            if (stack.length > 0) stack[stack.length - 1].children.push(block);
-            else out.push(block);
-            break;
-          }
+        // A bare colon line closes the innermost open block, whatever its
+        // colon count; with nothing open it is ordinary text.
+        const open = stack.pop();
+        if (open) {
+          const block: ShortcodeBlockInfo = {
+            from: open.from, to: node.to, name: open.name, attrs: open.attrs,
+            closeFrom: node.from, arity: open.arity, children: open.children,
+          };
+          if (stack.length > 0) stack[stack.length - 1].children.push(block);
+          else out.push(block);
         }
       }
     },

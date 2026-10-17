@@ -255,6 +255,7 @@ fn email_placeholder(lang: Language) -> &'static str {
         Language::En => "email",
         Language::ZhHans => "邮箱",
         Language::ZhHant => "電子郵件",
+        Language::De => "E-Mail-Adresse",
     }
 }
 
@@ -264,6 +265,7 @@ fn subscribe_label(lang: Language) -> &'static str {
         Language::En => "Subscribe",
         Language::ZhHans => "订阅",
         Language::ZhHant => "訂閱",
+        Language::De => "Abonnieren",
     }
 }
 
@@ -301,7 +303,7 @@ pub fn fetch_buttondown_username(api_key: &str) -> Option<String> {
 /// Copy set for the moss-hosted subscribe form.
 ///
 /// Must stay in sync with `COPY` in `crates/moss-build/src/js-src/site/subscribe/i18n.ts`. The
-/// set is small enough (5 strings × 3 locales) that duplication beats
+/// set is small enough (5 strings × 4 locales) that duplication beats
 /// plumbing the strings as data- attributes through the DOM.
 struct MossSubscribeCopy {
     placeholder: &'static str,
@@ -333,6 +335,13 @@ fn moss_subscribe_copy(lang: Language) -> MossSubscribeCopy {
             check_email: "請在電子郵件中確認訂閱",
             already_subscribed: "你已訂閱。",
             error: "出錯了，請重試。",
+        },
+        Language::De => MossSubscribeCopy {
+            placeholder: "ihre@email.de",
+            label: "Abonnieren",
+            check_email: "Bitte bestätigen Sie das Abonnement in Ihrer E-Mail.",
+            already_subscribed: "Sie haben bereits abonniert.",
+            error: "Es ist ein Fehler aufgetreten. Bitte versuchen Sie es erneut.",
         },
     }
 }
@@ -469,7 +478,7 @@ fn moss_apply_copy(lang: Language) -> MossApplyCopy {
         Language::En => MossApplyCopy {
             email_label: "Email",
             email_ph: "your@email.com",
-            email_helper: "For your invitation and free hosting",
+            email_helper: "For your invitation and mosspub.com hosting",
             matters_label: "Matters username",
             matters_ph: "Matters username",
             matters_helper: "Or tell us what you plan to write — a line is plenty.",
@@ -478,10 +487,22 @@ fn moss_apply_copy(lang: Language) -> MossApplyCopy {
             received: "Thanks for applying. Please confirm the email we just sent; we'll email you when your turn comes.",
             error: "Something went wrong. Try again?",
         },
+        Language::De => MossApplyCopy {
+            email_label: "E-Mail",
+            email_ph: "ihre@email.de",
+            email_helper: "Für Ihre Einladung und das mosspub.com-Hosting",
+            matters_label: "Matters-Benutzername",
+            matters_ph: "Matters-Benutzername",
+            matters_helper: "Oder schreiben Sie uns, worüber Sie schreiben möchten – ein Satz genügt.",
+            label: "Bewerben",
+            label_success: "Bewerbung gesendet",
+            received: "Danke für Ihre Bewerbung. Bitte bestätigen Sie die E-Mail, die wir Ihnen gerade geschickt haben; wir melden uns, sobald Sie an der Reihe sind.",
+            error: "Es ist ein Fehler aufgetreten. Bitte versuchen Sie es erneut.",
+        },
         Language::ZhHans => MossApplyCopy {
             email_label: "邮箱",
             email_ph: "邮箱",
-            email_helper: "用于获取邀请及免费托管服务",
+            email_helper: "用于获取邀请及 mosspub.com 托管服务",
             matters_label: "Matters 用户名",
             matters_ph: "Matters 用户名",
             matters_helper: "或者告诉我们你打算写什么，一句话就好",
@@ -493,7 +514,7 @@ fn moss_apply_copy(lang: Language) -> MossApplyCopy {
         Language::ZhHant => MossApplyCopy {
             email_label: "電子郵件",
             email_ph: "電子郵件",
-            email_helper: "用於獲取邀請及免費託管服務",
+            email_helper: "用於獲取邀請及 mosspub.com 託管服務",
             matters_label: "Matters 用戶名",
             matters_ph: "Matters 用戶名",
             matters_helper: "或者告訴我們你打算寫什麼，一句話就好",
@@ -591,6 +612,7 @@ pub fn render_inline_apply_form(
         Language::En => "en",
         Language::ZhHans => "zh-hans",
         Language::ZhHant => "zh-hant",
+        Language::De => "de",
     };
     let inner = apply_form_inner(lang, placeholder_override, button_override);
     format!(
@@ -658,6 +680,7 @@ pub fn render_subscribe_landing_html(
         Language::ZhHans => "zh-Hans",
         Language::ZhHant => "zh-Hant",
         Language::En => "en",
+        Language::De => "de",
     };
     format!(
         r#"<!DOCTYPE html>
@@ -719,6 +742,16 @@ fn landing_copy(
             "This link has expired",
             "Subscription links are valid for 48 hours. Please subscribe again from the site.",
         ),
+        (Language::De, SubscribeLanding::Confirmed) => (
+            "Abonniert",
+            "Sie haben abonniert",
+            "Sie erhalten eine E-Mail, sobald neue Texte erscheinen. Danke fürs Lesen.",
+        ),
+        (Language::De, SubscribeLanding::Expired) => (
+            "Link abgelaufen",
+            "Dieser Link ist abgelaufen",
+            "Abonnement-Links sind 48 Stunden gültig. Bitte abonnieren Sie erneut auf der Website.",
+        ),
         (Language::ZhHans, SubscribeLanding::Confirmed) => (
             "已订阅",
             "订阅成功",
@@ -747,6 +780,7 @@ fn landing_back_label(lang: Language) -> &'static str {
         Language::En => "← Back to the site",
         Language::ZhHans => "← 返回网站",
         Language::ZhHant => "← 返回網站",
+        Language::De => "← Zurück zur Website",
     }
 }
 
@@ -1399,7 +1433,7 @@ mod scope_detection_tests {
         // Redesigned form: two placeholder-only fields with a helper under each,
         // no visible <label> and no <details>/publish disclosure.
         assert!(
-            html.contains("用于获取邀请及免费托管服务"),
+            html.contains("用于获取邀请及 mosspub.com 托管服务"),
             "zh-hans email helper must appear: {html}"
         );
         assert!(
@@ -1459,7 +1493,7 @@ mod scope_detection_tests {
             "en second-field placeholder must not be Chinese: {html}"
         );
         assert!(
-            html.contains("For your invitation and free hosting"),
+            html.contains("For your invitation and mosspub.com hosting"),
             "en email helper must appear: {html}"
         );
         assert!(

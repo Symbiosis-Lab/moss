@@ -158,5 +158,5 @@ fn studio_contact_page_keeps_what_a_static_page_can_carry() {
     assert!(md.contains("[Support the print run](https://pay.example/donate/123)"), "{md}");
     assert!(md.contains("[hello@studio.example](mailto:hello@studio.example)"), "{md}");
     assert!(!md.contains("<form") && !md.contains("intercom") && !md.contains("list-manage"), "{md}");
-    assert_eq!((art.widgets.carried, art.widgets.dropped), (2, 0));
+    assert_eq!((art.widgets.carried, art.widgets.dropped()), (2, 0));
 }

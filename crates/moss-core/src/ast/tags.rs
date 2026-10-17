@@ -79,7 +79,9 @@ pub fn extract_inline_tags(doc: &Document) -> Vec<String> {
 
 fn in_block(block: &Block, out: &mut Vec<String>) {
     match block {
-        Block::Heading { children, .. } | Block::Paragraph(children) => in_inlines(children, out),
+        Block::Heading { children, .. }
+        | Block::Paragraph(children)
+        | Block::DefinitionTitle(children) => in_inlines(children, out),
         Block::Figure { caption, .. } => {
             if let Some(caption) = caption {
                 in_inlines(caption, out);
@@ -103,6 +105,8 @@ fn in_block(block: &Block, out: &mut Vec<String>) {
             }
         }
         Block::BlockQuote(children)
+        | Block::DefinitionList(children)
+        | Block::DefinitionDefinition(children)
         | Block::LinkCard { children, .. }
         | Block::FootnoteDefinition { children, .. } => {
             for nested in children {

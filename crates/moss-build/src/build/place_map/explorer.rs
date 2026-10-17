@@ -17,7 +17,12 @@
 //! `<g data-map-layer="marker">` group `render_svg` always emits is present
 //! but empty here, the same contract a page's own map gives it.
 
-use super::geometry::{tile_x, tile_y, world_viewbox_width, Frame, FrameTier, ProjectedPoint, Projection, TileGrid, TILE_COLUMNS, TILE_ROWS};
+use std::collections::BTreeSet;
+
+use super::geometry::{
+    tile_x, tile_y, world_viewbox_width, Frame, FrameTier, ProjectedPoint, Projection, TileGrid, FRAME_PADDING, MIN_FRAME_DEGREES,
+    TILE_COLUMNS, TILE_ROWS, VIEWBOX_HEIGHT,
+};
 use super::svg::{render_svg, Ids, Writer, SVG_HEIGHT};
 use super::{Pack, PlaceMapContext, PlaceMapTarget};
 use crate::vault::places::Gazetteer;
@@ -122,13 +127,75 @@ fn populated_tiles(pack: &Pack) -> std::collections::HashSet<(i16, i16)> {
         .collect()
 }
 
+/// How the explorer fits a view of places, written to `tiles.json` as
+/// `fit` so the frames the build chooses cells for are the frames the
+/// explorer draws: the places' bounding box padded by `box_padding` and at
+/// least `min_span_degrees` of longitude wide, fitted inside the free frame
+/// less `edge_pad` of its smaller side per edge, and for the opening view
+/// of all places no deeper than `opening_degrees_per_px` (degrees of
+/// longitude per CSS px; the pack is simplified for frames about ten
+/// degrees across, and deeper its land shows as polygon steps).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ExplorerFit {
+    pub opening_degrees_per_px: f64,
+    pub edge_pad: f64,
+    pub box_padding: f64,
+    pub min_span_degrees: f64,
+}
+
+/// The box padding and minimum span are the static locator poster's, so an
+/// article's live map opens on the frame of the poster it replaces.
+pub(crate) const EXPLORER_FIT: ExplorerFit =
+    ExplorerFit { opening_degrees_per_px: 0.015, edge_pad: 0.06, box_padding: FRAME_PADDING, min_span_degrees: MIN_FRAME_DEGREES };
+
+/// How far, in world units, a tile fades toward the world layer at an
+/// outer edge of a site's cells (`width`), and the margin past it a covered
+/// frame keeps for each tile's bleed and independently transformed box.
+/// Written to `tiles.json` as `edgeFade`.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct EdgeFade {
+    pub width: f64,
+    pub margin: f64,
+}
+
+pub(crate) const EDGE_FADE: EdgeFade = EdgeFade { width: 1.5, margin: 0.5 };
+
+/// A map size the opening view's cells are chosen for, in CSS px, with the
+/// bands the zoom controls take from its top and the card row from its
+/// bottom; the fit frames places in the rest while the whole map shows.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
+struct ReferenceMap {
+    width: f64,
+    height: f64,
+    bands: (f64, f64),
+}
+
+/// A tall phone, a short laptop and a large desktop. A height-bound fit
+/// shows the most world on the shortest map, a width-bound one on the
+/// narrowest, and the opening depth cap the most on the largest; a map
+/// outside these opens on the cover view where its frame is not covered.
+const REFERENCE_MAPS: [ReferenceMap; 3] = [
+    ReferenceMap { width: 390.0, height: 780.0, bands: (128.0, 106.0) },
+    ReferenceMap { width: 1366.0, height: 650.0, bands: (128.0, 106.0) },
+    ReferenceMap { width: 2560.0, height: 1300.0, bands: (128.0, 106.0) },
+];
+
+/// The most cells a site emits: about a quarter of the grid, near 1 MB of
+/// brotli-compressed SVG at the grid's mean of about 6 KB per cell. A
+/// reader fetches only the cells in and near its view.
+const OPENING_CELL_BUDGET: usize = 160;
+
 /// The regional tiles worth emitting for this site: the cell each gazetteer
-/// place falls in, plus its eight neighbours, intersected with the pack's
-/// own populated cells — so panning one cell away from a place still has
-/// detail, without paying to render or ship a tile nowhere near anything
-/// this site names. Sorted, so the result (and the hash fed from it, see
-/// `emit::place_map_assets::assets_hash`) is deterministic regardless of
-/// the gazetteer's own (name-ordered) iteration.
+/// place falls in plus its eight neighbours, so panning one cell away from a
+/// place still has detail, and the cells the opening view of all places
+/// draws at each reference map (`opening_cells`), so that view is regional
+/// detail end to end instead of the world layer enlarged past its
+/// resolution. Over `OPENING_CELL_BUDGET`, the largest map's cells go
+/// first; the explorer opens on the cover view where a frame is not
+/// covered. Intersected with the pack's own populated cells and sorted, so
+/// the result (and the hash fed from it, see
+/// `emit::place_map_assets::assets_hash`) is deterministic.
 ///
 /// Reads `gazetteer` directly rather than only the names some page's
 /// `location:` resolves: it is the one input the caller has in hand before
@@ -138,32 +205,101 @@ fn populated_tiles(pack: &Pack) -> std::collections::HashSet<(i16, i16)> {
 /// the same silent skip `PlaceMapContext::resolve_locations` gives it.
 pub fn relevant_tiles(gazetteer: &Gazetteer, pack: &Pack) -> Vec<(i16, i16)> {
     let populated = populated_tiles(pack);
-    let mut cells = std::collections::BTreeSet::new();
-    for (_, record) in gazetteer.iter() {
-        let Some((latitude, longitude)) = record.coords else {
-            continue;
-        };
-        let Some(point) = ProjectedPoint::new(longitude, latitude) else {
-            continue;
-        };
-        let (center_x, center_y) = (tile_x(point.longitude), tile_y(point.latitude));
-        for delta_y in -1..=1i32 {
-            let y = i32::from(center_y) + delta_y;
-            if !(0..TILE_ROWS as i32).contains(&y) {
-                continue;
-            }
-            for delta_x in -1..=1i32 {
-                // Longitude wraps (tile 35's east neighbour is tile 0);
-                // latitude does not (no tile sits beyond the poles).
-                let x = (i32::from(center_x) + delta_x).rem_euclid(TILE_COLUMNS as i32) as i16;
-                let cell = (x, y as i16);
-                if populated.contains(&cell) {
-                    cells.insert(cell);
-                }
-            }
+    let points: Vec<ProjectedPoint> = gazetteer
+        .iter()
+        .filter_map(|(_, record)| record.coords)
+        .filter_map(|(latitude, longitude)| ProjectedPoint::new(longitude, latitude))
+        .collect();
+    let neighbourhoods: BTreeSet<(i16, i16)> = neighbourhood_cells(&points).filter(|cell| populated.contains(cell)).collect();
+    let mut frames: Vec<BTreeSet<(i16, i16)>> =
+        opening_cells(&points).into_iter().map(|cells| cells.into_iter().filter(|cell| populated.contains(cell)).collect()).collect();
+    loop {
+        let chosen: BTreeSet<(i16, i16)> = neighbourhoods.iter().chain(frames.iter().flatten()).copied().collect();
+        if chosen.len() <= OPENING_CELL_BUDGET || frames.is_empty() {
+            return chosen.into_iter().collect();
         }
+        let largest = (0..frames.len()).max_by_key(|&index| frames[index].len()).unwrap();
+        frames.remove(largest);
     }
-    cells.into_iter().collect()
+}
+
+/// Each point's own cell and its eight neighbours.
+fn neighbourhood_cells(points: &[ProjectedPoint]) -> impl Iterator<Item = (i16, i16)> + '_ {
+    points.iter().flat_map(|point| ring((tile_x(point.longitude), tile_y(point.latitude))))
+}
+
+/// `cell` and its eight neighbours inside the grid. Neither axis wraps: the
+/// explorer's camera stops at the edges of the world.
+fn ring((center_x, center_y): (i16, i16)) -> impl Iterator<Item = (i16, i16)> {
+    (-1..=1i16).flat_map(move |delta_y| (-1..=1i16).map(move |delta_x| (center_x + delta_x, center_y + delta_y))).filter(|&(x, y)| {
+        (0..TILE_COLUMNS as i16).contains(&x) && (0..TILE_ROWS as i16).contains(&y)
+    })
+}
+
+/// For each reference map whose opening fit of `points` goes deeper than
+/// its cover view, the cells that frame needs: those under it, and those a
+/// tile's outer-edge fade would otherwise leave to the world layer.
+fn opening_cells(points: &[ProjectedPoint]) -> Vec<BTreeSet<(i16, i16)>> {
+    let world = Projection::new_world_full_extent();
+    let projected: Vec<(f64, f64)> = points.iter().filter_map(|&point| world.project(point)).collect();
+    let pad = EDGE_FADE.width + EDGE_FADE.margin;
+    REFERENCE_MAPS
+        .iter()
+        .filter_map(|&map| opening_view(&projected, map, &EXPLORER_FIT))
+        .map(|(left, top, right, bottom)| cells_under(&world, (left - pad, top - pad, right + pad, bottom + pad)).into_iter().collect())
+        .collect()
+}
+
+/// The world rectangle `(left, top, right, bottom)` the explorer's opening
+/// fit shows on `map`, or `None` when that fit is no deeper than the cover
+/// view. The explorer's `fitWork` at its opening depth, centred on the free
+/// frame and kept inside the world; the shared golden vectors below hold
+/// both to the same rectangles. `fitWork` falls back to the whole map when
+/// the free frame is under half of it, which no reference map is.
+fn opening_view(points: &[(f64, f64)], map: ReferenceMap, fit: &ExplorerFit) -> Option<(f64, f64, f64, f64)> {
+    if points.is_empty() {
+        return None;
+    }
+    let world_width = world_viewbox_width();
+    let (top_band, bottom_band) = map.bands;
+    let frame_height = map.height - top_band - bottom_band;
+    let (min_x, max_x) = points.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &(x, _)| (lo.min(x), hi.max(x)));
+    let (min_y, max_y) = points.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &(_, y)| (lo.min(y), hi.max(y)));
+    let span_x = ((max_x - min_x) * fit.box_padding).max(fit.min_span_degrees * world_width / 360.0);
+    let span_y = (max_y - min_y) * fit.box_padding;
+    let pad = map.width.min(frame_height) * fit.edge_pad;
+    // An infinite share (all places on one parallel) leaves the width to decide.
+    let fitted = ((map.width - 2.0 * pad) / span_x).min((frame_height - 2.0 * pad) / span_y);
+    let cover = (map.width / world_width).max(map.height / VIEWBOX_HEIGHT);
+    if fitted <= cover {
+        return None;
+    }
+    let scale = fitted.min(360.0 / (fit.opening_degrees_per_px * world_width));
+    let frame_offset = (top_band + frame_height / 2.0 - map.height / 2.0) / scale;
+    let (half_width, half_height) = (map.width / 2.0 / scale, map.height / 2.0 / scale);
+    let keep_inside = |center: f64, half: f64, extent: f64| if 2.0 * half >= extent { extent / 2.0 } else { center.clamp(half, extent - half) };
+    let center_x = keep_inside((min_x + max_x) / 2.0, half_width, world_width);
+    let center_y = keep_inside((min_y + max_y) / 2.0 - frame_offset, half_height, VIEWBOX_HEIGHT);
+    Some((center_x - half_width, center_y - half_height, center_x + half_width, center_y + half_height))
+}
+
+/// Every cell the world rectangle `(left, top, right, bottom)` overlaps.
+fn cells_under(world: &Projection, (left, top, right, bottom): (f64, f64, f64, f64)) -> Vec<(i16, i16)> {
+    let column_width = world_viewbox_width() / f64::from(TILE_COLUMNS);
+    let row_degrees = 180.0 / f64::from(TILE_ROWS);
+    // North is up: a row's top edge is its northern parallel.
+    let parallel_y = |latitude: f64| world.project(ProjectedPoint::new(0.0, latitude).unwrap()).unwrap().1;
+    let columns = (0..TILE_COLUMNS as i16).filter(|&x| {
+        let west = f64::from(x) * column_width;
+        west + column_width >= left && west <= right
+    });
+    let rows: Vec<i16> = (0..TILE_ROWS as i16)
+        .filter(|&y| {
+            let south = f64::from(y) * row_degrees - 90.0;
+            parallel_y(south + row_degrees) <= bottom && parallel_y(south) >= top
+        })
+        .collect();
+    columns.flat_map(|x| rows.iter().map(move |&y| (x, y))).collect()
 }
 
 #[cfg(test)]
@@ -340,84 +476,137 @@ mod tests {
         crate::vault::places::parse_gazetteer(&table)
     }
 
-    /// A single place, well inside the pack's grid (not near a pole or the
-    /// antimeridian), yields exactly its cell and its eight neighbours —
-    /// all nine populated, since the pack's seafloor data reaches
-    /// everywhere — and nothing further out.
+    /// The neighbourhood cells of places at `(latitude, longitude)`, sorted.
+    fn neighbourhood(places: &[(f64, f64)]) -> Vec<(i16, i16)> {
+        let points: Vec<ProjectedPoint> = places.iter().map(|&(latitude, longitude)| ProjectedPoint::new(longitude, latitude).unwrap()).collect();
+        neighbourhood_cells(&points).collect::<BTreeSet<_>>().into_iter().collect()
+    }
+
+    /// A single place, well inside the grid, yields exactly its cell and
+    /// its eight neighbours.
     #[test]
-    fn relevant_tiles_covers_a_place_cell_and_its_eight_neighbours() {
-        let pack = super::super::embedded().unwrap();
-        let gaz = gazetteer("[\"Beirut\"]\nlat = 33.89\nlng = 35.5\nprecision = \"city\"\n");
-        let tiles = relevant_tiles(&gaz, &pack);
+    fn a_place_neighbourhood_is_its_cell_and_its_eight_neighbours() {
+        let actual = neighbourhood(&[(33.89, 35.5)]);
         let (center_x, center_y) = (tile_x(35.5), tile_y(33.89));
-        let mut expected: Vec<(i16, i16)> = (-1..=1i32)
-            .flat_map(|dy| (-1..=1i32).map(move |dx| (dx, dy)))
-            .map(|(dx, dy)| (((i32::from(center_x) + dx).rem_euclid(36)) as i16, (i32::from(center_y) + dy) as i16))
-            .collect();
+        let mut expected: Vec<(i16, i16)> =
+            (-1..=1i16).flat_map(|dy| (-1..=1i16).map(move |dx| (center_x + dx, center_y + dy))).collect();
         expected.sort();
-        let mut actual = tiles.clone();
-        actual.sort();
         assert_eq!(actual, expected, "expected the 3x3 neighbourhood around ({center_x}, {center_y})");
     }
 
-    /// A place just west of the antimeridian wraps its neighbourhood
-    /// through column 35 back to column 0 (`relevant_tiles`'s
-    /// `rem_euclid(36)`), rather than running off the grid or stopping
-    /// short at 35 — the earlier neighbourhood test (Beirut) sits nowhere
-    /// near this edge and can't exercise the wrap.
+    /// The explorer's camera stops at the edges of the world, so a place by
+    /// the antimeridian or a pole has no neighbour past them.
     #[test]
-    fn relevant_tiles_wraps_the_antimeridian() {
-        let pack = super::super::embedded().unwrap();
-        let gaz = gazetteer("[\"Near Dateline\"]\nlat = 0.0\nlng = 179.9\nprecision = \"city\"\n");
-        let tiles = relevant_tiles(&gaz, &pack);
-        let (center_x, center_y) = (tile_x(179.9), tile_y(0.0));
-        assert_eq!(center_x, 35, "fixture assumption: 179.9 degrees sits in the last column");
-        let mut expected: Vec<(i16, i16)> = (-1..=1i32)
-            .flat_map(|dy| (-1..=1i32).map(move |dx| (dx, dy)))
-            .map(|(dx, dy)| (((i32::from(center_x) + dx).rem_euclid(36)) as i16, (i32::from(center_y) + dy) as i16))
-            .collect();
-        expected.sort();
-        let mut actual = tiles.clone();
-        actual.sort();
-        assert_eq!(actual, expected, "expected the wrapped 3x3 neighbourhood around ({center_x}, {center_y})");
-        assert!(actual.contains(&(0, center_y)), "the eastward wrap must reach column 0, got {actual:?}");
+    fn a_place_neighbourhood_stops_at_the_edges_of_the_world() {
+        let east = neighbourhood(&[(0.0, 179.9)]);
+        assert_eq!(tile_x(179.9), 35, "fixture assumption: 179.9 degrees sits in the last column");
+        assert_eq!(east, vec![(34, 8), (34, 9), (34, 10), (35, 8), (35, 9), (35, 10)]);
+        let south = neighbourhood(&[(-89.0, 0.0)]);
+        assert_eq!(south, vec![(17, 0), (17, 1), (18, 0), (18, 1), (19, 0), (19, 1)]);
     }
 
-    /// A place near the south pole clamps its neighbourhood at row 0
-    /// (`relevant_tiles`'s `0..18` bounds check dropping `y < 0`) instead
-    /// of yielding a negative row — the earlier neighbourhood test sits
-    /// nowhere near either pole and can't exercise the clamp.
+    /// Two places far apart contribute two separate neighbourhoods, nine
+    /// cells each: the result is a union, not one place's worth.
     #[test]
-    fn relevant_tiles_has_no_row_below_the_south_pole() {
-        let pack = super::super::embedded().unwrap();
-        let gaz = gazetteer("[\"Near South Pole\"]\nlat = -89.0\nlng = 0.0\nprecision = \"city\"\n");
-        let tiles = relevant_tiles(&gaz, &pack);
-        let (center_x, center_y) = (tile_x(0.0), tile_y(-89.0));
-        assert_eq!(center_y, 0, "fixture assumption: -89 degrees sits in the bottom row");
-        let mut expected: Vec<(i16, i16)> = (-1..=1i32)
-            .filter(|&dy| (0..18).contains(&(i32::from(center_y) + dy)))
-            .flat_map(|dy| (-1..=1i32).map(move |dx| (dx, dy)))
-            .map(|(dx, dy)| (((i32::from(center_x) + dx).rem_euclid(36)) as i16, (i32::from(center_y) + dy) as i16))
-            .collect();
-        expected.sort();
-        let mut actual = tiles.clone();
-        actual.sort();
-        assert_eq!(actual, expected, "expected only rows >= 0 around ({center_x}, {center_y})");
-        assert!(actual.iter().all(|&(_, y)| y >= 0), "no row below 0 may appear, got {actual:?}");
+    fn neighbourhoods_union_every_place() {
+        assert_eq!(neighbourhood(&[(33.89, 35.5), (13.75, 100.5)]).len(), 18);
     }
 
-    /// Two places far apart contribute two separate (non-overlapping)
-    /// neighbourhoods, each nine cells — proof the result is a union, not a
-    /// single place's worth of detail.
+    #[derive(serde::Deserialize)]
+    struct GoldenFrames {
+        fit: ExplorerFit,
+        #[serde(rename = "edgeFade")]
+        edge_fade: EdgeFade,
+        cases: Vec<GoldenFrame>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct GoldenFrame {
+        name: String,
+        points: Vec<(f64, f64)>,
+        map: ReferenceMap,
+        view: Option<(f64, f64, f64, f64)>,
+    }
+
+    /// Opening frames the explorer's `fitWork` draws, shared with its own
+    /// vitest suite, which holds the TypeScript fit to the same rectangles.
+    fn golden_frames() -> GoldenFrames {
+        serde_json::from_str(include_str!("../../js-src/site/places-explorer/__tests__/opening-frames.json")).unwrap()
+    }
+
+    fn gazetteer_of(places: &[(f64, f64)]) -> Gazetteer {
+        gazetteer(
+            &places
+                .iter()
+                .enumerate()
+                .map(|(index, &(latitude, longitude))| format!("[\"Stop {index}\"]\nlat = {latitude}\nlng = {longitude}\nprecision = \"city\"\n"))
+                .collect::<String>(),
+        )
+    }
+
     #[test]
-    fn relevant_tiles_unions_every_gazetteer_place() {
+    fn the_opening_view_is_the_explorers_fit_on_every_golden_frame() {
+        let golden = golden_frames();
+        assert_eq!((golden.fit, golden.edge_fade), (EXPLORER_FIT, EDGE_FADE), "the golden frames were drawn with another fit");
+        let world = Projection::new_world_full_extent();
+        for frame in golden.cases {
+            let points: Vec<(f64, f64)> =
+                frame.points.iter().map(|&(latitude, longitude)| world.project(ProjectedPoint::new(longitude, latitude).unwrap()).unwrap()).collect();
+            let view = opening_view(&points, frame.map, &EXPLORER_FIT);
+            match (view, frame.view) {
+                (None, None) => {}
+                (Some(view), Some(expected)) => {
+                    for (actual, expected) in [(view.0, expected.0), (view.1, expected.1), (view.2, expected.2), (view.3, expected.3)] {
+                        assert!((actual - expected).abs() < 1e-4, "{} on {:?}: {view:?}, explorer draws {expected:?}", frame.name, frame.map);
+                    }
+                }
+                (view, expected) => panic!("{} on {:?}: {view:?}, explorer draws {expected:?}", frame.name, frame.map),
+            }
+        }
+    }
+
+    /// Every cell under each reference map's opening view is emitted, and so
+    /// is every neighbour whose shared edge lies within a tile's outer-edge
+    /// fade and margin of the view, so no part of the frame falls to the
+    /// world layer; nothing further out is.
+    #[test]
+    fn a_site_emits_the_cells_its_opening_views_need_and_no_more() {
         let pack = super::super::embedded().unwrap();
-        let gaz = gazetteer(
-            "[\"Beirut\"]\nlat = 33.89\nlng = 35.5\nprecision = \"city\"\n\
-             [\"Bangkok\"]\nlat = 13.75\nlng = 100.5\nprecision = \"city\"\n",
-        );
-        let tiles = relevant_tiles(&gaz, &pack);
-        assert_eq!(tiles.len(), 18, "{tiles:?}");
+        let world = Projection::new_world_full_extent();
+        let pad = EDGE_FADE.width + EDGE_FADE.margin;
+        for name in ["continent", "cluster"] {
+            let golden = golden_frames();
+            let frames: Vec<&GoldenFrame> = golden.cases.iter().filter(|frame| frame.name == name).collect();
+            let emitted: BTreeSet<(i16, i16)> = relevant_tiles(&gazetteer_of(&frames[0].points), &pack).into_iter().collect();
+            let mut needed: BTreeSet<(i16, i16)> = neighbourhood(&frames[0].points).into_iter().collect();
+            for (left, top, right, bottom) in frames.iter().filter_map(|frame| frame.view) {
+                needed.extend(cells_under(&world, (left - pad, top - pad, right + pad, bottom + pad)));
+            }
+            assert_eq!(emitted, needed, "{name}");
+        }
+    }
+
+    /// Over budget, the reference map whose frame needs the most cells goes
+    /// first, so the smaller frames stay regional; a site spread across the
+    /// world keeps only its neighbourhoods.
+    #[test]
+    fn over_budget_the_largest_opening_frame_goes_first() {
+        let pack = super::super::embedded().unwrap();
+        let golden = golden_frames();
+        let world_spread = &golden.cases.iter().find(|frame| frame.name == "world").unwrap().points;
+        let points: Vec<ProjectedPoint> = world_spread.iter().map(|&(latitude, longitude)| ProjectedPoint::new(longitude, latitude).unwrap()).collect();
+        assert!(opening_cells(&points).iter().any(|cells| cells.len() > OPENING_CELL_BUDGET), "fixture assumption: the large map's frame alone is over budget");
+        assert_eq!(relevant_tiles(&gazetteer_of(world_spread), &pack), neighbourhood(world_spread));
+
+        // North to south across two continents: the short laptop's height-bound frame is the largest.
+        let pair = [(51.5, -0.1), (6.5, 3.4)];
+        let points: Vec<ProjectedPoint> = pair.iter().map(|&(latitude, longitude)| ProjectedPoint::new(longitude, latitude).unwrap()).collect();
+        let mut frames = opening_cells(&points);
+        frames.sort_by_key(|cells| cells.len());
+        let emitted: BTreeSet<(i16, i16)> = relevant_tiles(&gazetteer_of(&pair), &pack).into_iter().collect();
+        assert!(emitted.len() <= OPENING_CELL_BUDGET, "{} cells", emitted.len());
+        assert!(frames[0].is_subset(&emitted), "the smallest frame stays regional");
+        assert!(!frames.last().unwrap().is_subset(&emitted), "fixture assumption: the largest frame does not fit");
     }
 
     /// A gazetteer entry with no coordinates (the warned-about, kept-anyway

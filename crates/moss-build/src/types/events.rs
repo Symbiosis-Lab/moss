@@ -204,12 +204,12 @@ pub const MOSS_EVENT_CHANNEL: &str = "moss-event";
 // enum stays a thin tag and every consumer spells `types::events::X`.
 pub use crate::types::event_payloads::{
     host_from_url, ActionPanelOpened, CredentialRequest, LoginFailureReason, NestedRootInfo,
-    NestedRootsReport, NetworkFailureClass, PageVerdict, PublishReceipt, PublishReceiptDomain,
+    NestedRootsReport, PageVerdict, PublishReceipt, PublishReceiptDomain,
     PublishReceiptLive, PublishReceiptNewsletter, PublishReceiptPage, PublishReceiptPageKind,
     PublishReceiptUploaded, PublishTarget, PublishVerdict, PublishVerdictOrigin,
     PublishVerdictState, RootClass,
     StarterFailure, StarterProgress, StarterState, StarterStateRow, SuggestedSite, ThresholdPrompt,
-    ThresholdPromptKind, UpdateAvailable, UpdateCheckResult, UpdateDownloadProgress,
+    ThresholdPromptKind,
 };
 
 /// Terminal result of an actual structural read; consumers retry their full
@@ -279,13 +279,6 @@ pub enum MossEvent {
     ShowToast(ToastPayload),
     /// Mutate an existing toast in place. `id` (in payload) selects which.
     ShowToastUpdate(ToastPayload),
-    UpdateAvailable(UpdateAvailable),
-    UpdateCheckResult(UpdateCheckResult),
-    /// Byte progress of the installer download driven by `install_pending_update`.
-    /// Feeds the same update toast the "Update & Restart" button turns into a
-    /// progress bar, so the download is visible while it runs instead of only
-    /// when it ends.
-    UpdateDownloadProgress(UpdateDownloadProgress),
     /// `PanelTask` lifecycle event. Emitted by `TaskRegistry`
     /// after every spawn / progress / awaiting / terminal transition.
     /// Frontend renderers (`breadcrumb-hairline.ts`, the progress panel,

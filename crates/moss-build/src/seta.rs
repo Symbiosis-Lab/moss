@@ -3,6 +3,7 @@
 //! Crossed into this crate so the open binary can answer `deploy` and `domain`.
 
 pub mod client;
+mod wire;
 pub mod signing;
 pub mod domains;
 pub mod dns;

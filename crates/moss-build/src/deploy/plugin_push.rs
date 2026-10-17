@@ -282,7 +282,7 @@ pub async fn run_plugin_deploy_inner(
         return Ok(deploy_failed(
             "Cannot deploy to a project repository on GitHub Pages without a custom domain. \
              moss uses absolute paths that break on subpath hosting. Set up a custom domain \
-             first, or use moss hosting."
+             first, or use mosspub.com hosting."
                 .to_string(),
             crate::infra::app_advisory::t("deploy_err_custom_domain"),
         ));

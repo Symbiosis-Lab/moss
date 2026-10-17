@@ -146,7 +146,7 @@ async fn prebuilt_publish_is_rejected_while_a_normal_publish_is_in_flight() {
     // Guarded, it never touches the filesystem or the network at all.
     let missing = project.path().join("no-such-prebuilt-dir");
 
-    let err = push_prebuilt(project.path(), &missing, "guard-test-site", &identity, &silent())
+    let err = push_prebuilt(project.path(), &missing, "guard-test-site", &identity, false, &silent())
         .await
         .expect_err("a prebuilt publish must be rejected while a publish is in flight");
     assert_eq!(
@@ -182,6 +182,7 @@ async fn a_normal_publish_is_rejected_while_a_prebuilt_publish_is_in_flight() {
         project.path(),
         "guard-test-site",
         &identity,
+        false,
         &sink,
     ));
     // One poll runs the whole synchronous prologue (hash the dir, resolve the
@@ -234,7 +235,7 @@ async fn a_version_ahead_config_refuses_before_hashing_the_directory() {
     std::fs::write(moss_dir.join("config.toml"), format!("schema_version = {future}\n")).unwrap();
     let missing = project.path().join("no-such-prebuilt-dir");
 
-    let err = push_prebuilt(project.path(), &missing, "guard-test-site", &identity, &silent())
+    let err = push_prebuilt(project.path(), &missing, "guard-test-site", &identity, false, &silent())
         .await
         .expect_err("a version-ahead config must refuse");
     assert!(err.contains("schema_version") && err.contains("newer"), "got: {err}");
@@ -350,6 +351,7 @@ async fn a_self_healed_prebuilt_file_corrects_its_manifest_entry_before_commit()
         prebuilt.path(),
         "healed-prebuilt",
         &identity,
+        false,
         &silent(),
     )
     .await;
@@ -381,4 +383,163 @@ async fn a_self_healed_prebuilt_file_corrects_its_manifest_entry_before_commit()
         !body.contains(&old_hash),
         "the stale pre-drift hash must not survive into the committed manifest: {body}"
     );
+}
+
+// ── A removal that only touched `_moss/` still publishes ────────────────────
+//
+// The server leaves `_moss/` paths out of `remove` (they are not wipe
+// evidence) and reports how many it left out as `internal_remove`. With
+// `need` and `remove` both empty the publish used to return "up to date"
+// without committing, so a theme file deleted from the build stayed live.
+
+/// Publish a one-file directory against a fake server whose sync answer is
+/// `sync_body`; returns whether the client sent a commit.
+async fn commit_sent_for_sync_answer(sync_body: &'static str) -> bool {
+    use tokio::net::TcpListener;
+
+    let _lock = PUBLISH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let prev_url = std::env::var("MOSS_SETA_URL").ok();
+
+    let project = tmp_dir();
+    let prebuilt = tmp_dir();
+    std::fs::write(prebuilt.path().join("index.html"), b"<html>same</html>").unwrap();
+
+    let listener = TcpListener::bind::<std::net::SocketAddr>("127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let addr = listener.local_addr().unwrap();
+    let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let seen = requests.clone();
+    let server = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let raw = crate::test_drain_http_request(&mut stream).await;
+            let line = String::from_utf8_lossy(&raw).lines().next().unwrap_or("").to_string();
+            seen.lock().unwrap().push(line.clone());
+            let json = |body: &str| {
+                format!(
+                    "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+            };
+            let resp = if line.contains("/generation") {
+                "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 2\r\n\r\n{}".to_string()
+            } else if line.contains("/sync") {
+                json(sync_body)
+            } else {
+                json(r#"{"url":"https://fake.mosspub.com","files_updated":1,"files_removed":0,"timestamp":1700000000}"#)
+            };
+            crate::test_respond_and_close(&mut stream, resp.as_bytes()).await;
+        }
+    });
+
+    std::env::set_var("MOSS_SETA_URL", format!("http://{addr}"));
+    let identity = Identity::generate().expect("generate identity");
+    let result = push_prebuilt(project.path(), prebuilt.path(), "fake-site", &identity, false, &silent()).await;
+    match prev_url {
+        Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+        None => std::env::remove_var("MOSS_SETA_URL"),
+    }
+    server.abort();
+    assert!(result.is_ok(), "{result:?}");
+    let sent = requests.lock().unwrap().iter().any(|l| l.contains("/commit"));
+    sent
+}
+
+#[tokio::test]
+async fn a_publish_whose_only_change_is_removed_internal_files_commits() {
+    assert!(
+        commit_sent_for_sync_answer(r#"{"need":[],"remove":[],"server_total":2,"internal_remove":1}"#).await,
+        "internal_remove > 0 must reach the generation swap"
+    );
+}
+
+#[tokio::test]
+async fn nothing_changed_does_not_commit() {
+    assert!(!commit_sent_for_sync_answer(r#"{"need":[],"remove":[],"server_total":2,"internal_remove":0}"#).await);
+}
+
+#[tokio::test]
+async fn an_older_server_without_internal_remove_does_not_commit() {
+    assert!(!commit_sent_for_sync_answer(r#"{"need":[],"remove":[]}"#).await);
+}
+
+// ── Removal gate: an upload may not take a served address offline ───────────
+
+const GATE_SITE: &str = "gate-site";
+
+fn record_served(project: &Path, served: &[&str]) {
+    let snap = crate::build::manifest::change_set::PublishedSnapshot {
+        generation_id: "g1".into(),
+        target: format!("moss:{GATE_SITE}"),
+        published_at: "2026-01-01T00:00:00Z".into(),
+        files: served.iter().map(|p| (p.to_string(), "100644:aa".to_string())).collect(),
+        ..Default::default()
+    };
+    crate::build::manifest::published_record::save(&crate::moss_paths::MossPaths::new(project), &snap).unwrap();
+}
+
+/// Uploads `files` against a dead local server, so a call that passes the gate
+/// fails on the connection instead of reaching anything real.
+async fn gated_push(project: &Path, files: &[&str], accept_removals: bool) -> Result<PushResult, String> {
+    let prebuilt = tmp_dir();
+    for f in files {
+        let path = prebuilt.path().join(f);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"x").unwrap();
+    }
+    let _lock = PUBLISH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = crate::ENV_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let prev_url = std::env::var("MOSS_SETA_URL").ok();
+    std::env::set_var("MOSS_SETA_URL", "http://127.0.0.1:1");
+    let identity = Identity::generate().expect("generate identity");
+    let result = push_prebuilt(project, prebuilt.path(), GATE_SITE, &identity, accept_removals, &silent()).await;
+    match prev_url {
+        Some(u) => std::env::set_var("MOSS_SETA_URL", u),
+        None => std::env::remove_var("MOSS_SETA_URL"),
+    }
+    result
+}
+
+#[tokio::test]
+async fn a_prebuilt_upload_missing_a_served_address_is_refused() {
+    let project = tmp_dir();
+    record_served(project.path(), &["index.html", "old/index.html"]);
+
+    let err = gated_push(project.path(), &["index.html"], false).await.unwrap_err();
+
+    assert!(err.starts_with("Nothing published"), "{err}");
+    assert!(err.contains("/old/"), "{err}");
+    assert!(err.contains("--accept-removals"), "{err}");
+}
+
+#[tokio::test]
+async fn accepting_removals_lets_a_prebuilt_upload_past_the_gate() {
+    let project = tmp_dir();
+    record_served(project.path(), &["index.html", "old/index.html"]);
+
+    let err = gated_push(project.path(), &["index.html"], true).await.unwrap_err();
+
+    assert!(!err.contains("Nothing published"), "{err}");
+}
+
+#[tokio::test]
+async fn a_prebuilt_upload_with_no_publish_record_is_not_gated() {
+    let project = tmp_dir();
+
+    let err = gated_push(project.path(), &["index.html"], false).await.unwrap_err();
+
+    assert!(!err.contains("Nothing published"), "{err}");
+}
+
+#[tokio::test]
+async fn only_moss_internal_hashed_files_differing_is_not_a_removal() {
+    let project = tmp_dir();
+    record_served(project.path(), &["index.html", "_moss/app.1111.css"]);
+
+    let err = gated_push(project.path(), &["index.html", "_moss/app.2222.css"], false).await.unwrap_err();
+
+    assert!(!err.contains("Nothing published"), "{err}");
 }

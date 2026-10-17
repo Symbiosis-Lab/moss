@@ -556,18 +556,12 @@ pub fn frontmatter_asset_spans(source: &str) -> Vec<crate::resolve::md_extract::
         }
         #[allow(clippy::string_slice)]
         let raw_tail = &line[vrel..];
-        let first = raw_tail.as_bytes()[0];
-        // Flow collections are not asset paths.
-        if first == b'[' || first == b'{' {
-            continue;
-        }
-
-        let (value_len, quote) = match first {
-            b'"' => (scan_quoted(raw_tail, '"'), Some('"')),
-            b'\'' => (scan_quoted(raw_tail, '\''), Some('\'')),
-            _ => (scan_plain(raw_tail), None),
+        let quote = match raw_tail.as_bytes()[0] {
+            b'"' => Some('"'),
+            b'\'' => Some('\''),
+            _ => None,
         };
-        let Some(value_len) = value_len else { continue };
+        let Some(value_len) = scalar_len(raw_tail) else { continue };
         #[allow(clippy::string_slice)]
         // `scan_quoted` / `scan_plain` return char-boundary lengths.
         let raw = &raw_tail[..value_len];
@@ -664,6 +658,263 @@ fn unescape_double(raw: &str) -> String {
         }
     }
     out
+}
+
+/// One change to a page's top-level YAML frontmatter, for [`edit_fields`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum FieldEdit {
+    /// Set `key` to a string, number, bool or a list of those. An unchanged
+    /// value is left as written.
+    Set { key: String, value: serde_yaml::Value },
+    /// Remove `key`, its value lines and the comment lines directly above it.
+    /// Absent keys are fine.
+    Remove { key: String },
+}
+
+impl FieldEdit {
+    pub fn key(&self) -> &str {
+        match self {
+            FieldEdit::Set { key, .. } | FieldEdit::Remove { key } => key,
+        }
+    }
+}
+
+/// A top-level entry of a YAML block: its key and the lines it spans.
+struct Entry {
+    key: String,
+    /// Start of the comment lines directly above the key line, or of the key line.
+    comment_from: usize,
+    /// From the key line's start to the end of its last value line, terminator included.
+    lines: Range<usize>,
+    /// The scalar after `key:` on a one-line entry, without a trailing comment.
+    value: Option<Range<usize>>,
+}
+
+/// Byte length of the scalar at the start of `tail` (the text after `key: `),
+/// or `None` when it is not a one-line scalar: empty, a comment, a block
+/// scalar, a flow collection, an anchor, alias or tag.
+fn scalar_len(tail: &str) -> Option<usize> {
+    match tail.as_bytes().first()? {
+        b'|' | b'>' | b'[' | b'{' | b'&' | b'*' | b'!' | b'#' => None,
+        b'"' => scan_quoted(tail, '"'),
+        b'\'' => scan_quoted(tail, '\''),
+        _ => scan_plain(tail),
+    }
+}
+
+/// The top-level entries of the YAML text at `content[fields]`. A line
+/// indented, starting with `- `, or blank between value lines belongs to the
+/// entry above it; a run of comments at the margin belongs to the key right
+/// below it.
+fn entries(content: &str, fields: Range<usize>) -> Vec<Entry> {
+    let mut out: Vec<Entry> = Vec::new();
+    let mut comment_from: Option<usize> = None;
+    let mut offset = fields.start;
+    #[allow(clippy::string_slice)]
+    // `fields` is a line-boundary range from the splitter.
+    for raw in content[fields].split_inclusive('\n') {
+        let start = offset;
+        offset += raw.len();
+        let line = raw.trim_end_matches(['\n', '\r']);
+        if line.starts_with([' ', '\t']) || line == "-" || line.starts_with("- ") {
+            if let Some(entry) = out.last_mut() {
+                entry.lines.end = offset;
+                entry.value = None;
+            }
+            comment_from = None;
+            continue;
+        }
+        if line.starts_with('#') {
+            comment_from.get_or_insert(start);
+            continue;
+        }
+        let Some(colon) = line.find(": ").or_else(|| line.ends_with(':').then(|| line.len() - 1)) else {
+            comment_from = None;
+            continue;
+        };
+        #[allow(clippy::string_slice)]
+        // ASCII ':' and ' ' found by `find`.
+        let key = line[..colon].trim().trim_matches(['"', '\'']).to_string();
+        #[allow(clippy::string_slice)]
+        let after = &line[colon + 1..];
+        let value_from = colon + 1 + (after.len() - after.trim_start().len());
+        #[allow(clippy::string_slice)]
+        let len = scalar_len(&line[value_from..]);
+        out.push(Entry {
+            key,
+            comment_from: comment_from.take().unwrap_or(start),
+            lines: start..offset,
+            value: len.map(|len| start + value_from..start + value_from + len),
+        });
+    }
+    out
+}
+
+/// Whether two values are the same field value. Numbers compare by value,
+/// so a `1.0` that came back from the editor as `1` is not a change.
+fn same_value(a: &serde_yaml::Value, b: &serde_yaml::Value) -> bool {
+    use serde_yaml::Value;
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x == y || x.as_f64().is_some_and(|x| y.as_f64() == Some(x)),
+        (Value::Sequence(x), Value::Sequence(y)) => x.len() == y.len() && x.iter().zip(y).all(|(x, y)| same_value(x, y)),
+        _ => a == b,
+    }
+}
+
+/// `key: value` as the lines of one entry.
+fn entry_text(key: &str, value: &serde_yaml::Value, newline: &str) -> Result<String, String> {
+    let key = scalar_text(&serde_yaml::Value::String(key.to_string()))?;
+    match value {
+        serde_yaml::Value::Sequence(items) if items.is_empty() => Ok(format!("{key}: []{newline}")),
+        serde_yaml::Value::Sequence(items) => {
+            let mut text = format!("{key}:{newline}");
+            for item in items {
+                text.push_str(&format!("  - {}{newline}", scalar_text(item)?));
+            }
+            Ok(text)
+        }
+        scalar => Ok(format!("{key}: {}{newline}", scalar_text(scalar)?)),
+    }
+}
+
+/// `value` as YAML scalar text: plain when YAML reads it back as the same
+/// value, else double-quoted. Stray control characters are dropped, as
+/// [`serialize`] drops them.
+fn scalar_text(value: &serde_yaml::Value) -> Result<String, String> {
+    let value = &strip_control_chars(value);
+    match value {
+        serde_yaml::Value::Bool(b) => Ok(b.to_string()),
+        serde_yaml::Value::Number(n) => Ok(n.to_string()),
+        serde_yaml::Value::String(s) => {
+            let reads_back = |text: &str| {
+                serde_yaml::from_str::<HashMap<String, serde_yaml::Value>>(&format!("k: {text}\n"))
+                    .ok()
+                    .and_then(|m| m.get("k").cloned())
+                    == Some(value.clone())
+            };
+            if !s.is_empty() && s.trim() == s && !s.contains(['\n', '\r', '#']) && reads_back(s) {
+                return Ok(s.clone());
+            }
+            let mut quoted = String::from("\"");
+            for c in s.chars() {
+                match c {
+                    '"' => quoted.push_str("\\\""),
+                    '\\' => quoted.push_str("\\\\"),
+                    '\n' => quoted.push_str("\\n"),
+                    '\t' => quoted.push_str("\\t"),
+                    '\r' => quoted.push_str("\\r"),
+                    c if c.is_control() => quoted.push_str(&format!("\\u{:04X}", c as u32)),
+                    c => quoted.push(c),
+                }
+            }
+            quoted.push('"');
+            Ok(quoted)
+        }
+        _ => Err("only text, a number, true/false or a list of those can be written".to_string()),
+    }
+}
+
+/// [`edit_fields`] with the edits that turn the page's fields into `fields`:
+/// a key `fields` lacks is removed, one whose value differs is set.
+pub fn set_fields(content: &str, fields: &HashMap<String, serde_yaml::Value>) -> Result<String, String> {
+    let old = parse(content).frontmatter;
+    let edits: Vec<FieldEdit> = fields
+        .iter()
+        .map(|(key, value)| FieldEdit::Set { key: key.clone(), value: value.clone() })
+        .chain(old.keys().filter(|key| !fields.contains_key(*key)).map(|key| FieldEdit::Remove { key: key.clone() }))
+        .collect();
+    edit_fields(content, &edits)
+}
+
+/// Apply `edits` to the frontmatter of `content`, changing only the lines of
+/// the keys they name. Every other byte of the file, comments and quoting
+/// included, stays as written. New keys go one per line at the end of the
+/// block, in key order; a page with no frontmatter gets a new block.
+///
+/// A one-line scalar is replaced in place, keeping any trailing comment; any
+/// other entry being set is rewritten as its own lines.
+///
+/// Refuses, with the reason, rather than write a result it cannot vouch for:
+/// moss's simplified dialect, a key written twice, a value that is a map, and
+/// any result whose fields do not read back as exactly the old ones with the
+/// edits applied.
+pub fn edit_fields(content: &str, edits: &[FieldEdit]) -> Result<String, String> {
+    let mut seen = std::collections::HashSet::new();
+    if let Some(dup) = edits.iter().map(FieldEdit::key).find(|k| !seen.insert(*k)) {
+        return Err(format!("`{dup}` is edited twice"));
+    }
+    let newline = if content.contains("\r\n") { "\r\n" } else { "\n" };
+    let appended_text = |mut new: Vec<(&String, &serde_yaml::Value)>| -> Result<String, String> {
+        new.sort_by(|a, b| a.0.cmp(b.0));
+        new.into_iter().map(|(key, value)| entry_text(key, value, newline)).collect()
+    };
+
+    let Some(span) = frontmatter_span(content) else {
+        let lines = appended_text(edits.iter().filter_map(|e| match e {
+            FieldEdit::Set { key, value } => Some((key, value)),
+            FieldEdit::Remove { .. } => None,
+        }).collect())?;
+        if lines.is_empty() {
+            return Ok(content.to_string());
+        }
+        let bom = if content.starts_with('\u{feff}') { '\u{feff}'.len_utf8() } else { 0 };
+        #[allow(clippy::string_slice)]
+        // `bom` is 0 or the length of the leading BOM char.
+        return Ok(format!("{}---{newline}{lines}---{newline}{}", &content[..bom], &content[bom..]));
+    };
+    if span.kind != FrontmatterKind::Yaml {
+        return Err("this page's frontmatter has no `---` line above it; only a `---` block is edited".to_string());
+    }
+    let before = parse(content);
+    if let Some(error) = before.frontmatter_error {
+        return Err(format!("the frontmatter is not valid YAML: {error}"));
+    }
+
+    let found = entries(content, span.fields.clone());
+    let mut seen = std::collections::HashSet::new();
+    if let Some(dup) = found.iter().find(|e| !seen.insert(e.key.as_str())) {
+        return Err(format!("`{}` is written twice in the frontmatter", dup.key));
+    }
+
+    // Replacements on the original, applied back to front.
+    let mut splices: Vec<(Range<usize>, String)> = Vec::new();
+    let mut appended = Vec::new();
+    let mut expected = before.frontmatter.clone();
+    for edit in edits {
+        let entry = found.iter().find(|e| e.key == edit.key());
+        match (edit, entry) {
+            (FieldEdit::Remove { .. }, None) => {}
+            (FieldEdit::Remove { key }, Some(entry)) => {
+                splices.push((entry.comment_from..entry.lines.end, String::new()));
+                expected.remove(key);
+            }
+            (FieldEdit::Set { key, value }, _) if before.frontmatter.get(key).is_some_and(|old| same_value(old, value)) => {}
+            (FieldEdit::Set { key, value }, None) => {
+                appended.push((key, value));
+                expected.insert(key.clone(), value.clone());
+            }
+            (FieldEdit::Set { key, value }, Some(entry)) => {
+                match (&entry.value, value) {
+                    (Some(range), v) if !v.is_sequence() => splices.push((range.clone(), scalar_text(v)?)),
+                    _ => splices.push((entry.lines.clone(), entry_text(key, value, newline)?)),
+                }
+                expected.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    splices.push((span.fields.end..span.fields.end, appended_text(appended)?));
+    splices.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+    let mut out = content.to_string();
+    for (range, text) in splices {
+        out.replace_range(range, &text);
+    }
+
+    let after = parse(&out);
+    let body_kept = frontmatter_span(&out).is_some_and(|s| out.get(s.body..) == content.get(span.body..));
+    if after.frontmatter_error.is_some() || after.frontmatter != expected || !body_kept {
+        return Err("the edit would change more than the fields it names; nothing was changed".to_string());
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

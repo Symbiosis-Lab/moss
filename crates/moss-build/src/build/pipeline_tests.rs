@@ -177,6 +177,9 @@ fn build_test_full_with_gates(
             home_ready: _home_ready,
             publishable: _publishable,
             render_seq: _render_seq,
+            unready_derivations: _unready,
+            folder_lock: _,
+            locked_at_nanos: _,
         } = run(
             &root,
             site_dir_state,
@@ -408,6 +411,27 @@ fn test_build_creates_output_directory() {
 
     // Verify output was created (staging/ is sole output post-T2)
     assert!(test_dir.join(".moss/build.nosync/staging/index.html").exists());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn title_cards_do_not_block_preview_and_settle_in_pipeline_seal() {
+    let folder = TempDir::new().unwrap();
+    let root = crate::vault::paths::VaultRoot::resolve(folder.path());
+    let project = scan_folder(root.as_str()).unwrap();
+    let port = crate::build::ports::port_of_this_build(None, None);
+    // The current-thread runtime cannot poll the background workers until this
+    // synchronous call returns, so this checks ordering without a timer.
+    let result = run(&root, None, None, &port, None, None, &project, None,
+        crate::build::render::IncrementalGates::default(),
+        crate::build::feeds::search_lane::Freshness::Now, &test_cache_keys()).unwrap();
+    let stage = crate::moss_paths::MossPaths::new(root.path()).staging_dir();
+    let html = std::fs::read_to_string(stage.join("index.html")).unwrap();
+    assert!(html.contains("_moss/og/"), "preview HTML names its sharing card");
+    assert!(!stage.join("_moss/og").exists(), "preview must precede card rasterization");
+    let (sealed, _) = result.bg_handle.unwrap().await_completion().await.unwrap();
+    let cards: Vec<_> = sealed.image_outputs().iter().filter(|path| path.starts_with("_moss/og/")).collect();
+    assert_eq!(cards.len(), 1, "the pipeline must include its planned card in the seal");
+    assert!(stage.join(cards[0]).exists());
 }
 
 #[test]
@@ -1360,8 +1384,8 @@ fn a_ladder_already_in_staging_reaches_this_build_s_markup() {
         fs::write(ladder.join(member), "fake ladder member").unwrap();
     }
 
-    // Fresh registry, as `moss build` gets: one process, one registry, no
-    // rebuild afterwards to pick the ladder up.
+    // Fresh registry, as a one-shot build's pass gets it: the ladder is not
+    // in the registry, only on disk, and nothing re-registers it later.
     let services = BuildServices::headless();
     let result = build_test(
         folder_path,
@@ -1379,6 +1403,62 @@ fn a_ladder_already_in_staging_reaches_this_build_s_markup() {
         "a staged ladder must reach the emitted markup; got:\n{}",
         html
     );
+}
+
+/// A hero poster left in staging by a previous build is named by THIS build's
+/// hero, from a registry that starts empty. Same ordering invariant as the
+/// ladder's: `register_existing_posters` must run before the lookup copies the
+/// registry into its snapshot, or every hero keeps the 800-pixel thumbnail.
+#[test]
+fn a_hero_poster_already_in_staging_reaches_this_build_s_hero() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+
+    fs::write(test_dir.join("index.md"), "# Test\n\n:::hero\n![[clip.mp4]]\n:::\n").unwrap();
+    fs::write(test_dir.join("clip.mp4"), "fake video data").unwrap();
+    let staging = test_dir.join(".moss/build.nosync/staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::write(staging.join("clip.poster.jpg"), "fake poster").unwrap();
+
+    let services = BuildServices::headless();
+    let result = build_test(folder_path, None, None, None, Some(&services), &ResolvedSlots::empty());
+    assert!(result.is_ok(), "Build should succeed: {:?}", result);
+
+    let html = fs::read_to_string(staging.join("index.html")).unwrap();
+    assert!(
+        html.contains(r#"poster="/clip.poster.jpg""#),
+        "a staged poster must reach the hero's markup; got:\n{html}"
+    );
+}
+
+/// A definition's embed is dispatched like a blockquote's: the video element
+/// lands inside the `<dd>`, not as a broken image.
+#[test]
+fn a_definition_holds_a_video_embed_as_a_video() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+
+    fs::write(test_dir.join("index.md"), "# Test\n\nCredits\n: ![[clip.mp4]]\n").unwrap();
+    fs::write(test_dir.join("clip.mp4"), "fake video data").unwrap();
+
+    let services = BuildServices::headless();
+    let result = build_test(
+        folder_path,
+        None,
+        None,
+        None,
+        Some(&services),
+        &ResolvedSlots::empty(),
+    );
+    assert!(result.is_ok(), "Build should succeed: {:?}", result);
+
+    let html = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/index.html")).unwrap();
+    let definition = html
+        .split("<dd")
+        .nth(1)
+        .and_then(|rest| rest.split("</dd>").next())
+        .unwrap_or_else(|| panic!("no <dd> in output:\n{html}"));
+    assert!(definition.contains("<video"), "video embed missing from <dd>; got:\n{html}");
 }
 
 /// Build twice, the second time over a staging tree holding a ladder that the
@@ -1878,20 +1958,16 @@ async fn a_rebuild_storm_enters_the_encoder_once_and_stops_on_its_own() {
     let cached: Vec<String> = (0..10).map(|i| format!("videos/cached-{i}.mov")).collect();
     let mut names = vec![slow];
     names.extend(cached.iter().map(String::as_str));
-    // The encoder: a poster frame is written at once; the mp4 encode's first
-    // pass marks its entry and blocks until the test releases it, and the
-    // second pass writes the mp4.
+    // The encoder: a poster frame is written at once; the mp4 encode marks
+    // its entry, blocks until the test releases it, and then writes the mp4.
     let (temp, ctx) = vault_with_videos(
         &names,
         "#!/bin/sh\n\
-         out=''; thumb=''; pass=''; prev=''\n\
-         for a in \"$@\"; do out=\"$a\"; [ \"$a\" = -vframes ] && thumb=1; [ \"$prev\" = -pass ] && pass=\"$a\"; prev=\"$a\"; done\n\
+         out=''; thumb=''\n\
+         for a in \"$@\"; do out=\"$a\"; [ \"$a\" = -vframes ] && thumb=1; done\n\
          if [ -n \"$thumb\" ]; then printf poster > \"$out\"; exit 0; fi\n\
-         if [ \"$pass\" = 1 ]; then\n\
-           echo entered >> '{temp}/entered'\n\
-           n=0; while [ ! -f '{temp}/release' ] && [ -d '{temp}' ] && [ $n -lt 1500 ]; do sleep 0.02; n=$((n+1)); done\n\
-           exit 0\n\
-         fi\n\
+         echo entered >> '{temp}/entered'\n\
+         n=0; while [ ! -f '{temp}/release' ] && [ -d '{temp}' ] && [ $n -lt 1500 ]; do sleep 0.02; n=$((n+1)); done\n\
          printf 'encoded mp4' > \"$out\"\n",
     );
     // A 320-wide ProRes source: one ladder rung (no HLS), and not web-playable,
@@ -1899,7 +1975,7 @@ async fn a_rebuild_storm_enters_the_encoder_once_and_stops_on_its_own() {
     let ffprobe = temp.path().join("ffprobe");
     std::fs::write(
         &ffprobe,
-        "#!/bin/sh\ncase \"$*\" in *nokey=1*) echo 10; exit 0;; esac\nprintf '[STREAM]\\ncodec_type=video\\ncodec_name=prores\\nwidth=320\\nr_frame_rate=30/1\\n[/STREAM]\\n[FORMAT]\\nduration=10\\nbit_rate=90000000\\n[/FORMAT]\\n'\n",
+        "#!/bin/sh\ncase \"$*\" in *nokey=1*) echo 10; exit 0;; esac\nprintf '[STREAM]\\ncodec_type=video\\ncodec_name=prores\\nwidth=320\\nheight=180\\nr_frame_rate=30/1\\n[/STREAM]\\n[FORMAT]\\nduration=10\\nbit_rate=90000000\\n[/FORMAT]\\n'\n",
     )
     .unwrap();
     std::fs::set_permissions(&ffprobe, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -1959,7 +2035,7 @@ async fn a_rebuild_storm_enters_the_encoder_once_and_stops_on_its_own() {
             .unwrap();
             let sealed: SealedManifest = test_utils::drain_into_sealed(rx, previous.clone()).await;
             let settled = crate::build::diff_settled_assets(&previous, sealed.site_hashes_view());
-            crate::build::trigger_media_settle_rerender(&folder, &settled, Some(&previous));
+            crate::build::media::promise::trigger_media_settle_rerender(&folder, &settled, Some(&previous));
             (sealed.site_hashes_view().clone(), handle.take().is_some())
         }
     };
@@ -2133,24 +2209,23 @@ async fn a_cache_sweep_during_a_detached_encode_keeps_what_it_already_stored() {
     use crate::ops::watch::worker;
     use std::os::unix::fs::PermissionsExt;
 
-    // The first video encodes at once; the second blocks in its first pass.
+    // The first video encodes at once; the second blocks before it writes.
     let (temp, ctx) = vault_with_videos(
         &["videos/first.mov", "videos/second.mov"],
         "#!/bin/sh\n\
-         out=''; thumb=''; pass=''; prev=''; input=''\n\
-         for a in \"$@\"; do out=\"$a\"; [ \"$a\" = -vframes ] && thumb=1; [ \"$prev\" = -pass ] && pass=\"$a\"; [ \"$prev\" = -i ] && input=\"$a\"; prev=\"$a\"; done\n\
+         out=''; thumb=''; prev=''; input=''\n\
+         for a in \"$@\"; do out=\"$a\"; [ \"$a\" = -vframes ] && thumb=1; [ \"$prev\" = -i ] && input=\"$a\"; prev=\"$a\"; done\n\
          if [ -n \"$thumb\" ]; then printf poster > \"$out\"; exit 0; fi\n\
-         case \"$input\" in *second*) if [ \"$pass\" = 1 ]; then\n\
+         case \"$input\" in *second*)\n\
            echo entered >> '{temp}/entered'\n\
            n=0; while [ ! -f '{temp}/release' ] && [ -d '{temp}' ] && [ $n -lt 1500 ]; do sleep 0.02; n=$((n+1)); done\n\
-         fi;; esac\n\
-         [ \"$pass\" = 1 ] && exit 0\n\
+         ;; esac\n\
          printf 'encoded mp4' > \"$out\"\n",
     );
     let ffprobe = temp.path().join("ffprobe");
     std::fs::write(
         &ffprobe,
-        "#!/bin/sh\ncase \"$*\" in *nokey=1*) echo 10; exit 0;; esac\nprintf '[STREAM]\\ncodec_type=video\\ncodec_name=prores\\nwidth=320\\nr_frame_rate=30/1\\n[/STREAM]\\n[FORMAT]\\nduration=10\\nbit_rate=90000000\\n[/FORMAT]\\n'\n",
+        "#!/bin/sh\ncase \"$*\" in *nokey=1*) echo 10; exit 0;; esac\nprintf '[STREAM]\\ncodec_type=video\\ncodec_name=prores\\nwidth=320\\nheight=180\\nr_frame_rate=30/1\\n[/STREAM]\\n[FORMAT]\\nduration=10\\nbit_rate=90000000\\n[/FORMAT]\\n'\n",
     )
     .unwrap();
     std::fs::set_permissions(&ffprobe, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -2245,9 +2320,10 @@ fn test_run_video_conversion_singleflight_dedup_headless() {
             .in_flight_videos
             .do_work(&test_oid, || VideoConversionOutcome {
                 error: None,
-                poster: false,
+                thumb_linked: false,
                 mp4_oid: None,
                 thumb_oid: None,
+                hero_poster_oid: None,
                 hls_entries: Vec::new(),
             });
     assert!(result.is_some());
@@ -2259,9 +2335,10 @@ fn test_run_video_conversion_singleflight_dedup_headless() {
             .in_flight_videos
             .do_work(&test_oid, || VideoConversionOutcome {
                 error: None,
-                poster: false,
+                thumb_linked: false,
                 mp4_oid: None,
                 thumb_oid: None,
+                hero_poster_oid: None,
                 hls_entries: Vec::new(),
             });
     assert!(result2.is_some());
@@ -5412,6 +5489,7 @@ fn cold_page_metadata_keeps_complete_home_and_assets_until_recovery() {
 
 #[test]
 fn prior_route_requires_matching_source_and_current_bytes() {
+    use crate::build::cloud_ledger::{InputEntry, InputRole, InputState};
     use crate::system::folder_session::{PreviewRequirement, PreviewSource};
     let (dir, _cleanup) = create_test_dir();
     fs::write(dir.join("index.html"), "old page").unwrap();
@@ -5421,16 +5499,25 @@ fn prior_route_requires_matching_source_and_current_bytes() {
     ));
     previous.source_to_output.insert("index.md".into(), "index.html".into());
     let requirement = |source| PreviewRequirement { url_path: "/".into(), source, revision: 1 };
-    assert!(previous_route_present(&requirement(PreviewSource::File("index.md".into())), &previous, &dir));
-    assert!(!previous_route_present(&requirement(PreviewSource::File("other.md".into())), &previous, &dir));
-    assert!(!previous_route_present(&requirement(PreviewSource::Generated), &previous, &dir));
-    assert!(!previous_route_present(&requirement(PreviewSource::Unresolved), &previous, &dir));
+    let ledger = |state| std::collections::BTreeMap::from([
+        ("index.md".to_string(), InputEntry { role: InputRole::PageContent, state }),
+    ]);
+    let unread = std::collections::BTreeMap::new();
+    let read = ledger(InputState::Read { hash: "current".into() });
+    assert!(previous_route_present(&requirement(PreviewSource::File("index.md".into())), &previous, &dir, &unread));
+    assert!(!previous_route_present(&requirement(PreviewSource::File("other.md".into())), &previous, &dir, &unread));
+    assert!(!previous_route_present(&requirement(PreviewSource::Generated), &previous, &dir, &unread));
+    assert!(!previous_route_present(&requirement(PreviewSource::Unresolved), &previous, &dir, &unread));
+    assert!(!previous_route_present(&requirement(PreviewSource::Unresolved), &previous, &dir,
+        &ledger(InputState::Pending { retained: false })), "a source still downloading proves nothing");
+    assert!(previous_route_present(&requirement(PreviewSource::Unresolved), &previous, &dir, &read),
+        "a source this attempt read proves the route it owned");
     previous.source_to_output.clear();
-    assert!(!previous_route_present(&requirement(PreviewSource::Unresolved), &previous, &dir),
+    assert!(!previous_route_present(&requirement(PreviewSource::Unresolved), &previous, &dir, &read),
         "a generated old home cannot prove the unresolved new source");
     previous.source_to_output.insert("index.md".into(), "index.html".into());
     fs::write(dir.join("index.html"), "newer generation").unwrap();
-    assert!(!previous_route_present(&requirement(PreviewSource::File("index.md".into())), &previous, &dir));
+    assert!(!previous_route_present(&requirement(PreviewSource::File("index.md".into())), &previous, &dir, &unread));
 }
 
 #[cfg(target_os = "macos")]
@@ -5472,25 +5559,65 @@ fn pending_authored_folder_index_does_not_synthesize_a_finished_substitute() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn focused_unresolved_and_unemitted_routes_wait() {
+fn a_request_that_named_no_source_never_waits_on_a_local_page() {
     use crate::system::folder_session::PreviewSource;
     let (dir, _cleanup) = create_test_dir();
     let folder = dir.to_str().unwrap();
     fs::write(dir.join("article.md"), "# Article\n").unwrap();
-    assert_eq!(focused_build_phase(folder, "/article/", PreviewSource::Unresolved).unwrap(), "home_waiting");
+    assert_eq!(focused_build_phase(folder, "/article/", PreviewSource::Unresolved).unwrap(), "home_ready");
+    assert_eq!(focused_build_phase(folder, "/missing/", PreviewSource::Unresolved).unwrap(), "home_ready");
     assert_eq!(focused_build_phase(folder, "/missing/", PreviewSource::Generated).unwrap(), "home_ready");
 }
 
 #[cfg(target_os = "macos")]
 #[test]
-fn unresolved_navigation_waits_even_when_an_old_route_exists() {
+fn a_rebuild_keeps_showing_a_local_page_the_request_did_not_name_a_source_for() {
     use crate::system::folder_session::PreviewSource;
     let (dir, _cleanup) = create_test_dir();
     let folder = dir.to_str().unwrap();
     fs::write(dir.join("article.md"), "# Article\n").unwrap();
     let (promotion, _, _, _) = build_test_promoted_or_withheld(folder).unwrap();
     assert_eq!(promotion, crate::build::ship::Promotion::Promoted);
-    assert_eq!(focused_build_phase(folder, "/article/", PreviewSource::Unresolved).unwrap(), "home_waiting");
+    fs::write(dir.join("article.md"), "---\ntitle: Edited elsewhere\n---\n# Article\n").unwrap();
+    assert_eq!(focused_build_phase(folder, "/article/", PreviewSource::Unresolved).unwrap(), "home_ready");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_page_unusable_for_a_reason_outside_the_cloud_raises_no_cloud_wait() {
+    use std::os::unix::fs::PermissionsExt;
+    use crate::system::folder_session::PreviewSource;
+    let (dir, _cleanup) = create_test_dir();
+    let folder = dir.to_str().unwrap();
+    fs::write(dir.join("article.md"), "# Article\n").unwrap();
+    fs::set_permissions(dir.join("article.md"), fs::Permissions::from_mode(0o000)).unwrap();
+    let phase = focused_build_phase(folder, "/article/", PreviewSource::File("article.md".into()));
+    let mp = crate::moss_paths::MossPaths::new(&dir);
+    let state = SiteDirectoryState::new(mp.current_ptr());
+    let session = crate::system::folder_session::FolderSession::new(dir.clone());
+    session.set_preview_requirement("/article/".into(), PreviewSource::File("article.md".into())).unwrap();
+    let built = build_test_with_focus(folder, scan_folder(folder).unwrap(), Some(&state), Some(session), None, None);
+    fs::set_permissions(dir.join("article.md"), fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(phase.unwrap(), "home_ready", "nothing is in the cloud, so nothing is waited on");
+    built.unwrap();
+    assert_eq!(*state.current_dir.read().unwrap(), mp.staging_dir(),
+        "the preview shows this build, not a stale one held back for a download that does not exist");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_folder_page_waiting_on_its_index_is_shown_once_the_index_arrives() {
+    use crate::system::folder_session::PreviewSource;
+    let (dir, _cleanup) = create_test_dir();
+    let folder = dir.to_str().unwrap();
+    fs::create_dir_all(dir.join("notes")).unwrap();
+    fs::write(dir.join("notes/child.md"), "# Child\n").unwrap();
+    fs::write(dir.join("notes/.index.md.icloud"), "").unwrap();
+    assert_eq!(focused_build_phase(folder, "/notes/", PreviewSource::Unresolved).unwrap(), "home_waiting");
+    fs::remove_file(dir.join("notes/.index.md.icloud")).unwrap();
+    fs::write(dir.join("notes/index.md"), "# Notes\n").unwrap();
+    assert_eq!(focused_build_phase(folder, "/notes/", PreviewSource::Unresolved).unwrap(), "home_ready",
+        "the same request, never renamed by a navigation, is answered once its source is read");
 }
 
 #[cfg(target_os = "macos")]
@@ -5519,7 +5646,24 @@ fn generated_places_requires_the_emitted_route_in_this_attempt() {
     fs::write(dir.path().join("places/index.html"), b"<h1>Places</h1>").unwrap();
     assert_eq!(pending.preview_readiness(&requirement, dir.path()), crate::build::manifest::PreviewReadiness::Usable);
     let unresolved = PreviewRequirement { source: PreviewSource::Unresolved, ..requirement };
-    assert_eq!(pending.preview_readiness(&unresolved, dir.path()), crate::build::manifest::PreviewReadiness::Pending);
+    assert_eq!(pending.preview_readiness(&unresolved, dir.path()), crate::build::manifest::PreviewReadiness::Usable,
+        "no source maps to the route and nothing is pending, so the request stands for the generated page");
+}
+
+#[test]
+fn an_unresolved_request_with_no_route_waits_only_while_a_page_is_pending() {
+    use crate::build::cloud_ledger::{InputEvidence, InputRole};
+    use crate::build::manifest::{PendingManifest, PreviewReadiness};
+    use crate::system::folder_session::{PreviewRequirement, PreviewSource};
+    let dir = tempfile::tempdir().unwrap();
+    let requirement = PreviewRequirement { url_path: "/notes/".into(), source: PreviewSource::Unresolved, revision: 1 };
+    let settled = PendingManifest::for_build(Default::default(), InputEvidence::new(dir.path()));
+    assert_eq!(settled.preview_readiness(&requirement, dir.path()), PreviewReadiness::Missing);
+    let downloading = InputEvidence::new(dir.path());
+    downloading.require(&dir.path().join("notes/index.md"), InputRole::PageMetadata);
+    downloading.pending(&dir.path().join("notes/index.md"));
+    let waiting = PendingManifest::for_build(Default::default(), downloading);
+    assert_eq!(waiting.preview_readiness(&requirement, dir.path()), PreviewReadiness::Pending);
 }
 
 /// Every file under `dir`, as relative path → content hash. The instrument a
@@ -5826,6 +5970,31 @@ fn a_cloud_evicted_page_survives_the_seal_time_sweep_and_the_deploy_manifest() {
     assert!(!keys.iter().any(|k| k == "keeper/index.html"), "keys: {keys:?}");
 }
 
+/// A translation still in the cloud is not gone: the build keeps publishing
+/// its last page, so an old address recorded as forwarding to it keeps doing
+/// so, rather than being sent to the default language's page at that place.
+#[test]
+fn a_translation_still_in_the_cloud_keeps_its_old_address() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    let page = |title: &str| format!("---\ntitle: {title}\n---\n\n# {title}\n");
+    fs::write(test_dir.join("index.md"), "# Home").unwrap();
+    fs::write(test_dir.join("new.md"), page("New")).unwrap();
+    fs::create_dir_all(test_dir.join("zh-hans")).unwrap();
+    fs::write(test_dir.join("zh-hans/new.md"), page("新")).unwrap();
+    fs::create_dir_all(test_dir.join(".moss/data")).unwrap();
+    fs::write(test_dir.join(".moss/data/redirects.json"), r#"{"zh-hans/old/": "zh-hans/new/"}"#).unwrap();
+    let staging = test_dir.join(".moss/build.nosync/staging");
+
+    build_test_sealed(folder_path).expect("first build");
+    assert!(fs::read_to_string(staging.join("zh-hans/old/index.html")).unwrap().contains("url=/zh-hans/new/"));
+
+    let _cloud = crate::build::icloud::pretend::evicted(&test_dir.join("zh-hans/new.md"));
+    let keys = build_test_sealed(folder_path).expect("build with the translation evicted");
+    assert!(keys.iter().any(|k| k == "zh-hans/new/index.html"), "premise: the translation is carried forward, keys: {keys:?}");
+    assert!(fs::read_to_string(staging.join("zh-hans/old/index.html")).unwrap().contains("url=/zh-hans/new/"));
+}
+
 
 // ---------------------------------------------------------------------------
 // The cloud gate: does this build's home page belong to the user?
@@ -5855,6 +6024,7 @@ fn gate_structure(root: &std::path::Path, homepage: Option<&str>, evicted: &[&st
         has_language_trees: false,
         passthrough_roots: std::collections::HashSet::new(),
         dirs: Vec::new(),
+        empty_folders: Vec::new(),
     }
 }
 
@@ -6036,6 +6206,30 @@ fn a_readable_page_with_denied_uid_write_keeps_its_consumed_read_evidence() {
     assert!(keys.iter().any(|key| key == "index.html"));
     assert!(unresolved.is_empty(), "a denied optional UID write did not change source bytes: {unresolved:?}");
     assert!(crate::deploy::refuse_unresolved_inputs(&sealed).is_ok());
+}
+
+#[test]
+fn a_build_under_a_denied_source_write_session_leaves_every_source_byte_identical() {
+    let index = "---\ntitle: Home\n---\nHi";
+    let note = "---\ntitle: Note\npartial: true\n---\nShared text";
+
+    let (dir, _cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), index).unwrap();
+    fs::write(dir.join("note.md"), note).unwrap();
+    let session = crate::system::folder_session::FolderSession::new(dir.clone());
+    let _denied = session.deny_source_writes();
+    let folder_path = dir.to_str().unwrap();
+    let (_, keys, _, _) = build_test_with_focus(folder_path, scan_folder(folder_path).unwrap(), None, Some(session), None, None).unwrap();
+    assert!(keys.iter().any(|key| key == "index.html"));
+    assert_eq!(fs::read_to_string(dir.join("index.md")).unwrap(), index);
+    assert_eq!(fs::read_to_string(dir.join("note.md")).unwrap(), note);
+
+    let (control, _control_cleanup) = create_test_dir();
+    fs::write(control.join("index.md"), index).unwrap();
+    fs::write(control.join("note.md"), note).unwrap();
+    build_test_promoted_or_withheld(control.to_str().unwrap()).unwrap();
+    assert!(fs::read_to_string(control.join("index.md")).unwrap().contains("uid:"));
+    assert!(fs::read_to_string(control.join("note.md")).unwrap().contains("uid:"));
 }
 
 #[cfg(target_os = "macos")]
@@ -6777,6 +6971,45 @@ fn pages_deleted_outside_moss_leave_the_sitemap_on_the_next_build() {
     assert!(still_naming.is_empty(), "outputs still naming a page whose source was deleted: {still_naming:?}\n{sitemap}");
 }
 
+/// A photo marked for the photography page is listed however its paragraph
+/// renders: as a captioned figure, as a plain paragraph on a site that turned
+/// implicit figures off, or as an image without alt text, which never becomes
+/// a figure. An unmarked photo before them is not listed in their place. A
+/// marked video is listed on the videos page either way.
+#[test]
+fn marked_media_reach_their_collection_pages_however_the_paragraph_renders() {
+    for implicit_figure in [true, false] {
+        let (test_dir, _cleanup) = create_test_dir();
+        let folder_path = test_dir.to_str().unwrap();
+        fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+        fs::create_dir_all(test_dir.join(".moss")).unwrap();
+        fs::write(test_dir.join(".moss/config.toml"), format!("schema_version = 6\n\n[site]\nimplicit_figure = {implicit_figure}\n")).unwrap();
+        fs::write(
+            test_dir.join("trip.md"),
+            "---\ntitle: Trip\n---\n\nA walk.\n\n![Not for the gallery](unmarked.jpg)\n\n![Sunset over hills](sunset.jpg)\n<!-- photography -->\n\n![](noalt.jpg)\n<!-- photography -->\n\n![Morning mist](mist.mp4)\n<!-- video-meta: walks -->\n\n![[embedded.jpg]]\n<!-- photography -->\n\n![[embedded.mp4]]\n<!-- video-meta -->\n",
+        )
+        .unwrap();
+        for name in ["unmarked.jpg", "sunset.jpg", "noalt.jpg", "embedded.jpg"] {
+            image::RgbImage::from_pixel(24, 24, image::Rgb([23, 45, 67])).save(test_dir.join(name)).unwrap();
+        }
+        fs::write(test_dir.join("mist.mp4"), "fake video data").unwrap();
+        fs::write(test_dir.join("embedded.mp4"), "fake video data").unwrap();
+
+        build_test_sealed(folder_path).expect("build");
+        let staging = test_dir.join(".moss/build.nosync/staging");
+        let photos = fs::read_to_string(staging.join("photography/index.html")).unwrap_or_default();
+        for src in ["/sunset.jpg", "/noalt.jpg", "/embedded.jpg"] {
+            assert!(photos.contains(&format!(r#"data-src="{src}""#)), "implicit_figure = {implicit_figure}: {src} is listed:\n{photos}");
+        }
+        assert!(photos.contains(r#"data-title="Sunset over hills""#), "implicit_figure = {implicit_figure}: the alt text is the title");
+        assert!(!photos.contains("/unmarked.jpg"), "implicit_figure = {implicit_figure}: an unmarked photo is not listed");
+        let videos = fs::read_to_string(staging.join("videos/index.html")).unwrap_or_default();
+        for src in ["/mist.mp4", "/embedded.mp4"] {
+            assert!(videos.contains(&format!(r#"data-src="{src}""#)), "implicit_figure = {implicit_figure}: {src} is listed:\n{videos}");
+        }
+    }
+}
+
 /// The other side of the test above: a page this build could not read because
 /// it is still in the cloud keeps serving its last HTML
 /// (`carry_forward_deferred_page`), so it stays in the sitemap too. It must not
@@ -6832,7 +7065,7 @@ fn the_sitemap_lists_static_pages_and_notebooks_but_never_stubs() {
             assert!(staging.join(stub).is_file(), "premise, {build}: {stub} is published");
         }
         let sitemap = fs::read_to_string(staging.join("sitemap.xml")).unwrap();
-        for listed in ["https://example.com/demo/sketch<", "https://example.com/analysis<"] {
+        for listed in ["https://example.com/demo/sketch.html<", "https://example.com/analysis.html<"] {
             assert!(sitemap.contains(listed), "{build}: the sitemap must list {listed}\n{sitemap}");
         }
         for unlisted in ["old-essay", "subscribe/"] {
@@ -6874,10 +7107,10 @@ fn the_sitemap_leaves_out_html_pages_that_declare_noindex() {
 
     build_test_at_site_url(folder_path).expect("build");
     let sitemap = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/sitemap.xml")).unwrap();
-    for kept in ["music", "about", "commented", "too-late"] {
+    for kept in ["music.html", "about.html", "commented.html", "too-late.html"] {
         assert!(sitemap.contains(&format!("/{kept}</loc>")), "the sitemap must list {kept}\n{sitemap}");
     }
-    for out in ["scales", "closed", "just-inside", "share/abc123/", "hidden/"] {
+    for out in ["scales.html", "closed.html", "just-inside.html", "share/abc123/", "hidden/"] {
         assert!(!sitemap.contains(&format!("/{out}</loc>")), "the sitemap must not list {out}\n{sitemap}");
     }
 }
@@ -7054,6 +7287,26 @@ fn a_timed_event_with_a_zone_writes_tzid_and_a_vtimezone() {
 }
 
 #[test]
+fn a_folder_timezone_cascade_gives_its_events_a_zone() {
+    let (test_dir, _c) = create_test_dir();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::create_dir_all(test_dir.join("Events")).unwrap();
+    fs::write(
+        test_dir.join("Events/index.md"),
+        "---\ntitle: Events\ncascade:\n  timezone: Europe/Oslo\n---\n\nWhat is on.\n",
+    )
+    .unwrap();
+    fs::write(
+        test_dir.join("Events/concert.md"),
+        "---\ntitle: Concert\nuid: conc0001\nstart: 2026-11-01 19:00\n---\n\nBody.\n",
+    )
+    .unwrap();
+    build_test_sealed_at(test_dir.to_str().unwrap(), Some("https://example.test")).expect("build");
+    let lines = assert_valid_ics(&staged(&test_dir, "events/concert/event.ics"));
+    assert!(lines.contains(&"DTSTART;TZID=Europe/Oslo:20261101T190000".to_string()), "{lines:?}");
+}
+
+#[test]
 fn an_all_day_multi_day_event_ends_the_day_after_its_inclusive_end() {
     let (dir, _c) = event_site(&[("Festival.md", "title: Festival\nuid: fest0001\nstart: 2026-11-01\nend: 2026-11-03\n")]);
     let lines = assert_valid_ics(&staged(&dir, "events/festival/event.ics"));
@@ -7165,6 +7418,111 @@ fn a_folder_calendar_holds_what_the_folders_listing_shows() {
     let season = staged(&dir, "season/calendar.ics");
     assert!(season.contains("UID:open0001@example.test"), "a nested event the listing shows is in the calendar: {season}");
     assert_eq!(staged_calendars(&dir), ["calendar.ics", "season/calendar.ics"], "the root home lists the whole tree; Plain lists direct children only, and Talk is nested");
+}
+
+/// A site whose home (listing off) has `body`, with `Season/` and `Archive/`
+/// folders of events: `Season` holds a 2099 event, `Archive` only 2001 ones.
+fn embedding_home_site(body: &str) -> (std::path::PathBuf, impl Drop) {
+    let (dir, cleanup) = create_test_dir();
+    fs::write(dir.join("index.md"), format!("---\ntitle: Home\nchildren: false\n---\n\n{body}\n")).unwrap();
+    for (path, fm) in [
+        ("Season/index.md", "title: Season\n"),
+        ("Season/Gala.md", "title: Gala\nuid: gala0001\nstart: 2099-05-01\n"),
+        ("Archive/index.md", "title: Archive\n"),
+        ("Archive/Old.md", "title: Old\nuid: old00001\nstart: 2001-05-01\n"),
+    ] {
+        fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
+        fs::write(dir.join(path), format!("---\n{fm}---\n\nBody.\n")).unwrap();
+    }
+    build_test_sealed_at(dir.to_str().unwrap(), Some("https://example.test")).expect("build");
+    (dir, cleanup)
+}
+
+#[test]
+fn calendar_links_follow_the_embedded_listing_not_the_end_of_the_page() {
+    let (dir, _c) = embedding_home_site("![[Season/]]\n\nClosing words.");
+    let home = staged(&dir, "index.html");
+    assert_eq!(home.matches("moss-calendar-links").count(), 1, "{home}");
+    let links = home.find(r#"href="/season/calendar.ics""#).expect(&home);
+    assert!(home.contains(r#"href="webcal://example.test/season/calendar.ics""#), "{home}");
+    assert!(home.find("/season/gala/").unwrap() < links, "the links come after the listing: {home}");
+    assert!(links < home.find(">Closing words.</p>").unwrap(), "and before the prose that follows it: {home}");
+    assert!(!home.contains(r#"href="/calendar.ics" type"#), "the page's own all-events calendar is not offered at the end: {home}");
+    assert!(home.contains(r#"rel="alternate" type="text/calendar""#), "the head link stays: {home}");
+    assert!(staged_exists(&dir, "calendar.ics"), "the home's calendar file is still served");
+}
+
+#[test]
+fn a_folder_embedded_twice_gets_its_links_once_after_the_last_embed() {
+    let (dir, _c) = embedding_home_site("![[Season/|limit:1]]\n\nMiddle words.\n\n![[Season/]]\n\nClosing words.");
+    let home = staged(&dir, "index.html");
+    assert_eq!(home.matches(r#"href="/season/calendar.ics""#).count(), 1, "{home}");
+    let links = home.find(r#"href="/season/calendar.ics""#).unwrap();
+    assert!(home.find(">Middle words.</p>").unwrap() < links && links < home.find(">Closing words.</p>").unwrap(), "{home}");
+}
+
+#[test]
+fn an_embedded_listing_with_nothing_still_to_come_gets_no_calendar_links() {
+    let (dir, _c) = embedding_home_site("![[Archive/]]\n\nClosing words.");
+    let home = staged(&dir, "index.html");
+    assert!(home.contains("Old"), "the listing is there: {home}");
+    assert!(!home.contains("moss-calendar-links"), "{home}");
+    assert!(staged_exists(&dir, "archive/calendar.ics"), "the past season's own file is still served");
+}
+
+/// Regression guard: embedding must not move the links off a folder page that
+/// shows its own listing.
+#[test]
+fn a_folder_page_with_its_own_listing_closes_its_body_with_the_links() {
+    let (dir, _c) = embedding_home_site("Welcome.");
+    let page = staged(&dir, "season/index.html");
+    let links = page.find("moss-calendar-links").expect(&page);
+    assert!(page.find("Gala").unwrap() < links, "{page}");
+    assert!(page.contains(r#"href="/season/calendar.ics""#), "{page}");
+}
+
+/// A site with `Season/` (one 2099 event) whose home page has `fm` and `body`.
+fn season_home_site(fm: &str, body: &str) -> (std::path::PathBuf, impl Drop) {
+    let (dir, cleanup) = create_test_dir();
+    fs::create_dir_all(dir.join("Season")).unwrap();
+    fs::write(dir.join("Season/index.md"), format!("---\ntitle: Season\n{fm}---\n\n{body}\n")).unwrap();
+    fs::write(dir.join("Season/Gala.md"), "---\ntitle: Gala\nuid: gala0001\nstart: 2099-05-01\n---\n\nBody.\n").unwrap();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    build_test_sealed_at(dir.to_str().unwrap(), Some("https://example.test")).expect("build");
+    (dir, cleanup)
+}
+
+#[test]
+fn a_folder_page_with_its_listing_off_prints_no_calendar_links() {
+    let (dir, _c) = season_home_site("children: false\n", "Welcome.");
+    let page = staged(&dir, "season/index.html");
+    assert!(!page.contains("moss-calendar-links"), "{page}");
+    assert!(page.contains(r#"rel="alternate" type="text/calendar""#), "the head link stays: {page}");
+    assert!(staged_exists(&dir, "season/calendar.ics"), "and the file is still served");
+}
+
+#[test]
+fn a_folder_page_embedding_its_own_folder_gets_one_set_of_links() {
+    let (dir, _c) = season_home_site("", "![[/Season/]]");
+    let page = staged(&dir, "season/index.html");
+    assert_eq!(page.matches("moss-calendar-links").count(), 1, "{page}");
+}
+
+#[test]
+fn calendar_links_under_an_embedded_listing_stay_out_of_the_feed() {
+    let (dir, _c) = create_test_dir();
+    fs::create_dir_all(dir.join("Season")).unwrap();
+    fs::create_dir_all(dir.join("Notes")).unwrap();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::write(dir.join("Season/index.md"), "---\ntitle: Season\n---\n\nSeason.\n").unwrap();
+    fs::write(dir.join("Season/Gala.md"), "---\ntitle: Gala\nuid: gala0001\nstart: 2099-05-01\n---\n\nBody.\n").unwrap();
+    fs::write(dir.join("Notes/Post.md"), "---\ntitle: Post\ndate: 2026-01-01\n---\n\n![[/Season/]]\n").unwrap();
+    build_test_sealed_at(dir.to_str().unwrap(), Some("https://example.test")).expect("build");
+    let post = staged(&dir, "notes/post/index.html");
+    assert!(post.contains("moss-calendar-links"), "the page carries the links: {post}");
+    let feed = staged(&dir, "rss.xml");
+    assert!(feed.contains("Gala"), "the entry holds the listing: {feed}");
+    assert!(!feed.contains("calendar.ics") && !feed.contains("Download calendar"), "{feed}");
 }
 
 #[test]

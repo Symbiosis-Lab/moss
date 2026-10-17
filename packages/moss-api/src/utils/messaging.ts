@@ -118,7 +118,6 @@ export async function reportError(
  * @category Messaging
  */
 export type PluginHook =
-  | "import"
   | "publish"
   | "deploy"
   | "syndicate"
@@ -142,9 +141,17 @@ export type TriggerContext =
  * free-text affordance label after the colon, mirroring the dev harness
  * dialect (e.g., `"resend:Resend email"`, `"recheck:Recheck DNS"`).
  * Plain `"cancel"` carries no label.
+ *
+ * `"download-tool:<name>"` shows a Download button that fetches the named
+ * tool moss can download (e.g. `"git"`, `"ffmpeg"`); the name is a tool
+ * identifier, not a display label.
  * @category Messaging
  */
-export type EscapeSpec = "cancel" | `resend:${string}` | `recheck:${string}`;
+export type EscapeSpec =
+  | "cancel"
+  | `resend:${string}`
+  | `recheck:${string}`
+  | `download-tool:${string}`;
 
 // ── Advisory proposal vocabulary (Step 3 Phase 5, §8 + R13) ───────────────
 //
@@ -224,9 +231,9 @@ export interface AdvisoryProposal {
 /** @category Messaging */
 export interface StartTaskOptions {
   /**
-   * Hook the task belongs to. Defaults to "import" — the most common
-   * onboarding case. Plugins should pass an explicit hook for non-import
-   * work (e.g., a syndicator passes "syndicate").
+   * Hook the task belongs to. Defaults to "process" — work done on the
+   * site's files before generation. Plugins should pass an explicit hook for
+   * anything else (e.g., a syndicator passes "syndicate").
    */
   hook?: PluginHook;
   /**
@@ -403,7 +410,7 @@ async function invokeLifecycle(
  *
  * @example
  * const task = await startTask("Importing 42 articles", {
- *   hook: "import",
+ *   hook: "process",
  *   trigger: "onboarding_flow",
  * });
  * for (let i = 0; i < articles.length; i++) {
@@ -417,7 +424,7 @@ export async function startTask(
   label: string,
   options: StartTaskOptions = {}
 ): Promise<TaskHandle> {
-  const hook: PluginHook = options.hook ?? "import";
+  const hook: PluginHook = options.hook ?? "process";
   const trigger: TriggerContext = options.trigger ?? "background";
   const hasProgress = options.hasProgress ?? true;
   const cancellable = options.cancellable ?? false;
