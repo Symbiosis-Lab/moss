@@ -468,3 +468,25 @@ test("mounting a long row's indicator does not push the page below it", async ({
   };
   expect(await after(true)).toBe(await after(false));
 });
+
+// Here because this site's masthead, at these sizes, is one where measuring
+// across a vertical masthead instead of down it gives a different answer.
+for (const height of [700, 1000]) {
+  test(`a vertical page's masthead settles on one layout at 390x${height}`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height });
+    await page.goto("/scroll-overflow-vertical/");
+    await page.evaluate(() => document.fonts.ready);
+    const states = await page.evaluate(async () => {
+      const content = document.querySelector(".nav-content") as HTMLElement;
+      // The change a resize makes; the split must come back to one answer.
+      content.toggleAttribute("data-nav-split");
+      const seen: boolean[] = [];
+      for (let i = 0; i < 20; i++) {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        seen.push(content.hasAttribute("data-nav-split"));
+      }
+      return seen.slice(5);
+    });
+    expect(new Set(states).size, `split per frame: ${states.join(",")}`).toBe(1);
+  });
+}

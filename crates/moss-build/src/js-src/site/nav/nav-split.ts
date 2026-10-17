@@ -21,13 +21,17 @@
  *
  * Every measured input — site-name width, per-link widths, toggle-cluster
  * width, the computed column gaps — is the same in both modes, so the
- * decision cannot oscillate. Breadcrumb pages and the hamburger range
+ * decision cannot oscillate. Sizes are read on the masthead's inline axis; on
+ * a vertical page its physical width is its block size, which the split
+ * itself changes. Breadcrumb pages and the hamburger range
  * (≤20rem, where the links are an overlay) are left to the shipped CSS
  * untouched. With JS off nothing here runs and the shipped wrap is the
  * fallback, which also leaves the name alone on row 1; a link set that wraps
  * to several lines there holds the toggles at its bottom edge, which is what
  * the split avoids.
  */
+
+import { isVertical } from "../writing-mode";
 
 /** Widths (px) of everything a one-row masthead has to seat. */
 export interface RowWidths {
@@ -112,12 +116,14 @@ export function initNavSplit(): void {
     // computed gap still resolves (clamp over px/vw needs no layout), but
     // fall back to the outer gap if an engine declines to say.
     const innerGap = columnGap(navRight!, outerGap);
-    const linkWidths = [...links!.children].map((child) => (child as HTMLElement).offsetWidth);
+    const vertical = isVertical(navContent!);
+    const size = (el: HTMLElement) => (vertical ? el.offsetHeight : el.offsetWidth);
+    const linkWidths = [...links!.children].map((child) => size(child as HTMLElement));
     const fits = oneRowFits({
-      container: navContent!.clientWidth,
-      name: siteName!.offsetWidth,
+      container: vertical ? navContent!.clientHeight : navContent!.clientWidth,
+      name: size(siteName!),
       links: linkWidths.reduce((sum, w) => sum + w, 0) + linkGap * Math.max(0, linkWidths.length - 1),
-      icons: icons!.offsetWidth,
+      icons: size(icons!),
       outerGap,
       innerGap,
     });
