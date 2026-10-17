@@ -901,16 +901,19 @@ ${SCROLL_OVERFLOW_CELLS}
     // it must not be pinned to one or the other. Three plain-text cells
     // (no images) keep the geometry the render-gate assertions read off
     // (equal card widths, row scroll metrics) independent of image decode.
-    // More cells than scroll-row.ts's MAX_DOT_COUNT (10), so the row gets
-    // the sliding (data-indicator="dynamic") dots with their edge sizes.
-    "scroll-dots-dynamic.md": `---
-title: Scroll Dots Dynamic
+    // More cells than scroll-row.ts's MAX_DOT_COUNT (7), so the row gets
+    // the count and buttons (data-indicator="count"). The paragraph after it
+    // is what moves if mounting the indicator shifts the page.
+    "scroll-row-count.md": `---
+title: Scroll Row Count
 uid: "gcis0110"
 ---
 
 :::grid 3 {scroll label="Many"}
 ${Array.from({ length: 14 }, (_, i) => `[![Card ${i + 1}](tile.svg)](https://example.org/many-${i + 1}/)`).join("\n+++\n")}
 :::
+
+After the row.
 `,
     "scroll-row-fits.md": `---
 title: Scroll Row Fits

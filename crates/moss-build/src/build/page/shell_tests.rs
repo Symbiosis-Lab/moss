@@ -3843,39 +3843,6 @@ fn grid_scroll_indicator_spacing_only_neutralizes_visible_indicator_margin() {
 }
 
 #[test]
-fn long_scroll_indicator_uses_bounded_dynamic_dots() {
-    let rule = get_css_rule(DEFAULT_CSS, ".moss-scroll-dots[data-indicator=\"dynamic\"] button::before")
-        .expect("dynamic scroll indicator CSS rule should exist");
-    assert!(rule.contains("inline-size: 6px"), "got: {rule}");
-    assert!(rule.contains("block-size: 6px"), "got: {rule}");
-    let edge = get_css_rule(
-        DEFAULT_CSS,
-        ".moss-scroll-dots[data-indicator=\"dynamic\"] button.is-edge-start::before",
-    )
-    .expect("dynamic edge-dot CSS rule should exist");
-    assert!(edge.contains("inline-size: 4px"), "got: {edge}");
-    assert!(edge.contains("block-size: 4px"), "got: {edge}");
-    let visible = get_css_rule(
-        DEFAULT_CSS,
-        ".moss-scroll-dots[data-indicator=\"dynamic\"] button.is-visible::before",
-    )
-    .expect("dynamic visible-dot CSS rule should exist");
-    assert!(visible.contains("opacity: 0.85"), "got: {visible}");
-    let current = get_css_rule(
-        DEFAULT_CSS,
-        ".moss-scroll-dots[data-indicator=\"dynamic\"] button[aria-current=\"true\"]::before",
-    )
-    .expect("dynamic current-dot CSS rule should exist");
-    assert!(current.contains("inline-size: 10px"), "got: {current}");
-    assert!(current.contains("block-size: 10px"), "got: {current}");
-    // WebKit rasterizes a scale()d dot at its unscaled size and resamples it,
-    // so small dots came out lumpy on Retina: sizes must be exact, not scaled.
-    for r in [&rule, &edge, &current] {
-        assert!(!r.contains("transform"), "dot sized by transform: {r}");
-    }
-}
-
-#[test]
 fn external_card_favicon_resets_image_margins_and_uses_logical_gap() {
     let rule = get_css_rule(DEFAULT_CSS, ".moss-card-kicker-favicon")
         .expect("external-card favicon CSS rule should exist");
