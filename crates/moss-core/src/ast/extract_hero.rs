@@ -467,7 +467,7 @@ fn parse_overlay_to_blocks(
     if raw.is_empty() {
         return (Vec::new(), ShortcodeSource::default(), Diagnostics::default());
     }
-    let body_line = body.find(raw).map_or(0, |at| body[..at].matches('\n').count());
+    let body_line = body.find(raw).map_or(0, |at| body.split_at(at).0.matches('\n').count());
     let (blocks, metas, diag) =
         fragment_parts(parse_fragment_with_config(raw, &config_at_body_line(config, body_line)));
     let source = ShortcodeSource {

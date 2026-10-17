@@ -228,16 +228,16 @@ pub fn mark_cards_lazy(html: &str) -> String {
     let mut out = String::with_capacity(html.len() + 16);
     let mut rest = html;
     while let Some(start) = rest.find(MARKER_FOLDER_LIST) {
-        let after = &rest[start..];
+        let (before, after) = rest.split_at(start);
         let Some(end) = after.find(MARKER_END) else { break };
-        let marker = &after[..end];
-        out.push_str(&rest[..start]);
+        let (marker, tail) = after.split_at(end);
+        out.push_str(before);
         out.push_str(marker);
         if !marker.contains(&format!("|{LAZY_CARDS_TOKEN}")) {
             out.push('|');
             out.push_str(LAZY_CARDS_TOKEN);
         }
-        rest = &after[end..];
+        rest = tail;
     }
     out.push_str(rest);
     out

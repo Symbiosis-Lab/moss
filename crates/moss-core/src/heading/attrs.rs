@@ -49,10 +49,10 @@ fn heading_text(line: &str) -> Option<&str> {
 fn attribute_tail(text: &str) -> Option<&str> {
     let text = text.trim_end();
     let open = text.strip_suffix('}')?.rfind('{')?;
-    let block = &text[open..];
-    let inner = block[1..block.len() - 1].trim_start();
+    let block = text.split_at(open).1;
+    let inner = block.strip_prefix('{')?.strip_suffix('}')?.trim_start();
     let key = inner.split(['=', ' ']).next().unwrap_or("");
     let attribute = inner.starts_with(['.', '#'])
-        || (!key.is_empty() && inner[key.len()..].starts_with('=') && key.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_'));
+        || (!key.is_empty() && inner.strip_prefix(key).is_some_and(|r| r.starts_with('=')) && key.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_'));
     attribute.then_some(block)
 }

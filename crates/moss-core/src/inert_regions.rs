@@ -94,7 +94,7 @@ pub fn html_and_math_lines(markdown: &str, inert: &[bool]) -> Vec<bool> {
         } else if !in_html && !in_math && opens_html_block(t) {
             in_html = true;
         }
-        let toggles_math = t.starts_with("$$") && (t.len() == 2 || !t[2..].contains("$$"));
+        let toggles_math = t.strip_prefix("$$").is_some_and(|r| !r.contains("$$"));
         let flagged = in_html || in_math || toggles_math;
         if toggles_math {
             in_math = !in_math;
