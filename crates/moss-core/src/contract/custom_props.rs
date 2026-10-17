@@ -116,7 +116,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-eyebrow-separator",
         owner: ".moss-eyebrow",
         default: "\" · \"",
-        description: "The text drawn between the fields of the eyebrow line above a page title, as a CSS string. The markup holds no separator, so a theme sets this to change it: `\" / \"` for a slash, or `\" \"` for a plain space.",
+        description: "The text drawn between the fields of the eyebrow line above a page title, as a CSS string. The markup puts only a space between fields, which this string's own spaces absorb, so give it spaces on both sides: `\" / \"` for a slash, or `\" \"` for a plain space.",
     },
     CustomProp {
         name: "--moss-hint-x",

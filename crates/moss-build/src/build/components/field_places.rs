@@ -47,9 +47,13 @@ pub fn draw(
     };
     let field = |d: &FieldDecl| html_escape(&d.name);
 
+    // Spaced, so the fields stay separate words in the page's text (search
+    // excerpts, copying, reader views); the space collapses into the
+    // separator the stylesheet draws.
     let eyebrow: String = drawn(Place::Eyebrow)
         .map(|(d, _, html)| format!("<span data-field=\"{}\">{html}</span>", field(d)))
-        .collect();
+        .collect::<Vec<_>>()
+        .join(" ");
     let subtitle = drawn(Place::Subtitle)
         .next()
         .map(|(d, _, html)| format!("<p class=\"moss-subtitle\" data-field=\"{}\">{html}</p>\n", field(d)))

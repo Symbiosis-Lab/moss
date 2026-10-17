@@ -120,6 +120,7 @@ All notable changes to moss will be documented here.
 - In a card list where only some pages have a picture, a page with neither picture nor description no longer shows its title twice; its card keeps the row's shape with an empty tile.
 - The warning for `---` as a `:::grid` cell divider now names the line it is on and says to write `+++`; with the page path in front, as every build warning has, it points at the exact line. Before, it gave no line.
 - Site search no longer lists an old address that redirects to a moved page, so a search leads to the page itself rather than to "Redirecting…".
+- Fields drawn above a title (the eyebrow) are separate words in the page's text, so search excerpts and copied text read "Station 10 Hakone" rather than "Station 10Hakone". The page looks the same.
 - A plugin in a folder synced by iCloud, Dropbox, Nextcloud or another cloud app now loads, and stays allowed, when its files have not been downloaded yet. Before, it was skipped with "Resource deadlock avoided" and the build drew the default listing instead.
 - `moss history <folder> <page> --restore` and the page timeline read a relative page path from the site named, as the help says, when the current directory is outside it. Before, it was read from the current directory and refused as not inside the site.
 - A non-ASCII character inside a quoted string in a stylesheet, such as `content: " · "` or `content: "全"`, no longer comes out garbled in the built CSS. The minifier re-encoded each byte of the character separately.

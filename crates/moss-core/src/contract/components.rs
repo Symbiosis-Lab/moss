@@ -1489,11 +1489,11 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         kind: "standalone",
         parent: "",
         data_attrs: &[],
-        example_html: r#"<p class="moss-eyebrow"><span data-field="kind">Built</span><span data-field="years"><time datetime="1927/1933">1927–1933</time></span></p>"#,
+        example_html: r#"<p class="moss-eyebrow"><span data-field="kind">Built</span> <span data-field="years"><time datetime="1927/1933">1927–1933</time></span></p>"#,
         example_markdown: "",
         status: Status::Emerging,
         since: "1",
-        description: "A small line above the page title holding every declared field whose `place` is `eyebrow`, in declaration order, one `<span data-field>` each. The separator between spans is drawn by the stylesheet from `--moss-eyebrow-separator`, so the markup carries no separator text. Emitted only on a page that has a value for such a field.",
+        description: "A small line above the page title holding every declared field whose `place` is `eyebrow`, in declaration order, one `<span data-field>` each. The spans are separated by a single space, so the fields stay separate words in the page's text; the visible separator is drawn by the stylesheet from `--moss-eyebrow-separator` and absorbs that space. Emitted only on a page that has a value for such a field.",
     },
     ComponentEntry {
         class: "moss-subtitle",
