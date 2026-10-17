@@ -398,11 +398,15 @@ Here `/performers/ada-example/` lists the Spring Concert under "Conductor" and "
 
 Add `cards = true` to the kind and its names show on listing cards, with their role: a card for the Spring Concert reads `Ada Example, conductor · Ben Sample, soloist`, the fields in `fields` order. The card and each credit are classed `moss-card-credits`, `moss-credit` and `moss-credit-role`, so a theme can style them. The names are plain text, never links, because a card is already one link. Without `cards = true`, a card shows only its date and place, as before.
 
-Add `nav = true` to the kind and its root page (`/performers/`) joins the nav bar after the content entries, labelled with the kind's `title` or, with none, a built-in kind's translated title or the key capitalized; several such kinds keep the order of their blocks in the config file. Add `weight = 2` (an integer) to place the entry among the pages by weight, the way a page's own `weight` does: lower first, ties alphabetical by label, and entries without a weight after those with one. The entry appears once the kind has at least one term, on pages of the site language.
+Add `nav = true` to the kind and its root page (`/performers/`) joins the nav bar after the content entries, labelled with the kind's `title` or, with none, a built-in kind's translated title or the key capitalized; several such kinds keep the order of their blocks in the config file. The root page is headed by the same name, nav entry or not, in its `<title>` and in the breadcrumb of every term page under it: `[terms.performers]` with no `title` heads `/performers/` "Performers". Add `weight = 2` (an integer) to place the entry among the pages by weight, the way a page's own `weight` does: lower first, ties alphabetical by label, and entries without a weight after those with one. The entry appears once the kind has at least one term, in each edition that has one: the site language's nav shows `/performers/`, a language tree's (`de/`) shows `/de/performers/`, and a page shows its own edition's entry only. A `title` can name the kind per language, the way a declared field's `label` does: with `title = { en = "Performers", de = "Mitwirkende" }` the German entry and the German root page read `Mitwirkende`, and an edition the table has no entry for reads the `en` one. A plain string is the title in every edition.
+
+Term pages are per edition, as a language tree is. A page in `de/` that names `Ada Example` appears on `/de/performers/ada-example/`, which lists only German pages; the default edition's page for the same name, `/performers/ada-example/`, lists only its own. The two are translations of each other, so the language switcher and `hreflang` pair them, and a page's byline links, credits and a listing plugin's `ctx.terms` point at its own edition's page. A `<field>_page: true` claim is per edition too: the English page and its German translation can both claim `Ada Example` without a duplicate-claim warning, while two claims inside one edition still warn. The kind's root (`/performers/`, `/de/performers/`) is per edition as well. A tree for the site's own language (`en/` on an English site) is part of the default edition: its pages share the default edition's term pages, and the root home lists them. On a site whose root holds nothing but its home page, that tree is an edition like the others. Place-typed kinds (`location:`) are the exception and stay site-wide for now.
+
+A name only a language tree uses has its page in that tree alone, and its address without the tree, `/performers/<name>/`, forwards to `/de/performers/<name>/`; so does the kind's root `/performers/` when only a tree uses the kind. A name the default edition also uses keeps its page at `/performers/<name>/`.
 
 Naming a field in a declared kind takes it out of its built-in namespace: with the block above, `author:` no longer feeds `/authors/`. The old `/authors/<name>/` URLs keep working, and so does the bare `/authors/` root itself — moss emits a redirect to the new page for as long as the field belongs elsewhere. That redirect never lands on a real page: if you have hand-authored content living at the old address, moss leaves it alone rather than burying it under a meta-refresh.
 
-Any real page can take a generated one's place. `author_page: 趙雲` — or `true`, meaning "the name is my title" — makes that page the author's page: its body is the bio, its `url:` is wherever you want it, and the works listing attaches below. Every field has its claim: `tag_page:`, `editor_page:`, `jury_page:`, `place_page:`. A declared field claims with `<field>_page:` the same way, so `conductor_page: true` on a page called Ada Example makes that page the page for `conductor:` names. Any of a kind's claims takes over that kind's page, so in the `people` example above a bio page claims with whichever credit fits. Term mentions site-wide then link there instead of at the generated URL, and the generated URL forwards to the claiming page, so a link someone saved before the claim still arrives. Claiming adds that listing below the body, or just above it when the body closes on a sources section (a last `## Sources` or `## References`, `## Quellen` on a German page, `## 来源` on a Chinese one), and also gives the page's own `cover:` a visible place in the body — beside the title, the same layout a folder-index page claiming the same term already uses. An unclaimed leaf's `cover:` is its listing picture and share image, and is never drawn in its own body.
+Any real page can take a generated one's place. `author_page: 趙雲` — or `true`, meaning "the name is my title" — makes that page the author's page: its body is the bio, its `url:` is wherever you want it, and the works listing attaches below. Every field has its claim: `tag_page:`, `editor_page:`, `jury_page:`, `place_page:`. A declared field claims with `<field>_page:` the same way, so `conductor_page: true` on a page called Ada Example makes that page the page for `conductor:` names. Any of a kind's claims takes over that kind's page, so in the `people` example above a bio page claims with whichever credit fits. Mentions of the term on the pages of the claiming page's own edition then link there instead of at the generated URL, and the generated URL forwards to the claiming page, so a link someone saved before the claim still arrives. Claiming adds that listing below the body, or just above it when the body closes on a sources section (a last `## Sources` or `## References`, `## Quellen` on a German page, `## 来源` on a Chinese one), and also gives the page's own `cover:` a visible place in the body — beside the title, the same layout a folder-index page claiming the same term already uses. An unclaimed leaf's `cover:` is its listing picture and share image, and is never drawn in its own body.
 
 Two things that surprise people:
 
@@ -660,44 +664,19 @@ strings the pages that *did* fall through to it are dressed in. If the two ever
 disagree, believe the page: `moss list` reports each page's own language, and
 that is the one that ships in `<html lang>`.
 
-**moss supports exactly four editions: English, German, Simplified Chinese,
-and Traditional Chinese.** This is a hard ceiling, not a special case for a
-particular tree shape: moss's UI-language type has exactly four variants and
-resolves only `en`, `de` (also `de-de`, `de-at`, `de-ch`), `zh`/`zh-hans`/`zh-cn`,
-and `zh-hant`/`zh-tw`. A `de/` tree gets German interface strings (navigation,
-search, dates such as "15. Oktober 2026", comment and subscribe forms) and
-`<html lang="de">`, with `DE` as its switcher label (as English is `EN`). `en-us/` and `en-gb/`
-are accepted as directory names but resolve to no edition either.
+**moss has interface strings for exactly four languages: English, German, Simplified Chinese, and Traditional Chinese.** This is a hard ceiling, not a special case for a particular tree shape: moss's UI-language type has exactly four variants and resolves only `en`, `de` (also `de-de`, `de-at`, `de-ch`), `zh`/`zh-hans`/`zh-cn`, and `zh-hant`/`zh-tw`. A `de/` tree gets German interface strings (navigation, search, dates such as "15. Oktober 2026", comment and subscribe forms) and `<html lang="de">`, with `DE` as its switcher label (as English is `EN`). `en-us/` and `en-gb/` are accepted as directory names but have no interface strings of their own either.
 
-**A language tree outside those four gets correct content in the default
-edition's chrome.** The ceiling is real, but it is a ceiling on *interface*, not
-on the page. Measured on a `ja/` tree:
+**A language tree outside those four is still an edition, dressed in the site language's interface strings.** The ceiling is real, but it is a ceiling on *interface*, not on the page: a `ja/` tree gets its own term pages, nav entries and home listing like any edition. Measured on a `ja/` tree:
 
-- `<html lang>` is **the document's own language** — a page in `ja/` is served
-  as `lang="ja"`. moss recognizes far more codes as trees and filename suffixes
-  (`.languages`) than it has interface strings for, and `<html lang>` describes
-  the content, not the chrome. Screen readers and crawlers get the truth.
-- The chrome is the default edition's: site name, nav links, footer, and a
-  switcher listing only the editions that exist — and the switcher marks that
-  edition as the current one, because `ja` resolves to no edition of its own.
-  There are no Japanese interface strings, so this is the honest outcome rather
-  than a bug — but a reader does land on Japanese body text inside another
-  language's chrome, whichever `[site] lang` names.
-- The `<title>` gets the site name appended as a suffix, which a real edition
-  home (`/en/`) does not get: `ja` is a tree, not an edition.
+- `<html lang>` is **the document's own language** — a page in `ja/` is served as `lang="ja"`. moss recognizes far more codes as trees and filename suffixes (`.languages`) than it has interface strings for, and `<html lang>` describes the content, not the chrome. Screen readers and crawlers get the truth.
+- The interface strings are the site language's. There are no Japanese ones, so this is the honest outcome rather than a bug — but a reader does land on Japanese body text inside another language's chrome, whichever `[site] lang` names.
+- The `<title>` gets the site name appended as a suffix, which a home in an interface language (`/en/`) does not get.
 
-So: for a fifth language, translate the body content and expect to supply the
-chrome yourself — an authored `ja/footer.md`, theme CSS, and your own nav if
-the default one is unacceptable. What you do *not* have to do any more is
-correct the `lang` attribute by hand.
+So: for a fifth language, translate the body content and expect to supply the chrome yourself — an authored `ja/footer.md`, theme CSS, and your own nav if the default one is unacceptable. What you do *not* have to do any more is correct the `lang` attribute by hand.
 
-Give each language tree its own authored home page — the build never
-synthesizes a folder home for a language tree, so this is the reliable path to
-getting a working edition with a switcher entry. (A switcher entry can also
-come from a translation pair or from an in-language subtree, but an authored
-home page is the one that always works.) The ordinary folder-home rule applies,
-so `en/index.md` and `en/en.md` are equally valid; match whatever the site
-already does rather than converting it.
+Give each language tree its own authored home page. Without one, moss generates a home that lists the tree, but an authored home is the reliable path to a switcher entry. (A switcher entry can also come from a translation pair or from an in-language subtree, but an authored home page is the one that always works.) The ordinary folder-home rule applies, so `en/index.md` and `en/en.md` are equally valid; match whatever the site already does rather than converting it.
+
+An edition's home and top level behave like the root's. `de/index.md` lists the whole `de/` tree, subfolders included, and never a page of another edition or of the root. A page directly inside `de/` (`de/Über.md`) joins the German nav bar without `nav: true` and is left out of the German home's listing, the way `About.md` is at the root. A folder (`de/Partner/`, or `Partners/` at the root) does not join the nav by itself; give its home page `nav: true` to put it there. Set `children_depth: direct` on the edition's home for the narrow listing of its direct children, or `children_source` to list another folder. A tree for the site's own language is not an edition, and its pages belong to the default edition, unless the root holds nothing but its home page and every language has its own tree. Then the root is a language chooser: every tree is an edition, its site name leads to its own home, and the root lists none of their pages.
 
 A `[[reference]]` written from a page inside a language tree prefers that reader's own language — bare stem or full path alike. `[[work/spring-show]]` written from a page under `zh-hans/` resolves to `zh-hans/work/spring-show.md` when that file exists, the same way the bare `[[spring-show]]` already prefers `zh-hans/spring-show.md` over a root one; either form only falls back to the un-prefixed path when no same-language copy exists. To link across languages on purpose — a Chinese page pointing at the English original, say — write the full path including the language folder: `[[en/work/spring-show]]`.
 

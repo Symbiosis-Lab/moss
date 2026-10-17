@@ -142,7 +142,7 @@ mod tests {
         let kind = crate::build::terms::TermKind {
             cards: false,
             key: "places".into(), fields: vec!["location".into()], title: "Places".into(),
-            is_place: true, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), is_place: true, parents: Default::default(), explorer: None, line: None,
         };
         crate::build::terms::derive_terms(&mut docs, vec![kind]);
         expand(&mut docs, &maps);

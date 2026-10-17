@@ -66,6 +66,7 @@ impl PageChromeContext<'_, '_> {
         family: PageFamily,
         is_homepage: bool,
         force_breadcrumb: bool,
+        site_url: &crate::build::site_url::SiteUrl,
     ) -> ShellVars {
         let generated = matches!(family, PageFamily::GeneratedFolder);
         let site_title = self.site_title(doc);
@@ -81,7 +82,7 @@ impl PageChromeContext<'_, '_> {
         let mut nav = NavigationBuilder::new(
             self.documents, &site_title, doc.map(|d| d.url_path.as_str()),
             if generated { ui_lang } else { self.site_lang }, self.project.has_content_folders,
-        ).with_search(self.layout.assets.search).with_header_mode(self.layout.header).with_term_nav(self.layout.term_nav.clone())
+        ).with_search(self.layout.assets.search).with_header_mode(self.layout.header).with_term_nav(self.layout.term_nav.clone(), doc.map_or("", |d| d.edition.as_str()))
             .with_asset_snapshot(self.media_lookup.asset_snapshot());
         if !generated {
             nav = nav.with_source_fm(self.emit_source_lines, self.emit_source_lines && logo_is_own_field);
@@ -110,6 +111,13 @@ impl PageChromeContext<'_, '_> {
             );
             nav = nav.with_translations(ui_lang, &page_lang_tag, links);
         }
+        // Gated like the canonical link: a relative hreflang misleads
+        // crawlers, so absent is safer than wrong.
+        let hreflang_links = doc.filter(|_| site_url.is_deployed()).and_then(|d| {
+            crate::build::page::meta::build_hreflang_link_tags(
+                &page_lang_tag, &d.url_path, &d.translations, site_url.as_str(), &self.layout.lang_tag,
+            )
+        });
         let paths = &self.assets.paths;
         let mut body_attrs = String::new();
         if self.emit_source_lines { body_attrs.push_str(" data-moss-preview"); }
@@ -162,7 +170,7 @@ impl PageChromeContext<'_, '_> {
             share_cover_attr: String::new(), share_qr_attr: String::new(), main_class: String::new(),
             date: None, formatted_date: None, date_line: None, short_date: None, content: None,
             description: None, og_tags: None, twitter_tags: None, canonical_link: None,
-            hreflang_links: None, schema_json_ld: None, embed_head_assets: String::new(),
+            hreflang_links, schema_json_ld: None, embed_head_assets: String::new(),
             post_article: String::new(), lightbox: String::new(), robots_meta: None,
         }
     }

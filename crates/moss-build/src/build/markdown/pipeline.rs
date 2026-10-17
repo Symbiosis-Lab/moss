@@ -368,6 +368,9 @@ pub struct SiteMarkdown<'a> {
     pub typesetting: Option<&'a str>,
     /// The parse cache fingerprint hashes this value, so a changed declaration invalidates cached parses.
     pub fields: &'a [moss_core::fields::FieldDecl],
+    /// The default edition's language as configured, not the interface language it maps to,
+    /// which tells a tree in that language from an edition (`moss_core::home::root_language`).
+    pub lang: &'a str,
 }
 
 /// Math, hard line breaks and heading anchors on — their absent-key answers
@@ -383,6 +386,7 @@ impl Default for SiteMarkdown<'_> {
             heading_anchors: true,
             typesetting: None,
             fields: &[],
+            lang: "en",
         }
     }
 }
@@ -1276,9 +1280,12 @@ pub fn process_markdown_file(
         label.clone()
     };
 
-    // Detect root-level files (no directory component). Used for the nav
-    // membership check below and for auto-navigation downstream.
-    let is_root_level = !file_path.contains('/');
+    // Top of the page's edition: the site root, or directly inside a language
+    // tree. Feeds the nav membership check below and auto-navigation downstream.
+    // A tree for the site's own language is no separate edition unless the
+    // root only chooses a language: its pages would otherwise repeat the
+    // root's entries in the same nav bar.
+    let is_root_level = moss_core::home::is_edition_top_level(file_path, site.lang);
 
     // A nav page shows its title like any other page. The one exception is a
     // body that opens with its own `# Heading`: that heading is the title, so
@@ -1533,6 +1540,8 @@ pub fn process_markdown_file(
         cover_type: frontmatter.cover_type,
         nav,
         is_root_level,
+        // The final `url_path` is known only once every page is parsed.
+        edition: String::new(),
         // Centralized home-override signal: the ONE place this is derived.
         // Render code (html.rs) reads `doc.is_home_override` instead of
         // re-deriving from `translation_key == "home"`. Same signal that

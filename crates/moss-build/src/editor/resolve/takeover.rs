@@ -89,8 +89,8 @@ pub fn takeover_for(
         });
     }
     if let Some(site) = map.terms.get(key).filter(|site| site.claimed_by.is_none()) {
-        let (ns, _) = key.split_once('/')?;
-        let kind = namespace_kind(map, ns, site_lang)?;
+        let term = crate::build::terms::TermKey::parse(key)?;
+        let kind = namespace_kind(map, term.ns, site_lang)?;
         // The claim goes through the field this person is actually reached
         // by: someone who only ever appears in `jury:` is offered
         // `jury_page:`, not `author_page:`. Ties go to the kind's own field
@@ -103,8 +103,9 @@ pub fn takeover_for(
             .or_else(|| kind.fields.first())?
             .clone();
         let claim_key = crate::build::terms::claim_field_key(&field);
-        let folder = namespace_folder(map, project_root, ns, &kind.title);
-        let mut files = folder.url_note(ns).into_iter().collect::<Vec<_>>();
+        let title = kind.title_in(term.edition);
+        let folder = namespace_folder(map, project_root, term.edition, term.ns, &title);
+        let mut files = folder.url_note(term.ns).into_iter().collect::<Vec<_>>();
         files.push(NewFile {
             dir: folder.dir,
             name: format!("{}.md", filename_for(&site.display)),
@@ -120,8 +121,8 @@ pub fn takeover_for(
     }
     let generated = map.generated.iter().any(|g| g.trim_matches('/') == key);
     if let Some(kind) = generated.then(|| namespace_kind(map, key, site_lang)).flatten() {
-        let folder = namespace_folder(map, project_root, key, &kind.title);
-        let title = kind.title;
+        let title = kind.title_in("");
+        let folder = namespace_folder(map, project_root, "", key, &title);
         // The root's own page is the folder's home note: the `url:` note when
         // the folder does not serve the namespace yet, a plain unlisted home
         // when it does. Either way the root stays as unlisted as the
@@ -266,7 +267,7 @@ impl NamespaceFolder {
 /// language, so an editor opened against a stale map still offers the right
 /// recipe; the next build replaces the reconstruction with the record.
 fn namespace_kind(map: &ArticleMap, ns: &str, site_lang: Language) -> Option<crate::build::terms::TermKind> {
-    if !map.terms.keys().any(|k| k.split_once('/').is_some_and(|(n, _)| n == ns)) {
+    if !map.terms.keys().any(|k| crate::build::terms::TermKey::parse(k).is_some_and(|term| term.ns == ns)) {
         return None;
     }
     if let Some(kind) = map.kinds.iter().find(|k| k.key == ns) {
@@ -275,13 +276,7 @@ fn namespace_kind(map: &ArticleMap, ns: &str, site_lang: Language) -> Option<cra
     crate::build::terms::BUILTIN_DEFAULT_FIELDS
         .iter()
         .find(|(key, _)| *key == ns)
-        .map(|(key, field)| crate::build::terms::TermKind {
-            cards: false,
-            key: key.to_string(),
-            fields: vec![field.to_string()],
-            title: crate::i18n::term_root_title(site_lang, key).to_string(),
-            is_place: false, parents: Default::default(), explorer: None, line: None,
-        })
+        .map(|(key, field)| crate::build::terms::TermKind::builtin(key, field, site_lang.code()))
 }
 
 /// The real directory already serving the namespace wins — the one the
@@ -293,24 +288,35 @@ fn namespace_kind(map: &ArticleMap, ns: &str, site_lang: Language) -> Option<cra
 /// that title already slugs to the namespace (`Authors`), the folder is the
 /// namespace itself, `authors/`, so a case-sensitive volume never ends up
 /// with two folders for one URL.
+///
+/// An edition's namespace (`edition` = `de`) is the same folder inside that
+/// edition's tree, under the tree's own name on disk (`zh-Hans/`), so its
+/// pages stay out of the edition's top level, where every page is a nav item.
 fn namespace_folder(
     map: &ArticleMap,
     project_root: &Path,
+    edition: &str,
     ns: &str,
     title: &str,
 ) -> NamespaceFolder {
-    if let (Some(dir), Some(name)) = derive_folder_identity(map, project_root, ns) {
-        return NamespaceFolder { dir, has_home: map.pages.contains_key(&format!("{ns}/")), name, serves_url: true };
+    let url_prefix = if edition.is_empty() { String::new() } else { format!("{edition}/") };
+    let url = format!("{url_prefix}{ns}");
+    if let (Some(dir), Some(name)) = derive_folder_identity(map, project_root, &url) {
+        return NamespaceFolder { dir, has_home: map.pages.contains_key(&format!("{url}/")), name, serves_url: true };
     }
+    let (base, tree) = match derive_folder_identity(map, project_root, edition) {
+        (Some(dir), Some(tree)) => (std::path::PathBuf::from(dir), format!("{tree}/")),
+        _ => (project_root.join(edition), url_prefix.clone()),
+    };
     let name = if moss_core::slug::generate_slug(title) == ns { ns } else { title };
     // A localized folder that exists but serves elsewhere (`作者/作者.md`
     // with `url: people`) has its home recorded under that other URL.
-    let served_as = map.dir_overrides.get(name).map(String::as_str).unwrap_or(name);
+    let served_as = map.dir_overrides.get(&format!("{tree}{name}")).map(String::as_str).unwrap_or(name);
     NamespaceFolder {
-        dir: project_root.join(name).to_string_lossy().to_string(),
+        dir: base.join(name).to_string_lossy().to_string(),
         name: name.to_string(),
         serves_url: name == ns,
-        has_home: map.pages.contains_key(&format!("{served_as}/")),
+        has_home: map.pages.contains_key(&format!("{url_prefix}{served_as}/")),
     }
 }
 
@@ -526,6 +532,41 @@ mod tests {
         assert!(claim.dir.ends_with("标签"), "{}", claim.dir);
     }
 
+    #[test]
+    fn an_editions_term_is_claimed_in_its_namespace_folder_named_in_its_language_inside_the_tree_as_named_on_disk() {
+        let dir = root();
+        let mut m = map();
+        m.terms.insert("zh-hans/authors/王五".into(), TermSite { display: "王五".into(), claimed_by: None, parent: None });
+        m.articles.insert(
+            "zh-hans/posts/a/".into(),
+            serde_json::from_value::<ArticleInfo>(serde_json::json!({
+                "source_path": "zh-Hans/posts/a.md", "title": "A", "content": "", "url_path": "zh-hans/posts/a/", "date": null
+            })).unwrap(),
+        );
+        let t = takeover_for(&m, dir.path(), "s", "zh-hans/authors/王五/", Language::En).unwrap();
+        assert_eq!(t.files.len(), 2, "{t:?}");
+        let (home, claim) = (&t.files[0], &t.files[1]);
+        let folder = dir.path().join("zh-Hans").join("作者");
+        assert_eq!((home.dir.as_str(), home.name.as_str()), (folder.to_str().unwrap(), "作者.md"), "named in the edition's language");
+        assert_eq!(serde_json::Value::Object(home.frontmatter.clone()), serde_json::json!({ "url": "authors", "listed": false }));
+        assert_eq!((claim.dir.as_str(), claim.name.as_str()), (folder.to_str().unwrap(), "王五.md"));
+        assert_eq!(serde_json::Value::Object(claim.frontmatter.clone()), serde_json::json!({ "author_page": "王五" }));
+    }
+
+    #[test]
+    fn an_editions_namespace_folder_is_named_by_the_editions_title_and_routed_to_the_namespace() {
+        let dir = root();
+        let mut m = declared_people_map();
+        m.kinds[0].titles = vec![("en".into(), "People".into()), ("de".into(), "Leute".into())];
+        m.terms.insert("de/people/kane".into(), TermSite { display: "Kane".into(), claimed_by: None, parent: None });
+        let t = takeover_for(&m, dir.path(), "s", "de/people/kane/", Language::En).unwrap();
+        assert_eq!(t.files.len(), 2, "{t:?}");
+        let (home, claim) = (&t.files[0], &t.files[1]);
+        assert_eq!((home.dir.as_str(), home.name.as_str()), (dir.path().join("de").join("Leute").to_str().unwrap(), "Leute.md"));
+        assert_eq!(serde_json::Value::Object(home.frontmatter.clone()), serde_json::json!({ "url": "people", "listed": false }));
+        assert_eq!((claim.dir.as_str(), claim.name.as_str()), (home.dir.as_str(), "Kane.md"));
+    }
+
     /// A site that declared `[terms.people] fields = ["author", "editor",
     /// "jury"]`, with one person reached only through `jury:`.
     fn declared_people_map() -> ArticleMap {
@@ -535,6 +576,7 @@ mod tests {
             key: "people".into(),
             fields: vec!["author".into(), "editor".into(), "jury".into()],
             title: "People".into(),
+            titles: Vec::new(),
             is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         m.terms.insert("people/kane".into(), TermSite { display: "Kane".into(), claimed_by: None, parent: None });
@@ -585,7 +627,7 @@ mod tests {
             key: "authors".into(),
             fields: Vec::new(),
             title: "作者".into(),
-            is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         m.generated = vec!["authors/".into()];
         let t = takeover_for(&m, dir.path(), "s", "authors/", Language::ZhHant).unwrap();

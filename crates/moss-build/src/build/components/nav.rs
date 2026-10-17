@@ -82,8 +82,10 @@ pub struct NavigationBuilder<'a> {
     fm_logo: bool,
     /// `[site].header`, resolved. See `HeaderMode`.
     header_mode: HeaderMode,
-    /// Term-kind roots that are nav entries: `(namespace key, label, weight)`.
-    term_nav: Vec<(String, String, Option<i32>)>,
+    /// Term-kind roots that are nav entries, every edition's.
+    term_nav: Vec<crate::build::terms::TermNavEntry>,
+    /// The edition of the page this nav is for, which picks its entries.
+    page_edition: &'a str,
 }
 
 impl<'a> NavigationBuilder<'a> {
@@ -112,12 +114,15 @@ impl<'a> NavigationBuilder<'a> {
             fm_logo: false,
             header_mode: HeaderMode::Brand,
             term_nav: Vec::new(),
+            page_edition: "",
         }
     }
 
-    /// Add term-kind roots as nav entries after the content entries.
-    pub fn with_term_nav(mut self, term_nav: Vec<(String, String, Option<i32>)>) -> Self {
+    /// Add term-kind roots as nav entries after the content entries: those of
+    /// `page_edition`, the edition of the page this nav is for.
+    pub fn with_term_nav(mut self, term_nav: Vec<crate::build::terms::TermNavEntry>, page_edition: &'a str) -> Self {
         self.term_nav = term_nav;
+        self.page_edition = page_edition;
         self
     }
 
@@ -182,6 +187,14 @@ impl<'a> NavigationBuilder<'a> {
         self
     }
 
+    /// Whether `doc` is in this page's edition, for the nav bar and the footer
+    /// link list alike. Keyed on `effective_lang`: a content-detected language
+    /// without a language tree keeps the site language's items. The edition
+    /// tells apart trees that share one interface language.
+    pub(super) fn in_page_edition(&self, doc: &ParsedDocument) -> bool {
+        doc.lang == self.effective_lang() && doc.edition == self.page_edition
+    }
+
     /// The language whose chrome this page shows.
     ///
     /// A page's DETECTED language only redirects chrome (home link, nav-item
@@ -198,7 +211,7 @@ impl<'a> NavigationBuilder<'a> {
     }
 
     /// Where the site-name link points: "/" for the site language,
-    /// "/zh-hans/" for a page inside a language tree.
+    /// "/zh-hans/" for a page in an edition or a language tree.
     fn home_path(&self) -> String {
         // The tree segment the page ACTUALLY lives under, never a code spelled
         // back out of the interface enum. `en-us/` and `en-gb/` are language
@@ -206,7 +219,7 @@ impl<'a> NavigationBuilder<'a> {
         // pages linked home to `/en/` — a path no build emits. The
         // folder name is the path, by construction.
         match self.current_page_url.and_then(moss_core::home::lang_tree_prefix) {
-            Some(tree) if self.effective_lang() != self.lang => {
+            Some(tree) if !self.page_edition.is_empty() || self.effective_lang() != self.lang => {
                 format!("/{tree}/") // allow:served-path-url-construct (nav href to language-root page, not a framework asset)
             }
             _ => "/".to_string(),
@@ -252,7 +265,6 @@ impl<'a> NavigationBuilder<'a> {
     /// If nav items exist: renders hamburger + nav-links + nav-icons.
     /// If no nav items: just site name + nav-icons.
     pub fn generate_navigation(&self) -> String {
-        let effective_lang = self.effective_lang();
         let home_path = self.home_path();
         let logo_html = self.logo_html();
         let nav_mode = self.header_mode == HeaderMode::Nav;
@@ -280,12 +292,8 @@ impl<'a> NavigationBuilder<'a> {
         // - nav: true/false always wins (explicit opt-in/out)
         let mut nav_documents: Vec<&ParsedDocument> = self.documents.iter()
             .filter(|doc| {
-                // Scope nav to the current page's language tree (per-render filter,
-                // not an intrinsic property — stays here, outside the predicate).
-                // Keyed on effective_lang: a content-detected language without a
-                // language tree keeps the site language's nav items.
-                if doc.lang != effective_lang { return false; }
-                is_nav_bar_item_doc(doc, self.has_content_folders)
+                // Per-render scope, so it stays outside the predicate.
+                self.in_page_edition(doc) && is_nav_bar_item_doc(doc, self.has_content_folders)
             })
             .collect();
 
@@ -329,24 +337,23 @@ impl<'a> NavigationBuilder<'a> {
             })
             .collect();
 
-        // Term kinds that asked for a place in the nav. Only for pages of the
-        // site language: a term root is not part of a language tree. One with
-        // a `weight` is ordered among the entries by the rule below; one
-        // without follows every page entry, in config order.
+        // Term kinds that asked for a place in the nav, the page's own
+        // edition's. One with a `weight` is ordered among the entries by the
+        // rule below; one without follows every page entry, in config order.
         let mut unweighted_terms: Vec<String> = Vec::new();
-        if effective_lang == self.lang {
-            for (key, label, weight) in &self.term_nav {
-                let is_current = self.current_page_url == Some(format!("{key}/index.html").as_str());
-                let attrs = if is_current { r#" class="active""# } else { "" };
-                let item = format!(
-                    r#"<a href="/{}/"{attrs}>{}</a>"#, // allow:served-path-url-construct (nav href to a term kind's root page, not a framework asset)
-                    crate::build::features::html_escape(key),
-                    crate::build::features::html_escape(label),
-                );
-                match weight {
-                    Some(_) => entries.push((*weight, label.as_str(), item)),
-                    None => unweighted_terms.push(item),
-                }
+        for crate::build::terms::TermNavEntry { root: key, label, weight, .. } in
+            self.term_nav.iter().filter(|entry| entry.edition == self.page_edition)
+        {
+            let is_current = self.current_page_url == Some(format!("{key}/index.html").as_str());
+            let attrs = if is_current { r#" class="active""# } else { "" };
+            let item = format!(
+                r#"<a href="/{}/"{attrs}>{}</a>"#, // allow:served-path-url-construct (nav href to a term kind's root page, not a framework asset)
+                crate::build::features::html_escape(key),
+                crate::build::features::html_escape(label),
+            );
+            match weight {
+                Some(_) => entries.push((*weight, label.as_str(), item)),
+                None => unweighted_terms.push(item),
             }
         }
 
@@ -580,7 +587,7 @@ pub fn is_nav_bar_item_doc(
             unlisted: doc.listed == Some(false),
         },
         doc.is_root_level,
-        doc.url_path == "index.html",
+        crate::build::render::lang_roots::is_language_root(&doc.url_path),
         &doc.clean_stem,
         has_content_folders,
     )
@@ -589,7 +596,7 @@ pub fn is_nav_bar_item_doc(
 /// Whether a document should be excluded from article listings because
 /// it's a navigation item (appears in the nav bar instead).
 ///
-/// In organized mode, all root-level non-index files are nav items.
+/// In organized mode, all top-level non-index files (of any edition) are nav items.
 /// In flat mode, no files are auto-excluded from listings — even keyword
 /// nav files like "about" appear in both the nav bar AND the article list.
 /// (The nav bar uses `is_nav_keyword` to decide what to show; this function
@@ -600,7 +607,7 @@ pub fn is_listing_nav_item(doc: &crate::build::types::ParsedDocument, has_conten
         Some(false) => false,
         None => {
             if has_content_folders {
-                doc.is_root_level && doc.url_path != "index.html"
+                doc.is_root_level && !crate::build::render::lang_roots::is_language_root(&doc.url_path)
             } else {
                 false // Flat mode: all root files are articles in listings
             }

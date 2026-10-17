@@ -1129,6 +1129,9 @@ pub(crate) fn select_children_by_slug<'a>(
     } else {
         format!("{}/index.html", folder_id_slug)
     };
+    // A page of the site language's own tree is in the default edition, and
+    // sits under that tree's folder, so only another edition's page differs.
+    let own_tree = moss_core::home::lang_tree_prefix(&target_url).unwrap_or("");
 
     // For root folder (folder_id_slug = ""), prefix is empty so that all
     // non-homepage docs are considered candidates; starts_with("") is always true.
@@ -1151,15 +1154,13 @@ pub(crate) fn select_children_by_slug<'a>(
             if !d.is_listable() {
                 return false;
             }
-            // scope_default_tree: the root homepage lists only the default language
-            // tree. On a multilingual site (gated by `has_language_trees`), drop docs
-            // under any language-prefix folder (`en/`, …) so the default-language home
-            // never lists other-language articles. Single-language sites: gate is off,
-            // so this is a no-op.
-            // Set by synthesize_children_marker for homepage default-mode only.
+            // scope_default_tree: a home lists its own edition only (gated by
+            // `has_language_trees`). Set by `home_defaults` for a home in
+            // default mode only.
             if scope_default_tree
                 && project.has_language_trees
-                && moss_core::home::lang_tree_prefix(&d.url_path).is_some()
+                && !d.edition.is_empty()
+                && !d.edition.eq_ignore_ascii_case(own_tree)
             {
                 return false;
             }
@@ -1198,10 +1199,32 @@ pub(crate) fn select_children_by_slug<'a>(
         .collect()
 }
 
-/// A home's listing folder (`""` root, `en` for `en/index.html`) and whether
-/// the root-home defaults apply; shared by render and incremental group keys.
-pub(crate) fn home_scope(url_path: &str) -> (&str, bool) {
-    (moss_core::home::lang_tree_prefix(url_path).unwrap_or(""), url_path == "index.html")
+/// What a home page lists when its frontmatter says nothing: shared by the
+/// renderer and the incremental group keys.
+pub(crate) struct HomeDefaults<'a> {
+    /// The folder it lists: `""` for the root home, `de` for `de/index.html`.
+    pub tree: &'a str,
+    /// Depth defaults to "all" rather than "direct".
+    pub depth_all: bool,
+    /// Pages of other editions and top-level nav pages are left out.
+    pub scoped: bool,
+}
+
+/// The root home lists its whole tree. An edition's own `<lang>/index.md`
+/// does the same for its tree, unless it sets `children_source` or
+/// `children_depth` itself: either one is the author choosing a listing, and
+/// `children_depth: direct` is the way back to the narrow edition listing.
+pub(crate) fn home_defaults(doc: &ParsedDocument) -> HomeDefaults<'_> {
+    let tree = moss_core::home::lang_tree_prefix(&doc.url_path).unwrap_or("");
+    let is_root = doc.url_path == "index.html";
+    let is_edition_home =
+        !is_root && !doc.edition.is_empty() && crate::build::render::lang_roots::is_language_root(&doc.url_path);
+    let edition_defaults = is_edition_home && doc.children_source.is_none() && doc.children_depth.is_none();
+    HomeDefaults {
+        tree,
+        depth_all: is_root || edition_defaults,
+        scoped: doc.children_source.is_none() && (is_root || edition_defaults),
+    }
 }
 
 /// Render a single resolved marker. `Err` carries the plain-text problem when
@@ -1590,11 +1613,10 @@ fn resolve_more_link_target<'a>(
 ///
 /// `from_md_path` — source markdown path for relative path resolution in render_one.
 ///
-/// Only the root home lists the whole default-language tree (depth "all"),
-/// so it alone drops other languages' folders and top-level nav-item folders
-/// (the nav bar already shows those), unless `children_source` names another folder on purpose.
-/// Any other host, a language home included, lists its own `folder_path` at
-/// depth "direct", unfiltered: scoping by the root's rules would list the wrong tree.
+/// A home lists its whole edition (depth "all"), dropping other editions'
+/// pages and top-level nav pages (the nav bar already shows those), unless
+/// `children_source` names another folder on purpose; see [`home_defaults`].
+/// Any other host lists its own `folder_path` at depth "direct", unfiltered.
 pub fn synthesize_children_marker(
     doc: &crate::build::types::ParsedDocument,
     folder_path: &str,
@@ -1602,10 +1624,8 @@ pub fn synthesize_children_marker(
 ) -> String {
     use moss_core::resolve::embed_renderer::folder_list::{FolderEmbedParams, emit_marker};
 
-    let is_root_home = home_scope(&doc.url_path).1;
-    let depth = doc.children_depth.clone().or_else(|| is_root_home.then(|| "all".to_string()));
-
-    let root_default_mode = is_root_home && doc.children_source.is_none();
+    let home = home_defaults(doc);
+    let depth = doc.children_depth.clone().or_else(|| home.depth_all.then(|| "all".to_string()));
     let params = FolderEmbedParams {
         limit: doc.children_limit.map(|n| n as usize),
         sort: None,  // sort comes from target doc's direct_children_sort cache
@@ -1620,8 +1640,8 @@ pub fn synthesize_children_marker(
         // key, which never carries an empty value either.
         more: doc.children_more.clone().filter(|s| !s.is_empty()),
         count: doc.children_count.clone(),
-        scope_default_tree: root_default_mode,
-        exclude_nav: root_default_mode,
+        scope_default_tree: home.scoped,
+        exclude_nav: home.scoped,
         // A frontmatter listing has no pothole to read placement or a
         // caption out of; both are body-embed vocabulary.
         placement: Default::default(),

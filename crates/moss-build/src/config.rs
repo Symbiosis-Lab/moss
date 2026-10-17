@@ -240,12 +240,12 @@ impl ConfigFile {
                 };
                 let fields: Vec<String> =
                     fields.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
-                let title = table.get("title").and_then(|v| v.as_str()).map(str::to_string);
+                let titles = table.get("title").and_then(Self::choice_labels).unwrap_or_default();
                 let kind_type = table.get("type").and_then(|v| v.as_str()).map(str::to_string);
                 let explorer = table.get("explorer").and_then(|v| v.as_bool());
                 let line = table.get("line").and_then(|v| v.as_bool());
                 let cards = table.get("cards").cloned();
-                declared.push(RawKind { key: key.clone(), fields, title, kind_type, explorer, line, cards });
+                declared.push(RawKind { key: key.clone(), fields, titles, kind_type, explorer, line, cards });
             }
         }
         let declared_keys: std::collections::HashSet<&str> =
@@ -263,7 +263,7 @@ impl ConfigFile {
                 } else {
                     Vec::new()
                 },
-                title: None,
+                titles: Vec::new(),
                 kind_type: None,
                 explorer: None, line: None, cards: None,
             });
@@ -273,24 +273,23 @@ impl ConfigFile {
     }
 
     /// The kinds whose `[terms.<key>]` block says `nav = true`, in the order
-    /// the file writes them, each with its explicit `title` and `weight` if it set them.
+    /// the file writes them, each with its `weight` if it set one.
     /// Whether a kind has a root page to link is decided later, from the terms
     /// the site actually has (`TermIndex::nav_entries`).
-    pub fn terms_nav(&self) -> Vec<(String, Option<String>, Option<i32>)> {
+    pub fn terms_nav(&self) -> Vec<(String, Option<i32>)> {
         let Some(terms) = self.root.get("terms").and_then(|v| v.as_table()) else { return Vec::new() };
-        let mut nav: Vec<(usize, String, Option<String>, Option<i32>)> = terms
+        let mut nav: Vec<(usize, String, Option<i32>)> = terms
             .iter()
             .filter_map(|(key, value)| {
                 let table = value.as_table()?;
                 table.get("nav")?.as_bool().filter(|on| *on)?;
-                let title = table.get("title").and_then(|v| v.as_str()).map(str::to_string);
                 let order = self.written_position("terms", key);
                 let weight = table.get("weight").and_then(|v| v.as_integer()).and_then(|w| i32::try_from(w).ok());
-                Some((order, key.clone(), title, weight))
+                Some((order, key.clone(), weight))
             })
             .collect();
         nav.sort();
-        nav.into_iter().map(|(_, key, title, weight)| (key, title, weight)).collect()
+        nav.into_iter().map(|(_, key, weight)| (key, weight)).collect()
     }
 
     /// The `[redirects]` table: old address, new address, as the author wrote
@@ -513,10 +512,11 @@ pub struct RawKind {
     /// Frontmatter field names as configured, not yet checked by
     /// `build::terms::term_kinds`.
     pub fields: Vec<String>,
-    /// Explicit `title` from the table, when the author set one. `None` for
-    /// the two built-ins (their title comes from `i18n::term_root_title`)
-    /// and for a declared kind that didn't set one (its title is its key).
-    pub title: Option<String>,
+    /// The table's `title`, a string or a table of `language tag = title`, as
+    /// `(language tag, title)` pairs. Empty for the two built-ins (their title
+    /// comes from `i18n::term_root_title`) and for a declared kind that didn't
+    /// set one (its title is its key).
+    pub titles: Vec<(String, String)>,
     /// The declared `type = "..."` key, unvalidated — `"place"` is the only
     /// value `build::terms::term_kinds` recognizes today; anything else is a
     /// diagnostic there, not here. `None` for the two built-ins and for a

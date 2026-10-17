@@ -90,14 +90,23 @@ pub fn nav_globals(documents: &[ParsedDocument], has_content_folders: bool) -> B
 }
 
 /// Fold the nav-bar term kinds (`[terms.<key>] nav = true`, with a root page)
-/// into the site language's nav digest: they are nav entries too, and they
-/// appear on exactly that language's pages. A no-op for a site with none.
-pub fn fold_term_nav(globals: &mut BTreeMap<String, String>, site_lang: Language, term_nav: &[(String, String, Option<i32>)]) {
-    if term_nav.is_empty() {
-        return;
+/// into the nav digest of every language whose pages show them: an entry
+/// shows on the pages of its own edition. A no-op for a site with none.
+pub fn fold_term_nav(
+    globals: &mut BTreeMap<String, String>,
+    site_lang: Language,
+    term_nav: &[crate::build::terms::TermNavEntry],
+    documents: &[ParsedDocument],
+) {
+    let mut by_lang: BTreeMap<&str, std::collections::BTreeSet<&crate::build::terms::TermNavEntry>> = BTreeMap::new();
+    for doc in documents {
+        let shown = term_nav.iter().filter(|entry| entry.edition == doc.edition);
+        by_lang.entry(effective_lang(doc, site_lang).code()).or_default().extend(shown);
     }
-    let digest = globals.entry(site_lang.code().to_string()).or_default();
-    *digest = debug_hash(&(digest.as_str(), term_nav));
+    for (lang, entries) in by_lang.into_iter().filter(|(_, entries)| !entries.is_empty()) {
+        let digest = globals.entry(lang.to_string()).or_default();
+        *digest = debug_hash(&(digest.as_str(), entries));
+    }
 }
 
 /// The document that serves as `lang`'s home page: `index.html` for the

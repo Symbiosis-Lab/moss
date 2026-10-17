@@ -258,6 +258,15 @@ pub fn emit_redirect_table(
             }
         }
     }
+    // A moved term page keeps its QR code's old address too, like a renamed source.
+    if let Some(previous) = published_record::load_address_baseline(paths, backfill::publish_target(paths).as_deref()) {
+        for (old, new) in &inputs.term_stubs {
+            let (old_qr, new_qr) = (qr_key_for_url_path(old), qr_key_for_url_path(new));
+            if previous.files.contains_key(&old_qr) && pending.is_registered(&new_qr) {
+                new_renames.insert(old_qr, new_qr);
+            }
+        }
+    }
     let current_urls = current_build_urls(current_article_map);
     let merged = merge_redirects(existing.as_ref().unwrap_or(&BTreeMap::new()), &new_renames, &current_urls);
 

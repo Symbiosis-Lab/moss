@@ -9191,10 +9191,11 @@ mod homepage_translation_tests {
             .expect("synthetic Traditional Chinese folder page");
         assert!(synthetic.contains(" - 青苔</title>"));
         // The tree pairs with the site home by path, so its pages get the
-        // translation-tree breadcrumb, as a keyed tree's do.
+        // translation-tree breadcrumb, as a keyed tree's do, and a generated
+        // page names its edition's home as an authored one does.
         assert!(
-            synthetic.contains(r#"<a href="/zh-hant/" class="breadcrumb-segment""#)
-                && synthetic.contains(r#"<span class="breadcrumb-label">青苔</span>"#)
+            synthetic.contains(r#"<a href="/" class="breadcrumb-segment""#)
+                && synthetic.contains(r#"<a href="/zh-hant/" class="site-name" data-trail-crumb>青苔</a>"#)
         );
         assert!(!synthetic.contains(" - moss</title>"));
     }

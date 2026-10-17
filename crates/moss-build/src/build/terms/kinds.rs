@@ -25,10 +25,13 @@ pub struct TermKind {
     /// Frontmatter field names feeding this kind, in the order their
     /// sections render (`["author", "editor", "jury"]`).
     pub fields: Vec<String>,
-    /// Namespace-root heading, resolved once at construction and never read
-    /// with a fallback: a declared kind's config `title` or its own key; a
-    /// built-in's `i18n::term_root_title`. There is nothing to fall back to.
+    /// The kind's name in the site language, resolved once at construction.
+    /// Persisted with the kind; read it through [`Self::title_in`].
     pub title: String,
+    /// The config `title` as `(language tag, title)` pairs; a plain string is
+    /// the `en` entry, which every language falls back to.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub titles: Vec<(String, String)>,
     /// `type = "place"` in `[terms.<key>]`. The only typed kind — a plain
     /// bool, not an enum, because a place is the only kind type moss
     /// recognizes so far. Drives which kinds `build::terms::places::attach_parents`
@@ -88,6 +91,49 @@ impl TermKind {
     pub fn explorer_enabled(&self) -> bool {
         self.is_place && self.explorer.unwrap_or(true)
     }
+
+    /// The kind's name in `edition` (`""` is the default edition), which its
+    /// root page is headed and its nav entry labelled with. An edition moss
+    /// has no interface strings for is dressed in the site language's, so
+    /// without a label of its own it takes the site language's name.
+    pub fn title_in(&self, edition: &str) -> String {
+        let labelled = moss_core::fields::label_in(&self.titles, edition).is_some();
+        if edition.is_empty() || (!labelled && crate::i18n::Language::from_code(edition).is_none()) {
+            return self.title.clone();
+        }
+        kind_title(&self.key, &self.titles, edition)
+    }
+
+    /// A built-in kind as config would make it, for a map written before
+    /// kinds were recorded.
+    pub fn builtin(key: &str, field: &str, site_lang: &str) -> TermKind {
+        TermKind {
+            key: key.to_string(),
+            fields: vec![field.to_string()],
+            title: kind_title(key, &[], site_lang),
+            titles: Vec::new(),
+            is_place: false,
+            parents: Default::default(),
+            explorer: None,
+            line: None,
+            cards: false,
+        }
+    }
+}
+
+/// A kind's name in `lang`: its config `title` for that language by the rule a
+/// declared field's labels follow, else a built-in's translated title, else
+/// its key capitalized.
+fn kind_title(key: &str, titles: &[(String, String)], lang: &str) -> String {
+    if let Some(label) = moss_core::fields::label_in(titles, lang) {
+        return label.to_string();
+    }
+    if key == AUTHOR_NS || key == TAGS_NS {
+        let lang = crate::i18n::Language::from_code(lang).unwrap_or_default();
+        return crate::i18n::term_root_title(lang, key).to_string();
+    }
+    let mut chars = key.chars();
+    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
 }
 
 /// Why a name in a `[terms.<key>] fields` list cannot be a name-list field, or
@@ -135,8 +181,8 @@ pub fn declared_name_list_fields(cfg: &crate::config::ConfigFile) -> Vec<String>
 /// DECLARED (non-built-in) kind claims is removed from any built-in kind
 /// that would otherwise list it by default, so a field belongs to at most
 /// one kind — naming `author` in `[terms.people]` takes it out of
-/// `authors/`. `title` is resolved fully here: a declared kind's own
-/// `title`, or its key; a built-in's `i18n::term_root_title(lang, key)`.
+/// `authors/`. `title` is resolved here, in the site language (see
+/// `kind_title`).
 /// Nothing about the result is patched later.
 ///
 /// A declared kind that reuses a built-in's own key (`[terms.tags]`,
@@ -146,7 +192,7 @@ pub fn declared_name_list_fields(cfg: &crate::config::ConfigFile) -> Vec<String>
 /// keyed on `kind.key`, not on which branch produced the `RawKind`, so a
 /// declared `[terms.tags]` with no explicit `title` still falls back to the
 /// i18n default correctly.
-pub fn term_kinds(cfg: &crate::config::ConfigFile, lang: crate::i18n::Language) -> Vec<TermKind> {
+pub fn term_kinds(cfg: &crate::config::ConfigFile, site_lang: &str) -> Vec<TermKind> {
     let filtered: Vec<(crate::config::RawKind, Vec<String>)> = cfg
         .terms_kinds()
         .into_iter()
@@ -189,13 +235,7 @@ pub fn term_kinds(cfg: &crate::config::ConfigFile, lang: crate::i18n::Language) 
             } else {
                 fields
             };
-            let title = kind.title.unwrap_or_else(|| {
-                if is_builtin {
-                    crate::i18n::term_root_title(lang, &kind.key).to_string()
-                } else {
-                    kind.key.clone()
-                }
-            });
+            let title = kind_title(&kind.key, &kind.titles, site_lang);
             let is_place = match kind.kind_type.as_deref() {
                 Some("place") => true,
                 Some(other) => {
@@ -226,7 +266,7 @@ pub fn term_kinds(cfg: &crate::config::ConfigFile, lang: crate::i18n::Language) 
                     false
                 }
             };
-            TermKind { key: kind.key, fields, title, is_place, parents: Default::default(), explorer, line, cards }
+            TermKind { key: kind.key, fields, title, titles: kind.titles, is_place, parents: Default::default(), explorer, line, cards }
         })
         .collect()
 }
@@ -238,7 +278,7 @@ mod tests {
     #[test]
     fn built_in_kind_off_by_config_derives_nothing() {
         let cfg = crate::config::ConfigFile::parse("[terms]\ntags = false\n").unwrap();
-        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
+        let kinds = term_kinds(&cfg, "en");
         let tags = kinds.iter().find(|k| k.key == TAGS_NS).expect("tags kind present");
         assert!(tags.fields.is_empty(), "tags = false empties the built-in kind: {:?}", tags.fields);
         let authors = kinds.iter().find(|k| k.key == AUTHOR_NS).expect("authors kind present");
@@ -250,7 +290,7 @@ mod tests {
         let cfg =
             crate::config::ConfigFile::parse("[terms.people]\nfields = [\"author\", \"editor\"]\n")
                 .unwrap();
-        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
+        let kinds = term_kinds(&cfg, "en");
         let authors = kinds.iter().find(|k| k.key == AUTHOR_NS).expect("authors kind present");
         assert!(authors.fields.is_empty(), "author moved into people: {:?}", authors.fields);
         let people = kinds.iter().find(|k| k.key == "people").expect("people kind present");
@@ -262,7 +302,7 @@ mod tests {
         let cfg =
             crate::config::ConfigFile::parse("[terms.people]\nfields = [\"editor\", \"ghost\"]\n")
                 .unwrap();
-        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
+        let kinds = term_kinds(&cfg, "en");
         let people = kinds.iter().find(|k| k.key == "people").expect("people kind present");
         assert_eq!(
             people.fields,
@@ -276,7 +316,7 @@ mod tests {
         let cfg =
             crate::config::ConfigFile::parse("[terms.people]\nfields = [\"editor\", \"title\"]\n")
                 .unwrap();
-        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
+        let kinds = term_kinds(&cfg, "en");
         let people = kinds.iter().find(|k| k.key == "people").expect("people kind present");
         assert_eq!(people.fields, vec!["editor".to_string()], "title is not a name list");
     }
@@ -286,7 +326,7 @@ mod tests {
         // `tag` would claim `tag_page:`, the key `tags` already owns.
         let cfg = crate::config::ConfigFile::parse("[terms.people]\nfields = [\"tag\", \"place\"]\n")
             .unwrap();
-        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
+        let kinds = term_kinds(&cfg, "en");
         let people = kinds.iter().find(|k| k.key == "people").expect("people kind present");
         assert!(people.fields.is_empty(), "tag and place collide with tags and location: {:?}", people.fields);
     }
@@ -297,7 +337,7 @@ mod tests {
             "[terms.places]\ntype = \"place\"\nfields = [\"location\"]\n",
         )
         .unwrap();
-        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
+        let kinds = term_kinds(&cfg, "en");
         let places = kinds.iter().find(|k| k.key == "places").expect("places kind present");
         assert!(places.is_place);
     }
@@ -308,7 +348,7 @@ mod tests {
             "[terms.places]\ntype = \"place\"\nfields = [\"location\"]\n",
         )
         .unwrap();
-        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
+        let kinds = term_kinds(&cfg, "en");
         let places = kinds.iter().find(|k| k.key == "places").expect("places kind present");
         assert!(places.explorer_enabled(), "absent key defaults the explorer on");
     }
@@ -319,7 +359,7 @@ mod tests {
             "[terms.places]\ntype = \"place\"\nfields = [\"location\"]\nexplorer = false\n",
         )
         .unwrap();
-        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
+        let kinds = term_kinds(&cfg, "en");
         let places = kinds.iter().find(|k| k.key == "places").expect("places kind present");
         assert!(!places.explorer_enabled());
     }
@@ -330,7 +370,7 @@ mod tests {
             "[terms.places]\ntype = \"place\"\nfields = [\"location\"]\nline = false\n\n[terms.people]\nfields = [\"author\"]\nline = false\n",
         )
         .unwrap();
-        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
+        let kinds = term_kinds(&cfg, "en");
         assert_eq!(kinds.iter().find(|k| k.key == "places").unwrap().line, Some(false));
         assert_eq!(kinds.iter().find(|k| k.key == "people").unwrap().line, None);
     }
@@ -341,7 +381,7 @@ mod tests {
             "[terms.people]\nfields = [\"author\"]\nexplorer = false\n",
         )
         .unwrap();
-        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
+        let kinds = term_kinds(&cfg, "en");
         let people = kinds.iter().find(|k| k.key == "people").expect("people kind present");
         assert_eq!(people.explorer, None, "the key is dropped for a non-place kind");
         assert!(!people.explorer_enabled(), "never true off is_place, whatever the raw value was");
@@ -353,7 +393,7 @@ mod tests {
             "[terms.places]\ntype = \"country\"\nfields = [\"location\"]\n",
         )
         .unwrap();
-        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
+        let kinds = term_kinds(&cfg, "en");
         let places = kinds.iter().find(|k| k.key == "places").expect("places kind present");
         assert!(!places.is_place, "an unrecognized type is ignored, not a panic");
     }
@@ -363,13 +403,13 @@ mod tests {
         let _ = crate::build::cli_output::take_cli_problems();
         let on = crate::config::ConfigFile::parse("[terms.performers]\nfields = [\"conductor\"]\ncards = true\n")
             .unwrap();
-        let kinds = term_kinds(&on, crate::i18n::Language::En);
+        let kinds = term_kinds(&on, "en");
         assert!(kinds.iter().find(|k| k.key == "performers").unwrap().cards);
         assert_eq!(crate::build::cli_output::take_cli_problems(), 0, "a bool is not a problem");
 
         let bad = crate::config::ConfigFile::parse("[terms.performers]\nfields = [\"conductor\"]\ncards = \"yes\"\n")
             .unwrap();
-        let kinds = term_kinds(&bad, crate::i18n::Language::En);
+        let kinds = term_kinds(&bad, "en");
         assert!(!kinds.iter().find(|k| k.key == "performers").unwrap().cards, "a non-bool is off");
         assert_eq!(crate::build::cli_output::take_cli_problems(), 1, "a non-bool is one diagnostic");
     }
@@ -378,7 +418,7 @@ mod tests {
     fn a_kind_with_no_type_key_is_never_a_place_kind() {
         let cfg =
             crate::config::ConfigFile::parse("[terms.people]\nfields = [\"author\"]\n").unwrap();
-        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
+        let kinds = term_kinds(&cfg, "en");
         let people = kinds.iter().find(|k| k.key == "people").expect("people kind present");
         assert!(!people.is_place);
     }
@@ -393,7 +433,7 @@ mod tests {
     /// `pipeline.rs` construction line turns both of them red.
     #[test]
     fn absent_config_still_yields_the_two_built_in_kinds() {
-        let kinds = term_kinds(&crate::config::ConfigFile::empty(), crate::i18n::Language::En);
+        let kinds = term_kinds(&crate::config::ConfigFile::empty(), "en");
         let authors = kinds.iter().find(|k| k.key == AUTHOR_NS).expect("authors kind present");
         let tags = kinds.iter().find(|k| k.key == TAGS_NS).expect("tags kind present");
         assert_eq!(authors.fields, vec!["author".to_string()]);

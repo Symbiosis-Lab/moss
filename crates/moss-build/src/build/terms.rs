@@ -52,7 +52,12 @@ pub mod places;
 // doc comment for why it is a sibling file rather than inline here.
 mod rollup;
 mod stubs;
-pub use stubs::{claim_stubs, kind_move_stubs};
+mod editions;
+pub use editions::TermKey;
+use editions::{kind_edition, scope};
+mod translations;
+pub use translations::link_term_translations;
+pub use stubs::{claim_stubs, edition_move_stubs, kind_move_stubs};
 
 /// `[text](url)` and `[[wikilink]]` spans — what [`linked_spans`] scans for.
 static LINK_SPAN_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -120,6 +125,30 @@ pub struct TermIndex {
     /// every level of a document's chain into `members_by_field`, not only
     /// the immediate parent.
     children_by_term: BTreeMap<String, Vec<(String, String, usize)>>,
+    /// Every namespace root in use, in kind order then edition order.
+    roots: Vec<TermRoot>,
+}
+
+/// A namespace root in use in one edition.
+#[derive(Debug)]
+struct TermRoot {
+    /// `partners`, `de/partners`.
+    key: String,
+    /// Index into `TermIndex::kinds`.
+    kind: usize,
+    /// The edition's tree, `""` for the default edition.
+    edition: String,
+}
+
+/// A kind's entry in one edition's nav bar.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TermNavEntry {
+    /// The edition's root page key (`partners`, `de/partners`).
+    pub root: String,
+    pub label: String,
+    pub weight: Option<i32>,
+    /// The edition's tree, `""` for the default edition.
+    pub edition: String,
 }
 
 impl TermIndex {
@@ -139,9 +168,8 @@ impl TermIndex {
         self.sites.get(key).map(|s| s.display.as_str())
     }
 
-    /// The kind whose namespace root this key is (`key == kind.key`), if
-    /// any — `title` is already final (resolved once by `term_kinds`, never
-    /// read with a fallback here).
+    /// The kind whose namespace root this key is (`partners`, `de/partners`),
+    /// with the root's edition.
     ///
     /// Only for a namespace this build actually put terms in. A kind exists
     /// whether or not anything feeds it (the built-ins survive their
@@ -149,21 +177,8 @@ impl TermIndex {
     /// with `[terms] author = false` may well have a real directory called
     /// `authors/` — which keeps its own name, rather than being retitled by
     /// a namespace nothing is in.
-    pub fn kind_for(&self, key: &str) -> Option<&TermKind> {
-        self.namespace_in_use(key).then(|| self.kinds.iter().find(|k| k.key == key)).flatten()
-    }
-
-    /// Root-relative URL a mention of this term should link to: the claiming
-    /// page when one exists, the generated pseudo-folder page otherwise.
-    /// `None` when the term is unknown (nothing derived it — dimension off or
-    /// value absent everywhere).
-    pub fn term_url(&self, ns: &str, name: &str) -> Option<String> {
-        let key = term_folder_key(ns, name);
-        let site = self.sites.get(&key)?;
-        Some(match &site.claimed_by {
-            Some(claim) => format!("/{}", claim), // allow:served-path-url-construct (term link to the claiming page)
-            None => format!("/{}/", key), // allow:served-path-url-construct (term link to the generated pseudo-folder page)
-        })
+    pub fn kind_for(&self, key: &str) -> Option<(&TermKind, &str)> {
+        self.roots.iter().find(|root| root.key == key).map(|root| (&self.kinds[root.kind], root.edition.as_str()))
     }
 
     /// Every derived term, keyed by pseudo-folder key, in key order. What the
@@ -203,38 +218,32 @@ impl TermIndex {
         self.children_by_term.get(term_key).map(Vec::as_slice)
     }
 
-    /// Whether any term exists in this namespace (drives whether the
-    /// namespace root index is worth emitting).
-    fn namespace_in_use(&self, ns: &str) -> bool {
-        let prefix = format!("{}/", ns);
+    /// Whether any term exists under this root key.
+    fn namespace_in_use(&self, root: &str) -> bool {
+        let prefix = format!("{}/", root);
         self.sites.keys().any(|k| k.starts_with(&prefix))
     }
 
-    /// The namespace roots (every declared kind's key) that have at least
-    /// one term — a claimed one counts, since the claim page joins the root
-    /// listing.
+    /// The namespace roots (each declared kind's key, once per edition) that
+    /// have at least one term — a claimed one counts, since the claim page
+    /// joins the root listing.
     pub fn roots_in_use(&self) -> impl Iterator<Item = &str> + '_ {
-        self.kinds.iter().map(|k| k.key.as_str()).filter(move |ns| self.namespace_in_use(ns))
+        self.roots.iter().map(|root| root.key.as_str())
     }
 
     /// The nav-bar entries of the kinds in `nav` (see
-    /// `ConfigFile::terms_nav`) that have a root page: `(namespace key,
-    /// label, weight)`, in the order given. The label is the kind's explicit `title`,
-    /// else its resolved title for a built-in kind, else its key capitalized.
-    pub fn nav_entries(&self, nav: &[(String, Option<String>, Option<i32>)]) -> Vec<(String, String, Option<i32>)> {
-        nav.iter()
-            .filter(|(key, _, _)| self.namespace_in_use(key))
-            .map(|(key, title, weight)| {
-                let label = title.clone().unwrap_or_else(|| match self.kinds.iter().find(|k| k.key == *key) {
-                    Some(k) if key == moss_core::terms::AUTHOR_NS || key == moss_core::terms::TAGS_NS => k.title.clone(),
-                    _ => {
-                        let mut chars = key.chars();
-                        chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
-                    }
-                });
-                (key.clone(), label, *weight)
-            })
-            .collect()
+    /// `ConfigFile::terms_nav`) that have a root page, in the order given, one
+    /// per edition that has a root of the kind, labelled with the kind's name
+    /// in that edition (`TermKind::title_in`).
+    pub fn nav_entries(&self, nav: &[(String, Option<i32>)]) -> Vec<TermNavEntry> {
+        let mut out = Vec::new();
+        for (ns, weight) in nav {
+            for root in self.roots.iter().filter(|root| self.kinds[root.kind].key == *ns) {
+                let label = self.kinds[root.kind].title_in(&root.edition);
+                out.push(TermNavEntry { root: root.key.clone(), label, weight: *weight, edition: root.edition.clone() });
+            }
+        }
+        out
     }
 
     /// Every pseudo-folder that needs a synthetic folder document and an
@@ -259,7 +268,7 @@ impl TermIndex {
     /// reached through a claim (`ParsedDocument::term_listing`) instead, and
     /// `roots_in_use` already yields bare keys only.
     pub fn place_namespace_roots(&self) -> impl Iterator<Item = &str> + '_ {
-        self.roots_in_use().filter(|key| self.kinds.iter().any(|k| k.key == *key && k.is_place))
+        self.roots.iter().filter(|root| self.kinds[root.kind].is_place).map(|root| root.key.as_str())
     }
 }
 
@@ -334,6 +343,9 @@ pub fn claim_field_key(field: &str) -> String {
 /// page carries still creates the term (the claim IS an occurrence — an
 /// author page for someone with no published works yet is valid and lists
 /// nothing).
+///
+/// Terms are per edition (`ParsedDocument::edition`): a page's terms, claims
+/// and links stay inside the language tree it sits in.
 pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> TermIndex {
     inherit::inherit_work_locations(documents);
     let mut index = TermIndex::default();
@@ -342,10 +354,11 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
     // can exclude the claiming page from its own listing.
     for doc in documents.iter() {
         for kind in &kinds {
+            let edition = kind_edition(kind, &doc.edition);
             for field in &kind.fields {
                 let Some(claim) = term_claim_of(doc, field) else { continue };
                 let name = claim.name(&doc.title).trim();
-                let Some(key) = resolved_key(&kind.key, name) else { continue };
+                let Some(key) = resolved_key(edition, &kind.key, name) else { continue };
                 let site = index.sites.entry(key.clone()).or_insert_with(|| TermSite {
                     display: name.to_string(),
                     claimed_by: None,
@@ -385,8 +398,8 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
         // The claim page takes the generated page's place in the NAMESPACE
         // ROOT listing too (`/authors/`, `/tags/`): membership in the root is
         // declared the same way term membership is, via `also_in`.
-        if let Some((ns, _)) = key.split_once('/') {
-            doc.also_in.get_or_insert_with(Vec::new).push(ns.to_string());
+        if let Some(term) = TermKey::parse(&key) {
+            doc.also_in.get_or_insert_with(Vec::new).push(term.root());
         }
         if doc.children_source.is_some() {
             continue; // author routed children explicitly; their routing wins
@@ -405,6 +418,7 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
     // through the same steps as the immediate key.
     for doc in documents.iter_mut() {
         let own_claim = claimed_key(doc, &kinds, &index);
+        let doc_edition = doc.edition.clone();
         let doc_url = to_pretty_url(&doc.url_path);
         // Dedup `also_in`: a page naming the same term through more than one
         // field of one kind (`author:` and `editor:` both crediting the same
@@ -422,11 +436,12 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
         let mut members_pushed: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
         for kind in &kinds {
+            let edition = kind_edition(kind, &doc_edition);
             for field in &kind.fields {
                 let names = field_names(doc, field).to_vec();
                 for name in &names {
                     let name = name.trim();
-                    let Some(key) = resolved_key(&kind.key, name) else { continue };
+                    let Some(key) = resolved_key(edition, &kind.key, name) else { continue };
                     // First-seen original case is the display form; later
                     // case variants merge into the same key by construction.
                     index.sites.entry(key.clone()).or_insert_with(|| TermSite {
@@ -517,8 +532,8 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
     // generated page through `TermIndex::sections`.
     let mut sections_by_term: BTreeMap<String, Vec<(Option<String>, Vec<String>)>> = BTreeMap::new();
     for term_key in index.sites.keys() {
-        let Some((ns, _)) = term_key.split_once('/') else { continue };
-        let Some(kind) = kinds.iter().find(|k| k.key == ns) else { continue };
+        let Some(term) = TermKey::parse(term_key) else { continue };
+        let Some(kind) = kinds.iter().find(|k| k.key == term.ns) else { continue };
         let mut claimed_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut sections: Vec<(Option<String>, Vec<String>)> = kind
             .fields
@@ -568,6 +583,23 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
     }
 
     index.kinds = kinds;
+    let mut tiers: Vec<&str> = vec![""];
+    tiers.extend(index.sites.keys().filter_map(|key| TermKey::parse(key)).map(|term| term.edition));
+    tiers.sort_unstable();
+    tiers.dedup();
+    let roots: Vec<TermRoot> = index
+        .kinds
+        .iter()
+        .enumerate()
+        .flat_map(|(i, kind)| {
+            tiers
+                .iter()
+                .filter(move |edition| edition.is_empty() || !kind.is_place)
+                .map(move |edition| TermRoot { key: scope(edition, &kind.key), kind: i, edition: edition.to_string() })
+        })
+        .filter(|root| index.namespace_in_use(&root.key))
+        .collect();
+    index.roots = roots;
     // Runs last: `TermIndex::place_namespace_roots` reads `index.kinds`,
     // just set above. See `rollup::flag_place_namespace_roots`'s own doc.
     rollup::flag_place_namespace_roots(documents, &index);
@@ -610,10 +642,6 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
 /// Runs after [`derive_terms`] and before the render fingerprints are taken,
 /// so a claim appearing anywhere moves the linked URL and with it the page's
 /// surface — invalidation is free.
-///
-/// Renamed from `link_authors_in_bylines` in task A4 (a bare rename; the
-/// candidate set was still `author:`-only there). This task widens it to
-/// every kind's fields and adds guards 2 (fixed), 4, 5 and 6.
 pub fn link_terms_in_bylines(documents: &mut [ParsedDocument], index: &TermIndex) {
     for doc in documents.iter_mut() {
         if doc.byline.is_empty() {
@@ -659,6 +687,7 @@ pub fn link_terms_in_bylines(documents: &mut [ParsedDocument], index: &TermIndex
         }
         unique_names.sort_by_key(|n| std::cmp::Reverse(n.chars().count()));
 
+        let edition = doc.edition.clone();
         let own_url = format!("/{}", doc.url_path.trim_end_matches("index.html")); // allow:served-path-url-construct (self-link comparison only, never emitted)
         let links: Vec<(&str, String)> = unique_names
             .into_iter()
@@ -673,7 +702,7 @@ pub fn link_terms_in_bylines(documents: &mut [ParsedDocument], index: &TermIndex
                     return None;
                 }
                 // None: no kind's namespace has a term for this name.
-                let url = index.kinds.iter().find_map(|kind| index.term_url(&kind.key, name))?;
+                let url = index.kinds.iter().find_map(|kind| index.term_url_in(&edition, &kind.key, name))?;
                 if url == own_url {
                     return None; // the term page itself never links to itself
                 }
@@ -775,7 +804,7 @@ pub fn set_place_lines(documents: &mut [ParsedDocument], index: &TermIndex, lang
         let mut names: Vec<&str> = Vec::new();
         for name in &doc.location {
             let name = name.trim();
-            let Some(url) = index.term_url(&place_kind.key, name) else { continue };
+            let Some(url) = index.term_url_in("", &place_kind.key, name) else { continue };
             links.push(format!("[{}]({})", name, url));
             names.push(name);
         }
@@ -819,7 +848,7 @@ fn find_bounded(row: &str, name: &str) -> Option<(usize, usize)> {
 /// Such names have no slug of their own — `generate_slug` falls back to
 /// "untitled", which would silently merge every punctuation-only value into
 /// one shared `authors/untitled` term.
-fn resolved_key(ns: &str, name: &str) -> Option<String> {
+fn resolved_key(edition: &str, ns: &str, name: &str) -> Option<String> {
     if !name.chars().any(char::is_alphanumeric) {
         if !name.is_empty() {
             crate::build::cli_output::log_warn_problem!(
@@ -828,13 +857,9 @@ fn resolved_key(ns: &str, name: &str) -> Option<String> {
         }
         return None;
     }
-    Some(term_folder_key(ns, name))
+    Some(scope(edition, &term_folder_key(ns, name)))
 }
 
-/// The pseudo-folder key this doc claims, if any, across every kind's
-/// fields (the first field to resolve one wins — a page can be one term's
-/// page, and two claims on one page is an authoring mistake worth a
-/// warning).
 /// Split a term page's already-fetched member slice into the groups its
 /// resolved `sections` describe, dropping every group no member landed in.
 ///
@@ -901,13 +926,18 @@ pub fn render_term_sections<'a>(
     )
 }
 
+/// The pseudo-folder key this doc claims, if any, across every kind's
+/// fields (the first field to resolve one wins — a page can be one term's
+/// page, and two claims on one page is an authoring mistake worth a
+/// warning).
 fn claimed_key(doc: &ParsedDocument, kinds: &[TermKind], index: &TermIndex) -> Option<String> {
     let mut found: Option<String> = None;
     for kind in kinds {
+        let edition = kind_edition(kind, &doc.edition);
         for field in &kind.fields {
             let Some(claim) = term_claim_of(doc, field) else { continue };
             let name = claim.name(&doc.title).trim();
-            let Some(key) = resolved_key(&kind.key, name) else {
+            let Some(key) = resolved_key(edition, &kind.key, name) else {
                 continue;
             };
             // Only the winning claimer acts as the term page.
@@ -948,9 +978,28 @@ mod tests {
     /// kinds table (task A4).
     fn both_kinds() -> Vec<TermKind> {
         vec![
-            TermKind { cards: false, key: AUTHOR_NS.to_string(), fields: vec!["author".to_string()], title: "Authors".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
-            TermKind { cards: false, key: TAGS_NS.to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: AUTHOR_NS.to_string(), fields: vec!["author".to_string()], title: "Authors".to_string(), titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: TAGS_NS.to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None },
         ]
+    }
+
+    #[test]
+    fn a_term_is_keyed_by_the_edition_of_the_page_that_names_it() {
+        let mut docs = vec![doc("posts/a/index.html", "A"), doc("de/posts/b/index.html", "B")];
+        docs[0].author = vec!["Ada".into()];
+        docs[1].author = vec!["Ada".into(), "Nur Deutsch".into()];
+        docs[1].edition = "de".into();
+        let index = derive_terms(&mut docs, both_kinds());
+        assert_eq!(
+            index.sites().keys().map(String::as_str).collect::<Vec<_>>(),
+            ["authors/ada", "de/authors/ada", "de/authors/nur-deutsch"]
+        );
+        assert!(docs[1].also_in.as_ref().unwrap().contains(&"de/authors/ada".to_string()));
+        assert!(!docs[1].also_in.as_ref().unwrap().contains(&"authors/ada".to_string()));
+        assert_eq!(index.term_url_in("de", "authors", "Ada").as_deref(), Some("/de/authors/ada/"));
+        assert_eq!(index.term_url_in("", "authors", "Ada").as_deref(), Some("/authors/ada/"));
+        assert_eq!(index.roots_in_use().collect::<Vec<_>>(), ["authors", "de/authors"]);
+        assert_eq!(index.kind_for("de/authors").map(|(k, edition)| (k.key.as_str(), edition)), Some(("authors", "de")));
     }
 
     #[test]
@@ -988,7 +1037,7 @@ mod tests {
                 key: "places".to_string(),
                 fields: vec!["location".to_string()],
                 title: "Places".to_string(),
-                is_place: true,
+                titles: Vec::new(), is_place: true,
                 parents: Default::default(), explorer: None, line: None,
             },
             TermKind {
@@ -996,7 +1045,7 @@ mod tests {
                 key: TAGS_NS.to_string(),
                 fields: vec!["tags".to_string()],
                 title: "Tags".to_string(),
-                is_place: false,
+                titles: Vec::new(), is_place: false,
                 parents: Default::default(), explorer: None, line: None,
             },
         ];
@@ -1020,7 +1069,7 @@ mod tests {
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
-            is_place: true,
+            titles: Vec::new(), is_place: true,
             parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![
@@ -1048,7 +1097,7 @@ mod tests {
         // …the claim page takes its place in the /authors/ root listing…
         assert!(docs[0].also_in.as_ref().unwrap().contains(&"authors".to_string()));
         // …links point at the claiming page…
-        assert_eq!(index.term_url("authors", "林小滿").as_deref(), Some("/about/ma/"));
+        assert_eq!(index.term_url_in("", "authors", "林小滿").as_deref(), Some("/about/ma/"));
         // …and the member doc still claims membership for the selector.
         assert!(docs[1].also_in.as_ref().unwrap().contains(&"authors/林小滿".to_string()));
     }
@@ -1073,8 +1122,8 @@ mod tests {
         // Same result regardless of scan order.
         let index1 = derive_terms(&mut [a.clone(), b.clone()], both_kinds());
         let index2 = derive_terms(&mut [b, a], both_kinds());
-        assert_eq!(index1.term_url("authors", "X").as_deref(), Some("/a/"));
-        assert_eq!(index2.term_url("authors", "X").as_deref(), Some("/a/"));
+        assert_eq!(index1.term_url_in("", "authors", "X").as_deref(), Some("/a/"));
+        assert_eq!(index2.term_url_in("", "authors", "X").as_deref(), Some("/a/"));
     }
 
     #[test]
@@ -1087,7 +1136,7 @@ mod tests {
         assert!(docs[0].term_listing.is_none());
         // The claim still resolves links and suppresses the generated page.
         assert_eq!(index.unclaimed_keys().count(), 0);
-        assert_eq!(index.term_url("authors", "林小滿").as_deref(), Some("/about/ma/"));
+        assert_eq!(index.term_url_in("", "authors", "林小滿").as_deref(), Some("/about/ma/"));
     }
 
     #[test]
@@ -1176,7 +1225,7 @@ mod tests {
         let tags_raw: Vec<_> = raw.iter().filter(|k| k.key == TAGS_NS).collect();
         assert_eq!(tags_raw.len(), 1, "exactly one raw kind for the declared key: {raw:?}");
 
-        let kinds = term_kinds(&cfg, crate::i18n::Language::En);
+        let kinds = term_kinds(&cfg, "en");
         let tags_kinds: Vec<_> = kinds.iter().filter(|k| k.key == TAGS_NS).collect();
         assert_eq!(tags_kinds.len(), 1, "exactly one resolved kind for the declared key: {kinds:?}");
         assert_eq!(tags_kinds[0].fields, vec!["tags".to_string()]);
@@ -1212,7 +1261,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["jury".to_string()],
             title: "People".to_string(),
-            is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("about/kane/index.html", "Kane"), doc("posts/a/index.html", "A")];
         docs[0].jury_page = Some(TermClaim::UseTitle);
@@ -1230,7 +1279,7 @@ mod tests {
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
-            is_place: true, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), is_place: true, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("about/kyoto/index.html", "Kyoto"), doc("posts/a/index.html", "A")];
         docs[0].place_page = Some(TermClaim::UseTitle);
@@ -1249,7 +1298,7 @@ mod tests {
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
-            is_place: true,
+            titles: Vec::new(), is_place: true,
             parents: parents.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             explorer: None, line: None,
         }
@@ -1350,7 +1399,7 @@ mod tests {
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
-            is_place: true,
+            titles: Vec::new(), is_place: true,
             parents,
             explorer: None, line: None,
         }];
@@ -1399,7 +1448,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["jury".to_string()],
             title: "People".to_string(),
-            is_place: false,
+            titles: Vec::new(), is_place: false,
             parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("about/kane/index.html", "Kane")];
@@ -1507,7 +1556,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string()],
             title: "People".to_string(),
-            is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("posts/a/index.html", "A")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -1536,7 +1585,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string()],
             title: "People".to_string(),
-            is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("about/chen/index.html", "陳小華"), doc("posts/a/index.html", "A")];
         docs[0].author_page = Some(TermClaim::UseTitle);
@@ -1586,7 +1635,7 @@ mod tests {
             key: "authors".to_string(),
             fields: Vec::new(),
             title: "作者".to_string(),
-            is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("authors/index.html", "authors")];
         let index = derive_terms(&mut docs, off);
@@ -1601,12 +1650,12 @@ mod tests {
             key: "authors".to_string(),
             fields: vec!["author".to_string()],
             title: "作者".to_string(),
-            is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("posts/a/index.html", "A")];
         docs[0].author = vec!["Ada Lin".to_string()];
         let index = derive_terms(&mut docs, on);
-        assert_eq!(index.kind_for("authors").map(|k| k.title.as_str()), Some("作者"));
+        assert_eq!(index.kind_for("authors").map(|(k, _)| k.title.as_str()), Some("作者"));
     }
 
     #[test]
@@ -1621,7 +1670,7 @@ mod tests {
             key: "authors".to_string(),
             fields: vec!["author".to_string()],
             title: "Authors".to_string(),
-            is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("posts/a/index.html", "A"), doc("posts/b/index.html", "B")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -1645,7 +1694,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string(), "jury".to_string()],
             title: "People".to_string(),
-            is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("posts/a/index.html", "A"), doc("posts/b/index.html", "B")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -1663,7 +1712,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string(), "jury".to_string()],
             title: "People".to_string(),
-            is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("seasons/one/index.html", "One"), doc("posts/a/index.html", "A")];
         docs[0].jury = vec!["Ada Lin".to_string()];
@@ -1693,7 +1742,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string(), "jury".to_string()],
             title: "People".to_string(),
-            is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("posts/a/index.html", "A"), doc("seasons/one/index.html", "One")];
         docs[0].author = vec!["Kane".to_string()];
@@ -1725,7 +1774,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string()],
             title: "People".to_string(),
-            is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![
             doc("ada-lin/index.html", "Ada Lin"),
@@ -1784,14 +1833,14 @@ mod tests {
     /// the built-in loses the field, the declared kind gains it.
     fn author_moved_to_people() -> Vec<TermKind> {
         vec![
-            TermKind { cards: false, key: "authors".to_string(), fields: Vec::new(), title: "Authors".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
-            TermKind { cards: false, key: "tags".to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: "authors".to_string(), fields: Vec::new(), title: "Authors".to_string(), titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: "tags".to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None },
             TermKind {
                 cards: false,
                 key: "people".to_string(),
                 fields: vec!["author".to_string(), "editor".to_string()],
                 title: "People".to_string(),
-                is_place: false, parents: Default::default(), explorer: None, line: None,
+                titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
             },
         ]
     }
@@ -1861,14 +1910,14 @@ mod tests {
     #[test]
     fn a_moved_tags_namespace_root_also_gets_a_redirect() {
         let moved = vec![
-            TermKind { cards: false, key: "authors".to_string(), fields: vec!["author".to_string()], title: "Authors".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
-            TermKind { cards: false, key: "tags".to_string(), fields: Vec::new(), title: "Tags".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: "authors".to_string(), fields: vec!["author".to_string()], title: "Authors".to_string(), titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: "tags".to_string(), fields: Vec::new(), title: "Tags".to_string(), titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None },
             TermKind {
                 cards: false,
                 key: "topics".to_string(),
                 fields: vec!["tags".to_string()],
                 title: "Topics".to_string(),
-                is_place: false, parents: Default::default(), explorer: None, line: None,
+                titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
             },
         ];
         let mut docs = vec![doc("posts/a/index.html", "A")];
@@ -1893,9 +1942,9 @@ mod tests {
                 key: "authors".to_string(),
                 fields: vec!["author".to_string()],
                 title: "Authors".to_string(),
-                is_place: false, parents: Default::default(), explorer: None, line: None,
+                titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
             },
-            TermKind { cards: false, key: "tags".to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: "tags".to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None },
         ];
         let mut docs = vec![doc("posts/a/index.html", "A")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -1912,7 +1961,7 @@ mod tests {
             key: "authors".to_string(),
             fields: Vec::new(),
             title: "Authors".to_string(),
-            is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("posts/a/index.html", "A")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -1929,7 +1978,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string()],
             title: "People".to_string(),
-            is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("posts/a/index.html", "A")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -1978,7 +2027,7 @@ mod tests {
         // Chinese byline shape this guard must not break.
         docs[0].byline = vec!["谷夏攝影師".to_string()];
         let index = derive_terms(&mut docs, both_kinds());
-        let expected_url = index.term_url("authors", "谷夏攝").expect("term exists");
+        let expected_url = index.term_url_in("", "authors", "谷夏攝").expect("term exists");
         link_terms_in_bylines(&mut docs, &index);
         assert_eq!(docs[0].byline[0], format!("[谷夏攝]({expected_url})影師"));
     }
@@ -2005,13 +2054,13 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string()],
             title: "People".to_string(),
-            is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("posts/a/index.html", "A")];
         docs[0].author = vec!["Alex Rivera".to_string()];
         docs[0].byline = vec!["文｜Alex Rivera".to_string()];
         let index = derive_terms(&mut docs, kinds);
-        let expected_url = index.term_url("people", "Alex Rivera").expect("term exists");
+        let expected_url = index.term_url_in("", "people", "Alex Rivera").expect("term exists");
         link_terms_in_bylines(&mut docs, &index);
         assert_eq!(docs[0].byline[0], format!("文｜[Alex Rivera]({expected_url})"));
     }

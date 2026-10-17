@@ -115,8 +115,9 @@ impl FolderIndexPlan {
         for (_, key) in folder_index_keys(&project.dirs, dir_overrides) {
             candidates.entry(key).or_insert(false);
         }
-        for key in terms.synthetic_folder_keys() {
-            candidates.entry(key).or_insert(false);
+        let term_pages: HashSet<String> = terms.synthetic_folder_keys().into_iter().collect();
+        for key in &term_pages {
+            candidates.entry(key.clone()).or_insert(false);
         }
 
         // A pending authored index or a directory whose only pages are
@@ -172,13 +173,14 @@ impl FolderIndexPlan {
             .collect();
         // Preserve the served set: indexless language trees with descendants
         // have an index; empty language directories and authored translation
-        // trees do not acquire generated indexes.
+        // trees do not acquire generated indexes. A term page is a page of
+        // its edition, never a folder index of the tree it sits in.
         let folders: Vec<String> = candidates.into_iter().filter_map(|(folder, has_children)| {
             let top = folder.split('/').next().unwrap_or(&folder);
-            let empty_language = !has_children
-                && crate::i18n::path::resolve_language_from_folder(top).is_some();
+            let empty_language = !has_children && crate::i18n::path::resolve_language_from_folder(top).is_some();
+            let tree_suppressed = empty_language || translation_roots.contains(top);
             (!authored.contains(&folder) && !suppressed.contains(&folder) && !verbatim.contains(&folder)
-                && !empty_language && !translation_roots.contains(top))
+                && (term_pages.contains(&folder) || !tree_suppressed))
                 .then_some(folder)
         }).collect();
 

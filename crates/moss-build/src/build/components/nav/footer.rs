@@ -49,7 +49,7 @@ impl<'a> NavigationBuilder<'a> {
     pub fn generate_footer(&self, show_rss: bool) -> String {
         let mut footer_pages: Vec<&ParsedDocument> = self.documents
             .iter()
-            .filter(|d| d.footer == Some(true) && d.lang == self.current_lang)
+            .filter(|d| d.footer == Some(true) && self.in_page_edition(d))
             .collect();
         footer_pages.sort_by(|a, b| match (a.weight, b.weight) {
             // Tied weights fall through to alphabetical for cross-platform

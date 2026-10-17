@@ -2220,7 +2220,7 @@ fn place_kind(explorer: Option<bool>) -> TermKind {
         key: "places".to_string(),
         fields: vec!["location".to_string()],
         title: "Places".to_string(),
-        is_place: true,
+        titles: Vec::new(), is_place: true,
         parents: Default::default(),
         explorer, line: None,
     }

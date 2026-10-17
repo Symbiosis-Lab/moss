@@ -1,7 +1,8 @@
-//! Redirect stubs for term addresses that forward elsewhere: a moved namespace
-//! and a claimed term's generated address. Both are recomputed from the index every build.
+//! Redirect stubs for term addresses that forward elsewhere: a moved namespace,
+//! a claimed term's generated address, and a term only an edition has. All are
+//! recomputed from the index every build.
 
-use super::{TermIndex, BUILTIN_DEFAULT_FIELDS};
+use super::{TermIndex, TermKey, BUILTIN_DEFAULT_FIELDS};
 
 /// Old-URL → new-URL pairs for every term whose namespace moved when a
 /// declared kind took a built-in's default field: naming `author` in
@@ -54,11 +55,14 @@ pub fn kind_move_stubs(index: &TermIndex) -> Vec<(String, String)> {
         // used to list has a working forward. One stateless stub, same as
         // the per-name ones, to the new kind's own root.
         stubs.push((format!("{}/", builtin_ns), format!("/{}/", new_kind.key))); // allow:served-path-url-construct (term-namespace-root redirect target)
-        for (key, site) in &index.sites {
-            let Some((ns, slug)) = key.split_once('/') else {
+        // One stub per name, whatever editions use it: the old address was
+        // site-wide.
+        let mut seen = std::collections::HashSet::new();
+        for key in index.sites.keys() {
+            let Some(term) = TermKey::parse(key) else {
                 continue;
             };
-            if ns != new_kind.key {
+            if term.ns != new_kind.key {
                 continue;
             }
             // Reachable through the moved field specifically. A person in
@@ -68,13 +72,13 @@ pub fn kind_move_stubs(index: &TermIndex) -> Vec<(String, String)> {
                 .members_by_field
                 .get(&(key.clone(), field.to_string()))
                 .is_some_and(|members| !members.is_empty());
-            if !reached_through_moved_field {
+            if !reached_through_moved_field || !seen.insert(term.slug) {
                 continue;
             }
-            let Some(target) = index.term_url(&new_kind.key, &site.display) else {
+            let Some(target) = index.forward_target(term.plain()) else {
                 continue;
             };
-            stubs.push((format!("{}/{}/", builtin_ns, slug), target));
+            stubs.push((format!("{}/{}/", builtin_ns, term.slug), target));
         }
     }
     stubs
@@ -91,6 +95,33 @@ pub fn claim_stubs(index: &TermIndex) -> Vec<(String, String)> {
         };
         let generated = format!("{}/", key); // allow:served-path-url-construct (generated term address, the redirect source)
         stubs.push((generated, format!("/{}", claim))); // allow:served-path-url-construct (term redirect target, the claiming page)
+    }
+    stubs
+}
+
+/// Terms that exist only in an edition owe the address they had when every
+/// edition shared one set of term pages: `/partners/ada-example/` for a name
+/// only German pages use now lives at `/de/partners/ada-example/`, and so does
+/// the kind's root. A name or root the default edition also has keeps its page
+/// there, so it needs no stub. Like the others, recomputed every build.
+pub fn edition_move_stubs(index: &TermIndex) -> Vec<(String, String)> {
+    let mut stubs = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for key in index.sites.keys() {
+        let Some(term) = TermKey::parse(key) else { continue };
+        if term.edition.is_empty() || index.sites.contains_key(term.plain()) || !seen.insert(term.plain()) {
+            continue;
+        }
+        let Some(target) = index.forward_target(term.plain()) else { continue };
+        stubs.push((format!("{}/", term.plain()), target)); // allow:served-path-url-construct (the address before terms were per edition, the redirect source)
+    }
+    for kind in &index.kinds {
+        let ns = kind.key.as_str();
+        if index.kind_for(ns).is_some() {
+            continue;
+        }
+        let Some(target) = index.forward_target(ns) else { continue };
+        stubs.push((format!("{ns}/"), target)); // allow:served-path-url-construct (the root before terms were per edition, the redirect source)
     }
     stubs
 }

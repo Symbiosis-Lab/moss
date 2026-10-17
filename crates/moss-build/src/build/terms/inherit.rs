@@ -318,7 +318,7 @@ mod tests {
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
-            is_place: true,
+            titles: Vec::new(), is_place: true,
             parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![

@@ -305,7 +305,7 @@ fn term_addresses(
             for field in &kind.fields {
                 for name in crate::build::terms::field_names(doc, field) {
                     let name = name.trim();
-                    let Some(url) = index.term_url(&kind.key, name) else { continue };
+                    let Some(url) = index.term_url_in(&doc.edition, &kind.key, name) else { continue };
                     out.entry(kind.key.clone()).or_default().insert(name.to_string(), relative_url(listing_dir, url.trim_start_matches('/')));
                 }
             }
@@ -396,9 +396,8 @@ pub(crate) fn apply(
         let dir = own_dir(page).unwrap_or_default();
         let listing_dir: Vec<String> = dir.split('/').filter(|s| !s.is_empty()).map(str::to_string).collect();
         let children = listing_members(page, documents, project);
-        // The root's address prefix is empty, so without the tree check a
-        // root listing would take in every language tree's folders as well.
-        let tree = moss_core::home::lang_tree_prefix(&page.url_path);
+        // The root's address prefix is empty, so without the edition check a
+        // root listing would take in every edition's folders as well.
         let folders: Vec<&ParsedDocument> = documents
             .iter()
             .filter(|d| {
@@ -407,7 +406,7 @@ pub(crate) fn apply(
                     && d.url_path != page.url_path
                     && d.is_public_page()
                     && dir_segments(&d.url_path).starts_with(&listing_dir)
-                    && moss_core::home::lang_tree_prefix(&d.url_path) == tree
+                    && d.edition == page.edition
             })
             .collect();
         let ctx = ListingContext {
