@@ -1,4 +1,4 @@
-import { a as drain, c as parseColour, i as clamp01, l as smooth, n as recordingFrameCount, o as endpointPresence, r as recordingSteps, s as isDarkPage, t as DEFAULT_PRESET } from "./preset-RER7tjVe.mjs";
+import { a as drain, c as parseColour, i as clamp01, l as smooth, n as recordingFrameCount, o as endpointPresence, r as recordingSteps, s as isDarkPage, t as DEFAULT_PRESET } from "./preset-CbPMJNtm.mjs";
 import { t as createPaper } from "./default-D3yqzjlz.mjs";
 
 //#region src/engine/shaders.ts
@@ -671,33 +671,6 @@ function createSim(opts) {
 			fb
 		};
 	};
-	const recordOne = (side, footprint, budget, stepAt) => {
-		if (!fresh(side) && side.frames.length) freeFrames(side);
-		if (side.n >= REC_STEPS) return false;
-		if (side.frames.length && owner !== side) freeFrames(side);
-		if (!side.frames.length) {
-			if (grownFor !== footprint) {
-				gl.viewport(0, 0, W, H);
-				common(grow, true);
-				gl.bindFramebuffer(gl.FRAMEBUFFER, growF);
-				draw();
-				grownFor = footprint;
-			}
-			api.reset();
-			nStep = 0;
-			owner = side;
-			side.stamp = page.stamp;
-			side.frames.push(keep());
-		}
-		recording = true;
-		while (budget-- > 0 && side.n < REC_STEPS) {
-			const t = side.n * preset.dt, [fwd, stir, relift, options] = stepAt(t);
-			api.step(fwd, t, 0, stir, 0, relift, options);
-			if (++side.n % preset.recEvery === 0 || side.n === REC_STEPS) side.frames.push(keep());
-		}
-		recording = false;
-		return true;
-	};
 	const freeFrames = (side) => {
 		for (const k of side.frames) {
 			gl.deleteFramebuffer(k.fb);
@@ -805,99 +778,7 @@ function createSim(opts) {
 			gl.uniform1f(show.u.uClearance, clearance);
 			draw();
 		},
-		pair({ dose = 1, stir = 1, rinse = preset.recRinse, light = preset.recLight, lift = 1, flood = false, only = null } = {}) {
-			return { sides: [true, false].map((fwd) => ({
-				fwd,
-				frames: [],
-				n: 0,
-				dose: fwd ? dose : 1,
-				stir: fwd ? stir : 1,
-				lift: fwd ? lift : 1,
-				rinse: fwd ? rinse : preset.recRinse,
-				light: fwd ? light : preset.recLight,
-				flood: fwd && flood,
-				stamp: -1,
-				skip: only !== null && fwd !== only
-			})) };
-		},
-		record(pair, firstFwd, budget) {
-			for (const side of firstFwd ? pair.sides : [...pair.sides].reverse()) {
-				if (side.skip) continue;
-				if (recordOne(side, pair, budget, (t) => {
-					const flood = side.flood ? preset.recFlood(t) : 0;
-					return [
-						side.fwd,
-						preset.recStir(t) * side.stir,
-						flood,
-						{
-							standing: true,
-							open: preset.recOpen(t) + 2 * flood,
-							rain: Math.max(preset.recRain(t), .12 * flood),
-							rinse: t >= preset.recRinseFrom ? side.rinse : 0,
-							light: side.light,
-							dose: side.dose,
-							lift: side.lift
-						}
-					];
-				})) return;
-			}
-		},
-		recorded(pair) {
-			return pair.sides.every((side) => side.skip || side.n >= REC_STEPS && fresh(side));
-		},
 		setTint: changeTint,
-		show(pair, fromFwd, p) {
-			api.record(pair, fromFwd, preset.stepsPerFrame);
-			api.play(pair, fromFwd, p);
-			return !api.recorded(pair);
-		},
-		free(pair) {
-			for (const side of pair.sides) freeFrames(side);
-		},
-		play(pair, fromFwd, p) {
-			const [out, inc] = fromFwd ? pair.sides : [pair.sides[1], pair.sides[0]];
-			const at = (side, u) => {
-				const n = fresh(side) ? side.frames.length : 0;
-				if (!n) return null;
-				const x$1 = Math.min(clamp01(u) * (REC_FRAMES - 1), n - 1), i = Math.floor(x$1), j = Math.min(i + 1, n - 1);
-				return {
-					k0: side.frames[i],
-					k1: side.frames[j],
-					f: x$1 - i,
-					print: (side.fwd ? prints.src : prints.tgt).full
-				};
-			};
-			let x = at(out, p / preset.playOut), y = at(inc, (1 - p) / (1 - preset.playIn)), k = smooth(preset.playOut, preset.playIn, p);
-			if (!y) {
-				y = {
-					...x,
-					print: (out.fwd ? prints.tgt : prints.src).full
-				};
-				k = 0;
-			}
-			if (!x) return false;
-			place();
-			gl.useProgram(play.p);
-			bind(0, x.k0.s);
-			bind(1, x.k0.d);
-			bind(2, x.k1.s);
-			bind(3, x.k1.d);
-			bind(4, y.k0.s);
-			bind(5, y.k0.d);
-			bind(6, y.k1.s);
-			bind(7, y.k1.d);
-			bind(8, paper);
-			bind(9, x.print);
-			bind(10, y.print);
-			setEndpoint(play.u, p, pair.toNothing);
-			gl.uniform1f(play.u.uFx, x.f);
-			gl.uniform1f(play.u.uFy, y.f);
-			gl.uniform1f(play.u.uK, k);
-			gl.uniform1f(play.u.uXBaked, 0);
-			gl.uniform1f(play.u.uRaw, 0);
-			draw();
-			return true;
-		},
 		sceneSide(print, foot, { dose = 1, rinse = preset.recRinse, light = preset.recLight, look = {} } = {}) {
 			return {
 				frames: [],
@@ -915,26 +796,41 @@ function createSim(opts) {
 			const s = side, { stir = 1, open = 1, rain = 1, lift = 1, liftRamp = 0, flow = 0, dilute = 0, diluteFrom = 0, ...rest } = s.look;
 			prints.src = texOf(s.print);
 			prints.tgt = texOf(s.foot);
-			recordOne(s, s.foot, budget, (t) => {
-				const at = t / preset.recDuration;
-				return [
-					true,
-					preset.recStir(t) * stir,
-					0,
-					{
-						...rest,
-						standing: true,
-						open: preset.recOpen(t) * open,
-						rain: preset.recRain(t) * rain,
-						rinse: t >= preset.recRinseFrom ? s.rinse : 0,
-						light: s.light,
-						dose: s.dose,
-						lift: lift * (liftRamp ? smooth(0, liftRamp, at) * .85 + .15 : 1),
-						flow: flow * smooth(0, .3, at),
-						dilute: dilute * smooth(diluteFrom, 1, at)
-					}
-				];
-			});
+			if (!fresh(s) && s.frames.length) freeFrames(s);
+			if (s.n >= REC_STEPS) return;
+			if (s.frames.length && owner !== s) freeFrames(s);
+			if (!s.frames.length) {
+				if (grownFor !== s.foot) {
+					gl.viewport(0, 0, W, H);
+					common(grow, true);
+					gl.bindFramebuffer(gl.FRAMEBUFFER, growF);
+					draw();
+					grownFor = s.foot;
+				}
+				api.reset();
+				nStep = 0;
+				owner = s;
+				s.stamp = page.stamp;
+				s.frames.push(keep());
+			}
+			recording = true;
+			while (budget-- > 0 && s.n < REC_STEPS) {
+				const t = s.n * preset.dt, at = t / preset.recDuration;
+				api.step(true, t, 0, preset.recStir(t) * stir, 0, 0, {
+					...rest,
+					standing: true,
+					open: preset.recOpen(t) * open,
+					rain: preset.recRain(t) * rain,
+					rinse: t >= preset.recRinseFrom ? s.rinse : 0,
+					light: s.light,
+					dose: s.dose,
+					lift: lift * (liftRamp ? smooth(0, liftRamp, at) * .85 + .15 : 1),
+					flow: flow * smooth(0, .3, at),
+					dilute: dilute * smooth(diluteFrom, 1, at)
+				});
+				if (++s.n % preset.recEvery === 0 || s.n === REC_STEPS) s.frames.push(keep());
+			}
+			recording = false;
 		},
 		sideRecorded(side) {
 			return side.n >= REC_STEPS && fresh(side);

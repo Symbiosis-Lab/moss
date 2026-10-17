@@ -30,8 +30,6 @@ interface WatercolorPreset {
   recOpen: (t: number) => number;
   /** Plain water added evenly while recording. */
   recRain: (t: number) => number;
-  /** A flooded recording's (the title's) water-over-everything curve. */
-  recFlood: (t: number) => number;
   /** From this fraction of the recording, a wash lighter than `recLight` is left alone; a wash still darker is flushed. */
   recRinseFrom: number;
   /** The flush rate once `recRinseFrom` is reached. */
@@ -64,7 +62,7 @@ interface CreateSimOptions {
   texH: number;
   /** The simulation grid is texW/divisor x texH/divisor. */
   divisor: number;
-  /** Where the canvas lies in its parent, in CSS px; read fresh every draw/play call. */
+  /** Where the canvas lies in its parent, in CSS px; read fresh every draw/playSides call. */
   rect: () => Rect;
   /** Defaults to `createPaper()`, the fixed 256x256 generated sheet; the shaders tile at that period, so any other size is refused. */
   paper?: Paper;
@@ -104,30 +102,6 @@ interface StepOptions {
   dose?: number;
   lift?: number;
 }
-interface PairOptions {
-  dose?: number;
-  stir?: number;
-  rinse?: number;
-  light?: number;
-  lift?: number;
-  flood?: boolean;
-  /** Records one side alone (true: the lower print), for a boundary whose other print is not on hand yet. */
-  only?: boolean | null;
-}
-interface RecordingSide {
-  fwd: boolean;
-  frames: unknown[];
-  n: number;
-  dose: number;
-  stir: number;
-  lift: number;
-  rinse: number;
-  light: number;
-  flood: boolean;
-  skip: boolean;
-  /** Internal bookkeeping, public only because `pair()` returns this type: the tint's stamp when this side began recording. A side whose stamp is not the sim's current one was measured against another tint and counts as unrecorded. */
-  stamp: number;
-}
 /** How a scene side's ink lets go. `stir`, `open`, `rain` and `lift` scale the preset's recording schedule (1 leaves it); `liftRamp` is the share of the recording over which the letting go comes up from 15%; `flow` comes up over the first 30% of the recording, and `dilute` is reached by its end from `diluteFrom`; the rest are the `StepOptions` of the same name, applied to every recorded step. */
 interface SideLook {
   stir?: number;
@@ -160,11 +134,6 @@ interface BakedSide {
   print: PrintSource;
   at: number;
 }
-interface Pair {
-  sides: [RecordingSide, RecordingSide];
-  /** With a transparent ground and an incoming side that was never recorded: the leg ends on nothing instead of on the incoming print. The outgoing print is exact at p = 0, its pigment is gone (the canvas fully clear) from the middle of the leg on, and nothing of the incoming print is drawn; the host shows its own incoming page from there. Ignored on a paper ground. If the incoming side was recorded, it is drained away unseen. */
-  toNothing?: boolean;
-}
 interface WatercolorSim {
   dispose(): void;
   setPrints(src: PrintSource, tgt: PrintSource): void;
@@ -173,19 +142,11 @@ interface WatercolorSim {
   probe(x: number, y: number): number[][];
   /** `p`, if given, is the position through the leg (0 the outgoing print, 1 the incoming): at either end the canvas shows that print exactly, and the wash's own look fades in over `endpointMargin`. Left out, the full look is drawn. */
   draw(fwd: boolean, cure: number, clearance?: number, p?: number): void;
-  pair(options?: PairOptions): Pair;
-  record(pair: Pair, firstFwd: boolean, budget: number): void;
-  recorded(pair: Pair): boolean;
-  /** Records up to one frame's budget, then plays `p`; returns true while there is more to record. */
-  show(pair: Pair, fromFwd: boolean, p: number): boolean;
-  free(pair: Pair): void;
-  /** p in [0, 1] from the outgoing scene (fromFwd: the lower of the pair) to the incoming; returns whether either side had a frame to show. */
-  play(pair: Pair, fromFwd: boolean, p: number): boolean;
-  /** Changes the tint the wash is drawn against (a theme toggle). A change of more than 1/255 in any channel makes every side recorded so far count as unrecorded: `recorded()` is false, `play()` draws nothing from it and `record()` starts it again, since its pigment was measured against the old colour. A smaller change is ignored. A leg being played cannot be finished across it; hand off to the host's own page first. */
+  /** Changes the tint the wash is drawn against (a theme toggle). A change of more than 1/255 in any channel makes every side recorded so far count as unrecorded: `sideRecorded()` is false, `playSides()` draws nothing from it and `recordSide()` starts it again, since its pigment was measured against the old colour. A smaller change is ignored. A leg being played cannot be finished across it; hand off to the host's own page first. */
   setTint(colour: Colour): void;
   /** Adds a `webglcontextlost` handler; returns an unsubscribe function. The factory listens on the canvas only once the first handler is added, and from then on cancels the event's default action (which is what lets the context be restored). A page may also attach its own listener to the canvas directly. */
   onContextLost(handler: (event: Event) => void): () => void;
-  /** One scene's own dispersion, recorded over `foot`'s footprint (a print covering every scene it may mix with) instead of a pair's. */
+  /** One scene's own dispersion, recorded over `foot`'s footprint: a print covering every scene it may mix with. Its options shape the recording: `dose` charges the print's colour, and `rinse` is the flush per step once the wash is mixed, while its mean pigment is above `light`. */
   sceneSide(print: PrintSource, foot: PrintSource, options?: {
     dose?: number;
     rinse?: number;
@@ -223,4 +184,4 @@ declare function advance(sim: Pick<WatercolorSim, 'reset' | 'step'>, state: Cloc
 //#region src/engine/shaders.d.ts
 declare const DIAG_VIEWS: Record<number, string>;
 //#endregion
-export { DEFAULT_PRESET as _, BakedSide as a, PairOptions as c, Rect as d, SceneSide as f, createSim as g, WatercolorSim as h, advance as i, PrintSource as l, StepOptions as m, AdvanceResult as n, CreateSimOptions as o, SideLook as p, ClockState as r, Pair as s, DIAG_VIEWS as t, RecordingSide as u, WatercolorPreset as v };
+export { BakedSide as a, Rect as c, StepOptions as d, WatercolorSim as f, WatercolorPreset as h, advance as i, SceneSide as l, DEFAULT_PRESET as m, AdvanceResult as n, CreateSimOptions as o, createSim as p, ClockState as r, PrintSource as s, DIAG_VIEWS as t, SideLook as u };

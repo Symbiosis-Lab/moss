@@ -102,7 +102,6 @@ const DEFAULT_PRESET = {
 	recStir: (t) => 1.5 * smooth(.25, .9, t),
 	recOpen: (t) => smooth(.45, 1.35, t),
 	recRain: (t) => .012 * smooth(.45, .7, t) * (1 - smooth(1.4, 1.7, t)),
-	recFlood: (t) => smooth(1, 1.3, t),
 	recRinseFrom: .9,
 	recRinse: .02,
 	recLight: .28,

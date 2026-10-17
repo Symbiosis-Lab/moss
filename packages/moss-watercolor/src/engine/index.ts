@@ -1,5 +1,5 @@
 export { createSim } from './solver.js';
-export type { CreateSimOptions, WatercolorSim, StepOptions, PairOptions, Pair, RecordingSide, Rect, PrintSource, SceneSide, BakedSide, SideLook } from './solver.js';
+export type { CreateSimOptions, WatercolorSim, StepOptions, Rect, PrintSource, SceneSide, BakedSide, SideLook } from './solver.js';
 export { DEFAULT_PRESET } from './preset.js';
 export type { WatercolorPreset } from './preset.js';
 export { advance } from './host.js';
