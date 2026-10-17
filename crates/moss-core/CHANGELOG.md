@@ -56,6 +56,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The deprecation warning for `---` as a `:::grid` cell divider names the line in the file and says to write `+++`, and a warning raised inside a typed shortcode body (a grid inside a hero, say) now reports the file's line instead of one counted from the block. `contract::components` describes the empty quote tile a coverless card gets when it has no description.
+
 - A link to a folder written with `./` or `../` (or a trailing slash) resolves against the linking page's folder and finds the folder's home page, as the same folder written without dots already did. A path with no dots and no trailing slash keeps preferring a same-named file.
 - A video whose file name has a space or a non-ASCII character finds its streaming ladder, hero poster and size: the embed's URL-encoded address is looked up by the file's real path.
 - The editor's block scan agrees with the extractor about where a fenced block ends: a closing fence of another length closes the innermost block, a `::: {.x}` opener nests like a named one, and colons inside an HTML comment or indented code no longer close a block.
