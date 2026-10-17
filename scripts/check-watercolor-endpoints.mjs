@@ -310,7 +310,7 @@ async function saturatedInPage({ tolerance }) {
 // against a light tint, then the tint goes dark.
 // Scene sides: one recording per scene over one shared footprint, so any two play together and a mix
 // can be baked to turn toward a third scene. Each case fails when the behaviour it names is removed.
-async function sceneSidesInPage({ tolerance }) {
+async function sceneSidesInPage({ tolerance, ground }) {
   const W = 410, H = 390;
   const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
   const make = (draw) => { const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d'); g.fillStyle = bg; g.fillRect(0, 0, W, H); draw(g); return c; };
@@ -319,7 +319,7 @@ async function sceneSidesInPage({ tolerance }) {
   const printC = make((g) => { g.fillStyle = '#2f7a3a'; g.fillRect(60, 60, 280, 120); });
   const foot = document.createElement('canvas'); foot.width = W; foot.height = H; foot.getContext('2d').fillRect(0, 0, W, H);
   const canvas = document.getElementById('c');
-  const sim = MossWatercolor.createSim({ canvas, texW: W, texH: H, divisor: 2, rect: () => ({ x: 0, y: 0, w: W, h: H }) });
+  const sim = MossWatercolor.createSim({ canvas, texW: W, texH: H, divisor: 2, rect: () => ({ x: 0, y: 0, w: W, h: H }), ground });
   if (!sim) throw new Error('no WebGL2 + EXT_color_buffer_float');
   const record = (side) => { let n = 0; while (!sim.sideRecorded(side)) { sim.recordSide(side, 36); if (++n > 2000) throw new Error('a side never finished recording'); } };
   const shown = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d', { willReadFrequently: true }); g.fillStyle = bg; g.fillRect(0, 0, W, H); g.drawImage(canvas, 0, 0, W, H); return g.getImageData(0, 0, W, H).data; };
@@ -334,6 +334,44 @@ async function sceneSidesInPage({ tolerance }) {
   sim.setPrints(printC, printC);
   sim.playSides(x, 0, y, 1, 0, 0); { const d = diff(shown(), pixelsOf(printA)); check('p = 0 is the outgoing side\'s print', d, d <= tolerance); }
   sim.playSides(x, 1, y, 0, 1, 1); { const d = diff(shown(), pixelsOf(printB)); check('p = 1 is the incoming side\'s print', d, d <= tolerance); }
+  const pending = sim.sceneSide(printC, foot);
+  sim.playSides(x, 1, pending, 0, 0, 1); { const d = diff(shown(), pixelsOf(printC)); check('a leg ends on its incoming print before that side is recorded', d, d <= tolerance); }
+  sim.freeSide(pending);
+
+  // a leg to nothing leaves the canvas clear from its middle on, for the host's own page to show through
+  if (ground === 'transparent') {
+    const alphaMax = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(canvas, 0, 0, W, H); const b = g.getImageData(0, 0, W, H).data; let m = 0; for (let i = 3; i < b.length; i += 4) m = Math.max(m, b[i]); return m; };
+    let worst = 0;
+    for (const p of [.5, .75, 1]) { sim.playSides(x, MossWatercolor.legAt(p).ux, null, 0, 0, p, { toNothing: true }); worst = Math.max(worst, alphaMax()); }
+    check('a leg to nothing is clear from its middle on, alpha max', worst, worst <= .02 * 255);
+  } else {
+    sim.playSides(x, 1, null, 0, 0, .97); const kept = shown();
+    sim.playSides(x, 1, null, 0, 0, .97, { toNothing: true }); { const d = diff(shown(), kept); check('a paper ground ignores toNothing', d, d === 0); }
+  }
+
+  // a turn keeps the frame, even with an endpoint margin wider than where the turned leg resumes: through the mix,
+  // again through the mix from the baked side, and before the mix with a baked side kept
+  { const B = { outEnd: .1, inStart: .9 }, cv = document.createElement('canvas'), L = (p) => MossWatercolor.legAt(p, B);
+    const wide = MossWatercolor.createSim({ canvas: cv, texW: W, texH: H, divisor: 2, rect: () => ({ x: 0, y: 0, w: W, h: H }), ground, preset: { playOut: B.outEnd, playIn: B.inStart, endpointMargin: .35 } });
+    const grab = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d', { willReadFrequently: true }); g.fillStyle = bg; g.fillRect(0, 0, W, H); g.drawImage(cv, 0, 0, W, H); return g.getImageData(0, 0, W, H).data; };
+    const [wx, wy, wz] = [printA, printB, printC].map((pr) => { const sd = wide.sceneSide(pr, foot); let n = 0; while (!wide.sideRecorded(sd)) { wide.recordSide(sd, 36); if (++n > 2000) throw new Error('a side never finished recording'); } return sd; });
+    const draw = (a, b, p) => { const { ux, uy, k } = L(p); wide.playSides(a, ux, b, uy, k, p); return grab(); };
+    // mean diff, and the share of pixels any channel of which moved more than 16/255
+    let mean = 0, off = 0;
+    const turned = (before, after) => { let sum = 0, n = 0; for (let i = 0; i < after.length; i += 4) { let m = 0; for (let c = 0; c < 3; c++) { const d = Math.abs(after[i + c] - before[i + c]); sum += d; m = Math.max(m, d); } if (m > 16) n++; } mean = Math.max(mean, sum / (after.length / 4 * 3)); off = Math.max(off, n / (after.length / 4)); };
+    const bakeAt = (a, b, p) => { const { ux, uy, k } = L(p); return wide.bake(a, ux, b, uy, k, p); };
+    for (const at of [.25, .5, .8]) {
+      const before = draw(wx, wy, at), baked = bakeAt(wx, wy, at), turn = MossWatercolor.turnAt(at, B);
+      turned(before, draw(baked, wz, turn.p));
+      if (at === .5) {
+        const kept = draw(baked, wz, .05); turned(kept, draw(baked, wy, .05));
+        const again = draw(baked, wz, .4), rebaked = bakeAt(baked, wz, .4);
+        turned(again, draw(rebaked, wy, MossWatercolor.turnAt(.4, B).p)); wide.freeSide(rebaked);
+      }
+      wide.freeSide(baked);
+    }
+    wide.dispose();
+    check(`a turn keeps the frame: ${(off * 100).toFixed(3)}% of pixels off by more than 16, worst mean diff`, mean.toFixed(2), mean <= 1 && off <= .002); }
 
   // an interrupted recording is its own dispersion, not one carried on from the other side's sheet
   const alone = sim.sceneSide(printA, foot); record(alone);
@@ -342,7 +380,7 @@ async function sceneSidesInPage({ tolerance }) {
 
   // a baked mix is the mix it was baked from
   sim.playSides(x, 1, y, 1, .5, .5); const mix = shown();
-  const baked = sim.bake(x, 1, y, 1, .5);
+  const baked = sim.bake(x, 1, y, 1, .5, .5);
   sim.playSides(baked, 1, alone, 1, 0, .5); { const d = diff(shown(), mix); check('a baked mix matches the mix it was baked from', d, d <= tolerance); }
   sim.freeSide(baked);
 
@@ -418,7 +456,7 @@ const { chromium } = await loadPlaywright();
 const browser = await chromium.launch();
 let failed = false;
 try {
-  for (const [dark, bg, ground, saturated, flip, sides] of [[false, '#f4efe6'], [true, '#1d201e'], [false, '#f4efe6', 'transparent'], [true, '#1d201e', 'transparent'], [true, '#0000ff', undefined, true], [false, '#faf8f5', 'transparent', false, true], [false, '#f4efe6', undefined, false, false, true]]) {
+  for (const [dark, bg, ground, saturated, flip, sides] of [[false, '#f4efe6'], [true, '#1d201e'], [false, '#f4efe6', 'transparent'], [true, '#1d201e', 'transparent'], [true, '#0000ff', undefined, true], [false, '#faf8f5', 'transparent', false, true], [false, '#f4efe6', undefined, false, false, true], [false, '#f4efe6', 'transparent', false, false, true]]) {
   const page = await browser.newPage({ viewport: { width: 500, height: 450 }, deviceScaleFactor: 1 });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));

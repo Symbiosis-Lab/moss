@@ -99,7 +99,8 @@ export interface RecordingSide {
 export interface SideLook { stir?: number; open?: number; rain?: number; lift?: number; liftRamp?: number; splash?: number; mix?: number; curl?: number; dilute?: number; diluteFrom?: number; diffuse?: number; flow?: number; flowSize?: number; bloom?: number; reach?: number; }
 /** One scene's dispersion, recorded over `foot`'s footprint. Its recording state is the engine's own. */
 export interface SceneSide { readonly print: PrintSource; readonly foot: PrintSource; readonly look: SideLook; }
-export interface BakedSide { baked: true; A: WebGLTexture | null; fb: WebGLFramebuffer; print: PrintSource; }
+/** `print` is the plain print the frame showed when it was baked, and `at` where its envelope stood, folded below the middle: a leg continuing from it holds that envelope until it catches up. */
+export interface BakedSide { baked: true; A: WebGLTexture | null; fb: WebGLFramebuffer; print: PrintSource; at: number; }
 
 export interface Pair {
   sides: [RecordingSide, RecordingSide];
@@ -132,10 +133,10 @@ export interface WatercolorSim {
   /** Records up to `budget` steps of a scene side. One side records at a time: the sides share the simulation's state. */
   recordSide(side: SceneSide, budget: number): void;
   sideRecorded(side: SceneSide): boolean;
-  /** `x` at dissolve `ux` (0 its print, 1 its mixed wash), mixed by `k` into `y` at `uy`; `p` in [0, 1] places the leg's envelope, so at either end the canvas is that end's plain print. */
-  playSides(x: SceneSide | BakedSide, ux: number, y: SceneSide | null, uy: number, k: number, p: number): boolean;
-  /** The mix `playSides` would draw, kept as optical thickness: a side at its mixed end, to turn a transition toward another scene from where it stands. */
-  bake(x: SceneSide | BakedSide, ux: number, y: SceneSide | null, uy: number, k: number): BakedSide;
+  /** `x` at dissolve `ux` (0 its print, 1 its mixed wash), mixed by `k` into `y` at `uy`; `p` in [0, 1] places the leg's envelope, so at either end the canvas is that end's plain print. A `y` with nothing recorded yet adds nothing to the mix, but the leg still ends on its print. `toNothing`, on a transparent ground, drains the canvas clear from the middle of the leg on, so the host shows its own incoming page; ignored on a paper ground. */
+  playSides(x: SceneSide | BakedSide, ux: number, y: SceneSide | null, uy: number, k: number, p: number, options?: { toNothing?: boolean }): boolean;
+  /** The mix `playSides(x, ux, y, uy, k, p)` draws, kept as optical thickness: a side at its mixed end, to turn a transition toward another scene from where it stands. Played as `x` from at most `at` (`turnAt` resumes there), the frame is unchanged. */
+  bake(x: SceneSide | BakedSide, ux: number, y: SceneSide | null, uy: number, k: number, p: number): BakedSide;
   freeSide(side: SceneSide | BakedSide): void;
 }
 
@@ -457,12 +458,12 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
     sideRecorded(side) { return (side as any).n >= REC_STEPS && fresh(side as any); },
     // x at dissolve u (0 its print, 1 its mixed wash) mixed by k into y at uy; p places the leg's
     // envelope, so at p = 0 and p = 1 the canvas is the plain print of x or y.
-    playSides(x, ux, y, uy, k, p) { return drawSides(x, ux, y, uy, k, p, null); },
+    playSides(x, ux, y, uy, k, p, { toNothing = false } = {}) { return drawSides(x, ux, y, uy, k, p, null, toNothing); },
     // The mix on screen drawn as optical thickness, a side of its own at its mixed end.
-    bake(x, ux, y, uy, k) {
-      const A = tex(W, H), fb = fbo([A]);
-      drawSides(x, ux, y, uy, k, .5, fb);
-      return { baked: true, A, fb, print: y ? y.print : x.print };
+    bake(x, ux, y, uy, k, p) {
+      const A = tex(W, H), fb = fbo([A]), q = envelopeAt(x, p);
+      drawSides(x, ux, y, uy, k, p, fb);
+      return { baked: true, A, fb, print: q >= .5 ? (y ?? x).print : x.print, at: Math.min(q, 1 - q) };
     },
     freeSide(side) {
       if ('baked' in side) { gl.deleteFramebuffer(side.fb); gl.deleteTexture(side.A); side.A = null; return; }
@@ -474,9 +475,11 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
   const frameAt = (side: any, u: number) => {
     const n = fresh(side) ? side.frames.length : 0; if (!n) return null;
     const x = Math.min(clamp01(u) * (REC_FRAMES - 1), n - 1), i = Math.floor(x), j = Math.min(i + 1, n - 1);
-    return { k0: side.frames[i], k1: side.frames[j], f: x - i, print: texOf(side.print).full };
+    return { k0: side.frames[i], k1: side.frames[j], f: x - i };
   };
-  const drawSides = (x: any, ux: number, y: any, uy: number, k: number, p: number, into: WebGLFramebuffer | null) => {
+  // where the envelope stands at p: a baked x has no plain print of its own, so its leg keeps the envelope it was baked at
+  const envelopeAt = (x: any, p: number) => (x.baked ? Math.max(p, x.at) : p);
+  const drawSides = (x: any, ux: number, y: any, uy: number, k: number, p: number, into: WebGLFramebuffer | null, toNothing = false) => {
     const X = x.baked ? null : frameAt(x, ux);
     if (!x.baked && !X) return false;
     let Y = y ? frameAt(y, uy) : null;
@@ -486,10 +489,11 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
     const xs = X || Y;
     if (xs) { bind(0, xs.k0.s); bind(1, xs.k0.d); bind(2, xs.k1.s); bind(3, xs.k1.d); }
     if (Y) { bind(4, Y.k0.s); bind(5, Y.k0.d); bind(6, Y.k1.s); bind(7, Y.k1.d); }
-    const yPrint = Y ? Y.print : texOf(x.print).full;
-    bind(8, paper); bind(9, X ? X.print : yPrint); bind(10, yPrint);
+    // the leg ends on y's print even before y has a frame to mix in
+    const yPrint = texOf((y ?? x).print).full;
+    bind(8, paper); bind(9, texOf(x.print).full); bind(10, yPrint);
     if (x.baked) bind(11, x.A);
-    setEndpoint(play.u, p);
+    setEndpoint(play.u, envelopeAt(x, p), toNothing);
     gl.uniform1f(play.u.uFx, X ? X.f : 0); gl.uniform1f(play.u.uFy, Y ? Y.f : 0); gl.uniform1f(play.u.uK, k);
     gl.uniform1f(play.u.uXBaked, x.baked ? 1 : 0); gl.uniform1f(play.u.uRaw, into ? 1 : 0);
     draw();

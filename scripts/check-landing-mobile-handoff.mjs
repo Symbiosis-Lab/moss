@@ -36,7 +36,7 @@ const trace = (page, { to, turn, drop }) => page.evaluate(async ({ to, turn, dro
     if (!turned && s.leg && s.leg.p >= turn.at) { turned = true; scrollTo({ top: __restY(turn.back), behavior: 'instant' }); }
     if (saw && turned && !s.leg && s.shown === end) break;
   }
-  return { frames, start, end: scale(), mix: [PLAY_OUT, PLAY_IN] };
+  return { frames, start, end: scale(), mix: [PLAY_OUT, MossWatercolor.DEFAULT_PRESET.playIn] };
 }, { to, turn, drop });
 
 const smooth = (a, b, t) => { const x = Math.min(1, Math.max(0, (t - a) / (b - a))); return x * x * (3 - 2 * x); };

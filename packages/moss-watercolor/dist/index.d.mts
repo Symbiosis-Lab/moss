@@ -1,5 +1,5 @@
-import { _ as DEFAULT_PRESET, a as BakedSide, c as PairOptions, d as Rect, f as SceneSide, g as createSim, h as WatercolorSim, i as advance, l as PrintSource, m as StepOptions, n as AdvanceResult, o as CreateSimOptions, p as SideLook, r as ClockState, s as Pair, t as DIAG_VIEWS, u as RecordingSide, v as WatercolorPreset } from "./index-DxDYkz_G.mjs";
+import { _ as DEFAULT_PRESET, a as BakedSide, c as PairOptions, d as Rect, f as SceneSide, g as createSim, h as WatercolorSim, i as advance, l as PrintSource, m as StepOptions, n as AdvanceResult, o as CreateSimOptions, p as SideLook, r as ClockState, s as Pair, t as DIAG_VIEWS, u as RecordingSide, v as WatercolorPreset } from "./index-DTcU-Bob.mjs";
 import { n as PaperOptions, r as createPaper, t as Paper } from "./default-Cs3xymcD.mjs";
 import "./paper/index.mjs";
-import { DEFAULT_PHASE_BOUNDS, Phase, PhaseBounds, phaseOf, retarget } from "./model/index.mjs";
-export { AdvanceResult, BakedSide, ClockState, CreateSimOptions, DEFAULT_PHASE_BOUNDS, DEFAULT_PRESET, DIAG_VIEWS, Pair, PairOptions, Paper, PaperOptions, Phase, PhaseBounds, PrintSource, RecordingSide, Rect, SceneSide, SideLook, StepOptions, WatercolorPreset, WatercolorSim, advance, createPaper, createSim, phaseOf, retarget };
+import { DEFAULT_PHASE_BOUNDS, Phase, PhaseBounds, legAt, phaseOf, retarget, turnAt } from "./model/index.mjs";
+export { AdvanceResult, BakedSide, ClockState, CreateSimOptions, DEFAULT_PHASE_BOUNDS, DEFAULT_PRESET, DIAG_VIEWS, Pair, PairOptions, Paper, PaperOptions, Phase, PhaseBounds, PrintSource, RecordingSide, Rect, SceneSide, SideLook, StepOptions, WatercolorPreset, WatercolorSim, advance, createPaper, createSim, legAt, phaseOf, retarget, turnAt };

@@ -939,17 +939,18 @@ function createSim(opts) {
 		sideRecorded(side) {
 			return side.n >= REC_STEPS && fresh(side);
 		},
-		playSides(x, ux, y, uy, k, p) {
-			return drawSides(x, ux, y, uy, k, p, null);
+		playSides(x, ux, y, uy, k, p, { toNothing = false } = {}) {
+			return drawSides(x, ux, y, uy, k, p, null, toNothing);
 		},
-		bake(x, ux, y, uy, k) {
-			const A = tex(W, H), fb = fbo([A]);
-			drawSides(x, ux, y, uy, k, .5, fb);
+		bake(x, ux, y, uy, k, p) {
+			const A = tex(W, H), fb = fbo([A]), q = envelopeAt(x, p);
+			drawSides(x, ux, y, uy, k, p, fb);
 			return {
 				baked: true,
 				A,
 				fb,
-				print: y ? y.print : x.print
+				print: q >= .5 ? (y ?? x).print : x.print,
+				at: Math.min(q, 1 - q)
 			};
 		},
 		freeSide(side) {
@@ -971,11 +972,11 @@ function createSim(opts) {
 		return {
 			k0: side.frames[i],
 			k1: side.frames[j],
-			f: x - i,
-			print: texOf(side.print).full
+			f: x - i
 		};
 	};
-	const drawSides = (x, ux, y, uy, k, p, into) => {
+	const envelopeAt = (x, p) => x.baked ? Math.max(p, x.at) : p;
+	const drawSides = (x, ux, y, uy, k, p, into, toNothing = false) => {
 		const X = x.baked ? null : frameAt(x, ux);
 		if (!x.baked && !X) return false;
 		let Y = y ? frameAt(y, uy) : null;
@@ -1001,12 +1002,12 @@ function createSim(opts) {
 			bind(6, Y.k1.s);
 			bind(7, Y.k1.d);
 		}
-		const yPrint = Y ? Y.print : texOf(x.print).full;
+		const yPrint = texOf((y ?? x).print).full;
 		bind(8, paper);
-		bind(9, X ? X.print : yPrint);
+		bind(9, texOf(x.print).full);
 		bind(10, yPrint);
 		if (x.baked) bind(11, x.A);
-		setEndpoint(play.u, p);
+		setEndpoint(play.u, envelopeAt(x, p), toNothing);
 		gl.uniform1f(play.u.uFx, X ? X.f : 0);
 		gl.uniform1f(play.u.uFy, Y ? Y.f : 0);
 		gl.uniform1f(play.u.uK, k);

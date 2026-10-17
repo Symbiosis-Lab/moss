@@ -2856,14 +2856,12 @@ function drivePicture(now) {
 
 // ── The chase: the picture runs toward the scene being read ───────────────
 // The picture is always somewhere along one leg, from x toward y, at p in [0, 1]: x dissolves into
-// its mixed wash over [0, PLAY_OUT], the two washes mix over [PLAY_OUT, PLAY_IN], and y gathers out
-// of its own wash over [PLAY_IN, 1]. p moves at the page's own speed, toward 1 while y is the
-// target and back toward 0 while x is. A new target turns the leg from where it stands (turnTo), so
+// its mixed wash, the two washes mix, and y gathers out of its own wash (legAt). p moves at the
+// page's own speed, toward 1 while y is the target and back toward 0 while x is. A new target turns the leg from where it stands (turnTo), so
 // the frame on screen never jumps: a slow reader sees every scene in turn, and a fast one sees the
 // wash keep turning toward the newest scene and gather only where they stop. Each scene's
 // dispersion is recorded once over one shared footprint (footprint()), which is what lets any two
 // mix. Until y's recording is whole the leg waits in x's wash.
-const PLAY_IN = MossWatercolor.DEFAULT_PRESET.playIn;
 // The pace of a leg is the page's: the picture is as far through its leg as the page is through its
 // way to the scene, so a slow scroll is a slow change and a flick a quick one that lands with the copy.
 // It never moves faster than a leg in LEG_FAST seconds, so a dissolve is always seen, nor slower than
@@ -2933,7 +2931,7 @@ function printFor(scene, leaving) {
   return sheets[scene];
 }
 const zoomOf = (scene) => (mobileLayout() && scene === DEPLOY ? 1.4 : 1);
-const legAt = (p) => ({ ux: clamp01(p / PLAY_OUT), uy: clamp01((1 - p) / (1 - PLAY_IN)), k: smooth(PLAY_OUT, PLAY_IN, p) });
+const { legAt, turnAt } = MossWatercolor;
 function aimAt(scene) {
   if (scene === SHARE) mountLoop();
   leg.y = { scene, side: sideFor(printFor(scene, false)) };
@@ -2952,19 +2950,19 @@ function startLeg() {
 // The leg turns to a scene that is neither of its ends, from where it stands.
 function turnTo(scene) {
   if (bridging && scene !== SHIPS && scene !== DEPLOY) endBridge(true);
-  const { p } = leg;
-  if (p <= PLAY_OUT) { startBridge(leg.x.scene, scene, true); aimAt(scene); return; }   // nothing of y is on screen yet
-  if (p >= PLAY_IN) {                                              // y is gathering: it dissolves again from there
+  const { p } = leg, turn = turnAt(p);
+  if (turn.from === 'x') { startBridge(leg.x.scene, scene, true); aimAt(scene); return; }
+  if (turn.from === 'y') {
     if (leg.x.side.baked) sim.freeSide(leg.x.side);
     leg.x = { ...leg.y, zoom: zoomOf(leg.y.scene) };
-    leg.p = PLAY_OUT * (1 - p) / (1 - PLAY_IN);
+    leg.p = turn.p;
     startBridge(leg.x.scene, scene, true); aimAt(scene); return;
   }
-  const { ux, uy, k } = legAt(p);                                  // mid-mix: the mix becomes the wash it leaves
-  const baked = sim.bake(leg.x.side, ux, leg.y.side, uy, k);
+  const { ux, uy, k } = legAt(p);
+  const baked = sim.bake(leg.x.side, ux, leg.y.side, uy, k, p);
   if (leg.x.side.baked) sim.freeSide(leg.x.side);
   leg.x = { scene: null, side: baked, zoom: leg.x.zoom + (zoomOf(leg.y.scene) - leg.x.zoom) * k, share: xf };
-  leg.p = PLAY_OUT;
+  leg.p = turn.p;
   aimAt(scene);
 }
 // A print the leg needs and nobody has taken is taken now, under the wash: the leg is waiting in it.

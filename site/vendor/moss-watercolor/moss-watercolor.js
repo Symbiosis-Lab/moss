@@ -28,8 +28,10 @@ var MossWatercolor = (() => {
     advance: () => advance,
     createPaper: () => createPaper,
     createSim: () => createSim,
+    legAt: () => legAt,
     phaseOf: () => phaseOf,
-    retarget: () => retarget
+    retarget: () => retarget,
+    turnAt: () => turnAt
   });
 
   // packages/moss-watercolor/src/engine/shaders.ts
@@ -1034,14 +1036,14 @@ void main(){
       },
       // x at dissolve u (0 its print, 1 its mixed wash) mixed by k into y at uy; p places the leg's
       // envelope, so at p = 0 and p = 1 the canvas is the plain print of x or y.
-      playSides(x, ux, y, uy, k, p) {
-        return drawSides(x, ux, y, uy, k, p, null);
+      playSides(x, ux, y, uy, k, p, { toNothing = false } = {}) {
+        return drawSides(x, ux, y, uy, k, p, null, toNothing);
       },
       // The mix on screen drawn as optical thickness, a side of its own at its mixed end.
-      bake(x, ux, y, uy, k) {
-        const A = tex(W, H), fb = fbo([A]);
-        drawSides(x, ux, y, uy, k, 0.5, fb);
-        return { baked: true, A, fb, print: y ? y.print : x.print };
+      bake(x, ux, y, uy, k, p) {
+        const A = tex(W, H), fb = fbo([A]), q = envelopeAt(x, p);
+        drawSides(x, ux, y, uy, k, p, fb);
+        return { baked: true, A, fb, print: q >= 0.5 ? (y ?? x).print : x.print, at: Math.min(q, 1 - q) };
       },
       freeSide(side) {
         if ("baked" in side) {
@@ -1059,9 +1061,10 @@ void main(){
       const n = fresh(side) ? side.frames.length : 0;
       if (!n) return null;
       const x = Math.min(clamp01(u) * (REC_FRAMES - 1), n - 1), i = Math.floor(x), j = Math.min(i + 1, n - 1);
-      return { k0: side.frames[i], k1: side.frames[j], f: x - i, print: texOf(side.print).full };
+      return { k0: side.frames[i], k1: side.frames[j], f: x - i };
     };
-    const drawSides = (x, ux, y, uy, k, p, into) => {
+    const envelopeAt = (x, p) => x.baked ? Math.max(p, x.at) : p;
+    const drawSides = (x, ux, y, uy, k, p, into, toNothing = false) => {
       const X = x.baked ? null : frameAt(x, ux);
       if (!x.baked && !X) return false;
       let Y = y ? frameAt(y, uy) : null;
@@ -1087,12 +1090,12 @@ void main(){
         bind(6, Y.k1.s);
         bind(7, Y.k1.d);
       }
-      const yPrint = Y ? Y.print : texOf(x.print).full;
+      const yPrint = texOf((y ?? x).print).full;
       bind(8, paper);
-      bind(9, X ? X.print : yPrint);
+      bind(9, texOf(x.print).full);
       bind(10, yPrint);
       if (x.baked) bind(11, x.A);
-      setEndpoint(play.u, p);
+      setEndpoint(play.u, envelopeAt(x, p), toNothing);
       gl.uniform1f(play.u.uFx, X ? X.f : 0);
       gl.uniform1f(play.u.uFy, Y ? Y.f : 0);
       gl.uniform1f(play.u.uK, k);
@@ -1141,6 +1144,17 @@ void main(){
     }
     if (phase === "out" || phase === "mix" && smooth(outEnd, inStart, p) < 0.5) return { from, to: next, p };
     return { from: to, to: next, p: outEnd * incoming };
+  }
+  function legAt(p, bounds = DEFAULT_PHASE_BOUNDS) {
+    const { outEnd, inStart } = bounds;
+    return { ux: clamp01(p / outEnd), uy: clamp01((1 - p) / (1 - inStart)), k: smooth(outEnd, inStart, p) };
+  }
+  function turnAt(p, bounds = DEFAULT_PHASE_BOUNDS) {
+    const { outEnd, inStart } = bounds, phase = phaseOf(p, bounds);
+    if (Math.abs(outEnd - (1 - inStart)) > 1e-9) throw new Error(`turnAt: bounds must be symmetric (outEnd ${outEnd}, inStart ${inStart})`);
+    if (phase === "out") return { from: "x", p };
+    if (phase === "in") return { from: "y", p: outEnd * (1 - p) / (1 - inStart) };
+    return { from: "mix", p: outEnd };
   }
   return __toCommonJS(index_exports);
 })();

@@ -152,11 +152,13 @@ interface SceneSide {
   readonly foot: PrintSource;
   readonly look: SideLook;
 }
+/** `print` is the plain print the frame showed when it was baked, and `at` where its envelope stood, folded below the middle: a leg continuing from it holds that envelope until it catches up. */
 interface BakedSide {
   baked: true;
   A: WebGLTexture | null;
   fb: WebGLFramebuffer;
   print: PrintSource;
+  at: number;
 }
 interface Pair {
   sides: [RecordingSide, RecordingSide];
@@ -193,10 +195,12 @@ interface WatercolorSim {
   /** Records up to `budget` steps of a scene side. One side records at a time: the sides share the simulation's state. */
   recordSide(side: SceneSide, budget: number): void;
   sideRecorded(side: SceneSide): boolean;
-  /** `x` at dissolve `ux` (0 its print, 1 its mixed wash), mixed by `k` into `y` at `uy`; `p` in [0, 1] places the leg's envelope, so at either end the canvas is that end's plain print. */
-  playSides(x: SceneSide | BakedSide, ux: number, y: SceneSide | null, uy: number, k: number, p: number): boolean;
-  /** The mix `playSides` would draw, kept as optical thickness: a side at its mixed end, to turn a transition toward another scene from where it stands. */
-  bake(x: SceneSide | BakedSide, ux: number, y: SceneSide | null, uy: number, k: number): BakedSide;
+  /** `x` at dissolve `ux` (0 its print, 1 its mixed wash), mixed by `k` into `y` at `uy`; `p` in [0, 1] places the leg's envelope, so at either end the canvas is that end's plain print. A `y` with nothing recorded yet adds nothing to the mix, but the leg still ends on its print. `toNothing`, on a transparent ground, drains the canvas clear from the middle of the leg on, so the host shows its own incoming page; ignored on a paper ground. */
+  playSides(x: SceneSide | BakedSide, ux: number, y: SceneSide | null, uy: number, k: number, p: number, options?: {
+    toNothing?: boolean;
+  }): boolean;
+  /** The mix `playSides(x, ux, y, uy, k, p)` draws, kept as optical thickness: a side at its mixed end, to turn a transition toward another scene from where it stands. Played as `x` from at most `at` (`turnAt` resumes there), the frame is unchanged. */
+  bake(x: SceneSide | BakedSide, ux: number, y: SceneSide | null, uy: number, k: number, p: number): BakedSide;
   freeSide(side: SceneSide | BakedSide): void;
 }
 declare function createSim(opts: CreateSimOptions): WatercolorSim | null;
