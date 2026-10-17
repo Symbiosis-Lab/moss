@@ -1820,6 +1820,34 @@ fn grid_legacy_dash_emits_deprecation_warning() {
     assert!(result.warnings[0].contains("+++"));
 }
 
+#[test]
+fn grid_legacy_dash_warning_names_the_divider_line_in_the_file() {
+    // Two frontmatter lines above the body; the `---` is body line 4.
+    let config = ParseConfig { warning_line_offset: 2, ..Default::default() };
+    let md = "intro
+
+:::grid 2
+cell A
+---
+cell B
+:::
+";
+    let result = extract_shortcodes_with_config(md, &config);
+    assert_eq!(result.warnings.len(), 1, "{:?}", result.warnings);
+    assert!(result.warnings[0].contains("`---` on line 7"), "{:?}", result.warnings);
+    assert!(result.warnings[0].contains("write `+++`"), "{:?}", result.warnings);
+}
+
+#[test]
+fn grid_legacy_dash_warning_line_survives_a_typed_shortcode_body() {
+    let config = ParseConfig { warning_line_offset: 2, ..Default::default() };
+    let md = ":::hero\n# T\n:::grid 2\na\n---\nb\n:::\n:::\n";
+    let result = extract_shortcodes_with_config(md, &config);
+    let w: Vec<_> = result.warnings.iter().filter(|w| w.contains("`---`")).collect();
+    assert_eq!(w.len(), 1, "{:?}", result.warnings);
+    assert!(w[0].contains("on line 7"), "{w:?}");
+}
+
 // ---- `per-line` (renamed from `cols`) ----
 
 #[test]

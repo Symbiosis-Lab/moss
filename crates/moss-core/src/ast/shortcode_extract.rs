@@ -101,17 +101,12 @@ pub(crate) fn fragment_parts(doc: Document) -> (Vec<Block>, Vec<BlockMeta>, Diag
 
 /// `config` for a fragment whose first line is `body_line` (0-based) of the
 /// body `config` describes. The one place a fragment's start is carried, so
-/// the fragment's blocks report document lines instead of fragment lines.
+/// the fragment's blocks and warnings report document lines instead of
+/// fragment lines.
 pub(crate) fn config_at_body_line(config: &ParseConfig, body_line: usize) -> ParseConfig {
-    ParseConfig { source_line_offset: config.source_line_offset + body_line, ..*config }
-}
-
-/// `config` for a wrapper's body that is extracted again at the next level:
-/// both line offsets advance, so warnings and fragments stay in file lines.
-fn nested_body_config(config: &ParseConfig, body_start: usize) -> ParseConfig {
     ParseConfig {
-        warning_line_offset: config.warning_line_offset + body_start,
-        source_line_offset: config.source_line_offset + body_start,
+        source_line_offset: config.source_line_offset + body_line,
+        warning_line_offset: config.warning_line_offset + body_line,
         ..*config
     }
 }
@@ -198,12 +193,12 @@ fn parse_shortcode_block(
         "grid" => {
             let (sc, legacy, fragment_warnings) = parse_grid(args, body, config);
             let mut warns = fragment_warnings;
-            if legacy {
-                warns.warnings.push(
-                    "shortcode `:::grid` uses `---` cell dividers (deprecated). Migrate to `+++`.\n\
-                     `---` support will be removed in a future release."
-                        .to_string(),
-                );
+            if let Some(body_line) = legacy {
+                warns.warnings.push(format!(
+                    "`---` on line {} divides `:::grid` cells but is deprecated: write `+++` instead \
+                     (`---` support will be removed in a future release).",
+                    config.warning_line_offset + body_line + 1
+                ));
             }
             (Some(Shortcode::Grid(sc)), warns)
         }
@@ -286,7 +281,7 @@ pub const MAX_GRID_COLUMNS: u32 = 6;
 /// re-parsing cell bodies as fragments (e.g. a misspelled shortcode nested
 /// inside a cell) — see [`parse_cell_to_blocks`] — plus the `cols=`
 /// deprecation warning when that alias was written.
-fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, bool, Diagnostics) {
+fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, Option<usize>, Diagnostics) {
     let trimmed = args.trim();
     let (positional, attr_block): (&str, &str) = if let Some(pos) = trimmed.find('{') {
         // char-aligned: pos points to ASCII '{' from str::find — safe to slice.
@@ -335,7 +330,7 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
         }
     }
 
-    let (raw_cells, found_legacy_dash) = split_grid_cells(body);
+    let (raw_cells, legacy_dash_line) = split_grid_cells(body);
     let mut fragments = Vec::with_capacity(raw_cells.len());
 
     // Phase 4 PR4.5 (2026-05-28): cells become Vec<Vec<Block>>. Each raw
@@ -385,7 +380,7 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, b
             scroll,
             label,
         },
-        found_legacy_dash,
+        legacy_dash_line,
         fragment,
     )
 }
@@ -736,13 +731,13 @@ pub(super) fn detect_compound_link(cell_text: &str) -> Option<(String, String, S
 /// adds one, a bare colon line takes one off, colon counts are ignored (the
 /// same rule as [`find_block_end`]).
 ///
-/// Returns `(cells, found_legacy_dash)` where `found_legacy_dash` is
-/// `true` when at least one `---` divider **of this grid** was encountered,
+/// Returns `(cells, legacy_dash_line)` where `legacy_dash_line` is the
+/// 0-based body line of the first `---` divider **of this grid**, if any,
 /// signaling the caller to emit a deprecation warning. A `---` belonging to
 /// a nested block is reported when that block is parsed, not here.
-fn split_grid_cells(body: &str) -> (Vec<(String, usize)>, bool) {
+fn split_grid_cells(body: &str) -> (Vec<(String, usize)>, Option<usize>) {
     if body.is_empty() {
-        return (vec![(String::new(), 0)], false);
+        return (vec![(String::new(), 0)], None);
     }
     // One flag per line, aligned with `str::lines`, which agrees index-for-
     // index with `split_inclusive('\n')` for every input.
@@ -750,7 +745,7 @@ fn split_grid_cells(body: &str) -> (Vec<(String, usize)>, bool) {
     let mut cells = Vec::new();
     let mut current = String::new();
     let mut first_line_in_cell = true;
-    let mut found_legacy_dash = false;
+    let mut legacy_dash_line = None;
     // Body line the current cell's text starts on.
     let mut cell_start = 0;
     // Blocks we are currently inside; 0 means "at this grid's own depth",
@@ -766,8 +761,8 @@ fn split_grid_cells(body: &str) -> (Vec<(String, usize)>, bool) {
                 1 => depth += 1,
                 -1 if depth > 0 => depth -= 1,
                 _ if depth == 0 && (trimmed == "+++" || trimmed == "---") => {
-                    if trimmed == "---" {
-                        found_legacy_dash = true;
+                    if trimmed == "---" && legacy_dash_line.is_none() {
+                        legacy_dash_line = Some(idx);
                     }
                     if let Some(stripped) = current.strip_suffix('\n') {
                         current.truncate(stripped.len());
@@ -793,7 +788,7 @@ fn split_grid_cells(body: &str) -> (Vec<(String, usize)>, bool) {
         current.truncate(stripped.len());
     }
     cells.push((current, cell_start));
-    (cells, found_legacy_dash)
+    (cells, legacy_dash_line)
 }
 
 /// Byte-offset asset paths inside `:::gallery` / `:::hero` blocks.
@@ -1625,7 +1620,7 @@ fn extract_with_state(
                 });
                 // The body's first line sits `body_start` lines into this
                 // level, so the recursion's line numbers are shifted by it.
-                let body_config = nested_body_config(config, body_start);
+                let body_config = config_at_body_line(config, body_start);
                 let body_processed =
                     extract_with_state(&body, nonce, collected, &body_config);
                 output.push_str(&render_div_open(
@@ -1694,7 +1689,7 @@ fn extract_with_state(
             let mut classes = vec!["moss-unknown-shortcode".to_string()];
             classes.extend(parsed.classes.iter().cloned());
             let extra_attrs = format!(r#" data-name="{}""#, html_escape_attr(name));
-            let body_config = nested_body_config(config, body_start);
+            let body_config = config_at_body_line(config, body_start);
             let body_processed =
                 extract_with_state(&body, nonce, collected, &body_config);
             output.push_str(&render_div_open(&classes, parsed.id.as_deref(), None, Some(&extra_attrs)));
