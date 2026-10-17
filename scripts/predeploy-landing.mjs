@@ -17,8 +17,11 @@ const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 
 const fail = (message) => { console.error(`predeploy-landing: ${message}`); process.exit(1); };
 
 const head = git('rev-parse', 'HEAD');
-const merged = spawnSync('git', ['-C', repo, 'merge-base', '--is-ancestor', head, 'develop']).status === 0;
-if (!merged) fail(`HEAD ${head.slice(0, 9)} is not on develop. Merge it to develop first, then deploy from there.`);
+// Merged means on the published develop: a checkout's own develop can lag it, and a worktree at a
+// commit already on origin is as merged as it gets. Without the network, the local branch decides.
+spawnSync('git', ['-C', repo, 'fetch', '--quiet', 'origin', 'develop']);
+const onDevelop = (ref) => spawnSync('git', ['-C', repo, 'merge-base', '--is-ancestor', head, ref]).status === 0;
+if (!onDevelop('origin/develop') && !onDevelop('develop')) fail(`HEAD ${head.slice(0, 9)} is not on develop. Merge it to develop first, then deploy from there.`);
 const dirty = git('status', '--porcelain', '--', 'site', ':!site/.moss');
 if (dirty) fail(`site/ has uncommitted changes, so what would deploy is not what develop holds:\n${dirty}`);
 
