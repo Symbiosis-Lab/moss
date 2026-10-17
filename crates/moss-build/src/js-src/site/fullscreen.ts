@@ -25,6 +25,8 @@
  * reload.
  */
 
+import { lockPageScroll } from "./viewport";
+
 
 
 // Make this a module to allow declare global
@@ -55,6 +57,7 @@ const LIGHTBOX = `<button class="lightbox-close" aria-label="Close">&times;</but
   let items: MediaItem[] = [];
   let triggers: HTMLElement[] = [];
   let currentIndex = 0;
+  let unlockScroll: (() => void) | null = null;
 
   // The viewer's element, made on first need when the page carries none.
   function lightboxEl(): HTMLElement {
@@ -151,13 +154,14 @@ const LIGHTBOX = `<button class="lightbox-close" aria-label="Close">&times;</but
     if (nextButton) nextButton.hidden = single;
     lightbox.hidden = false;
     lightbox.focus();
-    document.body.style.overflow = "hidden";
+    unlockScroll ??= lockPageScroll();
   }
 
   function close(): void {
     const lightbox = lightboxEl();
     lightbox.hidden = true;
-    document.body.style.overflow = "";
+    unlockScroll?.();
+    unlockScroll = null;
     lightbox.querySelector<HTMLVideoElement>(".lightbox-video")?.pause();
     const iframe = lightbox.querySelector<HTMLIFrameElement>(".lightbox-iframe");
     if (iframe) iframe.src = "";

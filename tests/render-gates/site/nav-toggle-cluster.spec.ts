@@ -177,3 +177,85 @@ test("a wrapped nav row puts the links at the start edge and the toggles at the 
     0,
   );
 });
+
+test("a theme's own focus ring draws no second box inside the search field", async ({ page }) => {
+  // A theme stylesheet sits outside moss's cascade layers, as this does.
+  await page.addStyleTag({ content: ":focus-visible { outline: 2px solid rgb(255, 0, 0); outline-offset: 3px; }" });
+  await page.locator(".nav-search-btn").click();
+  const input = page.locator(".moss-search__input");
+  await expect(input).toBeFocused();
+
+  expect(await input.evaluate((el) => window.getComputedStyle(el).outlineStyle)).toBe("none");
+  const border = await page
+    .locator(".moss-search__panel")
+    .evaluate((el) => window.getComputedStyle(el).borderTopColor);
+  expect(border, "the panel's own border shows the focus").toBe(
+    await resolveColor(page, "var(--moss-color-ui-accent)"),
+  );
+});
+
+test("opening search does not move the page sideways under a classic scrollbar", async ({ playwright, browserName, baseURL }) => {
+  // Headless Chromium hides scrollbars; a reader on Windows, Linux or a Mac set
+  // to always show them sees one, and that is the width the lock must keep.
+  test.skip(browserName !== "chromium", "only Chromium can be told to draw classic scrollbars");
+  const browser = await playwright.chromium.launch({ ignoreDefaultArgs: ["--hide-scrollbars"] });
+  try {
+    const page = await browser.newPage({ baseURL, viewport: { width: 1024, height: 240 } });
+    await page.goto("/", { waitUntil: "load" });
+    // A styled scrollbar takes layout width whatever the OS shows; macOS's
+    // default overlays one whenever a trackpad is in use.
+    await page.addStyleTag({ content: "::-webkit-scrollbar { width: 15px } ::-webkit-scrollbar-thumb { background: gray }" });
+    const scrollbar = await page.evaluate(() => window.innerWidth - document.documentElement.clientWidth);
+    expect(scrollbar, "the page must scroll and draw a classic scrollbar, or this measures nothing").toBeGreaterThan(0);
+
+    const header = page.locator(".nav-content");
+    const before = await header.boundingBox();
+    await page.locator(".nav-search-btn").click();
+    await expect(page.locator(".moss-search__input")).toBeFocused();
+    expect(await header.boundingBox()).toEqual(before);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("the focused search field shows a 2px accent edge, and a 2px outline under forced colors", async ({ page }) => {
+  await page.locator(".nav-search-btn").click();
+  const panel = page.locator(".moss-search__panel");
+  const accent = await resolveColor(page, "var(--moss-color-ui-accent)");
+  expect(await panel.evaluate((el) => window.getComputedStyle(el).boxShadow)).toBe(`${accent} 0px 0px 0px 1px inset`);
+
+  await page.emulateMedia({ forcedColors: "active" });
+  const forced = await panel.evaluate((el) => {
+    const cs = window.getComputedStyle(el);
+    return [cs.outlineStyle, cs.outlineWidth, cs.outlineOffset];
+  });
+  expect(forced).toEqual(["solid", "1px", "-2px"]);
+});
+
+test("Tab onto a result lights that row alone, through a theme's own focus ring", async ({ page }) => {
+  await page.addStyleTag({ content: ":focus-visible { outline: 2px solid rgb(255, 0, 0); outline-offset: 3px; }" });
+  await page.locator(".nav-search-btn").click();
+  await page.keyboard.type("notes");
+  const rows = page.locator(".moss-search__link");
+  await expect(rows.nth(1), "the fixture must return at least two results").toBeVisible();
+
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+  await expect(rows.nth(1)).toBeFocused();
+  await expect(page.locator(".moss-search__link.is-selected")).toHaveCount(1);
+  await expect(rows.nth(1)).toHaveClass(/is-selected/);
+  expect(await rows.nth(1).evaluate((el) => window.getComputedStyle(el).outlineStyle)).toBe("none");
+});
+
+test("closing search leaves the page where the reader left it", async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 240 });
+  await page.goto("/", { waitUntil: "load" });
+  await page.evaluate(() => window.scrollTo(0, 200));
+  const before = await page.evaluate(() => window.scrollY);
+  expect(before, "the page must scroll for this to measure anything").toBeGreaterThan(0);
+  await page.keyboard.press("/");
+  await expect(page.locator(".moss-search__input")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".nav-search-btn")).toBeFocused();
+  expect(await page.evaluate(() => window.scrollY)).toBe(before);
+});

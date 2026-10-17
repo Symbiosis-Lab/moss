@@ -34,7 +34,7 @@ Reach for the cheapest rung that works; earn each step:
    a setext heading (underlined with `===` or `---`), are not checked.
 4. **Structural override.** Re-lay-out a page against moss's defaults.
 
-A text field shows focus on its own border, never as a ring inside or outside it. A theme's site-wide focus ring should exclude fields, for example `:focus-visible:not(input, textarea, select)`, and style a field's focus on its own border.
+A text field shows focus on its own border, never as a ring inside or outside it. A theme's site-wide focus ring should exclude fields, for example `:focus-visible:not(input, textarea, select)`, and style a field's focus on its own border. moss's search field already does: its input and result rows draw no outline whatever the theme says, so restyle the panel's border or the `.is-selected` row instead.
 
 ### Rung 4 in detail
 

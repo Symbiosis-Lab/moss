@@ -128,12 +128,20 @@
 
 /* The panel is the field the reader sees, so while its input holds focus the
    panel's own edge takes the accent: the focus shows on the box itself, never
-   as a ring inside or around it. The input draws no outline of its own. */
+   as a ring inside or around it. The input draws no outline of its own. The
+   inset shadow doubles the 1px border to the 2px a focus ring is elsewhere,
+   without moving anything. */
 .moss-search__panel:has(.moss-search__input:focus) {
   border-color: var(--moss-color-ui-accent);
+  box-shadow: inset 0 0 0 1px var(--moss-color-ui-accent);
 }
+/* Forced colors drop the shadow; an outline just inside the border keeps 2px. */
 @media (forced-colors: active) {
-  .moss-search__panel:has(.moss-search__input:focus) { border-color: Highlight; }
+  .moss-search__panel:has(.moss-search__input:focus) {
+    border-color: Highlight;
+    outline: 1px solid Highlight;
+    outline-offset: -2px;
+  }
 }
 
 /* --- Input row --- */
@@ -158,7 +166,10 @@
   min-width: 0;
   border: none;
   background: none;
-  outline: none;
+  /* !important: a theme's own `:focus-visible { outline: … }` sits outside
+     moss's layers and would otherwise draw a second box inside the panel,
+     whose border already shows the focus. */
+  outline: none !important;
   padding: var(--moss-space-xs) 0;
   font-family: var(--moss-font-body);
   font-size: var(--moss-size-md);
@@ -166,7 +177,6 @@
   color: var(--moss-color-text);
 }
 .moss-search__input::placeholder { color: var(--moss-color-muted); }
-.moss-search__input:focus-visible { outline: none; }
 
 /* Indeterminate 1px hairline — only shown past 200ms of genuine chunk-fetch
    latency, so a fast query never flashes it. */
@@ -243,9 +253,17 @@
 .moss-search__link:hover,
 .moss-search__link.is-selected,
 .moss-search__link:focus-visible {
-  outline: none;
+  /* !important for the reason the input's is: the bar and tint are the focus. */
+  outline: none !important;
   border-left-color: var(--moss-color-ui-accent);
   background: color-mix(in srgb, var(--moss-color-ui-accent) 4%, transparent);
+}
+@media (forced-colors: active) {
+  .moss-search__link.is-selected,
+  .moss-search__link:focus-visible {
+    outline: 2px solid Highlight !important;
+    outline-offset: -2px;
+  }
 }
 
 .moss-search__title {
