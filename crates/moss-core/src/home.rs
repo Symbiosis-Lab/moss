@@ -210,7 +210,7 @@ fn language_bucket(tag: &str) -> String {
 /// assert_eq!(editions.of("en/show/index.html"), "");
 /// assert_eq!(editions.of("he/ada/index.html"), "");
 /// ```
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Editions {
     trees: Vec<String>,
 }

@@ -105,6 +105,7 @@ fn editor_and_build_agree_on_folder_wikilinks() {
         &[],
         &[],
         &TermIndex::default(),
+        &Default::default(),
     );
 
     // `ParsedDocument` (the input `build_article_map` normally reads

@@ -349,3 +349,42 @@ fn a_kind_keyed_like_a_language_code_keeps_its_nav_entry_in_a_multilingual_site(
         assert!(nav.contains(&"/he/".to_string()), "{page}: {nav:?}");
     }
 }
+
+#[test]
+fn the_article_map_tells_the_editor_which_edition_a_page_names_its_terms_in() {
+    use moss_build::build::scan::article_map::ArticleMap;
+    let site = partner_site(&[("index.zh-hans.md", "---\ntitle: 首页\n---\n\n文字。\n")]);
+    site.write("de/Ungebaut.md", "---\ntitle: Ungebaut\n---\n\nText.\n");
+    let map = ArticleMap::load(&site.root.join(".moss")).unwrap();
+    let partners = map.kinds.iter().find(|k| k.key == "partners").unwrap();
+
+    let key = partners.key_in(&map.edition_of_source("de/Konzert.md"), "Ada Example");
+    assert_eq!(key, "de/partners/ada-example");
+    assert!(map.terms.contains_key(&key), "{:?}", map.terms.keys());
+    assert_eq!(map.edition_of_source("de/index.md"), "de", "the edition's home");
+    assert_eq!(map.edition_of_source("de/Ungebaut.md"), "de", "a page written since the last build");
+    assert_eq!(map.edition_of_source("index.zh-hans.md"), "zh-hans", "a home translated by file name");
+    assert_eq!(map.edition_of_source("Concert.md"), "");
+    assert_eq!(partners.key_in("", "Ada Example"), "partners/ada-example");
+}
+
+#[test]
+fn a_place_has_one_page_for_every_edition() {
+    use moss_build::build::scan::article_map::ArticleMap;
+    let site = Site::with_config(
+        "\n[terms.places]\ntype = \"place\"\nfields = [\"location\"]\ntitle = \"Places\"\n",
+        &[
+            ("index.md", "---\ntitle: Home\n---\n\nText.\n"),
+            ("de/index.md", "---\ntitle: Start\n---\n\nWillkommen.\n"),
+            ("Concert.md", "---\ntitle: Concert\ndate: 2026-01-01\nlocation: Lakeside\n---\n\nText.\n"),
+            ("de/Konzert.md", "---\ntitle: Konzert\ndate: 2026-01-02\nlocation: Lakeside\n---\n\nText.\n"),
+        ],
+    );
+    let lakeside = site.html("places/lakeside/index.html");
+    assert!(lakeside.contains("/concert/") && lakeside.contains("/de/konzert/"), "{lakeside}");
+    assert!(!site.output("de/places/lakeside").exists());
+
+    let map = ArticleMap::load(&site.root.join(".moss")).unwrap();
+    let places = map.kinds.iter().find(|k| k.key == "places").unwrap();
+    assert_eq!(places.key_in("de", "Lakeside"), "places/lakeside");
+}

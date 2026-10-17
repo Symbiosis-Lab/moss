@@ -2619,6 +2619,7 @@ pub fn generate_blocking_content_for_build(
         &url_collisions,
         &generated_index_urls,
         &term_index,
+        &editions,
     );
     if let Err(e) = article_map.save(&moss_dir) {
         log::warn!("⚠️ Failed to save article map: {}", e);

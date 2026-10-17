@@ -44,11 +44,9 @@ impl<'a> TermKey<'a> {
 
 impl TermIndex {
     /// The term's page in `edition` (`""` for the default one): the claiming
-    /// page, else the generated one. A place-typed kind is site-wide, so it
-    /// ignores the edition.
+    /// page, else the generated one.
     pub fn term_url_in(&self, edition: &str, ns: &str, name: &str) -> Option<String> {
-        let edition = self.kinds.iter().find(|k| k.key == ns).map_or(edition, |k| kind_edition(k, edition));
-        let key = scope(edition, &term_folder_key(ns, name));
+        let key = self.kinds.iter().find(|k| k.key == ns)?.key_in(edition, name);
         self.sites.get(&key).map(|site| self.site_target(&key, site))
     }
 
@@ -83,8 +81,11 @@ pub(super) fn scope(edition: &str, key: &str) -> String {
     if edition.is_empty() { key.to_string() } else { format!("{edition}/{key}") }
 }
 
-/// The edition a kind's terms live in for a page of `edition`: place-typed
-/// kinds are site-wide (their map and gazetteer are keyed by the plain key).
-pub(super) fn kind_edition<'a>(kind: &TermKind, edition: &'a str) -> &'a str {
-    if kind.is_place { "" } else { edition }
+impl TermKind {
+    /// The key of the term `name` as a page of `edition` names it
+    /// (`de/partners/ada`). A place-typed kind is site-wide, since its map and
+    /// gazetteer are keyed by the plain key, so it ignores the edition.
+    pub fn key_in(&self, edition: &str, name: &str) -> String {
+        scope(if self.is_place { "" } else { edition }, &term_folder_key(&self.key, name))
+    }
 }

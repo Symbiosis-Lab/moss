@@ -54,7 +54,7 @@ mod rollup;
 mod stubs;
 mod editions;
 pub use editions::TermKey;
-use editions::{kind_edition, scope};
+use editions::scope;
 mod translations;
 pub use translations::link_term_translations;
 pub use stubs::{claim_stubs, edition_move_stubs, kind_move_stubs};
@@ -354,11 +354,10 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
     // can exclude the claiming page from its own listing.
     for doc in documents.iter() {
         for kind in &kinds {
-            let edition = kind_edition(kind, &doc.edition);
             for field in &kind.fields {
                 let Some(claim) = term_claim_of(doc, field) else { continue };
                 let name = claim.name(&doc.title).trim();
-                let Some(key) = resolved_key(edition, &kind.key, name) else { continue };
+                let Some(key) = resolved_key(kind, &doc.edition, name) else { continue };
                 let site = index.sites.entry(key.clone()).or_insert_with(|| TermSite {
                     display: name.to_string(),
                     claimed_by: None,
@@ -436,12 +435,11 @@ pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> T
         let mut members_pushed: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
         for kind in &kinds {
-            let edition = kind_edition(kind, &doc_edition);
             for field in &kind.fields {
                 let names = field_names(doc, field).to_vec();
                 for name in &names {
                     let name = name.trim();
-                    let Some(key) = resolved_key(edition, &kind.key, name) else { continue };
+                    let Some(key) = resolved_key(kind, &doc_edition, name) else { continue };
                     // First-seen original case is the display form; later
                     // case variants merge into the same key by construction.
                     index.sites.entry(key.clone()).or_insert_with(|| TermSite {
@@ -848,7 +846,7 @@ fn find_bounded(row: &str, name: &str) -> Option<(usize, usize)> {
 /// Such names have no slug of their own — `generate_slug` falls back to
 /// "untitled", which would silently merge every punctuation-only value into
 /// one shared `authors/untitled` term.
-fn resolved_key(edition: &str, ns: &str, name: &str) -> Option<String> {
+fn resolved_key(kind: &TermKind, edition: &str, name: &str) -> Option<String> {
     if !name.chars().any(char::is_alphanumeric) {
         if !name.is_empty() {
             crate::build::cli_output::log_warn_problem!(
@@ -857,7 +855,7 @@ fn resolved_key(edition: &str, ns: &str, name: &str) -> Option<String> {
         }
         return None;
     }
-    Some(scope(edition, &term_folder_key(ns, name)))
+    Some(kind.key_in(edition, name))
 }
 
 /// Split a term page's already-fetched member slice into the groups its
@@ -933,11 +931,10 @@ pub fn render_term_sections<'a>(
 fn claimed_key(doc: &ParsedDocument, kinds: &[TermKind], index: &TermIndex) -> Option<String> {
     let mut found: Option<String> = None;
     for kind in kinds {
-        let edition = kind_edition(kind, &doc.edition);
         for field in &kind.fields {
             let Some(claim) = term_claim_of(doc, field) else { continue };
             let name = claim.name(&doc.title).trim();
-            let Some(key) = resolved_key(edition, &kind.key, name) else {
+            let Some(key) = resolved_key(kind, &doc.edition, name) else {
                 continue;
             };
             // Only the winning claimer acts as the term page.
