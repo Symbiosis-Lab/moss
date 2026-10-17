@@ -10,9 +10,6 @@ import { resolveBaseURL } from './landing-harness.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 
-// check-landing-transitions.mjs (the desktop join sweep) is left out: it times
-// out against the September 19 production page as well, so it is a broken
-// check, not a signal, until it is repaired for the native-scrolling page.
 const CHECKS = [
   'generate-landing-locales.test.mjs',
   'check-landing-url-boundaries.mjs',
@@ -28,6 +25,7 @@ const CHECKS = [
   'check-landing-slow-network.mjs',
   'check-landing-subscription.mjs',
   'check-landing-text-track.mjs',
+  'check-landing-transitions.mjs',
   'check-landing-wash-recovery.mjs',
   'check-site-preview.mjs',
   'check-docs-footer-icon.mjs',

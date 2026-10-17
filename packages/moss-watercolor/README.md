@@ -14,7 +14,7 @@ A dispersion is recorded once per print (`pair`/`record`), budgeted across frame
 
 ## Layers
 
-- **`./engine`** -- `createSim(options)`, the solver and its recording-and-playback methods (`setPrints`, `reset`, `step`, `draw`, `probe`, `pair`, `record`, `recorded`, `show`, `free`, `play`, `onContextLost`, `dispose`). Returns `null` without WebGL2 + `EXT_color_buffer_float`. Also exports `DEFAULT_PRESET` (every paper/fluid timing constant the solver reads) and `advance` (the host utility: paces a sim's clock toward a goal, however that goal is produced -- scroll, a timer, a test driving it by hand. This package has no opinion on which).
+- **`./engine`** -- `createSim(options)`, the solver and its recording-and-playback methods (`setPrints`, `reset`, `step`, `draw`, `probe`, `pair`, `record`, `recorded`, `show`, `free`, `play`, the scene-side methods `sceneSide`, `recordSide`, `sideRecorded`, `playSides`, `bake`, `freeSide`, `onContextLost`, `dispose`). Returns `null` without WebGL2 + `EXT_color_buffer_float`. Also exports `DEFAULT_PRESET` (every paper/fluid timing constant the solver reads) and `advance` (the host utility: paces a sim's clock toward a goal, however that goal is produced -- scroll, a timer, a test driving it by hand. This package has no opinion on which).
 - **`./paper`** -- `createPaper(options)`, the generated paper texture (tileable value noise: r relief, g absorbency, b fibre, a pore). A fixed default seed makes two calls reproduce the same sheet bit-for-bit.
 - **`./model`** -- `phaseOf` and `retarget`, the three-phase leg as pure functions of `p`, independent of the engine, with `DEFAULT_PHASE_BOUNDS` read from `DEFAULT_PRESET`. `retarget(from, to, p, next)` redirects an in-flight transition without a visual jump, in the terms the engine's `play()` draws it (outgoing recording at `p / playOut`, incoming recording at `(1 - p) / (1 - playIn)`, blended by `smooth(playOut, playIn, p)`): in the out phase, and in the first half of the mix, it keeps `from` and swaps the destination; from the second half of the mix on, and in the in phase, the old destination is what is on screen, so it becomes the new source at the matching position. Retargeting back to `from` returns the reverse leg, `{ from: to, to: from, p }` with `p` mapped through the bounds so the same picture stays on screen.
 - **`.`** -- re-exports all three.
@@ -61,6 +61,22 @@ By default the canvas is drawn over the page colour the host publishes as `--bg`
 One direction serves every print, the tint's. A print darker than a light ground is all darkening pigment and one lighter than a dark ground all lightening pigment, so a light page shown in front of a dark ground becomes a pale film that thins into it rather than vanishing in the first frames. Only marks on the far side of the tint, such as a page background whiter than a near-white ground, carry no pigment, and show the ground from the end of the endpoint margin. Choosing the direction per print would trade those marks for the ones on the other side, and drawing both would double the recorded state, so neither is done.
 
 A leg whose incoming print is not on hand yet can end on nothing: compose a pair whose incoming side was never recorded (`sim.pair({ only: true }).sides[1]`) and set `toNothing: true` on it. The outgoing print is exact at `p = 0`, its pigment is fully drained by the middle of the leg (whatever `drainFloor` is) and stays so to `p = 1`, and none of the incoming print is drawn, so the host can fade its own incoming page in over the clear canvas. It is ignored on a paper ground. If the incoming side was recorded, it is drained away unseen.
+
+## Transitions that turn
+
+A `pair` records two prints over the sheet those two share, so its sides mix with each other and with nothing else. A host whose transitions change destination midway records one side per scene instead, over one footprint every scene shares, so any two sides can be played together:
+
+```ts
+const water = document.createElement("canvas");   // the footprint: here, water over the whole canvas
+water.width = W; water.height = H; water.getContext("2d")!.fillRect(0, 0, W, H);
+const a = sim.sceneSide(printA, water), b = sim.sceneSide(printB, water);
+// one side records at a time, within a frame's budget
+for (const side of [a, b]) if (!sim.sideRecorded(side)) sim.recordSide(side, DEFAULT_PRESET.stepsPerFrame);
+// a at dissolve ux, mixed by k into b at uy; p places the leg's end envelope as in play()
+sim.playSides(a, ux, b, uy, k, p);
+```
+
+To turn a leg toward a third scene while the two washes are mixing, `bake(a, ux, b, uy, k)` keeps the mix on screen as one side at its mixed end, which then plays as the outgoing side toward the new scene with no change on screen on a paper ground (a transparent ground's drain differs a little between the two positions); free it with `freeSide` once the leg is done. Before the mix, swapping the incoming side changes nothing on screen, and while the incoming scene gathers it can become the outgoing side at the matching dissolve. `sceneSide` takes the same `dose`, `stir`, `rinse`, `light` and `lift` as `pair`, and a `look` that shapes how the ink lets go: `splash` and `mix` (0 for paint laid flat on still water rather than splashed and stirred to one colour), `flow` and `flowSize` (slow eddies with no direction), `bloom` and `reach` (dense colour running apart faster than thin), `diffuse`, `dilute` and `diluteFrom` (thinning into the water's depth), and `liftRamp`. Prints are uploaded once and kept by identity, up to ten; past that the oldest goes (any but the two last recorded against), and one dropped is uploaded again the next time a side plays it. Each side costs what one side of a `pair` costs (see "Memory cost").
 
 ## Requirements
 

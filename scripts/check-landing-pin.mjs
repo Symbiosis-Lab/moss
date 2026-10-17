@@ -15,21 +15,14 @@ for (const name of ['chromium', 'webkit']) {
       }
       await page.goto(process.argv[2]);
       await page.waitForFunction(() => window.__state?.().ready, null, { timeout: 30000 });
-      // The page snaps to its rests, so positions between them are held with the snap off. Each is read
-      // before JS gets a frame to compensate, as well as afterward, once the picture has caught up with
-      // the page: the pinned visual must not move with the scroll, whatever scene the picture is showing.
-      await page.addStyleTag({ content: 'html { scroll-snap-type: none !important }' });
+      // Each position is read on the frame it is set and the one after: the pinned visual must not
+      // move with the scroll, whatever scene the picture is showing.
       await page.evaluate(() => scrollTo(0, __restY(0) + 2));
       await page.waitForTimeout(500);
       const samples = await page.evaluate(async () => {
         const out = [];
         for (const offset of [2, 60, 120, 240, 420, 240, 60, 2]) {
           scrollTo(0, __restY(0) + offset);
-          const until = performance.now() + 15000;
-          while (Math.abs(__state().view - scrollY) > 1) {
-            if (performance.now() > until) throw new Error(`the picture never caught up with the page at offset ${offset}: ${JSON.stringify(__state())}`);
-            await new Promise((r) => setTimeout(r, 40));
-          }
           for (let frame = 0; frame < 2; frame++) {
             const vis = document.querySelector('#vis').getBoundingClientRect();
             out.push({ offset, visTop: vis.top, stage: document.querySelector('#stage').getBoundingClientRect().toJSON() });

@@ -1,22 +1,14 @@
 #!/usr/bin/env node
-// Desktop scrolling belongs to the browser: it moves and snaps the page, and the
-// page only slows the picture. This drives it with input a browser really
-// handles (trusted wheel notches and keys) in Chromium and WebKit with the
-// pointer in the left margin, clear of every demo frame: nothing scrolls before
-// input; a notch rests on the next scene (in Chromium that needs the page's
-// rule that carries a short scroll onward, since its snap alone returns a
-// single notch to where it started) and the snap is back once it has; a rest
-// holds; a notch back returns one scene; two quick notches advance one scene;
-// PageDown and PageUp step one scene, also while the editor demo holds focus;
-// End rests on the close, ArrowDown goes on to the footer and a notch up from
-// there rests on the close; with reduced motion a step lands at once, the snap
-// stays and the picture does not trail the page; and the page never cancels a
-// wheel event. WebKit only, because headless Chromium draws this page at about
-// a frame a second: a swipe (real trackpad timing, fingers then the glide)
-// moves one scene and every snap point is back once it rests, however far the
-// glide would otherwise carry the page; the wash starts with a notch and lands
-// whole about two seconds later; four notches end on scene 4; down-then-up
-// ends where it began.
+// Desktop paging, driven with input a browser really handles (trusted wheel
+// events and keys) in Chromium and WebKit. Nothing scrolls before input and
+// there is no CSS snap. A wheel notch, a nudge, a trackpad swipe of any size
+// and a slow drag each end the page at rest on a scene past where they began,
+// never between scenes and never back; a drag too short to count returns to
+// where it began. A swipe's own push is never cancelled, only its glide
+// afterwards; a phone-width page is never cancelled at all,
+// and ?snap=off leaves the page unpaged. Keys step one scene, also while the
+// editor demo holds focus; End rests on the close, and a notch up from the
+// footer rests on the close. Reduced motion lands a key step at once.
 import { loadPlaywright, whenReady } from './landing-harness.mjs';
 
 const base = process.argv[2];
@@ -34,59 +26,76 @@ const swipe = (frames, from, to) => {
   for (let k = 1, v; (v = to * Math.exp(-k * (1000 / 60) / 325)) >= .5; k++) deltas.push(v);
   return deltas;
 };
-const ORDINARY = swipe(12, 4, 30), LARGE = swipe(14, 6, 60);   // about 760px and 1600px in all
+const SHORT = swipe(8, 2, 10), ORDINARY = swipe(12, 4, 30), LARGE = swipe(14, 6, 60);   // about 80, 760 and 1600px in all
+const drag = (count, step) => Array.from({ length: count }, () => step);                 // fingers moving, no glide
 
-async function open(browser, options = {}) {
+async function open(browser, { query = '', ...options } = {}) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, ...options });
   const page = await context.newPage();
-  // counts what the page does to wheel events in the top document, and how many it was offered
-  await page.addInitScript(() => {
-    if (window !== window.top) return;
-    window.__wheelSeen = 0; window.__wheelCancelled = 0;
-    addEventListener('wheel', () => { window.__wheelSeen++; }, { capture: true, passive: true });
-    const original = Event.prototype.preventDefault;
-    Event.prototype.preventDefault = function () { if (this.type === 'wheel') window.__wheelCancelled++; return original.call(this); };
-  });
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  await page.goto(base);
+  await page.goto(base + query);
   await whenReady(page);
+  // registered after the page's own, so it sees what the page did to each event
+  await page.evaluate(() => { window.__wheels = []; addEventListener('wheel', (e) => __wheels.push({ dy: e.deltaY, cancelled: e.defaultPrevented }), { capture: true, passive: true }); });
   await page.mouse.move(30, 450);
   return { page, context, errors };
 }
 const restY = (page, scene) => page.evaluate((s) => __restY(s), scene);
-// sends a swipe at its own pace: each event leaves when the last was sent, not when it was handled
-const sendSwipe = async (page, deltas, sign = 1) => {
+// each event leaves when the last was sent, not when it was handled
+const send = async (page, deltas, sign = 1) => {
   const sent = [];
   for (const delta of deltas) { sent.push(page.mouse.wheel(0, sign * delta)); await sleep(1000 / 60); }
   await Promise.all(sent);
 };
-// where the page comes to a stop: still for 800ms
-const stillAt = async (page) => {
-  let last = NaN;
-  for (let n = 0, still = 0; n < 200 && still < 8; n++) { await sleep(100); const y = await page.evaluate(() => Math.round(scrollY)); still = y === last ? still + 1 : 0; last = y; }
-  return last;
-};
 const rested = async (page, scene, label) => {
   await page.waitForFunction((s) => Math.abs(scrollY - __restY(s)) <= 1, scene, { timeout: 40000 })
     .catch(async () => { throw new Error(`${label}: the page did not rest on rest ${scene}: ${JSON.stringify(await page.evaluate(() => ({ y: scrollY, rests: [-1, 0, 1, 2, 3, 4].map(__restY) })))}`); });
-  // a rest that holds: the browser's snap must not hand the page back
   await sleep(450);
-  assert(await page.evaluate((s) => Math.abs(scrollY - __restY(s)) <= 1, scene), `${label}: the page rebounded from rest ${scene} to ${await page.evaluate(() => scrollY)}`);
+  assert(await page.evaluate((s) => Math.abs(scrollY - __restY(s)) <= 1, scene), `${label}: the page did not hold rest ${scene}, it is at ${await page.evaluate(() => scrollY)}`);
+};
+// [time, y] per frame from now until the page has been still for 900ms
+const watchScroll = (page) => page.evaluate(() => new Promise((done) => {
+  const frames = []; let last = -1, since = performance.now();
+  const frame = (now) => {
+    frames.push([now, scrollY]);
+    if (scrollY !== last) { last = scrollY; since = now; }
+    if (now - since > 900) done(frames); else requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+}));
+// stands the page on a scene, picture and all, and lets it be still long enough to count as a rest
+const stand = async (page, scene) => {
+  await watchScroll(page);   // an earlier gesture's settle would carry the page off again
+  await page.evaluate((s) => scrollTo({ top: __restY(s), behavior: 'instant' }), scene);
+  await page.waitForFunction((s) => { const t = __state(); return !t.leg && t.shown === Math.max(0, s); }, scene, { timeout: 60000 })
+    .catch(async () => { throw new Error(`the picture did not settle on scene ${scene + 1}: ${JSON.stringify(await page.evaluate(() => __state()))}`); });
+  await sleep(900);
+};
+// the longest time the page stood still between leaving where it began and arriving
+const stall = (frames) => {
+  const end = frames.at(-1)[1]; let arrived = frames.length;
+  while (arrived > 0 && Math.abs(frames[arrived - 1][1] - end) <= 2) arrived--;
+  let from = null, worst = 0;
+  for (let i = 1; i < arrived; i++) {
+    const [t, y] = frames[i], moved = Math.abs(y - frames[i - 1][1]) >= .5;
+    if (moved || Math.abs(y - frames[0][1]) <= 2) from = null;
+    else { from ??= frames[i - 1][0]; worst = Math.max(worst, t - from); }
+  }
+  return worst;
 };
 
 for (const [name, type] of [['chromium', chromium], ['webkit', webkit]]) {
-  const browser = await type.launch();
+  const browser = await type.launch(name === 'chromium' ? { args: ['--enable-gpu', '--use-angle=metal', '--ignore-gpu-blocklist'] } : {});
   try {
     const { page, context, errors } = await open(browser);
     await sleep(1000);
     assert(await page.evaluate(() => scrollY === 0), `${name}: the page scrolled before any input`);
+    const snap = await page.evaluate(() => getComputedStyle(document.documentElement).scrollSnapType);
+    assert(snap === 'none', `${name}: the page has a CSS scroll snap: ${snap}`);
 
     await page.mouse.wheel(0, NOTCH);
     await rested(page, 0, `${name}: one notch from the title`);
-    // once a carried notch has come to rest the page hands the scroll back to the browser's snap
-    const snap = await page.evaluate(() => ({ carried: document.documentElement.classList.contains('carried'), type: getComputedStyle(document.documentElement).scrollSnapType }));
-    assert(!snap.carried && snap.type === 'y mandatory', `${name}: after a notch came to rest the snap was not back: ${JSON.stringify(snap)}`);
     await page.mouse.wheel(0, NOTCH);
     await rested(page, 1, `${name}: one notch from scene 1`);
     await page.mouse.wheel(0, -NOTCH);
@@ -106,114 +115,115 @@ for (const [name, type] of [['chromium', chromium], ['webkit', webkit]]) {
     await page.waitForFunction(() => document.activeElement?.id === 'ed', null, { timeout: 15000 });
     await page.keyboard.press('PageUp');
     await rested(page, -1, `${name}: PageUp from scene 1 with the editor demo focused`);
-
-    assert(await page.evaluate(() => __wheelSeen) >= 1, `${name}: the wheel events never reached the top document, so the cancel count below means nothing`);
-    assert(await page.evaluate(() => __wheelCancelled) === 0, `${name}: the page cancelled ${await page.evaluate(() => __wheelCancelled)} wheel events`);
     assert(!errors.length, `${name}: page errors: ${errors.join('; ')}`);
     await context.close();
 
-    // two quick notches from a rest advance one scene, not two
+    // a second notch while the first is settling is taken by the settle and does not carry the page a scene further
     const quick = await open(browser);
-    await quick.page.mouse.wheel(0, NOTCH); await sleep(80); await quick.page.mouse.wheel(0, NOTCH);
-    await rested(quick.page, 0, `${name}: two quick notches from the title`);
+    await stand(quick.page, 1);
+    await Promise.all([quick.page.mouse.wheel(0, NOTCH), quick.page.mouse.wheel(0, NOTCH)]);
+    await rested(quick.page, 2, `${name}: two quick notches from scene 2`);
+    const notches = await quick.page.evaluate(() => __wheels);
+    assert(notches.length === 2 && notches.every((w) => w.cancelled), `${name}: the second of two quick notches was left to the browser: ${JSON.stringify(notches)}`);
     await sleep(1200);
-    assert(await quick.page.evaluate(() => Math.abs(scrollY - __restY(0)) <= 1), `${name}: two quick notches went on past scene 1 to ${await quick.page.evaluate(() => scrollY)}`);
+    assert(await quick.page.evaluate(() => Math.abs(scrollY - __restY(2)) <= 1), `${name}: two quick notches went on past scene 3 to ${await quick.page.evaluate(() => scrollY)}`);
 
-    // End rests on the close; the footer lies a key press below it, and one notch up from there is the close again, not scene 4
+    // End rests on the close; the footer lies a key press below it, and one notch up from there is the close again
     await quick.page.keyboard.press('End');
     await rested(quick.page, 4, `${name}: End`);
-    // Chromium only: WebKit's ArrowDown moves one 40px step and stops short of the footer, and a notch up from
-    // there came back to the close in one run and went to scene 4 in another
+    // Chromium only: WebKit's ArrowDown moves one 40px step or none, so it is no evidence of where the footer begins
     if (name === 'chromium') {
       await quick.page.keyboard.press('ArrowDown');
       await quick.page.waitForFunction(() => scrollY > __restY(4) + 30, null, { timeout: 40000 })
-        .catch(async () => { throw new Error(`${name}: ArrowDown from the close did not reach the footer: y ${await quick.page.evaluate(() => scrollY)}, close ${await restY(quick.page, 4)}`); });
+        .catch(async () => { throw new Error(`${name}: ArrowDown from the close did not leave it: y ${await quick.page.evaluate(() => scrollY)}, close ${await restY(quick.page, 4)}`); });
       await sleep(800);
       await quick.page.mouse.wheel(0, -NOTCH);
-      await rested(quick.page, 4, `${name}: one notch up from the footer`);
+      await rested(quick.page, 4, `${name}: one notch up from below the close`);
     }
     await quick.context.close();
 
-    // reduced motion: the same snap, and a key step lands at once
+    // reduced motion: a key step lands at once, and the wheel is the browser's
     const calm = await open(browser, { reducedMotion: 'reduce' });
     const target = await restY(calm.page, 0);
     await calm.page.evaluate(() => { window.__ys = []; addEventListener('scroll', () => __ys.push(Math.round(scrollY)), { passive: true }); });
     await calm.page.keyboard.press('PageDown');
     await calm.page.waitForFunction((y) => Math.abs(scrollY - y) <= 1, target, { timeout: 40000 });
     await sleep(300);
-    const calmSnap = await calm.page.evaluate(() => ({ type: getComputedStyle(document.documentElement).scrollSnapType, y: scrollY, view: __state().view }));
-    assert(calmSnap.type === 'y mandatory', `${name}: with reduced motion the snap is ${calmSnap.type}`);
-    assert(Math.abs(calmSnap.view - calmSnap.y) < 1, `${name}: with reduced motion the picture still follows behind the page: ${JSON.stringify(calmSnap)}`);
     const seen = await calm.page.evaluate(() => __ys);
     assert(seen.length && seen.every((y) => Math.abs(y - target) <= 1), `${name}: with reduced motion a key step travelled instead of landing at once: ${seen}`);
     await calm.context.close();
-    console.log(`${name}: nothing scrolls unasked; notches and keys step one scene and rest without rebound; reduced motion lands at once; no wheel event was cancelled`);
 
-    if (name !== 'webkit') continue;
-
-    // The picture follows the page: from a notch its wash is running within 300ms and the next scene
-    // stands whole about two seconds later, without waiting for a page that is already there.
-    const one = await open(browser);
-    await one.page.keyboard.press('PageDown');
-    await rested(one.page, 0, 'webkit: PageDown from the title');
-    await one.page.waitForFunction(() => __state().shown === 0 && !__state().running && [0, 1].every((i) => __onHand[i]), null, { timeout: 30000 });
-    await sleep(500);
-    const t0 = Date.now();
-    await one.page.mouse.wheel(0, NOTCH);
-    let startedAt = null, wholeAt = null;
-    while (Date.now() - t0 < 6000 && wholeAt == null) {
-      const s = await one.page.evaluate(() => __state());
-      if (startedAt == null && s.running) startedAt = Date.now() - t0;
-      if (s.shown === 1 && !s.running) wholeAt = Date.now() - t0;
-      await sleep(40);
+    // Gestures end on a scene past where they began, in the gesture's direction, without a long stall.
+    const g = await open(browser);
+    const rests = await g.page.evaluate(() => [0, 1, 2, 3, 4].map(__restY));
+    const gestures = [
+      ['a notch', [NOTCH], 1, 1], ['a 30px nudge', [30], 1, 1], ['a short swipe', SHORT, 1, 1], ['an ordinary swipe', ORDINARY, 1, 1],
+      ['a large swipe', LARGE, 1, 1, 2], ['an ordinary swipe', ORDINARY, 1, 2], ['a short swipe up', SHORT, -1, 2], ['an ordinary swipe up', ORDINARY, -1, 2],
+      ['a 3s slow drag', drag(180, 4), 1, 1], ['a 40px drag', drag(10, 4), 1, 1],
+    ];
+    for (const [label, deltas, sign, from, far = 1] of gestures) {
+      await stand(g.page, from);
+      const watching = watchScroll(g.page);
+      await send(g.page, deltas, sign);
+      const frames = await watching, end = frames.at(-1)[1];
+      const landed = rests.findIndex((r) => Math.abs(r - end) <= 6);
+      assert(landed >= 0 && (landed - from) * sign >= far, `${name}: ${label} from scene ${from + 1} ended at ${Math.round(end)}, not on a scene ${far} or more past it (scenes at ${rests.map(Math.round)})`);
+      assert(stall(frames) <= 500, `${name}: ${label} from scene ${from + 1} stalled for ${Math.round(stall(frames))}ms on the way`);
     }
-    assert(startedAt != null && startedAt <= 300, `webkit: the wash started ${startedAt}ms after the notch, not within 300ms`);
-    assert(wholeAt != null && wholeAt >= 1400 && wholeAt <= 3500, `webkit: scene 2 was whole ${wholeAt}ms after the notch, not between 1400 and 3500`);
-    console.log(`webkit: from a notch the wash starts after ${startedAt}ms and scene 2 is whole after ${wholeAt}ms`);
-    await rested(one.page, 1, 'webkit: the notch from scene 1');
+    // a drag too short to count returns to where it began
+    await stand(g.page, 1);
+    await send(g.page, drag(4, 3));
+    await rested(g.page, 1, `${name}: a 12px drag from scene 2`);
 
-    // down and straight back up: the picture ends whole on the scene it started from
-    await one.page.mouse.wheel(0, -NOTCH);
-    await rested(one.page, 0, 'webkit: the notch back');
-    await one.page.waitForFunction(() => __state().shown === 0 && !__state().running, null, { timeout: 8000 })
-      .catch(async () => { throw new Error(`webkit: down and up did not end whole on scene 1: ${JSON.stringify(await one.page.evaluate(() => __state()))}`); });
-    await one.page.mouse.wheel(0, NOTCH); await sleep(700); await one.page.mouse.wheel(0, -NOTCH);
-    await rested(one.page, 0, 'webkit: down, then up 700ms later');
-    await one.page.waitForFunction(() => __state().shown === 0 && !__state().running, null, { timeout: 8000 })
-      .catch(async () => { throw new Error(`webkit: down then up did not end whole on scene 1: ${JSON.stringify(await one.page.evaluate(() => __state()))}`); });
-    await one.context.close();
+    // a swipe's own push is the reader's; only its glide is taken
+    await stand(g.page, 1);
+    await g.page.evaluate(() => { __wheels.length = 0; });
+    await send(g.page, ORDINARY);
+    const wheels = await g.page.evaluate(() => __wheels);
+    assert(wheels.slice(0, 4).every((w) => !w.cancelled), `${name}: the page cancelled the start of a swipe: ${JSON.stringify(wheels.slice(0, 4))}`);
+    assert(wheels.some((w) => w.cancelled), `${name}: the page left a swipe's glide to fight its settle`);
 
-    // A trackpad swipe moves one scene, however far its glide would carry the page. Native momentum
-    // picks the snap point nearest where it would end, and WebKit's passed scroll-snap-stop: an
-    // ordinary swipe moved two scenes from every rest and a large one three, and from the title,
-    // a third of a screen above scene 1, almost every swipe went past scene 1. The pointer is
-    // over the picture, where scene 1's notebook frame took the wheel events unheard. WebKit
-    // only, like the timings below: headless Chromium draws this page at about a frame a second,
-    // so a swipe's glide outruns every frame the page gets.
-    const swiped = await open(browser);
-    await swiped.page.mouse.move(480, 450);
-    await sleep(500);
-    for (const [label, deltas, sign, scene] of [['an ordinary swipe from the title', ORDINARY, 1, 0], ['a large swipe from scene 1', LARGE, 1, 1], ['an ordinary swipe up from scene 2', ORDINARY, -1, 0]]) {
-      await sendSwipe(swiped.page, deltas, sign);
-      const y = await stillAt(swiped.page), want = await restY(swiped.page, scene);
-      assert(Math.abs(y - want) <= 1, `webkit: ${label} came to rest at ${y}, not on scene ${scene + 1} at ${want}`);
-      // once the page rests, every snap point is back and the snap is on
-      await swiped.page.waitForFunction(() => [...document.querySelectorAll('#intro, .scene, #five, #footer')].every((el) => getComputedStyle(el).scrollSnapAlign !== 'none') && getComputedStyle(document.documentElement).scrollSnapType === 'y mandatory', null, { timeout: 5000 })
-        .catch(async () => { throw new Error(`webkit: after ${label} came to rest the snap points were not all back: ${JSON.stringify(await swiped.page.evaluate(() => ({ points: [...document.querySelectorAll('#intro, .scene, #five, #footer')].map((el) => getComputedStyle(el).scrollSnapAlign), type: getComputedStyle(document.documentElement).scrollSnapType })))}`); });
-    }
-    await swiped.context.close();
+    // one coalesced event in a steady drag is no glide: nothing is taken while the fingers move
+    await stand(g.page, 1);
+    await g.page.evaluate(() => { __wheels.length = 0; });
+    await send(g.page, [...drag(6, 4), 8, ...drag(30, 4)]);
+    const steady = await g.page.evaluate(() => __wheels);
+    assert(steady.every((w) => !w.cancelled), `${name}: a steady drag with one coalesced event was taken for a glide: ${JSON.stringify(steady.map((w) => w.cancelled ? 'x' : '.').join(''))}`);
 
-    // four notches 600ms apart from the title, the picture whole on scene 4 within 4s of the page resting
-    const four = await open(browser);
-    // the four prints on hand first, so the 4s bound below times the wash and not the captures
-    await four.page.waitForFunction(() => [0, 1, 2, 3].every((i) => __onHand[i]), null, { timeout: 30000 })
-      .catch(async () => { throw new Error(`webkit: the prints for scenes 1 to 4 never came on hand: ${JSON.stringify(await four.page.evaluate(() => [0, 1, 2, 3].map((i) => !!__onHand[i])))}`); });
-    for (let i = 0; i < 4; i++) { await four.page.mouse.wheel(0, NOTCH); await sleep(600); }
-    await rested(four.page, 3, 'webkit: four notches from the title');
-    await four.page.waitForFunction(() => __state().shown === 3 && !__state().running, null, { timeout: 4000 })
-      .catch(async () => { throw new Error(`webkit: four notches did not end whole on scene 4: ${JSON.stringify(await four.page.evaluate(() => __state()))}`); });
-    await four.context.close();
-    console.log('webkit: down and up ends whole on the scene it left; four notches end whole on scene 4');
+    // a stray small push against a settle still leaves the page on a scene, not between two
+    await stand(g.page, 1);
+    const stray = watchScroll(g.page);
+    await send(g.page, ORDINARY.slice(0, 20));
+    await sleep(120); await g.page.mouse.wheel(0, -6);
+    const strayEnd = (await stray).at(-1)[1];
+    assert(rests.some((r) => Math.abs(r - strayEnd) <= 1), `${name}: a stray push during a settle left the page between scenes, at ${Math.round(strayEnd)} (scenes at ${rests.map(Math.round)})`);
+
+    // a glide's tail that arrives late, on a busy page, is still the glide's and cannot carry the page past its scene
+    await stand(g.page, 1);
+    const late = watchScroll(g.page);
+    await send(g.page, ORDINARY.slice(0, 22));
+    for (const d of [3, 2, 2, 1, 1, 1]) { await sleep(150); await g.page.mouse.wheel(0, d); }
+    const lateEnd = (await late).at(-1)[1];
+    assert(rests.findIndex((r) => Math.abs(r - lateEnd) <= 1) >= 2, `${name}: a glide's late tail left the page off the scene it was going to, at ${Math.round(lateEnd)} (scenes at ${rests.map(Math.round)})`);
+    assert(!g.errors.length, `${name}: page errors: ${g.errors.join('; ')}`);
+    await g.context.close();
+
+    // ?snap=off: a notch is the browser's alone
+    const free = await open(browser, { query: '?snap=off' });
+    await free.page.mouse.wheel(0, NOTCH);
+    await sleep(1500);
+    const freed = await free.page.evaluate(() => ({ y: scrollY, rests: [-1, 0, 1].map(__restY), cancelled: __wheels.filter((w) => w.cancelled).length }));
+    assert(freed.y > 0 && freed.rests.every((r) => Math.abs(r - freed.y) > 20) && !freed.cancelled, `${name}: with ?snap=off the page still paged: ${JSON.stringify(freed)}`);
+    await free.context.close();
+
+    // a phone-width page scrolls freely
+    const narrow = await open(browser, { viewport: { width: 800, height: 900 } });
+    await narrow.page.mouse.wheel(0, NOTCH);
+    await sleep(1500);
+    const phone = await narrow.page.evaluate(() => ({ y: scrollY, cancelled: __wheels.filter((w) => w.cancelled).length }));
+    assert(phone.y > 0 && !phone.cancelled, `${name}: a notch on a phone-width page was cancelled or did not scroll: ${JSON.stringify(phone)}`);
+    await narrow.context.close();
+    console.log(`${name}: no snap and nothing scrolls unasked; notches, nudges, swipes and drags end on a scene past their start; a short drag returns; only a glide is cancelled; keys, End and reduced motion hold; ?snap=off and phone widths scroll freely`);
   } finally {
     await browser.close();
   }

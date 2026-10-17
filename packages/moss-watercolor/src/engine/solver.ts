@@ -42,6 +42,24 @@ export interface CreateSimOptions {
 }
 
 export interface StepOptions {
+  /** Scales the opening splash (0: the water arrives without one). */
+  splash?: number;
+  /** Scales the film's mixing toward its neighbourhood's and whole film's colour (0: only diffusion between neighbours). */
+  mix?: number;
+  /** The share of suspended pigment lost to the water's depth per step. */
+  dilute?: number;
+  /** Scales the small eddies the pigment rides. */
+  curl?: number;
+  /** How fast the picture-sized billows carry the pigment, in grid cells a step. */
+  flow?: number;
+  /** The billows' smallest wavelength, in grid cells. */
+  flowSize?: number;
+  /** How much faster dense colour runs apart than thin (0: as fast). */
+  bloom?: number;
+  /** A second ring of neighbours this many cells off, so the colour reaches further a step (1: none). */
+  reach?: number;
+  /** The least the pigment diffuses, as a share of the most (0: only as fast as the film moves). */
+  diffuse?: number;
   standing?: boolean;
   open?: number;
   rain?: number;
@@ -77,6 +95,11 @@ export interface RecordingSide {
   stamp: number;
 }
 
+/** How a scene side's ink lets go. `stir`, `open`, `rain` and `lift` scale the preset's recording schedule (1 leaves it); `liftRamp` is the share of the recording over which the letting go comes up from 15%; `dilute` is reached by the end of the recording from `diluteFrom`; the rest are the `StepOptions` of the same name, applied to every recorded step. */
+export interface SideLook { stir?: number; open?: number; rain?: number; lift?: number; liftRamp?: number; splash?: number; mix?: number; curl?: number; dilute?: number; diluteFrom?: number; diffuse?: number; flow?: number; flowSize?: number; bloom?: number; reach?: number; }
+export interface SceneSide extends RecordingSide { print: PrintSource; foot: PrintSource; look: SideLook; }
+export interface BakedSide { baked: true; A: WebGLTexture | null; fb: WebGLFramebuffer; print: PrintSource; }
+
 export interface Pair {
   sides: [RecordingSide, RecordingSide];
   /** With a transparent ground and an incoming side that was never recorded: the leg ends on nothing instead of on the incoming print. The outgoing print is exact at p = 0, its pigment is gone (the canvas fully clear) from the middle of the leg on, and nothing of the incoming print is drawn; the host shows its own incoming page from there. Ignored on a paper ground. If the incoming side was recorded, it is drained away unseen. */
@@ -103,6 +126,16 @@ export interface WatercolorSim {
   setTint(colour: Colour): void;
   /** Adds a `webglcontextlost` handler; returns an unsubscribe function. The factory listens on the canvas only once the first handler is added, and from then on cancels the event's default action (which is what lets the context be restored). A page may also attach its own listener to the canvas directly. */
   onContextLost(handler: (event: Event) => void): () => void;
+  /** One scene's own dispersion, recorded over `foot`'s footprint (a print covering every scene it may mix with) instead of a pair's. */
+  sceneSide(print: PrintSource, foot: PrintSource, options?: Omit<PairOptions, 'flood' | 'only'> & { look?: SideLook }): SceneSide;
+  /** Records up to `budget` steps of a scene side. One side records at a time: the sides share the simulation's state. */
+  recordSide(side: SceneSide, budget: number): void;
+  sideRecorded(side: SceneSide): boolean;
+  /** `x` at dissolve `ux` (0 its print, 1 its mixed wash), mixed by `k` into `y` at `uy`; `p` in [0, 1] places the leg's envelope, so at either end the canvas is that end's plain print. */
+  playSides(x: SceneSide | BakedSide, ux: number, y: SceneSide | null, uy: number, k: number, p: number): boolean;
+  /** The mix `playSides` would draw, kept as optical thickness: a side at its mixed end, to turn a transition toward another scene from where it stands. */
+  bake(x: SceneSide | BakedSide, ux: number, y: SceneSide | null, uy: number, k: number): BakedSide;
+  freeSide(side: SceneSide | BakedSide): void;
 }
 
 export function createSim(opts: CreateSimOptions): WatercolorSim | null {
@@ -146,7 +179,7 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
   // the texture units and constants every pass shares are set once, at link;
   // per step only the framebuffers, the state textures and the prints change
   const UNITS: Record<string, number> = { uW: 0, uS: 1, uD: 2, uNear: 3, uWhole: 4, uPaper: 8, uSrc: 9, uTgt: 10, uSrcLo: 11, uTgtLo: 12, uSrcFt: 13, uTgtFt: 14,
-    uXa0: 0, uXb0: 1, uXa1: 2, uXb1: 3, uYa0: 4, uYb0: 5, uYa1: 6, uYb1: 7, uXP: 9, uYP: 10, uGrow: 15 };
+    uXa0: 0, uXb0: 1, uXa1: 2, uXb1: 3, uYa0: 4, uYb0: 5, uYa1: 6, uYb1: 7, uXP: 9, uYP: 10, uXA: 11, uGrow: 15 };
   const prog = (fs: string) => { const p = gl.createProgram()!; gl.attachShader(p, compile(gl.VERTEX_SHADER, V)); gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) || 'program link failed');
     const u: Record<string, WebGLUniformLocation | null> = {}; const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); for (let i = 0; i < n; i++) { const nm = gl.getActiveUniform(p, i)!.name; u[nm] = gl.getUniformLocation(p, nm); }
@@ -210,8 +243,25 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
     g.drawImage(cur, 0, 0, w, h); return c; };
   const upload = (t: WebGLTexture, im: TexImageSource) => { gl.bindTexture(gl.TEXTURE_2D, t); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, im); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); };
-  const setPrint = (key: string, im: PrintSource) => { const p = prints[key] || { full: tex(0, 0, gl.CLAMP_TO_EDGE, false), lo: tex(0, 0, gl.CLAMP_TO_EDGE, false), ft: tex(0, 0, gl.CLAMP_TO_EDGE, false) };
-    upload(p.full, im); upload(p.lo, scaled(im, W, H)); upload(p.ft, scaled(im, Math.round(W / 4), Math.round(H / 4))); prints[key] = p; };
+  // Each print is uploaded once and kept by identity, so scene sides recorded against different
+  // prints can be played together; the oldest not bound to a slot goes past PRINTS_KEPT.
+  const PRINTS_KEPT = 10;
+  const printTex = new Map<PrintSource, { full: WebGLTexture; lo: WebGLTexture; ft: WebGLTexture }>();
+  const texOf = (im: PrintSource) => {
+    let p = printTex.get(im);
+    if (p) { printTex.delete(im); printTex.set(im, p); return p; }
+    p = { full: tex(0, 0, gl.CLAMP_TO_EDGE, false), lo: tex(0, 0, gl.CLAMP_TO_EDGE, false), ft: tex(0, 0, gl.CLAMP_TO_EDGE, false) };
+    upload(p.full, im); upload(p.lo, scaled(im, W, H)); upload(p.ft, scaled(im, Math.round(W / 4), Math.round(H / 4)));
+    printTex.set(im, p);
+    for (const [key, old] of printTex) {
+      if (printTex.size <= PRINTS_KEPT) break;
+      if (old === prints.src || old === prints.tgt || key === im) continue;
+      for (const t of [old.full, old.lo, old.ft]) gl.deleteTexture(t);
+      printTex.delete(key);
+    }
+    return p;
+  };
+  const setPrint = (key: string, im: PrintSource) => { prints[key] = texOf(im); };
 
   const bind = (unit: number, t: WebGLTexture) => { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t); };
   const draw = () => gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
@@ -262,9 +312,9 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
     // A `standing` film never dries or takes up, however long it runs; its
     // sheet opens by `open` toward the whole paper while `rain` water is added
     // over it; `rinse` flushes clean water through it and `dose` charges the print's ink.
-    step(fwd, t, cure, stir = 0, tilt = 0, relift = 0, { standing = false, open = 0, rain = 0, rinse = 0, light = preset.recLight, dose = 1, lift = 1 }: StepOptions = {}) {
+    step(fwd, t, cure, stir = 0, tilt = 0, relift = 0, { standing = false, open = 0, rain = 0, rinse = 0, light = preset.recLight, dose = 1, lift = 1, splash: splashK = 1, mix = 1, dilute = 0, curl = 1, diffuse = 0, flow = 0, flowSize = 150, bloom = 0, reach = 1 }: StepOptions = {}) {
       if (!recording) owner = null;
-      const splash = t < preset.tSplash ? 0.05 : 0, mist = t < preset.tSplash + 0.15 ? 0.03 : 0;
+      const splash = t < preset.tSplash ? 0.05 * splashK : 0, mist = t < preset.tSplash + 0.15 ? 0.03 : 0;
       // a hot-air blast: evaporation many times the rate of standing air, which
       // thins the film, drives the rim current and settles the pigment quickly
       const drying = standing ? 0 : smooth(preset.tDry, preset.tDry + 0.4, t);
@@ -286,7 +336,8 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
       gl.uniform1f(pig.u.uTime, t); gl.uniform1f(pig.u.uCure, cure);
       gl.uniform1f(pig.u.uLift, 0.075 * lift); gl.uniform1f(pig.u.uAds, 0.18 * take);
       // the whole film is stirred by the drying current (and by the hand that scrolls), not before
-      gl.uniform1f(pig.u.uMix, 0.06); gl.uniform1f(pig.u.uMixG, 0.005 + 0.025 * Math.max(drying, Math.min(1, stir)));
+      gl.uniform1f(pig.u.uMix, 0.06 * mix); gl.uniform1f(pig.u.uMixG, (0.005 + 0.025 * Math.max(drying, Math.min(1, stir))) * mix);
+      gl.uniform1f(pig.u.uDilute, dilute); gl.uniform1f(pig.u.uCurl, curl); gl.uniform1f(pig.u.uDiffuse, diffuse); gl.uniform1f(pig.u.uFlow, flow); gl.uniform1f(pig.u.uFlowSize, flowSize); gl.uniform1f(pig.u.uBloom, bloom); gl.uniform1f(pig.u.uReach, reach);
       gl.uniform1f(pig.u.uDrying, drying); gl.uniform1f(pig.u.uStir, stir); gl.uniform1f(pig.u.uRelift, relift); gl.uniform1f(pig.u.uRinse, rinse); gl.uniform1f(pig.u.uLight, light); gl.uniform1f(pig.u.uDose, dose);
       draw(); pi = 1 - pi;
     },
@@ -376,11 +427,76 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
       bind(4, y.k0.s); bind(5, y.k0.d); bind(6, y.k1.s); bind(7, y.k1.d);
       bind(8, paper); bind(9, x.print); bind(10, y.print);
       setEndpoint(play.u, p, pair.toNothing);
-      gl.uniform1f(play.u.uFx, x.f); gl.uniform1f(play.u.uFy, y.f); gl.uniform1f(play.u.uK, k);
+      gl.uniform1f(play.u.uFx, x.f); gl.uniform1f(play.u.uFy, y.f); gl.uniform1f(play.u.uK, k); gl.uniform1f(play.u.uXBaked, 0); gl.uniform1f(play.u.uRaw, 0);
       draw();
       return true;
     },
+    // One scene's own dispersion, recorded over `foot`'s footprint rather than a pair's, so any two
+    // sides recorded over the same footprint mix: a transition can turn to another scene midway.
+    sceneSide(print, foot, { dose = 1, stir = 1, rinse = preset.recRinse, light = preset.recLight, lift = 1, look = {} } = {}) {
+      return { fwd: true, frames: [], n: 0, dose, stir, lift, rinse, light, flood: false, stamp: -1, skip: false, print, foot, look };
+    },
+    recordSide(side, budget) {
+      if (!fresh(side) && side.frames.length) freeFrames(side);
+      if (side.n >= REC_STEPS) return;
+      if (side.frames.length && owner !== side) freeFrames(side);
+      prints.src = texOf(side.print); prints.tgt = texOf(side.foot);
+      if (!side.frames.length) {
+        if (grownFor !== side.foot) { gl.viewport(0, 0, W, H); common(grow, true); gl.bindFramebuffer(gl.FRAMEBUFFER, growF); draw(); grownFor = side.foot; }
+        api.reset(); nStep = 0; owner = side; side.stamp = page.stamp; side.frames.push(keep());
+      }
+      recording = true;
+      while (budget-- > 0 && side.n < REC_STEPS) {
+        const t = side.n * preset.dt;
+        const look = side.look, at = t / preset.recDuration;
+        api.step(true, t, 0, preset.recStir(t) * side.stir * (look.stir ?? 1), 0, 0,
+          { standing: true, open: preset.recOpen(t) * (look.open ?? 1), rain: preset.recRain(t) * (look.rain ?? 1), rinse: t >= preset.recRinseFrom ? side.rinse : 0, light: side.light, dose: side.dose,
+            lift: side.lift * (look.lift ?? 1) * (look.liftRamp ? smooth(0, look.liftRamp, at) * .85 + .15 : 1),
+            splash: look.splash ?? 1, mix: look.mix ?? 1, curl: look.curl ?? 1, diffuse: look.diffuse ?? 0, flow: (look.flow ?? 0) * smooth(0, .3, at), flowSize: look.flowSize ?? 150, bloom: look.bloom ?? 0, reach: look.reach ?? 1, dilute: (look.dilute ?? 0) * smooth(look.diluteFrom ?? 0, 1, at) });
+        if (++side.n % preset.recEvery === 0 || side.n === REC_STEPS) side.frames.push(keep());
+      }
+      recording = false;
+    },
+    sideRecorded(side) { return side.n >= REC_STEPS && fresh(side); },
+    // x at dissolve u (0 its print, 1 its mixed wash) mixed by k into y at uy; p places the leg's
+    // envelope, so at p = 0 and p = 1 the canvas is the plain print of x or y.
+    playSides(x, ux, y, uy, k, p) { return drawSides(x, ux, y, uy, k, p, null); },
+    // The mix on screen drawn as optical thickness, a side of its own at its mixed end.
+    bake(x, ux, y, uy, k) {
+      const A = tex(W, H), fb = fbo([A]);
+      drawSides(x, ux, y, uy, k, .5, fb);
+      return { baked: true, A, fb, print: y ? y.print : x.print };
+    },
+    freeSide(side) {
+      if ('baked' in side) { gl.deleteFramebuffer(side.fb); gl.deleteTexture(side.A); side.A = null; return; }
+      freeFrames(side); if (owner === side) owner = null;
+    },
     onContextLost,
+  };
+  // a side's frame at dissolve u, the latest recorded where it has not got that far yet
+  const frameAt = (side: any, u: number) => {
+    const n = fresh(side) ? side.frames.length : 0; if (!n) return null;
+    const x = Math.min(clamp01(u) * (REC_FRAMES - 1), n - 1), i = Math.floor(x), j = Math.min(i + 1, n - 1);
+    return { k0: side.frames[i], k1: side.frames[j], f: x - i, print: texOf(side.print).full };
+  };
+  const drawSides = (x: any, ux: number, y: any, uy: number, k: number, p: number, into: WebGLFramebuffer | null) => {
+    const X = x.baked ? null : frameAt(x, ux);
+    if (!x.baked && !X) return false;
+    let Y = y ? frameAt(y, uy) : null;
+    if (!Y) { k = 0; Y = X; }
+    if (into) { gl.bindFramebuffer(gl.FRAMEBUFFER, into); gl.viewport(0, 0, W, H); } else place();
+    gl.useProgram(play.p);
+    const xs = X || Y;
+    if (xs) { bind(0, xs.k0.s); bind(1, xs.k0.d); bind(2, xs.k1.s); bind(3, xs.k1.d); }
+    if (Y) { bind(4, Y.k0.s); bind(5, Y.k0.d); bind(6, Y.k1.s); bind(7, Y.k1.d); }
+    const yPrint = Y ? Y.print : texOf(x.print).full;
+    bind(8, paper); bind(9, X ? X.print : yPrint); bind(10, yPrint);
+    if (x.baked) bind(11, x.A);
+    setEndpoint(play.u, p);
+    gl.uniform1f(play.u.uFx, X ? X.f : 0); gl.uniform1f(play.u.uFy, Y ? Y.f : 0); gl.uniform1f(play.u.uK, k);
+    gl.uniform1f(play.u.uXBaked, x.baked ? 1 : 0); gl.uniform1f(play.u.uRaw, into ? 1 : 0);
+    draw();
+    return true;
   };
   return api;
 }
