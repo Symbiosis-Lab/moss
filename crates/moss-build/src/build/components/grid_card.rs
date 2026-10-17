@@ -67,9 +67,10 @@ pub fn render_item_with_typesetting(
 ///
 /// `list_has_covers`: when true and THIS card has no cover of its own, the
 /// cover slot becomes a quote card (`data-cover="quote"`) carrying the
-/// page's description — or its title, with no description — instead of
-/// the empty `.moss-card-no-cover` placeholder. A
-/// uniformly coverless list (e.g. a term index) keeps the plain
+/// page's description instead of the empty `.moss-card-no-cover`
+/// placeholder. With no description the slot is an empty `aria-hidden` tile:
+/// the title is already printed below, so repeating it would show it twice.
+/// A uniformly coverless list (e.g. a term index) keeps the plain
 /// placeholder, because there every card is the same shape and the
 /// placeholder is invisible CSS (`moss-card-cover { display: none }`);
 /// the quote slot exists only to fill the gap a MIXED list would
@@ -113,15 +114,12 @@ fn render_item(
         }
         _ if list_has_covers => {
             // The description is markdown (`ChildItemProps::description`'s
-            // contract, per `child_list.rs`), rendered safely inline; the
-            // title fallback is plain chrome text, so it stays a bare escape.
-            let quote_html = match props.description.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                Some(desc) => render_description_html_in_link(desc),
-                None => html_escape(&props.title),
-            };
+            // contract), rendered safely inline.
+            let quote = props.description.as_deref().map(str::trim).filter(|s| !s.is_empty());
             format!(
-                r#"<div class="moss-card-cover" data-cover="quote"><p>{}</p></div>"#,
-                quote_html
+                r#"<div class="moss-card-cover" data-cover="quote"{}>{}</div>"#,
+                if quote.is_none() { r#" aria-hidden="true""# } else { "" },
+                quote.map(|d| format!("<p>{}</p>", render_description_html_in_link(d))).unwrap_or_default(),
             )
         }
         _ => r#"<div class="moss-card-cover moss-card-no-cover"></div>"#.to_string(),

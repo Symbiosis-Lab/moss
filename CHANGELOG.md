@@ -116,6 +116,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- In a card list where only some pages have a picture, a page with neither picture nor description no longer shows its title twice; its card keeps the row's shape with an empty tile.
 - A plugin in a folder synced by iCloud, Dropbox, Nextcloud or another cloud app now loads, and stays allowed, when its files have not been downloaded yet. Before, it was skipped with "Resource deadlock avoided" and the build drew the default listing instead.
 - `moss history <folder> <page> --restore` and the page timeline read a relative page path from the site named, as the help says, when the current directory is outside it. Before, it was read from the current directory and refused as not inside the site.
 - A non-ASCII character inside a quoted string in a stylesheet, such as `content: " · "` or `content: "全"`, no longer comes out garbled in the built CSS. The minifier re-encoded each byte of the character separately.

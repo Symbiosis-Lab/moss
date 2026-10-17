@@ -313,9 +313,10 @@ fn coverless_card_in_covered_list_gets_quote_slot() {
     );
 }
 
-/// With no description either, the quote slot falls back to the title.
+/// With no description either, the slot stays as an empty tile: the title is
+/// already printed below it, so the slot must not repeat it.
 #[test]
-fn coverless_card_without_description_shows_title_in_quote_slot() {
+fn coverless_card_without_description_gets_empty_quote_slot() {
     let cards = vec![
         ChildItemProps {
             credits: None,
@@ -352,10 +353,16 @@ fn coverless_card_without_description_shows_title_in_quote_slot() {
         "Got: {}",
         note_html
     );
+    let cover_slot_start = note_html.find("moss-card-cover").expect("cover slot present");
     let cover_slot_end = note_html.find("moss-card-content").unwrap_or(note_html.len());
     assert!(
-        note_html[..cover_slot_end].contains("Untitled Note"),
-        "quote slot must fall back to the title when there is no description. Got: {}",
+        !note_html[cover_slot_start..cover_slot_end].contains("Untitled Note"),
+        "cover slot must not repeat the title when there is no description. Got: {}",
+        note_html
+    );
+    assert!(
+        note_html.contains(r#"data-cover="quote" aria-hidden="true"></div>"#),
+        "empty tile must be decorative. Got: {}",
         note_html
     );
 }

@@ -6175,8 +6175,9 @@ article a:where(:not(.moss-btn)):focus {
 /* Quote card: a coverless card's cover slot in a list where OTHER cards do
    have one (grid_card.rs — `data-cover="quote"` on the same `.moss-card-cover`
    box, no new class). Keeps the box every sibling has (aspect-ratio,
-   background) but sets the description (or the title, with none) as a print
-   in its mat: top-aligned, more room below the text than above. */
+   background) but sets the description as a print in its mat: top-aligned,
+   more room below the text than above. With no description the tile is
+   empty, so the title is not printed twice. */
 .moss-card-cover[data-cover="quote"] {
   display: flex;
   align-items: flex-start;

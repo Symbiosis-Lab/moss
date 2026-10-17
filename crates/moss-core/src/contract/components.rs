@@ -406,7 +406,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-cover",
                 values: &["quote"],
                 default: "",
-                description: "Emitted iff this card has no cover of its own AND at least one sibling in the same listing does. Fills the slot with the page's description as text (or its title, with none) instead of the empty `.moss-card-no-cover` placeholder — a letter without a photo in a listing of photographed pieces. Absent when the whole listing is coverless (every card gets the plain placeholder there) and absent on a card that has its own cover.",
+                description: "Emitted iff this card has no cover of its own AND at least one sibling in the same listing does. Fills the slot with the page's description as text (an empty `aria-hidden` tile, with none, so the title is not printed twice) instead of the empty `.moss-card-no-cover` placeholder — a letter without a photo in a listing of photographed pieces. Absent when the whole listing is coverless (every card gets the plain placeholder there) and absent on a card that has its own cover.",
             },
         ],
         example_html: r#"<div class="moss-card-cover"><img src="..." /></div>"#,
