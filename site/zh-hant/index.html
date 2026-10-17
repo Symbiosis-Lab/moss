@@ -2870,7 +2870,7 @@ const PLAY_IN = MossWatercolor.DEFAULT_PRESET.playIn;
 // one in LEG_SLOW, so a page that has stopped short still finishes. Where the page stood when the leg
 // last set off toward its present end is leg.track.
 const LEG_FAST = .8, LEG_SLOW = 2.2;
-const CLOSE_SIDE = { dose: CLOSE_DOSE, lift: CLOSE_LIFT, rinse: 0 };
+const CLOSE_SIDE = { dose: CLOSE_DOSE, rinse: 0, look: { ...INK, lift: INK.lift * CLOSE_LIFT } };
 let leg = null, chasing = null, foot = null, filmPrint = null, deployOut = null;
 // The Publish control between scenes 3 and 4 is no ink: the real control is carried across (publishBridge)
 // while both prints, with its ink taken out, wash around it. Leaving scene 4 the logos go as ink.
@@ -2911,7 +2911,7 @@ function sideFor(print) {
   const f = footprint();
   let side = sideCache.get(print);
   if (!side) {
-    side = sim.sceneSide(print, f, { ...(print === deployOut ? CLOSE_SIDE : null), look: INK });
+    side = sim.sceneSide(print, f, print === deployOut ? CLOSE_SIDE : { look: INK });
     sideCache.set(print, side);
     for (const [k, old] of sideCache) {
       if (sideCache.size <= (mobileLayout() ? 2 : 3)) break;   // a leg needs its two ends; desktop keeps one more for a turn back

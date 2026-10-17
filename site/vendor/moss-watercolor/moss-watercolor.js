@@ -782,6 +782,33 @@ void main(){
       draw();
       return { s, d, fb };
     };
+    const recordOne = (side, footprint, budget, stepAt) => {
+      if (!fresh(side) && side.frames.length) freeFrames(side);
+      if (side.n >= REC_STEPS) return false;
+      if (side.frames.length && owner !== side) freeFrames(side);
+      if (!side.frames.length) {
+        if (grownFor !== footprint) {
+          gl.viewport(0, 0, W, H);
+          common(grow, true);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, growF);
+          draw();
+          grownFor = footprint;
+        }
+        api.reset();
+        nStep = 0;
+        owner = side;
+        side.stamp = page.stamp;
+        side.frames.push(keep());
+      }
+      recording = true;
+      while (budget-- > 0 && side.n < REC_STEPS) {
+        const t = side.n * preset.dt, [fwd, stir, relift, options] = stepAt(t);
+        api.step(fwd, t, 0, stir, 0, relift, options);
+        if (++side.n % preset.recEvery === 0 || side.n === REC_STEPS) side.frames.push(keep());
+      }
+      recording = false;
+      return true;
+    };
     const freeFrames = (side) => {
       for (const k of side.frames) {
         gl.deleteFramebuffer(k.fb);
@@ -915,40 +942,15 @@ void main(){
       record(pair, firstFwd, budget) {
         for (const side of firstFwd ? pair.sides : [...pair.sides].reverse()) {
           if (side.skip) continue;
-          if (!fresh(side) && side.frames.length) freeFrames(side);
-          if (side.n >= REC_STEPS) continue;
-          if (side.frames.length && owner !== side) freeFrames(side);
-          if (!side.frames.length) {
-            if (grownFor !== pair) {
-              gl.viewport(0, 0, W, H);
-              common(grow, true);
-              gl.bindFramebuffer(gl.FRAMEBUFFER, growF);
-              draw();
-              grownFor = pair;
-            }
-            api.reset();
-            nStep = 0;
-            owner = side;
-            side.stamp = page.stamp;
-            side.frames.push(keep());
-          }
-          recording = true;
-          while (budget-- > 0 && side.n < REC_STEPS) {
-            const t = side.n * preset.dt;
+          if (recordOne(side, pair, budget, (t) => {
             const flood = side.flood ? preset.recFlood(t) : 0;
-            api.step(
+            return [
               side.fwd,
-              t,
-              0,
               preset.recStir(t) * side.stir,
-              0,
               flood,
               { standing: true, open: preset.recOpen(t) + 2 * flood, rain: Math.max(preset.recRain(t), 0.12 * flood), rinse: t >= preset.recRinseFrom ? side.rinse : 0, light: side.light, dose: side.dose, lift: side.lift }
-            );
-            if (++side.n % preset.recEvery === 0 || side.n === REC_STEPS) side.frames.push(keep());
-          }
-          recording = false;
-          return;
+            ];
+          })) return;
         }
       },
       recorded(pair) {
@@ -1004,62 +1006,28 @@ void main(){
       },
       // One scene's own dispersion, recorded over `foot`'s footprint rather than a pair's, so any two
       // sides recorded over the same footprint mix: a transition can turn to another scene midway.
-      sceneSide(print, foot, { dose = 1, stir = 1, rinse = preset.recRinse, light = preset.recLight, lift = 1, look = {} } = {}) {
-        return { fwd: true, frames: [], n: 0, dose, stir, lift, rinse, light, flood: false, stamp: -1, skip: false, print, foot, look };
+      sceneSide(print, foot, { dose = 1, rinse = preset.recRinse, light = preset.recLight, look = {} } = {}) {
+        return { frames: [], n: 0, dose, rinse, light, stamp: -1, print, foot, look };
       },
       recordSide(side, budget) {
-        if (!fresh(side) && side.frames.length) freeFrames(side);
-        if (side.n >= REC_STEPS) return;
-        if (side.frames.length && owner !== side) freeFrames(side);
-        prints.src = texOf(side.print);
-        prints.tgt = texOf(side.foot);
-        if (!side.frames.length) {
-          if (grownFor !== side.foot) {
-            gl.viewport(0, 0, W, H);
-            common(grow, true);
-            gl.bindFramebuffer(gl.FRAMEBUFFER, growF);
-            draw();
-            grownFor = side.foot;
-          }
-          api.reset();
-          nStep = 0;
-          owner = side;
-          side.stamp = page.stamp;
-          side.frames.push(keep());
-        }
-        recording = true;
-        while (budget-- > 0 && side.n < REC_STEPS) {
-          const t = side.n * preset.dt;
-          const look = side.look, at = t / preset.recDuration;
-          api.step(
-            true,
-            t,
-            0,
-            preset.recStir(t) * side.stir * (look.stir ?? 1),
-            0,
-            0,
-            {
-              standing: true,
-              open: preset.recOpen(t) * (look.open ?? 1),
-              rain: preset.recRain(t) * (look.rain ?? 1),
-              rinse: t >= preset.recRinseFrom ? side.rinse : 0,
-              light: side.light,
-              dose: side.dose,
-              lift: side.lift * (look.lift ?? 1) * (look.liftRamp ? smooth(0, look.liftRamp, at) * 0.85 + 0.15 : 1),
-              splash: look.splash ?? 1,
-              mix: look.mix ?? 1,
-              curl: look.curl ?? 1,
-              diffuse: look.diffuse ?? 0,
-              flow: (look.flow ?? 0) * smooth(0, 0.3, at),
-              flowSize: look.flowSize ?? 150,
-              bloom: look.bloom ?? 0,
-              reach: look.reach ?? 1,
-              dilute: (look.dilute ?? 0) * smooth(look.diluteFrom ?? 0, 1, at)
-            }
-          );
-          if (++side.n % preset.recEvery === 0 || side.n === REC_STEPS) side.frames.push(keep());
-        }
-        recording = false;
+        const s = side, { stir = 1, open = 1, rain = 1, lift = 1, liftRamp = 0, flow = 0, dilute = 0, diluteFrom = 0, ...rest } = s.look;
+        prints.src = texOf(s.print);
+        prints.tgt = texOf(s.foot);
+        recordOne(s, s.foot, budget, (t) => {
+          const at = t / preset.recDuration;
+          return [true, preset.recStir(t) * stir, 0, {
+            ...rest,
+            standing: true,
+            open: preset.recOpen(t) * open,
+            rain: preset.recRain(t) * rain,
+            rinse: t >= preset.recRinseFrom ? s.rinse : 0,
+            light: s.light,
+            dose: s.dose,
+            lift: lift * (liftRamp ? smooth(0, liftRamp, at) * 0.85 + 0.15 : 1),
+            flow: flow * smooth(0, 0.3, at),
+            dilute: dilute * smooth(diluteFrom, 1, at)
+          }];
+        });
       },
       sideRecorded(side) {
         return side.n >= REC_STEPS && fresh(side);

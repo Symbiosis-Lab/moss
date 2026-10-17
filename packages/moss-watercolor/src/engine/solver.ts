@@ -95,9 +95,10 @@ export interface RecordingSide {
   stamp: number;
 }
 
-/** How a scene side's ink lets go. `stir`, `open`, `rain` and `lift` scale the preset's recording schedule (1 leaves it); `liftRamp` is the share of the recording over which the letting go comes up from 15%; `dilute` is reached by the end of the recording from `diluteFrom`; the rest are the `StepOptions` of the same name, applied to every recorded step. */
+/** How a scene side's ink lets go. `stir`, `open`, `rain` and `lift` scale the preset's recording schedule (1 leaves it); `liftRamp` is the share of the recording over which the letting go comes up from 15%; `flow` comes up over the first 30% of the recording, and `dilute` is reached by its end from `diluteFrom`; the rest are the `StepOptions` of the same name, applied to every recorded step. */
 export interface SideLook { stir?: number; open?: number; rain?: number; lift?: number; liftRamp?: number; splash?: number; mix?: number; curl?: number; dilute?: number; diluteFrom?: number; diffuse?: number; flow?: number; flowSize?: number; bloom?: number; reach?: number; }
-export interface SceneSide extends RecordingSide { print: PrintSource; foot: PrintSource; look: SideLook; }
+/** One scene's dispersion, recorded over `foot`'s footprint. Its recording state is the engine's own. */
+export interface SceneSide { readonly print: PrintSource; readonly foot: PrintSource; readonly look: SideLook; }
 export interface BakedSide { baked: true; A: WebGLTexture | null; fb: WebGLFramebuffer; print: PrintSource; }
 
 export interface Pair {
@@ -127,7 +128,7 @@ export interface WatercolorSim {
   /** Adds a `webglcontextlost` handler; returns an unsubscribe function. The factory listens on the canvas only once the first handler is added, and from then on cancels the event's default action (which is what lets the context be restored). A page may also attach its own listener to the canvas directly. */
   onContextLost(handler: (event: Event) => void): () => void;
   /** One scene's own dispersion, recorded over `foot`'s footprint (a print covering every scene it may mix with) instead of a pair's. */
-  sceneSide(print: PrintSource, foot: PrintSource, options?: Omit<PairOptions, 'flood' | 'only'> & { look?: SideLook }): SceneSide;
+  sceneSide(print: PrintSource, foot: PrintSource, options?: { dose?: number; rinse?: number; light?: number; look?: SideLook }): SceneSide;
   /** Records up to `budget` steps of a scene side. One side records at a time: the sides share the simulation's state. */
   recordSide(side: SceneSide, budget: number): void;
   sideRecorded(side: SceneSide): boolean;
@@ -293,6 +294,27 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
     bind(0, wT[wi]); bind(1, pT[pi][0]); bind(2, pT[pi][1]); draw();
     return { s, d, fb };
   };
+  // One side's recording, up to `budget` steps, over the footprint `footprint` names; `stepAt(t)` gives the
+  // step's direction, stir, relift and options at recording time t. False once the side is whole.
+  const recordOne = (side: any, footprint: unknown, budget: number, stepAt: (t: number) => [boolean, number, number, StepOptions]) => {
+    // a recording made against another tint is void; start it again
+    if (!fresh(side) && side.frames.length) freeFrames(side);
+    if (side.n >= REC_STEPS) return false;
+    // anything else that reset or stepped the sheet meanwhile voids a half-made recording
+    if (side.frames.length && owner !== side) freeFrames(side);
+    if (!side.frames.length) {
+      if (grownFor !== footprint) { gl.viewport(0, 0, W, H); common(grow, true); gl.bindFramebuffer(gl.FRAMEBUFFER, growF); draw(); grownFor = footprint; }
+      api.reset(); nStep = 0; owner = side; side.stamp = page.stamp; side.frames.push(keep());
+    }
+    recording = true;
+    while (budget-- > 0 && side.n < REC_STEPS) {
+      const t = side.n * preset.dt, [fwd, stir, relift, options] = stepAt(t);
+      api.step(fwd, t, 0, stir, 0, relift, options);
+      if (++side.n % preset.recEvery === 0 || side.n === REC_STEPS) side.frames.push(keep());
+    }
+    recording = false;
+    return true;
+  };
   // a freed side holds nothing and so has recorded nothing
   const freeFrames = (side: any) => { for (const k of side.frames) { gl.deleteFramebuffer(k.fb); gl.deleteTexture(k.s); gl.deleteTexture(k.d); } side.frames = []; side.n = 0; };
   // the recording side whose half-made dispersion the sheet's state still holds
@@ -381,26 +403,12 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
     record(pair, firstFwd, budget) {
       for (const side of firstFwd ? pair.sides : [...pair.sides].reverse()) {
         if (side.skip) continue;
-        // a recording made against another tint is void; start it again
-        if (!fresh(side) && side.frames.length) freeFrames(side);
-        if (side.n >= REC_STEPS) continue;
-        // anything else that reset or stepped the sheet meanwhile voids a half-made recording
-        if (side.frames.length && owner !== side) freeFrames(side);
-        if (!side.frames.length) {
-          // the reach the sheet grows by belongs to the pair's footprint, the same for both sides
-          if (grownFor !== pair) { gl.viewport(0, 0, W, H); common(grow, true); gl.bindFramebuffer(gl.FRAMEBUFFER, growF); draw(); grownFor = pair; }
-          api.reset(); nStep = 0; owner = side; side.stamp = page.stamp; side.frames.push(keep());
-        }
-        recording = true;
-        while (budget-- > 0 && side.n < REC_STEPS) {
-          const t = side.n * preset.dt;
+        // the reach the sheet grows by belongs to the pair's footprint, the same for both sides
+        if (recordOne(side, pair, budget, (t) => {
           const flood = side.flood ? preset.recFlood(t) : 0;   // an open of 3 reaches past every place's need
-          api.step(side.fwd, t, 0, preset.recStir(t) * side.stir, 0, flood,
-            { standing: true, open: preset.recOpen(t) + 2 * flood, rain: Math.max(preset.recRain(t), .12 * flood), rinse: t >= preset.recRinseFrom ? side.rinse : 0, light: side.light, dose: side.dose, lift: side.lift });
-          if (++side.n % preset.recEvery === 0 || side.n === REC_STEPS) side.frames.push(keep());
-        }
-        recording = false;
-        return;
+          return [side.fwd, preset.recStir(t) * side.stir, flood,
+            { standing: true, open: preset.recOpen(t) + 2 * flood, rain: Math.max(preset.recRain(t), .12 * flood), rinse: t >= preset.recRinseFrom ? side.rinse : 0, light: side.light, dose: side.dose, lift: side.lift }];
+        })) return;
       }
     },
     recorded(pair) { return pair.sides.every((side) => side.skip || (side.n >= REC_STEPS && fresh(side))); },
@@ -433,31 +441,20 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
     },
     // One scene's own dispersion, recorded over `foot`'s footprint rather than a pair's, so any two
     // sides recorded over the same footprint mix: a transition can turn to another scene midway.
-    sceneSide(print, foot, { dose = 1, stir = 1, rinse = preset.recRinse, light = preset.recLight, lift = 1, look = {} } = {}) {
-      return { fwd: true, frames: [], n: 0, dose, stir, lift, rinse, light, flood: false, stamp: -1, skip: false, print, foot, look };
+    sceneSide(print, foot, { dose = 1, rinse = preset.recRinse, light = preset.recLight, look = {} } = {}) {
+      return { frames: [], n: 0, dose, rinse, light, stamp: -1, print, foot, look } as unknown as SceneSide;
     },
     recordSide(side, budget) {
-      if (!fresh(side) && side.frames.length) freeFrames(side);
-      if (side.n >= REC_STEPS) return;
-      if (side.frames.length && owner !== side) freeFrames(side);
-      prints.src = texOf(side.print); prints.tgt = texOf(side.foot);
-      if (!side.frames.length) {
-        if (grownFor !== side.foot) { gl.viewport(0, 0, W, H); common(grow, true); gl.bindFramebuffer(gl.FRAMEBUFFER, growF); draw(); grownFor = side.foot; }
-        api.reset(); nStep = 0; owner = side; side.stamp = page.stamp; side.frames.push(keep());
-      }
-      recording = true;
-      while (budget-- > 0 && side.n < REC_STEPS) {
-        const t = side.n * preset.dt;
-        const look = side.look, at = t / preset.recDuration;
-        api.step(true, t, 0, preset.recStir(t) * side.stir * (look.stir ?? 1), 0, 0,
-          { standing: true, open: preset.recOpen(t) * (look.open ?? 1), rain: preset.recRain(t) * (look.rain ?? 1), rinse: t >= preset.recRinseFrom ? side.rinse : 0, light: side.light, dose: side.dose,
-            lift: side.lift * (look.lift ?? 1) * (look.liftRamp ? smooth(0, look.liftRamp, at) * .85 + .15 : 1),
-            splash: look.splash ?? 1, mix: look.mix ?? 1, curl: look.curl ?? 1, diffuse: look.diffuse ?? 0, flow: (look.flow ?? 0) * smooth(0, .3, at), flowSize: look.flowSize ?? 150, bloom: look.bloom ?? 0, reach: look.reach ?? 1, dilute: (look.dilute ?? 0) * smooth(look.diluteFrom ?? 0, 1, at) });
-        if (++side.n % preset.recEvery === 0 || side.n === REC_STEPS) side.frames.push(keep());
-      }
-      recording = false;
+      const s = side as any, { stir = 1, open = 1, rain = 1, lift = 1, liftRamp = 0, flow = 0, dilute = 0, diluteFrom = 0, ...rest } = s.look as SideLook;
+      prints.src = texOf(s.print); prints.tgt = texOf(s.foot);
+      recordOne(s, s.foot, budget, (t) => {
+        const at = t / preset.recDuration;
+        return [true, preset.recStir(t) * stir, 0, { ...rest, standing: true, open: preset.recOpen(t) * open, rain: preset.recRain(t) * rain,
+          rinse: t >= preset.recRinseFrom ? s.rinse : 0, light: s.light, dose: s.dose,
+          lift: lift * (liftRamp ? smooth(0, liftRamp, at) * .85 + .15 : 1), flow: flow * smooth(0, .3, at), dilute: dilute * smooth(diluteFrom, 1, at) }];
+      });
     },
-    sideRecorded(side) { return side.n >= REC_STEPS && fresh(side); },
+    sideRecorded(side) { return (side as any).n >= REC_STEPS && fresh(side as any); },
     // x at dissolve u (0 its print, 1 its mixed wash) mixed by k into y at uy; p places the leg's
     // envelope, so at p = 0 and p = 1 the canvas is the plain print of x or y.
     playSides(x, ux, y, uy, k, p) { return drawSides(x, ux, y, uy, k, p, null); },

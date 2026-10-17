@@ -128,7 +128,7 @@ interface RecordingSide {
   /** Internal bookkeeping, public only because `pair()` returns this type: the tint's stamp when this side began recording. A side whose stamp is not the sim's current one was measured against another tint and counts as unrecorded. */
   stamp: number;
 }
-/** How a scene side's ink lets go. `stir`, `open`, `rain` and `lift` scale the preset's recording schedule (1 leaves it); `liftRamp` is the share of the recording over which the letting go comes up from 15%; `dilute` is reached by the end of the recording from `diluteFrom`; the rest are the `StepOptions` of the same name, applied to every recorded step. */
+/** How a scene side's ink lets go. `stir`, `open`, `rain` and `lift` scale the preset's recording schedule (1 leaves it); `liftRamp` is the share of the recording over which the letting go comes up from 15%; `flow` comes up over the first 30% of the recording, and `dilute` is reached by its end from `diluteFrom`; the rest are the `StepOptions` of the same name, applied to every recorded step. */
 interface SideLook {
   stir?: number;
   open?: number;
@@ -146,10 +146,11 @@ interface SideLook {
   bloom?: number;
   reach?: number;
 }
-interface SceneSide extends RecordingSide {
-  print: PrintSource;
-  foot: PrintSource;
-  look: SideLook;
+/** One scene's dispersion, recorded over `foot`'s footprint. Its recording state is the engine's own. */
+interface SceneSide {
+  readonly print: PrintSource;
+  readonly foot: PrintSource;
+  readonly look: SideLook;
 }
 interface BakedSide {
   baked: true;
@@ -183,7 +184,10 @@ interface WatercolorSim {
   /** Adds a `webglcontextlost` handler; returns an unsubscribe function. The factory listens on the canvas only once the first handler is added, and from then on cancels the event's default action (which is what lets the context be restored). A page may also attach its own listener to the canvas directly. */
   onContextLost(handler: (event: Event) => void): () => void;
   /** One scene's own dispersion, recorded over `foot`'s footprint (a print covering every scene it may mix with) instead of a pair's. */
-  sceneSide(print: PrintSource, foot: PrintSource, options?: Omit<PairOptions, 'flood' | 'only'> & {
+  sceneSide(print: PrintSource, foot: PrintSource, options?: {
+    dose?: number;
+    rinse?: number;
+    light?: number;
     look?: SideLook;
   }): SceneSide;
   /** Records up to `budget` steps of a scene side. One side records at a time: the sides share the simulation's state. */

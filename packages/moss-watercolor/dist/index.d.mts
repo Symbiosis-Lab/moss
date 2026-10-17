@@ -1,4 +1,4 @@
-import { _ as DEFAULT_PRESET, a as BakedSide, c as PairOptions, d as Rect, f as SceneSide, g as createSim, h as WatercolorSim, i as advance, l as PrintSource, m as StepOptions, n as AdvanceResult, o as CreateSimOptions, p as SideLook, r as ClockState, s as Pair, t as DIAG_VIEWS, u as RecordingSide, v as WatercolorPreset } from "./index-CafdLOgk.mjs";
+import { _ as DEFAULT_PRESET, a as BakedSide, c as PairOptions, d as Rect, f as SceneSide, g as createSim, h as WatercolorSim, i as advance, l as PrintSource, m as StepOptions, n as AdvanceResult, o as CreateSimOptions, p as SideLook, r as ClockState, s as Pair, t as DIAG_VIEWS, u as RecordingSide, v as WatercolorPreset } from "./index-DxDYkz_G.mjs";
 import { n as PaperOptions, r as createPaper, t as Paper } from "./default-Cs3xymcD.mjs";
 import "./paper/index.mjs";
 import { DEFAULT_PHASE_BOUNDS, Phase, PhaseBounds, phaseOf, retarget } from "./model/index.mjs";
