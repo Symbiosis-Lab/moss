@@ -26,7 +26,7 @@ use super::document::{BlockMeta, Document};
 use super::node::{Block, Inline};
 use super::parser::{parse_fragment_with_config, ParseConfig};
 use super::shortcode::{
-    ApplyShortcode, ButtonItem, ButtonsShortcode, GalleryItem, GalleryShortcode, GridShortcode,
+    ButtonItem, ButtonsShortcode, GalleryItem, GalleryShortcode, GridShortcode,
     RecentShortcode, Shortcode, ShortcodeSource, SourceFragment, SubscribeShortcode,
 };
 use super::url::Url;
@@ -130,7 +130,7 @@ pub(crate) fn source_fragment(
 /// Names recognized by the typed AST. Other names fall through to the
 /// unknown-name renderer (`<div class="moss-unknown-shortcode" data-name="…">`)
 /// with a build warning.
-const TYPED_KNOWN: &[&str] = &["subscribe", "buttons", "gallery", "hero", "grid", "recent", "apply"];
+const TYPED_KNOWN: &[&str] = &["subscribe", "buttons", "gallery", "hero", "grid", "recent"];
 
 fn is_typed_known(name: &str) -> bool {
     TYPED_KNOWN.contains(&name)
@@ -203,7 +203,6 @@ fn parse_shortcode_block(
             (Some(Shortcode::Grid(sc)), warns)
         }
         "recent" => (Some(Shortcode::Recent(parse_recent_args(args, body))), Diagnostics::default()),
-        "apply" => (Some(Shortcode::Apply(parse_apply_args(args))), Diagnostics::default()),
         _ => (None, Diagnostics::default()),
     }
 }
@@ -1381,30 +1380,6 @@ fn parse_subscribe_args(args: &str) -> SubscribeShortcode {
         .filter(|s| !s.is_empty())
         .map(str::to_string);
     SubscribeShortcode {
-        placeholder,
-        button,
-    }
-}
-
-/// Parse `:::apply {placeholder="..." button="..."}` into a typed struct.
-///
-/// Reads `placeholder` and `button` from the attribute block; ignores
-/// classes/id (the renderer uses fixed `moss-apply` chrome). Body must be
-/// empty under the unified grammar. Mirrors `parse_subscribe_args`.
-pub fn parse_apply_args(args: &str) -> ApplyShortcode {
-    let parsed = match super::attrs::parse_attrs(args) {
-        Ok(b) => b,
-        Err(_) => return ApplyShortcode::default(),
-    };
-    let placeholder = parsed
-        .get("placeholder")
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    let button = parsed
-        .get("button")
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    ApplyShortcode {
         placeholder,
         button,
     }

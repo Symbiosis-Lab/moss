@@ -11,26 +11,6 @@ fn error_body(status: u16, body: &str, code: &str) -> Option<serde_json::Value> 
     (json.get("error").and_then(|v| v.as_str()) == Some(code)).then_some(json)
 }
 
-/// Parse a seta invite-gate `not_allowlisted` 403, returning `apply_url`.
-///
-/// Returns `Some(apply_url)` only when `status == 403` AND the body's `error`
-/// field is exactly `"not_allowlisted"` — the shape the seta invite gate emits
-/// from `POST /api/sites`: `{"error":"not_allowlisted","apply_url":"<url>"}`.
-/// `apply_url` may be an empty string (the server sends `""` when its `APPLY_URL`
-/// env var is unset); a missing `apply_url` key also yields `Some("")`. Every
-/// other status / error reason returns `None` so the caller falls through to the
-/// normal failure path. Pure (status + body in, `Option<String>` out) so it's
-/// unit-testable without constructing a `reqwest::Response`.
-pub(super) fn parse_not_allowlisted(status: u16, body: &str) -> Option<String> {
-    let json = error_body(status, body, "not_allowlisted")?;
-    Some(
-        json.get("apply_url")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-    )
-}
-
 /// Whether `lang` looks like a language tag: `^[a-z]{2,3}(-[a-z0-9]{2,8}){0,2}$`,
 /// case-insensitive.
 fn is_lang_tag(lang: &str) -> bool {

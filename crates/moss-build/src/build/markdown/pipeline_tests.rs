@@ -1743,7 +1743,6 @@ fn test_pipeline_features_default_false_without_shortcode() {
     )
     .expect("pipeline should succeed");
     assert!(!doc.features.inline_subscribe);
-    assert!(!doc.features.inline_apply);
     assert!(!doc.features.scroll_rows);
 }
 
@@ -1822,39 +1821,6 @@ fn test_pipeline_single_cell_scroll_grid_does_not_set_scroll_rows() {
     )
     .expect("pipeline should succeed");
     assert!(!doc.features.scroll_rows, "a single-cell scroll grid has nothing to scroll");
-}
-
-#[test]
-fn test_pipeline_sets_features_inline_apply_when_shortcode_present() {
-    let content = "---\ntitle: Apply\n---\n\n# Join\n\n:::apply\n:::\n";
-    let page_map = std::collections::HashMap::new();
-    let doc = process_markdown_file(
-        "apply.md",
-        content,
-        "root",
-        &page_map,
-        false,
-        crate::i18n::Language::ZhHans,
-        Some("test-site"),
-        crate::build::markdown::SiteMarkdown::default(),
-        None,
-        None,
-        None,
-        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, derived_facts: &Default::default(), authored_source: None },
-    )
-    .expect("pipeline should succeed");
-    assert!(doc.features.inline_apply, "inline_apply flag must be set");
-    assert!(
-        doc.html_content.contains("moss-apply-form"),
-        "html must contain apply form: {}",
-        &doc.html_content[..doc.html_content.len().min(500)]
-    );
-    assert!(
-        doc.html_content
-            .contains(r#"action="https://api.mosspub.com/apply?lang=zh-hans""#),
-        "action must point to seta /apply: {}",
-        &doc.html_content[..doc.html_content.len().min(500)]
-    );
 }
 
 #[test]
@@ -3620,53 +3586,11 @@ fn hero_first_embed_alt_text_becomes_the_picture_alt() {
 
 // ---- per-page language tests ----
 
-/// A `:::apply` shortcode on a `zh-hans/` page in an English-default site
-/// must render in zh-hans (button text "申请", action `?lang=zh-hans`),
-/// not in the site default (English). Regression for the site_lang bug
-/// where pipeline hooks used `site_lang` instead of `doc_lang`.
-#[test]
-fn per_page_language_apply_in_zh_hans_subdir() {
-    let md = "---\ntitle: 申请\n---\n\n:::apply\n:::\n";
-    let empty_map = HashMap::new();
-    let doc = process_markdown_file(
-        "zh-hans/index.md",
-        md,
-        "test-site",
-        &empty_map,
-        false,
-        Language::En, // site default is EN
-        None,
-        crate::build::markdown::SiteMarkdown::default(),
-        None,
-        None,
-        None,
-        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, derived_facts: &Default::default(), authored_source: None },
-    )
-    .expect("should parse");
-    assert!(
-        doc.html_content.contains("申请"),
-        ":::apply on a zh-hans page must render zh-hans button label, got:\n{}",
-        doc.html_content
-    );
-    assert!(
-        doc.html_content.contains("lang=zh-hans"),
-        ":::apply action URL must carry lang=zh-hans, got:\n{}",
-        doc.html_content
-    );
-    assert!(
-        !doc.html_content.contains(">Apply<"),
-        "English label must NOT appear on a zh-hans page, got:\n{}",
-        doc.html_content
-    );
-}
-
 /// A `:::subscribe` shortcode on a zh-hans page in an En-default site must
 /// render zh-hans copy (button text "订阅", placeholder "邮箱") and carry
 /// `lang="zh-hans"` on the enclosing element, NOT the EN defaults.
 ///
-/// Mirrors `per_page_language_apply_in_zh_hans_subdir` for the subscribe
-/// shortcode — regression guard so the lang derivation applies to both
-/// inline shortcodes equally.
+/// Regression guard: the lang derivation follows the page, not the site default.
 #[test]
 fn per_page_language_subscribe_in_zh_hans_subdir() {
     let md = "---\ntitle: 订阅\n---\n\n:::subscribe\n:::\n";
@@ -3699,45 +3623,6 @@ fn per_page_language_subscribe_in_zh_hans_subdir() {
     assert!(
         doc.html_content.contains("请在邮箱中确认订阅"),
         "zh-hans confirmation copy must appear, got:\n{}",
-        doc.html_content
-    );
-}
-
-/// A `:::apply` shortcode on an English page in a zh-hans-default site
-/// must render in English (button text "Apply", action `?lang=en`),
-/// not in the site default (zh-hans).
-#[test]
-fn per_page_language_apply_en_page_in_zh_hans_site() {
-    let md = "---\ntitle: Apply\nlang: en\n---\n\n:::apply\n:::\n";
-    let empty_map = HashMap::new();
-    let doc = process_markdown_file(
-        "en/index.md",
-        md,
-        "test-site",
-        &empty_map,
-        false,
-        Language::ZhHans, // site default is ZhHans
-        None,
-        crate::build::markdown::SiteMarkdown::default(),
-        None,
-        None,
-        None,
-        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, derived_facts: &Default::default(), authored_source: None },
-    )
-    .expect("should parse");
-    assert!(
-        doc.html_content.contains(">Apply<"),
-        ":::apply on an en page must render English button label, got:\n{}",
-        doc.html_content
-    );
-    assert!(
-        doc.html_content.contains("lang=en"),
-        ":::apply action URL must carry lang=en, got:\n{}",
-        doc.html_content
-    );
-    assert!(
-        !doc.html_content.contains("申请"),
-        "zh-hans label must NOT appear on an English page, got:\n{}",
         doc.html_content
     );
 }

@@ -176,10 +176,11 @@ advisory_strings! {
     // for the progress panel.
     publish_failed            => { en: "Publish failed",                                   zh_hans: "发布失败",                                         zh_hant: "發布失敗" },
     deploy_err_custom_domain  => { en: "Custom domain required",                           zh_hans: "需要自定义域名",                                   zh_hant: "需要自訂網域" },
-    not_allowlisted           => { en: "Publishing to mosspub.com is by invitation. Apply for access.", zh_hans: "发布到 mosspub.com 需要邀请，请申请访问。", zh_hant: "發布到 mosspub.com 需要邀請，請申請存取。" },
     site_limit_one            => { en: "Your mosspub.com hosting includes 1 site.", zh_hans: "你的 mosspub.com 托管包含 1 个网站。", zh_hant: "你的 mosspub.com 託管包含 1 個網站。" },
     site_limit_many           => { en: "Your mosspub.com hosting includes {limit} sites.", zh_hans: "你的 mosspub.com 托管包含 {limit} 个网站。", zh_hant: "你的 mosspub.com 託管包含 {limit} 個網站。" },
     site_limit_contact        => { en: "To add more, write to {contact}.", zh_hans: "如需增加，请联系 {contact}。", zh_hant: "如需增加，請聯絡 {contact}。" },
+    site_limit_closed         => { en: "mosspub.com hosting isn't taking new sites right now.", zh_hans: "mosspub.com 托管暂不接受新网站。", zh_hant: "mosspub.com 託管暫不接受新網站。" },
+    site_limit_closed_contact => { en: "Write to {contact} to hear when it reopens.", zh_hans: "如需了解何时恢复，请联系 {contact}。", zh_hant: "如需了解何時恢復，請聯絡 {contact}。" },
     // ── Web import Job title ─────────────────────────────────────────────────
     import_from_host          => { en: "Importing from {host}",                           zh_hans: "正在从 {host} 导入",                               zh_hant: "正在從 {host} 匯入" },
 }
@@ -242,6 +243,10 @@ mod tests {
         assert_eq!(l(AppLanguage::ZhHans, "site_limit_contact"), "如需增加，请联系 {contact}。");
         assert_eq!(l(AppLanguage::ZhHant, "site_limit_many"), "你的 mosspub.com 託管包含 {limit} 個網站。");
         assert_eq!(l(AppLanguage::ZhHant, "site_limit_contact"), "如需增加，請聯絡 {contact}。");
+        assert_eq!(l(AppLanguage::ZhHans, "site_limit_closed"), "mosspub.com 托管暂不接受新网站。");
+        assert_eq!(l(AppLanguage::ZhHans, "site_limit_closed_contact"), "如需了解何时恢复，请联系 {contact}。");
+        assert_eq!(l(AppLanguage::ZhHant, "site_limit_closed"), "mosspub.com 託管暫不接受新網站。");
+        assert_eq!(l(AppLanguage::ZhHant, "site_limit_closed_contact"), "如需了解何時恢復，請聯絡 {contact}。");
     }
 
     #[test]

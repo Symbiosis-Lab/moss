@@ -53,51 +53,6 @@ export const COPY: Record<Lang, SubscribeCopy> = {
   },
 };
 
-export interface ApplyCopy {
-  /** Submit button label (idle). */
-  label: string;
-  /** Submit button label after terminal success. */
-  labelSuccess: string;
-  /** Placeholder for the second apply field (a Matters username OR a one-line pitch).
-   * Must stay in sync with `matters_ph` in `MossApplyCopy` (email.rs). */
-  mattersPh: string;
-  /** Shown after a successful application — replaces check-email. */
-  received: string;
-  /** Shown on network / server error. */
-  error: string;
-}
-
-export const APPLY_COPY: Record<Lang, ApplyCopy> = {
-  en: {
-    label: 'Apply',
-    labelSuccess: 'Application sent',
-    mattersPh: 'Matters username',
-    received: "Thanks for applying. Please confirm the email we just sent; we'll email you when your turn comes.",
-    error: 'Something went wrong. Try again?',
-  },
-  de: {
-    label: 'Bewerben',
-    labelSuccess: 'Bewerbung gesendet',
-    mattersPh: 'Matters-Benutzername',
-    received: 'Danke für Ihre Bewerbung. Bitte bestätigen Sie die E-Mail, die wir Ihnen gerade geschickt haben; wir melden uns, sobald Sie an der Reihe sind.',
-    error: 'Es ist ein Fehler aufgetreten. Bitte versuchen Sie es erneut.',
-  },
-  'zh-hans': {
-    label: '申请',
-    labelSuccess: '申请已提交',
-    mattersPh: 'Matters 用户名',
-    received: '谢谢你的申请，请查收确认邮件。我们会在轮到你时通过邮件邀请。',
-    error: '出错了，请重试。',
-  },
-  'zh-hant': {
-    label: '申請',
-    labelSuccess: '申請已提交',
-    mattersPh: 'Matters 用戶名',
-    received: '謝謝你的申請，請查收確認郵件。我們會在輪到你時透過郵件邀請。',
-    error: '出錯了，請重試。',
-  },
-};
-
 /**
  * Bucket an arbitrary BCP-47 language tag into one of the four copy keys.
  *

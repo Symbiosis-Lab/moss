@@ -21,7 +21,6 @@ use super::url::Url;
 /// - [`Shortcode::Hero`] — full-width hero section with media + overlay
 /// - [`Shortcode::Grid`] — flexible multi-cell layout
 /// - [`Shortcode::Recent`] — recent-posts query with fallback markdown
-/// - [`Shortcode::Apply`] — inline apply / membership-request form
 ///
 /// Phase B migrations add one variant per commit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,14 +76,6 @@ pub enum Shortcode {
     /// fallback content rendered when the query returns zero matches.
     /// Empty body means no fallback (the shortcode renders nothing).
     Recent(RecentShortcode),
-    /// `:::apply` — inline membership/contributor application form.
-    ///
-    /// Posts to the moss-seta `/apply` endpoint with fields `email`,
-    /// `matters`, `publish`, `scope`, and `website` (honeypot).
-    /// Configuration is via attributes (`placeholder`, `button`); body
-    /// must be empty. One-of {matters, publish} is server-enforced.
-    /// Succeeds terminally (no auto-revert) via `data-revert="false"`.
-    Apply(ApplyShortcode),
 }
 
 /// Arguments for [`Shortcode::Subscribe`].
@@ -403,15 +394,6 @@ pub struct HeroShortcode {
     pub caption: Vec<Inline>,
 }
 
-/// Arguments for [`Shortcode::Apply`].
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ApplyShortcode {
-    /// Optional override for the email input's placeholder text.
-    pub placeholder: Option<String>,
-    /// Optional override for the submit button label.
-    pub button: Option<String>,
-}
-
 /// Arguments for [`Shortcode::Recent`].
 ///
 /// Parameters parsed at shortcode-extract time; the query runs at render
@@ -447,7 +429,6 @@ pub enum ShortcodeKind {
     Hero,
     Grid,
     Recent,
-    Apply,
 }
 
 impl ShortcodeKind {
@@ -461,7 +442,6 @@ impl ShortcodeKind {
             ShortcodeKind::Buttons => "moss-buttons",
             ShortcodeKind::Subscribe => "moss-subscribe",
             ShortcodeKind::Recent => "moss-recent",
-            ShortcodeKind::Apply => "moss-apply",
         }
     }
 
@@ -476,19 +456,7 @@ impl ShortcodeKind {
             ShortcodeKind::Hero => "hero",
             ShortcodeKind::Grid => "grid",
             ShortcodeKind::Recent => "recent",
-            ShortcodeKind::Apply => "apply",
         }
-    }
-
-    /// Whether editors offer this shortcode to authors (slash menu, fence
-    /// autocomplete). Deliberate — keep hidden: `apply` is the membership
-    /// application form, meaningful only on sites configured for it, so it
-    /// parses and renders but is never suggested. The decision lives here,
-    /// in Rust, once — the generated catalog
-    /// (the frontend editor's `shortcodes.generated.ts`) carries it as the
-    /// `authorable` flag.
-    pub fn authorable(self) -> bool {
-        !matches!(self, ShortcodeKind::Apply)
     }
 
     /// All shortcode variants, in a stable order.
@@ -502,7 +470,6 @@ impl ShortcodeKind {
             ShortcodeKind::Hero,
             ShortcodeKind::Grid,
             ShortcodeKind::Recent,
-            ShortcodeKind::Apply,
         ]
         .into_iter()
     }
@@ -518,7 +485,6 @@ impl Shortcode {
             Shortcode::Hero(_) => ShortcodeKind::Hero,
             Shortcode::Grid(_) => ShortcodeKind::Grid,
             Shortcode::Recent(_) => ShortcodeKind::Recent,
-            Shortcode::Apply(_) => ShortcodeKind::Apply,
         }
     }
 }

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **BREAKING:** `Shortcode::Apply`, `ShortcodeKind::Apply`, `ApplyShortcode`, `parse_apply_args` and `ShortcodeKind::authorable` are removed, with the `moss-apply*` component entries. `:::apply` is now an unknown shortcode name. The shortcode catalog's `authorable` field stays and is `true` for every entry.
+
 ## [0.18.0] - 2026-10-15
 
 ### Added

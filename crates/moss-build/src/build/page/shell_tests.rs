@@ -762,34 +762,6 @@ fn test_css_hover_hints_are_gated_on_a_hover_capable_device() {
     );
 }
 
-#[test]
-fn test_css_apply_button_check_static_only_on_success() {
-    // Regression guard: the apply button's "Apply"/"申请" label must sit
-    // centred in idle state. The success pill shows the label + checkmark
-    // together (check `position: static`, in flow), but in idle/loading/
-    // error the check must stay out of flow (shared `position: absolute`).
-    // If the `position: static` override is NOT scoped to
-    // [data-state="success"], the invisible in-flow check reserves width
-    // beside the label and shifts it left of centre.
-    assert!(
-        get_css_rule(
-            DEFAULT_CSS,
-            r#".moss-subscribe-form[data-position="apply"][data-state="success"] .moss-btn__check"#,
-        )
-        .map_or(false, |r| r.contains("position: static")),
-        "apply success check must be position: static (in flow, beside the label)",
-    );
-    assert!(
-        get_css_rule(
-            DEFAULT_CSS,
-            r#".moss-subscribe-form[data-position="apply"] .moss-btn__check"#,
-        )
-        .is_none(),
-        "apply check must NOT force position: static across all states — that \
-             reserves width for the invisible check and de-centres the idle label",
-    );
-}
-
 /// Helper to extract CSS rule from media query.
 /// Searches all matching media query blocks, not just the first one.
 fn get_css_rule_in_media(css: &str, media_query: &str, selector: &str) -> Option<String> {

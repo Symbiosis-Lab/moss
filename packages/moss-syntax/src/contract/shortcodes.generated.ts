@@ -91,13 +91,4 @@ export const SHORTCODES: readonly ShortcodeInfo[] = [
     canonicalTemplate: "recent {count=${1:5}}\n${2:No posts yet.}\n:::",
     authorable: true,
   },
-  {
-    name: "apply",
-    attrs: [
-      { name: "placeholder" },
-      { name: "button" },
-    ],
-    canonicalTemplate: "apply {button=\"${1:Apply}\"}\n:::",
-    authorable: false,
-  },
 ];

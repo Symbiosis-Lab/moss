@@ -22,3 +22,13 @@ fn exact_text_in_english() {
         "Your mosspub.com hosting includes 3 sites. To add more, write to help@example.com."
     );
 }
+
+#[test]
+fn a_limit_of_zero_says_hosting_is_closed() {
+    let closed = "mosspub.com hosting isn't taking new sites right now.";
+    assert_eq!(site_limit_message(0, None), closed);
+    assert_eq!(
+        site_limit_message(0, Some("help@example.com")),
+        format!("{closed} Write to help@example.com to hear when it reopens.")
+    );
+}

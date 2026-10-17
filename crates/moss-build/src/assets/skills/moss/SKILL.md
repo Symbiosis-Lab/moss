@@ -212,7 +212,7 @@ model (dark mode, quiet chrome, `@layer` rules), see
   `staging`) **then** `moss deploy <folder> --site-id=<name>` → publishes to
   `<name>.mosspub.com`. The order matters: without a prior explicit `moss env`,
   `deploy` will not register a site, and `--site-id` alone silently does
-  nothing. The invite allowlist can also refuse registration.
+  nothing. The hosting service can also refuse a new site with a site limit, including a limit of 0 when it is taking no new sites.
 - **First publish refused as "Identity not yet verified":** the folder's key is
   not linked to an account yet. `moss deploy <folder> --site-id=<name> --email
   <address>` emails a sign-in link, waits up to 15 minutes for it to be opened,

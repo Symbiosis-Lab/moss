@@ -3,7 +3,7 @@
 //!
 //! Plainly: the editor's slash menu and fence autocomplete used to hand-copy
 //! this knowledge in TypeScript (`SHORTCODE_CATALOG`, `ASSET_ATTR_BY_SHORTCODE`)
-//! and the copies drifted (`apply` was missing). This table is generated into
+//! and the copies drifted. This table is generated into
 //! the frontend editor's `shortcodes.generated.ts` by the `shortcode-catalog`
 //! emitter in the desktop app's codegen binary, CI-diff-gated like
 //! `bindings.ts` — so the fact lives in Rust, once.
@@ -44,7 +44,7 @@ pub struct ShortcodeCatalogEntry {
     /// (`${n:placeholder}` tab stops). Hosts may localise placeholders;
     /// the structure here is the one insertion grammar.
     pub canonical_template: &'static str,
-    /// Whether editors offer this shortcode to authors — `kind.authorable()`.
+    /// Whether editors offer this shortcode to authors — every kind today..
     pub authorable: bool,
 }
 
@@ -123,14 +123,6 @@ fn entry(kind: ShortcodeKind) -> ShortcodeCatalogEntry {
             None,
             "recent {count=${1:5}}\n${2:No posts yet.}\n:::",
         ),
-        ShortcodeKind::Apply => (
-            &[
-                ShortcodeAttrSpec { name: "placeholder", asset_kinds: &[], flag: false },
-                ShortcodeAttrSpec { name: "button", asset_kinds: &[], flag: false },
-            ],
-            None,
-            "apply {button=\"${1:Apply}\"}\n:::",
-        ),
     };
     ShortcodeCatalogEntry {
         kind,
@@ -138,7 +130,7 @@ fn entry(kind: ShortcodeKind) -> ShortcodeCatalogEntry {
         attrs,
         asset_attr,
         canonical_template,
-        authorable: kind.authorable(),
+        authorable: true,
     }
 }
 
@@ -218,18 +210,6 @@ mod tests {
                 !e.canonical_template.contains("cols=") && !e.canonical_template.contains("per-line="),
                 "{name}: canonical template should teach the positional form, got {:?}",
                 e.canonical_template
-            );
-        }
-    }
-
-    #[test]
-    fn only_apply_is_hidden() {
-        for e in catalog() {
-            assert_eq!(
-                e.authorable,
-                e.kind != ShortcodeKind::Apply,
-                "{}: authorable flag drifted from the §7.1 decision",
-                e.name
             );
         }
     }

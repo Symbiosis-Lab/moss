@@ -287,58 +287,6 @@ async fn a_challenge_response_reaches_the_caller_as_challenge() {
     assert!(!err.is_transient(), "a challenge is never worth retrying");
 }
 
-// ── Invite-gate `not_allowlisted` 403 (POST /api/sites) ────────────────────
-// The seta invite gate returns `403 {error:'not_allowlisted', apply_url:'<url>'}`
-// for a verified email that isn't on the allowlist. `parse_not_allowlisted`
-// is the pure body-parser `from_failed_response` routes a 403 through so the
-// un-admitted user gets the friendly "发布到 mosspub.com 需要邀请，请申请访问" + apply link
-// instead of an opaque error.
-
-#[test]
-fn test_parse_not_allowlisted_extracts_apply_url_on_403() {
-    let body = r#"{"error":"not_allowlisted","apply_url":"https://mosspub.com/apply"}"#;
-    assert_eq!(
-        parse_not_allowlisted(403, body),
-        Some("https://mosspub.com/apply".to_string())
-    );
-}
-
-#[test]
-fn test_parse_not_allowlisted_empty_apply_url_is_allowed() {
-    // Server returns an empty apply_url string when APPLY_URL is unset.
-    let body = r#"{"error":"not_allowlisted","apply_url":""}"#;
-    assert_eq!(parse_not_allowlisted(403, body), Some(String::new()));
-}
-
-#[test]
-fn test_parse_not_allowlisted_ignores_non_403() {
-    // The `error` marker only counts on a 403 — a stray body on another
-    // status must not be hijacked into the invite-gate branch.
-    let body = r#"{"error":"not_allowlisted","apply_url":"https://x"}"#;
-    assert_eq!(parse_not_allowlisted(400, body), None);
-}
-
-#[test]
-fn test_parse_not_allowlisted_ignores_other_403_errors() {
-    // A different 403 reason (e.g. the pre-existing "pubkey not verified")
-    // must fall through to the normal failure path, not the invite branch.
-    let body = r#"{"error":"pubkey not verified for this email"}"#;
-    assert_eq!(parse_not_allowlisted(403, body), None);
-}
-
-#[test]
-fn test_not_allowlisted_error_display_carries_apply_url() {
-    // The variant's Display feeds the deploy-error string; it must carry the
-    // apply_url so the call-site message can surface the link.
-    let err = SetaError::NotAllowlisted {
-        apply_url: "https://mosspub.com/apply".to_string(),
-    };
-    assert!(
-        err.to_string().contains("https://mosspub.com/apply"),
-        "Display must carry apply_url: {err}"
-    );
-}
-
 #[test]
 fn test_extract_api_error_extracts_json_error_field() {
     let body = r#"{"error":"Invalid domain name"}"#;

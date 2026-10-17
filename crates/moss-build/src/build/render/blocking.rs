@@ -1619,8 +1619,8 @@ pub fn generate_blocking_content_for_build(
         // obvious answer is wrong. It is NOT "a set change is a config change,
         // and config changes aren't `ContentOnly`": adding a `:::subscribe` to
         // one markdown file is a `ContentOnly` trigger that adds `email.css`
-        // site-wide. What closes it is that `inline_subscribe`/`inline_apply`
-        // live in `PageFeatures`, which the facade's SURFACE fingerprint
+        // site-wide. What closes it is that `inline_subscribe`
+        // lives in `PageFeatures`, which the facade's SURFACE fingerprint
         // covers — so that edit trips `surface_changed` and forces a full
         // render. Narrowing the surface fingerprint would reopen this.
         let feature_style_hashes = crate::build::emit::feature_styles::all_hashes();

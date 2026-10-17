@@ -1486,11 +1486,10 @@
         {
           "name": "data-position",
           "values": [
-            "inline",
-            "apply"
+            "inline"
           ],
           "default": "inline",
-          "description": "Placement/behavior variant. All moss-hosted subscribe forms are `inline` (the auto-injected footer form and the `:::subscribe` shortcode emit identical HTML — footer vs in-page styling keys on the `footer` ancestor in CSS, not this attribute). `apply` marks the `:::apply` form (terminal success, FormData body)."
+          "description": "Placement/behavior variant. All moss-hosted subscribe forms are `inline` (the auto-injected footer form and the `:::subscribe` shortcode emit identical HTML — footer vs in-page styling keys on the `footer` ancestor in CSS, not this attribute)."
         },
         {
           "name": "data-button-override",

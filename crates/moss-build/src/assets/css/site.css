@@ -1346,37 +1346,6 @@ footer.container:has(> .moss-subscribe) > .moss-colophon {
   color: var(--moss-error, #c85450);
 }
 
-/* ─── apply success: stays a labeled ink pill, NOT subscribe's accent circle ─── */
-.moss-subscribe-form[data-position="apply"][data-state="success"] .moss-btn-slot .moss-btn {
-  position: static;
-  width: auto;
-  height: auto;
-  padding: .85rem 1rem;
-  border-radius: 9px;
-  background: var(--moss-color-text);
-  color: var(--moss-color-bg);
-  cursor: default;
-}
-.moss-subscribe-form[data-position="apply"][data-state="success"] .moss-btn__label {
-  opacity: 1;
-}
-/* The check-mark only joins the label in the normal flow for the success
-   pill ("…已提交" + check side by side). In idle / loading / error it must
-   stay out of flow (the shared `.moss-btn__check` rule sets
-   `position: absolute`) — otherwise the invisible, in-flow check reserves
-   ~half its width beside the label and shifts "Apply" / "申请" left of the
-   button's centre. Scoping to [data-state="success"] matches the state-scoped
-   pattern used by every other .moss-btn state rule above. */
-.moss-subscribe-form[data-position="apply"][data-state="success"] .moss-btn__check {
-  position: static;
-}
-.moss-subscribe-form[data-position="apply"] .moss-apply-hp {
-  position: absolute;
-  left: -9999px;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-}
 /* Reduced motion jump-cuts to end states (design-vocabulary.md). The spinner
    is deliberately NOT zeroed here — its exception lives on the family rule
    at .moss-btn__spinner::after above. */

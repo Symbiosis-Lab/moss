@@ -1,4 +1,4 @@
-import { a as shortcodeAssetRef, i as parseAttrKvSpans, n as isCloseFence, o as shortcodeBlockConfig, r as isOpenMatch, s as SHORTCODES, t as SHORTCODE_OPEN_RE } from "./shortcode-DtxjbgXz.mjs";
+import { a as shortcodeAssetRef, i as parseAttrKvSpans, n as isCloseFence, o as shortcodeBlockConfig, r as isOpenMatch, s as SHORTCODES, t as SHORTCODE_OPEN_RE } from "./shortcode-CGxBdyIx.mjs";
 
 //#region src/wikilink-grammar.ts
 const BANG = 33;
@@ -627,10 +627,9 @@ function scanShortcodeBlocks(text) {
 const flattenTemplate = (t) => t.replace(/\$\{\d+:([^}]*)\}/g, "$1");
 /**
 * The authorable shortcode vocabulary, derived from the generated catalog
-* (Rust SSOT: crates/moss-core/src/contract/shortcodes.rs). Non-authorable
-* kinds (`apply`) parse and render but are never offered to authors, so they
-* are excluded here — this list exists for unknown-name diagnostics and
-* completion, both author-facing.
+* (Rust SSOT: crates/moss-core/src/contract/shortcodes.rs). Kinds the catalog marks
+* non-authorable are excluded: this list exists for unknown-name diagnostics
+* and completion, both author-facing.
 */
 const KNOWN_SHORTCODES = SHORTCODES.filter((s) => s.authorable).map((s) => ({
 	name: s.name,

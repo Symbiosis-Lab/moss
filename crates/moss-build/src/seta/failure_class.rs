@@ -66,9 +66,8 @@ pub(super) enum FailureClass {
 /// | connect / request | Transient | The connection itself failed; a fault worth counting. |
 /// | 4xx (except 429) | Fatal | The server's final answer, 413 quota rejections included. |
 /// | `Parse` / `Io` / `Identity` | Fatal | A local defect; the network cannot fix it. |
-/// | `NotAllowlisted` | Fatal | An actionable invite-gate message the user must see immediately. |
 /// | `SiteLimitReached` | Fatal | The plan's quota is a final answer; the user must act on it. |
-/// | `Challenge` | Fatal | Unsolvable by a native client **on every status**, including the 503 the row above calls Backpressure. Retrying only deepens the edge's reputation signal against the user (the 2026-07-21 Bot Fight Mode incident: ~21 futile manual retries). |
+/// | `Challenge` | Fatal | Unsolvable by a native client **on every status**, including the 503 the row above calls Backpressure. Retrying only deepens the edge's reputation signal against the user. |
 pub(super) fn classify(error: &SetaError) -> FailureClass {
     match error {
         // Spelled out first, and deliberately ahead of any status test: a

@@ -298,23 +298,3 @@ impl<'a> DescribePayload<'a> {
         self
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::contract::tokens::load_tokens;
-
-    #[test]
-    fn apply_is_absent_from_public_contract() {
-        let tokens = load_tokens().expect("tokens");
-        let payload = DescribePayload::new(&tokens);
-        assert!(
-            payload.components.iter().all(|c| !c.class.starts_with("moss-apply")),
-            "apply classes must be demoted from the public contract"
-        );
-        assert!(
-            !payload.components.iter().any(|c| c.class == "moss-apply" && c.authorable),
-            ":::apply must not be marked authorable"
-        );
-    }
-}

@@ -36,7 +36,7 @@
         "crates/moss-core/src/ast/render.rs": 1000,
         "crates/moss-core/src/ast/resolve_urls.rs": 1000,
         "crates/moss-core/src/ast/shortcode_extract.rs": 2000,
-        "crates/moss-core/src/contract/components.rs": 5100,
+        "crates/moss-core/src/contract/components.rs": 5000,
         "crates/moss-core/src/frontmatter_typed.rs": 1400,
         "crates/moss-core/src/render/image.rs": 1100,
         "crates/moss-core/src/resolve/wikilink_dispatch.rs": 1100,
@@ -53,7 +53,6 @@
         "crates/moss-build/src/build/components/color_extract.rs": 900,
         "crates/moss-build/src/build/components/nav.rs": 900,
         "crates/moss-core/src/content_graph.rs": 900,
-        "crates/moss-build/src/build/features/email.rs": 900,
         "crates/moss-core/src/frontmatter.rs": 1000
       },
       "oversized": {

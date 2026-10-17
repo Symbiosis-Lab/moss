@@ -8,7 +8,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::time::Duration;
 
-use super::wire::{auth_request_body, parse_not_allowlisted, parse_site_limit_reached};
+use super::wire::{auth_request_body, parse_site_limit_reached};
 
 /// Time to wait for a TCP+TLS connection to establish. Catches dead or
 /// half-open connections (e.g. a dropped network, a wedged edge) fast without
@@ -425,16 +425,6 @@ pub enum SetaError {
     #[error("I/O error: {0}")]
     Io(String),
 
-    /// The seta invite gate (`POST /api/sites`, gated by `INVITE_GATE_ENABLED`)
-    /// rejected a verified email that isn't on the allowlist:
-    /// `403 {error:'not_allowlisted', apply_url:'<url>'}`. Carries `apply_url`
-    /// (may be empty when the server's `APPLY_URL` is unset) so the deploy call
-    /// sites can surface the friendly invite message + apply link rather than an
-    /// opaque error. The Display string is a diagnostic only — the user-facing,
-    /// localized copy is built at the call sites via `app_advisory`.
-    #[error("not allowlisted (apply at: {apply_url})")]
-    NotAllowlisted { apply_url: String },
-
     /// The hosting plan's site quota is used up:
     /// `403 {error:'site_limit_reached', limit:N, contact:'<optional address>'}`.
     /// `contact` is whatever the server chooses to offer; none is built in. The
@@ -557,7 +547,7 @@ impl SetaError {
     ///
     /// The single failed-response path for every seta endpoint: read the status
     /// and the `cf-mitigated` header, then the body, and route to exactly one of
-    /// three outcomes — [`SetaError::NotAllowlisted`] for the invite gate,
+    /// three outcomes — [`SetaError::SiteLimitReached`] for a used-up quota,
     /// [`SetaError::Challenge`] for an edge interstitial our native client can't
     /// solve, otherwise [`SetaError::Api`] carrying the authored JSON
     /// `error`/`message` or a length-capped raw body. Replaces the hand-rolled
@@ -592,14 +582,6 @@ impl SetaError {
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
         let body = response.text().await.unwrap_or_default();
-        // Invite gate: a 403 `not_allowlisted` is a distinct, actionable case —
-        // route it to its own variant so the deploy call sites can surface the
-        // friendly "申请免费试用" invite message + apply link instead of a generic
-        // API error string. Everything else flows on to the challenge check.
-        if let Some(apply_url) = parse_not_allowlisted(status, &body) {
-            log::warn!(target: "seta", "request to {} rejected by invite gate (not allowlisted)", url);
-            return SetaError::NotAllowlisted { apply_url };
-        }
         if let Some((limit, contact)) = parse_site_limit_reached(status, &body) {
             log::warn!(target: "seta", "request to {} refused: site limit {} reached", url, limit);
             return SetaError::SiteLimitReached { limit, contact };

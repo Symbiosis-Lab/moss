@@ -74,7 +74,6 @@ pub fn should_inject_subscribe_assets(
 ) -> bool {
     email_installed
         || pages.iter().any(|p| p.features.inline_subscribe)
-        || pages.iter().any(|p| p.features.inline_apply)
 }
 
 /// Decide whether to inject the places-explorer JS bundle (and, through

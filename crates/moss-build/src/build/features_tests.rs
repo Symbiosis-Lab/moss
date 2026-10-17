@@ -1821,7 +1821,6 @@ fn test_should_inject_email_channel_alone() {
 fn test_should_inject_inline_subscribe_alone() {
     let pages = vec![page_with_features(PageFeatures {
         inline_subscribe: true,
-        inline_apply: false,
         ..Default::default()
     })];
     assert!(
@@ -1834,49 +1833,9 @@ fn test_should_inject_inline_subscribe_alone() {
 fn test_should_inject_both_triggers() {
     let pages = vec![page_with_features(PageFeatures {
         inline_subscribe: true,
-        inline_apply: false,
         ..Default::default()
     })];
     assert!(should_inject_subscribe_assets(&pages, true));
-}
-
-#[test]
-fn test_should_inject_inline_apply_alone() {
-    let pages = vec![page_with_features(PageFeatures {
-        inline_subscribe: false,
-        inline_apply: true,
-        ..Default::default()
-    })];
-    assert!(
-        should_inject_subscribe_assets(&pages, false),
-        "inline apply shortcode must trigger subscribe-asset injection"
-    );
-}
-
-/// Regression: a page slice with ONLY `:::apply` (no subscribe shortcode,
-/// no email channel, no comments, no analytics, not moss-hosted) must still
-/// produce a true `should_inject_subscribe_assets` result.
-///
-/// If this returns false, `collect_native_slots_for_documents` hits its
-/// early-return and emits empty slots — the apply form renders without the
-/// subscribe CSS + JS that hydrate its submit button and state machine.
-/// This test pins the fix that added `has_inline_apply` to both the
-/// `should_inject_subscribe_assets` gate (features.rs:54) and the
-/// `collect_native_slots_for_documents` early-return guard (build.rs:526).
-#[test]
-fn apply_only_page_slice_does_not_hit_early_return() {
-    let pages = vec![page_with_features(PageFeatures {
-        inline_subscribe: false,
-        inline_apply: true,
-        ..Default::default()
-    })];
-    // No email channel, no comments, not moss-hosted — all other conditions false.
-    assert!(
-        should_inject_subscribe_assets(&pages, false),
-        "an apply-only page slice must trigger asset injection — \
-             without this the subscribe CSS/JS bundle is not emitted and \
-             the apply form submit button never gets hydrated"
-    );
 }
 
 // The `project_has_inline_subscribe` filesystem-scan tests were deleted

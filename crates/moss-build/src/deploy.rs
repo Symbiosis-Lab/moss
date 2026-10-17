@@ -988,10 +988,6 @@ pub async fn register_moss_host_site(
     let client = crate::seta::client::MossSetaClient::for_environment(identity, &env);
     let result = match client.register_site(site_id).await {
         Ok(r) => r,
-        // Invite gate: surface the friendly "apply for access" message + link.
-        Err(crate::seta::client::SetaError::NotAllowlisted { apply_url }) => {
-            return Err(not_allowlisted_message(&apply_url));
-        }
         Err(crate::seta::client::SetaError::SiteLimitReached { limit, contact }) => {
             return Err(site_limit_message(limit, contact.as_deref()));
         }
@@ -1041,57 +1037,23 @@ fn register_failure_message(site_id: &str, e: crate::seta::client::SetaError) ->
     format!("Could not register the site: {}", msg)
 }
 
-/// Build the localized "you're not on the invite list" message for the seta
-/// invite gate's `not_allowlisted` 403: the friendly closed-test copy (localized
-/// via `app_advisory`) plus the apply link, so an un-admitted user gets an
-/// actionable message instead of an opaque error. One caller since C4g —
-/// [`register_moss_host_site`], which every route reaches.
-pub fn not_allowlisted_message(apply_url: &str) -> String {
-    let base = crate::infra::app_advisory::t("not_allowlisted");
-    if apply_url.is_empty() {
-        base
-    } else {
-        format!("{}\n{}", base, apply_url)
-    }
-}
-
 /// The "your plan's site quota is used up" message. The contact address is
 /// whatever the server sent; with none, the message ends after the first sentence.
+/// A limit of 0 is the server's off switch: hosting is taking no new sites, so
+/// the message says that instead of quoting a quota of zero.
 pub fn site_limit_message(limit: u32, contact: Option<&str>) -> String {
     use crate::infra::app_advisory::fmt;
-    let first = match limit {
-        1 => fmt("site_limit_one", &[]),
-        n => fmt("site_limit_many", &[("limit", &n.to_string())]),
+    let (first, follow_up) = match limit {
+        0 => (fmt("site_limit_closed", &[]), "site_limit_closed_contact"),
+        1 => (fmt("site_limit_one", &[]), "site_limit_contact"),
+        n => (fmt("site_limit_many", &[("limit", &n.to_string())]), "site_limit_contact"),
     };
-    contact.map_or(first.clone(), |c| format!("{first} {}", fmt("site_limit_contact", &[("contact", c)])))
+    contact.map_or(first.clone(), |c| format!("{first} {}", fmt(follow_up, &[("contact", c)])))
 }
 
 #[cfg(test)]
 #[path = "deploy/site_limit_message_tests.rs"]
 mod site_limit_message_tests;
-
-#[cfg(test)]
-mod not_allowlisted_message_tests {
-    use super::not_allowlisted_message;
-
-    #[test]
-    fn includes_apply_url_when_present() {
-        let msg = not_allowlisted_message("https://mosspub.com/apply");
-        assert!(
-            msg.contains("https://mosspub.com/apply"),
-            "message must include the apply link: {msg}"
-        );
-        assert!(!msg.is_empty());
-    }
-
-    #[test]
-    fn omits_link_when_apply_url_empty() {
-        let msg = not_allowlisted_message("");
-        assert!(!msg.contains("http"), "no link when apply_url is empty: {msg}");
-        assert!(!msg.is_empty(), "still carries the base invite message");
-    }
-}
-
 
 #[cfg(test)]
 #[path = "deploy/publish_preflight_gate_tests.rs"]

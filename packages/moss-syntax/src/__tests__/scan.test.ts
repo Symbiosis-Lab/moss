@@ -165,7 +165,6 @@ describe('KNOWN_SHORTCODES', () => {
     expect(KNOWN_SHORTCODES.map((s) => s.name).sort()).toEqual(
       SHORTCODES.filter((s) => s.authorable).map((s) => s.name).sort(),
     );
-    expect(KNOWN_SHORTCODES.some((s) => s.name === 'apply')).toBe(false);
   });
 
   test('docs are one-line and name the fence', () => {

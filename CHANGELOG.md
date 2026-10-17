@@ -109,6 +109,7 @@ All notable changes to moss will be documented here.
 
 ### Changed
 
+- When mosspub.com hosting is not taking new sites (the server reports a site limit of 0), publishing says so, and where the server offers a contact address, tells you to write there to hear when it reopens. Before, it read "includes 0 sites".
 - A page with no `cover:` is now listed with its own first picture: its opening hero's picture, else the first figure, gallery picture or grid-cell picture in its body. Listing cards, grid cards and `covers:only` all see it. The picture is not drawn again on the page itself. A picture set inside a sentence, in a heading or a table, inside a link to another page, a vector or video, and a remote or `data:` address are not taken. Write `cover: false` to list a page without a picture, or `cover: file.jpg` to choose another. The share image follows the same rule: it also takes a gallery's first picture now, and no longer takes a picture set in a sentence, a heading or a table, inside a link to another page, or a vector.
 - The wording now says mosspub.com hosting, a service provided by Symbiosis Lab, instead of "moss hosting": in `moss deploy` help and messages, `moss history`, the agent skill and the docs. moss publishes anywhere a deploy target or plugin reaches, and mosspub.com is one destination among them.
 - A declared term kind with no `title` is now headed by its key capitalized ("People", not "people") on its root page, in the page title and in the breadcrumb of its term pages, matching its menu entry.
@@ -373,6 +374,8 @@ All notable changes to moss will be documented here.
 ### Removed
 
 - The `footer_align` frontmatter field is gone. It stopped changing where a footer link renders a while ago and had nothing left to do; a site that still sets it keeps building exactly as before — moss ignores frontmatter keys it doesn't recognize. **BREAKING (`moss-build` API):** `ParsedDocument.footer_align` is removed.
+- **BREAKING (`moss-build` API):** `SetaError::NotAllowlisted`, `deploy::not_allowlisted_message`, `PageFeatures.inline_apply` and `features::email::render_inline_apply_form` are removed. The `:::apply` application form is gone, with its styles and its script. A leftover `:::apply` block now builds like any unknown block: a warning, and an empty `moss-unknown-shortcode` div.
+- Publishing no longer has a message for an email that is not on an invite list; mosspub.com hosting is open to everyone, so the server never sends that refusal.
 
 ## [0.7.14] - 2026-06-27
 

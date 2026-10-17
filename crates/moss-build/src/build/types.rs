@@ -818,10 +818,6 @@ pub struct PageFeatures {
     /// `SUBSCRIBE_JS` + `email.css` even if `[channels.email]` is not
     /// configured.
     pub inline_subscribe: bool,
-    /// True if the page contains a `:::apply` inline shortcode block.
-    /// Causes the same `SUBSCRIBE_JS` + `email.css` injection as
-    /// `inline_subscribe` (subscribe.ts hydrates both forms).
-    pub inline_apply: bool,
     /// True if the page contains an Obsidian-style callout (`> [!note]`),
     /// nested ones included. Gates the `callouts` stylesheet partial via
     /// [`SiteAssets`]. Read from the typed AST

@@ -1,4 +1,4 @@
-import { a as shortcodeAssetRef, i as parseAttrKvSpans, r as isOpenMatch, t as SHORTCODE_OPEN_RE } from "../shortcode-DtxjbgXz.mjs";
+import { a as shortcodeAssetRef, i as parseAttrKvSpans, r as isOpenMatch, t as SHORTCODE_OPEN_RE } from "../shortcode-CGxBdyIx.mjs";
 import { HighlightStyle, syntaxHighlighting, syntaxTree } from "@codemirror/language";
 import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
 import { RangeSetBuilder, StateField } from "@codemirror/state";

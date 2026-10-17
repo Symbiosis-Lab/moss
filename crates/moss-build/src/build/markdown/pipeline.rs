@@ -1189,9 +1189,6 @@ pub fn process_markdown_file(
     // legacy `apply_typed_shortcodes` returned.
     let has_inline_subscribe =
         moss_core::ast::has_shortcode_recursive(&doc, moss_core::ast::ShortcodeKind::Subscribe);
-    // Apply-form presence: same mechanism, same asset-injection trigger.
-    let has_inline_apply =
-        moss_core::ast::has_shortcode_recursive(&doc, moss_core::ast::ShortcodeKind::Apply);
     // Callout presence: same mechanism, gating the `callouts` stylesheet
     // partial (`build/emit/stylesheet.rs`) rather than an injected asset.
     let has_callout = moss_core::ast::has_callout_recursive(&doc);
@@ -1609,7 +1606,6 @@ pub fn process_markdown_file(
         hero_overlay_text,
         features: crate::build::types::PageFeatures {
             inline_subscribe: has_inline_subscribe,
-            inline_apply: has_inline_apply,
             callouts: has_callout,
             footnotes: has_footnotes,
             scroll_rows: has_scroll_row,
@@ -2392,15 +2388,6 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
                     self.media_lookup,
                     self.heading_anchors,
                 ));
-            }
-            moss_core::ast::Shortcode::Apply(args) => {
-                let html = crate::build::features::email::render_inline_apply_form(
-                    self.lang,
-                    args.placeholder.as_deref(),
-                    args.button.as_deref(),
-                    self.seta_base,
-                );
-                out.push_str(&html);
             }
         }
     }
