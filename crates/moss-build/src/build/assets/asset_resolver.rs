@@ -156,9 +156,10 @@ impl StagedAsset {
         let mut files = BTreeMap::new();
         for i in 0..archive.len() {
             let mut file = archive.by_index(i).map_err(|e| format!("Read zip entry {i}: {e}"))?;
-            let name = file.name().trim_end_matches('/').to_string();
+            let raw_name = file.name().map_err(|e| format!("Read zip entry {i} name: {e}"))?.into_owned();
+            let name = raw_name.trim_end_matches('/').to_string();
             if !safe_relative_path(&name) {
-                log::warn!("Skipping zip entry with unsafe path: {}", file.name());
+                log::warn!("Skipping zip entry with unsafe path: {raw_name}");
                 continue;
             }
             let path = content.join(&name);
@@ -227,7 +228,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-            let options = zip::write::FileOptions::default();
+            let options = zip::write::SimpleFileOptions::default();
             for (name, content) in entries {
                 writer.start_file(*name, options).unwrap();
                 writer.write_all(content).unwrap();

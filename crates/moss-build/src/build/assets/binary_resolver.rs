@@ -1012,7 +1012,7 @@ fn extract_zip_to_cache(
             .by_index(i)
             .map_err(|e| format!("Failed to read zip entry {}: {}", i, e))?;
 
-        let name = file.name().to_string();
+        let name = file.name().map_err(|e| format!("Failed to read zip entry {i} name: {e}"))?.into_owned();
 
         // Look for the binary by exact filename (might be in a subdirectory).
         // Use exact match after path splitting to avoid false positives

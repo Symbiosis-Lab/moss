@@ -1,6 +1,6 @@
 use super::*;
 use std::io::Write;
-use zip::write::FileOptions;
+use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
 /// Build an in-memory zip from `(name, contents)` regular-file entries.
@@ -12,7 +12,7 @@ pub(crate) fn zip_with_files(files: &[(&str, &[u8])]) -> Vec<u8> {
     let mut buf = Vec::new();
     {
         let mut w = ZipWriter::new(io::Cursor::new(&mut buf));
-        let opts = FileOptions::default().unix_permissions(0o644);
+        let opts = SimpleFileOptions::default().unix_permissions(0o644);
         for (name, contents) in files {
             w.start_file(*name, opts).unwrap();
             w.write_all(contents).unwrap();
@@ -83,7 +83,7 @@ fn rejects_symlink_entry() {
     let mut buf = Vec::new();
     {
         let mut w = ZipWriter::new(io::Cursor::new(&mut buf));
-        w.add_symlink("link", "/etc/passwd", FileOptions::default())
+        w.add_symlink("link", "/etc/passwd", SimpleFileOptions::default())
             .unwrap();
         w.finish().unwrap();
     }
@@ -124,7 +124,7 @@ fn zip_with_lying_size(name: &str, content: &[u8], lied_size: u32) -> Vec<u8> {
     let mut buf = Vec::new();
     {
         let mut w = ZipWriter::new(io::Cursor::new(&mut buf));
-        let opts = FileOptions::default()
+        let opts = SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored)
             .unix_permissions(0o644);
         w.start_file(name, opts).unwrap();
@@ -154,7 +154,13 @@ fn declared_size_lie_cannot_bypass_the_cap() {
 
     let err = extract_zip_safe_limited(&zip, dir.path(), usize::MAX, 10)
         .expect_err("a lying uncompressed_size must not bypass the size cap");
-    assert!(matches!(err, ZipExtractError::TooLarge), "got {err:?}");
+    // The reader also notices the lie itself and fails the read; either way it is refused.
+    let refused = match &err {
+        ZipExtractError::TooLarge => true,
+        ZipExtractError::Io(m) => m.contains("declared") || m.contains("size") || m.contains("CRC"),
+        _ => false,
+    };
+    assert!(refused, "got {err:?}");
 }
 
 #[test]
@@ -198,4 +204,61 @@ fn the_capped_entry_holds_the_callers_ceiling() {
     let err = extract_zip_capped(&archive, &dir.path().join("over"), 10, 99).expect_err("100 bytes past a 99-byte cap");
     assert!(err.contains("limit"), "{err}");
     extract_zip_capped(&archive, &dir.path().join("ok"), 10, 100).expect("100 bytes within a 100-byte cap");
+}
+
+#[test]
+fn a_symlink_entry_pointing_outside_is_rejected_and_nothing_is_written() {
+    let base = tempfile::tempdir().unwrap();
+    let target = base.path().join("install");
+    let mut buf = Vec::new();
+    {
+        let mut w = ZipWriter::new(io::Cursor::new(&mut buf));
+        w.add_symlink("escape", "../outside", SimpleFileOptions::default()).unwrap();
+        w.start_file("escape/payload.txt", SimpleFileOptions::default()).unwrap();
+        w.write_all(b"x").unwrap();
+        w.finish().unwrap();
+    }
+
+    let err = extract_zip_safe(&buf, &target).expect_err("symlink entry must be rejected");
+    assert!(matches!(err, ZipExtractError::SymlinkEntry(_)), "got {err:?}");
+    assert!(!base.path().join("outside").exists());
+    assert!(!target.join("escape").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn setuid_and_group_write_bits_in_the_archive_are_not_applied() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut buf = Vec::new();
+    {
+        let mut w = ZipWriter::new(io::Cursor::new(&mut buf));
+        w.start_file("tool", SimpleFileOptions::default()).unwrap();
+        w.write_all(b"x").unwrap();
+        w.finish().unwrap();
+    }
+    // Pins against a future `set_permissions(mode)`; no code applies archive modes today.
+    // The writer masks permissions to 0o777, so set the file mode (regular file,
+    // setuid, rwxrwxrwx) in the central directory's external attributes by hand.
+    let pos = buf.windows(4).position(|w| w == [0x50, 0x4b, 0x01, 0x02]).unwrap();
+    buf[pos + 38..pos + 42].copy_from_slice(&(0o104777u32 << 16).to_le_bytes());
+    let dir = tempfile::tempdir().unwrap();
+    extract_zip_safe(&buf, dir.path()).unwrap();
+
+    let mode = std::fs::metadata(dir.path().join("tool")).unwrap().permissions().mode();
+    assert_eq!(mode & 0o7000, 0, "special bits kept: {mode:o}");
+    assert_eq!(mode & 0o022, 0, "group/other write kept: {mode:o}");
+}
+
+#[test]
+fn drive_and_root_shaped_names_are_refused_and_nothing_is_written() {
+    for name in ["\\x", "C:\\x", "\\\\srv\\share\\x", "./C:/x", "a/C:/x"] {
+        let base = tempfile::tempdir().unwrap();
+        let target = base.path().join("install");
+        let zip = zip_with_files(&[(name, b"pwned")]);
+
+        let err = extract_zip_safe(&zip, &target).expect_err(name);
+        assert!(matches!(err, ZipExtractError::PathTraversal(_)), "{name}: got {err:?}");
+        let written = walkdir::WalkDir::new(base.path()).into_iter().flatten().filter(|e| e.file_type().is_file()).count();
+        assert_eq!(written, 0, "{name} wrote a file");
+    }
 }

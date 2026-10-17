@@ -116,6 +116,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- Plugin and tool archives are now read with a current zip library, since the old one had published flaws in how it unpacks symlinks and permission bits. moss's unpacking of plugin archives never used those paths: an entry that is a symlink was already refused, and setuid or other permission bits in an archive were never applied. Tests now pin both.
 - In a card list where only some pages have a picture, a page with neither picture nor description no longer shows its title twice; its card keeps the row's shape with an empty tile.
 - The warning for `---` as a `:::grid` cell divider now names the line it is on and says to write `+++`; with the page path in front, as every build warning has, it points at the exact line. Before, it gave no line.
 - A plugin in a folder synced by iCloud, Dropbox, Nextcloud or another cloud app now loads, and stays allowed, when its files have not been downloaded yet. Before, it was skipped with "Resource deadlock avoided" and the build drew the default listing instead.

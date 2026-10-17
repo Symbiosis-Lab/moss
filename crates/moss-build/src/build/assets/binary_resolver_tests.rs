@@ -762,7 +762,7 @@ fn test_extract_zip_simple() {
     let mut zip_buf = Vec::new();
     {
         let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buf));
-        let options = zip::write::FileOptions::default().unix_permissions(0o755);
+        let options = zip::write::SimpleFileOptions::default().unix_permissions(0o755);
         writer.start_file(bin_name, options).unwrap();
         writer.write_all(b"#!/bin/sh\necho hello").unwrap();
         writer.finish().unwrap();
@@ -801,7 +801,7 @@ fn test_extract_zip_nested() {
     let mut zip_buf = Vec::new();
     {
         let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buf));
-        let options = zip::write::FileOptions::default().unix_permissions(0o755);
+        let options = zip::write::SimpleFileOptions::default().unix_permissions(0o755);
         writer
             .start_file(format!("subdir/{bin_name}"), options)
             .unwrap();

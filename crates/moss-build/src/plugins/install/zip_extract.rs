@@ -1,13 +1,7 @@
-//! Hardened ZIP extraction shared by the build-time plugin downloader
-//! (`build.rs`, which includes this file via `#[path]`) and the runtime
-//! registry installer ([`super::registry_client::artifact`]).
+//! Hardened ZIP extraction for the runtime registry installer
+//! ([`super::registry_client::artifact`]) and stack artifacts.
 //!
-//! Depends ONLY on `std` + `zip` so `build.rs` — a separate compilation unit
-//! that cannot resolve `crate::` paths — can include this file directly. Do
-//! NOT add `crate::`/`super::` references outside the `#[cfg(test)]` module.
-//!
-//! Hardening (the `build.rs` extractor this replaces was Zip-Slip-vulnerable —
-//! it joined raw entry names onto the target dir with no containment check):
+//! Hardening:
 //!   - every entry path must resolve strictly INSIDE `target_dir`
 //!     (`enclosed_name()` rejects `..` and absolute paths);
 //!   - symlink entries are rejected outright (a symlink plus a follow-up
@@ -65,6 +59,21 @@ impl std::error::Error for ZipExtractError {}
 /// True when a zip entry's unix mode marks it as a symlink.
 fn is_symlink_mode(mode: Option<u32>) -> bool {
     matches!(mode, Some(m) if m & S_IFMT == S_IFLNK)
+}
+
+fn is_absolute_name(name: &str) -> bool {
+    name.starts_with(['/', '\\']) || name.as_bytes().get(1) == Some(&b':')
+}
+
+/// Only plain names: no root, prefix or `..`, and no `:` in a component, since
+/// `Path::components` reads `C:` as a drive only on Windows and `join` of a
+/// drive path replaces the base there. Zip 9's `enclosed_name` turns
+/// `a/C:/x` and `./C:/x` into `C:/x`.
+fn is_plain_relative(rel: &Path) -> bool {
+    rel.components().all(|c| match c {
+        std::path::Component::Normal(s) => !s.to_string_lossy().contains(':'),
+        _ => false,
+    })
 }
 
 /// Extract `bytes` (a ZIP archive) into `target_dir`, rejecting any entry that
@@ -135,7 +144,10 @@ fn extract_zip_safe_limited_reader<R: Read + Seek>(
         let mut entry = archive
             .by_index(i)
             .map_err(|e| ZipExtractError::Zip(e.to_string()))?;
-        let name = entry.name().to_string();
+        let name = entry
+            .name()
+            .map_err(|e| ZipExtractError::Zip(e.to_string()))?
+            .into_owned();
 
         // Symlink entries are rejected outright: a symlink plus a follow-up
         // write-through entry is a directory-escape primitive, and no consumer
@@ -144,11 +156,12 @@ fn extract_zip_safe_limited_reader<R: Read + Seek>(
             return Err(ZipExtractError::SymlinkEntry(name));
         }
 
-        // `enclosed_name()` is None for any path with a `..` component or a
-        // root/absolute prefix — the Zip-Slip guard. Never join the raw name.
+        // `enclosed_name()` is None for a path that climbs out with `..`, but
+        // it strips a leading root or drive prefix rather than refusing it, so
+        // absolute names are refused here. Never join the raw name.
         let rel = entry
             .enclosed_name()
-            .map(|p| p.to_path_buf())
+            .filter(|rel| !is_absolute_name(&name) && is_plain_relative(rel))
             .ok_or_else(|| ZipExtractError::PathTraversal(name.clone()))?;
 
         let outpath = target_dir.join(&rel);
