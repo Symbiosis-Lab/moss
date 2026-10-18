@@ -714,13 +714,16 @@ function plateBounds() {
   const visible = { xMin: -r.left / s, xMax: (innerWidth - r.left) / s, yMin: -r.top / s, yMax: (innerHeight - r.top) / s };
   return { xMin: Math.max(-limit, visible.xMin - margin), xMax: Math.min(limit, Math.max(GEOM.cellW + GEOM.pad, visible.xMax + margin)), yMin: Math.max(-limit, visible.yMin - margin), yMax: Math.min(limit, Math.max(GEOM.cellH + GEOM.pad, visible.yMax + margin)) };
 }
+// The water around everything printed: a wash that spreads past the canvas's edge is cut off in a
+// straight line there, so it must be wider than dense ink spreads before it thins.
+const INK_ROOM = 220;
 function currentPrintRect() {
-  let xMin = -GEOM.pad, yMin = -GEOM.pad, xMax = GEOM.cellW + GEOM.pad, yMax = GEOM.cellH + GEOM.pad;
-  for (const pl of document.querySelectorAll('.plate')) { xMin = Math.min(xMin, pl.offsetLeft - GEOM.pad); yMin = Math.min(yMin, pl.offsetTop - GEOM.pad); xMax = Math.max(xMax, pl.offsetLeft + pl.offsetWidth + GEOM.pad); yMax = Math.max(yMax, pl.offsetTop + pl.offsetHeight + GEOM.pad); }
+  let xMin = -INK_ROOM, yMin = -INK_ROOM, xMax = GEOM.cellW + INK_ROOM, yMax = GEOM.cellH + INK_ROOM;
+  for (const pl of document.querySelectorAll('.plate')) { xMin = Math.min(xMin, pl.offsetLeft - INK_ROOM); yMin = Math.min(yMin, pl.offsetTop - INK_ROOM); xMax = Math.max(xMax, pl.offsetLeft + pl.offsetWidth + INK_ROOM); yMax = Math.max(yMax, pl.offsetTop + pl.offsetHeight + INK_ROOM); }
   if (typeof CARDS !== 'undefined') for (const c of Object.values(CARDS)) {
     if (!c.pose) continue;
-    xMin = Math.min(xMin, c.pose.x - GEOM.pad); yMin = Math.min(yMin, c.pose.y - GEOM.pad);
-    xMax = Math.max(xMax, c.pose.x + c.width * c.pose.s + GEOM.pad); yMax = Math.max(yMax, c.pose.y + c.height * c.pose.s + GEOM.pad);
+    xMin = Math.min(xMin, c.pose.x - INK_ROOM); yMin = Math.min(yMin, c.pose.y - INK_ROOM);
+    xMax = Math.max(xMax, c.pose.x + c.width * c.pose.s + INK_ROOM); yMax = Math.max(yMax, c.pose.y + c.height * c.pose.s + INK_ROOM);
   }
   xMin = Math.max(-MAX_PRINT_EDGE, xMin); yMin = Math.max(-MAX_PRINT_EDGE, yMin);
   xMax = Math.min(MAX_PRINT_EDGE, xMax); yMax = Math.min(MAX_PRINT_EDGE, yMax);
@@ -3049,13 +3052,14 @@ function chaseFrame(now, dt) {
   // the film comes up as scene 5 gathers and goes as it dissolves, over the close's last 55% as before
   const film = (leg.x.scene === SHARE ? crossAt(1 - p) : (leg.x.share ?? 0) * (1 - k)) + (leg.y.scene === SHARE ? crossAt(p) : 0);
   setCross(xf + (film - xf) * Math.min(1, dt / .15));
+  // the window grounds of the scene shown fade as its sheet wets, on a phone too, where the live stage
+  // under the falling cover would otherwise show the last scene's window frame
+  const dry = k <= 0 ? 1 - ux : k >= 1 ? 1 - uy : 0, gx = GROUND[leg.x.scene ?? leg.y.scene], gy = GROUND[leg.y.scene];
+  ground((gx[0] + (gy[0] - gx[0]) * k) * dry, (gx[1] + (gy[1] - gx[1]) * k) * dry);
   if (mobileLayout()) {
     stage.style.setProperty('--wash-cover', Math.min(smooth(0, .1, p), 1 - smooth(.9, 1, p)).toFixed(3));
     const z = leg.x.zoom + (zoomOf(leg.y.scene) - leg.x.zoom) * k;
     cell.style.transform = `scale(${SCALE}) translate(${(1 - z) * GEOM.cellW / 2}px, ${(1 - z) * GEOM.cellH / 2}px) scale(${z})`;
-  } else {
-    const dry = k <= 0 ? 1 - ux : k >= 1 ? 1 - uy : 0, gx = GROUND[leg.x.scene ?? leg.y.scene], gy = GROUND[leg.y.scene];
-    ground((gx[0] + (gy[0] - gx[0]) * k) * dry, (gx[1] + (gy[1] - gx[1]) * k) * dry);
   }
   if (p >= 1 && !back) arrive(leg.y.scene);
   else if (p <= 0 && back) arrive(leg.x.scene);
