@@ -126,7 +126,7 @@ const quiet = (page) => page.evaluate(async () => {
 // Scrolls until the next scene's copy has crossed `q` of the pinned visual.
 async function toInk(page, scene, q) {
   for (let i = 0; i < 4; i++) {
-    const delta = await page.evaluate(({ scene, q }) => { const t = scenesEl[scene].firstElementChild; return (q - mobileInkProgress(t)) * (mobileVisualBand().height + t.getBoundingClientRect().height); }, { scene, q });
+    const delta = await page.evaluate(({ scene, q }) => { const t = scenesEl[scene].firstElementChild; const band = mobileVisualBand(), r = t.getBoundingClientRect(); return r.top - (band.bottom - q * (band.height + r.height)); }, { scene, q });
     if (Math.abs(delta) < 4) break;
     await wheel(page, delta);
   }
@@ -143,16 +143,26 @@ async function checkChase() {
   const rest = await quiet(page);
   assert(rest.seen.length === 1 && rest.seen[0] === '1/1/false' && rest.moved === 0 && rest.writes === 0, `a resting reader's picture changed or the page wrote the scroll position: ${JSON.stringify(rest)}`);
 
-  // Past the halfway mark the page keeps the scene it is on until it is clearly closer to the next.
+  // The picture sets off as soon as the next copy touches it, and turns back with the reader.
   const target = () => page.evaluate(() => __state().target);
-  await toInk(page, 1, .55);
-  assert(await target() === 1, 'the target turned at the halfway mark');
-  await toInk(page, 1, .75);
-  assert(await target() === 2, 'the target did not follow the reader past the hysteresis');
-  await toInk(page, 1, .45);
-  assert(await target() === 2, 'the target turned back at the halfway mark');
+  await toInk(page, 1, .1);
+  assert(await target() === 2, 'the copy is crossing the picture and the picture has not set off for the next scene');
+  await page.waitForFunction(() => __state().leg?.p > 0, null, { timeout: 3000 }).catch(() => {});
+  const setOff = await page.evaluate(() => __state());
+  assert(setOff.leg?.y === 2 && setOff.leg.p > 0, `the picture did not start dissolving as the copy touched it: ${JSON.stringify(setOff)}`);
+  await toInk(page, 1, .04);
+  assert(await target() === 1, 'the picture did not turn back with the reader');
+  await settled(page, 1);
+  // A reader who stops mid-crossing sees the picture arrive once and stay.
   await toInk(page, 1, .3);
-  assert(await target() === 1, 'the target did not turn back once the reader was clearly nearer scene 2');
+  await settled(page, 2);
+  const parked = await page.evaluate(async () => {
+    const seen = new Set(), t0 = performance.now();
+    while (performance.now() - t0 < 4000) { await new Promise(requestAnimationFrame); const s = __state(); seen.add(`${s.shown}/${s.target}/${!!s.leg}`); }
+    return [...seen];
+  });
+  assert(parked.length === 1 && parked[0] === '2/2/false', `a reader stopped mid-crossing saw the picture move again: ${JSON.stringify(parked)}`);
+  await wheelTo(page, 1);
   await settled(page, 1);
 
   // A flick: the picture is still on its way when the reader's thumb lifts, then arrives without any scroll.

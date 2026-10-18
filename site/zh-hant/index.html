@@ -2512,12 +2512,17 @@ let asked = null;
 // and everything after it would never be defined). A `let` this early has no
 // such window.
 let s3MediaWarmed = false;
-// The scene being read: the nearest, held until the page is HYST of a scene past the halfway mark,
-// so a reader resting on a boundary does not turn the picture back and forth.
+// The scene being read. On desktop: the nearest, held until the page is HYST of a scene past the
+// halfway mark, so a reader resting on a boundary does not turn the picture back and forth. On a phone
+// the copy crossing the picture is the change itself: the picture sets off toward the next scene as
+// soon as its copy touches the picture, and back as soon as the reader turns (dir, the sign of the
+// page's last movement; 0 keeps the scene asked for).
 const HYST = .15;
-function onScroll() {
-  const p = mobileLayout() ? progressAt() : restProgress();
-  const t = asked != null && Math.abs(p - asked) < .5 + HYST ? asked : Math.round(p);
+function onScroll(dir = 0) {
+  const phone = mobileLayout(), p = phone ? progressAt() : restProgress(), near = Math.round(p);
+  const t = phone
+    ? Math.abs(p - near) < .002 ? near : dir > 0 ? Math.ceil(p) : dir < 0 ? Math.floor(p) : asked ?? near
+    : asked != null && Math.abs(p - asked) < .5 + HYST ? asked : near;
   if (t >= SHIPS - 1) warmScene3Media();
   // The position asks for a scene when the scene it names changes, so a scene set by another
   // hand (the signup link, the harness's `__still`) is left standing until the reader moves.
@@ -2528,9 +2533,9 @@ function onScroll() {
     const q = mobileLayout() ? mobileInkProgress(scenesEl[DEPLOY].firstElementChild) : clamp01((scrollY - restY(DEPLOY)) / Math.max(1, restY(SHARE) - restY(DEPLOY)));
     setCross(crossAt(q));
   }
-  if (t === asked) return;
-  asked = t; target = t;
-  if (!booted && t === SHARE && shown !== SHARE) standAtTerminalClose();
+  if (t !== asked) asked = target = t;
+  // a phone asks for the close as its copy starts crossing; before boot it stands there only once nearer
+  if (!booted && (phone ? near : t) === SHARE && shown !== SHARE) standAtTerminalClose();
 }
 // The sheets are loose: while the editor is on screen a plate can be dragged
 // anywhere plateBounds() allows, and the print rectangle expands on drop when
@@ -2847,7 +2852,7 @@ function drivePicture(now) {
       if (Math.abs(scrollY - to) > 1) { lastV = 0; settleTo(to); }
     }
   }
-  if (!mobileLayout() || real || first) onScroll();
+  if (!mobileLayout() || real || first) onScroll(Math.sign(real));
   syncHeldVisual();
   const dt = Math.min(0.25, Math.max(0, (now - lastWatchT) / 1000)); lastWatchT = now;
   try { chaseFrame(now, dt); }
