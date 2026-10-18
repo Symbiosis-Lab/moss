@@ -124,8 +124,9 @@ export function verticalSlot(
  * when the page had a scrollbar to begin with, or a page that never scrolled
  * would gain an empty gutter and shift the other way. A scrollbar the page
  * styles itself gets only the platform's gutter, which is none where the
- * platform overlays its scrollbars, so whatever width the gutter did not keep
- * is padded back.
+ * platform overlays its scrollbars, so whatever width the root gains is padded
+ * back. The root's own width says that, not `clientWidth`: once overflow is
+ * hidden, `clientWidth` no longer subtracts a gutter that is still kept.
  *
  * Locks nest: the page unlocks when the last one is released, in any order.
  * Returns the function that releases this lock; calling it twice is harmless.
@@ -137,10 +138,10 @@ export function lockPageScroll(): () => void {
   const root = document.documentElement;
   if (held++ === 0) {
     saved = { overflow: root.style.overflow, gutter: root.style.scrollbarGutter, padding: root.style.paddingRight };
-    const bar = window.innerWidth - root.clientWidth;
-    if (bar > 0) root.style.scrollbarGutter = "stable";
+    const width = root.getBoundingClientRect().width;
+    if (window.innerWidth - root.clientWidth > 0) root.style.scrollbarGutter = "stable";
     root.style.overflow = "hidden";
-    const lost = bar - (window.innerWidth - root.clientWidth);
+    const lost = root.getBoundingClientRect().width - width;
     if (lost > 0) root.style.paddingRight = `${(parseFloat(getComputedStyle(root).paddingRight) || 0) + lost}px`;
   }
   let released = false;
