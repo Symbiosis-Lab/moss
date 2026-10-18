@@ -13,6 +13,7 @@
 //! `setup.credentials`, the parallel `config_*` maps, `requires_stack` — parse
 //! as aliases that fold into this one shape, in [`PluginManifest::parse`].
 
+pub mod abilities;
 pub mod derivation;
 pub mod listing_style;
 pub mod settings;

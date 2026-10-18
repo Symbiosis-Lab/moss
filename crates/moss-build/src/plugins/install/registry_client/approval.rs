@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::plugins::contributions::abilities::Ability;
+
 pub const FILE: &str = "plugin-approvals.json";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -25,6 +27,22 @@ pub struct Approval {
     pub dir: PathBuf,
     /// `bundled::code_hash` of that directory when the user allowed it.
     pub code_sha256: String,
+    /// The plugin's version when the user allowed it. Absent in records
+    /// written before it was kept.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// What the manifest declared the plugin could do when the user allowed
+    /// it, so a later change can name what is new. Absent as `version` is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub abilities: Option<Vec<Ability>>,
+}
+
+impl Approval {
+    /// A record of the code alone, as written before versions and abilities
+    /// were kept.
+    pub fn new(dir: PathBuf, code_sha256: String) -> Self {
+        Approval { dir, code_sha256, version: None, abilities: None }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -41,9 +59,14 @@ impl Approvals {
     /// Record one, replacing any older record for the same directory: a
     /// directory whose code changed is exactly the case the old record must
     /// stop answering for.
-    pub fn grant(&mut self, dir: PathBuf, code_sha256: String) {
-        self.approvals.retain(|a| a.dir != dir);
-        self.approvals.push(Approval { dir, code_sha256 });
+    pub fn grant(&mut self, approval: Approval) {
+        self.approvals.retain(|a| a.dir != approval.dir);
+        self.approvals.push(approval);
+    }
+
+    /// The record for a directory, whatever code it names.
+    pub fn record_for(&self, dir: &Path) -> Option<&Approval> {
+        self.approvals.iter().find(|a| a.dir == dir)
     }
 }
 
@@ -75,7 +98,7 @@ mod tests {
         let mut store = load(tmp.path());
         assert!(!store.allows(&dir, "aaa"), "nothing is allowed until granted");
 
-        store.grant(dir.clone(), "aaa".into());
+        store.grant(Approval::new(dir.clone(), "aaa".into()));
         save(tmp.path(), &store).unwrap();
         let store = load(tmp.path());
         assert!(store.allows(&dir, "aaa"));
@@ -85,11 +108,31 @@ mod tests {
         // Re-granting after the code changed replaces the record rather than
         // keeping both: the old bytes are gone and must not stay allowed.
         let mut store = store;
-        store.grant(dir.clone(), "bbb".into());
+        store.grant(Approval::new(dir.clone(), "bbb".into()));
         assert!(!store.allows(&dir, "aaa"));
         assert_eq!(store.approvals.len(), 1);
 
         fs::write(tmp.path().join(FILE), "{not json").unwrap();
         assert_eq!(load(tmp.path()), Approvals::default(), "unreadable is empty, not an error");
+    }
+
+    #[test]
+    fn a_record_written_before_versions_were_kept_still_loads_and_allows() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join(FILE),
+            r#"{"approvals":[{"dir":"/v/.moss/plugins/x","code_sha256":"aaa"}]}"#,
+        )
+        .unwrap();
+        let store = load(tmp.path());
+        let dir = Path::new("/v/.moss/plugins/x");
+        assert!(store.allows(dir, "aaa"));
+        let record = store.record_for(dir).unwrap();
+        assert_eq!((record.version.as_deref(), record.abilities.as_ref()), (None, None));
+
+        // And an absent field stays absent on the way back out.
+        save(tmp.path(), &store).unwrap();
+        let body = fs::read_to_string(tmp.path().join(FILE)).unwrap();
+        assert!(!body.contains("version") && !body.contains("abilities"), "{body}");
     }
 }
