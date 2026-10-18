@@ -403,17 +403,114 @@ pub fn approve(plugin_dir: &Path) -> Result<(), String> {
         .ok_or_else(|| format!("{} has no readable manifest", plugin_dir.display()))?;
     let hash = crate::plugins::bundled::code_hash(plugin_dir, &manifest)
         .ok_or_else(|| format!("{} has no readable entry file", plugin_dir.display()))?;
+    grant_all(vec![Grant { dir: plugin_dir.to_path_buf(), manifest, hash }])
+}
+
+/// A plugin directory and the code hash being allowed for it.
+struct Grant {
+    dir: PathBuf,
+    manifest: PluginManifest,
+    hash: String,
+}
+
+/// Record every grant under one lock and one save. The grants take effect only
+/// if the save succeeds; on failure nothing is allowed.
+fn grant_all(grants: Vec<Grant>) -> Result<(), String> {
+    if grants.is_empty() {
+        return Ok(());
+    }
     let mut guard = CONSENT.write().unwrap_or_else(|e| e.into_inner());
     let Some((dir, approvals)) = guard.as_mut() else {
         // Nothing enforces consent without a store, so there is nothing to
         // record; every test binary and a moss with no app data land here.
         return Ok(());
     };
-    record_consent(approvals, plugin_dir, &manifest, hash);
-    match dir {
-        Some(dir) => approval::save(dir, approvals),
-        // Enforced without a store: the grant holds for this process only.
-        None => Ok(()),
+    let mut updated = approvals.clone();
+    for Grant { dir, manifest, hash } in grants {
+        record_consent(&mut updated, &dir, &manifest, hash);
+    }
+    if let Some(dir) = dir {
+        approval::save(dir, &updated)?;
+    }
+    *approvals = updated;
+    Ok(())
+}
+
+/// Allow the plugins a freshly picked starter carries, each only if the copy
+/// now in `site_root/.moss/plugins/<id>` hashes to what the registry listed.
+/// Returns the ids allowed. A missing directory, an unreadable one or one
+/// whose code differs by a byte is skipped and left to the usual prompt, and
+/// if the record cannot be saved nothing counts as allowed.
+pub fn approve_starter_plugins(site_root: &Path, listed: &[super::index::StarterPlugin]) -> Vec<String> {
+    let mut grants = Vec::new();
+    for plugin in listed.iter().filter(|p| crate::plugins::install::is_usable_id(&p.id)) {
+        let dir = site_root.join(".moss").join("plugins").join(&plugin.id);
+        let Some(manifest) = crate::plugins::bundled::read_installed_manifest(&dir) else { continue };
+        match crate::plugins::bundled::code_hash(&dir, &manifest) {
+            Some(hash) if hash == plugin.code_sha256 => grants.push(Grant { dir, manifest, hash }),
+            _ => {}
+        }
+    }
+    let ids = grants
+        .iter()
+        .filter_map(|grant| grant.dir.file_name()?.to_str().map(str::to_owned))
+        .collect();
+    match grant_all(grants) {
+        Ok(()) => ids,
+        Err(error) => {
+            log::warn!(target: "registry", "could not record the starter's plugin consent: {error}");
+            Vec::new()
+        }
+    }
+}
+
+/// What the registry's last accepted index says about a plugin directory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RegistryStatus {
+    /// The index lists this id with a `code_sha256` equal to this directory's
+    /// code hash: the registry vouches for these exact bytes.
+    ListedExact { version: String },
+    /// The index lists this id at this directory's version, but its entry
+    /// carries no code hash to compare or carries one that differs from this
+    /// directory's. Only the name and version are vouched for, not the code.
+    ListedVersion,
+    /// The index does not list this id and version, or moss has no index.
+    Unknown,
+    /// The registry withdrew this exact version; `reason` is its own sentence,
+    /// bounded and stripped.
+    Withdrawn { reason: String },
+}
+
+/// [`RegistryStatus`] of the plugin in `plugin_dir`, from the snapshot the
+/// loader consults. A withdrawal outranks a listing. A directory whose version
+/// is older or newer than the one the index lists is `Unknown`. An unreadable kill list
+/// is not a withdrawal here; [`verdict`] is where it stops a plugin.
+pub fn registry_status(manifest: &PluginManifest, plugin_dir: &Path) -> RegistryStatus {
+    let withdrawn = match revocation(&manifest.name, &manifest.version) {
+        Revocation::Withdrawn(reason) => Some(reason),
+        Revocation::Clear | Revocation::Unreadable => None,
+    };
+    let hash = code_of(manifest, plugin_dir).map(|code| code.hash);
+    registry_status_in(&cached_entries(), withdrawn, manifest, hash.as_deref())
+}
+
+fn registry_status_in(
+    entries: &[super::index::IndexEntry],
+    withdrawn: Option<String>,
+    manifest: &PluginManifest,
+    hash: Option<&str>,
+) -> RegistryStatus {
+    if let Some(reason) = withdrawn {
+        return RegistryStatus::Withdrawn { reason };
+    }
+    let Some(entry) = entries.iter().find(|e| e.id == manifest.name) else { return RegistryStatus::Unknown };
+    if hash.is_some() && entry.code_sha256.as_deref() == hash {
+        RegistryStatus::ListedExact { version: entry.version.clone() }
+    } else if entry.version == manifest.version {
+        RegistryStatus::ListedVersion
+    } else {
+        RegistryStatus::Unknown
     }
 }
 

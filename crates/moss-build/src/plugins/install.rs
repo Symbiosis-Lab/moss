@@ -5,6 +5,7 @@
 //! here as `registry_client`, in three layers split by what each is blind to.
 //! `discovery`/`bundled`/`registry` migrate under this module later.
 
+pub mod hash_cli;
 pub mod registry_client;
 pub mod zip_extract;
 
