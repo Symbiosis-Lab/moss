@@ -152,16 +152,23 @@ async function checkChase() {
   assert(setOff.leg?.y === 2 && setOff.leg.p > 0, `the picture did not start dissolving as the copy touched it: ${JSON.stringify(setOff)}`);
   await toInk(page, 1, .04);
   assert(await target() === 1, 'the picture did not turn back with the reader');
+  // While any copy is over the picture, the picture holds in the wash; it re-forms only once the copy has left.
+  const held = (name) => page.evaluate(async (name) => {
+    const { playOut, playIn } = MossWatercolor.DEFAULT_PRESET, seen = [], t0 = performance.now();
+    while (performance.now() - t0 < 3500) { await new Promise(requestAnimationFrame); seen.push(__state().leg?.p ?? null); }
+    const tail = seen.slice(-30), out = { formed: seen.filter((p) => p == null).length, low: Math.min(...tail), high: Math.max(...tail) };
+    if (out.formed || out.low < playOut - .02 || out.high > playIn + .02) throw Error(`${name}: the picture re-formed with copy over it: ${JSON.stringify(out)}`);
+  }, name);
+  await held('turned back mid-crossing');
+  await wheelTo(page, 1);
   await settled(page, 1);
-  // A reader who stops mid-crossing sees the picture arrive once and stay.
   await toInk(page, 1, .3);
+  await held('stopped mid-crossing');
+  await wheelTo(page, 2);
   await settled(page, 2);
-  const parked = await page.evaluate(async () => {
-    const seen = new Set(), t0 = performance.now();
-    while (performance.now() - t0 < 4000) { await new Promise(requestAnimationFrame); const s = __state(); seen.add(`${s.shown}/${s.target}/${!!s.leg}`); }
-    return [...seen];
-  });
-  assert(parked.length === 1 && parked[0] === '2/2/false', `a reader stopped mid-crossing saw the picture move again: ${JSON.stringify(parked)}`);
+  // Scrolling back so the copy re-enters dissolves the picture again.
+  await toInk(page, 1, .7);
+  await held('scrolled back into the copy');
   await wheelTo(page, 1);
   await settled(page, 1);
 

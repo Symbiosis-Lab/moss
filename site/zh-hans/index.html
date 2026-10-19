@@ -1069,7 +1069,7 @@ const running = () => phase === 'morph';
 // T_TOTAL and PLAY_OUT come from the engine's own DEFAULT_PRESET, so this page and the package it
 // loads cannot quietly disagree: T_TOTAL paces the carried Publish control, PLAY_OUT is where a leg's
 // outgoing wash is fully mixed.
-const { stepsPerFrame: STEPS_PER_FRAME, tTotal: T_TOTAL, playOut: PLAY_OUT } = MossWatercolor.DEFAULT_PRESET;
+const { stepsPerFrame: STEPS_PER_FRAME, tTotal: T_TOTAL, playOut: PLAY_OUT, playIn: PLAY_IN } = MossWatercolor.DEFAULT_PRESET;
 // The stiffness of the spring a scene 3 card settles on: SwiftUI's half-second spring at mass 1,
 // critically damped (springStep takes c = 2*sqrt(k)).
 const CARD_K = 160;
@@ -1643,6 +1643,8 @@ function mobileInkProgress(text) {
   const rect = text.getBoundingClientRect();
   return clamp01((band.bottom - rect.top) / (band.height + rect.height));
 }
+const copyEls = scenesEl.map((sec) => sec.querySelector('.scene-text')).filter(Boolean);
+const copyOverPicture = () => copyEls.some((text) => { const q = mobileInkProgress(text); return q > 0 && q < 1; });
 function mobileVisualBand() {
   const visual = document.getElementById('vis');
   const top = parseFloat(getComputedStyle(visual).top);
@@ -3035,6 +3037,9 @@ function chaseFrame(now, dt) {
   const back = target === leg.x.scene;
   let goal = back ? 0 : 1;
   if (!back && !(leg.y.side && sim.sideRecorded(leg.y.side))) goal = Math.min(goal, PLAY_OUT);
+  // on a phone the copy crosses the picture, and while any of it is over the picture the picture holds in
+  // the wash: the scene it heads for gathers only once the copy has left (the close fades in under its copy)
+  if (mobileLayout() && (back ? leg.x.scene : leg.y.scene) !== SHARE && copyOverPicture()) goal = back ? Math.max(goal, PLAY_OUT) : Math.min(goal, PLAY_IN);
   // where the page puts the picture: as far from goal as the page still is from the scene it heads for
   const at = mobileLayout() ? progressAt() : restProgress(), heads = back ? leg.x.scene : leg.y.scene;
   if (!leg.track || leg.track.heads !== heads) leg.track = { p: leg.p, at, heads };
