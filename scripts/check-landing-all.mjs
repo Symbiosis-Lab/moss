@@ -16,6 +16,7 @@ const CHECKS = [
   'check-landing-cold-bottom.mjs',
   'check-landing-beacon.mjs',
   'check-landing-download.mjs',
+  'check-landing-header.mjs',
   'check-landing-desktop-pace.mjs',
   'check-landing-desktop-scroll.mjs',
   'check-landing-mobile-handoff.mjs',

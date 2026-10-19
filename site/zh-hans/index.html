@@ -69,13 +69,23 @@
   html:lang(zh) .brand .moss-wordmark { font-family: MossLongCang, var(--body); font-size: 16px; font-weight: 400; }
   html:lang(zh) .brand svg { width: 18px; height: 18px; }
   .brand { position: fixed; top: 16px; left: 28px; z-index: 50; display: flex; align-items: center; gap: 5px; font: 600 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #000; }
-  .brand { color: rgb(calc(255 * var(--xf)), calc(255 * var(--xf)), calc(255 * var(--xf))); }
-  .brand svg { filter: grayscale(var(--xf)) brightness(calc(1 + var(--xf) * 99)); width: 16px; height: 16px; display: block; transform: translateY(1px); }
-  .language-picker { position: fixed; top: 11px; right: 24px; z-index: 50; display: flex; align-items: center; gap: 5px; min-height: 34px; padding-inline: 8px; color: rgb(calc(93 + 162 * var(--xf)), calc(88 + 167 * var(--xf)), calc(83 + 172 * var(--xf))); font: 500 12px/1 var(--body); }
+  .brand { color: rgb(calc(255 * var(--nav)), calc(255 * var(--nav)), calc(255 * var(--nav))); }
+  .brand svg { filter: grayscale(var(--nav)) brightness(calc(1 + var(--nav) * 99)); width: 16px; height: 16px; display: block; transform: translateY(1px); }
+  .language-picker { position: fixed; top: 11px; right: 24px; z-index: 50; display: flex; align-items: center; gap: 5px; min-height: 34px; padding-inline: 8px; color: rgb(calc(93 + 162 * var(--nav)), calc(88 + 167 * var(--nav)), calc(83 + 172 * var(--nav))); font: 500 12px/1 var(--body); }
   .language-picker a { color: inherit; text-decoration: none; }
-  .language-picker a:hover { color: rgb(calc(45 + 163 * var(--xf)), calc(90 + 165 * var(--xf)), calc(45 + 210 * var(--xf))); }
+  .language-picker a:hover { color: rgb(calc(45 + 163 * var(--nav)), calc(90 + 165 * var(--nav)), calc(45 + 210 * var(--nav))); }
   .language-picker a:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
-  .language-picker .nav-lang-current { color: rgb(calc(44 + 211 * var(--xf)), calc(40 + 215 * var(--xf)), calc(37 + 218 * var(--xf))); font-weight: 600; }
+  .language-picker .nav-lang-current { color: rgb(calc(44 + 211 * var(--nav)), calc(40 + 215 * var(--nav)), calc(37 + 218 * var(--nav))); font-weight: 600; }
+  /* The header turns with the close: past the middle of the film's crossfade (html.nav-dark) its text
+     turns white and it stands on the close's dark, since copy scrolls under it there. A phone's header
+     always has a ground, the page's colour until then; desktop's has none until then. */
+  @property --nav { syntax: '<number>'; inherits: true; initial-value: 0; }
+  html { --nav: 0; transition: --nav .4s ease; }
+  html.nav-dark { --nav: 1; }
+  @media (prefers-reduced-motion: reduce) { html { transition: none; } }
+  body::before { content: ''; position: fixed; z-index: 49; pointer-events: none; inset: 0 0 auto; height: 72px; opacity: var(--nav);
+    --nav-ground: color-mix(in srgb, var(--bg), #101110 calc(var(--nav) * 100%));
+    background: linear-gradient(to bottom, var(--nav-ground) 0 34px, color-mix(in srgb, var(--nav-ground) 72%, transparent) 52px, transparent); }
 
   /* ── two columns: the visual is pinned, the copy scrolls past it ─────── */
   /* The copy column owns all remaining width and centres its block in it, so
@@ -421,7 +431,7 @@
   }
 
   @media (max-width: 900px) {
-    body::before { content: ''; position: fixed; z-index: 49; pointer-events: none; inset: 0 0 auto; height: 72px; opacity: calc(1 - var(--xf)); background: linear-gradient(to bottom, var(--bg) 0 34px, color-mix(in srgb, var(--bg) 72%, transparent) 52px, transparent); }
+    body::before { opacity: 1; }
     #intro { min-height: 0; justify-items: start; padding: 88px 34px 32px; }
     #intro h1 { position: static; text-align: left; font-size: clamp(40px, 11vw, 58px); opacity: 1; }
     .page { position: relative; display: block; width: 100%; margin-top: 0; padding: 0 16px; }
@@ -1579,7 +1589,9 @@ function syncLoop() {
 // Once the close is more than half there it takes the pointer, and gives it back below that on the
 // way out: a button the reader can see must answer a click, and the page behind it is by then faded.
 const TAKES_POINTER = .5;
-const setCross = (q) => { if (q === xf) return; xf = q; document.documentElement.style.setProperty('--xf', q.toFixed(3)); syncLoop(); fiveOn(q >= TAKES_POINTER); };
+const setCross = (q) => { if (q === xf) return; xf = q; document.documentElement.style.setProperty('--xf', q.toFixed(3));
+  // the header turns once, a little either side of the middle, so a page resting there does not flicker
+  if (q > .55 || q < .45) document.documentElement.classList.toggle('nav-dark', q > .55); syncLoop(); fiveOn(q >= TAKES_POINTER); };
 // The close takes the pointer and the tab order only where it is mostly there: while it is
 // still faint it is paint, and behind the page it is not there at all. The page
 // is the other side: where the close is settled the
