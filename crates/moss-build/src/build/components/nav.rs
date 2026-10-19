@@ -615,10 +615,11 @@ pub fn is_listing_nav_item(doc: &crate::build::types::ParsedDocument, has_conten
     }
 }
 
-/// Whether any documents qualify as nav bar items under the adaptive model.
-/// Used by breadcrumb auto-enable: breadcrumbs turn on when the nav bar is empty.
-pub fn has_nav_items(docs: &[crate::build::types::ParsedDocument], has_content_folders: bool) -> bool {
-    docs.iter().any(|doc| is_nav_bar_item_doc(doc, has_content_folders))
+/// Whether `edition` has any page that the nav bar lists: breadcrumbs turn on
+/// where it has none. Each edition has its own bar, so another edition's
+/// top-level pages must not switch this one's trail off.
+pub fn has_nav_items(docs: &[crate::build::types::ParsedDocument], edition: &str, has_content_folders: bool) -> bool {
+    docs.iter().any(|doc| doc.edition == edition && is_nav_bar_item_doc(doc, has_content_folders))
 }
 
 /// Whether the current page sits inside `doc`'s own section — true for a
@@ -669,7 +670,8 @@ pub fn titlecase_segment(segment: &str) -> String {
 /// Returns `Some(segments)` when breadcrumbs should be shown, `None` otherwise.
 ///
 /// Breadcrumbs are shown when:
-/// 1. The homepage has `breadcrumb: true` (site-wide enable), OR `force` is set and the site has no nav items
+/// 1. The homepage has `breadcrumb: true` (site-wide enable), OR the page's edition has no nav items and
+///    either the homepage sets no `breadcrumb:` or `force` is set
 /// 2. The current page has NOT set `breadcrumb: false` (per-page override)
 /// 3. The page's effective depth > 0 (homepages don't get breadcrumbs)
 ///
@@ -681,7 +683,7 @@ pub fn titlecase_segment(segment: &str) -> String {
 /// its own `<h1>` `.visually-hidden` — with no other visible title anywhere
 /// in the page, a site that otherwise keeps breadcrumbs off (nav items cover
 /// orientation everywhere else) would name the section nowhere at all. `true`
-/// only for that one page shape. Where the site has nav items, that trail is
+/// only for that one page shape. Where the page's edition has nav items, that trail is
 /// not drawn: the nav bar orients the reader on every page, the explorer root
 /// included, so the root gets the same header as the rest. Every other rule
 /// above still applies on top (a page-level `breadcrumb: false` still opts out).
@@ -700,7 +702,7 @@ pub fn compute_breadcrumb_segments(
     // Rule 1: the home page's setting decides the header trail. `label` moves
     // the parent link above the title instead (`parent_label_segment`), so the
     // trail stays off there.
-    let has_nav = has_nav_items(all_docs, has_content_folders);
+    let has_nav = has_nav_items(all_docs, &doc.edition, has_content_folders);
     let breadcrumb_enabled = match home_breadcrumb_setting(all_docs) {
         Some(BreadcrumbSetting::On) => true,
         Some(BreadcrumbSetting::Off | BreadcrumbSetting::Label) => force && !has_nav,

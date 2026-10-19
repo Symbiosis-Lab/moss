@@ -182,3 +182,40 @@ fn a_root_with_a_page_of_its_own_or_a_single_tree_does_not_only_choose_a_languag
     let single: Vec<_> = chooser.iter().copied().filter(|(p, _)| !p.starts_with("de/")).collect();
     assert_eq!(en_home(&single).as_deref(), Some("/"), "one tree is no choice of language");
 }
+
+fn has_trail(site: &Site, rel: &str) -> bool {
+    site.html(rel).contains("breadcrumb-segment")
+}
+
+fn has_bar(site: &Site, rel: &str) -> bool {
+    site.html(rel).contains(r#"id="nav-links""#)
+}
+
+const ZH_NOTE: &str = "zh-hans/笔记/第一/index.html";
+
+#[test]
+fn another_editions_nav_leaves_a_root_without_nav_items_its_breadcrumb_trail() {
+    let site = Site::new(&[
+        ("index.md", "---\ntitle: Home\n---\n\nText.\n"),
+        ("Notes/first.md", "---\ntitle: First\ndate: 2026-01-01\n---\n\nText.\n"),
+        ("zh-hans/index.md", "---\ntitle: 首页\n---\n\n文字。\n"),
+        ("zh-hans/关于.md", "---\ntitle: 关于\n---\n\n文字。\n"),
+        ("zh-hans/笔记/第一.md", "---\ntitle: 第一\ndate: 2026-01-01\n---\n\n文字。\n"),
+    ]);
+    assert!(has_trail(&site, "notes/first/index.html"), "the root has no nav items, so its pages keep the trail");
+    assert!(!has_bar(&site, "notes/first/index.html"));
+    assert!(has_bar(&site, ZH_NOTE) && !has_trail(&site, ZH_NOTE), "the edition's own top-level page makes its nav");
+}
+
+#[test]
+fn the_roots_nav_leaves_an_edition_without_nav_items_its_breadcrumb_trail() {
+    let site = Site::new(&[
+        ("index.md", "---\ntitle: Home\n---\n\nText.\n"),
+        ("About.md", "---\ntitle: About\n---\n\nText.\n"),
+        ("Notes/first.md", "---\ntitle: First\ndate: 2026-01-01\n---\n\nText.\n"),
+        ("zh-hans/index.md", "---\ntitle: 首页\n---\n\n文字。\n"),
+        ("zh-hans/笔记/第一.md", "---\ntitle: 第一\ndate: 2026-01-01\n---\n\n文字。\n"),
+    ]);
+    assert!(has_bar(&site, "notes/first/index.html") && !has_trail(&site, "notes/first/index.html"));
+    assert!(has_trail(&site, ZH_NOTE), "an edition with no nav items keeps the trail");
+}

@@ -810,7 +810,7 @@ fn test_breadcrumb_force_yields_to_the_nav_bar_when_the_site_has_nav_items() {
         make_doc("about.html", "About", None, Some(true)),
         make_doc_with_breadcrumb("places/index.html", "Places", None),
     ];
-    assert!(has_nav_items(&documents, true), "fixture must carry a nav item");
+    assert!(has_nav_items(&documents, "", true), "fixture must carry a nav item");
     let doc = &documents[2];
 
     assert!(

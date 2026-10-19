@@ -122,6 +122,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- Each language edition now decides its breadcrumb trail from its own nav bar. Before, a nav item in one language edition turned the trail off in every other edition too, so the pages of an edition with no nav items of its own showed only the site name in their header, with neither a trail nor a nav bar.
 - Plugin and tool archives are now read with a current zip library, since the old one had published flaws in how it unpacks symlinks and permission bits. moss's unpacking of plugin archives never used those paths: an entry that is a symlink was already refused, and setuid or other permission bits in an archive were never applied. Tests now pin both.
 - In a card list where only some pages have a picture, a page with neither picture nor description no longer shows its title twice; its card keeps the row's shape with an empty tile.
 - The warning for `---` as a `:::grid` cell divider now names the line it is on and says to write `+++`; with the page path in front, as every build warning has, it points at the exact line. Before, it gave no line.
