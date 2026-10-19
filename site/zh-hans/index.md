@@ -1,5 +1,6 @@
 ---
 title: 青苔
+nav: false
 logo: assets/brand/logo.svg
 children: false
 uid: 41f7bc62
