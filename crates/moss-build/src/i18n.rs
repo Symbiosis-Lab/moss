@@ -911,6 +911,34 @@ mod tests {
         assert_eq!(canonical_bcp47("ja"), "ja");
         assert_eq!(declared_lang_tag(None, "index", "pt-br/index.md", None), Some("pt-BR".to_string()));
     }
+
+    #[test]
+    fn app_language_de_round_trips_through_its_stored_form() {
+        let json = serde_json::to_string(&AppLanguage::De).unwrap();
+        assert_eq!(json, "\"de\"");
+        assert_eq!(serde_json::from_str::<AppLanguage>(&json).unwrap(), AppLanguage::De);
+        assert_eq!(AppLanguage::De.as_locale_str(), "de");
+    }
+
+    #[test]
+    fn app_language_unknown_stored_value_falls_back_to_english() {
+        assert_eq!(serde_json::from_str::<AppLanguage>("\"fr\"").unwrap(), AppLanguage::En);
+    }
+
+    #[test]
+    fn app_language_german_tags_map_to_de() {
+        assert_eq!(AppLanguage::from_bcp47("de-DE"), AppLanguage::De);
+        assert_eq!(AppLanguage::from_bcp47("de-AT"), AppLanguage::De);
+    }
+
+    #[test]
+    fn app_language_all_lists_each_ui_language_once() {
+        let all = AppLanguage::ALL;
+        assert_eq!(all.len(), 4);
+        for (i, lang) in all.iter().enumerate() {
+            assert!(!all[i + 1..].contains(lang), "{lang:?} listed twice");
+        }
+    }
 }
 
 /// The last-resort default language for a SITE build (a non-English
@@ -938,13 +966,33 @@ pub fn build_default_language() -> Language {
 // (locale probing) stays app-side; unseeded reads default to `En`.
 
 /// Language preference for the moss app shell UI.
-#[derive(serde::Serialize, serde::Deserialize, Default, Clone, Copy, Debug, PartialEq, specta::Type)]
+#[derive(serde::Serialize, Default, Clone, Copy, Debug, PartialEq, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum AppLanguage {
     #[default]
     En,
+    De,
     ZhHans,
     ZhHant,
+}
+
+impl AppLanguage {
+    /// Every app UI language, so a caller that must cover them all reads one list.
+    pub const ALL: [AppLanguage; 4] = [AppLanguage::En, AppLanguage::De, AppLanguage::ZhHans, AppLanguage::ZhHant];
+}
+
+/// An unknown stored value falls back to English instead of failing the whole
+/// config, so a config written by a newer app still loads in this one.
+impl<'de> serde::Deserialize<'de> for AppLanguage {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let tag = String::deserialize(deserializer)?;
+        Ok(match tag.as_str() {
+            "de" => AppLanguage::De,
+            "zh_hans" => AppLanguage::ZhHans,
+            "zh_hant" => AppLanguage::ZhHant,
+            _ => AppLanguage::En,
+        })
+    }
 }
 
 impl AppLanguage {
@@ -953,6 +1001,7 @@ impl AppLanguage {
     pub fn as_locale_str(&self) -> &'static str {
         match self {
             AppLanguage::En => "en",
+            AppLanguage::De => "de",
             AppLanguage::ZhHans => "zh-hans",
             AppLanguage::ZhHant => "zh-hant",
         }
@@ -966,8 +1015,8 @@ impl AppLanguage {
     /// keeping the two enums from drifting silently.
     pub fn from_bcp47(tag: &str) -> AppLanguage {
         match crate::i18n::Language::from_bcp47_lenient(tag) {
-            // German is a site edition only; the editor has no German UI.
-            crate::i18n::Language::En | crate::i18n::Language::De => AppLanguage::En,
+            crate::i18n::Language::En => AppLanguage::En,
+            crate::i18n::Language::De => AppLanguage::De,
             crate::i18n::Language::ZhHans => AppLanguage::ZhHans,
             crate::i18n::Language::ZhHant => AppLanguage::ZhHant,
         }
@@ -977,6 +1026,7 @@ impl AppLanguage {
     pub fn to_language(&self) -> crate::i18n::Language {
         match self {
             AppLanguage::En => crate::i18n::Language::En,
+            AppLanguage::De => crate::i18n::Language::De,
             AppLanguage::ZhHans => crate::i18n::Language::ZhHans,
             AppLanguage::ZhHant => crate::i18n::Language::ZhHant,
         }
