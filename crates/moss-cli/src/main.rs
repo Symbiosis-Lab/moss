@@ -42,6 +42,7 @@ const CROSSED: &[(&str, fn(&[String]) -> i32)] = &[
     ("deploy", moss_build::cli::deploy::run),
     // `mv` is the app binary's alias for `rename` (`startup/run_mode.rs`).
     ("rename", moss_build::cli::rename::run),
+    ("new", moss_build::cli::new::run),
     ("mv", moss_build::cli::rename::run),
     ("expand", moss_build::cli::expand::run),
     // Lives under `deploy/history/`, not `cli/` (file budget — see the

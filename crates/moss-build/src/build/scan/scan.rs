@@ -1534,6 +1534,7 @@ pub fn scan_folder_with_dedup_emit_with_error(
         empty_folders,
     };
     crate::build::scan::case_collision::warn_case_colliding_files(&structure);
+    crate::build::template_check::warn_template_problems(Path::new(folder_path));
     Ok(structure)
 }
 

@@ -106,6 +106,11 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
             description: "Rename a file or folder and rewrite every [[wikilink]] and [text](link) that points at it, project-wide. Scriptable, so it is the safe way to bulk-rename (e.g. localizing filenames) without breaking links. `mv` is an alias.",
         },
         CliCommandInfo {
+            name: "new",
+            args: "<folder> [--template <id>] [--lang <code>] [--title \"<title>\"] [--json]  |  --translation <page.md> --lang <code> [--json]  |  --list [--json]",
+            description: "Make a page from a template, or a page's version in another language. <folder> is a folder in the site; with --template the page starts from that template and lands in the template's own folder when it names one, and --title names the file and sets its title. --translation writes the page's version in <code> at the mirrored path (work/x.md becomes zh-hans/work/x.md), copies its facts across, starts from the template for that language, and links the two with translationKey. --list prints the site's templates, language folders and default language; `--list --json` is the machine-readable form. Refuses rather than guesses: a template whose folder is gone creates nothing.",
+        },
+        CliCommandInfo {
             name: "expand",
             args: "<page.md|folder> [--dry-run] [--allow-plugins]",
             description: "Write embeds out as text. Each line holding only a `![[file.ext#fragment]]` embed of a file a plugin derives text from (once its text has been derived; missing text is derived first) or only a `![[note]]` / `![[note#heading]]` transclusion is replaced with the text it stands for, so the page can be edited as plain markdown. Embeds whose text is not available (skipped, unreadable, unresolved) are left as written, frontmatter is kept byte for byte, and a file is written only when something changed. --dry-run reports without writing. A plugin that derives the text must be allowed, as in a build: without `--allow-plugins` one not yet allowed in the app is refused with the same sentence a build prints.",
@@ -140,7 +145,7 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
 
 /// The subcommands that parse `--help` themselves; [`help_for`] declines
 /// them so their per-mode usage stays authoritative.
-const OWN_HELP: [&str; 9] = ["list", "doctor", "migrate", "rename", "expand", "domain", "env", "import", "history"];
+const OWN_HELP: [&str; 10] = ["list", "doctor", "migrate", "rename", "new", "expand", "domain", "env", "import", "history"];
 
 /// Render `moss <cmd> --help` from the table `moss describe` already publishes.
 ///

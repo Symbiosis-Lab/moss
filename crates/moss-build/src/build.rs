@@ -134,6 +134,7 @@ pub mod enhance;
 pub mod store_gc;
 pub mod svg_util;
 pub mod theme_lint;
+pub(crate) mod template_check;
 
 // Re-export for public API (used by integration tests via lib.rs)
 pub use scan::scan::scan_folder;

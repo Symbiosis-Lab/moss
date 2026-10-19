@@ -621,6 +621,26 @@ Turn on the site search with `search = true` under `[site]` in `.moss/config.tom
 search = true
 ```
 
+## Templates
+
+A template is a starting page that a person makes new pages from. It lives in `.moss/templates/` as a file named from the template's name: `production.md` for a template named Production. The file is an ordinary page whose four `_template_` keys moss reads and does not copy into the pages it makes: `_template_name` (the name the create menu shows), `_template_kind` (`page` for one new file, or `folder` for a new folder with a home page inside it), `_template_folder` and `_template_created_at`.
+
+`_template_folder` is optional and names a folder from the site root in the default language, such as `work/`. Every page made from the template goes into that folder, whatever folder the author was in. Without it, a page goes where it was asked for. If the folder does not exist, `moss new` refuses and creates nothing, and `moss build` warns.
+
+A version of a template in another language sits beside it with the language code before `.md`: `production.zh-hans.md` is the Simplified Chinese version of `production.md`. A page made inside the `zh-hans/` folder starts from it, and from the default file when there is none. A language version names no folder of its own, so its pages go to the same folder inside the language folder (`zh-hans/work/`). A language version for a language with no folder in the site is never used, and `moss build` warns about it.
+
+`moss new` makes pages from the command line:
+
+```
+moss new work/ --template production --title "Example Show"
+moss new --translation work/example-show.md --lang zh-hans
+moss new --list --json
+```
+
+The first form prints the path it wrote; add `--lang zh-hans` to make the page in that language's tree from the template's version for that language. The second makes the page's version in another language at the mirrored path, with a `translationKey` shared by both pages. `--list --json` prints the site's templates, their folders and languages, and the site's language folders, so a script or an agent can check them before it makes a page.
+
+A listing reads its folder when the build runs, so a page made from a template appears in a listing that reads that folder without being named anywhere. A home page that should show new work lists the folder instead of naming pages: `![[work/|style:grid,group:upcoming,limit:3]]`, which also puts events that have not ended first.
+
 ## Multilingual sites
 
 moss recognizes exactly two conventions for a translated file, and no others.

@@ -21,6 +21,9 @@ pub mod tools;
 // `rename` is the editor's rename-with-refs from the terminal; its whole body
 // is `editor::ref_scan`, which crossed with it.
 pub mod rename;
+// `moss new` plans in moss_core::template and writes through crate::templates;
+// it sits beside `rename`, the other command that reads the site from the cwd.
+pub mod new;
 pub mod render;
 // Read-only project ownership lookup for hosts opening an arbitrary path.
 pub mod root;
