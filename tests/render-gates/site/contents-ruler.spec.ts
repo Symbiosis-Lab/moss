@@ -19,6 +19,7 @@ const ARTICLE = '/essays/reading/long/';
 const SHORT = '/essays/reading/short/';
 const OPEN = '/essays/reading/open/';
 const FULL = '/essays/reading/full/';
+const BOXED = '/essays/reading/boxed/';
 const BRIEF = '/essays/reading/brief/';
 const CAPPED = '/essays/reading/capped/';
 const HOME = '/';
@@ -833,4 +834,26 @@ test.describe('a full-width page that asks for its contents open', () => {
     await open(page, 1280, 720);
     expect(await page.evaluate(() => document.body.getAttribute('style'))).toBeNull();
   });
+});
+
+test('an open list clears the leftmost painted edge of the content, not only its text', async ({ page }) => {
+  await open(page, 1440, 900, BOXED);
+  await jumpTo(page, 1);
+  await expect.poll(() => isAway(page)).toBe(false);
+  const g = await page.evaluate(() => {
+    const ink = (l: Element) => {
+      const range = document.createRange();
+      range.selectNodeContents(l);
+      return range.getBoundingClientRect().right;
+    };
+    return {
+      panelLeft: document.querySelector('.boxed')!.getBoundingClientRect().left,
+      textLeft: document.querySelector('main h2[id]')!.getBoundingClientRect().left,
+      labelsRight: Math.max(...[...document.querySelectorAll('.moss-contents-ruler-label')].map(ink)),
+      hidden: document.querySelector<HTMLElement>('.moss-contents-ruler')!.hidden,
+    };
+  });
+  expect(g.hidden).toBe(false);
+  expect(g.panelLeft, 'the panel reaches past the text').toBeLessThan(g.textLeft - 20);
+  expect(g.labelsRight + 24, 'a gutter before the panel').toBeLessThanOrEqual(g.panelLeft + 1);
 });

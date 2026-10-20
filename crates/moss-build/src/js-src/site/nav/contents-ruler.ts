@@ -145,6 +145,21 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   else document.body.append(nav);
   undo.push(() => nav.remove());
 
+  /**
+   * The left edge the list must clear. The first heading's by default; for an
+   * open list the leftmost painted edge of the content: a page whose sections
+   * sit in boxes or panels starts further left than its text, and the labels
+   * would touch the box. Full-bleed bands (`data-width`) are meant to run past
+   * the column and are not counted.
+   */
+  function contentLeft(): number {
+    const text = first.getBoundingClientRect().left;
+    if (!opts.pictures) return text;
+    const boxes = [...article.children].filter((el) => !el.hasAttribute("data-width"));
+    for (let el = first.parentElement; el && el !== article; el = el.parentElement) boxes.push(el);
+    return Math.min(text, ...boxes.map((el) => el.getBoundingClientRect().left));
+  }
+
   let away = true;
   let disposed = false;
   let mo: MutationObserver | undefined;
@@ -164,7 +179,7 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     set(0);
     if (vertical) return;
     const box = article.getBoundingClientRect();
-    const offset = first.getBoundingClientRect().left - box.left;
+    const offset = contentLeft() - box.left;
     // The column is the list's own width: where its labels start, the widest
     // title at the open size, and a gutter before the text.
     const padding = parseFloat(getComputedStyle(labels[0]).paddingInlineStart) || 0;
@@ -216,7 +231,7 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     reserveColumn(vertical, measure);
     let room = 0;
     if (!vertical) {
-      const textLeft = first.getBoundingClientRect().left;
+      const textLeft = contentLeft();
       room = Math.floor(textLeft - GUTTER - labels[0].getBoundingClientRect().left);
     }
     const listHeight = list.getBoundingClientRect().height;

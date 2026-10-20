@@ -204,6 +204,14 @@ contents: open
 
 ${[LONG_LATIN_TITLE, "Nets", "Ropes"].map((t) => `## ${t}\n\n${paragraphs(4)}`).join("\n\n")}
 `,
+    "Essays/Reading/Boxed.md": `---
+title: Boxed
+uid: "crg00110"
+contents: open
+---
+
+${OPEN_SECTIONS.slice(0, 3).map((t) => `::: {.boxed}\n## ${t}\n\n${paragraphs(3)}\n:::`).join("\n\n")}
+`,
     "Essays/Reading/Open.md": `---
 title: Collections
 uid: "crg00106"
@@ -220,7 +228,8 @@ ${openBody}
 lang = "en"
 floating_nav = true
 `,
-    ".moss/theme/style.css": null,
+    // A section in a panel that reaches past the text on both sides.
+    ".moss/theme/style.css": ".boxed { margin-inline: -40px; padding: 24px 40px; background: #eee; }\n",
   },
 };
 
