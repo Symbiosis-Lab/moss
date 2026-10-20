@@ -184,6 +184,17 @@ fn a_comma_joined_keyed_segment_tolerates_a_trailing_bare_flag() {
 }
 
 #[test]
+fn an_unknown_key_among_known_ones_is_ignored_and_recorded() {
+    let p = classify_folder_segments("style:grid,when:past,bogus:1");
+    assert_eq!(p.style.as_deref(), Some("grid"));
+    assert_eq!(p.when.as_deref(), Some("past"));
+    assert_eq!(p.caption, None);
+    assert_eq!(p.unknown_keys, vec!["bogus".to_string()]);
+    let m = emit_marker("/p/", "index.md", &p);
+    assert!(m.contains("unknown=bogus"), "{m}");
+}
+
+#[test]
 fn caption_drops_the_placement_words_it_shared_a_segment_with() {
     // `wide cover` is one segment: `wide` is placement, `cover` is left
     // over. The caption must be the leftover text, not the whole segment

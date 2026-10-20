@@ -39,7 +39,7 @@ use std::path::Path;
 
 use moss_core::asset_snapshot::AssetSnapshot;
 use moss_core::frontmatter_union::ChildrenCount;
-use moss_core::resolve::embed_renderer::folder_list::{marker_decode, LAZY_CARDS_TOKEN, MARKER_END, MARKER_FOLDER_LIST};
+use moss_core::resolve::embed_renderer::folder_list::{marker_decode, KNOWN_KEYS, LAZY_CARDS_TOKEN, MARKER_END, MARKER_FOLDER_LIST};
 use moss_core::resolve::embed_renderer::Sizing;
 use moss_core::resolve::title_params::TitleParams;
 use moss_core::sort::{ResolvedSort, SortAxis};
@@ -96,6 +96,8 @@ struct ParsedMarker<'a> {
     caption: Option<String>,
     /// The card grid's covers all load lazily (see `FolderEmbedParams::lazy_cards`).
     lazy_cards: bool,
+    /// Keys the embed named that moss does not know, comma-joined.
+    unknown_keys: Option<String>,
 }
 
 fn warn_map_fallback_once(path: &str, reason: &str) {
@@ -152,6 +154,7 @@ fn parse_marker_body(body: &str) -> Option<ParsedMarker<'_>> {
                 }
                 "pct" => out.placement.size = Some(v.trim().to_string()),
                 "caption" => out.caption = Some(marker_decode(v.trim())),
+                "unknown" => out.unknown_keys = Some(marker_decode(v.trim())),
                 _ => {}
             }
         } else if tok == "scope_default_tree" {
@@ -947,21 +950,30 @@ fn resolve_markers_impl(
         let embed_ordinal = ordinal.get();
         ordinal.set(embed_ordinal + 1);
         let rendered = match parse_marker_body(body) {
-            Some(parsed) => render_one(
-                &parsed,
-                embed_ordinal,
-                from_md_path,
-                all_docs,
-                project,
-                dir_overrides,
-                site_lang,
-                typesetting,
-                media_lookup,
-                math,
-                is_embed,
-                place_maps,
-                now,
-            ),
+            Some(parsed) => {
+                if let Some(keys) = &parsed.unknown_keys {
+                    crate::build::cli_output::log_warn_problem!(
+                        "[{from_md_path}] folder embed '{}' ignores unknown option(s) {keys}; known options: {}",
+                        parsed.path,
+                        KNOWN_KEYS.join(", ")
+                    );
+                }
+                render_one(
+                    &parsed,
+                    embed_ordinal,
+                    from_md_path,
+                    all_docs,
+                    project,
+                    dir_overrides,
+                    site_lang,
+                    typesetting,
+                    media_lookup,
+                    math,
+                    is_embed,
+                    place_maps,
+                    now,
+                )
+            }
             None => Err(format!("Invalid folder-embed marker: {body}")),
         };
         // The placeholder stays visible; the problem is also reported where
@@ -1658,6 +1670,7 @@ pub fn synthesize_children_marker(
         // caption out of; both are body-embed vocabulary.
         placement: Default::default(),
         caption: None,
+        unknown_keys: Vec::new(),
         // The page's own listing shares the page's one eager slot with its
         // hero or leading image.
         lazy_cards: doc.body_claims_eager,

@@ -280,6 +280,7 @@ fn render_block<H: RenderHooks + ?Sized>(
             out.push_str("</p>\n");
         }
         Block::Callout {
+            unknown_kind: _,
             kind,
             fold,
             title,

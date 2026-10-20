@@ -668,7 +668,7 @@ fn first_paragraph_excerpt(content: &str, strip_callout_marker: bool, math: bool
     for (index, paragraph) in paragraphs.iter().enumerate() {
         let stripped = strip_markdown_inline(paragraph);
         let stripped = stripped.trim();
-        if stripped.is_empty() {
+        if stripped.is_empty() || is_only_links(paragraph, math) {
             continue;
         }
         match lead {
@@ -709,6 +709,40 @@ fn first_paragraph_excerpt(content: &str, strip_callout_marker: bool, math: bool
 struct ExcerptText {
     plain: String,
     markdown: String,
+}
+
+/// Whether `paragraph` is a row of links and separators (`[About](#about) ·
+/// [Cast](#cast)`): navigation, not something the page says. Links of every
+/// form count, including reference links whose definition lives elsewhere.
+fn is_only_links(paragraph: &str, math: bool) -> bool {
+    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+    let mut unresolved = |link: pulldown_cmark::BrokenLink<'_>| {
+        Some((link.reference.to_string().into(), "".into()))
+    };
+    let parser = Parser::new_with_broken_link_callback(
+        paragraph,
+        moss_core::ast::parser_options(math),
+        Some(&mut unresolved),
+    );
+    let (mut depth, mut links) = (0usize, 0usize);
+    for event in parser {
+        match event {
+            Event::Start(Tag::Link { .. } | Tag::Image { .. }) => {
+                depth += 1;
+                links += 1;
+            }
+            Event::End(TagEnd::Link | TagEnd::Image) => depth -= 1,
+            Event::Text(t) | Event::Code(t) | Event::Html(t) | Event::InlineHtml(t)
+                if depth == 0 && t.chars().any(char::is_alphanumeric) =>
+            {
+                return false;
+            }
+            // An equation outside a link is something the page says.
+            Event::InlineMath(_) | Event::DisplayMath(_) if depth == 0 => return false,
+            _ => {}
+        }
+    }
+    links > 0
 }
 
 /// Whether `paragraph` (pre-strip, so its markers survive) is a list rather

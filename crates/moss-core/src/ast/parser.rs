@@ -1799,7 +1799,7 @@ where
 ///   followed by `+` or `-` for foldable callouts, optionally followed
 ///   by space + inline title.
 /// - The kind is canonicalized via [`CalloutKind::from_raw`]; unknown
-///   kinds fall back to [`CalloutKind::Note`] with no diagnostic.
+///   kinds fall back to [`CalloutKind::Note`], keeping the written name.
 ///
 /// Why detection runs on events (not parsed children): the inline
 /// parser collapses `SoftBreak` events into `Inline::Text("\n")`, which
@@ -1850,7 +1850,9 @@ fn detect_and_assemble_callout(
     }
 
     let (raw_kind, fold, title, _marker_byte_len) = parse_callout_marker(&leading)?;
-    let kind = CalloutKind::from_raw(raw_kind).unwrap_or(CalloutKind::Note);
+    let known = CalloutKind::from_raw(raw_kind);
+    let unknown_kind = known.is_none().then(|| raw_kind.to_string());
+    let kind = known.unwrap_or(CalloutKind::Note);
     let title: Option<String> = title.map(|s| s.to_string()).filter(|s| !s.is_empty());
 
     // We've consumed the leading Text events. `i` now points at the
@@ -1939,6 +1941,7 @@ fn detect_and_assemble_callout(
         kind,
         fold,
         title,
+        unknown_kind,
         children: body_blocks,
     };
     Some((block, i))

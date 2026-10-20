@@ -333,6 +333,7 @@ impl Restore<'_> {
             // (`> [!note] [![[x.png]]](/u)`), not an inline vector — the
             // author's bytes go back.
             Block::Callout {
+                unknown_kind: _,
                 title,
                 children,
                 kind: _,

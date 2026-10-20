@@ -28,7 +28,7 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         CliCommandInfo {
             name: "build",
             args: "<folder> [--serve [--watch]] [--no-plugins] [--allow-plugins] [--wait-plugins] [--strict] [--site-url=<url>]",
-            description: "Build the site with plugins. --serve starts a local preview server when the build finishes, and --watch, which only works with --serve, rebuilds on every file change and refreshes the preview. Use --no-plugins for fast CI/CD builds. A plugin that came with the folder and was never allowed in the moss app is refused unless --allow-plugins is passed. --strict exits 1 if the build reported any problems (they are printed to stderr and summarized as `moss: N problems …`); without it a build with warnings still exits 0.",
+            description: "Build the site with plugins. --serve starts a local preview server when the build finishes, on port 8080 or the next free port (there is no --port flag; set MOSS_PREVIEW_PORT_BASE=<port> to start the search elsewhere), and --watch, which only works with --serve, rebuilds on every file change and refreshes the preview. Use --no-plugins for fast CI/CD builds. A plugin that came with the folder and was never allowed in the moss app is refused unless --allow-plugins is passed. --strict exits 1 if the build reported any problems (they are printed to stderr and summarized as `moss: N problems …`); without it a build with warnings still exits 0.",
         },
         CliCommandInfo {
             name: "deploy",
@@ -480,6 +480,13 @@ mod tests {
         let text = help_for("build").expect("build is not self-handled");
         assert!(text.contains("[--serve [--watch]]"), "usage offers --watch on its own: {text}");
         assert!(text.contains("--watch, which only works with --serve"), "help does not say --watch needs --serve: {text}");
+    }
+
+    /// `--serve` has no port flag; the help must say how to move the start.
+    #[test]
+    fn build_help_says_how_to_choose_the_serve_port() {
+        let text = help_for("build").expect("build is not self-handled");
+        assert!(text.contains("MOSS_PREVIEW_PORT_BASE"), "build help does not name the port variable: {text}");
     }
 
     /// The store lives inside the site, at `.moss/history` — the store's own

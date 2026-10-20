@@ -284,18 +284,47 @@ pub fn plan_translation(
         frontmatter::edit_fields(source_text, &original_edits).map_err(PlanError::OriginalNotEditable)?;
     }
 
-    let mut frontmatter = template_file.map(|f| f.frontmatter.clone()).unwrap_or_default();
-    frontmatter.retain(|k, _| !k.starts_with("_template_"));
-    for (k, v) in source.frontmatter {
-        if !is_language_bound(&k, declared_claim_keys) {
-            frontmatter.insert(k, v);
+    // The page is the template's text (else the original's frontmatter lines)
+    // edited in place, so the lines keep their order and a blank field stays blank.
+    let (base, template_body) = match template_file {
+        Some(f) => (f.text.as_str(), true),
+        None => (source_text, false),
+    };
+    let (head, mut body) = match frontmatter::frontmatter_span(base).filter(|s| s.kind == frontmatter::FrontmatterKind::Yaml) {
+        Some(span) => (base.get(..span.body).unwrap_or(""), if template_body { base.get(span.body..).unwrap_or("") } else { "" }),
+        None => ("", if template_body { base } else { "" }),
+    };
+    let head_fields = frontmatter::parse(head).frontmatter;
+    let mut edits: Vec<FieldEdit> = head_fields
+        .keys()
+        .filter(|k| k.starts_with("_template_") || (!template_body && is_language_bound(k, declared_claim_keys)))
+        .map(|k| FieldEdit::Remove { key: k.clone() })
+        .collect();
+    for (k, v) in &source.frontmatter {
+        if !is_language_bound(k, declared_claim_keys) && !v.is_null() && !k.starts_with("_template_") && head_fields.get(k) != Some(v) {
+            edits.push(FieldEdit::Set { key: k.clone(), value: v.clone() });
         }
     }
-    frontmatter.insert("lang".to_string(), Value::String(target_lang.to_string()));
-    frontmatter.insert("translationKey".to_string(), Value::String(key));
-    let body = template_file.map(|f| f.body.clone()).unwrap_or_default();
-    let content = frontmatter::serialize(&frontmatter, &body).map_err(PlanError::Serialize)?;
+    edits.retain(|e| !matches!(e.key(), "lang" | "translationKey"));
+    edits.push(FieldEdit::Set { key: "lang".to_string(), value: Value::String(target_lang.to_string()) });
+    edits.push(FieldEdit::Set { key: "translationKey".to_string(), value: Value::String(key) });
+    let mut content = frontmatter::edit_fields(head, &edits).map_err(PlanError::Serialize)?;
+    let picture = leading_picture(&source.body).filter(|_| leading_picture(body).is_none());
+    if let Some(picture) = picture {
+        content.push_str(picture);
+        content.push('\n');
+        if !body.trim().is_empty() {
+            content.push('\n');
+        }
+        body = body.trim_start_matches(['\r', '\n']);
+    }
+    content.push_str(body);
     Ok(PlannedTranslation { path, content, original_edits })
+}
+
+/// The body's first line when it is a picture (`![alt](src)` or `![[src]]`).
+fn leading_picture(body: &str) -> Option<&str> {
+    body.lines().map(str::trim).find(|l| !l.is_empty()).filter(|l| l.starts_with("!["))
 }
 
 fn is_language_bound(key: &str, declared_claim_keys: &[String]) -> bool {
@@ -529,6 +558,58 @@ mod tests {
         let zh = zh_file();
         let out = translate("work/paper-bridges.md", PAPER, "zh-hans", &[], &[], &[], Some(&zh)).unwrap();
         assert_eq!(frontmatter::parse(&out.content).body, "## 關於作品\n");
+    }
+
+    const ORDERED_ZH: &str = "---\n_template_name: 新作品\nstart:\ntickets:\ncover:\nlayout: article\n---\n## 關於作品\n";
+
+    fn ordered_zh() -> TemplateFile {
+        TemplateFile {
+            lang: Some("zh-hans".to_string()),
+            frontmatter: frontmatter::parse(ORDERED_ZH).frontmatter,
+            body: "## 關於作品\n".to_string(),
+            text: ORDERED_ZH.to_string(),
+        }
+    }
+
+    #[test]
+    fn translation_keeps_the_template_line_order_and_blank_fields() {
+        let zh = ordered_zh();
+        let source = "---\ntitle: Example Show\ncover: poster.jpg\nstart: \"2026-06-01 19:00\"\n---\nBody.\n";
+        let run = || translate("work/example-show.md", source, "zh-hans", &[], &[], &[], Some(&zh)).unwrap().content;
+        let out = run();
+        assert_eq!(out, run(), "the same input writes the same bytes");
+        let at = |needle: &str| out.find(needle).unwrap_or_else(|| panic!("`{needle}` missing from:\n{out}"));
+        assert!(at("start:") < at("tickets:") && at("tickets:") < at("cover:") && at("cover:") < at("layout:"), "{out}");
+        assert!(out.contains("\ntickets:\n"), "a field the original lacks stays blank:\n{out}");
+        assert!(!out.contains("null"), "{out}");
+        assert!(out.contains("cover: poster.jpg"), "{out}");
+        assert!(out.contains("lang: zh-hans") && out.contains("translationKey: example-show"), "{out}");
+    }
+
+    #[test]
+    fn translation_without_a_template_starts_from_the_originals_lines() {
+        let source = "---\ntitle: Example Show\nstart: \"2026-06-01 19:00\"\nend:\ncover: poster.jpg\n---\nBody.\n";
+        let out = translate("work/example-show.md", source, "zh-hans", &[], &[], &[], None).unwrap().content;
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(&lines[..5], ["---", "start: \"2026-06-01 19:00\"", "end:", "cover: poster.jpg", "lang: zh-hans"], "{out}");
+        assert!(!out.contains("Example Show") && !out.contains("Body."), "{out}");
+    }
+
+    #[test]
+    fn translation_carries_the_leading_picture_unless_the_template_has_one() {
+        let zh = ordered_zh();
+        let source = "---\ntitle: Example Show\n---\n\n![Poster](poster.jpg)\n\n# Example Show\n";
+        let out = translate("work/example-show.md", source, "zh-hans", &[], &[], &[], Some(&zh)).unwrap();
+        assert_eq!(frontmatter::parse(&out.content).body, "![Poster](poster.jpg)\n\n## 關於作品\n");
+
+        let bare = translate("work/example-show.md", source, "zh-hans", &[], &[], &[], None).unwrap();
+        assert_eq!(frontmatter::parse(&bare.content).body, "![Poster](poster.jpg)\n");
+
+        let mut with_picture = ordered_zh();
+        with_picture.text = with_picture.text.replace("## 關於作品", "![[banner.jpg]]\n\n## 關於作品");
+        with_picture.body = "![[banner.jpg]]\n\n## 關於作品\n".to_string();
+        let kept = translate("work/example-show.md", source, "zh-hans", &[], &[], &[], Some(&with_picture)).unwrap();
+        assert_eq!(frontmatter::parse(&kept.content).body, with_picture.body);
     }
 
     #[test]

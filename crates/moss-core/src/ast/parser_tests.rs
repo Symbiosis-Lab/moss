@@ -17,6 +17,7 @@ fn first_block(md: &str) -> Block {
 fn parses_basic_callout_with_inline_title() {
     match first_block("> [!note] Heads up\n> Body line 1.\n") {
         Block::Callout {
+            unknown_kind: _,
             kind,
             fold,
             title,
@@ -35,6 +36,7 @@ fn parses_basic_callout_with_inline_title() {
 fn parses_titleless_callout() {
     match first_block("> [!warning]\n> Watch out.\n") {
         Block::Callout {
+            unknown_kind: _,
             kind,
             fold,
             title,
@@ -207,6 +209,7 @@ fn callout_multi_paragraph_body_preserves_blocks() {
     let md = "> [!info] Multi\n> First paragraph.\n>\n> Second paragraph.\n";
     match first_block(md) {
         Block::Callout {
+            unknown_kind: _,
             kind,
             title,
             children,
@@ -2479,4 +2482,19 @@ fn fragments_are_unannotated_when_tracking_is_off() {
         &crate::ast::hooks::DefaultHooks::new(),
     );
     assert!(!html.contains("data-source"), "{html}");
+}
+
+#[test]
+fn unknown_callout_type_renders_as_note_and_keeps_the_written_name() {
+    match first_block("> [!bio]- Bio\n> Body.\n") {
+        Block::Callout { kind, unknown_kind, .. } => {
+            assert_eq!(kind, CalloutKind::Note);
+            assert_eq!(unknown_kind.as_deref(), Some("bio"));
+        }
+        other => panic!("expected Callout, got {other:?}"),
+    }
+    match first_block("> [!tldr]\n> Body.\n") {
+        Block::Callout { unknown_kind, .. } => assert_eq!(unknown_kind, None),
+        other => panic!("expected Callout, got {other:?}"),
+    }
 }

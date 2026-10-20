@@ -29,9 +29,8 @@ use super::url::Url;
 
 /// Canonical callout kind. Obsidian-dialect aliases canonicalize via
 /// [`CalloutKind::from_raw`] (e.g. `tldr`/`summary` → [`CalloutKind::Abstract`]).
-/// Unknown kinds fall back to [`CalloutKind::Note`]; the parser logs at
-/// trace level (Diagnostic threading is a Phase 4 followup — see
-/// `validation::Diagnostic`, today scoped to frontmatter validation).
+/// Unknown kinds fall back to [`CalloutKind::Note`]; the written name is kept
+/// on [`Block::Callout::unknown_kind`] so the build can warn about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CalloutKind {
@@ -52,6 +51,13 @@ pub enum CalloutKind {
     Summary,
     Help,
 }
+
+/// The callout types an author can write, as they appear in the rendered
+/// `data-type`. Aliases (`tldr`, `faq`, ...) collapse into these.
+pub const CALLOUT_TYPES: &[&str] = &[
+    "note", "abstract", "info", "todo", "tip", "success", "question", "warning", "failure",
+    "danger", "bug", "example", "quote",
+];
 
 /// Per-column table alignment declared in GFM source (`|:--|` left,
 /// `|:-:|` center, `|--:|` right; a bare `|---|` is [`ColumnAlignment::None`]).
@@ -214,6 +220,10 @@ pub enum Block {
         kind: CalloutKind,
         fold: Option<Fold>,
         title: Option<String>,
+        /// The name the author wrote when it is not a callout type moss
+        /// knows; the callout then renders as a note.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unknown_kind: Option<String>,
         children: Vec<Block>,
     },
     /// `- item` / `1. item`. Each item is a list of blocks (so list items
@@ -834,6 +844,7 @@ mod tests {
     #[test]
     fn block_callout_round_trips_through_serde() {
         let original = Block::Callout {
+            unknown_kind: None,
             kind: CalloutKind::Warning,
             fold: Some(Fold::Open),
             title: Some("Hey".to_string()),

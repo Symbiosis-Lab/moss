@@ -2300,6 +2300,34 @@ fn a_broken_image_paragraph_is_deliberately_not_the_description() {
     assert_eq!(d, "Prose para.");
 }
 
+/// A paragraph that is only links and separators is a row of section links,
+/// not something to say about the page.
+#[test]
+fn a_paragraph_of_only_links_is_not_the_description() {
+    let nav = "[About](#about) · [Cast](#cast) | [[Tickets]] - [Visit](https://example.test)";
+    let d = extract_description(&format!("{nav}\n\nExample Show runs at Example Hall.\n"), true);
+    assert_eq!(d, "Example Show runs at Example Hall.");
+    assert_eq!(extract_description(&format!("{nav}\n"), true), "");
+    let prose = extract_description("[Example Show](a.md) runs at Example Hall.\n", true);
+    assert_eq!(prose, "Example Show runs at Example Hall.");
+}
+
+/// A row of reference-style links is navigation too, with or without a
+/// definition in the same paragraph.
+#[test]
+fn a_row_of_reference_links_is_not_the_description() {
+    let nav = "[About][a] · [Cast][cast] | [Visit]";
+    let input = format!("{nav}\n\nExample Show runs at Example Hall.\n\n[a]: #about\n[cast]: #cast\n");
+    assert_eq!(extract_description(&input, true), "Example Show runs at Example Hall.");
+    assert_eq!(extract_description(&format!("{nav}\n"), true), "");
+}
+
+/// A link row that also holds an equation is content, not navigation.
+#[test]
+fn a_link_row_with_an_equation_is_still_the_description() {
+    assert_eq!(extract_description("[About](#about) · $x^2$\n", true), "[About](#about) · $x^2$".replace("[About](#about)", "About"));
+}
+
 /// The excerpt parses with the SITE's math setting — the same value the page
 /// renders with. On a math-ON site (the default) `$[^a]$` is an equation:
 /// pulldown emits no reference event and the page displays the characters,

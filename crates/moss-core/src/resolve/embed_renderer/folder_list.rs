@@ -62,6 +62,9 @@ pub struct FolderEmbedParams {
     /// that wraps it. Any segment that is neither a keyed param nor
     /// placement.
     pub caption: Option<String>,
+    /// Keys in the keyed grammar that moss does not know. They are ignored
+    /// for the listing and carried in the marker so the build can warn.
+    pub unknown_keys: Vec<String>,
 }
 
 /// Read a whole folder-embed pothole: keyed params, placement and caption,
@@ -104,20 +107,10 @@ pub fn classify_folder_segments(raw: &str) -> FolderEmbedParams {
 }
 
 /// Recognized keys for the keyed (`key:value` / `key=value`) grammar.
-const KNOWN_KEYS: &[&str] = &["limit", "sort", "style", "depth", "group", "covers", "when", "more", "size"];
+pub const KNOWN_KEYS: &[&str] = &["limit", "sort", "style", "depth", "group", "covers", "when", "more", "size"];
 
-/// Whether a segment belongs to the keyed grammar rather than to placement
-/// or the caption.
-///
-/// A `key:value`/`key=value` token must name a recognized key — otherwise a
-/// colon in prose (`Note: 2024`) misfires as the keyed grammar and silently
-/// eats the caption. A token with NEITHER `:` nor `=` is tolerated rather
-/// than disqualifying: `merge_keyed_params` already treats a colon-less
-/// token as a bare flag (a sizing hint, or silently ignored, per its own
-/// comment), so `limit:3,more` must stay keyed with `more` a no-op, the same
-/// as `merge_keyed_params` parses it standalone. At least one recognized
-/// key is still required, or a plain caption ("wide cover", "This is nice")
-/// would misfire as keyed since every one of its tokens is colon-less.
+/// A segment is keyed when it has at least one known key.
+/// Unknown keys beside a known one are ignored and reported.
 fn is_keyed_segment(segment: &str) -> bool {
     if is_size_token(segment) {
         return true;
@@ -134,7 +127,7 @@ fn is_keyed_segment(segment: &str) -> bool {
     for t in &tokens {
         match t.split_once([':', '=']) {
             Some((k, _)) if KNOWN_KEYS.contains(&k.trim()) => has_known_key = true,
-            Some(_) => return false,
+            Some(_) => {} // unknown key: the segment stays keyed, the key is reported
             None => {} // colon-less bare token — tolerated
         }
     }
@@ -184,7 +177,7 @@ fn merge_keyed_params(out: &mut FolderEmbedParams, raw: &str) {
                         out.more = Some(v.to_string());
                     }
                 }
-                _ => {}
+                other => out.unknown_keys.push(other.to_string()),
             }
         } else if is_size_token(tok) {
             // A bare token that is unambiguously a sizing hint (ends in `%`,
@@ -341,6 +334,9 @@ pub fn emit_marker(path: &str, from: &str, params: &FolderEmbedParams) -> String
     }
     if let Some(n) = params.limit {
         parts.push(format!("limit={}", n));
+    }
+    if !params.unknown_keys.is_empty() {
+        parts.push(format!("unknown={}", marker_encode(&params.unknown_keys.join(","))));
     }
     if params.lazy_cards {
         parts.push(LAZY_CARDS_TOKEN.to_string());

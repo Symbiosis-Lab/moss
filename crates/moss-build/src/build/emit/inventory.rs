@@ -38,7 +38,7 @@ pub struct InventoryEntry {
     pub url_path: String,
     /// The chrome label (nav, breadcrumb, cards) — `label`, not the body H1.
     pub title: String,
-    /// Frontmatter `date:` as written, when present.
+    /// Frontmatter `date:` as written, else the day an event page starts.
     pub date: Option<String>,
     /// `article` or `folder` (a folder index page).
     pub kind: String,
@@ -140,7 +140,7 @@ pub fn build_inventory(
             source_path: doc.source_path.clone(),
             url_path: if doc.slot_only { String::new() } else { doc.url_path.clone() },
             title: doc.label.clone(),
-            date: doc.date.clone(),
+            date: doc.date.clone().or_else(|| doc.event.as_ref().map(|e| e.start.day_key())),
             kind: match doc.kind {
                 moss_core::PageKind::Folder => "folder".to_string(),
                 moss_core::PageKind::Article => "article".to_string(),
@@ -183,4 +183,33 @@ pub fn write_inventory(
         .map_err(|e| format!("Failed to serialize inventory: {}", e))?;
     crate::build::io_utils::write_output(&inventory_path(moss_dir), json.as_bytes())
         .map_err(|e| format!("Failed to write inventory: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::build::types::{EventFields, ParsedDocument};
+    use moss_core::frontmatter_typed::FrontMatter;
+
+    fn event_doc(start: &str, date: Option<&str>) -> ParsedDocument {
+        let fm = FrontMatter { start: Some(start.to_string()), ..Default::default() };
+        ParsedDocument {
+            url_path: "work/example-show/index.html".to_string(),
+            date: date.map(str::to_string),
+            event: EventFields::from_frontmatter(&fm),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn an_event_page_without_a_date_reports_its_start_day() {
+        let rows = build_inventory(&[event_doc("2026-11-03 19:30", None)], false, "en");
+        assert_eq!(rows[0].date.as_deref(), Some("2026-11-03"));
+    }
+
+    #[test]
+    fn a_page_date_wins_over_the_event_start() {
+        let rows = build_inventory(&[event_doc("2026-11-03", Some("2026-10-01"))], false, "en");
+        assert_eq!(rows[0].date.as_deref(), Some("2026-10-01"));
+    }
 }

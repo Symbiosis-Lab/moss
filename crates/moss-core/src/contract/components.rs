@@ -965,9 +965,9 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         data_attrs: &[
             DataAttr {
                 name: "data-type",
-                values: &["note", "info", "tip", "warning", "pending"],
+                values: crate::ast::node::CALLOUT_TYPES,
                 default: "note",
-                description: "v1 callout type. Theme authors target `.callout[data-type=...]` to style by variant.",
+                description: "v1 callout type. Theme authors target `.callout[data-type=...]` to style by variant. Authors may also write the aliases tldr, summary, hint, important, check, done, help, faq, caution, attention, fail, missing, error, cite and pending, which render as the type they stand for; any other name renders as note and warns.",
             },
         ],
         example_html: r#"<div class="moss-callout callout" data-type="note">...</div>"#,

@@ -229,6 +229,7 @@ fn render_block(
             out.push_str("\n\n");
         }
         Block::Callout {
+            unknown_kind: _,
             kind,
             fold,
             title,

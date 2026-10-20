@@ -408,6 +408,18 @@ mod tests {
         assert!(SKILL_DIR.get_file("references/importing.md").is_some());
     }
 
+    /// The `moss new` example must name the file `moss new` writes (the title
+    /// is the file name), and the guide must say what a pictureless card in a
+    /// grid of pictured cards shows.
+    #[test]
+    fn authoring_guide_matches_new_file_naming_and_quote_cards() {
+        let text = SKILL_DIR.get_file("references/authoring.md").unwrap().contents_utf8().unwrap();
+        assert!(text.contains("moss new --translation \"work/Example Show.md\" --lang zh-hans"), "translation example must use the file moss new writes");
+        assert!(!text.contains("work/example-show.md"), "example names a file moss new would not write");
+        assert!(text.contains("named after the title"), "guide must say the file is named after the title");
+        assert!(text.contains("italic quote"), "guide must say a pictureless card shows its description as an italic quote");
+    }
+
     /// Strip code spans from text to leave only scannable prose:
     /// - Triple-backtick fenced code blocks (``` ... ```) are replaced line-by-line
     ///   with blank lines so line counts are preserved.

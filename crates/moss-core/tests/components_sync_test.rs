@@ -407,3 +407,25 @@ fn grid_data_columns_values_match_the_parser_cap() {
     let actual: Vec<String> = attr.values.iter().map(|v| v.to_string()).collect();
     assert_eq!(actual, expected);
 }
+
+/// `describe` must list every callout type an author can write, so the
+/// `data-type` values are exactly the canonical kinds `[!name]` resolves to.
+#[test]
+fn callout_data_type_values_list_every_known_callout_type() {
+    use moss_core::ast::node::{CalloutKind, CALLOUT_TYPES};
+    let callout = COMPONENTS
+        .iter()
+        .find(|c| c.class == "callout")
+        .expect("callout entry");
+    let attr = callout
+        .data_attrs
+        .iter()
+        .find(|a| a.name == "data-type")
+        .expect("data-type entry");
+    assert_eq!(attr.values, CALLOUT_TYPES);
+    for name in CALLOUT_TYPES {
+        let kind = CalloutKind::from_raw(name).unwrap_or_else(|| panic!("{name} must parse"));
+        assert_eq!(kind.as_slug(), *name, "{name} must be its own canonical slug");
+    }
+    assert_eq!(CALLOUT_TYPES.len(), 13);
+}

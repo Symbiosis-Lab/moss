@@ -1209,6 +1209,7 @@ pub fn process_markdown_file(
     // Callout presence: same mechanism, gating the `callouts` stylesheet
     // partial (`build/emit/stylesheet.rs`) rather than an injected asset.
     let has_callout = moss_core::ast::has_callout_recursive(&doc);
+    crate::build::cli_output::warn_unknown_callouts(&doc, file_path);
     // Footnote presence: same mechanism again, but this one gates a runtime
     // SCRIPT (the sidenotes bundle) rather than a stylesheet partial.
     let has_footnotes = !moss_core::ast::footnotes::FootnoteIndex::build(&doc.blocks).is_empty();
