@@ -1,14 +1,14 @@
 {
   "schema": 4,
-  "manifest_sha256": "5968383e1b04f3a11a68986ee692c456c8cc3b31d58312ba174e22f73c0e8449",
-  "raw_bytes": 5198522,
-  "brotli_bytes": 3328141,
+  "manifest_sha256": "48281b79515689a556fcbc97b113b9b4a37b6c478bed5fa3e4d8963885b0b0eb",
+  "raw_bytes": 5173889,
+  "brotli_bytes": 3313209,
   "budget_bytes": 3513889,
-  "margin_bytes": 185748,
-  "margin_percent": 5.286,
+  "margin_bytes": 200680,
+  "margin_percent": 5.711,
   "tiers": {
     "world": 8995,
-    "fine": 4941828
+    "fine": 4917195
   },
   "index": 167716,
   "layers": {
@@ -37,8 +37,8 @@
       "reefs": 41948,
       "salt_flats": 5754,
       "built_up": 440261,
-      "relief": 1620953,
-      "sea_floor": 1888708
+      "relief": 1626622,
+      "sea_floor": 1858406
     }
   },
   "labels": {

@@ -52,20 +52,25 @@ const SOURCES = {
   bathymetry: "ne_10m_bathymetry_all.zip",
 };
 // Eight 90x90-degree gridline-registered tiles making up the 3-arcminute
-// GMT relief grid (source-manifest.toml earth_relief_03m_g_*); the fine
+// GEBCO 2025 relief grid (source-manifest.toml earth_gebco_03m_g_*); the fine
 // tier contours this at native resolution.
 // Filenames name the tile's southwest corner: N00 spans lat 0..90, S90
 // spans lat -90..0; each longitude tag spans 90 degrees starting there.
 const RELIEF_FINE_TILES = [
-  { artifact: "N00W180.earth_relief_03m_g.jp2", latMin: 0, lonMin: -180 },
-  { artifact: "N00W090.earth_relief_03m_g.jp2", latMin: 0, lonMin: -90 },
-  { artifact: "N00E000.earth_relief_03m_g.jp2", latMin: 0, lonMin: 0 },
-  { artifact: "N00E090.earth_relief_03m_g.jp2", latMin: 0, lonMin: 90 },
-  { artifact: "S90W180.earth_relief_03m_g.jp2", latMin: -90, lonMin: -180 },
-  { artifact: "S90W090.earth_relief_03m_g.jp2", latMin: -90, lonMin: -90 },
-  { artifact: "S90E000.earth_relief_03m_g.jp2", latMin: -90, lonMin: 0 },
-  { artifact: "S90E090.earth_relief_03m_g.jp2", latMin: -90, lonMin: 90 },
+  { artifact: "N00W180.earth_gebco_03m_g.jp2", latMin: 0, lonMin: -180 },
+  { artifact: "N00W090.earth_gebco_03m_g.jp2", latMin: 0, lonMin: -90 },
+  { artifact: "N00E000.earth_gebco_03m_g.jp2", latMin: 0, lonMin: 0 },
+  { artifact: "N00E090.earth_gebco_03m_g.jp2", latMin: 0, lonMin: 90 },
+  { artifact: "S90W180.earth_gebco_03m_g.jp2", latMin: -90, lonMin: -180 },
+  { artifact: "S90W090.earth_gebco_03m_g.jp2", latMin: -90, lonMin: -90 },
+  { artifact: "S90E000.earth_gebco_03m_g.jp2", latMin: -90, lonMin: 0 },
+  { artifact: "S90E090.earth_gebco_03m_g.jp2", latMin: -90, lonMin: 90 },
 ];
+// The unit the ladders below, the pack's bands and the renderer's palette
+// all count in: half a metre. It is the unit the approved design was drawn
+// in (the previous source stored its heights at that scale), so the grid is
+// converted into it here and no band moves.
+const BAND_UNIT_METRES = 0.5;
 const RELIEF_FINE_TILE_POINTS = 1801; // 90deg at 0.05deg (3 arcmin) spacing, gridline-registered.
 const RELIEF_FINE_SPACING = 0.05;
 const RELIEF_FINE_SIGMA = 1.2; // grid cells; suppresses marching-squares noise before tracing native-res contours.
@@ -80,7 +85,7 @@ const BUILT_UP_TOLERANCE = { fine: 2 * FINE_PX };
 const SEA_FLOOR_THRESHOLDS = [-6000, -5000, -4000, -3000, -2000, -1000, -200, -100, -50, -30, -20, -10];
 const RELIEF_THRESHOLDS = [100, 200, 400, 700, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 6000];
 // Per-layer bitmask of the logical source datasets behind it (opaque to the
-// Rust decoder). Bit 11 is the 3-arcminute GMT tile set; bit 10, the
+// Rust decoder). Bit 11 is the 3-arcminute GEBCO tile set; bit 10, the
 // 6-arcminute grid the world tier's bands were traced from, is retired
 // with them. Index 0 (coast) mirrors index 1 (land)'s mask (bit 2): every
 // coast stroke comes from land's own rings.
@@ -113,7 +118,7 @@ function parseToml(text) {
 async function verifySources() {
   const manifestBytes = await readFile(MANIFEST);
   const manifest = parseToml(manifestBytes.toString("utf8"));
-  if (manifest.schema !== 1 || manifest.gmt_dataset !== "earth_relief_03m_g") fail("unsupported source manifest");
+  if (manifest.schema !== 1 || manifest.elevation_dataset !== "earth_gebco_03m_g") fail("unsupported source manifest");
   if (manifest.sources.length !== 20) fail("source manifest has an unexpected source count");
   for (const source of manifest.sources) {
     const path = resolve(CACHE, source.artifact);
@@ -495,7 +500,7 @@ function reliefBands(z, lon, lat, spacing, smoothSigma = 0, land = null) {
   let values = Float32Array.from(z);
   // A global grid's first and last columns are the same meridian, so it
   // repeats every nx - 1 columns. The last column is rebuilt from the first
-  // before blurring: in the 3-arcminute GMT tiles it does not hold 180E at
+  // before blurring: in the 3-arcminute tiles it does not hold 180E at
   // all (each eastern tile's last column repeats its own first column, 90E,
   // which put a ridge thousands of metres high down the antimeridian), and
   // the blur spread that ridge into a gap in every band either side of it.
@@ -548,7 +553,7 @@ function reliefBands(z, lon, lat, spacing, smoothSigma = 0, land = null) {
   };
 }
 
-// Decodes one lossless signed-16-bit gridline-registered GMT relief tile
+// Decodes one lossless signed-16-bit gridline-registered relief tile
 // (JPEG2000) to a flat row-major Int16Array via the `opj_decompress` CLI
 // (from the openjpeg project). Node has no JP2 decoder of its own; this
 // mirrors the existing dependency on an external `python3` verifier.
@@ -569,13 +574,14 @@ async function decodeReliefTile(artifact, workDir) {
 // Assembles the eight 90x90-degree tiles into one native-resolution global
 // grid (0.05deg spacing), row 0 = south (lat -90), the ascending latitude
 // reliefBands expects.
-async function readFineReliefGrid() {
+async function readFineReliefGrid(scaleMetres) {
   const workDir = await mkdtemp(join(tmpdir(), "moss-place-map-relief-"));
   try {
     const nx = Math.round(360 / RELIEF_FINE_SPACING) + 1;
     const ny = Math.round(180 / RELIEF_FINE_SPACING) + 1;
     const z = new Float32Array(nx * ny);
     const T = RELIEF_FINE_TILE_POINTS;
+    const toBandUnits = scaleMetres / BAND_UNIT_METRES;
     for (const tile of RELIEF_FINE_TILES) {
       const values = await decodeReliefTile(tile.artifact, workDir);
       const latTop = tile.latMin + 90; // tile-local row 0 is the tile's north edge
@@ -585,7 +591,7 @@ async function readFineReliefGrid() {
         const rowBase = r * T; const gRowBase = gy * nx;
         for (let c = 0; c < T; c++) {
           const gx = Math.round((tile.lonMin + c * RELIEF_FINE_SPACING + 180) / RELIEF_FINE_SPACING);
-          z[gRowBase + gx] = values[rowBase + c];
+          z[gRowBase + gx] = values[rowBase + c] * toBandUnits;
         }
       }
     }
@@ -597,13 +603,13 @@ async function readFineReliefGrid() {
   }
 }
 
-async function makeLayers() {
+async function makeLayers(scaleMetres) {
   const raw = {};
   for (const [name, source] of Object.entries(SOURCES)) {
     if (name === "ice") raw[name] = [...await readGeoJson(source[0]), ...await readGeoJson(source[1])];
     else raw[name] = await readGeoJson(source);
   }
-  const fineGrid = await readFineReliefGrid();
+  const fineGrid = await readFineReliefGrid(scaleMetres);
   const bands = reliefBands(fineGrid.z, fineGrid.lon, fineGrid.lat, RELIEF_FINE_SPACING, RELIEF_FINE_SIGMA, raw.land);
   const bathymetry = raw.bathymetry.filter((feature) => feature.properties?.depth === 6000);
   const fineLayers = new Map();
@@ -915,8 +921,8 @@ async function writePack(bytes, fields, { out = OUT, reportPath = REPORT, budget
 }
 
 async function main() {
-  const { manifestBytes, manifestDigest } = await verifySources();
-  const { worldLayers, fineLayers } = await makeLayers();
+  const { manifest, manifestBytes, manifestDigest } = await verifySources();
+  const { worldLayers, fineLayers } = await makeLayers(manifest.elevation_scale_metres);
   const world = tierPayload(worldLayers, "world"); const fine = tierPayload(fineLayers, "fine");
   const index = tileIndex(fine.refs);
   const labelFeatures = await loadLabelFeatures();

@@ -24,7 +24,7 @@ import zipfile
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[1]
 MANIFEST = REPO_ROOT / "crates/moss-build/data/place-map/source-manifest.toml"
-GMT_MANIFEST_ARTIFACT = "earth_relief_server.txt"
+ELEVATION_MANIFEST_ARTIFACT = "earth_gebco_server.txt"
 EXPECTED_NAMES = {
     "land",
     "lakes",
@@ -38,16 +38,16 @@ EXPECTED_NAMES = {
     "populated_places",
     "geography_regions_polys",
     "geography_regions_elevation_points",
-    "earth_relief_03m_g_n00e000",
-    "earth_relief_03m_g_n00e090",
-    "earth_relief_03m_g_n00w090",
-    "earth_relief_03m_g_n00w180",
-    "earth_relief_03m_g_s90e000",
-    "earth_relief_03m_g_s90e090",
-    "earth_relief_03m_g_s90w090",
-    "earth_relief_03m_g_s90w180",
+    "earth_gebco_03m_g_n00e000",
+    "earth_gebco_03m_g_n00e090",
+    "earth_gebco_03m_g_n00w090",
+    "earth_gebco_03m_g_n00w180",
+    "earth_gebco_03m_g_s90e000",
+    "earth_gebco_03m_g_s90e090",
+    "earth_gebco_03m_g_s90w090",
+    "earth_gebco_03m_g_s90w180",
 }
-GMT_SOURCE_NAMES = {name for name in EXPECTED_NAMES if name.startswith("earth_relief_")}
+ELEVATION_SOURCE_NAMES = {name for name in EXPECTED_NAMES if name.startswith("earth_gebco_")}
 EXPECTED_URLS = {
     "land": "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_land.zip",
     "lakes": "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_lakes.zip",
@@ -61,14 +61,14 @@ EXPECTED_URLS = {
     "populated_places": "https://naturalearth.s3.amazonaws.com/10m_cultural/ne_10m_populated_places.zip",
     "geography_regions_polys": "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_geography_regions_polys.zip",
     "geography_regions_elevation_points": "https://naturalearth.s3.amazonaws.com/10m_physical/ne_10m_geography_regions_elevation_points.zip",
-    "earth_relief_03m_g_n00e000": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00E000.earth_relief_03m_g.jp2",
-    "earth_relief_03m_g_n00e090": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00E090.earth_relief_03m_g.jp2",
-    "earth_relief_03m_g_n00w090": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00W090.earth_relief_03m_g.jp2",
-    "earth_relief_03m_g_n00w180": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00W180.earth_relief_03m_g.jp2",
-    "earth_relief_03m_g_s90e000": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/S90E000.earth_relief_03m_g.jp2",
-    "earth_relief_03m_g_s90e090": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/S90E090.earth_relief_03m_g.jp2",
-    "earth_relief_03m_g_s90w090": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/S90W090.earth_relief_03m_g.jp2",
-    "earth_relief_03m_g_s90w180": "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/S90W180.earth_relief_03m_g.jp2",
+    "earth_gebco_03m_g_n00e000": "https://oceania.generic-mapping-tools.org/server/earth/earth_gebco/earth_gebco_03m_g/N00E000.earth_gebco_03m_g.jp2",
+    "earth_gebco_03m_g_n00e090": "https://oceania.generic-mapping-tools.org/server/earth/earth_gebco/earth_gebco_03m_g/N00E090.earth_gebco_03m_g.jp2",
+    "earth_gebco_03m_g_n00w090": "https://oceania.generic-mapping-tools.org/server/earth/earth_gebco/earth_gebco_03m_g/N00W090.earth_gebco_03m_g.jp2",
+    "earth_gebco_03m_g_n00w180": "https://oceania.generic-mapping-tools.org/server/earth/earth_gebco/earth_gebco_03m_g/N00W180.earth_gebco_03m_g.jp2",
+    "earth_gebco_03m_g_s90e000": "https://oceania.generic-mapping-tools.org/server/earth/earth_gebco/earth_gebco_03m_g/S90E000.earth_gebco_03m_g.jp2",
+    "earth_gebco_03m_g_s90e090": "https://oceania.generic-mapping-tools.org/server/earth/earth_gebco/earth_gebco_03m_g/S90E090.earth_gebco_03m_g.jp2",
+    "earth_gebco_03m_g_s90w090": "https://oceania.generic-mapping-tools.org/server/earth/earth_gebco/earth_gebco_03m_g/S90W090.earth_gebco_03m_g.jp2",
+    "earth_gebco_03m_g_s90w180": "https://oceania.generic-mapping-tools.org/server/earth/earth_gebco/earth_gebco_03m_g/S90W180.earth_gebco_03m_g.jp2",
 }
 EXPECTED_PUBLISHED_VERSIONS = {
     "land": "5.1.1",
@@ -113,10 +113,10 @@ def validate_manifest(manifest: dict) -> list[dict]:
         raise VerificationError("Natural Earth releases must be stated per source")
     if "natural_earth_version" in manifest:
         raise VerificationError("a single Natural Earth version cannot describe these mixed archives")
-    if manifest.get("gmt_dataset") != "earth_relief_03m_g":
-        raise VerificationError("only GMT earth_relief_03m_g is allowed")
-    if manifest.get("gmt_manifest_date") != "2025-05-01":
-        raise VerificationError("GMT manifest date is not the pinned 2025-05-01")
+    if manifest.get("elevation_dataset") != "earth_gebco_03m_g":
+        raise VerificationError("only GMT earth_gebco_03m_g (GEBCO 2025 Grid) is allowed")
+    if manifest.get("elevation_manifest_date") != "2025-08-11":
+        raise VerificationError("GMT manifest date is not the pinned 2025-08-11")
     if manifest.get("natural_earth_license", "").lower().find("public domain") < 0:
         raise VerificationError("Natural Earth public-domain notice is missing")
     if "border" in json.dumps(manifest, sort_keys=True).lower():
@@ -132,7 +132,7 @@ def validate_manifest(manifest: dict) -> list[dict]:
         name = source.get("name")
         if source.get("url") != EXPECTED_URLS[name]:
             raise VerificationError(f"{name}: URL is not the pinned source")
-        if name not in GMT_SOURCE_NAMES and source.get("published_version") != EXPECTED_PUBLISHED_VERSIONS[name]:
+        if name not in ELEVATION_SOURCE_NAMES and source.get("published_version") != EXPECTED_PUBLISHED_VERSIONS[name]:
             raise VerificationError(f"{name}: published version is not the pinned layer version")
         artifact = source.get("artifact")
         if not isinstance(artifact, str) or Path(artifact).name != artifact:
@@ -149,11 +149,14 @@ def validate_manifest(manifest: dict) -> list[dict]:
             raise VerificationError(f"{name}: members must be an exact list, not a wildcard")
         if members is None and (not isinstance(member, str) or "*" in member):
             raise VerificationError(f"{name}: one exact member is required")
-    gmt_hash = manifest.get("gmt_manifest_sha256", "")
-    if len(gmt_hash) != 64 or any(char not in "0123456789abcdef" for char in gmt_hash):
+    elevation_hash = manifest.get("elevation_manifest_sha256", "")
+    if len(elevation_hash) != 64 or any(char not in "0123456789abcdef" for char in elevation_hash):
         raise VerificationError("GMT server manifest hash is required")
-    if manifest.get("gmt_license") != "not specified in the pinned GMT server manifest":
-        raise VerificationError("GMT licence status must remain explicit")
+    licence = manifest.get("elevation_license", "")
+    if "public domain" not in licence or "navigation" not in licence or "endorsement" not in licence:
+        raise VerificationError("GEBCO public-domain statement and its conditions must stay explicit")
+    if manifest.get("elevation_scale_metres") != 1:
+        raise VerificationError("the generator reads GEBCO tiles as whole metres")
     return sources
 
 
@@ -210,20 +213,27 @@ def verify(source_dir: Path) -> dict:
     manifest, manifest_sha256 = load_manifest()
     sources = validate_manifest(manifest)
     receipts = [verify_source(source, source_dir) for source in sorted(sources, key=lambda item: item["name"])]
-    gmt_manifest = source_dir / GMT_MANIFEST_ARTIFACT
-    if gmt_manifest.is_symlink() or gmt_manifest.resolve().parent != source_dir.resolve():
+    elevation_manifest = source_dir / ELEVATION_MANIFEST_ARTIFACT
+    if elevation_manifest.is_symlink() or elevation_manifest.resolve().parent != source_dir.resolve():
         raise VerificationError("GMT server manifest must be a regular file directly in the source cache")
-    if not gmt_manifest.is_file():
-        raise VerificationError(f"missing cached GMT server manifest: {gmt_manifest}")
-    gmt_hash = sha256(gmt_manifest)
-    if gmt_hash != manifest["gmt_manifest_sha256"]:
-        raise VerificationError(f"GMT server manifest SHA-256 {gmt_hash} != {manifest['gmt_manifest_sha256']}")
+    if not elevation_manifest.is_file():
+        raise VerificationError(f"missing cached GMT server manifest: {elevation_manifest}")
+    elevation_hash = sha256(elevation_manifest)
+    if elevation_hash != manifest["elevation_manifest_sha256"]:
+        raise VerificationError(f"GMT server manifest SHA-256 {elevation_hash} != {manifest['elevation_manifest_sha256']}")
+    scales = {
+        line.split("\t")[1].strip("/"): line.split("\t")[4]
+        for line in elevation_manifest.read_text(encoding="utf-8").splitlines()
+        if line.count("\t") > 4
+    }
+    if scales.get(manifest["elevation_dataset"]) != str(manifest["elevation_scale_metres"]):
+        raise VerificationError("elevation_scale_metres differs from the scale in the pinned server manifest")
     return {
         "schema": 1,
         "generator": manifest["generator"],
         "generator_version": manifest["generator_version"],
         "source_manifest_sha256": manifest_sha256,
-        "gmt_manifest_sha256": gmt_hash,
+        "elevation_manifest_sha256": elevation_hash,
         "sources": receipts,
     }
 

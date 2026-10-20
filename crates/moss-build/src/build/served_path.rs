@@ -296,7 +296,7 @@ impl ServedPath {
     /// `compute_binary_hash` produces, 16 chars, though any non-empty
     /// lowercase-hex string is accepted so a future longer digest does not
     /// need a new constructor); `filename` is a bare basename — no `/`, no
-    /// `..` — ending `.svg` or `.json`.
+    /// `..` — ending `.svg`, `.json` or `.txt`.
     pub fn for_place_map_asset(assets_hash: &str, filename: &str) -> Result<Self, ServedPathError> {
         if assets_hash.is_empty() {
             return Err(ServedPathError::InvalidInput("place-map assets hash is empty"));
@@ -307,8 +307,8 @@ impl ServedPath {
         if filename.is_empty() || filename.contains('/') || filename.contains("..") {
             return Err(ServedPathError::InvalidInput("place-map asset filename must be a bare basename"));
         }
-        if !(filename.ends_with(".svg") || filename.ends_with(".json")) {
-            return Err(ServedPathError::InvalidInput("place-map asset filename must end .svg or .json"));
+        if !(filename.ends_with(".svg") || filename.ends_with(".json") || filename.ends_with(".txt")) {
+            return Err(ServedPathError::InvalidInput("place-map asset filename must end .svg, .json or .txt"));
         }
         Ok(ServedPath(format!("{PLACE_MAP_ASSET_PREFIX}{assets_hash}/{filename}")))
     }
@@ -941,6 +941,8 @@ mod tests {
         assert_eq!(tile.as_str(), "_moss/map.87ba30f2b3c09ca9/tile-20-12.svg");
         let index = ServedPath::for_place_map_asset("87ba30f2b3c09ca9", "tiles.json").unwrap();
         assert_eq!(index.as_str(), "_moss/map.87ba30f2b3c09ca9/tiles.json");
+        let notice = ServedPath::for_place_map_asset("87ba30f2b3c09ca9", "NOTICE.txt").unwrap();
+        assert_eq!(notice.as_str(), "_moss/map.87ba30f2b3c09ca9/NOTICE.txt");
     }
 
     #[test]

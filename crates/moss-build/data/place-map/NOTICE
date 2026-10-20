@@ -1,7 +1,11 @@
-Natural Earth vector data are public domain. Source and terms: https://www.naturalearthdata.com/about/terms-of-use/
+Map data acknowledgements
 
-The elevation source is GMT's earth_relief_03m_g grid, SRTM15 Earth Relief v2.7, distributed by the Generic Mapping Tools remote-data service as eight 90-degree tiles. The pinned server manifest identifies it as a 3x3 arc-minute product reduced by Gaussian Cartesian filtering and gives the 2025-05-01 source date; it does not publish a separate licence statement. Source manifest: https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_server.txt. Provenance: Tozer et al., https://doi.org/10.1029/2019EA000658. Preserve the source manifest and provenance with any redistribution and consult the upstream GMT terms for use.
+Natural Earth: vector map data (coastlines, lakes, rivers, ice, reefs, salt flats, urban areas, and the city, mountain-range, peak and river names) are in the public domain. Source and terms: https://www.naturalearthdata.com/about/terms-of-use/
 
-Three further Natural Earth datasets feed the places-explorer's label data (city, mountain range, peak and river names), under the same public-domain terms: `ne_10m_populated_places` (cities), `ne_10m_geography_regions_polys` (mountain ranges, among other named physical regions), and `ne_10m_geography_regions_elevation_points` (peaks). River names are read from the rivers dataset already listed above.
+GEBCO: relief and sea-floor shading is derived from the GEBCO 2025 Grid, distributed by the Generic Mapping Tools remote-data service as earth_gebco_03m_g (https://oceania.generic-mapping-tools.org/server/earth/earth_gebco/earth_gebco_server.txt). Source: GEBCO Compilation Group (2025) GEBCO 2025 Grid (doi:10.5285/37c52e96-24ea-67ce-e063-7086abc05f29)
 
-The checked-in binary is generated offline from the exact source objects and their SHA-256 values in source-manifest.toml. No runtime or build-time network access is required.
+The GEBCO Grid is placed in the public domain and may be used free of charge. Terms of use: https://www.gebco.net/data-products/gridded-bathymetry/terms-of-use
+
+This map is not endorsed by GEBCO, the IHO or the IOC, and does not carry any official status from them. The shading is a simplified, derived rendering of the grid.
+
+The GEBCO Grid should NOT be used for navigation or for any other purpose involving safety at sea. It is made available 'as is'.
