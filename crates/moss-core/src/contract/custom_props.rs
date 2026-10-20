@@ -371,6 +371,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "How far the page gives up on the right for the sidenote gutter, derived by site.css from `--moss-sidenote-reserve` and applied as `<body>` padding. The places explorer's full-width figure adds it back so the map still reaches the window's edge. Not a theme hook: set `--moss-sidenote-reserve` instead.",
     },
     CustomProp {
+        name: "--moss-contents-inset",
+        owner: "body",
+        default: "0px",
+        description: "How far the page moves right to make room for an open contents list, set by the site runtime (contents-ruler.ts) on a page with `contents: open` and applied as `<body>` left padding. The hero and screen-width bands add it back so they still reach the window's left edge. Absent on every other page. Not a theme hook.",
+    },
+    CustomProp {
         name: "--moss-place-figure-top",
         owner: "article.container > figure[data-moss-places-explorer]",
         default: "0px",
