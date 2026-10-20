@@ -25,7 +25,7 @@
  * reload.
  */
 
-import { lockPageScroll } from "./viewport";
+import { holdPageScroll } from "./viewport";
 
 
 
@@ -57,7 +57,6 @@ const LIGHTBOX = `<button class="lightbox-close" aria-label="Close">&times;</but
   let items: MediaItem[] = [];
   let triggers: HTMLElement[] = [];
   let currentIndex = 0;
-  let unlockScroll: (() => void) | null = null;
 
   // The viewer's element, made on first need when the page carries none.
   function lightboxEl(): HTMLElement {
@@ -154,14 +153,13 @@ const LIGHTBOX = `<button class="lightbox-close" aria-label="Close">&times;</but
     if (nextButton) nextButton.hidden = single;
     lightbox.hidden = false;
     lightbox.focus();
-    unlockScroll ??= lockPageScroll();
+    holdPageScroll("fullscreen", true);
   }
 
   function close(): void {
     const lightbox = lightboxEl();
     lightbox.hidden = true;
-    unlockScroll?.();
-    unlockScroll = null;
+    holdPageScroll("fullscreen", false);
     lightbox.querySelector<HTMLVideoElement>(".lightbox-video")?.pause();
     const iframe = lightbox.querySelector<HTMLIFrameElement>(".lightbox-iframe");
     if (iframe) iframe.src = "";

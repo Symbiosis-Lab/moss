@@ -10,6 +10,8 @@
 // Make this a module to allow declare global
 export {};
 
+import { holdPageScroll } from "./viewport";
+
 // Expose toggle functions globally for onclick handlers
 declare global {
   interface Window {
@@ -51,49 +53,65 @@ function isMobileMenuActive(): boolean {
 }
 
 /**
- * Toggle mobile menu visibility.
- *
- * Keeps the hamburger's `aria-expanded` and the menu's `inert` state
- * faithful to `.mobile-open`, so a screen reader knows whether the menu it
- * controls is disclosed (WCAG 4.1.2) and a keyboard user can't tab into a
- * closed, invisible menu (WCAG 2.4.7/2.4.3). See `MOBILE_MENU_QUERY` above.
+ * The one place the menu opens or closes, so every path (button, Escape,
+ * outside click, leaving the mobile width) leaves the same state: `.mobile-open`,
+ * `aria-expanded` (WCAG 4.1.2), `inert` on the closed links (2.4.3/2.4.7), the
+ * page's scroll lock and, on open, focus in the menu.
+ * The sheet starts where the header ends, which only layout knows.
  */
+function setMobileMenuOpen(open: boolean, returnFocus = false): void {
+  const navLinks = document.querySelector<HTMLElement>(".nav-links");
+  const button = document.querySelector<HTMLElement>(".mobile-menu-button");
+  if (!navLinks) return;
+
+  navLinks.classList.toggle("mobile-open", open);
+  button?.setAttribute("aria-expanded", String(open));
+  syncMobileMenuInert(navLinks, open);
+
+  if (open) {
+    holdPageScroll("menu", true);
+    placeMobileMenu(navLinks);
+    navLinks.querySelector<HTMLElement>("a")?.focus({ preventScroll: true });
+  } else {
+    holdPageScroll("menu", false);
+    if (returnFocus) button?.focus();
+  }
+}
+
+/** Top edge of the sheet: the header's bottom edge, never above the viewport. */
+function placeMobileMenu(navLinks: HTMLElement): void {
+  const header = navLinks.closest("header");
+  if (header) navLinks.style.top = `${Math.max(0, header.getBoundingClientRect().bottom)}px`;
+}
+
 function toggleMobileMenu(): void {
   const navLinks = document.querySelector<HTMLElement>(".nav-links");
-  const button = document.querySelector(".mobile-menu-button");
-  if (navLinks) {
-    const open = navLinks.classList.toggle("mobile-open");
-    button?.setAttribute("aria-expanded", String(open));
-    syncMobileMenuInert(navLinks, open);
-  }
+  if (navLinks) setMobileMenuOpen(!navLinks.classList.contains("mobile-open"));
 }
 
 // Expose functions globally
 window.toggleMobileMenu = toggleMobileMenu;
 
-// Keep `.nav-links`' `inert` state correct as the viewport crosses
-// MOBILE_MENU_QUERY — e.g. rotating a phone past 20rem, or resizing a
-// desktop window down past it. Applied once on load (the menu starts closed
-// under the mobile query, open/normal above it — never `mobile-open` on
-// first paint) and again on every query match/unmatch after that.
-function applyMobileMenuInert(): void {
-  // Re-query rather than closing over the node: a preview morph can replace
-  // `.nav-links` outright, and a stale reference would keep setting `inert` on
-  // a detached element while the live menu stayed tabbable.
+// Re-queries `.nav-links` rather than closing over it: a preview morph can
+// replace the node, and a stale reference would leave the live menu tabbable.
+function syncMobileMenuToViewport(): void {
   const navLinks = document.querySelector<HTMLElement>(".nav-links");
-  if (navLinks) syncMobileMenuInert(navLinks, navLinks.classList.contains("mobile-open"));
+  // The lock is held only while a live `.nav-links` is open.
+  const open = navLinks?.classList.contains("mobile-open") ?? false;
+  if (!open) holdPageScroll("menu", false);
+  if (!navLinks) return;
+  // An open sheet (and its scroll lock) must not outlive the width that made it one.
+  if (open && !isMobileMenuActive()) setMobileMenuOpen(false);
+  else syncMobileMenuInert(navLinks, open);
 }
 
-applyMobileMenuInert();
-window.matchMedia?.(MOBILE_MENU_QUERY).addEventListener?.("change", applyMobileMenuInert);
+syncMobileMenuToViewport();
+window.matchMedia?.(MOBILE_MENU_QUERY).addEventListener?.("change", syncMobileMenuToViewport);
 
-// `inert` is a reflected IDL property, and idiomorph reconciles ATTRIBUTES —
-// so a same-URL rebuild whose incoming markup has no `inert` attribute clears
-// it from the live menu, silently restoring the tab stops this exists to
-// remove. Nothing about the menu's open state changed, so nothing else would
-// notice. Re-assert after every patch — a menu silently regaining tab stops
-// it should not have is a WCAG 2.4.3/2.4.7 violation.
-document.addEventListener("moss-morph-patched", applyMobileMenuInert);
+// idiomorph reconciles attributes, so a rebuild can drop `inert` (or the
+// open class) from the live menu with nothing else noticing; re-assert after
+// every patch.
+document.addEventListener("moss-morph-patched", syncMobileMenuToViewport);
 
 /**
  * Toggle theme: light ↔ dark.
@@ -152,24 +170,21 @@ window.toggleTheme = toggleTheme;
 // Close mobile menu when clicking outside
 document.addEventListener("click", function (event: MouseEvent) {
   const navLinks = document.querySelector<HTMLElement>(".nav-links");
-  const mobileButton = document.querySelector(".mobile-menu-button");
-
-  if (
-    navLinks &&
-    mobileButton &&
-    navLinks.classList.contains("mobile-open")
-  ) {
-    const target = event.target as Element;
-    // Check if click is outside both the menu and the button
-    if (!navLinks.contains(target) && !mobileButton.contains(target)) {
-      navLinks.classList.remove("mobile-open");
-      // Same faithfulness toggleMobileMenu's close path keeps — this is the
-      // other way the menu closes, and both must leave aria-expanded/inert
-      // correct or assistive tech is told the menu is open when it is not.
-      mobileButton.setAttribute("aria-expanded", "false");
-      syncMobileMenuInert(navLinks, false);
-    }
+  const button = document.querySelector(".mobile-menu-button");
+  const target = event.target as Element;
+  if (navLinks?.classList.contains("mobile-open") && !navLinks.contains(target) && !button?.contains(target)) {
+    setMobileMenuOpen(false);
   }
+});
+
+document.addEventListener("keydown", (event: KeyboardEvent) => {
+  if (event.key !== "Escape" || event.defaultPrevented) return;
+  if (document.querySelector(".nav-links.mobile-open")) setMobileMenuOpen(false, true);
+});
+
+window.addEventListener("resize", () => {
+  const navLinks = document.querySelector<HTMLElement>(".nav-links.mobile-open");
+  if (navLinks) placeMobileMenu(navLinks);
 });
 
 // Restore saved font scale on every page — runs before DOMContentLoaded,

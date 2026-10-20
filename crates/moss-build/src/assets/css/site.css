@@ -1876,10 +1876,10 @@ footer.container hr::before {
   white-space: nowrap;
 }
 
-/* --moss-header-ink: the nav links' colour on the header band. Not applied
-   inside the opened phone menu, which sits on the page background rather than
-   on the band. Hover and active (below) keep the accent. */
-.main-nav a:not(.mobile-open *) {
+/* --moss-header-ink: the nav links' colour on the header band. The opened
+   phone menu styles its own links (12b), taking this as the default for
+   --moss-menu-ink. Hover and active (below) keep the accent. */
+.main-nav a {
   color: var(--moss-header-ink, var(--moss-color-text-secondary));
 }
 
@@ -1947,16 +1947,17 @@ header:has(+ .moss-hero[data-header="over"]) {
 
 /* Nav links and the site name set their own colour from the base sheet, which
    would stay dark over the photo; they take the header's light colour back.
-   The opened mobile panel sits on the page background, so its links keep the
-   base colour. */
-header:has(+ .moss-hero[data-header="over"]) :where(a, button, .site-name):not(.mobile-open *) {
+   The phone menu's sheet is opaque and not over the photo, so its links keep
+   their own colour. The open sheet is excluded by `.mobile-open`, a closing
+   one by `inert`, which it carries through the fade after `.mobile-open` goes. */
+header:has(+ .moss-hero[data-header="over"]) :where(a, button, .site-name):not(.nav-links:is(.mobile-open, [inert]) *) {
   color: inherit;
 }
 
 /* Focus rings sit on the photo, so they use the light header colour rather
    than the accent, which can fall below contrast on a dark image. The opened
-   mobile panel keeps the accent ring, since it sits on the page background. */
-header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.mobile-open *) {
+   mobile sheet keeps the accent ring: it is opaque, not over the photo. */
+header:has(+ .moss-hero[data-header="over"]) :focus-visible:not(.nav-links:is(.mobile-open, [inert]) *) {
   outline-color: #ffffff;
 }
 
@@ -3332,12 +3333,38 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
   padding: 0.25rem;
   cursor: pointer;
   color: var(--moss-color-text-secondary);
-  transition: all 0.2s ease;
+  transition: color 0.2s ease, background-color 0.2s ease;
 }
 
 .mobile-menu-button:hover {
   background: var(--moss-color-surface);
   color: var(--moss-color-text);
+}
+
+/* The three strokes become a cross: the outer two move to the middle and
+   rotate, the middle one fades. */
+.mobile-menu-button line {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 160ms ease-out, opacity 160ms ease-out;
+}
+
+.mobile-menu-button[aria-expanded="true"] line:nth-child(2) {
+  transform: translateY(6px) rotate(45deg);
+}
+
+.mobile-menu-button[aria-expanded="true"] line:nth-child(3) {
+  transform: translateY(-6px) rotate(-45deg);
+}
+
+.mobile-menu-button[aria-expanded="true"] line:nth-child(1) {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-menu-button line {
+    transition: opacity 160ms ease-out;
+  }
 }
 
 /* Invisible 44px hit area over the 32px icon. Only ever shown below the
@@ -5679,123 +5706,116 @@ article a:where(:not(.moss-btn)):focus {
    ========================================================================== */
 
 @media (max-width: 20rem) {
-  .nav-content {
-    position: relative;
-  }
-
   .mobile-menu-button {
     display: block;
   }
 
+  /* The open menu is a sheet from the header's bottom edge (theme.ts measures
+     it into `top` on every open) to the bottom of the viewport, on the
+     header's own background so the header's rule is the one line between
+     them. Closed, it has no height and no padding, so it adds no
+     page scroll; both step away only after the fade-out. Its links are a
+     single column (`flex-wrap: nowrap`; the desktop rule's `wrap` would make a
+     bounded column wrap into extra columns), and a long list scrolls inside
+     the sheet.
+
+     `align-self: stretch` is needed: `.nav-links` centres itself in the
+     `.nav-right` row above, and current Chromium applies that to a fixed
+     child too, which then shrinks to its content and floats mid-screen. */
   .nav-links {
-    /* Absolute positioning removes from flex flow */
-    position: absolute;
-    top: 100%;
+    position: fixed;
+    bottom: 0;
     left: 0;
     right: 0;
     z-index: 100;
-
-    /* Hidden by default.
-
-       The panel is sized by its own links, not by a height number. It used to
-       open to `max-height: 200px`, which holds about three links, and an
-       author's nav item count is unbounded — but the failure was not the
-       simple one of losing the fourth link off the bottom. `.nav-links`
-       inherits `flex-wrap: wrap` from the desktop rule above, and a COLUMN
-       flex container with a bounded height wraps into extra COLUMNS: measured
-       in both engines at 300px wide, six links rendered as two columns of
-       three, ten as four columns, and in WebKit twelve pushed three labels
-       past the right edge where `overflow: hidden` deleted them. So the menu
-       silently became a cramped grid long before it lost anything, and then
-       lost things anyway.
-
-       `flex-wrap: nowrap` keeps a column a column, and the open panel is as
-       tall as its links: its only height bound is the viewport, which is a
-       safety valve rather than a size — a menu longer than the screen scrolls
-       instead of running off the bottom unreachable. Only opacity and
-       visibility animate. The panel is absolutely positioned and overlays the
-       page, so nothing below it moves and a height tween buys nothing a fade
-       does not.
-
-       `max-height: 0` when closed is not a size either: it is what stops a
-       hidden panel from contributing scrollable overflow to the page (measured
-       at 12 links: without it a closed menu made a 600px viewport scroll to
-       624). It steps at 0s AFTER the fade, so the panel keeps its full height
-       for the whole of the fade out, and regains it instantly on the way in. */
+    align-self: stretch;
+    box-sizing: border-box;
     display: flex;
-    max-height: 0;
-    overflow-y: auto;
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity 0.2s ease-out, visibility 0s linear 0.2s,
-      max-height 0s linear 0.2s, padding-top 0s linear 0.2s;
-
-    /* Vertical stack */
     flex-direction: column;
     flex-wrap: nowrap;
     align-items: flex-start;
     gap: 0;
-
-    /* Clean appearance */
-    background: var(--moss-color-bg);
+    max-height: 0;
+    padding: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--moss-menu-bg, var(--moss-header-bg, var(--moss-color-bg)));
     border: none;
     box-shadow: none;
-    padding: 0;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-0.5rem);
+    transition: opacity 160ms ease-out, transform 160ms ease-out,
+      visibility 0s linear 160ms, max-height 0s linear 160ms,
+      padding 0s linear 160ms;
   }
 
   .nav-links.mobile-open {
-    max-height: calc(100dvh - 100%);
+    max-height: none;
+    padding: 1.75rem var(--moss-container-padding) 2rem;
     opacity: 1;
     visibility: visible;
-    transition: opacity 0.2s ease-out;
-    padding-top: var(--moss-space-sm);
+    transform: none;
+    transition: opacity 160ms ease-out, transform 160ms ease-out;
   }
 
-  .nav-links a {
-    /* Real padding, not just 12a's pseudo-element, because this link is
-       inside the open panel: `position: absolute` on `.nav-links` (above)
-       already takes the whole panel out of flow, so growing a real box here
-       costs nothing outside the panel's own (already unbounded) height —
-       none of 12a's "must not change the row it sits in" reasoning applies.
-       Combined with 12a's ::after, the panel's links clear the 44px floor
-       with room to spare (17px text + 32px padding = 49px real box, before
-       12a's own ±16px cap even applies). */
-    padding: var(--moss-space-sm) 0;
-    border-bottom: none;
+  /* `.main-nav .nav-links a` (0,2,1) outranks `.main-nav a` and ties
+     `.main-nav a.active` (0,2,1), which it beats by coming later in the
+     source; the header=over link colour steps aside for the sheet (see its
+     `:not`), so the sheet's links are styled in one place.
+     The ink follows the header band when a theme sets one. The underline is a
+     background gradient, not a border, so it never collides with the link's
+     `::after` hit area. */
+  .main-nav .nav-links a {
+    align-self: flex-start;
+    padding: 0.55rem 0;
+    border: 0;
+    border-radius: 2px;
+    color: var(--moss-menu-ink, var(--moss-header-ink, var(--moss-color-text)));
+    font: 400 var(--moss-menu-link-size, 1.875rem) / 1.15 var(--moss-font-heading, var(--moss-font-body));
+    white-space: normal;
+    overflow-wrap: anywhere;
+    background: linear-gradient(currentColor, currentColor) no-repeat left calc(100% - 0.4rem) / 0 1.5px;
+    transition: color 160ms ease-out, background-size 220ms ease-out;
   }
 
-  /* Cancels 12a's `::after` extension entirely here — not just at the
-     panel's own edges, on every link. Two reasons, both about this panel's
-     own shape: (1) `.nav-links` here is the open panel's own scroll
-     container (`overflow-y: auto`, above), and any descendant box — even an
-     invisible one — that reaches past its content edge counts toward its
-     scrollable overflow, which is exactly the "does it scroll when it
-     should not" failure nav-mobile.spec.ts exists to catch; (2) this same
-     rule sets `gap: 0` between stacked links (a vertical column, "Vertical
-     stack" above), so 12a's row-gap increase does not reach this panel at
-     all — a ±16px cap sized for a 32px gap would overlap a 0px one by
-     32px between every pair of stacked links. Nothing is lost: the real
-     padding just above already gives every link in the panel a 49px box
-     (17px text + 32px padding), comfortably past the 44px floor on its
-     own. */
+  .main-nav .nav-links a.active {
+    color: var(--moss-color-ui-accent);
+    background-size: 100% 1.5px;
+  }
+
+  .main-nav .nav-links a:active {
+    background-size: 100% 1.5px;
+    opacity: 0.7;
+  }
+
+  .main-nav .nav-links a:focus-visible {
+    background-size: 100% 1.5px;
+    outline-offset: 0.35rem;
+  }
+
+  /* The link's whole box is already well over 44px tall; 12a's extension
+     would only add scrollable overflow to the sheet. */
   .nav-links a::after {
     inset-block: 0;
   }
+}
 
-  .nav-links a:hover {
-    background: transparent;
-    color: var(--moss-color-ui-accent);
+@media (max-width: 20rem) and (hover: hover) {
+  .main-nav .nav-links a:hover {
+    background-size: 100% 1.5px;
   }
 }
 
-/* The menu's fade is affordance only — open and closed are fully described by
-   the end states, so reduced motion jump-cuts between them. Dropping the whole
-   shorthand also drops the 0.2s hold on `visibility`, which is what makes the
-   close instant rather than merely un-animated. */
+/* Reduced motion keeps the fade and the colour change and drops the slide and
+   the drawn underline. */
 @media (prefers-reduced-motion: reduce) and (max-width: 20rem) {
-  .nav-links,
-  .nav-links.mobile-open {
-    transition: none;
+  .nav-links {
+    transform: none;
+  }
+
+  .main-nav .nav-links a {
+    transition-property: color;
   }
 }
 

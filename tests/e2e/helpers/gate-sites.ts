@@ -1360,6 +1360,11 @@ typesetting: vertical
   },
 };
 
+const POSTER_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR4nGMwSFiAFTEMLQkAlntMAXEm5KkAAAAASUVORK5CYII=",
+  "base64",
+);
+
 // ── The narrow-viewport hamburger menu ───────────────────────────────────────
 // Six nav pages, which is the point: the menu used to open to a fixed
 // `max-height: 200px`, and because `.nav-links` inherits `flex-wrap: wrap` from
@@ -1367,9 +1372,27 @@ typesetting: vertical
 // extra COLUMNS rather than clipping it. Six links rendered as two columns of
 // three in both engines. Three pages would not have shown it. Served by
 // playwright/nav-mobile.config.ts.
+//
+// `cover` is the one page that is not a nav item: a `header=over` hero, for the
+// menu's link colours over a photo.
 export const NAV_MOBILE_GATE: ScratchSiteSpec = {
   name: "nav-mobile-gate",
   files: {
+    "poster.png": POSTER_PNG,
+    "cover.md": `---
+title: Cover
+uid: "nmg00108"
+listed: false
+---
+
+:::hero {header=over}
+![](/poster.png)
+
+Cover words
+:::
+
+Body text.
+`,
     "index.md": `---
 title: Nav Mobile
 uid: "nmg00101"
@@ -1404,7 +1427,7 @@ nav: true
 # Projects
 `,
     "Photography.md": `---
-title: Photography
+title: Photography and Film Archive
 uid: "nmg00105"
 nav: true
 ---
@@ -3386,11 +3409,6 @@ Body text.
 // only its opening hero (nothing listed under it: the other pages are
 // `listed: false`), and `about` joins the footer so there is a footer to
 // measure the gap to. Served by playwright/theme-floor-hooks.config.ts.
-const POSTER_PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR4nGMwSFiAFTEMLQkAlntMAXEm5KkAAAAASUVORK5CYII=",
-  "base64",
-);
-
 export const THEME_FLOOR_HOOKS_GATE: ScratchSiteSpec = {
   name: "theme-floor-hooks-gate",
   files: {

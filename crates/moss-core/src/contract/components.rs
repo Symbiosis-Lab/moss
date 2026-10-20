@@ -2904,7 +2904,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "The nav link list. The link for the page currently being viewed additionally carries the bare class `active` — style `.nav-links .active`, not a `moss-` class. Under `[site] header = \"nav\"` the list always opens with an unstyled Home link ahead of the site's own nav items, carrying `active` and `aria-current=\"page\"` together while on the home page. That mode drops the breadcrumb trail, so a nav item whose section contains the page being viewed — without being that exact page — carries `active` and `aria-current=\"true\"` instead of `\"page\"`, the one remaining cue for which section a deep page is under.",
+        description: "The nav link list. The link for the page currently being viewed carries the bare class `active` — style `.nav-links .active`, not a `moss-` class — and `aria-current=\"page\"`. Below 20rem (320px) the list becomes a full-screen sheet under the header, opened by `.mobile-menu-button`; set `--moss-menu-bg`, `--moss-menu-ink` and `--moss-menu-link-size` to restyle it rather than its selectors. Under `[site] header = \"nav\"` the list always opens with an unstyled Home link ahead of the site's own nav items. That mode drops the breadcrumb trail, so a nav item whose section contains the page being viewed — without being that exact page — carries `active` and `aria-current=\"true\"` instead of `\"page\"`, the one remaining cue for which section a deep page is under.",
     },
     ComponentEntry {
         class: "site-logo",
@@ -2948,7 +2948,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "The hamburger. Emitted on every page and hidden by media query above the mobile breakpoint — it is not conditionally rendered, so a rule that shows it always will.",
+        description: "The hamburger. Emitted on every page and hidden by media query above the mobile breakpoint — it is not conditionally rendered, so a rule that shows it always will. While the menu is open its three strokes form a cross; its `aria-label` stays \"Menu\" and `aria-expanded` carries open or closed.",
     },
     ComponentEntry {
         class: "nav-search-btn",

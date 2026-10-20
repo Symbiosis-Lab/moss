@@ -80,7 +80,7 @@ function navLinks(labels: string[], { open = false, activeIndex = -1 }: { open?:
 }
 
 function hamburger() {
-  return `<button class="mobile-menu-button" aria-label="Toggle menu" aria-expanded="false" aria-controls="nav-links"><svg viewBox="0 0 24 24" width="24" height="24"><line x1="3" y1="12" x2="21" y2="12"/></svg></button>`;
+  return `<button class="mobile-menu-button" aria-label="Menu" aria-expanded="false" aria-controls="nav-links"><svg viewBox="0 0 24 24" width="24" height="24"><line x1="3" y1="12" x2="21" y2="12"/></svg></button>`;
 }
 
 function subscribeForm() {

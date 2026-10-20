@@ -218,13 +218,31 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-header-ink",
         owner: "body > header",
         default: "var(--moss-color-text-secondary)",
-        description: "Colour of the nav links in the header, and of the site name beside them (whose own default is `var(--moss-color-text)`). Hover and the current page keep the accent colour, and the opened phone menu, which sits on the page background rather than on the band, keeps its own. Under `header=over` the links take the light colour of the photo whatever this is set to. Use it with `--moss-header-bg` so the text stays readable on the band.",
+        description: "Colour of the nav links in the header, and of the site name beside them (whose own default is `var(--moss-color-text)`). Hover and the current page keep the accent colour. The opened phone menu takes it too, unless `--moss-menu-ink` is set. Under `header=over` the links take the light colour of the photo whatever this is set to. Use it with `--moss-header-bg` so the text stays readable on the band.",
     },
     CustomProp {
         name: "--moss-header-rule",
         owner: "body > header",
         default: "var(--moss-border-light)",
         description: "Colour of the hairline under the header's navigation. Set it to `transparent` when `--moss-header-bg` gives the header a band, since the band's own edge already divides it from the page; the hairline would otherwise draw inside the band.",
+    },
+    CustomProp {
+        name: "--moss-menu-bg",
+        owner: ".nav-links",
+        default: "var(--moss-header-bg, var(--moss-color-bg))",
+        description: "Background of the opened phone menu, the full-screen sheet that replaces the nav links below 20rem (320px). It follows the header's band, so with `--moss-header-bg` set the sheet matches it and the header's own rule is the only line between them. Keep it opaque: the page behind must not show through.",
+    },
+    CustomProp {
+        name: "--moss-menu-ink",
+        owner: ".nav-links",
+        default: "var(--moss-header-ink, var(--moss-color-text))",
+        description: "Colour of the links in the opened phone menu. The current page keeps the interface accent colour. Set it with `--moss-menu-bg` so the links stay readable on the sheet.",
+    },
+    CustomProp {
+        name: "--moss-menu-link-size",
+        owner: ".nav-links",
+        default: "1.875rem",
+        description: "Font size of the links in the opened phone menu, set in the heading font. The links stay in one column, flush left on the page gutter, and a label too long for the width wraps.",
     },
     CustomProp {
         name: "--moss-footer-bg",

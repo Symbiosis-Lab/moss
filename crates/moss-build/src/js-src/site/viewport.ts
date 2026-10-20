@@ -128,30 +128,42 @@ export function verticalSlot(
  * back. The root's own width says that, not `clientWidth`: once overflow is
  * hidden, `clientWidth` no longer subtracts a gutter that is still kept.
  *
- * Locks nest: the page unlocks when the last one is released, in any order.
- * Returns the function that releases this lock; calling it twice is harmless.
+ * Holds are keyed by owner and recorded in one object on `window`, because
+ * the scripts that lock the page (menu, search, picture viewer) ship as
+ * separate bundles, each with its own copy of this module. The page unlocks
+ * when the last owner lets go, in any order; holding twice, or releasing an
+ * owner that holds nothing, changes nothing.
  */
-let held = 0;
-let saved = { overflow: "", gutter: "", padding: "" };
+interface PageScrollState {
+  owners: Set<string>;
+  saved: { overflow: string; gutter: string; padding: string };
+}
 
-export function lockPageScroll(): () => void {
+function pageScroll(): PageScrollState {
+  const w = window as unknown as { __mossPageScroll?: PageScrollState };
+  return (w.__mossPageScroll ??= { owners: new Set(), saved: { overflow: "", gutter: "", padding: "" } });
+}
+
+export function holdPageScroll(owner: string, on: boolean): void {
+  const state = pageScroll();
+  if (state.owners.has(owner) === on) return;
   const root = document.documentElement;
-  if (held++ === 0) {
-    saved = { overflow: root.style.overflow, gutter: root.style.scrollbarGutter, padding: root.style.paddingRight };
-    const width = root.getBoundingClientRect().width;
-    if (window.innerWidth - root.clientWidth > 0) root.style.scrollbarGutter = "stable";
-    root.style.overflow = "hidden";
-    const lost = root.getBoundingClientRect().width - width;
-    if (lost > 0) root.style.paddingRight = `${(parseFloat(getComputedStyle(root).paddingRight) || 0) + lost}px`;
-  }
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    if (--held === 0) {
-      root.style.overflow = saved.overflow;
-      root.style.scrollbarGutter = saved.gutter;
-      root.style.paddingRight = saved.padding;
+  if (on) {
+    if (state.owners.size === 0) {
+      state.saved = { overflow: root.style.overflow, gutter: root.style.scrollbarGutter, padding: root.style.paddingRight };
+      const width = root.getBoundingClientRect().width;
+      if (window.innerWidth - root.clientWidth > 0) root.style.scrollbarGutter = "stable";
+      root.style.overflow = "hidden";
+      const lost = root.getBoundingClientRect().width - width;
+      if (lost > 0) root.style.paddingRight = `${(parseFloat(getComputedStyle(root).paddingRight) || 0) + lost}px`;
     }
-  };
+    state.owners.add(owner);
+  } else {
+    state.owners.delete(owner);
+    if (state.owners.size === 0) {
+      root.style.overflow = state.saved.overflow;
+      root.style.scrollbarGutter = state.saved.gutter;
+      root.style.paddingRight = state.saved.padding;
+    }
+  }
 }

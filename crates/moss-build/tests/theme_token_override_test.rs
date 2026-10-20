@@ -160,7 +160,7 @@ fn header_tokens_are_read_by_moss_rules() {
     let css = moss_css(&out).replace(' ', "");
 
     assert!(css.contains("body>header{background:var(--moss-header-bg,transparent)}"), "header band: {css}");
-    assert!(css.contains(".main-nava:not(.mobile-open*){color:var(--moss-header-ink,"), "nav ink: {css}");
+    assert!(css.contains(".main-nava{color:var(--moss-header-ink,"), "nav ink: {css}");
     assert!(css.contains("body>header.site-name{color:var(--moss-header-ink,"), "site name ink: {css}");
 }
 

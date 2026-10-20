@@ -322,20 +322,12 @@ impl<'a> NavigationBuilder<'a> {
                     }
                 };
                 let is_current_page = self.current_page_url.map_or(false, |url| url == doc.url_path);
-                // `nav` header mode has no breadcrumb trail to say "you are
-                // somewhere under this section" on a deep page (the section's
-                // own nav item is the only cue left), so it marks that item
-                // itself: `aria-current="true"` for a containing section,
-                // `"page"` reserved for the exact page, same as Home above.
-                // Brand mode is unaffected — its plain `class="active"`-on-
-                // exact-match behavior (and the breadcrumb trail alongside
-                // it) is unchanged.
+                // The exact page is `aria-current="page"` in both modes. Only
+                // `nav` header mode, which has no breadcrumb trail to say "you
+                // are somewhere under this section", also marks the containing
+                // section (`aria-current="true"`).
                 let attrs = if is_current_page {
-                    if nav_mode {
-                        r#" class="active" aria-current="page""#
-                    } else {
-                        r#" class="active""#
-                    }
+                    r#" class="active" aria-current="page""#
                 } else if nav_mode && is_current_nav_section(doc, self.current_page_url) {
                     r#" class="active" aria-current="true""#
                 } else {
@@ -362,7 +354,7 @@ impl<'a> NavigationBuilder<'a> {
             self.term_nav.iter().filter(|entry| entry.edition == self.page_edition)
         {
             let is_current = self.current_page_url == Some(format!("{key}/index.html").as_str());
-            let attrs = if is_current { r#" class="active""# } else { "" };
+            let attrs = if is_current { r#" class="active" aria-current="page""# } else { "" };
             let item = format!(
                 r#"<a href="/{}/"{attrs}>{}</a>"#, // allow:served-path-url-construct (nav href to a term kind's root page, not a framework asset)
                 crate::build::features::html_escape(key),
@@ -420,8 +412,8 @@ impl<'a> NavigationBuilder<'a> {
         // discloses (WCAG 4.1.2).
         let hamburger = if has_nav_items {
             format!(
-                r#"<button class="mobile-menu-button" onclick="toggleMobileMenu()" aria-label="{}" aria-expanded="false" aria-controls="nav-links"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>"#,
-                crate::i18n::t(self.current_lang, "nav_toggle_menu"),
+                r#"<button class="mobile-menu-button" onclick="toggleMobileMenu()" aria-label="{label}" aria-expanded="false" aria-controls="nav-links"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>"#,
+                label = crate::i18n::t(self.current_lang, "nav_menu"),
             )
         } else {
             String::new()

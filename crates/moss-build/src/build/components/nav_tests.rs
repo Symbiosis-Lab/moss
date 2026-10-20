@@ -3032,9 +3032,9 @@ fn nav_mode_unrelated_section_is_not_marked_current() {
 
 #[test]
 fn brand_mode_never_marks_a_containing_section_current() {
-    // The regression this guards: brand mode keeps its breadcrumb trail for
-    // this job and must render exactly as it always has — no aria-current
-    // anywhere in the nav-links list, exact-match or not.
+    // Brand mode keeps its breadcrumb trail for the "somewhere under this
+    // section" cue, so a deep page marks nothing; only the exact page is
+    // current, and says so to assistive tech.
     let documents = vec![
         make_doc("index.html", "Home", None, None),
         make_folder_doc("essays/index.html", "Essays", Some(1)),
@@ -3052,8 +3052,7 @@ fn brand_mode_never_marks_a_containing_section_current() {
 
     let exact_page = NavigationBuilder::new(&documents, "My Site", Some("essays/index.html"), crate::i18n::Language::En, true)
         .generate_navigation();
-    assert!(!exact_page.contains("aria-current"), "brand mode's exact-match styling is plain class=\"active\" only: {exact_page}");
-    assert!(exact_page.contains(r#"<a href="/essays/" class="active">Essays</a>"#), "got: {exact_page}");
+    assert!(exact_page.contains(r#"<a href="/essays/" class="active" aria-current="page">Essays</a>"#), "got: {exact_page}");
 }
 
 // --- `listed: false` and automatic nav membership ---

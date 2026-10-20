@@ -174,11 +174,11 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "切换深色模式",
             Language::ZhHant => "切換深色模式",
         },
-        "nav_toggle_menu" => match lang {
-            Language::En => "Toggle menu",
-            Language::De => "Menü umschalten",
-            Language::ZhHans => "切换菜单",
-            Language::ZhHant => "切換選單",
+        "nav_menu" => match lang {
+            Language::En => "Menu",
+            Language::De => "Menü",
+            Language::ZhHans => "菜单",
+            Language::ZhHant => "選單",
         },
         // `[site] header = "nav"` masthead: the link list's leading item,
         // replacing the brand link that mode drops.

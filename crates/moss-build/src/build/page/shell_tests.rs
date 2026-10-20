@@ -804,12 +804,20 @@ fn get_css_rule_in_media(css: &str, media_query: &str, selector: &str) -> Option
 
 #[test]
 fn test_css_mobile_nav_links_are_a_single_column() {
-    // Narrow breakpoint (<20rem) uses hamburger with absolute positioning.
+    // Narrow breakpoint (<20rem) uses hamburger with a sheet over the page.
     let rule = get_css_rule_in_media(DEFAULT_CSS, "@media (max-width: 20rem)", ".nav-links")
         .expect(".nav-links mobile CSS rule should exist");
     assert!(
-        rule.contains("position: absolute"),
-        ".nav-links on mobile should overlay the page, got: {}",
+        rule.contains("position: fixed"),
+        ".nav-links on mobile should be a sheet over the page, got: {}",
+        rule
+    );
+    // `.nav-links` centres itself in the `.nav-right` row; current Chromium
+    // applies that to a fixed child, which then sizes to its content instead
+    // of filling the screen.
+    assert!(
+        rule.contains("align-self: stretch"),
+        ".nav-links sheet must stretch, not centre, got: {}",
         rule
     );
     // The closed panel collapses so a hidden menu contributes no page scroll.
@@ -831,8 +839,8 @@ fn test_css_mobile_nav_links_are_a_single_column() {
         rule
     );
 
-    // The open panel is sized by its links, capped only by the viewport — no
-    // height number decides how many nav items an author may have.
+    // The open sheet fills the viewport below the header and scrolls inside
+    // itself — no height number decides how many nav items an author may have.
     let open = get_css_rule_in_media(
         DEFAULT_CSS,
         "@media (max-width: 20rem)",
@@ -840,8 +848,8 @@ fn test_css_mobile_nav_links_are_a_single_column() {
     )
     .expect(".nav-links.mobile-open rule should exist");
     assert!(
-        open.contains("max-height: calc(100dvh - 100%)"),
-        "open .nav-links should be bounded by the viewport, not a fixed height, got: {}",
+        open.contains("max-height: none"),
+        "open .nav-links should lift the closed panel's zero height, got: {}",
         open
     );
 }
