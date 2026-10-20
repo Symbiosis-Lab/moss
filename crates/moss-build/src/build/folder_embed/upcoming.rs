@@ -8,11 +8,10 @@ use chrono::Local;
 use moss_core::event::EventTime;
 use std::collections::HashSet;
 
-/// True for an event that has not ended at `now`. An all-day event counts
-/// through the whole of its last day; a timed one until its `end` (else its
-/// `start`). Wall-clock times are compared with the build machine's clock,
-/// since the build carries no time-zone database. Ordinary articles are never
-/// upcoming, whatever their `date`.
+/// True for an event that has not ended at `now`: see [`ends_at`]. Wall-clock
+/// times are compared with the build machine's clock, since the build carries
+/// no time-zone database. Ordinary articles are never upcoming, whatever
+/// their `date`.
 pub(crate) fn is_upcoming(doc: &ParsedDocument, now: chrono::NaiveDateTime) -> bool {
     let Some(ev) = &doc.event else { return false };
     span_is_upcoming(ev.start, ev.end, now)
@@ -21,12 +20,28 @@ pub(crate) fn is_upcoming(doc: &ParsedDocument, now: chrono::NaiveDateTime) -> b
 /// The test behind [`is_upcoming`], for callers that hold an event's times
 /// rather than its page.
 pub(crate) fn span_is_upcoming(start: EventTime, end: Option<EventTime>, now: chrono::NaiveDateTime) -> bool {
+    ends_if_upcoming(start, end, now).is_some()
+}
+
+/// [`ends_at`] while the event has not ended at `now`, else `None`.
+pub(crate) fn ends_if_upcoming(start: EventTime, end: Option<EventTime>, now: chrono::NaiveDateTime) -> Option<String> {
+    let ends = ends_at(start, end);
+    (now.format("%Y-%m-%dT%H:%M").to_string() < ends).then_some(ends)
+}
+
+/// When an event is over, as wall-clock `YYYY-MM-DDTHH:MM`: an all-day event
+/// at the start of the day after its last day, a timed one at its `end` (else
+/// its `start`). The one definition of "ended": the event is over from this
+/// minute on, and `hero-ends.ts` compares the same way.
+pub(crate) fn ends_at(start: EventTime, end: Option<EventTime>) -> String {
     let last = end.unwrap_or(start);
-    if last.is_all_day() {
-        last.day_key() >= now.format("%Y-%m-%d").to_string()
-    } else {
-        last.sort_key() >= now.format("%Y-%m-%dT%H:%M").to_string()
+    if !last.is_all_day() {
+        return last.sort_key();
     }
+    let (y, m, d) = last.ymd();
+    chrono::NaiveDate::from_ymd_opt(i32::from(y), u32::from(m), u32::from(d))
+        .and_then(|day| day.succ_opt())
+        .map_or_else(|| last.day_key() + "T23:59", |next| format!("{}T00:00", next.format("%Y-%m-%d")))
 }
 
 /// `"upcoming"` or `"past"`: the `data-when` value of an event's page, card
@@ -162,5 +177,24 @@ mod tests {
         let day = chrono::NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
         assert!(is_upcoming(&doc, day.and_hms_opt(20, 0, 0).unwrap()));
         assert!(!is_upcoming(&doc, day.succ_opt().unwrap().and_hms_opt(0, 0, 0).unwrap()));
+    }
+
+    #[test]
+    fn an_event_is_over_from_the_minute_it_ends() {
+        let start = EventTime::DateTime(2026, 10, 8, 19, 0);
+        let end = Some(EventTime::DateTime(2026, 10, 8, 21, 30));
+        let at = |h, m| chrono::NaiveDate::from_ymd_opt(2026, 10, 8).unwrap().and_hms_opt(h, m, 0).unwrap();
+        assert!(span_is_upcoming(start, end, at(21, 29)));
+        assert!(!span_is_upcoming(start, end, at(21, 30)));
+        assert_eq!(ends_at(start, end), "2026-10-08T21:30");
+    }
+
+    #[test]
+    fn an_all_day_event_is_over_at_midnight_after_its_last_day() {
+        let day = EventTime::Date(2026, 12, 31);
+        assert_eq!(ends_at(day, None), "2027-01-01T00:00");
+        let at = |y, m, d, h, min| chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap().and_hms_opt(h, min, 0).unwrap();
+        assert!(span_is_upcoming(day, None, at(2026, 12, 31, 23, 59)));
+        assert!(!span_is_upcoming(day, None, at(2027, 1, 1, 0, 0)));
     }
 }

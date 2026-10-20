@@ -57,7 +57,7 @@ pub mod visit;
 
 pub use dispatch_wikilink_embeds::{dispatch_wikilink_embeds, WikilinkDispatchResult};
 pub use document::{BlockMeta, Document};
-pub use extract_hero::{extract_hero, HeroExtraction};
+pub use extract_hero::{extract_hero, HeroDrawnFrom, HeroExtraction};
 pub use grid_parts::{render_grid_parts, GridCellParts, GridParts};
 pub use hooks::{DefaultHooks, RenderHooks};
 pub use node::{Block, CalloutKind, Fold, Inline};

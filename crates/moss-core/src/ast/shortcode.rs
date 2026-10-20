@@ -396,6 +396,20 @@ pub struct HeroShortcode {
     /// Empty when the author wrote no caption.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub caption: Vec<Inline>,
+    /// A folder listing to draw the hero from (`from="work/|when:upcoming"`),
+    /// written as a folder embed's target and options. The hero shows that
+    /// listing's first page; its own image and words are the fallback when
+    /// the listing is empty. Resolved at build time, not here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+}
+
+impl HeroShortcode {
+    /// Whether the fence carries a picture or words of its own, which is what
+    /// a `from=` hero shows when its listing is empty.
+    pub fn has_own_content(&self) -> bool {
+        self.image.is_some() || !self.extra_images.is_empty() || !self.overlay.is_empty()
+    }
 }
 
 /// Arguments for [`Shortcode::Recent`].

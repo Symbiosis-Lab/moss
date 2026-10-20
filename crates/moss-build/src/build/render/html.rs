@@ -1269,7 +1269,7 @@ pub(super) fn render_page<'d>(
     let event_calendar_href = doc.and_then(|d| context.shared.calendar.event_href(d));
     let event_meta_html = doc
         .filter(|_| is_article_page)
-        .and_then(|d| components::event_meta::render(d, d.lang, emit_source_lines, event_calendar_href.as_deref(), now));
+        .and_then(|d| components::event_meta::render(d, d.lang, emit_source_lines, event_calendar_href.as_deref(), components::event_meta::UpcomingLabel::Hidden, now));
     let calendar_at_body_end = if event_meta_html.is_some() { None } else { event_calendar_href };
     let article_date_line_html: Option<String> = if is_article_page
         && doc.is_some()
@@ -1618,7 +1618,12 @@ pub(super) fn render_page<'d>(
         ..chrome
     };
 
-    Ok(processor.process(shell_type, vars))
+    let page = processor.process(shell_type, vars);
+    if page.contains(moss_core::resolve::embed_renderer::folder_list::MARKER_FOLDER_LIST) {
+        let name = doc.map_or("a generated page", |d| d.source_path.as_deref().unwrap_or(&d.url_path));
+        crate::build::cli_output::log_warn_problem!("[{name}] a folder listing was left unexpanded in the built page");
+    }
+    Ok(page)
 }
 
 /// Is this page a **step in the reading order** — one of the pages the series

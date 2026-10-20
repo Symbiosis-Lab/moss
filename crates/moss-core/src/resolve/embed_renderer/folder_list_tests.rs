@@ -216,3 +216,29 @@ fn marker_roundtrips_count_text_with_separators() {
     assert!(emit_marker("/p/", "index.md", &hidden).contains("|count=-->"));
     assert!(!emit_marker("/p/", "index.md", &FolderEmbedParams::default()).contains("count"));
 }
+
+#[test]
+fn strip_markers_drops_a_terminated_marker_and_keeps_the_prose() {
+    let text = format!("Before {}path=shows/|style=list{} after", MARKER_FOLDER_LIST, MARKER_END);
+    assert_eq!(strip_markers(&text), "Before  after");
+}
+
+#[test]
+fn strip_markers_drops_an_unterminated_marker_to_the_end() {
+    let text = format!("Before {}path=shows/ no end", MARKER_FOLDER_LIST);
+    assert_eq!(strip_markers(&text), "Before ");
+}
+
+#[test]
+fn strip_markers_leaves_text_without_a_marker_alone() {
+    assert_eq!(strip_markers("Plain words."), "Plain words.");
+}
+
+#[test]
+fn listing_marker_names_a_folder_and_its_options_and_nothing_else() {
+    let marker = listing_marker("shows/|when:upcoming", "index.md").unwrap();
+    assert_eq!(marker_body(&marker), Some("path=shows/|from=index.md|when=upcoming"));
+    assert_eq!(listing_marker("shows", "index.md"), None);
+    assert_eq!(listing_marker("|when:upcoming", "index.md"), None);
+    assert_eq!(listing_marker("", "index.md"), None);
+}

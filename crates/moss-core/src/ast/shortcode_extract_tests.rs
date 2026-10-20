@@ -3254,6 +3254,19 @@ fn hero_header_unknown_value_warns_and_is_ignored() {
 }
 
 #[test]
+fn hero_from_attribute_is_parsed() {
+    let md = ":::hero {from=\"work/|when:upcoming\" image=a.jpg}\n# Example Show\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Hero(args) => {
+            assert_eq!(args.from.as_deref(), Some("work/|when:upcoming"));
+            assert!(matches!(&args.image, Some(Url::Unresolved(u)) if u == "a.jpg"));
+        }
+        other => panic!("expected Hero, got {other:?}"),
+    }
+}
+
+#[test]
 fn empty_name_fenced_div_is_recorded_as_a_css_region_with_its_line() {
     let md = "::: {.eyebrow}\nStation 21\n:::\n";
     let result = extract_shortcodes(md);

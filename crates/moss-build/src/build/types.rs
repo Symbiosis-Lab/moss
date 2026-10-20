@@ -490,6 +490,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub hero_html: Option<String>,
+    /// A `from=` hero, drawn once every page is known; `hero_html`,
+    /// `hero_image_url` and `hero_overlay_text` start as its fallback.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub hero_from: Option<crate::build::folder_embed::hero_from::HeroFrom>,
     /// The page's one eager image is its hero or its opening body content, so
     /// its own children listing loads lazily. Set by the body planner.
     #[serde(skip)]
@@ -854,6 +859,10 @@ pub struct PageFeatures {
     /// runtime script via [`SiteAssets`]. Read from the typed AST
     /// (`moss_core::ast::has_scroll_row_recursive`).
     pub scroll_rows: bool,
+    /// True if the page's hero is drawn from an event that has not ended, so
+    /// it must step aside at view time. Gates `hero-ends.js` via
+    /// [`SiteAssets`]. Set when the hero is drawn, after parsing.
+    pub hero_ends: bool,
     /// True if the page may have a picture the full-screen viewer opens: a
     /// figure, an image or a `:::gallery`. A coarse superset; `fullscreen.js`
     /// decides which pictures actually open. Gates the viewer via
@@ -902,6 +911,8 @@ pub struct SiteAssets {
     pub has_footnotes: bool,
     /// Any page has a `:::grid N {scroll}` row. Gates `scroll-row.js`.
     pub scroll_rows: bool,
+    /// Any page's hero is drawn from an event. Gates `hero-ends.js`.
+    pub hero_ends: bool,
     /// `[site].link_preview` — hover link previews. Defaults ON.
     pub link_preview: bool,
     /// `[site].heading_anchors` — click-to-copy section permalinks. Defaults ON.
@@ -971,6 +982,7 @@ impl SiteAssets {
             callouts: false,
             has_footnotes: false,
             scroll_rows: false,
+            hero_ends: false,
             viewer: false,
             field_places: false,
             vertical: site_typesetting == Some("vertical"),
@@ -984,6 +996,7 @@ impl SiteAssets {
             ) == Some("vertical");
             out.has_footnotes |= page.features.footnotes;
             out.scroll_rows |= page.features.scroll_rows;
+            out.hero_ends |= page.features.hero_ends;
             out.viewer |= page.features.viewer;
             out.field_places |= page.features.field_places || crate::build::components::field_places::title_block_beside_picture(page);
         }

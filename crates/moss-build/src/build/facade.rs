@@ -227,6 +227,8 @@ fn surface_debug(doc: &ParsedDocument) -> String {
     // `hero_image_url` — the genuinely cross-page half, read by the homepage
     // — deliberately stays.
     stripped.hero_html = None;
+    // The plan a `from=` hero is drawn from carries the same rendered markup.
+    stripped.hero_from = None;
     // `reading_time` is `word_count / 200` (`markdown/pipeline.rs`) — a
     // non-monotone function of the body, so it steps on any edit that crosses
     // a 200-word boundary. Same class as `hero_html`: an audit for this fix

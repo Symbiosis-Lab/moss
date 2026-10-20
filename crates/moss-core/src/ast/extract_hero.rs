@@ -51,6 +51,19 @@ pub struct HeroExtraction {
     pub html: String,
     pub image_url: Option<String>,
     pub overlay_text: Option<String>,
+    /// The hero as it will be rendered, kept when it names a listing to draw
+    /// from (`from=`), so the build can render it again once the listing is
+    /// known. `html` and the two fields above are then the fallback.
+    pub drawn_from: Option<HeroDrawnFrom>,
+}
+
+/// A `from=` hero kept for a second render: the shortcode that was rendered
+/// (with `header=` already cleared where it does not open the page) and its
+/// source line.
+#[derive(Debug, Clone)]
+pub struct HeroDrawnFrom {
+    pub shortcode: HeroShortcode,
+    pub source_line: Option<usize>,
 }
 
 /// Find and extract the first top-level Hero shortcode from `doc`.
@@ -123,10 +136,9 @@ pub fn extract_hero(doc: &mut Document, hooks: &dyn RenderHooks) -> Option<HeroE
     let walked = first_paragraph_plain_text(&hero_args.overlay);
     let overlay_text = if !walked.trim().is_empty() {
         Some(walked)
-    } else if !hero_args.overlay_text.trim().is_empty() {
-        Some(hero_args.overlay_text.clone())
     } else {
-        None
+        let source = crate::resolve::embed_renderer::folder_list::strip_markers(&hero_args.overlay_text);
+        (!source.trim().is_empty()).then_some(source)
     };
 
     // Render via the hooks' Hero arm. Production's `PipelineHooks`
@@ -153,10 +165,18 @@ pub fn extract_hero(doc: &mut Document, hooks: &dyn RenderHooks) -> Option<HeroE
     };
     hooks.render_shortcode(&mut html, render_target, hero_source_line);
 
+    let drawn_from = match render_target {
+        Shortcode::Hero(args) if args.from.is_some() => {
+            Some(HeroDrawnFrom { shortcode: args.clone(), source_line: hero_source_line })
+        }
+        _ => None,
+    };
+
     Some(HeroExtraction {
         html,
         image_url,
         overlay_text,
+        drawn_from,
     })
 }
 
@@ -278,6 +298,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
     // hero picture; on a body embed it overrides the embed's own `![alt]`.
     let alt_attr = parsed.get("alt").unwrap_or_default().to_string();
     let header = parsed.get("header").map(str::to_string);
+    let from = parsed.get("from").map(str::to_string).filter(|v| !v.trim().is_empty());
 
     // Priority 1: `image=` attribute.
     if let Some(image_value) = parsed.get("image") {
@@ -304,6 +325,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 caption,
                 slide_captions: Vec::new(),
                 header: header.clone(),
+                from: from.clone(),
             },
             false,
             overlay_warnings,
@@ -337,6 +359,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 caption,
                 slide_captions: Vec::new(),
                 header: header.clone(),
+                from: from.clone(),
             },
             false,
             overlay_warnings,
@@ -411,6 +434,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 Vec::new()
             },
             header,
+            from,
         },
         used_priority_3,
         overlay_warnings,

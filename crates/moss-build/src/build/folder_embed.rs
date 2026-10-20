@@ -30,6 +30,7 @@
 //! `folder_id` because those carry on-disk paths.
 
 mod maps;
+pub(crate) mod hero_from;
 pub(crate) mod members;
 mod calendar_tokens;
 pub(crate) mod upcoming;
@@ -110,6 +111,16 @@ fn warn_map_fallback_once(path: &str, reason: &str) {
     ) {
         crate::build::cli_output::log_warn_problem!(
             "map embed '{path}' {reason}; rendering its ordinary listing"
+        );
+    }
+}
+
+fn warn_unknown_options(page: &str, parsed: &ParsedMarker<'_>) {
+    if let Some(keys) = &parsed.unknown_keys {
+        crate::build::cli_output::log_warn_problem!(
+            "[{page}] folder embed '{}' ignores unknown option(s) {keys}; known options: {}",
+            parsed.path,
+            KNOWN_KEYS.join(", ")
         );
     }
 }
@@ -784,7 +795,8 @@ pub fn expand_markers_in_documents_with_place_maps(
     calendar: Option<(&crate::build::feeds::calendar::CalendarPlan, &crate::build::site_url::SiteUrl)>,
     now: chrono::NaiveDateTime,
 ) {
-    let has_marker = |d: &ParsedDocument| d.html_content.contains(MARKER_FOLDER_LIST);
+    hero_from::resolve_all(documents, project, dir_overrides, math, media_lookup, now);
+    let has_marker = |d: &ParsedDocument| [Some(d.html_content.as_str()), d.hero_html.as_deref()].into_iter().flatten().any(|h| h.contains(MARKER_FOLDER_LIST));
     if !documents.iter().any(has_marker) {
         return;
     }
@@ -804,11 +816,8 @@ pub fn expand_markers_in_documents_with_place_maps(
         )
         .map(str::to_owned);
         let mut plan = documents[i].body_plan.take();
-        // `tag_embed: true` — every marker this scan finds came from a
-        // literal body `![[folder/|…]]`, never from `synthesize_children_marker`
-        // (that path calls `resolve_markers` directly on a lone marker, before
-        // this pass ever runs; see `resolve_markers_impl`'s doc comment).
-        // Body segments and grid cells share one SVG identity sequence per page.
+        // Every marker here came from an authored `![[folder/|…]]`, never from
+        // `synthesize_children_marker`. One SVG identity sequence per page.
         let ordinal = std::cell::Cell::new(0);
         let expand = |html: &str| {
             resolve_markers_impl(
@@ -828,6 +837,8 @@ pub fn expand_markers_in_documents_with_place_maps(
             )
         };
         let links_for = calendar_tokens::links_for(calendar, &documents[i], now);
+        // The hero sits before the body, so its listings come first in the page's order.
+        let hero = documents[i].hero_html.as_deref().map(&expand);
         let resolved = match plan.as_mut() {
             Some(p) => {
                 p.map_html(&expand);
@@ -842,6 +853,7 @@ pub fn expand_markers_in_documents_with_place_maps(
         };
         documents[i].body_plan = plan;
         documents[i].html_content = resolved;
+        documents[i].hero_html = hero;
     }
 }
 
@@ -951,13 +963,7 @@ fn resolve_markers_impl(
         ordinal.set(embed_ordinal + 1);
         let rendered = match parse_marker_body(body) {
             Some(parsed) => {
-                if let Some(keys) = &parsed.unknown_keys {
-                    crate::build::cli_output::log_warn_problem!(
-                        "[{from_md_path}] folder embed '{}' ignores unknown option(s) {keys}; known options: {}",
-                        parsed.path,
-                        KNOWN_KEYS.join(", ")
-                    );
-                }
+                warn_unknown_options(from_md_path, &parsed);
                 render_one(
                     &parsed,
                     embed_ordinal,
@@ -1248,36 +1254,27 @@ pub(crate) fn home_defaults(doc: &ParsedDocument) -> HomeDefaults<'_> {
     }
 }
 
-/// Render a single resolved marker. `Err` carries the plain-text problem when
-/// the target does not resolve; the caller renders the placeholder and reports it. `is_embed` — see [`resolve_markers_impl`] — passes
-/// straight through to [`generate_children`], which is where it actually
-/// shapes output.
+enum Listed<'a> {
+    Iframe(String),
+    Pages {
+        folder_slug: String,
+        target_doc: Option<&'a ParsedDocument>,
+        is_flatten: bool,
+        pages: Vec<&'a ParsedDocument>,
+    },
+}
+
+/// An embed's target resolved: an app to frame, or the pages it selects
+/// (before sort and limit). Shared by the embed and by a `from=` hero.
 #[allow(clippy::too_many_arguments)]
-fn render_one(
+fn list_pages<'a>(
     parsed: &ParsedMarker<'_>,
-    ordinal: usize,
-    from_md_path: &str,
-    all_docs: &[ParsedDocument],
+    from: &str,
+    all_docs: &'a [ParsedDocument],
     project: &ProjectStructure,
     dir_overrides: &std::collections::HashMap<String, String>,
-    site_lang: crate::i18n::Language,
-    typesetting: Option<&str>,
-    media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
-    math: bool,
-    is_embed: bool,
-    place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
     now: chrono::NaiveDateTime,
-) -> Result<String, String> {
-    // Prefer the marker's `from=` (the original markdown source); the
-    // page-level `from_md_path` is a safe fallback when older markers omit it.
-    let from = if parsed.from.is_empty() {
-        from_md_path
-    } else {
-        parsed.from
-    };
-    if parsed.style.as_deref() == Some("map") && !parsed.path.ends_with('/') {
-        return Ok(maps::render(parsed, ordinal, all_docs, place_maps));
-    }
+) -> Result<Listed<'a>, String> {
     // Route the three-branch decision through moss-core's `classify_reference`:
     // `dir_has_markdown_index` → FolderListing (Branch 1), else
     // `dir_has_static_index` → FolderIndexIframe (Branch 2), else NotFound.
@@ -1348,7 +1345,7 @@ fn render_one(
                 parsed.size.as_deref(),
                 all_docs,
             ) {
-                return Ok(iframe);
+                return Ok(Listed::Iframe(iframe));
             }
             // Defensive: predicate said iframe but the synthesizer declined.
             return Err(not_found(&folder_id));
@@ -1387,7 +1384,7 @@ fn render_one(
     // "all" flattens all descendants; "direct" (default) is one level only.
     let is_flatten = parsed.depth.as_deref() == Some("all");
     let host = all_docs.iter().find(|d| d.source_path.as_deref() == Some(from));
-    let folder_docs = members::select(
+    let pages = members::select(
         &folder_id_slug,
         is_flatten,
         parsed.scope_default_tree,
@@ -1399,6 +1396,44 @@ fn render_one(
         all_docs,
         project,
     );
+    Ok(Listed::Pages { folder_slug: folder_id_slug, target_doc, is_flatten, pages })
+}
+
+/// Render a single resolved marker. `Err` carries the plain-text problem when
+/// the target does not resolve; the caller renders the placeholder and reports it. `is_embed` — see [`resolve_markers_impl`] — passes
+/// straight through to [`generate_children`], which is where it actually
+/// shapes output.
+#[allow(clippy::too_many_arguments)]
+fn render_one(
+    parsed: &ParsedMarker<'_>,
+    ordinal: usize,
+    from_md_path: &str,
+    all_docs: &[ParsedDocument],
+    project: &ProjectStructure,
+    dir_overrides: &std::collections::HashMap<String, String>,
+    site_lang: crate::i18n::Language,
+    typesetting: Option<&str>,
+    media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
+    math: bool,
+    is_embed: bool,
+    place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
+    now: chrono::NaiveDateTime,
+) -> Result<String, String> {
+    // Prefer the marker's `from=` (the original markdown source); the
+    // page-level `from_md_path` is a safe fallback when older markers omit it.
+    let from = if parsed.from.is_empty() {
+        from_md_path
+    } else {
+        parsed.from
+    };
+    if parsed.style.as_deref() == Some("map") && !parsed.path.ends_with('/') {
+        return Ok(maps::render(parsed, ordinal, all_docs, place_maps));
+    }
+    let (folder_id_slug, target_doc, is_flatten, folder_docs) =
+        match list_pages(parsed, from, all_docs, project, dir_overrides, now)? {
+            Listed::Iframe(html) => return Ok(html),
+            Listed::Pages { folder_slug, target_doc, is_flatten, pages } => (folder_slug, target_doc, is_flatten, pages),
+        };
 
     if folder_docs.is_empty() {
         return Ok(String::new());

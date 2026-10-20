@@ -1336,10 +1336,10 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_html: r#"<section class="moss-hero" data-width="page">
   <div class="moss-hero-content">...</div>
 </section>"#,
-        example_markdown: ":::hero {image=cover.jpg}\n:::\n\n:::hero {image=cover.jpg full mobile=overlay}\n# Title over the image\n:::\n",
+        example_markdown: ":::hero {image=cover.jpg}\n:::\n\n:::hero {image=cover.jpg full mobile=overlay}\n# Title over the image\n:::\n\n:::hero {from=\"work/|when:upcoming\" image=cover.jpg}\n# Between seasons\n:::\n",
         status: Status::Confirmed,
         since: "0",
-        description: "Hero banner section at the top of a page (cover image + title). v1 adds `data-width` for author-controlled sizing.",
+        description: "Hero banner section at the top of a page (cover image + title). v1 adds `data-width` for author-controlled sizing. `from=\"<folder>/|<embed options>\"` draws the hero from the first page of that listing (its picture, title, event line, description and a link); the hero's own `image=` and words show only when the listing is empty.",
     },
     ComponentEntry {
         class: "moss-hero-content",

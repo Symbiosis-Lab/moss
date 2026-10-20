@@ -604,6 +604,13 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "更多 →",
             Language::ZhHant => "更多 →",
         },
+        // The link a hero drawn from a listing puts under the page's words ({} is its title).
+        "hero_more_about" => match lang {
+            Language::En => "More about {} →",
+            Language::De => "Mehr zu {} →",
+            Language::ZhHans => "了解更多：{} →",
+            Language::ZhHant => "了解更多：{} →",
+        },
 
         // Embed error messages (use {} as placeholder, replaced at call site)
         "notebook_not_found" => match lang {

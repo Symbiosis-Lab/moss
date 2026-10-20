@@ -120,6 +120,13 @@ pub const SITE_SCRIPTS: &[SiteScript] = &[
         load: Load::Shell { defer: false },
     },
     SiteScript {
+        name: "hero-ends",
+        dev_path: "src/assets/js/hero-ends.js",
+        source: || include_str!("../../assets/js/hero-ends.js"),
+        gate: |a| a.hero_ends,
+        load: Load::Shell { defer: false },
+    },
+    SiteScript {
         name: "places-explorer",
         dev_path: "src/assets/js/places-explorer.js",
         source: || include_str!("../../assets/js/places-explorer.js"),

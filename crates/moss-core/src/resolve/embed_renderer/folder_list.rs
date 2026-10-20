@@ -240,6 +240,21 @@ pub fn mark_cards_lazy(html: &str) -> String {
     out
 }
 
+/// `text` without its folder-list markers: for prose that quotes a block's
+/// source (a description), where a listing has no words to offer.
+pub fn strip_markers(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(MARKER_FOLDER_LIST) {
+        let (before, after) = rest.split_at(start);
+        out.push_str(before);
+        let Some(end) = after.find(MARKER_END) else { return out };
+        rest = after.split_at(end + MARKER_END.len()).1;
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Percent-encode the characters that would otherwise end a marker field or
 /// the marker itself.
 ///
@@ -284,6 +299,23 @@ pub fn marker_decode(value: &str) -> String {
         i += ch.len_utf8();
     }
     out
+}
+
+/// The listing marker for a folder embed `inner` (the content of `![[…]]`,
+/// `folder/|options`), or `None` unless its target names a folder, ending in
+/// `/`. One lowering for an embed in a body and for a hero's `from=`.
+pub fn listing_marker(inner: &str, source_path: &str) -> Option<String> {
+    let (target, _) = crate::resolve::embeds::split_embed_target(inner);
+    if !target.ends_with('/') {
+        return None;
+    }
+    let options = inner.split_once('|').map_or("", |(_, options)| options);
+    Some(emit_marker(target, source_path, &classify_folder_segments(options)))
+}
+
+/// The `key=value|…` body of a marker, without its delimiters.
+pub fn marker_body(marker: &str) -> Option<&str> {
+    marker.strip_prefix(MARKER_FOLDER_LIST)?.strip_suffix(MARKER_END)
 }
 
 pub fn emit_marker(path: &str, from: &str, params: &FolderEmbedParams) -> String {

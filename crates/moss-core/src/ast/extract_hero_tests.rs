@@ -21,6 +21,7 @@ fn hero_block(image_url: Option<&str>, overlay: Vec<Block>) -> Block {
         caption: Vec::new(),
         slide_captions: Vec::new(),
         header: None,
+        from: None,
     }))
 }
 

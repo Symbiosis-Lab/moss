@@ -690,6 +690,7 @@ mod tests {
                 caption: Vec::new(),
                 slide_captions: Vec::new(),
                 header: None,
+                from: None,
             }))]);
         let snap = empty_snapshot();
         let graph = empty_graph();

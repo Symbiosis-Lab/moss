@@ -513,9 +513,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         }),
         when_html: doc.event.as_ref().map(|e| {
             let mut html = crate::build::components::event_meta::render_when(e.start, e.end, doc.lang);
-            if when == Some("upcoming") {
-                html.push_str(&crate::build::components::event_meta::upcoming_label(doc.lang));
-            }
+            html.push_str(&crate::build::components::event_meta::upcoming_mark(e, doc.lang, now));
             html
         }),
         when,

@@ -3598,3 +3598,55 @@ export const FACTS_MARGIN_DEFAULT: ScratchSiteSpec = {
   name: "facts-margin-default-gate",
   files: { ...factsMarginFiles, ".moss/theme/style.css": null },
 };
+
+// A hero drawn from the first upcoming event of a folder, with its own picture,
+// caption and words as the fallback once the event has ended. The event is far
+// in the future so the build always draws it; the spec moves the browser's
+// clock to test what a visitor sees after the end. Served by
+// playwright/hero-from.config.ts.
+export const HERO_FROM_GATE: ScratchSiteSpec = {
+  name: "hero-from-gate",
+  files: {
+    "cover.svg": HERO_PORTRAIT_SVG,
+    "index.md": `---
+title: Example Company
+uid: "hfg00101"
+---
+
+:::hero {from="shows/|when:upcoming" image=cover.svg caption="Cover: Example Hall (photo: A. Photographer)"}
+# Between seasons
+:::
+
+Text below.
+`,
+    "over.md": `---
+title: Over Company
+uid: "hfg00104"
+---
+
+:::hero {from="shows/|when:upcoming" image=cover.svg header=over}
+# Between seasons
+:::
+
+Text below.
+`,
+    "shows/index.md": `---
+title: Shows
+uid: "hfg00102"
+children: false
+---
+`,
+    "shows/example-show.md": `---
+title: Example Show
+uid: "hfg00103"
+start: 2099-03-01 19:30
+end: 2099-03-01 21:30
+location: Example Hall
+description: A play about bridges.
+---
+
+Body.
+`,
+  },
+  siteUrl: "https://example.test",
+};

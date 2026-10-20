@@ -1242,7 +1242,7 @@ pub fn generate_blocking_content_for_build(
         )?;
         let calendar = crate::build::feeds::calendar::CalendarPlan::build(&documents, project_structure, &site_url);
 
-        // Resolve folder-list embed markers (`![[/folder/|limit:N,more]]`).
+        // Resolve folder-list embed markers (`![[/folder/|limit:N,more]]`) and settle `from=` heroes.
         // moss-core emits a `<!--MOSS_MARKER_FOLDER_LIST:…-->` marker during
         // wikilink resolution; we expand it here, AFTER
         // `populate_direct_children_sorts` so the target folder's resolved axis

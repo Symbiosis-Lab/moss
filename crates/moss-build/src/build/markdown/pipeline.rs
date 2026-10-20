@@ -1103,11 +1103,18 @@ pub fn process_markdown_file(
     //    delegates to `render_hero_html_typed` for byte parity with the
     //    legacy upstream hoist.
     let hero_extraction = moss_core::ast::extract_hero(&mut doc, &pipeline_hooks);
-    let hero_html = hero_extraction.as_ref().map(|h| h.html.clone());
+    let mut hero_html = hero_extraction.as_ref().map(|h| h.html.clone());
     let hero_image_url = hero_extraction.as_ref().and_then(|h| h.image_url.clone());
     let hero_overlay_text = hero_extraction
         .as_ref()
         .and_then(|h| h.overlay_text.clone());
+    // A hero that names a listing is drawn once every page is known; what the
+    // fence holds is only the fallback. With nothing in the fence there is no
+    // fallback, so no empty hero box is left behind.
+    let hero_drawn_from = hero_extraction.as_ref().and_then(|h| h.drawn_from.clone());
+    if hero_drawn_from.as_ref().is_some_and(|d| !d.shortcode.has_own_content()) {
+        hero_html = None;
+    }
 
     // 4. Capture the first body image for the cover chain.
     //    LOCKED ORDER: must run AFTER `extract_hero` (constraint 3). The
@@ -1530,6 +1537,12 @@ pub fn process_markdown_file(
     } else {
         hero_html
     };
+    let hero_from = hero_drawn_from.map(|drawn| crate::build::folder_embed::hero_from::HeroFrom {
+        drawn,
+        fallback_html: hero_html.clone(),
+        fallback_image_url: hero_image_url.clone(),
+        fallback_overlay_text: hero_overlay_text.clone(),
+    });
 
     Ok(ParsedDocument {
         declared,
@@ -1621,6 +1634,7 @@ pub fn process_markdown_file(
         translation_key: frontmatter.translation_key,
         translations: vec![],
         hero_html,
+        hero_from,
         body_claims_eager,
         hero_image_url,
         body_cover_path,
@@ -1630,6 +1644,7 @@ pub fn process_markdown_file(
             callouts: has_callout,
             footnotes: has_footnotes,
             scroll_rows: has_scroll_row,
+            hero_ends: false,
             viewer: has_viewer,
             field_places: has_field_places,
         },

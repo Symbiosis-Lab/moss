@@ -98,6 +98,7 @@ fn entry(kind: ShortcodeKind) -> ShortcodeCatalogEntry {
                 ShortcodeAttrSpec { name: "header", asset_kinds: &[], flag: false },
                 ShortcodeAttrSpec { name: "mobile", asset_kinds: &[], flag: false },
                 ShortcodeAttrSpec { name: "align", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "from", asset_kinds: &[], flag: false },
             ],
             Some("image"),
             "hero {image=${1:photo.jpg}}\n# ${2:Title}\n${3:Subtitle}\n:::",
@@ -271,6 +272,7 @@ mod tests {
                 "header" => h.header.is_some(),
                 "mobile" => h.mobile.is_some(),
                 "align" => h.align.is_some(),
+                "from" => h.from.is_some(),
                 _ => false,
             };
             assert!(set, "hero: `{}=x` sets nothing on the parsed hero", a.name);

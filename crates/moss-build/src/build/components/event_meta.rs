@@ -17,14 +17,24 @@ use moss_core::event::EventTime;
 
 const STATUSES: [&str; 4] = ["cancelled", "postponed", "moved-online", "rescheduled"];
 
+/// Whether an event's meta span carries the "Upcoming" label.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum UpcomingLabel {
+    Shown,
+    Hidden,
+}
+
 /// The event's meta span, or `None` when the page is not an event.
 /// `calendar_href` is the event file's address, from the calendar plan; the
-/// "Add to calendar" link goes after the tickets and online links.
+/// "Add to calendar" link goes after the tickets and online links. `label`
+/// says whether the "Upcoming" label follows the time while the event has not
+/// ended.
 pub fn render(
     doc: &ParsedDocument,
     lang: Language,
     emit_source_lines: bool,
     calendar_href: Option<&str>,
+    label: UpcomingLabel,
     now: chrono::NaiveDateTime,
 ) -> Option<String> {
     let ev = doc.event.as_ref()?;
@@ -48,6 +58,9 @@ pub fn render(
         start.sort_key(),
         time_parts(start, end, lang),
     ));
+    if label == UpcomingLabel::Shown {
+        html.push_str(&upcoming_mark(ev, lang, now));
+    }
     // A resolved place already has its own linked line under the meta line.
     if doc.place_line.is_none() && !doc.location.is_empty() {
         html.push_str(&format!(
@@ -279,8 +292,13 @@ pub fn render_when(start: EventTime, end: Option<EventTime>, lang: Language) -> 
 
 /// The short "Upcoming" word an upcoming event's card or row shows after its
 /// time.
-pub(crate) fn upcoming_label(lang: Language) -> String {
+fn upcoming_label(lang: Language) -> String {
     format!(r#"<span class="moss-event-upcoming">{}</span>"#, t(lang, "event_upcoming"))
+}
+
+/// [`upcoming_label`] while the event has not ended, else nothing.
+pub(crate) fn upcoming_mark(ev: &crate::build::types::EventFields, lang: Language, now: chrono::NaiveDateTime) -> String {
+    if crate::build::folder_embed::upcoming::span_is_upcoming(ev.start, ev.end, now) { upcoming_label(lang) } else { String::new() }
 }
 
 #[cfg(test)]
