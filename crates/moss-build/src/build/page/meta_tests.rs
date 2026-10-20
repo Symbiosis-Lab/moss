@@ -2560,3 +2560,34 @@ fn a_sentence_boundary_is_not_read_after_an_abbreviation_or_an_initial() {
     let content = format!("So did I. Then{tail}.");
     assert_eq!(extract_description(&content, true), "So did I.");
 }
+
+#[test]
+fn a_card_description_shows_the_plain_excerpts_words_and_no_markdown() {
+    // Each lead overruns the budget with its cut inside a span.
+    let tail = " and the discussion that followed ran on for a long while.";
+    for lead in [
+        "Our group hosted its first public lecture by **Dr. Ada Lovelace** of the Analytical Society on **March 3, 2026 at 4:00 pm** in **Room 12, East Hall of the Old Library Building**",
+        "Our group hosted its first public lecture on engines in the old hall, and the talk ran long, so *everyone who stayed past the end of the evening was given a copy of the notes*",
+        "Our group hosted its first public lecture on engines in the old hall, and the talk ran long, so _everyone who stayed past the end of the evening was given a copy of the notes_",
+        "Our group hosted its first public lecture on engines in the old hall, and the talk ran long, so run `moss build --watch the notes folder and every page under it, then open the preview`",
+        "Our group hosted its first public lecture on engines in the old hall, and the talk ran long, so read [the full notes from the first public lecture on engines and the rest](https://example.com/notes)",
+        "Our group hosted its first public lecture on engines in the old hall, and the talk ran long, so read [[notes/first-lecture|the full notes from the first public lecture on engines and more]]",
+        "Our group hosted its first ![a photograph of the lecture hall, taken from the back row](hall.jpg) public lecture on engines in the old hall, and the talk ran long, so *everyone who stayed past the end was given notes*",
+        "Our group hosted its first public lecture on engines in the old hall, and the talk ran long, see **the notes, [kept here](https://example.com/n), for everyone who came along**",
+    ] {
+        let content = format!("{lead}{tail}");
+        let markdown = extract_description_markdown(&content, true);
+        let html = render_description_html_in_link(&markdown);
+        assert_eq!(
+            strip_markdown_inline(&markdown),
+            extract_description(&content, true),
+            "the card shows different words than the plain excerpt: {markdown}"
+        );
+        for syntax in ["*", "_", "`", "[", "]("] {
+            assert!(!html.contains(syntax), "`{syntax}` leaked into the card: {html}");
+        }
+    }
+    // The CHPS-shaped lead keeps its bold, closed before the ellipsis.
+    let content = format!("Our group hosted its first public lecture by **Dr. Ada Lovelace** of the Analytical Society on **March 3, 2026 at 4:00 pm** in **Room 12, East Hall of the Old Library Building**{tail}");
+    assert!(extract_description_markdown(&content, true).ends_with("**…"));
+}

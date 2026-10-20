@@ -449,14 +449,143 @@ pub fn extract_description(content: &str, math: bool) -> String {
 /// (or fragment-plus-next-paragraph) span, at the same 160-char budget — but
 /// with its markdown left in place instead of stripped, for a caller that
 /// will render it with [`render_description_html`] rather than read it as
-/// plain text. Truncating the raw span at a plain-text character budget can
-/// orphan an opening marker (`_word` with no closing `_`); that is the same
-/// "garbled markdown is not description material" territory
-/// `strip_markdown_inline`'s own doc comment already accepts, and
-/// `render_description_html`'s unmatched-delimiter handling shows it as
-/// literal text rather than breaking.
+/// plain text. It is cut where the plain form is cut (see
+/// [`cut_markdown_like_plain`]), so a reader sees the same words either way.
 pub fn extract_description_markdown(content: &str, math: bool) -> String {
-    truncate_at_boundary(&first_paragraph_excerpt(content, true, math).markdown, 160)
+    cut_markdown_like_plain(&first_paragraph_excerpt(content, true, math), 160, math)
+}
+
+/// Cut `excerpt.markdown` after the same visible characters
+/// [`truncate_at_boundary`] keeps of `excerpt.plain`. Counting the raw
+/// markdown instead charges `**`, `_` and link URLs against the budget and
+/// cuts inside a span, which then renders as a literal `**`. A span still
+/// open at the cut (emphasis, a link, a `[[page|text]]` wikilink, code) is
+/// closed; a bare `[[page]]`, an autolink or an image the cut falls inside is
+/// dropped whole, since cutting it would change where it points.
+fn cut_markdown_like_plain(excerpt: &ExcerptText, max_chars: usize, math: bool) -> String {
+    use pulldown_cmark::{Event, LinkType, Parser, Tag, TagEnd};
+    let markdown = excerpt.markdown.trim();
+    let plain = excerpt.plain.trim();
+    let cut_plain = truncate_at_boundary(plain, max_chars);
+    if cut_plain == plain {
+        return markdown.to_string();
+    }
+    let (kept, ellipsis) = match cut_plain.strip_suffix('…') {
+        Some(kept) => (kept, "…"),
+        None => (cut_plain.as_str(), ""),
+    };
+    let mut remaining = kept.chars().count();
+    // Each open span: where it starts, where its content starts, what closes it.
+    let mut open: Vec<(usize, usize, String)> = Vec::new();
+    // The outermost span that cannot be closed part-way, how deep, and
+    // whether its text is visible (an image's alt text is not).
+    let mut atomic: Option<(usize, usize, bool)> = None;
+    let mut cut = None;
+    // The plain form collapses each whitespace run to one space.
+    let mut after_space = false;
+    let mut kept_offsets = |text: &str| -> Vec<usize> {
+        let mut kept = Vec::new();
+        for (i, c) in text.char_indices() {
+            if !(c.is_whitespace() && after_space) {
+                kept.push(i);
+            }
+            after_space = c.is_whitespace();
+        }
+        kept
+    };
+    for (event, range) in Parser::new_ext(markdown, moss_core::ast::parser_options(math)).into_offset_iter() {
+        let source = &markdown[range.clone()];
+        let visible = match &event {
+            Event::Start(_) | Event::End(_) if atomic.is_some() => {
+                let nested = matches!(event, Event::Start(Tag::Link { .. } | Tag::Image { .. }));
+                let closed = matches!(event, Event::End(TagEnd::Link | TagEnd::Image));
+                atomic = atomic.and_then(|(start, depth, shown)| match (nested, closed) {
+                    (true, _) => Some((start, depth + 1, shown)),
+                    (_, true) => (depth > 1).then_some((start, depth - 1, shown)),
+                    _ => Some((start, depth, shown)),
+                });
+                if atomic.is_none() && remaining == 0 {
+                    cut = Some(range.end);
+                    break;
+                }
+                continue;
+            }
+            Event::Start(Tag::Strong | Tag::Emphasis | Tag::Strikethrough) => {
+                let mark = source.chars().next().unwrap_or('*');
+                let run = source.chars().take_while(|&c| c == mark).count();
+                let len = if matches!(event, Event::Start(Tag::Emphasis)) { 1 } else { run.min(2) };
+                open.push((range.start, range.start + len, source[..len].to_string()));
+                continue;
+            }
+            Event::Start(Tag::Link { link_type: LinkType::WikiLink { has_pothole: true }, .. }) => {
+                let text_start = range.start + source.find('|').map_or(source.len(), |i| i + 1);
+                open.push((range.start, text_start, "]]".to_string()));
+                continue;
+            }
+            Event::Start(Tag::Link { link_type, dest_url, .. })
+                if !matches!(link_type, LinkType::WikiLink { .. } | LinkType::Autolink | LinkType::Email) =>
+            {
+                let dest = if dest_url.contains([' ', '(', ')']) { format!("<{dest_url}>") } else { dest_url.to_string() };
+                open.push((range.start, range.start + 1, format!("]({dest})")));
+                continue;
+            }
+            Event::Start(Tag::Link { .. } | Tag::Image { .. }) => {
+                atomic = Some((range.start, 1, matches!(event, Event::Start(Tag::Link { .. }))));
+                continue;
+            }
+            Event::End(TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough | TagEnd::Link) => {
+                open.pop();
+                continue;
+            }
+            Event::Text(_) | Event::Code(_) | Event::InlineMath(_) | Event::DisplayMath(_)
+                if matches!(atomic, Some((_, _, false))) =>
+            {
+                continue
+            }
+            Event::Text(text) | Event::Code(text) => kept_offsets(text),
+            // The plain form keeps math's `$` delimiters.
+            Event::InlineMath(_) | Event::DisplayMath(_) => kept_offsets(source),
+            _ => continue,
+        };
+        let at = |from: usize, text: &str| from + visible.get(remaining).copied().unwrap_or(text.len());
+        let visible_count = visible.len();
+        if visible_count < remaining || (visible_count == remaining && atomic.is_some()) {
+            remaining -= visible_count;
+            continue;
+        }
+        cut = Some(match &event {
+            _ if atomic.is_some() => atomic.map_or(range.start, |(start, _, _)| start),
+            Event::Text(text) if source.len() == text.len() => at(range.start, text),
+            Event::Code(text) => {
+                let run = source.chars().take_while(|&c| c == '`').count();
+                if source.len() == text.len() + 2 * run {
+                    open.push((range.start, range.start + run, source[..run].to_string()));
+                    at(range.start + run, text)
+                } else {
+                    range.start
+                }
+            }
+            // A cut inside math drops the formula: half of one is not text.
+            Event::InlineMath(_) | Event::DisplayMath(_) if visible_count > remaining => range.start,
+            _ if visible_count == remaining => range.end,
+            _ => range.start,
+        });
+        break;
+    }
+    // The walk and the plain stripper disagreed about what is visible; the
+    // plain cut is still the right words.
+    let Some(mut cut) = cut else {
+        return cut_plain;
+    };
+    let mut closers = String::new();
+    while let Some((start, content_start, closer)) = open.pop() {
+        if content_start < cut && !markdown[content_start..cut].trim().is_empty() {
+            closers.push_str(&closer);
+        } else {
+            cut = cut.min(start);
+        }
+    }
+    format!("{}{}{}", markdown[..cut].trim_end(), closers, ellipsis)
 }
 
 /// Extract a page's opening prose from markdown content, both plain (inline
