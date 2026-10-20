@@ -165,6 +165,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A card's description is no longer cut short after an abbreviation such as "Dr." or "St." when the opening sentence runs past the description length, which also left a stray `**` showing when the cut fell inside bold text. The description now runs to the length limit and ends with an ellipsis.
 - Publishing a site last published with moss 0.15.9 or earlier no longer stops with "1 address your site has served would stop working" for an internal `.moss-archive-sha256` file under a notebook asset folder. Moss's own `.moss-*` files are never counted as addresses a reader could lose.
 - A folder embed that shows no upcoming event, such as `![[work/|when:past]]`, no longer prints "Download calendar · Subscribe to calendar" after its cards, even when the folder holds an upcoming event elsewhere. The links follow the listing as shown.
 - `moss rename scene home/scene` now creates the missing `home/` folder inside the site and moves the entry there, as `mv` would, instead of failing with "Failed to resolve". Undoing the rename removes the folders it created if they are still empty. A destination that already exists is still refused, and so is one outside the site.

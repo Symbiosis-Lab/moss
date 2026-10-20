@@ -2540,3 +2540,23 @@ fn page_with_excerpt_only_keeps_entry() {
     assert_eq!(entry["preview"], "Body text");
     assert!(!entry.contains_key("description"));
 }
+
+#[test]
+fn a_sentence_boundary_is_not_read_after_an_abbreviation_or_an_initial() {
+    // Each text overruns the 160-char budget, so only a boundary inside the
+    // budget can be chosen; the abbreviation must not be one.
+    let tail = " and the discussion that followed ran on for a very long time because nobody wanted to leave the room before every last question had been answered fully";
+    for lead in [
+        "We thanked Dr.", "We thanked Mr.", "We thanked Mrs.", "We thanked Ms.", "We thanked Prof.",
+        "We met on St.", "It was us vs.", "Bring paper, pens, etc.", "Some tools, e.g.", "Some tools, i.e.",
+        "See No.", "We thanked Ada B.",
+    ] {
+        let content = format!("{lead} Lovelace{tail}.");
+        let desc = extract_description(&content, true);
+        assert!(!desc.ends_with('.') && desc.ends_with('…'), "cut after `{lead}`: {desc}");
+        assert!(desc.contains("Lovelace"), "cut after `{lead}`: {desc}");
+    }
+    // A real sentence end still counts, including after "I".
+    let content = format!("So did I. Then{tail}.");
+    assert_eq!(extract_description(&content, true), "So did I.");
+}

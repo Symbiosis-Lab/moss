@@ -1396,19 +1396,39 @@ pub fn extract_preview(content: &str, max_chars: usize, math: bool) -> String {
     truncate_at_boundary(&first_paragraph_excerpt(content, false, math).plain, max_chars)
 }
 
+/// Whether the word that ends `before` (the text up to a `.`) is a common
+/// abbreviation or a single-capital initial, so the `.` after it does not end
+/// a sentence. Case-insensitive for the abbreviations, except "No" which must
+/// be capitalised; "I" is not an initial, since "so did I." ends a sentence.
+fn ends_with_abbreviation(before: &str) -> bool {
+    let word_start = before
+        .rfind(|c: char| !(c.is_alphanumeric() || c == '.'))
+        .map_or(0, |i| i + before[i..].chars().next().map_or(1, char::len_utf8));
+    let word = &before[word_start..];
+    const ABBREVIATIONS: [&str; 10] = ["dr", "mr", "mrs", "ms", "prof", "st", "vs", "etc", "e.g", "i.e"];
+    let mut letters = word.chars();
+    let initial = matches!((letters.next(), letters.next()), (Some(c), None) if c.is_uppercase() && c != 'I');
+    initial || word == "No" || ABBREVIATIONS.iter().any(|a| word.eq_ignore_ascii_case(a))
+}
+
 /// The byte offset right after each sentence-ending mark in `text`, in
 /// order: ASCII `.`/`!`/`?` count only when followed by whitespace or the
 /// end of the text (so "e.g." or "3.14" mid-sentence is not mistaken for a
-/// boundary); the CJK full-width marks `。`/`！`/`？` always count, since CJK
-/// prose does not put a space after them. [`truncate_at_boundary`]'s only
-/// caller for this.
+/// boundary), unless the word before the `.` is an abbreviation or an
+/// initial ([`ends_with_abbreviation`]); the CJK full-width marks `。`/`！`/`？`
+/// always count, since CJK prose does not put a space after them.
+/// [`truncate_at_boundary`]'s only caller for this.
 fn sentence_end_offsets(text: &str) -> Vec<usize> {
     let mut offsets = Vec::new();
     let mut chars = text.char_indices().peekable();
     while let Some((byte_i, ch)) = chars.next() {
         let is_boundary = match ch {
             '。' | '！' | '？' => true,
-            '.' | '!' | '?' => chars.peek().is_none_or(|&(_, next)| next.is_whitespace()),
+            '!' | '?' => chars.peek().is_none_or(|&(_, next)| next.is_whitespace()),
+            '.' => {
+                chars.peek().is_none_or(|&(_, next)| next.is_whitespace())
+                    && !ends_with_abbreviation(&text[..byte_i])
+            }
             _ => false,
         };
         if is_boundary {
