@@ -633,6 +633,7 @@ test.describe('a page that asks for its contents open', () => {
       await expect.poll(async () => (await rows(page)).findIndex((row) => row.current)).toBe(k);
       const r = await rows(page);
       r.forEach((row, i) => {
+        expect(row.pic !== null, `row ${i} keeps its picture while it is marked`).toBe(OPEN_WITH_IMAGE[i]);
         if (row.pic) expect(row.picOutline, `picture ${i} outline when current is ${k}`).toBe(i === k ? 'solid' : 'none');
         else expect(row.dashWidth, `dash ${i} when current is ${k}`).toBe(i === k ? '18px' : '10px');
       });
