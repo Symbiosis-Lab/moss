@@ -527,6 +527,37 @@ fn internal_assets_are_never_public_addresses_and_the_list_is_sorted() {
     );
 }
 
+/// An older build copied a digest sidecar into a generated asset directory.
+/// Nobody links to it, so losing it must not stop a publish.
+#[test]
+fn a_vanished_internal_sidecar_never_refuses_the_publish() {
+    let prev = snapshot(&sealed(
+        &[("a.md", "a/index.html", "h", b"A")],
+        &[("jupyter/.moss-archive-sha256", &b"0"[..]), (".moss-build-stamp", &b"1"[..])],
+    ));
+    let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
+
+    let removed = removed_addresses(&prev, &cur, in_build(&cur));
+    assert!(pending_removals(&removed, None).is_empty(), "{removed:?}");
+    assert_eq!(removed_public_paths(&prev, &cur.files()), Vec::<String>::new());
+    assert_eq!(classify(Some(&prev), &cur).removed_assets, 2, "still counted as removed output");
+}
+
+#[test]
+fn a_vanished_page_or_authors_dotfile_still_refuses_beside_an_internal_sidecar() {
+    let prev = snapshot(&sealed(
+        &[("a.md", "a/index.html", "h", b"A"), ("b.md", "jupyter/index.html", "h", b"B")],
+        &[("jupyter/.moss-archive-sha256", &b"0"[..]), (".well-known/security.txt", &b"s"[..])],
+    ));
+    let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
+
+    let pending: Vec<String> = pending_removals(&removed_addresses(&prev, &cur, |_| true), None)
+        .into_iter()
+        .map(|p| p.path)
+        .collect();
+    assert_eq!(pending, [".well-known/security.txt", "jupyter/index.html"]);
+}
+
 /// `removed_assets` is what the desktop app has always read: every vanished
 /// non-page output including `_moss/`, from the own-target record, never a
 /// page. It is not derived from the address list.

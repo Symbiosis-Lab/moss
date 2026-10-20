@@ -53,9 +53,11 @@ pub fn is_not_found_address(rel: &str) -> bool {
 }
 
 /// Is this output path an address a visitor can have stored — anything outside
-/// the content-addressed, rotating `_moss/` namespace?
+/// the content-addressed, rotating `_moss/` namespace, and not one of moss's own
+/// `.moss-*` sidecar files, which nothing links to?
 pub fn is_public_address(path: &str) -> bool {
-    !path.starts_with("_moss/")
+    let name = path.rsplit('/').next().unwrap_or(path);
+    !path.starts_with("_moss/") && !name.starts_with(".moss-")
 }
 
 /// The URL an output path is served at. Only an `index.html` is served at its
