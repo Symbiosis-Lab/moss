@@ -326,6 +326,16 @@ pub fn verbatim_index_dirs(html_files: &[FileInfo], passthrough_roots: &HashSet<
         .collect()
 }
 
+/// The folders whose markdown cannot be the home: [`verbatim_index_dirs`]
+/// except a language tree's root whose `index.html` is named exactly in
+/// `[build].passthrough`. That pair behaves like the site root's: the
+/// `index.md` stays the home and is the document's metadata.
+pub fn reserved_home_dirs(html_files: &[FileInfo], passthrough_roots: &HashSet<String>) -> HashSet<String> {
+    let mut dirs = verbatim_index_dirs(html_files, passthrough_roots);
+    dirs.retain(|d| !(moss_core::home::is_known_language_code(d) && passthrough_roots.contains(&format!("{d}/index.html"))));
+    dirs
+}
+
 /// Each scanned directory that gets a folder-index page, paired with the
 /// page-tree key that index lives at.
 ///

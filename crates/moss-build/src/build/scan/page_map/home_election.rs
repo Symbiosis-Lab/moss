@@ -13,7 +13,8 @@ fn parent_dir(path: &str) -> &str {
 /// file per folder. `reserved` folders have a verbatim `index.html`, so no
 /// markdown file there can be the home: they are left out of the election and
 /// each file that would have won is warned about, since it publishes at its
-/// own address instead.
+/// own address instead. [`crate::build::scan::classify::reserved_home_dirs`]
+/// decides which folders are reserved.
 pub(crate) fn elect_homes_with_evicted(
     markdown_files: &[FileInfo],
     root: &crate::vault::paths::VaultRoot,

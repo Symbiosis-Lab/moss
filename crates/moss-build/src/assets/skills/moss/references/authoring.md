@@ -165,7 +165,7 @@ passthrough = ["index.html"]
 
 A passthrough page receives none of moss's injected features: no visit counter, comments or subscribe form. To be counted on a site published to mosspub.com, it adds `<script src="/_moss/js/beacon.js" defer></script>` itself.
 
-The explicit entry makes the source HTML win only the root `index.html` output collision. moss still generates every Markdown page, and `--watch` rebuilds when either source changes. The HTML document owns its own head, styles, scripts, accessibility, and asset links. A root `index.html` without this explicit entry remains an ordinary source asset and does not replace moss's generated homepage.
+The explicit entry makes the source HTML win only the root `index.html` output collision. moss still generates every Markdown page, and `--watch` rebuilds when either source changes. The HTML document owns its own head, styles, scripts, accessibility, and asset links. A root `index.html` without this explicit entry remains an ordinary source asset and does not replace moss's generated homepage. The `index.md` beside a declared document, at the root or in a language folder like `fr/`, is only that page's metadata: its title and description still serve the site, but its text is never published to `llms.txt`, a feed or search, and the build warns when it has any.
 
 ## Files moss does not render, and where they belong
 

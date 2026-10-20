@@ -382,7 +382,8 @@ pub fn generate_blocking_content_for_build(
         &project_structure.html_files,
         &project_structure.passthrough_roots,
     );
-    let (home_overrides, home_file_winners) = elect_homes(&project_structure.markdown_files, root, &verbatim_dirs);
+    let reserved_dirs = crate::build::scan::classify::reserved_home_dirs(&project_structure.html_files, &project_structure.passthrough_roots);
+    let (home_overrides, home_file_winners) = elect_homes(&project_structure.markdown_files, root, &reserved_dirs);
     let markdown = crate::build::markdown::SiteMarkdown { lang: root_language(&site_config.lang, project_structure, &home_file_winners), ..site_config.markdown() };
 
     // Build PageMap: pre-scan all markdown files to compute source_path → url_path mapping.
@@ -1666,6 +1667,7 @@ pub fn generate_blocking_content_for_build(
     );
     crate::build::terms::link_term_translations(&mut documents, &term_index);
     super::build_shared::report_verbatim_collisions(&documents, project_structure, &dir_overrides);
+    super::build_shared::withhold_shadowed_bodies(&mut documents, project_structure, &dir_overrides);
     // The resolved set now contains both authored and synthetic folders.
     // Stamp every explorer root once so its facade includes the shared places
     // asset URL that its own map markup renders below.
@@ -3015,6 +3017,7 @@ pub fn generate_blocking_content_for_build(
         crate::build::terms::kind_move_stubs(&term_index),
         crate::build::terms::claim_stubs(&term_index),
         crate::build::terms::edition_move_stubs(&term_index),
+        super::build_shared::shadowed_edition_home_stubs(&verbatim_dirs, &home_file_winners),
     ]
     .concat();
     let table_inputs = crate::build::feeds::redirects::TableInputs {

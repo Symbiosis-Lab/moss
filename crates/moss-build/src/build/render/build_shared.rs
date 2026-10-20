@@ -234,6 +234,56 @@ pub(super) fn report_verbatim_collisions(
     }
 }
 
+/// Withhold the body of every page whose address a passthrough `.html` file
+/// owns, and warn once per such file whose body was not empty. The file is what
+/// readers get, so its markdown is only metadata: its title and description
+/// still serve the site, but its text must not reach `llms.txt`, a feed or any
+/// other surface built from the documents.
+pub(super) fn withhold_shadowed_bodies(
+    documents: &mut [ParsedDocument],
+    project: &ProjectStructure,
+    dir_overrides: &HashMap<String, String>,
+) {
+    let owned: HashSet<String> = project
+        .html_files
+        .iter()
+        .filter(|f| crate::build::scan::classify::is_in_passthrough(&f.path, &project.passthrough_roots))
+        .map(|f| crate::build::scan::page_map::resolve_path_with_overrides(&f.path, dir_overrides))
+        .collect();
+    for doc in documents.iter_mut().filter(|d| !d.slot_only && owned.contains(&d.url_path)) {
+        let Some(source) = &doc.source_path else { continue };
+        if !doc.content.trim().is_empty() {
+            crate::build::cli_output::log_warn_problem!(
+                "`{source}` has text, but it is never published because the HTML document at {} owns the page",
+                crate::build::served_path::served_address(&doc.url_path)
+            );
+        }
+        doc.content.clear();
+        doc.html_content.clear();
+    }
+}
+
+/// The old addresses of language-tree homes whose `index.md` used to be
+/// published beside the tree's verbatim `index.html`, as `(old address, target)`
+/// pairs for the redirect table. The markdown is now that home's metadata, so
+/// `/fr/index/` forwards to `/fr/`.
+pub(super) fn shadowed_edition_home_stubs(
+    verbatim_dirs: &HashSet<String>,
+    home_file_winners: &HashSet<String>,
+) -> Vec<(String, String)> {
+    let mut stubs: Vec<(String, String)> = home_file_winners
+        .iter()
+        .filter_map(|file| {
+            let (dir, name) = file.split_once('/')?;
+            let stem = name.rsplit_once('.')?.0.to_lowercase();
+            (verbatim_dirs.contains(dir) && moss_core::home::is_known_language_code(dir) && !stem.contains('/'))
+                .then(|| (format!("{dir}/{stem}/"), format!("/{dir}/"))) // allow:served-path-url-construct (the address before the home was metadata, the redirect source)
+        })
+        .collect();
+    stubs.sort();
+    stubs
+}
+
 #[cfg(test)]
 #[path = "folder_index_plan_tests.rs"]
 mod folder_index_plan_tests;
