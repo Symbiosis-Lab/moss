@@ -1,12 +1,12 @@
-// Unit tests for site/ui/demo/player.js, against a fake driver (no browser, no iframe), plus the
-// two pure Pace formulas from site/ui/demo/driver.js (site/ui/demo/README.md, "Pace") — they take no DOM
+// Unit tests for site/home/ui/demo/player.js, against a fake driver (no browser, no iframe), plus the
+// two pure Pace formulas from site/home/ui/demo/driver.js (docs/reference/docs-demo.md, "Pace") — they take no DOM
 // and no timers, so they belong in the same no-browser suite rather than a browser-only check.
 // Run: node --test scripts/demo-player.test.mjs
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { play, playChain, resolveLocale } from '../site/ui/demo/player.js';
-import { travelDurationMs, holdAfterResultMs } from '../site/ui/demo/driver.js';
+import { play, playChain, resolveLocale } from '../site/home/ui/demo/player.js';
+import { travelDurationMs, holdAfterResultMs } from '../site/home/ui/demo/driver.js';
 
 // A driver whose animated verbs resolve true on the next microtask, as if each finished instantly.
 function fastDriver() {
@@ -196,7 +196,7 @@ test('a step\'s "reveals" rides alongside its one verb without counting as a sec
   assert.deepEqual(driver.calls, [['context', 'versions.currentFile']]);
 });
 
-test('play forwards a step\'s "reveals" to the driver untouched (site/ui/demo/README.md, "Pace")', async () => {
+test('play forwards a step\'s "reveals" to the driver untouched (docs/reference/docs-demo.md, "Pace")', async () => {
   const seen = [];
   const driver = {
     async click(name, opts) { seen.push(['click', name, opts.reveals]); return true; },

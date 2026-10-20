@@ -1,13 +1,8 @@
----
-listed: false
-uid: "6c601142"
----
-
 # The demo: one moss interface per page, many scenes
 
 A documentation page shows one real moss interface once, pinned beside the text. A Play button under a heading runs a *scene* on that interface — a short scripted demonstration of what the heading describes — and the reader can take over at any moment. There is never a second interface on the page, and the demo frame has no controls of its own: the text is both the list of scenes and the way to start them.
 
-This directory replaces the previous per-demonstration editor element (one editor per demo, rather than one editor per page), and its earlier name, `site/ui/stage`: it now covers more than one *surface* — the editor today, others later — so the directory, the elements, and the CSS classes are named for what they are, `demo`, not for the one surface that used to be the only one.
+This directory replaces the previous per-demonstration editor element (one editor per demo, rather than one editor per page), and its earlier name, `site/home/ui/stage`: it now covers more than one *surface* — the editor today, others later — so the directory, the elements, and the CSS classes are named for what they are, `demo`, not for the one surface that used to be the only one.
 
 ## Add a demo
 
@@ -110,7 +105,7 @@ Only script a gesture the harvested interface really performs. A section whose g
 
 ## The recorder
 
-`node scripts/record-scene.mjs <name> [--lang en|zh-hant|zh-hans] [--surface editor]` serves `site/ui` locally, opens the surface document in a headed Chromium, and records an author's own clicks, right-clicks, double-clicks, and typed-and-committed input fields, mapping each to a named target by the same reverse lookup `driver.js` itself uses (the surface adapter's `findTarget`, tried against every name in `TARGET_NAMES`). An interaction on an element with no named target is reported, not silently dropped, naming the element so the author can add a `data-action` or a `TARGETS` entry. On window close (or Ctrl-C) it writes `scenes/<name>.json` — `steps` and a default `reveals` (2, `driver.js`'s own default) on every click/context/dblclick step — and prints the link to paste.
+`node scripts/record-scene.mjs <name> [--lang en|zh-hant|zh-hans] [--surface editor]` serves `site/home/ui` locally, opens the surface document in a headed Chromium, and records an author's own clicks, right-clicks, double-clicks, and typed-and-committed input fields, mapping each to a named target by the same reverse lookup `driver.js` itself uses (the surface adapter's `findTarget`, tried against every name in `TARGET_NAMES`). An interaction on an element with no named target is reported, not silently dropped, naming the element so the author can add a `data-action` or a `TARGETS` entry. On window close (or Ctrl-C) it writes `scenes/<name>.json` — `steps` and a default `reveals` (2, `driver.js`'s own default) on every click/context/dblclick step — and prints the link to paste.
 
 `--headless --script <file>` drives the page with Playwright instead of a person, for testing the recorder itself: Playwright's own input simulation dispatches trusted DOM events, the same ones a real click produces, so it exercises the exact listeners unchanged. Verified by writing a driver that reproduces the "tree" scene's own two clicks and diffing the recorded JSON's verb/target sequence against `scenes/tree.json` — they matched exactly (only `reveals` differs, which is expected: the recorder writes the default, a hand-tuned scene often doesn't use it).
 

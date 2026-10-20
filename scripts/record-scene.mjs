@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // Records an author's own clicks / right-clicks / double-clicks / typed-and-committed input
 // fields against a surface's real document, mapping each interaction to a named target by
-// reverse lookup in the surface adapter (site/ui/demo/surfaces/*.js) — the same lookup a person
+// reverse lookup in the surface adapter (site/home/ui/demo/surfaces/*.js) — the same lookup a person
 // hand-authoring a scene would do, automated. An interaction on an element with no named target
 // prints a clear message naming the element, so the author can add a `data-action` or a TARGETS
 // entry instead of the recording silently dropping it. On window close (or Ctrl-C) it writes
-// site/ui/demo/scenes/<name>.json and prints the link to paste (site/ui/demo/README.md,
+// site/home/ui/demo/scenes/<name>.json and prints the link to paste (docs/reference/docs-demo.md,
 // "Add a demo").
 //
 // Usage:
@@ -24,7 +24,7 @@ import { resolve, relative } from 'node:path';
 import { resolveBaseURL, loadPlaywright } from './landing-harness.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
-const SITE_UI_DIR = resolve(ROOT, 'site/ui');
+const SITE_UI_DIR = resolve(ROOT, 'site/home/ui');
 const SCENES_DIR = resolve(SITE_UI_DIR, 'demo/scenes');
 
 const LOCALES = new Set(['en', 'zh-hant', 'zh-hans']);
@@ -34,7 +34,7 @@ const DEFAULT_REVEALS = 2; // driver.js PACE.defaultReveals
 // Which document a surface records against, and where its adapter module lives — both paths
 // relative to SITE_UI_DIR (the server root below). Kept as data here, alongside SURFACES rather
 // than re-derived from surfaces/editor.js's own EDITOR_URL, because that URL is built from
-// `import.meta.url` for the BROWSER's benefit (site/ui/demo/README.md, "Surfaces") and this
+// `import.meta.url` for the BROWSER's benefit (docs/reference/docs-demo.md, "Surfaces") and this
 // script needs an http:// path before any page exists to resolve it against.
 const SURFACE_DOCUMENTS = {
   editor: { doc: 'app-editor.html', adapter: '/demo/surfaces/editor.js' },
@@ -142,7 +142,7 @@ function recorderInitScript(adapterHref) {
       if (!e.isTrusted) return;
       report('context', resolveName(e.target), e.target);
     }, { capture: true });
-    // typeInto (site/ui/demo/README.md: "there is no bare type verb") — only a COMMITTED value,
+    // typeInto (docs/reference/docs-demo.md: "there is no bare type verb") — only a COMMITTED value,
     // on Enter, matches what the real driver plays back.
     document.addEventListener('keydown', (e) => {
       if (!e.isTrusted || e.key !== 'Enter') return;

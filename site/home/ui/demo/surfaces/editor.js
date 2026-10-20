@@ -1,7 +1,7 @@
 // The "editor" surface adapter: everything demo-frame.js and driver.js need to know about the
-// harvested editor document (site/ui/app-editor.html) to drive it — its named click/context
+// harvested editor document (site/home/ui/app-editor.html) to drive it — its named click/context
 // targets, its theme attributes, its ready check, and how to frame it. This is the adapter
-// interface every surface implements (site/ui/demo/README.md, "Surfaces"):
+// interface every surface implements (docs/reference/docs-demo.md, "Surfaces"):
 //
 //   DEFAULT_FIXTURE                      the fixture used when a scene names none
 //   findTarget(doc, name) -> Element|null      resolves a named target, or null if not yet rendered
@@ -10,7 +10,7 @@
 //   waitForReady(win, doc) -> Promise<handle>   resolves once the framed document is interactive
 //
 // Moves into the desktop app repository's scripts/landing/ once the driver gains a `load(fixture)` method (see
-// site/ui/demo/README.md, "The harvested document") — it belongs with the harvest, not the
+// docs/reference/docs-demo.md, "The harvested document") — it belongs with the harvest, not the
 // reader-facing demo frame.
 
 const EDITOR_URL = new URL('../../app-editor.html', import.meta.url);
@@ -114,8 +114,8 @@ export function findTarget(doc, name) {
   return find(doc) ?? null;
 }
 
-/** Every target name this surface's scenes may use — the set check-demo-scenes.mjs (site/ui/demo/
- * README.md, "Static check") validates a scene's step targets against, without loading a browser. */
+/** Every target name this surface's scenes may use — the set check-demo-scenes.mjs (docs/reference/docs-demo.md,
+ *  "Static check") validates a scene's step targets against, without loading a browser. */
 export const TARGET_NAMES = new Set(Object.keys(TARGETS));
 
 // The harvested document's own dark/light switch (see its `[data-theme]` and

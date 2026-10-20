@@ -1,8 +1,8 @@
 // Turns player.js's verbs into actions inside a framed surface: typing, clicking or right-clicking
 // a named target, moving the pointer overlay. Knows nothing about scenes, markers, or when
-// playback starts or stops — see site/ui/demo/README.md's module boundaries. Also knows nothing
+// playback starts or stops — see docs/reference/docs-demo.md's module boundaries. Also knows nothing
 // about any ONE surface: `findTarget` and the typing handle come in as `deps` from whichever
-// surface adapter (site/ui/demo/surfaces/*.js) demo-frame.js is driving, so this module has no
+// surface adapter (site/home/ui/demo/surfaces/*.js) demo-frame.js is driving, so this module has no
 // import of its own to change when a second surface is added.
 //
 // `typeInto`/`setTextInto` type into a named input that isn't the harvested editor's own
@@ -12,7 +12,7 @@
 const PRESS_DIP_SCALE = 0.88;
 const RING_EXPAND_SCALE = 2.4;
 
-// Pace (site/ui/demo/README.md, "Pace") — every timing beat the driver uses, in ONE table, each
+// Pace (docs/reference/docs-demo.md, "Pace") — every timing beat the driver uses, in ONE table, each
 // row with the one-line reason the README gives. A demonstration is watched, not caused, so these
 // are not interface-transition numbers (100-500ms): the viewer has to find the pointer, follow it,
 // see the press, and take in what appeared.
@@ -42,7 +42,7 @@ const PACE = {
   defaultReveals: 2,
   // Gap between a double-click's two presses: fast enough to read as one gesture, slow enough for
   // each press's own dip/ring to register on its own — a double click should LOOK like two
-  // presses (site/ui/demo/README.md, "The pointer"), not one blurred one.
+  // presses (docs/reference/docs-demo.md, "The pointer"), not one blurred one.
   dblclickGapMs: 180,
   // How long a step's own target may take to render before giving up: not a beat the viewer
   // watches, so it is generous rather than paced — a previous step's own effect (a menu opening, a
@@ -54,7 +54,7 @@ const PACE = {
   typeIntoCharMs: 55,
 };
 
-/** Travel duration for a glide of `distancePx` (site/ui/demo/README.md, "Pace"). Pure function —
+/** Travel duration for a glide of `distancePx` (docs/reference/docs-demo.md, "Pace"). Pure function —
  * no DOM, no timers — so its clamp boundaries are unit-testable without a browser. Also used by
  * check-demo-scenes.mjs and check-docs-demo.mjs to pace-bound a scene without a browser. */
 export function travelDurationMs(distancePx) {
@@ -62,7 +62,7 @@ export function travelDurationMs(distancePx) {
   return Math.min(PACE.travelMaxMs, Math.max(PACE.travelMinMs, raw));
 }
 
-/** Hold duration once a step's result has appeared (site/ui/demo/README.md, "Pace"). `reveals` is
+/** Hold duration once a step's result has appeared (docs/reference/docs-demo.md, "Pace"). `reveals` is
  * the step's own count of what just appeared; missing/undefined falls back to PACE.defaultReveals.
  * Pure function, same reason as travelDurationMs above. */
 export function holdAfterResultMs(reveals) {
@@ -94,7 +94,7 @@ function sleep(ms, signal) {
 /** Waits, bounded and abortable, for a named target to exist in `doc`. A step's target may not be
  * there yet because the previous step's own effect — a menu opening, a mode swap — is still
  * rendering; this lives here, once, rather than as a sleep verb in a scene, so every click/context
- * step benefits instead of only the scenes that happen to need it (site/ui/demo/README.md keeps the
+ * step benefits instead of only the scenes that happen to need it (docs/reference/docs-demo.md keeps the
  * verb table free of timing hacks on purpose). Resolves the element as soon as it appears; rejects
  * with an AbortError if `signal` aborts first, or after PACE.targetWaitMs. */
 function waitForTarget(resolveTarget, doc, name, signal) {
@@ -172,7 +172,7 @@ function waitForRectStable(el, signal) {
  *   getHandle: () => object | null,
  *   findTarget: (doc: Document, name: string) => Element | null,
  * }} deps `findTarget` and `getHandle` come from the active surface adapter
- *   (site/ui/demo/surfaces/*.js) — demo-frame.js supplies them, so this module never imports a
+ *   (site/home/ui/demo/surfaces/*.js) — demo-frame.js supplies them, so this module never imports a
  *   surface directly.
  */
 export function createDriver({ frame, frameWrap, pointerEl, getHandle, findTarget }) {
@@ -213,13 +213,13 @@ export function createDriver({ frame, frameWrap, pointerEl, getHandle, findTarge
   // The pointer's last animated-to position, in frameWrap-local px — parsed back out of its own
   // inline transform (glideTo's `from`) rather than tracked as separate state, so there is exactly
   // one place (the transform) that can disagree with itself. Used only to scale travel duration by
-  // distance (site/ui/demo/README.md, "Pace"); defaults to (0, 0), the pointer's initial position.
+  // distance (docs/reference/docs-demo.md, "Pace"); defaults to (0, 0), the pointer's initial position.
   function currentPointerXY() {
     const match = /translate\(([-\d.]+)px,\s*([-\d.]+)px\)/.exec(pointerEl.style.transform || '');
     return match ? { x: parseFloat(match[1]), y: parseFloat(match[2]) } : { x: 0, y: 0 };
   }
 
-  /** Glides the pointer to `el`'s center, scaled and eased per PACE.travel* (site/ui/demo/README.md,
+  /** Glides the pointer to `el`'s center, scaled and eased per PACE.travel* (docs/reference/docs-demo.md,
    * "Pace"). The Web Animations API, not a CSS transition plus a matching sleep, is the pointer's
    * one owner of how long that takes: the click below awaits the animation's own `.finished`
    * instead of racing a separately-tracked duration. Resolves false, without moving the pointer to
@@ -249,7 +249,7 @@ export function createDriver({ frame, frameWrap, pointerEl, getHandle, findTarge
     return true;
   }
 
-  /** Waits out the dwell before a press (site/ui/demo/README.md, "Pace") — longer before a
+  /** Waits out the dwell before a press (docs/reference/docs-demo.md, "Pace") — longer before a
    * right-click, whose result is less expected. Resolves false, same convention as every other
    * step here, if `signal` aborts mid-dwell. */
   function dwell(button, signal) {
@@ -273,7 +273,7 @@ export function createDriver({ frame, frameWrap, pointerEl, getHandle, findTarge
   let activeDip = null;
   let activeGlow = null;
 
-  /** Presses the pointer (site/ui/demo/README.md, "The pointer"): records which button on the
+  /** Presses the pointer (docs/reference/docs-demo.md, "The pointer"): records which button on the
    * pointer element itself (`data-button="left"|"right"`) — demo.css keys every visual treatment,
    * including a right-click's hollow dotted dot, off that attribute alone. The attribute is cleared and reflowed before
    * being reapplied so that CSS keyframe restarts
@@ -282,7 +282,7 @@ export function createDriver({ frame, frameWrap, pointerEl, getHandle, findTarge
    * and the ring's expand-and-fade via the Web Animations API; a still-running previous press is
    * cancelled first so back-to-back presses each get a full animation instead of blending into
    * one. Resolves once the dip completes (PACE.pressDipMs) — the ring keeps fading in the
-   * background through the hold that follows (site/ui/demo/README.md, "Pace": "during the hold"),
+   * background through the hold that follows (docs/reference/docs-demo.md, "Pace": "during the hold"),
    * so this does not block on it. An abort cancels both animations early rather than leaving them
    * running past the load that started them. */
   function press(button, signal) {
@@ -325,7 +325,7 @@ export function createDriver({ frame, frameWrap, pointerEl, getHandle, findTarge
     });
   }
 
-  /** Holds on the result once a step's press has fired (site/ui/demo/README.md, "Pace"), scaled by
+  /** Holds on the result once a step's press has fired (docs/reference/docs-demo.md, "Pace"), scaled by
    * the step's own `reveals`. Resolves false, same convention as every other step here, if `signal`
    * aborts mid-hold. */
   function hold(reveals, signal) {
@@ -348,7 +348,7 @@ export function createDriver({ frame, frameWrap, pointerEl, getHandle, findTarge
    * listener, which only reads the `dblclick` event); it worked, so none are dispatched here —
    * `.click()` synthesizes `detail: 0`, not the `1` then `2` a real double-click's own two clicks
    * carry, and building that pair only to throw it away would be unearned complexity for a target
-   * that never reads it (site/ui/demo/README.md's own module boundary: script only the gesture the
+   * that never reads it (docs/reference/docs-demo.md's own module boundary: script only the gesture the
    * harvested interface really performs). */
   function dispatchDblClick(el) {
     const { x, y } = centerOf(el);
@@ -359,12 +359,12 @@ export function createDriver({ frame, frameWrap, pointerEl, getHandle, findTarge
 
   /** The one press-sequence every click/context/dblclick verb and its instant twin is built from:
    * find the named target, then glide → dwell → press(es) → the real DOM event → hold on the
-   * result (site/ui/demo/README.md, "Pace") — or, when `instant` is set (reduced motion, or every
+   * result (docs/reference/docs-demo.md, "Pace") — or, when `instant` is set (reduced motion, or every
    * scene but the last in an `after` chain), skip straight from finding the target to `dispatch`
    * with no animation at all, same as every `*Instant` method did before this was one function.
    * `presses` (default 1) inserts `PACE.dblclickGapMs` between presses when there is more than one,
    * so a double-click keeps each press's own dip/ring rather than blurring into one
-   * (site/ui/demo/README.md, "The pointer"). `dispatch` fires at the moment the real gesture it
+   * (docs/reference/docs-demo.md, "The pointer"). `dispatch` fires at the moment the real gesture it
    * stands for would: before the sole press for a single click or right-click (matching
    * `click`/`context`'s own event, which the browser fires the same moment as the visual press), or
    * once after both presses for a double-click (a real `dblclick` event only fires after the second

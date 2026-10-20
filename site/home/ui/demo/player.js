@@ -1,5 +1,5 @@
 // Runs a scene's `steps` against a driver. Knows nothing about the host page, iframes, layout,
-// or UI strings — see site/ui/demo/README.md for the module boundaries.
+// or UI strings — see docs/reference/docs-demo.md for the module boundaries.
 //
 // A driver is any object shaped like:
 //   typeInto(targetName, text, { signal }) -> Promise<boolean>   animated typing into a named input; resolves false if interrupted
@@ -15,10 +15,10 @@
 
 /** One entry per verb a scene step can use. Adding a verb is adding an entry here. Each `run`
  * takes `reveals` last and forwards it to the driver untouched — player.js knows only that a step
- * may carry it, never what it means beyond that (site/ui/demo/README.md, "Pace"); the driver alone owns
+ * may carry it, never what it means beyond that (docs/reference/docs-demo.md, "Pace"); the driver alone owns
  * the formula reveals feeds. */
 const VERBS = {
-  // Types into a named input (site/ui/demo/README.md, "Scene format") — `{ "typeInto": { "target": "...",
+  // Types into a named input (docs/reference/docs-demo.md, "Scene format") — `{ "typeInto": { "target": "...",
   // "text": "..." } }` — for the site's own `<input>` fields (a rename prompt, a properties search
   // box) that aren't the harvested editor's own typing surface (driver.js).
   typeInto: {
@@ -29,7 +29,7 @@ const VERBS = {
     run: (driver, arg, locale, signal, reveals) => driver.click(arg, { signal, reveals }),
     instant: (driver, arg, locale, signal) => driver.clickInstant(arg, { signal }),
   },
-  // A right-click — how the harvested app's own menus open (site/ui/demo/README.md, "Scene format").
+  // A right-click — how the harvested app's own menus open (docs/reference/docs-demo.md, "Scene format").
   context: {
     run: (driver, arg, locale, signal, reveals) => driver.context(arg, { signal, reveals }),
     instant: (driver, arg, locale, signal) => driver.contextInstant(arg, { signal }),
@@ -43,7 +43,7 @@ const VERBS = {
 };
 
 // Step keys recognized alongside the one verb key, not counted against the "exactly one verb"
-// rule below. `reveals` is the only one today (site/ui/demo/README.md, "Pace": `{ "context": "crumb.file",
+// rule below. `reveals` is the only one today (docs/reference/docs-demo.md, "Pace": `{ "context": "crumb.file",
 // "reveals": 10 }`).
 const NON_VERB_STEP_KEYS = new Set(['reveals']);
 
@@ -76,7 +76,7 @@ export async function play(scene, driver, { locale = 'en', instant = false, sign
 }
 
 /**
- * Plays an `after` chain (site/ui/demo/README.md, "Scene format"): every entry but the last runs through
+ * Plays an `after` chain (docs/reference/docs-demo.md, "Scene format"): every entry but the last runs through
  * `play`'s existing instant mode — no second playback mechanism — and only the last, the scene
  * actually requested, plays under `instant` as given, so reduced motion still applies to it like
  * any other scene. `chain` is ordered eldest ancestor first, the requested scene last; resolving

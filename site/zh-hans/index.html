@@ -398,7 +398,7 @@
   .command button { min-height: 40px; padding: 8px 12px; color: #fff; background: transparent; border: 1px solid rgba(255,255,255,.52); border-radius: 4px; cursor: pointer; }
   #beta, #footer { width: min(1000px, 100%); margin: 56px auto 0; padding-top: 32px; text-align: left; }
   #beta { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 1fr); gap: 48px; align-items: end; }
-  /* Until closing.js has wired the form it cannot submit: say so instead of offering it. */
+  /* Until home/closing.js has wired the form it cannot submit: say so instead of offering it. */
   #beta { position: relative; }
   .static-signup-note { display: none; position: absolute; inset-block-start: 100%; margin-block-start: 26px; }
   html:not([data-closing-wired]) .signup { visibility: hidden; }
@@ -467,7 +467,7 @@
 </style>
 
 <script>document.documentElement.classList.add('js'); history.scrollRestoration = 'manual';</script>
-<script src="landing-i18n.js"></script>
+<script src="home/landing-i18n.js"></script>
 <!-- Mirrors the beacon moss injects into rendered pages; these pages are copied verbatim, so it is repeated here. -->
 <script src="/_moss/js/beacon.js" defer></script>
 </head>
@@ -486,13 +486,13 @@
          uses — the count differs (9 English, 2 Chinese) so there is no
          fixed markup to write here. -->
     <div class="sib" id="sib-nb" data-asset="nb"><iframe id="nb" title="Jupyter 笔记本：连续放大的曼德博集合"></iframe></div>
-    <div class="sib" id="sib-sk" data-asset="sk"><iframe id="sk" data-src="scene3/sketch/native.html?id=living-garden" title="HTML 作品"></iframe></div>
-    <div id="s3-video" data-asset="video"><video id="s3-video-el" muted loop playsinline preload="none" data-poster="scene3/movie/pool/posters/general-railroad-ties.jpg"></video></div>
+    <div class="sib" id="sib-sk" data-asset="sk"><iframe id="sk" data-src="home/scene3/sketch/native.html?id=living-garden" title="HTML 作品"></iframe></div>
+    <div id="s3-video" data-asset="video"><video id="s3-video-el" muted loop playsinline preload="none" data-poster="home/scene3/movie/pool/posters/general-railroad-ties.jpg"></video></div>
     <div class="ground" id="g0"></div><div class="ground" id="g1"></div>
     <div id="box">
       <iframe id="ed" title="青苔编辑器"></iframe>
       <iframe id="sh" title="青苔预览" loading="eager"></iframe>
-      <iframe id="vd" src="ui/shell.html?title=A%20canvas%20half%20empty%20%E2%80%94%20A%20Folder%20for%20All%20Digital%20Creation&target=your.site" title="青苔预览" loading="eager"></iframe>
+      <iframe id="vd" src="home/ui/shell.html?title=A%20canvas%20half%20empty%20%E2%80%94%20A%20Folder%20for%20All%20Digital%20Creation&target=your.site" title="青苔预览" loading="eager"></iframe>
     </div>
     <script>
     // ?lang=zh: the Chinese version (八大山人 vault), vertical typesetting in
@@ -517,11 +517,11 @@
         { kind: 'removed', title: '草稿', path: '/文/草稿/' },
       ];
       if (window.__LANG === 'zh') {
-        ed.src = 'ui/editor.html?measure=400&root=' + encodeURIComponent('八大山人') + '&file=' + encodeURIComponent('八大山人.md') + '&date=1659-12-01&home=1';
-        sh.src = 'ui/shell.html?preview=' + encodeURIComponent('/zhuda/homepage/') + '&title=' + encodeURIComponent('八大山人') + '&target=zhudasnotebook.com&pages=' + encodeURIComponent(JSON.stringify(ZHUDA_PAGES));
+        ed.src = 'home/ui/editor.html?measure=400&root=' + encodeURIComponent('八大山人') + '&file=' + encodeURIComponent('八大山人.md') + '&date=1659-12-01&home=1';
+        sh.src = 'home/ui/shell.html?preview=' + encodeURIComponent('/home/zhuda/homepage/') + '&title=' + encodeURIComponent('八大山人') + '&target=zhudasnotebook.com&pages=' + encodeURIComponent(JSON.stringify(ZHUDA_PAGES));
       } else {
-        ed.src = 'ui/editor.html?measure=400&root=' + encodeURIComponent('William Blake') + '&file=' + encodeURIComponent('William Blake.md') + '&date=1790-06-01&home=1';
-        sh.src = 'ui/shell.html?preview=' + encodeURIComponent('/blake/homepage/') + '&title=' + encodeURIComponent('William Blake') + '&target=blakesnotebook.com&pages=' + encodeURIComponent(JSON.stringify(BLAKE_PAGES));
+        ed.src = 'home/ui/editor.html?measure=400&root=' + encodeURIComponent('William Blake') + '&file=' + encodeURIComponent('William Blake.md') + '&date=1790-06-01&home=1';
+        sh.src = 'home/ui/shell.html?preview=' + encodeURIComponent('/home/blake/homepage/') + '&title=' + encodeURIComponent('William Blake') + '&target=blakesnotebook.com&pages=' + encodeURIComponent(JSON.stringify(BLAKE_PAGES));
       }
     })();
     </script>
@@ -530,7 +530,7 @@
          the grown control and run from then on by a d3-force simulation
          (build and physics live in the script, under "Scene 4's targets") —
          the markup carries nothing target-specific, so a logo landing in
-         scene4/logos/ needs no edit here. -->
+         home/scene4/logos/ needs no edit here. -->
     <div id="fan"></div>
   </div></div></div>
   <canvas id="publish-cue" aria-hidden="true" hidden></canvas></div>
@@ -594,7 +594,7 @@
      scripts/build-site-watercolor.mjs, checked by check-site-watercolor-freshness.mjs.
      Loaded as a plain classic script, synchronously, immediately before the
      page's own script that uses it -- this page has no module bundler. -->
-<script src="vendor/moss-watercolor/moss-watercolor.js"></script>
+<script src="home/vendor/moss-watercolor/moss-watercolor.js"></script>
 <script>
 // The composition (the box width is --ed-w, in the stylesheet).
 const GEOM = { cellW: 660, cellH: 620, pad: 80 };
@@ -659,8 +659,8 @@ const PUB_SCALE = 2.6, PUB_MS = 420, PUB_BEAT = 120, PUB_OUT_DELAY = 450;
 // of a reviewer without an edit. SCRIM is how much paper lies over the footage
 // so the line reads off it.
 const arg = (k, d) => new URLSearchParams(location.search).get(k) || d;
-const LOOP_SRC = arg('loopVideo', 'scene5-loop/out/v8-press.mp4');
-const LOOP_POSTER = arg('loopPoster', 'scene5-loop/out/v8-press-poster.jpg');
+const LOOP_SRC = arg('loopVideo', 'home/scene5-loop/out/v8-press.mp4');
+const LOOP_POSTER = arg('loopPoster', 'home/scene5-loop/out/v8-press-poster.jpg');
 const HEADLINE = arg('headline', 'Join the beta test.');
 const SCRIM = 0.72;
 // Only the three creative artifacts move. Their initial positions are
@@ -708,8 +708,8 @@ const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
 // article assets.
 // Each plate's file and its width / height: a loose sheet has its image's own shape.
 const PLATE_SET = window.__LANG === 'zh'
-  ? { dir: 'zhuda/plates', images: { '376d25daf9aa.jpg': 280 / 640, '3926a51d36d5.jpg': 640 / 622, '9e4725e1101e.jpg': 640 / 472, 'e265c76d268f.jpg': 426 / 640, 'e4772754b3b1.jpg': 337 / 640, 'e65a0ba027e5.jpg': 426 / 640, 'eab0bc5785fa.jpg': 318 / 640 } }
-  : { dir: 'blake/plates', images: { '3b119ebffab3.jpg': 475 / 640, 'b8dcbfe35cbd.jpg': 640 / 490, '38211f928ad5.jpg': 534 / 640, '171a382c9cc2.jpg': 531 / 640, '771aaf08cedb.jpg': 640 / 456, 'f34b78575d36.jpg': 640 / 326, '50e62b346c5f.jpg': 492 / 640, '5ac4f7fb652f.jpg': 640 / 237, '0bb22b56b263.jpg': 468 / 640 } };
+  ? { dir: 'home/zhuda/plates', images: { '376d25daf9aa.jpg': 280 / 640, '3926a51d36d5.jpg': 640 / 622, '9e4725e1101e.jpg': 640 / 472, 'e265c76d268f.jpg': 426 / 640, 'e4772754b3b1.jpg': 337 / 640, 'e65a0ba027e5.jpg': 426 / 640, 'eab0bc5785fa.jpg': 318 / 640 } }
+  : { dir: 'home/blake/plates', images: { '3b119ebffab3.jpg': 475 / 640, 'b8dcbfe35cbd.jpg': 640 / 490, '38211f928ad5.jpg': 534 / 640, '171a382c9cc2.jpg': 531 / 640, '771aaf08cedb.jpg': 640 / 456, 'f34b78575d36.jpg': 640 / 326, '50e62b346c5f.jpg': 492 / 640, '5ac4f7fb652f.jpg': 640 / 237, '0bb22b56b263.jpg': 468 / 640 } };
 // Where a plate may live, in #cell's own coordinates. The viewport-aware
 // bounds let a reader drag beyond the resting sheet while the print rectangle
 // grows to include the visible domain; the state textures remain bounded.
@@ -947,7 +947,7 @@ scatterPlates(plateEls);
 // The shallow-water pigment simulation (Curtis et al. 1997) that drives every
 // scene transition -- the shaders, the solver and the recorded-dispersion
 // playback that turns two prints into a three-phase wash -- now lives in
-// vendor/moss-watercolor/moss-watercolor.js, a checked-in build of
+// home/vendor/moss-watercolor/moss-watercolor.js, a checked-in build of
 // packages/moss-watercolor (same repo, loaded as a classic script since this
 // page has no module bundler). createSim/advance below are that package's.
 //
@@ -1023,7 +1023,7 @@ let sim = MossWatercolor.createSim(simOptions());
       doc.head.appendChild(style);
     }
     if (fe && fe.id === 'sh') {
-      // what the landing adds to the harvested shell (landing-shell.js, beside this page), kept out of the harvest so a refresh keeps it
+      // what the landing adds to the harvested shell (home/landing-shell.js, beside this page), kept out of the harvest so a refresh keeps it
       const additions = doc.createElement('script'); additions.src = '../landing-shell.js'; doc.head.appendChild(additions);
       const preview = doc.getElementById('moss-preview-iframe');
       const suppressPreviewLinks = () => {
@@ -1124,7 +1124,7 @@ function measurePub() {
 }
 
 // ── Scene 4's targets: one circle per deploy target, run by d3-force ──────
-// The deploy target list itself is never hardcoded here: scene4/logos/ is a
+// The deploy target list itself is never hardcoded here: home/scene4/logos/ is a
 // rights audit in progress, other hands add and re-verify entries in
 // targets.json while this scene only reads it. Each entry's own `file` and
 // `allowed_on_circle` decide whether a circle shows a real mark or the
@@ -1132,7 +1132,7 @@ function measurePub() {
 // cleared needs no code change on this side either.
 let TARGETS = [];
 let targetsPromise = null;
-const loadTargets = () => targetsPromise || (targetsPromise = fetch('scene4/logos/targets.json').then((r) => r.json())
+const loadTargets = () => targetsPromise || (targetsPromise = fetch('home/scene4/logos/targets.json').then((r) => r.json())
   .catch((e) => { console.warn('scene 4: targets.json failed to load, no targets to show', e && e.message); return []; }));
 // Fired now, well before the reader could plausibly reach scene 4 (it is the
 // fourth of five), so by the time startOrbit awaits it the promise is
@@ -1207,7 +1207,7 @@ function loadVendorScript(src) {
 // bare dependency URLs resolve against this site in some browsers.
 const loadD3Force = () => d3fPromise || (d3fPromise = (async () => {
   for (const file of ['d3-dispatch.min.js', 'd3-quadtree.min.js', 'd3-timer.min.js', 'd3-force.min.js']) {
-    await loadVendorScript(`vendor/d3-force/${file}`);
+    await loadVendorScript(`home/vendor/d3-force/${file}`);
   }
   return window.d3;
 })());
@@ -1373,7 +1373,7 @@ function buildCircle(t, node) {
     img.alt = ''; img.draggable = false; img.decoding = 'async';
     img.addEventListener('load', () => el.classList.add('has-logo'));
     img.addEventListener('error', () => img.remove());
-    img.src = `scene4/logos/${logoFile}`;
+    img.src = `home/scene4/logos/${logoFile}`;
     el.append(img, fb);
   } else el.append(fb);
   bindDrag(el, node);
@@ -1897,7 +1897,7 @@ async function fold(doc, liveRoot, options = {}) {
       // furniture the same as the centre sheet's shadow. So nothing under
       // one is worth reading into a print, at any weight: this is what lets the
       // notebook window hold its real, heavy baked animation
-      // (scene3/notebook/breed/mandelbrot-smooth-zoom.webp) instead of a shrunk
+      // (home/scene3/notebook/breed/mandelbrot-smooth-zoom.webp) instead of a shrunk
       // stand-in — a print never asks for its bytes, heavy or not, in the first
       // place. Before this exclusion, that read scaled with the source file's
       // own bytes and reliably stalled a capture long enough for a drag's
@@ -2288,7 +2288,7 @@ const primed = () => !washing() || needed(shown).every((n) => sheets[n]);   // a
 // test `fold` uses. Not `fold`'s own clone — the LIVE elements, because what
 // forces them to load lives one layer up from the fold.
 // The nested moss-preview-iframe's own navigation (kicked off by the shell's
-// own `setPreview`, ui/shell.html) is independent of `__shell` becoming
+// own `setPreview`, home/ui/shell.html) is independent of `__shell` becoming
 // available on its parent frame — `when()` above only proves the shell's own
 // script has run, not that the article it just pointed the preview at has
 // finished loading. `offscreenImgs()` below reads that iframe's live
@@ -3195,9 +3195,9 @@ async function liveLoop() {
 
 // Scene 3 keeps genuine app chrome above the artifacts and website paper
 // around a fixed article. Only the three artifacts change position.
-const NB_SRC = 'scene3/notebook/breed/mandelbrot-live.html';
-const S3_ARTICLE = '/scene3/article/';
-const S3_VIDEO = '/scene3/movie/pool/clips/general-railroad-ties.mp4';
+const NB_SRC = 'home/scene3/notebook/breed/mandelbrot-live.html';
+const S3_ARTICLE = '/home/scene3/article/';
+const S3_VIDEO = '/home/scene3/movie/pool/clips/general-railroad-ties.mp4';
 const CARDS = {
   sk: { docked: false, el: $('sib-sk'), label: 'the algorithmic artwork — drag anywhere' },
   nb: { docked: false, el: $('sib-nb'), label: 'the notebook, an IPython zoom — drag to move' },
@@ -3277,7 +3277,7 @@ function armScene3Layers() {
   attempt();
 }
 // The sketch's own canvas already pauses when its IntersectionObserver says
-// its canvas is out of view (scene3/sketch/native.html?id=processing-03) — which never fires
+// its canvas is out of view (home/scene3/sketch/native.html?id=processing-03) — which never fires
 // on its own here, since the canvas fills its iframe's whole viewport
 // whatever the parent page is doing. This is the signal that observer is
 // missing: whether scene 3 itself, the one place the sketch is ever drawn,
@@ -3504,6 +3504,6 @@ Promise.all([when(edFrame, '__editor'), when(shFrame, '__shell'), when(vdFrame, 
     page.inert = false; five.inert = false;
   });
 </script>
-<script src="closing.js" defer></script>
+<script src="home/closing.js" defer></script>
 </body>
 </html>

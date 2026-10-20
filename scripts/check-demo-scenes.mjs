@@ -1,30 +1,30 @@
 #!/usr/bin/env node
 // Static check on the demo system's content: no browser, no build, done in seconds — the rules
-// site/ui/demo/README.md states as prose, checked as data instead of only being caught later by
+// docs/reference/docs-demo.md states as prose, checked as data instead of only being caught later by
 // check-docs-demo.mjs's real-browser run. Run: node scripts/check-demo-scenes.mjs
 //
 // Rules (one function each, below):
 //   1. every `#scene=<name>` link in the site's Markdown names a scene file that exists
 //   2. every scene file is linked by at least one page (nothing orphaned)
 //   3. every step's target name is one its scene's surface adapter actually has
-//   4. a page never mixes surfaces across its own markers (site/ui/demo/README.md, "Surfaces")
+//   4. a page never mixes surfaces across its own markers (docs/reference/docs-demo.md, "Surfaces")
 //   5. a scene's own `after` name resolves to a real scene, and the `after` graph has no cycle
 //   6. a scene stays inside the spec's bound: about four steps, about ten seconds
-//      (site/ui/demo/README.md, "Layout of an illustrated section")
+//      (docs/reference/docs-demo.md, "Layout of an illustrated section")
 //
 // Exits 1 and prints every violation found (not just the first) if any rule fails.
 
 import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve, relative, extname } from 'node:path';
-import { travelDurationMs, holdAfterResultMs } from '../site/ui/demo/driver.js';
-import { TARGET_NAMES as EDITOR_TARGET_NAMES } from '../site/ui/demo/surfaces/editor.js';
+import { travelDurationMs, holdAfterResultMs } from '../site/home/ui/demo/driver.js';
+import { TARGET_NAMES as EDITOR_TARGET_NAMES } from '../site/home/ui/demo/surfaces/editor.js';
 
 export const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 export const SITE_DIR = resolve(ROOT, 'site');
-const SCENES_DIR = resolve(SITE_DIR, 'ui/demo/scenes');
+const SCENES_DIR = resolve(SITE_DIR, 'home/ui/demo/scenes');
 
-// The one surface this PR ships (site/ui/demo/README.md, "Surfaces") — a scene omitting `surface`
+// The one surface this PR ships (docs/reference/docs-demo.md, "Surfaces") — a scene omitting `surface`
 // defaults to this, and it is also what the theme's upgrade (site/.moss/theme/script.js) inserts
 // unconditionally. A second surface joins this map, not a chain of `if`s, when one exists.
 const SURFACES = {
@@ -32,7 +32,7 @@ const SURFACES = {
 };
 const DEFAULT_SURFACE = 'editor';
 
-// Spec bound (site/ui/demo/README.md, "Layout of an illustrated section": "kept to about four
+// Spec bound (docs/reference/docs-demo.md, "Layout of an illustrated section": "kept to about four
 // gestures and ten seconds"). Both numbers carry slack past the literal "about four"/"ten": a
 // static check can't see a step's real on-screen travel distance, so its duration estimate below
 // is necessarily a rough one, and it would rather fail loudly on something clearly too long than
@@ -50,7 +50,7 @@ const MAX_DURATION_MS = 15000;
 // approximation rather than a second copy of numbers that could drift from the real table.
 const TRAVEL_TYPICAL_PX = 400; // a representative on-screen hop within the ~600px demo frame
 const STEP_OVERHEAD_MS = 550; // ~ dwell (400-600ms) + one press (150ms), averaged
-const DBLCLICK_EXTRA_MS = 180 + 150; // the second press's own gap + dip (site/ui/demo/README.md, "Pace")
+const DBLCLICK_EXTRA_MS = 180 + 150; // the second press's own gap + dip (docs/reference/docs-demo.md, "Pace")
 const TYPE_CHAR_MS = 55; // driver.js PACE.typeIntoCharMs
 const TYPE_COMMIT_MS = 300; // rough allowance for the Enter that commits a typeInto step
 
@@ -97,9 +97,9 @@ export async function findMarkdownFiles(dir) {
   for (const entry of entries) {
     const full = resolve(dir, entry.name);
     if (entry.isDirectory()) {
-      // The demo system's own source (site/ui/demo) and the .moss project dirs carry no authored
+      // The demo system's own source (site/home/ui/demo) and the .moss project dirs carry no authored
       // guide content — skip them rather than special-casing their own README/scene JSON below.
-      if (full === resolve(SITE_DIR, 'ui') || entry.name === '.moss' || entry.name.startsWith('.')) continue;
+      if (full === resolve(SITE_DIR, 'home') || entry.name === '.moss' || entry.name.startsWith('.')) continue;
       files.push(...(await findMarkdownFiles(full)));
     } else if (extname(entry.name) === '.md') {
       files.push(full);
@@ -108,7 +108,7 @@ export async function findMarkdownFiles(dir) {
   return files;
 }
 
-// `[label](#scene=name)` — `name` may be empty ("just open the surface", site/ui/demo/README.md,
+// `[label](#scene=name)` — `name` may be empty ("just open the surface", docs/reference/docs-demo.md,
 // "Markdown markers"). Matches the Markdown source, not rendered HTML, so this needs no build.
 const SCENE_LINK_RE = /\[[^\]]*\]\(#scene=([^)\s]*)\)/g;
 
@@ -146,14 +146,14 @@ async function main() {
     if (name === '') continue; // "just open the surface" — no scene file to check
     usedScenes.add(name);
     if (!sceneFileSet.has(name)) {
-      errors.push(`${page} links scene "${name}", which has no site/ui/demo/scenes/${name}.json`);
+      errors.push(`${page} links scene "${name}", which has no site/home/ui/demo/scenes/${name}.json`);
     }
   }
 
   // Rule 2: every scene file is used by at least one page.
   for (const name of sceneFileNames) {
     if (!usedScenes.has(name)) {
-      errors.push(`site/ui/demo/scenes/${name}.json is not linked by any page`);
+      errors.push(`site/home/ui/demo/scenes/${name}.json is not linked by any page`);
     }
   }
 
@@ -163,7 +163,7 @@ async function main() {
     try {
       scenes.set(name, await loadScene(name));
     } catch (error) {
-      errors.push(`site/ui/demo/scenes/${name}.json failed to parse: ${error.message}`);
+      errors.push(`site/home/ui/demo/scenes/${name}.json failed to parse: ${error.message}`);
     }
   }
 
@@ -216,7 +216,7 @@ async function main() {
     const after = scene?.after;
     if (after !== undefined) {
       if (!sceneFileSet.has(after)) {
-        errors.push(`scene "${name}" names "after": "${after}", which has no site/ui/demo/scenes/${after}.json`);
+        errors.push(`scene "${name}" names "after": "${after}", which has no site/home/ui/demo/scenes/${after}.json`);
       } else {
         visit(after, [...pathSoFar, name]);
       }
@@ -243,7 +243,7 @@ async function main() {
       surfacesOnPage.add(scene.surface ?? DEFAULT_SURFACE);
     }
     if (surfacesOnPage.size > 1) {
-      errors.push(`${page} mixes demo surfaces (${[...surfacesOnPage].join(', ')}) — one surface per page today (site/ui/demo/README.md, "Surfaces")`);
+      errors.push(`${page} mixes demo surfaces (${[...surfacesOnPage].join(', ')}) — one surface per page today (docs/reference/docs-demo.md, "Surfaces")`);
     }
   }
 

@@ -416,8 +416,8 @@ jobs:
       - name: Landing's vendored moss-watercolor build is up to date
         run: |
           node scripts/build-site-watercolor.mjs
-          if ! git diff --exit-code -- site/vendor/moss-watercolor; then
-            echo "::error::site/vendor/moss-watercolor/moss-watercolor.js is stale. Run scripts/build-site-watercolor.mjs and commit it."
+          if ! git diff --exit-code -- site/home/vendor/moss-watercolor; then
+            echo "::error::site/home/vendor/moss-watercolor/moss-watercolor.js is stale. Run scripts/build-site-watercolor.mjs and commit it."
             exit 1
           fi
 

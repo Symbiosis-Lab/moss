@@ -8,8 +8,8 @@ import test from 'node:test';
 test('locale generation preserves script and style text through HTML end tag variants', async () => {
   const root = await mkdtemp(join(tmpdir(), 'moss-locales-'));
   try {
-    for (const directory of ['scripts', 'site/assets/brand', 'crates/moss-build/icons']) await mkdir(join(root, directory), { recursive: true });
-    for (const path of ['scripts/generate-landing-locales.mjs', 'site/landing-i18n.js', 'crates/moss-build/icons/icon.svg']) {
+    for (const directory of ['scripts', 'site/home', 'site/assets/brand', 'crates/moss-build/icons']) await mkdir(join(root, directory), { recursive: true });
+    for (const path of ['scripts/generate-landing-locales.mjs', 'site/home/landing-i18n.js', 'crates/moss-build/icons/icon.svg']) {
       await copyFile(new URL(`../${path}`, import.meta.url), join(root, path));
     }
     const blocks = [
@@ -40,8 +40,8 @@ test('locale generation preserves script and style text through HTML end tag var
 test('the committed Chinese landing pages are generated from the current English page', async () => {
   const root = await mkdtemp(join(tmpdir(), 'moss-locales-'));
   try {
-    for (const directory of ['scripts', 'site/assets/brand', 'crates/moss-build/icons']) await mkdir(join(root, directory), { recursive: true });
-    for (const path of ['scripts/generate-landing-locales.mjs', 'site/index.html', 'site/landing-i18n.js', 'crates/moss-build/icons/icon.svg']) {
+    for (const directory of ['scripts', 'site/home', 'site/assets/brand', 'crates/moss-build/icons']) await mkdir(join(root, directory), { recursive: true });
+    for (const path of ['scripts/generate-landing-locales.mjs', 'site/index.html', 'site/home/landing-i18n.js', 'crates/moss-build/icons/icon.svg']) {
       await copyFile(new URL(`../${path}`, import.meta.url), join(root, path));
     }
     execFileSync(process.execPath, [join(root, 'scripts/generate-landing-locales.mjs')], { stdio: 'pipe' });

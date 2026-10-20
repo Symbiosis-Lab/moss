@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// Verifies the <moss-editor-demo>/<moss-demo-marker> pages (site/ui/demo) in a real browser, in
+// Verifies the <moss-editor-demo>/<moss-demo-marker> pages (site/home/ui/demo) in a real browser, in
 // both Chromium and WebKit. Usage:
 //   PLAYWRIGHT_MODULE=/path/to/node_modules/playwright/index.mjs node scripts/check-docs-demo.mjs <preview-url>
 
 import { loadPlaywright } from './landing-harness.mjs';
-import { travelDurationMs, holdAfterResultMs } from '../site/ui/demo/driver.js';
+import { travelDurationMs, holdAfterResultMs } from '../site/home/ui/demo/driver.js';
 import { findMarkdownFiles, findSceneLinks, SITE_DIR } from './check-demo-scenes.mjs';
 
 const input = process.argv[2];
@@ -19,7 +19,7 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 
 // This checker's own policy — which built URLs to exercise in a real browser, at which source
 // file — locale/viewport, not the walk itself. zh-hans is skipped here to keep the per-engine run
-// short: scene names are locale-independent (site/ui/demo/README.md), so en and zh-hant already
+// short: scene names are locale-independent (docs/reference/docs-demo.md), so en and zh-hant already
 // exercise the same scenes zh-hans would.
 const CHECKED_PAGES = [
   { path: '/get-started/editor/', source: 'site/Get Started/Meet the editor.md' },
@@ -49,23 +49,23 @@ const sceneCache = new Map();
 async function sceneData(name) {
   let cached = sceneCache.get(name);
   if (!cached) {
-    cached = fetch(new URL(`ui/demo/scenes/${name}.json`, base)).then((res) => res.json());
+    cached = fetch(new URL(`home/ui/demo/scenes/${name}.json`, base)).then((res) => res.json());
     sceneCache.set(name, cached);
   }
   return cached;
 }
 
-// A generous upper bound on how long a scene can take to reach 'done' (site/ui/demo/README.md, "Pace"):
+// A generous upper bound on how long a scene can take to reach 'done' (docs/reference/docs-demo.md, "Pace"):
 // each of its OWN steps at the slowest travel/dwell/hold the pace table allows, plus a flat
 // allowance for typing and for fetch/settle latency. An "after" chain's ancestors play instantly
 // (player.js's playChain), so they cost fetch latency only, already covered by the flat slack.
-const DWELL_MAX_MS = 600; // site/ui/demo/README.md, "Pace": a right-click's dwell, the longer of the two
+const DWELL_MAX_MS = 600; // docs/reference/docs-demo.md, "Pace": a right-click's dwell, the longer of the two
 const PRESS_MS = 150;
 async function paceBoundMs(name) {
   const scene = await sceneData(name);
   let total = 15000; // fetch latency, "after"-chain resolution, and a fresh iframe reload of the
   // ~1.7MB harvested document + its own editor-ready bootstrap before ANY step plays (every Play
-  // is a fresh load — site/ui/demo/README.md) — slower in a cold headless browser than the README's own
+  // is a fresh load — docs/reference/docs-demo.md) — slower in a cold headless browser than the README's own
   // "about a fifth of a second" figure for a warm one, and slower again under WebKit.
   for (const step of scene.steps) {
     if (step.typeInto) { total += 2500; continue; }
@@ -75,7 +75,7 @@ async function paceBoundMs(name) {
 }
 
 // Navigates and waits for the demo frame's iframe to exist — nothing more. The frame starts
-// loading the default fixture as soon as it connects (see site/ui/demo/README.md, "the frame is
+// loading the default fixture as soon as it connects (see docs/reference/docs-demo.md, "the frame is
 // never empty"), but that load is asynchronous, so this helper still returns before it settles.
 // Callers that need editor content ready wait for that themselves, via waitEditorReady.
 async function gotoDemo(browser, path, viewport) {
@@ -148,7 +148,7 @@ async function pressKeyInEditor(page) {
 
 // a. At rest (no scroll, no click) at 1440px: exactly one iframe, the editor is ready, nothing is
 // playing (every marker reads Play), and the demo frame itself contains no button — the bar is gone;
-// the text is both the list of scenes and the way to start them (site/ui/demo/README.md).
+// the text is both the list of scenes and the way to start them (docs/reference/docs-demo.md).
 async function checkRestState(browser, engine) {
   await withPage(browser, '/get-started/editor/', { width: 1440, height: 900 }, async (page) => {
     await waitEditorReady(page);
@@ -168,7 +168,7 @@ async function checkRestState(browser, engine) {
 
 // d. A key press inside the editor during playback stops it, the text is kept, and the button
 // returns to Play. "tree" is a two-click scene — its first step's own 500-1000ms pointer glide
-// alone (driver.js's PACE.travel*, site/ui/demo/README.md "Pace") is already long enough to interrupt
+// alone (driver.js's PACE.travel*, docs/reference/docs-demo.md "Pace") is already long enough to interrupt
 // reliably without slowing anything down or adding a production knob; 200ms lands the keypress
 // mid-glide with margin either side, before the dwell/press/hold beats that follow it even start.
 async function checkInterruptStopsPlayback(browser, engine) {
@@ -190,7 +190,7 @@ async function checkInterruptStopsPlayback(browser, engine) {
 }
 
 // The framed editor's own UI strings follow the page's locale (surfaces/editor.js's `lang` passthrough,
-// site/ui/demo/README.md item 2): the context menu's "Versions…" row reads in English on the English
+// docs/reference/docs-demo.md item 2): the context menu's "Versions…" row reads in English on the English
 // guide and in the app's own zh-hant translation on the zh-hant guide. Found by `data-action`
 // (ctx-menu.ts renders each row's own i18n key as this attribute — gestures.md), not by counting
 // from the end of the menu, so a menu-order change cannot silently break this. Reads the English
@@ -260,7 +260,7 @@ async function checkVersionsDiffShowsOwnText(browser, engine) {
   });
 }
 
-// The right-click look (site/ui/demo/README.md, "The pointer"): the pointer dot must read solid through
+// The right-click look (docs/reference/docs-demo.md, "The pointer"): the pointer dot must read solid through
 // the whole glide and dwell that precede a right-click's press, and switch to the hollow dotted
 // look only once the press itself lands — never earlier, and never not at all. Regression guard
 // for a bug where `press()`'s own animation cleanup cancelled the CSS `moss-demo-hollow` keyframe
@@ -341,8 +341,8 @@ async function checkCollapseTreePointerOnBorder(browser, engine) {
 
 // e. A load whose own scene-JSON fetch is still pending when a second, different scene is
 // explicitly requested must not be able to claw back state once that stale fetch resolves — nor
-// navigate the shared iframe again after a newer load has already finished (site/ui/demo/README.md, "One
-// load at a time"). Every Play now navigates afresh regardless of fixture (site/ui/demo/README.md,
+// navigate the shared iframe again after a newer load has already finished (docs/reference/docs-demo.md, "One
+// load at a time"). Every Play now navigates afresh regardless of fixture (docs/reference/docs-demo.md,
 // "Play"), and app-editor.html reads no fixture-selecting query params at all (surfaces/editor.js), so the
 // iframe's own `src` is identical across every load and can no longer serve as the "did it
 // navigate again" signal. A real navigation always replaces `contentWindow` with a fresh object
@@ -615,7 +615,7 @@ async function checkDividerWidthsMatchArticle(browser, engine) {
   });
 }
 
-// j. "Pressing Play moves nothing" (site/ui/demo/README.md) on the wide layout: scrollY, the opening
+// j. "Pressing Play moves nothing" (docs/reference/docs-demo.md) on the wide layout: scrollY, the opening
 // paragraph, the demo frame, and the pressed button's own rect must not move by more than 1px at any
 // point across the WHOLE scene, not just before/after — a mid-scene jump (a superseded
 // scrollIntoView, a reflow from a result appearing) would otherwise slip between two snapshots.
@@ -633,7 +633,7 @@ async function checkDividerWidthsMatchArticle(browser, engine) {
 // a value nothing ever painted; requestAnimationFrame callbacks run at the point the render pipeline
 // itself visits, so they see what a reader actually would. Proven both ways against this file's own
 // unmodified guard: 8/8 clean here with the guard active, 3/3 caught here with it deliberately
-// disabled (site/ui/demo/demo-frame.js's onWindowScroll/guardScrollFrame, temporarily gutted to their
+// disabled (site/home/ui/demo/demo-frame.js's onWindowScroll/guardScrollFrame, temporarily gutted to their
 // no-op halves) — this loop is not blind to a real, uncorrected jump, only to one already fixed
 // before it rendered.
 function measureStillness(page, name, durationMs) {
@@ -709,7 +709,7 @@ async function checkPlayDoesNotShiftPage(browser, engine) {
 // The consolidated playback check: every marker on every page in DEMO_PAGES plays to 'done' with
 // no load error (its own status line stays empty) and no page error (an uncaught exception on the
 // host page), within a pace-derived bound for its own scene. Replaces per-scene assertions about
-// what a scene's steps specifically leave behind — site/ui/demo/README.md's own module boundary already
+// what a scene's steps specifically leave behind — docs/reference/docs-demo.md's own module boundary already
 // keeps a scene's *effect* out of player.js/demo-frame.js's concern, so this checks only what the
 // demo frame contract promises for every scene: it plays, and it settles back to Play.
 async function checkEveryMarkerPlaysToDone(browser, engine) {

@@ -1,10 +1,10 @@
 // The marker: an inline Play/Stop button and load-failure line, sitting mid-sentence in the prose
-// (site/ui/demo/README.md, "Authoring"). Toggles its scene on the nearest demo frame and reflects
+// (docs/reference/docs-demo.md, "Authoring"). Toggles its scene on the nearest demo frame and reflects
 // the frame's own report of that scene's state back onto the button, via events bubbled to
 // `document` (see demo-frame.js). Knows nothing about how a scene runs.
 //
 // Authors never write this element: `.moss/theme/script.js` upgrades a plain
-// `a[href^="#scene="]` link into one of these (site/ui/demo/README.md, "Markdown markers") — the
+// `a[href^="#scene="]` link into one of these (docs/reference/docs-demo.md, "Markdown markers") — the
 // upgrade is what supplies the `name` attribute (the part of the href after `#scene=`, empty for
 // "just open the surface").
 import { string } from './strings.js';
@@ -12,7 +12,7 @@ import { string } from './strings.js';
 /**
  * The id of the heading markdown rendered this marker under. Walks up from `el`, scanning each
  * level's earlier siblings for the nearest h1–h6 — a plain sibling search is not enough because
- * moss's Markdown renderer wraps a bare custom element in a lone <p> (see site/ui/demo/README.md).
+ * moss's Markdown renderer wraps a bare custom element in a lone <p> (see docs/reference/docs-demo.md).
  */
 function findHeadingId(el) {
   let node = el;
@@ -48,15 +48,15 @@ class MossDemoMarker extends HTMLElement {
     this.button.id = id;
     this.button.className = 'moss-demo-marker__button moss-demo-marker__button--inline';
 
-    // Named by reference to the heading it sits under, not by copying its text (site/ui/demo/
-    // README.md, "Authoring") — no heading, no invented fallback: the button keeps its own visible
+    // Named by reference to the heading it sits under, not by copying its text (docs/reference/docs-demo.md,
+    //  "Authoring") — no heading, no invented fallback: the button keeps its own visible
     // text as its accessible name and the gap is reported rather than papered over.
     const headingId = findHeadingId(this);
     if (headingId) this.button.setAttribute('aria-labelledby', `${id} ${headingId}`);
     else console.error(`moss-demo-marker: no heading with an id above "${name}" — its button has no heading in its accessible name`);
 
     // A marker sits mid-sentence, where several may share one heading and so read the same
-    // verb+heading accessible name (site/ui/demo/README.md, "Authoring") — aria-describedby its
+    // verb+heading accessible name (docs/reference/docs-demo.md, "Authoring") — aria-describedby its
     // own paragraph is what keeps assistive tech telling them apart. Several markers in the same
     // paragraph share that paragraph's id rather than each minting their own.
     const paragraph = this.parentElement;
@@ -98,7 +98,7 @@ class MossDemoMarker extends HTMLElement {
 
   render() {
     const verb = string(this.locale, this.playing ? 'stop' : 'play');
-    // A filled round ▶/■ plus the word (site/ui/demo/README.md, "Authoring") — demo.css visually
+    // A filled round ▶/■ plus the word (docs/reference/docs-demo.md, "Authoring") — demo.css visually
     // hides the word and shows only the glyph. The glyph is always decorative (aria-hidden); the
     // accessible name always comes from the button's own aria-labelledby self-reference, so the
     // verb text is what that reference reads, hidden or not.

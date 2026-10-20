@@ -3,11 +3,11 @@
 // single AbortController per load), theme + locale sync, the pointer overlay, playing a scene
 // through player.js/driver.js, reader input stopping playback at once, the WebKit scroll backstop,
 // and announcing state to whichever marker is listening. Knows nothing about where markers are,
-// how the page is laid out, or anything surface-specific — see site/ui/demo/README.md's module
+// how the page is laid out, or anything surface-specific — see docs/reference/docs-demo.md's module
 // table.
 //
-// A concrete element (site/ui/demo/moss-editor-demo.js today) subclasses this and supplies one
-// surface adapter (site/ui/demo/surfaces/*.js — the interface is documented at the top of
+// A concrete element (site/home/ui/demo/moss-editor-demo.js today) subclasses this and supplies one
+// surface adapter (site/home/ui/demo/surfaces/*.js — the interface is documented at the top of
 // surfaces/editor.js): `get surface()` returning its exports. Nothing here imports a surface
 // module directly, which is what lets a second surface (a `<moss-preview-demo>`, say) reuse this
 // base with zero changes to this file — only a new surfaces/*.js and a new custom element.
@@ -44,10 +44,10 @@ function loadSceneData(name) {
 }
 
 /**
- * Walks `scene.after` (site/ui/demo/README.md, "Scene format"), loading each ancestor by name,
+ * Walks `scene.after` (docs/reference/docs-demo.md, "Scene format"), loading each ancestor by name,
  * and returns the chain ordered eldest ancestor first, `name`/`scene` — the one actually requested
  * — last: the order player.js's `playChain` runs in. This is the "scene loading" half of `after`
- * composition (the module table in site/ui/demo/README.md); running the resolved chain is
+ * composition (the module table in docs/reference/docs-demo.md); running the resolved chain is
  * player.js's job. Throws loudly if a name repeats: an `after` cycle would otherwise fetch forever.
  */
 async function resolveChain(name, scene) {
@@ -67,22 +67,22 @@ async function resolveChain(name, scene) {
   return [...ancestors, { name, scene }];
 }
 
-/** The page's own effective theme (site/ui/demo/README.md, "Fitting the page"). This site's toggle
+/** The page's own effective theme (docs/reference/docs-demo.md, "Fitting the page"). This site's toggle
  * (theme.ts) always sets `data-theme` pre-paint and never changes it on its own — see
  * crates/moss-build/src/js-src/site/theme.ts — so the attribute is the only source. */
 function pageTheme() {
   return document.documentElement.dataset.theme || 'light';
 }
 
-/** Reports a named scene's phase to whichever marker is listening (site/ui/demo/README.md, "Who
+/** Reports a named scene's phase to whichever marker is listening (docs/reference/docs-demo.md, "Who
  * controls the demo"). The frame never looks for markers; this is the only channel back. */
 function announce(name, phase) {
   document.dispatchEvent(new CustomEvent('moss-demo-state', { detail: { name, phase } }));
 }
 
 /** The base class every `<moss-*-demo>` element extends. A subclass supplies exactly one thing —
- * `get surface()`, the adapter module (site/ui/demo/surfaces/*.js) — and inherits everything else:
- * lifecycle, loading, pace, and the "reader outranks the script" rules in site/ui/demo/README.md. */
+ * `get surface()`, the adapter module (site/home/ui/demo/surfaces/*.js) — and inherits everything else:
+ * lifecycle, loading, pace, and the "reader outranks the script" rules in docs/reference/docs-demo.md. */
 export class DemoFrameElement extends HTMLElement {
   connectedCallback() {
     this.locale = (document.documentElement.lang || 'en').toLowerCase();
@@ -126,13 +126,13 @@ export class DemoFrameElement extends HTMLElement {
     // stillness sample has yet caught.
     window.addEventListener('scroll', this.onWindowScroll, { signal });
 
-    // Theme follows the page (site/ui/demo/README.md, "Fitting the page"): re-applied to every
+    // Theme follows the page (docs/reference/docs-demo.md, "Fitting the page"): re-applied to every
     // freshly loaded iframe document in loadFrame, and here for a page-driven change (the reader's
     // own toggle) to an already-loaded editor.
     this.themeObserver = new MutationObserver(() => this.syncTheme());
     this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
-    // "The frame is never empty" (site/ui/demo/README.md): loaded on connect, no marker involved. A
+    // "The frame is never empty" (docs/reference/docs-demo.md): loaded on connect, no marker involved. A
     // marker's own explicit play, if it arrives before this settles, supersedes it like any other
     // load (see startScene).
     this.defaultLoad = new AbortController();
@@ -164,13 +164,13 @@ export class DemoFrameElement extends HTMLElement {
   onReducedChange = (event) => { this.reduced = event.matches; };
 
   /**
-   * One load at a time (site/ui/demo/README.md): starting any scene here abandons whichever load
+   * One load at a time (docs/reference/docs-demo.md): starting any scene here abandons whichever load
    * was previously in flight or playing — including the connect-time default-fixture load — by
    * aborting its controller, so every one of that load's still-pending continuations finds its
    * own `controller.signal.aborted` and quits instead of clobbering this newer call's state. The
    * abandoned scene's own marker, if any, is told so it can stop showing Stop.
    *
-   * An empty `name` ("just open the surface" — site/ui/demo/README.md, "Markdown markers") is not
+   * An empty `name` ("just open the surface" — docs/reference/docs-demo.md, "Markdown markers") is not
    * a scene at all: no fetch, no fresh load, no Play/Stop toggle to track — it only brings the
    * already-loaded default fixture into view and focuses it, the same as a reader who never
    * clicked anything still gets a working editor to try (see "The frame is never empty").
@@ -210,7 +210,7 @@ export class DemoFrameElement extends HTMLElement {
 
     this.load.scene = scene;
     this.load.chain = chain;
-    // `open` is optional (site/ui/demo/README.md, "Scene format"): a scene that never names it
+    // `open` is optional (docs/reference/docs-demo.md, "Scene format"): a scene that never names it
     // plays against whatever the fresh fixture load itself already contains — its own authored
     // piece — rather than being silently wiped to empty first. Discovered building the "versions"
     // scene: every scene up to then set `"open": ""` out of habit, which happened to be harmless
@@ -220,7 +220,7 @@ export class DemoFrameElement extends HTMLElement {
     // check-docs-demo.mjs's checkVersionsDiffShowsOwnText did.
     if (scene.open !== undefined) this.driver.setText(scene.open);
     this.settleView();
-    // "focus goes into the editor with preventScroll" (site/ui/demo/README.md, "Pressing Play
+    // "focus goes into the editor with preventScroll" (docs/reference/docs-demo.md, "Pressing Play
     // moves nothing") — moves keyboard/AT focus into the live demo on every Play, without
     // `focus()`'s own default of scrolling the target into view, which would be a second source of
     // motion on top of settleView above.
@@ -228,7 +228,7 @@ export class DemoFrameElement extends HTMLElement {
     await this.runPlayback(controller.signal, name);
   }
 
-  /** "Pressing Play moves nothing" (site/ui/demo/README.md): on the wide layout the frame sits in a
+  /** "Pressing Play moves nothing" (docs/reference/docs-demo.md): on the wide layout the frame sits in a
    * sticky column and is already in view, so nothing may scroll — not even a call meant to be a
    * no-op. `Element.scrollIntoView` cannot be trusted for that: on a `position: sticky` box it
    * computes the needed delta from the box's un-stuck, static-flow position rather than its
@@ -251,7 +251,7 @@ export class DemoFrameElement extends HTMLElement {
     if (mostlyOutOfView) this.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
 
-  /** Every Play is a fresh load (site/ui/demo/README.md, "Who controls the demo"): a scene can
+  /** Every Play is a fresh load (docs/reference/docs-demo.md, "Who controls the demo"): a scene can
    * leave the app anywhere — versions mode, an open menu, a different file — and reloading the
    * iframe is the only reset that is true for all of them, so this always navigates rather than
    * checking whether anything would actually differ. Checks `signal` before touching `iframe.src`
@@ -294,7 +294,7 @@ export class DemoFrameElement extends HTMLElement {
     doc.addEventListener('keydown', this.onEditorInteract, { capture: true, signal });
   }
 
-  /** "The reader outranks the script" (site/ui/demo/README.md): any pointer or key press inside
+  /** "The reader outranks the script" (docs/reference/docs-demo.md): any pointer or key press inside
    * the framed surface stops a playing scene at once and keeps what is there — Play always
    * restarts from the opening state rather than resuming. Idle browsing (no scene playing) is not
    * interrupted.
@@ -356,7 +356,7 @@ export class DemoFrameElement extends HTMLElement {
   async runPlayback(signal, name) {
     this.phase = 'playing';
     // Only meaningful on the wide/sticky layout, where "moves nothing" is an unconditional
-    // promise (site/ui/demo/README.md, "Pressing Play moves nothing"); null leaves
+    // promise (docs/reference/docs-demo.md, "Pressing Play moves nothing"); null leaves
     // guardScrollFrame a no-op on the narrow layout, which is allowed to scroll.
     this.scrollGuardY = getComputedStyle(this).position === 'sticky' ? window.scrollY : null;
     if (this.scrollGuardY !== null) requestAnimationFrame(() => this.guardScrollFrame(signal));

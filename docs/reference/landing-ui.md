@@ -1,8 +1,3 @@
----
-listed: false
-uid: "41ddf713"
----
-
 # Harvested moss interface bank
 
 These files are real moss interface, not drawings of it. They are generated from the desktop app's own code, so the landing page and the documentation show what the app shows. Reuse them before drawing a substitute interface, and never edit them by hand: a hand edit is lost at the next refresh.
@@ -13,10 +8,10 @@ These files are real moss interface, not drawings of it. They are generated from
 | `editor.html` | A hand-assembled editor panel built from the app's components, with a typing driver | The landing page |
 | `shell.html` | The preview and publish shell | The landing page |
 | `mark.svg` | The moss mark the shell draws | `shell.html` only |
-| `demo/` | `<moss-editor-demo>` and `<moss-demo-marker>`: the one editor a documentation page shows, and the markers that hand it a scene | Documentation pages with a `#scene=` link; see `demo/README.md` |
-| `../assets/guides/editor-ui-source.png`, `choose-page-source.png` | Stills of `app-editor.html`, shown where JavaScript is off | Meet the editor, in all three languages |
+| `demo/` | `<moss-editor-demo>` and `<moss-demo-marker>`: the one editor a documentation page shows, and the markers that hand it a scene | Documentation pages with a `#scene=` link; see [docs-demo.md](docs-demo.md) |
+| `site/assets/guides/editor-ui-source.png`, `choose-page-source.png` | Stills of `app-editor.html`, shown where JavaScript is off | Meet the editor, in all three languages |
 
-`capture-manifest.json` records which commit of the desktop app each harvested document came from: `app_editor_source` for `app-editor.html`, and `harvest_commit` with `captured_on` for the landing pair.
+`site/home/ui/capture-manifest.json` records which commit of the desktop app each harvested document came from: `app_editor_source` for `app-editor.html`, and `harvest_commit` with `captured_on` for the landing pair.
 
 ## Refresh
 
@@ -26,7 +21,7 @@ One command, run in the desktop app repository on a clean checkout of a pushed c
 pnpm harvest:docs -- --site /path/to/this/repo/site
 ```
 
-It builds the three documents from the app's current code, drives the result through the harvest's own end-to-end check in Chromium and WebKit, and only then copies `app-editor.html` here and writes its commit into `capture-manifest.json`. It then runs this repository's `docs:after-harvest` script (see `package.json`), which retakes the two stills from the new document with `scripts/capture-editor-guide-assets.mjs` and runs the scene checks that need no browser. Add `--landing` to copy `editor.html` and `shell.html` as well; that is a landing-page change, so run `node scripts/check-landing-all.mjs` before keeping it.
+It builds the three documents from the app's current code, drives the result through the harvest's own end-to-end check in Chromium and WebKit, and only then copies `app-editor.html` into `site/home/ui` and writes its commit into the capture manifest. It then runs this repository's `docs:after-harvest` script (see `package.json`), which retakes the two stills from the new document with `scripts/capture-editor-guide-assets.mjs` and runs the scene checks that need no browser. Add `--landing` to copy `editor.html` and `shell.html` as well; that is a landing-page change, so run `node scripts/check-landing-all.mjs` before keeping it.
 
 Then prove the pages a reader gets, against a real build:
 
@@ -44,5 +39,5 @@ When a refresh breaks a scene, the app renamed or moved something a scene clicks
 
 - `editor.html` and `app-editor.html` run against mock data. Neither is proof of filesystem, version-control, publishing or operating-system behavior.
 - Interface text in the harvested documents is the app's own; the landing page supplies its Chinese content separately.
-- `shell.html` stays the harvest. What the landing page adds to it lives in `site/landing-shell.js`, which leans on the shell's `window.__shell` and on the app's publish receipt styles; `check-landing-desktop-pace` fails if a refresh changes either under it.
+- `shell.html` stays the harvest. What the landing page adds to it lives in `site/home/landing-shell.js`, which leans on the shell's `window.__shell` and on the app's publish receipt styles; `check-landing-desktop-pace` fails if a refresh changes either under it.
 - When the app and a capture disagree, the app is right: refresh the capture, or use text.

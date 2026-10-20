@@ -27,7 +27,7 @@ moss-editor-demo {
   border: 0;
 }
 
-/* The pointer (site/ui/demo/README.md, "The pointer"): a small dot, positioned by driver.js's
+/* The pointer (docs/reference/docs-demo.md, "The pointer"): a small dot, positioned by driver.js's
    glide (transform on .moss-demo__pointer itself). Sized to be found at a glance in a ~600px
    editor — the first build was easy to miss — without ever covering the control it presses: the
    dot's own footprint never grows, and even the ring's ~2.4x press expansion stays well inside a
@@ -63,7 +63,7 @@ moss-editor-demo {
   opacity: 0;
 }
 
-/* Right-click (site/ui/demo/README.md, "The pointer"): a right-click must teach the reader to
+/* Right-click (docs/reference/docs-demo.md, "The pointer"): a right-click must teach the reader to
    right-click, and colour can't carry that (needs a legend, fails colour-blind readers, and the
    site's accent green already means Stop), so it is marked by SHAPE: for the press and the hold
    that follows, the solid dot becomes a hollow dotted circle, slightly larger so its dots read as
@@ -86,7 +86,7 @@ moss-editor-demo {
 
 @media (max-width: 600px) {
   .moss-demo__frame-wrap {
-    /* Roughly 60% of the viewport (see site/ui/demo/README.md, "Fitting the page") — low enough
+    /* Roughly 60% of the viewport (see docs/reference/docs-demo.md, "Fitting the page") — low enough
        that a phone reader's first screen still shows some of the prose the frame follows.
        min-height keeps the editor itself usable on a short viewport instead of tracking 56vh all
        the way down. */
@@ -97,7 +97,7 @@ moss-editor-demo {
   }
 }
 
-/* An unupgraded `a[href^="#scene="]` (site/ui/demo/README.md, "Markdown markers"): without
+/* An unupgraded `a[href^="#scene="]` (docs/reference/docs-demo.md, "Markdown markers"): without
    JavaScript there is no marker to click and no frame to open, so the plain link a no-script
    reader would otherwise see renders as nothing rather than a dead ▶ that does nothing. The
    upgrade (.moss/theme/script.js) replaces the anchor with a <moss-demo-marker> outright, which
@@ -111,7 +111,7 @@ a[href^="#scene="] {
   margin-block: var(--moss-space-xs, 0.5rem) var(--moss-space-sm, 1rem);
 }
 
-/* A filled round ▶/■ plus the word (site/ui/demo/README.md, "Authoring"). The filled-circle-on-accent
+/* A filled round ▶/■ plus the word (docs/reference/docs-demo.md, "Authoring"). The filled-circle-on-accent
    look is the same pattern moss's own round `.moss-btn-slot .moss-btn` primitive uses elsewhere
    (accent background, --moss-color-bg glyph) — reused rather than invented. */
 .moss-demo-marker__glyph {
@@ -125,11 +125,11 @@ a[href^="#scene="] {
   line-height: 1;
 }
 
-/* A marker sits mid-sentence (site/ui/demo/README.md, "Authoring") — sized to the running text
+/* A marker sits mid-sentence (docs/reference/docs-demo.md, "Authoring") — sized to the running text
    around it, not moss's `.moss-btn` primitive (a standalone pill with its own generous padding),
    which would visually break the sentence it sits inside. The button element itself IS the filled
    circle: a FIXED em size, set directly on the button and never derived from the ▶/■ character's
-   own natural width, is what keeps swapping them from re-wrapping the line (site/ui/demo/README.md,
+   own natural width, is what keeps swapping them from re-wrapping the line (docs/reference/docs-demo.md,
    "Pressing Play moves nothing") — confirmed by measuring the button's own rect through a full
    play/stop cycle. 1.15em is a touch over the surrounding text's cap-height, "the height of the
    text"; middle vertical-align is checked against the rendered line box in both the Latin and the
