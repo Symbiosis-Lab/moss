@@ -169,6 +169,38 @@ mod title_block_after_picture {
     }
 
     #[test]
+    fn a_picture_alone_in_a_paragraph_counts_as_the_leading_picture() {
+        for picture in [
+            "<p><picture><source srcset=\"a.webp\"><img src=\"a.jpg\" alt=\"\"></picture></p>",
+            "<p><img src=\"a.jpg\" alt=\"Poster\" /></p>",
+            "<p data-source-line=\"3\"><picture><img src=\"a.jpg\" alt=\"\"></picture></p>",
+        ] {
+            let out = after_leading_picture(&page(&format!("\n<div class=\"trail\"></div>\n{picture}\n<p>Text</p>")));
+            let at = |s: &str| out.find(s).unwrap_or_else(|| panic!("{s} missing from {out}"));
+            assert!(at("trail") < at("<img") && at("</p>\n<p class=\"moss-eyebrow\"") < at("<h1") && at("<h1") < at("<p>Text</p>"), "{out}");
+            assert!(!out.contains(BODY_START));
+        }
+    }
+
+    #[test]
+    fn a_paragraph_with_text_around_its_picture_is_not_a_leading_picture() {
+        for body in ["\n<p>See <img src=\"a.jpg\"></p>", "\n<p><img src=\"a.jpg\"> after</p>", "\n<p><img src=\"a.jpg\"><img src=\"b.jpg\"></p>"] {
+            let html = page(body);
+            assert!(super::super::title_block_lacks_picture(&html), "{body}");
+            assert!(after_leading_picture(&html).starts_with(TITLE.trim_end_matches('\n')));
+        }
+    }
+
+    #[test]
+    fn only_a_marked_body_with_no_leading_picture_lacks_one() {
+        use super::super::title_block_lacks_picture;
+        assert!(title_block_lacks_picture(&page("\n<p>Text</p>")));
+        assert!(!title_block_lacks_picture(&page("\n<figure class=\"moss-image\"><img></figure>")));
+        assert!(!title_block_lacks_picture(&page("\n<p><img src=\"a.jpg\"></p>")));
+        assert!(!title_block_lacks_picture("<h1>Authored</h1><p>x</p>"));
+    }
+
+    #[test]
     fn an_unclosed_block_keeps_the_title_block_first() {
         let out = after_leading_picture(&page("\n<div class=\"x\"><figure class=\"moss-image\"><img></figure>"));
         assert!(out.starts_with("<p class=\"moss-eyebrow\""), "{out}");

@@ -3765,7 +3765,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "The row inside the nav bar that holds `.nav-left` and `.nav-right`. It is the box the responsive nav measures itself against: when the two groups no longer fit on one line, `nav-split.ts` sets `data-nav-split` on this element and the links move to a second row.",
+        description: "The row inside the nav bar that holds `.nav-left` and `.nav-right`. It is the box the responsive nav measures itself against: when the two groups no longer fit on one line, `nav-split.ts` sets `data-nav-split` on this element and the links move to a second row; it first tries `data-nav-compact`, which draws the outer and toggle gaps in so a row that overflows by a few pixels stays on one line.",
     },
     ComponentEntry {
         class: "font-anchor",

@@ -3832,3 +3832,14 @@ fn gallery_rows_uses_ratio_fallback_wherever_it_reads_ar() {
     assert!(DEFAULT_CSS.contains("var(--ar, 1.5)"));
     assert!(!DEFAULT_CSS.contains("var(--ar)"), "a bare var(--ar) has no fallback");
 }
+
+#[test]
+fn compact_masthead_never_widens_the_link_gap() {
+    // The links' default column gap floors at --moss-space-sm; any value a
+    // compact rule sets there can exceed it on a phone and widen the row.
+    assert!(DEFAULT_CSS.contains("[data-nav-compact] .nav-right"));
+    assert!(
+        !DEFAULT_CSS.contains("[data-nav-compact] .nav-links"),
+        "compact mode must leave .nav-links' own clamp()ed column gap alone"
+    );
+}

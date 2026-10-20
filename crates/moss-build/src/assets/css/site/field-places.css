@@ -12,26 +12,20 @@
 .moss-key-figure { display: flex; align-items: baseline; gap: var(--moss-space-xs); margin: 0 0 var(--moss-space-md); }
 .moss-key-figure data { font-family: var(--moss-font-heading); font-size: var(--moss-read-h1); font-weight: var(--moss-font-heading-weight); line-height: 1.1; font-variant-numeric: tabular-nums; }
 .moss-key-figure span { font-size: var(--moss-size-sm); color: var(--moss-color-text-secondary); }
-.moss-facts { margin: 0 0 var(--moss-space-md); font-size: var(--moss-size-xs); line-height: 1.5; }
-.moss-facts > div { display: grid; align-items: baseline; grid-template-columns: minmax(5rem, 1fr) 2fr; gap: var(--moss-space-xs); padding-block: var(--moss-space-xs); border-block-start: 1px solid var(--moss-border-light); }
+.moss-facts { display: grid; grid-template-columns: fit-content(40%) minmax(0, 1fr); column-gap: var(--moss-space-sm); margin: 0 0 var(--moss-space-md); font-size: var(--moss-size-xs); line-height: 1.5; }
+.moss-facts > div { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: baseline; padding-block: var(--moss-space-xs); border-block-start: 1px solid var(--moss-border-light); }
 .moss-facts > div:last-child { border-block-end: 1px solid var(--moss-border-light); }
-.moss-facts dt { color: var(--moss-color-text-secondary); }
-.moss-facts dd { margin: 0; }
+.moss-facts dt { color: var(--moss-color-text-secondary); overflow-wrap: anywhere; }
+.moss-facts dd { margin: 0; min-inline-size: 0; overflow-wrap: anywhere; }
 
-/* On a wide screen the facts leave the column for the right margin the
-   sidenotes use, so the title and body keep their width. Where that margin is
-   not free they stay in the flow under the title: a vertical page has no right
-   margin, a full-width or sidebar page has none to spare, and a page with
-   sidenotes needs it for the notes, which float at their own place in the text
-   and would otherwise run into the facts. */
+/* On a wide screen the facts hang in the right margin the sidenotes use, so the title and body keep their width. `room` is the margin left after the column and paddings; CSS cannot branch on a length, so it is scaled by 1000 and clamped to saturate at 0 or the full reserve, with a transition under a pixel. With no room the list stays a block in the flow. The rule is skipped where the margin is taken: vertical, full-width and sidebar pages, and pages with sidenotes. */
 @media (min-width: 76rem) {
-  body:not([data-typesetting="vertical"], [data-content-width="full"]):not(:has(main.has-sidebar)) article:not(:has(.moss-sidenote)):has(> .moss-facts[data-beside]) { position: relative; }
-  body:not([data-typesetting="vertical"], [data-content-width="full"]):not(:has(main.has-sidebar)) article:not(:has(.moss-sidenote)) > .moss-facts[data-beside] > div:first-child { border-block-start: 0; padding-block-start: 0; }
   body:not([data-typesetting="vertical"], [data-content-width="full"]):not(:has(main.has-sidebar)) article:not(:has(.moss-sidenote)) > .moss-facts[data-beside] {
     --moss-facts-reserve: max(var(--moss-sidenote-reserve, 0px), 15rem);
-    position: absolute; inset-block-start: 0;
-    inset-inline-end: calc(var(--moss-container-padding) - var(--moss-facts-reserve));
-    inline-size: calc(var(--moss-facts-reserve) - var(--moss-space-md)); margin: 0;
+    --moss-facts-room: clamp(0px, calc((100vw - var(--moss-content-width) - 2 * var(--moss-container-padding) - var(--moss-facts-reserve)) * 1000), var(--moss-facts-reserve));
+    float: inline-end;
+    inline-size: max(calc(var(--moss-facts-reserve) - var(--moss-space-md)), calc(100% - var(--moss-facts-room) * 1000));
+    margin-inline-end: calc(-1 * var(--moss-facts-room));
   }
 }
 

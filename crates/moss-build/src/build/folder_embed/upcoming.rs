@@ -13,7 +13,7 @@ use std::collections::HashSet;
 /// `start`). Wall-clock times are compared with the build machine's clock,
 /// since the build carries no time-zone database. Ordinary articles are never
 /// upcoming, whatever their `date`.
-fn is_upcoming(doc: &ParsedDocument, now: chrono::NaiveDateTime) -> bool {
+pub(crate) fn is_upcoming(doc: &ParsedDocument, now: chrono::NaiveDateTime) -> bool {
     let Some(ev) = &doc.event else { return false };
     span_is_upcoming(ev.start, ev.end, now)
 }

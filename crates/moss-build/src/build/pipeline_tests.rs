@@ -7470,6 +7470,26 @@ fn an_embedded_listing_with_nothing_still_to_come_gets_no_calendar_links() {
     assert!(staged_exists(&dir, "archive/calendar.ics"), "the past season's own file is still served");
 }
 
+#[test]
+fn an_embed_showing_only_past_events_of_a_folder_with_an_upcoming_one_gets_no_links() {
+    let (dir, _c) = create_test_dir();
+    fs::create_dir_all(dir.join("Season")).unwrap();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\nchildren: false\n---\n\n![[Season/|when:past]]\n\n![[Season/|when:upcoming]]\n").unwrap();
+    fs::write(dir.join("Season/index.md"), "---\ntitle: Season\n---\n\nSeason.\n").unwrap();
+    fs::write(dir.join("Season/Gala.md"), "---\ntitle: Gala\nuid: gala0001\nstart: 2099-05-01\n---\n\nBody.\n").unwrap();
+    fs::write(dir.join("Season/Old.md"), "---\ntitle: Old\nuid: old00001\nstart: 2001-05-01\n---\n\nBody.\n").unwrap();
+    build_test_sealed_at(dir.to_str().unwrap(), Some("https://example.test")).expect("build");
+    let home = staged(&dir, "index.html");
+    assert_eq!(home.matches("moss-calendar-links").count(), 1, "{home}");
+    assert!(home.find("moss-calendar-links").unwrap() > home.find("/season/gala/").unwrap(), "the links follow the upcoming listing: {home}");
+
+    fs::write(dir.join("index.md"), "---\ntitle: Home\nchildren: false\n---\n\n![[Season/|when:past]]\n").unwrap();
+    build_test_sealed_at(dir.to_str().unwrap(), Some("https://example.test")).expect("build");
+    let home = staged(&dir, "index.html");
+    assert!(home.contains("Old"), "{home}");
+    assert!(!home.contains("moss-calendar-links"), "{home}");
+}
+
 /// Regression guard: embedding must not move the links off a folder page that
 /// shows its own listing.
 #[test]

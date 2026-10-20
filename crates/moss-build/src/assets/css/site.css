@@ -2528,6 +2528,12 @@ body > header .site-name {
   margin-inline-start: auto;
 }
 
+/* Tight single row (`data-nav-compact`, set by nav-split.ts): the outer and toggle gaps shrink; the link gap is already at its floor. */
+.nav-content[data-nav-compact],
+.nav-content[data-nav-compact] .nav-right {
+  column-gap: var(--moss-space-xs);
+}
+
 /* Same box as .nav-search-btn (search.css): a 2.25rem pill, transparent at
    rest, filled only on hover. The two buttons are the same control family and
    must not differ in height or in resting weight — a bare glyph beside a

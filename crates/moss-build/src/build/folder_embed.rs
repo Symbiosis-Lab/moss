@@ -1586,7 +1586,11 @@ fn render_one(
         None => listing,
     };
     Ok(match target_doc {
-        Some(t) if is_embed => format!("{embed}{}", calendar_tokens::token(ordinal, &t.url_path)),
+        // The links describe the listing as shown, so a listing with no event
+        // still to come (`when:past`) leaves none.
+        Some(t) if is_embed && limited.iter().any(|d| upcoming::is_upcoming(d, now)) => {
+            format!("{embed}{}", calendar_tokens::token(ordinal, &t.url_path))
+        }
         _ => embed,
     })
 }

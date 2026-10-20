@@ -6,6 +6,7 @@
 //! page's language and typesetting. Pure: page links arrive as a closure.
 
 use crate::build::components::field_text::{datetime_attr, number_text, value_text};
+use crate::build::components::child_list;
 use crate::build::types::ParsedDocument;
 use crate::i18n::Language;
 use moss_core::content_graph::ContentGraph;
@@ -56,7 +57,7 @@ pub fn draw(
         .join(" ");
     let subtitle = drawn(Place::Subtitle)
         .next()
-        .map(|(d, _, html)| format!("<p class=\"moss-subtitle\" data-field=\"{}\">{html}</p>\n", field(d)))
+        .map(|(d, _, html)| subtitle_line(&field(d), &html))
         .unwrap_or_default();
     let key_figures: String = drawn(Place::KeyFigure)
         .map(|(d, v, html)| {
@@ -89,15 +90,25 @@ pub fn draw_for_page(
     graph: Option<&ContentGraph>,
     typesetting: Option<&str>,
 ) -> Placements {
-    if doc.placed_fields.is_empty() {
-        return Placements::default();
-    }
     let page_href = |target: &str| {
         let source = graph?.resolve_path(target, doc.source_path.as_deref()?)?;
         let page = all_docs.iter().find(|d| d.source_path.as_deref() == Some(source.as_str()))?;
         Some(crate::build::markdown::pipeline::absolute_pretty_url(&page.url_path))
     };
-    draw(&doc.placed_fields, doc.lang, typesetting, &page_href)
+    let mut drawn = draw(&doc.placed_fields, doc.lang, typesetting, &page_href);
+    if let Some(own) = child_list::card_subtitle(doc) {
+        let placed = doc.placed_fields.iter().find(|(d, _)| d.place == Some(Place::Subtitle));
+        if placed.map(|(_, v)| value_text(v, doc.lang, typesetting)).as_deref().map(str::trim) != Some(own.as_str()) {
+            drawn.subtitle.push_str(&subtitle_line("subtitle", &html_escape(&own)));
+        }
+    }
+    drawn
+}
+
+/// The page's own `subtitle:` frontmatter is drawn like a declared subtitle
+/// field, so a theme styles both alike.
+fn subtitle_line(field: &str, html: &str) -> String {
+    format!("<p class=\"moss-subtitle\" data-field=\"{field}\">{html}</p>\n")
 }
 
 /// One value as inline markup.
@@ -175,7 +186,8 @@ pub fn mark_body_start(html: &mut String) {
 
 /// `html` with its title block, everything above [`BODY_START`], moved to
 /// just after the body's leading picture: its first top-level
-/// `figure.moss-image`, when only divs come before it. Without one, the title
+/// `figure.moss-image`, or a picture alone in its paragraph, when only divs
+/// come before it. Without one, the title
 /// block stays first.
 pub fn after_leading_picture(html: &str) -> String {
     place_title_block(html, false)
@@ -203,6 +215,24 @@ fn place_title_block(html: &str, beside: bool) -> String {
     }
 }
 
+/// Whether `html`, a body marked by [`mark_body_start`], has no leading picture
+/// for its title block to follow.
+pub fn title_block_lacks_picture(html: &str) -> bool {
+    html.split_once(BODY_START).is_some_and(|(_, body)| leading_picture_span(body).is_none())
+}
+
+/// Print a build problem when `doc` asks for its title block to follow a
+/// picture and `html` has none to follow.
+pub fn warn_title_block_unplaced(doc: &ParsedDocument, html: &str) {
+    if title_block_follows_picture(doc) && title_block_lacks_picture(html) {
+        crate::build::cli_output::log_warn_problem!(
+            "`{}` sets `title_block: {}` but its body does not open with a picture on a line of its own, so the title block stays first",
+            doc.source_path.as_deref().unwrap_or(doc.url_path.as_str()),
+            doc.title_block.as_deref().unwrap_or_default()
+        );
+    }
+}
+
 /// Where the leading picture of `body` starts and ends, per [`after_leading_picture`].
 fn leading_picture_span(body: &str) -> Option<(usize, usize)> {
     let mut at = 0;
@@ -216,11 +246,24 @@ fn leading_picture_span(body: &str) -> Option<(usize, usize)> {
         if rest.starts_with("<figure class=\"moss-image") {
             return Some((at, at + rest.find("</figure>")? + "</figure>".len()));
         }
+        if rest.starts_with("<p>") || rest.starts_with("<p ") {
+            let open = rest.find('>')? + 1;
+            let close = rest.find("</p>")?;
+            return is_lone_picture(&rest[open..close]).then_some((at, at + close + "</p>".len()));
+        }
         if !rest.starts_with("<div") {
             return None;
         }
         at += element_len(rest, "div")?;
     }
+}
+
+/// Whether a paragraph's content is one picture and nothing else: how a
+/// picture without a caption is written.
+fn is_lone_picture(inner: &str) -> bool {
+    let t = inner.trim();
+    (t.starts_with("<picture") && t.ends_with("</picture>") && t.matches("<picture").count() == 1)
+        || (t.starts_with("<img") && t.ends_with('>') && t.matches('<').count() == 1)
 }
 
 /// The length of the element `<tag …>…</tag>` that `html` starts with,

@@ -55,6 +55,7 @@ GATES_BUILD=(
   nav-toggle-cluster
   nav-split-order
   nav-split-pack
+  nav-one-row
   header-hit-areas
   lightbox-github-shapes
   grid-card-no-cover
@@ -96,6 +97,7 @@ GATES_BUILD=(
   places-explorer-vertical
   places-explorer-single
   footer-end-space
+  facts-margin
 )
 
 # The rest: no config, spec, or harness in this gate's chain ever reads

@@ -683,7 +683,10 @@ pub(super) fn render_page<'d>(
                 // below emits both. Same boolean as that gate, so "exactly one
                 // fires" reads off one variable. See render/credits.rs.
                 let folder_byline = (!is_article_page)
-                    .then(|| credits::render_page_masthead(doc, layout_config, emit_source_lines, locator_placement))
+                    .then(|| {
+                        let masthead = credits::render_page_masthead(doc, layout_config, emit_source_lines, locator_placement);
+                        format!("{}{masthead}", fields.subtitle)
+                    })
                     .unwrap_or_default();
                 if resolved_cover.is_some() && !is_article_layout && !is_explorer_root {
                     // Cover branch: folder_cover renders the cover-row with the
@@ -1350,6 +1353,9 @@ pub(super) fn render_page<'d>(
         if let Some(parent) = crate::build::components::nav::parent_label_segment(d, all_docs, context.chrome.home_breadcrumb) {
             crate::build::markdown::html_post::prepend_parent_label(&mut homepage_content, &parent);
         }
+    }
+    if let Some(d) = doc {
+        crate::build::components::field_places::warn_title_block_unplaced(d, &homepage_content);
     }
     if doc.is_some_and(crate::build::components::field_places::title_block_after_picture) {
         homepage_content = crate::build::components::field_places::after_leading_picture(&homepage_content);

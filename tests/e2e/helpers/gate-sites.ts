@@ -3188,6 +3188,60 @@ precision = "city"
   },
 };
 
+export const NAV_ONE_ROW_GATE: ScratchSiteSpec = {
+  name: "nav-one-row-gate",
+  files: {
+    "index.md": `---
+title: Hall
+uid: "nor00101"
+logo: assets/lockup.svg
+---
+
+# Hall
+
+Scratch site for the one-row masthead render gate.
+`,
+    "assets/lockup.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="45" height="44" viewBox="0 0 45 44"><rect width="45" height="44" fill="#a11d1d"/></svg>`,
+    ".moss/theme/style.css": `.site-logo { height: 44px; }\n`,
+    "Work.md": `---
+title: Work
+uid: "nor00102"
+nav: true
+---
+
+# Work
+`,
+    "About.md": `---
+title: About
+uid: "nor00103"
+nav: true
+---
+
+# About
+`,
+    "Visit.md": `---
+title: Visit
+uid: "nor00104"
+nav: true
+---
+
+# Visit
+`,
+    "index.zh-hans.md": `---
+title: 示例
+uid: "nor00201"
+---
+
+# 示例
+`,
+    ".moss/config.toml": `schema_version = 5
+
+[site]
+lang = "en"
+`,
+  },
+};
+
 export const NAV_SPLIT_PACK_GATE: ScratchSiteSpec = {
   name: "nav-split-pack-gate",
   files: {
@@ -3480,4 +3534,45 @@ export const FOOTER_END_SPACE_HIDDEN: ScratchSiteSpec = {
 export const FOOTER_END_SPACE_DEFAULT: ScratchSiteSpec = {
   name: "footer-end-space-default-gate",
   files: { ...footerEndSpaceFiles, ".moss/theme/style.css": null },
+};
+
+// ── Facts list: hangs in the right margin only where it fits ──
+// Two sites that differ only in the theme rule that widens the content
+// column. Served by playwright/facts-margin.config.ts.
+const factsMarginFiles = {
+  "court.md": `---
+title: Example Court
+architect: Anna Weber
+scope: Nine floors of flats above a covered market hall
+---
+
+# Example Court
+
+Body text.
+`,
+  ".moss/config.toml": `${CONFIG_TOML}
+[fields.architect]
+type = "text"
+place = "facts"
+label = "Principal architect of record for the whole scheme"
+
+[fields.scope]
+type = "text"
+place = "facts"
+label = "Scope"
+`,
+};
+
+export const FACTS_MARGIN_WIDENED: ScratchSiteSpec = {
+  name: "facts-margin-widened-gate",
+  files: {
+    ...factsMarginFiles,
+    ".moss/theme/style.css": `:root { --moss-content-width: 72rem; }
+`,
+  },
+};
+
+export const FACTS_MARGIN_DEFAULT: ScratchSiteSpec = {
+  name: "facts-margin-default-gate",
+  files: { ...factsMarginFiles, ".moss/theme/style.css": null },
 };

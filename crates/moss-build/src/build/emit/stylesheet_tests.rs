@@ -687,22 +687,27 @@ fn sidenote_eligibility_selector_is_written_identically() {
     }
 }
 
-/// Facts leave the column for the right margin only where that margin is free.
-/// Every rule that positions them there must exclude a vertical page, a
-/// full-width page, a sidebar page and a page with sidenotes.
+/// Facts hang in the right margin only where the page has one wide enough for
+/// them; the margin is sized from the content width, which a theme may widen,
+/// so the rule measures it instead of assuming it, and never takes the list
+/// out of the flow. Every rule that moves them there must exclude a vertical
+/// page, a full-width page, a sidebar page and a page with sidenotes.
 #[test]
-fn facts_are_only_taken_out_of_the_column_where_the_margin_is_free() {
+fn facts_hang_in_the_margin_only_where_it_is_wide_enough() {
     let css = assemble(&SiteAssets { field_places: true, ..SiteAssets::default() });
-    let mut absolute = 0;
-    for (at, _) in css.match_indices("position:absolute") {
+    assert!(!css.split('}').any(|r| r.contains(".moss-facts") && r.contains("position:absolute")), "the facts never leave the flow");
+    let mut floated = 0;
+    for (at, _) in css.match_indices("float:") {
         let selector = css[..at].rsplit_once('}').map_or(&css[..at], |(_, rest)| rest);
         if !selector.contains(".moss-facts") {
             continue;
         }
-        absolute += 1;
+        floated += 1;
+        let rule = &css[css[..at].rfind('}').map_or(0, |i| i + 1)..css[at..].find('}').map_or(css.len(), |e| at + e)];
+        assert!(rule.contains("--moss-content-width"), "the facts rule must measure the margin from the content width: {rule}");
         for guard in [r#":not([data-typesetting="vertical"]"#, r#"[data-content-width="full"]"#, ":not(:has(main.has-sidebar))", ":not(:has(.moss-sidenote))"] {
             assert!(selector.contains(guard), "the facts rule `{selector}` lacks {guard}");
         }
     }
-    assert_eq!(absolute, 1, "one rule positions the facts");
+    assert_eq!(floated, 1, "one rule hangs the facts in the margin");
 }

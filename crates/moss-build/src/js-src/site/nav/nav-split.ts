@@ -19,11 +19,14 @@
  * the name takes row 1 alone, then the links and the toggles at its end edge
  * share row 2.
  *
+ * Before splitting it tries a tighter single row: `data-nav-compact` draws the
+ * outer and toggle gaps in, and the masthead splits only if that still overflows.
+ *
  * Every measured input — site-name width, per-link widths, toggle-cluster
- * width, the computed column gaps — is the same in both modes, so the
- * decision cannot oscillate. Sizes are read on the masthead's inline axis; on
- * a vertical page its physical width is its block size, which the split
- * itself changes. Breadcrumb pages and the hamburger range
+ * width — is the same in every mode, and the column gaps are re-read after each
+ * mode is applied, so the decision cannot oscillate. Sizes are read on the
+ * masthead's inline axis; on a vertical page its physical width is its block
+ * size, which the split itself changes. Breadcrumb pages and the hamburger range
  * (≤20rem, where the links are an overlay) are left to the shipped CSS
  * untouched. With JS off nothing here runs and the shipped wrap is the
  * fallback, which also leaves the name alone on row 1; a link set that wraps
@@ -70,6 +73,12 @@ function on(
   teardown.push(() => target.removeEventListener(type, handler, options));
 }
 
+function setMode(el: HTMLElement, mode: "compact" | "split" | null): void {
+  el.removeAttribute("data-nav-split");
+  el.removeAttribute("data-nav-compact");
+  if (mode) el.setAttribute(`data-nav-${mode}`, "");
+}
+
 function columnGap(el: Element, fallback: number): number {
   const parsed = parseFloat(getComputedStyle(el).columnGap);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -100,35 +109,39 @@ export function initNavSplit(): void {
     links.children.length === 0 ||
     navLeft.querySelector(".breadcrumb-segment")
   ) {
-    navContent.removeAttribute("data-nav-split");
+    setMode(navContent, null);
     return;
   }
 
   function layout(): void {
     // ≤20rem the links are the hamburger's overlay panel, not a row.
     if (hamburger && getComputedStyle(hamburger).display !== "none") {
-      navContent!.removeAttribute("data-nav-split");
+      setMode(navContent!, null);
       return;
     }
-    const outerGap = columnGap(navContent!, 0);
-    const linkGap = columnGap(links!, 0);
-    // In split mode `.nav-right` has no box (`display: contents`); its
-    // computed gap still resolves (clamp over px/vw needs no layout), but
-    // fall back to the outer gap if an engine declines to say.
-    const innerGap = columnGap(navRight!, outerGap);
     const vertical = isVertical(navContent!);
     const size = (el: HTMLElement) => (vertical ? el.offsetHeight : el.offsetWidth);
-    const linkWidths = [...links!.children].map((child) => size(child as HTMLElement));
-    const fits = oneRowFits({
-      container: vertical ? navContent!.clientHeight : navContent!.clientWidth,
-      name: size(siteName!),
-      links: linkWidths.reduce((sum, w) => sum + w, 0) + linkGap * Math.max(0, linkWidths.length - 1),
-      icons: size(icons!),
-      outerGap,
-      innerGap,
-    });
-    if (fits) navContent!.removeAttribute("data-nav-split");
-    else navContent!.setAttribute("data-nav-split", "");
+    const fitsOneRow = (): boolean => {
+      const outerGap = columnGap(navContent!, 0);
+      const linkGap = columnGap(links!, 0);
+      // `.nav-right` has no box in split mode; fall back if its gap won't resolve.
+      const innerGap = columnGap(navRight!, outerGap);
+      const linkWidths = [...links!.children].map((child) => size(child as HTMLElement));
+      return oneRowFits({
+        container: vertical ? navContent!.clientHeight : navContent!.clientWidth,
+        name: size(siteName!),
+        links: linkWidths.reduce((sum, w) => sum + w, 0) + linkGap * Math.max(0, linkWidths.length - 1),
+        icons: size(icons!),
+        outerGap,
+        innerGap,
+      });
+    };
+    // Full spacing, then tight gaps, then two rows.
+    setMode(navContent!, null);
+    if (fitsOneRow()) return;
+    setMode(navContent!, "compact");
+    if (fitsOneRow()) return;
+    setMode(navContent!, "split");
   }
 
   // The masthead resizes with the window and with the font arriving; the

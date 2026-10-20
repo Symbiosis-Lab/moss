@@ -300,8 +300,7 @@ fn title_block_after_picture_cascaded_from_a_folder_draws_the_title_block_under_
 fn title_block_beside_picture_sets_the_title_block_in_one_wrapper_with_the_leading_picture() {
     let home = "---\ntitle: Piers\ncascade:\n  title_block: beside-picture\n---\nThe piers.\n";
     let pier = "---\ntitle: Pier Four\n---\n![A pier at dusk](dusk.png)\n\nThe text.\n";
-    let text_first = "---\ntitle: Text First\n---\nThe text.\n\n![A pier at dusk](dusk.png)\n";
-    let s = site("", &[("Piers/index.md", home), ("Piers/four.md", pier), ("Piers/first.md", text_first)]);
+    let s = site("", &[("Piers/index.md", home), ("Piers/four.md", pier)]);
     std::fs::write(s.root.join("Piers/dusk.png"), PNG).unwrap();
     let o = build_strict(&s);
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
@@ -312,8 +311,39 @@ fn title_block_beside_picture_sets_the_title_block_in_one_wrapper_with_the_leadi
     assert!(flat.contains("</h1></div></div><p>The text.</p>"), "{html}");
     let css = std::fs::read_to_string(s.root.join(".moss/build.nosync/current").join(stylesheet_href(&html))).unwrap();
     assert!(css.contains(".moss-title-beside"), "the layout ships its stylesheet");
-    let first = built(&s, "piers/first/index.html");
-    assert!(!first.contains("<div class=\"moss-title-beside\">") && !first.contains("moss:body-start"), "{first}");
+}
+
+#[test]
+fn every_spelling_of_a_leading_picture_places_the_title_block() {
+    let spellings = [("caption", "![Dusk](dusk.png)"), ("alt-only", "![Dusk|](dusk.png)"), ("wikilink", "![[dusk.png]]"), ("bare", "![](dusk.png)")];
+    for value in ["after-picture", "beside-picture"] {
+        let pages: Vec<(String, String)> = spellings
+            .iter()
+            .map(|(name, picture)| (format!("{name}.md"), format!("---\ntitle: {name}\ntitle_block: {value}\n---\n{picture}\n\nThe text.\n")))
+            .collect();
+        let refs: Vec<(&str, &str)> = pages.iter().map(|(n, t)| (n.as_str(), t.as_str())).collect();
+        let s = site("", &refs);
+        std::fs::write(s.root.join("dusk.png"), PNG).unwrap();
+        let o = build_strict(&s);
+        assert!(o.status.success(), "{value}: {}", String::from_utf8_lossy(&o.stderr));
+        for (name, _) in spellings {
+            let html = built(&s, &format!("{name}/index.html"));
+            assert!(position(&html, "<img") < position(&html, "<h1 class=\"moss-article-title\""), "{value} {name}: {html}");
+            assert_eq!(html.contains("moss-title-beside"), value == "beside-picture", "{value} {name}: {html}");
+        }
+    }
+}
+
+#[test]
+fn a_page_with_title_block_but_no_leading_picture_is_a_strict_failure_naming_the_page() {
+    let first = "---\ntitle: Text First\ntitle_block: beside-picture\n---\nThe text.\n\n![A pier at dusk](dusk.png)\n";
+    let none = "---\ntitle: None\ntitle_block: after-picture\n---\nThe text.\n";
+    let s = site("", &[("first.md", first), ("none.md", none)]);
+    std::fs::write(s.root.join("dusk.png"), PNG).unwrap();
+    let o = build_strict(&s);
+    assert!(!o.status.success());
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(stderr.contains("`first.md`") && stderr.contains("`none.md`") && stderr.contains("title_block"), "{stderr}");
 }
 
 #[test]

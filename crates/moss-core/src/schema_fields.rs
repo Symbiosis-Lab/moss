@@ -347,7 +347,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         widget: Widget::TextInput,
         // Frequency=2, Importance=3 → score=76
         score: 76,
-        description: "A second line for the page's title, such as the title in another script. Listing cards and rows draw it under the page's title",
+        description: "A second line for the page's title, such as the title in another script. The page and its listing cards and rows draw it under the page's title",
         label: Some("Subtitle"),
         label_key: "chip.subtitle.label",
         group: "This Page",
