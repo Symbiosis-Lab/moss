@@ -155,6 +155,16 @@ impl FolderIndexPlan {
                 })
                 .collect();
 
+        // A passthrough folder is served as the author laid it out: pages
+        // inside it render, but it and the folders within get no listing.
+        let passthrough: Vec<String> = project.passthrough_roots.iter()
+            .filter_map(|root| root.strip_suffix('/'))
+            .filter_map(|dir| {
+                crate::build::scan::page_map::resolve_path_with_overrides(&format!("{dir}/index.html"), dir_overrides)
+                    .strip_suffix("/index.html").map(str::to_string)
+            })
+            .collect();
+
         let authored: HashSet<String> = documents.iter()
             .filter(|d| d.source_path.is_some())
             .filter_map(|d| d.url_path.strip_suffix("/index.html").map(str::to_string))
@@ -179,7 +189,8 @@ impl FolderIndexPlan {
             let top = folder.split('/').next().unwrap_or(&folder);
             let empty_language = !has_children && crate::i18n::path::resolve_language_from_folder(top).is_some();
             let tree_suppressed = empty_language || translation_roots.contains(top);
-            (!authored.contains(&folder) && !suppressed.contains(&folder) && !verbatim.contains(&folder)
+            let in_passthrough = passthrough.iter().any(|root| folder == *root || folder.strip_prefix(root.as_str()).is_some_and(|rest| rest.starts_with('/')));
+            (!authored.contains(&folder) && !suppressed.contains(&folder) && !verbatim.contains(&folder) && !in_passthrough
                 && (term_pages.contains(&folder) || !tree_suppressed))
                 .then_some(folder)
         }).collect();

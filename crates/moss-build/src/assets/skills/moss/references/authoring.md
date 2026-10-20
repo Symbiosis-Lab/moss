@@ -345,7 +345,7 @@ A heading in the footer gets no permalink mark (a `slot:` page has none on its o
 
 ### Welcome email
 
-A `welcome-email.md` at the top of the site is the email each new subscriber gets once, right after they confirm. It is not a page: it has no address and no nav item. Write it in `zh-hans/welcome-email.md` (or any other language folder) for subscribers of that language; a language without its own file sends none.
+A `welcome-email.md` at the top of the site is the email each new subscriber gets once, right after they confirm. It is not a page: it has no address and no nav item. Write it in `zh-hans/welcome-email.md` (or any other language folder) for subscribers of that language; a subscriber of a language without its own file gets the top-level letter.
 
 ```
 ---
