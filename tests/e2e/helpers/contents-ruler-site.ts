@@ -58,7 +58,13 @@ const COVER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="
 `;
 
 /** The opted-in page's section titles, in order. */
-export const OPEN_SECTIONS = ["Quays", "Lanterns", "Nets", "Ropewalk", "Afterword"];
+export const OPEN_SECTIONS = [
+  "The quays at first light, 1820",
+  "Lanterns and the lamp keepers",
+  "Nets drying along the harbour",
+  "The ropewalk through the town",
+  "Afterword on the whole coast",
+];
 /** Which of them hold an image: the ropewalk's is inside a subsection. */
 export const OPEN_WITH_IMAGE = [true, false, true, true, false];
 
@@ -96,11 +102,11 @@ function png(width: number, height: number, [r, g, b]: [number, number, number])
 }
 
 const openBody = [
-  `## Quays\n\n![The quay at dawn](quay.png)\n\n${paragraphs(5)}`,
-  `## Lanterns\n\n${paragraphs(5)}`,
-  `## Nets\n\n${paragraphs(2)}\n\n![Nets drying](nets.png)\n\n${paragraphs(4)}`,
-  `## Ropewalk\n\n${paragraphs(2)}\n\n### The long walk\n\n![The ropewalk](rope.png)\n\n${paragraphs(4)}`,
-  `## Afterword\n\n${paragraphs(6)}`,
+  `## ${OPEN_SECTIONS[0]}\n\n![The quay at dawn](quay.png)\n\n${paragraphs(5)}`,
+  `## ${OPEN_SECTIONS[1]}\n\n${paragraphs(5)}`,
+  `## ${OPEN_SECTIONS[2]}\n\n${paragraphs(2)}\n\n![Nets drying](nets.png)\n\n${paragraphs(4)}`,
+  `## ${OPEN_SECTIONS[3]}\n\n${paragraphs(2)}\n\n### The long walk\n\n![The ropewalk](rope.png)\n\n${paragraphs(4)}`,
+  `## ${OPEN_SECTIONS[4]}\n\n${paragraphs(6)}`,
 ].join("\n\n");
 
 export const CONTENTS_RULER_GATE: ScratchSiteSpec = {
@@ -178,6 +184,25 @@ A band as wide as the window.
 :::
 
 ${openBody}
+`,
+    // Short titles: the column is the list's own width, so it is narrow.
+    "Essays/Reading/Brief.md": `---
+title: Brief
+uid: "crg00108"
+contents: open
+content_width: full
+---
+
+${["Quays", "Nets", "Ropes"].map((t) => `## ${t}\n\n${paragraphs(4)}`).join("\n\n")}
+`,
+    // One title far longer than the column may be: it is cut at the cap.
+    "Essays/Reading/Capped.md": `---
+title: Capped
+uid: "crg00109"
+contents: open
+---
+
+${[LONG_LATIN_TITLE, "Nets", "Ropes"].map((t) => `## ${t}\n\n${paragraphs(4)}`).join("\n\n")}
 `,
     "Essays/Reading/Open.md": `---
 title: Collections

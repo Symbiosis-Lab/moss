@@ -3262,7 +3262,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Emerging,
         since: "0",
-        description: "A 32px square picture standing for a section on a page with `contents: open`: the section's first image, read from the image already on the page at the narrowest width moss generated. Written by the site runtime; a section with no image has none and keeps its dash.",
+        description: "A 40px square picture standing for a section on a page with `contents: open`: the section's first image, read from the image already on the page at the narrowest width moss generated. Written by the site runtime; a section with no image has none and keeps its dash.",
     },
     ComponentEntry {
         class: "moss-nav-island-section-title",

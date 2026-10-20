@@ -3908,27 +3908,33 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
 }
 
 /* A page that asked for its contents open (`contents: open`): the same ruler,
-   with every title showing at rest, set a size above the hover label, and a
-   square picture of the section's first image in place of the dash. A section
-   with no image keeps its dash. The rows grow to fit the picture; contents-ruler.ts
+   with every title showing at rest, set at the page's body size, and a square
+   picture of the section's first image in place of the dash. A section with no
+   image keeps its dash. The rows grow to fit the picture; contents-ruler.ts
    measures the taller list like any other, so the ruler still steps aside
-   where it does not fit. */
+   where it does not fit. The picture size is one value, shared by the ruler,
+   its rows and the sections panel. */
+body[data-contents="open"] {
+  --moss-contents-pic: 40px;
+  --moss-contents-row: calc(var(--moss-contents-pic) + 8px);
+}
+
 .moss-contents-ruler[data-contents="open"] a {
-  inline-size: 32px;
-  block-size: 40px;
+  inline-size: var(--moss-contents-pic);
+  block-size: var(--moss-contents-row);
 }
 
 .moss-contents-ruler[data-contents="open"] .moss-contents-ruler-label {
-  inset-inline-start: 36px;
-  font-size: 1.0625rem;
-  line-height: 40px;
+  inset-inline-start: calc(var(--moss-contents-pic) + 4px);
+  font-size: var(--moss-reading-size);
+  line-height: var(--moss-contents-row);
   opacity: 1;
   visibility: visible;
 }
 
 .moss-contents-ruler-pic {
-  inline-size: 32px;
-  block-size: 32px;
+  inline-size: var(--moss-contents-pic);
+  block-size: var(--moss-contents-pic);
   border-radius: 4px;
   overflow: hidden;
   background: var(--moss-color-surface);
@@ -3955,9 +3961,14 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
   opacity: 1;
 }
 
-/* The same pictures in the sections panel. The picture sits where the dash
-   does, so titles still start in one column with or without one. */
-[data-island-menu="sections"] a[data-pic] {
+/* The same pictures, at the same size, in the sections panel. The picture sits
+   where the dash does, so titles still start in one column with or without
+   one: a row with no picture reserves the picture's width. */
+body[data-contents="open"] [data-island-menu="sections"] a {
+  padding-inline-start: calc(var(--moss-contents-pic) + 12px);
+}
+
+body[data-contents="open"] [data-island-menu="sections"] a[data-pic] {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -3970,8 +3981,8 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
 
 [data-island-menu="sections"] a[data-pic] img {
   flex: none;
-  inline-size: 28px;
-  block-size: 28px;
+  inline-size: var(--moss-contents-pic);
+  block-size: var(--moss-contents-pic);
   border-radius: 4px;
   object-fit: cover;
   background: var(--moss-color-surface);

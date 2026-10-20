@@ -19,6 +19,8 @@ const ARTICLE = '/essays/reading/long/';
 const SHORT = '/essays/reading/short/';
 const OPEN = '/essays/reading/open/';
 const FULL = '/essays/reading/full/';
+const BRIEF = '/essays/reading/brief/';
+const CAPPED = '/essays/reading/capped/';
 const HOME = '/';
 const OPEN_HOME = `http://localhost:${gatePort('contents-ruler:home')}/`;
 
@@ -571,6 +573,9 @@ test.describe('a page that asks for its contents open', () => {
           labelVisibility: getComputedStyle(label).visibility,
           labelOpacity: getComputedStyle(label).opacity,
           labelSize: parseFloat(getComputedStyle(label).fontSize),
+          bodySize: parseFloat(getComputedStyle(document.body).fontSize),
+          cut: label.textContent!.includes('…') || label.scrollWidth > label.clientWidth,
+          picSize: pic ? pic.parentElement!.getBoundingClientRect().width : 0,
           labelRight: label.getBoundingClientRect().right,
           dashShown: getComputedStyle(dash).display !== 'none',
           dashWidth: getComputedStyle(dash).width,
@@ -601,7 +606,9 @@ test.describe('a page that asks for its contents open', () => {
     const textLeft = (await geometry(page)).textLeft;
     r.forEach((row, i) => {
       expect([row.labelVisibility, row.labelOpacity], `title ${i} at rest`).toEqual(['visible', '1']);
-      expect(row.labelSize, `title ${i} is larger than the 13px hover label`).toBeGreaterThan(13);
+      expect(row.labelSize, `title ${i} is set at the page's body size`).toBe(row.bodySize);
+      expect(row.cut, `title ${i} is shown whole`).toBe(false);
+      if (OPEN_WITH_IMAGE[i]) expect(row.picSize, `picture ${i} is clearly a picture`).toBeGreaterThanOrEqual(36);
       expect(row.labelRight, `title ${i} clears the text column`).toBeLessThanOrEqual(textLeft - 24 + 1);
       expect(row.pic !== null, `row ${i} has a picture iff its section has an image`).toBe(OPEN_WITH_IMAGE[i]);
       expect(row.dashShown, `row ${i} shows a dash iff it has no picture`).toBe(!OPEN_WITH_IMAGE[i]);
@@ -664,7 +671,7 @@ test.describe('the sections panel of a page that asks for its contents open', ()
           const range = document.createRange();
           range.selectNodeContents(title);
           return {
-            text: title.textContent,
+            text: a.getAttribute('aria-label') ?? title.textContent,
             img: img && { loaded: img.complete && img.naturalWidth > 0, size: img.getBoundingClientRect().width },
             textLeft: range.getBoundingClientRect().left,
             fits: a.scrollWidth <= a.clientWidth,
@@ -724,7 +731,7 @@ test.describe('the home page', () => {
       await page.tap('.moss-nav-island-sections');
       await expect(page.locator('[data-island-menu="sections"]')).toBeVisible();
       const rows = await page.$$eval('[data-island-menu="sections"] a', (as) =>
-        as.map((a) => ({ text: a.textContent, pic: a.querySelector('img') !== null })),
+        as.map((a) => ({ text: a.getAttribute('aria-label') ?? a.textContent, pic: a.querySelector('img') !== null })),
       );
       expect(rows.map((row) => row.text)).toEqual(OPEN_SECTIONS);
       expect(rows.map((row) => row.pic)).toEqual(OPEN_WITH_IMAGE);
@@ -739,7 +746,12 @@ test.describe('a full-width page that asks for its contents open', () => {
       const h = document.querySelector('main h2[id]')!.getBoundingClientRect();
       const article = document.querySelector('main article')!.getBoundingClientRect();
       const nav = document.querySelector<HTMLElement>('.moss-contents-ruler')!;
-      const labels = [...nav.querySelectorAll('.moss-contents-ruler-label')].map((l) => l.getBoundingClientRect().right);
+      const labels = [...nav.querySelectorAll('.moss-contents-ruler-label')].map((l) => {
+        // The ink's right edge, not the box's: the box is as wide as the room.
+        const range = document.createRange();
+        range.selectNodeContents(l);
+        return range.getBoundingClientRect().right;
+      });
       const ol = nav.querySelector('ol')!.getBoundingClientRect();
       return {
         hidden: nav.hidden,
@@ -758,12 +770,41 @@ test.describe('a full-width page that asks for its contents open', () => {
     await expect.poll(() => isAway(page)).toBe(false);
     const s = await state(page);
     expect(s.hidden).toBe(false);
-    expect(s.textLeft, 'the content starts past the claimed column').toBeGreaterThanOrEqual(300);
-    expect(s.labelsRight, 'no title reaches the text').toBeLessThanOrEqual(s.textLeft - 24 + 1);
+    expect(s.textLeft, 'the text starts a gutter past the widest title').toBeGreaterThanOrEqual(s.labelsRight + 24 - 1);
+    expect(s.textLeft, 'and not much further: the column is the list\'s own width').toBeLessThanOrEqual(s.labelsRight + 24 + 48);
     expect(s.textWidth, 'a readable column is left').toBeGreaterThanOrEqual(448);
     expect(s.scrollWidth).toBeLessThanOrEqual(s.innerWidth);
     const titles = await page.$$eval('.moss-contents-ruler-label', (ls) => ls.map((l) => l.textContent));
     expect(titles).toEqual(OPEN_SECTIONS);
+    const cut = await page.$$eval('.moss-contents-ruler-label', (ls) => ls.map((l) => l.textContent!.includes('…') || l.scrollWidth > l.clientWidth));
+    expect(cut, 'no title is cut').toEqual(OPEN_SECTIONS.map(() => false));
+  });
+
+  test('short titles make a narrower column than long ones', async ({ page }) => {
+    await open(page, 1280, 800, FULL);
+    const long = (await state(page)).textLeft;
+    await open(page, 1280, 800, BRIEF);
+    await jumpTo(page, 1);
+    await expect.poll(() => isAway(page)).toBe(false);
+    const short = await state(page);
+    expect(short.hidden).toBe(false);
+    expect(short.textLeft, 'the text sits well left of where long titles put it').toBeLessThan(long - 100);
+    expect(short.textLeft).toBeGreaterThanOrEqual(short.labelsRight + 24 - 1);
+  });
+
+  test('a title longer than the cap is cut there and the text keeps its measure', async ({ page }) => {
+    await open(page, 1280, 800, CAPPED);
+    await jumpTo(page, 1);
+    await expect.poll(() => isAway(page)).toBe(false);
+    const s = await state(page);
+    const measure = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('main article')!).maxWidth));
+    expect(s.hidden, 'the list is still shown').toBe(false);
+    const cut = await page.$$eval('.moss-contents-ruler-label', (ls) => ls.map((l) => l.textContent!.includes('…')));
+    expect(cut).toEqual([true, false, false]);
+    expect(s.textLeft, 'the column reaches the cap').toBeGreaterThanOrEqual(0.6 * measure - 24);
+    expect(s.textLeft, 'the column stops at 60% of the measure').toBeLessThanOrEqual(0.6 * measure + 48);
+    expect(s.textWidth, 'the text keeps 40% of the measure').toBeGreaterThanOrEqual(0.4 * measure);
+    expect(s.labelsRight).toBeLessThanOrEqual(s.textLeft - 24 + 1);
   });
 
   test('a hero and a screen-width band still reach the window edge', async ({ page }) => {

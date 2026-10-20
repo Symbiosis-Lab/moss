@@ -26,8 +26,9 @@
  *
  * A page that asks for its contents open (`opts.pictures`, from
  * `contents: open`) keeps the same list and the same measuring, but shows the
- * titles at rest, larger, with a small picture of the section's first image
- * in place of the dash; a section with no image keeps its dash.
+ * titles at rest, at the page's body size, with a small picture of the
+ * section's first image in place of the dash; a section with no image keeps
+ * its dash.
  *
  * Every dash row is the same height at rest and open. Re-spacing on hover was
  * tried and rejected: the row under the pointer moves, and the click lands on
@@ -37,7 +38,7 @@
  * asserted in tests/render-gates/site/contents-ruler.spec.ts.
  */
 
-import { canvasMeasure, truncateMiddle } from "./middle-truncate";
+import { canvasMeasure, truncateMiddle, type Measure } from "./middle-truncate";
 import { markRows, SECTION_SYNC_EVENT, type SectionSyncDetail } from "./section-event";
 import { pictureImg } from "./section-pictures";
 
@@ -54,15 +55,15 @@ const MIN_LABEL = 96;
  *  margin rather than a clipped letter. */
 const MEASURE_SLACK = 2;
 
-/** The left column an open list claims: the dash and picture offset (40px), the
- *  picture, and room for a title. A page that asked for its contents open
- *  shifts right until its text starts at least this far in, whatever its
- *  content width. */
-const RESERVE = 300;
+/** The open list's column is sized from its own widest title, but may take at
+ *  most this share of the page's text measure (`--moss-content-width`, so a
+ *  full-width page allows more than a narrow one); a longer title is cut. */
+const MAX_COLUMN = 0.6;
 
-/** Narrowest text column worth shifting the page for; under it the list gives
- *  way and the island's panel is the contents. */
-const MIN_TEXT = 448;
+/** Share of the text measure the text must keep after the shift. Together with
+ *  `MAX_COLUMN` it means the list never takes more than the text leaves it;
+ *  under this the list gives way and the island's panel is the contents. */
+const MIN_TEXT = 0.4;
 
 /** Fade in when the first section is this far up the window; fade out when the
  *  article's bottom is above the middle. Pinned to the window, the ruler only
@@ -150,13 +151,13 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
 
   /**
    * Make room in the left margin for an open list: pad the body (as the
-   * sidenote gutter does on the right) so the text starts `RESERVE` in. The
+   * sidenote gutter does on the right) so the text starts `column` in. The
    * padding is derived from measured geometry — the text column's natural
    * left edge, with the shift removed — and is taken back when the shifted
    * column would be narrower than `MIN_TEXT`. A centred column that already
    * has the margin is not moved at all.
    */
-  function reserveColumn(vertical: boolean): void {
+  function reserveColumn(vertical: boolean, measure: Measure | null): void {
     if (!opts.pictures) return;
     const style = document.body.style;
     const set = (px: number): void => style.setProperty("--moss-contents-inset", `${px}px`);
@@ -164,13 +165,23 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     if (vertical) return;
     const box = article.getBoundingClientRect();
     const offset = first.getBoundingClientRect().left - box.left;
-    const need = RESERVE - offset;
+    // The column is the list's own width: where its labels start, the widest
+    // title at the open size, and a gutter before the text.
+    const padding = parseFloat(getComputedStyle(labels[0]).paddingInlineStart) || 0;
+    const widest = measure ? Math.max(...titles.map(measure)) : 0;
+    const textMeasure = parseFloat(getComputedStyle(article).maxWidth) || box.width;
+    const column = Math.min(
+      MAX_COLUMN * textMeasure,
+      // Never less than a label that names something (`MIN_LABEL`).
+      Math.ceil(labels[0].getBoundingClientRect().left + Math.max(MIN_LABEL, padding + widest + MEASURE_SLACK) + GUTTER),
+    );
+    const need = column - offset;
     // A centred block moves half of what the body pads; one that fills the
     // window shrinks instead, so the pad is capped at the shift it needs.
     const pad = Math.min(need, Math.max(0, 2 * (need - box.left)));
     if (pad <= 0) return;
     set(pad);
-    if (article.getBoundingClientRect().width - 2 * offset < MIN_TEXT) set(0);
+    if (article.getBoundingClientRect().width - 2 * offset < MIN_TEXT * textMeasure) set(0);
   }
 
   /**
@@ -201,7 +212,8 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     // A hidden ruler has no boxes: show it, measure, then decide, all before
     // the next paint.
     nav.hidden = false;
-    reserveColumn(vertical);
+    const measure = canvasMeasure(labels[0]);
+    reserveColumn(vertical, measure);
     let room = 0;
     if (!vertical) {
       const textLeft = first.getBoundingClientRect().left;
@@ -215,7 +227,6 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     // The shift is ours, not a change of the page's: do not re-measure for it.
     if (opts.pictures) mo?.takeRecords();
     if (eligible) {
-      const measure = canvasMeasure(labels[0]);
       const padding = parseFloat(getComputedStyle(labels[0]).paddingInlineStart) || 0;
       // Writes only, no read-back: the canvas measure plus MEASURE_SLACK is
       // trusted, and the render gate asserts no label overflows in either engine.
