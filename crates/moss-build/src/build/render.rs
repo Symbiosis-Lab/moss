@@ -2,7 +2,7 @@
 
 pub mod preflight;
 mod source_evidence;
-pub use source_evidence::{MissingReferenceOccurrence, PublishPreflightProjection, SourceRevision, SourceSpan};
+pub use source_evidence::{DraftLinkOccurrence, MissingReferenceOccurrence, PublishPreflightProjection, SourceRevision, SourceSpan};
 pub mod config;
 pub mod blocking;
 mod page_chrome;

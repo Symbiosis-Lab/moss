@@ -1182,7 +1182,7 @@ mod tests {
         // Exactly the one stub the site had already earned, and no other: a
         // negative assertion naming a URL would pass just as well if the
         // baseline logic were absent altogether.
-        let emitted: Vec<&String> = sealed.files().keys().collect();
+        let emitted: Vec<&String> = sealed.all_files().keys().collect();
         assert_eq!(
             emitted,
             vec!["ancient/page/index.html"],

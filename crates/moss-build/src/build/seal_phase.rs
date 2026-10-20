@@ -355,7 +355,7 @@ async fn run_materialize_phase(req: PendingSeal) {
             sealed_as,
             promotion_epoch,
             render_seq.map_or("none".to_string(), |r| r.to_string()),
-            sealed.files().len(),
+            sealed.all_files().len(),
             sealed_at.elapsed().as_millis()
         ),
         Ok(Promotion::Superseded) => log::info!(
@@ -458,7 +458,7 @@ async fn run_materialize_phase(req: PendingSeal) {
         .map(|_| crate::system::build_records::records().removed_addresses(&folder_path).unwrap_or_default());
     let server_ask = match (&backfill_verdict, &ports.server_diff) {
         (Some(SealVerdict::AskServer), Some(_)) => {
-            Some((sealed.files().clone(), sealed.generation_id().to_string()))
+            Some((sealed.files().into_owned(), sealed.generation_id().to_string()))
         }
         _ => None,
     };

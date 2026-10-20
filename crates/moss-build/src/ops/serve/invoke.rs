@@ -1114,7 +1114,7 @@ mod tests {
         let root = dir.path().to_string_lossy().to_string();
         crate::system::build_records::records().install_publish_preflight(
             &root,
-            crate::build::types::PublishPreflightProjection { build_generation: 7, missing_references: vec![], unresolved_inputs: vec![] },
+            crate::build::types::PublishPreflightProjection { build_generation: 7, missing_references: vec![], unresolved_inputs: vec![], drafts_linked: vec![] },
         );
 
         let out = dispatch_authed_read(&ctx, "get_publish_preflight", json!({ "folder": "/somewhere/else" }))

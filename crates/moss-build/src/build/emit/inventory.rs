@@ -42,8 +42,8 @@ pub struct InventoryEntry {
     pub date: Option<String>,
     /// `article` or `folder` (a folder index page).
     pub kind: String,
-    /// `draft: true` — rendered at its URL, but hidden from every listing,
-    /// feed, the sitemap and nav, and marked `noindex`.
+    /// `draft: true` — built for preview, never published, and hidden from
+    /// every listing, feed, the sitemap and nav.
     pub draft: bool,
     /// False only for `listed: false` — out of generated listings/feeds, but
     /// still a public, indexable page. Absent frontmatter means listed.

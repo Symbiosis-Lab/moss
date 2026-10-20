@@ -77,7 +77,7 @@ These fields control how the page appears in the site's navigation and chrome.
 <!-- auto:start:frontmatter-visibility -->
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `draft` | boolean | `false` | Publish at its own address only: left out of lists, feeds and the sitemap, and marked `noindex` |
+| `draft` | boolean | `false` | Shown in the preview only: never published, and left out of lists, feeds and the sitemap |
 | `listed` | boolean | `true` | Set `false` to leave the page out of lists, feeds and the sitemap; it is still published at its own address |
 <!-- auto:end:frontmatter-visibility -->
 

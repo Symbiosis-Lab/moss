@@ -35,8 +35,10 @@ pub(crate) fn build_deploy_context(
     folder_path: &str,
     output_dir: &Path,
 ) -> Result<DeployContext, String> {
-    // List files in site directory
-    let site_files = list_site_files(output_dir)?;
+    // The directory also holds the pages built for preview only; a plugin
+    // uploads what it is told about.
+    let withheld = crate::build::manifest::publish_view::withheld_in_current(&crate::moss_paths::MossPaths::new(Path::new(folder_path)));
+    let site_files = list_site_files(output_dir, &withheld)?;
 
     // Read custom domain from config (non-fatal — deploy proceeds without domain)
     let domain = crate::build::site_config::get_domain_config(folder_path)
@@ -59,7 +61,7 @@ pub(crate) fn build_deploy_context(
 }
 
 /// List files in the site directory
-fn list_site_files(dir: &Path) -> Result<Vec<String>, String> {
+fn list_site_files(dir: &Path, withheld: &std::collections::BTreeSet<String>) -> Result<Vec<String>, String> {
     let mut files = Vec::new();
     if dir.exists() {
         for entry in walkdir::WalkDir::new(dir)
@@ -68,7 +70,10 @@ fn list_site_files(dir: &Path) -> Result<Vec<String>, String> {
             .filter(|e| e.path().is_file())
         {
             if let Ok(rel) = entry.path().strip_prefix(dir) {
-                files.push(rel.to_string_lossy().to_string());
+                let rel = rel.to_string_lossy().to_string();
+                if !withheld.contains(&rel) {
+                    files.push(rel);
+                }
             }
         }
     }

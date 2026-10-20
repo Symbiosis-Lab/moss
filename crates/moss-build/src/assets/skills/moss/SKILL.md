@@ -259,7 +259,7 @@ model (dark mode, quiet chrome, `@layer` rules), see
 - **Site built by another generator:** `moss deploy <folder> --prebuilt=_site`
   skips `moss build` and uploads that directory as-is.
 - **Any other host:** `moss build <folder> --site-url=https://example.com`,
-  then upload `.moss/build.nosync/current/` yourself. `--site-url` is required there
+  then upload `.moss/build.nosync/current/` yourself, after deleting the pages marked `draft: true`, which are built there for the preview (`moss list` shows which they are). `--site-url` is required there
   because canonical URLs, `og:image`, the sitemap, and RSS are all absolute and
   otherwise derive from mosspub.com deployment state, which any other host
   never sets. Flag details: `moss describe --json`.

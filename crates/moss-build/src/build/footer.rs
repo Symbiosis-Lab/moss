@@ -113,9 +113,10 @@ pub struct ShipFacts {
     pub partial: bool,
 }
 
-/// The one place that decides whether a document is withheld from the published
-/// site: parsed and resolvable, but never emitted, listed, given an address or
-/// counted as a page. Today that is a reserved slot file (`footer.md`) or a
+/// Decides whether a document is slot-only: parsed and resolvable, but never
+/// rendered, listed, given an address or counted as a page. Drafts are not
+/// slot-only: they render for the preview and are withheld from publishing
+/// through `PageMeta.draft` (the manifest's publish view). Today that is a reserved slot file (`footer.md`) or a
 /// `partial: true` source. Both producers of `ParsedDocument::slot_only` (the
 /// full parse and the page-map pass) call this, and every other check reads the
 /// flag they set, so a further reason is added here and nowhere else.

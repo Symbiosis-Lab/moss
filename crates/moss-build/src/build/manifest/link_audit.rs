@@ -56,6 +56,8 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+pub(crate) mod drafts;
+
 use super::SealedManifest;
 use crate::build::served_path::ServedPath;
 
@@ -199,7 +201,8 @@ pub fn dead_links_in_page(
 /// A page that cannot be read (an eviction between write and audit) is skipped
 /// — the alternative is inventing broken links out of an I/O error.
 pub fn audit(stage_dir: &Path, sealed: &SealedManifest) -> Vec<DeadLink> {
-    let satisfied: HashSet<&str> = sealed.files().keys().map(String::as_str).collect();
+    let files = sealed.files();
+    let satisfied: HashSet<&str> = files.keys().map(String::as_str).collect();
     let mut pages: Vec<&&str> = satisfied.iter().filter(|k| k.ends_with(".html")).collect();
     pages.sort();
     let mut dead = Vec::new();

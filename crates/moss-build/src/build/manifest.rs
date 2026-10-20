@@ -74,6 +74,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 pub(crate) mod preview_originals;
+pub(crate) mod publish_view;
 
 use crate::build::assets::paths::{compute_binary_hash, compute_manifest_generation_id};
 use crate::types::content::{file_entry, SiteHashes};
@@ -1004,11 +1005,6 @@ impl SealedManifest {
     /// an unreadable output is not a missing one.
     pub(crate) fn mark_unverified(&mut self, rel_path: String, detail: String) {
         self.unverified.insert(rel_path, detail);
-    }
-
-    /// All output-path → mode-tagged-hash entries in the deploy manifest.
-    pub fn files(&self) -> &HashMap<String, String> {
-        &self.inner.files
     }
 
     /// Source-relative path → hash of the bytes that produced it.

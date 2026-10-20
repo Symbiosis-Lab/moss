@@ -44,7 +44,7 @@ moss works headless:
 moss build /path/to/folder --no-plugins
 ```
 
-The build output is a self-contained static site in `.moss/build.nosync/current/` — standard HTML, CSS, and JS that can be deployed anywhere. (`.moss/build.nosync/current/` is a symlink to the latest generation under `.moss/build.nosync/generations/`.)
+The build output is a self-contained static site in `.moss/build.nosync/current/` — standard HTML, CSS, and JS that can be deployed anywhere. A page marked `draft: true` is built there too, so the preview can show it; `moss deploy` leaves it out, but a folder you upload by hand includes it, so delete the draft pages first (`moss list` shows which they are). (`.moss/build.nosync/current/` is a symlink to the latest generation under `.moss/build.nosync/generations/`.)
 
 ## Import
 

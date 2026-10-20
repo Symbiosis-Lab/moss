@@ -721,7 +721,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         widget: Widget::Checkbox,
         // Frequency=0, Importance=2 → score = 100 - (0*6 + 2*4) = 100 - 8 = 92
         score: 92,
-        description: "Hidden from all listings, feeds, and navigation — still published at its direct URL",
+        description: "Shown in the preview only: never published, and hidden from all listings, feeds, and navigation",
         label_key: "chip.draft.label",
         group: "This Page",
         ..FIELD_DEFAULTS

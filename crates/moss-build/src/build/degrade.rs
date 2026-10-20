@@ -62,7 +62,7 @@ pub(crate) fn repair_staged_html(
     let mut unshippable = failed;
     let scan = crate::build::media::orphan_prune::extract_referenced_tails(stage_dir);
     unshippable.extend(crate::build::ship::prune_orphaned_webp_before_ship(mp, sealed, &scan));
-    let entries = sealed.files().len();
+    let entries = sealed.all_files().len();
     // Same object store `ship_phase` will read from, so a `staged_oid` entry
     // whose stage copy is transiently absent (evicted, mid-write, deleted by
     // something other than moss) is asked of its live CAS blob here too,

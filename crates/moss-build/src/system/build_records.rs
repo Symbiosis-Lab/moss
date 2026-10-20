@@ -331,6 +331,7 @@ mod tests {
                 },
             }],
             unresolved_inputs: vec![],
+            drafts_linked: vec![],
         }
     }
 

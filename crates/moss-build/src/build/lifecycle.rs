@@ -418,7 +418,7 @@ pub(crate) fn remember_whole(mp: &MossPaths, gen_dir: &Path, sealed: &crate::bui
     if !crate::build::io_utils::CLONES_DIRS {
         return;
     }
-    let whole = crate::build::store_gc::WholeGeneration::record(gen_dir, sealed.generation_id(), sealed.files());
+    let whole = crate::build::store_gc::WholeGeneration::record(gen_dir, sealed.generation_id(), sealed.all_files());
     lock_for(mp).state().whole = whole.map(Arc::new);
 }
 

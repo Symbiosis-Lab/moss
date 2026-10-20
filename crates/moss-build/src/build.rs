@@ -938,6 +938,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         crate::system::build_records::records().install_publish_preflight(
             &folder_path, types::PublishPreflightProjection {
                 build_generation, missing_references: Vec::new(), unresolved_inputs: evidence.unresolved_structural(),
+                drafts_linked: Vec::new(),
             },
         );
         if matches!(&failure, scan::scan::ScanFailure::Storage(unavailable) if unavailable.pending.is_some()) {
@@ -1294,6 +1295,10 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             build_generation,
             missing_references,
             unresolved_inputs,
+            drafts_linked: crate::build::manifest::link_audit::drafts::drafts_linked(
+                &build_documents,
+                |src| std::fs::read_to_string(config.source().join(src)).ok(),
+            ),
         },
     );
 
@@ -1407,7 +1412,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                         log::info!(
                             "seal+persist: generation {} sealed ({} files), {}",
                             sealed.generation_id(),
-                            sealed.files().len(),
+                            sealed.all_files().len(),
                             wait.finish()
                         );
                         let mp_for_mat = crate::moss_paths::MossPaths::new(
@@ -1494,7 +1499,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                     log::info!(
                         "seal+persist (sync): generation {} sealed ({} files), {}",
                         sealed.generation_id(),
-                        sealed.files().len(),
+                        sealed.all_files().len(),
                         wait.finish()
                     );
                     #[cfg(test)]

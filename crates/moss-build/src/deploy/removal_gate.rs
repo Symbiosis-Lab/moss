@@ -26,6 +26,12 @@ pub(crate) fn cause_line(r: &RemovedAddress) -> String {
             None => format!("{at} is gone because you deleted its file."),
         };
     }
+    if r.reason == RemovalReason::Withheld {
+        return match &r.source {
+            Some(src) => format!("{at} is no longer published because {src} says `draft: true`."),
+            None => format!("{at} is no longer published because its page says `draft: true`."),
+        };
+    }
     pending_line(&r.pending())
 }
 

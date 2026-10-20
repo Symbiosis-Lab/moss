@@ -267,7 +267,7 @@ pub fn ship_phase(
     let mut failures = 0u32;
     let mut drifted = 0;
 
-    for (rel_path, entry) in sealed.files() {
+    for (rel_path, entry) in sealed.all_files() {
         let stage_path = stage_dir.join(rel_path);
         let site_path = site_dir.join(rel_path);
         if seeded.is_some_and(|base| base.still_holds(rel_path, entry, &site_path)) {
@@ -611,7 +611,7 @@ pub fn materialize_and_promote(
                 "generation {} withheld: {} of {} entries unverifiable ({})",
                 sealed.generation_id(),
                 entries,
-                sealed.files().len(),
+                sealed.all_files().len(),
                 sample.join(", ")
             ),
             WithholdReason::ImplausibleLoss { lost, of } => log::info!(
@@ -637,14 +637,14 @@ pub fn materialize_and_promote(
         crate::build::store_gc::GenerationWriteLock::acquire(&mp.generations_dir(), sealed.generation_id())
             .map_err(|e| format!("Failed to lock generation {}: {}", sealed.generation_id(), e))?;
     let mut drifted = 0;
-    let copied = !write_lock.holds(&gen_dir, sealed.files());
+    let copied = !write_lock.holds(&gen_dir, sealed.all_files());
     if copied {
         // Seeded from the last whole generation by one copy-on-write clone
         // where the platform has one, so only the entries that differ are
         // written; otherwise every entry is copied.
         let base = crate::build::lifecycle::whole_generation(mp).filter(|base| write_lock.seed_from(&gen_dir, base));
         crate::build::io_utils::create_output_dir_all(&gen_dir)
-            .and_then(|()| crate::build::store_gc::prune_to_manifest(&gen_dir, sealed.files()))
+            .and_then(|()| crate::build::store_gc::prune_to_manifest(&gen_dir, sealed.all_files()))
             .map_err(|e| format!("Failed to prepare generation dir: {}", e))?;
         // Ship-by-OID: read a `staged_oid` entry from its
         // immutable CAS blob instead of the mutable `stage_dir` copy. Depends on
@@ -658,6 +658,8 @@ pub fn materialize_and_promote(
     }
     sealed.write_preview_originals(&mp.generations_dir())
         .map_err(|e| format!("Failed to write generation original identities: {e}"))?;
+    sealed.write_publish_view(&mp.generations_dir())
+        .map_err(|e| format!("Failed to record which pages are preview-only: {e}"))?;
     let promoted = crate::build::lifecycle::promote(mp, epoch, render, sealed.generation_id(), copied)
         .map_err(|e| format!("Failed to set current_ptr: {}", e))?;
     // A generation holding bytes its id does not describe keeps its lock file,
@@ -841,7 +843,7 @@ pub(crate) fn drop_absent_outputs(
     use crate::build::served_path::MATH_PNG_PREFIX;
     let mut absent: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut unverified: Vec<(String, String)> = Vec::new();
-    for (rel, entry) in sealed.files() {
+    for (rel, entry) in sealed.all_files() {
         let stage_path = stage_dir.join(rel);
         // Same resolution `ship_phase` uses (`resolve_ship_source`): a
         // CAS-backed entry's presence is asked of its CAS blob, never of the
@@ -944,7 +946,7 @@ pub(crate) fn unregistered_referenced_variants(
         .resolved
         .iter()
         .filter(|key| key.ends_with(".webp"))
-        .filter(|key| !sealed.files().contains_key(key.as_str()))
+        .filter(|key| !sealed.all_files().contains_key(key.as_str()))
         .filter(|key| {
             // Positively gone only: an unreadable path strips nothing.
             let path = stage_dir.join(key.as_str());
@@ -1785,7 +1787,7 @@ mod tests {
 
     /// Seed `generation`, on disk, as it would be recorded for the next copy.
     fn whole(mp: &crate::moss_paths::MossPaths, sealed: &SealedManifest) -> Option<WholeGeneration> {
-        WholeGeneration::record(&mp.generation_dir(sealed.generation_id()), sealed.generation_id(), sealed.files())
+        WholeGeneration::record(&mp.generation_dir(sealed.generation_id()), sealed.generation_id(), sealed.all_files())
     }
 
     /// A file edited inside the seed after it finished — by a person, or by

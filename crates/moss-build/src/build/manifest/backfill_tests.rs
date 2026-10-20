@@ -80,7 +80,7 @@ fn a_manifest_entry_hashes_the_shipped_page_not_the_staged_one() {
         .expect("ship_phase must materialize the generation");
     let files = published_files(&mp).expect("generation on disk must reconstruct");
 
-    assert_eq!(&files, sealed.files());
+    assert_eq!(&files, sealed.all_files());
     assert_ne!(
         sealed.files().get("index.html"),
         Some(&file_entry(&compute_binary_hash(staged))),
@@ -301,11 +301,11 @@ async fn the_server_diff_is_the_last_resort_and_is_asked_once_per_generation() {
     );
 
     let gen = "gen-remote-ask".to_string();
-    let set = from_server(&port, current.files().clone(), gen.clone()).await;
+    let set = from_server(&port, current.files().into_owned(), gen.clone()).await;
     assert!(!set.classified, "a server count can never justify a verb");
     assert_eq!((set.flat_upload, set.flat_remove), (3, 1), "counts pass through untouched");
 
-    let again = from_server(&port, current.files().clone(), gen).await;
+    let again = from_server(&port, current.files().into_owned(), gen).await;
     assert_eq!(calls.load(Ordering::SeqCst), 1, "one ask per sealed generation, not per seal");
     assert_eq!((again.flat_upload, again.flat_remove), (3, 1));
 }

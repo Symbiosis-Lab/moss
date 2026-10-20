@@ -345,16 +345,17 @@ pub struct FrontMatter {
     /// regardless of filename. Written by moss on homes it creates; survives rename.
     #[serde(default, deserialize_with = "deserialize_bool_lenient")]
     pub home: Option<bool>,
-    /// Draft: rendered and published at its direct URL, but hidden from all
-    /// listings, feeds, sitemap, and navigation (and marked `noindex`).
+    /// Draft: built so the preview can show it, but never published, and
+    /// hidden from all listings, feeds, sitemap, and navigation (and marked
+    /// `noindex`).
     #[serde(default, deserialize_with = "deserialize_bool_lenient")]
     pub draft: Option<bool>,
     /// Listed: when `false`, the page is hidden from moss's auto-generated
     /// surfaces (home feed, recent, folder embeds, RSS, llms.txt, sitemap, and
     /// auto sidebar listings) but remains indexable, share-cardable, and
     /// reachable at its direct URL. Absent ⇒ listed. Orthogonal to `draft`:
-    /// `draft` adds `noindex` and drops the share card; `listed: false` does
-    /// neither. Nav bar / footer link placement (explicit `nav:` / `footer:`)
+    /// a draft is never published, so it has no address to reach; `listed:
+    /// false` stays published. Nav bar / footer link placement (explicit `nav:` / `footer:`)
     /// are independent of this flag.
     #[serde(default, deserialize_with = "deserialize_bool_lenient")]
     pub listed: Option<bool>,

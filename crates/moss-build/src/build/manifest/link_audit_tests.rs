@@ -387,3 +387,63 @@ fn printed_links_show_the_decoded_href_not_the_entity_text() {
     assert_eq!(list_lines(&links), vec!["  '/media/it's.jpg' in 'a.html'"]);
     assert!(summary_line(&links).unwrap().contains("'/media/it's.jpg' in 'a.html'"));
 }
+
+mod drafts {
+    use crate::build::manifest::link_audit::drafts::drafts_linked;
+    use crate::build::types::ParsedDocument;
+
+    fn page(source: &str, url_path: &str, html: &str, draft: bool) -> ParsedDocument {
+        ParsedDocument {
+            source_path: Some(source.into()),
+            url_path: url_path.into(),
+            html_content: html.into(),
+            draft: draft.then_some(true),
+            ..Default::default()
+        }
+    }
+
+    fn no_source(_: &str) -> Option<String> {
+        None
+    }
+
+    #[test]
+    fn relative_and_root_links_into_a_draft_are_found_with_their_source_line() {
+        let docs = vec![
+            page("notes/about.md", "notes/about/index.html", r#"<a href="../../wip/">w</a> <a href="/wip/">x</a> <a href="/other/">o</a>"#, false),
+            page("wip.md", "wip/index.html", "<p>draft</p>", true),
+        ];
+        let found = drafts_linked(&docs, |src| (src == "notes/about.md").then(|| "intro\n\nSee [[wip]] now.\n".to_string()));
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert_eq!(found[0].draft_source, "wip.md");
+        assert_eq!(found[0].line, Some(3));
+    }
+
+    #[test]
+    fn a_folder_note_draft_is_found_by_its_folder_name() {
+        let docs = vec![
+            page("about.md", "about/index.html", r#"<a href="/wip/">w</a>"#, false),
+            page("wip/index.md", "wip/index.html", "<p>draft</p>", true),
+        ];
+        let found = drafts_linked(&docs, |_| Some("intro\n\nSee [[wip]] now.\n".to_string()));
+        assert_eq!(found[0].line, Some(3));
+    }
+
+    #[test]
+    fn a_draft_linking_to_a_draft_is_not_reported() {
+        let docs = vec![
+            page("a.md", "a/index.html", r#"<a href="/b/">b</a>"#, true),
+            page("b.md", "b/index.html", "<p>b</p>", true),
+        ];
+        assert!(drafts_linked(&docs, no_source).is_empty());
+    }
+
+    #[test]
+    fn external_anchor_and_published_links_are_not_reported() {
+        let docs = vec![
+            page("a.md", "a/index.html", r##"<a href="https://x.test/b/">e</a> <a href="#b">f</a> <a href="/c/">c</a>"##, false),
+            page("b.md", "b/index.html", "<p>b</p>", true),
+            page("c.md", "c/index.html", "<p>c</p>", false),
+        ];
+        assert!(drafts_linked(&docs, no_source).is_empty());
+    }
+}

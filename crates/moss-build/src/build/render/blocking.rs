@@ -217,6 +217,16 @@ pub(crate) fn source_metadata(stat: Option<crate::build::stat::FileStat>, bytes:
     crate::build::types::SourceMetadata::from_stat(format!("{:x}", Sha256::digest(bytes)), stat)
 }
 
+/// What the manifest remembers about a page between builds, `draft` included:
+/// that flag is how a page carried forward unrendered stays out of the publish.
+fn page_meta_of(doc: &crate::build::types::ParsedDocument) -> crate::types::content::PageMeta {
+    crate::types::content::PageMeta {
+        title: doc.title.clone(),
+        date: doc.date.clone(),
+        draft: doc.is_draft(),
+    }
+}
+
 /// Register a page's source hash beside its `source_to_output` mapping.
 ///
 /// **Call this everywhere `register_source_mapping` is called.** The two maps
@@ -1984,10 +1994,7 @@ pub fn generate_blocking_content_for_build(
                     Some(src) => Some((src.clone(), url_sp.clone())),
                     None => None,
                 };
-                let page_meta = doc.source_path.as_ref().map(|_| crate::types::content::PageMeta {
-                    title: doc.title.clone(),
-                    date: doc.date.clone(),
-                });
+                let page_meta = doc.source_path.as_ref().map(|_| page_meta_of(doc));
 
                 // Emit BackgroundProgress so the deploy panel shows what
                 // `wait_for_in_flight_work` is actually waiting on. Monotonic
@@ -2088,7 +2095,7 @@ pub fn generate_blocking_content_for_build(
                     register_page_source(pending, &page_source_hashes, src);
                     pending.register_page_meta(
                         src.clone(),
-                        crate::types::content::PageMeta { title: doc.title.clone(), date: doc.date.clone() },
+                        page_meta_of(doc),
                     );
                 }
                 *count += 1;
@@ -2594,7 +2601,7 @@ pub fn generate_blocking_content_for_build(
             if let Some(doc) = homepage_doc {
                 pending.register_page_meta(
                     src.clone(),
-                    crate::types::content::PageMeta { title: doc.title.clone(), date: doc.date.clone() },
+                    page_meta_of(doc),
                 );
             }
         }

@@ -540,6 +540,9 @@ pub struct SiteHashes {
 pub struct PageMeta {
     pub title: String,
     pub date: Option<String>,
+    /// `draft: true`: built and previewed, never published.
+    #[serde(default)]
+    pub draft: bool,
 }
 
 impl SiteHashes {

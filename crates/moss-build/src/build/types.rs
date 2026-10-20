@@ -11,7 +11,7 @@ use specta::Type;
 
 // SeriesField moved to moss-core. Re-exported for backward compat.
 pub use moss_core::frontmatter_typed::SeriesField;
-pub use crate::build::render::{MissingReferenceOccurrence, PublishPreflightProjection, SourceRevision, SourceSpan};
+pub use crate::build::render::{DraftLinkOccurrence, MissingReferenceOccurrence, PublishPreflightProjection, SourceRevision, SourceSpan};
 
 /// Validated event facts shared by page metadata, listings and calendar files.
 /// Present when `start` parses; `end` must also parse and not precede it.
@@ -160,8 +160,8 @@ pub struct ParsedDocument {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[specta(skip)]
     pub is_home_override: bool,
-    /// Draft: rendered and published at its direct URL, but hidden from all
-    /// listings, feeds, sitemap, and navigation (and marked `noindex`).
+    /// Draft: built for the preview, never published; hidden from every
+    /// listing, feed, sitemap and nav, and marked `noindex`.
     pub draft: Option<bool>,
     /// Listed: when `Some(false)`, hidden from moss's auto-generated index
     /// surfaces (feeds/lists/sitemap) via `is_listable()`, but still a public
@@ -771,15 +771,15 @@ impl ParsedDocument {
         self.cover.as_deref().or(self.card_cover.as_deref())
     }
 
+    pub fn is_draft(&self) -> bool { self.draft == Some(true) }
+
     /// Whether this document appears on moss's auto-generated *listing*
     /// surfaces — page lists, folder embeds, year-grouped article lists,
     /// home/folder children, auto-index pages, RSS, llms.txt, sitemap, and the
     /// auto sidebar/sibling listings. False when **any** exclusion fires:
     ///
-    /// 1. `draft == Some(true)` — work-in-progress: rendered and reachable at
-    ///    its direct URL, but hidden from all listings and (via
-    ///    `is_public_page`) marked `noindex` with no share card. (Supersedes
-    ///    the former `unlisted` flag, removed 2026-06.)
+    /// 1. `draft == Some(true)` — rendered for the preview, never published;
+    ///    (via `is_public_page`) `noindex` with no share card.
     /// 2. `listed == Some(false)` — a finished page curated *off-feed*: hidden
     ///    from these listing surfaces but still a public page — indexable,
     ///    share-cardable, reachable (see `is_public_page`).

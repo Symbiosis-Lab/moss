@@ -403,6 +403,9 @@ pub async fn read_site_file_impl(
 
     let paths = MossPaths::new(Path::new(project_path));
     let file_path = sandboxed.resolve_under(&paths.current_ptr())?;
+    if crate::build::manifest::publish_view::withheld_in_current(&paths).contains(&sandboxed_key(relative_path)) {
+        return Err(format!("'{relative_path}' is a draft: it is built for preview and never published"));
+    }
 
     let bytes = fs::read(&file_path)
         .map_err(|e| format!("Failed to read site file '{}': {}", relative_path, e))?;
@@ -564,8 +567,16 @@ pub fn list_files_in_dir(site_dir: &std::path::Path) -> Vec<SiteFileInfo> {
 /// time reads (which this stage moved off `current_ptr()` for exactly that
 /// reason).
 pub fn list_site_files_with_sizes_impl(project_path: &std::path::Path) -> Vec<SiteFileInfo> {
-    let site_dir = crate::moss_paths::MossPaths::new(project_path).current_ptr();
-    list_files_in_dir(&site_dir)
+    let paths = crate::moss_paths::MossPaths::new(project_path);
+    let withheld = crate::build::manifest::publish_view::withheld_in_current(&paths);
+    let mut files = list_files_in_dir(&paths.current_ptr());
+    files.retain(|f| !withheld.contains(&sandboxed_key(&f.path)));
+    files
+}
+
+/// A site file's key in the manifest: forward slashes, no leading `./`.
+fn sandboxed_key(relative_path: &str) -> String {
+    relative_path.replace('\\', "/").trim_start_matches("./").to_string()
 }
 
 #[cfg(test)]
