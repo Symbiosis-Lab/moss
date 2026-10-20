@@ -166,14 +166,29 @@ pub(crate) struct SelectorDialect {
     pub host_suffix: &'static str,
     /// Content containers, most specific first.
     pub selectors: &'static [&'static str],
+    /// Chrome inside the selected subtree, removed before conversion.
+    pub chrome: &'static [&'static str],
 }
+
+/// Host-gated selector dialects, tried in order; a new platform is a new row.
+pub(crate) static SELECTOR_DIALECTS: &[SelectorDialect] = &[DOUBAN, WECHAT_ARTICLE];
 
 /// Douban reviews/notes: the body lives in a small subtree while a
 /// `<ul class="nav">` global menu (no `<nav>` tag, no clutter class)
 /// dominates the scorer's biggest candidate.
-pub(crate) static DOUBAN: SelectorDialect = SelectorDialect {
+const DOUBAN: SelectorDialect = SelectorDialect {
     host_suffix: "douban.com",
     selectors: &[".review-content", "#link-report .note", ".note"],
+    chrome: &[],
+};
+
+/// WeChat Official Account articles: the body container ships with an inline
+/// `visibility: hidden` that a script clears, and the account card sits
+/// inside it. Images carry only `data-src`.
+const WECHAT_ARTICLE: SelectorDialect = SelectorDialect {
+    host_suffix: "mp.weixin.qq.com",
+    selectors: &["#js_content"],
+    chrome: &["mp-common-profile"],
 };
 
 /// What must hold before a chrome row may remove markup.
