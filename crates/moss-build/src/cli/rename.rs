@@ -93,15 +93,19 @@ fn rename_in(args: &[String], cwd: &Path, home: Option<&Path>) -> Result<String,
         .map(|e| e.file.as_str())
         .collect::<std::collections::HashSet<_>>()
         .len();
-    let outcome = if refs == 0 {
-        "no references to rewrite".to_string()
-    } else {
-        format!(
+    let mut parts = Vec::new();
+    if refs > 0 {
+        parts.push(format!(
             "{refs} reference{} rewritten in {files} file{}",
             if refs == 1 { "" } else { "s" },
             if files == 1 { "" } else { "s" }
-        )
-    };
+        ));
+    }
+    let pt = result.passthrough.len();
+    if pt > 0 {
+        parts.push(format!("{pt} passthrough entr{} updated", if pt == 1 { "y" } else { "ies" }));
+    }
+    let outcome = if parts.is_empty() { "no references to rewrite".to_string() } else { parts.join("; ") };
     Ok(format!("Renamed {} → {} ({outcome})", args[0], args[1]))
 }
 

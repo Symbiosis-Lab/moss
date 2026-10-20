@@ -126,6 +126,8 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- `moss rename scene home/scene` now creates the missing `home/` folder inside the site and moves the entry there, as `mv` would, instead of failing with "Failed to resolve". Undoing the rename removes the folders it created if they are still empty. A destination that already exists is still refused, and so is one outside the site.
+- Renaming or moving a file or folder rewrites the `[build].passthrough` entries in `.moss/config.toml` that name it or sit under it, keeping a leading `!`, comments and layout, so a renamed passthrough folder stays passthrough. `moss rename` reports how many entries it updated, and undoing the rename puts them back.
 - The text of an `index.md` whose address a declared passthrough `index.html` owns, at the site root or in a language folder, no longer appears in `llms.txt` or the feed, though readers never saw it. Its title and description still serve the site, and the build warns once for each such file that has text.
 - A language edition's `index.md` beside a declared `index.html` (`[build] passthrough = ["fr/index.html"]`) is that home's metadata, as at the site root, instead of a second page at `/fr/index/`. The old `/fr/index/` address forwards to `/fr/`, and the build no longer warns for the declared pair.
 - A folder declared in `[build] passthrough`, and the folders inside it, no longer get a generated listing page, even when markdown pages sit inside. The pages themselves still render. A listing address a site had already published forwards to the nearest page above it, or to the home page. A page inside such a folder no longer shows a breadcrumb link to a listing that does not exist.

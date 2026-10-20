@@ -85,17 +85,17 @@ fn plan_rejects_a_destination_outside_the_root_before_touching_the_tree() {
 }
 
 #[test]
-fn plan_rejects_a_missing_destination_parent_before_touching_the_tree() {
+fn plan_plans_a_missing_destination_parent_without_creating_it() {
     let tmp = tempfile::tempdir().unwrap();
     let root = fs::canonicalize(tmp.path()).unwrap();
     w(&root, "target.md", "# Target\n");
     let old = root.join("target.md").to_string_lossy().into_owned();
-    let new = root.join("missing/moved.md").to_string_lossy().into_owned();
+    let new = root.join("missing/deeper/moved.md").to_string_lossy().into_owned();
 
-    let err = plan_moves(&root, &[(old, new)]).unwrap_err();
-    assert!(err.contains("Failed to resolve"), "{err}");
+    let plan = plan_moves(&root, &[(old, new)]).unwrap();
+    assert_eq!(plan.moves[0].new_path, "missing/deeper/moved.md");
     assert!(root.join("target.md").exists());
-    assert!(!root.join("missing").exists());
+    assert!(!root.join("missing").exists(), "planning writes nothing");
 }
 
 #[test]

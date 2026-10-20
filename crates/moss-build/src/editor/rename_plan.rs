@@ -25,6 +25,7 @@
 //! wrapper: `plan_moves` + `apply_planned_moves` for a batch of exactly one.
 
 mod apply;
+mod passthrough;
 mod path_list_folder_index;
 mod served_address;
 
@@ -110,11 +111,16 @@ pub struct SkippedFile {
 
 /// The result of [`apply_planned_moves`]: exactly what happened, precise
 /// enough for [`undo_applied`] to reverse it.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(default)]
 pub struct RenameApplyResult {
     pub moves: Vec<PlannedMove>,
     pub edits: Vec<AppliedEdit>,
     pub skipped: Vec<SkippedFile>,
+    /// `(old, new)` of each `[build].passthrough` entry rewritten to follow a move.
+    pub passthrough: Vec<(String, String)>,
+    /// Root-relative folders the rename created for its destinations, shallowest first.
+    pub created_dirs: Vec<String>,
 }
 
 /// The result of [`undo_applied`].
@@ -654,13 +660,10 @@ fn root_relative_existing(canonical_root: &Path, abs: &Path) -> Result<String, S
 /// `/private/var`.
 fn root_relative_new(canonical_root: &Path, new_path: &str) -> Result<String, String> {
     let new_path = Path::new(new_path);
-    let file_name = new_path
-        .file_name()
-        .ok_or_else(|| format!("Invalid destination path: {}", new_path.display()))?;
-    let parent = new_path
-        .parent()
-        .ok_or_else(|| format!("Invalid destination path: {}", new_path.display()))?;
-    let (_, canonical_parent) = crate::vault::fs::recheck_canonical(canonical_root, parent)?;
+    let (Some(file_name), Some(parent)) = (new_path.file_name(), new_path.parent()) else {
+        return Err(format!("Invalid destination path: {}", new_path.display()));
+    };
+    let canonical_parent = crate::vault::fs::canonicalize_allowing_missing(canonical_root, parent)?;
     canonical_parent
         .join(file_name)
         .strip_prefix(canonical_root)
