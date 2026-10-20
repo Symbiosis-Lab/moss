@@ -255,7 +255,8 @@ async fn rerunning_after_a_failed_www_link_finishes_the_job_without_a_second_sta
 
 async fn status_with(routes: Routes, t: Table, json: bool) -> (Outcome, Seen) {
     let (client, seen) = mock(routes).await;
-    (status_flow(&client, "site", "example.com", json, &t).await, seen)
+    let dir = folder();
+    (status_flow(&client, dir.path().to_str().unwrap(), "example.com", json, &t).await, seen)
 }
 
 async fn status(cdn: &'static str, t: Table, json: bool) -> (Outcome, Seen) {
@@ -293,6 +294,18 @@ async fn status_with_every_record_and_an_active_certificate_is_live() {
 }
 
 #[tokio::test]
+async fn a_live_status_makes_the_next_build_use_www() {
+    let dir = folder();
+    let path = dir.path().to_str().unwrap();
+    crate::vault::config::set_domain_in_config(path, "example.com").unwrap();
+    let (client, _) = mock(vec![(OWNED, 200, OWNED_EXTERNAL), (CDN_GET, 200, ACTIVE)]).await;
+    let o = status_flow(&client, path, "example.com", false, &all_in_place()).await;
+    assert_eq!(o.code, 0, "{}", o.out);
+    let url = crate::build::site_url::resolve_for_project(path, None).unwrap();
+    assert_eq!(url.as_str(), "https://www.example.com");
+}
+
+#[tokio::test]
 async fn records_added_but_not_yet_confirmed_is_not_reported_as_missing() {
     let (o, _) = status(PENDING, all_in_place(), false).await;
     assert_eq!(o.code, 3);
@@ -318,7 +331,7 @@ async fn a_failed_hostname_or_an_empty_record_list_exits_4() {
         assert_eq!(o.code, 4, "{}", cdn);
         let v: serde_json::Value = serde_json::from_str(&o.out).unwrap();
         assert_eq!(v["verdict"], "failed");
-        assert!(v["reason"].as_str().unwrap().contains("moss domain link site example.com"));
+        assert!(v["reason"].as_str().unwrap().contains("moss domain link ") && v["reason"].as_str().unwrap().contains(" example.com"));
     }
 }
 

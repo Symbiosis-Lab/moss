@@ -393,6 +393,10 @@ pub(crate) async fn status_flow(
         Ok(c) => c,
         Err(e) => return fail(e),
     };
+    // The build canonicalizes to www only once the recorded status is active.
+    if let Some(word) = cdn.cdn_status.wire_word() {
+        let _ = crate::vault::deployment_state::record_cdn_status(folder, word);
+    }
     let retry = format!("moss domain link {} {}", folder, apex);
     let (checks, verdict) = if host.managed {
         // Only a moss-run domain's verdict leans on the service's DNS probe.
