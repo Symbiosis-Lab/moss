@@ -180,15 +180,16 @@ pub struct ParsedDocument {
     /// (auto-targets `footer-left`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot: Option<String>,
-    /// True if this document fills a layout slot rather than rendering as a
-    /// standalone page (e.g., `footer.md`). Mirrors
+    /// True if this document is parsed but never emitted as a page: it fills
+    /// a layout slot (e.g., `footer.md`) or is a `partial: true` transclusion
+    /// source. Mirrors
     /// [`moss_core::ast::Document::slot_only`] on the production type so
     /// page-emission, native-slot collection, and auto-H1 injection can
     /// branch on a single structural flag.
     ///
     /// Set at parse time by `process_markdown_file` from the reserved-name
-    /// convention (`crate::build::footer::is_excluded_from_pages`). Authors
-    /// may target additional slots via the `slot:` frontmatter field above,
+    /// convention (`crate::build::footer::is_excluded_from_pages`) or from
+    /// `partial: true`. Authors may target additional slots via the `slot:` frontmatter field above,
     /// but reserved-name detection is the canonical signal.
     ///
     /// Lands as part of the typed-AST migration; replaces the

@@ -249,6 +249,10 @@ pub struct ShellVars {
     /// Includes the preceding `window.mossTheme.base` global so the script can
     /// resolve co-located theme assets via `new URL("asset.woff2", mossTheme.base)`.
     pub user_js_tag: Option<String>,
+    /// `<script type="importmap">` for the theme's ES modules, in `<head>`
+    /// ahead of every module script. Empty unless the theme has script files
+    /// besides `script.js`.
+    pub theme_importmap: String,
     /// Site-wide flag: true when ANY document in the site has `sidebar` set.
     /// Used by Task 3 to add `class="has-sidebar-layout"` on the `<html>` element
     /// for content width adjustments.
@@ -432,6 +436,7 @@ impl ShellProcessor {
             ("lightbox", vars.lightbox),
             // User JS tag (placed after theme.js, before body-end slot)
             ("user_js_tag", vars.user_js_tag.unwrap_or_default()),
+            ("theme_importmap", vars.theme_importmap),
         ]);
 
         let mut result = substitute_template_tokens(&template, &values);

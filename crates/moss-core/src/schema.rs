@@ -352,7 +352,8 @@ mod tests {
         // (`nav_label` added 2026-10 — a shorter nav-bar name than `title`.)
         // (`inferred` added 2026-10 — fields taken from embedded files' derived facts.)
         // (`color` added 2026-10 — a folder home's section accent.)
-        assert_eq!(schema.frontmatter.fields.len(), 61);
+        // (`partial` added 2026-10 — a transclusion source that is never built.)
+        assert_eq!(schema.frontmatter.fields.len(), 62);
     }
 
     #[test]

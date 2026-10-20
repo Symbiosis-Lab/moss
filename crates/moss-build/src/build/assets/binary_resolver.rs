@@ -307,7 +307,7 @@ pub fn resolve_binary(
             }
             Err(e) => {
                 // Corrupt cache: delete it so the next download starts clean
-                log::warn!(
+                log::info!(
                     "Cached {} at '{}' failed validation ({}), removing corrupt cache",
                     config.name,
                     cached_str,

@@ -158,7 +158,7 @@ fn legend(rows: &[InventoryEntry]) -> Option<String> {
             "draft" => "  draft      frontmatter `draft: true` — published at its URL, hidden from every listing, feed, the sitemap and nav; marked noindex".to_string(),
             "unlisted" => "  unlisted   frontmatter `listed: false` — out of generated listings and feeds, but still a public, indexable page".to_string(),
             "nav-item" => "  nav-item   a root-level file in a site that has content folders: it appears in the nav bar instead of the article list (set `nav: false` to move it back)".to_string(),
-            "slot" => "  slot       layout chrome (footer.md, or `slot:` frontmatter) — renders into a template slot, never its own page".to_string(),
+            "slot" => "  slot       not a page: layout chrome (footer.md, or `slot:` frontmatter) that renders into a template slot, or a `partial: true` transclusion source".to_string(),
             other => format!("  {other}"),
         });
     }

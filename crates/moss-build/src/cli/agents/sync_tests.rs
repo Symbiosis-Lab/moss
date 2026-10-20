@@ -522,6 +522,9 @@ fn nothing_written_into_an_agent_directory_can_reach_a_commit() {
     let cursor = std::fs::read_to_string(project.join(".cursor/rules/.gitignore")).expect("written");
     assert!(cursor.lines().any(|l| l == "moss.mdc"), "must ignore its own rule: {cursor:?}");
     assert!(!cursor.contains("mine.mdc"), "must not ignore the user's rule: {cursor:?}");
+    // The `.gitignore` ignores itself, like `.claude/skills/moss/`, so a
+    // `.cursor/` holding only moss's file is not reported as untracked.
+    assert!(cursor.lines().any(|l| l == ".gitignore"), "must ignore itself: {cursor:?}");
 
     // Only ever adds: a line the user put there survives, and a second sync
     // does not duplicate moss's.
@@ -707,4 +710,19 @@ fn a_directory_at_the_named_path_is_replaced() {
     sync_with_home(&project, Some(home.path()), &dev).expect("dev sync");
 
     assert_all_name(&project, &dev);
+}
+
+/// The build's closing pointer sends an agent to `moss guide`, the one source
+/// of guidance, rather than telling it to read a file as if the file were the
+/// guidance.
+#[test]
+fn the_build_pointer_names_moss_guide() {
+    let (_tmp, project) = make_project();
+    std::fs::create_dir_all(project.join(".claude")).unwrap();
+    let home = empty_home();
+    sync_with_home(&project, Some(home.path()), &cli()).expect("sync");
+
+    let line = guidance_pointer_line(&project).expect("a pointer file exists");
+    assert!(line.contains("`moss guide`"), "{line}");
+    assert!(!line.contains("read "), "must not tell the agent to read the file: {line}");
 }

@@ -302,8 +302,15 @@ impl<'a> NavigationBuilder<'a> {
                 // Nav link text: `nav_label` if the page set one, else the
                 // chrome label. Both are plain text, so escape at the write.
                 let label = crate::build::features::html_escape(doc.nav_text());
-                let pretty = crate::build::scan::article_map::to_pretty_url(&doc.url_path);
-                let href = format!("/{}", pretty.trim_start_matches('/')); // allow:served-path-url-construct (nav href to user content page, not a framework asset)
+                let href = match crate::build::scan::page_map::nav_external_href(&doc.raw_frontmatter) {
+                    // `external_url:` makes the entry a plain link elsewhere —
+                    // an address, a section anchor, another site.
+                    Some(url) => crate::build::features::html_escape(url),
+                    None => {
+                        let pretty = crate::build::scan::article_map::to_pretty_url(&doc.url_path);
+                        format!("/{}", pretty.trim_start_matches('/')) // allow:served-path-url-construct (nav href to user content page, not a framework asset)
+                    }
+                };
                 let is_current_page = self.current_page_url.map_or(false, |url| url == doc.url_path);
                 // `nav` header mode has no breadcrumb trail to say "you are
                 // somewhere under this section" on a deep page (the section's
@@ -537,7 +544,8 @@ pub struct NavFacts {
 /// intentionally diverges in flat mode.
 ///
 /// `slot_only` wins over an explicit `nav: true` — slot files (e.g. `footer.md`)
-/// are structural chrome and are excluded unconditionally.
+/// are structural chrome and are excluded here, except a link-only partial,
+/// which only [`is_nav_bar_item_doc`] recognises.
 /// `draft` also wins over an explicit `nav: true` — draft pages are hidden from
 /// all listings, including the top nav bar.
 /// The `None` (no explicit frontmatter) case delegates to `is_navigational_page`,
@@ -579,6 +587,9 @@ pub fn is_nav_bar_item_doc(
     doc: &crate::build::types::ParsedDocument,
     has_content_folders: bool,
 ) -> bool {
+    if is_link_only_partial(doc) {
+        return true;
+    }
     is_nav_bar_item(
         NavFacts {
             nav: doc.nav,
@@ -591,6 +602,16 @@ pub fn is_nav_bar_item_doc(
         &doc.clean_stem,
         has_content_folders,
     )
+}
+
+/// A `partial: true` file with `nav: true` and `external_url:` is a header link
+/// to that address (a section anchor, a `mailto:`) with no page behind it.
+fn is_link_only_partial(doc: &crate::build::types::ParsedDocument) -> bool {
+    doc.slot_only
+        && doc.nav == Some(true)
+        && doc.draft != Some(true)
+        && doc.raw_frontmatter.get("partial").and_then(|v| v.as_bool()) == Some(true)
+        && crate::build::scan::page_map::nav_external_href(&doc.raw_frontmatter).is_some()
 }
 
 /// Whether a document should be excluded from article listings because

@@ -629,7 +629,7 @@ pub fn classify(previous: Option<&PublishedSnapshot>, current: &SealedManifest) 
     }
 
     if carry_gaps > 0 {
-        log::warn!(
+        log::info!(
             "publish change set: {carry_gaps} page(s) have an output mapping but no source \
              hash, so they were classified by output alone. A register_source_mapping call \
              is missing its paired source-hash registration."

@@ -168,7 +168,7 @@ fn previous_hashes_for_diff(folder_path: &str, output: &Path) -> SiteHashes {
     if output.exists() {
         load_previous_hashes(folder_path)
     } else {
-        log::warn!(
+        log::info!(
             "Output dir missing at rebuild start: {} — treating as full rebuild for refresh emit",
             output.display()
         );

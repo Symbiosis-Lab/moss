@@ -148,6 +148,10 @@ pub struct GalleryItem {
     /// URL resolution as body links. Empty when the item has none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub caption: Vec<Inline>,
+    /// CommonMark image title (`![alt](src "title")`), written as the
+    /// `title` attribute of the `<img>`. `None` for a bare path or wikilink.
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 /// Where a fenced shortcode's inner content sits in the page source, so a click
@@ -631,6 +635,7 @@ mod tests {
             classes: String::new(),
             items: vec![
                 GalleryItem {
+                    title: None,
                     src: Url::unresolved("a.jpg"),
                     alt: "A".to_string(),
                     alt_only: false,
@@ -638,6 +643,7 @@ mod tests {
                     caption: Vec::new(),
                 },
                 GalleryItem {
+                    title: None,
                     src: Url::unresolved("b.jpg"),
                     alt: "B".to_string(),
                     alt_only: false,
@@ -673,6 +679,7 @@ mod tests {
             columns: Some(4),
             classes: "showcase".to_string(),
             items: vec![GalleryItem {
+                title: None,
                 src: Url::unresolved("p.png"),
                 alt: "Photo".to_string(),
                 alt_only: false,

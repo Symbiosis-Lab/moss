@@ -2258,35 +2258,13 @@ fn unknown_shortcode_inside_a_valid_shortcode_warns() {
     );
 }
 
-/// A plain fenced div renders only classes and an id, so a `lang=` or
-/// `data-*` key on it is advised rather than silently dropped. A class-only
-/// fence stays quiet.
-#[test]
-fn fenced_div_keys_a_plain_div_cannot_render_are_advised() {
-    let doc = crate::ast::parse(":::{.note lang=fr data-tone=warm}\nBody.\n:::\n");
-    assert!(
-        doc.advisories
-            .iter()
-            .any(|a| a.contains("lang") && a.contains("data-tone")),
-        "dropped keys must be named, got {:?}",
-        doc.advisories
-    );
-    assert!(
-        doc.warnings.is_empty(),
-        "a dropped key is an advisory, not a counted warning, got {:?}",
-        doc.warnings
-    );
-    let quiet = crate::ast::parse(":::{.note}\nBody.\n:::\n");
-    assert!(quiet.advisories.is_empty(), "got {:?}", quiet.advisories);
-}
-
 /// A grid cell is parsed as its own fragment, so an advisory raised inside a
 /// cell must reach the outer document, not die with the fragment.
 #[test]
 fn fenced_div_advisory_inside_a_grid_cell_surfaces() {
-    let doc = crate::ast::parse("::::grid\n:::{.note lang=fr}\nBody.\n:::\n::::\n");
+    let doc = crate::ast::parse("::::grid\n:::{.note x=}\nBody.\n:::\n::::\n");
     assert!(
-        doc.advisories.iter().any(|a| a.contains("lang")),
+        doc.advisories.iter().any(|a| a.contains("could not be read")),
         "a cell's advisory must reach the document, got {:?}",
         doc.advisories
     );

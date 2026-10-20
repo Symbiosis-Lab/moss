@@ -1614,6 +1614,7 @@ fn make_test_vars(has_sidebar_layout: bool) -> ShellVars {
         ui_lang: crate::i18n::Language::En,
         user_css_link: None,
         user_js_tag: None,
+        theme_importmap: String::new(),
         has_sidebar_layout,
         embed_head_assets: String::new(),
         post_article: String::new(),

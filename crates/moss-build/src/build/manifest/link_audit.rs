@@ -31,8 +31,9 @@
 //!
 //! # Advisory, not a `--strict` failure
 //!
-//! Reported with a plain [`log::warn!`], which the headless logger prints but
-//! `cli_output`'s problem counter never sees. An unresolved `[[wikilink]]` is
+//! Reported as a `[NOTE]` through `log_note!`: printed, counted in the closing
+//! line's note tally, and never part of the problem count `--strict` reads. An
+//! unresolved `[[wikilink]]` is
 //! unambiguously the author's mistake — moss owns the whole resolution — and so
 //! it earns `log_warn_problem!`. A root-relative href does not have that
 //! property: a site can legitimately name a path served by a proxy, a redirect
@@ -292,10 +293,10 @@ fn print_list(dead: &[DeadLink]) {
 /// [`dead_links_among_promises`].
 pub fn audit_and_report(stage_dir: &Path, sealed: &SealedManifest) -> Vec<DeadLink> {
     let dead = audit(stage_dir, sealed);
-    // `log::warn!`, not `log_warn_problem!` — see the module docs on why this
+    // `log_note!`, not `log_warn_problem!` — see the module docs on why this
     // stays out of the `--strict` count.
     if let Some(line) = summary_line(&dead) {
-        log::warn!("{line}");
+        crate::build::cli_output::log_note!("{line}");
         print_list(&dead);
     }
     for link in &dead {

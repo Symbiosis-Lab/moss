@@ -358,6 +358,12 @@ pub struct FrontMatter {
     /// are independent of this flag.
     #[serde(default, deserialize_with = "deserialize_bool_lenient")]
     pub listed: Option<bool>,
+    /// Partial: the page exists only to be transcluded into other pages
+    /// (`![[name]]`). It resolves like any page but is never built, listed,
+    /// or given a URL, so it is absent from nav, sitemap, feeds, search and
+    /// `llms.txt`, and is never reported as an unlinked page.
+    #[serde(default, deserialize_with = "deserialize_bool_lenient")]
+    pub partial: Option<bool>,
     /// Page description for SEO and list previews
     pub description: Option<String>,
     /// Content tags for organization
@@ -988,8 +994,8 @@ pub(crate) fn is_frontmatter_field_line(trimmed: &str) -> bool {
 /// Keys that may be written bare, as `nav` rather than `nav: true`. Must stay in
 /// step with the bare-flag arm of [`parse_simplified_frontmatter`];
 /// `every_bare_flag_is_recognised_by_the_parser` fails if it drifts.
-pub(crate) const SIMPLIFIED_BARE_FLAGS: [&str; 8] = [
-    "nav", "home", "draft", "listed", "breadcrumb", "footer", "comments", "children",
+pub(crate) const SIMPLIFIED_BARE_FLAGS: [&str; 9] = [
+    "nav", "home", "draft", "listed", "partial", "breadcrumb", "footer", "comments", "children",
 ];
 
 /// The field names a simplified frontmatter block declares, in source order.
@@ -1169,7 +1175,7 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                         }
                     };
                 }
-                "nav" | "home" | "draft" | "listed" | "footer" | "comments" => {
+                "nav" | "home" | "draft" | "listed" | "partial" | "footer" | "comments" => {
                     let unquoted = value.trim_matches(|c| c == '\'' || c == '"');
                     // Anything other than "true"/"false" is a likely typo (e.g.
                     // "yes", "Ture"); warn rather than silently defaulting to
@@ -1191,6 +1197,7 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                         "home" => frontmatter.home = flag,
                         "draft" => frontmatter.draft = flag,
                         "listed" => frontmatter.listed = flag,
+                        "partial" => frontmatter.partial = flag,
                         "footer" => frontmatter.footer = flag,
                         "comments" => frontmatter.comments = flag,
                         _ => unreachable!(),
@@ -1220,6 +1227,7 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                 "draft" => frontmatter.draft = Some(true),
                 "listed" => frontmatter.listed = Some(true),
                 "breadcrumb" => frontmatter.breadcrumb = Some(BreadcrumbSetting::On),
+                "partial" => frontmatter.partial = Some(true),
                 "footer" => frontmatter.footer = Some(true),
                 "comments" => frontmatter.comments = Some(true),
                 "children" => frontmatter.children = Some(true),
@@ -1712,6 +1720,16 @@ mod tests {
         // in this parser's own hand-rolled bool matching.
         let (fm, _) = parse_simplified_frontmatter("nav: yes\n---\nbody\n");
         assert_eq!(fm.nav, None);
+    }
+
+    #[test]
+    fn parses_partial_field_in_both_dialects() {
+        let yaml: FrontMatter = serde_yaml::from_str("partial: true\n").expect("parse");
+        assert_eq!(yaml.partial, Some(true));
+        let (kv, _) = parse_simplified_frontmatter("partial: true\n---\nbody\n");
+        assert_eq!(kv.partial, Some(true));
+        let (bare, _) = parse_simplified_frontmatter("partial\n---\nbody\n");
+        assert_eq!(bare.partial, Some(true));
     }
 
     #[test]

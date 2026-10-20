@@ -358,9 +358,9 @@ fn is_inside(root: &Path, path: &Path) -> bool {
 ///
 /// `pattern` is `*` where moss owns the whole directory, which self-ignores:
 /// `*` matches the `.gitignore` too, so nothing shows up at all. Where moss
-/// owns one file in a directory that is the user's, it is that filename, and
-/// the `.gitignore` itself stays visible — correctly, since committing *it* is
-/// the right thing for everyone else on the repo.
+/// owns one file in a directory that is the user's, it is that filename plus
+/// `.gitignore` itself, so a directory holding only moss's file shows nothing
+/// in `git status` either.
 /// Whether `existing` already keeps `pattern` out of commits.
 ///
 /// Exact string equality would not recognize the user's own, broader spelling of
@@ -496,16 +496,25 @@ pub fn guidance_pointer(project: &Path) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
-/// Tell a CLI caller where [`guidance_pointer`] found the guidance, if anywhere.
+/// The line that tells a CLI caller how to get the guidance, if there is a
+/// pointer file at all.
 ///
-/// Lives here rather than at the call site in `lib.rs` so the rationale sits
-/// beside the function whose output it announces.
-pub fn print_guidance_pointer(project: &Path) {
-    if let Some(skill) = guidance_pointer(project) {
-        crate::build::cli_output::cli_eprintln!(
-            "🤖 Coding agent: read {} for how to author and theme this site.",
+/// The guidance itself is `moss guide`; the file only records which binary
+/// prints it, so the line names both. Lives here rather than at the call site
+/// in `lib.rs` so the rationale sits beside the function it announces.
+fn guidance_pointer_line(project: &Path) -> Option<String> {
+    guidance_pointer(project).map(|skill| {
+        format!(
+            "🤖 Coding agent: run `moss guide` for how to author and theme this site ({} names the exact command).",
             skill.display()
-        );
+        )
+    })
+}
+
+/// Print [`guidance_pointer_line`] to stderr, if there is one.
+pub fn print_guidance_pointer(project: &Path) {
+    if let Some(line) = guidance_pointer_line(project) {
+        crate::build::cli_output::cli_eprintln!("{line}");
     }
 }
 
@@ -523,7 +532,7 @@ pub fn sync_after_build(project: &Path, is_full_build: bool) {
         return;
     }
     if let Err(e) = sync_project(project, &bundled_cli_path()) {
-        log::warn!(target: "build", "agent guidance sync skipped: {e}");
+        log::info!(target: "build", "agent guidance sync skipped: {e}");
     }
 }
 
@@ -617,10 +626,11 @@ fn sync_with_home(project: &Path, home: Option<&Path>, cli: &Path) -> Result<Syn
         // `rules/` is the user's — their own rules live beside ours — so this
         // names the one file rather than sweeping the directory.
         let rules = project.join(".cursor/rules");
-        record(
-            &rules.join(".gitignore"),
-            Some(ensure_ignored(&real_root, &rules, "moss.mdc")?),
-        );
+        // The `.gitignore` names itself too, as `.claude/skills/moss/` does by
+        // way of `*`; otherwise a lone untracked `.cursor/` shows in `git status`.
+        let wrote_rule = ensure_ignored(&real_root, &rules, "moss.mdc")?;
+        let wrote_self = ensure_ignored(&real_root, &rules, ".gitignore")?;
+        record(&rules.join(".gitignore"), Some(wrote_rule || wrote_self));
         let path = rules.join("moss.mdc");
         let body = stamped_with(&skill_package::render_cursor_mdc(), &cli_binding_for(&path, cli));
         record(&path, write_managed(&real_root, &path, &body)?);

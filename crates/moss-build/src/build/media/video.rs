@@ -71,7 +71,7 @@ fn mutate_transform_record(
 ) {
     let source_size = fs::metadata(source_file).map(|m| m.len()).unwrap_or(0);
     if let Err(e) = transforms.merge(source_oid, source_size, crate::build::cache::RecordMode::Wait, mutate) {
-        log::warn!("Failed to write transform record: {}", e);
+        log::info!("Failed to write transform record: {}", e);
     }
 }
 
@@ -219,18 +219,18 @@ fn regenerate_still(
                 Ok(oid) => {
                     match objects.link_to(&oid, output) {
                         Ok(()) => linked = true,
-                        Err(e) => log::warn!("Failed to link {kind} to output: {}", e),
+                        Err(e) => log::info!("Failed to link {kind} to output: {}", e),
                     }
                     oid_result = Some(oid);
                 }
-                Err(e) => log::warn!("Failed to store {kind} in CAS: {}", e),
+                Err(e) => log::info!("Failed to store {kind} in CAS: {}", e),
             }
             Ok((oid_result, linked))
         }
         Ok(false) => Ok((None, false)),
         Err(ref e) if e == "Cancelled" => Err("Cancelled".to_string()),
         Err(e) => {
-            log::warn!("{kind} generation failed for {}: {}", filename, e);
+            log::info!("{kind} generation failed for {}: {}", filename, e);
             Ok((None, false))
         }
     };
@@ -466,7 +466,7 @@ pub(crate) fn convert_single_video(
         Err(ref e) if e == "Cancelled" => {
             return VideoConversionOutcome::failed("Cancelled".to_string());
         }
-        Err(e) => log::warn!("HLS ladder failed for {} (MP4 still served): {}", filename, e),
+        Err(e) => log::info!("HLS ladder failed for {} (MP4 still served): {}", filename, e),
     }
 
     // Step 1: Check transform cache for both MP4 and thumbnail
@@ -526,7 +526,7 @@ pub(crate) fn convert_single_video(
             let thumb_linked = match objects.link_to(thumb_oid, &output_thumb) {
                 Ok(()) => true,
                 Err(e) => {
-                    log::warn!("Failed to link cached thumbnail to output: {}", e);
+                    log::info!("Failed to link cached thumbnail to output: {}", e);
                     false
                 }
             };
@@ -555,7 +555,7 @@ pub(crate) fn convert_single_video(
             // over a thumbnail-only defect (a ~2s ffmpeg call) would be real,
             // avoidable cost for every site that already has a bad thumbnail
             // cached.
-            log::warn!("Cached thumbnail missing or failed validation, regenerating just the thumbnail: {}", filename);
+            log::info!("Cached thumbnail missing or failed validation, regenerating just the thumbnail: {}", filename);
 
             if let Err(e) = objects.link_to(mp4_oid, &output_mp4) {
                 return VideoConversionOutcome::failed(format!("could not stage {}: {}", filename, e));
@@ -595,7 +595,7 @@ pub(crate) fn convert_single_video(
         // Leave the stale entry in place until the fresh conversion records
         // its replacement. If conversion fails, the next build detects it
         // again; leaving it avoids clobbering a concurrent repair.
-        log::warn!("Cached video failed validation, re-encoding: {}", mp4_oid);
+        log::info!("Cached video failed validation, re-encoding: {}", mp4_oid);
     }
 
     // Step 3: Cache miss -- run ffmpeg pipeline
@@ -657,7 +657,7 @@ pub(crate) fn convert_single_video(
     } else {
         // 3c. Validate converted MP4 via ffprobe before storing in CAS
         if !ffmpeg.validate_encoded_video(&temp_mp4).unwrap_or(false) {
-            log::warn!("Converted video failed validation, not storing: {}", filename);
+            log::info!("Converted video failed validation, not storing: {}", filename);
             // allow:unlink an encode temp this call wrote under cache/tmp
             let _ = fs::remove_file(&temp_mp4);
             return VideoConversionOutcome::failed(format!("Validation failed for {}", filename));
@@ -854,7 +854,7 @@ impl ItemStep {
                 crate::build::outcome::Unreadable::NotYet => return Self::awaiting_cloud(),
                 crate::build::outcome::Unreadable::Broken(io) => {
                     let e = format!("Failed to copy video: {}", io);
-                    log::warn!("Fallback copy failed for {}: {}", mapped_source, e);
+                    log::info!("Fallback copy failed for {}: {}", mapped_source, e);
                     // The caller's advisory says why moss could not OPTIMIZE the
                     // video; only this arm knows the worse fact, that the page has
                     // no video at all. `item`, not `mapped_source`: the advisory
@@ -1118,7 +1118,7 @@ pub(crate) fn run_video_conversion(
     let ffmpeg = match ctx.ffmpeg_bin_path {
         Some(ref path) => Some(FFmpegManager::from_bin_path(path.clone())),
         None => {
-            log::warn!("Video conversion skipped: FFmpeg not found during scan");
+            log::info!("Video conversion skipped: FFmpeg not found during scan");
             // Offer the download only where moss has a source for it.
             let (what, action) =
                 if crate::build::assets::binary_resolver::Tool::Ffmpeg.download_available() {
@@ -1267,7 +1267,7 @@ pub(crate) fn run_video_conversion(
                     // failure), and shipping them is what every other can't-encode
                     // arm does. Before the outcome model this arm alone shipped
                     // nothing, leaving the page with no video at all.
-                    log::warn!("Failed to hash video {}: {}", filename, e);
+                    log::info!("Failed to hash video {}: {}", filename, e);
                     break 'item ItemStep::shipped_original(
                         services,
                         project_root,
@@ -1512,7 +1512,7 @@ pub(crate) fn run_video_conversion(
     // and holds only image entries — a plain overwrite would clobber whichever
     // category was written first. Merge preserves both.
     if let Err(e) = hash_index.save_merging(&hash_index_path) {
-        log::warn!("Failed to save HashIndex: {}", e);
+        log::info!("Failed to save HashIndex: {}", e);
     }
 
     log::info!("[epoch {}] Video conversion complete ({} videos, {} converted)", epoch, total, converted_count);
@@ -1591,7 +1591,7 @@ fn emit_video_outputs_via_channel(
         // blocking_send: safe because run_video_conversion runs inside spawn_blocking.
         // A send failure means the coordinator was dropped; log and continue.
         if let Err(e) = tx.blocking_send(msg) {
-            log::warn!("[video] Failed to register video output in coordinator: {}", e);
+            log::info!("[video] Failed to register video output in coordinator: {}", e);
         }
     }
     for line in summarize_video_coherence_violations(&missing, &read_failures) {
@@ -1888,7 +1888,7 @@ impl VideoStore {
         match crate::build::media::hls::heal_cached_ladder(&self.transforms, &source_oid, &ladder_dir, &self.compression_config) {
             Ok(outcome) => outcome,
             Err(e) => {
-                log::warn!("[video] HLS ladder heal failed for {}: {}", item, e);
+                log::info!("[video] HLS ladder heal failed for {}: {}", item, e);
                 LadderHeal::Nothing
             }
         }
@@ -2298,7 +2298,7 @@ pub(crate) fn cleanup_legacy_video_cache(moss_dir: &Path) {
     if legacy_video_cache.exists() && paths.cache_objects().exists() {
         // allow:unlink the retired .moss/cache/videos tree, not staging
         if let Err(e) = fs::remove_dir_all(&legacy_video_cache) {
-            log::warn!("Failed to remove legacy video cache: {}", e);
+            log::info!("Failed to remove legacy video cache: {}", e);
         } else {
             log::info!("Removed legacy path-based video cache (.moss/build.nosync/cache/videos/)");
         }

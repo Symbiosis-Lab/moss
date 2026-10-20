@@ -973,6 +973,21 @@ fn css_region_with_classes_and_id() {
 }
 
 #[test]
+fn css_region_key_values_follow_pandocs_html5_attribute_rule() {
+    // A key in pandoc's HTML5 list, `aria-*` or `data-*` is kept as
+    // written; any other key becomes `data-<key>`. `fig=teapot` used to be
+    // parsed and then dropped without a word.
+    let md = "::: {.figure #f1 fig=teapot title=Tea aria-label=Legend data-intensity=\"0.6\" note=\"a \\\"b\\\" <c>\"}\nBody.\n:::\n";
+    let out = extract_shortcodes(md).markdown_with_placeholders;
+    assert!(
+        out.contains(
+            "<div class=\"figure\" id=\"f1\" data-fig=\"teapot\" title=\"Tea\" aria-label=\"Legend\" data-intensity=\"0.6\" data-note=\"a &quot;b&quot; &lt;c&gt;\">"
+        ),
+        "{out}"
+    );
+}
+
+#[test]
 fn css_region_emits_blank_lines_around_body_for_markdown_processing() {
     // Pulldown-cmark needs a blank line between the `<div>` and the
     // body to treat the body as markdown rather than raw HTML.
@@ -3281,4 +3296,34 @@ fn warning_line_offset_shifts_css_region_lines() {
     let config = ParseConfig { warning_line_offset: 10, ..ParseConfig::default() };
     let result = extract_shortcodes_with_config(md, &config);
     assert_eq!(result.css_regions[0].line, 13);
+}
+
+#[test]
+fn a_button_with_an_attribute_block_is_kept_and_warned_about() {
+    let result = extract_shortcodes("::::buttons\n[Alone](/c/){role=secondary}\n::::\n");
+    match &result.extracted[0].shortcode {
+        Shortcode::Buttons(args) => assert_eq!(args.items.len(), 1),
+        other => panic!("expected Buttons, got {other:?}"),
+    }
+    assert!(
+        result.warnings.iter().any(|w| w.contains("[Alone](/c/){role=secondary}") && w.contains("ignores")),
+        "{:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn a_buttons_line_that_is_not_a_link_is_named_in_a_warning() {
+    let result = extract_shortcodes("::::buttons\n[One](/a/)\nTwo (/b/)\n::::\n");
+    match &result.extracted[0].shortcode {
+        Shortcode::Buttons(args) => assert_eq!(args.items.len(), 1),
+        other => panic!("expected Buttons, got {other:?}"),
+    }
+    assert!(result.warnings.iter().any(|w| w.contains("Two (/b/)")), "{:?}", result.warnings);
+}
+
+#[test]
+fn two_links_on_one_buttons_line_are_named_in_a_warning() {
+    let result = extract_shortcodes("::::buttons\n[a](/a/) [b](/b/)\n::::\n");
+    assert!(result.warnings.iter().any(|w| w.contains("[a](/a/) [b](/b/)") && w.contains("one link per line")), "{:?}", result.warnings);
 }

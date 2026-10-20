@@ -199,7 +199,7 @@ fn build_test_full_with_gates(
                 Ok((sealed, _cache_lease)) => {
                     let hashes_path = crate::moss_paths::MossPaths::new(root.path()).hashes();
                     if let Err(e) = sealed.write_to_disk(&hashes_path) {
-                        log::warn!("test seal+persist: failed to write hashes.json: {}", e);
+                        log::info!("test seal+persist: failed to write hashes.json: {}", e);
                     }
                 }
                 Err(e) => {
@@ -6211,7 +6211,7 @@ fn a_readable_page_with_denied_uid_write_keeps_its_consumed_read_evidence() {
 #[test]
 fn a_build_under_a_denied_source_write_session_leaves_every_source_byte_identical() {
     let index = "---\ntitle: Home\n---\nHi";
-    let note = "---\ntitle: Note\npartial: true\n---\nShared text";
+    let note = "---\ntitle: Note\n---\nShared text";
 
     let (dir, _cleanup) = create_test_dir();
     fs::write(dir.join("index.md"), index).unwrap();

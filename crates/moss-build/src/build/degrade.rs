@@ -113,7 +113,7 @@ pub fn apply_to_staging(
         let bytes = match std::fs::read(&full) {
             Ok(b) => b,
             Err(e) => {
-                log::warn!("degrade_failed_variants: failed to read {}: {}", full.display(), e);
+                log::info!("degrade_failed_variants: failed to read {}: {}", full.display(), e);
                 continue;
             }
         };
@@ -125,13 +125,13 @@ pub fn apply_to_staging(
             match crate::build::markdown::html_post::degrade_failed_variants(html, path, failed) {
                 Ok(r) => r,
                 Err(e) => {
-                    log::warn!("degrade_failed_variants: rewrite failed for {}: {}", path, e);
+                    log::info!("degrade_failed_variants: rewrite failed for {}: {}", path, e);
                     continue;
                 }
             };
         if let std::borrow::Cow::Owned(new_html) = rewritten {
             if let Err(e) = crate::build::io_utils::write_output(&full, new_html.as_bytes()) {
-                log::warn!("degrade_failed_variants: failed to write {}: {}", full.display(), e);
+                log::info!("degrade_failed_variants: failed to write {}: {}", full.display(), e);
                 continue;
             }
             // The manifest records the bytes the SITE will serve, not the

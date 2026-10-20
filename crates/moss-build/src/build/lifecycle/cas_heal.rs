@@ -103,7 +103,7 @@ pub(crate) fn rematerialize_with_oid(
         }
         Placement::Unverified(e) => HealOutcome::Unverified(e),
         Placement::Failed(e) => {
-            log::warn!("[cas-heal] re-link failed for {}: {}", staging_path.display(), e);
+            log::info!("[cas-heal] re-link failed for {}: {}", staging_path.display(), e);
             HealOutcome::NotCached
         }
     }
@@ -130,7 +130,7 @@ fn relink_from_cache(
             HealOutcome::Healed { oid }
         }
         Err(e) => {
-            log::warn!("[cas-heal] re-link failed for {}: {}", staging_path.display(), e);
+            log::info!("[cas-heal] re-link failed for {}: {}", staging_path.display(), e);
             HealOutcome::NotCached
         }
     }
@@ -281,7 +281,7 @@ impl StagedLinks {
             return;
         }
         if let Err(e) = self.current.save(&self.file) {
-            log::warn!("[cas-heal] could not save {}: {}", self.file.display(), e);
+            log::info!("[cas-heal] could not save {}: {}", self.file.display(), e);
         }
     }
 }

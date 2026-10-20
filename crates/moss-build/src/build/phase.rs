@@ -47,14 +47,17 @@
 //! - `target: "phase"` so users can filter (`MOSS_LOG_LEVEL=debug` shows
 //!   these; future: per-target level filter).
 //! - Per-phase budgets: a phase that overruns its budget additionally
-//!   logs WARN at 1× and again at 2× the budget, worded more insistently the
-//!   second time. Both tiers stay at WARN, never ERROR: the budgets are
+//!   logs INFO at 1× and again at 2× the budget, worded more insistently the
+//!   second time. Both tiers stay at INFO, never WARN or ERROR: a WARN line
+//!   is a problem the author can fix and fails `--strict`, and machine speed
+//!   is not one (the default CLI log level hides INFO; `MOSS_LOG_LEVEL=info`
+//!   shows it). The budgets are
 //!   initial guesses meant to be tuned as real timing data accrues (see
 //!   `PHASE_BUDGETS_MS` below), so an overrun is a performance note, not a
 //!   build failure, and it must never read as one — to a person scanning the
-//!   log, or to a tool that treats an ERROR line as something to fix. It is
-//!   still a real signal, not the noise the started/completed pair was, which
-//!   is why it isn't silent either. Observability ONLY — no panic, no changed
+//!   log, or to a tool that treats a WARN or ERROR line as something to fix.
+//!   It is still a real signal, not the noise the started/completed pair was,
+//!   which is why it is logged at INFO rather than DEBUG. Observability ONLY — no panic, no changed
 //!   return value, no bump to the CLI's problem count, and explicitly NO CI
 //!   wall-clock gate (shared-runner wall-clock tests are flake).
 //!
@@ -91,7 +94,7 @@ use std::time::{Duration, Instant};
 
 /// Per-phase build-time budgets in milliseconds.
 ///
-/// A phase elapsed >= budget logs WARN; >= 2x budget logs ERROR. Phases not
+/// A phase elapsed >= budget logs INFO; >= 2x budget logs INFO, worded harder. Phases not
 /// listed here are unbudgeted (no threshold logging) — add a row when adding
 /// a new `PhaseTrace::start(...)` call site.
 ///
@@ -142,7 +145,7 @@ const PHASE_BUDGETS_MS: &[(&str, u64)] = &[
 
 /// Budget classification for a completed (or aborted) phase.
 ///
-/// Both non-`Ok` tiers log at WARN (see `budget_log` below) — the name
+/// Both non-`Ok` tiers log at INFO (see `budget_log` below) — the name
 /// `Severe` is a classification, not a log level, so a future match on this
 /// enum can't reach for `log::error!` by reading the variant name alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,26 +189,26 @@ pub fn budget_class(phase: &str, elapsed: Duration) -> BudgetClass {
 ///
 /// Pure, like [`budget_class`], so the level and wording are unit-testable
 /// without a log-capture harness (none exists in this crate). Both overrun
-/// tiers log at `Warn`: the thresholds in `PHASE_BUDGETS_MS` are initial
+/// tiers log at `Info`: the thresholds in `PHASE_BUDGETS_MS` are initial
 /// guesses awaiting real timing data, so an overrun is a performance note,
-/// not a failure, and must never print as an `[ERROR]` line — that reads as
+/// not a failure, and must never print as a `[WARN]` or `[ERROR]` line — that reads as
 /// "the build failed" to a person scanning the log and to a coding agent
 /// that treats an ERROR line as something to fix, even though the build
 /// keeps going, returns success, and never counts this toward the CLI's
 /// `--strict` problem count.
-fn budget_log(phase: &'static str, elapsed: Duration) -> Option<(log::Level, String)> {
+pub(crate) fn budget_log(phase: &'static str, elapsed: Duration) -> Option<(log::Level, String)> {
     let budget = budget_ms(phase).unwrap_or_default();
     match budget_class(phase, elapsed) {
         BudgetClass::Ok => None,
         BudgetClass::Warn => Some((
-            log::Level::Warn,
+            log::Level::Info,
             format!(
                 "{phase} exceeded its {budget}ms budget ({elapsed:?}) — performance note, not \
                  a failure; initial budget, tune as timing data accrues"
             ),
         )),
         BudgetClass::Severe => Some((
-            log::Level::Warn,
+            log::Level::Info,
             format!(
                 "{phase} took {elapsed:?}, well past its {budget}ms budget — performance note, \
                  not a failure; initial budget, tune as timing data accrues"
@@ -527,23 +530,23 @@ mod tests {
     }
 
     #[test]
-    fn budget_log_warns_at_one_times_budget() {
+    fn budget_log_notes_at_one_times_budget() {
         let (level, message) = budget_log("scan", Duration::from_millis(2_000)).unwrap();
-        assert_eq!(level, log::Level::Warn);
+        assert_eq!(level, log::Level::Info);
         assert!(message.contains("scan"));
         assert!(message.contains("performance note, not a failure"));
     }
 
     #[test]
-    fn budget_log_at_two_times_budget_still_warns_not_errors() {
+    fn budget_log_at_two_times_budget_is_still_a_note() {
         // The line this whole fix is about: a phase running twice its
-        // (initial, self-admittedly-untuned) budget must log at WARN, never
-        // ERROR — before this fix, this branch logged `log::error!` and a
+        // (initial, self-admittedly-untuned) budget must log at INFO, never
+        // WARN or ERROR — before this fix, this branch logged `log::error!` and a
         // successful, large-site build read as failed.
         let (level, message) = budget_log("scan", Duration::from_millis(4_000)).unwrap();
         assert_eq!(
             level,
-            log::Level::Warn,
+            log::Level::Info,
             "a 2x budget overrun is a performance note, not a build failure"
         );
         assert!(message.contains("scan"));

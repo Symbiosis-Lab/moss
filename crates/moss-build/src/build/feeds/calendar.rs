@@ -291,7 +291,7 @@ impl CalendarPlan {
         warn_once("`timezone:` is not a time zone name (use Area/City), so these events' calendar times are floating", &problems.bad_zone);
         warn_once("`online:` is not an http(s) address, so it is left out of the calendar files", &problems.bad_online);
         if floating > 0 {
-            log::warn!(
+            crate::build::cli_output::log_note!(
                 "{floating} timed event(s) have no `timezone:`, so their calendar files carry floating local times \
                  that each calendar app reads in the viewer's own zone. Add `timezone: Area/City` to the event pages."
             );

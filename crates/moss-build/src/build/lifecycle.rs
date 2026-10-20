@@ -137,7 +137,7 @@ pub(crate) fn open_build_root_handle(mp: &MossPaths) {
     match root_identity::BuildRootHandle::open(&joined) {
         Ok(handle) => lock_for(mp).state().build_root_handle = Some(Arc::new(handle)),
         Err(e) if e.kind() == std::io::ErrorKind::Unsupported => {}
-        Err(e) => log::warn!(
+        Err(e) => log::info!(
             "build root handle: could not open {} — falling back to path-based resolution: {e}",
             joined.display()
         ),
@@ -162,7 +162,7 @@ pub(crate) fn held_build_root_path(root: &Path) -> Option<PathBuf> {
         Err(e) => {
             static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
             if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                log::warn!("build root handle open for {} but current_path() failed — falling back to the joined path: {e}", root.display());
+                log::info!("build root handle open for {} but current_path() failed — falling back to the joined path: {e}", root.display());
             }
             None
         }
@@ -478,7 +478,7 @@ pub(crate) fn withdraw_render(mp: &MossPaths, render: Option<u64>) {
         point(cell, &current);
     }
     st.shown_render = None;
-    log::warn!("serve: render #{} withdrawn — preview back on gen {}", render, current_gen);
+    log::info!("serve: render #{} withdrawn — preview back on gen {}", render, current_gen);
 }
 
 /// A build that may still write the object store or staging: held from
@@ -507,7 +507,7 @@ fn enter_writer(mp: &MossPaths, writers: fn(&mut FolderLifecycle) -> &mut usize)
     drop(st);
     let waited = started.elapsed();
     if waited > std::time::Duration::from_secs(1) {
-        log::warn!("cache write lease waited {} ms for a running cache GC", waited.as_millis());
+        log::info!("cache write lease waited {} ms for a running cache GC", waited.as_millis());
     }
     record
 }

@@ -268,7 +268,7 @@ pub fn handle_symlink_entry(
     let rel_path = match entry_path.strip_prefix(source_root) {
         Ok(rel) => rel.to_string_lossy().to_string(),
         Err(_) => {
-            log::warn!("[copy] symlink entry not under source_root; skipping: {}", entry_path.display());
+            log::info!("[copy] symlink entry not under source_root; skipping: {}", entry_path.display());
             return SymlinkOutcome::SkippedBroken { rel_path: entry_path.display().to_string() };
         }
     };
@@ -281,7 +281,7 @@ pub fn handle_symlink_entry(
     #[cfg(windows)]
     {
         let _ = (canonical_root, output_root);
-        log::warn!("[copy] Symlink preservation not supported on Windows; skipping {}", rel_path);
+        crate::build::cli_output::log_note!("[copy] Symlink preservation not supported on Windows; skipping {}", rel_path);
         SymlinkOutcome::SkippedUnsupportedPlatform { rel_path }
     }
 }
@@ -302,7 +302,7 @@ fn handle_symlink_unix(
     let target = match fs::read_link(entry_path) {
         Ok(t) => t,
         Err(e) => {
-            log::warn!("[copy] read_link failed for {}: {}", rel_path, e);
+            log::info!("[copy] read_link failed for {}: {}", rel_path, e);
             return SymlinkOutcome::SkippedBroken { rel_path: rel_path.to_string() };
         }
     };
@@ -374,7 +374,7 @@ fn handle_symlink_unix(
     // Ensure parent directory exists.
     if let Some(parent) = dest_path.parent() {
         if let Err(e) = crate::build::io_utils::create_output_dir_all(parent) {
-            log::warn!("[copy] failed to create parent dir for {}: {}", dest_path.display(), e);
+            log::info!("[copy] failed to create parent dir for {}: {}", dest_path.display(), e);
             return SymlinkOutcome::SkippedBroken { rel_path: rel_path.to_string() };
         }
     }
@@ -389,7 +389,7 @@ fn handle_symlink_unix(
     // Step 10: recreate the symlink, replacing whatever stands there without a
     // moment where the served alias is absent.
     if let Err(e) = crate::build::io_utils::replace_with_symlink(&slugified_target, &dest_path) {
-        log::warn!("[copy] failed to create symlink {} -> {}: {}", dest_path.display(), slugified_target.display(), e);
+        log::info!("[copy] failed to create symlink {} -> {}: {}", dest_path.display(), slugified_target.display(), e);
         return SymlinkOutcome::SkippedBroken { rel_path: rel_path.to_string() };
     }
 
@@ -515,12 +515,12 @@ pub fn handle_alias_entry(
     let dest_path = output_root.join(&rel_path);
     if let Some(parent) = dest_path.parent() {
         if let Err(e) = crate::build::io_utils::create_output_dir_all(parent) {
-            log::warn!("[copy] failed to create parent dir for {}: {}", dest_path.display(), e);
+            log::info!("[copy] failed to create parent dir for {}: {}", dest_path.display(), e);
             return Some(SymlinkOutcome::SkippedBroken { rel_path });
         }
     }
     if let Err(e) = crate::build::io_utils::replace_with_symlink(&relative_target, &dest_path) {
-        log::warn!("[copy] failed to create symlink for alias {}: {}", rel_path, e);
+        log::info!("[copy] failed to create symlink for alias {}: {}", rel_path, e);
         return Some(SymlinkOutcome::SkippedBroken { rel_path });
     }
 

@@ -206,7 +206,9 @@ fn format_build_root(phase: &str, observation: &RootObservation, swapped: Option
 /// line, or a start that could not be observed — and the line then carries no
 /// `swapped` at all, so an unknown start never reads as a swap.
 ///
-/// `swapped=true` logs at WARN; everything else logs at INFO, matching
+/// Every line logs at INFO, `swapped=true` included: a folder swapped under
+/// the build by a sync client is not something the author can fix by editing,
+/// so it must not print as a `[WARN]` the closing summary counts. Matches
 /// `log_build_summary`'s `target: "build"` convention.
 pub(crate) fn log_build_root(
     build_root: &Path,
@@ -216,11 +218,7 @@ pub(crate) fn log_build_root(
     let observation = observe(build_root);
     let swapped = since_start.map(|start| Some(start) != observation.identity);
     let line = format_build_root(phase, &observation, swapped);
-    if swapped == Some(true) {
-        log::warn!(target: "build", "{}", line);
-    } else {
-        log::info!(target: "build", "{}", line);
-    }
+    log::info!(target: "build", "{}", line);
     observation.identity
 }
 

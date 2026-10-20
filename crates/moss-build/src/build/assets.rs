@@ -8,3 +8,4 @@ pub mod binary_resolver;
 pub mod download;
 pub mod git;
 pub mod paths;
+pub mod theme_modules;

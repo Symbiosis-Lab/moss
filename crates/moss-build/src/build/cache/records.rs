@@ -71,7 +71,7 @@ static REPORTED: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(|| Mutex::new
 fn report_once(path: &Path, what: &str) -> bool {
     let first = REPORTED.lock().map_or(true, |mut seen| seen.insert(path.to_path_buf()));
     if first {
-        log::warn!("[cache] record {} {}", path.display(), what);
+        log::info!("[cache] record {} {}", path.display(), what);
     }
     first
 }

@@ -35,7 +35,7 @@ Inspect built HTML under `.moss/build.nosync/current/` (the active frozen genera
 the `.css` files under its `_moss/` are minified build output — use
 `moss describe --css <selector>` instead of reading them.
 
-**Check your work.** `moss build` exits 0 even when it reported problems; add `--strict` to make warnings fail the build. `moss list [--json]` is the inventory of what actually got published — url, kind, date, and the LANG column that confirms a new language tree registered. Use `moss rename <old> <new>` for renames: it rewrites every `[[wikilink]]` and `[text](link)` project-wide, which hand-editing will not.
+**Check your work.** `moss build` exits 0 even when it reported problems; add `--strict` to make warnings fail the build. `--strict` fails on problems, which the author can fix in the folder; notes are advice and never fail it. A problem prints as `[WARN]` and counts; a note prints as `[NOTE]` (a dead root-relative link is one, since a proxy may serve the path; so is a file the build left out because it is still downloading from cloud storage, or a suspended process); environment, timing and cache notes log at INFO and are hidden unless `MOSS_LOG_LEVEL=info`. A build's last status line is `Built N pages (M skipped) · K problems`, plus ` · J notes` when there are any; `moss: K problems reported above` follows it only when K is not 0, and is the line to grep for. `moss list [--json]` is the inventory of what actually got published — url, kind, date, and the LANG column that confirms a new language tree registered. Use `moss rename <old> <new>` for renames: it rewrites every `[[wikilink]]` and `[text](link)` project-wide, which hand-editing will not.
 
 **Before a restructure, save a version.** Moving pages, rewriting the theme, or deleting sections is safer with a named snapshot first: `moss history --save "before restructuring the nav"`. Both `--save` and `--restore` build the whole site first — the same build `moss deploy` runs, minus the publish — so a build that fails refuses to save or restore, and a slow build makes either one just as slow. `moss history [--json]` lists what's saved, newest first — every landed publish gets one automatically, `--save` adds one on demand. `moss history <path> --restore --at <id> [--copy]` brings back one page (`--copy` writes it alongside the current file instead of overwriting it); `moss history --restore --at <id> --yes` brings back the whole site (`--yes` is required, since it can move files to the Trash). A restore saves its own version of the current state first, so a restore is itself undoable the same way. `<id>` is a version's id from the timeline (or an unambiguous prefix), and `--json` includes it. This history lives in `.moss/history/` inside the site folder itself, gitignored and not part of the published output — being inside the folder, it travels along with whatever sync the site already uses, the same as `.moss/config.toml`.
 
@@ -171,12 +171,17 @@ For shortcodes and partials (content reuse, not styling tiers), see
   `<section>` landmark with an `aria-label`, or a stable hook where a positional
   selector like `p:first-of-type` would silently restyle the wrong element once
   the page grows. Say which of those applies, in a comment, at the point of use.
+  A `data-*` hook for your own script is the stated exception: write it as
+  `::: {.figure fig=teapot}` (which emits `data-fig="teapot"`), or as a raw
+  `<svg data-figure="…">`/`<canvas>` where the element itself is the drawing.
+  Drawings and your own JavaScript: `moss guide authoring`.
 - Never write inline `style="..."` — put the rule in `.moss/theme/style.css`.
 - Images and media use the standard form: `![](photo.jpg)`, written as a path relative to the page. Wikilinks (`![[photo.jpg]]`) work too and find the file by name. Either way moss resolves the file, so never write a site-absolute or `https://` address for a file in the folder.
 - A deck (standfirst) is a `> blockquote` as the first thing in the body. moss
   injects the title itself, so the deck sits directly under it — do not write a
   `# Title` above the blockquote to position it.
-- Repeated blocks become a partial, transcluded with `![[partial-name]]`.
+- Repeated blocks become a partial, transcluded with `![[partial-name]]`; give the file `partial: true` so it is not also published as a page.
+- In `footer.md`, each heading starts a column: the heading and what follows it, up to the next heading of the same or higher level, become one `<section>`, and the default theme lays the sections side by side. A `footer.md` with no headings stays one flow of paragraphs. See `moss guide authoring`.
 - Frontmatter is for metadata and declared controls, never prose. Some of those
   controls *are* visual — layout, cover, children rendering, content width — so
   check `.frontmatter[]` before reaching for CSS to do something a declared

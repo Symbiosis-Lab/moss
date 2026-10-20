@@ -334,7 +334,7 @@ pub fn emit_math_pngs(
             match rasterize_png(&img) {
                 Ok(png) => write_atomic(&disk, &png)?,
                 Err(e) => {
-                    log::warn!("math png rasterize failed for {tex:?}: {e}");
+                    log::info!("math png rasterize failed for {tex:?}: {e}");
                 }
             }
         }

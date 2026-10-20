@@ -118,7 +118,7 @@ fn store_comment_sync_state(folder_path: &str, state: &CommentSyncState) {
     if let Err(e) = write() {
         // Advisory state only — losing a write degrades the settings row's
         // status line, never the sync itself. Log and move on.
-        log::warn!(target: "sync", "could not persist comment-sync state: {e}");
+        log::info!(target: "sync", "could not persist comment-sync state: {e}");
     }
 }
 
@@ -260,7 +260,7 @@ pub fn spawn_native_process_sync(
                     advisories,
                 });
             }
-            Err(e) => log::warn!(target: "sync", "native-process task panicked: {:?}", e),
+            Err(e) => log::info!(target: "sync", "native-process task panicked: {:?}", e),
         }
     }));
 }
@@ -313,7 +313,7 @@ fn run_native_process_sync(
                     log::info!(target: "sync", "reviews: fetched metadata for {} articles in {:?}", n, phase_start.elapsed());
                 }
             }
-            Err(e) => log::warn!(target: "sync", "reviews fetch failed after {:?}: {}", phase_start.elapsed(), e),
+            Err(e) => log::info!(target: "sync", "reviews fetch failed after {:?}: {}", phase_start.elapsed(), e),
         }
     }
 
@@ -367,7 +367,7 @@ fn run_native_process_sync(
                     log::info!(target: "sync", "comments: synced {} articles against {} in {:?} (changed={})", comment_articles.len(), server_url, phase_start.elapsed(), outcome.changed);
                 }
                 Err(e) => {
-                    log::warn!(target: "sync", "comment sync failed ({:?}): {}", e.kind, e.detail);
+                    log::info!(target: "sync", "comment sync failed ({:?}): {}", e.kind, e.detail);
                     advisories.push(comment_sync_failure_advisory(&e));
                 }
             }
@@ -425,7 +425,7 @@ fn spawn_watchdog(label: &'static str, budget: Duration) -> Watchdog {
             std::thread::sleep(Duration::from_millis(500));
         }
         if !cancelled_clone.load(std::sync::atomic::Ordering::SeqCst) {
-            log::warn!(
+            log::info!(
                 target: "sync",
                 "watchdog: '{}' is still running after {:?} — likely a slow/unreachable upstream. \
                  Build is unaffected; this sync is in the background.",

@@ -52,6 +52,7 @@ struct NavEntry<'a> {
     url_path: &'a str,
     weight: Option<i32>,
     label: &'a str,
+    href: Option<&'a str>,
 }
 
 /// Per-language digest of "which documents does this language's nav bar
@@ -78,6 +79,7 @@ pub fn nav_globals(documents: &[ParsedDocument], has_content_folders: bool) -> B
             url_path: &doc.url_path,
             weight: doc.weight,
             label: &doc.label,
+            href: crate::build::scan::page_map::nav_external_href(&doc.raw_frontmatter),
         });
     }
     by_lang

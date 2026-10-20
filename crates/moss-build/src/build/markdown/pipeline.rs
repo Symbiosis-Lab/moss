@@ -780,6 +780,14 @@ pub fn process_markdown_file(
     let injects_into_every_page =
         crate::build::footer::targets_a_slot(file_path, frontmatter.slot.as_deref());
 
+    // `partial: true` joins the reserved name here: a transclusion source is
+    // parsed like any page but never emitted, listed, or given a folder index,
+    // and every one of those gates already keys off this flag.
+    let is_slot_only = crate::build::footer::is_slot_only(
+        file_path,
+        crate::build::footer::ShipFacts { partial: frontmatter.partial == Some(true) },
+    );
+
     let resolve_link = |href: &str| -> String {
         // By the time hrefs reach this closure, `moss-core`'s resolve pipeline
         // has already routed every resolvable link through
@@ -1007,7 +1015,7 @@ pub fn process_markdown_file(
     // Advisories are plain log lines, not problems: the page builds the same
     // either way, so `--strict` does not count them.
     for a in &doc.advisories {
-        log::warn!("[{}] {}", file_path, a);
+        crate::build::cli_output::log_note!("[{}] {}", file_path, a);
     }
 
     // Inline #tags are read from the author's OWN parsed
@@ -1131,10 +1139,19 @@ pub fn process_markdown_file(
 
     // An image with no alt and no caption is invisible to a screen reader. It
     // is a prompt to describe the image, not a defect in the build, so it goes
-    // to the log only: `log_warn_problem!` would make `--strict` fail every
+    // to the closing line's notes: `log_warn_problem!` would make `--strict` fail every
     // existing site that has a decorative or not-yet-described image.
     for href in moss_core::ast::images_without_text(&doc) {
-        log::warn!("Accessibility: image '{href}' on '{file_path}' has no alt text — write it in the brackets: ![describe the image]({href})");
+        crate::build::cli_output::log_note!("Accessibility: image '{href}' on '{file_path}' has no alt text — write it in the brackets: ![describe the image]({href})");
+    }
+
+    // 5b. A footer (a slot document that is never emitted as a page) is injected
+    //    beside every page's own headings: its headings carry no id, and each
+    //    one starts a column. A `partial: true` file is a slot document too,
+    //    but only one that targets a slot is a footer.
+    if is_slot_only && injects_into_every_page {
+        moss_core::ast::clear_heading_ids(&mut doc);
+        crate::build::footer::section_footer_blocks(&mut doc);
     }
 
     // 6. Render the typed AST to HTML through `PipelineHooks`. This is THE
@@ -1240,7 +1257,6 @@ pub fn process_markdown_file(
     // suppression through `HeadingInputs::slot_only` rather than the
     // pre-2026-05-28 frontmatter-synthesis hack (`title: ""` injected by the
     // now-deleted `render_footer_pages_from_disk`).
-    let is_slot_only = crate::build::footer::is_excluded_from_pages(file_path);
     let heading_inputs = moss_core::heading::HeadingInputs {
         file_path,
         frontmatter_title: frontmatter.title.as_deref(),
@@ -1620,7 +1636,7 @@ pub fn process_markdown_file(
         // `footer-left` slot. The flag is set structurally (by filename),
         // not from any YAML key. See PR7b's
         // typed-AST mirror on `moss_core::ast::Document::slot_only`.
-        slot_only: crate::build::footer::is_excluded_from_pages(file_path),
+        slot_only: is_slot_only,
         kind: if is_index_file {
             PageKind::Folder
         } else {

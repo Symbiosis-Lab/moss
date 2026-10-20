@@ -843,6 +843,18 @@ mod external_url_validation_tests {
         assert!(!is_valid_external_url(""));
     }
 
+    #[test]
+    fn nav_target_accepts_mail_tel_anchor_and_site_paths_but_not_scripts() {
+        for ok in ["https://a.example", "mailto:a@example.com", "tel:+15550100", "#services", "/#services", "/p#x"] {
+            assert!(is_valid_nav_target(ok), "{ok}");
+        }
+        for bad in ["javascript:alert(1)", "data:text/html,x", "//evil.example", "relative/path", ""] {
+            assert!(!is_valid_nav_target(bad), "{bad}");
+        }
+        // The linkblog guard stays http(s)-only.
+        assert!(!is_valid_external_url("mailto:a@example.com"));
+    }
+
     // --- external_url() accessor -----------------------------------------
 
     fn make_fm(key: &str, val: &str) -> std::collections::BTreeMap<String, serde_json::Value> {

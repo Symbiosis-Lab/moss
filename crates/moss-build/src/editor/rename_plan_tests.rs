@@ -1493,6 +1493,22 @@ fn moving_a_linked_page_where_it_is_not_served_refuses_and_says_why() {
     assert!(err.contains("blog/post.md") && err.contains("would not be served as a page"), "{err}");
 }
 
+// A `partial: true` page is never served, so it holds no address: a real page
+// that declares the same `url:` keeps it, and renaming that page does not make
+// a link to the address ambiguous.
+#[test]
+fn a_partial_page_does_not_hold_the_address_a_real_page_serves() {
+    let (_t, root) = site(&[
+        ("a.md", "---\npartial: true\nurl: /spot/\n---\n# Block\n"),
+        ("b.md", "---\nurl: /spot/\n---\n# Real\n"),
+        ("blog/post.md", "[l](/spot/)\n"),
+    ]);
+
+    do_move(&root, "b.md", "c.md");
+
+    assert_eq!(r(&root, "blog/post.md"), "[l](/spot/)\n");
+}
+
 // `/` is the site's front door whichever file is served there, so a link to it
 // stays `/` when the home page is renamed.
 #[test]

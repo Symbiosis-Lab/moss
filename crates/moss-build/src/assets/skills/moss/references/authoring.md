@@ -177,6 +177,26 @@ Where a file goes follows what owns it. `.moss/theme/` is the site's theme, for 
 
 A markdown page can own a script and a stylesheet too: put `essay.js` and `essay.css` in the same folder as `essay.md`, with the same name, and that page, and no other, links them. The stylesheet goes into the page's `<head>` after the theme's, in the same `themes` layer, so at equal specificity the page's rule wins; the script loads as a module after the theme's script. Both files are still served at their own address, byte for byte, and a folder's home page owns `index.js` and `index.css` beside it by the same rule (the file name is the page's source file name, so `notes/notes.md` owns `notes/notes.js`). A language edition's page owns the files in its own folder. A raw HTML page owns its whole document and gets nothing added.
 
+## Your own JavaScript and drawings
+
+`.moss/theme/script.js` is one classic script, emitted as a plain `<script src>` at the end of `<body>` on every page that uses the moss shell, after moss's own scripts. It has no `type="module"`, no `defer` and no `async`, so a top-level `import … from` statement is a syntax error. A dynamic `import("./vendor/kernel.js")` works: it resolves against the script's own address, and every other file under `.moss/theme/` is served byte for byte at `/_moss/theme/<path>`, so `.moss/theme/vendor/kernel.js` is `/_moss/theme/vendor/kernel.js` and the relative path above reaches it. Every `.js` and `.mjs` file in `.moss/theme/` is served from a content-hashed URL through an import map in `<head>`; `script.mjs` also loads as a module. So `import("./vendor/kernel.js")` in `script.js`, or `import { drawFigure } from "./figures.js"` in `script.mjs` (or in a file it imports), loads `/_moss/theme/…/figures.<hash>.js`, and editing `figures.js` changes only that address, not the entry's. `script.js` still runs first as a classic script; the module is deferred, strict and scoped to its file, so hand a value to the page with `window.x = …`, and a page opened straight from disk with `file://` will not run it. Every script file is published twice, plain (the verbatim mirror above) and hashed, so a large vendored library is uploaded twice; a file that is not UTF-8 is left unhashed with a warning. Images, fonts, wasm and other non-script files stay unhashed under `/_moss/theme/`, and a theme with no script file besides `script.js` gets no import map.
+
+Raw HTML in a page passes through untouched: `<svg>`, `<canvas>`, `<script>`, inline `<button>`, `data-*` attributes and event handlers all reach the built page as written. Markdown inside a raw HTML block is not processed. A fenced div's `key=value` pairs are written onto the div, a `data-` prefix on every key that is not a standard attribute (see Shortcodes above), which is the way to hand a value to your script without raw HTML.
+
+A drawing belongs in a partial (`partial: true`, transcluded with `![[Fig teapot]]`) so the page stays readable. An HTML block must start on its own line and contain no blank line inside. If an `<svg …>` open tag shares its line with the markup after it, CommonMark treats it as inline text and wraps it in a `<p>`, which applies the paragraph's reading-width rule to the drawing. A blank line inside the SVG ends the HTML block, and the rest of the file is read as markdown, so keep the drawing free of blank lines:
+
+```markdown
+---
+partial: true
+---
+<svg viewBox="0 0 400 320" data-figure="teapot" role="img" aria-label="A teapot on a table">
+<path d="M40 220h320" />
+<circle cx="120" cy="220" r="18" />
+</svg>
+```
+
+For an animated or interactive drawing, write the still version in the partial and let the theme script enhance it: it finds `svg[data-figure]`, reads `dataset.figure`, and replaces or animates the still. With no script, or when the script bails out, the reader sees the static drawing. Honour reduced motion in the script itself, `window.matchMedia("(prefers-reduced-motion: reduce)").matches`, and leave the static drawing in place when it is true. moss gives no motion switch of its own: reduced motion is the site's job, in CSS with a `prefers-reduced-motion` media query and in script with `matchMedia`.
+
 ## Embedding media
 
 All media via embeds — never raw `<img>`, `<video>`, or `<audio>`. The standard Markdown form is the default; the wikilink form renders the same thing:
@@ -266,7 +286,9 @@ moss describe --json | jq -r '.components[] | select(.authorable) | .class'
 
 Each entry carries `example_markdown`, which is the invocation moss itself tests — copy that shape rather than reconstructing one. Add a site-specific class to a shortcode invocation and style the class; keep the shortcode generic.
 
-A hero's words belong on its image: the markdown written inside the `:::hero {…} … :::` fence overlays the picture, and that is what makes it a hero rather than an illustration with a heading. The overlay sits bottom-start on every overlaid layout by default; `align=end` moves it to the inline-end edge instead — the right in a left-to-right page, the left in a right-to-left one; `align=center` sets the words in the middle of the picture with centred text, for a short title over a calm image. The overlay itself sits on a panel tinted from the image's own colour (`--moss-hero-panel-bg`, computed per image) and sized to its own content, never the hero's full height, so a busy photo with no calm corner no longer costs legibility and a short line of text never washes out most of the picture. Cropping still matters for which part of the picture shows: set `--moss-hero-object-position` so a deliberate subject (a face, a line of text in the photo itself) lands where you want it, and look at the result at desktop and phone width in light and dark mode. The hero frame grows to fit however much the overlay holds, so a long paragraph is never clipped by a fixed-height box. Phones show the image whole with the words below it unless the hero carries `mobile=overlay`, and under that mode the panel is already full width, so `align=end` makes no visible difference there; that mode also always keeps a band of the image showing above the panel — `--moss-hero-mobile-band`, default `min(45vb, 320px)` — so a long paragraph's panel never covers the whole picture. Move the crop first; when the crop cannot move the subject out from under the words — a portrait image already spanning the full width of a wide frame cannot move sideways — put the words at the other end with `align=end` instead. An image-only hero (`:::hero {image=…}` with nothing between the fences) or `caption="…"` is for an image that must be seen whole, which is a plate (next paragraph). `header=over` on the page's opening hero (`:::hero {image=… header=over}`) lays the site header over the photo instead of above it, in light type, for a page whose first block is the picture.
+To pin an anchor id, wrap the section in a fenced div: `::: {#veterans}` … `:::` emits `<div id="veterans">`, and `{#id}` after a heading is not supported (it renders as literal text). A heading's own id is its text slugified with punctuation kept (`## Block One.` becomes `block-one.`), matching Obsidian, so link to it exactly as it renders.
+
+A hero's words belong on its image: the markdown written inside the `:::hero {…} … :::` fence overlays the picture, and that is what makes it a hero rather than an illustration with a heading. The overlay sits bottom-start on every overlaid layout by default; `align=end` moves it to the inline-end edge instead — the right in a left-to-right page, the left in a right-to-left one; `align=center` sets the words in the middle of the picture with centred text, for a short title over a calm image. The overlay itself sits on a panel tinted from the image's own colour (`--moss-hero-panel-bg`, computed per image) and sized to its own content, never the hero's full height, so a busy photo with no calm corner no longer costs legibility and a short line of text never washes out most of the picture. Cropping still matters for which part of the picture shows: set `--moss-hero-object-position` so a deliberate subject (a face, a line of text in the photo itself) lands where you want it, and look at the result at desktop and phone width in light and dark mode. The hero frame grows to fit however much the overlay holds, so a long paragraph is never clipped by a fixed-height box. Phones show the image whole with the words below it unless the hero carries `mobile=overlay`, and under that mode the panel is already full width, so `align=end` makes no visible difference there; that mode also always keeps a band of the image showing above the panel — `--moss-hero-mobile-band`, default `min(45vb, 320px)` — so a long paragraph's panel never covers the whole picture. Move the crop first; when the crop cannot move the subject out from under the words — a portrait image already spanning the full width of a wide frame cannot move sideways — put the words at the other end with `align=end` instead. An image-only hero (`:::hero {image=…}` with nothing between the fences) or `caption="…"` is for an image that must be seen whole, which is a plate (next paragraph). To set the crop on the image itself, quote the whole value: `image="cover.jpg|cover top"`. Unquoted, the `|` ends the value, the attribute block fails to parse, and the hero loses its image; the build warns, and `--strict` fails on it. `header=over` on the page's opening hero (`:::hero {image=… header=over}`) lays the site header over the photo instead of above it, in light type, for a page whose first block is the picture.
 
 `:::hero {.plate}` (2026-09-11) is a moss default, not a per-site class to style: it renders the hero image whole — never cropped, never enlarged past the resolution it was delivered at, shrunk to fit the column instead. Reach for it over a plain hero whenever the image's own shape, not the page layout, should decide how large it appears — an artwork, manuscript page, or photograph reproduction where cropping would cut off part of the object, and especially a wide or tall outlier (a handscroll, a long strip) that a viewport-relative `100vw` sizing would otherwise fetch too small and stretch blurry. A plain `:::hero` (or `:::hero {caption="…"}`, which already avoids cropping but still bounds the frame at the default height cap) stays right for a banner meant to fill its slot.
 
@@ -308,6 +330,8 @@ A set of photos meant to be seen together is a `:::gallery` block with one image
 A `:::grid` cell holding nothing but a page reference becomes one of two different things depending on the `!`. `![[page.md]]` is a transclusion — it inlines that page's markdown as the cell's own content, same as a partial anywhere else in a body. `[[page]]` or `[[page|Custom Title]]`, alone in the cell, becomes a **card** instead: the page's own cover, title and description, styled the same way a folder listing cards its children. The cover is the page's listing picture (below); a page with none shows a card with no picture. The title is the page's own (`|Custom Title` overrides it), and the text is the page's `description:` field or, when that is empty, its first `byline:` row — never an excerpt pulled from the body, so a page with neither shows a card with no text under its title. (Folder listings in list and summary styles are different: they use `description:`, then the first `byline:` row, then an excerpt from the body.) A folder shown as a card shows its folder note's `description:` in a paragraph under its title, with its page count beside the title, so a folder of folders reads like a contents page. A card's cover is cropped to a fixed box by default (`4 / 3`), same as any other photograph; a cover with lettering or a full-frame subject wants to be shown whole instead, which is a scope override (rung 4), not a per-card frontmatter switch — set `--moss-card-cover-ratio` to the image's own ratio and `--moss-card-cover-fit: contain` on `.moss-card-cover` (or a narrower scope) rather than cropping it.
 
 A fence with a name or `{attributes}` opens a block, and a bare line of three or more colons closes the innermost open block; the number of colons does not matter, so use more only if you like the look. `::: {.intro}` around `::: {.figure}` nests, every closer can be `:::`, and `::::grid 2` around `::: {.note}` reads the same way. An opener nothing closes, or a closer with nothing left to close, is a build warning that names the line.
+
+A fenced div's `key=value` pairs are written onto the `<div>` by the rule pandoc's HTML5 output uses. A key that is a standard HTML attribute (`title`, `lang`, `dir`, `style`, `width`, `hidden`, `tabindex`, the `on…` event handlers and the rest of pandoc's list), starts with `aria-` or `data-`, or contains a `:`, is written as it is; any other key gets a `data-` prefix. So `::: {.figure fig=teapot title="A teapot" aria-label="Legend"}` emits `<div class="figure" data-fig="teapot" title="A teapot" aria-label="Legend">`. `id=` and `class=` written as pairs are not the fence's id and class (use `#id` and `.class`): they become `data-id` and `data-class`. The `data-` ones are hooks for your own CSS and script (`[data-fig="teapot"]`). Pairs come out in source order, with the value escaped.
 
 ### Partials
 
@@ -363,6 +387,33 @@ Thanks for joining {{site_name}}. New posts arrive at {{site_url}}.
 ```
 
 `subject:` is required; a file without one sends nothing and the build warns. `preview:` is the line mail apps show beside the subject. `from:` and `reply_to:` are optional. The `from:` address is used only when the site's mosspub.com hosting has verified that sending domain; otherwise mail goes out from its default, and replies still reach the `reply_to:` address if you set one. The body is markdown; `%%comments%%` are removed, so notes to yourself do not reach subscribers. Three variables are filled in per subscriber: `{{site_name}}`, `{{site_url}}` and `{{email}}`. An unsubscribe line is always added at the end for you, so do not write one. When the site is published to mosspub.com hosting, the build writes the file to `.moss-email/welcome.<language>.json` (`welcome.default.json` for the top-level one) and publishes it with the site; on any other host the letter is not used and nothing is written.
+
+Mark the file `partial: true` so it is only a source: the pages that embed it show its content, but it is never built, so it gets no URL and is absent from nav, sitemap, feeds, search, `moss list` and the folder listings (a folder holding only partials gets no index page). Without it, the partial publishes as a page of its own. Example, `figures/map.md`: `---` / `partial: true` / `---` / `<svg>…</svg>`, embedded with `![[figures/map]]`.
+
+### The footer
+
+`footer.md` at the site root (or `<lang>/footer.md` for a language tree) fills the footer of every page. In it, each heading starts a column: the heading and everything under it, up to the next heading of the same or a higher level, are wrapped in one `<section>`, and content before the first heading is a section of its own. A deeper heading stays inside the section it falls in. The default theme lays sibling sections out as columns that fill the page width and stack on a narrow screen; style them as `footer.container > section`. Only headings written directly in the file split it: one inside a list or a quote stays with its parent, and raw HTML never changes where it splits. Anything after a `---` line on its own is the bottom row: a `<div class="footer-bottom">` after the columns (the line itself is not drawn), laid out as one row with space between its blocks that wraps on a narrow screen. With a `---` but no headings, what is above it is one column. A `footer.md` with no headings and no `---` is not sectioned and stays one flow of paragraphs in the reading column.
+
+```markdown
+Short line about the site.
+
+## Site
+
+- [[Home]]
+- [[About]]
+
+## Contact
+
+[hello@example.com](mailto:hello@example.com)
+
+---
+
+Copyright
+
+[Privacy](/privacy)
+```
+
+Footer headings written in markdown carry no `id` and no permalink link, whatever `heading_anchors` says, so a footer `## Contact` cannot collide with a page's own `## Contact`. Do not link to a footer heading by `#fragment`. A heading you write as raw HTML, `<h2 id="mine">`, keeps the id you gave it.
 
 ### Term kinds
 
@@ -585,6 +636,32 @@ A section can show a shorter name in the nav bar than its title: `nav_label: Rea
 Breadcrumbs are switched on for the whole site by `breadcrumb: true` on the home page (left unset, they appear only when the site has no nav items), and on any other page `breadcrumb: false` hides them for that page while `true` does nothing. `breadcrumb: label` on the home page shows only the parent section, as a small link above each page's title, instead of the trail in the header.
 
 `url:` sets where a page is published, always inside the page's own folder: in `x/page.md`, `url: share/ID` publishes at `x/share/id/` and `url: a/b` at `x/a/b/`. A `/` is kept as a path separator, each part is cleaned up on its own (lowercased, for one), and `..` parts are dropped. A leading `/` is dropped too, not read as the site root: `url: /a/b` in `x/page.md` also publishes at `x/a/b/`, never at `/a/b/`.
+
+A nav bar entry can point somewhere other than its page: a page that is in the nav (`nav: true`) and sets `external_url:` makes its entry link to that value — `https://…`, `mailto:`, `tel:`, a section anchor `#services` or a site path `/#services` — and `nav_label` still names it. The page itself is still built at its own URL; give it `listed: false` if it should stay out of listings. Style the entry with a selector like `.nav-links a[href^="mailto:"]`. This applies to the header nav only: the footer links keep the page's own URL, and cards, canonical links and the sitemap only honour an `https://` or `http://` value, so a `mailto:`, `tel:` or `#anchor` there is used by the nav entry alone.
+
+```yaml
+---
+title: Contact
+nav: true
+weight: 9
+nav_label: Write to us
+external_url: "mailto:hello@example.com"
+---
+```
+
+A header link needs no page behind it. A file with `partial: true` is never a page; if it also has `nav: true` and `external_url`, it appears in the header nav as a link to that URL. It sorts with the other nav entries by `weight` like pages do, is labelled by `nav_label` or `title`, and is absent everywhere else (sitemap, feeds, search, `llms.txt`, listings), as every partial is. Use it for a link to a section of the home page or to a mail address:
+
+```yaml
+---
+title: Menu
+partial: true
+nav: true
+weight: 2
+external_url: "/#menu"
+---
+```
+
+A partial with `nav: true` and no `external_url` adds nothing to the nav, and the build warns with the file's name. Write the header link's frontmatter between `---` lines, as above: `external_url` is read from fenced frontmatter only, so in the fence-less `key: value` form the link is not added.
 
 `series:` on a folder index turns on prev/next chrome for its children: `true` follows the folder's own order, a list of wikilinks declares an explicit sequence, `false` turns it off. Set `series: false` on a page inside the folder instead, and that one page drops out of the reading order — no prev/next of its own, and it stops being any sibling's prev or next. Declaring `sort:` as an explicit list, or as `sort: weight`, turns `series` on by default.
 

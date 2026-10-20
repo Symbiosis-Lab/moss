@@ -622,7 +622,7 @@ impl ParseSession {
         // Merge, don't overwrite: the background image/video workers own
         // disjoint keys in the same index (see `HashIndex::save_merging`).
         if let Err(e) = self.hasher.into_index().save_merging(&self.index_path) {
-            log::warn!(target: "incremental", "failed to save hash index: {e}");
+            log::info!(target: "incremental", "failed to save hash index: {e}");
         }
     }
 }

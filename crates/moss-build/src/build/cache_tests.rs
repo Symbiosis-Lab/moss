@@ -2750,7 +2750,7 @@ fn gc_deletes_nothing_when_a_mark_input_is_unreadable() {
 
 /// Log lines of every thread, so a test can say a path warned or did not. Keyed
 /// on the unique oid a test puts in the message.
-static LOG_LINES: std::sync::Mutex<Vec<(log::Level, String)>> = std::sync::Mutex::new(Vec::new());
+static LOG_LINES: std::sync::Mutex<Vec<(log::Level, String, String)>> = std::sync::Mutex::new(Vec::new());
 
 struct Capture;
 
@@ -2759,9 +2759,17 @@ impl log::Log for Capture {
         true
     }
     fn log(&self, record: &log::Record) {
-        LOG_LINES.lock().unwrap_or_else(|e| e.into_inner()).push((record.level(), record.args().to_string()));
+        LOG_LINES.lock().unwrap_or_else(|e| e.into_inner()).push((record.level(), record.args().to_string(), record.target().to_string()));
     }
     fn flush(&self) {}
+}
+
+fn install_capture() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = log::set_logger(&Capture);
+        log::set_max_level(log::LevelFilter::Debug);
+    });
 }
 
 fn logged_at(level: log::Level, about: &str) -> bool {
@@ -2771,12 +2779,29 @@ fn logged_at(level: log::Level, about: &str) -> bool {
 /// How many lines of `level` mention `about`. The first call installs the
 /// capturing logger, so a test that wants lines from a build calls this first.
 pub(crate) fn logged_count(level: log::Level, about: &str) -> usize {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        let _ = log::set_logger(&Capture);
-        log::set_max_level(log::LevelFilter::Debug);
-    });
-    LOG_LINES.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(l, m)| *l == level && m.contains(about)).count()
+    install_capture();
+    LOG_LINES.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(l, m, _)| *l == level && m.contains(about)).count()
+}
+
+/// Whether a line about `about` went out through `log_note!` (the `#note` target).
+fn logged_as_note(about: &str) -> bool {
+    LOG_LINES.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(_, m, t)| t.ends_with("#note") && m.contains(about))
+}
+
+/// A page still in the cloud is left out of the build, and a person waiting on
+/// the build needs to be told why: a `[NOTE]`, not an INFO line the command
+/// line hides, and not a problem the author could fix in the folder.
+#[test]
+fn a_page_still_in_the_cloud_is_a_note() {
+    install_capture();
+    let dir = make_test_dir("cloud_page_is_a_note");
+    let page = write_temp_file(&dir, "cloud-note-page-7f3a.md", b"# Hi");
+    let _cloud = crate::build::icloud::pretend::evicted(&page);
+    let deferred = std::sync::Mutex::new(Vec::new());
+    let evidence = crate::build::cloud_ledger::InputEvidence::new(&dir);
+    assert_eq!(crate::build::cloud_readiness::read_page_source(&page, &deferred, &evidence), None);
+    assert!(logged_as_note("cloud-note-page-7f3a.md"), "a skipped cloud placeholder must reach the person waiting");
+    assert!(!logged_at(log::Level::Info, "cloud-note-page-7f3a.md"), "and must not be only an INFO line");
 }
 
 /// A store holding one blob of `source`'s bytes, with the blob's file replaced
@@ -3023,7 +3048,8 @@ fn a_cheap_lookup_of_a_blob_in_the_cloud_is_observational() {
 
     let (store, _src, empty, _dir) = store_with_blob("cheap_lookup_empty", b"other bytes", b"");
     assert_eq!(store.get_path(&empty), None);
-    assert!(logged_at(log::Level::Warn, &empty), "a downloaded blob that is unusable still warns");
+    assert!(logged_at(log::Level::Info, &empty), "a downloaded blob that is unusable is noted");
+    assert!(!logged_at(log::Level::Warn, &empty), "a damaged cache is not something the author can fix in the folder");
 }
 
 

@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
+use crate::build::assets::theme_modules::ThemeModules;
 use crate::build::emit::scripts::ScriptAssets;
 use crate::build::media::dimensions::MediaDimensionLookup;
 use crate::build::types::ParsedDocument;
@@ -30,6 +31,9 @@ pub struct BuildShared<'d> {
     /// The calendar files this build writes and the pages that link them. Empty
     /// until the build plans it from its documents.
     pub calendar: crate::build::feeds::calendar::CalendarPlan,
+
+    /// The theme's `script.mjs` and sibling modules; empty without one.
+    pub theme_modules: ThemeModules,
 }
 
 impl BuildShared<'_> {
@@ -50,6 +54,7 @@ impl BuildShared<'_> {
             ),
             sequences: SequenceChains::default(),
             calendar: Default::default(),
+            theme_modules: ThemeModules::default(),
         }
     }
 }
@@ -142,7 +147,12 @@ impl FolderIndexPlan {
                         && source.file_stem().and_then(|s| s.to_str()).is_some_and(|stem|
                             moss_core::home::is_home_file(stem, raw.rsplit('/').next().unwrap_or(raw)))
                 });
-                pending_only || authored_index_pending
+                // A folder whose only pages are partials has nothing to show:
+                // its sources are never built, so an index for it would be a
+                // live, empty page at an address the author never made.
+                let mut under = documents.iter().filter(|doc| doc.source_path.as_ref().is_some_and(|path| path.starts_with(&prefix)));
+                let partials_only = under.clone().next().is_some() && under.all(|doc| doc.slot_only);
+                pending_only || authored_index_pending || partials_only
             }).map(|(_, key)| key).collect();
 
         // A folder whose `index.html` is copied verbatim already has its page.

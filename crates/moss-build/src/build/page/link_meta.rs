@@ -842,8 +842,7 @@ fn fetch_all_link_meta_parallel_bounded(
     }
 
     if completed < cold.len() {
-        log::warn!(
-            target: "link-meta",
+        crate::build::cli_output::log_note!(
             "{log_label} budget ({:?}) exceeded: {} of {} cold URLs fetched before the deadline; \
              stragglers keep running and may still warm the cache for a later reader, but this build won't wait on them",
             budget, completed, cold.len()
@@ -1040,25 +1039,25 @@ fn write_url_list_atomic(moss_dir: &Path, urls: &[String]) {
         None => return,
     };
     if let Err(e) = crate::build::io_utils::create_output_dir_all(parent) {
-        log::warn!(target: "link-meta", "could not create {:?}: {}", parent, e);
+        log::info!(target: "link-meta", "could not create {:?}: {}", parent, e);
         return;
     }
     let json = match serde_json::to_string_pretty(urls) {
         Ok(s) => s,
         Err(e) => {
-            log::warn!(target: "link-meta", "serialize url list failed: {}", e);
+            log::info!(target: "link-meta", "serialize url list failed: {}", e);
             return;
         }
     };
     // Tempfile name colocated with target so rename stays on the same FS.
     let tmp = parent.join(format!(".urls.json.tmp.{}", std::process::id()));
     if let Err(e) = std::fs::write(&tmp, &json) {  // allow:raw_write the temp for this cache's own atomic save, not the output tree
-        log::warn!(target: "link-meta", "write tempfile failed: {}", e);
+        log::info!(target: "link-meta", "write tempfile failed: {}", e);
         return;
     }
     // allow:unlink the link-meta URL list under .moss, not staging
     if let Err(e) = std::fs::rename(&tmp, &path) {
-        log::warn!(target: "link-meta", "rename tempfile failed: {}", e);
+        log::info!(target: "link-meta", "rename tempfile failed: {}", e);
         // allow:unlink the link-meta URL list under .moss, not staging
         let _ = std::fs::remove_file(&tmp);
     }

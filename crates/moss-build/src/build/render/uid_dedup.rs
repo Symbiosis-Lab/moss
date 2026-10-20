@@ -485,7 +485,7 @@ fn persist_reassigned_uid(file_path: &Path, display_path: &str, new_uid: &str) -
     ) {
         Ok(c) => c,
         Err(e) => {
-            log::warn!("Cannot read '{}' to reassign its uid: {}", display_path, e);
+            log::info!("Cannot read '{}' to reassign its uid: {}", display_path, e);
             return false;
         }
     };
@@ -501,7 +501,7 @@ fn persist_reassigned_uid(file_path: &Path, display_path: &str, new_uid: &str) -
     match std::fs::write(file_path, &updated) {  // allow:raw_write the user's own markdown source — 'unreadable is not absent' applies unqualified
         Ok(()) => true,
         Err(e) => {
-            log::warn!(
+            log::info!(
                 "Failed to write reassigned uid into '{}': {}",
                 display_path,
                 e

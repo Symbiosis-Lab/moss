@@ -584,7 +584,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         widget: Widget::TextInput,
         // Frequency=3, Importance=2 → score = 100 - (3*6 + 2*4) = 100 - 26 = 74
         score: 74,
-        description: "Linkblog target: when set, internal references to this page (cards, link rewrites, canonical, sitemap) point here instead of the local URL. The page is still built locally — direct visits to its slug still work — but the canonical home is elsewhere on the web. Pattern from JSON Feed 1.1.",
+        description: "Linkblog target: when set, internal references to this page (cards, link rewrites, canonical, sitemap) point here instead of the local URL. The page is still built locally — direct visits to its slug still work — but the canonical home is elsewhere on the web. Pattern from JSON Feed 1.1. A page that is in the nav bar links to this value there instead, and the value may also be `mailto:`, `tel:`, `#anchor` or `/path#anchor`.",
         label_key: "chip.external_url.label",
         group: "This Page",
         ..FIELD_DEFAULTS
@@ -723,6 +723,16 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         score: 93,
         description: "When off, hidden from listings, feeds, and sitemap — but still indexed and reachable at its URL",
         label_key: "chip.listed.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "partial",
+        field_type: FieldType::Boolean,
+        widget: Widget::Checkbox,
+        score: 94,
+        description: "Marks a page that exists only to be transcluded into other pages with `![[name]]`: it is never built, so it has no URL and is absent from nav, sitemap, feeds, search and listings (e.g. a reusable inline SVG or a repeated block). With `nav: true` and `external_url`, it is a header nav link to that address and nothing else",
+        label_key: "chip.partial.label",
         group: "This Page",
         ..FIELD_DEFAULTS
     },

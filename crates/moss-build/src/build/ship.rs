@@ -286,7 +286,7 @@ pub fn ship_phase(
             // both of which are about a stage file this entry does not read.
             ShipRead::Held(bytes) => {
                 if let Err(e) = crate::build::io_utils::write_output(&site_path, bytes) {
-                    log::warn!("[ship_phase] write failed for {:?}: {}", site_path, e);
+                    log::info!("[ship_phase] write failed for {:?}: {}", site_path, e);
                     failures += 1;
                 }
                 continue;
@@ -308,7 +308,7 @@ pub fn ship_phase(
             if rel_path.starts_with(crate::build::served_path::MATH_PNG_PREFIX) {
                 continue;
             }
-            log::warn!(
+            log::info!(
                 "[ship_phase] {:?} is named by the manifest but is not an output; \
                  it went absent after the presence pass",
                 source_path
@@ -325,7 +325,7 @@ pub fn ship_phase(
         if source_path == stage_path {
             if let Some(real_hash) = verify_ship_integrity(rel_path, &stage_path, entry, sealed) {
                 drifted += 1;
-                log::warn!(
+                log::info!(
                     "[ship_phase] {:?} changed after this manifest sealed (now hashes to {}, \
                      manifest says {}) — shipping the current bytes rather than withholding the \
                      page; a concurrent build most likely rewrote this path",
@@ -336,7 +336,7 @@ pub fn ship_phase(
 
         if let Some(parent) = site_path.parent() {
             if let Err(e) = crate::build::io_utils::create_output_dir_all(parent) {
-                log::warn!("[ship_phase] create_dir_all for parent {:?}: {}", parent, e);
+                log::info!("[ship_phase] create_dir_all for parent {:?}: {}", parent, e);
                 failures += 1;
                 continue;
             }
@@ -347,7 +347,7 @@ pub fn ship_phase(
                     #[cfg(unix)]
                     {
                         if let Err(e) = crate::build::io_utils::replace_with_symlink(&target, &site_path) {
-                            log::warn!("[ship_phase] Failed to recreate symlink at {:?}: {}", site_path, e);
+                            log::info!("[ship_phase] Failed to recreate symlink at {:?}: {}", site_path, e);
                             failures += 1;
                         }
                     }
@@ -383,13 +383,13 @@ pub fn ship_phase(
                                 .map_err(|e| e.to_string())
                         };
                         if let Err(e) = res {
-                            log::warn!("[ship_phase] Failed to copy symlink target {:?} -> {:?}: {}", target_abs, site_path, e);
+                            log::info!("[ship_phase] Failed to copy symlink target {:?} -> {:?}: {}", target_abs, site_path, e);
                             failures += 1;
                         }
                     }
                 }
                 Err(e) => {
-                    log::warn!("[ship_phase] read_link failed for {:?}: {}", source_path, e);
+                    log::info!("[ship_phase] read_link failed for {:?}: {}", source_path, e);
                     failures += 1;
                 }
             }
@@ -405,12 +405,12 @@ pub fn ship_phase(
                         // can neither truncate an inode shared with `source_path`
                         // nor materialize a dataless destination.
                         if let Err(e) = crate::build::io_utils::write_output(&site_path, &stripped) {
-                            log::warn!("[ship_phase] write failed for {:?}: {}", site_path, e);
+                            log::info!("[ship_phase] write failed for {:?}: {}", site_path, e);
                             failures += 1;
                         }
                     }
                     Err(e) => {
-                        log::warn!("[ship_phase] read failed for {:?}: {}", source_path, e);
+                        log::info!("[ship_phase] read failed for {:?}: {}", source_path, e);
                         failures += 1;
                     }
                 }
@@ -424,7 +424,7 @@ pub fn ship_phase(
                 // renames, so the destination is never opened with `O_TRUNC`
                 // and a cloud-evicted `site_path` cannot force materialization.
                 if let Err(e) = crate::build::io_utils::copy_output(&source_path, &site_path) {
-                    log::warn!("[ship_phase] copy failed for {:?}: {}", source_path, e);
+                    log::info!("[ship_phase] copy failed for {:?}: {}", source_path, e);
                     failures += 1;
                 }
             }
@@ -607,14 +607,14 @@ pub fn materialize_and_promote(
                  so `current` stays on the last complete one",
                 sealed.generation_id()
             ),
-            WithholdReason::Unverified { entries, sample } => log::warn!(
+            WithholdReason::Unverified { entries, sample } => log::info!(
                 "generation {} withheld: {} of {} entries unverifiable ({})",
                 sealed.generation_id(),
                 entries,
                 sealed.files().len(),
                 sample.join(", ")
             ),
-            WithholdReason::ImplausibleLoss { lost, of } => log::warn!(
+            WithholdReason::ImplausibleLoss { lost, of } => log::info!(
                 "generation {} withheld: presence pass lost {} of {} entries (limit {})",
                 sealed.generation_id(),
                 lost,
@@ -726,7 +726,7 @@ pub(crate) fn prune_orphaned_webp_before_ship(
             .take(3)
             .map(|p| p.display().to_string())
             .collect();
-        log::warn!(
+        log::info!(
             "orphan prune: skipped — {} file(s)/dir(s) under staging could not be read, so the \
              reference set is incomplete and pruning from it could delete live images: {}",
             scan.unreadable.len(),
@@ -927,7 +927,7 @@ pub(crate) fn unregistered_referenced_variants(
     stage_dir: &std::path::Path,
 ) -> std::collections::HashSet<String> {
     if !scan.unreadable.is_empty() {
-        log::warn!(
+        log::info!(
             "unregistered-reference pass: {} file(s)/dir(s) under staging could not be read, so \
              some live 404s may go unrepaired this build",
             scan.unreadable.len()

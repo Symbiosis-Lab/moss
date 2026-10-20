@@ -611,7 +611,7 @@ pub fn compute(documents: &[ParsedDocument], inputs: &VerdictInputs<'_>) -> Rend
         .with_digests(DigestMap::HomeTitleGlobals, home_title_globals)
         .with_digests(DigestMap::HomeBreadcrumbGlobals, home_breadcrumb_globals);
     if let Err(e) = new_cache.save(inputs.cache_path) {
-        log::warn!(target: "incremental", "failed to save facade cache: {e}");
+        log::info!(target: "incremental", "failed to save facade cache: {e}");
     }
 
     let verdict = RenderVerdict { skip, basis };

@@ -583,7 +583,7 @@ fn produce_sized_raster(
                 );
                 return None;
             }
-            log::warn!(
+            log::info!(
                 "[sized-raster] encode failed for {} ({}); keeping verbatim original",
                 source_file.display(),
                 e
@@ -616,7 +616,7 @@ fn produce_sized_raster(
         match objects.store_bytes(&sized_bytes, crate::build::cache::RecordMode::Wait) {
             Ok(o) => (o, sized_bytes.len() as u64),
             Err(e) => {
-                log::warn!(
+                log::info!(
                     "[sized-raster] CAS store failed for {} ({}); keeping verbatim original",
                     source_file.display(),
                     e
@@ -645,7 +645,7 @@ fn produce_sized_raster(
             );
         });
         if let Err(e) = merged {
-            log::warn!("[sized-raster] failed to write transform record: {}", e);
+            log::info!("[sized-raster] failed to write transform record: {}", e);
         }
     }
 

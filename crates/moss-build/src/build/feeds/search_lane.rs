@@ -429,7 +429,7 @@ pub fn adopt_into(
                     // tree half of which could not be read). No receipt is
                     // written, so the next build retries — the same disposition
                     // the old worker had for a failed index.
-                    log::warn!(target: "search", "search index not generated: {}", e);
+                    log::info!(target: "search", "search index not generated: {}", e);
                     Adoption::Diverged
                 }
             };
@@ -448,7 +448,7 @@ pub fn adopt_into(
                 // register nothing and drop the receipt — the next build
                 // re-indexes.
                 drop_receipt_if_still(h, &index_dir, &receipt);
-                log::warn!(
+                log::info!(
                     target: "search",
                     "search bundle {} is incomplete on disk — dropped, will re-index",
                     receipt.fp,
@@ -503,7 +503,7 @@ fn lay_and_register(
     for (sp, _, src, dest) in &planned {
         if refresh || !crate::build::io_utils::output_present(dest) {
             if let Err(e) = crate::build::io_utils::copy_output(src, dest) {
-                log::warn!(target: "search", "failed to lay {} into staging: {}", sp, e);
+                log::info!(target: "search", "failed to lay {} into staging: {}", sp, e);
                 return None;
             }
         }
@@ -708,8 +708,8 @@ async fn index_one(req: &LaneRequest, watcher: tokio::sync::watch::Receiver<Lane
         Ok(Ok(None)) => {
             log::debug!(target: "search", "search index superseded before the gzip pass")
         }
-        Ok(Err(e)) => log::warn!(target: "search", "search index not generated: {}", e),
-        Err(e) => log::warn!(target: "search", "search index worker failed: {}", e),
+        Ok(Err(e)) => log::info!(target: "search", "search index not generated: {}", e),
+        Err(e) => log::info!(target: "search", "search index worker failed: {}", e),
     }
 }
 
@@ -771,7 +771,7 @@ pub fn settle_for_publish(mp: &MossPaths, enabled: bool) -> bool {
             }
             Err(e) => {
                 // Publishing without search beats not publishing.
-                log::warn!(target: "search", "publish: search index not generated: {}", e);
+                log::info!(target: "search", "publish: search index not generated: {}", e);
                 false
             }
         }

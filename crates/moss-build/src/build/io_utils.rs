@@ -112,7 +112,7 @@ pub fn create_output_dir_all(dir: &Path) -> io::Result<()> {
                 if crate::build::icloud::is_dataless_unavailable(&e)
                     && is_regenerable_output(&built) =>
             {
-                log::warn!(
+                log::info!(
                     "[output-dir] {} could not be created — the cloud provider refused to \
                      materialize it. It is regenerable output, so it is being replaced rather \
                      than waited for.",
@@ -355,7 +355,7 @@ impl ScratchDir {
     pub fn new(tmp_root: &Path, name: &str) -> Self {
         let dir = tmp_root.join(format!("{name}-{}", uuid::Uuid::new_v4()));
         if let Err(e) = create_output_dir_all(&dir) {
-            log::warn!("[scratch] could not create {}: {}", dir.display(), e);
+            log::info!("[scratch] could not create {}: {}", dir.display(), e);
         }
         Self(dir)
     }

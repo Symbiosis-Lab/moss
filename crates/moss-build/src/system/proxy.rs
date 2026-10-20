@@ -63,7 +63,7 @@ fn proxied_agent_builder(
                 log::debug!("http: routing request via system proxy");
                 builder = builder.proxy(proxy);
             }
-            Err(_) => log::warn!("http: resolved proxy is invalid; connecting directly"),
+            Err(_) => log::info!("http: resolved proxy is invalid; connecting directly"),
         }
     }
     builder

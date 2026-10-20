@@ -170,7 +170,7 @@ impl FinalSourceRecord {
                 true
             }
             Err(error) => {
-                log::warn!(
+                log::info!(
                     "Failed to write normalized uid into '{}': {}",
                     self.source_path,
                     error

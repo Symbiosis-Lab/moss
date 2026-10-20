@@ -971,7 +971,9 @@ pub(crate) fn render_img_tag(
     // the synthesizer owns escaping end-to-end (impl-review item 9).
     let extra_has_style = options
         .extra_attrs
-        .map(|s| s.contains("style="))
+        // A quoted attribute, so the words "style=" inside an escaped `title`
+        // value do not count.
+        .map(|s| s.starts_with("style=\"") || s.contains(" style=\""))
         .unwrap_or(false);
 
     let style_attr = if extra_has_style {

@@ -48,7 +48,7 @@ pub(crate) fn materialize_remote_covers(
     let transforms = TransformCache::for_site(&paths);
     let scratch_dir = paths.cache_tmp().join("remote-cover");
     if let Err(e) = io_utils::create_output_dir_all(&scratch_dir) {
-        log::warn!(target: "remote-cover", "could not create {:?}: {}", scratch_dir, e);
+        log::info!(target: "remote-cover", "could not create {:?}: {}", scratch_dir, e);
         return 0;
     }
 

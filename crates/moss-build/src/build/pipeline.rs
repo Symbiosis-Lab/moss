@@ -301,7 +301,7 @@ fn read_notebook_sibling(source: &std::path::Path, evidence: &super::cloud_ledge
     if crate::build::icloud::is_evicted(source) {
         evidence.pending(source);
         crate::build::cloud_readiness::request_download(source);
-        log::warn!("notebook {} is still in the cloud — building without it", source.display());
+        crate::build::cli_output::log_note!("notebook {} is still in the cloud — building without it", source.display());
         return None;
     }
     match fs::read_to_string(source) {
@@ -312,7 +312,7 @@ fn read_notebook_sibling(source: &std::path::Path, evidence: &super::cloud_ledge
         Err(e) if crate::build::icloud::is_offline_not_absent(source, &e) => {
             evidence.pending(source);
             crate::build::cloud_readiness::request_download(source);
-            log::warn!("notebook {} is unreadable but not gone — building without it", source.display());
+            crate::build::cli_output::log_note!("notebook {} is unreadable but not gone — building without it", source.display());
             None
         }
         Err(e) => {
@@ -433,7 +433,7 @@ fn run_notebook_processing(
     ) {
         Ok(path) => path,
         Err(e) => {
-            log::warn!("JupyterLite assets not available: {}. Notebooks will be copied without viewer.", e);
+            log::info!("JupyterLite assets not available: {}. Notebooks will be copied without viewer.", e);
             if is_headless {
                 crate::cli_eprintln!("Warning: JupyterLite not available: {}", e);
             }
@@ -458,7 +458,7 @@ fn run_notebook_processing(
                     }
                     Err(e) => {
                         evidence.read_error(&source, e.clone());
-                        log::warn!("Failed to copy notebook {}: {}", item.source_path, e);
+                        log::info!("Failed to copy notebook {}: {}", item.source_path, e);
                     }
                 }
             }
@@ -473,7 +473,7 @@ fn run_notebook_processing(
     let mut bundle_receipts = match copy_dir_recursive(&jl_assets, &jupyter_output) {
         Ok(receipts) => receipts,
         Err(e) => {
-            log::warn!("Failed to copy JupyterLite assets: {}", e);
+            log::info!("Failed to copy JupyterLite assets: {}", e);
             return Vec::new();
         }
     };
@@ -531,7 +531,7 @@ fn run_notebook_processing(
     // obvious.
     let is_cloud_storage = is_cloud_storage_path(source_path);
     if is_cloud_storage && !items.is_empty() {
-        log::warn!(
+        log::info!(
             "Notebook processing on cloud-storage path ({} items): {}. \
              Synchronous I/O may block if the cloud-sync client (Dropbox/\
              OneDrive/Google Drive/iCloud) is reconciling or files are \
@@ -585,14 +585,14 @@ fn run_notebook_processing(
         match rx.recv_timeout(Duration::from_secs(NOTEBOOK_IO_TIMEOUT_SECS)) {
             Ok(Ok(paths)) => IoOutcome::Done(paths),
             Ok(Err(e)) => {
-                log::warn!(
+                log::info!(
                     "[notebook] I/O for '{}' returned an error: {}; continuing",
                     label, e
                 );
                 IoOutcome::Errored(e)
             }
             Err(_) => {
-                log::warn!(
+                crate::build::cli_output::log_note!(
                     "[notebook] I/O for '{}' timed out after {}s. Likely cloud-storage \
                      dehydration (Dropbox CloudStorage / iCloud). The notebook is \
                      skipped on this build; the next rebuild will retry. Worker \
@@ -674,7 +674,7 @@ fn run_notebook_processing(
             let viewer_relative = crate::build::notebook::viewer_path(&item_source_path).unwrap();
             match stage_write(&viewer_html, &viewer_relative, &staging_owned) {
                 Ok(hash) => produced.push((viewer_relative, hash)),
-                Err(e) => log::warn!("Failed to write viewer HTML: {}", e),
+                Err(e) => log::info!("Failed to write viewer HTML: {}", e),
             }
             Ok(produced)
         });
@@ -799,7 +799,7 @@ fn run_notebook_processing(
         .unwrap();
         match stage_write(&manifest, &manifest_path, staging_dir) {
             Ok(hash) => generated_paths.push((manifest_path, hash)),
-            Err(e) => log::warn!("Failed to write JupyterLite contents manifest: {}", e),
+            Err(e) => log::info!("Failed to write JupyterLite contents manifest: {}", e),
         }
     }
 
@@ -1256,7 +1256,7 @@ fn build_inner(
     let lock_wait = t_lock.elapsed();
     log::log!(
         target: "timing",
-        if lock_wait >= STAGE_WRITE_LOCK_WARN { log::Level::Warn } else { log::Level::Debug },
+        if lock_wait >= STAGE_WRITE_LOCK_WARN { log::Level::Info } else { log::Level::Debug },
         "[build] staging: waited {lock_wait:?} for the stage-write lock (above {STAGE_WRITE_LOCK_WARN:?} means the previous build's seal tail is on this build's critical path)",
     );
 
@@ -1323,10 +1323,11 @@ fn build_inner(
         Err(error) => {
             if super::icloud::is_still_in_the_cloud(&config_path) {
                 input_evidence.pending(&config_path);
+                crate::build::cli_output::log_note!("config.toml is still in the cloud — building without it: {error}");
             } else {
                 input_evidence.read_error(&config_path, error.clone());
+                crate::build::cli_output::log_warn_problem!("config.toml could not be read: {error}");
             }
-            log::warn!("config.toml could not be read: {error}");
             None
         }
     };
@@ -1382,10 +1383,11 @@ fn build_inner(
         Err(e) => {
             if super::icloud::is_still_in_the_cloud(&places_toml_path) {
                 input_evidence.pending(&places_toml_path);
+                crate::build::cli_output::log_note!("places.toml is still in the cloud — building without it: {e}");
             } else {
                 input_evidence.read_error(&places_toml_path, e.clone());
+                crate::build::cli_output::log_warn_problem!("places.toml could not be read: {e}");
             }
-            log::warn!("places.toml could not be read: {e}");
             (crate::vault::places::Gazetteer::default(), None)
         }
     };
@@ -1416,7 +1418,7 @@ fn build_inner(
                     )
                 }
                 Err(error) => {
-                    crate::build::cli_output::log_warn_problem!("bundled place-map data could not be decoded ({error:?}); omitting maps");
+                    log::info!("bundled place-map data could not be decoded ({error:?}); omitting maps");
                     None
                 }
             }
@@ -1553,7 +1555,7 @@ fn build_inner(
             &mut pending,
             &background_ctx.dir_overrides,
         ) {
-            log::warn!("Failed to emit places-explorer data: {e}");
+            log::info!("Failed to emit places-explorer data: {e}");
         }
     }
 

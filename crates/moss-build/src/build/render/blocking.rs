@@ -355,7 +355,7 @@ pub fn generate_blocking_content_for_build(
                     .map_err(|e| format!("Failed to emit favicon: {}", e))?;
             }
             Err(e) => {
-                log::warn!("could not read favicon for manifest registration {}: {}", rel, e);
+                log::info!("could not read favicon for manifest registration {}: {}", rel, e);
                 pending.apply_message(rel, &favicon.content_hash, HashBucket::Files, None);
             }
         }
@@ -408,7 +408,7 @@ pub fn generate_blocking_content_for_build(
         &mut frontmatter_scan_cache,
     );
     if let Err(e) = frontmatter_scan_cache.save(&frontmatter_scan_cache_path) {
-        log::warn!("failed to persist frontmatter-scan cache: {}", e);
+        log::info!("failed to persist frontmatter-scan cache: {}", e);
     }
     log::debug!(target: "timing", "[render] page_map ({} entries): {:?}", page_map.len(), total_start.elapsed());
 
@@ -426,7 +426,7 @@ pub fn generate_blocking_content_for_build(
         &mut folder_lang_cache, &frontmatter_scan_cache,
     );
     if let Err(e) = folder_lang_cache.save(&folder_lang_cache_path) {
-        log::warn!("failed to persist folder-lang cache: {}", e);
+        log::info!("failed to persist folder-lang cache: {}", e);
     }
     log::debug!(target: "timing", "[render] folder_languages ({} folders): {:?}", folder_languages.len(), total_start.elapsed());
 
@@ -974,7 +974,7 @@ pub fn generate_blocking_content_for_build(
                         let source = match source {
                             Ok(source) => source,
                             Err(error) => {
-                                log::warn!("Cannot read '{}' to normalize duplicate uid: {}", reassigned_path, error);
+                                log::info!("Cannot read '{}' to normalize duplicate uid: {}", reassigned_path, error);
                                 return false;
                             }
                         };
@@ -1564,6 +1564,8 @@ pub fn generate_blocking_content_for_build(
         );
     }
 
+    let theme_modules = crate::build::assets::theme_modules::ThemeModules::read(&source_path_buf.join(".moss").join("theme"), &input_evidence)?;
+
     // `.moss/config.toml`: read fresh here (the many small readers elsewhere
     // in this crate each pull one field; this is the one place the whole
     // file's bytes are hashed) and registered the same way the theme files
@@ -1589,7 +1591,7 @@ pub fn generate_blocking_content_for_build(
             source_metadata(config_toml_stat, content.as_bytes()),
         ),
         Ok(None) => {}
-        Err(e) => log::warn!("[modified_paths] config.toml unreadable, not tracked this build: {e}"),
+        Err(e) => log::info!("[modified_paths] config.toml unreadable, not tracked this build: {e}"),
     }
 
     // Every content-addressed asset whose HASHED FILENAME appears in emitted
@@ -1628,6 +1630,7 @@ pub fn generate_blocking_content_for_build(
         parts.extend(feature_style_hashes.iter().map(String::as_str));
         parts.push(user_css_version.as_deref().unwrap_or(""));
         parts.push(user_js_version.as_deref().unwrap_or(""));
+        parts.extend(theme_modules.hashes());
         crate::build::facade::debug_hash(&parts)
     };
 
@@ -1709,6 +1712,7 @@ pub fn generate_blocking_content_for_build(
     // Built once here rather than once per page. See `BuildShared`.
     let mut shared = super::build_shared::BuildShared::new(scripts, project_structure, &dir_overrides);
     shared.calendar = calendar;
+    shared.theme_modules = theme_modules;
 
     let rss_href = ServedPath::for_rss("").unwrap().to_relative_url();
     let page_rss_link = has_rss.then(|| format!(r#"<link rel="alternate" type="application/rss+xml" title="RSS" href="{rss_href}">"#));
@@ -1726,6 +1730,7 @@ pub fn generate_blocking_content_for_build(
             assets: ChromeAssets {
                 paths: page_paths, scripts: &shared.scripts, has_user_css, has_user_js, page_owned: &page_owned,
                 head_alternates: page_rss_link.as_deref(),
+                theme_modules: &shared.theme_modules,
             },
             show_rss_in_footer, emit_source_lines, has_sidebar_layout,
             home_breadcrumb: crate::build::components::nav::home_breadcrumb_setting(&documents),
@@ -2407,6 +2412,8 @@ pub fn generate_blocking_content_for_build(
             .map_err(|e| format!("Failed to emit _moss/theme/script.<hash>.js: {}", e))?;
     }
 
+    shared.theme_modules.emit(&mut BuildContext::for_render(output_dir, pending))?;
+
     // theme.js is emitted with every other runtime script by `scripts.emit()`
     // below — it is the `gate: |_| true` row in SITE_SCRIPTS. The hand-rolled
     // emit that used to sit here wrote the same bytes to the same path a second
@@ -2625,7 +2632,7 @@ pub fn generate_blocking_content_for_build(
         &editions,
     );
     if let Err(e) = article_map.save(&moss_dir) {
-        log::warn!("⚠️ Failed to save article map: {}", e);
+        log::info!("⚠️ Failed to save article map: {}", e);
     }
 
     // `.moss/build.nosync/inventory.json` — what `moss list` reads back. Written here
@@ -2646,7 +2653,7 @@ pub fn generate_blocking_content_for_build(
         project_structure.has_content_folders,
         &layout_config.lang_tag,
     ) {
-        log::warn!("⚠️ Failed to save inventory: {}", e);
+        log::info!("⚠️ Failed to save inventory: {}", e);
     }
 
     // Generate _previews.json for hover link previews
@@ -2683,7 +2690,7 @@ pub fn generate_blocking_content_for_build(
             if let Err(e) = BuildContext::for_render(output_dir, pending)
                 .emit_held(&ServedPath::for_previews_manifest(), json.into_bytes(), HashBucket::Files)
             {
-                log::warn!("Failed to emit _moss/previews.json: {}", e);
+                log::info!("Failed to emit _moss/previews.json: {}", e);
             }
         }
     }
@@ -2931,8 +2938,9 @@ pub fn generate_blocking_content_for_build(
         let files = pending.files();
         for doc in &documents {
             if let Some(src) = doc.source_path.as_ref() {
-                if files.contains_key(&doc.url_path) && !s2o.contains_key(src) {
-                    log::warn!(
+                // A partial is never emitted; its address may be a real page's.
+                if !doc.slot_only && files.contains_key(&doc.url_path) && !s2o.contains_key(src) {
+                    log::info!(
                         "rename-event-propagation safety net: ParsedDocument with \
                          source_path={:?} and emitted url_path={:?} is missing \
                          from source_to_output. An HTML emission path was added \
@@ -3062,7 +3070,7 @@ pub fn generate_blocking_content_for_build(
                 );
             }
         }
-        Err(e) => log::warn!("Failed to emit the redirect table: {}", e),
+        Err(e) => log::info!("Failed to emit the redirect table: {}", e),
     }
 
     if has_rss {
@@ -3096,7 +3104,7 @@ pub fn generate_blocking_content_for_build(
             .filter(|src| !hashed.contains(*src))
             .collect();
         if !missing.is_empty() {
-            log::warn!(
+            log::info!(
                 "publish-classification safety net: {} source(s) have an output \
                  mapping but no source hash (e.g. {:?}). An emission or carry \
                  path calls register_source_mapping without the paired \
@@ -3447,7 +3455,7 @@ fn register_favicon_pngs(
                     .map_err(|e| format!("Failed to emit favicon PNG: {}", e))?;
             }
             Err(e) => {
-                log::warn!("could not hash {}: {}", rel, e);
+                log::info!("could not hash {}: {}", rel, e);
                 pending.apply_message(rel, "favicon-png", HashBucket::Files, None);
             }
         }
@@ -3494,7 +3502,7 @@ pub(super) fn resolve_favicon(
         let path = assets_dir.join(&name);
         let defer = |reason: &str| {
             crate::build::cloud_readiness::request_download(&path);
-            log::warn!("favicon {} is {} — using the default until it arrives", name, reason);
+            crate::build::cli_output::log_note!("favicon {} is {} — using the default until it arrives", name, reason);
             None
         };
         if crate::build::icloud::is_evicted(&path) {
@@ -3555,7 +3563,7 @@ pub(super) fn resolve_favicon(
         ) {
             Ok(sizes) => sizes,
             Err(e) => {
-                log::warn!(
+                log::info!(
                     "Failed to rasterize favicon PNGs: {}. Continuing with SVG only.",
                     e
                 );

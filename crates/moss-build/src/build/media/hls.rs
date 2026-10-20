@@ -253,7 +253,7 @@ pub(crate) fn ladder_members_from_master(ladder_dir: &Path) -> Option<Vec<String
         Ok(content) => content,
         Err(e) if crate::build::icloud::is_definitely_absent(&master_path, &e) => return None,
         Err(e) => {
-            log::warn!(
+            log::info!(
                 "HLS ladder: {} unreadable ({e}) — not evidence it's gone, \
                  falling back to a directory listing so a real member is never dropped",
                 master_path.display()

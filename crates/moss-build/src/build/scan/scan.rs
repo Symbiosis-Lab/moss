@@ -394,7 +394,7 @@ fn resolve_content_hash(
 ) -> Option<String> {
     new_index
         .resolve_from(old_index, stat, abs_path, relative_path)
-        .map_err(|e| log::warn!("Failed to hash {}: {}", relative_path, e))
+        .map_err(|e| log::info!("Failed to hash {}: {}", relative_path, e))
         .ok()
 }
 
@@ -443,7 +443,7 @@ pub(crate) fn write_cached_meta(
     let json_bytes = match serde_json::to_vec(meta) {
         Ok(b) => b,
         Err(e) => {
-            log::warn!("Failed to serialize media meta: {}", e);
+            log::info!("Failed to serialize media meta: {}", e);
             return;
         }
     };
@@ -451,7 +451,7 @@ pub(crate) fn write_cached_meta(
     let meta_oid = match objects.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request) {
         Ok(oid) => oid,
         Err(e) => {
-            log::warn!("Failed to store media meta blob: {}", e);
+            log::info!("Failed to store media meta blob: {}", e);
             return;
         }
     };
@@ -470,7 +470,7 @@ pub(crate) fn write_cached_meta(
         record.transforms.insert(MEDIA_META_TRANSFORM.to_string(), new_entry);
     });
     if let Err(e) = merged {
-        log::warn!("Failed to write media meta transform record: {}", e);
+        log::info!("Failed to write media meta transform record: {}", e);
     }
 }
 
@@ -757,7 +757,7 @@ fn extract_media_metadata_cached(
             return meta;
         }
         // If do_work returned None (panic in work fn), fall through to direct extraction.
-        log::warn!("Singleflight returned None for {}, falling back to direct extraction", hash);
+        log::info!("Singleflight returned None for {}, falling back to direct extraction", hash);
     }
 
     let meta = extract_media_metadata(
@@ -1397,7 +1397,7 @@ pub fn scan_folder_with_dedup_emit_with_error(
         .map(|f| f.path.as_str())
         .collect();
     if let Err(e) = new_index.save_pruned(&hash_index_path, |path| walked_non_media.contains(path)) {
-        log::warn!("Failed to save hash index: {}", e);
+        log::info!("Failed to save hash index: {}", e);
     }
 
     let total_files = markdown_files.len() + html_files.len() + image_files.len() + video_files.len() + notebook_files.len() + other_files.len();

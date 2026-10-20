@@ -1204,7 +1204,7 @@ impl FFmpegManager {
                         source.display()
                     ));
                 };
-                log::warn!(
+                log::info!(
                     "Validation failed at {}x{}; retrying at {}x{}: {}",
                     rung.width, rung.height, lower.width, lower.height, source.display()
                 );

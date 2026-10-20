@@ -309,7 +309,12 @@ pub trait RenderHooks {
                     // guard).
                     let media_style =
                         crate::media::parse_media_attrs(&item.attrs).to_inline_style();
-                    let style_frag = media_style.map(|s| format!(r#"style="{}""#, s));
+                    let style_frag = item
+                        .title
+                        .iter()
+                        .map(|t| format!(r#"title="{}""#, crate::media::html_escape(t)))
+                        .chain(media_style.map(|s| format!(r#"style="{}""#, s)))
+                        .reduce(|a, b| format!("{a} {b}"));
                     let opts = crate::render::image::ImageRenderOptions {
                         eager: false,
                         extra_attrs: style_frag.as_deref(),
@@ -948,8 +953,14 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
         // wrap) for inline images. PR3's Block::Figure handles the figure
         // wrap for image-only paragraphs.
         let ctx = crate::render::image::ImageContext::MarkdownInline;
-        let style_attr =
-            img_style.map(|s| format!(r#"style="{}""#, crate::media::html_escape(s)));
+        // The CommonMark title is the image's `title` attribute, before the
+        // `style` fragment; neither is emitted when absent.
+        let extra_parts: Vec<String> = title
+            .map(|t| format!(r#"title="{}""#, crate::media::html_escape(t)))
+            .into_iter()
+            .chain(img_style.map(|s| format!(r#"style="{}""#, crate::media::html_escape(s))))
+            .collect();
+        let style_attr = (!extra_parts.is_empty()).then(|| extra_parts.join(" "));
         let cell_scope = self.grid_cell_sizes.borrow();
         let opts = crate::render::image::ImageRenderOptions {
             extra_attrs: style_attr.as_deref(),
@@ -1447,6 +1458,7 @@ mod tests {
             alt_only: false,
             attrs: String::new(),
             caption,
+            title: None,
         };
         let link = Inline::Link {
             url: Url::resolved("../quay/", UrlKind::Internal),
@@ -1475,6 +1487,7 @@ mod tests {
         let sc = Shortcode::Gallery(GalleryShortcode {
             width: Some("page".to_string()),
             items: vec![GalleryItem {
+                title: None,
                 src: Url::resolved("a.jpg", UrlKind::Asset),
                 alt: String::new(),
                 alt_only: false,
@@ -1510,6 +1523,7 @@ mod tests {
         let sc = Shortcode::Gallery(GalleryShortcode {
             columns: Some(8),
             items: vec![GalleryItem {
+                title: None,
                 src: Url::resolved("a.jpg", UrlKind::Asset),
                 alt: String::new(),
                 alt_only: false,
@@ -1549,6 +1563,7 @@ mod tests {
             alt_only: false,
             attrs: String::new(),
             caption: Vec::new(),
+            title: None,
         };
         let sc = Shortcode::Gallery(GalleryShortcode {
             rows: true,
@@ -1580,6 +1595,7 @@ mod tests {
                 alt_only: false,
                 attrs: String::new(),
                 caption: Vec::new(),
+                title: None,
             }],
             ..Default::default()
         });
@@ -1604,6 +1620,7 @@ mod tests {
                 alt_only: false,
                 attrs: String::new(),
                 caption: Vec::new(),
+                title: None,
             }],
             ..Default::default()
         });
@@ -1624,6 +1641,7 @@ mod tests {
                 alt_only: false,
                 attrs: String::new(),
                 caption: Vec::new(),
+                title: None,
             }],
             ..Default::default()
         });
@@ -1643,6 +1661,7 @@ mod tests {
                 alt_only: true,
                 attrs: String::new(),
                 caption: Vec::new(),
+                title: None,
             }],
             ..Default::default()
         });
@@ -1661,6 +1680,7 @@ mod tests {
                 alt_only: false,
                 attrs: String::new(),
                 caption: Vec::new(),
+                title: None,
             }],
             ..Default::default()
         });
@@ -1729,6 +1749,7 @@ mod tests {
     fn gallery_with_one_item(src: &str) -> Shortcode {
         Shortcode::Gallery(GalleryShortcode {
             items: vec![GalleryItem {
+                title: None,
                 src: Url::resolved(src, UrlKind::Asset),
                 alt: "photo".to_string(),
                 alt_only: false,

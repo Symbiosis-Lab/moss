@@ -136,7 +136,7 @@ fn bundle_file(file: pagefind::api::SyntheticFile) -> SearchIndexFile {
     if rel_path == ENTRY_FILE {
         match canonical_entry(&bytes) {
             Ok(canonical) => bytes = canonical,
-            Err(e) => log::warn!(target: "search", "{ENTRY_FILE} kept in Pagefind's order: {e}"),
+            Err(e) => log::info!(target: "search", "{ENTRY_FILE} kept in Pagefind's order: {e}"),
         }
     }
     SearchIndexFile { rel_path, bytes }
@@ -449,7 +449,7 @@ fn segment_pages(site_dir: &Path) -> (Vec<SegmentedPage>, usize, usize) {
             let source = match std::fs::read_to_string(entry.path()) {
                 Ok(source) => source,
                 Err(e) => {
-                    log::warn!(target: "search", "skipping {:?} for search index: {}", rel, e);
+                    log::info!(target: "search", "skipping {:?} for search index: {}", rel, e);
                     return Slot::Skipped;
                 }
             };
@@ -479,7 +479,7 @@ fn segment_pages(site_dir: &Path) -> (Vec<SegmentedPage>, usize, usize) {
         };
         match segment_html(&source, &JIEBA) {
             Ok(html) => *slot = Slot::Ready(SegmentedPage { rel_path, key, html: html.into() }),
-            Err(e) => log::warn!(target: "search", "skipping {:?} for search index: {}", rel_path, e),
+            Err(e) => log::info!(target: "search", "skipping {:?} for search index: {}", rel_path, e),
         }
     });
 
@@ -589,7 +589,7 @@ pub fn build_search_index_cancellable(
                     }
                     match index.add_html_file(Some(page.rel_path), None, page.html.to_string()).await {
                         Ok(_) => page_count += 1,
-                        Err(e) => log::warn!(target: "search", "search index skipped a page: {}", e),
+                        Err(e) => log::info!(target: "search", "search index skipped a page: {}", e),
                     }
                 }
                 let fossick_ms = t_fossick.elapsed().as_millis();

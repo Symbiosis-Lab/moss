@@ -1095,6 +1095,51 @@ footer.container:has(> .moss-subscribe) > .moss-colophon {
   flex-basis: 100%;
 }
 
+/*
+ * Footer columns. A footer.md with headings is rendered as one <section> per
+ * heading (`build/footer.rs`), and sibling sections lay out as columns:
+ * as many as fit at the minimum width, each equal, stacking to one column on a
+ * narrow screen with no breakpoint. The footer takes the full page width
+ * instead of the reading column, which is too narrow to hold columns. A
+ * footer.md with no headings has no sections and none of this applies. The
+ * blocks after a `---` line are the bottom row, a flex row after the columns.
+ *
+ * Everything that is not a section (the divider, the generated link row, the
+ * subscribe form) takes a full row of its own. Declared after the subscribe
+ * flex rule so a footer with both is a grid, and so `margin-inline-start:
+ * auto` on the form still right-anchors it within its row.
+ */
+footer.container:has(> section, > .footer-bottom) {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: var(--moss-space-lg) var(--moss-space-xl);
+  max-inline-size: var(--moss-site-max-width);
+}
+footer.container:has(> section, > .footer-bottom)::before,
+footer.container:has(> section, > .footer-bottom) > :not(section) {
+  grid-column: 1 / -1;
+}
+/* The bottom row: what follows a `---` line in footer.md. */
+footer.container > .footer-bottom {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--moss-space-xs) var(--moss-space-lg);
+}
+footer.container > .footer-bottom > * {
+  margin-block: 0;
+}
+footer.container > section > :first-child {
+  margin-block-start: 0;
+}
+footer.container > section > :last-child {
+  margin-block-end: 0;
+}
+footer.container > section > :is(h1, h2, h3, h4, h5, h6) {
+  font-size: 1em;
+  margin-block-end: var(--moss-space-xs);
+}
+
 /* ==========================================================================
    moss-hosted subscribe form — inline state transitions
    Driven by js-src/site/subscribe/subscribe.ts via `data-state` attribute.

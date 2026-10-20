@@ -365,7 +365,7 @@ fn generate_html_inner<'d>(
     let context = RenderCtx {
         chrome: PageChromeContext {
             documents: all_docs, project, layout: layout_config, site_lang,
-            assets: ChromeAssets { paths: path_resolver, scripts: &shared.scripts, has_user_css, has_user_js, page_owned: &Default::default(), head_alternates },
+            assets: ChromeAssets { paths: path_resolver, scripts: &shared.scripts, has_user_css, has_user_js, page_owned: &Default::default(), head_alternates, theme_modules: &shared.theme_modules },
             show_rss_in_footer, emit_source_lines, has_sidebar_layout,
             home_breadcrumb: crate::build::components::nav::home_breadcrumb_setting(all_docs),
             media_lookup: &shared.media_lookup,

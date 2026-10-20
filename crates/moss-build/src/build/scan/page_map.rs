@@ -114,7 +114,7 @@ pub(crate) fn compute_home_overrides_with_evicted(
             // the race, and anything else. Dropping a page from the site map
             // is too consequential to do without saying so.
             Err(e) => {
-                log::warn!("page map skipping unreadable '{}': {}", fi.path, e);
+                log::info!("page map skipping unreadable '{}': {}", fi.path, e);
                 continue;
             }
         };
@@ -507,7 +507,7 @@ pub(crate) fn build_page_map_with_evicted(
         let content = match std::fs::read_to_string(&source_file_path) {
             Ok(c) => c,
             Err(e) => {
-                log::warn!("url map skipping unreadable '{}': {}", file_path, e);
+                log::info!("url map skipping unreadable '{}': {}", file_path, e);
                 continue;
             }
         };
@@ -578,7 +578,7 @@ pub(crate) fn pages_before_dedup(
             url_path,
             kind: if is_index { moss_core::PageKind::Folder } else { moss_core::PageKind::Article },
             lang,
-            slot_only: crate::build::footer::is_excluded_from_pages(&path),
+            slot_only: crate::build::footer::is_slot_only(&path, crate::build::footer::ShipFacts { partial: scan.is_partial(&path) }),
             source_path: Some(path),
             ..Default::default()
         };
@@ -783,7 +783,7 @@ pub(crate) fn build_external_url_map_with_evicted(
         let content = match std::fs::read_to_string(&source_file_path) {
             Ok(c) => c,
             Err(e) => {
-                log::warn!("external-url map skipping unreadable '{}': {}", file_path, e);
+                log::info!("external-url map skipping unreadable '{}': {}", file_path, e);
                 continue;
             }
         };
@@ -822,17 +822,45 @@ pub(crate) fn is_valid_external_url(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://")
 }
 
-/// Emits a `log::warn!` when `raw_url` is set but is not an absolute http(s)
-/// URL.  `file_path` is used only for the diagnostic message.
+/// Returns `true` when `url` can be a nav bar entry's target: an absolute
+/// http(s) URL, `mailto:`, `tel:`, an in-page `#anchor`, or a site path
+/// (`/path`, `/path#anchor`). A wider set than [`is_valid_external_url`] on
+/// purpose — a nav item may point at an address or a section, but a card,
+/// canonical link or sitemap entry may not. `javascript:`, `data:` and
+/// protocol-relative `//host` stay out.
+pub(crate) fn is_valid_nav_target(url: &str) -> bool {
+    is_valid_external_url(url)
+        || url.starts_with("mailto:")
+        || url.starts_with("tel:")
+        || url.starts_with('#')
+        || (url.starts_with('/') && !url.starts_with("//"))
+}
+
+/// A page's `external_url:` as its nav bar entry's target, or `None` when
+/// the page has none (or it is not a [`is_valid_nav_target`]), in which case
+/// the entry links to the page itself. Silent: the scan already warned.
+pub fn nav_external_href(
+    raw_frontmatter: &std::collections::BTreeMap<String, serde_json::Value>,
+) -> Option<&str> {
+    raw_frontmatter
+        .get("external_url")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|u| is_valid_nav_target(u))
+}
+
+/// Emits a `log::warn!` when `raw_url` is set but is not a value any
+/// consumer of `external_url:` accepts (see [`is_valid_nav_target`]).
+/// `file_path` is used only for the diagnostic message.
 ///
 /// Call this before the http(s) guard that silently drops the value so the
 /// user learns *why* the field is being ignored.
 pub(super) fn warn_invalid_external_url(raw_url: &str, file_path: &str) {
-    if !raw_url.is_empty() && !is_valid_external_url(raw_url) {
+    if !raw_url.is_empty() && !is_valid_nav_target(raw_url.trim()) {
         log::warn!(
             target: "frontmatter",
             "{}: `external_url: {:?}` is not an absolute http(s) URL and will be ignored. \
-             Use a full URL starting with https:// or http://.",
+             Use a full URL starting with https://, or mailto:, tel:, #anchor or /path for a nav entry.",
             file_path,
             raw_url,
         );

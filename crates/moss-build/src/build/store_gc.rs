@@ -251,7 +251,7 @@ impl GenerationWriteLock {
                 Err(e) if e.kind() == fs2::lock_contended_error().kind() => return Ok(Take::Busy),
                 Err(e) if wait && !cannot_lock_here(&e) => return Err(e),
                 Err(e) => {
-                    log::warn!("generation {gen_id}: cannot lock {}: {e}", path.display());
+                    log::info!("generation {gen_id}: cannot lock {}: {e}", path.display());
                     return Ok(Take::Unlockable(Self { handle, path, fresh: false }, created));
                 }
             }
@@ -329,7 +329,7 @@ impl GenerationWriteLock {
         let Self { handle, path, .. } = self;
         // allow:unlink this generation's own lock file, while its lock is held
         if let Err(e) = std::fs::remove_file(&path) {
-            log::warn!("failed to remove {}: {e}", path.display());
+            log::info!("failed to remove {}: {e}", path.display());
         }
         drop(handle);
     }
@@ -575,7 +575,7 @@ pub fn gc_old_generations(
             }
             // Dropped without finishing: the lock file stays, so the next GC
             // retries this half-removed directory as abandoned.
-            Err(e) => log::warn!("generation GC: failed to remove {:?}: {}", path, e),
+            Err(e) => log::info!("generation GC: failed to remove {:?}: {}", path, e),
         }
     }
     if !removed.is_empty() {
@@ -619,7 +619,7 @@ fn save_watermark(build_dir: &Path, objects_after_gc: usize) {
     // a cloud-evicted destination is *absent*, not something to materialize.
     // A raw `fs::write` here would `EDEADLK` the build.
     if let Err(e) = super::io_utils::write_output(&watermark_path(build_dir), json.as_bytes()) {
-        log::warn!("cache GC: failed to record watermark: {}", e);
+        log::info!("cache GC: failed to record watermark: {}", e);
     }
 }
 
@@ -684,7 +684,7 @@ pub fn maybe_gc_cache(mp: &crate::moss_paths::MossPaths) -> Option<cache::GcResu
     let result = match cache::gc(mp, &token) {
         Ok(result) => result,
         Err(input) => {
-            log::warn!("cache GC aborted: {} — nothing deleted", input);
+            log::info!("cache GC aborted: {} — nothing deleted", input);
             return None;
         }
     };

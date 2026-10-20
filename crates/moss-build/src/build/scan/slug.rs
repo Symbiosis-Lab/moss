@@ -340,6 +340,10 @@ pub fn resolve_duplicate_slugs_with_lang(
     let mut holder: HashMap<String, usize> = HashMap::new();
     let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
     for (i, doc) in documents.iter().enumerate() {
+        // Never emitted (a `partial: true` source, `footer.md`), so it holds no address.
+        if doc.slot_only {
+            continue;
+        }
         holder.entry(doc.url_path.clone()).or_insert(i);
         groups.entry(doc.url_path.clone()).or_default().push(i);
     }

@@ -1,6 +1,7 @@
 //! Common shell facts for authored pages and generated folder indexes.
 
 use crate::build::assets::paths::{compute_content_hash, PathResolver};
+use crate::build::assets::theme_modules::ThemeModules;
 use crate::build::cloud_ledger::InputEvidence;
 use crate::build::components::nav::{NavigationBuilder, compute_breadcrumb_segments};
 use crate::build::emit::scripts::ScriptAssets;
@@ -29,6 +30,7 @@ pub(super) struct ChromeAssets<'a> {
     pub has_user_js: bool,
     pub page_owned: &'a PageOwnedAssets,
     pub head_alternates: Option<&'a str>,
+    pub theme_modules: &'a ThemeModules,
 }
 
 pub(super) struct PageChromeContext<'a, 'd> {
@@ -124,6 +126,7 @@ impl PageChromeContext<'_, '_> {
         });
         let paths = &self.assets.paths;
         let page_source = doc.and_then(|d| d.source_path.as_deref());
+        let (theme_js_tag, theme_importmap) = self.assets.theme_modules.shell_tags(paths, self.assets.has_user_js);
         let mut body_attrs = String::new();
         if self.emit_source_lines { body_attrs.push_str(" data-moss-preview"); }
         if is_homepage { body_attrs.push_str(r#" data-page="home""#); }
@@ -170,9 +173,10 @@ impl PageChromeContext<'_, '_> {
             )).filter(|tags| !tags.is_empty()),
             user_js_tag: Some(format!(
                 "{}{}",
-                self.assets.has_user_js.then(|| paths.user_js_tag()).unwrap_or_default(),
+                theme_js_tag.unwrap_or_default(),
                 self.assets.page_owned.script(page_source, paths),
             )).filter(|tags| !tags.is_empty()),
+            theme_importmap,
             has_sidebar_layout: self.has_sidebar_layout,
             runtime_js_tags: self.assets.scripts.shell_tags(&self.layout.assets, paths),
             content_width_attr: resolve_data_attr(doc.and_then(|d| d.content_width.as_ref()), self.layout.content_width.as_ref(), "content-width", None),

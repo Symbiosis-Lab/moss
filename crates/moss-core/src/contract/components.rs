@@ -117,6 +117,7 @@ pub const UNPREFIXED_LEGACY_CLASSES: &[&str] = &[
     // Default footer.
     "footer-default",
     "footer-link",
+    "footer-bottom",
     // Surfaces the site JavaScript reads (declared 2026-08-09). Same reason as
     // the nav: these names were emitted, styled, and queried by name long before
     // the `moss-` convention, and a theme that targets them today would break if
@@ -1295,7 +1296,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-captioned",
                 values: &[],
                 default: "",
-                description: "Present when the hero carries `caption=\"…\"`. Such a hero is a photograph on display rather than a backdrop for overlay text, and a caption that names a subject is a promise the subject is in frame — so site.css shows the whole image instead of the default crop-to-fill: the box takes the picture's own shape, centred, bounded by `--moss-hero-max-height` rather than filling the frame. Put the crop back on the image itself (`image=cover.jpg|cover top`), which lands as an inline style and wins.",
+                description: "Present when the hero carries `caption=\"…\"`. Such a hero is a photograph on display rather than a backdrop for overlay text, and a caption that names a subject is a promise the subject is in frame — so site.css shows the whole image instead of the default crop-to-fill: the box takes the picture's own shape, centred, bounded by `--moss-hero-max-height` rather than filling the frame. Put the crop back on the image itself (`image=\"cover.jpg|cover top\"` — the value must be quoted, since an unquoted one ends at `|`), which lands as an inline style and wins.",
             },
             DataAttr {
                 name: "data-fit",
@@ -3208,6 +3209,17 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         status: Status::Confirmed,
         since: "0",
         description: "One link in the generated footer row (RSS and similar). Off-site ones also carry `data-external`.",
+    },
+    ComponentEntry {
+        class: "footer-bottom",
+        kind: "chrome",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<div class="footer-bottom"><p>Copyright</p><p>Terms</p></div>"#,
+        example_markdown: "",
+        status: Status::Confirmed,
+        since: "1",
+        description: "The footer's bottom row: everything in `footer.md` after its first `---` line. The default stylesheet lays its children out as one row with space between them, wrapping on a narrow screen.",
     },
     ComponentEntry {
         class: "moss-child-section-divider",

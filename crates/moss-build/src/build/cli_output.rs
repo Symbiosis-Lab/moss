@@ -168,6 +168,51 @@ fn with_problem_count<R>(f: impl FnOnce(&AtomicUsize) -> R) -> R {
     CLI_PROBLEMS.with(f)
 }
 
+// The last build's page, partial and note counts for the closing line, held the
+// same way as the problem count (a process atomic, a per-thread one under test)
+// so a second build in one process never reads the first one's. Pages are
+// stored plus one so zero means "no build recorded".
+#[cfg(not(test))]
+static CLI_BUILT: [AtomicUsize; 3] = [AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0)];
+#[cfg(test)]
+thread_local! {
+    static CLI_BUILT: [AtomicUsize; 3] = const { [AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0)] };
+}
+
+#[cfg(not(test))]
+fn with_built<R>(f: impl FnOnce(&[AtomicUsize; 3]) -> R) -> R {
+    f(&CLI_BUILT)
+}
+#[cfg(test)]
+fn with_built<R>(f: impl FnOnce(&[AtomicUsize; 3]) -> R) -> R {
+    CLI_BUILT.with(f)
+}
+
+/// Record how many pages the build rendered and how many partials (pages that
+/// only fill a slot, so have no URL) it skipped.
+pub fn note_built(pages: usize, partials: usize) {
+    with_built(|b| {
+        b[0].store(pages + 1, Ordering::Relaxed);
+        b[1].store(partials, Ordering::Relaxed);
+    });
+}
+
+/// Record that one advisory note was printed. A note is advice the author may
+/// act on but that is never a failure: it is printed as `[NOTE]`, counted here
+/// for the closing line, and left out of the problem count `--strict` reads.
+pub fn note_cli_note() {
+    with_built(|b| b[2].fetch_add(1, Ordering::Relaxed));
+}
+
+fn take_built() -> Option<(usize, usize, usize)> {
+    with_built(|b| {
+        let pages = b[0].swap(0, Ordering::Relaxed);
+        let partials = b[1].swap(0, Ordering::Relaxed);
+        let notes = b[2].swap(0, Ordering::Relaxed);
+        pages.checked_sub(1).map(|p| (p, partials, notes))
+    })
+}
+
 /// Record that one CLI-visible problem line was printed. Called by
 /// [`cli_warn!`] and [`log_warn_problem!`] — never call this directly and
 /// print separately, or the count can drift from what was actually shown.
@@ -225,12 +270,29 @@ pub(crate) use cli_warn;
 /// `[WARN]` line and still exited 0. Found by an agent-surface audit,
 /// 2026-08-06.
 macro_rules! log_warn_problem {
+    (target: $target:literal, $($arg:tt)*) => {{
+        $crate::build::cli_output::note_cli_problem();
+        log::warn!(target: concat!($target, "#counted"), $($arg)*)
+    }};
     ($($arg:tt)*) => {{
         $crate::build::cli_output::note_cli_problem();
-        log::warn!($($arg)*)
+        log::warn!(target: concat!(module_path!(), "#counted"), $($arg)*)
     }};
 }
 pub(crate) use log_warn_problem;
+
+/// Advice that is printed but never a failure: a finding that may be wrong
+/// because moss cannot see everything that serves the site (a dead root-
+/// relative link may be answered by a proxy or redirect in front of moss).
+/// The record rides at `warn` so the default CLI log level shows it, and its
+/// `#note` target suffix makes [`log_line_for`] print `[NOTE]`, keep it out of
+/// the `--strict` problem count and tally it for the closing line.
+macro_rules! log_note {
+    ($($arg:tt)*) => {
+        log::warn!(target: concat!(module_path!(), "#note"), $($arg)*)
+    };
+}
+pub(crate) use log_note;
 
 /// Report a finished CLI build: the pipeline's own summary, then the problem
 /// count if there was one.
@@ -254,10 +316,28 @@ pub(crate) use log_warn_problem;
 pub fn print_cli_build_result(message: &str, strict: bool) -> usize {
     cli_eprintln!("{}", message);
     let n = take_cli_problems();
+    if let Some((pages, partials, notes)) = take_built() {
+        cli_eprintln!("{}", built_summary_line(pages, partials, n, notes));
+    }
     if let Some(line) = problem_summary_line(n, strict) {
         cli_eprintln!("{}", line);
     }
     n
+}
+
+/// The closing line of every build, clean or not, so "nothing was wrong" is
+/// distinguishable from "nothing was checked": `Built 12 pages (3
+/// skipped) · 0 problems`, with ` · 1 note` appended only when there are
+/// notes. It deliberately lacks the `moss: ` prefix agents grep for problems.
+pub(crate) fn built_summary_line(pages: usize, partials: usize, problems: usize, notes: usize) -> String {
+    let noun = |n: usize, one: &str, many: &str| if n == 1 { one.to_string() } else { many.to_string() };
+    let skipped = if partials == 0 { String::new() } else { format!(" ({partials} skipped)") };
+    let notes = if notes == 0 { String::new() } else { format!(" · {notes} {}", noun(notes, "note", "notes")) };
+    format!(
+        "Built {pages} {}{skipped} · {problems} {}{notes}",
+        noun(pages, "page", "pages"),
+        noun(problems, "problem", "problems")
+    )
 }
 
 /// The one-line problem summary, or `None` when a clean build should stay
@@ -311,6 +391,8 @@ impl log::Log for HeadlessLogger {
         if let Some((line, counts)) = log_line_for(record) {
             if counts {
                 note_cli_problem();
+            } else if record.target().ends_with("#note") {
+                note_cli_note();
             }
             cli_eprintln!("{}", line);
         }
@@ -346,7 +428,22 @@ fn log_line_for(record: &log::Record) -> Option<(String, bool)> {
             true,
         ));
     }
-    Some((format!("[{}] {}: {}", record.level(), record.target(), record.args()), false))
+    // Every printed `[WARN]` is a problem, whichever call site wrote it: a bare
+    // `log::warn!` used to print and not count, so `--strict` and the closing
+    // summary disagreed with the screen. `log_warn_problem!` has already counted
+    // its own line and says so in the target suffix, which is not printed.
+    let target = record.target();
+    if let Some(plain) = target.strip_suffix("#note") {
+        return Some((format!("[NOTE] {}: {}", plain, record.args()), false));
+    }
+    let (target, counted) = match target.strip_suffix("#counted") {
+        Some(plain) => (plain, true),
+        None => (target, false),
+    };
+    Some((
+        format!("[{}] {}: {}", record.level(), target, record.args()),
+        record.level() == log::Level::Warn && !counted,
+    ))
 }
 
 /// Whether `record` came from usvg or resvg.

@@ -2075,6 +2075,24 @@ fn flush_pending_paragraph(out: &mut Vec<Block>, pending_inlines: &mut Vec<Inlin
 /// Headings whose base slug is `None` (shouldn't happen post-PR2, but
 /// safe-guarded) are left untouched.
 fn assign_heading_id_suffixes(blocks: &mut [Block]) {
+    let mut id_counts: HashMap<String, usize> = HashMap::new();
+    for slot in heading_id_slots(blocks) {
+        disambiguate_heading_id(slot, &mut id_counts);
+    }
+}
+
+/// Drop every heading's id, so the renderer emits no `id` and no permalink
+/// anchor. For a document that is injected beside other pages' headings (the
+/// footer), where an id would collide with the page's own.
+pub fn clear_heading_ids(doc: &mut Document) {
+    for slot in heading_id_slots(&mut doc.blocks) {
+        *slot = None;
+    }
+}
+
+/// Every heading's id slot, in the order the headings appear on the rendered
+/// page: the body first, then each hoisted endnote in endnote order.
+fn heading_id_slots(blocks: &mut [Block]) -> Vec<&mut Option<String>> {
     // Built BEFORE the mutable walk: `entries()` is the order
     // `render_section` emits the `<li id="fn-N">`s, and it needs a shared
     // borrow of the same tree.
@@ -2102,16 +2120,8 @@ fn assign_heading_id_suffixes(blocks: &mut [Block]) {
             .position(|l| l == label)
             .unwrap_or(usize::MAX)
     });
-
-    let mut id_counts: HashMap<String, usize> = HashMap::new();
-    for slot in body {
-        disambiguate_heading_id(slot, &mut id_counts);
-    }
-    for (_, slots) in notes {
-        for slot in slots {
-            disambiguate_heading_id(slot, &mut id_counts);
-        }
-    }
+    body.extend(notes.into_iter().flat_map(|(_, slots)| slots));
+    body
 }
 
 /// Apply the `-N` suffix rule to one heading id slot.

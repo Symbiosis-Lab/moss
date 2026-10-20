@@ -131,7 +131,7 @@
 //!
 //! The render phase emits `/_moss/theme/style.css` and `/_moss/theme/script.js`
 //! from the two canonical entry points; everything else in `theme/` mirrors
-//! through unchanged.
+//! through unchanged (`assets::theme_modules` adds hashed copies of its scripts).
 //!
 //! ## Plugin Filesystem Access
 //!
@@ -998,7 +998,7 @@ pub fn retire_legacy_roots(mp: &MossPaths) {
             // exact undiagnosable state the pass exists to end.
             // allow:unlink retired output roots that no build writes or serves
             if let Err(e) = crate::build::io_utils::remove_output_dir_all(&current) {
-                log::warn!("[retire-legacy] {} is a directory and could not be removed ({e}); \
+                log::info!("[retire-legacy] {} is a directory and could not be removed ({e}); \
                             promotion will keep failing until it is deleted by hand", current.display());
             }
         }
@@ -1189,7 +1189,7 @@ fn exclude_from_cloud_sync(dir: &std::path::Path) {
     if rc != 0 {
         let err = std::io::Error::last_os_error();
         if crate::infra::warn_once::should_warn_once(dir.to_path_buf(), warned_dirs()) {
-            log::warn!(
+            log::info!(
                 "[cloud-exclude] setxattr(com.apple.fileprovider.ignore#P) failed on {}: {}",
                 dir.display(),
                 err
@@ -1201,7 +1201,7 @@ fn exclude_from_cloud_sync(dir: &std::path::Path) {
     // the directory, and which of the two failed is a question the return
     // code alone could not answer.
     if !has_cloud_sync_marker(dir) && crate::infra::warn_once::should_warn_once(dir.to_path_buf(), warned_dirs()) {
-        log::warn!(
+        log::info!(
             "[cloud-exclude] com.apple.fileprovider.ignore#P is absent on {} right after it was set — \
              the provider may still sync it",
             dir.display()

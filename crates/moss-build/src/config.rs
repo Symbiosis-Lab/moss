@@ -86,7 +86,7 @@ impl ConfigFile {
         let mut table: toml::Table =
             toml::from_str(text).map_err(|e| format!("Failed to parse config.toml: {}", e))?;
         if let Err(e) = crate::config::migrations::migrate_to_current(&mut table) {
-            log::warn!(target: "config", "in-memory config migration failed, reading raw values: {e}");
+            log::info!(target: "config", "in-memory config migration failed, reading raw values: {e}");
         }
         Ok(Self { root: table, key_orders: written_key_orders(text) })
     }

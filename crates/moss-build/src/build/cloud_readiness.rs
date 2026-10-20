@@ -527,7 +527,7 @@ pub fn read_optional_build_input(path: &Path, what: &str, evidence: &crate::buil
             // one and showed the user a site with no stylesheet, calling it
             // ready. The ledger is how that reaches `cloud_gate_should_hold`.
             evidence.pending(path);
-            log::warn!(
+            crate::build::cli_output::log_note!(
                 "{} is still in the cloud — building without it; the download will trigger a rebuild",
                 what
             );
@@ -580,6 +580,10 @@ pub fn read_page_source(
             Some(text)
         },
         Ok(None) => {
+            crate::build::cli_output::log_note!(
+                "{} is still in the cloud — building without it; the download will trigger a rebuild",
+                path.display()
+            );
             deferred.lock().unwrap().push(path.to_path_buf());
             // And record it where the *publish* decision can see it. `deferred`
             // is a per-render-pass list read by `remove_stale_html` to protect
@@ -601,7 +605,14 @@ pub fn read_page_source(
                 evidence.retained(path);
                 deferred.lock().unwrap().push(path.to_path_buf());
             }
-            log::warn!("Skipping page {}: {}", path.display(), e);
+            if icloud::is_definitely_absent(path, &e) {
+                log::info!("Skipping page {}: {}", path.display(), e);
+            } else {
+                // Present but unreadable (not valid UTF-8, no permission): the
+                // page is left out of the site, and only the author can fix it.
+                // One problem per file; the scans that also trip on it stay quiet.
+                crate::build::cli_output::log_warn_problem!("Skipping page {}: {}", path.display(), e);
+            }
             None
         }
     }

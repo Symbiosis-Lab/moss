@@ -494,6 +494,20 @@ impl ServedPath {
         ServedPath(format!("{}/script.{}.js", THEME_MOUNT, hash))
     }
 
+    /// A theme JavaScript file with its content hash in the name. `rel` is the
+    /// file's path under `.moss/theme/` (`lib/kernel.mjs`); the output is always
+    /// `_moss/theme/lib/kernel.{hash}.js`, whatever the source extension, so a
+    /// static host with no `.mjs` MIME mapping still serves a JavaScript type.
+    pub fn for_theme_script_hashed(rel: &str, hash: &str) -> Result<Self, ServedPathError> {
+        Self::validate_source(rel)?;
+        let normalized = moss_core::slug::normalize_separators(rel.trim());
+        let stem = normalized
+            .strip_suffix(".mjs")
+            .or_else(|| normalized.strip_suffix(".js"))
+            .ok_or(ServedPathError::InvalidInput("theme script must end in .js or .mjs"))?;
+        Ok(ServedPath(format!("{}/{}.{}.js", THEME_MOUNT, stem, hash)))
+    }
+
     /// Places-explorer data file, content-hashed. Output:
     /// `_moss/places.{hash}.json`. Same shape as
     /// [`Self::for_default_stylesheet_hashed`]: the hash names the file, so
@@ -1220,6 +1234,16 @@ mod tests {
     fn for_custom_script_hashed_embeds_hash() {
         let sp = ServedPath::for_custom_script_hashed("abcd1234ef567890");
         assert_eq!(sp.as_str(), "_moss/theme/script.abcd1234ef567890.js");
+    }
+
+    #[test]
+    fn for_theme_script_hashed_forces_js_extension() {
+        let sp = ServedPath::for_theme_script_hashed("lib/kernel.mjs", "abcd").unwrap();
+        assert_eq!(sp.as_str(), "_moss/theme/lib/kernel.abcd.js");
+        let sp = ServedPath::for_theme_script_hashed("kernel.js", "abcd").unwrap();
+        assert_eq!(sp.as_str(), "_moss/theme/kernel.abcd.js");
+        assert!(ServedPath::for_theme_script_hashed("../kernel.js", "abcd").is_err());
+        assert!(ServedPath::for_theme_script_hashed("kernel.css", "abcd").is_err());
     }
 
     #[test]

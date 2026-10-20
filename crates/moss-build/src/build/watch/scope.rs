@@ -307,7 +307,7 @@ fn rel_or_whole(root: &Path, path: &Path) -> (Option<PathBuf>, String) {
         None => {
             static WARNED: std::sync::Once = std::sync::Once::new();
             WARNED.call_once(|| {
-                log::warn!(
+                log::info!(
                     target: "moss::build::watch",
                     "Watch filter asked about '{}', which is not inside '{}' — judging the \
                      whole path. If nothing in this folder ever rebuilds, this is why.",

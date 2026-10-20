@@ -210,7 +210,7 @@ pub fn io_stop(root: &Path, context: &str, path: &Path, e: std::io::Error) -> Bu
         match disposition(root, path) {
             Disposition::Discard => {
                 let removed = std::fs::remove_file(path).is_ok();
-                log::warn!(
+                log::info!(
                     "{} was evicted from the build stage{} — the next build will \
                      re-render it",
                     path.display(),
@@ -221,7 +221,7 @@ pub fn io_stop(root: &Path, context: &str, path: &Path, e: std::io::Error) -> Bu
                 // same place.
                 return if removed { BuildStopped::discarded(message) } else { BuildStopped::from(message) };
             }
-            Disposition::Report => log::warn!(
+            Disposition::Report => log::info!(
                 "{} is still in the cloud, but its arrival would not trigger a rebuild \
                  — reporting rather than raising an unclearable waiting screen",
                 path.display()
@@ -385,7 +385,7 @@ where
 {
     let outcome = match attempt().await {
         Err(stopped) if stopped.is_discarded() => {
-            log::warn!(
+            log::info!(
                 "build stopped on a file it discarded from the stage ({}) — building again",
                 stopped.message()
             );

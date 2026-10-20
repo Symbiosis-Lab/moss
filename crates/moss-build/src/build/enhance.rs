@@ -170,7 +170,7 @@ impl ResolvedSlots {
     /// `plugin_name` is used for deterministic tie-breaking (alphabetical).
     pub fn merge(&mut self, result: &EnhanceResult, priority: u32, plugin_name: &str) {
         if !result.success {
-            log::warn!("Plugin '{}' returned success=false for slot content; skipping its slots", plugin_name);
+            log::info!("Plugin '{}' returned success=false for slot content; skipping its slots", plugin_name);
             return;
         }
         for (slot_name, content) in &result.slots {
@@ -328,7 +328,7 @@ fn log_residual_slot_markers(page_path: &str, residual: &[&str]) {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     page_path.hash(&mut h);
     let page_id = h.finish();
-    log::warn!(
+    log::info!(
         target: "slots",
         "unresolved slot marker(s) {:?} shipped in page#{:016x} — slot injection did not cover this file (raw marker will render; in attribute position it leaks a literal \">\")",
         residual,
@@ -440,14 +440,14 @@ fn write_slot_inject_record(
     let json_bytes = match serde_json::to_vec(record) {
         Ok(b) => b,
         Err(e) => {
-            log::warn!("Failed to serialize html/slots record: {}", e);
+            log::info!("Failed to serialize html/slots record: {}", e);
             return;
         }
     };
     let record_oid = match object_store.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request) {
         Ok(oid) => oid,
         Err(e) => {
-            log::warn!("Failed to store html/slots record blob: {}", e);
+            log::info!("Failed to store html/slots record blob: {}", e);
             return;
         }
     };
@@ -460,7 +460,7 @@ fn write_slot_inject_record(
         rec.transforms.insert(SLOT_INJECT_TRANSFORM.to_string(), entry);
     });
     if let Err(e) = merged {
-        log::warn!("Failed to write html/slots transform record: {}", e);
+        log::info!("Failed to write html/slots transform record: {}", e);
     }
 }
 
@@ -491,7 +491,7 @@ impl StoreFailures {
 
     fn report(self) {
         if let Some(reason) = self.first_reason {
-            log::warn!(
+            log::info!(
                 target: "slots",
                 "{} page(s) could not be stored in the content store ({}); they ship from the stage under a fingerprint instead of an immutable copy",
                 self.pages,

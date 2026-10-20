@@ -218,7 +218,7 @@ fn read(path: &Path) -> Option<PublishedSnapshot> {
     match serde_json::from_slice(&bytes) {
         Ok(snap) => Some(snap),
         Err(e) => {
-            log::warn!(
+            log::info!(
                 "publish record at {} is unreadable ({e}); the next change set will be unclassified",
                 path.display()
             );

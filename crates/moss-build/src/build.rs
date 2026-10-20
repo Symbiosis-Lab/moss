@@ -873,7 +873,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                 Some(p)
             }
             Err(e) => {
-                log::warn!("⚠️ Preview server failed to start: {}", e);
+                log::info!("⚠️ Preview server failed to start: {}", e);
                 // Surface the failure to the frontend. Without this, the
                 // pipeline still completes with `port: None` and the panel
                 // silently warns then sits at the last BackgroundProgress
@@ -1014,7 +1014,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
             let await_start = std::time::Instant::now();
             progress::announce_process_hook_wait(&config.progress, port_now());
             if let Err(e) = handle.await {
-                log::warn!("process hook task failed: {}", e);
+                log::info!("process hook task failed: {}", e);
             }
             let waited_ms = await_start.elapsed().as_millis();
             progress::announce_process_hook_done(&config.progress, waited_ms, port_now());
@@ -1249,6 +1249,12 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // `run_pipeline`'s `Result<String, String>` after the fact isn't
     // possible, so they're recorded at the point they're computed instead.
     crate::build::phase::record_count("pages", build_documents.len());
+    if !cancelled {
+        // "Skipped" is every document that only fills a slot (a `partial: true`
+        // file, `footer.md`): it has no page of its own, so it is not a page.
+        let skipped = build_documents.iter().filter(|d| d.slot_only).count();
+        crate::build::cli_output::note_built(build_documents.len() - skipped, skipped);
+    }
     crate::build::phase::record_count("missing_references", missing_references.len());
     crate::build::phase::record_count("cancelled", cancelled as usize);
     crate::build::phase::record_count("publishable", publishable as usize);
@@ -1747,7 +1753,7 @@ impl SealWait {
         let mono = self.mono.elapsed();
         let wall = self.wall.elapsed().unwrap_or(mono);
         if wall.saturating_sub(mono) > SEAL_WAIT_SUSPENSION_WARN {
-            log::warn!(
+            crate::build::cli_output::log_note!(
                 "process was suspended ~{} s during the seal wait",
                 wall.saturating_sub(mono).as_secs()
             );
@@ -2117,7 +2123,7 @@ async fn advertise_sealed(
     // the time materialize actually runs.
     if verdict == crate::build::ship::ShipVerdict::Ship {
         if let Err(e) = sealed.write_to_disk(hashes_path) {
-            log::warn!("advertise_sealed: failed to write hashes.json: {}", e);
+            log::info!("advertise_sealed: failed to write hashes.json: {}", e);
         }
     }
 
@@ -2216,7 +2222,7 @@ pub(crate) fn collect_build_store(
         &mp.build_dir(),
     );
     if let Err(e) = store_gc::gc_old_generations(&mp.generations_dir(), &mp.current_generation_marker(), &roots, keep) {
-        log::warn!("generation GC failed (non-fatal): {}", e);
+        log::info!("generation GC failed (non-fatal): {}", e);
     }
     store_gc::maybe_gc_cache(mp);
 }
