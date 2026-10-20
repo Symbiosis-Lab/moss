@@ -353,6 +353,12 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub explorer_places_hash: Option<String>,
+    /// The `[build].passthrough` folder this page sits inside, as a folder key.
+    /// A folder at or under it that has no page of its own gets no listing, so
+    /// the trail does not link it.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub passthrough_root: Option<String>,
     /// The one per-page switch for this page's own map. On a claimed term
     /// page or a place-namespace-root page it gates the term map spliced
     /// below the content (see `is_place_namespace_root`): `Some(false)`
@@ -664,6 +670,12 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub missing_reference_occurrences: Vec<MissingReferenceOccurrence>,
+}
+
+/// Whether `folder` is `root` or a folder inside it. The one test for "at or
+/// under a passthrough root", shared by the listing plan and the breadcrumb.
+pub fn folder_within(root: &str, folder: &str) -> bool {
+    folder == root || folder.strip_prefix(root).is_some_and(|rest| rest.starts_with('/'))
 }
 
 impl ParsedDocument {

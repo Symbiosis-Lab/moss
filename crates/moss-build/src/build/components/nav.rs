@@ -844,11 +844,13 @@ fn trail_tail(
         };
 
         // Look up the folder's chrome label (plain text) from all_docs.
-        let title = all_docs
-            .iter()
-            .find(|d| d.url_path == folder_index_path)
-            .map(|d| d.label.clone())
-            .unwrap_or_else(|| titlecase_segment(part));
+        let folder_doc = all_docs.iter().find(|d| d.url_path == folder_index_path);
+        let title = folder_doc.map(|d| d.label.clone()).unwrap_or_else(|| titlecase_segment(part));
+        // A passthrough folder gets no listing page, so an ancestor inside one
+        // that has no page of its own is left out of the trail.
+        let folder_key = folder_index_path.trim_end_matches("/index.html");
+        let has_page = folder_doc.is_some()
+            || !doc.passthrough_root.as_deref().is_some_and(|root| crate::build::types::folder_within(root, folder_key));
 
         if is_last {
             // For the last folder part, check if the file is index.html
@@ -862,11 +864,13 @@ fn trail_tail(
             } else {
                 // There's a non-index file, so the folder is a middle segment
                 // and the file itself is the current page
-                segments.push(BreadcrumbSegment {
-                    title,
-                    url: folder_url(&effective_path),
-                    is_current: false,
-                });
+                if has_page {
+                    segments.push(BreadcrumbSegment {
+                        title,
+                        url: folder_url(&effective_path),
+                        is_current: false,
+                    });
+                }
                 segments.push(BreadcrumbSegment {
                     // Breadcrumb text is chrome; use the plain-text label.
                     title: doc.label.clone(),
@@ -876,11 +880,13 @@ fn trail_tail(
             }
         } else {
             // Middle segment: link to the folder index
-            segments.push(BreadcrumbSegment {
-                title,
-                url: folder_url(&effective_path),
-                is_current: false,
-            });
+            if has_page {
+                segments.push(BreadcrumbSegment {
+                    title,
+                    url: folder_url(&effective_path),
+                    is_current: false,
+                });
+            }
         }
     }
 

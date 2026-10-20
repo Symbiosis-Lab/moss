@@ -257,7 +257,8 @@ fn passthrough_folder_and_its_subfolders_get_no_listing_but_their_pages_render()
     let generated = generated(&documents);
     for gone in ["scene/index.html", "scene/deep/index.html", "scene/deep/more/index.html"] {
         assert!(!generated.contains(gone), "passthrough folder got a listing {gone}: {generated:?}");
-        assert!(!output.join(gone).exists(), "listing written for {gone}");
+        let written = std::fs::read_to_string(output.join(gone)).unwrap_or_default();
+        assert!(written.is_empty() || written.contains("http-equiv=\"refresh\""), "listing written for {gone}");
     }
     assert!(generated.contains("notes/index.html"), "an ordinary folder keeps its listing: {generated:?}");
     for page in ["scene/credits/index.html", "scene/sketch/index.html", "scene/deep/more/page/index.html"] {

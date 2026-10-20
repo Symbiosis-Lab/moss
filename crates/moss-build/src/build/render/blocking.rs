@@ -3018,6 +3018,7 @@ pub fn generate_blocking_content_for_build(
         crate::build::terms::claim_stubs(&term_index),
         crate::build::terms::edition_move_stubs(&term_index),
         super::build_shared::shadowed_edition_home_stubs(&verbatim_dirs, &home_file_winners),
+        folder_plan.passthrough_stubs.clone(),
     ]
     .concat();
     let table_inputs = crate::build::feeds::redirects::TableInputs {

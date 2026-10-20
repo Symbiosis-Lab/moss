@@ -1572,6 +1572,7 @@ pub fn process_markdown_file(
         place_names: None,
         is_place_namespace_root: false,
         explorer_places_hash: None,
+        passthrough_root: None,
         has_own_map_embed: false,
         map,
         route,

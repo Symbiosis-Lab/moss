@@ -91,6 +91,9 @@ pub(super) struct FolderIndexEntry {
 
 pub(super) struct FolderIndexPlan {
     pub entries: Vec<FolderIndexEntry>,
+    /// `(old address, target)` for each listing a passthrough folder no longer
+    /// gets, for the redirect table.
+    pub passthrough_stubs: Vec<(String, String)>,
 }
 
 impl FolderIndexPlan {
@@ -164,6 +167,10 @@ impl FolderIndexPlan {
                     .strip_suffix("/index.html").map(str::to_string)
             })
             .collect();
+        for doc in documents.iter_mut() {
+            let folder = doc.url_path.rsplit_once('/').map_or("", |(dir, _)| dir);
+            doc.passthrough_root = passthrough.iter().find(|root| crate::build::types::folder_within(root, folder)).cloned();
+        }
 
         let authored: HashSet<String> = documents.iter()
             .filter(|d| d.source_path.is_some())
@@ -185,14 +192,26 @@ impl FolderIndexPlan {
         // have an index; empty language directories and authored translation
         // trees do not acquire generated indexes. A term page is a page of
         // its edition, never a folder index of the tree it sits in.
-        let folders: Vec<String> = candidates.into_iter().filter_map(|(folder, has_children)| {
+        let mut folders: Vec<String> = Vec::new();
+        let mut withheld: Vec<String> = Vec::new();
+        for (folder, has_children) in candidates {
             let top = folder.split('/').next().unwrap_or(&folder);
             let empty_language = !has_children && crate::i18n::path::resolve_language_from_folder(top).is_some();
             let tree_suppressed = empty_language || translation_roots.contains(top);
-            let in_passthrough = passthrough.iter().any(|root| folder == *root || folder.strip_prefix(root.as_str()).is_some_and(|rest| rest.starts_with('/')));
-            (!authored.contains(&folder) && !suppressed.contains(&folder) && !verbatim.contains(&folder) && !in_passthrough
-                && (term_pages.contains(&folder) || !tree_suppressed))
-                .then_some(folder)
+            let in_passthrough = passthrough.iter().any(|root| crate::build::types::folder_within(root, &folder));
+            if authored.contains(&folder) || suppressed.contains(&folder) || verbatim.contains(&folder)
+                || !(term_pages.contains(&folder) || !tree_suppressed)
+            {
+                continue;
+            }
+            if in_passthrough { withheld.push(folder) } else { folders.push(folder) }
+        }
+        // Each withheld listing forwards to the nearest folder page still served.
+        let passthrough_stubs = withheld.iter().map(|folder| {
+            let target = std::iter::successors(folder.rsplit_once('/').map(|(parent, _)| parent), |p| p.rsplit_once('/').map(|(parent, _)| parent))
+                .find(|p| authored.contains(*p) || verbatim.contains(*p) || folders.iter().any(|f| f == p))
+                .map_or_else(|| "/".to_string(), |p| format!("/{p}/")); // allow:served-path-url-construct (the redirect target is the parent page's address)
+            (format!("{folder}/"), target) // allow:served-path-url-construct (the address the listing had, the redirect source)
         }).collect();
 
         let entries = folders.into_iter().map(|folder| {
@@ -200,7 +219,7 @@ impl FolderIndexPlan {
             documents.push(make_document(&folder));
             FolderIndexEntry { folder, document_index }
         }).collect();
-        Self { entries }
+        Self { entries, passthrough_stubs }
     }
 }
 
