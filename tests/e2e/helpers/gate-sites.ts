@@ -3474,6 +3474,10 @@ listed: false
 ---
 
 Small print.
+
+---
+
+More small print.
 `,
     ".moss/config.toml": CONFIG_TOML,
     ".moss/theme/style.css": `:root {
