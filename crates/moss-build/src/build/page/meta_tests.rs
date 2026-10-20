@@ -2587,7 +2587,7 @@ fn a_card_description_shows_the_plain_excerpts_words_and_no_markdown() {
             assert!(!html.contains(syntax), "`{syntax}` leaked into the card: {html}");
         }
     }
-    // The CHPS-shaped lead keeps its bold, closed before the ellipsis.
+    // A lead bold throughout keeps its bold, closed before the ellipsis.
     let content = format!("Our group hosted its first public lecture by **Dr. Ada Lovelace** of the Analytical Society on **March 3, 2026 at 4:00 pm** in **Room 12, East Hall of the Old Library Building**{tail}");
     assert!(extract_description_markdown(&content, true).ends_with("**…"));
 }

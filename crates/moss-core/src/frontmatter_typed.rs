@@ -1867,12 +1867,12 @@ mod url_path_tests {
         // Bug fix: Title-Case folder must be lowercased in the URL.
         assert_eq!(
             compute_url_path(
-                "News/2026-04-22-morbidelli.md",
+                "News/2026-04-22-lovelace.md",
                 false,
                 None,
-                "2026-04-22-morbidelli"
+                "2026-04-22-lovelace"
             ),
-            "news/2026-04-22-morbidelli/index.html"
+            "news/2026-04-22-lovelace/index.html"
         );
         assert_eq!(
             compute_url_path("Projects/giant-planets.md", false, None, "giant-planets"),
