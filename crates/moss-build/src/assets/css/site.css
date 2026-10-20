@@ -1465,9 +1465,13 @@ footer.container hr::before {
    onto an adjacent line of the same paragraph is not defended against here,
    the same scope limit the original fix accepted.
 
-   The inline axis is NOT extended by this base rule — a sentence link's
-   width must stay exactly its own text, or the reach would spill into the
-   surrounding words and widen what looks clickable mid-sentence. A list
+   The inline axis is NOT extended by this base rule beyond a 44px floor — a
+   sentence link's width stays its own text, or the reach would spill into the
+   surrounding words and widen what looks clickable mid-sentence. The floor
+   exists for short labels in a row of links ("X", "RSS", "Email"), whose own
+   width is under 44px; `margin-inline: auto` centres the wider area on the
+   link, and the separators between such links are wider than the few pixels
+   it adds to each side. A list
    link gets its own, more specific rule below instead: list items stack
    with nothing beside them horizontally (unlike a nav row), so widening is
    free there, and a short label needs it — "FAQ" at the default reading
@@ -1489,6 +1493,8 @@ footer.container hr::before {
     position: absolute;
     inset-block: -16px;
     inset-inline: 0;
+    min-inline-size: 44px;
+    margin-inline: auto;
   }
   /* List links only (see above): the inline axis has no neighbor to
      overlap, so it reaches the same 16px as the block axis on both sides —
@@ -5768,7 +5774,7 @@ article a:where(:not(.moss-btn)):focus {
 
 .moss-cards[data-layout="grid"] {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(var(--moss-card-min, 280px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(var(--moss-card-min, var(--_card-min, 280px)), 1fr));
   gap: var(--moss-space-lg);
   /* Logical: the listing's separation from the prose around it is a block-axis
      rhythm. Spelled physically it ate 128px off a vertical page's band. */
@@ -5807,12 +5813,15 @@ article a:where(:not(.moss-btn)):focus {
   margin: 0;
 }
 
-/* Per-state density — wrapper carries the axis + cover-presence flags */
-.moss-cards[data-layout="grid"][data-list-axis="date"] { --moss-card-min: 320px; }
-.moss-cards[data-layout="grid"][data-list-axis="weight"] { --moss-card-min: 220px; }
-.moss-cards[data-layout="grid"][data-list-axis="title"] { --moss-card-min: 220px; }
-.moss-cards[data-layout="grid"][data-list-axis="weight"][data-list-has-covers] { --moss-card-min: 280px; }
-.moss-cards[data-layout="grid"][data-list-axis="title"][data-list-has-covers] { --moss-card-min: 280px; }
+/* Per-state density — wrapper carries the axis + cover-presence flags. These
+   set the private `--_card-min`, which the grid reads only when the author set
+   no `--moss-card-min` (on `:root` or the grid): a public property declared
+   here on the grid would shadow any value inherited from `:root`. */
+.moss-cards[data-layout="grid"][data-list-axis="date"] { --_card-min: 320px; }
+.moss-cards[data-layout="grid"][data-list-axis="weight"] { --_card-min: 220px; }
+.moss-cards[data-layout="grid"][data-list-axis="title"] { --_card-min: 220px; }
+.moss-cards[data-layout="grid"][data-list-axis="weight"][data-list-has-covers] { --_card-min: 280px; }
+.moss-cards[data-layout="grid"][data-list-axis="title"][data-list-has-covers] { --_card-min: 280px; }
 
 /* The INDEX state: a grid whose cards carry no cover at all.
  *
@@ -5844,12 +5853,12 @@ article a:where(:not(.moss-btn)):focus {
    `:not(:has(.moss-card-description))` is the description half.
 
    `[data-list-axis]` is carried by every grid wrapper (grid_card.rs), and is
-   matched on every rule here — not just the `--moss-card-min` one that needs
+   matched on every rule here — not just the `--_card-min` one that needs
    it to outrank the per-axis floors above — so hand-written or third-party
    `data-layout="grid"` markup cannot pick up index chrome with archive track
    sizing. */
 .moss-cards[data-layout="grid"][data-list-axis]:not([data-list-has-covers]):not(:has(.moss-card-description)) {
-  --moss-card-min: min(11em, 45%);
+  --_card-min: min(11em, 45%);
   gap: var(--moss-space-md) var(--moss-space-lg);
 }
 
@@ -6049,7 +6058,7 @@ article a:where(:not(.moss-btn)):focus {
    on `.moss-grid .moss-card` selectors that were always inert (a `:::grid`
    cell's card is `display: flex` at every width regardless). Below 36rem the
    listing's own auto-fill (`.moss-cards[data-layout="grid"]`'s `minmax(var(
-   --moss-card-min, 280px), 1fr)`) settles on one column, at which point the
+   --moss-card-min, var(--_card-min, 280px)), 1fr)`) settles on one column, at which point the
    subgrid's `display: grid` / `grid-auto-rows: auto auto` two-track
    row-pairing no longer has a second column to pair against; reset both back
    here, plus the explicit `grid-row: 1`/`2` placement from that block, or a

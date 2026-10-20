@@ -326,7 +326,7 @@ fn flat_row_shows_year_for_month_precision_date() {
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
-        html.contains(r#"<span class="moss-prefix-link-prefix date">1793 · 06</span>"#),
+        html.contains(r#"<span class="moss-prefix-link-prefix date">June 1793</span>"#),
         "{html}"
     );
 }

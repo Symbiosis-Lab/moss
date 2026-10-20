@@ -7307,6 +7307,23 @@ fn a_folder_timezone_cascade_gives_its_events_a_zone() {
 }
 
 #[test]
+fn an_empty_value_on_one_page_cancels_a_cascaded_key_there() {
+    let (test_dir, _c) = create_test_dir();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::create_dir_all(test_dir.join("Shows")).unwrap();
+    fs::write(
+        test_dir.join("Shows/index.md"),
+        "---\ntitle: Shows\ncascade:\n  description: Folder blurb\n---\n\nWhat is on.\n",
+    )
+    .unwrap();
+    fs::write(test_dir.join("Shows/kept.md"), "---\ntitle: Kept\n---\n\nBody.\n").unwrap();
+    fs::write(test_dir.join("Shows/cancelled.md"), "---\ntitle: Cancelled\ndescription: \"\"\n---\n\nBody.\n").unwrap();
+    build_test_sealed_at(test_dir.to_str().unwrap(), Some("https://example.test")).expect("build");
+    assert!(staged(&test_dir, "shows/kept/index.html").contains("Folder blurb"), "the cascade reaches a plain page");
+    assert!(!staged(&test_dir, "shows/cancelled/index.html").contains("Folder blurb"), "an empty value cancels it");
+}
+
+#[test]
 fn an_all_day_multi_day_event_ends_the_day_after_its_inclusive_end() {
     let (dir, _c) = event_site(&[("Festival.md", "title: Festival\nuid: fest0001\nstart: 2026-11-01\nend: 2026-11-03\n")]);
     let lines = assert_valid_ics(&staged(&dir, "events/festival/event.ics"));

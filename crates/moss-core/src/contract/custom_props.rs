@@ -194,7 +194,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-card-min",
         owner: "moss-cards",
         default: "280px",
-        description: "Minimum column width in the auto-filled card grid. Lower it for denser grids of short items, raise it to force fewer, wider cards.",
+        description: "Minimum column width in the auto-filled card grid. Lower it for denser grids of short items, raise it to force fewer, wider cards. Set it on `:root` for every grid or on a grid for that one; with none set, the grid picks a width by its sort order.",
     },
     CustomProp {
         name: "--moss-cover-color",

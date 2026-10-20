@@ -835,6 +835,17 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "reader_controls",
+        field_type: FieldType::Boolean,
+        widget: Widget::Checkbox,
+        // Frequency=1, Importance=1 → score=90
+        score: 91,
+        description: "`false` removes the reader's text-size control (the \"Aa\" button beside the date) from a dated page; unset or `true` keeps it. Event pages never draw it. A folder sets it for its pages with cascade.",
+        label_key: "chip.reader_controls.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "color",
         field_type: FieldType::String,
         widget: Widget::TextInput,

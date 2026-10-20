@@ -64,7 +64,17 @@ pub(crate) fn populate_direct_children_sorts(docs: &mut [ParsedDocument]) {
                 })
                 .map(|(_, d)| d)
                 .collect();
-            moss_core::sort::resolve_folder_sort(&docs[fi], &children)
+            let (resolved, undated) = moss_core::sort::resolve_folder_sort_with_undated(&docs[fi], &children);
+            // The site's home page is not a dated stream, and `children: false` lists nothing.
+            if !undated.is_empty() && !prefix.is_empty() && docs[fi].children != Some(false) {
+                let names: Vec<&str> = undated.iter().map(|d| d.source_path.as_deref().unwrap_or(&d.url_path)).collect();
+                crate::build::cli_output::log_warn_problem!(
+                    "folder `{}` lists by title, not date, because only some of its pages have a `date:`; add one to {} or set `sort: title` on the folder's home page to keep this order",
+                    prefix.trim_end_matches('/'),
+                    names.join(", ")
+                );
+            }
+            resolved
         };
         docs[fi].direct_children_sort = Some(resolved);
     }

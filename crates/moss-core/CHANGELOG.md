@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `reader_controls` joins the built-in fields (`FrontMatter::reader_controls`, a boolean): `false` removes the text-size control from a dated page.
+
 ## [0.19.0] - 2026-10-18
 
 ### Removed

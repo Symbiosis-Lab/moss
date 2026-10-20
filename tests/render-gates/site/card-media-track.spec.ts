@@ -39,7 +39,7 @@ const TOKENS = `:root{
   --moss-space-md:24px; --moss-space-lg:32px; --moss-space-2xl:64px;
   --moss-color-surface:#f4f4f4; --moss-color-bg:#fff; --moss-color-text:#111;
   --moss-color-muted:#666; --moss-border-light:#ddd; --moss-color-accent:#2d5a2d;
-  --moss-reading-size:18px; --moss-card-min:160px;
+  --moss-reading-size:18px;
 }`;
 
 // A 1x1 transparent GIF: a real cover, so the media track has something to be
@@ -236,5 +236,31 @@ test.describe('fallback path (engine without subgrid)', () => {
     const bg = await page.locator('.moss-card-no-cover').first()
       .evaluate(el => getComputedStyle(el).backgroundImage);
     expect(bg, 'the fallback placeholder lost its gradient').toContain('linear-gradient');
+  });
+});
+
+// A theme's `--moss-card-min` on `:root` sets the listing's column floor; the
+// per-sort-axis default applies only when the theme set none.
+test.describe('column floor', () => {
+  const columns = (p) => p.evaluate(() => {
+    const g = document.querySelector('.moss-cards[data-layout="grid"]');
+    return getComputedStyle(g).gridTemplateColumns.split(' ').length;
+  });
+  const withRoot = (decl) => listing([true, true, true, true, true], { width: 900 })
+    .replace('</head>', `<style>${decl}</style></head>`);
+
+  test('without a theme value the sort axis default applies', async ({ page }) => {
+    await page.setContent(listing([true, true, true, true, true], { width: 900 }));
+    expect(await columns(page)).toBe(2);
+  });
+
+  test('a :root value reaches the grid', async ({ page }) => {
+    await page.setContent(withRoot(':root{--moss-card-min:150px}'));
+    expect(await columns(page)).toBe(5);
+  });
+
+  test('a value set on the grid itself still wins over :root', async ({ page }) => {
+    await page.setContent(withRoot(':root{--moss-card-min:150px} .moss-cards{--moss-card-min:420px}'));
+    expect(await columns(page)).toBe(2);
   });
 });

@@ -27,6 +27,7 @@ const CASCADE_KEYS: &[&str] = &[
     "description",
     "content_width",
     "title_block",
+    "reader_controls",
     "sort",
     "timezone",
 ];
@@ -222,6 +223,13 @@ fn apply_cascade_values(
                         if allowed.contains(&v.as_str()) {
                             doc.title_block = Some(v);
                         }
+                    }
+                }
+            }
+            "reader_controls" => {
+                if doc.reader_controls.is_none() {
+                    if let Ok(v) = serde_yaml::from_value::<bool>(value.clone()) {
+                        doc.reader_controls = Some(v);
                     }
                 }
             }
@@ -608,6 +616,7 @@ mod tests {
             "tags" => serde_yaml::to_value(vec!["docs"]).unwrap(),
             "content_width" => serde_yaml::Value::String("wide".to_string()),
             "title_block" => serde_yaml::Value::String("beside-picture".to_string()),
+            "reader_controls" => serde_yaml::Value::Bool(false),
             "sort" => serde_yaml::Value::String("title".to_string()),
             "timezone" => serde_yaml::Value::String("Europe/Oslo".to_string()),
             other => panic!("CASCADE_KEYS names `{other}` but the test has no sample value for it"),

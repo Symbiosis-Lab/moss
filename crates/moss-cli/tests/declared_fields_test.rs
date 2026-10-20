@@ -372,3 +372,27 @@ fn a_blank_value_counts_as_absent_for_built_in_and_declared_fields() {
         }
     }
 }
+
+#[test]
+fn reader_controls_false_removes_the_text_size_control_from_a_dated_page_or_a_folder() {
+    let dated = |extra: &str| format!("---\ntitle: Note\ndate: 2026-03-01\n{extra}---\nThe text.\n");
+    let home = "---\ntitle: Quiet\ncascade:\n  reader_controls: false\n---\nQuiet pages.\n";
+    let s = site(
+        "",
+        &[
+            ("Plain/note.md", &dated("")),
+            ("Own/note.md", &dated("reader_controls: false\n")),
+            ("Quiet/index.md", home),
+            ("Quiet/note.md", &dated("")),
+            ("Quiet/back.md", &dated("reader_controls: true\n")),
+        ],
+    );
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let control = "class=\"font-trigger";
+    assert!(built(&s, "plain/note/index.html").contains(control), "the control is on by default");
+    assert!(!built(&s, "own/note/index.html").contains(control), "a page turns it off");
+    assert!(!built(&s, "quiet/note/index.html").contains(control), "a folder turns it off for its pages");
+    assert!(built(&s, "quiet/back/index.html").contains(control), "a page turns it back on");
+    assert!(built(&s, "own/note/index.html").contains("class=\"date\""), "the date stays");
+}

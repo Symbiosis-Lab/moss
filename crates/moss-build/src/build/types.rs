@@ -605,6 +605,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub title_block: Option<String>,
+    /// `reader_controls: false` removes the text-size control from a dated
+    /// page. Set on the page or cascaded from a folder.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub reader_controls: Option<bool>,
     /// Declared listing sort from frontmatter (folder index pages only;
     /// `None` on article pages).
     pub sort: Option<moss_core::sort::SortField>,

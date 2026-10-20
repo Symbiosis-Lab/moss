@@ -110,10 +110,15 @@ pub fn format_display_date(date_str: &str, lang: Language, typesetting: Option<&
     }
 }
 
-/// [`format_vertical_cjk_date_compact`] under [`use_cjk_numerals`], else [`format_date_string`].
+/// [`format_vertical_cjk_date_compact`] under [`use_cjk_numerals`], else
+/// [`format_date_string`]. A month-precision date (`2026-02`) is written as the
+/// month in `lang` ("February 2026", "2026年2月"): "2026 · 02" reads as a
+/// version number, and a day-precision date still has its compact form.
 pub fn format_compact_date(date_str: &str, lang: Language, typesetting: Option<&str>) -> String {
     if use_cjk_numerals(typesetting, lang) {
         format_vertical_cjk_date_compact(date_str).unwrap_or_else(|| format_date_string(date_str))
+    } else if matches!(parse_partial_date(date_str), Some(PartialDate { month: Some(_), day: None, .. })) {
+        format_article_date(date_str, lang)
     } else {
         format_date_string(date_str)
     }

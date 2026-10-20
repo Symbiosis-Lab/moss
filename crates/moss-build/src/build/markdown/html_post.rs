@@ -46,6 +46,9 @@ pub fn prepare_markdown_source(
     frontmatter_line_count: usize,
 ) -> String {
     let accepted = accept_criticmarkup(body);
+    if let Some(warning) = unbalanced_percent_warning(&accepted, frontmatter_line_count) {
+        crate::build::cli_output::cli_warn!("[{}] {}", file_path, warning);
+    }
     let stripped = strip_percent_comments(&accepted).into_owned();
     if let Some(warning) = unterminated_comment_warning(&stripped, frontmatter_line_count) {
         crate::build::cli_output::cli_warn!("[{}] {}", file_path, warning);
@@ -148,150 +151,73 @@ pub fn accept_criticmarkup(text: &str) -> std::borrow::Cow<'_, str> {
 
 /// Strip `%%...%%` Obsidian-style comments from markdown before rendering.
 ///
-/// Two forms are supported:
+/// Every `%%` outside inert content pairs with the next one, on the same line
+/// or any later line, and the span between them (delimiters included) is
+/// removed. When both delimiters stand alone on their lines the whole lines go,
+/// so no blank line is left behind. A final `%%` with no partner is left
+/// visible; [`unbalanced_percent_warning`] reports it.
 ///
-/// **Block form** — the opening `%%` and closing `%%` each appear alone on
-/// their own line (optional surrounding whitespace). The entire span from the
-/// opening line through the closing line (inclusive) is removed. The block
-/// form may span multiple lines.
-///
-/// **Inline form** — a balanced `%%...%%` pair on a *single* line with no
-/// intervening `%%` marker. The entire `%%content%%` is removed from the
-/// line. A lone `%%` without a partner on the same line is left untouched.
-///
-/// Inert content is never stripped — [`mask_code_regions`] guards fenced and
-/// indented code, inline code spans and HTML comments, so examples like
-/// `` `%%code%%` `` survive. This guard also prevents accidentally stripping
-/// `50%% off` style prose that happens to contain a double-`%` inside a code
-/// literal.
-///
-/// The prose guard: a lone `%%` in the middle of normal prose (e.g.
-/// `50% off ... 80% done`) contains no second `%%` on the same line and so
-/// is never stripped. Only a *balanced* pair on one line (inline) or a pair
-/// where each delimiter is alone on its line (block) triggers removal.
+/// Inert content is never read for delimiters — [`mask_code_regions`] guards
+/// fenced and indented code, inline code spans and HTML comments, so
+/// `` `%%code%%` `` survives.
 pub fn strip_percent_comments(text: &str) -> std::borrow::Cow<'_, str> {
     if !text.contains("%%") {
         return std::borrow::Cow::Borrowed(text);
     }
 
     let masked = mask_code_regions(text);
-
-    // Collect (byte_start, byte_end) ranges in the ORIGINAL text to remove.
-    // Ranges must be non-overlapping and will be applied in order.
-    let mut removals: Vec<(usize, usize)> = Vec::new();
-
-    // --- Pass 1: block form ---
-    // A line is a "block delimiter" when, after stripping leading/trailing
-    // whitespace, it equals exactly `%%`. We find the first such line, then
-    // the next such line, and treat everything from the start of the first
-    // delimiter line to the end of the second (including its newline) as a
-    // removal range.
-    {
-        let masked_lines: Vec<&str> = masked.split('\n').collect();
-        let orig_lines: Vec<&str> = text.split('\n').collect();
-        // Build byte offsets for each line start in the original text.
-        let mut line_starts: Vec<usize> = Vec::with_capacity(orig_lines.len());
-        let mut offset = 0usize;
-        for line in &orig_lines {
-            line_starts.push(offset);
-            offset += line.len() + 1; // +1 for '\n'
-        }
-
-        let mut i = 0usize;
-        while i < masked_lines.len() {
-            if masked_lines[i].trim() == "%%" {
-                // Found opening delimiter. Search for the next delimiter.
-                let open_line = i;
-                let mut j = i + 1;
-                while j < masked_lines.len() {
-                    if masked_lines[j].trim() == "%%" {
-                        // Found closing delimiter at line j.
-                        let start = line_starts[open_line];
-                        // End = start of next line after closing delimiter, or
-                        // the total text length if this is the last line.
-                        let end = if j + 1 < line_starts.len() {
-                            line_starts[j + 1]
-                        } else {
-                            text.len()
-                        };
-                        removals.push((start, end));
-                        i = j + 1; // resume after the closing delimiter
-                        break;
-                    }
-                    j += 1;
-                }
-                if j >= masked_lines.len() {
-                    // No closing delimiter found — leave the opening `%%` alone.
-                    i += 1;
-                }
-            } else {
-                i += 1;
-            }
-        }
-    }
-
-    // --- Pass 2: inline form ---
-    // Scan each line of the masked text. On lines that are NOT already fully
-    // covered by a block removal, find balanced `%%...%%` pairs and remove them.
-    // "Balanced" = two `%%` tokens on the same line with no lone `%%` between.
-    {
-        let masked_lines: Vec<&str> = masked.split('\n').collect();
-        let orig_lines: Vec<&str> = text.split('\n').collect();
-        let mut line_byte_start = 0usize;
-        for (li, mline) in masked_lines.iter().enumerate() {
-            let line_byte_end = line_byte_start + orig_lines[li].len();
-            // Skip lines already fully consumed by a block removal.
-            let already_removed = removals.iter().any(|&(rs, re)| {
-                rs <= line_byte_start && re >= line_byte_end
-            });
-            if !already_removed {
-                // Find `%%...%%` pairs on this line. A pair is two consecutive
-                // `%%` occurrences on the same masked line.
-                let mut search_from = 0usize;
-                loop {
-                    let Some(first) = mline.get(search_from..).and_then(|s| s.find("%%")) else {
-                        break;
-                    };
-                    let abs_first = search_from + first;
-                    let after_first = abs_first + 2;
-                    let Some(second) = mline.get(after_first..).and_then(|s| s.find("%%")) else {
-                        break;
-                    };
-                    let abs_second = after_first + second;
-                    let abs_second_end = abs_second + 2;
-                    // Map back to byte offsets in the original text.
-                    let rm_start = line_byte_start + abs_first;
-                    let rm_end = line_byte_start + abs_second_end;
-                    removals.push((rm_start, rm_end));
-                    search_from = abs_second_end;
-                }
-            }
-            line_byte_start += orig_lines[li].len() + 1; // +1 for '\n'
-        }
-    }
-
-    if removals.is_empty() {
-        return std::borrow::Cow::Borrowed(text);
-    }
-
-    // Sort and apply removals. Overlapping ranges are merged as we go.
-    removals.sort_by_key(|r| r.0);
+    let markers = percent_markers(&masked);
+    let alone_before = |at: usize| masked.get(..at).and_then(|h| h.rsplit('\n').next()).is_some_and(|l| l.trim().is_empty());
+    let alone_after = |at: usize| masked.get(at..).and_then(|t| t.split('\n').next()).is_some_and(|l| l.trim().is_empty());
 
     let mut out = String::with_capacity(text.len());
     let mut pos = 0usize;
-    for (start, end) in removals {
-        if start < pos {
-            // Partial or full overlap with a previous range — advance end only.
-            if end > pos {
-                pos = end;
-            }
-            continue;
+    for pair in markers.chunks_exact(2) {
+        let (mut start, mut end) = (pair[0], pair[1] + 2);
+        if alone_before(start) && alone_after(end) {
+            start = masked.get(..start).and_then(|h| h.rfind('\n')).map_or(0, |i| i + 1);
+            end = masked.get(end..).and_then(|t| t.find('\n')).map_or(text.len(), |i| end + i + 1);
         }
         out.push_str(text.get(pos..start).unwrap_or_default());
         pos = end;
     }
+    if pos == 0 {
+        return std::borrow::Cow::Borrowed(text);
+    }
     out.push_str(text.get(pos..).unwrap_or_default());
     std::borrow::Cow::Owned(out)
+}
+
+/// Byte offsets of every `%%` in `masked`, left to right, none overlapping.
+fn percent_markers(masked: &str) -> Vec<usize> {
+    let mut found = Vec::new();
+    let mut from = 0usize;
+    while let Some(i) = masked.get(from..).and_then(|s| s.find("%%")) {
+        found.push(from + i);
+        from += i + 2;
+    }
+    found
+}
+
+/// Message for a `%%` left without a partner, or `None` when every marker pairs.
+///
+/// Takes the text *before* stripping so the line number names a line in the
+/// author's file once `frontmatter_line_count` is added.
+fn unbalanced_percent_warning(body: &str, frontmatter_line_count: usize) -> Option<String> {
+    if !body.contains("%%") {
+        return None;
+    }
+    let markers = percent_markers(&mask_code_regions(body));
+    if markers.len() % 2 == 0 {
+        return None;
+    }
+    let at = *markers.last()?;
+    let line = frontmatter_line_count + body.get(..at).map_or(1, |head| head.matches('\n').count() + 1);
+    Some(format!(
+        "the `%%` on line {line} has no closing `%%`, so it shows on the page as written. \
+         A `%% note %%` comment is removed when its two markers are on the same line \
+         or any later line."
+    ))
 }
 
 /// Return a byte-identical copy of `text` with every inert byte — fenced
@@ -1159,6 +1085,25 @@ mod tests {
     fn pct_block_multiline_stripped() {
         let input = "before\n%%\nline one\nline two\n%%\nafter";
         assert_eq!(strip_percent_comments(input), "before\nafter");
+    }
+
+    #[test]
+    fn pct_pair_opening_mid_line_closes_on_a_later_line_without_eating_the_heading() {
+        let input = "Intro %% a note\nthat runs on %% tail\n\n## Next heading\n\nBody";
+        assert_eq!(
+            strip_percent_comments(input),
+            "Intro  tail\n\n## Next heading\n\nBody"
+        );
+    }
+
+    #[test]
+    fn pct_unbalanced_marker_stays_visible_and_is_reported() {
+        let input = "Intro\n\n%% never closed\n\n## Heading";
+        assert_eq!(strip_percent_comments(input), input);
+        let warning = unbalanced_percent_warning(input, 4).expect("a warning");
+        assert!(warning.contains("line 7"), "{warning}");
+        assert!(unbalanced_percent_warning("a %%b%% c", 0).is_none());
+        assert!(unbalanced_percent_warning("`%%`", 0).is_none());
     }
 
     #[test]

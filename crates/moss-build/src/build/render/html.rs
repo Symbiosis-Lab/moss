@@ -1278,7 +1278,7 @@ pub(super) fn render_page<'d>(
         let d = doc.unwrap();
         let doc_lang = d.lang;
         // The size control's "Aa" would hang off the end of the event facts.
-        let has_size_control = event_meta_html.is_none();
+        let has_size_control = event_meta_html.is_none() && d.reader_controls != Some(false);
         let when_html = event_meta_html.unwrap_or_else(|| {
             let formatted = components::format_display_date(d.date.as_ref().unwrap(), doc_lang, resolved_typesetting);
             let date_fm_attr = if emit_source_lines { r#" data-source-fm="date""# } else { "" };
