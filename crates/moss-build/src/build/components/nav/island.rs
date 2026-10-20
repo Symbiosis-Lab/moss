@@ -7,7 +7,7 @@
 //! under the size the ratchet caps at, and matches how the island reads on
 //! screen — related to the masthead, not part of it.
 
-use super::NavigationBuilder;
+use super::{BreadcrumbSegment, NavigationBuilder};
 
 /// The `…` disclosure a folding breadcrumb trail opens, plus the separator
 /// that follows it — ONE fragment for both trails (masthead and island), so
@@ -65,15 +65,21 @@ impl<'a> NavigationBuilder<'a> {
         // would reintroduce the brand link this mode exists to drop, in the
         // one nav surface that isn't gated on it. The Home link the masthead
         // already opens with covers the same "way back" job.
-        if self.header_mode == super::HeaderMode::Nav {
+        let trail = self.breadcrumb_segments.as_deref().filter(|s| !s.is_empty());
+        if self.header_mode == super::HeaderMode::Nav && trail.is_some() {
             return String::new();
         }
-        let Some(segments) = &self.breadcrumb_segments else {
-            return String::new();
+        // A page that asked for its contents open but has no trail (the home
+        // page) still gets the island, with itself as the only crumb.
+        let only;
+        let segments = match (trail, &self.island_only_title) {
+            (Some(trail), _) => trail,
+            (None, Some(title)) => {
+                only = [BreadcrumbSegment { title: title.clone(), url: String::new(), is_current: true }];
+                &only[..]
+            }
+            (None, None) => return String::new(),
         };
-        if segments.is_empty() {
-            return String::new();
-        }
 
         let home_path = self.home_path();
         let logo_html = self.logo_html();

@@ -113,6 +113,7 @@ const GATE_PORT_KEYS = [
   'footer-end-space:default',
   'facts-margin:widened',
   'facts-margin:default',
+  'contents-ruler:home',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

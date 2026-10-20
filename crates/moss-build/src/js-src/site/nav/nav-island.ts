@@ -29,6 +29,7 @@
 
 import { applyFold, inlineAvailableExtent, placePanel, trailOverflows } from "./breadcrumb-fold";
 import { mountContentsRuler } from "./contents-ruler";
+import { contentsOpen, pictureImg, sectionPictures } from "./section-pictures";
 import { canvasMeasure, truncateMiddle } from "./middle-truncate";
 import { markRows, SECTION_SYNC_EVENT } from "./section-event";
 import { mountSectionName } from "./section-name";
@@ -192,11 +193,22 @@ export function initNavIsland(): void {
 
   const titles = headings.map(headingText);
 
+  const pictures = contentsOpen() ? sectionPictures(headings) : undefined;
+
   if (sectionsMenu) {
     headings.forEach((heading, i) => {
       const row = document.createElement("a");
       row.href = `#${heading.id}`;
-      row.textContent = titles[i];
+      const picture = pictures?.[i];
+      if (picture) {
+        // The title moves into its own box so that fitting it (below) leaves
+        // the picture alone; the row's other text-only form is untouched.
+        row.setAttribute("data-pic", "");
+        const title = document.createElement("span");
+        title.className = "moss-nav-island-section-title";
+        row.append(pictureImg(picture, () => row.removeAttribute("data-pic")), title);
+      }
+      (row.querySelector(".moss-nav-island-section-title") ?? row).textContent = titles[i];
       row.addEventListener("click", () => closeMenus());
       sectionsMenu.appendChild(row);
     });
@@ -214,6 +226,7 @@ export function initNavIsland(): void {
         label: sectionsBtn.getAttribute("aria-label") ?? "",
         island,
         clearance: scrollspyLine,
+        pictures,
       }),
       mountSectionName({ button: sectionsBtn, island, titles }),
     );
@@ -442,16 +455,23 @@ export function initNavIsland(): void {
    *  keep the whole title as the link's name when it was cut. */
   function fitSectionRows(): void {
     const rows = [...(sectionsMenu?.children ?? [])] as HTMLElement[];
-    rows.forEach((row, i) => (row.textContent = titles[i]));
-    const measure = rows[0] && canvasMeasure(rows[0]);
+    // A row with a picture keeps its title in a box of its own.
+    const textOf = (row: HTMLElement): HTMLElement =>
+      row.querySelector<HTMLElement>(".moss-nav-island-section-title") ?? row;
+    rows.forEach((row, i) => (textOf(row).textContent = titles[i]));
+    const measure = rows[0] && canvasMeasure(textOf(rows[0]));
     if (!measure) return;
-    const style = getComputedStyle(rows[0]);
-    const room =
-      rows[0].clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
-    if (room <= 0) return;
+    const roomOf = (row: HTMLElement): number => {
+      const text = textOf(row);
+      if (text !== row) return text.clientWidth;
+      const style = getComputedStyle(row);
+      return row.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+    };
+    if (roomOf(rows[0]) <= 0) return;
     rows.forEach((row, i) => {
-      row.textContent = truncateMiddle(titles[i], room, measure);
-      if (row.textContent === titles[i]) row.removeAttribute("aria-label");
+      const text = textOf(row);
+      text.textContent = truncateMiddle(titles[i], roomOf(row), measure);
+      if (text.textContent === titles[i]) row.removeAttribute("aria-label");
       else row.setAttribute("aria-label", titles[i]);
     });
   }

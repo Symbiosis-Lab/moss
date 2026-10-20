@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### New
 
+- A page can keep its contents list open with `contents: open` in its frontmatter. On a wide screen the list in the left margin shows every section title at rest, larger than the hover labels, marks the current section, and shows a small picture of the section's first image in place of its dash (a section without an image keeps the dash). The nav island's sections panel on a phone shows the same pictures. The picture is the narrowest width moss already generated for that image, so it costs no new file. Pages without the field are unchanged.
 - A root `AGENTS.md`, `CLAUDE.md` or `GEMINI.md` now shows in the editor's file tree, as it does on disk; it is still not published. The tree also marks each file that has a special role on the site (agent instructions, welcome email, footer, 404 page, and the settings page of a copied-as-is `index.html`), decided by the same rules the build uses.
 - A `%% note %%` comment can now open in the middle of a line and close on a later one; everything between the two markers is removed, and the heading after it stays. Before, only a one-line pair or markers alone on their own lines were removed, and a half-open one could swallow the next heading. A `%%` with no partner stays visible on the page and the build warns with its line.
 - The guide now says that setting a key to an empty value on one page (`description: ""`) cancels a folder's `cascade:` for that page.

@@ -24,6 +24,11 @@
  *   and the bottom of the window — the list must not scroll, because scrolling
  *   would clip the labels that hang out of it.
  *
+ * A page that asks for its contents open (`opts.pictures`, from
+ * `contents: open`) keeps the same list and the same measuring, but shows the
+ * titles at rest, larger, with a small picture of the section's first image
+ * in place of the dash; a section with no image keeps its dash.
+ *
  * Every dash row is the same height at rest and open. Re-spacing on hover was
  * tried and rejected: the row under the pointer moves, and the click lands on
  * a different section.
@@ -34,6 +39,7 @@
 
 import { canvasMeasure, truncateMiddle } from "./middle-truncate";
 import { markRows, SECTION_SYNC_EVENT, type SectionSyncDetail } from "./section-event";
+import { pictureImg } from "./section-pictures";
 
 /** Clear space between the widest label and the text column — the same gap
  *  the text keeps from a sidenote. */
@@ -65,6 +71,10 @@ export interface RulerOptions {
   island: HTMLElement;
   /** Space the island's bar occupies at the top of the window. */
   clearance: () => number;
+  /** Set when the page asked for its contents to stay open (`contents: open`):
+   *  the titles show at rest, and each entry is a picture URL, or null for a
+   *  section with no image, which keeps its dash. */
+  pictures?: Array<string | null>;
 }
 
 /** Mount the ruler. Returns its disposer: removes the node and every listener. */
@@ -87,6 +97,7 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   nav.className = "moss-contents-ruler";
   nav.setAttribute("aria-label", opts.label);
   nav.hidden = true;
+  if (opts.pictures) nav.dataset.contents = "open";
   const list = document.createElement("ol");
   const links = headings.map((heading, i) => {
     const link = document.createElement("a");
@@ -97,6 +108,15 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     link.innerHTML =
       '<span class="moss-contents-ruler-dash"></span>' +
       '<span class="moss-contents-ruler-label" aria-hidden="true"></span>';
+    const picture = opts.pictures?.[i];
+    if (picture) {
+      const frame = document.createElement("span");
+      frame.className = "moss-contents-ruler-pic";
+      frame.setAttribute("aria-hidden", "true");
+      frame.append(pictureImg(picture, () => link.removeAttribute("data-pic")));
+      link.prepend(frame);
+      link.setAttribute("data-pic", "");
+    }
     const item = document.createElement("li");
     item.append(link);
     list.append(item);
@@ -210,6 +230,7 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   // Without hover (a tablet in landscape) the labels need a gesture of their
   // own: the first tap opens them, the next follows the link.
   on(nav, "click", (event) => {
+    if (opts.pictures) return;
     if (window.matchMedia?.("(hover: hover)").matches) return;
     if (!nav.hasAttribute("data-open")) {
       event.preventDefault();

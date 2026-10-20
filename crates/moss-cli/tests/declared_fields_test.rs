@@ -396,3 +396,17 @@ fn reader_controls_false_removes_the_text_size_control_from_a_dated_page_or_a_fo
     assert!(built(&s, "quiet/back/index.html").contains(control), "a page turns it back on");
     assert!(built(&s, "own/note/index.html").contains("class=\"date\""), "the date stays");
 }
+
+#[test]
+fn contents_open_puts_a_body_attribute_on_that_page_only_and_an_unknown_value_is_a_strict_failure() {
+    let s = site("", &[("open.md", "---\ntitle: Open\ncontents: open\n---\nx\n"), ("plain.md", "---\ntitle: Plain\n---\nx\n")]);
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(built(&s, "open/index.html").contains(r#" data-contents="open""#));
+    assert!(!built(&s, "plain/index.html").contains("data-contents"));
+
+    let bad = site("", &[("a.md", "---\ntitle: A\ncontents: shut\n---\nx\n")]);
+    let o = build_strict(&bad);
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("contents"), "{}", String::from_utf8_lossy(&o.stderr));
+}

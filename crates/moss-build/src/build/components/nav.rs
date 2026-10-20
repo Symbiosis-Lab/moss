@@ -41,6 +41,9 @@ pub struct NavigationBuilder<'a> {
     current_page_url: Option<&'a str>,
     lang: Language,
     breadcrumb_segments: Option<Vec<BreadcrumbSegment>>,
+    /// The page's title, for the nav island of a page that has no breadcrumb
+    /// trail of its own (the home page) but asked for its contents open.
+    island_only_title: Option<String>,
     /// Render the trail's own `is_current` segment instead of the ordinary
     /// skip (`breadcrumb.rs`'s `nav_left_html`) — an explorer root's only
     /// use (`render/html.rs`/`render/blocking.rs`, both via `is_explorer_root`).
@@ -102,6 +105,7 @@ impl<'a> NavigationBuilder<'a> {
             current_page_url,
             lang,
             breadcrumb_segments: None,
+            island_only_title: None,
             breadcrumb_current_visible: false,
             translations: Vec::new(),
             current_lang: lang,
@@ -164,6 +168,12 @@ impl<'a> NavigationBuilder<'a> {
     pub fn with_breadcrumb(mut self, segments: Vec<BreadcrumbSegment>, force_current_visible: bool) -> Self {
         self.breadcrumb_segments = Some(segments);
         self.breadcrumb_current_visible = force_current_visible;
+        self
+    }
+
+    /// Give a page with no trail an island whose only crumb is `title`.
+    pub fn with_island_only(mut self, title: &str) -> Self {
+        self.island_only_title = Some(title.to_string());
         self
     }
 

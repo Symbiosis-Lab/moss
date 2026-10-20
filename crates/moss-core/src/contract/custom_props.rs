@@ -443,6 +443,12 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         description: "Present when a page widens its column via `content_width:` frontmatter; absent at the default reading measure. This is what `--moss-content-width` — and therefore `--moss-nav-width`, which tracks it — resolves against, so it is the hook for a layout that should respond to the preset rather than to a fixed width.",
     },
     ScopeAttr {
+        selector: "body",
+        name: "data-contents",
+        values: &["open"],
+        description: "Present as `open` when a page asks, with `contents: open` in its frontmatter, for its contents list to stay open: on a wide screen the ruler in the left margin shows every section title at rest, larger than the hover labels, with a small picture (the section's first image) in place of the dash; the nav island's sections panel carries the same pictures. Absent keeps the ruler of dashes whose titles open on hover.",
+    },
+    ScopeAttr {
         selector: ".moss-eyebrow > span, .moss-subtitle, .moss-key-figure, .moss-facts > div",
         name: "data-field",
         values: &[],

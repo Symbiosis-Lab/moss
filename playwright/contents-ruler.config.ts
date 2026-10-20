@@ -13,15 +13,20 @@
  */
 import './localhost-no-proxy';
 import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
-import { CONTENTS_RULER_GATE } from '../tests/e2e/helpers/contents-ruler-site';
+import { CONTENTS_HOME_GATE, CONTENTS_RULER_GATE } from '../tests/e2e/helpers/contents-ruler-site';
 import { defineGateConfig } from './define-gate-config';
 import { gatePort } from './gate-ports';
 
 const PORT = gatePort('contents-ruler');
 const serveDir = buildScratchSite(CONTENTS_RULER_GATE);
+const homeServeDir = buildScratchSite(CONTENTS_HOME_GATE);
 
 export default defineGateConfig({
   gate: 'contents-ruler',
   use: { baseURL: `http://localhost:${PORT}/`, colorScheme: 'light' },
-  webServer: { serveDir, port: PORT },
+  // The second site's home page asks for its contents open; the first's does not.
+  webServer: [
+    { serveDir, port: PORT },
+    { serveDir: homeServeDir, port: gatePort('contents-ruler:home') },
+  ],
 });

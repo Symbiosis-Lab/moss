@@ -9,6 +9,7 @@
  * same folder is the target the morph test navigates to. All text is invented.
  * Served by playwright/contents-ruler.config.ts.
  */
+import { deflateSync } from "node:zlib";
 import type { ScratchSiteSpec } from "./scratch-site";
 
 export const LONG_CJK_TITLE =
@@ -56,10 +57,59 @@ const longBody = SECTIONS.map((title, i) => {
 const COVER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1100" viewBox="0 0 1600 1100"><rect width="1600" height="1100" fill="#456"/></svg>
 `;
 
+/** The opted-in page's section titles, in order. */
+export const OPEN_SECTIONS = ["Quays", "Lanterns", "Nets", "Ropewalk", "Afterword"];
+/** Which of them hold an image: the ropewalk's is inside a subsection. */
+export const OPEN_WITH_IMAGE = [true, false, true, true, false];
+
+const CRC = Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+function chunk(type: string, data: Buffer): Buffer {
+  const body = Buffer.concat([Buffer.from(type), data]);
+  let crc = 0xffffffff;
+  for (const byte of body) crc = CRC[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  const head = Buffer.alloc(4);
+  head.writeUInt32BE(data.length);
+  const tail = Buffer.alloc(4);
+  tail.writeUInt32BE((crc ^ 0xffffffff) >>> 0);
+  return Buffer.concat([head, body, tail]);
+}
+
+/** A flat-colour PNG wider than moss's first ladder rung (800), so the page
+ *  carries a `srcset` and the choice of thumbnail has something to choose. */
+function png(width: number, height: number, [r, g, b]: [number, number, number]): Buffer {
+  const row = Buffer.alloc(1 + width * 3);
+  for (let x = 0; x < width; x++) row.set([r, g, b], 1 + x * 3);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr.set([8, 2, 0, 0, 0], 8);
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", deflateSync(Buffer.concat(Array.from({ length: height }, () => row)))),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+const openBody = [
+  `## Quays\n\n![The quay at dawn](quay.png)\n\n${paragraphs(5)}`,
+  `## Lanterns\n\n${paragraphs(5)}`,
+  `## Nets\n\n${paragraphs(2)}\n\n![Nets drying](nets.png)\n\n${paragraphs(4)}`,
+  `## Ropewalk\n\n${paragraphs(2)}\n\n### The long walk\n\n![The ropewalk](rope.png)\n\n${paragraphs(4)}`,
+  `## Afterword\n\n${paragraphs(6)}`,
+].join("\n\n");
+
 export const CONTENTS_RULER_GATE: ScratchSiteSpec = {
   name: "contents-ruler-gate",
   files: {
     "cover.svg": COVER_SVG,
+    "quay.png": png(1000, 700, [60, 90, 140]),
+    "nets.png": png(1000, 700, [140, 90, 60]),
+    "rope.png": png(1000, 700, [90, 140, 60]),
     "index.md": `---
 title: Harbour Notes
 uid: "crg00101"
@@ -69,6 +119,8 @@ breadcrumb: true
 # Harbour Notes
 
 Home page of an invented site for the contents-ruler render gate.
+
+${["Harbour", "Market"].map((t) => `## ${t}\n\n${paragraphs(4)}`).join("\n\n")}
 `,
     // Enough footer that the article can scroll above the middle of a window:
     // "once past the article" has to be a place a reader can actually reach.
@@ -108,6 +160,49 @@ uid: "crg00105"
 ---
 
 ${SHORT_SECTIONS.map((t) => `## ${t}\n\n${paragraphs(3)}`).join("\n\n")}
+`,
+    "Essays/Reading/Open.md": `---
+title: Collections
+uid: "crg00106"
+contents: open
+---
+
+${paragraphs(2)}
+
+${openBody}
+`,
+    ".moss/config.toml": `schema_version = 5
+
+[site]
+lang = "en"
+floating_nav = true
+`,
+    ".moss/theme/style.css": null,
+  },
+};
+
+/** A site whose HOME page asks for its contents open, each section opening
+ *  with a grid of pictures in a wrapping div, as a collection page does. */
+export const CONTENTS_HOME_GATE: ScratchSiteSpec = {
+  name: "contents-home-gate",
+  files: {
+    "quay.png": png(1000, 700, [60, 90, 140]),
+    "nets.png": png(1000, 700, [140, 90, 60]),
+    "rope.png": png(1000, 700, [90, 140, 60]),
+    "index.md": `---
+title: Shelf
+uid: "crg00201"
+contents: open
+---
+
+# Shelf
+
+${OPEN_SECTIONS.map(
+  (title, i) =>
+    `::: {.collection}\n## ${title}\n\n${
+      OPEN_WITH_IMAGE[i] ? `:::grid 2\n![One](quay.png)\n+++\n![Two](nets.png)\n:::\n\n` : ""
+    }${paragraphs(3)}\n:::`,
+).join("\n\n")}
 `,
     ".moss/config.toml": `schema_version = 5
 
