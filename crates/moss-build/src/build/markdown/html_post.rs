@@ -816,14 +816,12 @@ where
     // alongside `<img src="X.jpg">` at event-iterator time, *before* the
     // pretty-URL depth adjuster runs. Without `srcset` here, the WebP
     // `<source>` would not gain the `../` prefix that the matching `<img src>`
-    // gets, and the browser would 404 the WebP — recreating the bug we
-    // fixed by deploying the variants in the first place. Since the
-    // responsive ladder (responsive-image-variants Task 3) `srcset` may
-    // carry multiple comma-separated "URL descriptor" candidates —
+    // gets, and the browser would 404 the WebP. `srcset` may also carry
+    // multiple comma-separated "URL descriptor" candidates —
     // `rewrite_srcset_candidates` splits those and rewrites each URL
     // independently; single-URL srcset stays on the shared path below.
     let re = regex::Regex::new(r#"((?:src|srcset|poster|data-placeholder-src|data)=")([^"]+)"#).unwrap();
-    re.replace_all(html, |caps: &regex::Captures| {
+    let mut rewrite_attr = |caps: &regex::Captures| {
         let attr_prefix = &caps[1];
         let value = &caps[2];
 
@@ -901,8 +899,23 @@ where
         let escaped = moss_core::media::html_escape(&format!("{}{}", encoded, suffix));
 
         format!("{}{}", attr_prefix, escaped)
-    })
-    .to_string()
+    };
+    // Only real start tags are searched. Text that merely reads `src="…"` (prose,
+    // inline code, fenced code) has no `<tag` around it, since the renderer
+    // escapes a literal `<` as `&lt;`. `<pre>`/`<code>` elements match first
+    // and are copied through whole, so an element written inside them is text.
+    let tag_re = regex::Regex::new(
+        r#"(?s)(?P<skip><pre\b.*?</pre>|<code\b.*?</code>)|<[a-zA-Z](?:"[^"]*"|'[^']*'|[^'">])*>"#,
+    )
+    .unwrap();
+    tag_re
+        .replace_all(html, |tag: &regex::Captures| {
+            if tag.name("skip").is_some() {
+                return tag[0].to_string();
+            }
+            re.replace_all(&tag[0], &mut rewrite_attr).to_string()
+        })
+        .to_string()
 }
 
 /// URL values the attribute rewriters must never touch: absolute paths,
@@ -1009,6 +1022,58 @@ use moss_core::resolve::fuzzy_path::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── rewrite_relative_src_attrs only touches real tags ─────────────
+
+    const ATTR_TEXT: &str = r#"src="My Photos/a.jpg" and src="…/b.jpg""#;
+
+    fn assert_text_untouched(html: &str) {
+        let real = r#"<img src="My Photos/c.jpg">"#;
+        let page = format!("{html}{real}");
+        let want = format!("{html}<img src=\"../my-photos/c.jpg\">");
+        assert_eq!(adjust_relative_paths_for_pretty_urls(&page), want);
+        let want = format!("{html}<img src=\"my-photos/c.jpg\">");
+        assert_eq!(
+            apply_dir_overrides_to_asset_paths(&page, &std::collections::HashMap::new()),
+            want
+        );
+    }
+
+    #[test]
+    fn src_text_in_fenced_html_code_is_untouched() {
+        assert_text_untouched(&format!(
+            "<pre><code class=\"language-html\">&lt;img {}&gt;\n</code></pre>",
+            ATTR_TEXT.replace('"', "&quot;")
+        ));
+        assert_text_untouched(&format!(
+            "<pre><code class=\"language-html\">&lt;img {ATTR_TEXT}&gt;\n</code></pre>"
+        ));
+    }
+
+    #[test]
+    fn src_text_in_fenced_text_code_is_untouched() {
+        assert_text_untouched(&format!("<pre><code class=\"language-text\">{ATTR_TEXT}\n</code></pre>"));
+        assert_text_untouched(&format!("<pre><code>{ATTR_TEXT}\n</code></pre>"));
+    }
+
+    #[test]
+    fn src_text_in_inline_code_is_untouched() {
+        assert_text_untouched(&format!("<p>use <code>{ATTR_TEXT}</code> here</p>"));
+    }
+
+    #[test]
+    fn src_text_in_prose_is_untouched() {
+        assert_text_untouched(&format!("<p>write {ATTR_TEXT} in a tag</p>"));
+    }
+
+    #[test]
+    fn picture_source_poster_and_object_still_rewritten() {
+        let html = r#"<picture><source srcset="My Dir/a.webp"><img src="My Dir/a.jpg"></picture><video poster="My Dir/p.jpg"></video><object data="My Dir/d.pdf"></object>"#;
+        assert_eq!(
+            adjust_relative_paths_for_pretty_urls(html),
+            r#"<picture><source srcset="../my-dir/a.webp"><img src="../my-dir/a.jpg"></picture><video poster="../my-dir/p.jpg"></video><object data="../my-dir/d.pdf"></object>"#
+        );
+    }
 
     // ── prepare_markdown_source ───────────────────────────────────────
 

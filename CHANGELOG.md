@@ -166,6 +166,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- Text that reads like an image attribute, such as `src="My Photos/a.jpg"` in a code block, inline code or a sentence, is printed as written. The build used to rewrite it as if it were a real image path, so a documentation sample could show `untitled/` or `../` that the author never wrote. Real `src`, `srcset`, `poster` and `data` attributes are still rewritten.
 - A card's description is no longer cut short after an abbreviation such as "Dr." or "St." when the opening sentence runs past the description length, which also left a stray `**` showing when the cut fell inside bold text. The description now runs to the length limit and ends with an ellipsis.
 - Publishing a site last published with moss 0.15.9 or earlier no longer stops with "1 address your site has served would stop working" for an internal `.moss-archive-sha256` file under a notebook asset folder. Moss's own `.moss-*` files are never counted as addresses a reader could lose.
 - A folder embed that shows no upcoming event, such as `![[work/|when:past]]`, no longer prints "Download calendar · Subscribe to calendar" after its cards, even when the folder holds an upcoming event elsewhere. The links follow the listing as shown.
