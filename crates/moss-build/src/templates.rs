@@ -48,13 +48,18 @@ fn template_path(site_root: &Path, id: &str) -> Result<PathBuf, String> {
 }
 
 fn read_doc(path: &Path) -> Result<(Frontmatter, String), String> {
+    read_doc_text(path).map(|(fm, body, _)| (fm, body))
+}
+
+/// A template file's frontmatter, body and the text as written.
+fn read_doc_text(path: &Path) -> Result<(Frontmatter, String, String), String> {
     let raw = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read template '{}': {e}", path.display()))?;
     let doc = frontmatter::parse(&raw);
     if let Some(err) = doc.frontmatter_error {
         return Err(format!("'{}' has broken frontmatter: {err}", path.display()));
     }
-    Ok((doc.frontmatter, doc.body))
+    Ok((doc.frontmatter, doc.body, raw))
 }
 
 fn write_doc(path: &Path, fm: &Frontmatter, body: &str) -> Result<(), String> {
@@ -102,7 +107,7 @@ fn build_template(id: &str, path: &Path, lang_files: &[(String, PathBuf)]) -> Re
     let file = file_name(path);
     validate_template_id(id)
         .map_err(|_| format!("'{file}' is not listed: its file name must be lowercase letters, digits and hyphens"))?;
-    let (fm, body) = read_doc(path)?;
+    let (fm, body, text) = read_doc_text(path)?;
     let name = fm
         .get(NAME_KEY)
         .and_then(Value::as_str)
@@ -117,10 +122,10 @@ fn build_template(id: &str, path: &Path, lang_files: &[(String, PathBuf)]) -> Re
         .and_then(Value::as_str)
         .map(normalise_folder)
         .filter(|f| !f.is_empty());
-    let mut files = vec![TemplateFile { lang: None, frontmatter: fm, body }];
+    let mut files = vec![TemplateFile { lang: None, frontmatter: fm, body, text }];
     for (lang, lang_path) in lang_files {
-        let (fm, body) = read_doc(lang_path)?;
-        files.push(TemplateFile { lang: Some(lang.clone()), frontmatter: fm, body });
+        let (fm, body, text) = read_doc_text(lang_path)?;
+        files.push(TemplateFile { lang: Some(lang.clone()), frontmatter: fm, body, text });
     }
     Ok(Template { id: id.to_string(), name, kind, folder, files })
 }

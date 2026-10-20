@@ -298,3 +298,22 @@ fn an_unknown_title_block_value_is_a_strict_failure() {
     assert!(!o.status.success());
     assert!(String::from_utf8_lossy(&o.stderr).contains("title_block"), "{}", String::from_utf8_lossy(&o.stderr));
 }
+
+/// A page copied from a template still has its blank lines. A blank value is an
+/// absent one for built-in and declared fields alike: strict passes and no row
+/// or event line is drawn for it.
+#[test]
+fn a_blank_value_counts_as_absent_for_built_in_and_declared_fields() {
+    let config = "[fields.architect]\ntype = \"text\"\nplace = \"facts\"\n[fields.kind]\ntype = \"choice\"\nof = [\"Building\", \"Service\"]\nplace = \"eyebrow\"\n";
+    let nulls = "---\ntitle: Example Show\ndescription:\nstart:\nlocation:\narchitect:\nkind:\n---\nbody\n";
+    let empties = "---\ntitle: Example Show\ndescription: \"\"\nstart: \"\"\nlocation: \"\"\narchitect: \"\"\nkind: \"\"\n---\nbody\n";
+    let s = site(config, &[("nulls.md", nulls), ("empties.md", empties)]);
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    for page in ["nulls/index.html", "empties/index.html"] {
+        let html = built(&s, page);
+        for drawn in ["moss-event-meta", "moss-event-place", "data-field=", "moss-eyebrow", "<dt>"] {
+            assert!(!html.contains(drawn), "{page} draws {drawn}: {html}");
+        }
+    }
+}

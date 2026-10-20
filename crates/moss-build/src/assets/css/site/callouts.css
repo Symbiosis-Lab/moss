@@ -62,6 +62,15 @@
   line-height: 1.4;
 }
 
+/* A folded callout is a <details>; its title is the <summary> */
+summary.callout-title {
+  cursor: pointer;
+}
+
+details.callout:not([open]) > .callout-title {
+  margin-bottom: 0;
+}
+
 /* Callout body */
 .callout-content {
   color: var(--moss-color-text-secondary);

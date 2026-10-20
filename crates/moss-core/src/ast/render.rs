@@ -300,7 +300,16 @@ fn render_block<H: RenderHooks + ?Sized>(
             // callouts hadn't moved to a typed `<div>` shape yet at the
             // time; downstream consumer (iframe-bridge) accepts the attr
             // on any wrapper element).
-            out.push_str(r#"<div class="callout" data-type=""#);
+            // A folded callout is a native <details> (keyboard and
+            // screen-reader behaviour for free); the title is its <summary>.
+            let (wrapper, title_tag) = if fold.is_some() {
+                ("details", "summary")
+            } else {
+                ("div", "div")
+            };
+            out.push_str("<");
+            out.push_str(wrapper);
+            out.push_str(r#" class="callout" data-type=""#);
             out.push_str(kind.as_slug());
             out.push_str(r#"""#);
             push_source_line_attr(out, meta.source_line);
@@ -312,6 +321,9 @@ fn render_block<H: RenderHooks + ?Sized>(
                 out.push_str(r#" data-fold=""#);
                 out.push_str(fold_attr);
                 out.push_str(r#"""#);
+                if *fold_state == Fold::Open {
+                    out.push_str(" open");
+                }
             }
             out.push_str(">\n");
             // Title slot: prefer the parser-extracted title; fall back
@@ -322,9 +334,13 @@ fn render_block<H: RenderHooks + ?Sized>(
                 .filter(|t| !t.is_empty())
                 .map(|t| escape_text(t))
                 .unwrap_or_else(|| kind.default_title().to_string());
-            out.push_str(r#"  <div class="callout-title">"#);
+            out.push_str(r#"  <"#);
+            out.push_str(title_tag);
+            out.push_str(r#" class="callout-title">"#);
             out.push_str(&display_title);
-            out.push_str("</div>\n");
+            out.push_str("</");
+            out.push_str(title_tag);
+            out.push_str(">\n");
             // The box itself always survives: its title is text the AUTHOR
             // typed, and hoisting a footnote definition moves the note — it
             // must not delete the prose around it. What goes is the empty
@@ -336,7 +352,9 @@ fn render_block<H: RenderHooks + ?Sized>(
                 out.push_str(&body);
                 out.push_str("</div>\n");
             }
-            out.push_str("</div>\n");
+            out.push_str("</");
+            out.push_str(wrapper);
+            out.push_str(">\n");
         }
         Block::List {
             ordered,

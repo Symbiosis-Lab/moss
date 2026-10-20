@@ -293,7 +293,7 @@ fn schema_frontmatter_warnings(
             // both map back to a top-level key the author wrote.
             d.path.as_deref().is_some_and(|p| {
                 let base = p.split('[').next().unwrap_or(p);
-                frontmatter.contains_key(base)
+                moss_core::frontmatter::get_present(frontmatter, base).is_some()
             })
         })
         .map(|d| format!("[{}] frontmatter: {}", file_path, d.message))
@@ -313,7 +313,7 @@ fn declared_fields(
 ) -> DeclaredFields {
     let mut out = DeclaredFields::default();
     for decl in decls.iter().filter(|decl| moss_core::fields::in_folders(&decl.scope, file_path)) {
-        let Some(raw) = frontmatter.get(&decl.name) else { continue };
+        let Some(raw) = moss_core::frontmatter::get_present(frontmatter, &decl.name) else { continue };
         let Ok(json) = serde_json::to_value(raw) else { continue };
         let builtin = moss_core::schema_fields::builtin_field(&decl.name).is_some();
         match moss_core::fields::parse_value(decl, &json, page) {

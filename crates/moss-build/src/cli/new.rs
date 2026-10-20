@@ -207,9 +207,9 @@ fn create(o: &Options, cwd: &Path, home: Option<&Path>, now: &str) -> Result<Str
                     existing.insert(dir);
                 }
             }
-            let planned = plan_page_from_template(&t, lang.as_deref(), &anchor_full, &langs, &existing, now, &claims)
+            let planned = plan_page_from_template(&t, lang.as_deref(), &anchor_full, &langs, &existing, o.title.as_deref(), now, &claims)
                 .map_err(plan_message)?;
-            (Some(t), (planned.dir, planned.frontmatter, planned.body))
+            (Some(t), (planned.dir, planned.content))
         }
         None => {
             if let Some(l) = &lang {
@@ -217,15 +217,16 @@ fn create(o: &Options, cwd: &Path, home: Option<&Path>, now: &str) -> Result<Str
                     return Err(plan_message(PlanError::LanguageNotInSite(l.clone())));
                 }
             }
-            (None, (anchor_full.clone(), HashMap::new(), String::new()))
+            let mut frontmatter = HashMap::new();
+            if let Some(title) = &o.title {
+                frontmatter.insert("title".to_string(), Value::String(title.clone()));
+            }
+            (None, (anchor_full.clone(), frontmatter::serialize(&frontmatter, "")?))
         }
     };
-    let (dir, mut frontmatter, body) = page;
-    if let Some(title) = &o.title {
-        frontmatter.insert("title".to_string(), Value::String(title.clone()));
-    }
+    let (dir, content) = page;
     let stem = o.title.as_deref().map(file_stem_for_title).unwrap_or_else(|| "untitled".to_string());
-    let rel = write_new_page(&root, &dir, &stem, &frontmatter, &body)?;
+    let rel = write_new_page(&root, &dir, &stem, &content)?;
 
     Ok(if o.json {
         pretty(json!({
@@ -292,8 +293,7 @@ fn write_new_page(
     root: &Path,
     dir: &str,
     stem: &str,
-    frontmatter: &HashMap<String, Value>,
-    body: &str,
+    content: &str,
 ) -> Result<String, String> {
     let rel = (1u32..)
         .map(|n| match n {
@@ -302,8 +302,7 @@ fn write_new_page(
         })
         .find(|rel| !root.join(rel).exists())
         .expect("an unused file name exists");
-    let content = frontmatter::serialize(frontmatter, body)?;
-    write_exclusive(&root.join(&rel), &content)?;
+    write_exclusive(&root.join(&rel), content)?;
     Ok(rel)
 }
 

@@ -833,3 +833,13 @@ mod edit_fields_tests {
         assert!(edit_fields(page, &[remove("base")]).is_err());
     }
 }
+
+#[test]
+fn get_present_treats_blank_as_absent() {
+    let fm = frontmatter_map("---\nfilled: x\nnull_val:\nempty: \"\"\nspaces: \"  \"\nzero: 0\n---\n");
+    assert!(get_present(&fm, "filled").is_some());
+    assert!(get_present(&fm, "zero").is_some());
+    for key in ["null_val", "empty", "spaces", "missing"] {
+        assert!(get_present(&fm, key).is_none(), "{key}");
+    }
+}

@@ -98,6 +98,8 @@ pub struct TemplateFile {
     pub lang: Option<String>,
     pub frontmatter: HashMap<String, Value>,
     pub body: String,
+    /// The file as written, so a page made from it keeps its line order.
+    pub text: String,
 }
 
 /// A saved template with all its language files.
@@ -116,8 +118,9 @@ pub struct Template {
 pub struct PlannedPage {
     /// Site-relative directory ending in `/`, or `""` for the site root.
     pub dir: String,
-    pub frontmatter: HashMap<String, Value>,
-    pub body: String,
+    /// The page's text: the template's lines in their written order, with only
+    /// the lines that name the template or its source page changed.
+    pub content: String,
 }
 
 /// The other language's version of a page.
@@ -170,13 +173,16 @@ pub fn folder_in_default_tree<'a>(path: &'a str, langs: &SiteLanguages) -> (&'a 
 
 /// The page a template makes, in its folder when it names one, else in
 /// `anchor_dir`. `lang` picks the language file and the tree the folder is
-/// made in.
+/// made in. `title` replaces the template's title; without one the title is
+/// cleared.
+#[allow(clippy::too_many_arguments)]
 pub fn plan_page_from_template(
     template: &Template,
     lang: Option<&str>,
     anchor_dir: &str,
     langs: &SiteLanguages,
     existing_dirs: &BTreeSet<String>,
+    title: Option<&str>,
     now: &str,
     declared_claim_keys: &[String],
 ) -> Result<PlannedPage, PlanError> {
@@ -205,13 +211,26 @@ pub fn plan_page_from_template(
         }
         None => normalise_folder(anchor_dir),
     };
-    let mut frontmatter = file.frontmatter.clone();
-    frontmatter.retain(|key, _| !key.starts_with("_template_"));
-    Ok(PlannedPage {
-        dir,
-        frontmatter: instantiate_template_frontmatter(frontmatter, now, declared_claim_keys),
-        body: file.body.clone(),
-    })
+    let kept = instantiate_template_frontmatter(
+        file.frontmatter.iter().filter(|(key, _)| !key.starts_with("_template_")).map(|(k, v)| (k.clone(), v.clone())).collect(),
+        now,
+        declared_claim_keys,
+    );
+    let mut edits: Vec<FieldEdit> = file
+        .frontmatter
+        .keys()
+        .filter(|key| !kept.contains_key(*key))
+        .map(|key| FieldEdit::Remove { key: key.clone() })
+        .collect();
+    if let Some(date) = kept.get("date") {
+        edits.push(FieldEdit::Set { key: "date".to_string(), value: date.clone() });
+    }
+    if let Some(title) = title {
+        edits.retain(|e| e.key() != "title");
+        edits.push(FieldEdit::Set { key: "title".to_string(), value: Value::String(title.to_string()) });
+    }
+    let content = frontmatter::edit_fields(&file.text, &edits).map_err(PlanError::Serialize)?;
+    Ok(PlannedPage { dir, content })
 }
 
 /// Fields that describe one language's text or name this page alone; a
@@ -392,6 +411,7 @@ mod tests {
             lang: Some("zh-hans".to_string()),
             frontmatter: fm(&[("_template_name", "新作品"), ("start", "")]),
             body: "## 關於作品\n".to_string(),
+            text: "---\n_template_name: 新作品\nstart:\n---\n## 關於作品\n".to_string(),
         }
     }
 
@@ -406,6 +426,7 @@ mod tests {
                     lang: None,
                     frontmatter: fm(&[("_template_name", "Production"), ("_template_kind", "page"), ("start", "")]),
                     body: "## About the work\n".to_string(),
+                    text: "---\n_template_name: Production\n_template_kind: page\nstart:\n---\n## About the work\n".to_string(),
                 },
                 zh_file(),
             ],
@@ -439,35 +460,35 @@ mod tests {
 
     #[test]
     fn template_folder_wins_over_anchor() {
-        let page = plan_page_from_template(&production(Some("work")), None, "about/", &site(), &set(&["work/", "about/"]), "2026-10-19", &[]).unwrap();
+        let page = plan_page_from_template(&production(Some("work")), None, "about/", &site(), &set(&["work/", "about/"]), None, "2026-10-19", &[]).unwrap();
         assert_eq!(page.dir, "work/");
-        assert_eq!(page.body, "## About the work\n");
+        assert!(page.content.ends_with("## About the work\n"));
     }
 
     #[test]
     fn language_file_goes_to_the_tree() {
-        let page = plan_page_from_template(&production(Some("work")), Some("zh-hans"), "", &site(), &set(&["zh-hans/work/"]), "2026-10-19", &[]).unwrap();
+        let page = plan_page_from_template(&production(Some("work")), Some("zh-hans"), "", &site(), &set(&["zh-hans/work/"]), None, "2026-10-19", &[]).unwrap();
         assert_eq!(page.dir, "zh-hans/work/");
-        assert_eq!(page.body, "## 關於作品\n");
+        assert!(page.content.ends_with("## 關於作品\n"));
     }
 
     #[test]
     fn missing_folder_is_an_error() {
-        let err = plan_page_from_template(&production(Some("work")), None, "", &site(), &set(&[]), "2026-10-19", &[]).unwrap_err();
+        let err = plan_page_from_template(&production(Some("work")), None, "", &site(), &set(&[]), None, "2026-10-19", &[]).unwrap_err();
         assert_eq!(err, PlanError::FolderMissing("work/".to_string()));
     }
 
     #[test]
     fn no_folder_uses_anchor() {
-        let page = plan_page_from_template(&production(None), None, "about", &site(), &set(&[]), "2026-10-19", &[]).unwrap();
+        let page = plan_page_from_template(&production(None), None, "about", &site(), &set(&[]), None, "2026-10-19", &[]).unwrap();
         assert_eq!(page.dir, "about/");
     }
 
     #[test]
     fn template_keys_do_not_reach_the_page() {
-        let page = plan_page_from_template(&production(Some("work")), None, "", &site(), &set(&["work/"]), "2026-10-19", &[]).unwrap();
-        assert!(page.frontmatter.keys().all(|k| !k.starts_with("_template_")));
-        assert!(page.frontmatter.contains_key("start"));
+        let page = plan_page_from_template(&production(Some("work")), None, "", &site(), &set(&["work/"]), None, "2026-10-19", &[]).unwrap();
+        assert!(!page.content.contains("_template_"));
+        assert!(page.content.contains("start:"));
     }
 
     #[test]

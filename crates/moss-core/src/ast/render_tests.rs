@@ -265,27 +265,43 @@ fn renders_callout_falls_back_to_default_title() {
 }
 
 #[test]
-fn renders_foldable_callout_with_data_fold_attribute() {
-    let html_open = render(vec![Block::Callout {
-        kind: CalloutKind::Tip,
-        fold: Some(Fold::Open),
-        title: Some("Open".into()),
-        children: vec![],
-    }]);
-    assert!(
-        html_open.contains(r#"data-type="tip""#) && html_open.contains(r#"data-fold="open""#),
-        "expected data-fold='open' attribute, got: {html_open}"
-    );
-
-    let html_closed = render(vec![Block::Callout {
+fn folded_callout_renders_closed_details_with_summary_title() {
+    let html = render(vec![Block::Callout {
         kind: CalloutKind::Tip,
         fold: Some(Fold::Closed),
+        title: Some("More".into()),
+        children: vec![Block::Paragraph(vec![Inline::Text("Body.".into())])],
+    }]);
+    assert!(
+        html.contains(r#"<details class="callout" data-type="tip" data-fold="closed">"#),
+        "closed callout must be a details without `open`, got: {html}"
+    );
+    assert!(
+        html.contains(r#"<summary class="callout-title">More</summary>"#),
+        "title must be the summary, got: {html}"
+    );
+    assert!(
+        html.contains(r#"<div class="callout-content">"#) && html.contains("</details>"),
+        "body stays in callout-content inside the details, got: {html}"
+    );
+    assert!(!html.contains("<div class=\"callout\""), "no div wrapper: {html}");
+}
+
+#[test]
+fn unfolded_plus_callout_renders_open_details() {
+    let html = render(vec![Block::Callout {
+        kind: CalloutKind::Tip,
+        fold: Some(Fold::Open),
         title: None,
         children: vec![],
     }]);
     assert!(
-        html_closed.contains(r#"data-fold="closed""#),
-        "expected data-fold='closed' attribute, got: {html_closed}"
+        html.contains(r#"<details class="callout" data-type="tip" data-fold="open" open>"#),
+        "`+` callout must start open, got: {html}"
+    );
+    assert!(
+        html.contains(r#"<summary class="callout-title">Tip</summary>"#),
+        "default title is still the summary, got: {html}"
     );
 }
 

@@ -153,3 +153,21 @@ fn new_caps_a_long_cjk_title_in_bytes() {
     assert!(out.len() <= 200 + ".md".len(), "{} bytes", out.len());
     assert!(root.join(&out).is_file());
 }
+
+#[test]
+fn new_keeps_the_templates_line_order_and_blank_fields_blank() {
+    let site = site();
+    let root = site.path();
+    write(
+        &root.join(".moss/templates/show.md"),
+        "---\n_template_name: Show\n_template_kind: page\ntitle: Old\nvenue: Example Hall\nstart:\ndate: 2020-01-01\nend:\nlayout: event\nuid: abc\n---\nBody\n",
+    );
+
+    let out = new_in(&args(&[".", "--template", "show", "--title", "Example Show"]), root, None, NOW).unwrap();
+
+    let page = fs::read_to_string(root.join(out)).unwrap();
+    assert_eq!(
+        page,
+        "---\ntitle: Example Show\nvenue: Example Hall\nstart:\ndate: 2026-10-19\nend:\nlayout: event\n---\nBody\n"
+    );
+}

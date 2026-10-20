@@ -106,6 +106,10 @@ the text color:
 That leaves prose links accented and makes buttons and nav blend with the
 surrounding text. Run `moss describe --json` for both current values.
 
+### The header's navigation
+
+The header is one row, the site name then the nav links then the toggles, for as long as they fit. moss measures them against the header's width rather than at a fixed screen width, so there is no breakpoint to set. When the row no longer fits, the site name stays on the first row alone and the links and toggles move to a second row under it; at 20rem and narrower the links fold into a menu button instead. To keep the nav on one row, use fewer or shorter nav entries (`nav_label:` gives a page a shorter name in the nav than its title) or a smaller logo: `.site-logo` is `1.15em` tall with its width following the image, so a wide logo widens the site name. Without scripting the links still wrap under the name once they do not fit, but the toggles then follow the last link.
+
 ## Never use @layer
 
 Never write `@layer` in your `style.css` — moss handles cascade order for you.
@@ -217,7 +221,7 @@ A folder embed takes comma-separated options after the `|` that follows the fold
 
 moss warns and you lose enhancement (LQIP, WebP encode, thumbnails, dimensions) if you use raw HTML tags for media that moss owns.
 
-A picture that is only decoration, with nothing a reader needs to be told (a texture, a band of ornament, a faded page behind a heading), belongs in the theme, not in a page: put the file in `.moss/theme/` and paint it with CSS (`background` or `mask` on a moss selector or pseudo-element). An image embedded in a page is content, so it needs alt text, and `--strict` reports one without it. Giving decoration made-up alt text to quiet that report makes screen readers announce it.
+A picture that is only decoration, with nothing a reader needs to be told (a texture, a band of ornament, a faded page behind a heading), belongs in the theme, not in a page: put the file in `.moss/theme/` and paint it with CSS (`background` or `mask` on a moss selector or pseudo-element). An image embedded in a page is content, so it needs alt text. An image without it builds with a warning in the build log, and `--strict` does not fail on it, so check the log yourself. Giving decoration made-up alt text to quiet that report makes screen readers announce it.
 
 **Ambient loop video.** Add `|loop` to a video embed for a silent background
 loop — autoplays, no controls, respects `prefers-reduced-motion`:
@@ -278,7 +282,7 @@ A folder's home page can declare `cascade:` to push values to every page beneath
 ### Shortcodes
 
 Shortcodes are fenced blocks (`:::hero`, `:::grid`, …); callouts use
-`> [!note]`. The set is version-specific, so read it rather than assuming:
+`> [!note]`; a minus after the type (`> [!note]- Title`) makes a folded callout that starts closed and a plus (`> [!note]+ Title`) one that starts open, each a native `<details>` with the title as its `<summary>`, so write that rather than raw `<details>`. The set is version-specific, so read it rather than assuming:
 
 ```
 moss describe --json | jq -r '.components[] | select(.authorable) | .class'
@@ -289,6 +293,21 @@ Each entry carries `example_markdown`, which is the invocation moss itself tests
 To pin an anchor id, wrap the section in a fenced div: `::: {#veterans}` … `:::` emits `<div id="veterans">`, and `{#id}` after a heading is not supported (it renders as literal text). A heading's own id is its text slugified with punctuation kept (`## Block One.` becomes `block-one.`), matching Obsidian, so link to it exactly as it renders.
 
 A hero's words belong on its image: the markdown written inside the `:::hero {…} … :::` fence overlays the picture, and that is what makes it a hero rather than an illustration with a heading. The overlay sits bottom-start on every overlaid layout by default; `align=end` moves it to the inline-end edge instead — the right in a left-to-right page, the left in a right-to-left one; `align=center` sets the words in the middle of the picture with centred text, for a short title over a calm image. The overlay itself sits on a panel tinted from the image's own colour (`--moss-hero-panel-bg`, computed per image) and sized to its own content, never the hero's full height, so a busy photo with no calm corner no longer costs legibility and a short line of text never washes out most of the picture. Cropping still matters for which part of the picture shows: set `--moss-hero-object-position` so a deliberate subject (a face, a line of text in the photo itself) lands where you want it, and look at the result at desktop and phone width in light and dark mode. The hero frame grows to fit however much the overlay holds, so a long paragraph is never clipped by a fixed-height box. Phones show the image whole with the words below it unless the hero carries `mobile=overlay`, and under that mode the panel is already full width, so `align=end` makes no visible difference there; that mode also always keeps a band of the image showing above the panel — `--moss-hero-mobile-band`, default `min(45vb, 320px)` — so a long paragraph's panel never covers the whole picture. Move the crop first; when the crop cannot move the subject out from under the words — a portrait image already spanning the full width of a wide frame cannot move sideways — put the words at the other end with `align=end` instead. An image-only hero (`:::hero {image=…}` with nothing between the fences) or `caption="…"` is for an image that must be seen whole, which is a plate (next paragraph). To set the crop on the image itself, quote the whole value: `image="cover.jpg|cover top"`. Unquoted, the `|` ends the value, the attribute block fails to parse, and the hero loses its image; the build warns, and `--strict` fails on it. `header=over` on the page's opening hero (`:::hero {image=… header=over}`) lays the site header over the photo instead of above it, in light type, for a page whose first block is the picture.
+
+A fenced div works inside a hero, so a block of text can take its own class and be styled apart from the heading:
+
+```markdown
+:::hero
+![Hall](hall.png)
+# Example Show
+
+::: {.dates}
+12 October, Example Hall
+:::
+:::
+```
+
+The inner `:::` closes the div and the outer one closes the hero; the div lands inside the hero's overlay panel.
 
 `:::hero {.plate}` (2026-09-11) is a moss default, not a per-site class to style: it renders the hero image whole — never cropped, never enlarged past the resolution it was delivered at, shrunk to fit the column instead. Reach for it over a plain hero whenever the image's own shape, not the page layout, should decide how large it appears — an artwork, manuscript page, or photograph reproduction where cropping would cut off part of the object, and especially a wide or tall outlier (a handscroll, a long strip) that a viewport-relative `100vw` sizing would otherwise fetch too small and stretch blurry. A plain `:::hero` (or `:::hero {caption="…"}`, which already avoids cropping but still bounds the frame at the default height cap) stays right for a banner meant to fill its slot.
 
@@ -368,6 +387,8 @@ hello@example.com
 ```
 
 A heading in the footer gets no permalink mark (a `slot:` page has none on its own page either, since one render serves both), and a `---` there is a plain line, not the three-dot ornament. A dark footer band is three properties in the theme: `--moss-footer-bg`, `--moss-footer-ink` (text, links and headings) and `--moss-footer-rule` (the line above the footer and any `---` in it), with no selectors and no colours repeated for each element. The band runs the full page width. The grid's columns are equal and become one column at 768px; for other widths, or a different arrangement on a phone, give the grid a class (`:::grid 4 {.footer-cols}`) and set `grid-template-columns` on it in the theme. Short link lists read better as two columns side by side on a phone, with a long block (identity, address) spanning both; one column stacks them into a long footer. The footer sits in the page column; a width word (`wide`, `page`, `screen`) does not widen it. moss's own one-line colophon is the footer's last line, inside it, so a footer band's background covers it. To hide the mark, the theme sets `.moss-colophon { display: none; }` in `.moss/theme/style.css`; there is no config switch for it. The footer keeps its own end space whether or not the mark shows, so hiding the mark leaves that space. A theme that places the mark in its own row sets the colophon's whole `margin` (the end margin cancels the footer's end space) and padding and keeps the link's padding, which holds the line the hover wording appears on. A picture below everything is the footer's own `::after`, and the footer sets `padding-block-end: 0` so nothing follows it (hide moss's colophon with `.moss-colophon { display: none }` if the picture should be the very last thing). A picture behind the footer's text needs more: draw it as the footer's `::before`, which replaces moss's divider, so reset that rule's `margin-block-end` and border; make the footer a flex column, put the columns, legal row and colophon before it with `order`, and lift it behind them with a negative top margin. Small text needs near-empty ground, and a footer picture has no hero panel behind it: if the picture's quiet area is not tall enough for the text, extend the picture with an even fade above its subject rather than setting text over detail (2026-10-14: a legal row was unreadable over the dense top of a footer picture). A site in several languages can keep one `footer.md` per language folder. (2026-10-13: a rebuilt site's theme carried 24 rules placing footer columns by `:nth-of-type` because nothing here said a footer could hold a grid; written as a grid, every one of them went.)
+
+The newsletter form that a footer or a `:::subscribe` block draws appears for a site that has not been published yet only when moss serves it: `moss build --serve` or the desktop app's preview. Opened from disk or through a static file server such as `python -m http.server`, it is hidden, because a form with no site to send to would only fail for a reader. Once the site is published the form is wired to it and shows on the published host. Check it with `moss build <folder> --serve`, never by opening the built files.
 
 ### Welcome email
 
@@ -718,6 +739,8 @@ moss new --list --json
 ```
 
 The first form prints the path it wrote; add `--lang zh-hans` to make the page in that language's tree from the template's version for that language. The second makes the page's version in another language at the mirrored path, with a `translationKey` shared by both pages. `--list --json` prints the site's templates, their folders and languages, and the site's language folders, so a script or an agent can check them before it makes a page.
+
+The new page is the template's text: lines stay in the order written and a blank field such as `start:` stays blank for the author to fill. Only `title` (set from `--title`, otherwise removed), `date` (set to today when the template has one), the `_template_` keys, and fields that name one page (`uid`, `url`, `translationKey`, `origin`, `syndicated`, name claims) change. A blank field (`start:` or `start: ""`) counts as not written, for built-in and declared fields: `--strict` does not complain about it and the page draws no row for it, so a draft made from a template builds clean before every field is filled.
 
 A listing reads its folder when the build runs, so a page made from a template appears in a listing that reads that folder without being named anywhere. A home page that should show new work lists the folder instead of naming pages: `![[work/|style:grid,group:upcoming,limit:3]]`, which also puts events that have not ended first.
 
