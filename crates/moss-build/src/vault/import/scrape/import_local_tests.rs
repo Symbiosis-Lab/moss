@@ -91,6 +91,8 @@ Content-Transfer-Encoding: quoted-printable\r\n\
 Content-Location: https://mp.weixin.qq.com/s/invented\r\n\
 \r\n\
 <html><head><title>Invented Post</title></head><body>\r\n\
+<script>var ct =3D \"1757394245\"; var nickname =3D htmlDecode(\"Invented Lanterns\");\r\n\
+var author =3D \"\";</script>\r\n\
 <div id=3D\"js_content\" style=3D\"visibility: hidden; opacity: 0;\">\r\n\
 <mp-common-profile><div>Invented Account Card</div></mp-common-profile>\r\n\
 <p>Lantern harvest begins at dusk.</p>\r\n\
@@ -118,6 +120,9 @@ Content-Location: https://mmbiz.qpic.cn/invented/640?wx_fmt=jpeg\r\n\
     let content = std::fs::read_to_string(&md_path).unwrap();
     assert!(content.contains("Lantern harvest begins at dusk."), "got:\n{content}");
     assert!(!content.contains("Invented Account Card"), "got:\n{content}");
+    assert!(content.contains("date: \"2025-09-09T13:04:05+08:00\""), "got:\n{content}");
+    assert!(content.contains("publisher: \"Invented Lanterns\""), "got:\n{content}");
+    assert!(!content.contains("author:"), "got:\n{content}");
     assert!(content.contains("./assets/imported/"), "got:\n{content}");
     let asset_count = std::fs::read_dir(out.join(ASSETS_SUBDIR)).map(|d| d.count()).unwrap_or(0);
     assert_eq!(asset_count, 1, "the embedded image should be written");

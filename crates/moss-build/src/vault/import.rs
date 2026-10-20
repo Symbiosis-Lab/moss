@@ -20,6 +20,7 @@ pub mod infer;
 pub mod media;
 pub mod readymag;
 pub mod scrape;
+pub mod script_vars;
 pub mod state_json;
 pub mod strikingly;
 pub mod widgets;

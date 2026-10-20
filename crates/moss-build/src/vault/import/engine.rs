@@ -10,7 +10,7 @@
 use super::dialects::{self, ChromeGate, SelectorDialect};
 use crate::vault::import::scrape::extractor;
 use crate::vault::import::scrape::metadata::{same_name, EventMetadata};
-use crate::vault::import::scrape::converter::{AdapterBody, MetadataOverrides, SiteContent};
+use crate::vault::import::scrape::converter::{AdapterBody, SiteContent};
 
 /// The single entry the scrape pipeline calls
 /// (`scrape::converter::extract_article_with_snapshot`); `snapshot` is the
@@ -64,7 +64,7 @@ fn apply_selector_dialect(d: &SelectorDialect, html: &str, url: &str) -> Option<
             if !inner.trim().is_empty() {
                 return Some(SiteContent {
                     body: AdapterBody::Html(inner),
-                    overrides: MetadataOverrides::default(),
+                    overrides: super::script_vars::read(html, d.script_vars),
                 });
             }
         }
