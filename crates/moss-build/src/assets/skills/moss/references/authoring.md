@@ -173,7 +173,9 @@ A file in the site folder that is not a page — a script, a data file, a styles
 
 A raw `.html` page is listed in `sitemap.xml` unless its first 8 KiB holds `<meta name="robots" content="noindex">` (or `none`); `listed: false` is the frontmatter equivalent for a Markdown page.
 
-Where a file goes follows what owns it. `.moss/theme/` is the site's theme, for every page moss generates: its `style.css` and `script.js` load on each of them, and whatever sits beside them ships with the theme under `/_moss/theme/`. A source-owned HTML document owns its own scripts and assets instead, so keep them beside it as ordinary files, or in a passthrough folder, and link them by path. One page's script put in the theme would travel with the theme to every page and tie that page to the theme's mount path.
+Where a file goes follows what owns it. `.moss/theme/` is the site's theme, for every page moss generates: its `style.css` and `script.js` load on each of them, and whatever sits beside them ships with the theme under `/_moss/theme/`. A source-owned HTML document owns its own scripts and assets instead, so keep them beside it as ordinary files, or in a passthrough folder, and link them by path.
+
+A markdown page can own a script and a stylesheet too: put `essay.js` and `essay.css` in the same folder as `essay.md`, with the same name, and that page, and no other, links them. The stylesheet goes into the page's `<head>` after the theme's, in the same `themes` layer, so at equal specificity the page's rule wins; the script loads as a module after the theme's script. Both files are still served at their own address, byte for byte, and a folder's home page owns `index.js` and `index.css` beside it by the same rule (the file name is the page's source file name, so `notes/notes.md` owns `notes/notes.js`). A language edition's page owns the files in its own folder. A raw HTML page owns its whole document and gets nothing added.
 
 ## Embedding media
 

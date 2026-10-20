@@ -1,6 +1,7 @@
 //! Common shell facts for authored pages and generated folder indexes.
 
-use crate::build::assets::paths::PathResolver;
+use crate::build::assets::paths::{compute_content_hash, PathResolver};
+use crate::build::cloud_ledger::InputEvidence;
 use crate::build::components::nav::{NavigationBuilder, compute_breadcrumb_segments};
 use crate::build::emit::scripts::ScriptAssets;
 use crate::build::page::layout::LayoutConfig;
@@ -10,6 +11,8 @@ use crate::build::served_path::served_address;
 use crate::build::types::ParsedDocument;
 use crate::i18n::Language;
 use crate::types::content::ProjectStructure;
+use std::collections::HashMap;
+use std::path::Path;
 
 use super::config::{resolve_logo_url, resolve_data_attr, resolve_comments_attr};
 
@@ -24,6 +27,7 @@ pub(super) struct ChromeAssets<'a> {
     pub scripts: &'a ScriptAssets,
     pub has_user_css: bool,
     pub has_user_js: bool,
+    pub page_owned: &'a PageOwnedAssets,
     pub head_alternates: Option<&'a str>,
 }
 
@@ -119,6 +123,7 @@ impl PageChromeContext<'_, '_> {
             )
         });
         let paths = &self.assets.paths;
+        let page_source = doc.and_then(|d| d.source_path.as_deref());
         let mut body_attrs = String::new();
         if self.emit_source_lines { body_attrs.push_str(" data-moss-preview"); }
         if is_homepage { body_attrs.push_str(r#" data-page="home""#); }
@@ -155,11 +160,19 @@ impl PageChromeContext<'_, '_> {
             analytics: analytics_home.and_then(|d| d.analytics.as_ref()).map(|a| a.to_script_tag()),
             body_attrs,
             lang: page_lang_tag, ui_lang,
-            user_css_link: self.assets.has_user_css.then(|| format!(
-                "{}<link rel=\"stylesheet\" href=\"{}\" layer=\"themes\">",
-                if generated { "\n    " } else { "" }, paths.user_css_path(),
-            )),
-            user_js_tag: self.assets.has_user_js.then(|| paths.user_js_tag()),
+            user_css_link: Some(format!(
+                "{}{}",
+                self.assets.has_user_css.then(|| format!(
+                    "{}<link rel=\"stylesheet\" href=\"{}\" layer=\"themes\">",
+                    if generated { "\n    " } else { "" }, paths.user_css_path(),
+                )).unwrap_or_default(),
+                self.assets.page_owned.link(page_source, paths),
+            )).filter(|tags| !tags.is_empty()),
+            user_js_tag: Some(format!(
+                "{}{}",
+                self.assets.has_user_js.then(|| paths.user_js_tag()).unwrap_or_default(),
+                self.assets.page_owned.script(page_source, paths),
+            )).filter(|tags| !tags.is_empty()),
             has_sidebar_layout: self.has_sidebar_layout,
             runtime_js_tags: self.assets.scripts.shell_tags(&self.layout.assets, paths),
             content_width_attr: resolve_data_attr(doc.and_then(|d| d.content_width.as_ref()), self.layout.content_width.as_ref(), "content-width", None),
@@ -173,5 +186,81 @@ impl PageChromeContext<'_, '_> {
             hreflang_links, schema_json_ld: None, embed_head_assets: String::new(),
             post_article: String::new(), lightbox: String::new(), robots_meta: None,
         }
+    }
+}
+
+// A page's own script and stylesheet: `essay.js` and `essay.css` beside
+// `essay.md` (same folder, same stem as the page's source file). The files stay
+// ordinary site files, published at their own address; this only decides which
+// page links them. It is resolved at render time rather than stored on
+// `ParsedDocument` because a parse-cache replay would otherwise keep describing
+// a sibling that has since appeared or gone.
+
+/// A sibling file's source path and the hash of its bytes.
+#[derive(Debug, Clone)]
+struct Owned {
+    source: String,
+    hash: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct Pair {
+    css: Option<Owned>,
+    js: Option<Owned>,
+}
+
+/// Every page-owned file of one build, keyed by the owning page's source path.
+#[derive(Debug, Default)]
+pub(super) struct PageOwnedAssets {
+    by_page: HashMap<String, Pair>,
+}
+
+fn stem_key(path: &str) -> &str {
+    path.rsplit_once('.').map_or(path, |(stem, _)| stem)
+}
+
+impl PageOwnedAssets {
+    pub fn collect(project: &ProjectStructure, root: &Path, evidence: &InputEvidence) -> Result<Self, String> {
+        let page_stems: HashMap<&str, &str> = project
+            .markdown_files
+            .iter()
+            .map(|f| (stem_key(&f.path), f.path.as_str()))
+            .collect();
+        let mut by_page: HashMap<String, Pair> = HashMap::new();
+        for file in &project.other_files {
+            let is_css = file.file_type == "css";
+            if !is_css && file.file_type != "js" {
+                continue;
+            }
+            let Some(page) = page_stems.get(stem_key(&file.path)) else { continue };
+            let label = if is_css { "page stylesheet" } else { "page script" };
+            let Some(text) = crate::build::cloud_readiness::read_optional_build_input(
+                &root.join(&file.path), label, evidence,
+            )? else { continue };
+            let owned = Owned { source: file.path.clone(), hash: compute_content_hash(&text) };
+            let pair = by_page.entry((*page).to_string()).or_default();
+            if is_css { pair.css = Some(owned) } else { pair.js = Some(owned) }
+        }
+        Ok(Self { by_page })
+    }
+
+    fn href(owned: &Owned, paths: &PathResolver) -> String {
+        escape_html_attr(&format!("{}?v={}", paths.resolve_url(&owned.source), owned.hash))
+    }
+
+    /// The `<link>` for the page's stylesheet, with its leading indent, or `""`.
+    pub fn link(&self, page_source: Option<&str>, paths: &PathResolver) -> String {
+        page_source.and_then(|p| self.by_page.get(p)).and_then(|pair| pair.css.as_ref()).map_or_else(
+            String::new,
+            |css| format!("\n    <link rel=\"stylesheet\" href=\"{}\" layer=\"themes\">", Self::href(css, paths)),
+        )
+    }
+
+    /// The module `<script>` for the page's script, with its leading indent, or `""`.
+    pub fn script(&self, page_source: Option<&str>, paths: &PathResolver) -> String {
+        page_source.and_then(|p| self.by_page.get(p)).and_then(|pair| pair.js.as_ref()).map_or_else(
+            String::new,
+            |js| format!("\n    <script type=\"module\" src=\"{}\"></script>", Self::href(js, paths)),
+        )
     }
 }

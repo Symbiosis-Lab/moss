@@ -46,7 +46,7 @@ use crate::build::scan::sort_inference::populate_direct_children_sorts;
 pub use super::config::SiteConfig;
 pub use crate::build::incremental_gates::IncrementalGates;
 use super::config::resolve_logo_url;
-use super::page_chrome::{ChromeAssets, PageChromeContext, PageFamily};
+use super::page_chrome::{ChromeAssets, PageChromeContext, PageFamily, PageOwnedAssets};
 use super::image_util::PREVIEW_MAX_CHARS;
 use super::preflight::{check_misplaced_theme_files, check_mixed_multilingual_structure};
 use super::html::{RenderCtx, render_page, tab_title};
@@ -1719,11 +1719,12 @@ pub fn generate_blocking_content_for_build(
         .with_dir_overrides(dir_overrides.clone());
     if let Some(v) = user_css_version.as_deref() { page_paths = page_paths.with_user_css_version(v); }
     if let Some(v) = user_js_version.as_deref() { page_paths = page_paths.with_user_js_version(v); }
+    let page_owned = PageOwnedAssets::collect(project_structure, source_path_buf, &input_evidence)?;
     let render_context = RenderCtx {
         chrome: PageChromeContext {
             documents: &documents, project: project_structure, layout: &layout_config, site_lang,
             assets: ChromeAssets {
-                paths: page_paths, scripts: &shared.scripts, has_user_css, has_user_js,
+                paths: page_paths, scripts: &shared.scripts, has_user_css, has_user_js, page_owned: &page_owned,
                 head_alternates: page_rss_link.as_deref(),
             },
             show_rss_in_footer, emit_source_lines, has_sidebar_layout,
