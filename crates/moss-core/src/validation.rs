@@ -35,7 +35,6 @@ const FOREIGN_FIELD_HINTS: &[(&str, &str)] = &[
     // Short blurb — Hugo (`summary`), Jekyll (`excerpt`).
     ("summary", "description"),
     ("excerpt", "description"),
-    ("subtitle", "description"),
     // Taxonomy — Jekyll/Hugo split tags from categories; moss has one axis.
     ("categories", "tags"),
     ("category", "tags"),

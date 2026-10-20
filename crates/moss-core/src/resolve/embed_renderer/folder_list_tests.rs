@@ -90,6 +90,13 @@ fn marker_omits_size_when_absent() {
 }
 
 #[test]
+fn parses_when_past_and_upcoming_and_drops_anything_else() {
+    assert_eq!(parse_params("when:past").when.as_deref(), Some("past"));
+    assert_eq!(parse_params("when=upcoming,limit:3").when.as_deref(), Some("upcoming"));
+    assert_eq!(parse_params("when:soon").when, None);
+}
+
+#[test]
 fn parses_covers_only() {
     let p = parse_params("depth:all,covers:only,limit:6");
     assert_eq!(p.covers, Some("only".to_string()));

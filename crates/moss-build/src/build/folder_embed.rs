@@ -73,6 +73,8 @@ struct ParsedMarker<'a> {
     /// because this module re-parses the SAME pipe-encoded marker body that
     /// `emit_marker` produced, same as `limit`/`depth`/`group`.
     covers: Option<&'a str>,
+    /// `"past"` or `"upcoming"`: keeps only the pages whose event has ended, or has not.
+    when: Option<&'a str>,
     /// Internal filter: root homepage's own listing — scope to the default language
     /// tree (drop language-prefix subtrees) when the site is multilingual (homepage only).
     scope_default_tree: bool,
@@ -139,6 +141,7 @@ fn parse_marker_body(body: &str) -> Option<ParsedMarker<'_>> {
                 "more" => out.more = Some(marker_decode(v.trim())),
                 "count" => out.count = Some(ChildrenCount(marker_decode(v.trim()))),
                 "covers" => out.covers = Some(v.trim()),
+                "when" => out.when = Some(v.trim()),
                 "width" => out.placement.width = moss_core::media::match_width_token(v.trim()),
                 "align" => {
                     out.placement.align = match v.trim() {
@@ -421,6 +424,7 @@ pub(crate) fn generate_children(
                 &project.root_path,
                 dir_overrides,
                 typesetting,
+                now,
             );
             // The grid card is one of those paths: its description comes from
             // `props_for_document` (frontmatter, then the first byline row) and
@@ -614,7 +618,9 @@ pub(crate) fn generate_children(
                     url_path: item.url_path.clone(),
                     place: item.place.clone(),
                     when_html: item.when_html.clone(),
+                    when: item.when,
                     credits: item.credits.clone(),
+                    subtitle: item.subtitle.clone(),
                     source_file: item.source_file.clone(),
                 })
                 .collect();
@@ -708,7 +714,9 @@ fn render_minimal_year_section(
                 url_path: a.url_path.clone(),
                 place: a.place.clone(),
                 when_html: a.when_html.clone(),
+                when: a.when,
                 credits: a.credits.clone(),
+                subtitle: a.subtitle.clone(),
                 source_file: a.source_file.clone(),
             };
             components::child_list::render(&props, true, false, lang, typesetting)
@@ -749,7 +757,8 @@ fn render_minimal_year_section(
 /// every image and video's dimensions/color/LQIP on EVERY build this
 /// function ran at all, regardless of whether any listing actually changed —
 /// corpus-scaled work identical in shape to `page_map`/`external_url_map`'s.
-pub fn expand_markers_in_documents(
+#[cfg(test)]
+pub(crate) fn expand_markers_in_documents(
     documents: &mut [ParsedDocument],
     project: &ProjectStructure,
     dir_overrides: &std::collections::HashMap<String, String>,
@@ -757,7 +766,7 @@ pub fn expand_markers_in_documents(
     media_lookup: &crate::build::media::dimensions::MediaDimensionLookup,
     site_typesetting: Option<&str>,
 ) {
-    expand_markers_in_documents_with_place_maps(documents, project, dir_overrides, math, media_lookup, site_typesetting, None, None)
+    expand_markers_in_documents_with_place_maps(documents, project, dir_overrides, math, media_lookup, site_typesetting, None, None, upcoming::now())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -770,14 +779,12 @@ pub fn expand_markers_in_documents_with_place_maps(
     site_typesetting: Option<&str>,
     place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
     calendar: Option<(&crate::build::feeds::calendar::CalendarPlan, &crate::build::site_url::SiteUrl)>,
+    now: chrono::NaiveDateTime,
 ) {
     let has_marker = |d: &ParsedDocument| d.html_content.contains(MARKER_FOLDER_LIST);
     if !documents.iter().any(has_marker) {
         return;
     }
-    // One clock for every past/upcoming decision this pass makes: the
-    // `group:upcoming` ordering and the calendar links agree exactly.
-    let now = upcoming::now();
     for i in 0..documents.len() {
         if !has_marker(&documents[i]) {
             continue;
@@ -844,7 +851,8 @@ pub fn expand_markers_in_documents_with_place_maps(
 ///   from the original markdown source)
 /// - `all_docs` / `project` / `dir_overrides` / `site_lang`: pipeline state
 ///   forwarded to `generate_children`
-pub fn resolve_markers(
+#[cfg(test)]
+pub(crate) fn resolve_markers(
     html: &str,
     from_md_path: &str,
     all_docs: &[ParsedDocument],
@@ -857,7 +865,7 @@ pub fn resolve_markers(
 ) -> String {
     resolve_markers_with_place_maps(
         html, from_md_path, all_docs, project, dir_overrides, site_lang,
-        typesetting, media_lookup, math, None,
+        typesetting, media_lookup, math, None, upcoming::now(),
     )
 }
 
@@ -873,6 +881,7 @@ pub(crate) fn resolve_markers_with_place_maps(
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     math: bool,
     place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
+    now: chrono::NaiveDateTime,
 ) -> String {
     resolve_markers_impl(
         html,
@@ -887,7 +896,7 @@ pub(crate) fn resolve_markers_with_place_maps(
         false,
         place_maps,
         &std::cell::Cell::new(0),
-        upcoming::now(),
+        now,
     )
 }
 
@@ -1372,6 +1381,8 @@ fn render_one(
         parsed.scope_default_tree,
         parsed.exclude_nav,
         parsed.covers == Some("only"),
+        parsed.when,
+        now,
         host,
         all_docs,
         project,
@@ -1636,6 +1647,7 @@ pub fn synthesize_children_marker(
         // never an iframe, so size is irrelevant here.
         size: None,
         covers: doc.children_covers.clone(),
+        when: doc.children_when.clone(),
         // Empty-string guard matches the embed grammar's own `more:`
         // key, which never carries an empty value either.
         more: doc.children_more.clone().filter(|s| !s.is_empty()),

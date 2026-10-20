@@ -2078,9 +2078,9 @@ fn test_css_content_width_escape_collapses_on_mobile() {
     let rule = get_css_rule_in_media(
         DEFAULT_CSS,
         "@media (max-width: 48rem)",
-        "article.container > [data-width]",
+        r#"article.container > [data-width]:not([data-width="screen"])"#,
     )
-    .expect("data-width escape must collapse below 48rem");
+    .expect("data-width escape must collapse below 48rem, except for a screen band");
     assert!(
         rule.contains("inline-size: auto") && rule.contains("margin-inline: auto"),
         "mobile collapse must undo the escape, got: {rule}"

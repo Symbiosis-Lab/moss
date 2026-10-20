@@ -145,6 +145,11 @@ fn build_lenient(s: &Site) -> Output {
 /// A 1×1 PNG.
 const PNG: &[u8] = &[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x04, 0x00, 0x00, 0x00, 0xb5, 0x1c, 0x0c, 0x02, 0x00, 0x00, 0x00, 0x0b, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64, 0x60, 0x00, 0x00, 0x00, 0x06, 0x00, 0x02, 0x30, 0x81, 0xd0, 0x2f, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82];
 
+fn stylesheet_href(html: &str) -> String {
+    let rest = html.split("rel=\"stylesheet\" href=\"").nth(1).expect("a stylesheet link");
+    rest[..rest.find('"').unwrap()].trim_start_matches('/').to_string()
+}
+
 fn position(html: &str, needle: &str) -> usize {
     html.find(needle).unwrap_or_else(|| panic!("missing {needle} in {html}"))
 }
@@ -289,6 +294,26 @@ fn title_block_after_picture_cascaded_from_a_folder_draws_the_title_block_under_
     for page in [&html, &other, &own] {
         assert!(!page.contains("moss:body-start"));
     }
+}
+
+#[test]
+fn title_block_beside_picture_sets_the_title_block_in_one_wrapper_with_the_leading_picture() {
+    let home = "---\ntitle: Piers\ncascade:\n  title_block: beside-picture\n---\nThe piers.\n";
+    let pier = "---\ntitle: Pier Four\n---\n![A pier at dusk](dusk.png)\n\nThe text.\n";
+    let text_first = "---\ntitle: Text First\n---\nThe text.\n\n![A pier at dusk](dusk.png)\n";
+    let s = site("", &[("Piers/index.md", home), ("Piers/four.md", pier), ("Piers/first.md", text_first)]);
+    std::fs::write(s.root.join("Piers/dusk.png"), PNG).unwrap();
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let html = built(&s, "piers/four/index.html");
+    let (wrap, figure, h1, text) = (position(&html, "<div class=\"moss-title-beside\">"), position(&html, "<figure"), position(&html, "<h1 class=\"moss-article-title\""), position(&html, "<p>The text.</p>"));
+    assert!(wrap < figure && figure < h1 && h1 < text, "{html}");
+    let flat = html.replace('\n', "");
+    assert!(flat.contains("</h1></div></div><p>The text.</p>"), "{html}");
+    let css = std::fs::read_to_string(s.root.join(".moss/build.nosync/current").join(stylesheet_href(&html))).unwrap();
+    assert!(css.contains(".moss-title-beside"), "the layout ships its stylesheet");
+    let first = built(&s, "piers/first/index.html");
+    assert!(!first.contains("<div class=\"moss-title-beside\">") && !first.contains("moss:body-start"), "{first}");
 }
 
 #[test]

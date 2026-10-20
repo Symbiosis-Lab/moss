@@ -1535,7 +1535,8 @@ fn build_inner(
     // When the typed-AST migration completes (Phase 4+), this evolves to
     // `Vec<moss_core::ast::Document>`.
     let exits_after_build = matches!(search_freshness, crate::build::feeds::search_lane::Freshness::Now);
-    let (mut site_result, mut background_ctx, documents, carry_verification) = generate_blocking_content_for_build(root, project_structure, &stage_dir, services, progress_sender, emit_source_lines, site_config, &mut pending, exits_after_build, true)?;
+    let build_now = crate::build::folder_embed::upcoming::now();
+    let (mut site_result, mut background_ctx, documents, carry_verification) = generate_blocking_content_for_build(root, project_structure, &stage_dir, services, progress_sender, emit_source_lines, site_config, &mut pending, exits_after_build, true, build_now)?;
     log::debug!(target: "timing", "[build] staging: generate_blocking_content: {:?}", build_start.elapsed());
 
     // Places-explorer data file (`_moss/places.<hash>.json`), gated on the
@@ -1568,7 +1569,7 @@ fn build_inner(
         Some(resolve) => resolve(&documents, &site_lang, site_comments)?,
         None => ResolvedSlots::empty(),
     };
-    crate::build::emit::listing_style::apply(&documents, project_structure, &site_result.term_index, &listing_field_decls, &stage_dir, &mut pending, &mut resolved_slots);
+    crate::build::emit::listing_style::apply(&documents, project_structure, &site_result.term_index, &listing_field_decls, &stage_dir, &mut pending, &mut resolved_slots, build_now);
     // Injects slots (and plugin listings) over the stage, re-registers every page it
     // rewrote, and settles the `MOSS_INCREMENTAL_VERIFY=1` carry check. See `build::emit::slots`.
     crate::build::emit::slots::apply_to_stage_and_manifest(

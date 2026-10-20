@@ -343,6 +343,7 @@ pub(crate) fn apply(
     stage_dir: &Path,
     pending: &mut PendingManifest,
     slots: &mut ResolvedSlots,
+    now: chrono::NaiveDateTime,
 ) {
     let hosts: Vec<&ParsedDocument> = documents.iter().filter(|d| d.plugin_listing_style().is_some()).collect();
     // Pages that write a style of their own but draw no listing with it: the
@@ -395,7 +396,7 @@ pub(crate) fn apply(
         }
         let dir = own_dir(page).unwrap_or_default();
         let listing_dir: Vec<String> = dir.split('/').filter(|s| !s.is_empty()).map(str::to_string).collect();
-        let children = listing_members(page, documents, project);
+        let children = listing_members(page, documents, project, now);
         // The root's address prefix is empty, so without the edition check a
         // root listing would take in every edition's folders as well.
         let folders: Vec<&ParsedDocument> = documents
@@ -414,7 +415,7 @@ pub(crate) fn apply(
             style: style.to_string(),
             page: record(page, &listing_dir, true),
             pages: children.iter().map(|d| record(d, &listing_dir, true)).collect(),
-            folders: in_listing_order(page, documents, &folders).iter().map(|d| record(d, &listing_dir, true)).collect(),
+            folders: in_listing_order(page, documents, &folders, now).iter().map(|d| record(d, &listing_dir, true)).collect(),
             terms: term_addresses(&children, terms, &listing_dir),
             declarations: declarations(field_decls, &lang_tag(page)),
         };

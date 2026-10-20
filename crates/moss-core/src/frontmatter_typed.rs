@@ -401,6 +401,9 @@ pub struct FrontMatter {
     /// Listing filter: "only" keeps pages that have a cover. Applied after
     /// flattening and before `children_limit`. Absent = no filter.
     pub children_covers: Option<String>,
+    /// Listing filter: "past" or "upcoming" keeps only the pages whose event
+    /// has ended, or has not. Applied before `children_limit`. Absent = no filter.
+    pub children_when: Option<String>,
     /// What this listing's folder cards say they count: `false` hides it, a
     /// string replaces the text (see [`crate::frontmatter_union::ChildrenCount`]).
     pub children_count: Option<crate::frontmatter_union::ChildrenCount>,
@@ -456,7 +459,7 @@ pub struct FrontMatter {
     pub typesetting: Option<String>,
     /// Content width preset: "wide" or "full"
     pub content_width: Option<String>,
-    /// Where the title block goes: "after-picture" puts it under the body's leading picture
+    /// Where the title block goes: "after-picture" puts it under the body's leading picture, "beside-picture" next to it
     pub title_block: Option<String>,
     /// On a folder's home page: the accent colour (`#rgb` or `#rrggbb`) of the
     /// folder's section. Validated and inherited by `build::scan::section_color`.
@@ -1117,6 +1120,13 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                     "only" => frontmatter.children_covers = Some(value.to_string()),
                     _ => eprintln!(
                         "Warning: children_covers: \"{}\" is not valid. Use \"only\".",
+                        value
+                    ),
+                },
+                "children_when" => match value {
+                    "past" | "upcoming" => frontmatter.children_when = Some(value.to_string()),
+                    _ => eprintln!(
+                        "Warning: children_when: \"{}\" is not valid. Use \"past\" or \"upcoming\".",
                         value
                     ),
                 },

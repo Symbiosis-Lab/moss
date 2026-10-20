@@ -447,10 +447,10 @@ body[data-typesetting="vertical"] .moss-table-scroll {
   -webkit-line-clamp: none;
 }
 
-/* The horizontal two-line clamp's SIZE limit — the base rule's
+/* The horizontal three-line clamp's SIZE limit — the base rule's
    `max-block-size`, still in effect after the reset above — is a valid
-   rotation for grid and `:::grid` cells (it clamps to two columns instead of
-   two lines), but a LIST card is a column-group whose block length is free:
+   rotation for grid and `:::grid` cells (it clamps to three columns instead of
+   three lines), but a LIST card is a column-group whose block length is free:
    a full description costs columns, not band height, so the size limit is
    undone deliberately here, on top of the box-model reset above (2026-09-06).
    `line-clamp: none` travels with it (not with the box-model reset above)

@@ -1483,6 +1483,7 @@ pub fn process_markdown_file(
     let children_limit = frontmatter.children_limit;
     let children_more = frontmatter.children_more;
     let children_covers = frontmatter.children_covers;
+    let children_when = frontmatter.children_when;
     let children_count = frontmatter.children_count;
     let from_sidebar_alias = frontmatter._from_sidebar_alias;
     let series = frontmatter.series;
@@ -1602,6 +1603,7 @@ pub fn process_markdown_file(
         children_limit,
         children_more,
         children_covers,
+        children_when,
         children_count,
         from_sidebar_alias,
         series,

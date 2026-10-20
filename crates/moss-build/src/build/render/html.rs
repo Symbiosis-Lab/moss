@@ -402,7 +402,8 @@ pub(super) fn render_page<'d>(
     let site_url = context.site_url;
     let output_dir = context.output_dir;
     let source_root = context.source_root;
-    let BuildShared { media_lookup, sequences, .. } = context.shared;
+    let BuildShared { media_lookup, sequences, now, .. } = context.shared;
+    let now = *now;
     let path_resolver = &context.chrome.assets.paths;
     let ui_lang = doc.map(|d| d.lang).unwrap_or(site_lang);
     let page_lang_tag = doc.and_then(|d| d.lang_tag.clone()).unwrap_or_else(|| layout_config.lang_tag.clone());
@@ -482,6 +483,7 @@ pub(super) fn render_page<'d>(
                 &project.root_path,
                 media_lookup,
                 resolved_typesetting,
+                now,
             );
             splice_body_locator(&mut body_plan, doc, layout_config, locator_placement);
             let mut content = body_plan.to_html();
@@ -535,7 +537,7 @@ pub(super) fn render_page<'d>(
                     &target_folder_path,
                     &from_md_path,
                 );
-                let resolved_html = crate::build::folder_embed::resolve_markers(
+                let resolved_html = crate::build::folder_embed::resolve_markers_with_place_maps(
                     &marker,
                     &from_md_path,
                     all_docs,
@@ -545,6 +547,8 @@ pub(super) fn render_page<'d>(
                     resolved_typesetting,
                     Some(media_lookup),
                     layout_config.assets.math,
+                    None,
+                    now,
                 );
                 content.push_str(&crate::build::emit::listing_style::wrap(
                     doc,
@@ -571,6 +575,7 @@ pub(super) fn render_page<'d>(
                 &project.root_path,
                 media_lookup,
                 resolved_typesetting,
+                now,
             );
             // Done before any cover-wrap below reads `body`, so a claimed
             // leaf's `split_at_lede` sees the locator as part of the body
@@ -581,7 +586,7 @@ pub(super) fn render_page<'d>(
                 body.prepend_html(eyebrow);
             }
             let mut content = body.to_html();
-            if crate::build::components::field_places::title_block_after_picture(doc) {
+            if crate::build::components::field_places::title_block_follows_picture(doc) {
                 crate::build::components::field_places::mark_body_start(&mut content);
             }
 
@@ -890,7 +895,7 @@ pub(super) fn render_page<'d>(
                         &folder_path,
                         &from_md_path,
                     );
-                    let resolved_html = crate::build::folder_embed::resolve_markers(
+                    let resolved_html = crate::build::folder_embed::resolve_markers_with_place_maps(
                         &marker,
                         &from_md_path,
                         all_docs,
@@ -900,6 +905,8 @@ pub(super) fn render_page<'d>(
                         resolved_typesetting,
                         Some(media_lookup),
                         layout_config.assets.math,
+                        None,
+                        now,
                     );
                     content.push_str(&crate::build::emit::listing_style::wrap(
                         doc,
@@ -1135,6 +1142,7 @@ pub(super) fn render_page<'d>(
                     let (date_display, date_raw, _explicit) = components::extract_date_from_doc(d, &project.root_path);
                     components::ArticleListItemProps {
                         credits: None,
+                        subtitle: None,
                         date_display,
                         date_raw,
                         url: crate::build::scan::article_map::to_pretty_url(&d.url_path),
@@ -1143,6 +1151,7 @@ pub(super) fn render_page<'d>(
                         url_path: d.url_path.clone(),
                         place: d.place_names.clone(),
                         when_html: None,
+                        when: None,
                         source_file: d.source_path.clone(),
                     }
                 })
@@ -1257,7 +1266,7 @@ pub(super) fn render_page<'d>(
     let event_calendar_href = doc.and_then(|d| context.shared.calendar.event_href(d));
     let event_meta_html = doc
         .filter(|_| is_article_page)
-        .and_then(|d| components::event_meta::render(d, d.lang, emit_source_lines, event_calendar_href.as_deref()));
+        .and_then(|d| components::event_meta::render(d, d.lang, emit_source_lines, event_calendar_href.as_deref(), now));
     let calendar_at_body_end = if event_meta_html.is_some() { None } else { event_calendar_href };
     let article_date_line_html: Option<String> = if is_article_page
         && doc.is_some()
@@ -1265,20 +1274,26 @@ pub(super) fn render_page<'d>(
     {
         let d = doc.unwrap();
         let doc_lang = d.lang;
+        // The size control's "Aa" would hang off the end of the event facts.
+        let has_size_control = event_meta_html.is_none();
         let when_html = event_meta_html.unwrap_or_else(|| {
             let formatted = components::format_display_date(d.date.as_ref().unwrap(), doc_lang, resolved_typesetting);
             let date_fm_attr = if emit_source_lines { r#" data-source-fm="date""# } else { "" };
             format!(r#"<span class="date"{}>{}</span>"#, date_fm_attr, formatted)
         });
-        Some(format!(
-            r#"<div class="date-line">{}<div class="font-anchor"><button class="font-trigger size-std" aria-label="{}" aria-expanded="false" type="button"></button><div class="font-pill" id="fontPill"><button data-scale="small" aria-label="{}"></button><button data-scale="" class="active" aria-label="{}"></button><button data-scale="large" aria-label="{}"></button><button data-scale="xlarge" aria-label="{}"></button></div></div></div>"#,
-            when_html,
-            crate::i18n::t(doc_lang, "reading_preferences"),
-            crate::i18n::t(doc_lang, "text_small"),
-            crate::i18n::t(doc_lang, "text_standard"),
-            crate::i18n::t(doc_lang, "text_large"),
-            crate::i18n::t(doc_lang, "text_xlarge"),
-        ))
+        let size_control_html = if has_size_control {
+            format!(
+                r#"<div class="font-anchor"><button class="font-trigger size-std" aria-label="{}" aria-expanded="false" type="button"></button><div class="font-pill" id="fontPill"><button data-scale="small" aria-label="{}"></button><button data-scale="" class="active" aria-label="{}"></button><button data-scale="large" aria-label="{}"></button><button data-scale="xlarge" aria-label="{}"></button></div></div>"#,
+                crate::i18n::t(doc_lang, "reading_preferences"),
+                crate::i18n::t(doc_lang, "text_small"),
+                crate::i18n::t(doc_lang, "text_standard"),
+                crate::i18n::t(doc_lang, "text_large"),
+                crate::i18n::t(doc_lang, "text_xlarge"),
+            )
+        } else {
+            String::new()
+        };
+        Some(format!(r#"<div class="date-line">{when_html}{size_control_html}</div>"#))
     } else {
         None
     };
@@ -1338,6 +1353,8 @@ pub(super) fn render_page<'d>(
     }
     if doc.is_some_and(crate::build::components::field_places::title_block_after_picture) {
         homepage_content = crate::build::components::field_places::after_leading_picture(&homepage_content);
+    } else if doc.is_some_and(crate::build::components::field_places::title_block_beside_picture) {
+        homepage_content = crate::build::components::field_places::beside_leading_picture(&homepage_content);
     }
     // Calendar links that close the body: a folder's download and subscribe
     // links, and an event's "Add to calendar" when no meta line carries it.

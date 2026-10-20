@@ -34,6 +34,10 @@ pub struct BuildShared<'d> {
 
     /// The theme's `script.mjs` and sibling modules; empty without one.
     pub theme_modules: ThemeModules,
+    /// The build's one clock: every past/upcoming decision (an event page's
+    /// `data-when`, its listing cards, the ordering) reads this, so a build
+    /// that crosses an event's end cannot disagree with itself.
+    pub now: chrono::NaiveDateTime,
 }
 
 impl BuildShared<'_> {
@@ -55,6 +59,7 @@ impl BuildShared<'_> {
             sequences: SequenceChains::default(),
             calendar: Default::default(),
             theme_modules: ThemeModules::default(),
+            now: crate::build::folder_embed::upcoming::now(),
         }
     }
 }

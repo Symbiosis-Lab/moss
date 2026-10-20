@@ -71,6 +71,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Cap on hero media block size on desktop (height horizontally, width under vertical typesetting). `none` removes the crop entirely rather than raising it — the image renders at its own intrinsic size instead of a taller band; to make the band taller, give this a longer length (e.g. `120vb`) instead. Note the wrapper has its own cap — `.moss-hero { max-block-size: min(80vb, 800px) }` reads the same property, so setting it once lifts both. It is also the minimum height of a `mobile=overlay` hero on a phone, so `100svh` makes that hero fill the first screen.",
     },
     CustomProp {
+        name: "--moss-hero-content-width",
+        owner: "moss-hero-content",
+        default: "auto",
+        description: "Width of the words block over a hero's picture, from tablet width up (a phone stacks or full-widths it). Unset, the block is as wide as its text, so a title over a wide poster can shrink to its longest word; give it a length or a percentage of the hero (e.g. `29%`, `24rem`) to use the poster's clear area. It also replaces the block's default cap of `max(600px, 35%)`, so a wider value is not clamped.",
+    },
+    CustomProp {
         name: "--moss-hero-progress",
         owner: "moss-hero-indicator-segment",
         default: "0",

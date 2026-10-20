@@ -4853,7 +4853,7 @@ article.container > [data-width="screen"] {
 }
 
 @media (max-width: 48rem) {
-  article.container > [data-width] {
+  article.container > [data-width]:not([data-width="screen"]) {
     /* collapse to the column. `auto` rather than 0: a hand-written band
        that also carries an inline width is centred here, below 48rem only —
        above it the escape's margins assume the token's width. The renderer
@@ -4870,6 +4870,14 @@ article.container > [data-width="screen"] {
 article.container > div[data-width]:not([class^="moss-"]):not([class*=" moss-"]) > * {
   max-inline-size: var(--moss-content-width);
   margin-inline: auto;
+}
+
+/* A `screen` band stays edge to edge on a phone too (the collapse above
+ * skips it), so its content needs the page gutter the column would have
+ * given it. */
+article.container > div[data-width="screen"]:not([class^="moss-"]):not([class*=" moss-"]) {
+  box-sizing: border-box;
+  padding-inline: var(--moss-container-padding);
 }
 
 /* Direct-child article-body headings + horizontal rules clear floats so
@@ -6414,9 +6422,9 @@ article a:where(:not(.moss-btn)):focus {
   line-height: 1.4;
   margin: 0;
   transition: color 0.15s ease;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* A long title wraps in full; clipping it hides the part that tells two
+     pages apart. `anywhere` keeps one unbroken word inside a phone column. */
+  overflow-wrap: anywhere;
 }
 
 .moss-cards[data-layout="list"] .moss-card-kicker {
@@ -6438,6 +6446,23 @@ article a:where(:not(.moss-btn)):focus {
   color: color-mix(in srgb, var(--moss-cover-ink, #fff) 75%, transparent);
 }
 
+/* The page's subtitle under a card's or row's title: quieter and smaller than
+   the title, on its own line. */
+.moss-card-subtitle {
+  display: block;
+  font-size: 0.875em;
+  line-height: 1.4;
+  color: var(--moss-color-muted);
+  overflow-wrap: anywhere;
+}
+
+/* A row with a subtitle stacks it under the title; the prefix stays beside both. */
+.moss-prefix-link-text {
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
+}
+
 .moss-card-description {
   /* Sized at sm (1rem) so descriptions cross the comfortable-reading
      threshold for CJK scripts, where the previous xs (0.875rem) was
@@ -6453,13 +6478,13 @@ article a:where(:not(.moss-btn)):focus {
      physical axis that is, and plain block layout never touches
      `writing-mode`. It is the fallback the rule below still leans on (its
      own clip has no ellipsis, so a browser that ignored `-webkit-line-clamp`
-     would at least still clip at two lines) and it is also the ONLY clamp a
+     would at least still clip at three lines) and it is also the ONLY clamp a
      vertical-typesetting site keeps — see site/vertical.css, which undoes the
      rule below for exactly that reason. */
   overflow: hidden;
-  max-block-size: calc(1.5em * 2);
+  max-block-size: calc(1.5em * 3);
   /* Ellipsis for the common case: `display: -webkit-box` + `-webkit-box-
-     orient: vertical` + `-webkit-line-clamp: 2` paints the ellipsis natively
+     orient: vertical` + `-webkit-line-clamp: 3` paints the ellipsis natively
      in both engines, but that legacy multi-line-truncation box lays its
      content out along the PHYSICAL horizontal axis regardless of the
      element's own writing-mode — inside a vertical-rl card it forced the
@@ -6471,15 +6496,15 @@ article a:where(:not(.moss-btn)):focus {
      — a horizontal-only build must not carry the substring at all), so the
      undo lives in site/vertical.css instead, the one file that already knows
      about vertical typesetting and is the gated partial a horizontal site
-     never even ships. `line-clamp: 2` is set alongside the prefixed property
+     never even ships. `line-clamp: 3` is set alongside the prefixed property
      for whichever engine ships the unprefixed standard version first — inert
      today (Chromium 149 and the WebKit moss ships both ignore it), but it
      would not need `display: -webkit-box` or vertical.css's undo at all, so
      it costs nothing to have it ready. */
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
 }
 
 .moss-child-section-divider {
@@ -7261,6 +7286,9 @@ article a:where(:not(.moss-btn)):focus {
     inset-inline-start: auto;
     z-index: 2; /* not auto: else this flex item paints below the scrim */
     flex: none; /* hugs its own content; never stretch to the hero's height */
+    /* Without a width the words shrink to their longest word; the cap moves with it so it cannot clamp a wider request. */
+    inline-size: var(--moss-hero-content-width, auto);
+    max-inline-size: var(--moss-hero-content-width, max(600px, 35%));
   }
 
   /* Captions join the same bottom stack, directly above the content, so the

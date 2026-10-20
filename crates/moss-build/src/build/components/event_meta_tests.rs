@@ -17,7 +17,7 @@ fn doc(start: &str, end: Option<&str>) -> ParsedDocument {
 }
 
 fn time_element(d: &ParsedDocument, lang: Language) -> String {
-    let html = render(d, lang, false, None).unwrap();
+    let html = render(d, lang, false, None, chrono::NaiveDateTime::default()).unwrap();
     let from = html.find(r#"<time class="moss-event-time""#).unwrap();
     let to = from + html[from..].find("</time>").unwrap() + "</time>".len();
     html[from..to].to_string()
@@ -70,7 +70,7 @@ fn chinese_uses_a_24_hour_clock_and_weekday_after_the_date() {
 fn unsafe_link_schemes_are_not_linked() {
     let mut d = doc("2026-11-01", None);
     d.event.as_mut().unwrap().tickets = Some("javascript:alert(1)".into());
-    assert!(!render(&d, Language::En, false, None).unwrap().contains("<a "));
+    assert!(!render(&d, Language::En, false, None, chrono::NaiveDateTime::default()).unwrap().contains("<a "));
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn tickets_and_online_links_each_carry_their_own_class() {
     let mut d = doc("2026-11-01", None);
     d.event.as_mut().unwrap().tickets = Some("https://example.test/tickets".into());
     d.event.as_mut().unwrap().online = Some("https://example.test/live".into());
-    let html = render(&d, Language::En, false, None).unwrap();
+    let html = render(&d, Language::En, false, None, chrono::NaiveDateTime::default()).unwrap();
     assert!(
         html.contains(r#"<a class="moss-event-link moss-event-tickets" href="https://example.test/tickets">"#),
         "{html}"
@@ -91,7 +91,7 @@ fn tickets_and_online_links_each_carry_their_own_class() {
 
 #[test]
 fn a_page_without_an_event_renders_nothing() {
-    assert!(render(&ParsedDocument::default(), Language::En, false, None).is_none());
+    assert!(render(&ParsedDocument::default(), Language::En, false, None, chrono::NaiveDateTime::default()).is_none());
 }
 
 #[test]

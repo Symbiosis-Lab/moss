@@ -38,8 +38,13 @@ pub struct ArticleListItemProps {
     /// An event's written time as a `<time>` with its parts in spans
     /// (`event_meta::render_when`); shown in place of `date_display`.
     pub when_html: Option<String>,
+    /// `"upcoming"` or `"past"` for an event, published on the row as
+    /// `data-when`; `None` for any other page.
+    pub when: Option<&'static str>,
     /// The page's listed names, pre-rendered (`ChildItemProps::credits`).
     pub credits: Option<String>,
+    /// The page's `subtitle:` ([`card_subtitle`]), drawn under the title.
+    pub subtitle: Option<String>,
     /// Source path of the page this row stands for (`ParsedDocument::source_path`).
     pub source_file: Option<String>,
 }
@@ -55,10 +60,48 @@ impl ArticleListItemProps {
     }
 }
 
+/// ` data-when="…"` for an event's card or row, or nothing.
+fn when_attr(when: Option<&str>) -> String {
+    when.map(|w| format!(r#" data-when="{w}""#)).unwrap_or_default()
+}
+
+/// The attributes every listing card and row root carries: its source page
+/// and an event's upcoming/past state.
+pub(crate) fn root_attrs(source_file: Option<&str>, when: Option<&str>) -> String {
+    format!("{}{}", source_file_attr(source_file), when_attr(when))
+}
+
 /// ` data-source-file="…"` for an element whose source is another page, or
 /// nothing when the path is unknown.
 pub(crate) fn source_file_attr(path: Option<&str>) -> String {
     path.map(|p| format!(r#" data-source-file="{}""#, html_escape(p))).unwrap_or_default()
+}
+
+/// The page's `subtitle:` frontmatter, trimmed; `None` when absent or blank.
+pub(crate) fn card_subtitle(doc: &ParsedDocument) -> Option<String> {
+    doc.raw_frontmatter
+        .get("subtitle")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// The line under a card's or row's title; nothing when there is no subtitle.
+pub(crate) fn subtitle_html(subtitle: Option<&str>) -> String {
+    subtitle
+        .map(|s| format!(r#"<span class="moss-card-subtitle">{}</span>"#, html_escape(s)))
+        .unwrap_or_default()
+}
+
+/// A row's title with its subtitle beneath. A row lays its prefix and title
+/// side by side, so the pair gets a wrapper to stack them; without a subtitle
+/// the title stays as it was.
+fn title_with_subtitle(title_html: String, subtitle: Option<&str>) -> String {
+    match subtitle_html(subtitle) {
+        sub if sub.is_empty() => title_html,
+        sub => format!(r#"<span class="moss-prefix-link-text">{title_html}{sub}</span>"#),
+    }
 }
 
 /// Renders an article list item as HTML.
@@ -96,10 +139,13 @@ pub fn render(
 ) -> String {
     if no_date {
         return format!(
-            r#"<p class="moss-card"{}><a href="{}" class="moss-prefix-link"><span class="moss-prefix-link-title title">{}</span></a></p>"#,
-            source_file_attr(props.source_file.as_deref()),
+            r#"<p class="moss-card"{}><a href="{}" class="moss-prefix-link">{}</a></p>"#,
+            root_attrs(props.source_file.as_deref(), props.when),
             html_escape(&props.url),
-            html_escape(&props.title)
+            title_with_subtitle(
+                format!(r#"<span class="moss-prefix-link-title title">{}</span>"#, html_escape(&props.title)),
+                props.subtitle.as_deref(),
+            )
         );
     }
 
@@ -136,11 +182,14 @@ pub fn render(
         )
     };
     format!(
-        r#"<p class="moss-card"{}><a href="{}" class="moss-prefix-link">{}<span class="moss-prefix-link-title title">{}</span></a></p>"#,
-        source_file_attr(props.source_file.as_deref()),
+        r#"<p class="moss-card"{}><a href="{}" class="moss-prefix-link">{}{}</a></p>"#,
+        root_attrs(props.source_file.as_deref(), props.when),
         html_escape(&props.url),
         prefix,
-        html_escape(&props.title)
+        title_with_subtitle(
+            format!(r#"<span class="moss-prefix-link-title title">{}</span>"#, html_escape(&props.title)),
+            props.subtitle.as_deref(),
+        )
     )
 }
 
@@ -191,6 +240,9 @@ pub struct ChildItemProps {
     /// An event's written time as a `<time>` with its parts in spans
     /// (`event_meta::render_when`); shown in place of `date_display`.
     pub when_html: Option<String>,
+    /// `"upcoming"` or `"past"` for an event, published on the card as
+    /// `data-when`; `None` for any other page.
+    pub when: Option<&'static str>,
     /// The names a term kind with `cards = true` lists on this page, as one
     /// pre-rendered `moss-card-credits` span (`terms::roles`). Shown in a
     /// leaf's meta after its date and place; `None` for a folder.
@@ -211,6 +263,8 @@ pub struct ChildItemProps {
     pub source_file: Option<String>,
     /// The listing's `children_count:` setting, applied to a folder's count.
     pub count_setting: Option<moss_core::frontmatter_union::ChildrenCount>,
+    /// The page's `subtitle:` ([`card_subtitle`]), drawn under the title.
+    pub subtitle: Option<String>,
 }
 
 impl ChildItemProps {
@@ -221,8 +275,8 @@ impl ChildItemProps {
         crate::i18n::card_count_label(lang, count, typesetting, self.count_setting.as_ref())
     }
 
-    pub(crate) fn source_file_attr(&self) -> String {
-        source_file_attr(self.source_file.as_deref())
+    pub(crate) fn root_attrs(&self) -> String {
+        root_attrs(self.source_file.as_deref(), self.when)
     }
 
     /// The card's ` style="--moss-section-color: …"` attribute, or nothing for
@@ -361,6 +415,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
     root_path: &str,
     dir_overrides: &std::collections::HashMap<String, String>,
     typesetting: Option<&str>,
+    now: chrono::NaiveDateTime,
 ) -> ChildItemProps {
     let path_resolver = PathResolver::new().with_dir_overrides(dir_overrides.clone());
 
@@ -433,6 +488,8 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         path_resolver.resolve_url(&crate::build::scan::article_map::to_pretty_url(&doc.url_path));
     let permalink = external_url.as_ref().map(|_| local_url.clone());
 
+    let when = doc.event.as_ref().map(|e| crate::build::folder_embed::upcoming::when_of(e, now));
+
     ChildItemProps {
         // Child list cards/rows are chrome; use the plain-text label.
         title: doc.label.clone(),
@@ -455,13 +512,19 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
             Some(doc.location.join(", ")).filter(|p| !p.is_empty())
         }),
         when_html: doc.event.as_ref().map(|e| {
-            crate::build::components::event_meta::render_when(e.start, e.end, doc.lang)
+            let mut html = crate::build::components::event_meta::render_when(e.start, e.end, doc.lang);
+            if when == Some("upcoming") {
+                html.push_str(&crate::build::components::event_meta::upcoming_label(doc.lang));
+            }
+            html
         }),
+        when,
         credits: doc.card_credits.clone(),
         tickets: doc.event.as_ref().and_then(|e| e.tickets.clone()),
         online: doc.event.as_ref().and_then(|e| e.online.clone()),
         section_color: doc.section.clone(),
         source_file: doc.source_path.clone(),
+        subtitle: card_subtitle(doc),
     }
 }
 
@@ -528,12 +591,16 @@ fn row_parts(props: &ChildItemProps, event: Option<&EventCardLinks>, row_class: 
     match event {
         Some(links) => (
             format!(r#"<div class="{row_class}">"#),
-            format!(r#"<span class="{title_class}">{}</span>{}"#, links.title, links.actions),
+            format!(
+                "{}{}",
+                title_with_subtitle(format!(r#"<span class="{title_class}">{}</span>"#, links.title), props.subtitle.as_deref()),
+                links.actions
+            ),
             "</div>",
         ),
         None => (
             format!(r#"<a href="{}" class="{row_class}">"#, html_escape(&props.url)),
-            format!(r#"<span class="{title_class}">{}</span>"#, html_escape(&props.title)),
+            title_with_subtitle(format!(r#"<span class="{title_class}">{}</span>"#, html_escape(&props.title)), props.subtitle.as_deref()),
             "</a>",
         ),
     }
@@ -565,7 +632,7 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
             let (open, title, close) = row_parts(props, event, "moss-prefix-link moss-folder-link", "moss-prefix-link-title");
             format!(
                 r#"<div class="moss-card moss-folder-item"{}>{}{}{}{}<p class="moss-folder-description">{}</p></div>"#,
-                props.source_file_attr(), open, title, meta_span("moss-prefix-link-suffix"), close,
+                props.root_attrs(), open, title, meta_span("moss-prefix-link-suffix"), close,
                 crate::build::page::meta::render_description_html(desc)
             )
         } else {
@@ -573,7 +640,7 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
             let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
             format!(
                 r#"<div class="moss-card"{}>{}{}{}{}</div>"#,
-                props.source_file_attr(), open, meta_span("moss-prefix-link-prefix"), title, close
+                props.root_attrs(), open, meta_span("moss-prefix-link-prefix"), title, close
             )
         }
     } else if let Some(ref date_raw) = props.date_raw {
@@ -587,7 +654,7 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
         let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
         format!(
             r#"<div class="moss-card"{}>{}<span class="moss-prefix-link-prefix date">{}</span>{}{}</div>"#,
-            props.source_file_attr(), open, date, title, close
+            props.root_attrs(), open, date, title, close
         )
     } else if let Some(ref date_display) = props.date_display {
         // Article with a display date but no raw date. `date_display` is
@@ -597,14 +664,14 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
         let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
         format!(
             r#"<div class="moss-card"{}>{}<span class="moss-prefix-link-prefix date">{}</span>{}{}</div>"#,
-            props.source_file_attr(), open, date, title, close
+            props.root_attrs(), open, date, title, close
         )
     } else {
         // Article without any date
         let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
         format!(
             r#"<div class="moss-card"{}>{}{}{}</div>"#,
-            props.source_file_attr(), open, title, close
+            props.root_attrs(), open, title, close
         )
     }
 }

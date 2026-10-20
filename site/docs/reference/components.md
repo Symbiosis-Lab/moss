@@ -35,6 +35,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-card-cover-link` | instance | Anchor wrapping the `.moss-card-cover` on linkblog cards — same role as `.moss-card-title-link` but for the cover image / media. Targets the canonical (external) URL. |
 | `.moss-card-description-link` | instance | Anchor wrapping the `.moss-card-description` on linkblog cards — same role as `.moss-card-title-link` but for the description excerpt. Targets the canonical (external) URL. |
 | `.moss-card-description` | instance | Excerpt / description paragraph inside a `.moss-card` — below the title in both grid- and list-layout cards. |
+| `.moss-card-subtitle` | instance | The page's `subtitle:` under its title, on grid and summary cards and on list rows. Absent when the page has no subtitle. Muted and smaller than the title by default. |
 | `.moss-embed-more` | instance | Trailing "More →" link on a truncated children listing (emitted when `children_limit` caps the embed); links to the folder's full index. Rendered as a sibling immediately after `.moss-cards-container`, so it sits outside the listing's flex `gap` and binds to the list via its own `margin-top`. |
 | `.moss-folder-item` | instance | Modifier on `.moss-card-minimal` for folder-type entries in minimal listings. |
 | `.moss-folder-title` | instance | Title text of a folder entry in minimal listings. |
@@ -43,6 +44,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-prefix-link` | instance | Link with a prefix span (date or icon) and a title span. Used inside minimal cards. |
 | `.moss-prefix-link-prefix` | instance | Prefix slot of a prefix-link (typically a date). |
 | `.moss-prefix-link-title` | instance | Title slot of a prefix-link. |
+| `.moss-prefix-link-text` | instance | Stacks a prefix-link's title over the page's subtitle. Present only on a row whose page has a subtitle; otherwise the title span sits directly in the link. |
 | `.title` | instance | Bare co-class beside `moss-prefix-link-title`, the counterpart of `date` on the prefix span. Both predate the prefixed names and are still emitted for themes that key on them. |
 | `.moss-prefix-link-suffix` | instance | Optional trailing slot of a prefix-link. |
 | `.moss-callout` | standalone | Obsidian-style callout. The Obsidian-compat `.callout` class is co-emitted; type lives on `data-type` (v1). |
@@ -76,6 +78,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-align-right` | standalone | Floats an embed element to the right of body text (editorial runaround) — an image, a captioned figure (`.moss-image`, `.moss-embed-figure`), a bare `.moss-embed`, or a `.moss-cards-container` listing. Symmetric counterpart to `.moss-align-left`. Mirrors WordPress's `alignright` convention. |
 | `.moss-article-title` | instance | Article-page H1 title emitted from frontmatter. |
 | `.moss-eyebrow` | standalone | A small line above the page title holding every declared field whose `place` is `eyebrow`, in declaration order, one `<span data-field>` each. The spans are separated by a single space, so the fields stay separate words in the page's text; the visible separator is drawn by the stylesheet from `--moss-eyebrow-separator` and absorbs that space. Emitted only on a page that has a value for such a field. |
+| `.moss-title-beside` | standalone | Pairs a page's leading picture with its title block (eyebrow, title, subtitle, facts) in two columns from 48rem up, stacked below. Emitted only on a page with `title_block: beside-picture` whose body opens with a picture; the picture comes first, the title block follows in a plain div. |
 | `.moss-subtitle` | standalone | A line under the page title holding the first declared field, in declaration order, whose `place` is `subtitle`. Emitted only on a page that has a value for it. |
 | `.moss-key-figure` | standalone | A large number under the page title for a declared field whose `place` is `key-figure`: the count in a `<data value>` element, then its noun. One paragraph per such field, in declaration order. Emitted only on a page that has a value for it. |
 | `.moss-facts` | standalone | A list of the page's declared fields whose `place` is `facts`: one `<div data-field>` per field in declaration order, with the field's label in `<dt>` and its value in `<dd>`. On a wide screen the list sits in the right margin beside the title; on a narrow, vertical, full-width or sidebar page, or one with sidenotes, it stays in the flow. Emitted only on a page that has a value for such a field. |
@@ -159,6 +162,7 @@ Class names moss emits on auto-generated components. Target them directly in `.m
 | `.moss-event-calendar` | instance | The "Add to calendar" link to the event's `.ics` file, after the tickets and online links. Carries `.moss-event-link` too. |
 | `.moss-event-tickets` | instance | The `tickets` link, which also carries `.moss-event-link`. An event card with `tickets:` in a listing carries one too, after its meta. |
 | `.moss-event-online` | instance | The `online` link, which also carries `.moss-event-link`. An event card with `online:` in a listing carries one too, after its Tickets link. |
+| `.moss-event-upcoming` | instance | The word "Upcoming" (translated) after the time of an event that has not ended, on a card or a list row in a folder listing. Past events carry no label; their `data-when="past"` is the hook. |
 | `.moss-event-sep` | instance | The separator between an event's time and its place in a listing row or card. |
 | `.moss-when` | container | An event's time in a listing item (list row, card, grid card), in place of the compact date: a `<time>` whose `datetime` is the start as written, venue-local. The visible text is the same words the event page shows (localized to the page language). Each piece sits in its own span so a theme can lay the date out as it likes, for instance a large day numeral. The same spans appear inside an event page's `.moss-event-time`. |
 | `.moss-when-weekday` | instance | The weekday name. |

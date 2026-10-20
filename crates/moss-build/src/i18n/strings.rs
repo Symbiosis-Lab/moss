@@ -363,6 +363,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         "event_tickets" => match lang { Language::En => "Tickets", Language::De => "Tickets", Language::ZhHans => "购票", Language::ZhHant => "購票" },
         "event_tickets_for" => match lang { Language::En => " for {}", Language::De => " für {}", Language::ZhHans => "：{}", Language::ZhHant => "：{}" },
         "event_online" => match lang { Language::En => "Online", Language::De => "Online-Teilnahme", Language::ZhHans => "线上参加", Language::ZhHant => "線上參加" },
+        "event_upcoming" => match lang { Language::En => "Upcoming", Language::De => "Demnächst", Language::ZhHans => "即将上演", Language::ZhHant => "即將上演" },
         "event_status_cancelled" => match lang { Language::En => "Cancelled", Language::De => "Abgesagt", Language::ZhHans => "已取消", Language::ZhHant => "已取消" },
         "event_status_postponed" => match lang { Language::En => "Postponed", Language::De => "Verschoben", Language::ZhHans => "已延期", Language::ZhHant => "已延期" },
         "event_status_moved-online" => match lang { Language::En => "Moved online", Language::De => "Findet online statt", Language::ZhHans => "改为线上", Language::ZhHant => "改為線上" },

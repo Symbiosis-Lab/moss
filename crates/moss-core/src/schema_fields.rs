@@ -342,6 +342,18 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "subtitle",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        // Frequency=2, Importance=3 → score=76
+        score: 76,
+        description: "A second line for the page's title, such as the title in another script. Listing cards and rows draw it under the page's title",
+        label: Some("Subtitle"),
+        label_key: "chip.subtitle.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "date",
         field_type: FieldType::String,
         widget: Widget::DatePicker,
@@ -813,10 +825,10 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         name: "title_block",
         field_type: FieldType::String,
         widget: Widget::Select,
-        enum_values: Some(&["after-picture"]),
+        enum_values: Some(&["after-picture", "beside-picture"]),
         // Frequency=1, Importance=2 → score=86
         score: 86,
-        description: "Where the title block (eyebrow, title, subtitle, date, byline, key figures, facts) goes: after-picture puts it under the body's leading picture. Absent keeps it first. A folder sets it for its pages with cascade.",
+        description: "Where the title block (eyebrow, title, subtitle, date, byline, key figures, facts) goes: after-picture puts it under the body's leading picture, beside-picture next to it (two columns on a wide screen, stacked on a phone). Absent keeps it first. A folder sets it for its pages with cascade.",
         label: Some("Title block"),
         label_key: "chip.title_block.label",
         group: "This Page",
@@ -1073,6 +1085,19 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "Keep only pages with a cover or a first picture. \"only\" — e.g. the home page of an artist's site lists the latest works that have a picture. Absent = no filter.",
         label: Some("Covers"),
         label_key: "chip.children_covers.label",
+        group: "Child Styles",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "children_when",
+        field_type: FieldType::String,
+        widget: Widget::Select,
+        enum_values: Some(&["past", "upcoming"]),
+        // Frequency=1, Importance=2 → score=86
+        score: 87,
+        description: "Keep only events that have ended (\"past\") or not (\"upcoming\"); a page with no start or date is past. Applied before children_limit. Absent = no filter.",
+        label: Some("When"),
+        label_key: "chip.children_when.label",
         group: "Child Styles",
         ..FIELD_DEFAULTS
     },

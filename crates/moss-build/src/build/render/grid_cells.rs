@@ -67,6 +67,8 @@ pub(crate) struct BuildIndex<'a> {
     pub page_url_path: &'a str,
     /// The rendering page's resolved typesetting, for the card's CJK date and count.
     pub typesetting: Option<&'a str>,
+    /// The build's clock, for the past/upcoming reading of a linked event.
+    pub now: chrono::NaiveDateTime,
 }
 
 /// A grid cell's structure, read from its typed blocks.
@@ -299,6 +301,7 @@ pub(crate) fn resolve_page_body(
     root_path: &str,
     media_lookup: &crate::build::media::dimensions::MediaDimensionLookup,
     typesetting: Option<&str>,
+    now: chrono::NaiveDateTime,
 ) -> BodyPlan {
     let mut plan = match &doc.body_plan {
         Some(p) => p.clone(),
@@ -313,6 +316,7 @@ pub(crate) fn resolve_page_body(
         lang: doc.lang,
         page_url_path: &doc.url_path,
         typesetting,
+        now,
     };
     apply_summary_grids(&mut plan, &index);
     apply_collection_cards(&mut plan, &index);
@@ -793,6 +797,7 @@ fn picked_card_props(link: &CellLink<'_>, index: &BuildIndex<'_>) -> Option<Chil
         index.root_path.unwrap_or(""),
         index.dir_overrides,
         index.typesetting,
+        index.now,
     );
     // An explicit link text wins; otherwise the linked page's own label, which
     // `props_for_document` already filled in.

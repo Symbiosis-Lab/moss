@@ -23,6 +23,9 @@ pub struct FolderEmbedParams {
     /// flattening (`depth:all`) and before `limit`, so a capped listing
     /// counts the limit off the covered set rather than the full set.
     pub covers: Option<String>,
+    /// Listing filter: "past" or "upcoming" keeps only the pages whose event
+    /// has ended, or has not. A page with no start or date is past.
+    pub when: Option<String>,
     /// Raw sizing token (e.g. `"80%"`, `"800x600"`). Parsed to a `Sizing`
     /// at render time and applied ONLY to the static-index iframe branch
     /// (the card-grid listing branch ignores it). Stored raw so the
@@ -101,7 +104,7 @@ pub fn classify_folder_segments(raw: &str) -> FolderEmbedParams {
 }
 
 /// Recognized keys for the keyed (`key:value` / `key=value`) grammar.
-const KNOWN_KEYS: &[&str] = &["limit", "sort", "style", "depth", "group", "covers", "more", "size"];
+const KNOWN_KEYS: &[&str] = &["limit", "sort", "style", "depth", "group", "covers", "when", "more", "size"];
 
 /// Whether a segment belongs to the keyed grammar rather than to placement
 /// or the caption.
@@ -174,6 +177,7 @@ fn merge_keyed_params(out: &mut FolderEmbedParams, raw: &str) {
                 "depth" => out.depth = Some(v.trim().to_string()),
                 "group" => out.group = Some(v.trim().to_string()),
                 "covers" => out.covers = Some(v.trim().to_string()),
+                "when" => out.when = Some(v.trim().to_string()).filter(|w| matches!(w.as_str(), "past" | "upcoming")),
                 "more" => {
                     let v = v.trim();
                     if !v.is_empty() {
@@ -302,6 +306,9 @@ pub fn emit_marker(path: &str, from: &str, params: &FolderEmbedParams) -> String
     }
     if let Some(ref c) = params.covers {
         parts.push(format!("covers={}", c));
+    }
+    if let Some(ref w) = params.when {
+        parts.push(format!("when={}", w));
     }
     if let Some(ref m) = params.more {
         parts.push(format!("more={}", marker_encode(m)));

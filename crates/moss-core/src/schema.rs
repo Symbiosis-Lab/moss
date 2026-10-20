@@ -353,7 +353,7 @@ mod tests {
         // (`inferred` added 2026-10 — fields taken from embedded files' derived facts.)
         // (`color` added 2026-10 — a folder home's section accent.)
         // (`partial` added 2026-10 — a transclusion source that is never built.)
-        assert_eq!(schema.frontmatter.fields.len(), 62);
+        assert_eq!(schema.frontmatter.fields.len(), 64);
     }
 
     #[test]

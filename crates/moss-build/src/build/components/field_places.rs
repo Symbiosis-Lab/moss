@@ -141,7 +141,23 @@ pub const BODY_START: &str = "<!-- moss:body-start -->";
 /// (`title_block: after-picture`, its own or cascaded). A folder index and a
 /// slot such as the footer keep their title first.
 pub fn title_block_after_picture(doc: &ParsedDocument) -> bool {
-    doc.title_block.as_deref() == Some("after-picture") && doc.kind != moss_core::page_kind::PageKind::Folder && !doc.slot_only
+    title_block_is(doc, "after-picture")
+}
+
+/// Whether `doc` sets its title block beside its leading picture
+/// (`title_block: beside-picture`), under the same rules as
+/// [`title_block_after_picture`].
+pub fn title_block_beside_picture(doc: &ParsedDocument) -> bool {
+    title_block_is(doc, "beside-picture")
+}
+
+/// Whether `doc` moves its title block next to its leading picture, either way.
+pub fn title_block_follows_picture(doc: &ParsedDocument) -> bool {
+    title_block_after_picture(doc) || title_block_beside_picture(doc)
+}
+
+fn title_block_is(doc: &ParsedDocument, value: &str) -> bool {
+    doc.title_block.as_deref() == Some(value) && doc.kind != moss_core::page_kind::PageKind::Folder && !doc.slot_only
 }
 
 /// Put [`BODY_START`] right after the title of a body that opens with moss's
@@ -162,17 +178,33 @@ pub fn mark_body_start(html: &mut String) {
 /// `figure.moss-image`, when only divs come before it. Without one, the title
 /// block stays first.
 pub fn after_leading_picture(html: &str) -> String {
+    place_title_block(html, false)
+}
+
+/// Like [`after_leading_picture`], but the picture and the title block go in
+/// one `div.moss-title-beside`, the picture first, so a stylesheet can set
+/// them side by side.
+pub fn beside_leading_picture(html: &str) -> String {
+    place_title_block(html, true)
+}
+
+fn place_title_block(html: &str, beside: bool) -> String {
     let Some((masthead, body)) = html.split_once(BODY_START) else {
         return html.to_string();
     };
-    match leading_picture_end(body) {
-        Some(end) => format!("{}\n{masthead}{}", &body[..end], &body[end..]),
-        None => format!("{masthead}{body}"),
+    let Some((start, end)) = leading_picture_span(body) else {
+        return format!("{masthead}{body}");
+    };
+    let (before, picture, after) = (&body[..start], &body[start..end], &body[end..]);
+    if beside {
+        format!("{before}<div class=\"moss-title-beside\">{picture}\n<div>{masthead}</div></div>{after}")
+    } else {
+        format!("{before}{picture}\n{masthead}{after}")
     }
 }
 
-/// Where the leading picture of `body` ends, per [`after_leading_picture`].
-fn leading_picture_end(body: &str) -> Option<usize> {
+/// Where the leading picture of `body` starts and ends, per [`after_leading_picture`].
+fn leading_picture_span(body: &str) -> Option<(usize, usize)> {
     let mut at = 0;
     loop {
         at += body[at..].len() - body[at..].trim_start().len();
@@ -182,7 +214,7 @@ fn leading_picture_end(body: &str) -> Option<usize> {
             continue;
         }
         if rest.starts_with("<figure class=\"moss-image") {
-            return Some(at + rest.find("</figure>")? + "</figure>".len());
+            return Some((at, at + rest.find("</figure>")? + "</figure>".len()));
         }
         if !rest.starts_with("<div") {
             return None;

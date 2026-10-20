@@ -152,6 +152,23 @@ mod title_block_after_picture {
     }
 
     #[test]
+    fn beside_wraps_the_picture_and_the_title_block_in_one_div_after_leading_divs() {
+        use super::super::beside_leading_picture;
+        let html = page("\n<div class=\"trail\"><p>Road</p></div>\n<figure class=\"moss-image\"><img></figure>\n<p>Text</p>");
+        let out = beside_leading_picture(&html);
+        let at = |s: &str| out.find(s).unwrap_or_else(|| panic!("{s} missing from {out}"));
+        assert!(at("trail") < at("<div class=\"moss-title-beside\"><figure") && at("</figure>") < at("moss-eyebrow") && at("</h1>") < at("</div></div>") && at("</div></div>") < at("<p>Text</p>"), "{out}");
+        assert!(!out.contains(BODY_START));
+    }
+
+    #[test]
+    fn beside_without_a_leading_picture_keeps_the_title_block_first() {
+        use super::super::beside_leading_picture;
+        let out = beside_leading_picture(&page("\n<p>Text first</p>\n<figure class=\"moss-image\"><img></figure>"));
+        assert!(out.starts_with(TITLE.trim_end_matches('\n')) && !out.contains("moss-title-beside") && !out.contains(BODY_START), "{out}");
+    }
+
+    #[test]
     fn an_unclosed_block_keeps_the_title_block_first() {
         let out = after_leading_picture(&page("\n<div class=\"x\"><figure class=\"moss-image\"><img></figure>"));
         assert!(out.starts_with("<p class=\"moss-eyebrow\""), "{out}");
@@ -166,4 +183,14 @@ fn a_folder_index_and_a_slot_keep_their_title_first() {
     assert!(!title_block_after_picture(&ParsedDocument { slot_only: true, ..page.clone() }));
     assert!(!title_block_after_picture(&ParsedDocument { kind: moss_core::page_kind::PageKind::Folder, ..page.clone() }));
     assert!(!title_block_after_picture(&ParsedDocument { title_block: None, ..page }));
+}
+
+#[test]
+fn beside_picture_follows_the_same_page_rules_as_after_picture() {
+    use crate::build::components::field_places::{title_block_beside_picture, title_block_follows_picture};
+    let page = ParsedDocument { title_block: Some("beside-picture".into()), kind: moss_core::page_kind::PageKind::Article, ..Default::default() };
+    assert!(title_block_beside_picture(&page) && title_block_follows_picture(&page));
+    assert!(!title_block_beside_picture(&ParsedDocument { slot_only: true, ..page.clone() }));
+    assert!(!title_block_beside_picture(&ParsedDocument { kind: moss_core::page_kind::PageKind::Folder, ..page.clone() }));
+    assert!(!title_block_beside_picture(&ParsedDocument { title_block: Some("after-picture".into()), ..page }));
 }

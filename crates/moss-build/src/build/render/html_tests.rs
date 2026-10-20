@@ -16,6 +16,15 @@ fn render_for_build(
     site_config: crate::build::render::blocking::SiteConfig,
     exits_after_build: bool,
 ) -> std::path::PathBuf {
+    render_for_build_at(test_dir, site_config, exits_after_build, crate::build::folder_embed::upcoming::now())
+}
+
+fn render_for_build_at(
+    test_dir: &std::path::Path,
+    site_config: crate::build::render::blocking::SiteConfig,
+    exits_after_build: bool,
+    now: chrono::NaiveDateTime,
+) -> std::path::PathBuf {
     let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
     std::fs::create_dir_all(&output_dir).unwrap();
     let project_structure =
@@ -32,6 +41,7 @@ fn render_for_build(
         &mut pending,
         exits_after_build,
         false,
+        now,
     )
     .expect("generate_blocking_content_for_build should succeed");
     crate::build::emit::slots::write_as_rendered(&output_dir, pending.take_unwritten_pages()).unwrap();
@@ -10111,5 +10121,27 @@ mod remote_cover_end_to_end_tests {
         assert!(index_html.contains("author.jpg"), "authored image must survive: {index_html}");
         assert!(!index_html.contains("_moss/link/"), "must not also emit a fetched cover: {index_html}");
         let _ = server.join();
+    }
+}
+
+/// An event's own page, its card in the folder listing and the card on a page
+/// that links it all take the build's clock, never a clock of their own.
+#[test]
+fn one_build_clock_decides_upcoming_for_the_page_and_every_card() {
+    use chrono::NaiveDate;
+    let at = |y| NaiveDate::from_ymd_opt(y, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+    for (year, want, other) in [(2019, "upcoming", "past"), (2021, "past", "upcoming")] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("Events")).unwrap();
+        std::fs::write(root.join("index.md"), "---\ntitle: Home\n---\n\n:::grid\n[[Events/Gala]]\n:::\n").unwrap();
+        std::fs::write(root.join("Events/index.md"), "---\ntitle: Events\n---\n\nWhat is on.\n").unwrap();
+        std::fs::write(root.join("Events/Gala.md"), "---\ntitle: Gala\nuid: gala0001\nstart: 2020-06-01\n---\n\nBody.\n").unwrap();
+        let out = render_for_build_at(root, crate::build::render::blocking::SiteConfig::default(), true, at(year));
+        for page in ["events/gala/index.html", "events/index.html", "index.html"] {
+            let html = std::fs::read_to_string(out.join(page)).unwrap_or_else(|e| panic!("{page}: {e}"));
+            assert!(html.contains(&format!(r#"data-when="{want}""#)), "{page} at {year}: {html}");
+            assert!(!html.contains(&format!(r#"data-when="{other}""#)), "{page} at {year}: {html}");
+        }
     }
 }

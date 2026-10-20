@@ -263,6 +263,7 @@ pub fn generate_blocking_content(
     let output = generate_blocking_content_for_build(
         root, project_structure, output_dir, services, progress_sender, emit_source_lines,
         site_config, pending, false, false,
+        crate::build::folder_embed::upcoming::now(),
     )?;
     // No slot pass follows this entry point, so its pages are written as rendered.
     crate::build::emit::slots::write_as_rendered(output_dir, pending.take_unwritten_pages())?;
@@ -279,6 +280,7 @@ pub fn generate_blocking_content(
 /// [`generate_blocking_content`]'s plain default. Unlike that one, it leaves the
 /// rendered pages in `pending` for the slot pass to write. `defer_title_cards`
 /// plans sharing cards for the background phase; standalone callers pass false.
+/// `now` is the build's one clock for every past/upcoming decision.
 pub fn generate_blocking_content_for_build(
     root: &crate::vault::paths::VaultRoot,
     project_structure: &ProjectStructure,
@@ -290,6 +292,7 @@ pub fn generate_blocking_content_for_build(
     pending: &mut PendingManifest,
     exits_after_build: bool,
     defer_title_cards: bool,
+    now: chrono::NaiveDateTime,
 ) -> Result<BlockingContentOutput, BuildStopped> {
     let total_start = std::time::Instant::now();
     let mut og_requests = Vec::new();
@@ -1246,6 +1249,7 @@ pub fn generate_blocking_content_for_build(
             site_config.typesetting.as_deref(),
             site_config.place_maps.as_ref(),
             Some((&calendar, &site_url)),
+            now,
         );
         log::debug!(target: "timing", "[reduce] expand_markers_in_documents: {:?}", reduce_start.elapsed());
 
@@ -1713,6 +1717,7 @@ pub fn generate_blocking_content_for_build(
     let mut shared = super::build_shared::BuildShared::new(scripts, project_structure, &dir_overrides);
     shared.calendar = calendar;
     shared.theme_modules = theme_modules;
+    shared.now = now;
 
     let rss_href = ServedPath::for_rss("").unwrap().to_relative_url();
     let page_rss_link = has_rss.then(|| format!(r#"<link rel="alternate" type="application/rss+xml" title="RSS" href="{rss_href}">"#));
@@ -2288,7 +2293,7 @@ pub fn generate_blocking_content_for_build(
                 None,
                 site_config.math, false,
                 &Default::default(),
-                false, None, crate::build::folder_embed::upcoming::now(),
+                false, None, now,
             );
             // The generated half of the same split the claimed term page gets
             // in `folder_embed`, through the same function: a term no page

@@ -20,13 +20,20 @@ const STATUSES: [&str; 4] = ["cancelled", "postponed", "moved-online", "reschedu
 /// The event's meta span, or `None` when the page is not an event.
 /// `calendar_href` is the event file's address, from the calendar plan; the
 /// "Add to calendar" link goes after the tickets and online links.
-pub fn render(doc: &ParsedDocument, lang: Language, emit_source_lines: bool, calendar_href: Option<&str>) -> Option<String> {
+pub fn render(
+    doc: &ParsedDocument,
+    lang: Language,
+    emit_source_lines: bool,
+    calendar_href: Option<&str>,
+    now: chrono::NaiveDateTime,
+) -> Option<String> {
     let ev = doc.event.as_ref()?;
     let (start, end) = (ev.start, ev.end);
     let status = ev.status.as_deref().map(str::trim).filter(|s| STATUSES.contains(s));
 
     let mut html = format!(
-        r#"<span class="date moss-event-meta"{}{}>"#,
+        r#"<span class="date moss-event-meta" data-when="{}"{}{}>"#,
+        crate::build::folder_embed::upcoming::when_of(ev, now),
         status.map(|s| format!(r#" data-status="{s}""#)).unwrap_or_default(),
         if emit_source_lines { r#" data-source-fm="start""# } else { "" },
     );
@@ -268,6 +275,12 @@ fn time_parts(start: EventTime, end: Option<EventTime>, lang: Language) -> Strin
 /// words the page shows.
 pub fn render_when(start: EventTime, end: Option<EventTime>, lang: Language) -> String {
     format!(r#"<time class="moss-when" datetime="{}">{}</time>"#, start.sort_key(), time_parts(start, end, lang))
+}
+
+/// The short "Upcoming" word an upcoming event's card or row shows after its
+/// time.
+pub(crate) fn upcoming_label(lang: Language) -> String {
+    format!(r#"<span class="moss-event-upcoming">{}</span>"#, t(lang, "event_upcoming"))
 }
 
 #[cfg(test)]

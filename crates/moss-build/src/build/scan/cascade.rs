@@ -607,7 +607,7 @@ mod tests {
             }
             "tags" => serde_yaml::to_value(vec!["docs"]).unwrap(),
             "content_width" => serde_yaml::Value::String("wide".to_string()),
-            "title_block" => serde_yaml::Value::String("after-picture".to_string()),
+            "title_block" => serde_yaml::Value::String("beside-picture".to_string()),
             "sort" => serde_yaml::Value::String("title".to_string()),
             "timezone" => serde_yaml::Value::String("Europe/Oslo".to_string()),
             other => panic!("CASCADE_KEYS names `{other}` but the test has no sample value for it"),

@@ -29,6 +29,23 @@ pub(crate) fn span_is_upcoming(start: EventTime, end: Option<EventTime>, now: ch
     }
 }
 
+/// `"upcoming"` or `"past"`: the `data-when` value of an event's page, card
+/// and row.
+pub(crate) fn when_of(ev: &crate::build::types::EventFields, now: chrono::NaiveDateTime) -> &'static str {
+    if span_is_upcoming(ev.start, ev.end, now) { "upcoming" } else { "past" }
+}
+
+/// Whether `doc` passes a `when:` filter: `past` keeps whatever is not
+/// upcoming (articles included), `upcoming` keeps only events that have not
+/// ended. No filter, or an unknown one, keeps everything.
+pub(super) fn keeps(when: Option<&str>, doc: &ParsedDocument, now: chrono::NaiveDateTime) -> bool {
+    match when {
+        Some("upcoming") => is_upcoming(doc, now),
+        Some("past") => !is_upcoming(doc, now),
+        _ => true,
+    }
+}
+
 /// The build's "now" for every past/upcoming decision.
 pub(crate) fn now() -> chrono::NaiveDateTime {
     Local::now().naive_local()

@@ -422,6 +422,9 @@ pub struct ParsedDocument {
     /// when ITS OWN index page (the same `ParsedDocument`) has a cover —
     /// no special-casing needed, `cover` is already that page's field.
     pub children_covers: Option<String>,
+    /// Listing filter: "past" or "upcoming" keeps only the pages whose event
+    /// has ended, or has not. Applied before `children_limit`.
+    pub children_when: Option<String>,
     /// What this listing's folder cards say they count; absent = the built-in
     /// "N articles" text. Left out of the exported bindings: the listing
     /// reads it, no UI does.
@@ -598,7 +601,7 @@ pub struct ParsedDocument {
     #[specta(skip)]
     pub placed_fields: Vec<(moss_core::fields::FieldDecl, moss_core::fields::TypedValue)>,
     /// `title_block:` — `after-picture` draws the title block after the body's
-    /// leading picture. Set on the page or cascaded from a folder.
+    /// leading picture, `beside-picture` next to it. Set on the page or cascaded from a folder.
     #[serde(skip)]
     #[specta(skip)]
     pub title_block: Option<String>,
@@ -977,7 +980,7 @@ impl SiteAssets {
             out.has_footnotes |= page.features.footnotes;
             out.scroll_rows |= page.features.scroll_rows;
             out.viewer |= page.features.viewer;
-            out.field_places |= page.features.field_places;
+            out.field_places |= page.features.field_places || crate::build::components::field_places::title_block_beside_picture(page);
         }
         out
     }
