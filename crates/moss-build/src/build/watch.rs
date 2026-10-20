@@ -1158,11 +1158,7 @@ pub fn collect_raw_create_keys(
 /// The only consumer of this event flashes the file's row in the editor tree, so a key
 /// naming something the tree does not show is a promise about a row that does not exist.
 /// The filter therefore defers to `scan::classify::is_hidden` — the same predicate
-/// `list_tree` filters with — rather than keeping a second list in step by hand. That
-/// second list had already drifted: it excluded `.moss/`, `.git/` and `node_modules/`,
-/// but not a root `AGENTS.md`/`CLAUDE.md`/`GEMINI.md`, which the tree hides and which
-/// **moss writes itself** when agent-file sync is on. So the common case — moss creating
-/// the very file it hides — announced a path no row could match.
+/// `list_tree` filters with — rather than keeping a second list in step by hand.
 fn raw_create_key(root: &Path, abs: &Path) -> Option<String> {
     // path_is_watchable rejects dot-dirs (e.g. `.git`), `node_modules` and nested sites
     // ANYWHERE in the path, and a dotfile that is not a page (`.secret.jpg`). It is still needed alongside `is_hidden`, which only
@@ -1184,7 +1180,7 @@ fn raw_create_key(root: &Path, abs: &Path) -> Option<String> {
                 // this entry: "" at the project root, else the accumulated prefix.
                 // `show_internal: false` because the flash targets the default tree.
                 if crate::build::scan::classify::is_hidden(&s_str, &parts.join("/"), false) {
-                    return None; // .moss/, .git/, node_modules/, target/, root agent configs
+                    return None; // .moss/, .git/, node_modules/, target/
                 }
                 parts.push(s_str);
             }

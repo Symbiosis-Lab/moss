@@ -332,7 +332,7 @@ pub fn verbatim_index_dirs(html_files: &[FileInfo], passthrough_roots: &HashSet<
 /// `index.md` stays the home and is the document's metadata.
 pub fn reserved_home_dirs(html_files: &[FileInfo], passthrough_roots: &HashSet<String>) -> HashSet<String> {
     let mut dirs = verbatim_index_dirs(html_files, passthrough_roots);
-    dirs.retain(|d| !(moss_core::home::is_known_language_code(d) && passthrough_roots.contains(&format!("{d}/index.html"))));
+    dirs.retain(|d| !(moss_core::home::is_known_language_code(d) && passthrough_roots.contains(&format!("{d}/{INDEX_HTML}"))));
     dirs
 }
 
@@ -402,12 +402,10 @@ pub(crate) fn register_auto_index_dirs(
 // ── Not the site's content: the shared tree/watch filter ───────────────────
 //
 // `is_hidden` answers "is this entry the author's material, or moss's own?"
-// Three callers need the SAME answer or they disagree about what a project
-// contains: the editor's file tree (which lists it), the watcher's
+// Two callers need the SAME answer or they disagree about what a project
+// contains: the editor's file tree (which lists it) and the watcher's
 // RawFileCreated flash (which must not point at a file the tree will not
-// show), and the scan's root agent-config rule above, which this predicate
-// already delegates to. It lives here, with the other classification rules,
-// because that is where its one hard case already lived.
+// show). It lives here, with the other classification rules.
 
 /// Hidden entries that should not appear in the file tree.
 pub const HIDDEN_ENTRIES: &[&str] = &[".git", "node_modules", "target"];
@@ -447,8 +445,6 @@ pub enum HiddenReason {
     /// OS/VCS/tooling noise nobody authored: junk files, `HIDDEN_ENTRIES`,
     /// the root `.moss`/dotfile gate.
     OsOrVcsNoise,
-    /// A root `AGENTS.md`/`CLAUDE.md`/`GEMINI.md`-shaped file.
-    AgentConfig,
     /// An entry inside `.moss/` not on `MOSS_INTERNAL_ALLOWLIST`.
     MossInternal,
 }
@@ -459,7 +455,7 @@ impl HiddenReason {
     /// decides what counts toward a "something is filtered here" total —
     /// see `TreeNode::hidden`.
     pub fn is_curated(self) -> bool {
-        matches!(self, HiddenReason::AgentConfig | HiddenReason::MossInternal)
+        matches!(self, HiddenReason::MossInternal)
     }
 }
 
@@ -490,20 +486,10 @@ pub fn is_hidden_reason(name: &str, parent_relative: &str, show_internal: bool) 
         if name.starts_with('.') {
             return Some(HiddenReason::OsOrVcsNoise);
         }
-        // Agent-instruction files (AGENTS.md, CLAUDE.md, GEMINI.md) are the one
-        // category that reads as prose and isn't. The scan already refuses to
-        // publish them (`left_out_of_site`, above) — whoever wrote it,
-        // it isn't the site's content, so it would otherwise sit in the tree
-        // between `index.md` and `about.md`. Same standing as `.moss/`: present,
-        // one toggle away.
-        //
-        // Hidden, not read-only. The version stamp is the consent boundary
-        // (`cli::agents::sync::is_ours`), and editing the file is precisely how
-        // an author takes it over — sealing it would leave no way to do that
-        // from inside moss.
-        if is_agent_config_name(name) {
-            return if show_internal { None } else { Some(HiddenReason::AgentConfig) };
-        }
+        // Root agent-instruction files (AGENTS.md, CLAUDE.md, GEMINI.md) are
+        // listed: editing one is how an author takes it over from moss
+        // (`cli::agents::sync::is_ours`), so the tree must reach it. They stay
+        // unpublished (`left_out_of_site`); `special_file_kind` tells the editor so.
         return None;
     }
 
@@ -520,6 +506,95 @@ pub fn is_hidden_reason(name: &str, parent_relative: &str, show_internal: bool) 
     }
 
     None
+}
+
+/// A file's role on the site, beyond being a page or an asset. The editor
+/// explains it before opening the file, so the tree says it rather than the
+/// editor guessing from names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum SpecialFileKind {
+    /// A root `AGENTS.md`/`CLAUDE.md`/`GEMINI.md`: read by coding agents, never published.
+    AgentInstructions,
+    /// The welcome email at a language-tree root: mail, not a page.
+    WelcomeEmail,
+    /// The reserved-name footer at a language-tree root, by name only: a
+    /// `slot:` declaration in frontmatter does not make a file this kind.
+    Footer,
+    /// The site's `404.md`, shown by a host for an address that does not exist.
+    NotFound,
+    /// The `index.md` of a folder whose `index.html` is copied as-is: it holds
+    /// that document's metadata and is not what visitors read.
+    PageSettings,
+}
+
+/// The name of the HTML file a passthrough entry can pair a page's settings with.
+const INDEX_HTML: &str = "index.html";
+
+/// Folders (project-relative, `""` for the root) whose `index.md` is the
+/// settings of a copied-as-is `index.html` that `[build].passthrough` names
+/// exactly. Read once per tree build.
+///
+/// Decided by the build's own passthrough functions over the config-named
+/// files that exist, so it cannot disagree with the build: the root and a
+/// language tree's root qualify (their `index.md` stays the home), a deeper
+/// folder does not (its `index.md` is evicted from the home election and is
+/// an ordinary page at its own address).
+pub fn page_settings_dirs(project_path: &str) -> HashSet<String> {
+    let config = crate::build::site_config::get_build_passthrough(project_path).unwrap_or_default();
+    let html: Vec<FileInfo> = config
+        .iter()
+        .filter(|e| !e.starts_with('!'))
+        .map(|e| e.trim_matches('/'))
+        .filter(|p| Path::new(project_path).join(p).is_file())
+        .map(|p| FileInfo { path: p.to_string(), file_type: "html".into(), size: 0, modified: None })
+        .collect();
+    let roots = compute_passthrough_roots(&html, &config);
+    let reserved = reserved_home_dirs(&html, &roots);
+    html.iter()
+        .filter(|f| roots.contains(&f.path))
+        .filter_map(|f| {
+            if f.path == INDEX_HTML {
+                Some("")
+            } else {
+                f.path.strip_suffix(&format!("/{INDEX_HTML}"))
+            }
+        })
+        .filter(|d| !reserved.contains(*d))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The special role of the file at `rel_path` (project-relative, `/`
+/// separators), if any. Every kind reuses the predicate the build decides it
+/// with; `page_settings_dirs` comes from [`page_settings_dirs`], read once.
+/// Nothing inside `.moss/` is special.
+pub fn special_file_kind(rel_path: &str, page_settings_dirs: &HashSet<String>) -> Option<SpecialFileKind> {
+    if rel_path == ".moss" || rel_path.starts_with(".moss/") {
+        return None;
+    }
+    let (dir, name) = rel_path.rsplit_once('/').unwrap_or(("", rel_path));
+    if dir.is_empty() && is_agent_config_name(name) {
+        return Some(SpecialFileKind::AgentInstructions);
+    }
+    let (_, within_tree) = crate::build::footer::language_tree_split(rel_path);
+    if crate::build::footer::slot_from_filename(within_tree) == Some(crate::build::slots::Slot::Footer) {
+        return Some(SpecialFileKind::Footer);
+    }
+    if within_tree == crate::build::footer::WELCOME_EMAIL_FILE {
+        return Some(SpecialFileKind::WelcomeEmail);
+    }
+    if dir.is_empty() && is_page_path(Path::new(name)) {
+        let stem = Path::new(name).file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+        if moss_core::frontmatter_typed::compute_url_path(name, false, None, stem)
+            == crate::build::served_path::NOT_FOUND_PAGE
+        {
+            return Some(SpecialFileKind::NotFound);
+        }
+    }
+    let is_index_page = is_page_path(Path::new(name))
+        && Path::new(name).file_stem().and_then(|s| s.to_str()).is_some_and(moss_core::home::is_index_stem);
+    (is_index_page && page_settings_dirs.contains(dir)).then_some(SpecialFileKind::PageSettings)
 }
 
 
@@ -633,10 +708,10 @@ mod tests {
     // --- is_hidden: root agent-instruction files ---
 
     #[test]
-    fn root_agent_instruction_files_hide_with_the_internal_toggle() {
+    fn root_agent_instruction_files_are_listed_in_both_modes() {
         for name in ["AGENTS.md", "CLAUDE.md", "GEMINI.md"] {
-            assert!(is_hidden(name, "", false), "{name} must not sit among the author's prose");
-            assert!(!is_hidden(name, "", true), "{name} must be reachable in internal mode");
+            assert!(!is_hidden(name, "", false), "{name} must be reachable in the default tree");
+            assert!(!is_hidden(name, "", true));
         }
     }
 
@@ -867,5 +942,101 @@ mod tests {
         for ext in ["css", "js", "woff2", "pdf", "mp3", "unknownext", ""] {
             assert_eq!(classify_extension(ext), ScanBucket::Other, "{ext}");
         }
+    }
+
+    // --- special_file_kind ---
+
+    fn kind(rel: &str) -> Option<SpecialFileKind> {
+        special_file_kind(rel, &HashSet::new())
+    }
+
+    #[test]
+    fn agent_instructions_are_special_only_at_the_root() {
+        for name in ["AGENTS.md", "CLAUDE.md", "GEMINI.md"] {
+            assert_eq!(kind(name), Some(SpecialFileKind::AgentInstructions), "{name}");
+        }
+        assert_eq!(kind("posts/AGENTS.md"), None);
+        assert_eq!(kind("Agents.md"), None);
+    }
+
+    #[test]
+    fn welcome_email_and_footer_sit_at_a_tree_root() {
+        assert_eq!(kind("welcome-email.md"), Some(SpecialFileKind::WelcomeEmail));
+        assert_eq!(kind("fr/welcome-email.md"), Some(SpecialFileKind::WelcomeEmail));
+        assert_eq!(kind("footer.md"), Some(SpecialFileKind::Footer));
+        assert_eq!(kind("fr/footer.md"), Some(SpecialFileKind::Footer));
+        assert_eq!(kind("docs/footer.md"), None, "a non-language folder's footer.md is an ordinary page");
+        assert_eq!(kind("docs/welcome-email.md"), None);
+        assert_eq!(kind("footer-blog.md"), None);
+    }
+
+    #[test]
+    fn a_page_that_is_a_slot_only_by_frontmatter_is_not_the_footer_kind() {
+        // Decided by name alone, so a `slot:` declaration cannot make a file this kind.
+        assert_eq!(kind("closing.md"), None);
+    }
+
+    #[test]
+    fn not_found_is_the_root_404_page() {
+        assert_eq!(kind("404.md"), Some(SpecialFileKind::NotFound));
+        assert_eq!(kind("fr/404.md"), None);
+        assert_eq!(kind("docs/404.md"), None);
+        assert_eq!(kind("404.png"), None);
+        assert_eq!(kind("4040.md"), None);
+    }
+
+    #[test]
+    fn nothing_inside_moss_is_special() {
+        assert_eq!(kind(".moss/footer.md"), None);
+        assert_eq!(kind(".moss/theme/404.md"), None);
+        let dirs: HashSet<String> = [String::new(), ".moss".to_string()].into();
+        assert_eq!(special_file_kind(".moss/index.md", &dirs), None);
+    }
+
+    #[test]
+    fn page_settings_follow_the_declared_index_html_dirs() {
+        let dirs: HashSet<String> = [String::new(), "fr".to_string()].into();
+        assert_eq!(special_file_kind("index.md", &dirs), Some(SpecialFileKind::PageSettings));
+        assert_eq!(special_file_kind("fr/index.md", &dirs), Some(SpecialFileKind::PageSettings));
+        assert_eq!(special_file_kind("about/index.md", &dirs), None);
+        assert_eq!(special_file_kind("about.md", &dirs), None);
+        assert_eq!(special_file_kind("index.png", &dirs), None);
+        assert_eq!(kind("index.md"), None);
+    }
+
+    fn site_with_passthrough(files: &[&str], passthrough: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for f in files {
+            let path = dir.path().join(f);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "x").unwrap();
+        }
+        std::fs::create_dir_all(dir.path().join(".moss")).unwrap();
+        std::fs::write(dir.path().join(".moss/config.toml"), format!("[build]\npassthrough = {passthrough}\n")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn page_settings_dirs_pair_exactly_named_index_html_with_the_root_and_language_roots() {
+        let site = site_with_passthrough(
+            &["index.html", "fr/index.html", "docs/index.html", "lab/index.html"],
+            r#"["index.html", "fr/index.html", "docs/index.html"]"#,
+        );
+        let dirs = page_settings_dirs(site.path().to_str().unwrap());
+        // `docs/index.md` is evicted from the home election by the build, so it
+        // is an ordinary page; `lab/` is auto-detected but never named.
+        assert_eq!(dirs, HashSet::from([String::new(), "fr".to_string()]));
+    }
+
+    #[test]
+    fn an_undeclared_index_html_pairs_nothing() {
+        let site = site_with_passthrough(&["index.html", "fr/index.html"], r#"["other"]"#);
+        assert!(page_settings_dirs(site.path().to_str().unwrap()).is_empty());
+    }
+
+    #[test]
+    fn a_negated_or_missing_entry_pairs_nothing() {
+        let site = site_with_passthrough(&["fr/index.html"], r#"["!fr/index.html", "index.html"]"#);
+        assert!(page_settings_dirs(site.path().to_str().unwrap()).is_empty());
     }
 }

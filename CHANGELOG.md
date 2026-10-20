@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### New
 
+- A root `AGENTS.md`, `CLAUDE.md` or `GEMINI.md` now shows in the editor's file tree, as it does on disk; it is still not published. The tree also marks each file that has a special role on the site (agent instructions, welcome email, footer, 404 page, and the settings page of a copied-as-is `index.html`), decided by the same rules the build uses.
 - A `%% note %%` comment can now open in the middle of a line and close on a later one; everything between the two markers is removed, and the heading after it stays. Before, only a one-line pair or markers alone on their own lines were removed, and a half-open one could swallow the next heading. A `%%` with no partner stays visible on the page and the build warns with its line.
 - The guide now says that setting a key to an empty value on one page (`description: ""`) cancels a folder's `cascade:` for that page.
 - A dated page can drop the text-size control (the "Aa" button beside its date). Set `reader_controls: false` in its frontmatter, or `cascade: { reader_controls: false }` on a folder's home page for every page in the folder; a page can set `reader_controls: true` to keep it. Event pages never draw it.
