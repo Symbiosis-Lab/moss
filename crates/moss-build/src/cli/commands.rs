@@ -52,8 +52,8 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         },
         CliCommandInfo {
             name: "domain",
-            args: "<list|link> <folder> [<domain>]",
-            description: "List or link custom domains for a project's site.",
+            args: "<list|link|status> <folder> [<domain>] [--json]",
+            description: "List, link or check custom domains for a project's site; link prints the DNS records to set.",
         },
         CliCommandInfo {
             name: "env",
@@ -200,7 +200,8 @@ const EXAMPLE_LINES: &[(&str, &str)] = &[
     // with no arguments at all.
     ("preview", "moss                                 # Launch the app window"),
     ("domain", "moss domain list ~/blog/             # Show domains linked to this project's site"),
-    ("domain", "moss domain link ~/blog/ example.com # Link a custom domain (same path as the UI)"),
+    ("domain", "moss domain link ~/blog/ example.com # Link a domain; prints the DNS records to set"),
+    ("domain", "moss domain status ~/blog/ example.com # Check live DNS and certificate; exit 0 when live"),
     ("env", "moss env staging ~/blog/             # Set the mosspub.com environment to staging"),
     ("env", "moss env ~/blog/                     # Show the mosspub.com environment"),
     ("tools", "moss tools download ffmpeg         # Fetch FFmpeg so videos are optimized"),

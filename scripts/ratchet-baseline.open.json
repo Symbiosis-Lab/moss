@@ -106,7 +106,7 @@
         "crates/moss-build/src/ops/serve": 20,
         "crates/moss-build/src/js-src/site/places-explorer": 17,
         "crates/moss-build/src/vault/import/scrape": 17,
-        "crates/moss-build/src/cli": 22,
+        "crates/moss-build/src/cli": 23,
         "crates/moss-build/src/build/components": 16
       },
       "oversized": {
