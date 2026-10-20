@@ -1311,11 +1311,9 @@ fn build_inner(
             input_evidence.read_bytes(&config_path, text.as_bytes());
             match crate::config::ConfigFile::parse(&text) {
                 Ok(parsed) => Some(parsed),
-                Err(error) => {
-                    input_evidence.read_error(&config_path, error.clone());
-                    log::warn!("config.toml could not be parsed: {error}");
-                    None
-                }
+                // Fatal, not a fallback to defaults: the withheld generation
+                // would otherwise be reported as shipped.
+                Err(error) => return Err(error.into()),
             }
         }
         Ok(None) => {
