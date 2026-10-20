@@ -35,7 +35,7 @@ use crate::build::page::shell::{
     ShellProcessor, ShellType, ShellVars,
 };
 use crate::build::scan::page_map::{
-    build_page_map_and_external_urls_cached, elect_homes, folder_of, is_home_translation, resolve_folder_languages,
+    build_page_map_and_external_urls_cached, elect_homes, folder_of, is_home_translation, resolve_folder_languages, root_language,
     FolderLangCache, FrontmatterScanCache,
 };
 use crate::build::scan::page_map::resolve_path_with_overrides;
@@ -154,8 +154,8 @@ fn synthetic_folder_doc(
     let term_root = term_index.roots_in_use().any(|ns| ns == folder);
     let title = if let Some(term_display) = term_index.display(folder) {
         term_display.to_string()
-    } else if let Some(kind_title) = term_index.kind_for(folder).map(|k| k.title.clone()) {
-        kind_title
+    } else if let Some((kind, edition)) = term_index.kind_for(folder) {
+        kind.title_in(edition)
     } else if let Some(endonym) = (!folder.contains('/')).then(|| moss_core::home::endonym(folder)).flatten() {
         // A language tree's synthesized home (`zh-hans/`, no `index.zh-hans.md`)
         // is titled by the language's own name, not its code's filename text.
@@ -383,6 +383,7 @@ pub fn generate_blocking_content_for_build(
         &project_structure.passthrough_roots,
     );
     let (home_overrides, home_file_winners) = elect_homes(&project_structure.markdown_files, root, &verbatim_dirs);
+    let markdown = crate::build::markdown::SiteMarkdown { lang: root_language(&site_config.lang, project_structure, &home_file_winners), ..site_config.markdown() };
 
     // Build PageMap: pre-scan all markdown files to compute source_path → url_path mapping.
     // This includes cascading url overrides from folder index files, so child pages
@@ -513,7 +514,7 @@ pub fn generate_blocking_content_for_build(
                 site_lang,
                 site_id.as_deref(),
                 seta_url_for_build.as_str(),
-                site_config.markdown(),
+                markdown,
                 emit_source_lines,
                 project_structure.has_content_folders,
             ),
@@ -770,7 +771,7 @@ pub fn generate_blocking_content_for_build(
                         authored_source: Some(&content),
                     };
 
-                    let mut doc = match process_markdown_file(&file_info.path, resolved_content, root_folder_name, &page_map, emit_source_lines, site_lang, site_id.as_deref(), site_config.markdown(), Some(&event_level_image_lookup), Some(&external_url_map), Some(&content_graph), page_context) {
+                    let mut doc = match process_markdown_file(&file_info.path, resolved_content, root_folder_name, &page_map, emit_source_lines, site_lang, site_id.as_deref(), markdown, Some(&event_level_image_lookup), Some(&external_url_map), Some(&content_graph), page_context) {
                         Ok(doc) => doc,
                         Err(_) => return None,
                     };
@@ -1118,6 +1119,7 @@ pub fn generate_blocking_content_for_build(
     // site default. Reuse it here.
     // Out here because the article map, written far below, carries these to the editor's `url` chip.
     let mut url_collisions: Vec<crate::build::scan::slug::UrlCollision> = Vec::new();
+    let editions: moss_core::home::Editions;
     let (layout_config, site_url, has_rss, show_rss_in_footer, term_index, calendar) = {
         // Profile the whole-corpus Reduce chain. Each pass
         // below folds OTHER pages' state into `documents`, so (unlike Loop A)
@@ -1128,6 +1130,12 @@ pub fn generate_blocking_content_for_build(
         // Sync permalink with updated url_path (dedup may have changed it)
         for doc in &mut documents {
             doc.permalink = format!("/{}", doc.url_path); // allow:served-path-url-construct (page permalink synced after slug dedup, stored in ParsedDocument)
+        }
+        // From the pages' addresses, not their files: a translation by file
+        // name (`about.zh-hans.md`) is a page of the `zh-hans` edition too.
+        editions = moss_core::home::Editions::new(markdown.lang, documents.iter().map(|d| d.url_path.as_str()));
+        for doc in &mut documents {
+            doc.edition = editions.of(&doc.url_path);
         }
         log::debug!(target: "timing", "[reduce] slug_dedup ({} docs): {:?}", documents.len(), reduce_start.elapsed());
 
@@ -1611,8 +1619,8 @@ pub fn generate_blocking_content_for_build(
         // obvious answer is wrong. It is NOT "a set change is a config change,
         // and config changes aren't `ContentOnly`": adding a `:::subscribe` to
         // one markdown file is a `ContentOnly` trigger that adds `email.css`
-        // site-wide. What closes it is that `inline_subscribe`/`inline_apply`
-        // live in `PageFeatures`, which the facade's SURFACE fingerprint
+        // site-wide. What closes it is that `inline_subscribe`
+        // lives in `PageFeatures`, which the facade's SURFACE fingerprint
         // covers — so that edit trips `surface_changed` and forces a full
         // render. Narrowing the surface fingerprint would reopen this.
         let feature_style_hashes = crate::build::emit::feature_styles::all_hashes();
@@ -1652,9 +1660,11 @@ pub fn generate_blocking_content_for_build(
         |folder| {
             let mut doc = synthetic_folder_doc(folder, &term_index, &folder_display, &folder_languages, site_lang);
             doc.lang_tag = Some(crate::i18n::lang_tag_in_tree(&format!("{folder}/index.md"), doc.lang));
+            doc.edition = editions.of(&doc.url_path);
             doc
         },
     );
+    crate::build::terms::link_term_translations(&mut documents, &term_index);
     super::build_shared::report_verbatim_collisions(&documents, project_structure, &dir_overrides);
     // The resolved set now contains both authored and synthetic folders.
     // Stamp every explorer root once so its facade includes the shared places
@@ -2192,12 +2202,14 @@ pub fn generate_blocking_content_for_build(
             // digest could not honour a rule the renderer honours. `folder` is
             // already a URL-space (slugified) key, and the synthetic index
             // always lists direct children with neither homepage filter.
+            // An edition's generated home lists like an authored one.
+            let home = crate::build::folder_embed::home_defaults(&documents[entry.document_index]);
             let folder_docs: Vec<&ParsedDocument> =
                 crate::build::folder_embed::select_children_by_slug(
                     folder,
-                    false, // depth: direct
-                    false, // scope_default_tree: homepage-only filter
-                    false, // exclude_nav: homepage-only filter
+                    home.depth_all,
+                    home.scoped,
+                    home.scoped,
                     &documents,
                     project_structure,
                 );
@@ -2318,7 +2330,7 @@ pub fn generate_blocking_content_for_build(
             );
 
             let chrome = render_context.chrome.shell_vars(
-                Some(folder_doc), PageFamily::GeneratedFolder, false, is_explorer_root,
+                Some(folder_doc), PageFamily::GeneratedFolder, false, is_explorer_root, &site_url,
             );
             // Generated bodies keep their term sections and place-map layout;
             // they do not enter the authored children or metadata branches.
@@ -2607,6 +2619,7 @@ pub fn generate_blocking_content_for_build(
         &url_collisions,
         &generated_index_urls,
         &term_index,
+        &editions,
     );
     if let Err(e) = article_map.save(&moss_dir) {
         log::warn!("⚠️ Failed to save article map: {}", e);
@@ -2800,7 +2813,7 @@ pub fn generate_blocking_content_for_build(
         )
         .with_search(layout_config.assets.search)
         .with_header_mode(layout_config.header)
-        .with_term_nav(layout_config.term_nav.clone())
+        .with_term_nav(layout_config.term_nav.clone(), "")
         .with_asset_snapshot(shared.media_lookup.asset_snapshot());
         let nav_builder = if let Some(ref logo) = layout_config.logo_path {
             nav_builder.with_logo(logo.clone())
@@ -2998,8 +3011,12 @@ pub fn generate_blocking_content_for_build(
     // keeps serving its old `authors/<slug>/` URL: those moves are recomputed
     // from the kinds table every build and stored nowhere, so they ride in
     // beside the persisted rename history.
-    let term_stubs =
-        [crate::build::terms::kind_move_stubs(&term_index), crate::build::terms::claim_stubs(&term_index)].concat();
+    let term_stubs = [
+        crate::build::terms::kind_move_stubs(&term_index),
+        crate::build::terms::claim_stubs(&term_index),
+        crate::build::terms::edition_move_stubs(&term_index),
+    ]
+    .concat();
     let table_inputs = crate::build::feeds::redirects::TableInputs {
         term_stubs,
         has_deployed_url: site_url.is_deployed(),

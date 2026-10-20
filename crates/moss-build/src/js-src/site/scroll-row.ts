@@ -81,19 +81,31 @@
  * whichever cards exist now, not a stale array from the first attach — are
  * rebuilt every time, since an edit can change the card count.
  */
-import { isVertical } from "./writing-mode";
+import { isVertical, pageLanguage, type SiteLanguage } from "./writing-mode";
 
 export {};
 
 const ROW = ".moss-grid[data-scroll]";
-const DOTS = "moss-scroll-dots";
-const MAX_DOT_COUNT = 10;
-const DYNAMIC_DOT_COUNT = 7;
+const NAV = "moss-scroll-dots";
+/** Up to this many cards get one dot each; a longer row gets a counter. */
+const MAX_DOT_COUNT = 7;
+
+/** "Previous" and "Next" in each site language, for the counter's buttons.
+ * A Rust test (`scroll_row_labels_match_the_site_strings`) holds them to
+ * `i18n/strings.rs`, the site's own copy. */
+const LABELS: Record<SiteLanguage, { previous: string; next: string }> = {
+  en: { previous: "Previous", next: "Next" },
+  de: { previous: "Zurück", next: "Weiter" },
+  "zh-hans": { previous: "上一个", next: "下一个" },
+  "zh-hant": { previous: "上一個", next: "下一個" },
+};
 
 interface RowState {
   nav: HTMLElement | null;
   io: IntersectionObserver | null;
   cancelNavigation: (() => void) | null;
+  /** Repaints the current indicator after the row scrolls. */
+  onScroll: (() => void) | null;
 }
 
 const rows = new WeakMap<HTMLElement, RowState>();
@@ -139,8 +151,16 @@ export function initScrollDots(root: ParentNode = document): void {
 function attach(row: HTMLElement): void {
   let state = rows.get(row);
   if (!state) {
-    state = { nav: null, io: null, cancelNavigation: null };
+    state = { nav: null, io: null, cancelNavigation: null, onScroll: null };
     rows.set(row, state);
+    let frame = 0;
+    row.addEventListener("scroll", () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        state!.onScroll?.();
+      });
+    }, { passive: true });
     row.addEventListener("wheel", (e) => {
       state!.cancelNavigation?.();
       onWheel(row, e);
@@ -151,7 +171,7 @@ function attach(row: HTMLElement): void {
       new ResizeObserver(() => fit(row, state!)).observe(row);
     }
   }
-  buildDots(row, state);
+  buildIndicator(row, state);
 }
 
 /** See the file header: the one place that decides whether `row` is an
@@ -201,145 +221,83 @@ function navigationStep(row: HTMLElement, key: string): -1 | 1 | null {
  * pointed at the old cards, and the nav element itself, which a morph may
  * already have removed — so it is safe to call on every init, not just the
  * first. */
-function buildDots(row: HTMLElement, state: RowState): void {
+function buildIndicator(row: HTMLElement, state: RowState): void {
   state.io?.disconnect();
   state.nav?.remove();
   state.nav = null;
   state.io = null;
   state.cancelNavigation = null;
+  state.onScroll = null;
 
   const cards = Array.from(row.children) as HTMLElement[];
   if (cards.length < 2) return;
 
   const nav = document.createElement("div");
-  nav.className = DOTS;
-  const dynamicMode = cards.length > MAX_DOT_COUNT;
-  nav.dataset.indicator = dynamicMode ? "dynamic" : "dots";
+  nav.className = NAV;
   nav.setAttribute("role", "group");
   const label = row.getAttribute("aria-label");
   if (label) nav.setAttribute("aria-label", label);
-
+  nav.dataset.count = String(cards.length);
   const reduce = prefersReducedMotion();
-  const viewport = document.createElement("div");
-  viewport.className = `${DOTS}-viewport`;
-  const track = document.createElement("div");
-  track.className = `${DOTS}-track`;
-  viewport.appendChild(track);
-  nav.appendChild(viewport);
-  const dots = Array.from({ length: cards.length }, (_, index) => {
-    const dot = document.createElement("button");
-    dot.type = "button";
-    dot.dataset.cardIndex = String(index);
-    dot.setAttribute("aria-label", `${index + 1} / ${cards.length}`);
-    dot.addEventListener("click", () => {
-      navigateTo(index);
-    });
-    dot.addEventListener("keydown", (e) => {
-      const step = navigationStep(row, e.key);
-      const navigationKey = step !== null || e.key === "Home" || e.key === "End";
-      if (!navigationKey) return;
-      e.preventDefault();
-      const current = Number(dot.dataset.cardIndex);
-      const next =
-        e.key === "Home"
-          ? 0
-          : e.key === "End"
-            ? cards.length - 1
-            : Math.max(0, Math.min(cards.length - 1, current + (step ?? 0)));
-      if (cards[next]) {
-        navigateTo(next);
-        dots.find((candidate) => candidate.dataset.cardIndex === String(next))?.focus();
-      }
-    });
-    track.appendChild(dot);
-    return dot;
-  });
-  row.after(nav);
-  state.nav = nav;
 
   const inView = new Set<number>();
   let activeIndex = 0;
-  let requested: { index: number; reached: boolean } | null = null;
-  const windowStart = (index: number): number => {
-    if (!dynamicMode) return 0;
-    const half = Math.floor(DYNAMIC_DOT_COUNT / 2);
-    return Math.max(0, Math.min(index - half, cards.length - DYNAMIC_DOT_COUNT));
-  };
-  const navigateTo = (index: number, behavior: ScrollBehavior = reduce ? "auto" : "smooth"): void => {
+  // `lands` is the card the count will show once the row comes to rest: the
+  // last card when the target is within one view of the end. Decided at the
+  // press, so a frame of the glide with fewer cards in view cannot change it.
+  let requested: { index: number; reached: boolean; lands: number } | null = null;
+  const navigateTo = (index: number, behavior: ScrollBehavior = reduce ? "auto" : "smooth"): number => {
     const card = cards[index];
-    if (!card) return;
+    if (!card) return activeIndex;
+    const end = cards.length - 1;
+    const lands = index >= cards.length - range().span ? end : index;
     activeIndex = index;
-    requested = { index, reached: inView.has(index) };
+    requested = { index, reached: inView.has(index), lands };
     card.scrollIntoView({ block: "nearest", inline: "start", behavior });
     paint(index);
-  };
-  const paint = (requestedIndex?: number) => {
-    const keepIndicatorFocus = nav.contains(document.activeElement);
-    const first = requestedIndex ?? requested?.index ?? (inView.size ? Math.min(...inView) : activeIndex);
-    activeIndex = first;
-    const start = windowStart(first);
-    track.style.setProperty("--moss-scroll-dot-start", String(start));
-    dots.forEach((dot, index) => {
-      dot.tabIndex = index === first ? 0 : -1;
-      dot.classList.toggle("is-visible", inView.has(index));
-      dot.classList.toggle("is-edge-start", dynamicMode && start > 0 && index === start);
-      dot.classList.toggle("is-edge-end", dynamicMode && start + DYNAMIC_DOT_COUNT < cards.length && index === start + DYNAMIC_DOT_COUNT - 1);
-      if (index === first) dot.setAttribute("aria-current", "true");
-      else dot.removeAttribute("aria-current");
-    });
-    if (keepIndicatorFocus) {
-      dots.find((dot) => dot.dataset.cardIndex === String(first))?.focus({ preventScroll: true });
-    }
+    return lands;
   };
 
-  // UIPageControl-style continuous interaction: wait for a real drag so a
-  // normal button click stays discrete, then scrub by horizontal distance.
-  // Direct updates intentionally use `auto`; animating every crossed card
-  // makes the content lag behind the pointer and flashes intermediate pages.
-  let scrub: { pointerId: number; x: number; index: number; active: boolean } | null = null;
-  let suppressClick = false;
-  nav.addEventListener("click", (event) => {
-    if (!suppressClick) return;
-    event.preventDefault();
-    event.stopPropagation();
-  }, { capture: true });
-  viewport.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0) return;
-    scrub = { pointerId: event.pointerId, x: event.clientX, index: activeIndex, active: false };
-  });
-  viewport.addEventListener("pointermove", (event) => {
-    if (!scrub || event.pointerId !== scrub.pointerId) return;
-    const delta = event.clientX - scrub.x;
-    if (!scrub.active && Math.abs(delta) < 6) return;
-    if (!scrub.active) {
-      scrub.active = true;
-      nav.dataset.scrubbing = "";
-      viewport.setPointerCapture?.(event.pointerId);
-    }
-    event.preventDefault();
-    const width = viewport.getBoundingClientRect().width || DYNAMIC_DOT_COUNT * 24;
-    const step = Math.round((delta / width) * (cards.length - 1));
-    const index = Math.max(0, Math.min(cards.length - 1, scrub.index + step));
-    if (index !== activeIndex) navigateTo(index, "auto");
-  });
-  const endScrub = (event: PointerEvent) => {
-    if (!scrub || event.pointerId !== scrub.pointerId) return;
-    const wasActive = scrub.active;
-    if (viewport.hasPointerCapture?.(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
-    scrub = null;
-    delete nav.dataset.scrubbing;
-    if (wasActive) {
-      suppressClick = true;
-      window.setTimeout(() => { suppressClick = false; }, 0);
+  /** Where the row is: its first card (a requested card while a navigation
+   * to it is under way), its last card in view, and how many cards one view
+   * holds, counted from the cards actually in view. */
+  const range = (): { first: number; last: number; span: number } => {
+    const first = requested?.index ?? (inView.size ? Math.min(...inView) : activeIndex);
+    const span = inView.size ? Math.max(...inView) - Math.min(...inView) + 1 : 1;
+    return { first, last: Math.max(first, inView.size ? Math.max(...inView) : first), span };
+  };
+  const view = cards.length > MAX_DOT_COUNT
+    ? buildCounter(row, nav, cards, navigateTo, range)
+    : buildDots(row, nav, cards, navigateTo, () => activeIndex);
+  row.after(nav);
+  state.nav = nav;
+
+  let reported = "";
+  const paint = (requestedIndex?: number) => {
+    const { first: seen, last } = range();
+    const first = requestedIndex ?? seen;
+    activeIndex = first;
+    // The current card is the first in view, except once the last card is in
+    // view: the reader has reached the end. Scroll snapping can rest the row
+    // a few pixels short of its scroll limit, so the end is what is in view.
+    // While a navigation is under way it is where the row will come to rest.
+    const end = cards.length - 1;
+    const current = requested ? requested.lands : inView.has(end) ? end : first;
+    const position = { current: current + 1, first: first + 1, last: Math.max(first, last) + 1, count: cards.length };
+    Object.assign(nav.dataset, { current: position.current, first: position.first, last: position.last });
+    view.paint(first, current, inView);
+    const key = `${position.current}|${position.first}|${position.last}`;
+    if (key !== reported) {
+      reported = key;
+      row.dispatchEvent(new CustomEvent("moss-scroll-position", { bubbles: true, detail: position }));
     }
   };
-  viewport.addEventListener("pointerup", endScrub);
-  viewport.addEventListener("pointercancel", endScrub);
   state.cancelNavigation = () => {
     if (!requested) return;
     requested = null;
     paint();
   };
+  state.onScroll = () => paint();
   paint();
   if (typeof IntersectionObserver === "function") {
     const io = new IntersectionObserver(
@@ -362,6 +320,173 @@ function buildDots(row: HTMLElement, state: RowState): void {
   }
 
   fit(row, state);
+}
+
+/** What one kind of indicator draws for a position. */
+interface IndicatorView {
+  paint(first: number, current: number, inView: ReadonlySet<number>): void;
+}
+
+/** One dot per card, for a short row: the dots in view are lit and the first
+ * of them is `aria-current`. One roving tab stop; dragging across the dots
+ * scrubs through the cards. */
+function buildDots(
+  row: HTMLElement,
+  nav: HTMLElement,
+  cards: HTMLElement[],
+  navigateTo: (index: number, behavior?: ScrollBehavior) => void,
+  activeIndex: () => number,
+): IndicatorView {
+  nav.dataset.indicator = "dots";
+  const viewport = document.createElement("div");
+  viewport.className = `${NAV}-viewport`;
+  nav.appendChild(viewport);
+  const dots = cards.map((_, index) => {
+    const dot = document.createElement("button");
+    dot.type = "button";
+    dot.dataset.cardIndex = String(index);
+    dot.setAttribute("aria-label", `${index + 1} / ${cards.length}`);
+    dot.addEventListener("click", () => navigateTo(index));
+    dot.addEventListener("keydown", (e) => {
+      const step = navigationStep(row, e.key);
+      if (step === null && e.key !== "Home" && e.key !== "End") return;
+      e.preventDefault();
+      const next =
+        e.key === "Home" ? 0 : e.key === "End" ? cards.length - 1 : Math.max(0, Math.min(cards.length - 1, index + (step ?? 0)));
+      navigateTo(next);
+      dots[next]?.focus();
+    });
+    viewport.appendChild(dot);
+    return dot;
+  });
+
+  // UIPageControl-style continuous interaction: wait for a real drag so a
+  // normal button click stays discrete, then scrub by horizontal distance.
+  // Direct updates intentionally use `auto`; animating every crossed card
+  // makes the content lag behind the pointer and flashes intermediate pages.
+  let scrub: { pointerId: number; x: number; index: number; active: boolean } | null = null;
+  let suppressClick = false;
+  nav.addEventListener("click", (event) => {
+    if (!suppressClick) return;
+    event.preventDefault();
+    event.stopPropagation();
+  }, { capture: true });
+  viewport.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    scrub = { pointerId: event.pointerId, x: event.clientX, index: activeIndex(), active: false };
+  });
+  viewport.addEventListener("pointermove", (event) => {
+    if (!scrub || event.pointerId !== scrub.pointerId) return;
+    const delta = event.clientX - scrub.x;
+    if (!scrub.active && Math.abs(delta) < 6) return;
+    if (!scrub.active) {
+      scrub.active = true;
+      nav.dataset.scrubbing = "";
+      viewport.setPointerCapture?.(event.pointerId);
+    }
+    event.preventDefault();
+    const width = viewport.getBoundingClientRect().width || cards.length * 24;
+    const step = Math.round((delta / width) * (cards.length - 1));
+    const index = Math.max(0, Math.min(cards.length - 1, scrub.index + step));
+    if (index !== activeIndex()) navigateTo(index, "auto");
+  });
+  const endScrub = (event: PointerEvent) => {
+    if (!scrub || event.pointerId !== scrub.pointerId) return;
+    const wasActive = scrub.active;
+    if (viewport.hasPointerCapture?.(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
+    scrub = null;
+    delete nav.dataset.scrubbing;
+    if (wasActive) {
+      suppressClick = true;
+      window.setTimeout(() => { suppressClick = false; }, 0);
+    }
+  };
+  viewport.addEventListener("pointerup", endScrub);
+  viewport.addEventListener("pointercancel", endScrub);
+
+  return {
+    paint(first, _current, inView) {
+      const keepFocus = nav.contains(document.activeElement);
+      dots.forEach((dot, index) => {
+        dot.tabIndex = index === first ? 0 : -1;
+        dot.classList.toggle("is-visible", inView.has(index));
+        if (index === first) dot.setAttribute("aria-current", "true");
+        else dot.removeAttribute("aria-current");
+      });
+      if (keepFocus) dots[first]?.focus({ preventScroll: true });
+    },
+  };
+}
+
+/** A count and ‹ › buttons, for a row too long for dots: "26 / 55", the
+ * current card's number. The count is sized once for its widest value, so it
+ * never changes width as the reader scrolls. The buttons move one view; on a
+ * right-to-left row they swap sides, and on a vertical row they point along
+ * it. */
+function buildCounter(
+  row: HTMLElement,
+  nav: HTMLElement,
+  cards: HTMLElement[],
+  navigateTo: (index: number) => number,
+  range: () => { first: number; span: number },
+): IndicatorView {
+  nav.dataset.indicator = "count";
+  if (isVertical(row)) nav.dataset.axis = "block";
+  const rtl = getComputedStyle(row).direction === "rtl";
+  if (rtl) nav.dir = "rtl";
+  const words = LABELS[pageLanguage()];
+  const button = (cls: string, text: string, name: string): HTMLButtonElement => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = cls;
+    b.textContent = text;
+    b.setAttribute("aria-label", name);
+    return b;
+  };
+  const prev = button(`${NAV}-prev`, rtl ? "›" : "‹", words.previous);
+  const next = button(`${NAV}-next`, rtl ? "‹" : "›", words.next);
+  const count = document.createElement("span");
+  count.className = `${NAV}-count`;
+  const now = document.createElement("span");
+  const widest = document.createElement("span");
+  widest.className = `${NAV}-count-size`;
+  widest.setAttribute("aria-hidden", "true");
+  widest.textContent = `${cards.length} / ${cards.length}`;
+  count.append(now, widest);
+  const spoken = document.createElement("span");
+  spoken.className = "visually-hidden";
+  spoken.setAttribute("aria-live", "polite");
+  nav.append(prev, count, next, spoken);
+
+  const nameOf = (card: HTMLElement): string =>
+    card.getAttribute("aria-label") ||
+    card.querySelector(".moss-card-title, h1, h2, h3, h4, h5, h6")?.textContent?.trim() ||
+    "";
+  const step = (direction: -1 | 1): void => {
+    const { first, span } = range();
+    const target = Math.max(0, Math.min(cards.length - 1, first + direction * span));
+    const shown = navigateTo(target);
+    const name = nameOf(cards[shown]);
+    // Cleared first, so pressing again at the same card is announced again.
+    spoken.textContent = "";
+    requestAnimationFrame(() => {
+      spoken.textContent = `${name ? `${name}, ` : ""}${shown + 1} / ${cards.length}`;
+    });
+  };
+  prev.addEventListener("click", () => {
+    if (prev.getAttribute("aria-disabled") !== "true") step(-1);
+  });
+  next.addEventListener("click", () => {
+    if (next.getAttribute("aria-disabled") !== "true") step(1);
+  });
+
+  return {
+    paint(first, current) {
+      now.textContent = `${current + 1} / ${cards.length}`;
+      prev.setAttribute("aria-disabled", String(first === 0));
+      next.setAttribute("aria-disabled", String(current === cards.length - 1));
+    },
+  };
 }
 
 /** Pixels a wheel event asks to move, whatever unit it was reported in. */

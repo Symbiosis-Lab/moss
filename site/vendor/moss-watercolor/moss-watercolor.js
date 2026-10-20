@@ -28,8 +28,9 @@ var MossWatercolor = (() => {
     advance: () => advance,
     createPaper: () => createPaper,
     createSim: () => createSim,
+    legAt: () => legAt,
     phaseOf: () => phaseOf,
-    retarget: () => retarget
+    turnAt: () => turnAt
   });
 
   // packages/moss-watercolor/src/engine/shaders.ts
@@ -187,7 +188,7 @@ void main(){
   var PIG = HEAD + `
 uniform sampler2D uW, uS, uD;
 uniform sampler2D uNear, uWhole;
-uniform float uTime, uCure, uLift, uAds, uMix, uMixG, uDrying, uStir, uRelift, uRinse, uLight, uDose;
+uniform float uTime, uCure, uLift, uAds, uMix, uMixG, uDrying, uStir, uRelift, uRinse, uLight, uDose, uDilute, uCurl, uDiffuse, uFlow, uFlowSize, uBloom, uReach;
 layout(location=0) out vec4 oS; layout(location=1) out vec4 oD;
 vec4 S(vec2 t){ return texture(uS, t / uSize); }
 vec2 curlN(vec2 p){
@@ -195,11 +196,23 @@ vec2 curlN(vec2 p){
   float n0 = texture(uPaper, q / 7.0).r, nx = texture(uPaper, (q + vec2(e / 46.0, 0.0)) / 7.0).r, ny = texture(uPaper, (q + vec2(0.0, e / 46.0)) / 7.0).r;
   return vec2(ny - n0, n0 - nx) * (46.0 / e) * 0.05;
 }
+// Slow billows the size of the picture: the curl of a few travelling waves, so the flow is smooth,
+// keeps no pigment from anywhere, and turns over as the recording runs.
+vec2 billow(vec2 p){
+  vec2 v = vec2(0.0);
+  const vec3 waves[4] = vec3[4](vec3(0.9, 0.4, 0.7), vec3(-0.5, 0.85, 1.1), vec3(0.3, -0.95, 0.6), vec3(-0.8, -0.6, 0.9));
+  for (int i = 0; i < 4; i++) {
+    vec2 k = waves[i].xy * (6.2832 / (uFlowSize * (1.0 + 0.4 * float(i))));
+    float a = dot(k, p) + uTime * waves[i].z + float(i) * 1.7;
+    v += vec2(k.y, -k.x) * cos(a) / length(k);
+  }
+  return v * 0.25;
+}
 void main(){
   vec2 t = gl_FragCoord.xy; vec2 px = 1.0 / uSize;
   vec4 w = texture(uW, vUv); float h = w.r; vec2 vel = w.gb; float wet = wetOf(h);
   // the liquid rides the flow plus unresolved convection
-  vec2 velP = vel + curlN(t) * 1.6 * smoothstep(0.025, 0.28, h);
+  vec2 velP = vel + curlN(t) * 1.6 * uCurl * smoothstep(0.025, 0.28, h) + billow(t) * uFlow * wet;
   vec3 s = S(t - velP).rgb;
   // What the sheet has taken is not yet bound: while the film is wet and moving,
   // the settled pigment is dragged along with it (a fraction of the flow the
@@ -217,7 +230,6 @@ void main(){
   // what mixes is concentration (pigment per volume), so a thin rim holds
   // little pigment and the veil fades to the water's edge instead of outlining it
   float h0 = 0.02; float hc = max(h, h0);
-  vec4 wl = texture(uW, vUv + vec2(px.x, 0.0)), wr = texture(uW, vUv - vec2(px.x, 0.0)), wu = texture(uW, vUv + vec2(0.0, px.y)), wd = texture(uW, vUv - vec2(0.0, px.y));
   // exchange between neighbours is driven by the concentration difference and
   // limited by the thinner of the two films, so it conserves pigment and a
   // thin rim neither gains nor gives much
@@ -229,15 +241,23 @@ void main(){
   // evaporation drives in a drying film, below the grid) and it goes to one
   // colour in a moment, just as the sheet begins to take. Long unmixed,
   // briefly mixed: what a wet-in-wet wash does.
-  float agit = 0.12 + 0.88 * clamp(length(vel) * 2.0 + uStir * 0.5 + uDrying, 0.0, 1.0);
+  float agit = max(uDiffuse, 0.12 + 0.88 * clamp(length(vel) * 2.0 + uStir * 0.5 + uDrying, 0.0, 1.0));
   float diffF = clamp(0.45 * (0.35 + h * 45.0), 0.0, 0.45) * wet * agit;
-  vec3 c = s / hc;
+  vec3 c = s / hc; float ms = dot(s, vec3(1.0 / 3.0));
+  // Paint on wet paper blooms: where the colour is dense it runs apart fast, and slows as it thins
+  // (uBloom: the exchange grows with the pair's mean density), so it spreads in soft fronts rather
+  // than blurring. A second ring of neighbours uReach cells off lets it reach further in a step.
+  // Each exchange is the same in both directions, so no pigment is made or lost.
+  bool wide = uReach > 1.0;
   vec3 ex = vec3(0.0);
-  ex += (S(t+vec2(1,0)).rgb / max(wl.r, h0) - c) * min(wl.r, hc);
-  ex += (S(t-vec2(1,0)).rgb / max(wr.r, h0) - c) * min(wr.r, hc);
-  ex += (S(t+vec2(0,1)).rgb / max(wu.r, h0) - c) * min(wu.r, hc);
-  ex += (S(t-vec2(0,1)).rgb / max(wd.r, h0) - c) * min(wd.r, hc);
-  s += diffF * 0.25 * ex;
+  for (int i = 0; i < 8; i++) {
+    if (i >= 4 && !wide) break;
+    vec2 o = (i < 4 ? 1.0 : uReach) * (i % 4 == 0 ? vec2(1, 0) : i % 4 == 1 ? vec2(-1, 0) : i % 4 == 2 ? vec2(0, 1) : vec2(0, -1));
+    float hn = texture(uW, (t + o) / uSize).r; vec3 sn = S(t + o).rgb, cn = sn / max(hn, h0);
+    float k = min(diffF + uBloom * wet * 0.5 * (dot(sn, vec3(1.0 / 3.0)) + ms), 0.95);
+    ex += k * (cn - c) * min(hn, hc);
+  }
+  s += (wide ? 0.125 : 0.25) * ex;
   // the neighbourhood and whole-film means come from the explicit box
   // downsample below, not from a mip chain: the sim state is never mipmapped
   vec4 nr = texture(uNear, vUv), wh = texture(uWhole, vec2(0.5));
@@ -249,6 +269,10 @@ void main(){
   // the sheet, while the film's mean pigment per wet cell (the sheet is ~85%
   // wet once open) is darker than copy can be read over (uLight)
   s *= 1.0 - uRinse * wet * smoothstep(uLight * 0.85, uLight, dot(wh.rgb, vec3(1.0 / 3.0)) / 0.85);
+  // ink let go into deep water thins as it spreads through the depth the film cannot show
+  // and what drifts to the edge of the water fades there rather than piling against it
+  vec2 eg = min(vUv, 1.0 - vUv);
+  s *= 1.0 - (uDilute + step(1e-6, uDilute) * 0.06 * (1.0 - smoothstep(0.0, 0.12, min(eg.x, eg.y)))) * wet;
   // the water re-wets the old print: its ink dissolves into the film, all of it
   vec3 Ao = absorb(texture(uSrcLo, vUv));
   // dissolution is faster where the film moves: flow thins the boundary layer
@@ -357,8 +381,8 @@ in vec2 vUv; uniform sampler2D uW, uS, uD;
 layout(location=0) out vec4 oA; layout(location=1) out vec4 oB;
 void main(){ oA = vec4(texture(uS, vUv).rgb, texture(uW, vUv).r); oB = texture(uD, vUv); }`;
   var PLAY = HEAD + `
-uniform sampler2D uXa0, uXb0, uXa1, uXb1, uYa0, uYb0, uYa1, uYb1, uXP, uYP;
-uniform float uFx, uFy, uK;
+uniform sampler2D uXa0, uXb0, uXa1, uXb1, uYa0, uYb0, uYa1, uYb1, uXP, uYP, uXA;
+uniform float uFx, uFy, uK, uXBaked, uRaw;
 out vec4 o;
 vec3 side(sampler2D a0, sampler2D b0, sampler2D a1, sampler2D b1, float f, sampler2D pr, vec2 uv, float g){
   vec2 px = 1.0 / uSize;
@@ -374,9 +398,12 @@ vec3 side(sampler2D a0, sampler2D b0, sampler2D a1, sampler2D b1, float f, sampl
 void main(){
   vec2 uv = vUv; vec4 pap = P(uv * uSize);
   float g = max(1.0 + 0.4 * ((pap.r - 0.5) * 1.4 + (pap.b - 0.5) * 0.6), 0.05);
-  vec3 A = uK <= 0.0 ? side(uXa0, uXb0, uXa1, uXb1, uFx, uXP, uv, g)
+  // a baked X is a mix already drawn as optical thickness, so it mixes on unchanged
+  vec3 X = uK >= 1.0 ? vec3(0.0) : uXBaked > 0.5 ? texture(uXA, uv).rgb : side(uXa0, uXb0, uXa1, uXb1, uFx, uXP, uv, g);
+  vec3 A = uK <= 0.0 ? X
          : uK >= 1.0 ? side(uYa0, uYb0, uYa1, uYb1, uFy, uYP, uv, g)
-         : mix(side(uXa0, uXb0, uXa1, uXb1, uFx, uXP, uv, g), side(uYa0, uYb0, uYa1, uYb1, uFy, uYP, uv, g), uK);
+         : mix(X, side(uYa0, uYb0, uYa1, uYb1, uFy, uYP, uv, g), uK);
+  if (uRaw > 0.5) { o = vec4(A, 1.0); return; }
   vec4 plain = uEnd > .5 ? texture(uYP, uv) : texture(uXP, uv);
   o = composite(present(A, absorb(plain)), plain);
 }`;
@@ -426,7 +453,6 @@ void main(){
     recStir: (t) => 1.5 * smooth(0.25, 0.9, t),
     recOpen: (t) => smooth(0.45, 1.35, t),
     recRain: (t) => 0.012 * smooth(0.45, 0.7, t) * (1 - smooth(1.4, 1.7, t)),
-    recFlood: (t) => smooth(1, 1.3, t),
     recRinseFrom: 0.9,
     recRinse: 0.02,
     recLight: 0.28,
@@ -556,6 +582,7 @@ void main(){
       uYb1: 7,
       uXP: 9,
       uYP: 10,
+      uXA: 11,
       uGrow: 15
     };
     const prog = (fs) => {
@@ -682,12 +709,30 @@ void main(){
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, im);
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     };
-    const setPrint = (key, im) => {
-      const p = prints[key] || { full: tex(0, 0, gl.CLAMP_TO_EDGE, false), lo: tex(0, 0, gl.CLAMP_TO_EDGE, false), ft: tex(0, 0, gl.CLAMP_TO_EDGE, false) };
+    const PRINTS_KEPT = 10;
+    const printTex = /* @__PURE__ */ new Map();
+    const texOf = (im) => {
+      let p = printTex.get(im);
+      if (p) {
+        printTex.delete(im);
+        printTex.set(im, p);
+        return p;
+      }
+      p = { full: tex(0, 0, gl.CLAMP_TO_EDGE, false), lo: tex(0, 0, gl.CLAMP_TO_EDGE, false), ft: tex(0, 0, gl.CLAMP_TO_EDGE, false) };
       upload(p.full, im);
       upload(p.lo, scaled(im, W, H));
       upload(p.ft, scaled(im, Math.round(W / 4), Math.round(H / 4)));
-      prints[key] = p;
+      printTex.set(im, p);
+      for (const [key, old] of printTex) {
+        if (printTex.size <= PRINTS_KEPT) break;
+        if (old === prints.src || old === prints.tgt || key === im) continue;
+        for (const t of [old.full, old.lo, old.ft]) gl.deleteTexture(t);
+        printTex.delete(key);
+      }
+      return p;
+    };
+    const setPrint = (key, im) => {
+      prints[key] = texOf(im);
     };
     const bind = (unit, t) => {
       gl.activeTexture(gl.TEXTURE0 + unit);
@@ -770,9 +815,9 @@ void main(){
       // A `standing` film never dries or takes up, however long it runs; its
       // sheet opens by `open` toward the whole paper while `rain` water is added
       // over it; `rinse` flushes clean water through it and `dose` charges the print's ink.
-      step(fwd, t, cure, stir = 0, tilt = 0, relift = 0, { standing = false, open = 0, rain = 0, rinse = 0, light = preset.recLight, dose = 1, lift = 1 } = {}) {
+      step(fwd, t, cure, stir = 0, tilt = 0, relift = 0, { standing = false, open = 0, rain = 0, rinse = 0, light = preset.recLight, dose = 1, lift = 1, splash: splashK = 1, mix = 1, dilute = 0, curl = 1, diffuse = 0, flow = 0, flowSize = 150, bloom = 0, reach = 1 } = {}) {
         if (!recording) owner = null;
-        const splash = t < preset.tSplash ? 0.05 : 0, mist = t < preset.tSplash + 0.15 ? 0.03 : 0;
+        const splash = t < preset.tSplash ? 0.05 * splashK : 0, mist = t < preset.tSplash + 0.15 ? 0.03 : 0;
         const drying = standing ? 0 : smooth(preset.tDry, preset.tDry + 0.4, t);
         const take = standing ? 0 : smooth(preset.tTake, preset.tTake + 0.45, t);
         gl.viewport(0, 0, W, H);
@@ -803,8 +848,15 @@ void main(){
         gl.uniform1f(pig.u.uCure, cure);
         gl.uniform1f(pig.u.uLift, 0.075 * lift);
         gl.uniform1f(pig.u.uAds, 0.18 * take);
-        gl.uniform1f(pig.u.uMix, 0.06);
-        gl.uniform1f(pig.u.uMixG, 5e-3 + 0.025 * Math.max(drying, Math.min(1, stir)));
+        gl.uniform1f(pig.u.uMix, 0.06 * mix);
+        gl.uniform1f(pig.u.uMixG, (5e-3 + 0.025 * Math.max(drying, Math.min(1, stir))) * mix);
+        gl.uniform1f(pig.u.uDilute, dilute);
+        gl.uniform1f(pig.u.uCurl, curl);
+        gl.uniform1f(pig.u.uDiffuse, diffuse);
+        gl.uniform1f(pig.u.uFlow, flow);
+        gl.uniform1f(pig.u.uFlowSize, flowSize);
+        gl.uniform1f(pig.u.uBloom, bloom);
+        gl.uniform1f(pig.u.uReach, reach);
         gl.uniform1f(pig.u.uDrying, drying);
         gl.uniform1f(pig.u.uStir, stir);
         gl.uniform1f(pig.u.uRelift, relift);
@@ -840,115 +892,128 @@ void main(){
         gl.uniform1f(show.u.uClearance, clearance);
         draw();
       },
-      // Mobile transitions. Each print of a boundary is washed out by this same
-      // simulation, over the wet sheet the two prints share, from solid to one
-      // mixed wash -- stopping before the film dries or takes anything up. The
-      // transition plays the outgoing dispersion forward, mixes the two washes,
-      // then plays the incoming dispersion backward, so the next scene gathers
-      // out of its own wash; scrolling back plays the same frames back.
-      // pair() holds a boundary's two recordings, in scene order like the prints.
-      // Options shape the lower print's dispersion only: `dose` charges its
-      // colour (the closing's logos give up more pigment than they show), `lift`
-      // scales how fast its ink lets go, `stir` how far the film is mixed toward
-      // one colour, and `rinse` is the flush per step once the wash is mixed,
-      // while its mean pigment is above `light`: 0 keeps a dark wash whose colour
-      // is the point, and a light of 0 flushes a wash off the sheet. `only` records
-      // one side alone (true: the lower print), for a boundary whose other print
-      // is not on hand yet.
-      pair({ dose = 1, stir = 1, rinse = preset.recRinse, light = preset.recLight, lift = 1, flood = false, only = null } = {}) {
-        return { sides: [true, false].map((fwd) => ({ fwd, frames: [], n: 0, dose: fwd ? dose : 1, stir: fwd ? stir : 1, lift: fwd ? lift : 1, rinse: fwd ? rinse : preset.recRinse, light: fwd ? light : preset.recLight, flood: fwd && flood, stamp: -1, skip: only !== null && fwd !== only })) };
+      setTint: changeTint,
+      // Each scene's print is washed out by this same simulation, over a footprint every scene it may mix
+      // with shares, from solid to one mixed wash -- stopping before the film dries or takes anything up.
+      // A transition plays the outgoing dispersion forward, mixes the two washes, then plays the incoming
+      // dispersion backward, so the next scene gathers out of its own wash; scrolling back plays the same
+      // frames back, and a transition can turn to another scene midway.
+      sceneSide(print, foot, { dose = 1, rinse = preset.recRinse, light = preset.recLight, look = {} } = {}) {
+        return { frames: [], n: 0, dose, rinse, light, stamp: -1, print, foot, look };
       },
-      // Records up to `budget` steps, the side the transition needs first first:
-      // the two sides share the simulation's state, so one runs at a time.
-      record(pair, firstFwd, budget) {
-        for (const side of firstFwd ? pair.sides : [...pair.sides].reverse()) {
-          if (side.skip) continue;
-          if (!fresh(side) && side.frames.length) freeFrames(side);
-          if (side.n >= REC_STEPS) continue;
-          if (side.frames.length && owner !== side) freeFrames(side);
-          if (!side.frames.length) {
-            if (grownFor !== pair) {
-              gl.viewport(0, 0, W, H);
-              common(grow, true);
-              gl.bindFramebuffer(gl.FRAMEBUFFER, growF);
-              draw();
-              grownFor = pair;
-            }
-            api.reset();
-            nStep = 0;
-            owner = side;
-            side.stamp = page.stamp;
-            side.frames.push(keep());
+      // Records up to `budget` steps; the sides share the simulation's state, so one runs at a time.
+      recordSide(side, budget) {
+        const s = side, { stir = 1, open = 1, rain = 1, lift = 1, liftRamp = 0, flow = 0, dilute = 0, diluteFrom = 0, ...rest } = s.look;
+        prints.src = texOf(s.print);
+        prints.tgt = texOf(s.foot);
+        if (!fresh(s) && s.frames.length) freeFrames(s);
+        if (s.n >= REC_STEPS) return;
+        if (s.frames.length && owner !== s) freeFrames(s);
+        if (!s.frames.length) {
+          if (grownFor !== s.foot) {
+            gl.viewport(0, 0, W, H);
+            common(grow, true);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, growF);
+            draw();
+            grownFor = s.foot;
           }
-          recording = true;
-          while (budget-- > 0 && side.n < REC_STEPS) {
-            const t = side.n * preset.dt;
-            const flood = side.flood ? preset.recFlood(t) : 0;
-            api.step(
-              side.fwd,
-              t,
-              0,
-              preset.recStir(t) * side.stir,
-              0,
-              flood,
-              { standing: true, open: preset.recOpen(t) + 2 * flood, rain: Math.max(preset.recRain(t), 0.12 * flood), rinse: t >= preset.recRinseFrom ? side.rinse : 0, light: side.light, dose: side.dose, lift: side.lift }
-            );
-            if (++side.n % preset.recEvery === 0 || side.n === REC_STEPS) side.frames.push(keep());
-          }
-          recording = false;
+          api.reset();
+          nStep = 0;
+          owner = s;
+          s.stamp = page.stamp;
+          s.frames.push(keep());
+        }
+        recording = true;
+        while (budget-- > 0 && s.n < REC_STEPS) {
+          const t = s.n * preset.dt, at = t / preset.recDuration;
+          api.step(true, t, 0, preset.recStir(t) * stir, 0, 0, {
+            ...rest,
+            standing: true,
+            open: preset.recOpen(t) * open,
+            rain: preset.recRain(t) * rain,
+            rinse: t >= preset.recRinseFrom ? s.rinse : 0,
+            light: s.light,
+            dose: s.dose,
+            lift: lift * (liftRamp ? smooth(0, liftRamp, at) * 0.85 + 0.15 : 1),
+            flow: flow * smooth(0, 0.3, at),
+            dilute: dilute * smooth(diluteFrom, 1, at)
+          });
+          if (++s.n % preset.recEvery === 0 || s.n === REC_STEPS) s.frames.push(keep());
+        }
+        recording = false;
+      },
+      sideRecorded(side) {
+        return side.n >= REC_STEPS && fresh(side);
+      },
+      // x at dissolve u (0 its print, 1 its mixed wash) mixed by k into y at uy; p places the leg's
+      // envelope, so at p = 0 and p = 1 the canvas is the plain print of x or y.
+      playSides(x, ux, y, uy, k, p, { toNothing = false } = {}) {
+        return drawSides(x, ux, y, uy, k, p, null, toNothing);
+      },
+      // The mix on screen drawn as optical thickness, a side of its own at its mixed end.
+      bake(x, ux, y, uy, k, p) {
+        const A = tex(W, H), fb = fbo([A]), q = envelopeAt(x, p);
+        drawSides(x, ux, y, uy, k, p, fb);
+        return { baked: true, A, fb, print: q >= 0.5 ? (y ?? x).print : x.print, at: Math.min(q, 1 - q) };
+      },
+      freeSide(side) {
+        if ("baked" in side) {
+          gl.deleteFramebuffer(side.fb);
+          gl.deleteTexture(side.A);
+          side.A = null;
           return;
         }
-      },
-      recorded(pair) {
-        return pair.sides.every((side) => side.skip || side.n >= REC_STEPS && fresh(side));
-      },
-      setTint: changeTint,
-      // a frame of a recording on screen: a frame's budget recorded ahead, then p
-      // drawn; true while there is more to record, so the caller comes back
-      show(pair, fromFwd, p) {
-        api.record(pair, fromFwd, preset.stepsPerFrame);
-        api.play(pair, fromFwd, p);
-        return !api.recorded(pair);
-      },
-      free(pair) {
-        for (const side of pair.sides) freeFrames(side);
-      },
-      // p in [0, 1] from the outgoing scene (fromFwd: the lower of the pair) to the incoming.
-      play(pair, fromFwd, p) {
-        const [out, inc] = fromFwd ? pair.sides : [pair.sides[1], pair.sides[0]];
-        const at = (side, u) => {
-          const n = fresh(side) ? side.frames.length : 0;
-          if (!n) return null;
-          const x2 = Math.min(clamp01(u) * (REC_FRAMES - 1), n - 1), i = Math.floor(x2), j = Math.min(i + 1, n - 1);
-          return { k0: side.frames[i], k1: side.frames[j], f: x2 - i, print: (side.fwd ? prints.src : prints.tgt).full };
-        };
-        let x = at(out, p / preset.playOut), y = at(inc, (1 - p) / (1 - preset.playIn)), k = smooth(preset.playOut, preset.playIn, p);
-        if (!y) {
-          y = { ...x, print: (out.fwd ? prints.tgt : prints.src).full };
-          k = 0;
-        }
-        if (!x) return false;
-        place();
-        gl.useProgram(play.p);
-        bind(0, x.k0.s);
-        bind(1, x.k0.d);
-        bind(2, x.k1.s);
-        bind(3, x.k1.d);
-        bind(4, y.k0.s);
-        bind(5, y.k0.d);
-        bind(6, y.k1.s);
-        bind(7, y.k1.d);
-        bind(8, paper);
-        bind(9, x.print);
-        bind(10, y.print);
-        setEndpoint(play.u, p, pair.toNothing);
-        gl.uniform1f(play.u.uFx, x.f);
-        gl.uniform1f(play.u.uFy, y.f);
-        gl.uniform1f(play.u.uK, k);
-        draw();
-        return true;
+        freeFrames(side);
+        if (owner === side) owner = null;
       },
       onContextLost
+    };
+    const frameAt = (side, u) => {
+      const n = fresh(side) ? side.frames.length : 0;
+      if (!n) return null;
+      const x = Math.min(clamp01(u) * (REC_FRAMES - 1), n - 1), i = Math.floor(x), j = Math.min(i + 1, n - 1);
+      return { k0: side.frames[i], k1: side.frames[j], f: x - i };
+    };
+    const envelopeAt = (x, p) => x.baked ? Math.max(p, x.at) : p;
+    const drawSides = (x, ux, y, uy, k, p, into, toNothing = false) => {
+      const X = x.baked ? null : frameAt(x, ux);
+      if (!x.baked && !X) return false;
+      let Y = y ? frameAt(y, uy) : null;
+      if (!Y) {
+        k = 0;
+        Y = X;
+      }
+      if (into) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, into);
+        gl.viewport(0, 0, W, H);
+      } else place();
+      gl.useProgram(play.p);
+      const xs = X || Y;
+      if (xs) {
+        bind(0, xs.k0.s);
+        bind(1, xs.k0.d);
+        bind(2, xs.k1.s);
+        bind(3, xs.k1.d);
+      }
+      if (Y) {
+        bind(4, Y.k0.s);
+        bind(5, Y.k0.d);
+        bind(6, Y.k1.s);
+        bind(7, Y.k1.d);
+      }
+      const yPrint = texOf((y ?? x).print).full;
+      bind(8, paper);
+      bind(9, texOf(x.print).full);
+      bind(10, yPrint);
+      if (x.baked) bind(11, x.A);
+      setEndpoint(play.u, envelopeAt(x, p), toNothing);
+      gl.uniform1f(play.u.uFx, X ? X.f : 0);
+      gl.uniform1f(play.u.uFy, Y ? Y.f : 0);
+      gl.uniform1f(play.u.uK, k);
+      gl.uniform1f(play.u.uXBaked, x.baked ? 1 : 0);
+      gl.uniform1f(play.u.uRaw, into ? 1 : 0);
+      draw();
+      return true;
     };
     return api;
   }
@@ -980,16 +1045,16 @@ void main(){
     if (p < bounds.inStart) return "mix";
     return "in";
   }
-  function retarget(from, to, p, next, bounds = DEFAULT_PHASE_BOUNDS) {
+  function legAt(p, bounds = DEFAULT_PHASE_BOUNDS) {
     const { outEnd, inStart } = bounds;
-    const phase = phaseOf(p, bounds);
-    const incoming = Math.min(1, (1 - p) / (1 - inStart));
-    if (next === from) {
-      const reversed = phase === "out" ? 1 - (1 - inStart) * p / outEnd : phase === "mix" ? outEnd + inStart - p : outEnd * incoming;
-      return { from: to, to: from, p: reversed };
-    }
-    if (phase === "out" || phase === "mix" && smooth(outEnd, inStart, p) < 0.5) return { from, to: next, p };
-    return { from: to, to: next, p: outEnd * incoming };
+    return { ux: clamp01(p / outEnd), uy: clamp01((1 - p) / (1 - inStart)), k: smooth(outEnd, inStart, p) };
+  }
+  function turnAt(p, bounds = DEFAULT_PHASE_BOUNDS) {
+    const { outEnd, inStart } = bounds, phase = phaseOf(p, bounds);
+    if (Math.abs(outEnd - (1 - inStart)) > 1e-9) throw new Error(`turnAt: bounds must be symmetric (outEnd ${outEnd}, inStart ${inStart})`);
+    if (phase === "out") return { from: "x", p };
+    if (phase === "in") return { from: "y", p: outEnd * (1 - p) / (1 - inStart) };
+    return { from: "mix", p: outEnd };
   }
   return __toCommonJS(index_exports);
 })();

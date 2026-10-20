@@ -17,6 +17,9 @@
  * here.
  *
  * The arithmetic is deliberately dull. What is worth reading is `visibleWidth`.
+ *
+ * The same gutter decides `lockPageScroll`, which an overlay takes so the page
+ * behind it neither scrolls nor shifts.
  */
 
 /** Minimum clearance from any viewport edge, in px. */
@@ -109,4 +112,46 @@ export function verticalSlot(
   }
 
   return { top: Math.max(gutter, Math.min(above, limit - gutter - height)), flipped: false };
+}
+
+/**
+ * Stop the page behind an overlay from scrolling, without moving it.
+ *
+ * Hiding the root's overflow also hides a classic scrollbar (Windows, Linux,
+ * macOS set to always show scrollbars), and the page then widens by the
+ * scrollbar's width and shifts sideways under the overlay. While locked, the
+ * root keeps the scrollbar's gutter with `scrollbar-gutter: stable` — but only
+ * when the page had a scrollbar to begin with, or a page that never scrolled
+ * would gain an empty gutter and shift the other way. A scrollbar the page
+ * styles itself gets only the platform's gutter, which is none where the
+ * platform overlays its scrollbars, so whatever width the root gains is padded
+ * back. The root's own width says that, not `clientWidth`: once overflow is
+ * hidden, `clientWidth` no longer subtracts a gutter that is still kept.
+ *
+ * Locks nest: the page unlocks when the last one is released, in any order.
+ * Returns the function that releases this lock; calling it twice is harmless.
+ */
+let held = 0;
+let saved = { overflow: "", gutter: "", padding: "" };
+
+export function lockPageScroll(): () => void {
+  const root = document.documentElement;
+  if (held++ === 0) {
+    saved = { overflow: root.style.overflow, gutter: root.style.scrollbarGutter, padding: root.style.paddingRight };
+    const width = root.getBoundingClientRect().width;
+    if (window.innerWidth - root.clientWidth > 0) root.style.scrollbarGutter = "stable";
+    root.style.overflow = "hidden";
+    const lost = root.getBoundingClientRect().width - width;
+    if (lost > 0) root.style.paddingRight = `${(parseFloat(getComputedStyle(root).paddingRight) || 0) + lost}px`;
+  }
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    if (--held === 0) {
+      root.style.overflow = saved.overflow;
+      root.style.scrollbarGutter = saved.gutter;
+      root.style.paddingRight = saved.padding;
+    }
+  };
 }

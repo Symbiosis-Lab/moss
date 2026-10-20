@@ -81,6 +81,11 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
             description: "Print the moss site that owns a path as {\"root\": string|null}. Uses the canonical .moss ownership check, stops at the home directory, and does not scan or change files.",
         },
         CliCommandInfo {
+            name: "plugin",
+            args: "hash <plugin-dir> [--json]",
+            description: "Print the code hash of a plugin directory: the value moss records when a plugin is allowed and the registry pins per version. Needs no site. Prints the hex digest, or with --json {\"id\", \"version\", \"code_sha256\"}. Exits 1 when the directory has no readable manifest.json or entry file.",
+        },
+        CliCommandInfo {
             name: "import",
             args: "<url> [<folder>] [-r|--recursive]  |  --list <file> [<folder>] [-r|--recursive]  |  <folder> [-r|--recursive] [--with <derivation-id>] [--allow-plugins]  |  --status [<site>] [--json] [--allow-plugins]",
             description: "Import a URL (or batch of URLs) into a project folder as markdown. Given an existing folder instead, show the files in it that an installed plugin can turn into pages (for example documents): records the choice in .moss/config.toml and writes a page beside each file, never overwriting one; `--with` picks a derivation when several accept the folder. `-r`/`--recursive` covers the folder and every folder beneath it (hidden folders and `.moss` skipped): each folder holding files the derivation accepts and with no decision yet is shown and gets its pages, a folder already decided (shown or kept) is left exactly as it is, and one line per folder (folder, what was done, pages written) plus a total is printed. A plugin the site carries runs only if allowed, as in a build: without `--allow-plugins` a plugin not yet allowed in the app is refused with the same sentence a build prints, and nothing is written. `--status` lists every folder holding such files with its decision (undecided, show, keep), file count, pages still missing and files a plugin declined; `--json` prints {\"folders\": [{folder, derivation_id, noun_one, noun_other, count, decision, stubs_missing, skipped: [{file, reason, message}], failed: [{file, message}]}]}.",

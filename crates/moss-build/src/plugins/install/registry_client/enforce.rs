@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, RwLock};
 use std::time::SystemTime;
 
+use crate::plugins::contributions::abilities::{abilities, Ability};
 use crate::plugins::types::PluginManifest;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -402,18 +403,161 @@ pub fn approve(plugin_dir: &Path) -> Result<(), String> {
         .ok_or_else(|| format!("{} has no readable manifest", plugin_dir.display()))?;
     let hash = crate::plugins::bundled::code_hash(plugin_dir, &manifest)
         .ok_or_else(|| format!("{} has no readable entry file", plugin_dir.display()))?;
+    grant_all(vec![Grant { dir: plugin_dir.to_path_buf(), manifest, hash }])
+}
+
+/// A plugin directory and the code hash being allowed for it.
+struct Grant {
+    dir: PathBuf,
+    manifest: PluginManifest,
+    hash: String,
+}
+
+/// Record every grant under one lock and one save. The grants take effect only
+/// if the save succeeds; on failure nothing is allowed.
+fn grant_all(grants: Vec<Grant>) -> Result<(), String> {
+    if grants.is_empty() {
+        return Ok(());
+    }
     let mut guard = CONSENT.write().unwrap_or_else(|e| e.into_inner());
     let Some((dir, approvals)) = guard.as_mut() else {
         // Nothing enforces consent without a store, so there is nothing to
         // record; every test binary and a moss with no app data land here.
         return Ok(());
     };
-    approvals.grant(canonical(plugin_dir), hash);
-    match dir {
-        Some(dir) => approval::save(dir, approvals),
-        // Enforced without a store: the grant holds for this process only.
-        None => Ok(()),
+    let mut updated = approvals.clone();
+    for Grant { dir, manifest, hash } in grants {
+        record_consent(&mut updated, &dir, &manifest, hash);
     }
+    if let Some(dir) = dir {
+        approval::save(dir, &updated)?;
+    }
+    *approvals = updated;
+    Ok(())
+}
+
+/// Allow the plugins a freshly picked starter carries, each only if the copy
+/// now in `site_root/.moss/plugins/<id>` hashes to what the registry listed.
+/// Returns the ids allowed. A missing directory, an unreadable one or one
+/// whose code differs by a byte is skipped and left to the usual prompt, and
+/// if the record cannot be saved nothing counts as allowed.
+pub fn approve_starter_plugins(site_root: &Path, listed: &[super::index::StarterPlugin]) -> Vec<String> {
+    let mut grants = Vec::new();
+    for plugin in listed.iter().filter(|p| crate::plugins::install::is_usable_id(&p.id)) {
+        let dir = site_root.join(".moss").join("plugins").join(&plugin.id);
+        let Some(manifest) = crate::plugins::bundled::read_installed_manifest(&dir) else { continue };
+        match crate::plugins::bundled::code_hash(&dir, &manifest) {
+            Some(hash) if hash == plugin.code_sha256 => grants.push(Grant { dir, manifest, hash }),
+            _ => {}
+        }
+    }
+    let ids = grants
+        .iter()
+        .filter_map(|grant| grant.dir.file_name()?.to_str().map(str::to_owned))
+        .collect();
+    match grant_all(grants) {
+        Ok(()) => ids,
+        Err(error) => {
+            log::warn!(target: "registry", "could not record the starter's plugin consent: {error}");
+            Vec::new()
+        }
+    }
+}
+
+/// What the registry's last accepted index says about a plugin directory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RegistryStatus {
+    /// The index lists this id with a `code_sha256` equal to this directory's
+    /// code hash: the registry vouches for these exact bytes.
+    ListedExact { version: String },
+    /// The index lists this id at this directory's version, but its entry
+    /// carries no code hash to compare or carries one that differs from this
+    /// directory's. Only the name and version are vouched for, not the code.
+    ListedVersion,
+    /// The index does not list this id and version, or moss has no index.
+    Unknown,
+    /// The registry withdrew this exact version; `reason` is its own sentence,
+    /// bounded and stripped.
+    Withdrawn { reason: String },
+}
+
+/// [`RegistryStatus`] of the plugin in `plugin_dir`, from the snapshot the
+/// loader consults. A withdrawal outranks a listing. A directory whose version
+/// is older or newer than the one the index lists is `Unknown`. An unreadable kill list
+/// is not a withdrawal here; [`verdict`] is where it stops a plugin.
+pub fn registry_status(manifest: &PluginManifest, plugin_dir: &Path) -> RegistryStatus {
+    let withdrawn = match revocation(&manifest.name, &manifest.version) {
+        Revocation::Withdrawn(reason) => Some(reason),
+        Revocation::Clear | Revocation::Unreadable => None,
+    };
+    let hash = code_of(manifest, plugin_dir).map(|code| code.hash);
+    registry_status_in(&cached_entries(), withdrawn, manifest, hash.as_deref())
+}
+
+fn registry_status_in(
+    entries: &[super::index::IndexEntry],
+    withdrawn: Option<String>,
+    manifest: &PluginManifest,
+    hash: Option<&str>,
+) -> RegistryStatus {
+    if let Some(reason) = withdrawn {
+        return RegistryStatus::Withdrawn { reason };
+    }
+    let Some(entry) = entries.iter().find(|e| e.id == manifest.name) else { return RegistryStatus::Unknown };
+    if hash.is_some() && entry.code_sha256.as_deref() == hash {
+        RegistryStatus::ListedExact { version: entry.version.clone() }
+    } else if entry.version == manifest.version {
+        RegistryStatus::ListedVersion
+    } else {
+        RegistryStatus::Unknown
+    }
+}
+
+/// The record [`approve`] writes: the code's hash plus what the manifest
+/// said the plugin was, so a later change can be described against it.
+fn record_consent(approvals: &mut Approvals, plugin_dir: &Path, manifest: &PluginManifest, code_sha256: String) {
+    approvals.grant(approval::Approval {
+        dir: canonical(plugin_dir),
+        code_sha256,
+        version: Some(manifest.version.clone()),
+        abilities: Some(abilities(manifest)),
+    });
+}
+
+/// What is different about the plugin in `plugin_dir` from the one the user
+/// allowed. `None` when the directory was never allowed, when its code is
+/// still the code allowed, when no consent store is installed, or when it has
+/// no readable manifest and entry.
+pub fn change_since_approval(plugin_dir: &Path) -> Option<PluginChange> {
+    let manifest = crate::plugins::bundled::read_installed_manifest(plugin_dir)?;
+    let hash = code_of(&manifest, plugin_dir)?.hash;
+    let guard = CONSENT.read().unwrap_or_else(|e| e.into_inner());
+    let (_, approvals) = guard.as_ref()?;
+    change_in(approvals, &manifest, plugin_dir, &hash)
+}
+
+fn change_in(approvals: &Approvals, manifest: &PluginManifest, plugin_dir: &Path, hash: &str) -> Option<PluginChange> {
+    let record = approvals.record_for(&canonical(plugin_dir)).filter(|r| r.code_sha256 != hash)?;
+    Some(PluginChange {
+        approved_version: record.version.clone(),
+        version: manifest.version.clone(),
+        new_abilities: record.abilities.as_ref().map(|before| {
+            abilities(manifest).into_iter().filter(|a| !before.iter().any(|b| b.same_as(a))).collect()
+        }),
+    })
+}
+
+/// How a plugin differs from what the user allowed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct PluginChange {
+    /// `None` for an allowance recorded before versions were kept.
+    pub approved_version: Option<String>,
+    pub version: String,
+    /// Abilities the manifest declares now that the allowance did not cover.
+    /// `None` when the allowance recorded no abilities, so none can be called
+    /// new.
+    pub new_abilities: Option<Vec<Ability>>,
 }
 
 fn canonical(plugin_dir: &Path) -> PathBuf {
@@ -675,6 +819,67 @@ mod tests {
         assert_eq!(withheld(&manifest_of("some-third-party-plugin", "1.0.0"), false), None);
     }
 
+    /// Writes a plugin directory and returns it with its parsed manifest and
+    /// the hash of the code in it.
+    fn plugin_on_disk(root: &Path, manifest_text: &str, entry: &str) -> (PathBuf, PluginManifest, String) {
+        let dir = root.join("demo");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("manifest.json"), manifest_text).unwrap();
+        std::fs::write(dir.join("index.js"), entry).unwrap();
+        let manifest = PluginManifest::parse(manifest_text).unwrap();
+        let hash = crate::plugins::bundled::code_hash(&dir, &manifest).unwrap();
+        (dir, manifest, hash)
+    }
+
+    const V1: &str = r#"{"name":"demo","version":"1.0.0","entry":"index.js","contributes":{"listing_styles":{"board":{"label":"Board"}}}}"#;
+    const V2: &str = r#"{"name":"demo","version":"1.1.0","entry":"index.js","capabilities":["deploy"],"contributes":{"listing_styles":{"board":{"label":"Board"}}}}"#;
+
+    #[test]
+    fn a_change_is_reported_only_for_an_allowed_directory_whose_code_moved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (dir, manifest, hash) = plugin_on_disk(tmp.path(), V1, "var A = 1;");
+        let mut approvals = Approvals::default();
+        assert_eq!(change_in(&approvals, &manifest, &dir, &hash), None, "never allowed: nothing to compare");
+
+        record_consent(&mut approvals, &dir, &manifest, hash.clone());
+        assert_eq!(change_in(&approvals, &manifest, &dir, &hash), None, "same code: no change");
+
+        let (dir, v2, new_hash) = plugin_on_disk(tmp.path(), V2, "var A = 2;");
+        assert_eq!(
+            change_in(&approvals, &v2, &dir, &new_hash),
+            Some(PluginChange {
+                approved_version: Some("1.0.0".into()),
+                version: "1.1.0".into(),
+                new_abilities: Some(vec![Ability::Publishes { hook: "deploy".into() }]),
+            }),
+            "only the ability the allowance did not cover"
+        );
+    }
+
+    #[test]
+    fn a_change_to_an_allowance_with_no_record_of_abilities_calls_none_of_them_new() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (dir, _, hash) = plugin_on_disk(tmp.path(), V1, "var A = 1;");
+        let mut approvals = Approvals::default();
+        approvals.grant(approval::Approval::new(canonical(&dir), hash));
+        let (dir, v2, new_hash) = plugin_on_disk(tmp.path(), V2, "var A = 2;");
+        let change = change_in(&approvals, &v2, &dir, &new_hash).unwrap();
+        assert_eq!(change.approved_version, None);
+        assert_eq!(change.new_abilities, None);
+    }
+
+    #[test]
+    fn rewording_an_ability_is_not_a_new_ability() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (dir, manifest, hash) = plugin_on_disk(tmp.path(), V1, "var A = 1;");
+        let mut approvals = Approvals::default();
+        record_consent(&mut approvals, &dir, &manifest, hash);
+        let reworded = V1.replace(r#""label":"Board""#, r#""label":"Project board","description":"Cards""#);
+        let (dir, v2, new_hash) = plugin_on_disk(tmp.path(), &reworded, "var A = 2;");
+        let change = change_in(&approvals, &v2, &dir, &new_hash).unwrap();
+        assert_eq!(change.new_abilities, Some(vec![]));
+    }
+
     /// A plugin the user already allowed is still recognised while a cloud app
     /// has its files out of the folder: the hash waits for them, so it matches
     /// the recorded consent instead of coming back `None`. Before macOS 14 an
@@ -694,10 +899,10 @@ mod tests {
         std::fs::write(&entry_path, "var AllowedDemo = {};").unwrap();
 
         let mut approvals = approval::Approvals::default();
-        approvals.grant(
+        approvals.grant(approval::Approval::new(
             canonical(&plugin_dir),
             crate::plugins::bundled::code_hash(&plugin_dir, &manifest).unwrap(),
-        );
+        ));
 
         std::fs::remove_file(&manifest_path).unwrap();
         std::fs::remove_file(&entry_path).unwrap();

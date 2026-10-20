@@ -16,8 +16,6 @@ describe("shortcode vocabulary", () => {
     expect(names).toContain("grid");
     expect(names).toContain("hero");
     expect(names).toContain("gallery");
-    // `apply` is non-authorable in the Rust catalog, so authors never see it.
-    expect(names).not.toContain("apply");
   });
 
   it("carries a one-line doc for each name", () => {

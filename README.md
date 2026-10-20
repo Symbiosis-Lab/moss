@@ -23,7 +23,7 @@ Like its namesake, moss thrives in the spaces others overlook. It doesn't compet
 
 ## Status
 
-moss is in beta. Building, previewing and editing are open to everyone. Publishing a new site to mosspub.com hosting is by invitation while the beta is closed: [request access](https://mosspub.com). The built site is plain static files, so you can host it anywhere you choose.
+moss is in beta. Building, previewing and editing are open to everyone. You can publish to mosspub.com hosting with `moss deploy`. The built site is plain static files, so you can host it anywhere you choose.
 
 ## Install
 
@@ -55,7 +55,7 @@ npm install -g @symbiosis-lab/moss
 moss build ~/blog/            # build once
 moss build ~/blog/ --serve    # build and serve a local preview
 moss list ~/blog/             # inventory every page: kind, URL, title, lang
-moss deploy ~/blog/ --site-id=my-blog   # first publish: registers my-blog.mosspub.com (by invitation during the beta)
+moss deploy ~/blog/ --site-id=my-blog   # first publish: registers my-blog.mosspub.com
 moss deploy ~/blog/           # build and publish on every later run
 ```
 

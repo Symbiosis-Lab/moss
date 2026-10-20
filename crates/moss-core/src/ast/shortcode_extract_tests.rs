@@ -2584,49 +2584,6 @@ fn recent_body_is_trimmed() {
     }
 }
 
-// ---- Apply ----
-
-#[test]
-fn parses_apply_directive() {
-    use super::super::shortcode::ShortcodeKind;
-    use super::super::visit::has_shortcode_recursive;
-    let doc = crate::ast::parse(":::apply\n:::\n");
-    assert!(
-        has_shortcode_recursive(&doc, ShortcodeKind::Apply),
-        "expected an Apply shortcode"
-    );
-}
-
-#[test]
-fn apply_parse_bare_has_none_overrides() {
-    let (sc, warns) = parse_shortcode_block("apply", "", "", &ParseConfig::default());
-    assert!(warns.warnings.is_empty());
-    match sc.expect("expected Some(Shortcode)") {
-        Shortcode::Apply(args) => {
-            assert!(args.placeholder.is_none());
-            assert!(args.button.is_none());
-        }
-        other => panic!("expected Apply, got {other:?}"),
-    }
-}
-
-#[test]
-fn apply_parse_with_overrides() {
-    let (sc, _) = parse_shortcode_block(
-        "apply",
-        r#"{placeholder="email" button="申请"}"#,
-        "",
-        &ParseConfig::default(),
-    );
-    match sc.expect("expected Some(Shortcode)") {
-        Shortcode::Apply(args) => {
-            assert_eq!(args.placeholder.as_deref(), Some("email"));
-            assert_eq!(args.button.as_deref(), Some("申请"));
-        }
-        other => panic!("expected Apply, got {other:?}"),
-    }
-}
-
 #[test]
 fn extracts_recent_end_to_end_with_sentinel() {
     // Full extraction path: `:::recent` opener is recognized as
@@ -3191,7 +3148,7 @@ fn every_shortcode_kind_url_slot_is_accounted_for() {
     fn classify(sc: &Shortcode) -> Tracking {
         match sc {
             // `visit.rs`: no URLs.
-            Shortcode::Subscribe(_) | Shortcode::Recent(_) | Shortcode::Apply(_) => Tracking::None,
+            Shortcode::Subscribe(_) | Shortcode::Recent(_) => Tracking::None,
             // `visit.rs`: item.url — buttons items are `[label](url)` lines.
             Shortcode::Buttons(_) => Tracking::GenericOnly,
             // `visit.rs`: cells are typed blocks; every URL in them came from
@@ -3213,7 +3170,6 @@ fn every_shortcode_kind_url_slot_is_accounted_for() {
         Shortcode::Hero(Default::default()),
         Shortcode::Grid(Default::default()),
         Shortcode::Recent(Default::default()),
-        Shortcode::Apply(Default::default()),
     ];
     let structural = all
         .iter()

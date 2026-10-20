@@ -80,9 +80,11 @@ jobs:
             VERSION="${REQUESTED#v}"
           else
             # --exclude-drafts is the point — see the header.
+            # The newest app release: moss-core-v… and ffmpeg-… releases live
+            # in this repo too and are newer by date.
             VERSION=$(gh release list --repo Symbiosis-Lab/moss \
-              --exclude-drafts --exclude-pre-releases --limit 1 --json tagName \
-              -q '.[0].tagName')
+              --exclude-drafts --exclude-pre-releases --limit 30 --json tagName \
+              -q '[.[].tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))][0]')
             VERSION="${VERSION#v}"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"

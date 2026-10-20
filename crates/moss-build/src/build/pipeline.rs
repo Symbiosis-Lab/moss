@@ -1355,7 +1355,7 @@ fn build_inner(
     // a special case inside it).
     let mut kinds = crate::build::terms::term_kinds(
         cfg.as_ref().unwrap_or(&crate::config::ConfigFile::empty()),
-        crate::i18n::Language::from_code(&site_lang).unwrap_or(crate::i18n::Language::En),
+        &site_lang,
     );
     let (field_decls, field_problems) = cfg.as_ref().map(|c| c.field_decls()).unwrap_or_default();
     for problem in &field_problems {

@@ -48,8 +48,8 @@ pub struct LayoutConfig {
     pub lang_tag: String,
     pub place_maps: Option<crate::build::place_map::PlaceMapRenderContext>,
     /// Term kinds that asked for a nav-bar entry (`[terms.<key>] nav = true`)
-    /// and have a root page: `(namespace key, label)`, in config order.
-    pub term_nav: Vec<(String, String, Option<i32>)>,
+    /// and have a root page, one entry per edition, in config order.
+    pub term_nav: Vec<crate::build::terms::TermNavEntry>,
 }
 
 impl LayoutConfig {
@@ -85,7 +85,7 @@ impl LayoutConfig {
     }
 
     /// Set the term kinds that are nav-bar entries — see [`Self::term_nav`].
-    pub fn with_term_nav(mut self, term_nav: Vec<(String, String, Option<i32>)>) -> Self {
+    pub fn with_term_nav(mut self, term_nav: Vec<crate::build::terms::TermNavEntry>) -> Self {
         self.term_nav = term_nav;
         self
     }

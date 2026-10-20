@@ -1,88 +1,18 @@
 //! German is a site edition: a page under a `de/` tree is dressed in German
 //! interface strings, German dates and `<html lang="de">`, and the switcher on
-//! the other editions reads "DE", as the English one reads "EN".
+//! the other editions reads "DE", as the English one reads "EN". An edition's home and top level
+//! behave like the root's.
 
-use std::fs;
-use std::path::PathBuf;
-use std::sync::Mutex;
+#[path = "support/site.rs"]
+mod site;
 
-struct Capture(Mutex<Vec<String>>);
-
-impl log::Log for Capture {
-    fn enabled(&self, _: &log::Metadata) -> bool {
-        true
-    }
-    fn log(&self, record: &log::Record) {
-        self.0.lock().unwrap().push(record.args().to_string());
-    }
-    fn flush(&self) {}
-}
-
-static CAPTURE: Capture = Capture(Mutex::new(Vec::new()));
-
-fn build_sync(folder_path: &str, trigger: moss_build::build::BuildTrigger) -> Result<String, String> {
-    use moss_build::build::{run_pipeline, PipelineConfig, PluginMode};
-    use moss_build::cli::host::cli_host_ports;
-    use moss_build::vault_root::VaultRoot;
-
-    let _ = log::set_logger(&CAPTURE);
-    log::set_max_level(log::LevelFilter::Warn);
-    let source = PathBuf::from(folder_path);
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(run_pipeline(PipelineConfig {
-        root: VaultRoot::resolve(&source),
-        progress: moss_build::build::stdout_sink(),
-        plugins: PluginMode::Skip,
-        watch: false,
-        start_server: false,
-        host: cli_host_ports(folder_path),
-        trigger,
-        exits_after_build: true,
-        site_url_override: None,
-        server_port: None,
-        admission_epoch: None,
-        live_port: None,
-    }))
-}
-
-struct Site(PathBuf);
-
-impl Site {
-    fn new(files: &[(&str, &str)]) -> Site {
-        let root = std::env::temp_dir().join(format!("moss_german_edition_{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&root).unwrap();
-        let site = Site(root);
-        site.write(".moss/config.toml", "schema_version = 6\n\n[site]\nlang = \"en\"\n");
-        for (rel, body) in files {
-            site.write(rel, body);
-        }
-        let result = build_sync(&site.0.to_string_lossy(), moss_build::build::BuildTrigger::Full);
-        assert!(result.is_ok(), "build failed: {result:?}");
-        site
-    }
-
-    fn write(&self, rel: &str, body: &str) {
-        let path = self.0.join(rel);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, body).unwrap();
-    }
-
-    fn html(&self, rel: &str) -> String {
-        fs::read_to_string(self.0.join(".moss/build.nosync/staging").join(rel)).unwrap()
-    }
-}
-
-impl Drop for Site {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
+use site::Site;
 
 #[test]
 fn a_de_tree_is_dressed_in_german_chrome_and_dates() {
     let site = Site::new(&[
         ("index.md", "---\ntitle: Home\n---\n\nText.\n"),
-        ("de/index.md", "---\ntitle: Start\n---\n\nWillkommen.\n"),
+        ("de/index.md", "---\ntitle: Start\nchildren_depth: direct\n---\n\nWillkommen.\n"),
         ("de/blog/index.md", "---\ntitle: Blog\n---\n\nText.\n"),
         ("de/blog/erster.md", "---\ntitle: Erster\ndate: 2026-10-15\n---\n\n## Anfang\n\nText.\n"),
         ("de/blog/zweiter.md", "---\ntitle: Zweiter\ndate: 2026-10-16\n---\n\nText.\n"),
@@ -129,4 +59,163 @@ fn a_regional_german_tree_keeps_its_region_beside_the_plain_german_one() {
     let root = site.html("about/index.html");
     assert!(root.contains(r#"hreflang="de""#), "plain German alternate: {root}");
     assert!(root.contains(r#"hreflang="de-AT""#), "regional German alternate: {root}");
+}
+
+const EDITION_SITE: &[(&str, &str)] = &[
+    ("index.md", "---\ntitle: Home\n---\n\nText.\n"),
+    ("About.md", "---\ntitle: About\n---\n\nText.\n"),
+    ("Notes/first.md", "---\ntitle: First note\ndate: 2026-01-01\n---\n\nText.\n"),
+    ("Notes/2026/deep.md", "---\ntitle: Deep note\ndate: 2026-01-02\n---\n\nText.\n"),
+    ("de/index.md", "---\ntitle: Start\n---\n\nWillkommen.\n"),
+    ("de/Über.md", "---\ntitle: Über\n---\n\nText.\n"),
+    ("de/Notizen/erste.md", "---\ntitle: Erste Notiz\ndate: 2026-01-01\n---\n\nText.\n"),
+    ("de/Notizen/2026/tiefe.md", "---\ntitle: Tiefe Notiz\ndate: 2026-01-02\n---\n\nText.\n"),
+];
+
+#[test]
+fn an_edition_home_lists_its_whole_tree_and_only_its_own() {
+    let site = Site::new(EDITION_SITE);
+
+    let (_, de) = site.links("de/index.html");
+    assert!(de.contains(&"/de/notizen/erste/".to_string()), "{de:?}");
+    assert!(de.contains(&"/de/notizen/2026/tiefe/".to_string()), "subfolder pages: {de:?}");
+    assert!(de.iter().all(|h| !h.starts_with("/notes") && h != "/about/"), "no root page: {de:?}");
+
+    let (_, root) = site.links("index.html");
+    assert!(root.contains(&"/notes/2026/deep/".to_string()), "{root:?}");
+    assert!(root.iter().all(|h| !h.starts_with("/de/")), "no German page: {root:?}");
+}
+
+#[test]
+fn a_top_level_page_of_an_edition_joins_its_nav_and_leaves_its_listing() {
+    let site = Site::new(EDITION_SITE);
+
+    let (de_nav, de_main) = site.links("de/index.html");
+    assert!(de_nav.iter().any(|h| h.contains("ber/") && h.starts_with("/de/")), "German nav: {de_nav:?}");
+    assert!(de_main.iter().all(|h| !h.contains("ber/")), "not in the German listing: {de_main:?}");
+    assert!(de_nav.iter().all(|h| h != "/about/"), "{de_nav:?}");
+
+    let (en_nav, _) = site.links("index.html");
+    assert!(en_nav.contains(&"/about/".to_string()), "{en_nav:?}");
+    assert!(en_nav.iter().all(|h| !h.starts_with("/de/ber") && !h.starts_with("/de/%C3")), "English nav: {en_nav:?}");
+
+    // The same bar on a deeper German page.
+    let (nested_nav, _) = site.links("de/notizen/erste/index.html");
+    assert!(nested_nav.iter().any(|h| h.starts_with("/de/") && h.contains("ber/")), "{nested_nav:?}");
+}
+
+#[test]
+fn children_depth_direct_keeps_the_narrow_edition_listing() {
+    let mut files = EDITION_SITE.to_vec();
+    files.retain(|(p, _)| *p != "de/index.md");
+    files.push(("de/index.md", "---\ntitle: Start\nchildren_depth: direct\n---\n\nWillkommen.\n"));
+    let site = Site::new(&files);
+
+    let (_, de) = site.links("de/index.html");
+    assert!(de.contains(&"/de/notizen/".to_string()), "the folder card: {de:?}");
+    assert!(de.iter().any(|h| h.contains("ber/")), "the top-level page is listed again: {de:?}");
+    assert!(!de.contains(&"/de/notizen/erste/".to_string()), "{de:?}");
+}
+
+#[test]
+fn a_generated_edition_home_lists_like_a_written_one() {
+    let files: Vec<_> = EDITION_SITE.iter().copied().filter(|(p, _)| *p != "de/index.md").collect();
+    let site = Site::new(&files);
+
+    let (nav, main) = site.links("de/index.html");
+    assert!(main.contains(&"/de/notizen/2026/tiefe/".to_string()), "{main:?}");
+    assert!(main.iter().all(|h| !h.starts_with("/notes") && !h.contains("ber/")), "{main:?}");
+    assert!(nav.iter().any(|h| h.starts_with("/de/") && h.contains("ber/")), "{nav:?}");
+}
+
+#[test]
+fn a_tree_for_the_site_language_does_not_repeat_the_root_nav() {
+    let site = Site::new(&[
+        ("index.md", "---\ntitle: Home\n---\n\nText.\n"),
+        ("About.md", "---\ntitle: About\n---\n\nText.\n"),
+        ("Notes/first.md", "---\ntitle: First\ndate: 2026-01-01\n---\n\nText.\n"),
+        ("en/About.md", "---\ntitle: About again\n---\n\nText.\n"),
+    ]);
+    let (nav, _) = site.links("index.html");
+    assert!(nav.iter().all(|h| !h.starts_with("/en/")), "{nav:?}");
+}
+
+#[test]
+fn on_a_root_that_only_chooses_a_language_the_site_language_tree_is_an_edition_too() {
+    let site = Site::new(&[
+        ("index.md", "---\ntitle: Choose\n---\n\nPick a language.\n"),
+        ("en/index.md", "---\ntitle: Home\n---\n\nHi.\n"),
+        ("en/About.md", "---\ntitle: About\n---\n\nText.\n"),
+        ("en/Posts/A.md", "---\ntitle: A\ndate: 2026-01-01\n---\n\nText.\n"),
+        ("de/index.md", "---\ntitle: Start\n---\n\nHallo.\n"),
+        ("de/Posts/B.md", "---\ntitle: B\ndate: 2026-01-01\n---\n\nText.\n"),
+    ]);
+
+    let (en_nav, en_main) = site.links("en/index.html");
+    assert_eq!(en_nav.first().map(String::as_str), Some("/en/"), "the site name leads to the English home: {en_nav:?}");
+    assert!(en_nav.contains(&"/en/about/".to_string()), "{en_nav:?}");
+    assert!(en_main.contains(&"/en/posts/a/".to_string()), "{en_main:?}");
+
+    let (de_nav, _) = site.links("de/posts/b/index.html");
+    assert!(de_nav.contains(&"/en/".to_string()) && !de_nav.contains(&"/".to_string()), "the switch leads to the English home, not the chooser: {de_nav:?}");
+
+    let (_, root) = site.links("index.html");
+    assert!(root.iter().all(|h| !h.starts_with("/en/")), "the chooser lists no edition's pages: {root:?}");
+}
+
+#[test]
+fn a_root_with_a_page_of_its_own_or_a_single_tree_does_not_only_choose_a_language() {
+    let chooser = [
+        ("index.md", "---\ntitle: Choose\n---\n\nPick a language.\n"),
+        ("footer.md", "Footer.\n"),
+        ("en/index.md", "---\ntitle: Home\n---\n\nHi.\n"),
+        ("en/About.md", "---\ntitle: About\n---\n\nText.\n"),
+        ("de/index.md", "---\ntitle: Start\n---\n\nHallo.\n"),
+    ];
+    let en_home = |files: &[(&str, &str)]| Site::new(files).links("en/index.html").0.first().cloned();
+    assert_eq!(en_home(&chooser).as_deref(), Some("/en/"), "a footer is no page of the root's own");
+
+    let mut with_html = chooser.to_vec();
+    with_html.push(("Imprint.html", "<!doctype html><title>Imprint</title><p>Text.</p>\n"));
+    assert_eq!(en_home(&with_html).as_deref(), Some("/"), "a written HTML page belongs to the root");
+
+    let single: Vec<_> = chooser.iter().copied().filter(|(p, _)| !p.starts_with("de/")).collect();
+    assert_eq!(en_home(&single).as_deref(), Some("/"), "one tree is no choice of language");
+}
+
+fn has_trail(site: &Site, rel: &str) -> bool {
+    site.html(rel).contains("breadcrumb-segment")
+}
+
+fn has_bar(site: &Site, rel: &str) -> bool {
+    site.html(rel).contains(r#"id="nav-links""#)
+}
+
+const ZH_NOTE: &str = "zh-hans/笔记/第一/index.html";
+
+#[test]
+fn another_editions_nav_leaves_a_root_without_nav_items_its_breadcrumb_trail() {
+    let site = Site::new(&[
+        ("index.md", "---\ntitle: Home\n---\n\nText.\n"),
+        ("Notes/first.md", "---\ntitle: First\ndate: 2026-01-01\n---\n\nText.\n"),
+        ("zh-hans/index.md", "---\ntitle: 首页\n---\n\n文字。\n"),
+        ("zh-hans/关于.md", "---\ntitle: 关于\n---\n\n文字。\n"),
+        ("zh-hans/笔记/第一.md", "---\ntitle: 第一\ndate: 2026-01-01\n---\n\n文字。\n"),
+    ]);
+    assert!(has_trail(&site, "notes/first/index.html"), "the root has no nav items, so its pages keep the trail");
+    assert!(!has_bar(&site, "notes/first/index.html"));
+    assert!(has_bar(&site, ZH_NOTE) && !has_trail(&site, ZH_NOTE), "the edition's own top-level page makes its nav");
+}
+
+#[test]
+fn the_roots_nav_leaves_an_edition_without_nav_items_its_breadcrumb_trail() {
+    let site = Site::new(&[
+        ("index.md", "---\ntitle: Home\n---\n\nText.\n"),
+        ("About.md", "---\ntitle: About\n---\n\nText.\n"),
+        ("Notes/first.md", "---\ntitle: First\ndate: 2026-01-01\n---\n\nText.\n"),
+        ("zh-hans/index.md", "---\ntitle: 首页\n---\n\n文字。\n"),
+        ("zh-hans/笔记/第一.md", "---\ntitle: 第一\ndate: 2026-01-01\n---\n\n文字。\n"),
+    ]);
+    assert!(has_bar(&site, "notes/first/index.html") && !has_trail(&site, "notes/first/index.html"));
+    assert!(has_trail(&site, ZH_NOTE), "an edition with no nav items keeps the trail");
 }

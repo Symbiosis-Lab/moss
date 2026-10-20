@@ -411,7 +411,7 @@ pub(super) fn render_page<'d>(
         doc.and_then(|d| d.typesetting.as_deref()), layout_config.typesetting.as_deref(),
     );
     let vertical_typesetting = resolved_typesetting == Some("vertical");
-    let mut chrome = context.chrome.shell_vars(doc, PageFamily::Authored, is_homepage, is_explorer_root_doc(doc, layout_config));
+    let mut chrome = context.chrome.shell_vars(doc, PageFamily::Authored, is_homepage, is_explorer_root_doc(doc, layout_config), site_url);
     // The calendar alternates sit in the head beside the feed's.
     if let Some(d) = doc {
         let head = context.shared.calendar.head_link(d, d.lang);
@@ -522,7 +522,7 @@ pub(super) fn render_page<'d>(
 
             // A home lists its own tree: "" for the root home, `en` for
             // `en/index.html`. `children_source` redirects it elsewhere.
-            let own_tree = crate::build::folder_embed::home_scope(&doc.url_path).0;
+            let own_tree = crate::build::folder_embed::home_defaults(doc).tree;
             let target_folder_path = doc.children_source.as_deref()
                 .map(|r| resolve_children_source_folder_path(r, all_docs))
                 .unwrap_or_else(|| own_tree.to_string());
@@ -1579,20 +1579,6 @@ pub(super) fn render_page<'d>(
                     crate::build::page::meta::escape_html_attr(&url)
                 )
             })
-        },
-        // Gated on is_deployed() like canonical_link above: a relative hreflang
-        // misleads crawlers, so absent is safer than wrong. The helper handles
-        // the empty-translations and host-stripping cases itself.
-        hreflang_links: if site_url.is_deployed() {
-            doc.and_then(|d| crate::build::page::meta::build_hreflang_link_tags(
-                &page_lang_tag,
-                &d.url_path,
-                &d.translations,
-                site_url.as_str(),
-                &layout_config.lang_tag,
-            ))
-        } else {
-            None
         },
         schema_json_ld: crate::build::page::meta::page_json_ld(
             doc, is_article_page, is_homepage, share_card_description_str, &site_title,

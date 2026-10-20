@@ -3,7 +3,7 @@
  *
  * `render_list_with_typesetting` (the auto-generated listing grid) already
  * upgrades a coverless card in a mixed row to a `data-cover="quote"` slot —
- * the page's description, or its title with none — printed on the same
+ * the page's description, or an empty tile with none — on the same
  * surface-filled box every covered sibling's cover occupies, instead of the
  * bare empty `.moss-card-cover.moss-card-no-cover` placeholder
  * (`grid_card.rs::render_item`'s `list_has_covers` doc). Before this fix
@@ -61,12 +61,12 @@ test("a coverless cell in a mixed :::grid gets the quote slot, not the bare plac
   expect(two!.isQuote, 'the coverless card must carry data-cover="quote"').toBe(true);
 
   // The box is genuinely visible: real, positive dimensions (not collapsed
-  // to zero like the auto-listing's subgrid-collapsed track), a printed
-  // fallback — the page's title, since this fixture sets no description —
-  // and a real fill distinguishable from a fully transparent hole.
+  // to zero like the auto-listing's subgrid-collapsed track) and a real fill
+  // distinguishable from a fully transparent hole. With no description it
+  // prints nothing: the title is already the card's title below.
   expect(two!.coverWidth, "the quote box collapsed to zero width").toBeGreaterThan(0);
   expect(two!.coverHeight, "the quote box collapsed to zero height").toBeGreaterThan(0);
-  expect(two!.quoteText).toBe("Card Two");
+  expect(two!.quoteText, "the empty tile must not repeat the card's title").toBeNull();
   expect(
     two!.coverBackground,
     "the quote box has no visible fill against the page background",

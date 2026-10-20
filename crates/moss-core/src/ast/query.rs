@@ -330,7 +330,7 @@ fn find_first_image_in_shortcode<'a>(
     hoisted: &HashMap<String, usize>,
 ) -> Option<&'a Url> {
     match sc {
-        Shortcode::Subscribe(_) | Shortcode::Buttons(_) | Shortcode::Recent(_) | Shortcode::Apply(_) => None,
+        Shortcode::Subscribe(_) | Shortcode::Buttons(_) | Shortcode::Recent(_) => None,
         Shortcode::Gallery(args) => args.items.first().map(|item| &item.src),
         Shortcode::Hero(args) => {
             // Hero overlay walked first; the hero image itself is not

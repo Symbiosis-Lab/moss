@@ -20,6 +20,7 @@
 import { describe, test, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { scanShortcodeBlocks, type ShortcodeBlock } from '../scan.js';
+import { SHORTCODES } from '../contract/shortcodes.generated.js';
 
 interface SummaryNode {
   name: string;
@@ -49,7 +50,7 @@ function countGridCells(text: string, b: ShortcodeBlock): number {
 }
 
 /** The shortcodes the build extracts as typed blocks. */
-const TYPED = new Set(['grid', 'buttons', 'hero', 'gallery', 'subscribe', 'recent', 'apply']);
+const TYPED = new Set(SHORTCODES.map((s) => s.name));
 
 /** The corpus view of a scan: closed typed blocks only. A closed block of any
  *  other name is a wrapper whose contents the build does not list, and an

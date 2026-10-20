@@ -463,8 +463,7 @@ pub(crate) fn unwrap_implicit_figure(block: &mut Block) {
             Shortcode::Subscribe(_)
             | Shortcode::Buttons(_)
             | Shortcode::Gallery(_)
-            | Shortcode::Recent(_)
-            | Shortcode::Apply(_) => {}
+            | Shortcode::Recent(_) => {}
         },
         _ => {}
     }
@@ -2245,14 +2244,13 @@ fn collect_heading_id_slots<'a>(
                 Shortcode::Hero(args) => {
                     collect_heading_id_slots(&mut args.overlay, sink, hoisted, notes, scope.inside_shortcode());
                 }
-                // No block children: Subscribe/Apply bodies must be empty,
+                // No block children: Subscribe bodies must be empty,
                 // Buttons/Gallery carry typed item lists, and Recent's
                 // fallback is unparsed markdown.
                 Shortcode::Subscribe(_)
                 | Shortcode::Buttons(_)
                 | Shortcode::Gallery(_)
-                | Shortcode::Recent(_)
-                | Shortcode::Apply(_) => {}
+                | Shortcode::Recent(_) => {}
             },
             // Deliberately exhaustive, no `_` arm: these carry no block
             // children, and the next `Block` variant that gains a

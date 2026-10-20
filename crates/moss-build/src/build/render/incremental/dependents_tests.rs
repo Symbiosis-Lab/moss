@@ -184,3 +184,25 @@ fn field_is_classified_defaults_unknown_fields_to_unsafe() {
         assert!(!field_is_classified(&d, field), "{field} must stay in the Full fallback");
     }
 }
+
+fn nav_entry(root: &str) -> crate::build::terms::TermNavEntry {
+    let edition = root.split_once('/').map_or("", |(tree, _)| tree).to_string();
+    crate::build::terms::TermNavEntry { root: root.to_string(), label: "Partners".to_string(), weight: None, edition }
+}
+
+#[test]
+fn an_editions_term_nav_entry_moves_only_that_languages_digest() {
+    let mut de = doc("de/konzert/index.html", PageKind::Article);
+    (de.lang, de.edition) = (Language::De, "de".into());
+    let pages = [doc("index.html", PageKind::Folder), de];
+    let digests = |entries: &[crate::build::terms::TermNavEntry]| {
+        let mut globals = BTreeMap::new();
+        fold_term_nav(&mut globals, Language::En, entries, &pages);
+        globals
+    };
+    let both = digests(&[nav_entry("partners"), nav_entry("de/partners")]);
+    let without_de = digests(&[nav_entry("partners")]);
+    assert_eq!(both.keys().collect::<Vec<_>>(), ["de", "en"]);
+    assert_ne!(both["de"], without_de.get("de").cloned().unwrap_or_default(), "the German bar changed");
+    assert_eq!(both["en"], without_de["en"], "the English bar did not");
+}

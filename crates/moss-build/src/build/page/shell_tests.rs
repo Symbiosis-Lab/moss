@@ -762,34 +762,6 @@ fn test_css_hover_hints_are_gated_on_a_hover_capable_device() {
     );
 }
 
-#[test]
-fn test_css_apply_button_check_static_only_on_success() {
-    // Regression guard: the apply button's "Apply"/"申请" label must sit
-    // centred in idle state. The success pill shows the label + checkmark
-    // together (check `position: static`, in flow), but in idle/loading/
-    // error the check must stay out of flow (shared `position: absolute`).
-    // If the `position: static` override is NOT scoped to
-    // [data-state="success"], the invisible in-flow check reserves width
-    // beside the label and shifts it left of centre.
-    assert!(
-        get_css_rule(
-            DEFAULT_CSS,
-            r#".moss-subscribe-form[data-position="apply"][data-state="success"] .moss-btn__check"#,
-        )
-        .map_or(false, |r| r.contains("position: static")),
-        "apply success check must be position: static (in flow, beside the label)",
-    );
-    assert!(
-        get_css_rule(
-            DEFAULT_CSS,
-            r#".moss-subscribe-form[data-position="apply"] .moss-btn__check"#,
-        )
-        .is_none(),
-        "apply check must NOT force position: static across all states — that \
-             reserves width for the invisible check and de-centres the idle label",
-    );
-}
-
 /// Helper to extract CSS rule from media query.
 /// Searches all matching media query blocks, not just the first one.
 fn get_css_rule_in_media(css: &str, media_query: &str, selector: &str) -> Option<String> {
@@ -3840,39 +3812,6 @@ fn grid_scroll_indicator_spacing_only_neutralizes_visible_indicator_margin() {
     // 4px row padding + -4px indicator compensation + 8px inset in a 24px
     // target around an 8px dot = the intended 8px visual gap.
     assert_eq!(4 - 4 + (24 - 8) / 2, 8);
-}
-
-#[test]
-fn long_scroll_indicator_uses_bounded_dynamic_dots() {
-    let rule = get_css_rule(DEFAULT_CSS, ".moss-scroll-dots[data-indicator=\"dynamic\"] button::before")
-        .expect("dynamic scroll indicator CSS rule should exist");
-    assert!(rule.contains("inline-size: 6px"), "got: {rule}");
-    assert!(rule.contains("block-size: 6px"), "got: {rule}");
-    let edge = get_css_rule(
-        DEFAULT_CSS,
-        ".moss-scroll-dots[data-indicator=\"dynamic\"] button.is-edge-start::before",
-    )
-    .expect("dynamic edge-dot CSS rule should exist");
-    assert!(edge.contains("inline-size: 4px"), "got: {edge}");
-    assert!(edge.contains("block-size: 4px"), "got: {edge}");
-    let visible = get_css_rule(
-        DEFAULT_CSS,
-        ".moss-scroll-dots[data-indicator=\"dynamic\"] button.is-visible::before",
-    )
-    .expect("dynamic visible-dot CSS rule should exist");
-    assert!(visible.contains("opacity: 0.85"), "got: {visible}");
-    let current = get_css_rule(
-        DEFAULT_CSS,
-        ".moss-scroll-dots[data-indicator=\"dynamic\"] button[aria-current=\"true\"]::before",
-    )
-    .expect("dynamic current-dot CSS rule should exist");
-    assert!(current.contains("inline-size: 10px"), "got: {current}");
-    assert!(current.contains("block-size: 10px"), "got: {current}");
-    // WebKit rasterizes a scale()d dot at its unscaled size and resamples it,
-    // so small dots came out lumpy on Retina: sizes must be exact, not scaled.
-    for r in [&rule, &edge, &current] {
-        assert!(!r.contains("transform"), "dot sized by transform: {r}");
-    }
 }
 
 #[test]

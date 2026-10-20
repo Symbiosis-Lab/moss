@@ -12,7 +12,9 @@
  * still works. The user lands on the raw-JSON page — ugly but not broken.
  */
 
-import { APPLY_COPY, COPY, langBucket, type ApplyCopy, type Lang, type SubscribeCopy } from './i18n.js';
+import { COPY, langBucket, type Lang, type SubscribeCopy } from './i18n.js';
+
+type StatusKey = 'check-email' | 'already-subscribed' | 'error';
 
 type FormState = 'idle' | 'loading' | 'success' | 'error';
 
@@ -56,14 +58,8 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
 
   const lang: Lang = langBucket(document.documentElement.lang);
   const copy: SubscribeCopy = COPY[lang];
-  const applyCopy: ApplyCopy = APPLY_COPY[lang];
 
-  // Is this an apply form (terminal success, FormData body)?
-  const isApply = form.dataset.position === 'apply';
-  // Does this form opt out of auto-revert? (apply forms set data-revert="false")
-  const revertEnabled = form.dataset.revert !== 'false';
-
-  // Apply copy — Rust already filled these in server-side, but we overwrite
+  // Rust already filled the copy in server-side, but we overwrite
   // anyway so the form matches the page's detected lang when the Rust-emitted
   // lang doesn't match (e.g., a zh-hans article on a mixed-lang site).
   //
@@ -74,10 +70,8 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
   // are `data-position="inline"` now — footer vs inline is a CSS concern — so
   // the override marker, not the position, is what gates the overwrite.)
   const hasButtonOverride = form.dataset.buttonOverride === 'true';
-  if (!isApply && !hasButtonOverride) {
+  if (!hasButtonOverride) {
     input.placeholder = copy.placeholder;
-  }
-  if (!hasButtonOverride && !isApply) {
     const labelEl = btn.querySelector<HTMLElement>('.moss-btn__label');
     if (labelEl) labelEl.textContent = copy.label;
   }
@@ -107,88 +101,51 @@ export function hydrateSubscribeForm(form: HTMLFormElement): void {
       window.setTimeout(() => {
         // Mirror the real success path (status copy + state), so preview
         // shows the same confirmation the live site does.
-        showStatus(form, isApply ? 'received' : 'check-email', copy, applyCopy, isApply);
+        showStatus(form, 'check-email', copy);
         setState(form, 'success', btn);
-        if (revertEnabled) {
-          scheduleAutoRevert(form, input);
-        } else {
-          freezeTerminal(form, btn, applyCopy.labelSuccess);
-        }
+        scheduleAutoRevert(form, input);
       }, 600);
       return;
     }
 
-    // Seam 1: Build the POST body.
-    // - Subscribe forms (data-position != "apply"): keep the original JSON
-    //   {email, scope} payload so the seta /subscribe endpoint (which expects
-    //   JSON) and existing tests are byte-identical.
-    // - Apply forms (data-position = "apply"): use URLSearchParams built from
-    //   FormData so all fields (matters, scope, website honeypot) ride along
-    //   naturally, and the no-JS native form POST uses the same encoding.
-    let fetchBody: BodyInit;
-    let contentType: string;
-    if (isApply) {
-      const formData = new FormData(form);
-      const bodyParams = new URLSearchParams();
-      for (const [k, v] of formData.entries()) {
-        bodyParams.append(k, String(v));
-      }
-      fetchBody = bodyParams;
-      contentType = 'application/x-www-form-urlencoded';
-    } else {
-      const scopeInput = form.querySelector<HTMLInputElement>('input[name="scope"]');
-      const jsonBody: { email: string; scope?: string } = { email };
-      if (scopeInput) {
-        jsonBody.scope = scopeInput.value;
-      }
-      fetchBody = JSON.stringify(jsonBody);
-      contentType = 'application/json';
+    const scopeInput = form.querySelector<HTMLInputElement>('input[name="scope"]');
+    const jsonBody: { email: string; scope?: string } = { email };
+    if (scopeInput) {
+      jsonBody.scope = scopeInput.value;
     }
 
     try {
       const res = await fetch(form.action, {
         method: 'POST',
-        headers: { 'Content-Type': contentType, Accept: 'application/json' },
-        body: fetchBody,
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(jsonBody),
       });
       const data: SubscribeResponse = await res.json().catch(() => ({}));
       if (!res.ok) {
-        showStatus(form, 'error', copy, applyCopy, isApply);
+        showStatus(form, 'error', copy);
         setState(form, 'error', btn);
         return;
       }
-      if (isApply) {
-        showStatus(form, 'received', copy, applyCopy, isApply);
-        setState(form, 'success', btn);
-        // Seam 2: terminal success — disable inputs + swap label, no auto-revert
-        freezeTerminal(form, btn, applyCopy.labelSuccess);
-      } else {
-        const statusKey = data.alreadySubscribed ? 'already-subscribed' : 'check-email';
-        showStatus(form, statusKey, copy, applyCopy, isApply);
-        setState(form, 'success', btn);
-        // Seam 2: auto-revert only when revert is enabled (subscribe forms)
-        if (revertEnabled) {
-          scheduleAutoRevert(form, input);
-        }
-      }
+      showStatus(form, data.alreadySubscribed ? 'already-subscribed' : 'check-email', copy);
+      setState(form, 'success', btn);
+      scheduleAutoRevert(form, input);
     } catch {
-      showStatus(form, 'error', copy, applyCopy, isApply);
+      showStatus(form, 'error', copy);
       setState(form, 'error', btn);
     }
   });
 
-  // Tap the success circle to revert immediately — only for revertable forms.
+  // Tap the success circle to revert immediately.
   btn.addEventListener('click', (e) => {
     if (form.dataset.state !== 'success') return;
     e.preventDefault(); // always prevent submit from re-firing on success
-    if (!revertEnabled) return; // apply forms: success is terminal — just prevent default
     revertToIdle(form, input);
   });
 }
 
 function setState(form: HTMLFormElement, state: FormState, btn?: HTMLButtonElement): void {
   form.dataset.state = state;
-  // Seam 3 a11y: aria-disabled on the button during loading/success so
+  // aria-disabled on the button during loading/success so
   // screen-readers know it's unavailable without visual CSS alone.
   // Resolve the button from the form when not passed — ensures revertToIdle
   // (which omits `btn`) never leaves aria-disabled stale on the live element.
@@ -209,10 +166,8 @@ function setState(form: HTMLFormElement, state: FormState, btn?: HTMLButtonEleme
  */
 function showStatus(
   form: HTMLFormElement,
-  key: 'check-email' | 'already-subscribed' | 'error' | 'received',
+  key: StatusKey,
   copy: SubscribeCopy,
-  applyCopy: ApplyCopy,
-  isApply: boolean,
 ): void {
   const container = form.querySelector<HTMLElement>('.moss-subscribe-status');
   if (!container) return;
@@ -221,36 +176,21 @@ function showStatus(
     const k = span.dataset.copy;
     if (k === key) {
       span.hidden = false;
-      span.textContent = copyFor(key, copy, applyCopy, isApply);
+      span.textContent = copyFor(key, copy);
     } else {
       span.hidden = true;
     }
   });
   container.dataset.state = key;
-  // Seam 3 a11y: on success, focus the status region so screen-readers announce it.
+  // on success, focus the status region so screen-readers announce it.
   // Guard tabIndex — the element needs a non-negative tabIndex (e.g. tabindex="-1")
   // to be programmably focusable; a plain div without one silently ignores focus().
-  if (key === 'check-email' || key === 'already-subscribed' || key === 'received') {
+  if (key === 'check-email' || key === 'already-subscribed') {
     if (container.tabIndex >= 0) container.focus();
   }
 }
 
-function copyFor(
-  key: 'check-email' | 'already-subscribed' | 'error' | 'received',
-  copy: SubscribeCopy,
-  applyCopy: ApplyCopy,
-  isApply: boolean,
-): string {
-  if (isApply) {
-    switch (key) {
-      case 'received':
-        return applyCopy.received;
-      case 'error':
-        return applyCopy.error;
-      default:
-        return '';
-    }
-  }
+function copyFor(key: StatusKey, copy: SubscribeCopy): string {
   switch (key) {
     case 'check-email':
       return copy.checkEmail;
@@ -258,33 +198,6 @@ function copyFor(
       return copy.alreadySubscribed;
     case 'error':
       return copy.error;
-    default:
-      return '';
-  }
-}
-
-/**
- * Freeze the apply form after terminal success: disable all visible inputs,
- * swap the button label to the data-label-success value.
- * No auto-revert is scheduled; the form remains in success state.
- */
-function freezeTerminal(
-  form: HTMLFormElement,
-  btn: HTMLButtonElement,
-  labelSuccess: string,
-): void {
-  // Disable all visible inputs except type=hidden (the scope input).
-  // The website honeypot (type=text) IS included in this sweep — it's harmlessly
-  // disabled alongside the real fields; only type=hidden inputs are excluded.
-  const inputs = form.querySelectorAll<HTMLInputElement>('input:not([type="hidden"])');
-  inputs.forEach((inp) => {
-    inp.disabled = true;
-  });
-  // Swap the label to the success text
-  const labelEl = btn.querySelector<HTMLElement>('.moss-btn__label');
-  if (labelEl) {
-    const successText = labelEl.dataset.labelSuccess ?? labelSuccess;
-    labelEl.textContent = successText;
   }
 }
 

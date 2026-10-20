@@ -421,6 +421,8 @@ fn segment_pages(site_dir: &Path) -> (Vec<SegmentedPage>, usize, usize) {
         Ready(SegmentedPage),
         Unsegmented { rel_path: String, key: u128, source: String },
         Skipped,
+        /// A redirect stub: left out of the walk, not counted as skipped.
+        Stub,
     }
 
     // Taken, not locked for the pass: a concurrent index build finds the map
@@ -451,6 +453,10 @@ fn segment_pages(site_dir: &Path) -> (Vec<SegmentedPage>, usize, usize) {
                     return Slot::Skipped;
                 }
             };
+            // A redirect stub is an old address, not a page to find.
+            if crate::build::feeds::redirects::is_redirect_stub(&source) {
+                return Slot::Stub;
+            }
             let key = xxhash_rust::xxh3::xxh3_128(source.as_bytes());
             let rel_path = rel.to_string_lossy().into_owned();
             match prior.get(&key) {
@@ -458,6 +464,7 @@ fn segment_pages(site_dir: &Path) -> (Vec<SegmentedPage>, usize, usize) {
                 None => Slot::Unsegmented { rel_path, key, source },
             }
         })
+        .filter(|slot| !matches!(slot, Slot::Stub))
         .collect();
     drop(prior);
 

@@ -120,7 +120,7 @@ pub struct SiteConfig {
     pub term_kinds: Vec<crate::build::terms::TermKind>,
     /// The term kinds that asked for a nav-bar entry (`nav = true`), in config
     /// order — `ConfigFile::terms_nav`.
-    pub term_nav: Vec<(String, Option<String>, Option<i32>)>,
+    pub term_nav: Vec<(String, Option<i32>)>,
     /// The `[fields.<name>]` declarations, read once per build; the markdown
     /// pipeline checks each page's frontmatter against them.
     pub field_decls: Vec<moss_core::fields::FieldDecl>,
@@ -146,6 +146,7 @@ impl SiteConfig {
             heading_anchors: self.heading_anchors,
             typesetting: self.typesetting.as_deref(),
             fields: &self.field_decls,
+            lang: &self.lang,
         }
     }
 }

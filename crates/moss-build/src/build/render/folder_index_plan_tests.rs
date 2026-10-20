@@ -17,7 +17,7 @@ fn build(root: &Path) -> (std::path::PathBuf, Vec<ParsedDocument>) {
     let project = crate::build::scan::scan::scan_folder(root.to_str().unwrap()).unwrap();
     let output = root.join(".moss/build.nosync/site");
     fs::create_dir_all(&output).unwrap();
-    let kinds = crate::build::terms::term_kinds(&crate::config::ConfigFile::parse("").unwrap(), Language::En);
+    let kinds = crate::build::terms::term_kinds(&crate::config::ConfigFile::parse("").unwrap(), "en");
     let (_, _, documents, _) = super::super::blocking::generate_blocking_content(
         &crate::vault::paths::VaultRoot::resolve(root), &project, &output,
         None, None, true,
@@ -224,7 +224,7 @@ fn a_build_names_each_empty_folder_it_left_out() {
     let project = crate::build::scan::scan::scan_folder(root.path().to_str().unwrap()).unwrap();
     let output = root.path().join(".moss/build.nosync/site");
     fs::create_dir_all(&output).unwrap();
-    let kinds = crate::build::terms::term_kinds(&crate::config::ConfigFile::parse("").unwrap(), Language::En);
+    let kinds = crate::build::terms::term_kinds(&crate::config::ConfigFile::parse("").unwrap(), "en");
     let recording = std::sync::Arc::new(Recording::default());
     let mut services = crate::types::services::BuildServices::headless();
     services.reporter = recording.clone();

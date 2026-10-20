@@ -205,7 +205,6 @@ where
             }
         }
         Shortcode::Recent(_) => {} // No URLs.
-        Shortcode::Apply(_) => {}  // No URLs.
     }
 }
 
@@ -285,7 +284,7 @@ pub fn for_each_child_sequence(block: &Block, mut f: impl FnMut(&[Block]) -> boo
         Block::Shortcode(Shortcode::Grid(args)) => args.cells.iter().all(|cell| f(cell)),
         Block::Shortcode(Shortcode::Hero(args)) => f(&args.overlay),
         Block::Shortcode(
-            Shortcode::Subscribe(_) | Shortcode::Buttons(_) | Shortcode::Gallery(_) | Shortcode::Recent(_) | Shortcode::Apply(_),
+            Shortcode::Subscribe(_) | Shortcode::Buttons(_) | Shortcode::Gallery(_) | Shortcode::Recent(_),
         ) => true,
         // No block children. Inline children of headings, paragraphs, terms,
         // tables and figures are visited by inline visitors, not block ones.

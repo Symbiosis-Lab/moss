@@ -119,6 +119,145 @@ pub fn lang_tree_prefix(path: &str) -> Option<&str> {
     }
 }
 
+/// The edition a path belongs to: its language tree, or `None` for the default
+/// edition (root paths, and a tree in the site's own language, see
+/// [`is_site_language`]). With `site_lang` `""`, every tree is an edition
+/// ([`root_language`]).
+///
+/// ```
+/// use moss_core::home::edition_of;
+/// assert_eq!(edition_of("de/About.md", "en"), Some("de"));
+/// assert_eq!(edition_of("en/About.md", "en-US"), None);
+/// assert_eq!(edition_of("About.md", "en"), None);
+/// ```
+pub fn edition_of<'a>(path: &'a str, site_lang: &str) -> Option<&'a str> {
+    lang_tree_prefix(path).filter(|tree| !is_site_language(tree, site_lang))
+}
+
+/// Whether a language tree is in the site's own language: the same primary
+/// language, with Chinese split by script, since `zh-hans/` and `zh-hant/` are
+/// two editions while `en/` serves an `en-US` site.
+///
+/// ```
+/// use moss_core::home::is_site_language;
+/// assert!(is_site_language("en", "en-US"));
+/// assert!(is_site_language("zh-hans", "zh-CN"));
+/// assert!(is_site_language("zh-hans", "zh"));
+/// assert!(!is_site_language("zh-hant", "zh-CN"));
+/// assert!(is_site_language("zh-tw", "zh-Hant"));
+/// assert!(!is_site_language("fr", "en"));
+/// assert!(is_site_language("zh-hans", "zh-Hans-HK"));
+/// ```
+pub fn is_site_language(tree: &str, site_lang: &str) -> bool {
+    language_bucket(tree) == language_bucket(site_lang)
+}
+
+/// The language of the default edition: `site_lang`, or `""` when the site
+/// root only chooses a language. That is a site with two or more language
+/// trees and no page outside them, `root_pages` being every page but the
+/// root's home and layout slots. With no root pages for the site language to
+/// own, its tree is an edition like the others.
+///
+/// ```
+/// use moss_core::home::root_language;
+/// assert_eq!(root_language("en", ["en/About.md", "de/Über.md"]), "");
+/// assert_eq!(root_language("en", ["en/About.md", "Events/Concert.md"]), "en");
+/// assert_eq!(root_language("en", ["en/About.md", "en/Posts/A.md"]), "en");
+/// assert_eq!(root_language("en", ["About.md"]), "en");
+/// assert_eq!(root_language("en", [] as [&str; 0]), "en");
+/// ```
+pub fn root_language<'a, 'p>(site_lang: &'a str, root_pages: impl IntoIterator<Item = &'p str>) -> &'a str {
+    let mut trees: Vec<String> = Vec::new();
+    for path in root_pages {
+        let Some(tree) = lang_tree_prefix(path) else { return site_lang };
+        let tree = tree.to_ascii_lowercase();
+        if !trees.contains(&tree) {
+            trees.push(tree);
+        }
+    }
+    if trees.len() > 1 { "" } else { site_lang }
+}
+
+/// A tag's primary language in lower case; Chinese as `zh-hans` or `zh-hant`.
+fn language_bucket(tag: &str) -> String {
+    let tag = tag.to_ascii_lowercase();
+    let mut subtags = tag.split(['-', '_']);
+    let primary = subtags.next().unwrap_or("").to_string();
+    if primary != "zh" {
+        return primary;
+    }
+    // An explicit script wins over the region: zh-Hans-HK is simplified.
+    let rest: Vec<&str> = subtags.collect();
+    let traditional = if rest.contains(&"hans") {
+        false
+    } else {
+        rest.iter().any(|s| matches!(*s, "hant" | "tw" | "hk" | "mo"))
+    };
+    if traditional { "zh-hant".to_string() } else { "zh-hans".to_string() }
+}
+
+/// Which edition of one site each path is in, built once per build from the
+/// site language and the addresses of the site's own pages.
+///
+/// A segment spelled like a language code is an edition only when some page
+/// of the site sits in a tree by that name: a term kind keyed `he` publishes
+/// `/he/…` pages that belong to the default edition.
+///
+/// ```
+/// use moss_core::home::Editions;
+/// let editions = Editions::new("en", ["de/about/index.html", "en/show/index.html", "posts/a/index.html"]);
+/// assert_eq!(editions.of("de/partners/ada/index.html"), "de");
+/// assert_eq!(editions.of("en/show/index.html"), "");
+/// assert_eq!(editions.of("he/ada/index.html"), "");
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Editions {
+    trees: Vec<String>,
+}
+
+impl Editions {
+    pub fn new<'a>(site_lang: &str, page_paths: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut trees: Vec<String> = page_paths
+            .into_iter()
+            .filter_map(|path| edition_of(path, site_lang))
+            .map(str::to_ascii_lowercase)
+            .collect();
+        trees.sort_unstable();
+        trees.dedup();
+        Self { trees }
+    }
+
+    /// The edition `path` is in: its tree in lower case, `""` for the default
+    /// edition.
+    pub fn of(&self, path: &str) -> String {
+        let first = path.split('/').next().unwrap_or("").to_ascii_lowercase();
+        if path.len() > first.len() && self.trees.contains(&first) { first } else { String::new() }
+    }
+}
+
+/// True when `path` sits at the top of its edition: directly at the site root,
+/// or directly inside an edition's language tree (`"de/About.md"`). The default
+/// language's own tree is no edition, so nothing in it is top level.
+///
+/// An edition's top level plays the part the site root plays for the default
+/// language: its pages join that edition's navigation and are left out of that
+/// edition's home listing.
+///
+/// ```
+/// use moss_core::home::is_edition_top_level;
+/// assert!(is_edition_top_level("About.md", "en"));
+/// assert!(is_edition_top_level("de/About.md", "en"));
+/// assert!(!is_edition_top_level("en/About.md", "en"));
+/// assert!(!is_edition_top_level("de/Partners/Ada.md", "en"));
+/// assert!(!is_edition_top_level("posts/hello.md", "en"));
+/// ```
+pub fn is_edition_top_level(path: &str, site_lang: &str) -> bool {
+    match path.split_once('/') {
+        Some((_, rest)) => edition_of(path, site_lang).is_some() && !rest.contains('/'),
+        None => true,
+    }
+}
+
 /// Strip a known language suffix from a file stem.
 ///
 /// Returns the bare stem if the suffix after the last `.` is a recognized

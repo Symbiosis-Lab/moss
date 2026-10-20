@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// A page loaded at the bottom stands on the close before anything has loaded, uncovers scene 4 when the
+// reader scrolls back up (all before boot), and a later jump from scene 2 to the bottom ends on the close.
 import { pathToFileURL } from 'node:url';
 
 const modulePath = process.env.PLAYWRIGHT_MODULE || 'playwright';
@@ -6,85 +8,58 @@ const engines = await import(modulePath.startsWith('/') ? pathToFileURL(modulePa
 const base = new URL(process.argv[2] || 'http://localhost:8080/');
 const assert = (ok, message) => { if (!ok) throw new Error(message); };
 
-async function state(page) {
-  return page.evaluate(() => ({
-    ...window.__state(),
-    y: scrollY,
-    max: document.documentElement.scrollHeight - innerHeight,
-    closing: document.querySelector('#five').classList.contains('on'),
-  }));
-}
+const state = (page) => page.evaluate(() => ({ ...__state(), y: scrollY, rest: __restY(4), closing: document.querySelector('#five').classList.contains('on') }));
+// Wait for a smooth scroll to finish: End reports xf = 1 before the page has arrived.
+const still = (page) => page.evaluate(() => new Promise((done) => {
+  let last = -1, since = performance.now();
+  (function tick() { if (scrollY !== last) { last = scrollY; since = performance.now(); } else if (performance.now() - since > 500) return done(); requestAnimationFrame(tick); })();
+}));
 
-// Desktop is WebKit unless ENGINE says otherwise: the picture follows the page over seconds of frames,
-// and headless Chromium draws this page at about a frame a second, so it would not arrive in time.
+// Desktop runs in WebKit unless ENGINE says otherwise: headless Chromium draws this page at about a
+// frame a second, too slowly for the picture to arrive.
 const engineFor = (test) => process.env.ENGINE || (test.mobile ? 'chromium' : 'webkit');
 let browser;
 try {
-  const results = [];
   for (const test of [
     { name: 'desktop', viewport: { width: 1920, height: 1200 } },
     { name: 'mobile', viewport: { width: 390, height: 844 }, mobile: true },
   ]) {
     browser = await engines[engineFor(test)].launch({ headless: true });
     const page = await browser.newPage({ viewport: test.viewport, isMobile: !!test.mobile, hasTouch: !!test.mobile });
+    // holds the demos back; a demo that takes ten seconds ends the boot, so no longer than this
     await page.route(/\/ui\/(editor|shell)\.html/, async (route) => {
       await new Promise((resolve) => setTimeout(resolve, test.mobile ? 3000 : 8000));
       await route.continue();
     });
-    const url = new URL(base);
-    await page.goto(url.href, { waitUntil: 'commit' });
+    await page.goto(base.href, { waitUntil: 'commit' });
     await page.waitForSelector('#five');
-    if (test.mobile && engineFor(test) === 'webkit') {
-      // Playwright cannot synthesize a wheel in mobile WebKit; test native
-      // document arrival directly. Chromium covers actual wheel input above.
-      await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
-    } else if (test.mobile) {
-      await page.mouse.wheel(0, 10000);
-      await page.mouse.wheel(0, 10000);
-    } else {
-      // Desktop: a wheel notch now moves at most one rest (narrowSnap in the page's script), so
-      // two large wheel deltas no longer reach the close. End is real, trusted input too, and is
-      // the one key, like Home, that still goes all the way, so it still arrives while cold.
-      await page.keyboard.press('End');
-    }
-    // On desktop the picture follows the page to the close: about two seconds of frames, and five or so
-    // while the page is busy with its first captures. The fixture holds the frames back for longer there
-    // (a demo frame that takes ten seconds ends the boot, so not longer than this).
-    if (test.mobile) await page.waitForTimeout(250);
-    else await page.waitForFunction(() => window.__state().xf === 1, null, { timeout: 7000 }).catch(() => {});
+    if (test.mobile) await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+    else await page.keyboard.press('End');
+    await page.waitForFunction(() => window.__state?.().xf === 1, null, { timeout: 20000 });
+    await still(page);
     const cold = await state(page);
-    // the page rests on the close or, a little further, the footer: both are the bottom
-    const bottom = await page.evaluate(() => scrollY >= __restY(4) - 1);
-    assert(!cold.ready && bottom, `${test.name}: fixture delay did not hold cold load at bottom: ${JSON.stringify(cold)}`);
-    assert(cold.shown === 4 && cold.xf === 1 && cold.closing, `${test.name}: closing missing before capture readiness: ${JSON.stringify(cold)}`);
+    assert(!cold.ready && cold.y >= cold.rest - 1, `${test.name}: not cold at the bottom: ${JSON.stringify(cold)}`);
+    assert(cold.shown === 4 && cold.xf === 1 && cold.closing, `${test.name}: the close does not stand before boot: ${JSON.stringify(cold)}`);
 
-    await page.mouse.move(10, 100);
-    await page.mouse.down();
-    // Return to the actual scene 4 rest; footer height differs by viewport and locale.
-    await page.evaluate(() => scrollTo(0, window.__restY(3)));
-    await page.mouse.up();
-    await page.waitForFunction((xf) => window.__state().xf < xf, cold.xf, { timeout: 3000 }).catch(() => {});
-    const coldReverse = await state(page);
-    assert(coldReverse.xf < cold.xf && !coldReverse.closing, `${test.name}: cold reverse did not uncover scene 4: ${JSON.stringify(coldReverse)}`);
-    await page.waitForFunction(() => document.documentElement.dataset.ready === '1', null, { timeout: 20000 });
-    await page.evaluate(() => scrollTo(0, window.__restY(3)));
-    await page.waitForFunction(() => { const s = window.__state(); return s.shown === 3 && s.target === 3 && !s.running; }, null, { timeout: 10000 }).catch(async error => { throw new Error(`${test.name}: return failed ${JSON.stringify(await state(page))}`, {cause:error}); });
+    await page.evaluate(() => scrollTo({ top: __restY(3), behavior: 'instant' }));
+    await page.waitForFunction(() => window.__state().xf < 1, null, { timeout: 5000 }).catch(() => {});
+    const back = await state(page);
+    assert(!back.ready && back.xf < 1 && !back.closing, `${test.name}: scrolling up before boot did not uncover scene 4: ${JSON.stringify(back)}`);
 
-    await page.evaluate(() => scrollTo(0, window.__restY(1)));
-    await page.waitForFunction(() => window.__state().running, null, { timeout: 5000 });
-    await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
-    // A jump to the bottom from scene 2 plays what it passes: a wash for each boundary whose print is
-    // on hand, the live fade for each that has none, and the close itself, each paced in frames. A cold
-    // phone holds no prints of scenes 3 and 4 yet, so it plays four crossings of four frames and a
-    // dissolve, which a software-rendered Chromium at ten frames a second draws in about four seconds.
-    await page.waitForFunction(() => { const s = window.__state(); return s.shown === 4 && s.xf === 1 && !s.running; }, null, { timeout: 8000 }).catch(async error => { throw new Error(`${test.name}: active jump failed ${JSON.stringify(await state(page))}`, {cause:error}); });
-    const activeJoin = await state(page);
-    assert(activeJoin.closing, `${test.name}: closing remained queued behind active join`);
-    results.push({ name: test.name, cold, coldReverse, activeJoin });
-    await page.close();
+    await page.waitForFunction(() => document.documentElement.dataset.ready === '1', null, { timeout: 60000 });
+    await page.waitForFunction(() => { const s = __state(); return s.shown === 3 && s.target === 3 && !s.leg; }, null, { timeout: 40000 })
+      .catch(async () => { throw new Error(`${test.name}: did not return to scene 4: ${JSON.stringify(await state(page))}`); });
+
+    // from scene 2 to the bottom in one jump
+    await page.evaluate(() => scrollTo({ top: __restY(1), behavior: 'instant' }));
+    await page.waitForFunction(() => { const s = __state(); return s.shown === 1 && s.target === 1 && !s.leg; }, null, { timeout: 40000 });
+    await page.evaluate(() => scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' }));
+    await page.waitForFunction(() => { const s = __state(); return s.shown === 4 && s.xf === 1 && !s.leg; }, null, { timeout: 40000 })
+      .catch(async () => { throw new Error(`${test.name}: the jump to the bottom did not end on the close: ${JSON.stringify(await state(page))}`); });
+    assert((await state(page)).closing, `${test.name}: the close is not standing after the jump`);
+    console.log(`${engineFor(test)}: ${test.name}: close stands cold, uncovers on the way up, and follows a jump from scene 2`);
     await browser.close();
   }
-  console.log(JSON.stringify(results, null, 2));
 } finally {
   await browser?.close().catch(() => {});
 }

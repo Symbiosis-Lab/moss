@@ -22,7 +22,7 @@ fn text(s: &str) -> TypedValue {
 }
 
 #[test]
-fn an_eyebrow_holds_its_fields_in_declaration_order_without_a_separator() {
+fn an_eyebrow_holds_its_fields_in_declaration_order_separated_by_a_space() {
     let placed = [
         (decl("kind", FieldKind::Choice, Place::Eyebrow), TypedValue::Choice { value: "Building".into(), label: "Built".into() }),
         (decl("years", FieldKind::Period, Place::Eyebrow), period("1927/1933")),
@@ -30,7 +30,7 @@ fn an_eyebrow_holds_its_fields_in_declaration_order_without_a_separator() {
     let out = draw(&placed, Language::En, None, &no_pages);
     assert_eq!(
         out.eyebrow,
-        "<p class=\"moss-eyebrow\"><span data-field=\"kind\">Built</span><span data-field=\"years\"><time datetime=\"1927/1933\">1927–1933</time></span></p>\n"
+        "<p class=\"moss-eyebrow\"><span data-field=\"kind\">Built</span> <span data-field=\"years\"><time datetime=\"1927/1933\">1927–1933</time></span></p>\n"
     );
     assert_eq!((out.subtitle.as_str(), out.after_masthead().as_str()), ("", ""));
 }

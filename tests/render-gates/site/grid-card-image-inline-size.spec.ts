@@ -37,6 +37,12 @@ import { test, expect, type Page } from "@playwright/test";
 
 const DESKTOP = { width: 1280, height: 900 };
 
+async function pressNextToEnd(page: Page) {
+  const next = page.locator(".moss-scroll-dots-next");
+  for (let i = 0; i < 20 && (await next.getAttribute("aria-disabled")) !== "true"; i++) await next.click();
+  await expect(next).toHaveAttribute("aria-disabled", "true");
+}
+
 /** The card's own inline-axis content size (border-box inline size minus
  * inline padding), and its image's rendered inline-axis size — "inline"
  * meaning whichever physical axis `writing-mode` currently maps it to. */
@@ -348,16 +354,18 @@ test("the fitting scroll row's vertical-typesetting twin also fits at 1280px", a
 // in every state, must be an unscaled square of an even whole-pixel size
 // (which also centers it on whole pixels inside its 24px cell).
 test("a scroll row's page-control dots are unscaled even-pixel squares in every state", async ({ page }) => {
-  await page.goto("/scroll-dots-dynamic/");
+  await page.setViewportSize(DESKTOP);
+  // Settled sizes: the current dot grows over 0.2s, and mid-transition is not a state.
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/scroll-row/");
   const nav = page.locator(".moss-scroll-dots");
-  await expect(nav).toHaveAttribute("data-indicator", "dynamic");
+  await expect(nav).toHaveAttribute("data-indicator", "dots");
   const dots = await nav.evaluate((el) =>
     [...el.querySelectorAll("button")].map((b) => {
       const cs = getComputedStyle(b, "::before");
       return { cls: b.className, current: b.getAttribute("aria-current"), w: cs.width, h: cs.height, t: cs.transform };
     }),
   );
-  expect(dots.some((d) => d.cls.includes("is-edge-end"))).toBe(true);
   expect(dots.some((d) => d.current === "true")).toBe(true);
   for (const d of dots) {
     expect(d.t, `transform on ${JSON.stringify(d)}`).toBe("none");
@@ -383,9 +391,18 @@ for (const vertical of [false, true]) {
     await row.hover();
     await page.mouse.wheel(0, 160);
     await expect.poll(position).toBeGreaterThan(0);
-    const current = page.locator('.moss-scroll-dots button[tabindex="0"]');
-    await current.focus();
-    await page.keyboard.press("End");
+    // The wheel glides; a press made before it lands is undone by it.
+    await expect.poll(async () => {
+      const before = await position();
+      await page.waitForTimeout(100);
+      return (await position()) === before;
+    }).toBe(true);
+    await pressNextToEnd(page);
+    // Clicking scrolls the page to the button, which on a vertical page can
+    // move the row out of view; what matters is that the row reached its end.
+    const end = () => row.evaluate((el, vertical) => vertical ? el.scrollHeight - el.clientHeight : el.scrollWidth - el.clientWidth, vertical);
+    await expect.poll(position).toBeGreaterThanOrEqual((await end()) - 1);
+    await row.scrollIntoViewIfNeeded();
     await expect(row.locator(":scope > *").last()).toBeInViewport();
   });
 }
@@ -413,3 +430,63 @@ test.describe("native touch input", () => {
     });
   }
 });
+
+test("a long row's count keeps one width as it changes, so nothing beside it moves", async ({ page }) => {
+  await page.setViewportSize(DESKTOP);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/scroll-row-count/");
+  const nav = page.locator(".moss-scroll-dots");
+  await expect(nav).toHaveAttribute("data-indicator", "count");
+  const boxes = () =>
+    nav.evaluate((el) =>
+      [".moss-scroll-dots-prev", ".moss-scroll-dots-count", ".moss-scroll-dots-next"].map((s) => {
+        const r = el.querySelector(s)!.getBoundingClientRect();
+        return [r.x, r.width, r.height].map((n) => Math.round(n * 100) / 100);
+      }),
+    );
+  const count = page.locator(".moss-scroll-dots-count > span:first-child");
+  await expect(count).toHaveText("1 / 14");
+  const start = await boxes();
+  const next = page.locator(".moss-scroll-dots-next");
+  await next.click();
+  await expect(count).not.toHaveText("1 / 14");
+  expect(await boxes()).toEqual(start);
+  await pressNextToEnd(page);
+  await expect(count).toHaveText("14 / 14");
+  expect(await boxes()).toEqual(start);
+});
+
+test("mounting a long row's indicator does not push the page below it", async ({ browser, baseURL }) => {
+  const after = async (javaScriptEnabled: boolean) => {
+    const context = await browser.newContext({ baseURL, viewport: DESKTOP, javaScriptEnabled });
+    const page = await context.newPage();
+    await page.goto("/scroll-row-count/");
+    if (javaScriptEnabled) await expect(page.locator(".moss-scroll-dots")).toBeVisible();
+    const y = await page.getByText("After the row.").evaluate((el) => el.getBoundingClientRect().top);
+    await context.close();
+    return y;
+  };
+  expect(await after(true)).toBe(await after(false));
+});
+
+// Here because this site's masthead, at these sizes, is one where measuring
+// across a vertical masthead instead of down it gives a different answer.
+for (const height of [700, 1000]) {
+  test(`a vertical page's masthead settles on one layout at 390x${height}`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height });
+    await page.goto("/scroll-overflow-vertical/");
+    await page.evaluate(() => document.fonts.ready);
+    const states = await page.evaluate(async () => {
+      const content = document.querySelector(".nav-content") as HTMLElement;
+      // The change a resize makes; the split must come back to one answer.
+      content.toggleAttribute("data-nav-split");
+      const seen: boolean[] = [];
+      for (let i = 0; i < 20; i++) {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        seen.push(content.hasAttribute("data-nav-split"));
+      }
+      return seen.slice(5);
+    });
+    expect(new Set(states).size, `split per frame: ${states.join(",")}`).toBe(1);
+  });
+}

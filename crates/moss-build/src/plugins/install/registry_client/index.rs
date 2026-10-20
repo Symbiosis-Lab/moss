@@ -11,6 +11,7 @@
 //! these rules hold on both sides of it.
 
 use serde::{Deserialize, Serialize};
+use specta::Type;
 
 /// The only `schema_version` this client understands. A bump is a breaking
 /// change the design expects never to make; if one ever happens the old URL
@@ -58,6 +59,11 @@ pub struct IndexEntry {
     /// The artifact hash pinned at review time. This is the whole integrity
     /// story: what was reviewed is what installs, wherever it is hosted.
     pub sha256: String,
+    /// The loader's code hash (`bundled::code_hash`) of the unpacked plugin,
+    /// which is not the archive's `sha256`. Absent in indexes published before
+    /// the registry computed it.
+    #[serde(default)]
+    pub code_sha256: Option<String>,
     #[serde(default)]
     pub size_bytes: u64,
     /// The oldest moss that may run this version. Absent means no floor.
@@ -85,6 +91,14 @@ pub struct IndexEntry {
     /// starter without every entry type's fields living on this one struct.
     #[serde(flatten, default)]
     extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// A plugin a starter carries, with the code hash the registry saw in it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Type)]
+pub struct StarterPlugin {
+    pub id: String,
+    pub version: String,
+    pub code_sha256: String,
 }
 
 /// One stop on a starter's guided tour: a label and the page it opens.
@@ -119,6 +133,10 @@ pub struct StarterEntry {
     pub min_moss_version: Option<String>,
     #[serde(default)]
     pub tour: Vec<TourStop>,
+    /// The plugins the starter's `.moss/plugins/` carries. Empty for a starter
+    /// published before the registry listed them.
+    #[serde(default)]
+    pub plugins: Vec<StarterPlugin>,
     pub download_url: String,
     pub sha256: String,
     #[serde(default)]
@@ -440,6 +458,36 @@ mod tests {
              "download_url":"https://example.invalid/x.zip","sha256":"aa","brand_new":42}]}"#;
         let index = accept_index(raw, 0).expect("unknown fields must be ignored");
         assert_eq!(index.plugins().len(), 1);
+    }
+
+    #[test]
+    fn an_index_without_code_hashes_or_starter_plugins_still_parses() {
+        let raw = r#"{"schema_version":1,"serial":3,"entries":[
+            {"type":"plugin","id":"x","display_name":"X","version":"1.0.0",
+             "download_url":"https://example.invalid/x.zip","sha256":"aa"},
+            {"type":"starter","id":"s","display_name":"S","version":"1.0.0",
+             "download_url":"https://example.invalid/s.zip","sha256":"bb"}]}"#;
+        let index = accept_index(raw, 0).expect("today's index shape");
+        assert_eq!(index.find("x").unwrap().code_sha256, None);
+        let starters = index.starters();
+        assert_eq!(starters.len(), 1);
+        assert!(starters[0].plugins.is_empty());
+    }
+
+    #[test]
+    fn code_hashes_and_starter_plugins_are_read_when_published() {
+        let raw = r#"{"schema_version":1,"serial":3,"entries":[
+            {"type":"plugin","id":"x","display_name":"X","version":"1.0.0",
+             "download_url":"https://example.invalid/x.zip","sha256":"aa","code_sha256":"cc"},
+            {"type":"starter","id":"s","display_name":"S","version":"1.0.0",
+             "download_url":"https://example.invalid/s.zip","sha256":"bb",
+             "plugins":[{"id":"x","version":"1.0.0","code_sha256":"cc"}]}]}"#;
+        let index = accept_index(raw, 0).unwrap();
+        assert_eq!(index.find("x").unwrap().code_sha256.as_deref(), Some("cc"));
+        assert_eq!(
+            index.starters()[0].plugins,
+            vec![StarterPlugin { id: "x".into(), version: "1.0.0".into(), code_sha256: "cc".into() }]
+        );
     }
 
     #[test]

@@ -38,8 +38,6 @@ export interface WatercolorPreset {
   recOpen: (t: number) => number;
   /** Plain water added evenly while recording. */
   recRain: (t: number) => number;
-  /** A flooded recording's (the title's) water-over-everything curve. */
-  recFlood: (t: number) => number;
   /** From this fraction of the recording, a wash lighter than `recLight` is left alone; a wash still darker is flushed. */
   recRinseFrom: number;
   /** The flush rate once `recRinseFrom` is reached. */
@@ -69,7 +67,6 @@ export const DEFAULT_PRESET: WatercolorPreset = {
   recStir: (t) => 1.5 * smooth(.25, .9, t),
   recOpen: (t) => smooth(.45, 1.35, t),
   recRain: (t) => .012 * smooth(.45, .7, t) * (1 - smooth(1.4, 1.7, t)),
-  recFlood: (t) => smooth(1, 1.3, t),
   recRinseFrom: 0.9,
   recRinse: 0.02,
   recLight: 0.28,

@@ -1,7 +1,7 @@
 // One pigment simulation on one canvas: its state is texW x texH composition
 // pixels over `divisor`, and `rect()` is where the canvas lies in its parent
-// (in CSS px) -- `draw()`/`play()` size and position the canvas from it every
-// call, since a caller's own layout can grow the print rectangle at runtime.
+// (in CSS px) -- `draw()`/`playSides()` size and position the canvas from it
+// every call, since a caller's own layout can grow the print rectangle at runtime.
 //
 // Internal helpers are left loosely typed: the shape of a recorded frame or a
 // side is private to this file, and only the factory's own options and
@@ -9,9 +9,9 @@
 //
 // Two halves share one factory: the solver proper
 // (setPrints/reset/step/probe/draw/dispose -- the shallow-water film and its
-// display) and recording-and-playback (pair/record/recorded/show/free/play
-// -- each print's dispersion recorded once, then played forward/backward and
-// crossfaded in optical thickness for a transition).
+// display) and recording-and-playback (sceneSide/recordSide/playSides/bake/
+// freeSide -- each scene's dispersion recorded once, then played forward or
+// backward and mixed in optical thickness for a transition).
 import { V, WATER, PIG, MEAN, GROW, PACK, PLAY, buildShowShader } from './shaders.js';
 import { clamp01, smooth, endpointPresence, drain, isDarkPage, parseColour, type Colour } from './math.js';
 import { DEFAULT_PRESET, recordingSteps, recordingFrameCount, type WatercolorPreset } from './preset.js';
@@ -27,7 +27,7 @@ export interface CreateSimOptions {
   texH: number;
   /** The simulation grid is texW/divisor x texH/divisor. */
   divisor: number;
-  /** Where the canvas lies in its parent, in CSS px; read fresh every draw/play call. */
+  /** Where the canvas lies in its parent, in CSS px; read fresh every draw/playSides call. */
   rect: () => Rect;
   /** Defaults to `createPaper()`, the fixed 256x256 generated sheet; the shaders tile at that period, so any other size is refused. */
   paper?: Paper;
@@ -42,6 +42,24 @@ export interface CreateSimOptions {
 }
 
 export interface StepOptions {
+  /** Scales the opening splash (0: the water arrives without one). */
+  splash?: number;
+  /** Scales the film's mixing toward its neighbourhood's and whole film's colour (0: only diffusion between neighbours). */
+  mix?: number;
+  /** The share of suspended pigment lost to the water's depth per step. */
+  dilute?: number;
+  /** Scales the small eddies the pigment rides. */
+  curl?: number;
+  /** How fast the picture-sized billows carry the pigment, in grid cells a step. */
+  flow?: number;
+  /** The billows' smallest wavelength, in grid cells. */
+  flowSize?: number;
+  /** How much faster dense colour runs apart than thin (0: as fast). */
+  bloom?: number;
+  /** A second ring of neighbours this many cells off, so the colour reaches further a step (1: none). */
+  reach?: number;
+  /** The least the pigment diffuses, as a share of the most (0: only as fast as the film moves). */
+  diffuse?: number;
   standing?: boolean;
   open?: number;
   rain?: number;
@@ -51,37 +69,12 @@ export interface StepOptions {
   lift?: number;
 }
 
-export interface PairOptions {
-  dose?: number;
-  stir?: number;
-  rinse?: number;
-  light?: number;
-  lift?: number;
-  flood?: boolean;
-  /** Records one side alone (true: the lower print), for a boundary whose other print is not on hand yet. */
-  only?: boolean | null;
-}
-
-export interface RecordingSide {
-  fwd: boolean;
-  frames: unknown[];
-  n: number;
-  dose: number;
-  stir: number;
-  lift: number;
-  rinse: number;
-  light: number;
-  flood: boolean;
-  skip: boolean;
-  /** Internal bookkeeping, public only because `pair()` returns this type: the tint's stamp when this side began recording. A side whose stamp is not the sim's current one was measured against another tint and counts as unrecorded. */
-  stamp: number;
-}
-
-export interface Pair {
-  sides: [RecordingSide, RecordingSide];
-  /** With a transparent ground and an incoming side that was never recorded: the leg ends on nothing instead of on the incoming print. The outgoing print is exact at p = 0, its pigment is gone (the canvas fully clear) from the middle of the leg on, and nothing of the incoming print is drawn; the host shows its own incoming page from there. Ignored on a paper ground. If the incoming side was recorded, it is drained away unseen. */
-  toNothing?: boolean;
-}
+/** How a scene side's ink lets go. `stir`, `open`, `rain` and `lift` scale the preset's recording schedule (1 leaves it); `liftRamp` is the share of the recording over which the letting go comes up from 15%; `flow` comes up over the first 30% of the recording, and `dilute` is reached by its end from `diluteFrom`; the rest are the `StepOptions` of the same name, applied to every recorded step. */
+export interface SideLook { stir?: number; open?: number; rain?: number; lift?: number; liftRamp?: number; splash?: number; mix?: number; curl?: number; dilute?: number; diluteFrom?: number; diffuse?: number; flow?: number; flowSize?: number; bloom?: number; reach?: number; }
+/** One scene's dispersion, recorded over `foot`'s footprint. Its recording state is the engine's own. */
+export interface SceneSide { readonly print: PrintSource; readonly foot: PrintSource; readonly look: SideLook; }
+/** `print` is the plain print the frame showed when it was baked, and `at` where its envelope stood, folded below the middle: a leg continuing from it holds that envelope until it catches up. */
+export interface BakedSide { baked: true; A: WebGLTexture | null; fb: WebGLFramebuffer; print: PrintSource; at: number; }
 
 export interface WatercolorSim {
   dispose(): void;
@@ -91,18 +84,20 @@ export interface WatercolorSim {
   probe(x: number, y: number): number[][];
   /** `p`, if given, is the position through the leg (0 the outgoing print, 1 the incoming): at either end the canvas shows that print exactly, and the wash's own look fades in over `endpointMargin`. Left out, the full look is drawn. */
   draw(fwd: boolean, cure: number, clearance?: number, p?: number): void;
-  pair(options?: PairOptions): Pair;
-  record(pair: Pair, firstFwd: boolean, budget: number): void;
-  recorded(pair: Pair): boolean;
-  /** Records up to one frame's budget, then plays `p`; returns true while there is more to record. */
-  show(pair: Pair, fromFwd: boolean, p: number): boolean;
-  free(pair: Pair): void;
-  /** p in [0, 1] from the outgoing scene (fromFwd: the lower of the pair) to the incoming; returns whether either side had a frame to show. */
-  play(pair: Pair, fromFwd: boolean, p: number): boolean;
-  /** Changes the tint the wash is drawn against (a theme toggle). A change of more than 1/255 in any channel makes every side recorded so far count as unrecorded: `recorded()` is false, `play()` draws nothing from it and `record()` starts it again, since its pigment was measured against the old colour. A smaller change is ignored. A leg being played cannot be finished across it; hand off to the host's own page first. */
+  /** Changes the tint the wash is drawn against (a theme toggle). A change of more than 1/255 in any channel makes every side recorded so far count as unrecorded: `sideRecorded()` is false, `playSides()` draws nothing from it and `recordSide()` starts it again, since its pigment was measured against the old colour. A smaller change is ignored. A leg being played cannot be finished across it; hand off to the host's own page first. */
   setTint(colour: Colour): void;
   /** Adds a `webglcontextlost` handler; returns an unsubscribe function. The factory listens on the canvas only once the first handler is added, and from then on cancels the event's default action (which is what lets the context be restored). A page may also attach its own listener to the canvas directly. */
   onContextLost(handler: (event: Event) => void): () => void;
+  /** One scene's own dispersion, recorded over `foot`'s footprint: a print covering every scene it may mix with. Its options shape the recording: `dose` charges the print's colour, and `rinse` is the flush per step once the wash is mixed, while its mean pigment is above `light`. */
+  sceneSide(print: PrintSource, foot: PrintSource, options?: { dose?: number; rinse?: number; light?: number; look?: SideLook }): SceneSide;
+  /** Records up to `budget` steps of a scene side. One side records at a time: the sides share the simulation's state. */
+  recordSide(side: SceneSide, budget: number): void;
+  sideRecorded(side: SceneSide): boolean;
+  /** `x` at dissolve `ux` (0 its print, 1 its mixed wash), mixed by `k` into `y` at `uy`; `p` in [0, 1] places the leg's envelope, so at either end the canvas is that end's plain print. A `y` with nothing recorded yet adds nothing to the mix, but the leg still ends on its print. `toNothing`, on a transparent ground, drains the canvas clear from the middle of the leg on, so the host shows its own incoming page; ignored on a paper ground. */
+  playSides(x: SceneSide | BakedSide, ux: number, y: SceneSide | null, uy: number, k: number, p: number, options?: { toNothing?: boolean }): boolean;
+  /** The mix `playSides(x, ux, y, uy, k, p)` draws, kept as optical thickness: a side at its mixed end, to turn a transition toward another scene from where it stands. Played as `x` from at most `at` (`turnAt` resumes there), the frame is unchanged. */
+  bake(x: SceneSide | BakedSide, ux: number, y: SceneSide | null, uy: number, k: number, p: number): BakedSide;
+  freeSide(side: SceneSide | BakedSide): void;
 }
 
 export function createSim(opts: CreateSimOptions): WatercolorSim | null {
@@ -146,7 +141,7 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
   // the texture units and constants every pass shares are set once, at link;
   // per step only the framebuffers, the state textures and the prints change
   const UNITS: Record<string, number> = { uW: 0, uS: 1, uD: 2, uNear: 3, uWhole: 4, uPaper: 8, uSrc: 9, uTgt: 10, uSrcLo: 11, uTgtLo: 12, uSrcFt: 13, uTgtFt: 14,
-    uXa0: 0, uXb0: 1, uXa1: 2, uXb1: 3, uYa0: 4, uYb0: 5, uYa1: 6, uYb1: 7, uXP: 9, uYP: 10, uGrow: 15 };
+    uXa0: 0, uXb0: 1, uXa1: 2, uXb1: 3, uYa0: 4, uYb0: 5, uYa1: 6, uYb1: 7, uXP: 9, uYP: 10, uXA: 11, uGrow: 15 };
   const prog = (fs: string) => { const p = gl.createProgram()!; gl.attachShader(p, compile(gl.VERTEX_SHADER, V)); gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) || 'program link failed');
     const u: Record<string, WebGLUniformLocation | null> = {}; const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); for (let i = 0; i < n; i++) { const nm = gl.getActiveUniform(p, i)!.name; u[nm] = gl.getUniformLocation(p, nm); }
@@ -210,8 +205,25 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
     g.drawImage(cur, 0, 0, w, h); return c; };
   const upload = (t: WebGLTexture, im: TexImageSource) => { gl.bindTexture(gl.TEXTURE_2D, t); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, im); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); };
-  const setPrint = (key: string, im: PrintSource) => { const p = prints[key] || { full: tex(0, 0, gl.CLAMP_TO_EDGE, false), lo: tex(0, 0, gl.CLAMP_TO_EDGE, false), ft: tex(0, 0, gl.CLAMP_TO_EDGE, false) };
-    upload(p.full, im); upload(p.lo, scaled(im, W, H)); upload(p.ft, scaled(im, Math.round(W / 4), Math.round(H / 4))); prints[key] = p; };
+  // Each print is uploaded once and kept by identity, so scene sides recorded against different
+  // prints can be played together; the oldest not bound to a slot goes past PRINTS_KEPT.
+  const PRINTS_KEPT = 10;
+  const printTex = new Map<PrintSource, { full: WebGLTexture; lo: WebGLTexture; ft: WebGLTexture }>();
+  const texOf = (im: PrintSource) => {
+    let p = printTex.get(im);
+    if (p) { printTex.delete(im); printTex.set(im, p); return p; }
+    p = { full: tex(0, 0, gl.CLAMP_TO_EDGE, false), lo: tex(0, 0, gl.CLAMP_TO_EDGE, false), ft: tex(0, 0, gl.CLAMP_TO_EDGE, false) };
+    upload(p.full, im); upload(p.lo, scaled(im, W, H)); upload(p.ft, scaled(im, Math.round(W / 4), Math.round(H / 4)));
+    printTex.set(im, p);
+    for (const [key, old] of printTex) {
+      if (printTex.size <= PRINTS_KEPT) break;
+      if (old === prints.src || old === prints.tgt || key === im) continue;
+      for (const t of [old.full, old.lo, old.ft]) gl.deleteTexture(t);
+      printTex.delete(key);
+    }
+    return p;
+  };
+  const setPrint = (key: string, im: PrintSource) => { prints[key] = texOf(im); };
 
   const bind = (unit: number, t: WebGLTexture) => { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t); };
   const draw = () => gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
@@ -262,9 +274,9 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
     // A `standing` film never dries or takes up, however long it runs; its
     // sheet opens by `open` toward the whole paper while `rain` water is added
     // over it; `rinse` flushes clean water through it and `dose` charges the print's ink.
-    step(fwd, t, cure, stir = 0, tilt = 0, relift = 0, { standing = false, open = 0, rain = 0, rinse = 0, light = preset.recLight, dose = 1, lift = 1 }: StepOptions = {}) {
+    step(fwd, t, cure, stir = 0, tilt = 0, relift = 0, { standing = false, open = 0, rain = 0, rinse = 0, light = preset.recLight, dose = 1, lift = 1, splash: splashK = 1, mix = 1, dilute = 0, curl = 1, diffuse = 0, flow = 0, flowSize = 150, bloom = 0, reach = 1 }: StepOptions = {}) {
       if (!recording) owner = null;
-      const splash = t < preset.tSplash ? 0.05 : 0, mist = t < preset.tSplash + 0.15 ? 0.03 : 0;
+      const splash = t < preset.tSplash ? 0.05 * splashK : 0, mist = t < preset.tSplash + 0.15 ? 0.03 : 0;
       // a hot-air blast: evaporation many times the rate of standing air, which
       // thins the film, drives the rim current and settles the pigment quickly
       const drying = standing ? 0 : smooth(preset.tDry, preset.tDry + 0.4, t);
@@ -286,7 +298,8 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
       gl.uniform1f(pig.u.uTime, t); gl.uniform1f(pig.u.uCure, cure);
       gl.uniform1f(pig.u.uLift, 0.075 * lift); gl.uniform1f(pig.u.uAds, 0.18 * take);
       // the whole film is stirred by the drying current (and by the hand that scrolls), not before
-      gl.uniform1f(pig.u.uMix, 0.06); gl.uniform1f(pig.u.uMixG, 0.005 + 0.025 * Math.max(drying, Math.min(1, stir)));
+      gl.uniform1f(pig.u.uMix, 0.06 * mix); gl.uniform1f(pig.u.uMixG, (0.005 + 0.025 * Math.max(drying, Math.min(1, stir))) * mix);
+      gl.uniform1f(pig.u.uDilute, dilute); gl.uniform1f(pig.u.uCurl, curl); gl.uniform1f(pig.u.uDiffuse, diffuse); gl.uniform1f(pig.u.uFlow, flow); gl.uniform1f(pig.u.uFlowSize, flowSize); gl.uniform1f(pig.u.uBloom, bloom); gl.uniform1f(pig.u.uReach, reach);
       gl.uniform1f(pig.u.uDrying, drying); gl.uniform1f(pig.u.uStir, stir); gl.uniform1f(pig.u.uRelift, relift); gl.uniform1f(pig.u.uRinse, rinse); gl.uniform1f(pig.u.uLight, light); gl.uniform1f(pig.u.uDose, dose);
       draw(); pi = 1 - pi;
     },
@@ -307,80 +320,81 @@ export function createSim(opts: CreateSimOptions): WatercolorSim | null {
       gl.uniform1f(show.u.uClearance, clearance);
       draw();
     },
-    // Mobile transitions. Each print of a boundary is washed out by this same
-    // simulation, over the wet sheet the two prints share, from solid to one
-    // mixed wash -- stopping before the film dries or takes anything up. The
-    // transition plays the outgoing dispersion forward, mixes the two washes,
-    // then plays the incoming dispersion backward, so the next scene gathers
-    // out of its own wash; scrolling back plays the same frames back.
-    // pair() holds a boundary's two recordings, in scene order like the prints.
-    // Options shape the lower print's dispersion only: `dose` charges its
-    // colour (the closing's logos give up more pigment than they show), `lift`
-    // scales how fast its ink lets go, `stir` how far the film is mixed toward
-    // one colour, and `rinse` is the flush per step once the wash is mixed,
-    // while its mean pigment is above `light`: 0 keeps a dark wash whose colour
-    // is the point, and a light of 0 flushes a wash off the sheet. `only` records
-    // one side alone (true: the lower print), for a boundary whose other print
-    // is not on hand yet.
-    pair({ dose = 1, stir = 1, rinse = preset.recRinse, light = preset.recLight, lift = 1, flood = false, only = null }: PairOptions = {}) {
-      return { sides: [true, false].map((fwd) => ({ fwd, frames: [], n: 0, dose: fwd ? dose : 1, stir: fwd ? stir : 1, lift: fwd ? lift : 1, rinse: fwd ? rinse : preset.recRinse, light: fwd ? light : preset.recLight, flood: fwd && flood, stamp: -1, skip: only !== null && fwd !== only })) as unknown as [RecordingSide, RecordingSide] };
-    },
-    // Records up to `budget` steps, the side the transition needs first first:
-    // the two sides share the simulation's state, so one runs at a time.
-    record(pair, firstFwd, budget) {
-      for (const side of firstFwd ? pair.sides : [...pair.sides].reverse()) {
-        if (side.skip) continue;
-        // a recording made against another tint is void; start it again
-        if (!fresh(side) && side.frames.length) freeFrames(side);
-        if (side.n >= REC_STEPS) continue;
-        // anything else that reset or stepped the sheet meanwhile voids a half-made recording
-        if (side.frames.length && owner !== side) freeFrames(side);
-        if (!side.frames.length) {
-          // the reach the sheet grows by belongs to the pair's footprint, the same for both sides
-          if (grownFor !== pair) { gl.viewport(0, 0, W, H); common(grow, true); gl.bindFramebuffer(gl.FRAMEBUFFER, growF); draw(); grownFor = pair; }
-          api.reset(); nStep = 0; owner = side; side.stamp = page.stamp; side.frames.push(keep());
-        }
-        recording = true;
-        while (budget-- > 0 && side.n < REC_STEPS) {
-          const t = side.n * preset.dt;
-          const flood = side.flood ? preset.recFlood(t) : 0;   // an open of 3 reaches past every place's need
-          api.step(side.fwd, t, 0, preset.recStir(t) * side.stir, 0, flood,
-            { standing: true, open: preset.recOpen(t) + 2 * flood, rain: Math.max(preset.recRain(t), .12 * flood), rinse: t >= preset.recRinseFrom ? side.rinse : 0, light: side.light, dose: side.dose, lift: side.lift });
-          if (++side.n % preset.recEvery === 0 || side.n === REC_STEPS) side.frames.push(keep());
-        }
-        recording = false;
-        return;
-      }
-    },
-    recorded(pair) { return pair.sides.every((side) => side.skip || (side.n >= REC_STEPS && fresh(side))); },
     setTint: changeTint,
-    // a frame of a recording on screen: a frame's budget recorded ahead, then p
-    // drawn; true while there is more to record, so the caller comes back
-    show(pair, fromFwd, p) { api.record(pair, fromFwd, preset.stepsPerFrame); api.play(pair, fromFwd, p); return !api.recorded(pair); },
-    free(pair) { for (const side of pair.sides) freeFrames(side); },
-    // p in [0, 1] from the outgoing scene (fromFwd: the lower of the pair) to the incoming.
-    play(pair, fromFwd, p) {
-      const [out, inc] = fromFwd ? pair.sides : [pair.sides[1], pair.sides[0]];
-      // u = 0 is the solid print, u = 1 the mixed wash; a side still being
-      // recorded shows its latest frame
-      const at = (side: any, u: number) => { const n = fresh(side) ? side.frames.length : 0; if (!n) return null;
-        const x = Math.min(clamp01(u) * (REC_FRAMES - 1), n - 1), i = Math.floor(x), j = Math.min(i + 1, n - 1);
-        return { k0: side.frames[i], k1: side.frames[j], f: x - i, print: (side.fwd ? prints.src : prints.tgt)!.full }; };
-      let x: any = at(out, p / preset.playOut), y: any = at(inc, (1 - p) / (1 - preset.playIn)), k = smooth(preset.playOut, preset.playIn, p);
-      // an incoming side with nothing recorded yet shows the outgoing wash, but its print is still the one the leg ends on
-      if (!y) { y = { ...x, print: (out.fwd ? prints.tgt : prints.src)!.full }; k = 0; }
-      if (!x) return false;
-      place();
-      gl.useProgram(play.p);
-      bind(0, x.k0.s); bind(1, x.k0.d); bind(2, x.k1.s); bind(3, x.k1.d);
-      bind(4, y.k0.s); bind(5, y.k0.d); bind(6, y.k1.s); bind(7, y.k1.d);
-      bind(8, paper); bind(9, x.print); bind(10, y.print);
-      setEndpoint(play.u, p, pair.toNothing);
-      gl.uniform1f(play.u.uFx, x.f); gl.uniform1f(play.u.uFy, y.f); gl.uniform1f(play.u.uK, k);
-      draw();
-      return true;
+    // Each scene's print is washed out by this same simulation, over a footprint every scene it may mix
+    // with shares, from solid to one mixed wash -- stopping before the film dries or takes anything up.
+    // A transition plays the outgoing dispersion forward, mixes the two washes, then plays the incoming
+    // dispersion backward, so the next scene gathers out of its own wash; scrolling back plays the same
+    // frames back, and a transition can turn to another scene midway.
+    sceneSide(print, foot, { dose = 1, rinse = preset.recRinse, light = preset.recLight, look = {} } = {}) {
+      return { frames: [], n: 0, dose, rinse, light, stamp: -1, print, foot, look } as unknown as SceneSide;
+    },
+    // Records up to `budget` steps; the sides share the simulation's state, so one runs at a time.
+    recordSide(side, budget) {
+      const s = side as any, { stir = 1, open = 1, rain = 1, lift = 1, liftRamp = 0, flow = 0, dilute = 0, diluteFrom = 0, ...rest } = s.look as SideLook;
+      prints.src = texOf(s.print); prints.tgt = texOf(s.foot);
+      // a recording made against another tint is void; start it again
+      if (!fresh(s) && s.frames.length) freeFrames(s);
+      if (s.n >= REC_STEPS) return;
+      // anything else that reset or stepped the sheet meanwhile voids a half-made recording
+      if (s.frames.length && owner !== s) freeFrames(s);
+      if (!s.frames.length) {
+        if (grownFor !== s.foot) { gl.viewport(0, 0, W, H); common(grow, true); gl.bindFramebuffer(gl.FRAMEBUFFER, growF); draw(); grownFor = s.foot; }
+        api.reset(); nStep = 0; owner = s; s.stamp = page.stamp; s.frames.push(keep());
+      }
+      recording = true;
+      while (budget-- > 0 && s.n < REC_STEPS) {
+        const t = s.n * preset.dt, at = t / preset.recDuration;
+        api.step(true, t, 0, preset.recStir(t) * stir, 0, 0, { ...rest, standing: true, open: preset.recOpen(t) * open, rain: preset.recRain(t) * rain,
+          rinse: t >= preset.recRinseFrom ? s.rinse : 0, light: s.light, dose: s.dose,
+          lift: lift * (liftRamp ? smooth(0, liftRamp, at) * .85 + .15 : 1), flow: flow * smooth(0, .3, at), dilute: dilute * smooth(diluteFrom, 1, at) });
+        if (++s.n % preset.recEvery === 0 || s.n === REC_STEPS) s.frames.push(keep());
+      }
+      recording = false;
+    },
+    sideRecorded(side) { return (side as any).n >= REC_STEPS && fresh(side as any); },
+    // x at dissolve u (0 its print, 1 its mixed wash) mixed by k into y at uy; p places the leg's
+    // envelope, so at p = 0 and p = 1 the canvas is the plain print of x or y.
+    playSides(x, ux, y, uy, k, p, { toNothing = false } = {}) { return drawSides(x, ux, y, uy, k, p, null, toNothing); },
+    // The mix on screen drawn as optical thickness, a side of its own at its mixed end.
+    bake(x, ux, y, uy, k, p) {
+      const A = tex(W, H), fb = fbo([A]), q = envelopeAt(x, p);
+      drawSides(x, ux, y, uy, k, p, fb);
+      return { baked: true, A, fb, print: q >= .5 ? (y ?? x).print : x.print, at: Math.min(q, 1 - q) };
+    },
+    freeSide(side) {
+      if ('baked' in side) { gl.deleteFramebuffer(side.fb); gl.deleteTexture(side.A); side.A = null; return; }
+      freeFrames(side); if (owner === side) owner = null;
     },
     onContextLost,
+  };
+  // a side's frame at dissolve u, the latest recorded where it has not got that far yet
+  const frameAt = (side: any, u: number) => {
+    const n = fresh(side) ? side.frames.length : 0; if (!n) return null;
+    const x = Math.min(clamp01(u) * (REC_FRAMES - 1), n - 1), i = Math.floor(x), j = Math.min(i + 1, n - 1);
+    return { k0: side.frames[i], k1: side.frames[j], f: x - i };
+  };
+  // where the envelope stands at p: a baked x has no plain print of its own, so its leg keeps the envelope it was baked at
+  const envelopeAt = (x: any, p: number) => (x.baked ? Math.max(p, x.at) : p);
+  const drawSides = (x: any, ux: number, y: any, uy: number, k: number, p: number, into: WebGLFramebuffer | null, toNothing = false) => {
+    const X = x.baked ? null : frameAt(x, ux);
+    if (!x.baked && !X) return false;
+    let Y = y ? frameAt(y, uy) : null;
+    if (!Y) { k = 0; Y = X; }
+    if (into) { gl.bindFramebuffer(gl.FRAMEBUFFER, into); gl.viewport(0, 0, W, H); } else place();
+    gl.useProgram(play.p);
+    const xs = X || Y;
+    if (xs) { bind(0, xs.k0.s); bind(1, xs.k0.d); bind(2, xs.k1.s); bind(3, xs.k1.d); }
+    if (Y) { bind(4, Y.k0.s); bind(5, Y.k0.d); bind(6, Y.k1.s); bind(7, Y.k1.d); }
+    // the leg ends on y's print even before y has a frame to mix in
+    const yPrint = texOf((y ?? x).print).full;
+    bind(8, paper); bind(9, texOf(x.print).full); bind(10, yPrint);
+    if (x.baked) bind(11, x.A);
+    setEndpoint(play.u, envelopeAt(x, p), toNothing);
+    gl.uniform1f(play.u.uFx, X ? X.f : 0); gl.uniform1f(play.u.uFy, Y ? Y.f : 0); gl.uniform1f(play.u.uK, k);
+    gl.uniform1f(play.u.uXBaked, x.baked ? 1 : 0); gl.uniform1f(play.u.uRaw, into ? 1 : 0);
+    draw();
+    return true;
   };
   return api;
 }

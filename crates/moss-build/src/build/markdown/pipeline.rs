@@ -368,6 +368,9 @@ pub struct SiteMarkdown<'a> {
     pub typesetting: Option<&'a str>,
     /// The parse cache fingerprint hashes this value, so a changed declaration invalidates cached parses.
     pub fields: &'a [moss_core::fields::FieldDecl],
+    /// The default edition's language as configured, not the interface language it maps to,
+    /// which tells a tree in that language from an edition (`moss_core::home::root_language`).
+    pub lang: &'a str,
 }
 
 /// Math, hard line breaks and heading anchors on — their absent-key answers
@@ -383,6 +386,7 @@ impl Default for SiteMarkdown<'_> {
             heading_anchors: true,
             typesetting: None,
             fields: &[],
+            lang: "en",
         }
     }
 }
@@ -1185,9 +1189,6 @@ pub fn process_markdown_file(
     // legacy `apply_typed_shortcodes` returned.
     let has_inline_subscribe =
         moss_core::ast::has_shortcode_recursive(&doc, moss_core::ast::ShortcodeKind::Subscribe);
-    // Apply-form presence: same mechanism, same asset-injection trigger.
-    let has_inline_apply =
-        moss_core::ast::has_shortcode_recursive(&doc, moss_core::ast::ShortcodeKind::Apply);
     // Callout presence: same mechanism, gating the `callouts` stylesheet
     // partial (`build/emit/stylesheet.rs`) rather than an injected asset.
     let has_callout = moss_core::ast::has_callout_recursive(&doc);
@@ -1276,9 +1277,12 @@ pub fn process_markdown_file(
         label.clone()
     };
 
-    // Detect root-level files (no directory component). Used for the nav
-    // membership check below and for auto-navigation downstream.
-    let is_root_level = !file_path.contains('/');
+    // Top of the page's edition: the site root, or directly inside a language
+    // tree. Feeds the nav membership check below and auto-navigation downstream.
+    // A tree for the site's own language is no separate edition unless the
+    // root only chooses a language: its pages would otherwise repeat the
+    // root's entries in the same nav bar.
+    let is_root_level = moss_core::home::is_edition_top_level(file_path, site.lang);
 
     // A nav page shows its title like any other page. The one exception is a
     // body that opens with its own `# Heading`: that heading is the title, so
@@ -1533,6 +1537,8 @@ pub fn process_markdown_file(
         cover_type: frontmatter.cover_type,
         nav,
         is_root_level,
+        // The final `url_path` is known only once every page is parsed.
+        edition: String::new(),
         // Centralized home-override signal: the ONE place this is derived.
         // Render code (html.rs) reads `doc.is_home_override` instead of
         // re-deriving from `translation_key == "home"`. Same signal that
@@ -1600,7 +1606,6 @@ pub fn process_markdown_file(
         hero_overlay_text,
         features: crate::build::types::PageFeatures {
             inline_subscribe: has_inline_subscribe,
-            inline_apply: has_inline_apply,
             callouts: has_callout,
             footnotes: has_footnotes,
             scroll_rows: has_scroll_row,
@@ -2383,15 +2388,6 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
                     self.media_lookup,
                     self.heading_anchors,
                 ));
-            }
-            moss_core::ast::Shortcode::Apply(args) => {
-                let html = crate::build::features::email::render_inline_apply_form(
-                    self.lang,
-                    args.placeholder.as_deref(),
-                    args.button.as_deref(),
-                    self.seta_base,
-                );
-                out.push_str(&html);
             }
         }
     }

@@ -581,22 +581,6 @@ pub trait RenderHooks {
                 // renderer's responsibility.
                 out.push_str(r#"<div class="moss-recent"></div>"#);
             }
-            Shortcode::Apply(args) => {
-                // Test-harness skeleton; the production renderer in
-                // moss-build's PipelineHooks emits the full form HTML with
-                // the seta action URL and language-specific copy.
-                let placeholder = args.placeholder.as_deref().unwrap_or("your@email.com");
-                out.push_str(r#"<div class="moss-apply">"#);
-                out.push_str(r#"<form class="moss-subscribe-form moss-apply-form" data-position="apply" data-revert="false">"#);
-                out.push_str(r#"<input type="email" placeholder=""#);
-                out.push_str(&escape_attr(placeholder));
-                out.push_str(r#"" />"#);
-                out.push_str("<button>");
-                out.push_str(&escape_text(args.button.as_deref().unwrap_or("申请")));
-                out.push_str("</button>");
-                out.push_str("</form>");
-                out.push_str("</div>");
-            }
         }
     }
 

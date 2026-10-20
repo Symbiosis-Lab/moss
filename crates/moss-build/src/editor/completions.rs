@@ -128,7 +128,12 @@ fn collect_targets(project_path: &str, map: &ArticleMap) -> Vec<Target> {
         }
         let url = ArticleMap::canonical_url(key);
         if seen.insert(url.clone()) {
-            targets.push(Target::Generated { url, display: term.display.clone() });
+            // The same name in two editions is two pages; say which one this is.
+            let display = match crate::build::terms::TermKey::parse(key) {
+                Some(term_key) if !term_key.edition.is_empty() => format!("{} ({})", term.display, term_key.edition),
+                _ => term.display.clone(),
+            };
+            targets.push(Target::Generated { url, display });
         }
     }
     for key in &map.generated {

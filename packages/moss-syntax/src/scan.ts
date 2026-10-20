@@ -141,10 +141,9 @@ const flattenTemplate = (t: string): string => t.replace(/\$\{\d+:([^}]*)\}/g, '
 
 /**
  * The authorable shortcode vocabulary, derived from the generated catalog
- * (Rust SSOT: crates/moss-core/src/contract/shortcodes.rs). Non-authorable
- * kinds (`apply`) parse and render but are never offered to authors, so they
- * are excluded here — this list exists for unknown-name diagnostics and
- * completion, both author-facing.
+ * (Rust SSOT: crates/moss-core/src/contract/shortcodes.rs). Kinds the catalog marks
+ * non-authorable are excluded: this list exists for unknown-name diagnostics
+ * and completion, both author-facing.
  */
 export const KNOWN_SHORTCODES: ReadonlyArray<ShortcodeSpec> = SHORTCODES
   .filter((s) => s.authorable)

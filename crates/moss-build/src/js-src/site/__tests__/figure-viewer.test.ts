@@ -129,6 +129,13 @@ describe("any picture of a page opens in the viewer", () => {
     expect(lightbox().hidden).toBe(true);
   });
 
+  test("the page behind the viewer stops scrolling while it is open, and only then", () => {
+    img("/a.jpg").click();
+    expect(document.documentElement.style.overflow).toBe("hidden");
+    (document.querySelector(".lightbox-close") as HTMLElement).click();
+    expect(document.documentElement.style.overflow).toBe("");
+  });
+
   test("Tab stays inside the open viewer", () => {
     img("/a.jpg").click();
     const close = document.querySelector(".lightbox-close") as HTMLElement;

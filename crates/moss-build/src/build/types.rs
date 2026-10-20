@@ -139,9 +139,14 @@ pub struct ParsedDocument {
     pub media_items: Vec<crate::build::media_collection::MediaItem>,
     /// Whether to show in navigation
     pub nav: Option<bool>,
-    /// Whether source file is at root level (no '/' in path)
-    /// Used for auto-navigation: root-level non-index files default to nav
+    /// Whether the source file is at the top of its edition: the site root, or
+    /// directly inside a language tree. Used for auto-navigation: top-level
+    /// non-index files default to nav, in their own edition's bar.
     pub is_root_level: bool,
+    /// The language edition this page is in (`de`), `""` for the default
+    /// edition: [`moss_core::home::Editions::of`] over the final `url_path`,
+    /// set once the build has every page.
+    pub edition: String,
     /// True iff this document is its folder's home via the `home: true`
     /// frontmatter marker rather than its filename — i.e. it won the home
     /// slot in [`crate::build::scan::page_map::compute_home_overrides`].
@@ -813,10 +818,6 @@ pub struct PageFeatures {
     /// `SUBSCRIBE_JS` + `email.css` even if `[channels.email]` is not
     /// configured.
     pub inline_subscribe: bool,
-    /// True if the page contains a `:::apply` inline shortcode block.
-    /// Causes the same `SUBSCRIBE_JS` + `email.css` injection as
-    /// `inline_subscribe` (subscribe.ts hydrates both forms).
-    pub inline_apply: bool,
     /// True if the page contains an Obsidian-style callout (`> [!note]`),
     /// nested ones included. Gates the `callouts` stylesheet partial via
     /// [`SiteAssets`]. Read from the typed AST

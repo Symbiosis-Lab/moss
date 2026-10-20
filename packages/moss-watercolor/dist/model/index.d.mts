@@ -10,33 +10,27 @@ declare const DEFAULT_PHASE_BOUNDS: PhaseBounds;
 type Phase = 'out' | 'mix' | 'in';
 /** Which of the three phases `p` falls in. */
 declare function phaseOf(p: number, bounds?: PhaseBounds): Phase;
+/** What `playSides` draws at `p`: the outgoing side's dissolve `ux`, the incoming side's `uy`, and the mix `k` between them. */
+declare function legAt(p: number, bounds?: PhaseBounds): {
+  ux: number;
+  uy: number;
+  k: number;
+};
 /**
- * Redirects an in-flight leg to `next` without a visual jump, in the same
- * terms the engine's `play()` draws it: the outgoing side shows its
- * recording at `p / outEnd`, the incoming side at `(1 - p) / (1 - inStart)`
- * (both clamped to [0, 1]), and the two are weighted by
- * `k = smooth(outEnd, inStart, p)`.
+ * Turns a leg toward a third scene from where it stands at `p`, so the frame on screen does not change. The new
+ * leg's outgoing side is `from`, and it continues at the returned `p` toward the new scene:
  *
- * - Outgoing phase (`k = 0`): only the source is on screen, so the source is
- *   kept and the destination swapped silently.
- * - Mix phase with `k < 0.5`: the source still dominates; it is kept and the
- *   destination swapped (the incoming half of the blend changes, which is the
- *   smaller part of the picture).
- * - Mix phase with `k >= 0.5`, or the incoming phase: the old destination
- *   dominates, so it becomes the source. Its recording is at the position
- *   `(1 - p) / (1 - inStart)` the incoming side was showing, which the
- *   outgoing side reaches at `outEnd * ((1 - p) / (1 - inStart))` (the full
- *   recording, `outEnd`, throughout the mix).
+ * - `'x'` while nothing of the incoming side is on screen yet: the leg keeps its outgoing side and `p`.
+ * - `'y'` while the incoming side gathers alone: it becomes the outgoing side, dissolving again from as far as it
+ *   had gathered.
+ * - `'mix'` in between: the host bakes the mix `legAt(p)` describes (`bake`, at `p`) and the leg starts from it,
+ *   at its mixed end.
  *
- * Retargeting back to the leg's own source is the reverse transition: the
- * two ends swap and `p` is mapped so the same picture stays on screen (the
- * outgoing and incoming recordings trade places, and the blend weight
- * becomes `1 - k`).
+ * The bounds must be symmetric (`outEnd = 1 - inStart`).
  */
-declare function retarget<T>(from: T, to: T, p: number, next: T, bounds?: PhaseBounds): {
-  from: T;
-  to: T;
+declare function turnAt(p: number, bounds?: PhaseBounds): {
+  from: 'x' | 'y' | 'mix';
   p: number;
 };
 //#endregion
-export { DEFAULT_PHASE_BOUNDS, Phase, PhaseBounds, phaseOf, retarget };
+export { DEFAULT_PHASE_BOUNDS, Phase, PhaseBounds, legAt, phaseOf, turnAt };

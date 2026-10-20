@@ -41,6 +41,8 @@ fn article(url: &str, body: &str) -> ParsedDocument {
         clean_stem: stem.to_string(),
         kind: PageKind::Article,
         content: body.to_string(),
+        // A site in a language none of these trees is, so `en/` and `de/` are editions.
+        edition: moss_core::home::Editions::new("zh-hans", [url]).of(url),
         ..Default::default()
     }
 }
@@ -363,8 +365,9 @@ fn hosts_are_mapped_to_the_groups_they_actually_read() {
     assert!(!hosts_listing(&article("writings/alpha/index.html", "")), "a plain article hosts nothing");
 }
 
-/// A language home lists its own folder at depth `direct`, with none of the
-/// root home's filters; the root home's key is unchanged beside it.
+/// A language home lists its own tree like the root home does (depth `all`,
+/// both homepage filters), unless it asks for `direct`; the root home's key is
+/// unchanged beside it.
 #[test]
 fn a_language_home_reads_its_own_folder_not_the_root_tree() {
     let mut docs = vault();
@@ -372,7 +375,14 @@ fn a_language_home_reads_its_own_folder_not_the_root_tree() {
 
     let en_home = docs.iter().find(|d| d.url_path == "en/index.html").unwrap();
     let keys = groups_read_by(en_home, &docs).expect("a language home is a modelled shape");
-    assert_eq!(keys, vec![key("en")]);
+    assert_eq!(
+        keys,
+        vec![GroupKey { folder_slug: "en".into(), depth: Depth::All, scope_default_tree: true, exclude_nav: true }]
+    );
+
+    let mut direct = en_home.clone();
+    direct.children_depth = Some("direct".into());
+    assert_eq!(groups_read_by(&direct, &docs).unwrap(), vec![key("en")]);
 
     let home = docs.iter().find(|d| d.url_path == "index.html").unwrap();
     assert_eq!(groups_read_by(home, &docs).unwrap(), vec![root_key()]);
@@ -527,4 +537,41 @@ fn a_root_level_document_is_never_a_series_member() {
     // parent folder two levels up, the same shape `render/html.rs`'s own
     // series-nav block checks before it looks anything up.
     assert!(!is_series_member(&about, &docs));
+}
+
+/// A German and a root page both name the same person: each term page is its
+/// own group, and an edit to one page moves only its own edition's digest.
+#[test]
+fn an_edit_moves_only_the_term_group_of_its_own_edition() {
+    let mut docs = vec![
+        article("en-post/index.html", "Root lede."),
+        article("de/de-post/index.html", "German lede."),
+        folder("authors/ada/index.html"),
+        folder("de/authors/ada/index.html"),
+    ];
+    docs[0].author = vec!["Ada".into()];
+    docs[1].author = vec!["Ada".into()];
+    let kinds = vec![crate::build::terms::TermKind {
+        cards: false,
+        key: "authors".into(),
+        fields: vec!["author".into()],
+        title: "Authors".into(),
+        titles: Vec::new(), is_place: false,
+        parents: Default::default(),
+        explorer: None,
+        line: None,
+    }];
+    crate::build::terms::derive_terms(&mut docs, kinds);
+    let (en, de) = (key("authors/ada"), key("de/authors/ada"));
+    let (en_before, de_before) = (digest(&docs, &en), digest(&docs, &de));
+
+    let mut german_edited = docs.clone();
+    german_edited[1].content = "A rewritten German lede.".into();
+    assert_eq!(digest(&german_edited, &en), en_before, "the root term page is untouched");
+    assert_ne!(digest(&german_edited, &de), de_before, "the German term page lists the edited page");
+
+    let mut root_edited = docs.clone();
+    root_edited[0].content = "A rewritten root lede.".into();
+    assert_ne!(digest(&root_edited, &en), en_before);
+    assert_eq!(digest(&root_edited, &de), de_before);
 }

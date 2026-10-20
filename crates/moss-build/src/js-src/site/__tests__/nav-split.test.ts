@@ -66,6 +66,23 @@ describe("initNavSplit — which mastheads it manages", () => {
     expect(navContent().hasAttribute("data-nav-split")).toBe(false);
   });
 
+  test("a vertical masthead is measured down its column, not across it", () => {
+    renderMasthead(`<a href="/" class="site-name">My Site</a>`, `<a href="/blog/">Blog</a>`);
+    navContent().style.writingMode = "vertical-rl";
+    // Room for everything down the column, none across it.
+    const sizes = (el: Element, width: number, height: number) => {
+      Object.defineProperty(el, "offsetWidth", { value: width });
+      Object.defineProperty(el, "offsetHeight", { value: height });
+    };
+    Object.defineProperty(navContent(), "clientWidth", { value: 40 });
+    Object.defineProperty(navContent(), "clientHeight", { value: 600 });
+    sizes(document.querySelector(".site-name")!, 30, 150);
+    sizes(document.querySelector(".nav-links a")!, 30, 80);
+    sizes(document.querySelector(".nav-icons")!, 36, 36);
+    initNavSplit();
+    expect(navContent().hasAttribute("data-nav-split")).toBe(false);
+  });
+
   test("in jsdom every width is 0, so a plain-name masthead fits and stays unsplit", () => {
     renderMasthead(`<a href="/" class="site-name">My Site</a>`, `<a href="/blog/">Blog</a>`);
     initNavSplit();

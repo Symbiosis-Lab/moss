@@ -1489,11 +1489,11 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         kind: "standalone",
         parent: "",
         data_attrs: &[],
-        example_html: r#"<p class="moss-eyebrow"><span data-field="kind">Built</span><span data-field="years"><time datetime="1927/1933">1927–1933</time></span></p>"#,
+        example_html: r#"<p class="moss-eyebrow"><span data-field="kind">Built</span> <span data-field="years"><time datetime="1927/1933">1927–1933</time></span></p>"#,
         example_markdown: "",
         status: Status::Emerging,
         since: "1",
-        description: "A small line above the page title holding every declared field whose `place` is `eyebrow`, in declaration order, one `<span data-field>` each. The separator between spans is drawn by the stylesheet from `--moss-eyebrow-separator`, so the markup carries no separator text. Emitted only on a page that has a value for such a field.",
+        description: "A small line above the page title holding every declared field whose `place` is `eyebrow`, in declaration order, one `<span data-field>` each. The spans are separated by a single space, so the fields stay separate words in the page's text; the visible separator is drawn by the stylesheet from `--moss-eyebrow-separator` and absorbs that space. Emitted only on a page that has a value for such a field.",
     },
     ComponentEntry {
         class: "moss-subtitle",
@@ -1812,9 +1812,9 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         data_attrs: &[
             DataAttr {
                 name: "data-position",
-                values: &["inline", "apply"],
+                values: &["inline"],
                 default: "inline",
-                description: "Placement/behavior variant. All moss-hosted subscribe forms are `inline` (the auto-injected footer form and the `:::subscribe` shortcode emit identical HTML — footer vs in-page styling keys on the `footer` ancestor in CSS, not this attribute). `apply` marks the `:::apply` form (terminal success, FormData body).",
+                description: "Placement/behavior variant. All moss-hosted subscribe forms are `inline` (the auto-injected footer form and the `:::subscribe` shortcode emit identical HTML — footer vs in-page styling keys on the `footer` ancestor in CSS, not this attribute).",
             },
             DataAttr {
                 name: "data-button-override",
@@ -1893,90 +1893,6 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         status: Status::Emerging,
         since: "0",
         description: "Standalone subscribe landing page surface (larger variant).",
-    },
-    // -------------------------------------------------------------------
-    // Apply form (membership / contributor application).
-    // -------------------------------------------------------------------
-    ComponentEntry {
-        class: "moss-apply",
-        kind: "standalone",
-        parent: "",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-apply" data-state="idle">
-  <form class="moss-subscribe-form moss-apply-form">...</form>
-</div>"#,
-        example_markdown: ":::apply\n:::\n",
-        status: Status::Emerging,
-        since: "0",
-        description: "Apply / membership-request form block (:::apply shortcode).",
-    },
-    ComponentEntry {
-        class: "moss-apply-form",
-        kind: "instance",
-        parent: "moss-apply",
-        data_attrs: &[
-            DataAttr {
-                name: "data-position",
-                values: &["apply"],
-                default: "apply",
-                description: "Position variant; always `apply` for this form. Drives CSS layout in email.css.",
-            },
-            DataAttr {
-                name: "data-revert",
-                values: &["false"],
-                default: "false",
-                description: "When `false`, success is terminal (no auto-revert). subscribe.ts reads this.",
-            },
-        ],
-        example_html: r#"<form class="moss-subscribe-form moss-apply-form" data-position="apply" data-revert="false">...</form>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "0",
-        description: "Form element inside `.moss-apply`. Also carries `.moss-subscribe-form` so subscribe.ts hydrates it.",
-    },
-    ComponentEntry {
-        class: "moss-apply-matters",
-        kind: "instance",
-        parent: "moss-apply",
-        data_attrs: &[],
-        example_html: r#"<input type="text" name="matters" class="moss-input moss-apply-matters">"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "0",
-        description: "Second apply-form input inside `.moss-apply-form` — a Matters username OR a one-line pitch (placeholder-only, no visible label).",
-    },
-    ComponentEntry {
-        class: "moss-apply-hp",
-        kind: "instance",
-        parent: "moss-apply",
-        data_attrs: &[],
-        example_html: r#"<input type="text" name="website" class="moss-apply-hp" tabindex="-1" aria-hidden="true">"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "0",
-        description: "Honeypot field (off-screen) inside `.moss-apply-form`. Bots fill it; humans don't.",
-    },
-    ComponentEntry {
-        class: "moss-apply-status",
-        kind: "instance",
-        parent: "moss-apply",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-subscribe-status moss-apply-status" aria-live="polite">...</div>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "0",
-        description: "Status region inside `.moss-apply-form` (also carries `.moss-subscribe-status`).",
-    },
-    ComponentEntry {
-        class: "moss-apply-helper",
-        kind: "instance",
-        parent: "moss-apply",
-        data_attrs: &[],
-        example_html: r#"<p class="moss-apply-helper" id="moss-apply-email-help">用于获取邀请及 mosspub.com 托管服务</p>"#,
-        example_markdown: "",
-        status: Status::Emerging,
-        since: "0",
-        description: "Helper text line beneath each field in `.moss-apply-form` (referenced by the field's aria-describedby). Internal — not part of the public component contract.",
     },
     // -------------------------------------------------------------------
     // Series navigation (prev/next + collection links).
@@ -3453,48 +3369,109 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         class: "moss-scroll-dots",
         kind: "container",
         parent: "",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-scroll-dots" role="group" aria-label="Related articles">
-  <button type="button" aria-label="1 / 8" class="is-visible" aria-current="true"></button>
-  <button type="button" aria-label="2 / 8" class="is-visible"></button>
-  …
+        data_attrs: &[
+            DataAttr {
+                name: "data-indicator",
+                values: &["dots", "count"],
+                default: "dots",
+                description: "`dots` for a row of up to seven cards, one dot each; `count` for a longer row, which shows the current card's number and ‹ › buttons instead.",
+            },
+            DataAttr {
+                name: "data-current",
+                values: &[],
+                default: "",
+                description: "The current card's 1-based number: the first card in view, or the last card once the last card is in view. Updated as the row scrolls, together with `data-first`, `data-last` and the `moss-scroll-position` event the row fires whenever any of them changes (`detail`: `current`, `first`, `last`, `count`), which a theme can use to draw its own indicator.",
+            },
+            DataAttr {
+                name: "data-first",
+                values: &[],
+                default: "",
+                description: "The 1-based number of the first card in view.",
+            },
+            DataAttr {
+                name: "data-last",
+                values: &[],
+                default: "",
+                description: "The 1-based number of the last card in view.",
+            },
+            DataAttr {
+                name: "data-count",
+                values: &[],
+                default: "",
+                description: "How many cards the row holds.",
+            },
+        ],
+        example_html: r#"<div class="moss-scroll-dots" role="group" aria-label="Related articles" data-indicator="count" data-count="12" data-current="4" data-first="4" data-last="6">
+  <button type="button" class="moss-scroll-dots-prev" aria-label="Previous" aria-disabled="false">‹</button>
+  <span class="moss-scroll-dots-count"><span>4 / 12</span><span class="moss-scroll-dots-count-size" aria-hidden="true">12 / 12</span></span>
+  <button type="button" class="moss-scroll-dots-next" aria-label="Next" aria-disabled="false">›</button>
+  <span class="visually-hidden" aria-live="polite"></span>
 </div>"#,
         example_markdown: ":::grid 3 {scroll label=\"Related articles\"}\n…\n:::",
         status: Status::Emerging,
         since: "1",
-        description: "Position dots after a `:::grid N {scroll}` row, one per card. Added by the `scroll-row` runtime script, never by the build, so a page without scripts keeps the plain scrolling row. Cards in view carry `.is-visible`; the first of them is `aria-current`. Hidden when the row has nothing to scroll, and in print.",
+        description: "Position indicator after a `:::grid N {scroll}` row. Added by the `scroll-row` runtime script, never by the build, so a page without scripts keeps the plain scrolling row. Up to seven cards it holds one dot per card (cards in view carry `.is-visible`, the first of them `aria-current`); a longer row gets a count and ‹ › buttons that move one view. A theme can hide it for one row and draw its own from the row's `moss-scroll-position` event. Hidden when the row has nothing to scroll, and in print.",
     },
     ComponentEntry {
         class: "moss-scroll-dots-viewport",
         kind: "container",
         parent: "moss-scroll-dots",
         data_attrs: &[],
-        example_html: r#"<div class="moss-scroll-dots" role="group" aria-label="Related articles" data-indicator="dynamic">
+        example_html: r#"<div class="moss-scroll-dots" role="group" aria-label="Related articles" data-indicator="dots">
   <div class="moss-scroll-dots-viewport">
-    <div class="moss-scroll-dots-track">…</div>
-  </div>
-</div>"#,
-        example_markdown: ":::grid 3 {scroll label=\"Related articles\"}\n…\n:::",
-        status: Status::Emerging,
-        since: "1",
-        description: "Clipping wrapper directly inside `.moss-scroll-dots`, around `.moss-scroll-dots-track`. `overflow: hidden` crops the track to what's visible and `touch-action: pan-y` reserves the horizontal gesture for the pointer-driven scrub instead of ceding it to page panning. In dynamic mode (`data-indicator=\"dynamic\"` on the ancestor, more than ten cards) it also fixes its `inline-size` to exactly seven dot-slots so a longer set of dots slides through a stable window; in the plain `dots` mode it sizes to its content and shows every dot. Added by the `scroll-row` runtime script, never by the build.",
-    },
-    ComponentEntry {
-        class: "moss-scroll-dots-track",
-        kind: "container",
-        parent: "moss-scroll-dots-viewport",
-        data_attrs: &[],
-        example_html: r#"<div class="moss-scroll-dots-viewport">
-  <div class="moss-scroll-dots-track">
-    <button type="button" aria-label="1 / 8" class="is-visible" aria-current="true"></button>
-    <button type="button" aria-label="2 / 8" class="is-visible"></button>
+    <button type="button" aria-label="1 / 5" class="is-visible" aria-current="true"></button>
+    <button type="button" aria-label="2 / 5" class="is-visible"></button>
     …
   </div>
 </div>"#,
         example_markdown: ":::grid 3 {scroll label=\"Related articles\"}\n…\n:::",
         status: Status::Emerging,
         since: "1",
-        description: "Flex row of dot buttons inside `.moss-scroll-dots-viewport`. Slides via `transform: translateX()` driven by the `--moss-scroll-dot-start` custom property the script sets on navigation, over a 0.22s transition — suppressed while the reader is actively dragging (`.moss-scroll-dots[data-scrubbing]` on the ancestor, so the track tracks the pointer 1:1) or under `prefers-reduced-motion: reduce`. Added by the `scroll-row` runtime script, never by the build.",
+        description: "The row of dot buttons inside a `dots` indicator. `touch-action: pan-y` keeps a horizontal drag across the dots for scrubbing through the cards instead of panning the page. Added by the `scroll-row` runtime script, never by the build.",
+    },
+    ComponentEntry {
+        class: "moss-scroll-dots-count",
+        kind: "instance",
+        parent: "moss-scroll-dots",
+        data_attrs: &[],
+        example_html: r#"<span class="moss-scroll-dots-count"><span>4 / 12</span><span class="moss-scroll-dots-count-size" aria-hidden="true">12 / 12</span></span>"#,
+        example_markdown: ":::grid 3 {scroll label=\"Related articles\"}\n…\n:::",
+        status: Status::Emerging,
+        since: "1",
+        description: "The current card's number and the total, in a `count` indicator, with tabular figures. A button press also announces the card it reached in a live region. Added by the `scroll-row` runtime script.",
+    },
+    ComponentEntry {
+        class: "moss-scroll-dots-count-size",
+        kind: "instance",
+        parent: "moss-scroll-dots-count",
+        data_attrs: &[],
+        example_html: r#"<span class="moss-scroll-dots-count-size" aria-hidden="true">12 / 12</span>"#,
+        example_markdown: ":::grid 3 {scroll label=\"Related articles\"}\n…\n:::",
+        status: Status::Emerging,
+        since: "1",
+        description: "The count's widest value, set invisibly in the same grid cell as the visible number so the count keeps one width as the number changes and nothing beside it moves. Added by the `scroll-row` runtime script.",
+    },
+    ComponentEntry {
+        class: "moss-scroll-dots-prev",
+        kind: "instance",
+        parent: "moss-scroll-dots",
+        data_attrs: &[],
+        example_html: r#"<button type="button" class="moss-scroll-dots-prev" aria-label="Previous" aria-disabled="true">‹</button>"#,
+        example_markdown: ":::grid 3 {scroll label=\"Related articles\"}\n…\n:::",
+        status: Status::Emerging,
+        since: "1",
+        description: "Moves a `count` row back one view. `aria-disabled=\"true\"` at the start of the row, so it keeps its place in the tab order. Added by the `scroll-row` runtime script.",
+    },
+    ComponentEntry {
+        class: "moss-scroll-dots-next",
+        kind: "instance",
+        parent: "moss-scroll-dots",
+        data_attrs: &[],
+        example_html: r#"<button type="button" class="moss-scroll-dots-next" aria-label="Next" aria-disabled="false">›</button>"#,
+        example_markdown: ":::grid 3 {scroll label=\"Related articles\"}\n…\n:::",
+        status: Status::Emerging,
+        since: "1",
+        description: "Moves a `count` row forward one view. `aria-disabled=\"true\"` once the last card is current. Added by the `scroll-row` runtime script.",
     },
     ComponentEntry {
         class: "moss-col-right",
@@ -4919,29 +4896,11 @@ pub const COMPONENTS: &[ComponentEntry] = &[
     },
 ];
 
-/// Implementation classes that are emitted by moss for internal functionality
-/// but must not appear in the public theme-facing contract (`moss describe` /
-/// the generated contract documentation). These classes ARE present in `COMPONENTS` for
-/// the sync-test to validate their HTML class literals, but `is_public()` hides
-/// them from agents, themes, and `reference.md` generation.
-const INTERNAL_CLASSES: &[&str] = &[
-    "moss-apply",
-    "moss-apply-form",
-    "moss-apply-matters",
-    "moss-apply-hp",
-    "moss-apply-status",
-    "moss-apply-helper",
-];
-
 impl ComponentEntry {
-    /// True for entries that belong in the public, agent/theme-facing surface.
-    /// v1 rule: not retired AND not an internal implementation class.
-    ///
-    /// Internal classes (e.g. all `moss-apply*`) stay in COMPONENTS so the
-    /// sync-test can validate them, but they must not surface in `moss describe`
-    /// or the generated contract documentation — they are subject to change at any time.
+    /// True for entries that belong in the public, agent/theme-facing surface:
+    /// everything not retired.
     pub fn is_public(&self) -> bool {
-        self.status != Status::Retired && !INTERNAL_CLASSES.contains(&self.class)
+        self.status != Status::Retired
     }
 }
 
@@ -4954,28 +4913,4 @@ pub fn retired_class_names() -> impl Iterator<Item = &'static str> {
     COMPONENTS.iter()
         .filter(|e| e.status == Status::Retired)
         .map(|e| e.class)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Orphan-gate: every class in `INTERNAL_CLASSES` must exist as a `class`
-    /// in `COMPONENTS`. If a class is renamed in the emitter *and* in
-    /// `INTERNAL_CLASSES` but forgotten in `COMPONENTS`, it would silently
-    /// re-enter the public contract surface (`is_public()` only hides known
-    /// internals). This test prevents that gap.
-    #[test]
-    fn every_internal_class_has_a_components_entry() {
-        let component_classes: std::collections::HashSet<&'static str> =
-            COMPONENTS.iter().map(|e| e.class).collect();
-        for &internal in INTERNAL_CLASSES {
-            assert!(
-                component_classes.contains(internal),
-                "INTERNAL_CLASSES entry '{}' has no matching entry in COMPONENTS — \
-                 add a ComponentEntry for it or remove it from INTERNAL_CLASSES",
-                internal
-            );
-        }
-    }
 }

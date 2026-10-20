@@ -67,11 +67,6 @@ async function swipe(page, fromY, toY, steps = 6) {
 }
 const mobileState = (page) => page.evaluate(() => ({
   y: scrollY,
-  max: document.documentElement.scrollHeight - innerHeight,
-  progress: __state().progress,
-  xf: +xfAt().toFixed(3),
-  renderedXf: __state().xf,
-  target: __state().target,
   snap: getComputedStyle(document.documentElement).scrollSnapType,
   mobileSnap: document.documentElement.hasAttribute('data-mobile-snap'),
   writes: window.__landingScrollWrites.length,
@@ -113,74 +108,99 @@ async function checkOpening(viewport) {
   return { viewport, startGap: +start.gap.toFixed(1), travel: +distance.toFixed(1), titleTravel: +(start.title.top - moved.title.top).toFixed(1), movedVisualTop: +moved.visual.top.toFixed(1) };
 }
 
-// The browser scrolls a wheel off the main thread, and scrollY shows it a frame or more later
-// (longer while a wash keeps the page busy). So a wheel is followed by a wait for the page to
-// have moved and come to a stop, not by a fixed pause. A page that never moves is reported by
-// the assertion after the read.
+// The browser scrolls a wheel off the main thread, so a wheel is followed by a wait for the page to
+// have moved and come to a stop, not by a fixed pause.
 async function wheel(page, delta) {
   const from = await page.evaluate(() => scrollY);
   await page.mouse.wheel(0, delta);
   if (Math.abs(delta) > 1) await page.waitForFunction((y) => Math.abs(scrollY - y) > 1, from, { timeout: 5000 }).catch(() => {});
   for (let last = NaN, y = await page.evaluate(() => scrollY), n = 0; y !== last && n < 40; n++) { last = y; await page.waitForTimeout(100); y = await page.evaluate(() => scrollY); }
 }
+const wheelTo = async (page, scene) => wheel(page, await page.evaluate((s) => __restY(s) - scrollY, scene));
+const settled = (page, scene) => page.waitForFunction((s) => { const st = __state(); return st.shown === s && !st.leg; }, scene, { timeout: 40000 });
+const quiet = (page) => page.evaluate(async () => {
+  const seen = new Set(), t0 = performance.now(), y = scrollY;
+  while (performance.now() - t0 < 1500) { await new Promise(requestAnimationFrame); const s = __state(); seen.add(`${s.shown}/${s.target}/${s.running}`); }
+  return { seen: [...seen], moved: scrollY - y, writes: window.__landingScrollWrites.length };
+});
+// Scrolls until the next scene's copy has crossed `q` of the pinned visual.
+async function toInk(page, scene, q) {
+  for (let i = 0; i < 4; i++) {
+    const delta = await page.evaluate(({ scene, q }) => { const t = scenesEl[scene].firstElementChild; const band = mobileVisualBand(), r = t.getBoundingClientRect(); return r.top - (band.bottom - q * (band.height + r.height)); }, { scene, q });
+    if (Math.abs(delta) < 4) break;
+    await wheel(page, delta);
+  }
+  await page.waitForTimeout(250);
+}
 
-async function checkSceneTiming() {
+// The picture chases the scene being read and finishes after the reader stops.
+async function checkChase() {
   const page = await mobilePage();
-  const read = () => page.evaluate(() => {
-    const text = document.querySelector('#c2 .scene-text').getBoundingClientRect();
-    const band = mobileVisualBand();
-    return { text: { top: text.top, bottom: text.bottom }, band, progress: progressAt(), state: __state(), writes: window.__landingScrollWrites.length };
-  });
-  const wheelTextTopTo = async (desired) => {
-    const delta = await page.evaluate((value) => document.querySelector('#c2 .scene-text').getBoundingClientRect().top - value, desired);
-    await wheel(page, delta);
-    await page.waitForTimeout(250);
-    return read();
-  };
-  const wheelIncomingTopTo = async (selector, desired) => {
-    const delta = await page.evaluate(({ selector, value }) => document.querySelector(selector).getBoundingClientRect().top - value, { selector, value: desired });
-    await wheel(page, delta);
-    await page.waitForTimeout(300);
-    return read();
-  };
-  const band = await page.evaluate(() => mobileVisualBand());
-  // Scene 1's copy drives the first morph like every later one (check-landing-text-track.mjs);
-  // this checks the interval scene 2 then stands solid before its own copy arrives.
-  await page.mouse.wheel(0, await page.evaluate(() => __restY(1) - scrollY));
-  await page.waitForFunction(() => __state().shown === 1 && !__state().running, null, { timeout: 10000 });
-  const pinned = await read();
-  assert(pinned.progress === 1, `scene 2 was not consolidated once scene 1's copy cleared the visual: ${JSON.stringify(pinned)}`);
-  await page.waitForFunction(() => [0, 1, 2, 3].every(i => __onHand[i]), null, { timeout: 30000 });
-  const plateauStart = await page.evaluate(() => scrollY);
-  const before = await wheelTextTopTo(band.bottom + 24);
-  assert(before.progress === 1 && before.state.shown === 1, `scene 2 advanced before approaching the visual: ${JSON.stringify(before)}`);
-  const nextTextHeight = await page.evaluate(() => document.querySelector('#c2 .scene-text').getBoundingClientRect().height);
-  const contact = await wheelIncomingTopTo('#c2 .scene-text', band.bottom + 8);
-  assert(contact.progress === 1 && contact.state.shown === 1, `scene 2 advanced before next incoming text contact: ${JSON.stringify(contact)}`);
-  // solid from scene 1's copy clearing the visual to scene 2's copy reaching it
-  const plateau = await page.evaluate(() => scrollY) - plateauStart;
-  assert(plateau >= 55, `scene 2 solid interval too short: ${plateau}px`);
-  const nextHalfTop = band.bottom - (band.height + nextTextHeight) / 2;
-  const half = await wheelIncomingTopTo('#c2 .scene-text', nextHalfTop);
-  assert(half.progress > 1.4 && half.progress < 1.6 && Math.abs(half.state.washT - 1.05) < .05 && half.state.shown === 1,
-    `scene 2 wash did not follow next incoming text: ${JSON.stringify({ contact, half })}`);
-  await page.waitForTimeout(600);
-  const paused = await read();
-  assert(Math.abs(paused.state.washT - half.state.washT) < .01 && Math.abs(paused.state.progress - half.state.progress) < .001 && paused.writes === 0,
-    `scene 2 wash advanced without scroll input: ${JSON.stringify({ half, paused })}`);
-  const reversed = await wheelIncomingTopTo('#c2 .scene-text', band.bottom + 8);
-  assert(reversed.progress < half.progress && reversed.state.washT < half.state.washT - .02 && reversed.writes === 0,
-    `scene 2 wash did not reverse with upward scroll: ${JSON.stringify({ half, reversed })}`);
+  await wheelTo(page, 1);
+  await settled(page, 1);
+  await page.waitForFunction(() => [0, 1, 2, 3].every((i) => __onHand[i]), null, { timeout: 40000 });
+
+  const rest = await quiet(page);
+  assert(rest.seen.length === 1 && rest.seen[0] === '1/1/false' && rest.moved === 0 && rest.writes === 0, `a resting reader's picture changed or the page wrote the scroll position: ${JSON.stringify(rest)}`);
+
+  // The picture sets off as soon as the next copy touches it, and turns back with the reader.
+  const target = () => page.evaluate(() => __state().target);
+  await toInk(page, 1, .1);
+  assert(await target() === 2, 'the copy is crossing the picture and the picture has not set off for the next scene');
+  await page.waitForFunction(() => __state().leg?.p > 0, null, { timeout: 3000 }).catch(() => {});
+  const setOff = await page.evaluate(() => __state());
+  assert(setOff.leg?.y === 2 && setOff.leg.p > 0, `the picture did not start dissolving as the copy touched it: ${JSON.stringify(setOff)}`);
+  await toInk(page, 1, .04);
+  assert(await target() === 1, 'the picture did not turn back with the reader');
+  // While any copy is over the picture, the picture holds in the wash; it re-forms only once the copy has left.
+  const held = (name) => page.evaluate(async (name) => {
+    const { playOut, playIn } = MossWatercolor.DEFAULT_PRESET, seen = [], t0 = performance.now();
+    while (performance.now() - t0 < 3500) { await new Promise(requestAnimationFrame); seen.push(__state().leg?.p ?? null); }
+    const tail = seen.slice(-30), out = { formed: seen.filter((p) => p == null).length, low: Math.min(...tail), high: Math.max(...tail) };
+    if (out.formed || out.low < playOut - .02 || out.high > playIn + .02) throw Error(`${name}: the picture re-formed with copy over it: ${JSON.stringify(out)}`);
+  }, name);
+  await held('turned back mid-crossing');
+  await wheelTo(page, 1);
+  await settled(page, 1);
+  await toInk(page, 1, .3);
+  await held('stopped mid-crossing');
+  await wheelTo(page, 2);
+  await settled(page, 2);
+  // Scrolling back so the copy re-enters dissolves the picture again.
+  await toInk(page, 1, .7);
+  await held('scrolled back into the copy');
+  await wheelTo(page, 1);
+  await settled(page, 1);
+
+  // A flick: the picture is still on its way when the reader's thumb lifts, then arrives without any scroll.
+  await wheelTo(page, 2);
+  const lagging = await page.evaluate(() => __state());
+  const stopped = Date.now();
+  assert(lagging.leg && lagging.shown === 1, `the picture was not still travelling when the reader stopped: ${JSON.stringify(lagging)}`);
+  await settled(page, 2);
+  const arrivedMs = Date.now() - stopped;
+  assert(arrivedMs < 4500, `the picture took ${arrivedMs}ms to arrive`);
+  const after = await quiet(page);
+  assert(after.moved === 0 && after.writes === 0, `arriving moved or wrote the scroll position: ${JSON.stringify(after)}`);
+
+  // Reversing mid-leg plays the picture back; it never reaches the scene the reader turned away from.
+  await page.evaluate(() => { window.__log = []; (function tick() { const s = __state(); __log.push([s.shown, s.leg ? s.leg.p : null]); requestAnimationFrame(tick); })(); });
+  await page.mouse.wheel(0, await page.evaluate(() => __restY(3) - scrollY));
+  await page.waitForFunction(() => __state().leg?.p > .1, null, { timeout: 15000 });
+  await wheelTo(page, 2);
+  await settled(page, 2);
+  const log = await page.evaluate(() => __log);
+  const peak = Math.max(...log.map(([, p]) => p ?? 0));
+  assert(!log.some(([shown]) => shown === 3), 'the picture arrived at the scene the reader had turned away from');
+  assert(log.slice(log.findIndex(([, p]) => p === peak)).some(([, p]) => p != null && p < peak - .05), `the leg did not run back: peak ${peak}`);
   await page.close();
-  return { pinned: pinned.progress, before: +before.progress.toFixed(3), contact: +contact.progress.toFixed(3),
-    half: +half.progress.toFixed(3), halfWashT: half.state.washT, pausedWashT: paused.state.washT,
-    reversed: +reversed.progress.toFixed(3), reversedWashT: reversed.state.washT, clearedShown: reversed.state.shown };
+  return { rest: rest.seen, arrivedMs, peak };
 }
 
 try {
   results.opening = [];
   for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 568 }]) results.opening.push(await checkOpening(viewport));
-  results.sceneTiming = await checkSceneTiming();
+  results.chase = await checkChase();
   const page = await mobilePage();
   let state = await mobileState(page);
   assert(state.snap === 'none' && !state.mobileSnap, `mobile starts with snap enabled: ${JSON.stringify(state)}`);
@@ -200,54 +220,21 @@ try {
   await page.locator('#c1 .btns a').first().click();
   assert(await page.evaluate(() => window.__copyClicked), 'mobile copy link did not receive a click');
 
-  await swipe(page, 720, 650, 10);
+  // A phone scrolls freely: a touch moves the page, the page does not move it after release and does not snap.
+  const before = await mobileState(page);
+  await swipe(page, 720, 400);
   await page.waitForTimeout(250);
-  state = await mobileState(page);
-  const releasedY = state.y;
+  const released = await mobileState(page);
+  assert(released.y > before.y + 20, `a swipe did not scroll the phone layout: ${before.y} -> ${released.y}`);
   await page.waitForTimeout(700);
   const held = await mobileState(page);
   assert(held.snap === 'none' && !held.mobileSnap, `touch armed mobile snapping: ${JSON.stringify(held)}`);
   assert(held.writes === 0, `mobile code called scrollTo ${held.writes} time(s)`);
-  assert(Math.abs(held.y - releasedY) < 2, `page moved after native release: ${releasedY} -> ${held.y}`);
-
-  for (let i = 0; i < 50 && state.xf <= .01; i++) {
-    await swipe(page, 650, 520);
-    await page.waitForTimeout(35);
-    state = await mobileState(page);
-  }
-  for (let i = 0; i < 12 && state.xf >= .9; i++) {
-    await swipe(page, 450, 560);
-    await page.waitForTimeout(50);
-    state = await mobileState(page);
-  }
-  assert(state.xf > .01 && state.xf < .9, `did not reach a partial closing scrub: ${JSON.stringify(state)}`);
-  const partial = state;
-  const partialHeld = await mobileState(page);
-  assert(partialHeld.writes === 0, `closing issued scrollTo: ${JSON.stringify(partialHeld)}`);
-  await swipe(page, 590, 450);
-  await page.waitForTimeout(180);
-  const forward = await mobileState(page);
-  assert(forward.y > partialHeld.y && forward.xf > partialHeld.xf, `closing did not advance with touch scroll: ${JSON.stringify({ partialHeld, forward })}`);
-  await swipe(page, 450, 590);
-  await page.waitForTimeout(180);
-  const reverse = await mobileState(page);
-  assert(reverse.y < forward.y && reverse.xf < forward.xf, `closing did not reverse with touch scroll: ${JSON.stringify({ forward, reverse })}`);
-  await page.waitForTimeout(500);
-  const reverseHeld = await mobileState(page);
-  assert(reverseHeld.writes === 0, `reverse release issued scrollTo: ${JSON.stringify({ reverse, reverseHeld })}`);
-  results.mobile = { releasedY, partial, forward, reverse, writes: reverseHeld.writes };
+  assert(Math.abs(held.y - released.y) < 2, `page moved after native release: ${released.y} -> ${held.y}`);
+  results.mobile = { releasedY: released.y, writes: held.writes };
   await page.close();
 
-  // A phone scrolls freely: no snapping, whatever the page does on desktop.
-  const freePage = await mobilePage();
-  await swipe(freePage, 720, 400);
-  await freePage.waitForTimeout(200);
-  const freeState = await mobileState(freePage);
-  assert(freeState.snap === 'none' && !freeState.mobileSnap, `a phone snaps its scrolling: ${JSON.stringify(freeState)}`);
-  await freePage.close();
-  results.mobileFree = freeState;
-
-  // A wheel notch on the phone layout belongs to the browser alone: the carry-on rule is desktop's.
+  // A wheel notch on the phone layout belongs to the browser alone.
   const wheelPage = await mobilePage();
   const wheelFrom = await wheelPage.evaluate(() => scrollY);
   await wheel(wheelPage, 100);

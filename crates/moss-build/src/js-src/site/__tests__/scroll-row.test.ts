@@ -68,26 +68,27 @@ describe("scroll dots", () => {
     expect(nav.dataset.indicator).toBe("dots");
   });
 
-  test.each([10, 11])("keeps stable dots and clips long rows to seven slots", (count) => {
+  test.each([7, 8])("up to seven cards get dots; a longer row gets a count and two buttons", (count) => {
     const g = row(count, "Related");
     initScrollDots();
     const nav = g.nextElementSibling as HTMLElement;
-    expect(nav.dataset.indicator).toBe(count <= 10 ? "dots" : "dynamic");
-    expect(nav.querySelectorAll("button")).toHaveLength(count);
     expect(nav.getAttribute("role")).toBe("group");
     expect(nav.getAttribute("aria-label")).toBe("Related");
-    expect(nav.querySelectorAll("button[tabindex=\"0\"]")).toHaveLength(1);
-    if (count > 10) {
-      expect(nav.querySelector(".moss-scroll-dots-viewport")).not.toBeNull();
-      expect(Array.from(nav.querySelectorAll("button")).map((button) => button.dataset.cardIndex)).toEqual(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
-      expect((nav.querySelector(".moss-scroll-dots-track") as HTMLElement).style.getPropertyValue("--moss-scroll-dot-start")).toBe("0");
-      expect(nav.querySelector("button.is-edge-end")).not.toBeNull();
-      expect(nav.querySelectorAll("[tabindex], button, a, input, select, textarea")).toHaveLength(11);
+    expect(nav.dataset.count).toBe(String(count));
+    if (count <= 7) {
+      expect(nav.dataset.indicator).toBe("dots");
+      expect(nav.querySelectorAll(".moss-scroll-dots-viewport button")).toHaveLength(count);
+      expect(nav.querySelectorAll("button[tabindex=\"0\"]")).toHaveLength(1);
+    } else {
+      expect(nav.dataset.indicator).toBe("count");
+      expect(Array.from(nav.querySelectorAll("button")).map((b) => b.className)).toEqual(["moss-scroll-dots-prev", "moss-scroll-dots-next"]);
+      expect(nav.querySelector(".moss-scroll-dots-count")?.textContent).toBe(`1 / ${count}${count} / ${count}`);
+      expect(nav.querySelector(".moss-scroll-dots-count-size")?.textContent).toBe(`${count} / ${count}`);
     }
   });
 
-  test("slides the stable dot track with the first visible card", () => {
-    const g = row(11);
+  test("the count shows one number, the first card in view, and only the buttons that can move are live", () => {
+    const g = row(20);
     let intersectionCallback: IntersectionObserverCallback | undefined;
     class FakeIntersectionObserver {
       constructor(observerCallback: IntersectionObserverCallback) {
@@ -98,24 +99,173 @@ describe("scroll dots", () => {
     }
     vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
     initScrollDots();
-    intersectionCallback?.([
-      { target: g.children[5], isIntersecting: true } as IntersectionObserverEntry,
-    ], {} as IntersectionObserver);
     const nav = g.nextElementSibling as HTMLElement;
-    expect(nav.querySelector("button[aria-current=\"true\"]")?.dataset.cardIndex).toBe("5");
-    expect((nav.querySelector(".moss-scroll-dots-track") as HTMLElement).style.getPropertyValue("--moss-scroll-dot-start")).toBe("2");
-    expect(nav.querySelectorAll("button.is-edge-start, button.is-edge-end")).toHaveLength(2);
-    intersectionCallback?.([
-      { target: g.children[5], isIntersecting: false } as IntersectionObserverEntry,
-      { target: g.children[10], isIntersecting: true } as IntersectionObserverEntry,
-    ], {} as IntersectionObserver);
-    expect((nav.querySelector(".moss-scroll-dots-track") as HTMLElement).style.getPropertyValue("--moss-scroll-dot-start")).toBe("4");
-    expect(nav.querySelector("button.is-edge-start")).not.toBeNull();
-    expect(nav.querySelector("button.is-edge-end")).toBeNull();
+    const now = () => nav.querySelector(".moss-scroll-dots-count > span:first-child")?.textContent;
+    const prev = nav.querySelector(".moss-scroll-dots-prev") as HTMLButtonElement;
+    const next = nav.querySelector(".moss-scroll-dots-next") as HTMLButtonElement;
+    expect([now(), prev.getAttribute("aria-disabled"), next.getAttribute("aria-disabled")]).toEqual(["1 / 20", "true", "false"]);
+    intersectionCallback?.([5, 6, 7, 8].map((i) => ({ target: g.children[i], isIntersecting: true }) as IntersectionObserverEntry), {} as IntersectionObserver);
+    expect([now(), nav.dataset.current, prev.getAttribute("aria-disabled")]).toEqual(["6 / 20", "6", "false"]);
+  });
+
+  test("next moves one view and says where it landed; previous comes back", async () => {
+    const g = row(20);
+    let intersectionCallback: IntersectionObserverCallback | undefined;
+    class FakeIntersectionObserver {
+      constructor(observerCallback: IntersectionObserverCallback) {
+        intersectionCallback = observerCallback;
+      }
+      observe = vi.fn();
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    const title = document.createElement("span");
+    title.className = "moss-card-title";
+    title.textContent = "Pier Ten";
+    g.children[9].append(title, " a long description the reader does not need to hear");
+    initScrollDots();
+    intersectionCallback?.([5, 6, 7, 8].map((i) => ({ target: g.children[i], isIntersecting: true }) as IntersectionObserverEntry), {} as IntersectionObserver);
+    const nav = g.nextElementSibling as HTMLElement;
+    (nav.querySelector(".moss-scroll-dots-next") as HTMLButtonElement).click();
+    expect(g.children[9].scrollIntoView).toHaveBeenCalled();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    expect(nav.querySelector("[aria-live]")?.textContent).toBe("Pier Ten, 10 / 20");
+    (nav.querySelector(".moss-scroll-dots-prev") as HTMLButtonElement).click();
+    expect(g.children[5].scrollIntoView).toHaveBeenCalled();
+  });
+
+  test("once the last card is in view the count reads the last card", () => {
+    const g = row(20);
+    let intersectionCallback: IntersectionObserverCallback | undefined;
+    class FakeIntersectionObserver {
+      constructor(observerCallback: IntersectionObserverCallback) {
+        intersectionCallback = observerCallback;
+      }
+      observe = vi.fn();
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    initScrollDots();
+    intersectionCallback?.([15, 16, 17, 18, 19].map((i) => ({ target: g.children[i], isIntersecting: true }) as IntersectionObserverEntry), {} as IntersectionObserver);
+    const nav = g.nextElementSibling as HTMLElement;
+    expect(nav.querySelector(".moss-scroll-dots-count > span:first-child")?.textContent).toBe("20 / 20");
+    expect(nav.querySelector(".moss-scroll-dots-next")?.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  test("the press that reaches the end shows, disables and says the last card at once, and keeps it while the row glides", async () => {
+    const g = row(20);
+    let intersectionCallback: IntersectionObserverCallback | undefined;
+    class FakeIntersectionObserver {
+      constructor(observerCallback: IntersectionObserverCallback) {
+        intersectionCallback = observerCallback;
+      }
+      observe = vi.fn();
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    initScrollDots();
+    const see = (cards: number[], isIntersecting = true) =>
+      intersectionCallback?.(cards.map((i) => ({ target: g.children[i], isIntersecting }) as IntersectionObserverEntry), {} as IntersectionObserver);
+    see([12, 13, 14, 15]);
+    const nav = g.nextElementSibling as HTMLElement;
+    const now = () => nav.querySelector(".moss-scroll-dots-count > span:first-child")?.textContent;
+    const next = nav.querySelector(".moss-scroll-dots-next") as HTMLButtonElement;
+    next.click();
+    expect([now(), next.getAttribute("aria-disabled")]).toEqual(["20 / 20", "true"]);
+    see([12, 13], false);
+    see([16, 17]);
+    expect(now(), "a frame of the glide").toBe("20 / 20");
+    see([14, 15], false);
+    expect(now(), "a frame with fewer cards in view").toBe("20 / 20");
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    expect(nav.querySelector("[aria-live]")?.textContent).toBe("20 / 20");
+  });
+
+  test("two quick presses of next move two views, not one", () => {
+    const g = row(20);
+    let intersectionCallback: IntersectionObserverCallback | undefined;
+    class FakeIntersectionObserver {
+      constructor(observerCallback: IntersectionObserverCallback) {
+        intersectionCallback = observerCallback;
+      }
+      observe = vi.fn();
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    initScrollDots();
+    intersectionCallback?.([0, 1, 2, 3].map((i) => ({ target: g.children[i], isIntersecting: true }) as IntersectionObserverEntry), {} as IntersectionObserver);
+    const next = g.nextElementSibling!.querySelector(".moss-scroll-dots-next") as HTMLButtonElement;
+    next.click();
+    next.click();
+    expect(g.children[8].scrollIntoView).toHaveBeenCalled();
+  });
+
+  test("on a right-to-left row the buttons swap sides and point the way they move; on a vertical row they turn", () => {
+    const rtl = row(9);
+    rtl.style.direction = "rtl";
+    const vertical = row(9);
+    setVerticalOverflow(vertical, 500);
+    initScrollDots();
+    const rtlNav = rtl.nextElementSibling as HTMLElement;
+    expect([rtlNav.dir, rtlNav.querySelector(".moss-scroll-dots-prev")?.textContent, rtlNav.querySelector(".moss-scroll-dots-next")?.textContent]).toEqual(["rtl", "›", "‹"]);
+    expect((vertical.nextElementSibling as HTMLElement).dataset.axis).toBe("block");
+  });
+
+  test("the count is read by a screen reader; only its sizing copy is hidden", () => {
+    const g = row(9);
+    initScrollDots();
+    const count = g.nextElementSibling!.querySelector(".moss-scroll-dots-count") as HTMLElement;
+    expect(count.hasAttribute("aria-hidden")).toBe(false);
+    expect(count.querySelector(".moss-scroll-dots-count-size")?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  test("a disabled button does nothing", () => {
+    const g = row(20);
+    initScrollDots();
+    (g.nextElementSibling!.querySelector(".moss-scroll-dots-prev") as HTMLButtonElement).click();
+    expect(Array.from(g.children).some((c) => vi.mocked((c as HTMLElement).scrollIntoView).mock.calls.length > 0)).toBe(false);
+  });
+
+  test("the buttons are named in the page's language", () => {
+    document.documentElement.lang = "de";
+    try {
+      const g = row(9);
+      initScrollDots();
+      const names = Array.from(g.nextElementSibling!.querySelectorAll("button")).map((b) => b.getAttribute("aria-label"));
+      expect(names).toEqual(["Zurück", "Weiter"]);
+    } finally {
+      document.documentElement.lang = "";
+    }
+  });
+
+  test("the row tells listeners its position once per change, so a theme can draw its own indicator", () => {
+    const g = row(20);
+    let intersectionCallback: IntersectionObserverCallback | undefined;
+    class FakeIntersectionObserver {
+      constructor(observerCallback: IntersectionObserverCallback) {
+        intersectionCallback = observerCallback;
+      }
+      observe = vi.fn();
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    const seen: unknown[] = [];
+    g.addEventListener("moss-scroll-position", (e) => seen.push((e as CustomEvent).detail));
+    initScrollDots();
+    intersectionCallback?.([5, 6, 7].map((i) => ({ target: g.children[i], isIntersecting: true }) as IntersectionObserverEntry), {} as IntersectionObserver);
+    intersectionCallback?.([{ target: g.children[8], isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+    intersectionCallback?.([{ target: g.children[8], isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+    expect(seen, "every change of the range is reported, and only changes").toEqual([
+      { current: 1, first: 1, last: 1, count: 20 },
+      { current: 6, first: 6, last: 8, count: 20 },
+      { current: 6, first: 6, last: 9, count: 20 },
+    ]);
+    const nav = g.nextElementSibling as HTMLElement;
+    expect([nav.dataset.current, nav.dataset.first, nav.dataset.last], "a listener that arrives late reads the same").toEqual(["6", "6", "9"]);
   });
 
   test("dragging the indicator scrubs without smooth per-card animation", () => {
-    const g = row(22);
+    const g = row(7);
     initScrollDots();
     const viewport = g.nextElementSibling!.querySelector(".moss-scroll-dots-viewport") as HTMLElement;
     Object.defineProperty(viewport, "getBoundingClientRect", { value: () => ({ width: 168 }) });
@@ -126,8 +276,8 @@ describe("scroll dots", () => {
     };
     viewport.dispatchEvent(pointer("pointerdown", 40));
     viewport.dispatchEvent(pointer("pointermove", 208));
-    expect(g.children[21].scrollIntoView).toHaveBeenCalledWith(expect.objectContaining({ behavior: "auto" }));
-    expect(g.nextElementSibling!.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("22 / 22");
+    expect(g.children[6].scrollIntoView).toHaveBeenCalledWith(expect.objectContaining({ behavior: "auto" }));
+    expect(g.nextElementSibling!.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("7 / 7");
     expect((g.nextElementSibling as HTMLElement).dataset.scrubbing).toBe("");
     viewport.dispatchEvent(pointer("pointerup", 208));
     (g.nextElementSibling!.querySelector("button[data-card-index=\"5\"]") as HTMLButtonElement).click();
@@ -135,20 +285,20 @@ describe("scroll dots", () => {
     expect((g.nextElementSibling as HTMLElement).hasAttribute("data-scrubbing")).toBe(false);
   });
 
-  test("arrow keys move the dynamic window and its single tab stop", () => {
-    const g = row(11);
+  test("End moves the dots' single tab stop to the last card", () => {
+    const g = row(7);
     initScrollDots();
     const nav = g.nextElementSibling as HTMLElement;
     const current = nav.querySelector("button[aria-current=\"true\"]") as HTMLButtonElement;
     current.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
-    expect(nav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("11 / 11");
+    expect(nav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("7 / 7");
     expect(nav.querySelectorAll("button[tabindex=\"0\"]")).toHaveLength(1);
-    expect((document.activeElement as HTMLElement)?.getAttribute("aria-label")).toBe("11 / 11");
-    expect(g.children[10].scrollIntoView).toHaveBeenCalled();
+    expect((document.activeElement as HTMLElement)?.getAttribute("aria-label")).toBe("7 / 7");
+    expect(g.children[6].scrollIntoView).toHaveBeenCalled();
   });
 
   test("observer updates do not pull keyboard navigation back during a smooth scroll", () => {
-    const g = row(11);
+    const g = row(7);
     let intersectionCallback: IntersectionObserverCallback | undefined;
     class FakeIntersectionObserver {
       constructor(observerCallback: IntersectionObserverCallback) {
@@ -168,22 +318,22 @@ describe("scroll dots", () => {
     intersectionCallback?.([
       { target: g.children[0], isIntersecting: true } as IntersectionObserverEntry,
     ], {} as IntersectionObserver);
-    expect(nav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("11 / 11");
-    expect((document.activeElement as HTMLElement)?.getAttribute("aria-label")).toBe("11 / 11");
+    expect(nav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("7 / 7");
+    expect((document.activeElement as HTMLElement)?.getAttribute("aria-label")).toBe("7 / 7");
     intersectionCallback?.([
       { target: g.children[0], isIntersecting: false } as IntersectionObserverEntry,
-      { target: g.children[10], isIntersecting: true } as IntersectionObserverEntry,
+      { target: g.children[6], isIntersecting: true } as IntersectionObserverEntry,
     ], {} as IntersectionObserver);
-    expect(nav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("11 / 11");
+    expect(nav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("7 / 7");
     intersectionCallback?.([
-      { target: g.children[10], isIntersecting: false } as IntersectionObserverEntry,
-      { target: g.children[9], isIntersecting: true } as IntersectionObserverEntry,
+      { target: g.children[6], isIntersecting: false } as IntersectionObserverEntry,
+      { target: g.children[5], isIntersecting: true } as IntersectionObserverEntry,
     ], {} as IntersectionObserver);
-    expect(nav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("10 / 11");
+    expect(nav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("6 / 7");
   });
 
   test("pointer scrolling cancels a requested card that never reaches the viewport", () => {
-    const g = row(11);
+    const g = row(7);
     let intersectionCallback: IntersectionObserverCallback | undefined;
     class FakeIntersectionObserver {
       constructor(observerCallback: IntersectionObserverCallback) {
@@ -205,11 +355,11 @@ describe("scroll dots", () => {
       { target: g.children[0], isIntersecting: false } as IntersectionObserverEntry,
       { target: g.children[4], isIntersecting: true } as IntersectionObserverEntry,
     ], {} as IntersectionObserver);
-    expect(nav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("5 / 11");
+    expect(nav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("5 / 7");
   });
 
   test("native keyboard scrolling cancels a requested card", () => {
-    const g = row(11);
+    const g = row(7);
     let intersectionCallback: IntersectionObserverCallback | undefined;
     class FakeIntersectionObserver {
       constructor(observerCallback: IntersectionObserverCallback) {
@@ -231,11 +381,11 @@ describe("scroll dots", () => {
       { target: g.children[0], isIntersecting: false } as IntersectionObserverEntry,
       { target: g.children[4], isIntersecting: true } as IntersectionObserverEntry,
     ], {} as IntersectionObserver);
-    expect(nav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("5 / 11");
+    expect(nav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("5 / 7");
   });
 
   test("a requested card already in view may later leave", () => {
-    const g = row(11);
+    const g = row(7);
     let intersectionCallback: IntersectionObserverCallback | undefined;
     class FakeIntersectionObserver {
       constructor(observerCallback: IntersectionObserverCallback) {
@@ -257,7 +407,7 @@ describe("scroll dots", () => {
       { target: g.children[1], isIntersecting: false } as IntersectionObserverEntry,
       { target: g.children[4], isIntersecting: true } as IntersectionObserverEntry,
     ], {} as IntersectionObserver);
-    expect(nav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("5 / 11");
+    expect(nav.querySelector("button[aria-current=\"true\"]")?.getAttribute("aria-label")).toBe("5 / 7");
   });
 
   test("arrow keys follow the row's visual axis and direction", () => {

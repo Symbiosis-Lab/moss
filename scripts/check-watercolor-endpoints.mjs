@@ -71,9 +71,10 @@ async function inPage({ tolerance, search, dark, ground }) {
   const canvas = document.getElementById('c');
   const sim = MossWatercolor.createSim({ canvas, texW: W, texH: H, divisor: 2, rect: () => ({ x: 0, y: 0, w: W, h: H }), ground });
   if (!sim) throw new Error('no WebGL2 + EXT_color_buffer_float');
-  sim.setPrints(printA, printB);
-  const pair = sim.pair();
-  let guard = 0; while (sim.show(pair, true, 0.5)) if (++guard > 1000) throw new Error('recording never finished');
+  // every print here is an opaque full frame, so a side recorded over its own print has the whole frame as footprint
+  const alone = (print, s = sim) => { const side = s.sceneSide(print, print); let n = 0; while (!s.sideRecorded(side)) { s.recordSide(side, MossWatercolor.DEFAULT_PRESET.stepsPerFrame); if (++n > 1000) throw new Error('recording never finished'); } return side; };
+  const leg = (x, y, p, s = sim) => { const { ux, uy, k } = MossWatercolor.legAt(p); return s.playSides(x, ux, y, uy, k, p); };
+  const sA = alone(printA), sB = alone(printB);
 
   const pixels = (src) => { const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d', { willReadFrequently: true }); g.fillStyle = bg; g.fillRect(0, 0, W, H); g.drawImage(src, 0, 0, W, H); return g.getImageData(0, 0, W, H).data; };
   const compare = (shown, print) => {
@@ -103,43 +104,33 @@ async function inPage({ tolerance, search, dark, ground }) {
     // (opaque), pigment over nothing in between, and clear at the middle of the leg.
     const readAlpha = (src) => { const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(src, 0, 0, W, H); const d = g.getImageData(0, 0, W, H).data; let sum = 0, min = 255, lit = 0; for (let i = 3; i < d.length; i += 4) { sum += d[i]; min = Math.min(min, d[i]); if (d[i] > 20) lit++; } return { mean: sum / (d.length / 4) / 255, min, lit }; };
     const pix = (src) => { const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d', { willReadFrequently: true }); g.fillStyle = bg; g.fillRect(0, 0, W, H); g.drawImage(src, 0, 0, W, H); return g.getImageData(0, 0, W, H).data; };
-    const alone = (print, s = sim) => { s.setPrints(print, print); const rec = s.pair({ only: true }); let n = 0; while (s.show(rec, true, 0.5)) if (++n > 1000) throw new Error('recording never finished'); return rec; };
-    const recA = alone(printA), recB = alone(printB);
-    sim.setPrints(printA, printB);
-    recA.sides[0].fwd = true; recB.sides[0].fwd = false;
-    const composed = { sides: [recA.sides[0], recB.sides[0]] };
     const wantA = pix(printA), wantB = pix(printB);
     const results = [], png = {};
     for (const [p, want, name] of [[0, wantA, 'A'], [1, wantB, 'B']]) {
-      sim.show(composed, true, p);
+      leg(sA, sB, p);
       const al = readAlpha(canvas), cmp = compare(pix(canvas), want);
-      results.push({ case: `transparent ground, show(p=${p}) vs print ${name}: alpha min ${al.min}`, ...cmp, ok: cmp.max <= tolerance && cmp.offset === 0 && al.min === 255 });
+      results.push({ case: `transparent ground, p=${p} vs print ${name}: alpha min ${al.min}`, ...cmp, ok: cmp.max <= tolerance && cmp.offset === 0 && al.min === 255 });
     }
     // a host's page is rarely the colour the sim was given: a print on its own paper is still exact at the ends
     const printC = document.createElement('canvas'); printC.width = W; printC.height = H;
     { const g = printC.getContext('2d'); g.fillStyle = dark ? '#050505' : '#ffffff'; g.fillRect(0, 0, W, H); g.strokeStyle = dark ? '#c8d8ff' : '#203060'; g.lineWidth = 3; for (let x = 10; x < W; x += 30) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke(); } g.fillStyle = dark ? '#f0c060' : '#703010'; g.font = 'bold 60px serif'; g.fillText('Own', 50, 200); }
-    const recC = alone(printC);
-    sim.setPrints(printC, printB);
-    recC.sides[0].fwd = true; recB.sides[0].fwd = false;
-    sim.show({ sides: [recC.sides[0], recB.sides[0]] }, true, 0);
+    const sC = alone(printC);
+    leg(sC, sB, 0);
     { const al = readAlpha(canvas), cmp = compare(pix(canvas), pix(printC));
-      results.push({ case: `transparent ground, show(p=0) on a print whose paper is not --bg: alpha min ${al.min}`, ...cmp, ok: cmp.max <= tolerance && cmp.offset === 0 && al.min === 255 }); }
-    sim.setPrints(printA, printB); recB.sides[0].fwd = false;
+      results.push({ case: `transparent ground, p=0 on a print whose paper is not --bg: alpha min ${al.min}`, ...cmp, ok: cmp.max <= tolerance && cmp.offset === 0 && al.min === 255 }); }
     // the default floor leaves a translucent film at the middle of the leg: neither cut out nor opaque
-    sim.show(composed, true, 0.5);
+    leg(sA, sB, 0.5);
     { const al = readAlpha(canvas);
-      results.push({ case: `transparent ground, show(p=0.5), default drainFloor: mean alpha ${al.mean.toFixed(3)}, ${al.lit} px of pigment (partial)`, max: 0, offset: 0, ok: al.mean > 0.03 && al.mean < 0.95 && al.lit > 2000 }); }
+      results.push({ case: `transparent ground, p=0.5, default drainFloor: mean alpha ${al.mean.toFixed(3)}, ${al.lit} px of pigment (partial)`, max: 0, offset: 0, ok: al.mean > 0.03 && al.mean < 0.95 && al.lit > 2000 }); }
     // a floor of 0 clears the canvas at the middle, so the host's own background shows untouched
     { const canvas0 = document.createElement('canvas');
       const sim0 = MossWatercolor.createSim({ canvas: canvas0, texW: W, texH: H, divisor: 2, rect: () => ({ x: 0, y: 0, w: W, h: H }), ground, preset: { drainFloor: 0 } });
-      const recA0 = alone(printA, sim0), recB0 = alone(printB, sim0);
-      sim0.setPrints(printA, printB); recA0.sides[0].fwd = true; recB0.sides[0].fwd = false;
-      sim0.show({ sides: [recA0.sides[0], recB0.sides[0]] }, true, 0.5);
+      leg(alone(printA, sim0), alone(printB, sim0), 0.5, sim0);
       const al = readAlpha(canvas0);
-      results.push({ case: `transparent ground, show(p=0.5), drainFloor 0: mean alpha ${al.mean.toFixed(4)} (grid fully visible)`, max: 0, offset: 0, ok: al.mean <= 0.02 }); }
+      results.push({ case: `transparent ground, p=0.5, drainFloor 0: mean alpha ${al.mean.toFixed(4)} (grid fully visible)`, max: 0, offset: 0, ok: al.mean <= 0.02 }); }
     // the film thins and thickens smoothly: the change between neighbouring frames has no jump
     { const premult = (src) => { const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(src, 0, 0, W, H); const d = g.getImageData(0, 0, W, H).data; const o = new Float32Array(d.length); for (let i = 0; i < d.length; i += 4) { const a = d[i + 3] / 255; o[i] = d[i] * a; o[i + 1] = d[i + 1] * a; o[i + 2] = d[i + 2] * a; o[i + 3] = d[i + 3]; } return o; };
-      const ps = [0.4, 0.45, 0.5, 0.55, 0.6], frames = ps.map((p) => { sim.show(composed, true, p); return premult(canvas); });
+      const ps = [0.4, 0.45, 0.5, 0.55, 0.6], frames = ps.map((p) => { leg(sA, sB, p); return premult(canvas); });
       const deltas = []; for (let k = 1; k < frames.length; k++) { let sum = 0; for (let i = 0; i < frames[k].length; i++) sum += Math.abs(frames[k][i] - frames[k - 1][i]); deltas.push(sum / frames[k].length); }
       const smooth = deltas.every((d, k) => d > 0 && d <= 2 * Math.max(...[deltas[k - 1], deltas[k + 1]].filter((v) => v !== undefined)));
       results.push({ case: `transparent ground, frame-to-frame change across p=${ps.join(', ')}: ${deltas.map((d) => d.toFixed(2)).join(', ')} (no jump over 2x a neighbour)`, max: 0, offset: 0, ok: smooth }); }
@@ -149,66 +140,63 @@ async function inPage({ tolerance, search, dark, ground }) {
     // there the paper ground blends the plain print in as well, which a light page's paper ground does not
     // (and a light transparent ground does, so a print on a slightly off-white paper still ends exact).
     const mk = (opts) => { const cv = document.createElement('canvas'); return { cv, s: MossWatercolor.createSim({ canvas: cv, texW: W, texH: H, divisor: 2, rect: () => ({ x: 0, y: 0, w: W, h: H }), ...opts }) }; };
-    const compose = (s) => { const a = alone(printA, s), b = alone(printB, s); s.setPrints(printA, printB); a.sides[0].fwd = true; b.sides[0].fwd = false; return { sides: [a.sides[0], b.sides[0]] }; };
+    const compose = (s) => [alone(printA, s), alone(printB, s)];
     const flat = mk({ ground, preset: { drainFloor: 1 } }), paper = mk({ ground: 'paper' });
     const flatLeg = compose(flat.s), paperLeg = compose(paper.s);
     const maxDiff = (x, y) => { let m = 0; for (let i = 0; i < x.length; i += 4) for (let k = 0; k < 3; k++) m = Math.max(m, Math.abs(x[i + k] - y[i + k])); return m; };
     const gl = canvas.getContext('webgl2');
     const premultiplied = () => { const b = new Uint8Array(gl.drawingBufferWidth * gl.drawingBufferHeight * 4); gl.readPixels(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight, gl.RGBA, gl.UNSIGNED_BYTE, b); return b; };
     for (const p of [0.03, 0.25, 0.5, 0.75]) {
-      flat.s.show(flatLeg, true, p); paper.s.show(paperLeg, true, p);
+      leg(...flatLeg, p, flat.s); leg(...paperLeg, p, paper.s);
       const d = maxDiff(pix(flat.cv), pix(paper.cv));
-      if (p > 0.1 || dark) results.push({ case: `transparent ground over the page colour, show(p=${p}) vs the paper ground's frame: max diff ${d}/255`, max: d, offset: 0, ok: d <= 4 });
+      if (p > 0.1 || dark) results.push({ case: `transparent ground over the page colour, p=${p} vs the paper ground's frame: max diff ${d}/255`, max: d, offset: 0, ok: d <= 4 });
       // a premultiplied pixel can never carry more colour than coverage
-      sim.show(composed, true, p);
+      leg(sA, sB, p);
       const b = premultiplied(); let over = 0; for (let i = 0; i < b.length; i += 4) for (let k = 0; k < 3; k++) if (b[i + k] > b[i + 3] + 1) over++;
-      results.push({ case: `transparent ground, show(p=${p}): ${over} channels brighter than their alpha`, max: over, offset: 0, ok: over === 0 });
+      results.push({ case: `transparent ground, p=${p}: ${over} channels brighter than their alpha`, max: over, offset: 0, ok: over === 0 });
     }
     // a hair inside the margin the page's paper is still mostly there: no pixel is nearly clear (what keeps the host's background from showing through a leg that has barely begun)
-    sim.show(composed, true, 0.03);
+    leg(sA, sB, 0.03);
     { const b = premultiplied(); let minA = 255; for (let i = 3; i < b.length; i += 4) minA = Math.min(minA, b[i]);
-      results.push({ case: `transparent ground, show(p=0.03): alpha min ${minA} (the paper still covers the background)`, max: minA, offset: 0, ok: minA >= 0.85 * 255 }); }
+      results.push({ case: `transparent ground, p=0.03: alpha min ${minA} (the paper still covers the background)`, max: minA, offset: 0, ok: minA >= 0.85 * 255 }); }
     // A leg whose incoming print is not on hand ends on nothing: the outgoing print is exact at p = 0, its
     // pigment is gone from the middle on (the host fades its own incoming page in over the clear canvas),
     // and none of the incoming print is drawn.
-    { const out = { sides: [recA.sides[0], sim.pair({ only: true }).sides[1]], toNothing: true };
-      sim.setPrints(printA, printB); recA.sides[0].fwd = true;
-      sim.show(out, true, 0);
+    { const toNothing = (p) => sim.playSides(sA, MossWatercolor.legAt(p).ux, null, 0, 0, p, { toNothing: true });
+      toNothing(0);
       { const al = readAlpha(canvas), cmp = compare(pix(canvas), wantA);
-        results.push({ case: `transparent ground, leg to nothing, show(p=0) vs print A: alpha min ${al.min}`, ...cmp, ok: cmp.max <= tolerance && cmp.offset === 0 && al.min === 255 }); }
-      sim.show(out, true, 0.25);
+        results.push({ case: `transparent ground, leg to nothing, p=0 vs print A: alpha min ${al.min}`, ...cmp, ok: cmp.max <= tolerance && cmp.offset === 0 && al.min === 255 }); }
+      toNothing(0.25);
       { const b = premultiplied(); let sum = 0, over = 0; for (let i = 0; i < b.length; i += 4) { sum += b[i + 3]; for (let k = 0; k < 3; k++) if (b[i + k] > b[i + 3] + 1) over++; }
-        results.push({ case: `transparent ground, leg to nothing, show(p=0.25): mean alpha ${(sum / (b.length / 4) / 255).toFixed(3)}, ${over} channels brighter than their alpha`, max: 0, offset: 0, ok: sum / (b.length / 4) / 255 > 0.03 && over === 0 }); }
+        results.push({ case: `transparent ground, leg to nothing, p=0.25: mean alpha ${(sum / (b.length / 4) / 255).toFixed(3)}, ${over} channels brighter than their alpha`, max: 0, offset: 0, ok: sum / (b.length / 4) / 255 > 0.03 && over === 0 }); }
       for (const p of [0.5, 0.75, 0.9, 1]) {
-        sim.show(out, true, p);
+        toNothing(p);
         const b = premultiplied(); let maxA = 0, maxC = 0; for (let i = 0; i < b.length; i += 4) { maxA = Math.max(maxA, b[i + 3]); maxC = Math.max(maxC, b[i], b[i + 1], b[i + 2]); }
-        results.push({ case: `transparent ground, leg to nothing, show(p=${p}): alpha max ${maxA}, colour max ${maxC} (clear)`, max: maxA, offset: 0, ok: maxA <= 0.02 * 255 && maxC <= maxA + 1 });
+        results.push({ case: `transparent ground, leg to nothing, p=${p}: alpha max ${maxA}, colour max ${maxC} (clear)`, max: maxA, offset: 0, ok: maxA <= 0.02 * 255 && maxC <= maxA + 1 });
       }
-      recB.sides[0].fwd = false; }
-    for (const p of [0.2, 0.8]) {
-      sim.show(composed, true, p); const al = readAlpha(canvas);
-      results.push({ case: `transparent ground, show(p=${p}): mean alpha ${al.mean.toFixed(3)}, ${al.lit} px of pigment`, max: 0, offset: 0, ok: al.mean > 0.03 && al.mean < 0.95 && al.lit > 2000 });
     }
-    for (const p of [0.25, 0.5]) { sim.show(composed, true, p); png[p] = canvas.toDataURL('image/png'); }
+    for (const p of [0.2, 0.8]) {
+      leg(sA, sB, p); const al = readAlpha(canvas);
+      results.push({ case: `transparent ground, p=${p}: mean alpha ${al.mean.toFixed(3)}, ${al.lit} px of pigment`, max: 0, offset: 0, ok: al.mean > 0.03 && al.mean < 0.95 && al.lit > 2000 });
+    }
+    for (const p of [0.25, 0.5]) { leg(sA, sB, p); png[p] = canvas.toDataURL('image/png'); }
     return { results, png };
   }
   const png = {};
   const wantA = pixels(printA), wantB = pixels(printB);
   const results = [];
-  for (const [fwd, p, want, name] of [[true, 0, wantA, 'A'], [true, 1, wantB, 'B'], [false, 0, wantB, 'B'], [false, 1, wantA, 'A']]) {
-    sim.show(pair, fwd, p);
-    results.push({ case: `show(fwd=${fwd}, p=${p}) vs print ${name}`, ...compare(pixels(canvas), want) });
+  for (const [x, y, p, want, dir] of [[sA, sB, 0, wantA, 'A→B'], [sA, sB, 1, wantB, 'A→B'], [sB, sA, 0, wantB, 'B→A'], [sB, sA, 1, wantA, 'B→A']]) {
+    leg(x, y, p);
+    results.push({ case: `leg ${dir} at p=${p} vs print ${dir[p ? 2 : 0]}`, ...compare(pixels(canvas), want) });
   }
-  // a pair recorded for one side only (a boundary whose incoming print is not on hand yet)
-  // still ends on the incoming print
-  const half = sim.pair({ only: true });
-  guard = 0; while (sim.show(half, true, 0.5)) if (++guard > 1000) throw new Error('recording never finished');
+  // a leg whose incoming side is not recorded yet still ends on the incoming print
+  const pendingB = sim.sceneSide(printB, printB);
   for (const [p, want, name] of [[0, wantA, 'A'], [1, wantB, 'B']]) {
-    sim.show(half, true, p);
-    results.push({ case: `show(one-sided pair, p=${p}) vs print ${name}`, ...compare(pixels(canvas), want) });
+    leg(sA, pendingB, p);
+    results.push({ case: `leg to an unrecorded side at p=${p} vs print ${name}`, ...compare(pixels(canvas), want) });
   }
   // the stepped display: whatever water the film holds and however far the cure has got, the ends are the prints
-  sim.reset(); sim.step(true, 0, 0);
+  sim.setPrints(printA, printB); sim.reset(); sim.step(true, 0, 0);
   sim.draw(true, 0, -0.2, 0);
   results.push({ case: 'draw(p=0) after one step vs print A', ...compare(pixels(canvas), wantA) });
   for (let i = 1; i < 60; i++) sim.step(true, i / 120, 0.3);
@@ -216,58 +204,36 @@ async function inPage({ tolerance, search, dark, ground }) {
   results.push({ case: 'draw(p=1, cure 0.3) with water on the sheet vs print B', ...compare(pixels(canvas), wantB) });
   // a hair inside the ends the wash has hardly started: no slide, and no jump in colour
   for (const [p, want, name] of [[0.01, wantA, 'A'], [0.99, wantB, 'B']]) {
-    sim.show(pair, true, p);
-    results.push({ case: `show(p=${p}) vs print ${name}: continuous with the end`, ...compare(pixels(canvas), want), nearEnd: true });
+    leg(sA, sB, p);
+    results.push({ case: `leg at p=${p} vs print ${name}: continuous with the end`, ...compare(pixels(canvas), want), nearEnd: true });
   }
-  // a host that records each print alone and composes two of them for a leg by flipping `fwd`
-  const alone = (print) => {
-    sim.setPrints(print, print);
-    const rec = sim.pair({ only: true });
-    let n = 0; while (sim.show(rec, true, 0.5)) if (++n > 1000) throw new Error('recording never finished');
-    return rec;
-  };
-  const recA = alone(printA), recB = alone(printB);
-  sim.setPrints(printA, printB);
-  const outSide = recA.sides[0], inSide = recB.sides[0];
-  outSide.fwd = true; inSide.fwd = false;
-  const composed = { sides: [outSide, inSide] };
-  for (const p of [0, 0.02, 0.25, 0.5, 0.75, 0.98, 1]) {
-    sim.show(composed, true, p);
+  for (const p of [0.02, 0.25, 0.5, 0.75, 0.98]) {
+    leg(sA, sB, p);
     const shown = pixels(canvas);
-    const r = { case: `composed show(p=${p}) vs print ${p < 0.5 ? 'A' : 'B'}`, ...compare(shown, p < 0.5 ? wantA : wantB) };
-    if (p === 0) results.push({ ...r, case: 'composed show(p=0) vs print A' });
-    else if (p === 1) results.push({ ...r, case: 'composed show(p=1) vs print B' });
-    else if (dark && p >= 0.25 && p <= 0.75) {
+    if (dark && p >= 0.25 && p <= 0.75) {
       // mid-leg on a dark page (the flat frame the page used to show has std 0 and a 99th percentile at the paper's): neither a flat frame nor either print; light pigment visible over the paper
       const st = frameStats(shown);
-      results.push({ case: `dark composed show(p=${p}): luminance std ${st.std.toFixed(1)}, 99th percentile ${st.p99} (paper ${paperLuma.toFixed(0)})`, ...st, paperLuma, stats: true });
-      results.push({ case: `dark composed show(p=${p}) vs print A (must differ)`, ...compare(shown, wantA), expectDifferent: true });
-      results.push({ case: `dark composed show(p=${p}) vs print B (must differ)`, ...compare(shown, wantB), expectDifferent: true });
+      results.push({ case: `dark leg at p=${p}: luminance std ${st.std.toFixed(1)}, 99th percentile ${st.p99} (paper ${paperLuma.toFixed(0)})`, ...st, paperLuma, stats: true });
+      results.push({ case: `dark leg at p=${p} vs print A (must differ)`, ...compare(shown, wantA), expectDifferent: true });
+      results.push({ case: `dark leg at p=${p} vs print B (must differ)`, ...compare(shown, wantB), expectDifferent: true });
       if (p === 0.25 || p === 0.5) png[p] = canvas.toDataURL('image/png');
     } else {
       // mid-leg the canvas must hold wash: not transparent, and not the plain page
       const rawLit = canvasLit(canvas);
-      results.push({ case: `composed show(p=${p}): canvas has wash content`, max: rawLit, offset: 0, wash: true });
+      results.push({ case: `leg at p=${p}: canvas has wash content`, max: rawLit, offset: 0, wash: true });
     }
   }
-  // and the way back: the same two recordings, roles swapped, the prints slotted the other way round
-  sim.setPrints(printB, printA);
-  recB.sides[0].fwd = true; recA.sides[0].fwd = false;
-  const back = { sides: [recB.sides[0], recA.sides[0]] };
-  for (const [p, want, name] of [[0, wantB, 'B'], [1, wantA, 'A']]) {
-    sim.show(back, true, p);
-    results.push({ case: `composed back show(p=${p}) vs print ${name}`, ...compare(pixels(canvas), want) });
-  }
-  sim.show(back, true, 0.5);
-  results.push({ case: 'composed back show(p=0.5): canvas has wash content', max: canvasLit(canvas), offset: 0, wash: true });
+  // and the way back: the same two recordings, roles swapped
+  leg(sB, sA, 0.5);
+  results.push({ case: 'leg B→A at p=0.5: canvas has wash content', max: canvasLit(canvas), offset: 0, wash: true });
   // a preset that leaves the margin out must not blank the wash
   const bare = document.createElement('canvas'); bare.style.position = 'absolute'; document.body.appendChild(bare);
   const sim2 = MossWatercolor.createSim({ canvas: bare, texW: W, texH: H, divisor: 2, rect: () => ({ x: 0, y: 0, w: W, h: H }), preset: { endpointMargin: undefined } });
   sim2.setPrints(printA, printB); sim2.reset(); sim2.step(true, 0, 0); sim2.draw(true, 0, -0.2, 0.5);
   results.push({ case: 'draw(p=0.5) with a preset that has no endpointMargin: canvas has wash content', max: canvasLit(bare), offset: 0, wash: true });
   // the middle must really differ, or the comparison above proves nothing
-  sim.show(pair, true, 0.5);
-  results.push({ case: 'show(fwd=true, p=0.5) vs print A (must differ)', ...compare(pixels(canvas), wantA), expectDifferent: true });
+  leg(sA, sB, 0.5);
+  results.push({ case: 'leg A→B at p=0.5 vs print A (must differ)', ...compare(pixels(canvas), wantA), expectDifferent: true });
   return { results, png };
 }
 
@@ -283,26 +249,119 @@ async function saturatedInPage({ tolerance }) {
   const canvas = document.getElementById('c');
   const sim = MossWatercolor.createSim({ canvas, texW: W, texH: H, divisor: 2, rect: () => ({ x: 0, y: 0, w: W, h: H }) });
   if (!sim) throw new Error('no WebGL2 + EXT_color_buffer_float');
-  sim.setPrints(printA, printB);
-  const pair = sim.pair();
-  let guard = 0; while (sim.show(pair, true, 0.5)) if (++guard > 1000) throw new Error('recording never finished');
+  const alone = (print) => { const side = sim.sceneSide(print, print); let n = 0; while (!sim.sideRecorded(side)) { sim.recordSide(side, MossWatercolor.DEFAULT_PRESET.stepsPerFrame); if (++n > 1000) throw new Error('recording never finished'); } return side; };
+  const sA = alone(printA), sB = alone(printB);
+  const leg = (p) => { const { ux, uy, k } = MossWatercolor.legAt(p); sim.playSides(sA, ux, sB, uy, k, p); };
   const pixels = (src) => { const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d', { willReadFrequently: true }); g.fillStyle = bg; g.fillRect(0, 0, W, H); g.drawImage(src, 0, 0, W, H); return g.getImageData(0, 0, W, H).data; };
   const maxDiff = (x, y) => { let m = 0; for (let i = 0; i < x.length; i += 4) for (let k = 0; k < 3; k++) m = Math.max(m, Math.abs(x[i + k] - y[i + k])); return m; };
   const results = [], png = {};
   for (const [p, want, name] of [[0, printA, 'A'], [1, printB, 'B']]) {
-    sim.show(pair, true, p);
+    leg(p);
     const d = maxDiff(pixels(canvas), pixels(want));
-    results.push({ case: `saturated page, show(p=${p}) vs print ${name}: max diff ${d}/255`, max: d, offset: 0, ok: d <= tolerance });
+    results.push({ case: `saturated page, p=${p} vs print ${name}: max diff ${d}/255`, max: d, offset: 0, ok: d <= tolerance });
   }
   // mid-leg the sheet's own blue stays full (a non-finite density would land as 0 or garbage there), and
   // the light marks are still pigment over it
   for (const p of [0.25, 0.5, 0.75]) {
-    sim.show(pair, true, p); png[p] = canvas.toDataURL('image/png');
+    leg(p); png[p] = canvas.toDataURL('image/png');
     const d = pixels(canvas); let darkBlue = 0, other = 0;
     for (let i = 0; i < d.length; i += 4) { if (d[i + 2] < 250) darkBlue++; if (d[i] > 8 || d[i + 1] > 8) other++; }
-    results.push({ case: `saturated page, show(p=${p}): ${darkBlue} px lost their blue, ${other} px carry pigment`, max: darkBlue, offset: 0, ok: darkBlue === 0 && other > 500 });
+    results.push({ case: `saturated page, p=${p}: ${darkBlue} px lost their blue, ${other} px carry pigment`, max: darkBlue, offset: 0, ok: darkBlue === 0 && other > 500 });
   }
   return { results, png };
+}
+
+// Scene sides: one recording per scene over one shared footprint, so any two play together and a mix
+// can be baked to turn toward a third scene. Each case fails when the behaviour it names is removed.
+async function sceneSidesInPage({ tolerance, ground }) {
+  const W = 410, H = 390;
+  const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+  const make = (draw) => { const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d'); g.fillStyle = bg; g.fillRect(0, 0, W, H); draw(g); return c; };
+  const printA = make((g) => { g.fillStyle = '#181818'; g.font = 'bold 64px serif'; g.fillText('Moss', 40, 220); });
+  const printB = make((g) => { g.fillStyle = '#a02818'; g.beginPath(); g.arc(250, 130, 70, 0, 7); g.fill(); });
+  const printC = make((g) => { g.fillStyle = '#2f7a3a'; g.fillRect(60, 60, 280, 120); });
+  const foot = document.createElement('canvas'); foot.width = W; foot.height = H; foot.getContext('2d').fillRect(0, 0, W, H);
+  const canvas = document.getElementById('c');
+  const sim = MossWatercolor.createSim({ canvas, texW: W, texH: H, divisor: 2, rect: () => ({ x: 0, y: 0, w: W, h: H }), ground });
+  if (!sim) throw new Error('no WebGL2 + EXT_color_buffer_float');
+  const record = (side) => { let n = 0; while (!sim.sideRecorded(side)) { sim.recordSide(side, 36); if (++n > 2000) throw new Error('a side never finished recording'); } };
+  const shown = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d', { willReadFrequently: true }); g.fillStyle = bg; g.fillRect(0, 0, W, H); g.drawImage(canvas, 0, 0, W, H); return g.getImageData(0, 0, W, H).data; };
+  const pixelsOf = (print) => print.getContext('2d').getImageData(0, 0, W, H).data;
+  const diff = (x, y) => { let m = 0; for (let i = 0; i < x.length; i += 4) for (let k = 0; k < 3; k++) m = Math.max(m, Math.abs(x[i + k] - y[i + k])); return m; };
+  const results = [], check = (label, d, ok) => results.push({ case: `${label}: ${d}/255`, ok });
+  const x = sim.sceneSide(printA, foot), y = sim.sceneSide(printB, foot);
+  sim.recordSide(x, 100);
+  record(y); record(x);   // y recorded in between x's start and its finish
+
+  // the ends are each side's own print, whatever prints the sim has bound
+  sim.setPrints(printC, printC);
+  sim.playSides(x, 0, y, 1, 0, 0); { const d = diff(shown(), pixelsOf(printA)); check('p = 0 is the outgoing side\'s print', d, d <= tolerance); }
+  sim.playSides(x, 1, y, 0, 1, 1); { const d = diff(shown(), pixelsOf(printB)); check('p = 1 is the incoming side\'s print', d, d <= tolerance); }
+  const pending = sim.sceneSide(printC, foot);
+  sim.playSides(x, 1, pending, 0, 0, 1); { const d = diff(shown(), pixelsOf(printC)); check('a leg ends on its incoming print before that side is recorded', d, d <= tolerance); }
+  sim.freeSide(pending);
+
+  // a leg to nothing leaves the canvas clear from its middle on, for the host's own page to show through
+  if (ground === 'transparent') {
+    const alphaMax = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(canvas, 0, 0, W, H); const b = g.getImageData(0, 0, W, H).data; let m = 0; for (let i = 3; i < b.length; i += 4) m = Math.max(m, b[i]); return m; };
+    let worst = 0;
+    for (const p of [.5, .75, 1]) { sim.playSides(x, MossWatercolor.legAt(p).ux, null, 0, 0, p, { toNothing: true }); worst = Math.max(worst, alphaMax()); }
+    check('a leg to nothing is clear from its middle on, alpha max', worst, worst <= .02 * 255);
+  } else {
+    sim.playSides(x, 1, null, 0, 0, .97); const kept = shown();
+    sim.playSides(x, 1, null, 0, 0, .97, { toNothing: true }); { const d = diff(shown(), kept); check('a paper ground ignores toNothing', d, d === 0); }
+  }
+
+  // a turn keeps the frame, even with an endpoint margin wider than where the turned leg resumes: through the mix,
+  // again through the mix from the baked side, and before the mix with a baked side kept
+  { const B = { outEnd: .1, inStart: .9 }, cv = document.createElement('canvas'), L = (p) => MossWatercolor.legAt(p, B);
+    const wide = MossWatercolor.createSim({ canvas: cv, texW: W, texH: H, divisor: 2, rect: () => ({ x: 0, y: 0, w: W, h: H }), ground, preset: { playOut: B.outEnd, playIn: B.inStart, endpointMargin: .35 } });
+    const grab = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d', { willReadFrequently: true }); g.fillStyle = bg; g.fillRect(0, 0, W, H); g.drawImage(cv, 0, 0, W, H); return g.getImageData(0, 0, W, H).data; };
+    const [wx, wy, wz] = [printA, printB, printC].map((pr) => { const sd = wide.sceneSide(pr, foot); let n = 0; while (!wide.sideRecorded(sd)) { wide.recordSide(sd, 36); if (++n > 2000) throw new Error('a side never finished recording'); } return sd; });
+    const draw = (a, b, p) => { const { ux, uy, k } = L(p); wide.playSides(a, ux, b, uy, k, p); return grab(); };
+    // mean diff, and the share of pixels any channel of which moved more than 16/255
+    let mean = 0, off = 0;
+    const turned = (before, after) => { let sum = 0, n = 0; for (let i = 0; i < after.length; i += 4) { let m = 0; for (let c = 0; c < 3; c++) { const d = Math.abs(after[i + c] - before[i + c]); sum += d; m = Math.max(m, d); } if (m > 16) n++; } mean = Math.max(mean, sum / (after.length / 4 * 3)); off = Math.max(off, n / (after.length / 4)); };
+    const bakeAt = (a, b, p) => { const { ux, uy, k } = L(p); return wide.bake(a, ux, b, uy, k, p); };
+    for (const at of [.25, .5, .8]) {
+      const before = draw(wx, wy, at), baked = bakeAt(wx, wy, at), turn = MossWatercolor.turnAt(at, B);
+      turned(before, draw(baked, wz, turn.p));
+      if (at === .5) {
+        const kept = draw(baked, wz, .05); turned(kept, draw(baked, wy, .05));
+        const again = draw(baked, wz, .4), rebaked = bakeAt(baked, wz, .4);
+        turned(again, draw(rebaked, wy, MossWatercolor.turnAt(.4, B).p)); wide.freeSide(rebaked);
+      }
+      wide.freeSide(baked);
+    }
+    wide.dispose();
+    check(`a turn keeps the frame: ${(off * 100).toFixed(3)}% of pixels off by more than 16, worst mean diff`, mean.toFixed(2), mean <= 1 && off <= .002); }
+
+  // an interrupted recording is its own dispersion, not one carried on from the other side's sheet
+  const alone = sim.sceneSide(printA, foot); record(alone);
+  sim.playSides(x, 1, null, 0, 0, .42); const interrupted = shown();
+  sim.playSides(alone, 1, null, 0, 0, .42); { const d = diff(shown(), interrupted); check('an interrupted recording matches an uninterrupted one', d, d <= tolerance); }
+
+  // a baked mix is the mix it was baked from
+  sim.playSides(x, 1, y, 1, .5, .5); const mix = shown();
+  const baked = sim.bake(x, 1, y, 1, .5, .5);
+  sim.playSides(baked, 1, alone, 1, 0, .5); { const d = diff(shown(), mix); check('a baked mix matches the mix it was baked from', d, d <= tolerance); }
+  sim.freeSide(baked);
+
+  // every field of a look reaches the recording
+  const plain = sim.sceneSide(printB, foot, { look: { stir: 0 } }), still = sim.sceneSide(printB, foot, { look: { stir: 0, splash: 0, mix: 0, bloom: .8, reach: 4 } });
+  record(plain); record(still);
+  sim.playSides(plain, 1, null, 0, 0, .42); const a = shown();
+  sim.playSides(still, 1, null, 0, 0, .42); { const d = diff(shown(), a); check('splash, mix, bloom and reach change the wash', d, d > 32); }
+
+  // past ten uploaded prints the oldest goes, and a side whose print went is drawn from it again
+  for (let i = 0; i < 12; i++) { const s = sim.sceneSide(make((g) => { g.fillStyle = `hsl(${i * 30} 60% 40%)`; g.fillRect(20 + i * 10, 20, 120, 120); }), foot); sim.recordSide(s, 1); sim.freeSide(s); }
+  sim.playSides(x, 0, y, 1, 0, 0); { const d = diff(shown(), pixelsOf(printA)); check('a print dropped from the cache is drawn again', d, d <= tolerance); }
+
+  sim.freeSide(alone);
+  results.push({ case: 'a freed side is unrecorded and draws nothing', ok: !sim.sideRecorded(alone) && sim.playSides(alone, .5, null, 0, 0, .3) === false });
+  sim.setTint('#1d201e');
+  results.push({ case: 'a new page colour voids a side', ok: !sim.sideRecorded(x) });
+  return { results, png: {} };
 }
 
 // A host's theme can flip under a recording: pigment is measured against the tint, so setTint must void
@@ -314,48 +373,52 @@ async function themeFlipInPage({ tolerance, threshold }) {
   const printA = make((g) => { g.strokeStyle = '#202020'; g.lineWidth = 2; for (let x = 10; x < W; x += 20) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke(); } g.fillStyle = '#181818'; g.font = 'bold 64px serif'; g.fillText('Moss', 40, 220); });
   const printB = make((g) => { g.strokeStyle = '#1a2a60'; g.lineWidth = 3; for (let i = -H; i < W; i += 26) { g.beginPath(); g.moveTo(i, 0); g.lineTo(i + H, H); g.stroke(); } g.fillStyle = '#a02818'; g.beginPath(); g.arc(250, 130, 70, 0, 7); g.fill(); });
   const canvas = document.getElementById('c');
-  const mk = (cv, tint) => { const s = MossWatercolor.createSim({ canvas: cv, texW: W, texH: H, divisor: 2, rect: () => ({ x: 0, y: 0, w: W, h: H }), ground: 'transparent', tint }); if (!s) throw new Error('no WebGL2 + EXT_color_buffer_float'); s.setPrints(printA, printB); return s; };
-  const finish = (s, pair) => { let n = 0; while (s.show(pair, true, 0.5)) if (++n > 1000) throw new Error('recording never finished'); };
+  const mk = (cv, tint) => { const s = MossWatercolor.createSim({ canvas: cv, texW: W, texH: H, divisor: 2, rect: () => ({ x: 0, y: 0, w: W, h: H }), ground: 'transparent', tint }); if (!s) throw new Error('no WebGL2 + EXT_color_buffer_float'); return s; };
+  // the two scenes' sides; the prints are opaque full frames, so each is recorded over its own print
+  const sides = (s) => [s.sceneSide(printA, printA), s.sceneSide(printB, printB)];
+  const finish = (s, legSides) => { for (const side of legSides) { let n = 0; while (!s.sideRecorded(side)) { s.recordSide(side, MossWatercolor.DEFAULT_PRESET.stepsPerFrame); if (++n > 1000) throw new Error('recording never finished'); } } };
+  const recorded = (s, legSides) => legSides.every((side) => s.sideRecorded(side));
+  const leg = (s, [x, y], p) => { const { ux, uy, k } = MossWatercolor.legAt(p); return s.playSides(x, ux, y, uy, k, p); };
   const over = (src, ground) => { const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d', { willReadFrequently: true }); g.fillStyle = ground; g.fillRect(0, 0, W, H); g.drawImage(src, 0, 0, W, H); return g.getImageData(0, 0, W, H).data; };
   const flat = (print) => { const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').drawImage(print, 0, 0); return over(c, DARK); };
   const meanDiff = (x, y) => { let e = 0, n = 0; for (let i = 0; i < x.length; i += 4) for (let k = 0; k < 3; k++) { e += Math.abs(x[i + k] - y[i + k]); n++; } return e / n; };
   const maxDiff = (x, y) => { let m = 0; for (let i = 0; i < x.length; i += 4) for (let k = 0; k < 3; k++) m = Math.max(m, Math.abs(x[i + k] - y[i + k])); return m; };
   const results = [];
   const sim = mk(canvas, LIGHT);
-  const pair = sim.pair();
-  finish(sim, pair);
-  results.push({ case: 'theme flip: recorded under the light tint', ok: sim.recorded(pair) === true });
+  const both = sides(sim);
+  finish(sim, both);
+  results.push({ case: 'theme flip: recorded under the light tint', ok: recorded(sim, both) === true });
   sim.setTint('#faf8f6');
-  results.push({ case: 'theme flip: a tint within 1/255 keeps the recording', ok: sim.recorded(pair) === true });
+  results.push({ case: 'theme flip: a tint within 1/255 keeps the recording', ok: recorded(sim, both) === true });
   sim.setTint([0.98, 0.973, 0.961]);
-  results.push({ case: 'theme flip: a triple within 1/255 keeps the recording', ok: sim.recorded(pair) === true });
+  results.push({ case: 'theme flip: a triple within 1/255 keeps the recording', ok: recorded(sim, both) === true });
   sim.setTint(DARK);
-  results.push({ case: 'theme flip: setTint to the dark tint voids the recording', ok: sim.recorded(pair) === false });
-  results.push({ case: 'theme flip: play() draws nothing from a stale pair', ok: sim.play(pair, true, 0.5) === false });
-  finish(sim, pair);
-  results.push({ case: 'theme flip: re-recorded under the dark tint', ok: sim.recorded(pair) === true });
+  results.push({ case: 'theme flip: setTint to the dark tint voids the recording', ok: recorded(sim, both) === false });
+  results.push({ case: 'theme flip: playSides() draws nothing from a stale side', ok: leg(sim, both, 0.5) === false });
+  finish(sim, both);
+  results.push({ case: 'theme flip: re-recorded under the dark tint', ok: recorded(sim, both) === true });
   const wantA = over(printA, DARK), wantB = over(printB, DARK);
   for (const [p, want, name] of [[0, wantA, 'A'], [1, wantB, 'B']]) {
-    sim.show(pair, true, p);
-    results.push({ case: `theme flip: re-recorded show(p=${p}) vs print ${name}: max diff ${maxDiff(over(canvas, DARK), want)}/255`, ok: maxDiff(over(canvas, DARK), want) <= tolerance });
+    leg(sim, both, p);
+    results.push({ case: `theme flip: re-recorded, p=${p} vs print ${name}: max diff ${maxDiff(over(canvas, DARK), want)}/255`, ok: maxDiff(over(canvas, DARK), want) <= tolerance });
   }
   // Past the endpoint margin the canvas over the new ground should still read as the print. A sim that kept
   // the light tint draws a light page with no pigment (a page as light as its tint is clear sheet), so the
   // page vanishes into the dark ground. Measured, mean abs diff per channel: re-recorded 32.2/255, stale light tint 202.3/255; FLIP_THRESHOLD sits between.
-  sim.show(pair, true, 0.1);
+  leg(sim, both, 0.1);
   const fresh = meanDiff(over(canvas, DARK), wantA);
-  const staleCanvas = document.createElement('canvas'); const stale = mk(staleCanvas, LIGHT); const sp = stale.pair(); finish(stale, sp); stale.show(sp, true, 0.1);
+  const staleCanvas = document.createElement('canvas'); const stale = mk(staleCanvas, LIGHT); const sp = sides(stale); finish(stale, sp); leg(stale, sp, 0.1);
   const staleDiff = meanDiff(over(staleCanvas, DARK), wantA);
-  results.push({ case: `theme flip: show(p=0.1) over the new ground, mean diff from the print ${fresh.toFixed(1)}/255 (stale light tint: ${staleDiff.toFixed(1)}/255)`, ok: fresh < threshold && staleDiff > threshold });
+  results.push({ case: `theme flip: p=0.1 over the new ground: mean diff from the print ${fresh.toFixed(1)}/255 (stale light tint: ${staleDiff.toFixed(1)}/255)`, ok: fresh < threshold && staleDiff > threshold });
   // A flip in the middle of a recording: the side has frames made against the light tint, so a side stamped when
   // it ENDS (not when it starts) would keep them and pass as recorded under the dark one.
-  const midCanvas = document.createElement('canvas'); const mid = mk(midCanvas, LIGHT); const mp = mid.pair();
-  mid.record(mp, true, 100);
-  results.push({ case: 'theme flip: a 100-step budget leaves the side part-recorded', ok: mid.recorded(mp) === false });
+  const midCanvas = document.createElement('canvas'); const mid = mk(midCanvas, LIGHT); const mp = sides(mid);
+  mid.recordSide(mp[0], 100);
+  results.push({ case: 'theme flip: a 100-step budget leaves the side part-recorded', ok: recorded(mid, mp) === false });
   mid.setTint(DARK);
-  finish(mid, mp); mid.show(mp, true, 0.1);
+  finish(mid, mp); leg(mid, mp, 0.1);
   const midDiff = meanDiff(over(midCanvas, DARK), wantA);
-  results.push({ case: `theme flip: flipped mid-recording, show(p=0.1) mean diff from the print ${midDiff.toFixed(1)}/255`, ok: midDiff < threshold });
+  results.push({ case: `theme flip: flipped mid-recording, p=0.1: mean diff from the print ${midDiff.toFixed(1)}/255`, ok: midDiff < threshold });
   return { results, png: {} };
 }
 
@@ -363,16 +426,16 @@ const { chromium } = await loadPlaywright();
 const browser = await chromium.launch();
 let failed = false;
 try {
-  for (const [dark, bg, ground, saturated, flip] of [[false, '#f4efe6'], [true, '#1d201e'], [false, '#f4efe6', 'transparent'], [true, '#1d201e', 'transparent'], [true, '#0000ff', undefined, true], [false, '#faf8f5', 'transparent', false, true]]) {
+  for (const [dark, bg, ground, saturated, flip, sides] of [[false, '#f4efe6'], [true, '#1d201e'], [false, '#f4efe6', 'transparent'], [true, '#1d201e', 'transparent'], [true, '#0000ff', undefined, true], [false, '#faf8f5', 'transparent', false, true], [false, '#f4efe6', undefined, false, false, true], [false, '#f4efe6', 'transparent', false, false, true]]) {
   const page = await browser.newPage({ viewport: { width: 500, height: 450 }, deviceScaleFactor: 1 });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.setContent(`<!doctype html><style>:root{--bg:${bg}}body{margin:0;background:var(--bg)}canvas{position:absolute}</style><canvas id="c"></canvas>`);
   await page.addScriptTag({ content: script });
-  const { results, png } = await page.evaluate(flip ? themeFlipInPage : saturated ? saturatedInPage : inPage, { tolerance: TOLERANCE, search: SEARCH, dark, ground, threshold: FLIP_THRESHOLD });
+  const { results, png } = await page.evaluate(sides ? sceneSidesInPage : flip ? themeFlipInPage : saturated ? saturatedInPage : inPage, { tolerance: TOLERANCE, search: SEARCH, dark, ground, threshold: FLIP_THRESHOLD });
   if (errors.length) throw new Error(errors.join('\n'));
   if (process.env.WATERCOLOR_PNG_DIR) for (const [p, url] of Object.entries(png)) writeFileSync(`${process.env.WATERCOLOR_PNG_DIR}/${dark ? 'dark' : 'light'}${ground ? '-transparent' : ''}-p${Math.round(p * 100)}.png`, Buffer.from(url.split(',')[1], 'base64'));
-  console.log(`-- ${dark ? 'dark' : 'light'} page (${bg})${ground ? `, ground: ${ground}` : ''}`);
+  console.log(`-- ${dark ? 'dark' : 'light'} page (${bg})${ground ? `, ground: ${ground}` : ''}${sides ? ', scene sides' : ''}`);
   for (const r of results) {
     const ok = r.ok !== undefined ? r.ok : r.stats ? r.std >= 1 && r.p99 >= r.paperLuma + 25 : r.wash ? r.max > 1000 : r.expectDifferent ? r.max > 32 : r.nearEnd ? r.max <= 24 && r.offset === 0 : r.max <= TOLERANCE && r.offset === 0;
     if (!ok) failed = true;

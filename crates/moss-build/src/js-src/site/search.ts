@@ -31,6 +31,8 @@
 // Rust-owned constants (bundle mount URL + palette strings) arrive via the
 // generated module — `generate-artifacts -- search-runtime` — never hand-mirrored.
 import { BUNDLE_PATH, STRINGS, type SearchStrings } from "./search.generated";
+import { lockPageScroll } from "./viewport";
+import { pageLanguage } from "./writing-mode";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -68,15 +70,7 @@ interface PagefindApi {
 }
 
 /** Resolve `<html lang>` the same way `Language::from_bcp47` does: any zh-* by region. */
-function resolveStrings(): SearchStrings {
-  const tag = (document.documentElement.lang || "en").toLowerCase();
-  if (/^de(-|_|$)/.test(tag)) return STRINGS.de;
-  if (!tag.startsWith("zh")) return STRINGS.en;
-  if (/hant|tw|hk|mo/.test(tag)) return STRINGS["zh-hant"];
-  return STRINGS["zh-hans"];
-}
-
-const S = resolveStrings();
+const S: SearchStrings = STRINGS[pageLanguage()];
 
 // ---------------------------------------------------------------------------
 // State
@@ -105,8 +99,8 @@ let indexVersion = 0;
 
 /** Element focus returns to on close (the trigger that opened the panel). */
 let returnFocusTo: HTMLElement | null = null;
-/** Saved inline `overflow` so close restores exactly what the page had. */
-let savedOverflow: string | null = null;
+/** Undoes the page scroll lock taken on open. */
+let unlockScroll: (() => void) | null = null;
 
 // ---------------------------------------------------------------------------
 // Pagefind loading
@@ -297,8 +291,7 @@ function open(trigger: HTMLElement | null): void {
   returnFocusTo = trigger;
   isOpen = true;
   root.hidden = false;
-  savedOverflow = document.documentElement.style.overflow;
-  document.documentElement.style.overflow = "hidden";
+  unlockScroll = lockPageScroll();
   input?.focus();
   input?.select();
   // Warm the index while the user is still reaching for the first key.
@@ -309,15 +302,15 @@ function close(): void {
   if (!isOpen) return;
   isOpen = false;
   if (overlay) overlay.hidden = true;
-  document.documentElement.style.overflow = savedOverflow ?? "";
-  savedOverflow = null;
+  unlockScroll?.();
+  unlockScroll = null;
   clearProgress();
   window.clearTimeout(debounceTimer);
   // Closing mid-composition (Esc, backdrop click) doesn't reliably fire
   // compositionend — without this the next open's `input` handler stays gated
   // forever, since nothing else clears the flag.
   isComposing = false;
-  returnFocusTo?.focus();
+  returnFocusTo?.focus({ preventScroll: true });
   returnFocusTo = null;
 }
 
@@ -517,6 +510,8 @@ function renderResults(data: PagefindResultData[]): void {
     a.appendChild(excerpt);
 
     a.addEventListener("mousemove", () => select(i, false));
+    // Tab moves focus onto a row; the highlighted row follows it, so only one row is lit.
+    a.addEventListener("focus", () => select(i, false));
     li.appendChild(a);
     frag.appendChild(li);
     rows.push(a);
@@ -635,8 +630,8 @@ document.addEventListener("moss-morph-patched", () => {
   if (overlay && !overlay.isConnected) {
     if (isOpen) {
       isOpen = false;
-      document.documentElement.style.overflow = savedOverflow ?? "";
-      savedOverflow = null;
+      unlockScroll?.();
+      unlockScroll = null;
       returnFocusTo = null;
     }
     // Same gate close() clears: a morph mid-composition doesn't fire

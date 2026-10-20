@@ -231,7 +231,7 @@ fn shipping_note(sheet: &str) -> &'static str {
         }
         "comments.css" => "linked only when the site has synced comments",
         "email.css" => {
-            "linked only when the email channel is installed or a page has :::subscribe / :::apply"
+            "linked only when the email channel is installed or a page has :::subscribe"
         }
         "review.css" => "linked only when the site has review data",
         _ => "shipping conditions unknown — add a row to shipping_note()",

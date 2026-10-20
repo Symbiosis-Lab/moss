@@ -77,7 +77,7 @@ impl FieldDecl {
 }
 
 /// The label for `lang` (matched ignoring case), else the `en` one.
-fn label_in<'a>(labels: &'a [(String, String)], lang: &str) -> Option<&'a str> {
+pub fn label_in<'a>(labels: &'a [(String, String)], lang: &str) -> Option<&'a str> {
     let find = |tag: &str| labels.iter().find(|(t, _)| t.eq_ignore_ascii_case(tag)).map(|(_, l)| l.as_str());
     find(lang).or_else(|| find("en"))
 }

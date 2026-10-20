@@ -5,6 +5,9 @@
 use std::fs;
 use std::path::PathBuf;
 
+#[path = "support/site.rs"]
+mod site;
+
 fn build_sync(folder_path: &str) -> Result<String, String> {
     use moss_build::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
     use moss_build::cli::host::cli_host_ports;
@@ -134,6 +137,21 @@ fn kinds_with_weights_order_by_weight_not_by_config() {
 fn a_built_in_kind_without_a_title_uses_its_translated_title() {
     let links = nav_links_with("[terms.authors]\nnav = true\n", &[("ada.md", "title: Ada Piece\nauthor: [Ada]")]);
     assert_eq!(links.last(), Some(&link("/authors/", "Authors")), "{links:?}");
+}
+
+#[test]
+fn a_declared_kinds_root_without_a_title_is_headed_by_its_key_capitalized_like_its_nav_entry() {
+    let site = site::Site::with_config(
+        "\n[terms.sponsors]\nfields = [\"sponsor\"]\nnav = true\n",
+        &[
+            ("index.md", "---\ntitle: Home\n---\n\nHello.\n"),
+            ("notes/first.md", "---\ntitle: First\nsponsor: [Birch]\n---\n\nNote.\n"),
+        ],
+    );
+    let root = site.html("sponsors/index.html");
+    assert!(root.contains("<title>Sponsors") && root.contains(">Sponsors</h1>"), "{root}");
+    let term = site.html("sponsors/birch/index.html");
+    assert!(term.contains(">Sponsors</span>"), "the breadcrumb: {term}");
 }
 
 #[test]

@@ -47,14 +47,11 @@ fn classify_groups_statuses_by_what_the_client_should_do() {
         SetaError::Parse("bad json".into()),
         SetaError::Io("open failed".into()),
         SetaError::Identity("no key".into()),
-        SetaError::NotAllowlisted {
-            apply_url: String::new(),
-        },
     ] {
         assert_eq!(
             classify(&local),
             FailureClass::Fatal,
-            "a local defect / invite gate is not a network condition: {local}"
+            "a local defect is not a network condition: {local}"
         );
     }
 }

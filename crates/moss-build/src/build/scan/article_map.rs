@@ -198,23 +198,27 @@ pub struct ArticleMap {
     /// reading `generated`/`terms`/`kinds` for that purpose.
     #[serde(default)]
     pub folder_indexes: std::collections::BTreeMap<String, String>,
+
+    /// The site's language editions, so the editor finds the term pages of
+    /// the edition a page is in.
+    #[serde(default)]
+    pub editions: moss_core::home::Editions,
 }
 
 impl ArticleMap {
     /// Create a new empty article map
     pub fn new() -> Self {
-        Self {
-            articles: HashMap::new(),
-            pages: HashMap::new(),
-            page_titles: HashMap::new(),
-            dir_overrides: HashMap::new(),
-            url_collisions: HashMap::new(),
-            generated: Vec::new(),
-            terms: std::collections::BTreeMap::new(),
-            kinds: Vec::new(),
-            fields_with_members: std::collections::BTreeMap::new(),
-            folder_indexes: std::collections::BTreeMap::new(),
-        }
+        Self::default()
+    }
+
+    /// The language edition of the page built from `source`, a site-relative
+    /// source path: `""` for the default edition. Read from the page's address,
+    /// where a translation by file name (`about.de.md`) shows its edition, else
+    /// from the source path's first folder, which sees a language tree but not
+    /// a translation by file name the last build did not see.
+    pub fn edition_of_source(&self, source: &str) -> String {
+        let url = self.articles.values().find(|a| a.source_path == source).map(|a| a.url_path.as_str());
+        self.editions.of(url.unwrap_or(source))
     }
 
     /// Check if a URL path corresponds to an article
@@ -440,8 +444,10 @@ pub fn build_article_map(
     url_collisions: &[UrlCollision],
     generated: &[String],
     terms: &TermIndex,
+    editions: &moss_core::home::Editions,
 ) -> ArticleMap {
     let mut map = ArticleMap::new();
+    map.editions = editions.clone();
     map.generated = generated.to_vec();
     map.terms = terms.sites().clone();
     map.kinds = terms.kinds().to_vec();
@@ -457,8 +463,8 @@ pub fn build_article_map(
     // field has a member, rather than an empty Vec, so a reader's `.get()`
     // and a fallback-to-`fields[0]` branch agree on "no members" either way.
     for term_key in terms.sites().keys() {
-        let Some((ns, _)) = term_key.split_once('/') else { continue };
-        let Some(kind) = terms.kinds().iter().find(|k| k.key == ns) else { continue };
+        let Some(term) = crate::build::terms::TermKey::parse(term_key) else { continue };
+        let Some(kind) = terms.kinds().iter().find(|k| k.key == term.ns) else { continue };
         let fields_with_a_member: Vec<String> = kind
             .fields
             .iter()

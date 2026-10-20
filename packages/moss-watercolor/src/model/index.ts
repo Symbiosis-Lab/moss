@@ -2,17 +2,12 @@
 // transition's outgoing scene plays its own recorded dispersion forward
 // through [0, outEnd], the two washes mix as optical thickness through
 // (outEnd, inStart), and the incoming scene consolidates by playing its own
-// dispersion backward through [inStart, 1] -- so a transition "from A to B"
-// read backward is the transition "from B to A" (at 1 - p when the bounds
-// are symmetric, mapped through them otherwise: see `retarget`).
-//
-// This mirrors the engine's own `play(pair, fromFwd, p)` (engine/solver.ts),
-// which computes the same three phases inline against its `playOut`/
-// `playIn` preset fields; these functions exist so a caller can reason about
-// -- and redirect -- a leg's phase without reaching into the engine, and so
-// the three-phase logic itself is unit-tested directly.
+// dispersion backward through [inStart, 1]. `legAt` gives what the engine's
+// `playSides` draws at p, and `turnAt` turns a leg toward a third scene
+// without a change on screen; neither needs the engine, so the phase logic
+// is unit-tested directly.
 import { DEFAULT_PRESET } from '../engine/preset.js';
-import { smooth } from '../engine/math.js';
+import { clamp01, smooth } from '../engine/math.js';
 
 export interface PhaseBounds {
   /** The outgoing side plays through this fraction of p. */
@@ -33,38 +28,29 @@ export function phaseOf(p: number, bounds: PhaseBounds = DEFAULT_PHASE_BOUNDS): 
   return 'in';
 }
 
-/**
- * Redirects an in-flight leg to `next` without a visual jump, in the same
- * terms the engine's `play()` draws it: the outgoing side shows its
- * recording at `p / outEnd`, the incoming side at `(1 - p) / (1 - inStart)`
- * (both clamped to [0, 1]), and the two are weighted by
- * `k = smooth(outEnd, inStart, p)`.
- *
- * - Outgoing phase (`k = 0`): only the source is on screen, so the source is
- *   kept and the destination swapped silently.
- * - Mix phase with `k < 0.5`: the source still dominates; it is kept and the
- *   destination swapped (the incoming half of the blend changes, which is the
- *   smaller part of the picture).
- * - Mix phase with `k >= 0.5`, or the incoming phase: the old destination
- *   dominates, so it becomes the source. Its recording is at the position
- *   `(1 - p) / (1 - inStart)` the incoming side was showing, which the
- *   outgoing side reaches at `outEnd * ((1 - p) / (1 - inStart))` (the full
- *   recording, `outEnd`, throughout the mix).
- *
- * Retargeting back to the leg's own source is the reverse transition: the
- * two ends swap and `p` is mapped so the same picture stays on screen (the
- * outgoing and incoming recordings trade places, and the blend weight
- * becomes `1 - k`).
- */
-export function retarget<T>(from: T, to: T, p: number, next: T, bounds: PhaseBounds = DEFAULT_PHASE_BOUNDS): { from: T; to: T; p: number } {
+/** What `playSides` draws at `p`: the outgoing side's dissolve `ux`, the incoming side's `uy`, and the mix `k` between them. */
+export function legAt(p: number, bounds: PhaseBounds = DEFAULT_PHASE_BOUNDS): { ux: number; uy: number; k: number } {
   const { outEnd, inStart } = bounds;
-  const phase = phaseOf(p, bounds);
-  // How far the incoming side's recording has played back, 1 = fully dispersed.
-  const incoming = Math.min(1, (1 - p) / (1 - inStart));
-  if (next === from) {
-    const reversed = phase === 'out' ? 1 - ((1 - inStart) * p) / outEnd : phase === 'mix' ? outEnd + inStart - p : outEnd * incoming;
-    return { from: to, to: from, p: reversed };
-  }
-  if (phase === 'out' || (phase === 'mix' && smooth(outEnd, inStart, p) < 0.5)) return { from, to: next, p };
-  return { from: to, to: next, p: outEnd * incoming };
+  return { ux: clamp01(p / outEnd), uy: clamp01((1 - p) / (1 - inStart)), k: smooth(outEnd, inStart, p) };
+}
+
+/**
+ * Turns a leg toward a third scene from where it stands at `p`, so the frame on screen does not change. The new
+ * leg's outgoing side is `from`, and it continues at the returned `p` toward the new scene:
+ *
+ * - `'x'` while nothing of the incoming side is on screen yet: the leg keeps its outgoing side and `p`.
+ * - `'y'` while the incoming side gathers alone: it becomes the outgoing side, dissolving again from as far as it
+ *   had gathered.
+ * - `'mix'` in between: the host bakes the mix `legAt(p)` describes (`bake`, at `p`) and the leg starts from it,
+ *   at its mixed end.
+ *
+ * The bounds must be symmetric (`outEnd = 1 - inStart`).
+ */
+export function turnAt(p: number, bounds: PhaseBounds = DEFAULT_PHASE_BOUNDS): { from: 'x' | 'y' | 'mix'; p: number } {
+  const { outEnd, inStart } = bounds, phase = phaseOf(p, bounds);
+  // the envelope is symmetric in p, so a side handed over at 1 - p keeps it only when the bounds are too
+  if (Math.abs(outEnd - (1 - inStart)) > 1e-9) throw new Error(`turnAt: bounds must be symmetric (outEnd ${outEnd}, inStart ${inStart})`);
+  if (phase === 'out') return { from: 'x', p };
+  if (phase === 'in') return { from: 'y', p: (outEnd * (1 - p)) / (1 - inStart) };
+  return { from: 'mix', p: outEnd };
 }

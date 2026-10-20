@@ -147,7 +147,7 @@ fn in_block(block: &Block, out: &mut Vec<String>) {
                 in_block(nested, out);
             }
         }
-        // Code is the author's literal text; Subscribe/Buttons/Gallery/Apply
+        // Code is the author's literal text; Subscribe/Buttons/Gallery
         // carry no prose body; `Recent`'s fallback is unparsed markdown (see
         // the module doc); Other is raw passthrough HTML.
         Block::CodeBlock { .. }
@@ -155,8 +155,7 @@ fn in_block(block: &Block, out: &mut Vec<String>) {
             Shortcode::Subscribe(_)
             | Shortcode::Buttons(_)
             | Shortcode::Gallery(_)
-            | Shortcode::Recent(_)
-            | Shortcode::Apply(_),
+            | Shortcode::Recent(_),
         )
         | Block::ThematicBreak
         | Block::Other(_) => {}

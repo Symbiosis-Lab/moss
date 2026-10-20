@@ -1346,37 +1346,6 @@ footer.container:has(> .moss-subscribe) > .moss-colophon {
   color: var(--moss-error, #c85450);
 }
 
-/* ─── apply success: stays a labeled ink pill, NOT subscribe's accent circle ─── */
-.moss-subscribe-form[data-position="apply"][data-state="success"] .moss-btn-slot .moss-btn {
-  position: static;
-  width: auto;
-  height: auto;
-  padding: .85rem 1rem;
-  border-radius: 9px;
-  background: var(--moss-color-text);
-  color: var(--moss-color-bg);
-  cursor: default;
-}
-.moss-subscribe-form[data-position="apply"][data-state="success"] .moss-btn__label {
-  opacity: 1;
-}
-/* The check-mark only joins the label in the normal flow for the success
-   pill ("…已提交" + check side by side). In idle / loading / error it must
-   stay out of flow (the shared `.moss-btn__check` rule sets
-   `position: absolute`) — otherwise the invisible, in-flow check reserves
-   ~half its width beside the label and shifts "Apply" / "申请" left of the
-   button's centre. Scoping to [data-state="success"] matches the state-scoped
-   pattern used by every other .moss-btn state rule above. */
-.moss-subscribe-form[data-position="apply"][data-state="success"] .moss-btn__check {
-  position: static;
-}
-.moss-subscribe-form[data-position="apply"] .moss-apply-hp {
-  position: absolute;
-  left: -9999px;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-}
 /* Reduced motion jump-cuts to end states (design-vocabulary.md). The spinner
    is deliberately NOT zeroed here — its exception lives on the family rule
    at .moss-btn__spinner::after above. */
@@ -7788,11 +7757,12 @@ a.moss-grid-card:hover {
 }
 
 /* Position the indicator under a scroll row (`scroll-row.js` adds it; without the
-   script the row still scrolls). The dot is drawn 8px but the button is a
-   24px target, the WCAG 2.5.8 minimum. Cards in view are lit; the first of
-   them is also `aria-current` and larger. Long rows clip a stable dot track to
-   seven slots; smaller edge dots signal cards beyond the viewport. `currentColor`
-   keeps the dots right on any theme's ground. */
+   script the row still scrolls). A row of up to seven cards gets one dot per
+   card: drawn 8px in a 24px target, the WCAG 2.5.8 minimum; cards in view are
+   lit and the first of them is `aria-current` and larger. A longer row gets a
+   count and ‹ › buttons instead (`data-indicator="count"`), because dots stop
+   telling a reader where they are past about seven. `currentColor` keeps it
+   right on any theme's ground. */
 .moss-scroll-dots {
   display: flex;
   flex-wrap: nowrap;
@@ -7801,22 +7771,17 @@ a.moss-grid-card:hover {
   color: var(--moss-color-text);
   direction: ltr;
   writing-mode: horizontal-tb;
+  /* The row gives up its section margin once this is shown (above); -4px,
+     the 24px controls and this make up that same margin, so the page below
+     does not move when the script adds the indicator. That margin is
+     --moss-space-lg; a theme that changes the row's end margin changes this
+     too. The vertical partial undoes this. */
+  block-size: 24px;
+  margin-block-end: calc(var(--moss-space-lg) - 20px);
 }
 .moss-scroll-dots-viewport {
-  overflow: hidden;
-  touch-action: pan-y;
-}
-.moss-scroll-dots[data-indicator="dynamic"] .moss-scroll-dots-viewport {
-  inline-size: calc(7 * 24px);
-}
-.moss-scroll-dots-track {
   display: flex;
-  inline-size: max-content;
-  transform: translateX(calc(var(--moss-scroll-dot-start, 0) * -24px));
-  transition: transform 0.22s ease-out;
-}
-.moss-scroll-dots[data-scrubbing] .moss-scroll-dots-track {
-  transition: none;
+  touch-action: pan-y;
 }
 
 /* `scroll-row.ts`'s `fit()` sets the `hidden` IDL property, not just a class,
@@ -7859,24 +7824,43 @@ a.moss-grid-card:hover {
   inline-size: 10px;
   block-size: 10px;
 }
-.moss-scroll-dots[data-indicator="dynamic"] button::before {
-  inline-size: 6px;
-  block-size: 6px;
-  opacity: 0.45;
+/* The count: the widest value it can show sits invisibly in the same grid
+   cell, so the visible number never changes the count's width and the
+   buttons beside it never move. */
+.moss-scroll-dots[data-indicator="count"] {
+  align-items: center;
+  gap: var(--moss-space-xs);
 }
-.moss-scroll-dots[data-indicator="dynamic"] button.is-edge-start::before,
-.moss-scroll-dots[data-indicator="dynamic"] button.is-edge-end::before {
-  inline-size: 4px;
-  block-size: 4px;
+.moss-scroll-dots-count {
+  display: inline-grid;
+  justify-items: center;
+  font-size: var(--moss-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--moss-color-text-secondary);
+}
+.moss-scroll-dots-count > * {
+  grid-area: 1 / 1;
+}
+.moss-scroll-dots-count-size {
+  visibility: hidden;
+}
+.moss-scroll-dots[data-indicator="count"] button {
+  font-size: var(--moss-size-md);
+  line-height: 1;
+}
+.moss-scroll-dots[data-indicator="count"] button::before {
+  content: none;
+}
+.moss-scroll-dots[dir="rtl"] {
+  direction: rtl;
+}
+/* A vertical row scrolls down the line: ‹ and › turn to point up and down. */
+.moss-scroll-dots[data-axis="block"] button {
+  rotate: 90deg;
+}
+.moss-scroll-dots[data-indicator="count"] button[aria-disabled="true"] {
   opacity: 0.3;
-}
-.moss-scroll-dots[data-indicator="dynamic"] button.is-visible::before {
-  opacity: 0.85;
-}
-.moss-scroll-dots[data-indicator="dynamic"] button[aria-current="true"]::before {
-  inline-size: 10px;
-  block-size: 10px;
-  opacity: 0.95;
+  cursor: default;
 }
 .moss-scroll-dots button:focus-visible {
   outline: 2px solid var(--moss-color-ui-accent);
@@ -7884,7 +7868,6 @@ a.moss-grid-card:hover {
   border-radius: 50%;
 }
 @media (prefers-reduced-motion: reduce) {
-  .moss-scroll-dots-track,
   .moss-scroll-dots button::before {
     transition: none;
   }

@@ -473,7 +473,6 @@ fn collect_native_slots_for_documents(
         is_moss_hosted,
     );
     let has_inline_subscribe = pages.iter().any(|p| p.features.inline_subscribe);
-    let has_inline_apply = pages.iter().any(|p| p.features.inline_apply);
     let has_footer_file = pages.iter().any(|p| p.slot_only);
 
     // Site fingerprint: a PII-free, one-line summary of the build-shaping state
@@ -485,14 +484,13 @@ fn collect_native_slots_for_documents(
     // was missing when diagnosing that report.
     log::info!(
         target: "moss::build",
-        "site fingerprint: pages={}, email_installed={}, comments={}, moss_hosted={}, footer_md={}, inline_subscribe={}, inline_apply={}, analytics={}",
+        "site fingerprint: pages={}, email_installed={}, comments={}, moss_hosted={}, footer_md={}, inline_subscribe={}, analytics={}",
         pages.len(),
         email_channel_installed,
         comments_enabled,
         is_moss_hosted,
         has_footer_file,
         has_inline_subscribe,
-        has_inline_apply,
         services_config.analytics.is_some(),
     );
 
@@ -522,11 +520,9 @@ fn collect_native_slots_for_documents(
         }
     }
 
-    // Subscribe-family membership (`email` channel / inline `:::subscribe` / inline
-    // `:::apply`) is single-sourced through `should_inject_subscribe_assets` so this
-    // early-return guard and the downstream injector cannot drift — they did once,
-    // when `inline_apply` was added to the injector but not to this guard, silently
-    // dropping the apply form's CSS/JS on apply-only sites.
+    // Subscribe-family membership (`email` channel / inline `:::subscribe`) is
+    // single-sourced through `should_inject_subscribe_assets` so this early-return
+    // guard and the downstream injector cannot drift.
     if !(services_config.analytics.is_some()
         || services_config.comments.is_some()
         || services_config.email.is_some()

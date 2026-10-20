@@ -409,3 +409,19 @@ fn the_not_found_page_is_not_indexed() {
     assert_eq!(index.pages, SITE_PAGES);
     assert_eq!(index.skipped, 0, "leaving the page out is not a skip");
 }
+
+/// A redirect stub is an old address that sends the reader on, so a search
+/// must lead to the page it names, never to "Redirecting…".
+#[test]
+fn a_redirect_stub_is_not_indexed() {
+    let dir = tempfile::tempdir().unwrap();
+    write_bilingual_site(dir.path());
+    std::fs::create_dir_all(dir.path().join("old-name")).unwrap();
+    let stub = crate::build::feeds::redirects::generate_redirect_html("/new-name/");
+    std::fs::write(dir.path().join("old-name/index.html"), stub).unwrap();
+    let _serialize = lock_index_counter();
+    clear_segment_cache();
+    let index = build_search_index(dir.path()).expect("index should build");
+    assert_eq!(index.pages, SITE_PAGES);
+    assert_eq!(index.skipped, 0, "leaving the stub out is not a skip");
+}

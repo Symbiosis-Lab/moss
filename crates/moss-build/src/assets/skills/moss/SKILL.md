@@ -16,6 +16,8 @@ markup, markup over code, shared rules over duplicated ones.
 it. Generation from scratch scatters one-off HTML and gradient-soup themes;
 both erode legibility.
 
+**Never ship less than the design needs.** moss has a low floor and a high ceiling: the simple parts of a site are plain markdown and folders, and anything a hand-built site can put on the web a moss site can put there too. When markdown cannot say something — an interactive drawing, a scroll-driven scene, a custom component — keep the words in markdown and take an escape hatch for the rest: raw `<svg>` or `<canvas>` in a partial, `.moss/theme/script.js`, a plugin. Do not cut the design down to what is easy in markdown. If moss blocks something the web can do, or forces a workaround, tell the user it is a moss gap and name the reproduction, rather than quietly shipping less.
+
 ## Start from a blank folder
 
 1. Create a folder. Its name becomes the site title — choose it deliberately.
@@ -212,7 +214,7 @@ model (dark mode, quiet chrome, `@layer` rules), see
   `staging`) **then** `moss deploy <folder> --site-id=<name>` → publishes to
   `<name>.mosspub.com`. The order matters: without a prior explicit `moss env`,
   `deploy` will not register a site, and `--site-id` alone silently does
-  nothing. The invite allowlist can also refuse registration.
+  nothing. The hosting service can also refuse a new site with a site limit, including a limit of 0 when it is taking no new sites.
 - **First publish refused as "Identity not yet verified":** the folder's key is
   not linked to an account yet. `moss deploy <folder> --site-id=<name> --email
   <address>` emails a sign-in link, waits up to 15 minutes for it to be opened,

@@ -127,6 +127,14 @@ pub fn merge_redirects(
     merged
 }
 
+/// How every redirect stub begins, so [`is_redirect_stub`] can tell one from a page.
+const STUB_HEAD: &str = "<!DOCTYPE html>\n<html><head>\n<meta charset=\"utf-8\">\n<meta http-equiv=\"refresh\"";
+
+/// Whether built HTML is a redirect stub this module wrote.
+pub fn is_redirect_stub(html: &str) -> bool {
+    html.starts_with(STUB_HEAD)
+}
+
 /// Generate an HTML redirect page for the given target URL.
 ///
 /// Uses `<meta http-equiv="refresh">` for immediate redirect with a
@@ -144,10 +152,7 @@ pub fn generate_redirect_html(target_url: &str) -> String {
     // the attribute or the link text.
     let absolute = crate::build::page::meta::escape_html_attr(&absolute);
     format!(
-        r#"<!DOCTYPE html>
-<html><head>
-<meta charset="utf-8">
-<meta http-equiv="refresh" content="0; url={absolute}">
+        r#"{STUB_HEAD} content="0; url={absolute}">
 <link rel="canonical" href="{absolute}">
 <title>Redirecting...</title>
 </head><body>
@@ -247,6 +252,15 @@ pub fn emit_redirect_table(
             if folder_sources.contains(source.as_str()) {
                 new_renames.insert(to_pretty_url(old), to_pretty_url(new));
             }
+            let (old_qr, new_qr) = (qr_key_for_url_path(old), qr_key_for_url_path(new));
+            if previous.files.contains_key(&old_qr) && pending.is_registered(&new_qr) {
+                new_renames.insert(old_qr, new_qr);
+            }
+        }
+    }
+    // A moved term page keeps its QR code's old address too, like a renamed source.
+    if let Some(previous) = published_record::load_address_baseline(paths, backfill::publish_target(paths).as_deref()) {
+        for (old, new) in &inputs.term_stubs {
             let (old_qr, new_qr) = (qr_key_for_url_path(old), qr_key_for_url_path(new));
             if previous.files.contains_key(&old_qr) && pending.is_registered(&new_qr) {
                 new_renames.insert(old_qr, new_qr);

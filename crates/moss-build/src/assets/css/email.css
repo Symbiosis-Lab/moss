@@ -104,52 +104,6 @@
       min-height: 0;
     }
   }
-
-  /* ─── Apply form: borderless, placeholder-only, single column ─── */
-  .moss-apply {
-    max-width: 32rem;
-    margin: var(--moss-space-lg) 0;
-    /* Left-align column — do not center-align child text */
-    text-align: start;
-  }
-
-  /* No flex gap: vertical rhythm comes from the helper margins so each helper
-     hugs its own input while the two field-groups stay generously apart. */
-  .moss-subscribe-form[data-position="apply"] {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .moss-subscribe-form[data-position="apply"] .moss-input {
-    width: 100%;
-    box-sizing: border-box;
-    margin: 0;
-  }
-
-  /* Submit button at its natural width, left-aligned under the fields */
-  .moss-subscribe-form[data-position="apply"] .moss-btn-slot {
-    align-self: flex-start;
-  }
-
-  /* Honeypot: off-screen, inaccessible to humans */
-  .moss-apply-hp {
-    position: absolute;
-    left: -9999px;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-  }
-
-  /* Helper line under each field — no visible <label>; the inputs are
-     placeholder-only and named for assistive tech via aria-label. The top
-     margin hugs the field above; the bottom margin sets the group rhythm. */
-  .moss-apply-helper {
-    margin: 0.375rem 0 var(--moss-space-lg) 0;
-    font-size: var(--moss-size-xs);
-    color: var(--moss-color-text-secondary);
-    text-align: start;
-  }
 }
 
 /* A pending form (no site_id baked in yet) must never face real readers:

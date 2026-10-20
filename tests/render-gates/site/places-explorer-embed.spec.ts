@@ -465,6 +465,11 @@ test.describe("style:map embed", () => {
     // not a proxy for this one.
     await page.mouse.move(0, 0);
     await expect.poll(() => button.evaluate((el) => getComputedStyle(el).transform), { timeout: 2000 }).toBe("none");
+    // The wrapper's enter animation scales the button with it. Its class can
+    // clear on a fallback timer before a slow runner has finished the
+    // transform, so wait on the transform itself.
+    const wrapper = page.locator(POSTER).locator(".immersive-iframe-wrapper");
+    await expect.poll(() => wrapper.evaluate((el) => getComputedStyle(el).transform), { timeout: 2000 }).toBe("none");
     const style = await read();
     const luminance = ([r, g, b]: number[]) => {
       const lin = (v: number) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };

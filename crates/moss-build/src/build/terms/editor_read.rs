@@ -26,6 +26,7 @@ pub struct VaultTerms {
 #[derive(Debug, serde::Serialize, specta::Type)]
 pub struct KindTerms {
     pub fields: Vec<String>,
+    /// Each name once, whichever editions use it.
     pub names: Vec<String>,
 }
 
@@ -34,17 +35,15 @@ pub struct KindTerms {
 pub fn list_vault_terms_in(map: &ArticleMap) -> VaultTerms {
     let mut kinds = BTreeMap::new();
     for kind in &map.kinds {
-        let prefix = format!("{}/", kind.key);
+        let mut seen = std::collections::HashSet::new();
         let names = map
             .terms
             .iter()
-            .filter(|(key, _)| key.starts_with(&prefix))
+            .filter(|(key, _)| super::TermKey::parse(key).is_some_and(|term| term.ns == kind.key))
+            .filter(|(_, rec)| seen.insert(rec.display.as_str()))
             .map(|(_, rec)| rec.display.clone())
             .collect();
-        kinds.insert(
-            kind.key.clone(),
-            KindTerms { fields: kind.fields.clone(), names },
-        );
+        kinds.insert(kind.key.clone(), KindTerms { fields: kind.fields.clone(), names });
     }
     VaultTerms { kinds }
 }
@@ -75,7 +74,7 @@ mod tests {
             key: key.to_string(),
             fields: fields.iter().map(|f| f.to_string()).collect(),
             title: key.to_string(),
-            is_place: false,
+            titles: Vec::new(), is_place: false,
             parents: Default::default(), explorer: None, line: None,
         }
     }
@@ -111,6 +110,15 @@ mod tests {
         assert_eq!(t.kinds["people"].fields, vec!["author", "editor"]);
         assert_eq!(t.kinds["people"].names, vec!["Scarly"]);
         assert_eq!(t.kinds["tags"].names, vec!["City", "Prose"]);
+    }
+
+    #[test]
+    fn a_name_two_editions_use_is_listed_once() {
+        let map = map_with(
+            vec![kind("people", &["author"])],
+            &[("de/people/scarly", "Scarly", None), ("people/scarly", "Scarly", None), ("de/people/nur", "Nur", None)],
+        );
+        assert_eq!(list_vault_terms_in(&map).kinds["people"].names, vec!["Nur", "Scarly"]);
     }
 
     #[test]

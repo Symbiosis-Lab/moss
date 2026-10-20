@@ -328,20 +328,19 @@ pub fn groups_read_by(doc: &ParsedDocument, documents: &[ParsedDocument]) -> Opt
     // (a) A home page — the root's or a language's own `<lang>/index.html`.
     //     `synthesize_children_marker` lists the tree the home sits at (`""`
     //     for the root, `<lang>` otherwise) unless `children_source` redirects
-    //     it; only the root home defaults depth to "all" and turns on both
-    //     filters (in default mode, i.e. with no `children_source`).
+    //     it; `home_defaults` says which homes default depth to "all" and turn
+    //     on both filters.
     if crate::build::render::lang_roots::is_language_root(&doc.url_path) {
-        let (tree, is_root) = crate::build::folder_embed::home_scope(&doc.url_path);
-        let default_mode = is_root && doc.children_source.is_none();
+        let home = crate::build::folder_embed::home_defaults(doc);
         let folder_slug = match doc.children_source.as_deref() {
-            None => tree.to_string(),
+            None => home.tree.to_string(),
             Some(reference) => resolve_children_source_slug(reference, documents)?,
         };
         keys.push(GroupKey {
             folder_slug,
-            depth: Depth::from_frontmatter(doc.children_depth.as_deref(), is_root),
-            scope_default_tree: default_mode,
-            exclude_nav: default_mode,
+            depth: Depth::from_frontmatter(doc.children_depth.as_deref(), home.depth_all),
+            scope_default_tree: home.scoped,
+            exclude_nav: home.scoped,
         });
     }
 

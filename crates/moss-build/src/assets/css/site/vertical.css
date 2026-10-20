@@ -382,6 +382,13 @@ body[data-typesetting="vertical"] .moss-table-scroll {
   --_grid-overflow-y: auto;
 }
 
+/* The indicator stays a horizontal strip, which lies across this flow: its
+   height is not the row's end margin here, so it takes back no margin. */
+[data-typesetting="vertical"] .moss-scroll-dots {
+  block-size: auto;
+  margin-block-end: 0;
+}
+
 /* Preserve authored multi-column tracks at phone width, where inline space is
    viewport height. A single wrapped column keeps its mobile stretch. */
 @media (max-width: 768px) {

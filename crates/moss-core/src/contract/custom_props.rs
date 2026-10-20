@@ -116,7 +116,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-eyebrow-separator",
         owner: ".moss-eyebrow",
         default: "\" · \"",
-        description: "The text drawn between the fields of the eyebrow line above a page title, as a CSS string. The markup holds no separator, so a theme sets this to change it: `\" / \"` for a slash, or `\" \"` for a plain space.",
+        description: "The text drawn between the fields of the eyebrow line above a page title, as a CSS string. The markup puts only a space between fields, which this string's own spaces absorb, so give it spaces on both sides: `\" / \"` for a slash, or `\" \"` for a plain space.",
     },
     CustomProp {
         name: "--moss-hint-x",
@@ -153,12 +153,6 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         owner: "moss-grid",
         default: "2.5rem",
         description: "Exact width of the next card's visible slice at the edge of a scrolling row (`:::grid N {scroll}`) — how much of it shows, not an approximation. moss solves the row's `grid-auto-columns` so `data-columns` cards fit fully and precisely this much of the next one peeks past the edge. Raise it for a more insistent hint, lower it toward `0` to hide the cue.",
-    },
-    CustomProp {
-        name: "--moss-scroll-dot-start",
-        owner: "moss-scroll-dots-track",
-        default: "0",
-        description: "Zero-based start slot for the clipped scroll-indicator track. Written per-row by scroll-row.js while the reader scrolls or scrubs; not a theme hook, because the next indicator update overwrites a hand-set value.",
     },
     CustomProp {
         name: "--moss-grid-image-ratio",

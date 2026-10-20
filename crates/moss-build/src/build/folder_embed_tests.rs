@@ -1421,8 +1421,10 @@ fn root_homepage_multilingual_excludes_language_subtrees() {
     let home = make_folder_doc("index.html", "Home");
     let zh_root = make_doc("alpha.html", "Alpha", Some("2025-01-01"));
     let zh_sub = make_doc("writings/beta.html", "Beta", Some("2025-02-01"));
-    let en_top = make_doc("en/yankee.html", "Yankee", Some("2025-03-01"));
-    let en_nested = make_doc("en/writing/xray.html", "Xray", Some("2025-04-01"));
+    let mut en_top = make_doc("en/yankee.html", "Yankee", Some("2025-03-01"));
+    let mut en_nested = make_doc("en/writing/xray.html", "Xray", Some("2025-04-01"));
+    en_top.edition = "en".into();
+    en_nested.edition = "en".into();
     let docs = vec![home, zh_root, zh_sub, en_top, en_nested];
     let project = multilingual_project();
     let dir_overrides = std::collections::HashMap::new();
@@ -1483,12 +1485,10 @@ fn single_language_root_homepage_lists_all() {
     assert!(out.contains(">Beta<"), "{}", out);
 }
 
-/// Documented (location-model) behavior: a single-language site that happens to
-/// have a top-level folder named like a language code is treated as multilingual,
-/// so the root home excludes it. Pinned so the false-positive is intentional, and
-/// any future stricter gate is a visible, reviewed change.
+/// A folder named for the site's own language is the default edition, so the
+/// root home lists it like any other folder.
 #[test]
-fn coincidental_language_named_folder_excluded_from_root_home() {
+fn the_site_languages_own_tree_is_listed_on_the_root_home() {
     let home = make_folder_doc("index.html", "Home");
     let a = make_doc("alpha.html", "Alpha", Some("2025-01-01"));
     let en = make_doc("en/note.html", "Note", Some("2025-02-01"));
@@ -1508,11 +1508,7 @@ fn coincidental_language_named_folder_excluded_from_root_home() {
         true,
     );
     assert!(out.contains(">Alpha<"), "{}", out);
-    assert!(
-        !out.contains(">Note<"),
-        "known-language-named folder treated as a tree: {}",
-        out
-    );
+    assert!(out.contains(">Note<"), "{}", out);
 }
 
 /// A `children_source` homepage targets another folder by user intent, so it is
@@ -2772,7 +2768,7 @@ fn pseudo_folder_place_embed_lists_its_derived_members() {
         key: "places".to_string(),
         fields: vec!["location".to_string()],
         title: "Places".to_string(),
-        is_place: true,
+        titles: Vec::new(), is_place: true,
         parents: Default::default(), explorer: None, line: None,
     };
     let mut docs = vec![
@@ -2803,7 +2799,7 @@ fn place_map_embed_emits_svg_with_placement_and_caption() {
         key: "places".to_string(),
         fields: vec!["location".to_string()],
         title: "Places".to_string(),
-        is_place: true,
+        titles: Vec::new(), is_place: true,
         parents: Default::default(), explorer: None, line: None,
     };
     let mut docs = vec![make_doc("travel/kyoto.html", "Kyoto", Some("2025-01-01"))];
@@ -2842,7 +2838,7 @@ fn pseudo_folder_rollup_ancestor_embed_lists_its_descendants() {
         key: "places".to_string(),
         fields: vec!["location".to_string()],
         title: "Places".to_string(),
-        is_place: true,
+        titles: Vec::new(), is_place: true,
         parents: [("places/kyoto".to_string(), "Japan".to_string())].into_iter().collect(),
         explorer: None, line: None,
     };

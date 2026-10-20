@@ -66,6 +66,10 @@ pub(crate) fn site_lang_roots(
     site_lang: Language,
 ) -> Vec<LangRoot> {
     let mut roots: Vec<LangRoot> = Vec::new();
+    // No page but the root's home in the default edition: the root only
+    // chooses a language, and each language's front door is its edition's home.
+    let root_chooses = !all_docs.iter().any(|page| page.source_path.is_some() && page.is_public_page()
+        && page.edition.is_empty() && page.url_path != "index.html");
     for d in all_docs {
         // Dedup on the DECLARED TAG, not the interface enum. Keying on the enum
         // collapsed every language moss has no interface for onto `En`, so an
@@ -80,18 +84,21 @@ pub(crate) fn site_lang_roots(
                 all_docs.iter().any(|page| page.source_path.is_some() && page.is_public_page()
                     && page.url_path.starts_with(prefix) && page.lang_tag == d.lang_tag)
             });
-        if published_root && !roots.iter().any(|r| Some(&r.lang_tag) == d.lang_tag.as_ref())
-        {
-            roots.push(LangRoot {
-                // `fill_missing_lang_tags` runs before rendering, so this is
-                // the string the root's own page emits. The fallback is for an
-                // entry point that forgets to fill: the site tag is wrong-ish,
-                // `""` is an invalid `hreflang` that also makes every tag
-                // compare equal in `same_language_edition`.
-                lang_tag: d.lang_tag.clone()
-                    .unwrap_or_else(|| site_lang.as_bcp47_attr().to_string()),
+        if !published_root { continue; }
+        // `fill_missing_lang_tags` runs before rendering, so this is the
+        // string the root's own page emits. The fallback is for an entry point
+        // that forgets to fill: the site tag is wrong-ish, `""` is an invalid
+        // `hreflang` that also makes every tag compare equal in
+        // `same_language_edition`.
+        match roots.iter_mut().find(|r| Some(&r.lang_tag) == d.lang_tag.as_ref()) {
+            None => roots.push(LangRoot {
+                lang_tag: d.lang_tag.clone().unwrap_or_else(|| site_lang.as_bcp47_attr().to_string()),
                 url_path: d.url_path.clone(),
-            });
+            }),
+            Some(root) if root_chooses && root.url_path == "index.html" && !d.edition.is_empty() => {
+                root.url_path = d.url_path.clone();
+            }
+            Some(_) => {}
         }
     }
 
@@ -312,6 +319,19 @@ mod tests {
                 "a generated root represents only the edition its public source declares");
             assert_eq!(publishes_multiple(&docs, Language::En), published);
         }
+    }
+
+    #[test]
+    fn an_edition_home_is_the_front_door_only_when_the_root_chooses_a_language() {
+        let mut fr_home = declaring(Language::En, "fr", "fr/index.html");
+        fr_home.edition = "fr".into();
+        let mut own_page = declaring(Language::En, "en", "about/index.html");
+        own_page.edition = String::new();
+        let root = declaring(Language::En, "fr", "index.html");
+
+        let with_own_page = vec![root.clone(), own_page, fr_home.clone()];
+        assert_eq!(site_lang_roots(&with_own_page, Language::En)[0].url_path, "index.html");
+        assert_eq!(site_lang_roots(&[root, fr_home], Language::En)[0].url_path, "fr/index.html");
     }
 
     #[test]

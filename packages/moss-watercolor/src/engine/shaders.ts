@@ -169,7 +169,7 @@ void main(){
 export const PIG = HEAD + `
 uniform sampler2D uW, uS, uD;
 uniform sampler2D uNear, uWhole;
-uniform float uTime, uCure, uLift, uAds, uMix, uMixG, uDrying, uStir, uRelift, uRinse, uLight, uDose;
+uniform float uTime, uCure, uLift, uAds, uMix, uMixG, uDrying, uStir, uRelift, uRinse, uLight, uDose, uDilute, uCurl, uDiffuse, uFlow, uFlowSize, uBloom, uReach;
 layout(location=0) out vec4 oS; layout(location=1) out vec4 oD;
 vec4 S(vec2 t){ return texture(uS, t / uSize); }
 vec2 curlN(vec2 p){
@@ -177,11 +177,23 @@ vec2 curlN(vec2 p){
   float n0 = texture(uPaper, q / 7.0).r, nx = texture(uPaper, (q + vec2(e / 46.0, 0.0)) / 7.0).r, ny = texture(uPaper, (q + vec2(0.0, e / 46.0)) / 7.0).r;
   return vec2(ny - n0, n0 - nx) * (46.0 / e) * 0.05;
 }
+// Slow billows the size of the picture: the curl of a few travelling waves, so the flow is smooth,
+// keeps no pigment from anywhere, and turns over as the recording runs.
+vec2 billow(vec2 p){
+  vec2 v = vec2(0.0);
+  const vec3 waves[4] = vec3[4](vec3(0.9, 0.4, 0.7), vec3(-0.5, 0.85, 1.1), vec3(0.3, -0.95, 0.6), vec3(-0.8, -0.6, 0.9));
+  for (int i = 0; i < 4; i++) {
+    vec2 k = waves[i].xy * (6.2832 / (uFlowSize * (1.0 + 0.4 * float(i))));
+    float a = dot(k, p) + uTime * waves[i].z + float(i) * 1.7;
+    v += vec2(k.y, -k.x) * cos(a) / length(k);
+  }
+  return v * 0.25;
+}
 void main(){
   vec2 t = gl_FragCoord.xy; vec2 px = 1.0 / uSize;
   vec4 w = texture(uW, vUv); float h = w.r; vec2 vel = w.gb; float wet = wetOf(h);
   // the liquid rides the flow plus unresolved convection
-  vec2 velP = vel + curlN(t) * 1.6 * smoothstep(0.025, 0.28, h);
+  vec2 velP = vel + curlN(t) * 1.6 * uCurl * smoothstep(0.025, 0.28, h) + billow(t) * uFlow * wet;
   vec3 s = S(t - velP).rgb;
   // What the sheet has taken is not yet bound: while the film is wet and moving,
   // the settled pigment is dragged along with it (a fraction of the flow the
@@ -199,7 +211,6 @@ void main(){
   // what mixes is concentration (pigment per volume), so a thin rim holds
   // little pigment and the veil fades to the water's edge instead of outlining it
   float h0 = 0.02; float hc = max(h, h0);
-  vec4 wl = texture(uW, vUv + vec2(px.x, 0.0)), wr = texture(uW, vUv - vec2(px.x, 0.0)), wu = texture(uW, vUv + vec2(0.0, px.y)), wd = texture(uW, vUv - vec2(0.0, px.y));
   // exchange between neighbours is driven by the concentration difference and
   // limited by the thinner of the two films, so it conserves pigment and a
   // thin rim neither gains nor gives much
@@ -211,15 +222,23 @@ void main(){
   // evaporation drives in a drying film, below the grid) and it goes to one
   // colour in a moment, just as the sheet begins to take. Long unmixed,
   // briefly mixed: what a wet-in-wet wash does.
-  float agit = 0.12 + 0.88 * clamp(length(vel) * 2.0 + uStir * 0.5 + uDrying, 0.0, 1.0);
+  float agit = max(uDiffuse, 0.12 + 0.88 * clamp(length(vel) * 2.0 + uStir * 0.5 + uDrying, 0.0, 1.0));
   float diffF = clamp(0.45 * (0.35 + h * 45.0), 0.0, 0.45) * wet * agit;
-  vec3 c = s / hc;
+  vec3 c = s / hc; float ms = dot(s, vec3(1.0 / 3.0));
+  // Paint on wet paper blooms: where the colour is dense it runs apart fast, and slows as it thins
+  // (uBloom: the exchange grows with the pair's mean density), so it spreads in soft fronts rather
+  // than blurring. A second ring of neighbours uReach cells off lets it reach further in a step.
+  // Each exchange is the same in both directions, so no pigment is made or lost.
+  bool wide = uReach > 1.0;
   vec3 ex = vec3(0.0);
-  ex += (S(t+vec2(1,0)).rgb / max(wl.r, h0) - c) * min(wl.r, hc);
-  ex += (S(t-vec2(1,0)).rgb / max(wr.r, h0) - c) * min(wr.r, hc);
-  ex += (S(t+vec2(0,1)).rgb / max(wu.r, h0) - c) * min(wu.r, hc);
-  ex += (S(t-vec2(0,1)).rgb / max(wd.r, h0) - c) * min(wd.r, hc);
-  s += diffF * 0.25 * ex;
+  for (int i = 0; i < 8; i++) {
+    if (i >= 4 && !wide) break;
+    vec2 o = (i < 4 ? 1.0 : uReach) * (i % 4 == 0 ? vec2(1, 0) : i % 4 == 1 ? vec2(-1, 0) : i % 4 == 2 ? vec2(0, 1) : vec2(0, -1));
+    float hn = texture(uW, (t + o) / uSize).r; vec3 sn = S(t + o).rgb, cn = sn / max(hn, h0);
+    float k = min(diffF + uBloom * wet * 0.5 * (dot(sn, vec3(1.0 / 3.0)) + ms), 0.95);
+    ex += k * (cn - c) * min(hn, hc);
+  }
+  s += (wide ? 0.125 : 0.25) * ex;
   // the neighbourhood and whole-film means come from the explicit box
   // downsample below, not from a mip chain: the sim state is never mipmapped
   vec4 nr = texture(uNear, vUv), wh = texture(uWhole, vec2(0.5));
@@ -231,6 +250,10 @@ void main(){
   // the sheet, while the film's mean pigment per wet cell (the sheet is ~85%
   // wet once open) is darker than copy can be read over (uLight)
   s *= 1.0 - uRinse * wet * smoothstep(uLight * 0.85, uLight, dot(wh.rgb, vec3(1.0 / 3.0)) / 0.85);
+  // ink let go into deep water thins as it spreads through the depth the film cannot show
+  // and what drifts to the edge of the water fades there rather than piling against it
+  vec2 eg = min(vUv, 1.0 - vUv);
+  s *= 1.0 - (uDilute + step(1e-6, uDilute) * 0.06 * (1.0 - smoothstep(0.0, 0.12, min(eg.x, eg.y)))) * wet;
   // the water re-wets the old print: its ink dissolves into the film, all of it
   vec3 Ao = absorb(texture(uSrcLo, vUv));
   // dissolution is faster where the film moves: flow thins the boundary layer
@@ -357,8 +380,8 @@ void main(){ oA = vec4(texture(uS, vUv).rgb, texture(uW, vUv).r); oB = texture(u
 // between two of its frames, side Y likewise, and uK between the two sides.
 // The sides mix as optical thickness, pigment into pigment, never as pixels.
 export const PLAY = HEAD + `
-uniform sampler2D uXa0, uXb0, uXa1, uXb1, uYa0, uYb0, uYa1, uYb1, uXP, uYP;
-uniform float uFx, uFy, uK;
+uniform sampler2D uXa0, uXb0, uXa1, uXb1, uYa0, uYb0, uYa1, uYb1, uXP, uYP, uXA;
+uniform float uFx, uFy, uK, uXBaked, uRaw;
 out vec4 o;
 vec3 side(sampler2D a0, sampler2D b0, sampler2D a1, sampler2D b1, float f, sampler2D pr, vec2 uv, float g){
   vec2 px = 1.0 / uSize;
@@ -374,9 +397,12 @@ vec3 side(sampler2D a0, sampler2D b0, sampler2D a1, sampler2D b1, float f, sampl
 void main(){
   vec2 uv = vUv; vec4 pap = P(uv * uSize);
   float g = max(1.0 + 0.4 * ((pap.r - 0.5) * 1.4 + (pap.b - 0.5) * 0.6), 0.05);
-  vec3 A = uK <= 0.0 ? side(uXa0, uXb0, uXa1, uXb1, uFx, uXP, uv, g)
+  // a baked X is a mix already drawn as optical thickness, so it mixes on unchanged
+  vec3 X = uK >= 1.0 ? vec3(0.0) : uXBaked > 0.5 ? texture(uXA, uv).rgb : side(uXa0, uXb0, uXa1, uXb1, uFx, uXP, uv, g);
+  vec3 A = uK <= 0.0 ? X
          : uK >= 1.0 ? side(uYa0, uYb0, uYa1, uYb1, uFy, uYP, uv, g)
-         : mix(side(uXa0, uXb0, uXa1, uXb1, uFx, uXP, uv, g), side(uYa0, uYb0, uYa1, uYb1, uFy, uYP, uv, g), uK);
+         : mix(X, side(uYa0, uYb0, uYa1, uYb1, uFy, uYP, uv, g), uK);
+  if (uRaw > 0.5) { o = vec4(A, 1.0); return; }
   vec4 plain = uEnd > .5 ? texture(uYP, uv) : texture(uXP, uv);
   o = composite(present(A, absorb(plain)), plain);
 }`;

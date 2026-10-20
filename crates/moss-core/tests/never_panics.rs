@@ -102,6 +102,13 @@ proptest! {
     }
 
     #[test]
+    fn is_edition_top_level_never_panics(path in any_str()) {
+        let _ = moss_core::home::is_edition_top_level(&path, "en");
+        let _ = moss_core::home::edition_of(&path, "en");
+        let _ = moss_core::home::Editions::new("en", [path.as_str()]).of(&path);
+    }
+
+    #[test]
     fn strip_lang_suffix_never_panics(stem in any_str()) {
         let _ = moss_core::home::strip_lang_suffix(&stem);
     }

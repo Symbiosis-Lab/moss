@@ -34,7 +34,7 @@ Reach for the cheapest rung that works; earn each step:
    a setext heading (underlined with `===` or `---`), are not checked.
 4. **Structural override.** Re-lay-out a page against moss's defaults.
 
-A text field shows focus on its own border, never as a ring inside or outside it. A theme's site-wide focus ring should exclude fields, for example `:focus-visible:not(input, textarea, select)`, and style a field's focus on its own border.
+A text field shows focus on its own border, never as a ring inside or outside it. A theme's site-wide focus ring should exclude fields, for example `:focus-visible:not(input, textarea, select)`, and style a field's focus on its own border. moss's search field already does: its input and result rows draw no outline whatever the theme says, so restyle the panel's border or the `.is-selected` row instead.
 
 ### Rung 4 in detail
 
@@ -284,6 +284,21 @@ Separate a grid's cells with a line that holds only `+++`. A grid takes one to s
 
 `:::grid N {scroll}` (2026-09-21) keeps a grid's row on one line and lets the reader drag it sideways instead of it wrapping — `N` becomes how many cards fit in view at once, with a slice of the next one showing as the cue to keep going. Reach for it on a "related articles" or "more like this" strip where reading order matters more than seeing every card at once; add `label="…"` to give the row an accessible name when the surrounding heading doesn't already say what it is. Skip it when every card must be visible without scrolling and use the plain wrapping grid instead.
 
+Under a scroll row, moss shows where the reader is. A row of up to seven cards gets one dot per card. A longer row gets the current card's number and the total ("12 / 40") between ‹ and › buttons that move one view, because dots stop telling a reader where they are past about seven. The number is the first card in view, or the last card once the row is at its end, and its box is sized for the widest number so nothing beside it moves.
+
+A theme can replace that indicator for one row. The row fires a `moss-scroll-position` event whenever the current card or the cards in view change, with `detail` holding `current`, `first` and `last` (1-based card numbers) and `count`; the indicator carries the same numbers as `data-current`, `data-first`, `data-last` and `data-count`, so a script that starts later can read where the row already is. Hide the default for that row and draw your own from the event in `.moss/theme/script.js`; move the row by scrolling a card into view (`card.scrollIntoView({ inline: "start", block: "nearest" })`):
+
+```css
+.moss-grid.timeline + .moss-scroll-dots { display: none; }
+```
+
+```js
+document.querySelector(".moss-grid.timeline")?.addEventListener("moss-scroll-position", (e) => {
+  const { current, count } = e.detail;
+  // draw your own indicator for card `current` of `count`
+});
+```
+
 A grid is also how two things sit side by side, because a cell takes any markdown, not only a card: headings, paragraphs, lists, images. `:::grid 2 1:2` gives a narrow column and a wide one (an address beside a text, a note beside a picture); the ratio has one part per column. Cells start level at the top and have no box or border, and at 768px and narrower the grid becomes one column in the order you wrote the cells. Three defaults were chosen for cards and show in a prose cell: a picture in a cell is cropped to a square with rounded corners (set `--moss-grid-image-ratio: auto` and `--moss-grid-image-radius: 0` on the grid's class to show it whole), a cell's paragraphs sit 8px apart, not a paragraph's usual distance, and a cell holding nothing but a link becomes a card. When the page opens with a grid whose cell holds the first heading and that heading's text equals the page title, it is the page's title (an article gets no second one above the grid) and the `byline:` is printed right below it inside the cell; a different heading leaves the title above the grid with the byline under it, and a grid that comes after other content leaves the byline at the top of the page. Reach for it before any theme rule that floats, absolutely positions or places by `:nth-of-type` to get columns. Use the ratio for a one-off; when the theme needs to change the columns at a breakpoint, write `:::grid 2 {.your-class}` with no ratio and set `grid-template-columns` on the class, because a ratio is written as `--moss-grid-ratio` on the element: a class rule setting `grid-template-columns` overrides it (also inside `@media`), but a class rule setting `--moss-grid-ratio` does not, since the element's own value wins. (2026-10-13: a builder looking for a side column searched this guide for "sidebar" and "column", found only the child rail, and wrote eight float-and-offset rules that a grid replaces.)
 
 A set of photos meant to be seen together is a `:::gallery` block with one image per line, written as `![](a.jpg)`, `![[a.jpg]]`, or a bare file name; `:::gallery N` sets how many columns it has. `:::gallery rows` lays the photos out in justified rows that fill the width and keep each photo's proportions, and `--moss-gallery-row-height` sets the row height. Each photo opens full screen in moss's own viewer, where the arrow keys step through the page's pictures in reading order (the gallery's photos and the page's figures) and Escape closes it and returns focus to the last picture shown. A photo with no alt text gets the link name "Open image 2 of 5", so write the description in the alt text whenever the picture needs one. A photo followed on the next line by one italic line takes that line as its caption, as a figure does: `![Harbour](a.jpg)` then `*Dusk, [the quay project](projects/quay.md), 1931*`. The caption shows under the photo, in `rows` too, may hold a link, and is what the viewer shows under the large photo; a photo without the line has no caption. The bare `|` form works in a gallery too: `![Two dancers on a pink stage|](a.jpg)` gives the photo that alt text with no title in the viewer. A gallery is a set a reader goes through, unlike the hero rotation, whose interchangeable moods of one subject give no sign of which one is showing, and unlike `:::grid`, whose cells are cards that link to pages.
@@ -383,11 +398,15 @@ Here `/performers/ada-example/` lists the Spring Concert under "Conductor" and "
 
 Add `cards = true` to the kind and its names show on listing cards, with their role: a card for the Spring Concert reads `Ada Example, conductor · Ben Sample, soloist`, the fields in `fields` order. The card and each credit are classed `moss-card-credits`, `moss-credit` and `moss-credit-role`, so a theme can style them. The names are plain text, never links, because a card is already one link. Without `cards = true`, a card shows only its date and place, as before.
 
-Add `nav = true` to the kind and its root page (`/performers/`) joins the nav bar after the content entries, labelled with the kind's `title` or, with none, a built-in kind's translated title or the key capitalized; several such kinds keep the order of their blocks in the config file. Add `weight = 2` (an integer) to place the entry among the pages by weight, the way a page's own `weight` does: lower first, ties alphabetical by label, and entries without a weight after those with one. The entry appears once the kind has at least one term, on pages of the site language.
+Add `nav = true` to the kind and its root page (`/performers/`) joins the nav bar after the content entries, labelled with the kind's `title` or, with none, a built-in kind's translated title or the key capitalized; several such kinds keep the order of their blocks in the config file. The root page is headed by the same name, nav entry or not, in its `<title>` and in the breadcrumb of every term page under it: `[terms.performers]` with no `title` heads `/performers/` "Performers". Add `weight = 2` (an integer) to place the entry among the pages by weight, the way a page's own `weight` does: lower first, ties alphabetical by label, and entries without a weight after those with one. The entry appears once the kind has at least one term, in each edition that has one: the site language's nav shows `/performers/`, a language tree's (`de/`) shows `/de/performers/`, and a page shows its own edition's entry only. A `title` can name the kind per language, the way a declared field's `label` does: with `title = { en = "Performers", de = "Mitwirkende" }` the German entry and the German root page read `Mitwirkende`, and an edition the table has no entry for reads the `en` one. A plain string is the title in every edition.
+
+Term pages are per edition, as a language tree is. A page in `de/` that names `Ada Example` appears on `/de/performers/ada-example/`, which lists only German pages; the default edition's page for the same name, `/performers/ada-example/`, lists only its own. The two are translations of each other, so the language switcher and `hreflang` pair them, and a page's byline links, credits and a listing plugin's `ctx.terms` point at its own edition's page. A `<field>_page: true` claim is per edition too: the English page and its German translation can both claim `Ada Example` without a duplicate-claim warning, while two claims inside one edition still warn. The kind's root (`/performers/`, `/de/performers/`) is per edition as well. A tree for the site's own language (`en/` on an English site) is part of the default edition: its pages share the default edition's term pages, and the root home lists them. On a site whose root holds nothing but its home page, that tree is an edition like the others. Place-typed kinds (`location:`) are the exception and stay site-wide for now.
+
+A name only a language tree uses has its page in that tree alone, and its address without the tree, `/performers/<name>/`, forwards to `/de/performers/<name>/`; so does the kind's root `/performers/` when only a tree uses the kind. A name the default edition also uses keeps its page at `/performers/<name>/`.
 
 Naming a field in a declared kind takes it out of its built-in namespace: with the block above, `author:` no longer feeds `/authors/`. The old `/authors/<name>/` URLs keep working, and so does the bare `/authors/` root itself — moss emits a redirect to the new page for as long as the field belongs elsewhere. That redirect never lands on a real page: if you have hand-authored content living at the old address, moss leaves it alone rather than burying it under a meta-refresh.
 
-Any real page can take a generated one's place. `author_page: 趙雲` — or `true`, meaning "the name is my title" — makes that page the author's page: its body is the bio, its `url:` is wherever you want it, and the works listing attaches below. Every field has its claim: `tag_page:`, `editor_page:`, `jury_page:`, `place_page:`. A declared field claims with `<field>_page:` the same way, so `conductor_page: true` on a page called Ada Example makes that page the page for `conductor:` names. Any of a kind's claims takes over that kind's page, so in the `people` example above a bio page claims with whichever credit fits. Term mentions site-wide then link there instead of at the generated URL, and the generated URL forwards to the claiming page, so a link someone saved before the claim still arrives. Claiming adds that listing below the body, or just above it when the body closes on a sources section (a last `## Sources` or `## References`, `## Quellen` on a German page, `## 来源` on a Chinese one), and also gives the page's own `cover:` a visible place in the body — beside the title, the same layout a folder-index page claiming the same term already uses. An unclaimed leaf's `cover:` is its listing picture and share image, and is never drawn in its own body.
+Any real page can take a generated one's place. `author_page: 趙雲` — or `true`, meaning "the name is my title" — makes that page the author's page: its body is the bio, its `url:` is wherever you want it, and the works listing attaches below. Every field has its claim: `tag_page:`, `editor_page:`, `jury_page:`, `place_page:`. A declared field claims with `<field>_page:` the same way, so `conductor_page: true` on a page called Ada Example makes that page the page for `conductor:` names. Any of a kind's claims takes over that kind's page, so in the `people` example above a bio page claims with whichever credit fits. Mentions of the term on the pages of the claiming page's own edition then link there instead of at the generated URL, and the generated URL forwards to the claiming page, so a link someone saved before the claim still arrives. Claiming adds that listing below the body, or just above it when the body closes on a sources section (a last `## Sources` or `## References`, `## Quellen` on a German page, `## 来源` on a Chinese one), and also gives the page's own `cover:` a visible place in the body — beside the title, the same layout a folder-index page claiming the same term already uses. An unclaimed leaf's `cover:` is its listing picture and share image, and is never drawn in its own body.
 
 Two things that surprise people:
 
@@ -458,7 +477,7 @@ cascade:
 
 Such a page draws its whole title block (eyebrow, title, subtitle, date and byline, key figures, facts) right after the body's leading picture: the first picture on a line of its own, when nothing but classed divs comes before it. A page whose body opens with text, a heading or a list, or has no picture, keeps the title block first, and so do folder index pages and pages that draw their own cover. Without the key the title block comes first. A theme that needs some other order still lays out `article` as a grid.
 
-moss draws no separator in the eyebrow. The stylesheet puts one between its fields from `--moss-eyebrow-separator`, a CSS string defaulting to `" · "`, so a theme sets `--moss-eyebrow-separator: " "` or `" / "`.
+The eyebrow's fields are separated in the markup by one space only. The stylesheet draws the visible separator from `--moss-eyebrow-separator`, a CSS string defaulting to `" · "`, so a theme sets `--moss-eyebrow-separator: " "` or `" / "`. Give the string spaces on both sides: the space between fields merges with a leading one, and `"/"` alone would read "A /B".
 
 To move a fact that pages already write as a classed div into a field, use `moss migrate --lift <class> --as <field> --place <place>`. Without `--apply` it prints the diff; with it, it saves a version of the site first, then writes. Each `::: {.class}` div holding one paragraph of plain text becomes a frontmatter line on its page, the div is removed, moss draws the value at `--place` instead (`none` keeps it in the frontmatter only, so it leaves the page; `--place` sets the field's place for the whole site, and the diff shows that change to `.moss/config.toml`), and the field is declared in `.moss/config.toml` as `text` if it is not declared yet. A paragraph wholly in italics or bold is lifted without them, so set that style on `[data-field="…"]`. A page whose div holds a link or other formatting, holds it twice, or whose frontmatter already gives the field another value is left as written and listed. `moss doctor --surface --all` then shows whether any of the class is left, and `moss doctor --surface` names theme rules still keyed on it.
 
@@ -645,44 +664,19 @@ strings the pages that *did* fall through to it are dressed in. If the two ever
 disagree, believe the page: `moss list` reports each page's own language, and
 that is the one that ships in `<html lang>`.
 
-**moss supports exactly four editions: English, German, Simplified Chinese,
-and Traditional Chinese.** This is a hard ceiling, not a special case for a
-particular tree shape: moss's UI-language type has exactly four variants and
-resolves only `en`, `de` (also `de-de`, `de-at`, `de-ch`), `zh`/`zh-hans`/`zh-cn`,
-and `zh-hant`/`zh-tw`. A `de/` tree gets German interface strings (navigation,
-search, dates such as "15. Oktober 2026", comment and subscribe forms) and
-`<html lang="de">`, with `DE` as its switcher label (as English is `EN`). `en-us/` and `en-gb/`
-are accepted as directory names but resolve to no edition either.
+**moss has interface strings for exactly four languages: English, German, Simplified Chinese, and Traditional Chinese.** This is a hard ceiling, not a special case for a particular tree shape: moss's UI-language type has exactly four variants and resolves only `en`, `de` (also `de-de`, `de-at`, `de-ch`), `zh`/`zh-hans`/`zh-cn`, and `zh-hant`/`zh-tw`. A `de/` tree gets German interface strings (navigation, search, dates such as "15. Oktober 2026", comment and subscribe forms) and `<html lang="de">`, with `DE` as its switcher label (as English is `EN`). `en-us/` and `en-gb/` are accepted as directory names but have no interface strings of their own either.
 
-**A language tree outside those four gets correct content in the default
-edition's chrome.** The ceiling is real, but it is a ceiling on *interface*, not
-on the page. Measured on a `ja/` tree:
+**A language tree outside those four is still an edition, dressed in the site language's interface strings.** The ceiling is real, but it is a ceiling on *interface*, not on the page: a `ja/` tree gets its own term pages, nav entries and home listing like any edition. Measured on a `ja/` tree:
 
-- `<html lang>` is **the document's own language** — a page in `ja/` is served
-  as `lang="ja"`. moss recognizes far more codes as trees and filename suffixes
-  (`.languages`) than it has interface strings for, and `<html lang>` describes
-  the content, not the chrome. Screen readers and crawlers get the truth.
-- The chrome is the default edition's: site name, nav links, footer, and a
-  switcher listing only the editions that exist — and the switcher marks that
-  edition as the current one, because `ja` resolves to no edition of its own.
-  There are no Japanese interface strings, so this is the honest outcome rather
-  than a bug — but a reader does land on Japanese body text inside another
-  language's chrome, whichever `[site] lang` names.
-- The `<title>` gets the site name appended as a suffix, which a real edition
-  home (`/en/`) does not get: `ja` is a tree, not an edition.
+- `<html lang>` is **the document's own language** — a page in `ja/` is served as `lang="ja"`. moss recognizes far more codes as trees and filename suffixes (`.languages`) than it has interface strings for, and `<html lang>` describes the content, not the chrome. Screen readers and crawlers get the truth.
+- The interface strings are the site language's. There are no Japanese ones, so this is the honest outcome rather than a bug — but a reader does land on Japanese body text inside another language's chrome, whichever `[site] lang` names.
+- The `<title>` gets the site name appended as a suffix, which a home in an interface language (`/en/`) does not get.
 
-So: for a fifth language, translate the body content and expect to supply the
-chrome yourself — an authored `ja/footer.md`, theme CSS, and your own nav if
-the default one is unacceptable. What you do *not* have to do any more is
-correct the `lang` attribute by hand.
+So: for a fifth language, translate the body content and expect to supply the chrome yourself — an authored `ja/footer.md`, theme CSS, and your own nav if the default one is unacceptable. What you do *not* have to do any more is correct the `lang` attribute by hand.
 
-Give each language tree its own authored home page — the build never
-synthesizes a folder home for a language tree, so this is the reliable path to
-getting a working edition with a switcher entry. (A switcher entry can also
-come from a translation pair or from an in-language subtree, but an authored
-home page is the one that always works.) The ordinary folder-home rule applies,
-so `en/index.md` and `en/en.md` are equally valid; match whatever the site
-already does rather than converting it.
+Give each language tree its own authored home page. Without one, moss generates a home that lists the tree, but an authored home is the reliable path to a switcher entry. (A switcher entry can also come from a translation pair or from an in-language subtree, but an authored home page is the one that always works.) The ordinary folder-home rule applies, so `en/index.md` and `en/en.md` are equally valid; match whatever the site already does rather than converting it.
+
+An edition's home and top level behave like the root's. `de/index.md` lists the whole `de/` tree, subfolders included, and never a page of another edition or of the root. A page directly inside `de/` (`de/Über.md`) joins the German nav bar without `nav: true` and is left out of the German home's listing, the way `About.md` is at the root. A folder (`de/Partner/`, or `Partners/` at the root) does not join the nav by itself; give its home page `nav: true` to put it there. Set `children_depth: direct` on the edition's home for the narrow listing of its direct children, or `children_source` to list another folder. A tree for the site's own language is not an edition, and its pages belong to the default edition, unless the root holds nothing but its home page and every language has its own tree. Then the root is a language chooser: every tree is an edition, its site name leads to its own home, and the root lists none of their pages.
 
 A `[[reference]]` written from a page inside a language tree prefers that reader's own language — bare stem or full path alike. `[[work/spring-show]]` written from a page under `zh-hans/` resolves to `zh-hans/work/spring-show.md` when that file exists, the same way the bare `[[spring-show]]` already prefers `zh-hans/spring-show.md` over a root one; either form only falls back to the un-prefixed path when no same-language copy exists. To link across languages on purpose — a Chinese page pointing at the English original, say — write the full path including the language folder: `[[en/work/spring-show]]`.
 

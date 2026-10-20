@@ -106,6 +106,22 @@ fn url_space_offers_deployed_urls_and_generated_pages_only_there() {
 }
 
 #[test]
+fn one_name_in_two_editions_is_two_rows_and_the_editions_one_names_it() {
+    let project = repo_temp();
+    let root = project.path();
+    write_map(
+        root,
+        r#"{"articles":{},"pages":{},"generated":[],
+            "terms":{"partners/ada":{"display":"Ada","claimed_by":null},
+                     "de/partners/ada":{"display":"Ada","claimed_by":null}}}"#,
+    );
+
+    let urls = complete(root, LinkSyntax::Inline, "/", "index.md");
+    assert_eq!(find(&urls, "/partners/ada/").label, "Ada");
+    assert_eq!(find(&urls, "/de/partners/ada/").label, "Ada (de)");
+}
+
+#[test]
 fn prefers_the_same_language_tree_from_an_absolute_from_file() {
     // The editor sends an ABSOLUTE from_file; it must be relativized before
     // ranking or the language-tree bias sees `/Users/...` and inverts.

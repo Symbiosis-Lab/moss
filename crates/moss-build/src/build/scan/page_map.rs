@@ -18,7 +18,7 @@ pub(crate) use frontmatter_cache::{build_page_map_and_external_urls_cached, Fron
 pub(crate) use frontmatter_cache::build_page_map_and_external_urls_cached_with_evicted;
 
 mod home_election;
-pub(crate) use home_election::{elect_homes, elect_homes_with_evicted, is_home_translation};
+pub(crate) use home_election::{elect_homes, elect_homes_with_evicted, is_home_translation, root_language};
 
 mod folder_lang;
 pub(crate) use folder_lang::{folder_of, resolve_folder_languages, FolderLangCache};

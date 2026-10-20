@@ -70,3 +70,18 @@ pub(crate) fn is_home_translation(file_path: &str, winners: &HashSet<String>) ->
     moss_core::home::strip_lang_suffix(&stem).is_some_and(moss_core::home::is_index_stem)
         && winners.iter().any(|w| parent_dir(w) == dir)
 }
+
+/// The default edition's language, [`moss_core::home::root_language`] over
+/// every page but the root's home, its translations and the layout slots.
+pub(crate) fn root_language<'a>(site_lang: &'a str, files: &crate::types::content::ProjectStructure, winners: &HashSet<String>) -> &'a str {
+    let is_root_home = |p: &str| !p.contains('/') && (winners.contains(p) || is_home_translation(p, winners) || p == "index.html");
+    moss_core::home::root_language(
+        site_lang,
+        files
+            .markdown_files
+            .iter()
+            .chain(&files.html_files)
+            .map(|f| f.path.as_str())
+            .filter(|p| !is_root_home(p) && !crate::build::footer::is_excluded_from_pages(p)),
+    )
+}

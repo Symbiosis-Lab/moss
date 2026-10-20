@@ -1,5 +1,5 @@
-import { a as CreateSimOptions, c as PrintSource, d as StepOptions, f as WatercolorSim, h as WatercolorPreset, i as advance, l as RecordingSide, m as DEFAULT_PRESET, n as AdvanceResult, o as Pair, p as createSim, r as ClockState, s as PairOptions, t as DIAG_VIEWS, u as Rect } from "./index-DoEWqAdc.mjs";
+import { a as BakedSide, c as Rect, d as StepOptions, f as WatercolorSim, h as WatercolorPreset, i as advance, l as SceneSide, m as DEFAULT_PRESET, n as AdvanceResult, o as CreateSimOptions, p as createSim, r as ClockState, s as PrintSource, t as DIAG_VIEWS, u as SideLook } from "./index-ZYXkCQs7.mjs";
 import { n as PaperOptions, r as createPaper, t as Paper } from "./default-Cs3xymcD.mjs";
 import "./paper/index.mjs";
-import { DEFAULT_PHASE_BOUNDS, Phase, PhaseBounds, phaseOf, retarget } from "./model/index.mjs";
-export { AdvanceResult, ClockState, CreateSimOptions, DEFAULT_PHASE_BOUNDS, DEFAULT_PRESET, DIAG_VIEWS, Pair, PairOptions, Paper, PaperOptions, Phase, PhaseBounds, PrintSource, RecordingSide, Rect, StepOptions, WatercolorPreset, WatercolorSim, advance, createPaper, createSim, phaseOf, retarget };
+import { DEFAULT_PHASE_BOUNDS, Phase, PhaseBounds, legAt, phaseOf, turnAt } from "./model/index.mjs";
+export { AdvanceResult, BakedSide, ClockState, CreateSimOptions, DEFAULT_PHASE_BOUNDS, DEFAULT_PRESET, DIAG_VIEWS, Paper, PaperOptions, Phase, PhaseBounds, PrintSource, Rect, SceneSide, SideLook, StepOptions, WatercolorPreset, WatercolorSim, advance, createPaper, createSim, legAt, phaseOf, turnAt };
