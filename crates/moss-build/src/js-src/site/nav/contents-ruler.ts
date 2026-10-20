@@ -54,6 +54,16 @@ const MIN_LABEL = 96;
  *  margin rather than a clipped letter. */
 const MEASURE_SLACK = 2;
 
+/** The left column an open list claims: the dash and picture offset (40px), the
+ *  picture, and room for a title. A page that asked for its contents open
+ *  shifts right until its text starts at least this far in, whatever its
+ *  content width. */
+const RESERVE = 300;
+
+/** Narrowest text column worth shifting the page for; under it the list gives
+ *  way and the island's panel is the contents. */
+const MIN_TEXT = 448;
+
 /** Fade in when the first section is this far up the window; fade out when the
  *  article's bottom is above the middle. Pinned to the window, the ruler only
  *  belongs on screen while the article's body is — not over a cover image above
@@ -136,6 +146,32 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
 
   let away = true;
   let disposed = false;
+  let mo: MutationObserver | undefined;
+
+  /**
+   * Make room in the left margin for an open list: pad the body (as the
+   * sidenote gutter does on the right) so the text starts `RESERVE` in. The
+   * padding is derived from measured geometry — the text column's natural
+   * left edge, with the shift removed — and is taken back when the shifted
+   * column would be narrower than `MIN_TEXT`. A centred column that already
+   * has the margin is not moved at all.
+   */
+  function reserveColumn(vertical: boolean): void {
+    if (!opts.pictures) return;
+    const style = document.body.style;
+    const set = (px: number): void => style.setProperty("--moss-contents-inset", `${px}px`);
+    set(0);
+    if (vertical) return;
+    const box = article.getBoundingClientRect();
+    const offset = first.getBoundingClientRect().left - box.left;
+    const need = RESERVE - offset;
+    // A centred block moves half of what the body pads; one that fills the
+    // window shrinks instead, so the pad is capped at the shift it needs.
+    const pad = Math.min(need, Math.max(0, 2 * (need - box.left)));
+    if (pad <= 0) return;
+    set(pad);
+    if (article.getBoundingClientRect().width - 2 * offset < MIN_TEXT) set(0);
+  }
 
   /**
    * One frame's reading and writing, run when the island's scrollspy reports.
@@ -165,6 +201,7 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     // A hidden ruler has no boxes: show it, measure, then decide, all before
     // the next paint.
     nav.hidden = false;
+    reserveColumn(vertical);
     let room = 0;
     if (!vertical) {
       const textLeft = first.getBoundingClientRect().left;
@@ -174,6 +211,9 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     const fits = (window.innerHeight - listHeight) / 2 >= opts.clearance();
     const eligible = !vertical && room >= MIN_LABEL && fits;
     nav.hidden = !eligible;
+    if (!eligible && opts.pictures) document.body.style.removeProperty("--moss-contents-inset");
+    // The shift is ours, not a change of the page's: do not re-measure for it.
+    if (opts.pictures) mo?.takeRecords();
     if (eligible) {
       const measure = canvasMeasure(labels[0]);
       const padding = parseFloat(getComputedStyle(labels[0]).paddingInlineStart) || 0;
@@ -205,10 +245,10 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     undo.push(() => ro.disconnect());
   }
   if (typeof MutationObserver !== "undefined") {
-    const mo = new MutationObserver(relayout);
+    mo = new MutationObserver(relayout);
     mo.observe(document.documentElement, { attributes: true });
     mo.observe(document.body, { attributes: true });
-    undo.push(() => mo.disconnect());
+    undo.push(() => mo?.disconnect());
   }
   on(window, "resize", relayout, { passive: true });
   document.fonts?.ready.then(relayout);
@@ -246,5 +286,6 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     disposed = true;
     undo.forEach((f) => f());
     delete island.dataset.ruler;
+    if (opts.pictures) document.body.style.removeProperty("--moss-contents-inset");
   };
 }

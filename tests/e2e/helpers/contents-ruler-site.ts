@@ -161,6 +161,24 @@ uid: "crg00105"
 
 ${SHORT_SECTIONS.map((t) => `## ${t}\n\n${paragraphs(3)}`).join("\n\n")}
 `,
+    "Essays/Reading/Full.md": `---
+title: Full width collections
+uid: "crg00107"
+contents: open
+content_width: full
+---
+
+:::hero {image=../../cover.svg}
+:::
+
+${paragraphs(2)}
+
+:::{.band screen}
+A band as wide as the window.
+:::
+
+${openBody}
+`,
     "Essays/Reading/Open.md": `---
 title: Collections
 uid: "crg00106"

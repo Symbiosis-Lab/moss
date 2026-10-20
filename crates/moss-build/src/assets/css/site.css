@@ -355,6 +355,9 @@ body {
     var(--moss-sidenote-reserve, 0px)
   );
   padding-right: var(--moss-sidenote-inset);
+  /* Set by contents-ruler.ts on a page that asked for its contents open, to
+     keep the text clear of the list in the left margin. Absent: no padding. */
+  padding-left: var(--moss-contents-inset, 0px);
   display: flex;
   flex-direction: column;
   min-height: 100vh;
@@ -4941,8 +4944,8 @@ article.container > [data-width] {
  * so left-to-right pages position from the left and right-to-left pages from
  * the right, and the extra width reaches the window's right edge in both. */
 article.container > [data-width="screen"] {
-  inline-size: calc(var(--moss-escape) + var(--moss-sidenote-inset, 0px));
-  margin-left: calc((100% - 100cqi) / 2);
+  inline-size: calc(var(--moss-escape) + var(--moss-sidenote-inset, 0px) + var(--moss-contents-inset, 0px));
+  margin-left: calc((100% - 100cqi) / 2 - var(--moss-contents-inset, 0px));
   margin-right: calc((100% - 100cqi) / 2 - var(--moss-sidenote-inset, 0px));
 }
 
@@ -6817,7 +6820,8 @@ article a:where(:not(.moss-btn)):focus {
      on body absorbs the overhang. No fallback: `body` always declares it.
      Not a negative margin — that silently did nothing, since an explicit
      width turns off the `align-items: stretch` a negative margin needs. */
-  inline-size: calc(100% + var(--moss-sidenote-inset));
+  inline-size: calc(100% + var(--moss-sidenote-inset) + var(--moss-contents-inset, 0px));
+  margin-left: calc(-1 * var(--moss-contents-inset, 0px));
   /* Reads the same hook as the media cap below, with its own (looser) fallback:
      the wrapper clips, the media scales, so they want different defaults but the
      same off switch. Without this, `--moss-hero-max-height: none` lifted the

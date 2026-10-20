@@ -18,6 +18,7 @@ import { SECTIONS, SHORT_SECTIONS, LONG_CJK_TITLE, LONG_LATIN_TITLE, OPEN_SECTIO
 const ARTICLE = '/essays/reading/long/';
 const SHORT = '/essays/reading/short/';
 const OPEN = '/essays/reading/open/';
+const FULL = '/essays/reading/full/';
 const HOME = '/';
 const OPEN_HOME = `http://localhost:${gatePort('contents-ruler:home')}/`;
 
@@ -431,7 +432,7 @@ test.describe('on a phone', () => {
       await scrollTo(page, (await page.evaluate(() => window.scrollY)) + 80);
       await scrollTo(page, (await page.evaluate(() => window.scrollY)) - 80);
       await page.waitForFunction(() => document.querySelector('.moss-nav-island')?.getAttribute('data-shown') === 'true');
-      const s = await state();
+      const s = await state(page);
       expect(s.innerWidth).toBe(390);
       expect(s.scrollWidth).toBeLessThanOrEqual(390);
       expect(s.barRight).toBeLessThanOrEqual(390);
@@ -728,5 +729,67 @@ test.describe('the home page', () => {
       expect(rows.map((row) => row.text)).toEqual(OPEN_SECTIONS);
       expect(rows.map((row) => row.pic)).toEqual(OPEN_WITH_IMAGE);
     });
+  });
+});
+
+/** An open list claims its own column: the page shifts right to make room, whatever its width. */
+test.describe('a full-width page that asks for its contents open', () => {
+  const state = (page: Page) =>
+    page.evaluate(() => {
+      const h = document.querySelector('main h2[id]')!.getBoundingClientRect();
+      const article = document.querySelector('main article')!.getBoundingClientRect();
+      const nav = document.querySelector<HTMLElement>('.moss-contents-ruler')!;
+      const labels = [...nav.querySelectorAll('.moss-contents-ruler-label')].map((l) => l.getBoundingClientRect().right);
+      const ol = nav.querySelector('ol')!.getBoundingClientRect();
+      return {
+        hidden: nav.hidden,
+        textLeft: h.left,
+        textWidth: article.width,
+        labelsRight: Math.max(...labels),
+        listRight: ol.right,
+        scrollWidth: document.documentElement.scrollWidth,
+        innerWidth: window.innerWidth,
+      };
+    });
+
+  test('at 1280px the list is shown and the content starts to its right', async ({ page }) => {
+    await open(page, 1280, 800, FULL);
+    await jumpTo(page, 1);
+    await expect.poll(() => isAway(page)).toBe(false);
+    const s = await state(page);
+    expect(s.hidden).toBe(false);
+    expect(s.textLeft, 'the content starts past the claimed column').toBeGreaterThanOrEqual(300);
+    expect(s.labelsRight, 'no title reaches the text').toBeLessThanOrEqual(s.textLeft - 24 + 1);
+    expect(s.textWidth, 'a readable column is left').toBeGreaterThanOrEqual(448);
+    expect(s.scrollWidth).toBeLessThanOrEqual(s.innerWidth);
+    const titles = await page.$$eval('.moss-contents-ruler-label', (ls) => ls.map((l) => l.textContent));
+    expect(titles).toEqual(OPEN_SECTIONS);
+  });
+
+  test('a hero and a screen-width band still reach the window edge', async ({ page }) => {
+    await open(page, 1280, 800, FULL);
+    const edges = await page.evaluate(() => ({
+      pad: parseFloat(getComputedStyle(document.body).paddingLeft),
+      hero: document.querySelector('.moss-hero')!.getBoundingClientRect().left,
+      band: document.querySelector('article [data-width="screen"]')!.getBoundingClientRect().left,
+      bandRight: document.querySelector('article [data-width="screen"]')!.getBoundingClientRect().right,
+      innerWidth: document.documentElement.clientWidth,
+    }));
+    expect(edges.pad, 'the page was shifted').toBeGreaterThan(0);
+    expect(edges.hero).toBeCloseTo(0, 0);
+    expect(edges.band).toBeCloseTo(0, 0);
+    expect(edges.bandRight).toBeCloseTo(edges.innerWidth, 0);
+  });
+
+  test('where the column plus a readable measure does not fit, the page is not shifted and the panel is the contents', async ({ page }) => {
+    await open(page, 640, 800, FULL);
+    await expect(ruler(page)).toBeHidden();
+    expect(await page.evaluate(() => document.body.style.getPropertyValue('--moss-contents-inset'))).toBe('');
+    expect(await page.evaluate(() => getComputedStyle(document.body).paddingLeft)).toBe('0px');
+  });
+
+  test('a default page is not shifted and carries no inline style on the body', async ({ page }) => {
+    await open(page, 1280, 720);
+    expect(await page.evaluate(() => document.body.getAttribute('style'))).toBeNull();
   });
 });
