@@ -13,6 +13,7 @@
 
 pub mod blocks;
 pub mod dialects;
+pub(crate) mod douban;
 pub mod emit;
 pub mod engine;
 pub mod geometry;

@@ -121,7 +121,7 @@ pub fn generate_frontmatter(metadata: &ArticleMetadata, source_url: &str) -> Str
 /// real frontmatter early — confirmed to drop `title` entirely rather than
 /// fail safe. Escaping keeps the whole value on one physical line, so no
 /// line inside it can ever trim down to exactly `---`.
-pub(super) fn escape_yaml_string(s: &str) -> String {
+pub(crate) fn escape_yaml_string(s: &str) -> String {
     let clean = moss_core::frontmatter::strip_control_chars_str(s);
     clean
         .replace('\\', "\\\\")

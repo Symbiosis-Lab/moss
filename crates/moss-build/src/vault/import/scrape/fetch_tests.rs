@@ -220,7 +220,7 @@ async fn a_redirect_to_loopback_is_refused() {
 
     let start = format!("{}/start", server.url());
     let agent = no_redirect_test_agent(&start);
-    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None)
+    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None)
         .expect_err("a redirect to a loopback address must be refused");
     // Not just `.expect_err(...)`: an ablated per-hop check would still
     // ATTEMPT the connection to 127.0.0.1:1 and get a real connection
@@ -242,7 +242,7 @@ async fn a_redirect_to_link_local_metadata_is_refused() {
 
     let start = format!("{}/start", server.url());
     let agent = no_redirect_test_agent(&start);
-    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None)
+    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None)
         .expect_err("a redirect to the cloud-metadata address must be refused");
     // Asserting the detail (not just "some Err") matters here: an
     // ablated check would still connect-fail refusing this unroutable
@@ -263,7 +263,7 @@ async fn a_redirect_to_ipv6_loopback_is_refused() {
 
     let start = format!("{}/start", server.url());
     let agent = no_redirect_test_agent(&start);
-    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None)
+    let err = fetch_with_validated_redirects(&agent, &start, "test-agent", None, None)
         .expect_err("a redirect to ::1 must be refused");
     assert!(refusal_detail(&err).contains("disallowed"), "{}", refusal_detail(&err));
 }
@@ -296,7 +296,7 @@ async fn a_legitimate_redirect_is_still_followed() {
 
     let start = format!("{}/old-path", server.url());
     let agent = no_redirect_test_agent(&start);
-    let response = fetch_following_redirects(&agent, &start, "test-agent", None, |_| Ok(()))
+    let response = fetch_following_redirects(&agent, &start, "test-agent", None, None, |_| Ok(()))
         .expect("a legitimate redirect must still be followed");
     assert_eq!(response.status(), 200);
 }
@@ -318,7 +318,7 @@ async fn a_redirect_chain_longer_than_the_hop_cap_is_refused() {
 
     let start = format!("{}/hop0", server.url());
     let agent = no_redirect_test_agent(&start);
-    fetch_with_validated_redirects(&agent, &start, "test-agent", None)
+    fetch_with_validated_redirects(&agent, &start, "test-agent", None, None)
         .expect_err("a chain past MAX_REDIRECT_HOPS must be refused, not followed forever");
 }
 
@@ -346,10 +346,40 @@ async fn a_media_download_sends_the_media_accept_header() {
 
     let tmp = tempfile::tempdir().unwrap();
     let url = format!("{}/content/v1/abc/def/photo.jpg", server.url());
-    download_asset(&url, tmp.path(), "test-agent")
+    download_asset(&url, tmp.path(), "test-agent", None)
         .await
         .expect("mock only matches the request carrying MEDIA_ACCEPT; an \
                  unmatched mockito request errors instead of 200-ing");
+}
+
+#[tokio::test]
+async fn a_media_download_sends_the_pages_origin_as_referer() {
+    let mut server = mockito::Server::new_async().await;
+    let _m = server
+        .mock("GET", "/img/a.jpg")
+        .match_header("referer", "http://pages.example.test/")
+        .with_status(200)
+        .with_header("content-type", "image/jpeg")
+        .with_body(b"\xff\xd8\xff\xe0fake-jpeg-bytes".as_slice())
+        .create_async()
+        .await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let url = format!("{}/img/a.jpg", server.url());
+    download_asset(&url, tmp.path(), "test-agent", Some("http://pages.example.test/notes/1?x=2#top"))
+        .await
+        .expect("mock only matches a request carrying the page origin as Referer");
+}
+
+#[test]
+fn referer_is_the_origin_and_never_sent_on_a_downgrade() {
+    assert_eq!(
+        referer_for("https://pages.example.test/a/b?q=1", "https://cdn.example.test/x.jpg").as_deref(),
+        Some("https://pages.example.test/")
+    );
+    assert_eq!(referer_for("https://pages.example.test/a", "http://cdn.example.test/x.jpg"), None);
+    assert_eq!(referer_for("file:///tmp/a.html", "https://cdn.example.test/x.jpg"), None);
+    assert_eq!(referer_for("", "https://cdn.example.test/x.jpg"), None);
 }
 
 #[tokio::test]
@@ -371,14 +401,14 @@ async fn a_linked_file_over_the_cap_is_not_written_and_one_under_it_keeps_its_na
         .await;
 
     let tmp = tempfile::tempdir().unwrap();
-    let big = download_linked_file(&format!("{}/files/big.pdf", server.url()), tmp.path(), "t", 8, "big.pdf".into())
+    let big = download_linked_file(&format!("{}/files/big.pdf", server.url()), tmp.path(), "t", None, 8, "big.pdf".into())
         .await
         .unwrap();
     assert!(matches!(big, Downloaded::TooLarge));
     assert!(!tmp.path().join("big.pdf").exists(), "an oversized file is never written");
 
     let small =
-        download_linked_file(&format!("{}/files/small.pdf", server.url()), tmp.path(), "t", 8, "small.pdf".into())
+        download_linked_file(&format!("{}/files/small.pdf", server.url()), tmp.path(), "t", None, 8, "small.pdf".into())
             .await
             .unwrap();
     assert!(matches!(small, Downloaded::Saved(name) if name == "small.pdf"));
@@ -437,6 +467,7 @@ async fn a_redirect_target_on_a_ruled_host_is_rewritten_before_validation() {
         &start,
         "test-agent",
         Some(crate::vault::import::media::MEDIA_ACCEPT),
+        None,
         move |u: &str| {
             *seen_clone.lock().unwrap() = Some(u.to_string());
             Err("refused for test".to_string())
@@ -472,7 +503,7 @@ async fn a_page_fetch_redirect_is_never_rewritten_even_on_a_ruled_host() {
     // `accept: None` — a page fetch, same as `fetch_page` passes. The
     // rewrite hook must not fire just because the redirect target
     // happens to land on a host the media table rules on.
-    let err = fetch_following_redirects(&agent, &start, "test-agent", None, move |u: &str| {
+    let err = fetch_following_redirects(&agent, &start, "test-agent", None, None, move |u: &str| {
         *seen_clone.lock().unwrap() = Some(u.to_string());
         Err("refused for test".to_string())
     })

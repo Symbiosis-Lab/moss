@@ -321,7 +321,7 @@ pub(crate) fn rewrite_file_links(
         .to_string()
 }
 
-fn extract_image_urls_in_markdown(md: &str) -> Vec<String> {
+pub(crate) fn extract_image_urls_in_markdown(md: &str) -> Vec<String> {
     IMG_PATTERN
         .captures_iter(md)
         .map(|c| c[2].to_string())
