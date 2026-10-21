@@ -10,11 +10,11 @@
  *   open, to the far edge of the drawn titles. The pointer's height over them
  *   gives a continuous focus `f` (row `i`'s centre is `f = i`).
  * - The drawn layer is each link's dash, picture and label, translated and
- *   scaled by transform and opacity only. A label is a surface of its own that
- *   shows the whole title (wrapped, never cut) and may reach over the page. Rows near `f` grow to the height a
- *   picture needs; the rest keep their height and are pushed aside, so the
- *   drawn rows tile without gaps and the point under the pointer stays under
- *   it.
+ *   scaled by transform and opacity only. A label shows the whole title
+ *   (wrapped, never cut) and may reach over the page; one panel behind all the
+ *   rows is the only surface. Rows near `f` grow to the height a picture
+ *   needs; the rest keep their height and are pushed aside, so the drawn rows
+ *   tile without gaps and the point under the pointer stays under it.
  *
  * Because every strip is hit-tested at its rest position, aiming at a row
  * never moves it away: the row drawn under the pointer is the strip's own row.
@@ -51,6 +51,8 @@ const SNAP_OPEN = 0.005;
 const SNAP_FOCUS = 0.002;
 /** Clear space kept below the open list. */
 const EDGE = 8;
+/** The panel's room above and below the rows. */
+const PANEL_PAD = 4;
 
 /** Weight of a row `distance` rows from the focus: 1 at it, 0 at `radius`. */
 export function falloff(distance: number, radius = RADIUS): number {
@@ -102,6 +104,8 @@ export interface LensRow {
   dy: number;
   /** Share of full size: scales the picture and drives the label. */
   m: number;
+  /** The row's drawn height; the rows tile, so the list spans the first row's top to the last row's bottom. */
+  size: number;
 }
 
 /**
@@ -144,7 +148,7 @@ export function layoutRows(input: LensInput): LensRow[] {
   nudge -= Math.max(0, bottom + nudge - maxY);
   shift = shift.map((s) => s + nudge);
 
-  return shift.map((s, j) => ({ dy: s + grow[j] / 2, m: weight[j] * k }));
+  return shift.map((s, j) => ({ dy: s + grow[j] / 2, m: weight[j] * k, size: REST_ROW + grow[j] }));
 }
 
 export interface LensOptions {
@@ -180,6 +184,12 @@ export function mountContentsLens(opts: LensOptions): () => void {
   let titleHeights: number[] = [];
   let minY = 0;
   let reach = 0;
+  let navTop = 0;
+  let listPad = 0;
+  const panel = document.createElement("span");
+  panel.className = "moss-contents-ruler-panel";
+  panel.setAttribute("aria-hidden", "true");
+  nav.prepend(panel);
 
   const measure = (): void => {
     const frame = rows.find((r) => r.pic)?.pic;
@@ -187,6 +197,9 @@ export function mountContentsLens(opts: LensOptions): () => void {
     minY = opts.clearance();
     titleHeights = rows.map(({ label }) => label.offsetHeight);
     reach = Math.max(...rows.map(({ label }) => label.getBoundingClientRect().right)) - links[0].getBoundingClientRect().left;
+    navTop = nav.getBoundingClientRect().top;
+    // The panel starts at the nav's edge, the list's own side padding left of the dashes.
+    listPad = parseFloat(getComputedStyle(nav.querySelector("ol")!).paddingLeft) || 0;
     strips = links.map((link) => {
       const box = link.getBoundingClientRect();
       return { top: box.top, height: box.height };
@@ -198,6 +211,7 @@ export function mountContentsLens(opts: LensOptions): () => void {
   function clear(): void {
     nav.removeAttribute("data-lens");
     nav.style.removeProperty("--moss-contents-reach");
+    panel.removeAttribute("style");
     for (const { link, dash, label, pic } of rows) {
       for (const el of [dash, label, pic]) el?.removeAttribute("style");
       link.removeAttribute("data-lit");
@@ -218,14 +232,22 @@ export function mountContentsLens(opts: LensOptions): () => void {
     });
     nav.setAttribute("data-lens", "");
     nav.style.setProperty("--moss-contents-reach", px(reach));
+    const last = rows.length - 1;
+    const spanTop = (j: number): number => strips[0].top + j * REST_ROW + REST_ROW / 2 + layout[j].dy - layout[j].size / 2;
+    const top = spanTop(0) - PANEL_PAD;
+    // Height is the one value written besides the transform: the panel is out
+    // of flow and contained, so it costs no layout of the page.
+    panel.style.transform = `translateY(${px(top - navTop)})`;
+    panel.style.height = px(spanTop(last) + layout[last].size - top + PANEL_PAD);
+    panel.style.width = px(listPad + reach + listPad);
+    panel.style.opacity = String(open);
     rows.forEach(({ link, dash, label, pic }, j) => {
       const { dy, m } = layout[j];
       const move = `translateY(${px(dy)})`;
       const lit = !!pic && link.hasAttribute("data-pic") && m > PIC_MIN;
       dash.style.transform = move;
       label.style.transform = move;
-      // The surface follows the opening alone; only the ink fades with
-      // distance, so the page never shows through a title's own surface.
+      // The titles follow the opening alone; only the ink fades with distance.
       label.style.opacity = String(open);
       label.style.setProperty("--moss-contents-ink", String(LABEL_FLOOR + (1 - LABEL_FLOOR) * m));
       if (pic) {
@@ -328,5 +350,6 @@ export function mountContentsLens(opts: LensOptions): () => void {
     cancelAnimationFrame(frame);
     listeners.forEach((off) => off());
     clear();
+    panel.remove();
   };
 }

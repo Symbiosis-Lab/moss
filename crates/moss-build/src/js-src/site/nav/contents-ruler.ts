@@ -30,7 +30,7 @@
  * A page with `contents: pictures` (`opts.pictures`) is the same ruler at rest:
  * the same dashes, the same place, nothing reserved. Hovering or focusing it
  * opens the rows around the pointer with a small picture of each section
- * (contents-lens.ts), each title whole on its own surface over the page.
+ * (contents-lens.ts), each title whole on one panel over the page.
  *
  * Which of this needs an engine — hit-testing, label clearance, clipping — is
  * asserted in tests/render-gates/site/contents-ruler.spec.ts.
@@ -195,7 +195,7 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     // Up to the gutter before the text is the margin the ruler may use. The
     // dashes need the list's own width of it; the plain ruler's titles need
     // `MIN_LABEL` more. The open titles of a `contents: pictures` ruler are
-    // drawn on a surface of their own over the page, so they need none.
+    // drawn on a panel over the page, so they need none.
     const margin = textLeft - GUTTER;
     const room = Math.floor(margin - labels[0].getBoundingClientRect().left);
     const fits = (window.innerHeight - listBox.height) / 2 >= opts.clearance();

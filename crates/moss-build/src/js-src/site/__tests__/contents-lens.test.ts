@@ -66,6 +66,13 @@ describe("layoutRows", () => {
     expect(rows[5].m).toBe(0);
   });
 
+  test.each([0, 2.5, 5, 0.3])("the drawn rows tile: each row's size runs to the next row's top (focus %s)", (f) => {
+    const rows = layoutRows({ ...base, f, heights: heights(6), floors: [20, 44, 20, 20, 62, 20] });
+    const top = (j: number) => base.restTop + j * REST_ROW + REST_ROW / 2 + rows[j].dy - rows[j].size / 2;
+    for (let j = 1; j < rows.length; j++) expect(top(j)).toBeCloseTo(top(j - 1) + rows[j - 1].size, 8);
+    expect(rows[4].size).toBeGreaterThanOrEqual(62);
+  });
+
   test("rows above move up and rows below move down, symmetrically", () => {
     const rows = layoutRows({ ...base, f: 3, heights: heights(7) });
     for (let d = 1; d <= 3; d++) expect(rows[3 - d].dy).toBeCloseTo(-rows[3 + d].dy, 8);

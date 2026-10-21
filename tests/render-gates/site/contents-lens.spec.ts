@@ -354,7 +354,7 @@ test.describe('a full-width page, the narrowest margin a page has', () => {
     lines: number;
     clipped: boolean;
     box: { left: number; right: number; top: number; bottom: number };
-    surface: { background: string; shadow: string; events: string };
+    surface: { background: string; shadow: string };
     under: string | null;
   }
 
@@ -369,7 +369,7 @@ test.describe('a full-width page, the narrowest margin a page has', () => {
           lines: Math.round((box.height - 4) / parseFloat(cs.lineHeight)),
           clipped: label.scrollWidth > label.clientWidth,
           box: { left: box.left, right: box.right, top: box.top, bottom: box.bottom },
-          surface: { background: cs.backgroundColor, shadow: cs.boxShadow, events: cs.pointerEvents },
+          surface: { background: cs.backgroundColor, shadow: cs.boxShadow },
           under: under?.closest('.moss-contents-ruler a')?.getAttribute('href') ?? under?.tagName ?? null,
         };
       }),
@@ -389,7 +389,7 @@ test.describe('a full-width page, the narrowest margin a page has', () => {
     expect(rest.every((t) => t.under === null || !t.under.startsWith('#')), 'nothing of the ruler is under a hidden title').toBe(true);
   });
 
-  test('an open title is the whole heading on its own surface, wrapped, never cut', async ({ page }) => {
+  test('an open title is the whole heading, wrapped, never cut, and draws no surface of its own', async ({ page }) => {
     const textLeft = await page.evaluate(() => document.querySelector('main h2[id]')!.getBoundingClientRect().left);
     let reachedOverText = false;
     for (const k of [0, 2, FULL_SECTIONS.length - 1]) {
@@ -399,9 +399,8 @@ test.describe('a full-width page, the narrowest margin a page has', () => {
         expect(title.text, `title ${i} while row ${k} is focused`).toBe(FULL_SECTIONS[i]);
         expect(title.text).not.toContain('…');
         expect(title.clipped, `title ${i} is clipped`).toBe(false);
-        expect(title.surface.background, `title ${i} has a surface`).not.toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
-        expect(title.surface.shadow).not.toBe('none');
-        expect(title.surface.events, 'the surface takes no pointer').toBe('none');
+        expect(title.surface.background, `title ${i} has no surface`).toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
+        expect(title.surface.shadow).toBe('none');
         reachedOverText ||= title.box.right > textLeft;
       });
       expect(t[0].lines, 'a long title wraps').toBe(2);
@@ -461,6 +460,90 @@ test.describe('a full-width page, the narrowest margin a page has', () => {
     await page.mouse.move(x + 600, y);
     await expect.poll(() => page.locator('.moss-contents-ruler').evaluate((el) => el.hasAttribute('data-lens'))).toBe(false);
     expect(await linkAt(page, x, y)).toBeNull();
+  });
+
+  interface Panel {
+    visible: number;
+    shadowed: number;
+    rect: { left: number; right: number; top: number; bottom: number };
+    centre: string | null;
+    background: string;
+    events: string;
+    over: boolean;
+  }
+
+  const panel = (page: Page): Promise<Panel> =>
+    page.evaluate(() => {
+      const nav = document.querySelector('.moss-contents-ruler')!;
+      const surfaces = [...nav.querySelectorAll<HTMLElement>('*')].filter((el) => {
+        const cs = getComputedStyle(el);
+        const b = el.getBoundingClientRect();
+        return cs.boxShadow !== 'none' && cs.display !== 'none' && cs.visibility !== 'hidden' && Number(cs.opacity) > 0 && b.width > 0;
+      });
+      const el = nav.querySelector<HTMLElement>('.moss-contents-ruler-panel')!;
+      const b = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      const at = document.elementFromPoint((b.left + b.right) / 2, (b.top + b.bottom) / 2);
+      const main = getComputedStyle(document.querySelector('main')!).zIndex;
+      return {
+        visible: surfaces.length,
+        shadowed: surfaces.filter((s) => s === el).length,
+        rect: { left: b.left, right: b.right, top: b.top, bottom: b.bottom },
+        centre: at?.closest('.moss-contents-ruler a')?.getAttribute('href') ?? at?.className ?? at?.tagName ?? null,
+        background: cs.backgroundColor,
+        events: cs.pointerEvents,
+        over: Number(getComputedStyle(nav).zIndex) > (main === 'auto' ? 0 : Number(main)),
+      };
+    });
+
+  test('the open list is one panel behind every row, with no page text inside it', async ({ page }) => {
+    const at = await rows(page);
+    expect((await panel(page)).visible, 'no surface at rest').toBe(0);
+    const restPanel = await page.locator('.moss-contents-ruler-panel').evaluate((el) => ({ display: getComputedStyle(el).display, events: getComputedStyle(el).pointerEvents }));
+    expect(restPanel.display === 'none' || restPanel.events === 'none', 'at rest the panel takes no pointer').toBe(true);
+    for (const k of [1, 3]) {
+      await hoverStrip(page, k);
+      const p = await panel(page);
+      expect(p.visible, 'exactly one surface is visible').toBe(1);
+      expect(p.shadowed, 'and it is the panel').toBe(1);
+      expect(p.background, 'it is opaque').not.toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
+      expect(p.events, 'open, the panel is part of the ruler for the pointer').toBe('auto');
+      expect(p.over, 'the ruler is drawn over the page').toBe(true);
+      expect(p.centre, 'under its centre is a row, not page text').toMatch(/^#/);
+      const t = await titles(page);
+      for (const [i, title] of t.entries()) {
+        expect(title.box.left, `title ${i}`).toBeGreaterThanOrEqual(p.rect.left - 0.5);
+        expect(title.box.right, `title ${i}`).toBeLessThanOrEqual(p.rect.right + 0.5);
+        expect(title.box.top, `title ${i}`).toBeGreaterThanOrEqual(p.rect.top - 0.5);
+        expect(title.box.bottom, `title ${i}`).toBeLessThanOrEqual(p.rect.bottom + 0.5);
+      }
+      const dash = (await rows(page))[0].dash.x;
+      expect(p.rect.left, 'it starts at the dashes').toBeLessThanOrEqual(dash);
+      const inside = { x: p.rect.right - 3, y: (p.rect.top + p.rect.bottom) / 2 };
+      await page.mouse.move(2, 2);
+      await expect.poll(() => page.locator('.moss-contents-ruler').evaluate((el) => el.hasAttribute('data-lens'))).toBe(false);
+      expect((await panel(page)).visible, 'no surface again at rest').toBe(0);
+      expect(
+        await page.evaluate(([x, y]) => !document.elementFromPoint(x, y)?.closest('.moss-contents-ruler'), [inside.x, inside.y]),
+        'at rest a point inside the open panel hits the page',
+      ).toBe(true);
+    }
+    expect((await rows(page)).map((r) => [r.strip.top, r.strip.bottom])).toEqual(at.map((r) => [r.strip.top, r.strip.bottom]));
+  });
+
+  test('a pointer moving between rows over the panel, past the strips, never closes the list', async ({ page }) => {
+    const at = await rows(page);
+    await hoverStrip(page, 1);
+    const p = await panel(page);
+    // Inside the panel, in the 8px beyond the strips' far end.
+    const x = p.rect.right - 3;
+    for (const k of [1, 2, 3, 4, 5]) {
+      await page.mouse.move(x, stripCentre(at[k]), { steps: 4 });
+      await frames(page, 6);
+      expect(await page.locator('.moss-contents-ruler').evaluate((el) => el.hasAttribute('data-lens')), `over the panel beside row ${k}`).toBe(true);
+    }
+    await page.mouse.move(x + 60, stripCentre(at[5]));
+    await expect.poll(() => page.locator('.moss-contents-ruler').evaluate((el) => el.hasAttribute('data-lens'))).toBe(false);
   });
 
   test('at rest the titles are not drawn', async ({ page }) => {

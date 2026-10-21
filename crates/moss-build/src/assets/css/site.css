@@ -4094,11 +4094,10 @@ body[data-contents="pictures"] {
    lens, which sets their opacity. A device without hover keeps the plain
    ruler's tap-to-open.
 
-   Each open title sits on a surface of its own, like the island's bar, and may
-   reach over the page past the margin: it shows whole, wrapped at about
-   `--moss-contents-measure`, never cut. Its box is centred on its row and is
-   one row tall for one line, so a short title changes no row. The surface
-   takes no pointer: the strips decide what is under it. */
+   An open title may reach over the page past the margin: it shows whole,
+   wrapped at about `--moss-contents-measure`, never cut. Its box is centred on
+   its row and is one row tall for one line, so a short title changes no row.
+   All the open rows sit on one panel (below), not one surface each. */
 .moss-contents-ruler[data-contents="pictures"] .moss-contents-ruler-label {
   inset-inline-start: calc(var(--moss-contents-pic) + 4px);
   top: 50%;
@@ -4111,13 +4110,33 @@ body[data-contents="pictures"] {
   white-space: normal;
   overflow-wrap: anywhere;
   color: color-mix(in srgb, var(--moss-color-text-secondary) calc(var(--moss-contents-ink, 1) * 100%), transparent);
+}
+
+/* The one floating surface behind the open rows: the page background, a
+   hairline and the floating-chrome elevation. contents-lens.ts moves it with
+   the rows (transform) and sizes it to them; it is out of flow and contained.
+   While open it takes the pointer, so it counts as part of the nav and moving
+   between rows over it keeps the list open; the strips above it still decide
+   which row is under the pointer. At rest it is not drawn and takes nothing,
+   so the page beneath stays clickable. Behind the rows because it comes first
+   in the nav. */
+.moss-contents-ruler-panel {
+  display: none;
+  position: absolute;
+  inset: 0 auto auto 0;
+  contain: strict;
   background: var(--moss-color-bg);
   border-radius: calc(var(--moss-contents-row) * 0.3);
   box-shadow: 0 0 0 1px var(--moss-border-light), var(--moss-elevation-2);
 }
 
-[data-theme="dark"] .moss-contents-ruler[data-contents="pictures"] .moss-contents-ruler-label {
+[data-theme="dark"] .moss-contents-ruler-panel {
   box-shadow: 0 0 0 1px var(--moss-border-medium), var(--moss-elevation-2);
+}
+
+.moss-contents-ruler[data-lens] .moss-contents-ruler-panel {
+  display: block;
+  pointer-events: auto;
 }
 
 .moss-contents-ruler[data-contents="pictures"]:not([data-lens]):not([data-open]) .moss-contents-ruler-label {

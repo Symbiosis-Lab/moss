@@ -422,7 +422,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-contents-ink",
         owner: ".moss-contents-ruler-label",
         default: "1",
-        description: "How much ink an open title of a `contents: pictures` ruler has, from 0 to 1: full at the row under the pointer, falling to a floor that keeps every title legible. Set by the site runtime (contents-lens.ts) on each open frame; the title's surface does not fade with it. Not a theme hook.",
+        description: "How much ink an open title of a `contents: pictures` ruler has, from 0 to 1: full at the row under the pointer, falling to a floor that keeps every title legible. Set by the site runtime (contents-lens.ts) on each open frame; the panel behind the titles does not fade with it. Not a theme hook.",
     },
     CustomProp {
         name: "--moss-place-figure-top",

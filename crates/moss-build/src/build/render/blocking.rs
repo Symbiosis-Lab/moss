@@ -3072,18 +3072,19 @@ pub fn generate_blocking_content_for_build(
         // forgotten (2026-08-29).
         Ok(health) => {
             use crate::build::feeds::redirects::BaselineHealth;
-            let reason = match health {
-                BaselineHealth::Fine => None,
-                BaselineHealth::Unusable(why) => Some(why.describe()),
-                BaselineHealth::NoBaselineYet => {
-                    Some("this site has no usable record of what is live yet; the next \
-                          publish writes it")
+            // A missing record is a note: it says nothing about the content, and
+            // the next publish ends it. A record that exists and cannot be used
+            // stays a problem.
+            match health {
+                BaselineHealth::Fine => {}
+                BaselineHealth::Unusable(why) => {
+                    log_warn_problem!("{} — a renamed page's old link may 404 until then", why.describe());
                 }
-            };
-            if let Some(reason) = reason {
-                log_warn_problem!(
-                    "{reason} — a renamed page's old link may 404 until then"
-                );
+                BaselineHealth::NoBaselineYet => {
+                    crate::build::cli_output::log_note!(
+                        "this site has no usable record of what is live yet; the next publish writes it — a renamed page's old link may 404 until then"
+                    );
+                }
             }
         }
         Err(e) => log::info!("Failed to emit the redirect table: {}", e),

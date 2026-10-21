@@ -297,10 +297,10 @@ pub fn load(paths: &MossPaths) -> Baseline {
         // records cannot be shown to cover it, so its pages would silently go
         // missing from the baseline.
         Baseline::Unreadable(why) => return Baseline::Unreadable(why),
-        Baseline::Absent if entries.is_empty() && !records.is_empty() => {
-            // Records, but no note IDs anywhere. Something HAS been published,
-            // so this is not absence — and the file that used to answer is
-            // gone, so nothing here can.
+        Baseline::Absent if entries.is_empty() && records.iter().any(|r| r.triples.is_none()) => {
+            // Records that predate `triples`: a publish happened but nothing
+            // here can say what it put live. A record with empty `triples` is
+            // a real baseline (a site with no tracked pages), not this.
             log::info!(
                 "the publish records carry no note IDs and the file that used to \
                  hold them is gone — this build will not detect renames or resolve \
