@@ -2344,6 +2344,7 @@ mod tests {
             cells: vec![vec![figure_block(None)]],
             width: Some("page".to_string()),
             scroll: false,
+            collage: false,
             label: None,
         });
         let mut out = String::new();
@@ -2375,6 +2376,7 @@ mod tests {
             cells: vec![vec![figure_block(Some("screen"))]],
             width: None,
             scroll: false,
+            collage: false,
             label: None,
         });
         let mut out = String::new();

@@ -55,6 +55,10 @@ pub struct AttrBlock {
     /// every other shortcode that shares this parser leaves it unread, so
     /// writing `scroll` on one is inert rather than an error.
     pub scroll: bool,
+    /// `collage` bare flag, read only by `:::grid` (a lead picture beside a
+    /// packed set of smaller tiles); inert on every other shortcode, like
+    /// `scroll`.
+    pub collage: bool,
 }
 
 impl AttrBlock {
@@ -64,6 +68,7 @@ impl AttrBlock {
             && self.kvs.is_empty()
             && self.width.is_none()
             && !self.scroll
+            && !self.collage
     }
 
     /// Convenience for renderers: get the value for a key.
@@ -252,6 +257,8 @@ pub fn parse_attrs_spanned(input: &str) -> Result<(AttrBlock, Vec<KvSpan>), Attr
                             block.width = Some(width);
                         } else if key == "scroll" {
                             block.scroll = true;
+                        } else if key == "collage" {
+                            block.collage = true;
                         } else {
                             return Err(AttrError::InvalidKey { token: key });
                         }

@@ -61,6 +61,7 @@ GATES_BUILD=(
   grid-card-no-cover
   nav-mobile
   grid-mobile-collapse
+  collage
   card-cover-ratio
   grid-card-image-inline-size
   hero-caption

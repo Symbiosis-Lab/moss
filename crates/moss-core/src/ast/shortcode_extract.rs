@@ -318,6 +318,7 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, O
     let classes = parsed.class_string();
     let width = parsed.width.map(str::to_string);
     let scroll = parsed.scroll;
+    let collage = parsed.collage;
     let label = parsed.get("label").map(str::to_string);
 
     let mut columns: u32 = 1;
@@ -397,6 +398,7 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, O
             source: ShortcodeSource { extra_lines: 0, fragments },
             width,
             scroll,
+            collage,
             label,
         },
         legacy_dash_line,
@@ -1674,6 +1676,17 @@ fn extract_with_state(
                     }
                     collected.warnings.extend(diag.warnings);
                     collected.advisories.extend(diag.advisories);
+                    if let Shortcode::Grid(g) = &sc {
+                        if g.collage && !g.is_collage() {
+                            collected.warnings.push(format!(
+                                "`:::grid {{collage}}` on line {} has {} cells, but a collage needs {} to {}; it renders as a plain grid.",
+                                config.warning_line_offset + i + 1,
+                                g.cells.len(),
+                                super::shortcode::COLLAGE_TILES.start(),
+                                super::shortcode::COLLAGE_TILES.end(),
+                            ));
+                        }
+                    }
                     let index = collected.extracted.len();
                     output.push_str(&placeholder_for(&nonce, index));
                     output.push('\n');

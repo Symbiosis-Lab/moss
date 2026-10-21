@@ -1623,6 +1623,18 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 default: "",
                 description: "Presence flag alongside `data-scroll`: this row's cell count is at or under its `data-columns`, so it renders exactly like the plain wrapping grid on a screen wide enough to show every card at once — N equal tracks, no drag, no dots — and only becomes a real scroller once the viewport narrows past the same breakpoint that would otherwise collapse a plain grid to one column. Absent on a row that overflows its columns and so scrolls at every width, and on a one-cell `{scroll}` row (which gets no `data-scroll` either — nothing to scroll at any width).",
             },
+            DataAttr {
+                name: "data-collage",
+                values: &[],
+                default: "",
+                description: "Presence flag: emitted from the bare `collage` keyword (`:::grid {collage}`) when the grid has 3 to 9 cells; with any other count the build warns and the grid stays plain. The first cell is the lead; on a wide screen it takes the left half at full height and the rest pack the right half in rows of varied widths inside a fixed 9:4 box, and on a phone the lead runs full width at 3:2 with the others in rows of three squares. Pictures crop with `object-fit: cover`; a caption shows over its picture on hover or keyboard focus; a cell that is not a picture fills with the page background and clips its text with a fade. The collage's tracks are always horizontal; on a vertically typeset page a text tile still reads in the page's vertical direction.",
+            },
+            DataAttr {
+                name: "data-count",
+                values: &["3", "4", "5", "6", "7", "8", "9"],
+                default: "",
+                description: "The collage's tile count, emitted with `data-collage` so the stylesheet picks one arrangement per count instead of a site writing `:nth-child` placement rules.",
+            },
         ],
         example_html: r#"<div class="moss-grid" data-width="wide">
   <div class="moss-grid-card">...</div>

@@ -106,6 +106,33 @@ Set the `--moss-grid-scroll-peek` custom property to control exactly how many pi
 
 Under vertical (right-to-left column) typesetting, `scroll` still keeps the row on one line, but the line itself runs down the page instead of across it, so the row scrolls vertically — perpendicular to the page's own sideways scroll between columns — with the same peek cueing more cards below.
 
+## Collage
+
+Add `collage` to show a collection's highlights as a collage: the first cell is the lead picture and the others are smaller tiles, pictures or a passage of text. No column count is needed.
+
+```markdown
+:::grid {collage}
+![Lead picture](a.jpg)
+*Credit for a.*
++++
+![Second](b.jpg)
+*Credit for b.*
++++
+::: {.passage}
+A passage set as type fills its tile.
+:::
++++
+![Third](c.jpg)
+*Credit for c.*
+:::
+```
+
+On a wide screen the lead takes the left half at full height and the other tiles pack the right half in rows of varied widths, inside a box with a fixed 9:4 shape. On a phone the lead runs full width at 3:2 and the others sit in rows of three squares; a last row with fewer tiles shares the width. Pictures crop to fill their tile.
+
+The italic line under a picture is its credit. It shows over the picture on hover and keyboard focus, and on every device, including a phone, a picture opens in the picture viewer with its credit under it. A cell that is not a picture, such as a fenced div holding a passage, fills its tile with the page background and fades out the text that does not fit, so keep it short.
+
+A collage takes 3 to 9 cells. With any other count the build warns with the line and shows a plain grid. Set `--moss-collage-gap` for the space between tiles (default `6px`). Use a collage for a handful of highlights; use [[gallery]] for a set of photos to go through and a plain grid when each cell is a card.
+
 ## Cell content
 
 Cells are full markdown: headings, paragraphs, lists, images, and links all work. Cells also recognize:

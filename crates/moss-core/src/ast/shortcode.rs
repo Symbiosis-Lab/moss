@@ -195,6 +195,10 @@ impl ShortcodeSource {
     }
 }
 
+/// Tile counts a `{collage}` grid has a layout for; the stylesheet draws one
+/// arrangement per count.
+pub const COLLAGE_TILES: std::ops::RangeInclusive<usize> = 3..=9;
+
 /// Arguments for [`Shortcode::Grid`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GridShortcode {
@@ -239,6 +243,11 @@ pub struct GridShortcode {
     /// rather than "how many per row".
     #[serde(default)]
     pub scroll: bool,
+    /// From the bare `collage` keyword: the cells lay out as one lead picture
+    /// and a packed set of smaller tiles. Only honoured for 3 to 9 cells (see
+    /// [`Self::is_collage`]).
+    #[serde(default)]
+    pub collage: bool,
     /// Accessible name for the scrolling row (`label="…"`). Only meaningful
     /// alongside `scroll` — rendered as `aria-label` (with `role="region"`)
     /// on the wrapping element; `None` when the author did not set it, or
@@ -264,7 +273,14 @@ impl GridShortcode {
     /// every width or only once the viewport narrows — see
     /// [`Self::fits_without_scrolling`] for that.
     pub fn is_scroll_row(&self) -> bool {
-        self.scroll && self.cells.len() >= 2
+        self.scroll && !self.collage && self.cells.len() >= 2
+    }
+
+    /// True when the author wrote `{collage}` and the grid has a cell count
+    /// the collage layouts are drawn for. Outside that range the grid renders
+    /// as a plain grid and the build warns.
+    pub fn is_collage(&self) -> bool {
+        self.collage && COLLAGE_TILES.contains(&self.cells.len())
     }
 
     /// True when a scroll row's own cells already fit in one line at its

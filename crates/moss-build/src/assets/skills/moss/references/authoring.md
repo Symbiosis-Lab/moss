@@ -344,6 +344,27 @@ Separate a grid's cells with a line that holds only `+++`. A grid takes one to s
 
 `:::grid N {scroll}` (2026-09-21) keeps a grid's row on one line and lets the reader drag it sideways instead of it wrapping — `N` becomes how many cards fit in view at once, with a slice of the next one showing as the cue to keep going. Reach for it on a "related articles" or "more like this" strip where reading order matters more than seeing every card at once; add `label="…"` to give the row an accessible name when the surrounding heading doesn't already say what it is. Skip it when every card must be visible without scrolling and use the plain wrapping grid instead.
 
+`:::grid {collage}` sets a collection's highlights as a collage: the first cell is the lead picture and the rest are smaller tiles, some of them details of the lead or a passage of text set as a tile. Write each picture with its credit as an italic line under it, and a passage as a fenced div:
+
+```
+:::grid {collage}
+![Lead picture](a.jpg)
+*Credit for a.*
++++
+![Second](b.jpg)
+*Credit for b.*
++++
+::: {.passage}
+A passage set as type fills its tile.
+:::
++++
+![Third](c.jpg)
+*Credit for c.*
+:::
+```
+
+On a wide screen the lead takes the left half at full height and the other tiles pack the right half in rows of varied widths, inside a box with a fixed 9:4 shape; on a phone the lead runs full width at 3:2 and the others sit in rows of three squares. Pictures crop to fill their tile. A credit shows over its picture on hover and keyboard focus, and on every device a picture opens in the picture viewer with its credit under it. A cell that is not a picture fills its tile with the page background and clips its text with a fade, so keep a passage short. It takes 3 to 9 cells; any other count builds a plain grid and warns with the line. No column count is needed. Set `--moss-collage-gap` for the space between tiles. Reach for it instead of a grid with a placement rule per tile (`:nth-child`, `grid-area`), which is written for one tile count and does not hold on a phone; use `:::gallery` when the pictures are a set to go through and `:::grid N` when the cells are cards.
+
 Under a scroll row, moss shows where the reader is. A row of up to seven cards gets one dot per card. A longer row gets the current card's number and the total ("12 / 40") between ‹ and › buttons that move one view, because dots stop telling a reader where they are past about seven. The number is the first card in view, or the last card once the row is at its end, and its box is sized for the widest number so nothing beside it moves.
 
 A theme can replace that indicator for one row. The row fires a `moss-scroll-position` event whenever the current card or the cards in view change, with `detail` holding `current`, `first` and `last` (1-based card numbers) and `count`; the indicator carries the same numbers as `data-current`, `data-first`, `data-last` and `data-count`, so a script that starts later can read where the row already is. Hide the default for that row and draw your own from the event in `.moss/theme/script.js`; move the row by scrolling a card into view (`card.scrollIntoView({ inline: "start", block: "nearest" })`):

@@ -3650,3 +3650,83 @@ Body.
   },
   siteUrl: "https://example.test",
 };
+
+/** Three collages (4, 7 with one passage tile, 9 tiles) of pictures with mixed proportions. */
+const COLLAGE_PASSAGE = `A passage set as type fills its tile. It carries on well past what one small tile can show, so the text has to be clipped with a fade instead of spilling out of its box and into the tiles around it. The quick brown fox jumps over the lazy dog, again and again, until the tile is full.`;
+
+const COLLAGE_LONG_CREDIT = `A long credit line that names the photographer, the archive, the year and the licence, so it runs to three lines in a narrow tile.`;
+
+function collageBody(count: number, passageAt?: number): string {
+  return Array.from({ length: count }, (_, i) =>
+    i === passageAt
+      ? `::: {.passage}\n${COLLAGE_PASSAGE}\n:::`
+      : `![Picture ${i + 1}](t${i + 1}.svg)\n*Credit for picture ${i + 1}.*`,
+  ).join("\n+++\n");
+}
+
+export const COLLAGE_GATE: ScratchSiteSpec = {
+  name: "collage-gate",
+  files: {
+    "white.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="600" height="400" fill="#fff"/></svg>
+`,
+    "vertical/index.md": `---
+title: Vertical Collage
+uid: "clg00110"
+typesetting: vertical
+---
+
+:::grid {collage}
+${collageBody(5, 2)}
+:::
+`,
+    "t1.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="600" height="400" fill="#4a7"/></svg>
+`,
+    "t2.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600" viewBox="0 0 400 600"><rect width="400" height="600" fill="#a47"/></svg>
+`,
+    "t3.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500" viewBox="0 0 500 500"><rect width="500" height="500" fill="#47a"/></svg>
+`,
+    "t4.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="300" viewBox="0 0 800 300"><rect width="800" height="300" fill="#a74"/></svg>
+`,
+    "t5.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="500" viewBox="0 0 300 500"><rect width="300" height="500" fill="#7a4"/></svg>
+`,
+    "t6.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="600" height="400" fill="#74a"/></svg>
+`,
+    "t7.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600" viewBox="0 0 400 600"><rect width="400" height="600" fill="#aa4"/></svg>
+`,
+    "t8.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500" viewBox="0 0 500 500"><rect width="500" height="500" fill="#4aa"/></svg>
+`,
+    "t9.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="300" viewBox="0 0 800 300"><rect width="800" height="300" fill="#a4a"/></svg>
+`,
+    "index.md": `---
+title: Collage
+uid: "clg00101"
+---
+
+# Collage
+
+## Four
+
+:::grid {collage}
+${collageBody(4)}
+:::
+
+## Seven
+
+:::grid {collage}
+${collageBody(7, 3)}
+:::
+
+## Credit
+
+:::grid {collage}
+${collageBody(5).replace("![Picture 3](t3.svg)\n*Credit for picture 3.*", "![White](white.svg)\n*" + COLLAGE_LONG_CREDIT + "*")}
+:::
+
+## Nine
+
+:::grid {collage}
+${collageBody(9)}
+:::
+`,
+  },
+};

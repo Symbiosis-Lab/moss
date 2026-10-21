@@ -195,6 +195,11 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
                 open_tag.push('"');
             }
         }
+        // `data-count` lets the stylesheet pick the arrangement for this many
+        // tiles without a per-site `:nth-child` chain.
+        if args.is_collage() {
+            open_tag.push_str(&format!(r#" data-collage data-count="{}""#, args.cells.len()));
+        }
         if let Some(w) = &args.width {
             open_tag.push_str(r#" data-width=""#);
             open_tag.push_str(w);

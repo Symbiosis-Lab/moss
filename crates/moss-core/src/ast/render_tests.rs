@@ -1509,3 +1509,33 @@ fn footnote_marker_inside_definition_is_numbered_in_document_order() {
     let two = endnotes.find("note two");
     assert!(one.is_some() && two.is_some() && one < two, "{html}");
 }
+
+fn collage_grid(cell_count: usize) -> Block {
+    Block::Shortcode(Shortcode::Grid(GridShortcode {
+        columns: 1,
+        collage: true,
+        cells: (0..cell_count)
+            .map(|_| vec![Block::Paragraph(vec![Inline::Text("A".into())])])
+            .collect(),
+        ..Default::default()
+    }))
+}
+
+#[test]
+fn grid_collage_emits_flag_and_tile_count() {
+    for n in [3, 7, 9] {
+        let html = render(vec![collage_grid(n)]);
+        assert!(
+            html.contains(&format!(r#"<div class="moss-grid" data-columns="1" data-collage data-count="{n}">"#)),
+            "got: {html}"
+        );
+    }
+}
+
+#[test]
+fn grid_collage_outside_three_to_nine_is_a_plain_grid() {
+    for n in [1, 2, 10] {
+        let html = render(vec![collage_grid(n)]);
+        assert!(!html.contains("data-collage") && !html.contains("data-count"), "got: {html}");
+    }
+}

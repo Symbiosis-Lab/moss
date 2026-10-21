@@ -647,6 +647,7 @@ mod tests {
                 cells: vec![cell],
                 width: None,
                 scroll: false,
+                collage: false,
                 label: None,
             }))]);
         let snap = empty_snapshot();

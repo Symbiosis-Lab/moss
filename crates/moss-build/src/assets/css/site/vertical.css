@@ -312,6 +312,12 @@ body[data-typesetting="vertical"] .moss-table-scroll {
   writing-mode: inherit;
 }
 
+/* A collage's tracks stay horizontal (site.css), so a tile that holds text
+   takes the page's reading direction back. */
+[data-typesetting="vertical"] .moss-grid[data-collage] .moss-grid-card:not(:has(img)) {
+  writing-mode: vertical-rl;
+}
+
 /* The three `.moss-card*` rules below asked for `--moss-font-serif`, which no
    token defines. The reads were invalid at computed-value time, so these cards
    have always rendered in the inherited body face — never a serif one. Dropping

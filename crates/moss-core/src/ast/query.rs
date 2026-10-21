@@ -648,6 +648,7 @@ mod tests {
             cells: vec![cell],
             width: None,
             scroll: false,
+            collage: false,
             label: None,
         }))]);
         match find_first_block_image(&doc) {

@@ -2534,3 +2534,28 @@ fn unknown_callout_type_renders_as_note_and_keeps_the_written_name() {
         other => panic!("expected Callout, got {other:?}"),
     }
 }
+
+fn collage_source(cells: usize) -> String {
+    let body = (0..cells).map(|i| format!("Cell {i}")).collect::<Vec<_>>().join("\n+++\n");
+    format!("Intro.\n\n:::grid {{collage}}\n{body}\n:::\n")
+}
+
+#[test]
+fn collage_grid_with_three_to_nine_cells_does_not_warn() {
+    for n in [3, 9] {
+        let doc = crate::ast::parse(&collage_source(n));
+        assert!(doc.warnings.is_empty(), "{n} cells: {:?}", doc.warnings);
+    }
+}
+
+#[test]
+fn collage_grid_outside_three_to_nine_cells_warns_with_its_line() {
+    for n in [2, 10] {
+        let doc = crate::ast::parse(&collage_source(n));
+        assert!(
+            doc.warnings.iter().any(|w| w.contains("collage") && w.contains("on line 3") && w.contains(&format!("{n} cells"))),
+            "{n} cells: {:?}",
+            doc.warnings
+        );
+    }
+}
