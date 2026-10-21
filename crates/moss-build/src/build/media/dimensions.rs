@@ -43,6 +43,8 @@ pub(crate) struct MediaMaps {
     pub(crate) dimensions: HashMap<String, (u32, u32)>,
     /// Map from source path to dominant color hex string (e.g., "#ff5733")
     pub(crate) colors: HashMap<String, String>,
+    /// Map from source path to the encoded `MediaMetadata::tone_bands`
+    pub(crate) tones: HashMap<String, String>,
     /// Map from source path to LQIP data URI
     pub(crate) lqips: HashMap<String, String>,
     /// Map from source path to the scanned `is_animated` flag (multi-frame GIF
@@ -116,6 +118,7 @@ impl MediaDimensionLookup {
         BUILT_ON_THIS_THREAD.with(|n| n.set(n.get() + 1));
         let mut dimensions = HashMap::new();
         let mut colors = HashMap::new();
+        let mut tones = HashMap::new();
         let mut lqips = HashMap::new();
         let mut animated = HashMap::new();
 
@@ -125,6 +128,9 @@ impl MediaDimensionLookup {
             }
             if let Some(ref color) = meta.dominant_color {
                 colors.insert(meta.path.clone(), color.clone());
+            }
+            if let Some(ref tone) = meta.tone_bands {
+                tones.insert(meta.path.clone(), tone.clone());
             }
             if let Some(ref lqip) = meta.lqip_data_uri {
                 lqips.insert(meta.path.clone(), lqip.clone());
@@ -173,18 +179,27 @@ impl MediaDimensionLookup {
         }
         index_by_output_url(&mut dimensions, dir_overrides);
         index_by_output_url(&mut colors, dir_overrides);
+        index_by_output_url(&mut tones, dir_overrides);
         index_by_output_url(&mut lqips, dir_overrides);
         index_by_output_url(&mut animated, dir_overrides);
 
         let maps = MediaMaps {
             dimensions,
             colors,
+            tones,
             lqips,
             animated,
         };
         let snapshot =
             crate::build::markdown::pipeline::build_asset_snapshot(&maps, registry, dir_overrides);
         Self { maps, snapshot }
+    }
+
+    /// The picture at `href` (an output URL) as luminance bands, as the scan
+    /// measured them. `None` until the scan has (a preview's first build), for
+    /// a video or an unreadable picture.
+    pub fn tone_grid(&self, href: &str) -> Option<crate::build::markdown::hero_ink::ToneGrid> {
+        crate::build::markdown::hero_ink::ToneGrid::parse(resolve_entry(&self.maps.tones, href)?)
     }
 
     /// This lookup's `AssetSnapshot`. See the `snapshot` field.

@@ -687,6 +687,7 @@ mod tests {
                 overlay_text: String::new(),
                 width: None,
                 mobile: None,
+                panel: None,
                 align: None,
                 caption: Vec::new(),
                 slide_captions: Vec::new(),

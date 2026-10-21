@@ -76,3 +76,98 @@ fn a_hero_with_words_after_it_is_an_ordinary_hero() {
     let html = site.html("index.html");
     assert!(!footer_of(&html).contains("moss-hero-closing"));
 }
+
+/// A 160x70 picture: `top` over the first 70% of its rows, `bottom` below.
+fn picture(top: [u8; 3], bottom: [u8; 3], hatched_top: bool) -> Vec<u8> {
+    let mut img = image::RgbImage::new(160, 70);
+    for (_, y, p) in img.enumerate_pixels_mut() {
+        let dark_line = hatched_top && y < 49 && y % 2 == 0;
+        *p = image::Rgb(if dark_line { [20, 30, 50] } else if y < 49 { top } else { bottom });
+    }
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+    out.into_inner()
+}
+
+const SKY: [u8; 3] = [205, 218, 232];
+const GROUND: [u8; 3] = [30, 40, 60];
+
+/// A site whose footer closes on `hero` (a `:::hero` block), over a quiet sky
+/// (`day.png`, `night.png`) or a hatched one.
+fn site_with(hero: &str, hatched: bool) -> String {
+    let site = Site::new(&[("index.md", "---\ntitle: Harbour\n---\n\nBody text.\n"), ("footer.md", hero)]);
+    std::fs::write(site.root.join("day.png"), picture(SKY, GROUND, hatched)).unwrap();
+    std::fs::write(site.root.join("night.png"), picture([20, 28, 48], [230, 235, 240], hatched)).unwrap();
+    site.rebuild();
+    footer_of(&site.html("index.html")).to_string()
+}
+
+#[test]
+fn a_quiet_sky_takes_ink_with_no_panel_and_a_busy_one_keeps_its_panel() {
+    let quiet = site_with(HERO, false);
+    assert!(quiet.contains(r#"data-words="narrow:dark mid:dark wide:dark""#), "dark ink on the pale sky: {quiet}");
+    assert!(quiet.contains(r#"data-words-night="narrow:light mid:light wide:light""#), "light ink on the dark picture: {quiet}");
+    assert!(quiet.contains(r#"data-foot="light""#), "the foot of the day picture is dark ground: {quiet}");
+
+    let busy = site_with(HERO, true);
+    assert!(!busy.contains(r#"data-words=""#), "a hatched sky keeps the panel: {busy}");
+}
+
+#[test]
+fn panel_forces_the_backing_either_way() {
+    let always = site_with(&HERO.replace("align=top", "align=top panel=always"), false);
+    assert!(!always.contains("data-words"), "{always}");
+    let night_only = site_with(HERO, true);
+    assert!(night_only.contains("data-words-night"), "the pairs are measured apart: {night_only}");
+    let never = site_with(&HERO.replace("align=top", "align=top panel=none"), true);
+    assert!(never.contains("data-words=\""), "ink on a busy sky when asked: {never}");
+}
+
+#[test]
+fn a_closing_hero_caption_is_its_credit_inside_the_picture() {
+    let footer = site_with(&HERO.replace("align=top", "align=top caption=\"Etching, 1643.\""), false);
+    let section_end = footer.find("</section>").unwrap();
+    let credit = footer.find(r#"<p class="moss-hero-credit""#).expect("the credit renders");
+    assert!(footer[credit..].contains(">Etching, 1643.</p>"), "{footer}");
+    assert!(credit < section_end, "inside the picture's box: {footer}");
+    assert!(!footer.contains("data-captioned") && !footer.contains(r#"class="moss-hero-caption""#), "{footer}");
+}
+
+#[test]
+fn an_ordinary_hero_keeps_its_panel_unless_it_asks_to_measure() {
+    let page = |hero: &str| {
+        let site = Site::new(&[("index.md", &format!("---\ntitle: Harbour\n---\n\n{hero}\n"))]);
+        std::fs::write(site.root.join("day.png"), picture(SKY, GROUND, false)).unwrap();
+        site.rebuild();
+        site.html("index.html")
+    };
+    let plain = page(":::hero {image=day.png align=top}\n## Hello\n:::");
+    assert!(!plain.contains("data-words"), "today's heroes are unchanged: {plain}");
+    let auto = page(":::hero {image=day.png align=top panel=auto}\n## Hello\n:::");
+    assert!(auto.contains(r#"data-words="narrow:dark mid:dark wide:dark""#), "{auto}");
+}
+
+#[test]
+fn an_ordinary_overlay_heros_caption_still_renders_below_its_picture() {
+    let site = Site::new(&[(
+        "index.md",
+        "---\ntitle: Harbour\n---\n\n:::hero {image=day.png caption=\"Etching, 1643.\"}\n## Hello\n:::\n",
+    )]);
+    std::fs::write(site.root.join("day.png"), picture(SKY, GROUND, false)).unwrap();
+    site.rebuild();
+    let html = site.html("index.html");
+    assert!(html.contains(r#"</section><p class="moss-hero-caption">Etching, 1643.</p>"#), "{html}");
+    assert!(!html.contains("moss-hero-credit"), "{html}");
+}
+
+#[test]
+fn panel_none_over_a_picture_ink_cannot_read_on_warns_naming_the_hero() {
+    let site = Site::new(&[]);
+    std::fs::write(site.root.join("mid.png"), picture([120; 3], [120; 3], false)).unwrap();
+    site.write("index.md", "---\ntitle: Harbour\n---\n\n:::hero {image=mid.png align=top panel=none}\n## Open all hours today\n:::\n");
+    let logged = site.rebuild().join("\n");
+    assert!(logged.contains("panel=none") && logged.contains("Open all hours today") && logged.contains("4.5:1"), "{logged}");
+    // And a picture ink reads on says nothing.
+    std::fs::write(site.root.join("mid.png"), picture(SKY, GROUND, false)).unwrap();
+    assert!(!site.rebuild().join("\n").contains("panel=none"));
+}

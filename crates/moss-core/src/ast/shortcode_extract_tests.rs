@@ -2352,6 +2352,16 @@ fn hero_dark_with_nothing_to_pair_emits_warning() {
 }
 
 #[test]
+fn hero_panel_needs_words_and_a_known_value() {
+    let bare = extract_shortcodes(":::hero {image=hero.jpg panel=auto}\n:::\n");
+    assert!(bare.warnings.iter().any(|w| w.contains("`panel=`") && w.contains("no words")), "{:?}", bare.warnings);
+    let odd = extract_shortcodes(":::hero {image=hero.jpg panel=sometimes}\n# Title\n:::\n");
+    assert!(odd.warnings.iter().any(|w| w.contains("unrecognized") && w.contains("sometimes")), "{:?}", odd.warnings);
+    let fine = extract_shortcodes(":::hero {image=hero.jpg panel=none}\n# Title\n:::\n");
+    assert!(fine.warnings.is_empty(), "{:?}", fine.warnings);
+}
+
+#[test]
 fn hero_unknown_align_value_emits_warning() {
     let md = ":::hero {image=hero.jpg align=middle}\n# Title\n:::\n";
     let result = extract_shortcodes(md);

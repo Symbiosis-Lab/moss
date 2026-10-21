@@ -568,17 +568,17 @@ pub fn listing_globals(
     .collect()
 }
 
-/// `image_files` with the two placeholder fields blanked — a clone blanked,
+/// `image_files` with the late-filled placeholder fields blanked — a clone blanked,
 /// not the other fields listed, so a field added to `MediaMetadata` lands in
 /// the full-render digest by default.
 fn without_placeholders(files: &[MediaMetadata]) -> Vec<MediaMetadata> {
     files
         .iter()
-        .map(|m| MediaMetadata { dominant_color: None, lqip_data_uri: None, ..m.clone() })
+        .map(|m| MediaMetadata { dominant_color: None, tone_bands: None, lqip_data_uri: None, ..m.clone() })
         .collect()
 }
 
-/// Per image path, a digest of its dominant colour and LQIP.
+/// Per image path, a digest of its dominant colour, LQIP and tone bands.
 ///
 /// These two are filled in LATE by design: a preview scan reads only the
 /// header, and the background encoder writes them once it has decoded the
@@ -593,7 +593,7 @@ pub fn image_placeholders(project: &ProjectStructure) -> BTreeMap<String, String
     project
         .image_files
         .iter()
-        .map(|m| (m.path.clone(), debug_hash(&(&m.dominant_color, &m.lqip_data_uri))))
+        .map(|m| (m.path.clone(), debug_hash(&(&m.dominant_color, &m.lqip_data_uri, &m.tone_bands))))
         .collect()
 }
 

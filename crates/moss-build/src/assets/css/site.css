@@ -1148,14 +1148,17 @@ footer.container > section > :is(h1, h2, h3, h4, h5, h6) {
  * `.moss-hero` rule below. Other footer content stays in the reading column.
  */
 body > footer.container:has(> .moss-hero-closing) {
-  /* The colophon's row along the picture's bottom edge. */
-  --moss-closing-strip: 2.25rem;
+  /* The colophon's row along the picture's bottom edge; none without one. */
+  --moss-closing-strip: 0px;
   display: block;
   position: relative;
   max-inline-size: none;
   margin-right: 0;
   padding: 0;
   border-image: none;
+}
+body > footer.container:has(> .moss-hero-closing):has(> .moss-colophon) {
+  --moss-closing-strip: 2.25rem;
 }
 body > footer.container:has(> .moss-hero-closing)::before {
   content: none;
@@ -1183,11 +1186,47 @@ body > footer.container:has(> .moss-hero-closing) > .moss-colophon {
   margin: 0;
   padding: 0;
 }
-/* White with the hero text's own shadow: the colophon sits on the picture. */
+/* `data-foot` (below) replaces the white with the ink measured along the foot. */
 body > footer.container:has(> .moss-hero-closing) > .moss-colophon a {
   color: #fff;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   padding-block: 0.25rem 0;
+}
+/* No darkening: the words are in ink measured on the bare picture, or on a panel. */
+.moss-hero.moss-hero-closing[data-overlay]::before {
+  content: none;
+}
+/* The credit (`caption=`). Panel and tone match the hero's words unless the foot measured quiet (`data-foot`). */
+.moss-hero-closing > .moss-hero-credit {
+  position: absolute;
+  inset-block-end: var(--moss-closing-strip);
+  inset-inline-end: 0;
+  z-index: 3;
+  box-sizing: border-box;
+  max-inline-size: min(36rem, 100%);
+  margin: 0;
+  padding: 0.3rem 5%;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  text-align: end;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  background: var(--moss-hero-panel-bg, var(--item-hero-panel-bg, rgba(20, 16, 12, 0.82)));
+}
+.moss-hero-closing[data-hero-tone="light"] > .moss-hero-credit {
+  color: var(--moss-hero-tone-color, #2c2825);
+  text-shadow: none;
+  background: var(--moss-hero-panel-bg, var(--item-hero-panel-bg, rgba(250, 248, 244, 0.82)));
+}
+.moss-hero-closing > .moss-hero-credit a {
+  color: inherit;
+}
+/* A phone keeps max(half the picture's own height, 11rem) clear below the words.
+   `--item-hero-ratio` is the picture's height over its width. */
+@media (width < 48rem) {
+  body > footer.container > .moss-hero-closing[data-mobile="overlay"][data-overlay] {
+    padding-block: 0 calc(var(--moss-closing-strip) + max(100% * var(--item-hero-ratio, 0.5) * 0.5, 11rem));
+  }
 }
 
 /* ==========================================================================
@@ -7844,6 +7883,66 @@ body > footer.container:has(> .moss-hero-closing) {
   .moss-hero[data-mobile="overlay"][data-hero-tone="light"] .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
     text-shadow: none;
   }
+}
+
+/* Words in ink, no panel: `data-words` lists the layouts (`narrow`, `mid`,
+   `wide`) where the light-theme picture is quiet under the words, `-night` the
+   same for the `dark=` picture; a layout not listed keeps its panel. The layouts
+   are the three the words are measured in (`hero_ink`). Stays after the tone
+   rules above, which it ties with. */
+@media (width < 48rem) {
+  :is(:root:not([data-theme="dark"]) .moss-hero[data-words~="narrow:dark"][data-mobile="overlay"], :root[data-theme="dark"] .moss-hero[data-words-night~="narrow:dark"][data-mobile="overlay"]) .moss-hero-content {
+    color: var(--moss-hero-tone-color, #2c2825);
+    text-shadow: none;
+    background: none;
+  }
+  :is(:root:not([data-theme="dark"]) .moss-hero[data-words~="narrow:dark"][data-mobile="overlay"], :root[data-theme="dark"] .moss-hero[data-words-night~="narrow:dark"][data-mobile="overlay"]) .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
+    text-shadow: none;
+  }
+  :is(:root:not([data-theme="dark"]) .moss-hero[data-words~="narrow:light"][data-mobile="overlay"], :root[data-theme="dark"] .moss-hero[data-words-night~="narrow:light"][data-mobile="overlay"]) .moss-hero-content {
+    color: #fff;
+    background: none;
+  }
+}
+@media (48rem <= width < 80rem) {
+  :is(:root:not([data-theme="dark"]) .moss-hero[data-words~="mid:dark"], :root[data-theme="dark"] .moss-hero[data-words-night~="mid:dark"]) .moss-hero-content {
+    color: var(--moss-hero-tone-color, #2c2825);
+    text-shadow: none;
+    background: none;
+  }
+  :is(:root:not([data-theme="dark"]) .moss-hero[data-words~="mid:dark"], :root[data-theme="dark"] .moss-hero[data-words-night~="mid:dark"]) .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
+    text-shadow: none;
+  }
+  :is(:root:not([data-theme="dark"]) .moss-hero[data-words~="mid:light"], :root[data-theme="dark"] .moss-hero[data-words-night~="mid:light"]) .moss-hero-content {
+    color: #fff;
+    background: none;
+  }
+}
+@media (width >= 80rem) {
+  :is(:root:not([data-theme="dark"]) .moss-hero[data-words~="wide:dark"], :root[data-theme="dark"] .moss-hero[data-words-night~="wide:dark"]) .moss-hero-content {
+    color: var(--moss-hero-tone-color, #2c2825);
+    text-shadow: none;
+    background: none;
+  }
+  :is(:root:not([data-theme="dark"]) .moss-hero[data-words~="wide:dark"], :root[data-theme="dark"] .moss-hero[data-words-night~="wide:dark"]) .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
+    text-shadow: none;
+  }
+  :is(:root:not([data-theme="dark"]) .moss-hero[data-words~="wide:light"], :root[data-theme="dark"] .moss-hero[data-words-night~="wide:light"]) .moss-hero-content {
+    color: #fff;
+    background: none;
+  }
+}
+/* The foot of a closing picture. */
+:is(:root:not([data-theme="dark"]) .moss-hero-closing[data-foot="dark"], :root[data-theme="dark"] .moss-hero-closing[data-foot-night="dark"]) > .moss-hero-credit,
+:is(:root:not([data-theme="dark"]) .moss-hero-closing[data-foot="dark"], :root[data-theme="dark"] .moss-hero-closing[data-foot-night="dark"]) ~ .moss-colophon a {
+  color: var(--moss-hero-tone-color, #2c2825);
+  text-shadow: none;
+  background: none;
+}
+:is(:root:not([data-theme="dark"]) .moss-hero-closing[data-foot="light"], :root[data-theme="dark"] .moss-hero-closing[data-foot-night="light"]) > .moss-hero-credit,
+:is(:root:not([data-theme="dark"]) .moss-hero-closing[data-foot="light"], :root[data-theme="dark"] .moss-hero-closing[data-foot-night="light"]) ~ .moss-colophon a {
+  color: #fff;
+  background: none;
 }
 
 /* ==========================================================================

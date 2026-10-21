@@ -147,6 +147,8 @@ pub struct ShellVars {
     /// Whether the page carries the `<header>` band: false under
     /// `[site].header = "none"`, where the island holds the controls.
     pub has_header: bool,
+    /// Whether moss's colophon is emitted (`[site].colophon`, default true).
+    pub colophon: bool,
     /// Floating nav island markup, or empty when the page has no
     /// breadcrumb trail to continue. Emitted as a sibling *before* `<header>`
     /// so it is `position: fixed` against the viewport rather than against any
@@ -381,6 +383,22 @@ impl ShellProcessor {
         // Every placeholder the templates may carry, in one lookup table. Tokens
         // absent from the current templates (main_class, date, …) stay registered
         // so a template that reintroduces them skips the unknown-token drop.
+        // moss's own voice, derived from one language rather than passed in
+        // pre-rendered pieces — see `ShellVars::ui_lang`. Empty when the site
+        // turns the colophon off.
+        let colophon = if vars.colophon {
+            substitute_template_tokens(
+                COLOPHON_TEMPLATE,
+                &std::collections::HashMap::from([
+                    ("colophon_text", crate::i18n::t(vars.ui_lang, "published_with_moss").to_string()),
+                    ("colophon_name", crate::i18n::t(vars.ui_lang, "colophon_name").to_string()),
+                    ("colophon_lang", vars.ui_lang.as_bcp47_attr().to_string()),
+                    ("moss_mark", MOSS_MARK_SVG.to_string()),
+                ]),
+            )
+        } else {
+            String::new()
+        };
         let values: std::collections::HashMap<&'static str, String> = std::collections::HashMap::from([
             // Escaped like every other attribute value here. The allowlist in
             // `resolve_site_default_lang` is what actually closes this today;
@@ -412,10 +430,7 @@ impl ShellProcessor {
             ("comments_attr", vars.comments_attr),
             // moss's own voice, derived from one language rather than passed
             // in four already-rendered pieces — see `ShellVars::ui_lang`.
-            ("colophon_text", crate::i18n::t(vars.ui_lang, "published_with_moss").to_string()),
-            ("colophon_name", crate::i18n::t(vars.ui_lang, "colophon_name").to_string()),
-            ("colophon_lang", vars.ui_lang.as_bcp47_attr().to_string()),
-            ("moss_mark", MOSS_MARK_SVG.to_string()),
+            ("colophon", colophon),
             ("skip_link_label", crate::i18n::t(vars.ui_lang, "skip_to_content").to_string()),
             ("latest_list", vars.latest_list.unwrap_or_default()),
             ("latest_sidebar", latest_sidebar),
@@ -673,6 +688,10 @@ pub fn minify_css(css: &str) -> String {
 /// colophon, scripts) with a single `{main_content}` slot for the per-type
 /// `<main>` content fragment. Spliced in `ShellProcessor::process`.
 pub const SHELL_TEMPLATE: &str = include_str!("../../assets/templates/shell.html");
+
+/// moss's colophon, substituted for the shell's `{colophon}` (empty under
+/// `[site].colophon = false`). Its bounds comment lets the footer take it in.
+pub const COLOPHON_TEMPLATE: &str = include_str!("../../assets/templates/colophon.html");
 
 /// The small moss mark, for `shell.html`'s `{moss_mark}`.
 ///

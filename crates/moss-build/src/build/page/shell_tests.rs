@@ -1630,6 +1630,7 @@ fn make_test_vars(has_sidebar_layout: bool) -> ShellVars {
         runtime_js_tags: String::new(),
         lightbox: String::new(),
         robots_meta: None,
+        colophon: true,
     }
 }
 
@@ -1888,6 +1889,17 @@ fn rendered_shell_keeps_skip_link_out_of_the_search_index() {
         result.contains(r##"<a class="moss-skip-link" data-pagefind-ignore href="#main-content">"##),
         "the skip link must carry data-pagefind-ignore"
     );
+}
+
+#[test]
+fn the_colophon_is_left_out_when_the_site_turns_it_off() {
+    let processor = ShellProcessor::new();
+    let on = processor.process(ShellType::Article, make_test_vars(false));
+    assert!(on.contains("moss-colophon"), "on by default");
+    let off = processor.process(ShellType::Article, ShellVars { colophon: false, ..make_test_vars(false) });
+    assert!(!off.contains("moss-colophon"), "the element is not emitted: {off}");
+    assert!(!off.contains("mosspub.com"), "nor its link");
+    assert!(off.contains("<script"), "the rest of the page is untouched");
 }
 
 #[test]
@@ -2927,11 +2939,11 @@ fn test_template_includes_colophon_text_placeholder() {
     // The shared shell owns the colophon and must use placeholders (not
     // hardcoded strings) so it can be localized.
     assert!(
-        SHELL_TEMPLATE.contains("{colophon_text}") && SHELL_TEMPLATE.contains("{colophon_name}"),
+        COLOPHON_TEMPLATE.contains("{colophon_text}") && COLOPHON_TEMPLATE.contains("{colophon_name}"),
         "Shell template should use the {{colophon_text}} and {{colophon_name}} placeholders"
     );
     assert!(
-        !SHELL_TEMPLATE.contains("Published with moss"),
+        !COLOPHON_TEMPLATE.contains("Published with moss"),
         "Shell template should not have hardcoded 'Published with moss'"
     );
     // Two strings, two jobs. The <svg> is aria-hidden, so without an
@@ -2939,11 +2951,11 @@ fn test_template_includes_colophon_text_placeholder() {
     // name — and "moss" alone does not say what the link does. The label
     // carries the full phrase; the span carries the half a reader sees.
     assert!(
-        SHELL_TEMPLATE.contains(r#"aria-label="{colophon_text}""#),
+        COLOPHON_TEMPLATE.contains(r#"aria-label="{colophon_text}""#),
         "The colophon link needs the full phrase as its accessible name — the mark is aria-hidden"
     );
     assert!(
-        SHELL_TEMPLATE.contains(r#"<span class="moss-colophon-label moss-wordmark">{colophon_name}</span>"#),
+        COLOPHON_TEMPLATE.contains(r#"<span class="moss-colophon-label moss-wordmark">{colophon_name}</span>"#),
         "The visible wordmark must stay wrapped in .moss-colophon-label (the CSS reveals it by class) \
          and carry .moss-wordmark (mark.css sets its face by it)"
     );
@@ -2954,7 +2966,7 @@ fn test_template_includes_colophon_text_placeholder() {
     // picks the face and the lead off this attribute, so keying it on the page
     // would set a Latin wordmark in the Chinese metrics.
     assert!(
-        SHELL_TEMPLATE.contains(r#"lang="{colophon_lang}""#),
+        COLOPHON_TEMPLATE.contains(r#"lang="{colophon_lang}""#),
         "The colophon link must declare the wordmark's own language, not the page's"
     );
 }

@@ -132,6 +132,11 @@ export function buildScratchSite(spec: ScratchSiteSpec): string {
   }
   try {
     console.log(`${tag} building scratch site …`);
+    // The build's own cache is keyed by file content, not by the binary, so a
+    // changed binary would otherwise reuse what the old one cached (an image's
+    // measurements, say) and a gate could not go red for a change in how they
+    // are computed.
+    fs.rmSync(path.join(siteDir, ".moss/cache"), { recursive: true, force: true });
     execSync(`"${MOSS_BIN}" build "${siteDir}" --no-plugins`, {
       cwd: siteDir,
       stdio: "pipe",

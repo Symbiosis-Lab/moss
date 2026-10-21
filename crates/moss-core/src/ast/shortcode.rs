@@ -395,8 +395,18 @@ pub struct HeroShortcode {
     /// width, so this has no visible effect there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub align: Option<String>,
+    /// Whether the overlay's words sit on a tinted panel (`panel=`). `None`
+    /// leaves it to the hero: an ordinary hero always has the panel, a
+    /// closing picture measures its picture and drops the panel where dark or
+    /// light ink reads on the picture itself. `Some("auto")` asks an ordinary
+    /// hero for that measurement too; `Some("none")` never draws the panel;
+    /// `Some("always")` always does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<String>,
     /// Caption or credit for the image, from `caption="…"`. Rendered as a
-    /// line of text BELOW the hero, never over it.
+    /// line of text BELOW the hero, never over it, except on a footer's
+    /// closing picture, where it is the credit set small inside the picture
+    /// at its foot.
     ///
     /// The overlay and the caption answer different questions. The overlay is
     /// text laid *on* the photograph — a title, a standfirst — and it is

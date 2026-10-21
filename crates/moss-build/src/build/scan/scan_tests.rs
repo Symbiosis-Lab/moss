@@ -1225,6 +1225,7 @@ fn test_video_scan_uses_hash_when_index_hits() {
     let cached = CachedMediaMeta {
         dimensions: Some((1920, 1080)),
         dominant_color: Some("#FF5733".to_string()),
+        tone_bands: None,
         lqip_data_uri: None,
         is_animated: false,
     };
@@ -1381,6 +1382,7 @@ fn test_second_scan_reads_the_lqip_the_background_phase_wrote() {
         &CachedMediaMeta {
             dimensions: Some((64, 48)),
             dominant_color: Some("#ff0000".to_string()),
+            tone_bands: None,
             lqip_data_uri: Some("data:image/jpeg;base64,fake".to_string()),
             is_animated: false,
         },
@@ -1713,6 +1715,7 @@ impl ScanFixture {
         let meta = CachedMediaMeta {
             dimensions: Some((8, 8)),
             dominant_color: Some("#ff0000".to_string()),
+            tone_bands: None,
             lqip_data_uri: Some("data:image/webp;base64,AAAA".to_string()),
             is_animated: false,
         };
@@ -1935,6 +1938,7 @@ fn a_pre_fix_media_meta_entry_is_not_reused_after_the_version_bump() {
     let stale = CachedMediaMeta {
         dimensions: None,
         dominant_color: None,
+        tone_bands: None,
         lqip_data_uri: None,
         is_animated: false,
     };
@@ -2415,6 +2419,7 @@ fn test_build_content_graph_indexes_asset_directories() {
                 modified: None,
                 dimensions: None,
                 dominant_color: None,
+                tone_bands: None,
                 lqip_data_uri: None,
             },
             MediaMetadata {
@@ -2425,6 +2430,7 @@ fn test_build_content_graph_indexes_asset_directories() {
                 modified: None,
                 dimensions: None,
                 dominant_color: None,
+                tone_bands: None,
                 lqip_data_uri: None,
             },
         ],
@@ -2804,7 +2810,7 @@ fn media_metadata_is_not_written_over_a_record_that_cannot_be_read() {
     let before = fs::read(&record_file).unwrap();
 
     crate::build::io_utils::fault::fail_reads(&record_file, libc::EACCES, 1);
-    let meta = CachedMediaMeta { dimensions: Some((4, 3)), dominant_color: None, lqip_data_uri: None, is_animated: false };
+    let meta = CachedMediaMeta { dimensions: Some((4, 3)), dominant_color: None, tone_bands: None, lqip_data_uri: None, is_animated: false };
     write_cached_meta(&objects, &transform_cache, hash, 10, &meta);
 
     assert_eq!(fs::read(&record_file).unwrap(), before);

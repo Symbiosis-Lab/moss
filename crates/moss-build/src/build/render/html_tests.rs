@@ -3937,6 +3937,7 @@ mod children_field_tests {
             modified: None,
             dimensions: Some(dimensions),
             dominant_color: None,
+            tone_bands: None,
             lqip_data_uri: None,
         });
         let mut homepage = make_doc("Test Site", "index.html");
@@ -3995,6 +3996,7 @@ mod children_field_tests {
             modified: None,
             dimensions: Some(dimensions),
             dominant_color: None,
+            tone_bands: None,
             lqip_data_uri: None,
         });
         let mut homepage = make_doc("Test Site", "index.html");
@@ -6859,6 +6861,7 @@ mod video_path_mapping_integration_tests {
             modified: None,
             dimensions: Some((1920, 1080)),
             dominant_color: Some("#4287f5".to_string()),
+            tone_bands: None,
             lqip_data_uri: None,
         });
 
@@ -7064,6 +7067,7 @@ mod og_url_tests {
                 modified: None,
                 dimensions: Some(dims),
                 dominant_color: None,
+                tone_bands: None,
                 lqip_data_uri: None,
                 is_animated: false,
             }];

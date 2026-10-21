@@ -195,6 +195,11 @@ pub struct MediaMetadata {
     /// `MediaDimensionLookup::get_cover_color` (which delegates
     /// to `color_extract::prepare_cover_color`) to normalize.
     pub dominant_color: Option<String>,
+    /// The picture's luminance extremes by horizontal band (see
+    /// `markdown::hero_ink::ToneBands`), which decides whether a hero's words
+    /// can sit on it in ink. Images only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone_bands: Option<String>,
     /// LQIP (Low Quality Image Placeholder) as a base64 data URI
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lqip_data_uri: Option<String>,
@@ -802,6 +807,7 @@ mod tests {
             modified: None,
             dimensions: Some((1920, 1080)),
             dominant_color: Some("#ff5733".to_string()),
+            tone_bands: None,
             lqip_data_uri: Some("data:image/jpeg;base64,/9j/4AAQ".to_string()),
         };
 
@@ -823,6 +829,7 @@ mod tests {
             modified: None,
             dimensions: Some((200, 200)),
             dominant_color: None,
+            tone_bands: None,
             lqip_data_uri: None,
         };
 

@@ -385,7 +385,7 @@ const PANEL_ALPHA: f32 = 0.8;
 /// LESS panel contrast than this (any other colour a theme would plausibly
 /// choose for "dark text over a pale photo" sits further from mid-grey), so
 /// solving for the shipped default is the binding case.
-fn hero_tone_color_luminance() -> f32 {
+pub(crate) fn hero_tone_color_luminance() -> f32 {
     relative_luminance(0x2c as f32 / 255.0, 0x28 as f32 / 255.0, 0x25 as f32 / 255.0)
 }
 

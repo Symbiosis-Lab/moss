@@ -1095,6 +1095,8 @@ pub fn process_markdown_file(
         }
     });
 
+    super::hero_ink::warn_unreadable_forced_ink(&doc, media_lookup, file_path);
+
     // 3. Extract the Hero shortcode for hoisting.
     //    LOCKED ORDER: must run AFTER `resolve_urls` (constraint 2) and
     //    BEFORE `find_first_block_image` (constraint 3). Removes the
@@ -2402,12 +2404,6 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
                 // `observe_typed_ast` runs on the pre-hoist AST and exercises
                 // this branch).
                 //
-                // `render_hero_html_typed`'s `_resolve_link` parameter
-                // is unread (URL resolution already happened in
-                // `resolve_shortcode_urls`). We pass an identity closure
-                // to satisfy the signature without coupling
-                // `PipelineHooks` to a generic resolver type.
-                let resolver_noop = |s: &str| s.to_string();
                 let hero_mobile_bg: Option<String> = self.media_lookup.and_then(|lookup| {
                     match args.image.as_ref() {
                         Some(moss_core::ast::Url::Resolved(r)) => lookup.get_cover_color_muted(&r.href),
@@ -2416,7 +2412,6 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
                 });
                 let html = crate::build::markdown::typed_renderers::render_hero_html_typed(
                     args,
-                    &resolver_noop,
                     self.media_lookup,
                     source_line,
                     hero_mobile_bg.as_deref(),

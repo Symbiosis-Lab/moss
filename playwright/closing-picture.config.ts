@@ -12,15 +12,19 @@
  */
 import './localhost-no-proxy';
 import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
-import { CLOSING_PICTURE_GATE } from '../tests/e2e/helpers/closing-picture-site';
+import { CLOSING_PICTURE_BUSY_GATE, CLOSING_PICTURE_GATE } from '../tests/e2e/helpers/closing-picture-site';
 import { defineGateConfig } from './define-gate-config';
 import { gatePort } from './gate-ports';
 
 const PORT = gatePort('closing-picture');
 const serveDir = buildScratchSite(CLOSING_PICTURE_GATE);
+const busyServeDir = buildScratchSite(CLOSING_PICTURE_BUSY_GATE);
 
 export default defineGateConfig({
   gate: 'closing-picture',
   use: { baseURL: `http://localhost:${PORT}/` },
-  webServer: { serveDir, port: PORT },
+  webServer: [
+    { serveDir, port: PORT },
+    { serveDir: busyServeDir, port: gatePort('closing-picture:busy') },
+  ],
 });

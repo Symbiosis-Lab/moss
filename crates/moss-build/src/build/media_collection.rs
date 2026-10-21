@@ -593,6 +593,7 @@ mod tests {
             modified: None,
             dimensions: Some((1600, 1067)),
             dominant_color: None,
+            tone_bands: None,
             lqip_data_uri: None,
         }];
         let lookup = MediaDimensionLookup::new(&images, &[], &std::collections::HashMap::new(), None);

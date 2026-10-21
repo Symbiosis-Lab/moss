@@ -755,6 +755,7 @@ fn test_store_bytes_json_blob() {
     let meta = CachedMediaMeta {
         dimensions: Some((1920, 1080)),
         dominant_color: Some("#ff5733".to_string()),
+        tone_bands: None,
         lqip_data_uri: None,
         is_animated: false,
     };
@@ -1371,6 +1372,7 @@ fn test_metadata_cache_hit_returns_stored_meta() {
     let meta = CachedMediaMeta {
         dimensions: Some((1280, 720)),
         dominant_color: Some("#00ff00".to_string()),
+        tone_bands: None,
         lqip_data_uri: None,
         is_animated: false,
     };
@@ -1458,6 +1460,7 @@ fn test_metadata_cache_full_roundtrip() {
     let meta = CachedMediaMeta {
         dimensions: Some((1920, 1080)),
         dominant_color: Some("#336699".to_string()),
+        tone_bands: None,
         lqip_data_uri: None,
         is_animated: false,
     };
@@ -1984,6 +1987,7 @@ fn test_singleflight_media_metadata_basic() {
         modified: Some("1700000000".to_string()),
         dimensions: Some((1920, 1080)),
         dominant_color: Some("#ff5733".to_string()),
+        tone_bands: None,
         lqip_data_uri: None,
     });
 
@@ -2027,6 +2031,7 @@ fn test_singleflight_media_metadata_concurrent_dedup() {
                     modified: None,
                     dimensions: Some((800, 600)),
                     dominant_color: Some("#00ff00".to_string()),
+                    tone_bands: None,
                     lqip_data_uri: None,
                 }
             })
@@ -2225,6 +2230,7 @@ fn test_cached_media_meta_roundtrip_with_is_animated() {
     let meta = CachedMediaMeta {
         dimensions: Some((480, 270)),
         dominant_color: None,
+        tone_bands: None,
         lqip_data_uri: None,
         is_animated: true,
     };
@@ -2239,6 +2245,7 @@ fn test_cached_media_meta_roundtrip_with_lqip() {
     let meta = CachedMediaMeta {
         dimensions: Some((1920, 1080)),
         dominant_color: Some("#336699".to_string()),
+        tone_bands: None,
         lqip_data_uri: Some("data:image/jpeg;base64,/9j/4AAQ".to_string()),
         is_animated: false,
     };
@@ -2258,6 +2265,7 @@ fn test_cached_media_meta_none_lqip_omitted_in_json() {
     let meta = CachedMediaMeta {
         dimensions: Some((640, 480)),
         dominant_color: None,
+        tone_bands: None,
         lqip_data_uri: None,
         is_animated: false,
     };

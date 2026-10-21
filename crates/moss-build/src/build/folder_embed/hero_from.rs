@@ -181,7 +181,6 @@ fn draw(
     let mobile_bg = image_url.as_deref().and_then(|href| media_lookup.get_cover_color_muted(href));
     let drawn = crate::build::markdown::typed_renderers::render_hero_html_typed(
         &hero,
-        &|s: &str| s.to_string(),
         Some(media_lookup),
         plan.drawn.source_line,
         mobile_bg.as_deref(),

@@ -936,6 +936,7 @@ mod plate_tests {
             modified: None,
             dimensions: Some(dims),
             dominant_color: None,
+            tone_bands: None,
             lqip_data_uri: None,
             is_animated: false,
         }

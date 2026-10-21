@@ -16,6 +16,7 @@ fn build_asset_snapshot_additively_indexes_output_url() {
         modified: None,
         dimensions: Some((4515, 6158)),
         dominant_color: Some("#123456".to_string()),
+        tone_bands: None,
         lqip_data_uri: Some("data:image/jpeg;base64,zzz".to_string()),
     };
     let lookup =
@@ -53,6 +54,7 @@ fn build_asset_snapshot_carries_animated_flag() {
         modified: None,
         dimensions: Some((320, 240)),
         dominant_color: None,
+        tone_bands: None,
         lqip_data_uri: None,
     };
     let still = crate::types::content::MediaMetadata {
@@ -63,6 +65,7 @@ fn build_asset_snapshot_carries_animated_flag() {
         modified: None,
         dimensions: Some((1024, 768)),
         dominant_color: None,
+        tone_bands: None,
         lqip_data_uri: None,
     };
     let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(
@@ -114,6 +117,7 @@ fn build_asset_snapshot_slug_collision_is_deterministic() {
         modified: None,
         dimensions: Some((100, 100)),
         dominant_color: Some("#aaaaaa".to_string()),
+        tone_bands: None,
         lqip_data_uri: Some("data:image/jpeg;base64,AAA".to_string()),
     };
     let hyphen_variant = crate::types::content::MediaMetadata {
@@ -124,6 +128,7 @@ fn build_asset_snapshot_slug_collision_is_deterministic() {
         modified: None,
         dimensions: Some((200, 200)),
         dominant_color: Some("#bbbbbb".to_string()),
+        tone_bands: None,
         lqip_data_uri: Some("data:image/jpeg;base64,BBB".to_string()),
     };
     let slug_key = std::path::PathBuf::from("assets/my-photos/x.jpg");
@@ -3823,6 +3828,7 @@ fn body_image_sizes_follow_the_pages_effective_typesetting() {
         modified: None,
         dimensions: Some((2400, 1771)),
         dominant_color: None,
+        tone_bands: None,
         lqip_data_uri: None,
     };
     let lookup =
@@ -3974,6 +3980,7 @@ fn lookup_for(paths: &[&str]) -> crate::build::media::dimensions::MediaDimension
             modified: None,
             dimensions: Some((1200, 800)),
             dominant_color: None,
+            tone_bands: None,
             lqip_data_uri: None,
         })
         .collect();

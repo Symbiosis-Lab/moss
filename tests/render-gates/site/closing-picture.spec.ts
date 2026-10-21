@@ -2,7 +2,12 @@
 // viewport (whatever the body's own padding), nothing paints below it, and its
 // words stay on it at every width, in both themes.
 import { test, expect, Page } from '@playwright/test';
-import { worstCaseContrast } from '../../e2e/helpers/wcag-contrast';
+import { contrastRatio, luminanceOfCss, parseColor, relativeLuminance, worstCaseContrast } from '../../e2e/helpers/wcag-contrast';
+import { CREDIT, GROUND, SKY, SKY_NIGHT } from '../../e2e/helpers/closing-picture-site';
+import { gatePort } from '../../../playwright/gate-ports';
+
+const lum = ([r, g, b]: readonly number[]) => relativeLuminance(r, g, b);
+const contrastWith = (ink: string, ground: readonly number[]) => contrastRatio(luminanceOfCss(ink), lum(ground));
 
 const PAGES = [
   { name: 'a short page', path: '/' },
@@ -33,6 +38,19 @@ const measure = (page: Page) =>
       heading: box(content.querySelector('h2')!),
       link: box(content.querySelector('a')!),
       colophon: box(document.querySelector('footer .moss-colophon')!),
+      colophonInk: getComputedStyle(document.querySelector('footer .moss-colophon a')!).color,
+      credit: box(hero.querySelector('.moss-hero-credit')!),
+      creditInk: getComputedStyle(hero.querySelector('.moss-hero-credit')!).color,
+      creditPanel: getComputedStyle(hero.querySelector('.moss-hero-credit')!).backgroundColor,
+      creditSize: parseFloat(getComputedStyle(hero.querySelector('.moss-hero-credit')!).fontSize),
+      wordsSize: parseFloat(getComputedStyle(content.querySelector('p')!).fontSize),
+      content: box(content),
+      pictureRatio: (() => {
+        const img = visible[0].querySelector('img') ?? (visible[0] as HTMLImageElement);
+        return Number(img.getAttribute('height')) / Number(img.getAttribute('width'));
+      })(),
+      scrim: getComputedStyle(hero, '::before').content,
+      strayCaption: document.querySelectorAll('footer .moss-hero-caption').length,
       visibleSrc: visible.map((v) => (v.querySelector('img') ?? v).getAttribute('src') ?? ''),
       panel: cs.backgroundColor,
       text: cs.color,
@@ -72,13 +90,52 @@ for (const scheme of SCHEMES) {
           expect(m.visibleSrc.length, 'one picture of the pair is shown').toBe(1);
           expect(m.visibleSrc[0].includes('dark'), `the ${scheme} picture is the one shown`).toBe(scheme === 'dark');
 
-          const { overBlack, overWhite } = worstCaseContrast(m.panel, m.text);
-          expect(Math.min(overBlack, overWhite), `words ${m.text} on panel ${m.panel}`).toBeGreaterThanOrEqual(4.5);
+          // The picture is flat, so its worst case under the words is its sky and
+          // under the foot its ground: the words are in ink with no panel, and
+          // the ink clears AA against them.
+          const [sky, ground] = scheme === 'dark' ? [SKY_NIGHT, [8, 10, 14]] : [SKY, GROUND];
+          expect(parseColor(m.panel).a, 'no panel behind the words').toBe(0);
+          expect(m.scrim, 'no darkening laid over the picture').toBe('none');
+          expect(contrastWith(m.text, sky), `words ${m.text} on the sky`).toBeGreaterThanOrEqual(4.5);
+
+          // The credit: the caption, small, inside the picture at its foot on the end side.
+          expect(m.strayCaption, 'the caption is not left below the picture').toBe(0);
+          expect(m.credit.bottom, 'credit inside the picture').toBeLessThanOrEqual(m.hero.bottom + 1);
+          expect(m.credit.right, 'credit on the end side').toBeLessThanOrEqual(m.hero.right + 1);
+          expect(m.credit.left, 'credit on the end side').toBeGreaterThan(m.hero.left + (m.hero.right - m.hero.left) * 0.05);
+          expect(m.credit.top, 'credit is below the words').toBeGreaterThan(m.heading.bottom);
+          expect(m.credit.bottom, 'credit is above the colophon row').toBeLessThanOrEqual(m.colophon.top + 1);
+          expect(m.creditSize, 'credit is smaller than the words').toBeLessThan(m.wordsSize);
+          expect(parseColor(m.creditPanel).a, 'ink needs no panel at the foot').toBe(0);
+          expect(contrastWith(m.creditInk, ground), `credit ${m.creditInk} on the foot`).toBeGreaterThanOrEqual(4.5);
+          expect(contrastWith(m.colophonInk, ground), `colophon ${m.colophonInk} on the foot`).toBeGreaterThanOrEqual(4.5);
         });
       }
     });
   }
 }
+
+// The phone keeps the subject: the words take the top, and the bottom 40% of the
+// picture's box holds no panel, no darkening and none of the words, with the area
+// below the words at least half the picture's own height at that width.
+for (const width of [390, 400]) {
+  test(`phone ${width}: the area opposite the words is clear and half the picture tall`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto('/', { waitUntil: 'load' });
+    const m = await measure(page);
+    const box = m.hero.bottom - m.hero.top;
+    expect(m.content.bottom, 'the words end above the bottom 40%').toBeLessThanOrEqual(m.hero.top + box * 0.6);
+    expect(m.scrim).toBe('none');
+    expect(parseColor(m.panel).a).toBe(0);
+    const pictureHeight = m.viewport * m.pictureRatio;
+    expect(m.hero.bottom - m.content.bottom, 'room for the picture below the words').toBeGreaterThanOrEqual(pictureHeight * 0.5);
+  });
+}
+
+test('the credit is the caption, small, and links stay legible', async ({ page }) => {
+  await page.goto('/', { waitUntil: 'load' });
+  await expect(page.locator('footer .moss-hero-closing .moss-hero-credit')).toHaveText(CREDIT);
+});
 
 test('the colophon does not sit on the words', async ({ page }) => {
   await page.setViewportSize({ width: 400, height: 800 });
@@ -119,4 +176,73 @@ for (const { name, width } of [{ name: 'phone', width: 400 }, { name: 'narrow de
     expect(m.hero.right).toBeCloseTo(m.viewport, 0);
     expect(m.hero.bottom).toBeCloseTo(m.docHeight, 0);
   });
+}
+
+// An ordinary hero keeps its panel unless it asks to be measured; one that asks
+// loses the panel over a quiet sky and keeps it over a hatched one.
+for (const width of [1360, 390]) {
+  test.describe(`ordinary heroes at ${width}px`, () => {
+    test.use({ viewport: { width, height: 800 }, colorScheme: 'light' });
+    const words = (page: Page) =>
+      page.evaluate(() => {
+        const c = document.querySelector('.moss-hero .moss-hero-content')!;
+        const cs = getComputedStyle(c);
+        return { text: cs.color, panel: cs.backgroundColor, scrim: getComputedStyle(c.parentElement!, '::before').content };
+      });
+
+    test('panel=auto over a quiet sky: ink, no panel', async ({ page }) => {
+      await page.goto('/hero/quiet/', { waitUntil: 'load' });
+      const m = await words(page);
+      expect(parseColor(m.panel).a).toBe(0);
+      expect(contrastWith(m.text, SKY)).toBeGreaterThanOrEqual(4.5);
+    });
+    test('panel=auto over a hatched sky keeps the panel', async ({ page }) => {
+      await page.goto('/hero/busy/', { waitUntil: 'load' });
+      expect(parseColor((await words(page)).panel).a).toBeGreaterThan(0.5);
+    });
+    test('a hero that does not ask is unchanged', async ({ page }) => {
+      await page.goto('/hero/plain/', { waitUntil: 'load' });
+      const m = await words(page);
+      expect(parseColor(m.panel).a).toBeGreaterThan(0.5);
+      expect(await page.locator('body > .moss-hero[data-words], body > .moss-hero[data-words-night]').count(), 'nothing measured').toBe(0);
+    });
+  });
+}
+
+// The words are measured where their box sits at each layout. A dark patch over the
+// far end of the words' rows spares the wide layout (a box of about 47% at the start)
+// but not the narrower ones, where the box reaches it or runs edge to edge.
+for (const [width, panel] of [[1360, false], [1000, true], [390, true]] as const) {
+  test(`a dark patch at the far end of the words' rows ${panel ? 'keeps' : 'spares'} the panel at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto('/hero/patch/', { waitUntil: 'load' });
+    const bg = await page.evaluate(() => getComputedStyle(document.querySelector('.moss-hero .moss-hero-content')!).backgroundColor);
+    if (panel) expect(parseColor(bg).a).toBeGreaterThan(0.5);
+    else expect(parseColor(bg).a).toBe(0);
+  });
+}
+
+// A busy foot: the credit takes a small panel of its own and stays legible in
+// both themes, whatever tone the picture is.
+const BUSY = `http://localhost:${gatePort('closing-picture:busy')}/`;
+for (const scheme of SCHEMES) {
+  for (const width of [1360, 390]) {
+    test(`busy foot, ${scheme}, ${width}px: the credit is legible on its own panel`, async ({ browser }) => {
+      const context = await browser.newContext({ colorScheme: scheme, viewport: { width, height: 800 } });
+      const page = await context.newPage();
+      await page.goto(BUSY, { waitUntil: 'load' });
+      const credit = await page.evaluate(() => {
+        const el = document.querySelector('footer .moss-hero-closing .moss-hero-credit')!;
+        const cs = getComputedStyle(el);
+        const hero = el.parentElement!.getBoundingClientRect();
+        const r = el.getBoundingClientRect();
+        return { ink: cs.color, panel: cs.backgroundColor, inside: r.bottom <= hero.bottom + 1 && r.right <= hero.right + 1 };
+      });
+      expect(credit.inside).toBe(true);
+      expect(parseColor(credit.panel).a, 'a panel behind the credit').toBeGreaterThan(0.5);
+      const { overBlack, overWhite } = worstCaseContrast(credit.panel, credit.ink);
+      expect(Math.min(overBlack, overWhite), `credit ${credit.ink} on ${credit.panel}`).toBeGreaterThanOrEqual(4.5);
+      await context.close();
+    });
+  }
 }

@@ -117,6 +117,7 @@ const GATE_PORT_KEYS = [
   'contents-ruler:home',
   'hero-from',
   'closing-picture',
+  'closing-picture:busy',
   'header-none',
   'header-none:band',
   'contents-lens',

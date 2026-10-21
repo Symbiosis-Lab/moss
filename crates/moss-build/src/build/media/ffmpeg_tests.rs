@@ -69,6 +69,7 @@ fn test_collect_videos_for_conversion_mov_files() {
                 modified: None,
                 dimensions: None,
                 dominant_color: None,
+                tone_bands: None,
                 lqip_data_uri: None,
             },
             MediaMetadata {
@@ -79,6 +80,7 @@ fn test_collect_videos_for_conversion_mov_files() {
                 modified: None,
                 dimensions: None,
                 dominant_color: None,
+                tone_bands: None,
                 lqip_data_uri: None,
             },
         ],
@@ -122,6 +124,7 @@ fn test_collect_videos_small_mp4_is_thumbnail_only() {
                 modified: None,
                 dimensions: None,
                 dominant_color: None,
+                tone_bands: None,
                 lqip_data_uri: None,
             },
             MediaMetadata {
@@ -132,6 +135,7 @@ fn test_collect_videos_small_mp4_is_thumbnail_only() {
                 modified: None,
                 dimensions: None,
                 dominant_color: None,
+                tone_bands: None,
                 lqip_data_uri: None,
             },
         ],

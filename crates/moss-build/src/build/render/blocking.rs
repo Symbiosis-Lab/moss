@@ -1366,7 +1366,7 @@ pub fn generate_blocking_content_for_build(
         let layout_config = layout_config.with_heading_anchors(site_config.heading_anchors);
         // [site].floating_nav (default false — opt-in) rides along for
         // the same reason: the emitter reads LayoutConfig, not SiteConfig.
-        let layout_config = layout_config.with_floating_nav(site_config.floating_nav);
+        let layout_config = layout_config.with_floating_nav(site_config.floating_nav).with_colophon(site_config.colophon);
         // [site].header (default "brand") rides along for the same reason:
         // the nav renderer reads LayoutConfig, not SiteConfig.
         let layout_config = layout_config.with_header_mode(site_config.header).with_term_nav(term_index.nav_entries(&site_config.term_nav));

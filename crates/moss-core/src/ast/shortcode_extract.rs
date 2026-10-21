@@ -200,6 +200,19 @@ fn parse_shortcode_block(
                     );
                 }
             }
+            if sc.panel.is_some() && sc.overlay.is_empty() {
+                warns.warnings.push(
+                    "shortcode `:::hero` has `panel=` but no words over the picture, so there is no panel to set. The attribute is ignored.".to_string(),
+                );
+            }
+            if let Some(ref v) = sc.panel {
+                if !matches!(v.as_str(), "auto" | "none" | "always") {
+                    warns.warnings.push(format!(
+                        "shortcode `:::hero` has unrecognized `panel={v}`. \
+                         Only `panel=auto`, `panel=none` and `panel=always` are recognized. The attribute is ignored."
+                    ));
+                }
+            }
             if let Some(ref v) = sc.header {
                 if v != "over" {
                     warns.warnings.push(format!(

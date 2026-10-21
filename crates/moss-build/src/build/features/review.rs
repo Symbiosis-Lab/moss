@@ -1199,6 +1199,7 @@ mod tests {
             modified: None,
             dimensions: Some((1200, 800)),
             dominant_color: None,
+            tone_bands: None,
             lqip_data_uri: None,
         }];
         let lookup = MediaDimensionLookup::new(&images, &[], &HashMap::new(), None);
@@ -1250,6 +1251,7 @@ mod tests {
             modified: None,
             dimensions: Some((1200, 800)),
             dominant_color: None,
+            tone_bands: None,
             lqip_data_uri: None,
         }];
         let mut dir_overrides = HashMap::new();
