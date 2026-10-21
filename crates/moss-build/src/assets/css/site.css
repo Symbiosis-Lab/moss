@@ -3708,10 +3708,31 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
   display: none;
 }
 
-/* While the contents ruler is on screen it is the page's one contents menu. */
-.moss-nav-island[data-ruler="on"] .moss-nav-island-sections,
-.moss-nav-island[data-ruler="on"] [data-island-menu="sections"] {
+/* While the contents ruler is on screen it is the page's one contents menu.
+   Not on a site with no header: its island is on screen to stay, so the
+   button is the reader's one constant place to see the section's name. */
+.moss-nav-island:not([data-header="none"])[data-ruler="on"] .moss-nav-island-sections,
+.moss-nav-island:not([data-header="none"])[data-ruler="on"] [data-island-menu="sections"] {
   display: none;
+}
+
+.moss-nav-island-sections[hidden] {
+  display: none;
+}
+
+/* `[site].header = "none"`: no trail, so the name takes the room the trail
+   would have had and the controls sit at the far end. */
+.moss-nav-island[data-header="none"] .moss-nav-island-sections {
+  flex: 0 1 16rem;
+  min-inline-size: 0;
+}
+
+.moss-nav-island[data-header="none"] .moss-nav-island-section-name {
+  flex: 1 1 0;
+  min-inline-size: 0;
+  inline-size: auto;
+  text-align: start;
+  font-size: var(--moss-size-sm);
 }
 
 /* Invisible 44px hit area over the 32px icon. .moss-nav-island-actions holds

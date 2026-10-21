@@ -841,7 +841,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         enum_values: Some(&["open"]),
         // Frequency=0, Importance=1 → score=96
         score: 96,
-        description: "`open` keeps the page's contents list in the left margin of a wide screen with its titles showing and a small picture beside each section that has one; absent keeps the ruler of short dashes whose titles open on hover. The page shifts right to make room, and where that would leave under 448px of text the list steps aside, as the ruler does, and the nav island's sections panel carries the same pictures",
+        description: "`open` keeps the page's contents list in the left margin of a wide screen with its titles showing and a small picture beside each section that has one; absent keeps the ruler of short dashes whose titles open on hover. The page shifts right to make room, and where that would leave under 448px of text the list steps aside, as the ruler does, and the nav island's sections panel carries the same pictures. Independently of this field, `contents=end` on a fenced div (`::: {.band screen contents=end}`) or a heading (`## Proposals {contents=end}`) marks where the main sections stop: the ruler lists only the sections before it and steps aside once it passes the middle of the window",
         label: Some("Contents"),
         label_key: "chip.contents.label",
         group: "This Page",

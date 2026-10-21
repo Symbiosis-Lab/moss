@@ -14,6 +14,9 @@ use crate::i18n::link::TranslationLink;
 mod breadcrumb;
 /// The floating nav island. A child module for the same reason.
 mod island;
+/// The search / language / theme cluster, shared by the masthead and the
+/// island of a site with no header.
+mod icons;
 /// `generate_footer`, and `strip_empty_footer`, which settles the footer it
 /// emits once slots are resolved. A child module for the same reason as the
 /// two above.
@@ -41,9 +44,8 @@ pub struct NavigationBuilder<'a> {
     current_page_url: Option<&'a str>,
     lang: Language,
     breadcrumb_segments: Option<Vec<BreadcrumbSegment>>,
-    /// The page's title, for the nav island of a page that has no breadcrumb
-    /// trail of its own (the home page) but asked for its contents open.
-    island_only_title: Option<String>,
+    /// What the nav island is for this page.
+    island: island::IslandShape,
     /// Render the trail's own `is_current` segment instead of the ordinary
     /// skip (`breadcrumb.rs`'s `nav_left_html`) — an explorer root's only
     /// use (`render/html.rs`/`render/blocking.rs`, both via `is_explorer_root`).
@@ -105,7 +107,7 @@ impl<'a> NavigationBuilder<'a> {
             current_page_url,
             lang,
             breadcrumb_segments: None,
-            island_only_title: None,
+            island: island::IslandShape::default(),
             breadcrumb_current_visible: false,
             translations: Vec::new(),
             current_lang: lang,
@@ -140,6 +142,9 @@ impl<'a> NavigationBuilder<'a> {
     /// Set `[site].header` — see `HeaderMode`.
     pub fn with_header_mode(mut self, header_mode: HeaderMode) -> Self {
         self.header_mode = header_mode;
+        if header_mode == HeaderMode::None {
+            self.island = island::IslandShape::Pinned;
+        }
         self
     }
 
@@ -173,7 +178,9 @@ impl<'a> NavigationBuilder<'a> {
 
     /// Give a page with no trail an island whose only crumb is `title`.
     pub fn with_island_only(mut self, title: &str) -> Self {
-        self.island_only_title = Some(title.to_string());
+        if self.island == island::IslandShape::Trail {
+            self.island = island::IslandShape::TitleOnly(title.to_string());
+        }
         self
     }
 
@@ -275,6 +282,11 @@ impl<'a> NavigationBuilder<'a> {
     /// If nav items exist: renders hamburger + nav-links + nav-icons.
     /// If no nav items: just site name + nav-icons.
     pub fn generate_navigation(&self) -> String {
+        // No header band under `[site].header = "none"`; the island carries
+        // the controls (`nav/island.rs`).
+        if self.header_mode == HeaderMode::None {
+            return String::new();
+        }
         let home_path = self.home_path();
         let logo_html = self.logo_html();
         let nav_mode = self.header_mode == HeaderMode::Nav;
@@ -429,69 +441,7 @@ impl<'a> NavigationBuilder<'a> {
             String::new()
         };
 
-        // Icon items: search (left), language toggle, theme toggle (right).
-        // Left to right the cluster runs from the most content-related control
-        // to the most presentation-related one: search sits nearest the nav
-        // links it complements (it IS navigation), language changes what
-        // content you read, theme is pure presentation and keeps its
-        // established right-most anchor.
-        let mut icon_items: Vec<String> = Vec::new();
-
-        // Search icon — only when this build actually shipped an index
-        // (`_moss/pagefind/`).
-        // The client runtime binds the click; with JS off the
-        // button is inert, which is why it is a `<button>` and not a link.
-        if self.has_search {
-            let search_label = crate::i18n::t(self.current_lang, "nav_search");
-            icon_items.push(format!(
-                r#"<button class="nav-search-btn" type="button" aria-label="{}"><svg class="search-icon" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" viewBox="0 0 32 32"><circle cx="14" cy="14" r="8.5"/><path d="m20.2 20.2 6.3 6.3"/></svg></button>"#,
-                search_label,
-            ));
-        }
-
-        // Language toggle in nav (site-wide: shows all site languages)
-        if !self.translations.is_empty() {
-            let current = format!(
-                r#"<span class="nav-lang-current">{}</span>"#,
-                crate::i18n::switcher_label(&self.current_lang_tag)
-            );
-            let links: Vec<String> = self.translations.iter().map(|t| {
-                let pretty = crate::build::scan::article_map::to_pretty_url(&t.url_path);
-                let href = format!("/{}", pretty.trim_start_matches('/')); // allow:served-path-url-construct (language toggle nav href to translation page, not a framework asset)
-                format!(
-                    r#"<a href="{}" class="nav-lang-link" hreflang="{}">{}</a>"#,
-                    // The declared tag, not `code()` — whose own doc says to use
-                    // the BCP-47 form for an hreflang, and which collapses an
-                    // unshipped language onto one of three variants.
-                    href, t.lang_tag, t.display_name
-                )
-            }).collect();
-            let mut parts = vec![current];
-            parts.extend(links);
-            icon_items.push(format!(
-                r#"<div class="nav-lang-toggle" aria-label="{}">{}</div>"#,
-                crate::i18n::t(self.current_lang, "nav_language"),
-                parts.join(" / ")
-            ));
-        }
-
-        // Theme toggle icon (toggles light ↔ dark) — "classic" style from toggles.dev
-        //
-        // No `data-tooltip` on any toggle — only `aria-label`. The glyphs are
-        // their own labels (a sun/moon, a magnifier), so a pill repeating
-        // "Toggle theme" was noise; worse, on touch there is no un-hover, so a
-        // tapped toggle's hint just hung there. Hover hints in the nav now
-        // exist only where they carry information the row has hidden — a
-        // truncated breadcrumb label, a fold's `…` levels — and those are
-        // JS-promoted (breadcrumb-hint.ts, breadcrumb-fold.ts), never emitted
-        // here.
-        let theme_label = crate::i18n::t(self.current_lang, "nav_toggle_theme");
-        icon_items.push(format!(
-            r#"<button class="nav-theme-btn" type="button" aria-label="{}" onclick="toggleTheme()"><svg class="theme-toggle-icon" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="1em" height="1em" fill="currentColor" stroke-linecap="round" viewBox="0 0 32 32"><clipPath id="theme-toggle__classic__cutout"><path d="M0-5h30a1 1 0 0 0 9 13v24H0Z"/></clipPath><g clip-path="url(#theme-toggle__classic__cutout)"><circle cx="16" cy="16" r="9.34"/><g stroke="currentColor" stroke-width="1"><path d="M16 5.5v-4"/><path d="M16 30.5v-4"/><path d="M1.5 16h4"/><path d="M26.5 16h4"/><path d="m23.4 8.6 2.8-2.8"/><path d="m5.7 26.3 2.9-2.9"/><path d="m5.8 5.8 2.8 2.8"/><path d="m23.4 23.4 2.9 2.9"/></g></g></svg></button>"#,
-            theme_label,
-        ));
-
-        let nav_icons = format!(r#"<div class="nav-icons">{}</div>"#, icon_items.join(""));
+        let nav_icons = self.nav_icons_html();
         let nav_right = format!(r#"<div class="nav-right">{}{}{}</div>"#, hamburger, nav_links, nav_icons);
 
         format!("{}{}", site_name, nav_right)

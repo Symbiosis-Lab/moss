@@ -86,6 +86,10 @@ export interface RulerOptions {
    *  the titles show at rest, and each entry is a picture URL, or null for a
    *  section with no image, which keeps its dash. */
   pictures?: Array<string | null>;
+  /** The element the author marked as the end of the main sections
+   *  (`contents=end`): the ruler steps aside once its top passes the middle of
+   *  the window, and returns when the reader scrolls back above it. */
+  end?: Element | null;
 }
 
 /** Mount the ruler. Returns its disposer: removes the node and every listener. */
@@ -160,6 +164,15 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     return Math.min(text, ...boxes.map((el) => el.getBoundingClientRect().left));
   }
 
+  // Blocks wider than the text column (`data-width`) can sit anywhere in
+  // `main`, and script can add them after load: the list is read on layout and
+  // whenever the scope's children change, and tested each frame.
+  const scope = first.closest("main") ?? article;
+  let bands: Element[] = [];
+  const collectBands = (): void => {
+    bands = [...scope.querySelectorAll("[data-width]:not([data-width=body])")];
+  };
+  collectBands();
   let away = true;
   let disposed = false;
   let mo: MutationObserver | undefined;
@@ -210,13 +223,24 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   function fade(): void {
     if (disposed) return;
     const inBody = first.getBoundingClientRect().top < window.innerHeight * SHOW_BELOW;
-    const notPast = article.getBoundingClientRect().bottom > window.innerHeight * HIDE_ABOVE;
+    const scopeEnd = (opts.end ?? article).getBoundingClientRect();
+    const notPast = (opts.end ? scopeEnd.top : scopeEnd.bottom) > window.innerHeight * HIDE_ABOVE;
+    // A wide block that reaches the ruler's column and shares its height would
+    // be painted over: the ruler steps aside until the block has passed.
+    // Only worth measuring while the ruler would otherwise be up.
+    const zone = inBody && notPast && !nav.hidden ? list.getBoundingClientRect() : null;
+    const covered =
+      zone !== null &&
+      bands.some((band) => {
+        const box = band.getBoundingClientRect();
+        return box.left < zone.right && box.top < zone.bottom && box.bottom > zone.top;
+      });
     const rendered =
       !nav.hidden &&
       (nav.checkVisibility
         ? nav.checkVisibility({ checkVisibilityCSS: true })
         : getComputedStyle(nav).display !== "none");
-    away = !(inBody && notPast) && !nav.matches(":focus-within");
+    away = !(inBody && notPast && !covered) && !nav.matches(":focus-within");
     nav.toggleAttribute("data-away", away);
     island.dataset.ruler = rendered && !away ? "on" : "off";
   }
@@ -227,6 +251,7 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     // A hidden ruler has no boxes: show it, measure, then decide, all before
     // the next paint.
     nav.hidden = false;
+    collectBands();
     const measure = canvasMeasure(labels[0]);
     reserveColumn(vertical, measure);
     let room = 0;
@@ -271,6 +296,9 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     undo.push(() => ro.disconnect());
   }
   if (typeof MutationObserver !== "undefined") {
+    const bandsMo = new MutationObserver(collectBands);
+    bandsMo.observe(scope, { childList: true, subtree: true });
+    undo.push(() => bandsMo.disconnect());
     mo = new MutationObserver(relayout);
     mo.observe(document.documentElement, { attributes: true });
     mo.observe(document.body, { attributes: true });

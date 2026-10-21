@@ -611,8 +611,9 @@ document.addEventListener("keydown", (e) => {
   const isCmdK = (e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K");
   const isSlash = e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey;
   if (!isCmdK && !isSlash) return;
-  if (!document.querySelector(".nav-search-btn")) return;
   e.preventDefault();
+  // This script ships only where the build made a search index; the button is
+  // a place for focus to return to, and a site with no header has none.
   open(document.querySelector<HTMLElement>(".nav-search-btn"));
 });
 

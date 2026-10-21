@@ -2825,7 +2825,33 @@ fn test_header_mode_from_config_default_and_recognized_values() {
     assert_eq!(HeaderMode::from_config(Some("")), HeaderMode::Brand);
     assert_eq!(HeaderMode::from_config(Some("brand")), HeaderMode::Brand);
     assert_eq!(HeaderMode::from_config(Some("nav")), HeaderMode::Nav);
+    assert_eq!(HeaderMode::from_config(Some("none")), HeaderMode::None);
 }
+
+#[test]
+fn none_mode_builds_no_masthead_and_the_island_carries_the_controls() {
+    let documents = nav_mode_documents();
+    let builder = |mode| {
+        NavigationBuilder::new(&documents, "My Site", Some("index.html"), crate::i18n::Language::En, true)
+            .with_search(true)
+            .with_header_mode(mode)
+    };
+    assert_eq!(builder(HeaderMode::None).generate_navigation(), "");
+
+    let island = builder(HeaderMode::None).generate_nav_island();
+    assert!(island.contains(r#"data-header="none""#), "got: {island}");
+    assert!(island.contains("nav-theme-btn") && island.contains("nav-search-btn"), "got: {island}");
+    assert!(island.contains("moss-nav-island-sections"), "got: {island}");
+    assert!(!island.contains("moss-nav-island-trail") && !island.contains("My Site"), "got: {island}");
+    // Without scripting the island shows itself, so the controls stay reachable.
+    assert!(island.contains("<noscript><style>"), "got: {island}");
+    assert!(!builder(HeaderMode::Brand).generate_nav_island().contains("noscript"));
+
+    // A header that is there keeps its controls and its brand-mode island.
+    assert!(builder(HeaderMode::Brand).generate_navigation().contains("nav-theme-btn"));
+    assert!(!builder(HeaderMode::Brand).generate_nav_island().contains("data-header"));
+}
+
 
 #[test]
 fn test_header_mode_from_config_unrecognized_falls_back_to_brand() {

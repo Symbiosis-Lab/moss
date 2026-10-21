@@ -528,6 +528,7 @@ mod tests {
                 level: 2,
                 children: vec![Inline::Text("Title".into())],
                 id: None,
+                contents_end: false,
             },
         ]);
         assert!(find_first_block_image(&doc).is_none());
@@ -566,6 +567,7 @@ mod tests {
             level: 2,
             children: vec![img("badge.png"), Inline::Text("Title".into())],
             id: None,
+            contents_end: false,
         }]);
         assert_eq!(find_first_block_image(&heading), None);
         let table = super::super::parse("| a |\n|---|\n| ![](cell.png) |\n");

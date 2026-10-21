@@ -467,6 +467,12 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         description: "Present when a page widens its column via `content_width:` frontmatter; absent at the default reading measure. This is what `--moss-content-width` — and therefore `--moss-nav-width`, which tracks it — resolves against, so it is the hook for a layout that should respond to the preset rather than to a fixed width.",
     },
     ScopeAttr {
+        selector: "main :is(div, h1, h2, h3, h4, h5, h6)",
+        name: "data-contents-end",
+        values: &[],
+        description: "Present on the element an author marked as the end of the page's main sections, with `contents=end` on a fenced div (`::: {.band screen contents=end}`) or on a heading (`## Proposals {contents=end}`). The contents ruler lists only the sections before it and steps aside once the element's top passes the middle of the window, and returns when the reader scrolls back above it. The nav island's sections panel still lists every heading, and the island ignores the marker.",
+    },
+    ScopeAttr {
         selector: "body",
         name: "data-contents",
         values: &["open"],

@@ -695,6 +695,7 @@ pub trait RenderHooks {
         level: u8,
         id: Option<&str>,
         source_line: Option<usize>,
+        contents_end: bool,
         content: &str,
     ) {
         out.push('<');
@@ -704,6 +705,9 @@ pub trait RenderHooks {
             out.push_str(r#" id=""#);
             out.push_str(&escape_attr(id));
             out.push('"');
+        }
+        if contents_end {
+            out.push_str(" data-contents-end");
         }
         if let Some(n) = source_line {
             use std::fmt::Write as _;
@@ -1166,7 +1170,7 @@ mod tests {
     fn default_hooks_render_heading_emits_id() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 2, Some("setup"), None, "Setup");
+        hooks.render_heading(&mut out, 2, Some("setup"), None, false, "Setup");
         assert_eq!(
             out,
             r##"<h2 id="setup">Setup<a class="moss-heading-anchor" href="#setup" aria-label="Permalink to this section"></a></h2>"##
@@ -1177,7 +1181,7 @@ mod tests {
     fn default_hooks_render_heading_without_id() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 3, None, None, "Sub");
+        hooks.render_heading(&mut out, 3, None, None, false, "Sub");
         assert_eq!(out, "<h3>Sub</h3>");
     }
 
@@ -1185,7 +1189,7 @@ mod tests {
     fn default_hooks_render_heading_emits_source_line() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 2, Some("setup"), Some(42), "Setup");
+        hooks.render_heading(&mut out, 2, Some("setup"), Some(42), false, "Setup");
         assert_eq!(
             out,
             r##"<h2 id="setup" data-source-line="42">Setup<a class="moss-heading-anchor" href="#setup" aria-label="Permalink to this section"></a></h2>"##
@@ -1196,7 +1200,7 @@ mod tests {
     fn default_hooks_render_heading_source_line_without_id() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 1, None, Some(1), "Top");
+        hooks.render_heading(&mut out, 1, None, Some(1), false, "Top");
         assert_eq!(out, r#"<h1 data-source-line="1">Top</h1>"#);
     }
 
@@ -1204,7 +1208,7 @@ mod tests {
     fn default_hooks_render_heading_emits_anchor_when_id_present() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 2, Some("setup"), None, "Setup");
+        hooks.render_heading(&mut out, 2, Some("setup"), None, false, "Setup");
         assert_eq!(
             out,
             r##"<h2 id="setup">Setup<a class="moss-heading-anchor" href="#setup" aria-label="Permalink to this section"></a></h2>"##
@@ -1215,7 +1219,7 @@ mod tests {
     fn default_hooks_render_heading_no_anchor_when_id_absent() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 3, None, None, "Sub");
+        hooks.render_heading(&mut out, 3, None, None, false, "Sub");
         assert_eq!(out, "<h3>Sub</h3>");
     }
 
@@ -1223,7 +1227,7 @@ mod tests {
     fn default_hooks_render_heading_anchor_preserves_source_line_position() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 2, Some("setup"), Some(42), "Setup");
+        hooks.render_heading(&mut out, 2, Some("setup"), Some(42), false, "Setup");
         assert_eq!(
             out,
             r##"<h2 id="setup" data-source-line="42">Setup<a class="moss-heading-anchor" href="#setup" aria-label="Permalink to this section"></a></h2>"##
@@ -1234,7 +1238,7 @@ mod tests {
     fn default_hooks_render_heading_anchor_escapes_id_in_href() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 2, Some(r#"a&b"#), None, "AB");
+        hooks.render_heading(&mut out, 2, Some(r#"a&b"#), None, false, "AB");
         assert_eq!(
             out,
             r##"<h2 id="a&amp;b">AB<a class="moss-heading-anchor" href="#a&amp;b" aria-label="Permalink to this section"></a></h2>"##

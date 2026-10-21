@@ -1589,6 +1589,7 @@ fn make_test_vars(has_sidebar_layout: bool) -> ShellVars {
         js_path: "theme.js".to_string(),
         lazy_chunk_attrs: String::new(),
         navigation: "".to_string(),
+        has_header: true,
         nav_island: String::new(),
         homepage_content: "".to_string(),
         latest_list: None,
@@ -1859,6 +1860,7 @@ fn template_marks_main_nav_and_nav_island_as_source_none_in_preview_mode() {
     let processor = ShellProcessor::new();
     let mut vars = make_test_vars(false);
     vars.body_attrs = " data-moss-preview".to_string();
+    vars.navigation = "<a href=\"/\">Home</a>".to_string();
     vars.nav_island = concat!(
         r#"<div class="moss-nav-island"><div class="moss-nav-island-bar">"#,
         r#"<nav class="moss-nav-island-trail" aria-label="Breadcrumb"></nav>"#,
@@ -2352,9 +2354,25 @@ fn process_composes_shell_with_content_fragment() {
         ..test_vars()
     };
     let out = ShellProcessor::new().process(ShellType::Article, vars);
-    assert!(out.contains("<header>"));
     assert!(out.contains("ARTICLE_BODY"));
     assert!(!out.contains("{main_content}"));
+}
+
+#[test]
+fn process_emits_no_header_element_only_when_the_mode_has_none() {
+    let with_nav = ShellVars { navigation: "<a href=\"/\">Home</a>".into(), ..test_vars() };
+    let out = ShellProcessor::new().process(ShellType::Article, with_nav);
+    assert!(out.contains("<header>") && out.contains("main-nav"));
+    assert!(out.contains("moss-skip-link"));
+
+    let none = ShellVars { has_header: false, ..test_vars() };
+    let out = ShellProcessor::new().process(ShellType::Article, none);
+    assert!(!out.contains("<header"), "no header band: {out}");
+    assert!(out.contains("moss-skip-link"));
+
+    // Empty navigation alone does not drop the header: it is the mode's call.
+    let empty = ShellVars { navigation: String::new(), ..test_vars() };
+    assert!(ShellProcessor::new().process(ShellType::Article, empty).contains("<header>"));
 }
 
 #[test]

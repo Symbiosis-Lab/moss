@@ -11,26 +11,29 @@
 /// with a Home item instead (see `NavigationBuilder::generate_navigation`).
 /// Breadcrumbs are suppressed too under `Nav` — the Home link already gives
 /// every page a way back, which is the same job breadcrumb auto-enable
-/// exists to do.
+/// exists to do. `None` drops the header band altogether: the controls it
+/// held move into the nav island, which is then on every page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HeaderMode {
     #[default]
     Brand,
     Nav,
+    None,
 }
 
 impl HeaderMode {
     /// Parse `[site].header`. An absent key, empty string, or `"brand"` all
-    /// resolve to the default; anything but `"nav"` besides those falls back
+    /// resolve to the default; anything but `"nav"` or `"none"` besides those falls back
     /// to `Brand` with a build warning, the same shape as
     /// `LocatorPlacement::from_config`.
     pub fn from_config(value: Option<&str>) -> Self {
         match value {
             None | Some("") | Some("brand") => Self::Brand,
             Some("nav") => Self::Nav,
+            Some("none") => Self::None,
             Some(other) => {
                 crate::build::cli_output::log_warn_problem!(
-                    "[site].header must be 'brand' or 'nav', not '{other}'; using 'brand'"
+                    "[site].header must be 'brand', 'nav' or 'none', not '{other}'; using 'brand'"
                 );
                 Self::Brand
             }

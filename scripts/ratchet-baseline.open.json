@@ -32,7 +32,7 @@
         "crates/moss-build/src/tasks.rs": 1400,
         "crates/moss-build/src/vault/fs.rs": 900,
         "crates/moss-core/src/ast/hooks.rs": 1200,
-        "crates/moss-core/src/ast/parser.rs": 2300,
+        "crates/moss-core/src/ast/parser.rs": 2400,
         "crates/moss-core/src/ast/render.rs": 1000,
         "crates/moss-core/src/ast/resolve_urls.rs": 1000,
         "crates/moss-core/src/ast/shortcode_extract.rs": 2000,
@@ -51,7 +51,7 @@
         "crates/moss-build/src/build/place_map/svg.rs": 1000,
         "crates/moss-build/src/build/place_map/geometry.rs": 1000,
         "crates/moss-build/src/build/components/color_extract.rs": 900,
-        "crates/moss-build/src/build/components/nav.rs": 1000,
+        "crates/moss-build/src/build/components/nav.rs": 900,
         "crates/moss-core/src/content_graph.rs": 900,
         "crates/moss-core/src/frontmatter.rs": 1000
       },

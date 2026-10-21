@@ -2834,7 +2834,11 @@ pub fn generate_blocking_content_for_build(
             project_structure.has_content_folders,
         )
         .with_search(layout_config.assets.search)
-        .with_header_mode(layout_config.header)
+        .with_header_mode(match layout_config.header {
+            // A generated media page has no island to carry the controls.
+            crate::build::components::nav::HeaderMode::None => crate::build::components::nav::HeaderMode::Brand,
+            mode => mode,
+        })
         .with_term_nav(layout_config.term_nav.clone(), "")
         .with_asset_snapshot(shared.media_lookup.asset_snapshot());
         let nav_builder = if let Some(ref logo) = layout_config.logo_path {

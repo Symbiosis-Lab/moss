@@ -118,6 +118,7 @@ fn extract_hero_overlay_text_skips_leading_heading() {
             level: 2,
             children: vec![Inline::Text("Title".into())],
             id: None,
+            contents_end: false,
         },
         Block::Paragraph(vec![Inline::Text("Description".into())]),
     ];

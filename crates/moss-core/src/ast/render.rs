@@ -266,10 +266,11 @@ fn render_block<H: RenderHooks + ?Sized>(
             level,
             children,
             id,
+            contents_end,
         } => {
             let mut content = String::new();
             render_inlines(hooks, &mut content, children, fnotes);
-            hooks.render_heading(out, *level, id.as_deref(), meta.source_line, &content);
+            hooks.render_heading(out, *level, id.as_deref(), meta.source_line, *contents_end, &content);
             out.push('\n');
         }
         Block::Paragraph(children) => {

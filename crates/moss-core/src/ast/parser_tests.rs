@@ -315,11 +315,47 @@ fn parses_h1_heading() {
             level,
             children,
             id,
+            ..
         } => {
             assert_eq!(level, 1);
             // Phase 4 PR2: parser populates id with the Obsidian anchor slug.
             assert_eq!(id.as_deref(), Some("hello"));
             assert!(matches!(&children[0], Inline::Text(t) if t == "Hello"));
+        }
+        other => panic!("expected Heading, got {other:?}"),
+    }
+}
+
+#[test]
+fn heading_contents_end_is_a_flag_not_text() {
+    match first_block("## Proposals {contents=end}\n") {
+        Block::Heading { children, id, contents_end, .. } => {
+            assert!(contents_end);
+            assert_eq!(id.as_deref(), Some("proposals"));
+            assert!(matches!(&children[..], [Inline::Text(t)] if t == "Proposals"), "{children:?}");
+        }
+        other => panic!("expected Heading, got {other:?}"),
+    }
+    // Any other attribute block is still just text, and still warned about.
+    match first_block("## Proposals {.wide}\n") {
+        Block::Heading { contents_end, .. } => assert!(!contents_end),
+        other => panic!("expected Heading, got {other:?}"),
+    }
+    let doc = parse("## A {.wide}\n\n## B {contents=end}\n");
+    assert_eq!(doc.warnings.len(), 1, "{:?}", doc.warnings);
+}
+
+#[test]
+fn heading_contents_end_leaves_no_trailing_space_after_inline_markup() {
+    let html = crate::ast::render::render_document(
+        &parse("## **Bold** {contents=end}\n"),
+        &crate::ast::hooks::DefaultHooks::new(),
+    );
+    assert!(html.starts_with(r#"<h2 id="bold" data-contents-end><strong>Bold</strong><a"#), "{html}");
+    match first_block("## **Bold** {contents=end}\n") {
+        Block::Heading { children, id, .. } => {
+            assert_eq!(id.as_deref(), Some("bold"));
+            assert!(!matches!(children.last(), Some(Inline::Text(t)) if t.ends_with(' ') || t.is_empty()), "{children:?}");
         }
         other => panic!("expected Heading, got {other:?}"),
     }

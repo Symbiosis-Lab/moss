@@ -988,6 +988,15 @@ fn css_region_key_values_follow_pandocs_html5_attribute_rule() {
 }
 
 #[test]
+fn css_region_contents_end_is_a_flag_attribute_beside_the_width() {
+    let out = extract_shortcodes("::: {.band screen contents=end}\nBody.\n:::\n").markdown_with_placeholders;
+    assert!(out.contains("<div class=\"band\" data-width=\"screen\" data-contents-end>"), "{out}");
+    // Only the value `end` is the marker; anything else is an ordinary key.
+    let other = extract_shortcodes("::: {.band contents=open}\nBody.\n:::\n").markdown_with_placeholders;
+    assert!(other.contains("data-contents=\"open\"") && !other.contains("data-contents-end"), "{other}");
+}
+
+#[test]
 fn css_region_emits_blank_lines_around_body_for_markdown_processing() {
     // Pulldown-cmark needs a blank line between the `<div>` and the
     // body to treat the body as markdown rather than raw HTML.

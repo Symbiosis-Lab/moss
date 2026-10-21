@@ -670,6 +670,19 @@ fn parse_block(
     }
 }
 
+/// Drop the `{contents=end}` block from the end of a heading's inlines. It is
+/// plain text, so it is the tail of the last text inline.
+fn strip_trailing_marker(children: &mut Vec<Inline>) {
+    if let Some(Inline::Text(text)) = children.last_mut() {
+        if let Some(title) = crate::heading::attrs::strip_contents_end(text) {
+            *text = title.to_string();
+        }
+    }
+    if matches!(children.last(), Some(Inline::Text(t)) if t.is_empty()) {
+        children.pop();
+    }
+}
+
 fn parse_block_with_tag(
     events: &[Event<'_>],
     start: usize,
@@ -696,12 +709,20 @@ fn parse_block_with_tag(
             // only Event::Text and Event::Code. The post-parse
             // `assign_heading_id_suffixes` pass disambiguates collisions.
             let heading_text = crate::heading::text::events_to_text(events, start + 1, end);
-            let base_slug = obsidian_heading_anchor(&heading_text);
+            // `{contents=end}` is read, not printed: out of the text, the
+            // slug and the children, onto the element as a flag.
+            let marker = crate::heading::attrs::strip_contents_end(&heading_text);
+            let base_slug = obsidian_heading_anchor(marker.unwrap_or(&heading_text));
+            let mut children = children;
+            if marker.is_some() {
+                strip_trailing_marker(&mut children);
+            }
             (
                 Some(Block::Heading {
                     level: level_num,
                     children,
                     id: Some(base_slug),
+                    contents_end: marker.is_some(),
                 }),
                 end - start + 1,
             )

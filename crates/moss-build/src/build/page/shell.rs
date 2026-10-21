@@ -144,6 +144,9 @@ pub struct ShellVars {
     /// video ladder.
     pub lazy_chunk_attrs: String,
     pub navigation: String,
+    /// Whether the page carries the `<header>` band: false under
+    /// `[site].header = "none"`, where the island holds the controls.
+    pub has_header: bool,
     /// Floating nav island markup, or empty when the page has no
     /// breadcrumb trail to continue. Emitted as a sibling *before* `<header>`
     /// so it is `position: fixed` against the viewport rather than against any
@@ -364,6 +367,17 @@ impl ShellProcessor {
         let latest_sidebar =
             vars.latest_sidebar.map(|s| format!("{}\n        ", s)).unwrap_or_default();
 
+        // `[site].header = "none"` has no `<header>` at all rather than an
+        // empty band.
+        let header = if !vars.has_header {
+            String::new()
+        } else {
+            format!(
+                "<header>\n        <nav class=\"main-nav container\">\n            <div class=\"nav-content\">\n                {}\n            </div>\n        </nav>\n    </header>",
+                vars.navigation
+            )
+        };
+
         // Every placeholder the templates may carry, in one lookup table. Tokens
         // absent from the current templates (main_class, date, …) stay registered
         // so a template that reintroduces them skips the unknown-token drop.
@@ -383,7 +397,7 @@ impl ShellProcessor {
             ("css_path", vars.css_path),
             ("js_path", vars.js_path),
             ("lazy_chunk_attrs", vars.lazy_chunk_attrs),
-            ("navigation", vars.navigation),
+            ("header", header),
             ("nav_island", vars.nav_island),
             ("homepage_content", vars.homepage_content),
             ("body_attrs", vars.body_attrs),
@@ -464,7 +478,7 @@ impl ShellProcessor {
             // substituted values, so "the first <nav>" is not reliably anything.
             for (open, marked) in [
                 (r#"<nav class="main-nav "#, r#"<nav data-source-none class="main-nav "#),
-                (r#"<div class="moss-nav-island">"#, r#"<div class="moss-nav-island" data-source-none>"#),
+                (r#"<div class="moss-nav-island""#, r#"<div class="moss-nav-island" data-source-none"#),
                 (r#"<nav class="moss-series-nav""#, r#"<nav class="moss-series-nav" data-source-none"#),
                 (r#"<div class="font-anchor""#, r#"<div class="font-anchor" data-source-none"#),
                 (r#"<div class="moss-colophon">"#, r#"<div class="moss-colophon" data-source-none>"#),

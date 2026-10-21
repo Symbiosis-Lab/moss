@@ -290,7 +290,7 @@ impl Restore<'_> {
     /// irrelevant field to `_` and the answer is recorded in the source.
     fn in_block(&self, block: &mut Block) {
         match block {
-            Block::Heading { children, id, level: _ } => {
+            Block::Heading { children, id, .. } => {
                 if self.in_inlines(children) {
                     // The `id` was slugged mid-parse from the event stream,
                     // when the heading's text still read `U+E000…`. Recompute

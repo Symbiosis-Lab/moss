@@ -1831,10 +1831,19 @@ fn render_div_open(
 
 /// The `key=value` pairs of a fenced div's attribute block as HTML attributes,
 /// each with a leading space, in source order; keys are named by
-/// [`html_attribute_name`] (`fig=teapot` is `data-fig`, `title=Tea` stays).
+/// [`html_attribute_name`] (`fig=teapot` is `data-fig`, `title=Tea` stays;
+/// `contents=end` is the flag `data-contents-end`).
 fn data_attrs_for(kvs: &[(String, String)]) -> String {
     kvs.iter()
-        .map(|(key, value)| format!(" {}=\"{}\"", html_attribute_name(key), html_escape_attr(value)))
+        .map(|(key, value)| {
+            // `contents=end` marks where a page's main sections stop: a flag
+            // attribute the contents ruler reads, not a `data-contents` value.
+            if key == "contents" && value == "end" {
+                " data-contents-end".to_string()
+            } else {
+                format!(" {}=\"{}\"", html_attribute_name(key), html_escape_attr(value))
+            }
+        })
         .collect()
 }
 

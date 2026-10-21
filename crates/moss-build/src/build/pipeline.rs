@@ -1485,7 +1485,7 @@ fn build_inner(
         // asked for, not inherited, so a site that never said anything gets no
         // floating nav (as amended 2026-08-30).
         floating_nav: site_bool("floating_nav").unwrap_or(false),
-        // `[site].header` — "brand" (default) or "nav"; an absent or
+        // `[site].header` — "brand" (default), "nav" or "none"; an absent or
         // unrecognized value resolves to "brand" (`HeaderMode::from_config`
         // logs a warning on the latter).
         header: crate::build::components::nav::HeaderMode::from_config(site_str("header").as_deref()),

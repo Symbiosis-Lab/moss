@@ -203,6 +203,10 @@ pub enum Block {
         /// Heading anchor id (slug). Computed by the parser via
         /// [`crate::heading::anchor::obsidian_heading_anchor`].
         id: Option<String>,
+        /// The heading was written `## Title {contents=end}`: it opens the part
+        /// of the page after the main sections.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        contents_end: bool,
     },
     /// A paragraph of inline content.
     Paragraph(Vec<Inline>),
@@ -508,12 +512,14 @@ mod tests {
             level: 1,
             children: vec![text("Hello")],
             id: Some("hello".to_string()),
+            contents_end: false,
         };
         match b {
             Block::Heading {
                 level,
                 children,
                 id,
+                ..
             } => {
                 assert_eq!(level, 1);
                 assert_eq!(children.len(), 1);
@@ -752,6 +758,7 @@ mod tests {
             level: 2,
             children: vec![Inline::Text("Setup".to_string())],
             id: Some("setup".to_string()),
+            contents_end: false,
         };
         let s = serde_json::to_string(&original).expect("serialize");
         let back: Block = serde_json::from_str(&s).expect("deserialize");

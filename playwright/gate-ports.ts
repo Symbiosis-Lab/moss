@@ -116,6 +116,8 @@ const GATE_PORT_KEYS = [
   'contents-ruler:home',
   'hero-from',
   'closing-picture',
+  'header-none',
+  'header-none:band',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

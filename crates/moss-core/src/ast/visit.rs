@@ -609,6 +609,7 @@ mod tests {
                 has_pothole: false,
             }],
             id: None,
+            contents_end: false,
         }]);
         let mut count = 0;
         visit_urls_mut(&mut doc, |_| count += 1);

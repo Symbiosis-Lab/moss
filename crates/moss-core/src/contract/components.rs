@@ -3057,6 +3057,12 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 description: "Whether the island is currently revealed. Written by the site runtime; ABSENT in the emitted HTML, which is what keeps the island invisible with JavaScript off.",
             },
             DataAttr {
+                name: "data-header",
+                values: &["none"],
+                default: "",
+                description: "Present as `none` under `[site].header = \"none\"`. That island is the page's only chrome: it has no trail, carries the search button, language switcher and theme toggle (`.nav-icons`), is emitted on every page, and shows from the first section heading to the end of the page instead of on scroll-up. On a page with fewer than two sections it shows the controls alone, from the start.",
+            },
+            DataAttr {
                 name: "data-nameless",
                 values: &[],
                 default: "",
@@ -3073,7 +3079,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Emerging,
         since: "0",
-        description: "Floating navigation island: a one-line bar, aligned to the text column, revealed on scroll-up once the masthead has left the screen. Opt-in — a site gets none until it sets `[site].floating_nav = true` (the Services-tab toggle writes that key). On a site that opted in, the markup is emitted on every page with a breadcrumb trail but only ever shows where the page has a contents table to offer: two or more section headings. `--moss-nav-island-display: none` forces it off from CSS, media query included.",
+        description: "Floating navigation island: a one-line bar, aligned to the text column, revealed on scroll-up once the masthead has left the screen. Opt-in — a site gets none until it sets `[site].floating_nav = true` (the Services-tab toggle writes that key), or `[site].header = \"none\"`, which pins it instead (see `data-header`). On a site that opted in, the markup is emitted on every page with a breadcrumb trail but only ever shows where the page has a contents table to offer: two or more section headings. `--moss-nav-island-display: none` forces it off from CSS, media query included.",
     },
     ComponentEntry {
         class: "moss-nav-island-bar",
@@ -3128,7 +3134,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Emerging,
         since: "0",
-        description: "Button cluster at the island's end edge. Holds the sections button only — theme, language and search stay in the masthead.",
+        description: "Button cluster at the island's end edge. Holds the sections button only — theme, language and search stay in the masthead. Under `[site].header = \"none\"` there is no masthead: the sections button sits directly in the bar, beside the `.nav-icons` cluster that carries those controls.",
     },
     ComponentEntry {
         class: "moss-nav-island-sections",
@@ -3139,7 +3145,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Emerging,
         since: "0",
-        description: "Opens this page's section list. Always present in an emitted island, because an island only ever shows on a page with two or more sections — so the button always has something to open. The glyph is a small ruler. The site runtime adds the current section's name before it, in a box of fixed width, and hides the button while the contents ruler is on screen.",
+        description: "Opens this page's section list. Always present in an emitted island, because an island only ever shows on a page with two or more sections — so the button always has something to open. The glyph is a small ruler. The site runtime adds the current section's name before it, in a box of fixed width, and hides the button while the contents ruler is on screen (not under `[site].header = \"none\"`, where the island stays and the button always names the section).",
     },
     ComponentEntry {
         class: "moss-nav-island-section-name",

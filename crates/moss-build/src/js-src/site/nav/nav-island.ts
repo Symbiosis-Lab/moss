@@ -45,6 +45,9 @@ import { mountSectionName } from "./section-name";
  */
 const SCROLLSPY_CLEARANCE = 28;
 
+/** `pinned` is the island of a site with no header; `trail` is every other. */
+type IslandShape = "trail" | "pinned";
+
 /** Ignore scroll jitter below this many pixels when deciding direction. */
 const JITTER = 2;
 
@@ -104,6 +107,23 @@ export function sectionHeadings(root: ParentNode = document): HTMLElement[] {
   return [];
 }
 
+/**
+ * The element the author marked as the end of the main sections: the first
+ * `data-contents-end` in the sections' own `main`, so a marker elsewhere (a
+ * footer) is not read, and none that comes before the first section, which
+ * would leave the ruler with nothing to list.
+ */
+export function contentsEnd(headings: HTMLElement[]): Element | null {
+  const end = headings[0]?.closest("main")?.querySelector("[data-contents-end]") ?? null;
+  return end && headings[0].compareDocumentPosition(end) & Node.DOCUMENT_POSITION_FOLLOWING ? end : null;
+}
+
+/** How many of `headings` (document order) come before `end`: the ruler's. */
+export function mainSectionCount(headings: HTMLElement[], end: Element | null): number {
+  if (!end) return headings.length;
+  return headings.filter((h) => h.compareDocumentPosition(end) & Node.DOCUMENT_POSITION_FOLLOWING).length;
+}
+
 /** A heading's title, without the permalink anchor moss appends to it. */
 function headingText(heading: HTMLElement): string {
   const copy = heading.cloneNode(true) as HTMLElement;
@@ -124,7 +144,11 @@ export function initNavIsland(): void {
 
   const bar = island.querySelector<HTMLElement>(".moss-nav-island-bar");
   const trail = island.querySelector<HTMLElement>(".moss-nav-island-trail");
-  if (!bar || !trail) return;
+  // A site with `[site].header = "none"` has no masthead to scroll away from:
+  // its island has no trail, only the sections button and the controls, and is
+  // on screen from the first section on instead of on scroll-up.
+  const shape: IslandShape = island.dataset.header === "none" ? "pinned" : "trail";
+  if (!bar || (shape === "trail" && !trail)) return;
 
   // Writing `data-shown` is what makes the island renderable at all. Do it
   // before the display probe below, or the probe reads the JS-off state and
@@ -133,7 +157,9 @@ export function initNavIsland(): void {
   island.dataset.shown = "false";
   island.inert = true;
 
-  const crumbs = [...trail.querySelectorAll<HTMLElement>("[data-island-crumb]")];
+  // The trail's parts; all absent on a pinned island.
+  const inTrail = <T extends Element>(selector: string): T[] => [...(trail?.querySelectorAll<T>(selector) ?? [])];
+  const crumbs = inTrail<HTMLElement>("[data-island-crumb]");
 
   // Which headings become the sections panel — and, as revised 2026-08-30,
   // whether there is an island at all.
@@ -146,8 +172,8 @@ export function initNavIsland(): void {
   // has sections all the same, and hard-coding `h2` told them they had none.
   const headings = sectionHeadings();
 
-  const moreBtn = trail.querySelector<HTMLButtonElement>(".moss-nav-island-more");
-  const moreSep = trail.querySelector<HTMLElement>("[data-trail-more-separator]");
+  const moreBtn = inTrail<HTMLButtonElement>(".moss-nav-island-more")[0] ?? null;
+  const moreSep = inTrail<HTMLElement>("[data-trail-more-separator]")[0] ?? null;
   const sectionsBtn = island.querySelector<HTMLButtonElement>(".moss-nav-island-sections");
   const levelsMenu = island.querySelector<HTMLElement>('[data-island-menu="levels"]');
   const sectionsMenu = island.querySelector<HTMLElement>('[data-island-menu="sections"]');
@@ -164,6 +190,7 @@ export function initNavIsland(): void {
     sectionsMenu.replaceChildren();
     sectionsMenu.hidden = true;
     sectionsBtn.setAttribute("aria-expanded", "false");
+    sectionsBtn.hidden = shape === "pinned" && headings.length < MIN_SECTIONS;
   }
 
   // Two ways for a page to have no island, and one exit for both: remove
@@ -183,10 +210,17 @@ export function initNavIsland(): void {
   //     the island from inside a media query. It is checked second because it
   //     forces a style read and the heading count does not.
   if (
-    headings.length < MIN_SECTIONS ||
+    (headings.length < MIN_SECTIONS && shape === "trail") ||
     getComputedStyle(island).display === "none"
   ) {
     island.removeAttribute("data-shown");
+    island.inert = false;
+    return;
+  }
+  // With no header, the island is the page's only chrome: a page with no
+  // contents table shows it, controls alone, from the start.
+  if (headings.length < MIN_SECTIONS) {
+    island.dataset.shown = "true";
     island.inert = false;
     return;
   }
@@ -219,17 +253,26 @@ export function initNavIsland(): void {
   // scrollspy of its own. They must exist before the first `pass()` at the
   // bottom, whose notification they would otherwise miss.
   if (sectionsBtn) {
-    teardown.push(
-      mountContentsRuler({
-        headings,
-        titles,
-        label: sectionsBtn.getAttribute("aria-label") ?? "",
-        island,
-        clearance: scrollspyLine,
-        pictures,
-      }),
-      mountSectionName({ button: sectionsBtn, island, titles }),
-    );
+    // The ruler lists the main sections only: those before the element the
+    // author marked as the end of them (`contents=end`). The island's panel
+    // keeps them all.
+    const end = contentsEnd(headings);
+    const main = mainSectionCount(headings, end);
+    const label = sectionsBtn.getAttribute("aria-label") ?? "";
+    if (main >= MIN_SECTIONS) {
+      teardown.push(
+        mountContentsRuler({
+          headings: headings.slice(0, main),
+          titles: titles.slice(0, main),
+          label,
+          island,
+          clearance: scrollspyLine,
+          pictures: pictures?.slice(0, main),
+          end,
+        }),
+      );
+    }
+    teardown.push(mountSectionName({ button: sectionsBtn, island, titles }));
   }
 
   // -------------------------------------------------------------------------
@@ -292,7 +335,11 @@ export function initNavIsland(): void {
     // anything below has written.
     island.dispatchEvent(new CustomEvent(SECTION_SYNC_EVENT, { detail: { index } }));
 
-    if (!past) {
+    if (shape === "pinned") {
+      // On screen once the first section has reached the reading line, and
+      // there for the rest of the page.
+      setShown(index >= 0);
+    } else if (!past) {
       setShown(false);
     } else if (y < lastY - JITTER) {
       setShown(true);
@@ -336,7 +383,7 @@ export function initNavIsland(): void {
   let levelNames = "";
 
   function foldTrail(): void {
-    if (!moreBtn || !moreSep || !levelsMenu) return;
+    if (!trail || !moreBtn || !moreSep || !levelsMenu) return;
     // The algorithm and its measurement rules live in breadcrumb-fold.ts —
     // shared with the masthead, which folds the same way.
     levelNames = applyFold({
@@ -360,6 +407,7 @@ export function initNavIsland(): void {
    * trail, which would flip the name off and on as the trail grew and shrank.
    */
   function layoutTrail(): void {
+    if (!trail) return;
     island.removeAttribute("data-nameless");
     foldTrail();
     if (trailOverflows(trail)) {
@@ -378,7 +426,7 @@ export function initNavIsland(): void {
   if (typeof ResizeObserver !== "undefined") {
     const ro = new ResizeObserver(() => layoutTrail());
     ro.observe(bar);
-    ro.observe(trail);
+    if (trail) ro.observe(trail);
     teardown.push(() => ro.disconnect());
   }
   on(window, "resize", () => {
