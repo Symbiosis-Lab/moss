@@ -398,7 +398,31 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-contents-lane",
         owner: ".moss-contents-ruler",
         default: "0px",
-        description: "How wide each link of the contents ruler's invisible hit strip is on a page with `contents: pictures`: from the dash to the end of the room the titles have, so the pointer can move from a dash to its title without leaving the strip. Set by the site runtime (contents-ruler.ts) from the measured room. Not a theme hook.",
+        description: "How wide each link of the contents ruler's invisible hit strip is on a page with `contents: pictures`: from the dash to the gutter before the text column, so the pointer can move from a dash toward its title without leaving the strip and never rests over the text. Set by the site runtime (contents-ruler.ts) from the measured layout. Not a theme hook.",
+    },
+    CustomProp {
+        name: "--moss-contents-reach",
+        owner: ".moss-contents-ruler",
+        default: "0px",
+        description: "How far each hit strip of an open `contents: pictures` ruler reaches from the dash: to the far edge of the drawn titles, so the pointer can move onto a title and click it. Set while the ruler is open by the site runtime (contents-lens.ts), removed at rest, when the strips shrink back to `--moss-contents-lane`. Not a theme hook.",
+    },
+    CustomProp {
+        name: "--moss-contents-row",
+        owner: ".moss-contents-ruler",
+        default: "20px",
+        description: "The height of one row of the contents ruler, at rest and in its hit strip; the title surfaces and the lens derive their sizes from it. The site runtime assumes 20px, so a theme should leave it.",
+    },
+    CustomProp {
+        name: "--moss-contents-measure",
+        owner: ".moss-contents-ruler",
+        default: "24ch",
+        description: "How wide an open title of a `contents: pictures` ruler may be before it wraps onto a second line. A theme may set it on `.moss-contents-ruler`.",
+    },
+    CustomProp {
+        name: "--moss-contents-ink",
+        owner: ".moss-contents-ruler-label",
+        default: "1",
+        description: "How much ink an open title of a `contents: pictures` ruler has, from 0 to 1: full at the row under the pointer, falling to a floor that keeps every title legible. Set by the site runtime (contents-lens.ts) on each open frame; the title's surface does not fade with it. Not a theme hook.",
     },
     CustomProp {
         name: "--moss-place-figure-top",

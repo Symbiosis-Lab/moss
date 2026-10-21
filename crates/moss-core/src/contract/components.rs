@@ -3264,7 +3264,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Emerging,
         since: "0",
-        description: "Contents ruler: one short dash per section in the left margin, pinned to the window and vertically centred, with the section titles opening to its right on hover or focus. Added by the site runtime (never in emitted HTML) beside `<main>` on a page where the nav island is live, and only where the margin leaves a title at least 96px; hidden under vertical typesetting, in print, when the dashes do not fit the window's height, and while the article's body is off screen.",
+        description: "Contents ruler: one short dash per section in the left margin, pinned to the window and vertically centred, with the section titles opening to its right on hover or focus. Added by the site runtime (never in emitted HTML) beside `<main>` on a page where the nav island is live, and only where the margin leaves a title at least 96px (a ruler on a page with `contents: pictures` needs only room for its dashes); hidden under vertical typesetting, in print, when the dashes do not fit the window's height, and while the article's body is off screen.",
     },
     ComponentEntry {
         class: "moss-contents-ruler-dash",
@@ -3286,7 +3286,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Emerging,
         since: "0",
-        description: "A section's title, to the right of its dash and hidden until the ruler is hovered or focused. Cut in the middle to the room left before the text column; the link carries the full title as its accessible name.",
+        description: "A section's title, to the right of its dash and hidden until the ruler is hovered or focused. Cut in the middle to the room left before the text column; the link carries the full title as its accessible name. On a page with `contents: pictures` it is not cut: it shows whole on a surface of its own, wrapped at about 24 characters, and may reach over the page.",
     },
     ComponentEntry {
         class: "moss-contents-ruler-pic",

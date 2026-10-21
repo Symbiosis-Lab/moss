@@ -89,6 +89,20 @@ describe("layoutRows", () => {
     expect(grown).toBe(LABEL_ROW);
   });
 
+  test("a row never draws shorter than its floor, even far from the focus, and rows still tile", () => {
+    const floors = [REST_ROW, REST_ROW, REST_ROW, REST_ROW, 36, REST_ROW];
+    const rows = layoutRows({ ...base, f: 0, heights: heights(6), floors });
+    const height = (k: number) => REST_ROW + (rows[k].m > 0 ? (PIC_ROW - REST_ROW) * rows[k].m : 0);
+    expect(rows[4].m, "row 4 is far from the focus").toBe(0);
+    for (let j = 0; j < 5; j++) {
+      const h = (k: number) => Math.max(height(k), floors[k]);
+      const gap = rows[j + 1].dy + REST_ROW - rows[j].dy - (h(j) + h(j + 1)) / 2;
+      expect(gap, `rows ${j} and ${j + 1}`).toBeCloseTo(0, 6);
+    }
+    const closed = layoutRows({ ...base, f: 0, open: 0, heights: heights(6), floors });
+    expect(closed.every((r) => r.dy === 0), "closed, the floors add nothing").toBe(true);
+  });
+
   test("closed, nothing moves", () => {
     const rows = layoutRows({ ...base, open: 0, f: 2, heights: heights(6) });
     expect(rows.every((r) => r.dy === 0 && r.m === 0)).toBe(true);

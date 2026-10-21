@@ -3720,7 +3720,7 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
 /* `[site].header = "none"`: no trail, so the name takes the room the trail
    would have had and the controls sit at the far end. */
 .moss-nav-island[data-header="none"] .moss-nav-island-sections {
-  flex: 0 1 16rem;
+  flex: 1 1 0;
   min-inline-size: 0;
 }
 
@@ -3878,6 +3878,8 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
    move the one under the pointer and the click would land on a neighbour. */
 .moss-contents-ruler {
   position: fixed;
+  --moss-contents-row: 20px;
+  --moss-contents-measure: 24ch;
   left: 32px; /* plus the list's 8px padding: the dashes start 40px in */
   top: 50%;
   transform: translateY(-50%);
@@ -3913,8 +3915,8 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
   position: relative;
   display: flex;
   align-items: center;
-  inline-size: 20px; /* every row is 20px tall; see above */
-  block-size: 20px;
+  inline-size: var(--moss-contents-row); /* every row is one height; see above */
+  block-size: var(--moss-contents-row);
   text-decoration: none;
   color: var(--moss-color-muted);
 }
@@ -3955,9 +3957,10 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
 
 /* The title, to the right of its dash. Hidden at rest with `visibility` as well
    as opacity so that only the dash column is hit-tested; its box overlaps the
-   list padding so there is no dead strip between dash and label. nav-island.ts
-   sets its `max-width` (the room left before the text) and cuts the title in
-   the middle to fit. */
+   list padding so there is no dead strip between dash and label. For the plain
+   ruler contents-ruler.ts sets its `max-width` (the room left before the text)
+   and cuts the title in the middle to fit; a `contents: pictures` ruler shows
+   titles whole (below). */
 .moss-contents-ruler-label {
   position: absolute;
   inset-inline-start: 24px; /* 4px past the row: inside the list padding, so no dead strip */
@@ -3965,7 +3968,7 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
   box-sizing: border-box;
   padding-inline-start: 8px;
   font-size: 0.8125rem; /* a step under body text; nothing in the type scale sits there */
-  line-height: 20px; /* the row height */
+  line-height: var(--moss-contents-row);
   white-space: nowrap;
   overflow: hidden;
   color: var(--moss-color-text-secondary);
@@ -4006,10 +4009,13 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
    focusing it opens the rows around the pointer (contents-lens.ts), which
    moves the dash, picture and label of each row by transform and opacity
    alone. The links themselves never move: each is a fixed hit strip, widened
-   by `::after` to `--moss-contents-lane` (set to the room the titles have), so
-   what is under the pointer is decided by the rest geometry and not by what is
-   drawn. The picture size is one value, shared by the ruler and the sections
-   panel. */
+   sideways by `::after` and never vertically, so what is under the pointer is
+   decided by the rest geometry and not by what is drawn. At rest the strip
+   reaches `--moss-contents-lane` (the margin before the text gutter), so the
+   page under the margin stays clickable; while open it reaches
+   `--moss-contents-reach` (the far edge of the drawn titles), so the pointer
+   can move onto a title and click it. The picture size is one value, shared by
+   the ruler and the sections panel. */
 body[data-contents="pictures"] {
   --moss-contents-pic: 40px;
 }
@@ -4020,6 +4026,10 @@ body[data-contents="pictures"] {
   inset-block: 0;
   inset-inline-start: -8px; /* the list's own side padding: no dead strip left of the dash */
   inline-size: calc(var(--moss-contents-lane, 0px) + 8px);
+}
+
+.moss-contents-ruler[data-contents="pictures"][data-lens] a::after {
+  inline-size: calc(max(var(--moss-contents-lane, 0px), var(--moss-contents-reach, 0px)) + 8px);
 }
 
 /* The link is 20px tall while its drawn row opens to the picture's height, so
@@ -4043,9 +4053,32 @@ body[data-contents="pictures"] {
 
 /* Titles start past the picture; hover and focus show them only through the
    lens, which sets their opacity. A device without hover keeps the plain
-   ruler's tap-to-open. */
+   ruler's tap-to-open.
+
+   Each open title sits on a surface of its own, like the island's bar, and may
+   reach over the page past the margin: it shows whole, wrapped at about
+   `--moss-contents-measure`, never cut. Its box is centred on its row and is
+   one row tall for one line, so a short title changes no row. The surface
+   takes no pointer: the strips decide what is under it. */
 .moss-contents-ruler[data-contents="pictures"] .moss-contents-ruler-label {
   inset-inline-start: calc(var(--moss-contents-pic) + 4px);
+  top: 50%;
+  translate: 0 -50%;
+  inline-size: max-content;
+  max-inline-size: var(--moss-contents-measure);
+  line-height: 1.25;
+  padding-block: calc((var(--moss-contents-row) - 1lh) / 2);
+  padding-inline: var(--moss-space-xs);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  color: color-mix(in srgb, var(--moss-color-text-secondary) calc(var(--moss-contents-ink, 1) * 100%), transparent);
+  background: var(--moss-color-bg);
+  border-radius: calc(var(--moss-contents-row) * 0.3);
+  box-shadow: 0 0 0 1px var(--moss-border-light), var(--moss-elevation-2);
+}
+
+[data-theme="dark"] .moss-contents-ruler[data-contents="pictures"] .moss-contents-ruler-label {
+  box-shadow: 0 0 0 1px var(--moss-border-medium), var(--moss-elevation-2);
 }
 
 .moss-contents-ruler[data-contents="pictures"]:not([data-lens]):not([data-open]) .moss-contents-ruler-label {

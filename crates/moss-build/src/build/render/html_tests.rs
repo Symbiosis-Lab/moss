@@ -3278,6 +3278,36 @@ mod children_field_tests {
         );
     }
 
+    /// With a header the site's name is on screen already, so the home's own
+    /// title heading is visually hidden; with `header = "none"` nothing else
+    /// shows it, so the heading is visible, with its subtitle after it.
+    #[test]
+    fn the_home_title_is_visible_only_where_no_header_shows_the_site_name() {
+        use crate::build::components::nav::HeaderMode;
+        let mut homepage = make_doc("Harbour Notes", "index.html");
+        homepage.is_root_level = true;
+        homepage.content = "A short welcome.\n".to_string();
+        homepage
+            .raw_frontmatter
+            .insert("subtitle".to_string(), serde_json::json!("Tide tables and tall stories"));
+        let all_docs = vec![homepage.clone()];
+
+        let with_header = render_page(Some(&homepage), &all_docs, true);
+        assert!(
+            with_header.contains(r#"<h1 class="moss-folder-title visually-hidden""#),
+            "the header names the site, so the home's heading stays hidden: {with_header}"
+        );
+
+        let layout = make_layout().with_header_mode(HeaderMode::None);
+        let headerless = render_page_in(Some(&homepage), &all_docs, true, &layout);
+        let h1 = headerless.find(r#"<h1 class="moss-folder-title""#).unwrap_or_else(|| {
+            panic!("with no header the home's heading must be visible: {headerless}")
+        });
+        let subtitle = headerless.find("moss-subtitle").expect("the subtitle is drawn");
+        assert!(h1 < subtitle, "the subtitle follows the title: {headerless}");
+        assert!(!headerless.contains("moss-folder-title visually-hidden"), "{headerless}");
+    }
+
     #[test]
     fn an_inner_page_carries_no_home_marker() {
         let mut homepage = make_doc("Test Site", "index.html");
@@ -3300,11 +3330,20 @@ mod children_field_tests {
         all_docs: &[ParsedDocument],
         is_homepage: bool,
     ) -> String {
+        render_page_in(doc, all_docs, is_homepage, &make_layout())
+    }
+
+    fn render_page_in(
+        doc: Option<&ParsedDocument>,
+        all_docs: &[ParsedDocument],
+        is_homepage: bool,
+        layout: &LayoutConfig,
+    ) -> String {
         generate_html(
             doc,
             all_docs,
             &make_project(),
-            &make_layout(),
+            layout,
             is_homepage,
             None,
             None,

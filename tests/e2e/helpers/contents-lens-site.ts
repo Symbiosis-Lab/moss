@@ -22,6 +22,16 @@ export const LENS_SECTIONS = [
 /** The last section has no picture. */
 export const LENS_WITH_IMAGE = [true, true, true, true, true, true, false];
 export const MANY = 40;
+/** A page that fills the window (`content_width: full`), so its left margin is
+ *  as narrow as a page's gets, with titles that do not fit it on one line. */
+export const FULL_SECTIONS = [
+  "Forty-one Landings of the Lantern Ferry, 1861–62",
+  "Quays at first light",
+  "Nets along the harbour and the ropewalk beyond it",
+  "The long road of the lantern ferry from the old harbour wall to the last light on the far shore",
+  "Salt flats in winter",
+  "Afterword",
+];
 
 const images = ["quay.png", "nets.png", "rope.png"];
 
@@ -35,6 +45,10 @@ const many = Array.from({ length: MANY }, (_, i) => {
   const title = `Chapter ${i + 1}`;
   return `## ${title}\n\n${i % 5 === 0 ? `![${title}](${images[i % 3]})\n\n` : ""}${paragraphs(3)}`;
 }).join("\n\n");
+
+const full = FULL_SECTIONS.map(
+  (title, i) => `## ${title}\n\n${i < 5 ? `![${title}](${images[i % 3]})\n\n` : ""}${paragraphs(5)}`,
+).join("\n\n");
 
 export const CONTENTS_LENS_GATE: ScratchSiteSpec = {
   name: "contents-lens-gate",
@@ -80,6 +94,15 @@ contents: pictures
 ---
 
 ${many}
+`,
+    "Essays/Full.md": `---
+title: Full
+uid: "ctl00106"
+contents: pictures
+content_width: full
+---
+
+${full}
 `,
     ".moss/config.toml": `schema_version = 5
 

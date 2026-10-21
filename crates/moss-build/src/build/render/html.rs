@@ -494,11 +494,14 @@ pub(super) fn render_page<'d>(
             if !is_article_page {
                 content = credits::splice_page_masthead(content, doc, layout_config, emit_source_lines, locator_placement, &fields);
 
-                // The home injects no visible title of its own, but a page
-                // needs one top-level heading: when the body supplies none,
-                // add the folder-index heading, visually hidden.
-                if moss_core::heading::title_outcome(&doc.content, true) != moss_core::heading::TitleOutcome::None {
-                    let h1 = crate::build::components::folder_title::render(&doc.label, emit_source_lines, true);
+                // One top-level heading is required: the header names the
+                // site, so the heading is visually hidden; with no header it
+                // is shown, unless an opening hero stands in for it.
+                use moss_core::heading::{title_outcome, TitleOutcome};
+                let outcome = title_outcome(&doc.content, true);
+                if outcome != TitleOutcome::None {
+                    let headerless = layout_config.header == crate::build::components::nav::HeaderMode::None;
+                    let h1 = crate::build::components::folder_title::render(&doc.label, emit_source_lines, !(headerless && outcome == TitleOutcome::Visible));
                     content = format!("{h1}\n{content}");
                 }
             }

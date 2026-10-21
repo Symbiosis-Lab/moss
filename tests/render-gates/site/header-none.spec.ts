@@ -8,7 +8,7 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { gatePort } from '../../../playwright/gate-ports';
-import { AFTER_END, BAND_PATH, BAND_SECTIONS, COLLECTIONS } from '../../e2e/helpers/header-none-site';
+import { AFTER_END, BAND_PATH, BAND_SECTIONS, COLLECTIONS, LONG_TITLE, SITE_SUBTITLE } from '../../e2e/helpers/header-none-site';
 
 const BAND_PAGE = `http://localhost:${gatePort('header-none:band')}${BAND_PATH}`;
 const ALL = [...COLLECTIONS, AFTER_END];
@@ -129,6 +129,19 @@ test.describe('a one-page site with header = "none"', () => {
     expect(await rows.allTextContents()).toEqual(ALL);
   });
 
+  test('the home page shows its own title and subtitle, for nothing else names the site', async ({ page }) => {
+    const title = page.locator('main h1.moss-folder-title');
+    await expect(title).toHaveText('Shelf');
+    await expect(title).toBeVisible();
+    expect(await title.evaluate((el) => el.classList.contains('visually-hidden'))).toBe(false);
+    const box = await title.boundingBox();
+    expect(box!.width).toBeGreaterThan(20);
+    expect(box!.height).toBeGreaterThan(20);
+    const subtitle = page.locator('main .moss-subtitle');
+    await expect(subtitle).toHaveText(SITE_SUBTITLE);
+    expect((await subtitle.boundingBox())!.y, 'the subtitle follows the title').toBeGreaterThan(box!.y);
+  });
+
   test('the ruler lists the main sections, is up inside them and steps aside past the marker', async ({ page }) => {
     expect(await page.locator('.moss-contents-ruler a').count()).toBe(COLLECTIONS.length);
 
@@ -234,5 +247,70 @@ test.describe('the ruler steps aside from a full-width block', () => {
     await jumpTo(page, 0);
     await expect.poll(() => isAway(page)).toBe(false);
     expect(BAND_SECTIONS.length).toBeGreaterThan(3);
+  });
+});
+
+test.describe('the island names a long section in the room the bar has', () => {
+  /** The label's text, whether it is clipped, and the bar's room left of the buttons. */
+  const label = (page: Page) =>
+    page.evaluate(() => {
+      const name = document.querySelector<HTMLElement>('.moss-nav-island-section-name')!;
+      const text = (name.textContent ?? '').trim();
+      const probe = document.createElement('span');
+      probe.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap';
+      const cs = getComputedStyle(name);
+      probe.style.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+      probe.textContent = text;
+      document.body.append(probe);
+      const need = probe.getBoundingClientRect().width;
+      probe.remove();
+      return { text, room: name.getBoundingClientRect().width, need, ellipsis: text.includes('…') };
+    });
+
+  test('at 1360px the whole title shows, the bar having hundreds of pixels to spare', async ({ page }) => {
+    await open(page, '/', 1360, 800);
+    await jumpTo(page, COLLECTIONS.indexOf(LONG_TITLE));
+    await expect.poll(() => nameOf(page)).toBe(LONG_TITLE);
+    const l = await label(page);
+    expect(l.ellipsis).toBe(false);
+    expect(l.room, 'the label box is wider than the old 16rem button').toBeGreaterThan(300);
+    expect(l.need).toBeLessThanOrEqual(l.room);
+    const bar = await page.locator('.moss-nav-island-bar').boundingBox();
+    expect(bar!.width).toBeGreaterThan(l.room);
+  });
+
+  test('at 390px it is cut only because it no longer fits', async ({ page }) => {
+    await open(page, '/', 390, 800);
+    await jumpTo(page, COLLECTIONS.indexOf(LONG_TITLE));
+    await expect.poll(() => nameOf(page)).not.toBe('');
+    const l = await label(page);
+    if (l.text === LONG_TITLE) {
+      expect(l.need).toBeLessThanOrEqual(l.room);
+    } else {
+      expect(l.text).toContain('…');
+      // Whatever is shown fills the room: one more character would not fit.
+      expect(l.need).toBeLessThanOrEqual(l.room);
+      expect(l.room - l.need, 'the cut label fills the box').toBeLessThan(30);
+    }
+    const bar = await page.locator('.moss-nav-island-bar').boundingBox();
+    expect(bar!.x + bar!.width).toBeLessThanOrEqual(390);
+
+    // The controls keep their size and their place at the bar's end.
+    const cluster = async () =>
+      page.evaluate(() => {
+        const bar = document.querySelector('.moss-nav-island-bar')!.getBoundingClientRect();
+        const icons = document.querySelector('.moss-nav-island .nav-icons')!.getBoundingClientRect();
+        const button = document.querySelector('.moss-nav-island-sections')!.getBoundingClientRect();
+        return { w: icons.width, h: icons.height, fromEnd: bar.right - icons.right, gap: icons.left - button.right };
+      });
+    const narrow = await cluster();
+    await open(page, '/', 1360, 800);
+    await jumpTo(page, COLLECTIONS.indexOf(LONG_TITLE));
+    const wide = await cluster();
+    expect(narrow.w, 'not squeezed').toBeGreaterThanOrEqual(28);
+    expect(narrow.w).toBeCloseTo(wide.w, 0);
+    expect(narrow.h).toBeCloseTo(wide.h, 0);
+    expect(narrow.fromEnd).toBeCloseTo(wide.fromEnd, 0);
+    expect(narrow.gap, 'the section button does not run into the controls').toBeGreaterThanOrEqual(0);
   });
 });

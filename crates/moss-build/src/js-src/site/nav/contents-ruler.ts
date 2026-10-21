@@ -12,11 +12,14 @@
  *
  * Where the geometry matters, it is measured, not breakpointed:
  *
- * - A label may reach no further than one gutter short of the text column, so
- *   its maximum width is `textLeft - GUTTER - labelLeft`, read from the layout.
- *   Titles longer than that are cut in the middle (see middle-truncate.ts).
+ * - A plain ruler's label may reach no further than one gutter short of the
+ *   text column, so its maximum width is `textLeft - GUTTER - labelLeft`, read
+ *   from the layout. Titles longer than that are cut in the middle (see
+ *   middle-truncate.ts). A `contents: pictures` title is never cut.
  * - Under `MIN_LABEL` of room a label names nothing, so the ruler stays away
- *   and the island is all there is.
+ *   and the island is all there is. A `contents: pictures` ruler has no titles
+ *   at rest, only dashes, so it needs just the dash lane (the list's own width)
+ *   before the gutter.
  * - A site can switch it off with CSS (`display: none`, `visibility: hidden`);
  *   whether it is actually rendered is read on every pass, so the island's
  *   sections button comes back however it was hidden.
@@ -27,7 +30,7 @@
  * A page with `contents: pictures` (`opts.pictures`) is the same ruler at rest:
  * the same dashes, the same place, nothing reserved. Hovering or focusing it
  * opens the rows around the pointer with a small picture of each section
- * (contents-lens.ts).
+ * (contents-lens.ts), each title whole on its own surface over the page.
  *
  * Which of this needs an engine — hit-testing, label clearance, clipping — is
  * asserted in tests/render-gates/site/contents-ruler.spec.ts.
@@ -187,30 +190,36 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     // the next paint.
     nav.hidden = false;
     collectBands();
-    const measure = canvasMeasure(labels[0]);
-    let room = 0;
-    if (!vertical) {
-      const textLeft = first.getBoundingClientRect().left;
-      room = Math.floor(textLeft - GUTTER - labels[0].getBoundingClientRect().left);
-    }
-    const listHeight = list.getBoundingClientRect().height;
-    const fits = (window.innerHeight - listHeight) / 2 >= opts.clearance();
-    const eligible = !vertical && room >= MIN_LABEL && fits;
+    const textLeft = vertical ? 0 : first.getBoundingClientRect().left;
+    const listBox = list.getBoundingClientRect();
+    // Up to the gutter before the text is the margin the ruler may use. The
+    // dashes need the list's own width of it; the plain ruler's titles need
+    // `MIN_LABEL` more. The open titles of a `contents: pictures` ruler are
+    // drawn on a surface of their own over the page, so they need none.
+    const margin = textLeft - GUTTER;
+    const room = Math.floor(margin - labels[0].getBoundingClientRect().left);
+    const fits = (window.innerHeight - listBox.height) / 2 >= opts.clearance();
+    const roomy = opts.pictures ? margin >= listBox.right : room >= MIN_LABEL;
+    const eligible = !vertical && roomy && fits;
     nav.hidden = !eligible;
     if (eligible) {
-      const padding = parseFloat(getComputedStyle(labels[0]).paddingInlineStart) || 0;
-      // Writes only, no read-back: the canvas measure plus MEASURE_SLACK is
-      // trusted, and the render gate asserts no label overflows in either engine.
-      const fit = room - padding - MEASURE_SLACK;
       if (opts.pictures) {
-        // The hit strips reach from the dash to the end of the room the titles have.
-        const reach = labels[0].getBoundingClientRect().left - links[0].getBoundingClientRect().left + room;
-        nav.style.setProperty("--moss-contents-lane", `${reach}px`);
+        // The hit strips reach from the dash to the gutter, never over the text.
+        nav.style.setProperty("--moss-contents-lane", `${margin - links[0].getBoundingClientRect().left}px`);
+        labels.forEach((label, i) => {
+          label.textContent = titles[i];
+        });
+      } else {
+        const measure = canvasMeasure(labels[0]);
+        const padding = parseFloat(getComputedStyle(labels[0]).paddingInlineStart) || 0;
+        // Writes only, no read-back: the canvas measure plus MEASURE_SLACK is
+        // trusted, and the render gate asserts no label overflows in either engine.
+        const fit = room - padding - MEASURE_SLACK;
+        labels.forEach((label, i) => {
+          label.style.maxWidth = `${room}px`;
+          label.textContent = measure ? truncateMiddle(titles[i], fit, measure) : titles[i];
+        });
       }
-      labels.forEach((label, i) => {
-        label.style.maxWidth = `${room}px`;
-        label.textContent = measure ? truncateMiddle(titles[i], fit, measure) : titles[i];
-      });
     }
     fade();
   }

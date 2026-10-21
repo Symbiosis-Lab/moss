@@ -5,11 +5,13 @@
  * At rest the ruler is the plain column of dashes. Two layers make the
  * opening:
  *
- * - The hit layer is the ruler's own links, which never move: one 20px strip
- *   per section, widened sideways into a lane. The pointer's height over them
+ * - The hit layer is the ruler's own links, which never move vertically: one
+ *   20px strip per section, widened sideways into a lane at rest and, while
+ *   open, to the far edge of the drawn titles. The pointer's height over them
  *   gives a continuous focus `f` (row `i`'s centre is `f = i`).
  * - The drawn layer is each link's dash, picture and label, translated and
- *   scaled by transform and opacity only. Rows near `f` grow to the height a
+ *   scaled by transform and opacity only. A label is a surface of its own that
+ *   shows the whole title (wrapped, never cut) and may reach over the page. Rows near `f` grow to the height a
  *   picture needs; the rest keep their height and are pushed aside, so the
  *   drawn rows tile without gaps and the point under the pointer stays under
  *   it.
@@ -31,7 +33,7 @@ export const LABEL_ROW = 24;
 export const RADIUS = 2.5;
 /** The pointer must rest this long before the ruler opens. */
 export const INTENT_MS = 80;
-/** A label far from the focus stays this opaque, so every title is legible. */
+/** A label far from the focus keeps this much ink, so every title is legible. */
 export const LABEL_FLOOR = 0.55;
 /** Below this share of its size (about 5px) a picture reads as a speck beside
  *  its title, so it is not drawn. */
@@ -84,6 +86,10 @@ export interface LensInput {
   all?: boolean;
   /** Each row's height when fully open. */
   heights: number[];
+  /** The least each row may be drawn, once open, wherever the focus is: the
+   *  height of its title, which is shown in full on every row. Defaults to
+   *  `REST_ROW`, which adds nothing. */
+  floors?: number[];
   /** Top of the first strip. */
   restTop: number;
   /** The open list stays between these. */
@@ -100,20 +106,23 @@ export interface LensRow {
 
 /**
  * Where each row is drawn. A row's growth is its open height over `REST_ROW`
- * times its weight; the rows before it add up to its offset, and the offset at
- * the focus is taken back off every row so the point under the pointer stays
- * put. Growth is capped so the whole list fits between `minY` and `maxY`, and
- * the list is nudged back inside them where it still reaches past an end.
+ * times its weight, but never less than its floor (a title of two lines needs
+ * its height even far from the focus); the rows before it add up to its
+ * offset, and the offset at the focus is taken back off every row so the point
+ * under the pointer stays put. The growth above the floors is capped so the
+ * whole list fits between `minY` and `maxY`, and the list is nudged back
+ * inside them where it still reaches past an end.
  */
 export function layoutRows(input: LensInput): LensRow[] {
   const { f, open, all, heights, restTop, minY, maxY } = input;
   const n = heights.length;
   const weight = heights.map((_, j) => (all ? 1 : falloff(j - f)) * open);
-  const wanted = heights.map((h, j) => Math.max(0, h - REST_ROW) * weight[j]);
-  const total = wanted.reduce((a, b) => a + b, 0);
-  const room = Math.max(0, maxY - minY - n * REST_ROW);
+  const base = heights.map((_, j) => Math.max(0, (input.floors?.[j] ?? REST_ROW) - REST_ROW) * open);
+  const extra = heights.map((h, j) => Math.max(0, Math.max(0, h - REST_ROW) * weight[j] - base[j]));
+  const total = extra.reduce((a, b) => a + b, 0);
+  const room = Math.max(0, maxY - minY - n * REST_ROW - base.reduce((a, b) => a + b, 0));
   const k = total > room ? room / total : 1;
-  const grow = wanted.map((g) => g * k);
+  const grow = extra.map((g, j) => base[j] + g * k);
 
   const before: number[] = [];
   let sum = 0;
@@ -168,12 +177,16 @@ export function mountContentsLens(opts: LensOptions): () => void {
   let open = 0;
   let f = 0;
   let picRow = LABEL_ROW;
+  let titleHeights: number[] = [];
   let minY = 0;
+  let reach = 0;
 
   const measure = (): void => {
     const frame = rows.find((r) => r.pic)?.pic;
     picRow = frame ? frame.offsetHeight + PIC_PAD : LABEL_ROW;
     minY = opts.clearance();
+    titleHeights = rows.map(({ label }) => label.offsetHeight);
+    reach = Math.max(...rows.map(({ label }) => label.getBoundingClientRect().right)) - links[0].getBoundingClientRect().left;
     strips = links.map((link) => {
       const box = link.getBoundingClientRect();
       return { top: box.top, height: box.height };
@@ -184,6 +197,7 @@ export function mountContentsLens(opts: LensOptions): () => void {
 
   function clear(): void {
     nav.removeAttribute("data-lens");
+    nav.style.removeProperty("--moss-contents-reach");
     for (const { link, dash, label, pic } of rows) {
       for (const el of [dash, label, pic]) el?.removeAttribute("style");
       link.removeAttribute("data-lit");
@@ -197,18 +211,23 @@ export function mountContentsLens(opts: LensOptions): () => void {
       open,
       all,
       heights,
+      floors: titleHeights,
       restTop: strips[0].top,
       minY,
       maxY: window.innerHeight - EDGE,
     });
     nav.setAttribute("data-lens", "");
+    nav.style.setProperty("--moss-contents-reach", px(reach));
     rows.forEach(({ link, dash, label, pic }, j) => {
       const { dy, m } = layout[j];
       const move = `translateY(${px(dy)})`;
       const lit = !!pic && link.hasAttribute("data-pic") && m > PIC_MIN;
       dash.style.transform = move;
       label.style.transform = move;
-      label.style.opacity = String(open * LABEL_FLOOR + (1 - LABEL_FLOOR) * m);
+      // The surface follows the opening alone; only the ink fades with
+      // distance, so the page never shows through a title's own surface.
+      label.style.opacity = String(open);
+      label.style.setProperty("--moss-contents-ink", String(LABEL_FLOOR + (1 - LABEL_FLOOR) * m));
       if (pic) {
         pic.style.transform = `${move} scale(${m.toFixed(3)})`;
         pic.style.opacity = String(m);

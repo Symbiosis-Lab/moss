@@ -11,7 +11,10 @@
  */
 import type { ScratchSiteSpec } from "./scratch-site";
 
-export const COLLECTIONS = ["Quays", "Lanterns", "Nets", "Ropewalk", "Almanac"];
+/** The last title is longer than the island's old 16rem label box, and fits the bar. */
+export const LONG_TITLE = "Landings of the Lantern Ferry, 1861–62";
+export const COLLECTIONS = ["Quays", "Lanterns", "Nets", "Ropewalk", LONG_TITLE];
+export const SITE_SUBTITLE = "An index of invented collections";
 export const AFTER_END = "Colophon";
 
 const FILLER =
@@ -30,12 +33,11 @@ export const ONE_PAGE_GATE: ScratchSiteSpec = {
   files: {
     "index.md": `---
 title: Shelf
+subtitle: ${SITE_SUBTITLE}
 uid: "hng00001"
 ---
 
-# Shelf
-
-An index of invented collections.
+A short welcome to the shelf.
 
 ${sections(COLLECTIONS)}
 
