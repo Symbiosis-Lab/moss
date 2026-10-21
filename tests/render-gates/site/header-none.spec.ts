@@ -169,6 +169,30 @@ test.describe('a one-page site with header = "none"', () => {
   });
 });
 
+test.describe('a headerless page gives its first element the header\'s top space', () => {
+  for (const width of [1360, 390]) {
+    test(`at ${width}px the home title clears the top edge by a spacing step`, async ({ page }) => {
+      await open(page, '/', width, 800);
+      const lg = await page.evaluate(() => {
+        const probe = document.createElement('div');
+        probe.style.blockSize = 'var(--moss-space-lg)';
+        document.body.append(probe);
+        const h = probe.getBoundingClientRect().height;
+        probe.remove();
+        return h;
+      });
+      expect(lg).toBeGreaterThan(16);
+      const top = (await page.locator('main h1.moss-folder-title').boundingBox())!.y;
+      expect(top, 'the title sits below the top edge').toBeGreaterThanOrEqual(lg - 1);
+    });
+  }
+
+  test('a page that keeps its header gets no extra space on main', async ({ page }) => {
+    await open(page, BAND_PAGE);
+    expect(await page.locator('main').evaluate((el) => getComputedStyle(el).paddingBlockStart)).toBe('0px');
+  });
+});
+
 test.describe('a headerless page with fewer than two sections', () => {
   test('shows the controls from the start, without a sections button', async ({ page }) => {
     await open(page, '/short/');

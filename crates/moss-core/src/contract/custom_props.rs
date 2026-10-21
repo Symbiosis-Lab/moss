@@ -68,7 +68,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-hero-max-height",
         owner: "moss-hero",
         default: "70vb",
-        description: "Cap on hero media block size on desktop (height horizontally, width under vertical typesetting). `none` removes the crop entirely rather than raising it — the image renders at its own intrinsic size instead of a taller band; to make the band taller, give this a longer length (e.g. `120vb`) instead. Note the wrapper has its own cap — `.moss-hero { max-block-size: min(80vb, 800px) }` reads the same property, so setting it once lifts both. It is also the minimum height of a `mobile=overlay` hero on a phone, so `100svh` makes that hero fill the first screen.",
+        description: "Cap on hero media block size on desktop (height horizontally, width under vertical typesetting). `none` removes the crop entirely rather than raising it — the image renders at its own intrinsic size instead of a taller band; to make the band taller, give this a longer length (e.g. `120vb`) instead. Note the wrapper has its own cap — `.moss-hero { max-block-size: min(80vb, 800px) }` reads the same property, so setting it once lifts both. It is also the minimum height of a `mobile=overlay` hero on a phone, so `100svh` makes that hero fill the first screen. On a closing picture it is the whole height of the picture's box, in place of the picture's own shape; the ink measure assumes the uncropped picture, so set `panel=always` on a closing picture you cap.",
     },
     CustomProp {
         name: "--moss-hero-content-width",

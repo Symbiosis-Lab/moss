@@ -121,6 +121,11 @@ const GATE_PORT_KEYS = [
   'header-none',
   'header-none:band',
   'contents-lens',
+  'content-grid:default',
+  'content-grid:full',
+  'closing-picture:sky',
+  'content-grid:end',
+  'content-grid:center',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

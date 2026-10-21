@@ -21,7 +21,7 @@ interface Busy {
 }
 
 /** A landscape: a flat sky over the top `horizon` of the frame, ground below. */
-function landscapePng(width: number, height: number, sky: Rgb, ground: Rgb, horizon: number, busy: Busy = {}): Buffer {
+export function landscapePng(width: number, height: number, sky: Rgb, ground: Rgb, horizon: number, busy: Busy = {}): Buffer {
   const rowOf = ([r, g, b]: Rgb, patch?: Rgb) => {
     const row = Buffer.alloc(1 + width * 3);
     for (let x = 0; x < width; x++) row.set(patch && x >= width / 2 ? patch : [r, g, b], 1 + x * 3);
@@ -106,6 +106,20 @@ export const CLOSING_PICTURE_BUSY_GATE: ScratchSiteSpec = {
     "closing.png": landscapePng(1600, 700, SKY, FOOT_LIGHT, 0.7, { foot: [10, 14, 24] }),
     "closing-dark.png": landscapePng(1600, 700, SKY_NIGHT, FOOT_NIGHT, 0.7, { foot: [230, 235, 240] }),
     "index.md": `---\ntitle: Busy Foot\nuid: "cpb00101"\n---\n\n# Busy Foot\n\nAn invented site for the busy-foot case.\n`,
+    "footer.md": `:::hero {image=closing.png dark=closing-dark.png align=top caption="${CREDIT}"}\n## ${HEADING}\n\n[${LINK_TEXT}](https://example.org/new)\n:::\n`,
+  },
+};
+
+/** A tall closing picture (1600x1050) with a dark patch in the right half of its sky: taller than a short window shows, and a phone's words keep a panel. */
+export const PATCH: Rgb = [10, 14, 24];
+export const CLOSING_PICTURE_SKY_GATE: ScratchSiteSpec = {
+  name: "closing-picture-sky-gate",
+  files: {
+    ".moss/config.toml": `schema_version = 5\n\n[site]\nlang = "en"\n`,
+    "closing.png": landscapePng(1600, 1050, SKY, GROUND, 0.9, { patch: PATCH }),
+    "closing-dark.png": landscapePng(1600, 1050, SKY_NIGHT, [8, 10, 14], 0.9, { patch: [230, 235, 240] }),
+    "index.md": `---\ntitle: Tall Shelf\nuid: "cps00101"\n---\n\n# Tall Shelf\n\nAn invented site for the tall closing picture.\n`,
+    "Full.md": `---\ntitle: Full\nuid: "cps00102"\ncontent_width: full\n---\n\n# Full\n\nA page whose text column is the site's widest.\n`,
     "footer.md": `:::hero {image=closing.png dark=closing-dark.png align=top caption="${CREDIT}"}\n## ${HEADING}\n\n[${LINK_TEXT}](https://example.org/new)\n:::\n`,
   },
 };

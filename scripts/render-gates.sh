@@ -103,6 +103,7 @@ GATES_BUILD=(
   footer-end-space
   facts-margin
   closing-picture
+  content-grid
 )
 
 # The rest: no config, spec, or harness in this gate's chain ever reads

@@ -246,3 +246,115 @@ for (const scheme of SCHEMES) {
     });
   }
 }
+
+// The picture is the point: from 48rem the box takes the picture's own shape at
+// the window's width, so the whole picture shows, even taller than the window.
+// An author's `--moss-hero-max-height` caps it, keeping the side away from the words.
+const SKY_PAGE = `http://localhost:${gatePort('closing-picture:sky')}/`;
+const boxOf = (page: Page) =>
+  page.evaluate(() => {
+    const hero = document.querySelector('footer .moss-hero-closing')!;
+    const r = hero.getBoundingClientRect();
+    const img = [...hero.querySelectorAll('img')].find((i) => getComputedStyle(i).display !== 'none')!;
+    return {
+      width: r.width,
+      height: r.height,
+      ratio: Number(img.getAttribute('height')) / Number(img.getAttribute('width')),
+      position: getComputedStyle(img).objectPosition,
+    };
+  });
+
+for (const width of [1360, 900]) {
+  test(`desktop ${width}px: the box is the picture's shape, so the whole picture shows`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto('/', { waitUntil: 'load' });
+    const b = await boxOf(page);
+    expect(Math.abs(b.height - b.width * b.ratio), `box ${b.height} for a ${b.width}px wide picture of ratio ${b.ratio}`).toBeLessThanOrEqual(1);
+  });
+}
+
+test.describe('a picture taller than the window', () => {
+  test('1360x800: the box is the whole picture, taller than the window', async ({ page }) => {
+    await page.setViewportSize({ width: 1360, height: 800 });
+    await page.goto(SKY_PAGE, { waitUntil: 'load' });
+    const b = await boxOf(page);
+    expect(b.width * b.ratio, 'the picture is taller than the window').toBeGreaterThan(800);
+    expect(Math.abs(b.height - b.width * b.ratio)).toBeLessThanOrEqual(1);
+  });
+
+  test('--moss-hero-max-height caps it and the crop keeps the foot', async ({ page }) => {
+    await page.setViewportSize({ width: 1360, height: 800 });
+    await page.goto(SKY_PAGE, { waitUntil: 'load' });
+    await page.evaluate(() => document.documentElement.style.setProperty('--moss-hero-max-height', '500px'));
+    const b = await boxOf(page);
+    expect(Math.abs(b.height - 500)).toBeLessThanOrEqual(1);
+    expect(b.position.split(' ')[1], 'the crop keeps the bottom').toBe('100%');
+  });
+});
+
+// On a phone a kept panel fades out toward the picture's subject instead of
+// ending in a seam. The words' own box stays solid (their contrast is measured
+// there); the fade hangs below it, inside the room the picture keeps clear.
+for (const scheme of SCHEMES) {
+  test(`phone, ${scheme}: a kept panel fades into the picture, below the words`, async ({ browser }) => {
+    const context = await browser.newContext({ colorScheme: scheme, viewport: { width: 390, height: 800 } });
+    const page = await context.newPage();
+    await page.goto(SKY_PAGE, { waitUntil: 'load' });
+    await page.evaluate(() => scrollTo(0, 1e6));
+    const m = await page.evaluate(() => {
+      const hero = document.querySelector('footer .moss-hero-closing')!;
+      const content = hero.querySelector('.moss-hero-content')!;
+      const cs = getComputedStyle(content);
+      const tail = getComputedStyle(content, '::after');
+      const h = hero.getBoundingClientRect();
+      const c = content.getBoundingClientRect();
+      return {
+        panel: cs.backgroundColor,
+        ink: cs.color,
+        tail: { content: tail.content, bg: tail.backgroundColor, height: parseFloat(tail.height), mask: tail.maskImage || tail.webkitMaskImage, top: tail.top },
+        hero: { top: h.top, bottom: h.bottom, left: h.left, width: h.width },
+        words: { bottom: c.bottom },
+      };
+    });
+    expect(parseColor(m.panel).a, 'the panel is kept').toBeGreaterThan(0.5);
+    const { overBlack, overWhite } = worstCaseContrast(m.panel, m.ink);
+    expect(Math.min(overBlack, overWhite), `words ${m.ink} on ${m.panel}`).toBeGreaterThanOrEqual(4.5);
+    expect(m.tail.content).not.toBe('none');
+    expect(m.tail.bg, 'the tail is the panel faded').toBe(m.panel);
+    expect(m.tail.mask).toContain('linear-gradient');
+    expect(m.tail.height).toBeGreaterThan(24);
+    expect(m.tail.height * 4, 'the fade takes at most a quarter of the room below the words').toBeLessThanOrEqual(m.hero.bottom - m.words.bottom);
+
+    // No seam: the column of pixels crossing the end of the panel changes gently.
+    const shot = await page.screenshot({ clip: { x: m.hero.left + m.hero.width * 0.2, y: m.words.bottom - 8, width: 1, height: m.tail.height + 16 } });
+    const column = await page.evaluate(async (b64) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${b64}`;
+      await img.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0);
+      const px = ctx.getImageData(0, 0, img.width, img.height).data;
+      return Array.from({ length: img.height }, (_, y) => 0.2126 * px[y * 4] + 0.7152 * px[y * 4 + 1] + 0.0722 * px[y * 4 + 2]);
+    }, shot.toString('base64'));
+    const steps = column.slice(1).map((v, i) => Math.abs(v - column[i]));
+    expect(Math.max(...steps), `rows across the panel's end: ${column.map((v) => Math.round(v)).join(' ')}`).toBeLessThan(14);
+    await context.close();
+  });
+}
+
+// The words start at the text column, so the stretch of picture they cover
+// depends on the page's content width: a dark patch over the right half of the
+// sky keeps the panel on a default-width page (the words reach 65% across) and
+// spares it on a `content_width: full` one (48%).
+for (const [path, panel] of [['', true], ['full/', false]] as const) {
+  test(`a dark patch over the right half of the sky ${panel ? 'keeps' : 'spares'} the panel on ${panel ? 'a default-width' : 'a full-width'} page at 1360px`, async ({ page }) => {
+    await page.setViewportSize({ width: 1360, height: 800 });
+    await page.goto(`${SKY_PAGE}${path}`, { waitUntil: 'load' });
+    const bg = await page.evaluate(() => getComputedStyle(document.querySelector('footer .moss-hero-closing .moss-hero-content')!).backgroundColor);
+    if (panel) expect(parseColor(bg).a).toBeGreaterThan(0.5);
+    else expect(parseColor(bg).a).toBe(0);
+  });
+}

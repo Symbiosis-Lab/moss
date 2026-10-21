@@ -105,8 +105,8 @@ fn site_with(hero: &str, hatched: bool) -> String {
 #[test]
 fn a_quiet_sky_takes_ink_with_no_panel_and_a_busy_one_keeps_its_panel() {
     let quiet = site_with(HERO, false);
-    assert!(quiet.contains(r#"data-words="narrow:dark mid:dark wide:dark""#), "dark ink on the pale sky: {quiet}");
-    assert!(quiet.contains(r#"data-words-night="narrow:light mid:light wide:light""#), "light ink on the dark picture: {quiet}");
+    assert!(quiet.contains(r#"data-words="narrow:dark mid:dark wide:dark wide-full:dark""#), "dark ink on the pale sky: {quiet}");
+    assert!(quiet.contains(r#"data-words-night="narrow:light mid:light wide:light wide-full:light""#), "light ink on the dark picture: {quiet}");
     assert!(quiet.contains(r#"data-foot="light""#), "the foot of the day picture is dark ground: {quiet}");
 
     let busy = site_with(HERO, true);
