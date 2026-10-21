@@ -5059,11 +5059,13 @@ article.container > [data-width="screen"] {
 }
 
 @media (max-width: 48rem) {
-  article.container > [data-width]:not([data-width="screen"]) {
-    /* collapse to the column. `auto` rather than 0: a hand-written band
-       that also carries an inline width is centred here, below 48rem only —
-       above it the escape's margins assume the token's width. The renderer
-       never emits a token and a percent together. */
+  article.container > [data-width]:not(div[data-width="screen"]:not([class^="moss-"]):not([class*=" moss-"])) {
+    /* collapse to the column; a fenced-div `screen` band alone is exempt
+       (rule below), so a `screen` figure collapses like the other tokens.
+       `auto` rather than 0: a hand-written band that also carries an inline
+       width is centred here, below 48rem only — above it the escape's
+       margins assume the token's width. The renderer never emits a token
+       and a percent together. */
     inline-size: auto;
     margin-inline: auto;
   }
@@ -5078,9 +5080,9 @@ article.container > div[data-width]:not([class^="moss-"]):not([class*=" moss-"])
   margin-inline: auto;
 }
 
-/* A `screen` band stays edge to edge on a phone too (the collapse above
- * skips it), so its content needs the page gutter the column would have
- * given it. */
+/* A fenced-div `screen` band stays edge to edge on a phone too (the
+ * collapse above skips it), so its content needs the page gutter the column
+ * would have given it. */
 article.container > div[data-width="screen"]:not([class^="moss-"]):not([class*=" moss-"]) {
   box-sizing: border-box;
   padding-inline: var(--moss-container-padding);

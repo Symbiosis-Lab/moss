@@ -187,6 +187,17 @@ test.describe('horizontal, phone width', () => {
     expect(overflow).toBeLessThanOrEqual(0);
   });
 
+  test('a fenced-div screen band spans the viewport and its text keeps the page gutter', async ({ page }) => {
+    await page.goto('/band/');
+    const band = await box(page, 'article.container > div.band');
+    const p = await box(page, 'article.container > div.band > p');
+    const col = await column(page);
+    expect(Math.abs(band.left)).toBeLessThanOrEqual(1);
+    expect(Math.abs(band.right - 390)).toBeLessThanOrEqual(1);
+    expect(Math.abs(p.left - col.left)).toBeLessThanOrEqual(1);
+    expect(Math.abs(p.right - col.right)).toBeLessThanOrEqual(1);
+  });
+
   test('a hand-written band narrowed by an inline width stays centred', async ({ page }) => {
     await page.goto('/raw/');
     const fig = await box(page, 'article.container > figure');
