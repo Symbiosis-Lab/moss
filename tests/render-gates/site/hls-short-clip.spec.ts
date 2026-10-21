@@ -103,6 +103,10 @@ test.describe("short hero clips through hls.js", () => {
   test.beforeEach(async ({ page }) => {
     await reportConnection(page, undefined);
   });
+  // A throttled segment can still be in flight when a test ends.
+  test.afterEach(async ({ page }) => {
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
 
   test("the playing clip climbs to the top rung on a fast link", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
