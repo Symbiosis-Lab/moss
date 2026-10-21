@@ -75,7 +75,7 @@ impl PageChromeContext<'_, '_> {
         site_url: &crate::build::site_url::SiteUrl,
     ) -> ShellVars {
         let generated = matches!(family, PageFamily::GeneratedFolder);
-        let contents_open = doc.and_then(|d| d.raw_frontmatter.get("contents")).and_then(|v| v.as_str()) == Some("open");
+        let contents_pictures = doc.and_then(|d| d.raw_frontmatter.get("contents")).and_then(|v| v.as_str()) == Some("pictures");
         let site_title = self.site_title(doc);
         let ui_lang = doc.map(|d| d.lang).unwrap_or(self.site_lang);
         let page_lang_tag = doc.and_then(|d| d.lang_tag.clone())
@@ -116,7 +116,7 @@ impl PageChromeContext<'_, '_> {
             let links = crate::i18n::site_languages::other_language_links(
                 &page_lang_tag, &d.translations, &roots, multi,
             );
-            if contents_open { nav = nav.with_island_only(&d.title); }
+            if contents_pictures { nav = nav.with_island_only(&d.title); }
             nav = nav.with_translations(ui_lang, &page_lang_tag, links);
         }
         // Gated like the canonical link: a relative hreflang misleads
@@ -136,7 +136,7 @@ impl PageChromeContext<'_, '_> {
         // it. A page with no document is the synthetic homepage.
         let address = served_address(doc.map(|d| d.url_path.as_str()).unwrap_or("index.html"));
         body_attrs.push_str(&format!(r#" data-path="{}""#, escape_html_attr(&address)));
-        if contents_open { body_attrs.push_str(r#" data-contents="open""#); }
+        if contents_pictures { body_attrs.push_str(r#" data-contents="pictures""#); }
         if let Some(section) = doc.and_then(|d| d.section.as_ref()) {
             if !section.segment.is_empty() {
                 body_attrs.push_str(&format!(r#" data-section="{}""#, escape_html_attr(&section.segment)));
@@ -159,7 +159,7 @@ impl PageChromeContext<'_, '_> {
             ),
             navigation: nav.generate_navigation(),
             has_header: self.layout.header != crate::build::components::nav::HeaderMode::None,
-            nav_island: if self.layout.floating_nav || contents_open || self.layout.header == crate::build::components::nav::HeaderMode::None { nav.generate_nav_island() } else { String::new() },
+            nav_island: if self.layout.floating_nav || contents_pictures || self.layout.header == crate::build::components::nav::HeaderMode::None { nav.generate_nav_island() } else { String::new() },
             footer: Some(nav.generate_footer(self.show_rss_in_footer)),
             favicon: Some(paths.favicon_link()),
             apple_touch_icon: paths.apple_touch_icon_link(),

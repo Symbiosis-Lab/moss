@@ -355,9 +355,6 @@ body {
     var(--moss-sidenote-reserve, 0px)
   );
   padding-right: var(--moss-sidenote-inset);
-  /* Set by contents-ruler.ts on a page that asked for its contents open, to
-     keep the text clear of the list in the left margin. Absent: no padding. */
-  padding-left: var(--moss-contents-inset, 0px);
   display: flex;
   flex-direction: column;
   min-height: 100vh;
@@ -4005,37 +4002,74 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
   transition: opacity 150ms ease;
 }
 
-/* A page that asked for its contents open (`contents: open`): the same ruler,
-   with every title showing at rest, set at the page's body size, and a square
-   picture of the section's first image in place of the dash. A section with no
-   image keeps its dash. The rows grow to fit the picture; contents-ruler.ts
-   measures the taller list like any other, so the ruler still steps aside
-   where it does not fit. The picture size is one value, shared by the ruler,
-   its rows and the sections panel. */
-body[data-contents="open"] {
+/* A page with `contents: pictures`: at rest the plain ruler. Hovering or
+   focusing it opens the rows around the pointer (contents-lens.ts), which
+   moves the dash, picture and label of each row by transform and opacity
+   alone. The links themselves never move: each is a fixed hit strip, widened
+   by `::after` to `--moss-contents-lane` (set to the room the titles have), so
+   what is under the pointer is decided by the rest geometry and not by what is
+   drawn. The picture size is one value, shared by the ruler and the sections
+   panel. */
+body[data-contents="pictures"] {
   --moss-contents-pic: 40px;
-  --moss-contents-row: calc(var(--moss-contents-pic) + 8px);
 }
 
-.moss-contents-ruler[data-contents="open"] a {
-  inline-size: var(--moss-contents-pic);
-  block-size: var(--moss-contents-row);
+.moss-contents-ruler[data-contents="pictures"] a::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: -8px; /* the list's own side padding: no dead strip left of the dash */
+  inline-size: calc(var(--moss-contents-lane, 0px) + 8px);
 }
 
-.moss-contents-ruler[data-contents="open"] .moss-contents-ruler-label {
+/* The link is 20px tall while its drawn row opens to the picture's height, so
+   the ring on the link would cut through the picture: the link keeps an
+   invisible outline (still shown in forced-colours mode) and the ring is drawn
+   on the picture and the title instead. */
+.moss-contents-ruler[data-contents="pictures"] a:focus-visible {
+  outline-color: transparent;
+}
+
+.moss-contents-ruler[data-contents="pictures"] a:focus-visible :is(.moss-contents-ruler-pic, .moss-contents-ruler-label) {
+  outline: 2px solid var(--moss-color-ui-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* The drawn parts never take the pointer: the strip does. */
+.moss-contents-ruler[data-contents="pictures"] :is(.moss-contents-ruler-dash, .moss-contents-ruler-label, .moss-contents-ruler-pic) {
+  pointer-events: none;
+}
+
+/* Titles start past the picture; hover and focus show them only through the
+   lens, which sets their opacity. A device without hover keeps the plain
+   ruler's tap-to-open. */
+.moss-contents-ruler[data-contents="pictures"] .moss-contents-ruler-label {
   inset-inline-start: calc(var(--moss-contents-pic) + 4px);
-  font-size: var(--moss-reading-size);
-  line-height: var(--moss-contents-row);
-  opacity: 1;
+}
+
+.moss-contents-ruler[data-contents="pictures"]:not([data-lens]):not([data-open]) .moss-contents-ruler-label {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.moss-contents-ruler[data-lens] .moss-contents-ruler-label {
   visibility: visible;
+  transition: none;
 }
 
 .moss-contents-ruler-pic {
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block-start: 50%;
+  margin-block-start: calc(var(--moss-contents-pic) / -2);
   inline-size: var(--moss-contents-pic);
   block-size: var(--moss-contents-pic);
   border-radius: 4px;
   overflow: hidden;
   background: var(--moss-color-surface);
+  transform-origin: left center;
+  visibility: hidden;
 }
 
 .moss-contents-ruler-pic img {
@@ -4043,11 +4077,10 @@ body[data-contents="open"] {
   inline-size: 100%;
   block-size: 100%;
   object-fit: cover;
-  opacity: 0.7;
 }
 
-.moss-contents-ruler a[data-pic] .moss-contents-ruler-dash {
-  display: none;
+.moss-contents-ruler a[data-lit] .moss-contents-ruler-dash {
+  visibility: hidden;
 }
 
 .moss-contents-ruler a[data-pic][aria-current="true"] .moss-contents-ruler-pic {
@@ -4055,18 +4088,14 @@ body[data-contents="open"] {
   outline-offset: 2px;
 }
 
-.moss-contents-ruler a[data-pic][aria-current="true"] .moss-contents-ruler-pic img {
-  opacity: 1;
-}
-
 /* The same pictures, at the same size, in the sections panel. The picture sits
    where the dash does, so titles still start in one column with or without
    one: a row with no picture reserves the picture's width. */
-body[data-contents="open"] [data-island-menu="sections"] a {
+body[data-contents="pictures"] [data-island-menu="sections"] a {
   padding-inline-start: calc(var(--moss-contents-pic) + 12px);
 }
 
-body[data-contents="open"] [data-island-menu="sections"] a[data-pic] {
+body[data-contents="pictures"] [data-island-menu="sections"] a[data-pic] {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -5048,13 +5077,12 @@ article.container > [data-width] {
  * `main` that much narrower than the window, so the band adds the inset back
  * on its far side, the contract body's own comment states. The near edge does
  * not move: the start margin stays as above and the end margin gives up the
- * inset. The margins are physical, not logical, because the inset is a
+ * inset. The end margin is physical, not logical, because the inset is a
  * physical padding-right: an over-constrained box drops its end-side margin,
  * so left-to-right pages position from the left and right-to-left pages from
  * the right, and the extra width reaches the window's right edge in both. */
 article.container > [data-width="screen"] {
-  inline-size: calc(var(--moss-escape) + var(--moss-sidenote-inset, 0px) + var(--moss-contents-inset, 0px));
-  margin-left: calc((100% - 100cqi) / 2 - var(--moss-contents-inset, 0px));
+  inline-size: calc(var(--moss-escape) + var(--moss-sidenote-inset, 0px));
   margin-right: calc((100% - 100cqi) / 2 - var(--moss-sidenote-inset, 0px));
 }
 
@@ -6912,15 +6940,13 @@ article a:where(:not(.moss-btn)):focus {
    body's padding-right narrows this element's containing block, so
    adding the INSET back (not the reserve — much less, 0px from 1316px
    up) lands the banner on the viewport's right edge; `overflow-x: clip`
-   on body absorbs the overhang. The contents inset is body's physical
-   padding-left, so the margin is physical too. No fallback: `body` always
+   on body absorbs the overhang. No fallback: `body` always
    declares it. Not a negative margin on the right — that silently did
    nothing, since an explicit width turns off the `align-items: stretch`
    a negative margin needs. The closing footer is a second such box. */
 .moss-hero,
 body > footer.container:has(> .moss-hero-closing) {
-  inline-size: calc(100% + var(--moss-sidenote-inset) + var(--moss-contents-inset, 0px));
-  margin-left: calc(-1 * var(--moss-contents-inset, 0px));
+  inline-size: calc(100% + var(--moss-sidenote-inset));
 }
 
 .moss-hero {

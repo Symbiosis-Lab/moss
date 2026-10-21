@@ -398,11 +398,11 @@ fn reader_controls_false_removes_the_text_size_control_from_a_dated_page_or_a_fo
 }
 
 #[test]
-fn contents_open_puts_a_body_attribute_on_that_page_only_and_an_unknown_value_is_a_strict_failure() {
-    let s = site("", &[("open.md", "---\ntitle: Open\ncontents: open\n---\nx\n"), ("plain.md", "---\ntitle: Plain\n---\nx\n")]);
+fn contents_pictures_puts_a_body_attribute_on_that_page_only_and_an_unknown_value_is_a_strict_failure() {
+    let s = site("", &[("pics.md", "---\ntitle: Pics\ncontents: pictures\n---\nx\n"), ("plain.md", "---\ntitle: Plain\n---\nx\n")]);
     let o = build_strict(&s);
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-    assert!(built(&s, "open/index.html").contains(r#" data-contents="open""#));
+    assert!(built(&s, "pics/index.html").contains(r#" data-contents="pictures""#));
     assert!(!built(&s, "plain/index.html").contains("data-contents"));
 
     let bad = site("", &[("a.md", "---\ntitle: A\ncontents: shut\n---\nx\n")]);

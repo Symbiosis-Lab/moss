@@ -18,10 +18,6 @@ import { SECTIONS, SHORT_SECTIONS, LONG_CJK_TITLE, LONG_LATIN_TITLE, OPEN_SECTIO
 const ARTICLE = '/essays/reading/long/';
 const SHORT = '/essays/reading/short/';
 const OPEN = '/essays/reading/open/';
-const FULL = '/essays/reading/full/';
-const BOXED = '/essays/reading/boxed/';
-const BRIEF = '/essays/reading/brief/';
-const CAPPED = '/essays/reading/capped/';
 const HOME = '/';
 const OPEN_HOME = `http://localhost:${gatePort('contents-ruler:home')}/`;
 
@@ -561,96 +557,24 @@ test.describe('on a touch screen wide enough for the ruler', () => {
   });
 });
 
-/** What `contents: open` changes, and what it leaves alone. */
-test.describe('a page that asks for its contents open', () => {
-  const rows = (page: Page) =>
-    page.evaluate(() =>
-      [...document.querySelectorAll<HTMLElement>('.moss-contents-ruler a')].map((a) => {
-        const label = a.querySelector<HTMLElement>('.moss-contents-ruler-label')!;
-        const dash = a.querySelector<HTMLElement>('.moss-contents-ruler-dash')!;
-        const pic = a.querySelector<HTMLImageElement>('.moss-contents-ruler-pic img');
-        return {
-          text: label.textContent,
-          labelVisibility: getComputedStyle(label).visibility,
-          labelOpacity: getComputedStyle(label).opacity,
-          labelSize: parseFloat(getComputedStyle(label).fontSize),
-          bodySize: parseFloat(getComputedStyle(document.body).fontSize),
-          cut: label.textContent!.includes('…') || label.scrollWidth > label.clientWidth,
-          picSize: pic ? pic.parentElement!.getBoundingClientRect().width : 0,
-          labelRight: label.getBoundingClientRect().right,
-          dashShown: getComputedStyle(dash).display !== 'none',
-          dashWidth: getComputedStyle(dash).width,
-          pic: pic && { src: pic.getAttribute('src'), loaded: pic.complete && pic.naturalWidth > 0 },
-          picOutline: pic ? getComputedStyle(pic.parentElement!).outlineStyle : null,
-          current: a.getAttribute('aria-current') === 'true',
-        };
-      }),
-    );
-
-  test('a page that does not ask is unchanged: titles hidden at rest, no pictures', async ({ page }) => {
+/** What `contents: pictures` leaves alone: at rest it is the plain ruler. */
+test.describe('a page that does not ask for pictures', () => {
+  test('is unchanged: titles hidden at rest, no pictures, no data-contents', async ({ page }) => {
     await open(page, 1280, 720);
     await intoArticle(page);
     expect(await page.evaluate(() => document.body.dataset.contents)).toBeUndefined();
     expect(await ruler(page).getAttribute('data-contents')).toBeNull();
-    const r = await rows(page);
-    expect(r.every((row) => row.labelVisibility === 'hidden' && row.dashShown && row.pic === null)).toBe(true);
-  });
-
-  test('the titles show at rest, larger, one picture per section with an image and a dash for the rest', async ({ page }) => {
-    await open(page, 1280, 800, OPEN);
-    await jumpTo(page, 1);
-    await expect.poll(() => isAway(page)).toBe(false);
-    expect(await ruler(page).getAttribute('data-contents')).toBe('open');
-
-    const r = await rows(page);
-    expect(r.map((row) => row.text)).toEqual(OPEN_SECTIONS);
-    const textLeft = (await geometry(page)).textLeft;
-    r.forEach((row, i) => {
-      expect([row.labelVisibility, row.labelOpacity], `title ${i} at rest`).toEqual(['visible', '1']);
-      expect(row.labelSize, `title ${i} is set at the page's body size`).toBe(row.bodySize);
-      expect(row.cut, `title ${i} is shown whole`).toBe(false);
-      if (OPEN_WITH_IMAGE[i]) expect(row.picSize, `picture ${i} is clearly a picture`).toBeGreaterThanOrEqual(36);
-      expect(row.labelRight, `title ${i} clears the text column`).toBeLessThanOrEqual(textLeft - 24 + 1);
-      expect(row.pic !== null, `row ${i} has a picture iff its section has an image`).toBe(OPEN_WITH_IMAGE[i]);
-      expect(row.dashShown, `row ${i} shows a dash iff it has no picture`).toBe(!OPEN_WITH_IMAGE[i]);
-    });
-
-    // The picture is the page's own image at the narrowest width moss made:
-    // not the file the <img> names, and one the page already has a rung for.
-    const sources = await page.evaluate(() =>
-      [...document.querySelectorAll<HTMLImageElement>('main img')].map((img) => ({
-        src: img.getAttribute('src'),
-        srcset: img.closest('picture')?.querySelector('source')?.getAttribute('srcset') ?? '',
+    const r = await page.$$eval('.moss-contents-ruler a', (as) =>
+      as.map((a) => ({
+        label: getComputedStyle(a.querySelector('.moss-contents-ruler-label')!).visibility,
+        pic: a.querySelector('.moss-contents-ruler-pic'),
       })),
     );
-    expect(sources.length).toBe(3);
-    const withImage = r.filter((row) => row.pic);
-    withImage.forEach((row, k) => {
-      const widths = sources[k].srcset.split(',').map((c) => c.trim().split(/\s+/));
-      const narrowest = widths.sort((a, b) => parseInt(a[1]) - parseInt(b[1]))[0][0];
-      expect(row.pic!.src).toBe(narrowest);
-      expect(row.pic!.src).not.toBe(sources[k].src);
-    });
-    await expect.poll(async () => (await rows(page)).filter((row) => row.pic?.loaded).length).toBe(3);
-  });
-
-  test('the current-section mark follows scroll', async ({ page }) => {
-    await open(page, 1280, 800, OPEN);
-    for (const k of [0, 2, 3, 4, 1]) {
-      await jumpTo(page, k);
-      await expect.poll(() => isAway(page)).toBe(false);
-      await expect.poll(async () => (await rows(page)).findIndex((row) => row.current)).toBe(k);
-      const r = await rows(page);
-      r.forEach((row, i) => {
-        expect(row.pic !== null, `row ${i} keeps its picture while it is marked`).toBe(OPEN_WITH_IMAGE[i]);
-        if (row.pic) expect(row.picOutline, `picture ${i} outline when current is ${k}`).toBe(i === k ? 'solid' : 'none');
-        else expect(row.dashWidth, `dash ${i} when current is ${k}`).toBe(i === k ? '18px' : '10px');
-      });
-    }
+    expect(r.every((row) => row.label === 'hidden' && row.pic === null)).toBe(true);
   });
 });
 
-test.describe('the sections panel of a page that asks for its contents open', () => {
+test.describe('the sections panel of a page with pictures in its contents', () => {
   test.use({ viewport: { width: 390, height: 800 }, isMobile: true, hasTouch: true });
 
   test('shows the same pictures, and every title starts in one column', async ({ page }) => {
@@ -701,21 +625,21 @@ test.describe('the home page', () => {
     expect(await page.locator('.moss-nav-island').count()).toBe(0);
   });
 
-  test('with the field gets the open list with pictures on a wide screen', async ({ page }) => {
+  test('with the field gets the ruler with a picture for each section that has an image, titles hidden at rest', async ({ page }) => {
     await open(page, 1280, 800, OPEN_HOME);
     await jumpTo(page, 1);
     await expect.poll(() => isAway(page)).toBe(false);
-    expect(await ruler(page).getAttribute('data-contents')).toBe('open');
+    expect(await ruler(page).getAttribute('data-contents')).toBe('pictures');
     const r = await page.$$eval('.moss-contents-ruler a', (as) =>
       as.map((a) => ({
-        text: a.querySelector('.moss-contents-ruler-label')!.textContent,
+        text: a.getAttribute('aria-label'),
         visible: getComputedStyle(a.querySelector('.moss-contents-ruler-label')!).visibility,
         pic: a.querySelector('.moss-contents-ruler-pic img') !== null,
       })),
     );
     expect(r.map((row) => row.text)).toEqual(OPEN_SECTIONS);
     expect(r.map((row) => row.pic)).toEqual(OPEN_WITH_IMAGE);
-    expect(r.every((row) => row.visible === 'visible')).toBe(true);
+    expect(r.every((row) => row.visible === 'hidden')).toBe(true);
   });
 
   test.describe('on a phone', () => {
@@ -740,120 +664,8 @@ test.describe('the home page', () => {
   });
 });
 
-/** An open list claims its own column: the page shifts right to make room, whatever its width. */
-test.describe('a full-width page that asks for its contents open', () => {
-  const state = (page: Page) =>
-    page.evaluate(() => {
-      const h = document.querySelector('main h2[id]')!.getBoundingClientRect();
-      const article = document.querySelector('main article')!.getBoundingClientRect();
-      const nav = document.querySelector<HTMLElement>('.moss-contents-ruler')!;
-      const labels = [...nav.querySelectorAll('.moss-contents-ruler-label')].map((l) => {
-        // The ink's right edge, not the box's: the box is as wide as the room.
-        const range = document.createRange();
-        range.selectNodeContents(l);
-        return range.getBoundingClientRect().right;
-      });
-      const ol = nav.querySelector('ol')!.getBoundingClientRect();
-      return {
-        hidden: nav.hidden,
-        textLeft: h.left,
-        textWidth: article.width,
-        labelsRight: Math.max(...labels),
-        listRight: ol.right,
-        scrollWidth: document.documentElement.scrollWidth,
-        innerWidth: window.innerWidth,
-      };
-    });
-
-  test('at 1280px the list is shown and the content starts to its right', async ({ page }) => {
-    await open(page, 1280, 800, FULL);
-    await jumpTo(page, 1);
-    await expect.poll(() => isAway(page)).toBe(false);
-    const s = await state(page);
-    expect(s.hidden).toBe(false);
-    expect(s.textLeft, 'the text starts a gutter past the widest title').toBeGreaterThanOrEqual(s.labelsRight + 24 - 1);
-    expect(s.textLeft, 'and not much further: the column is the list\'s own width').toBeLessThanOrEqual(s.labelsRight + 24 + 48);
-    expect(s.textWidth, 'a readable column is left').toBeGreaterThanOrEqual(448);
-    expect(s.scrollWidth).toBeLessThanOrEqual(s.innerWidth);
-    const titles = await page.$$eval('.moss-contents-ruler-label', (ls) => ls.map((l) => l.textContent));
-    expect(titles).toEqual(OPEN_SECTIONS);
-    const cut = await page.$$eval('.moss-contents-ruler-label', (ls) => ls.map((l) => l.textContent!.includes('…') || l.scrollWidth > l.clientWidth));
-    expect(cut, 'no title is cut').toEqual(OPEN_SECTIONS.map(() => false));
-  });
-
-  test('short titles make a narrower column than long ones', async ({ page }) => {
-    await open(page, 1280, 800, FULL);
-    const long = (await state(page)).textLeft;
-    await open(page, 1280, 800, BRIEF);
-    await jumpTo(page, 1);
-    await expect.poll(() => isAway(page)).toBe(false);
-    const short = await state(page);
-    expect(short.hidden).toBe(false);
-    expect(short.textLeft, 'the text sits well left of where long titles put it').toBeLessThan(long - 100);
-    expect(short.textLeft).toBeGreaterThanOrEqual(short.labelsRight + 24 - 1);
-  });
-
-  test('a title longer than the cap is cut there and the text keeps its measure', async ({ page }) => {
-    await open(page, 1280, 800, CAPPED);
-    await jumpTo(page, 1);
-    await expect.poll(() => isAway(page)).toBe(false);
-    const s = await state(page);
-    const measure = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('main article')!).maxWidth));
-    expect(s.hidden, 'the list is still shown').toBe(false);
-    const cut = await page.$$eval('.moss-contents-ruler-label', (ls) => ls.map((l) => l.textContent!.includes('…')));
-    expect(cut).toEqual([true, false, false]);
-    expect(s.textLeft, 'the column reaches the cap').toBeGreaterThanOrEqual(0.6 * measure - 24);
-    expect(s.textLeft, 'the column stops at 60% of the measure').toBeLessThanOrEqual(0.6 * measure + 48);
-    expect(s.textWidth, 'the text keeps 40% of the measure').toBeGreaterThanOrEqual(0.4 * measure);
-    expect(s.labelsRight).toBeLessThanOrEqual(s.textLeft - 24 + 1);
-  });
-
-  test('a hero and a screen-width band still reach the window edge', async ({ page }) => {
-    await open(page, 1280, 800, FULL);
-    const edges = await page.evaluate(() => ({
-      pad: parseFloat(getComputedStyle(document.body).paddingLeft),
-      hero: document.querySelector('.moss-hero')!.getBoundingClientRect().left,
-      band: document.querySelector('article [data-width="screen"]')!.getBoundingClientRect().left,
-      bandRight: document.querySelector('article [data-width="screen"]')!.getBoundingClientRect().right,
-      innerWidth: document.documentElement.clientWidth,
-    }));
-    expect(edges.pad, 'the page was shifted').toBeGreaterThan(0);
-    expect(edges.hero).toBeCloseTo(0, 0);
-    expect(edges.band).toBeCloseTo(0, 0);
-    expect(edges.bandRight).toBeCloseTo(edges.innerWidth, 0);
-  });
-
-  test('where the column plus a readable measure does not fit, the page is not shifted and the panel is the contents', async ({ page }) => {
-    await open(page, 640, 800, FULL);
-    await expect(ruler(page)).toBeHidden();
-    expect(await page.evaluate(() => document.body.style.getPropertyValue('--moss-contents-inset'))).toBe('');
-    expect(await page.evaluate(() => getComputedStyle(document.body).paddingLeft)).toBe('0px');
-  });
-
-  test('a default page is not shifted and carries no inline style on the body', async ({ page }) => {
-    await open(page, 1280, 720);
-    expect(await page.evaluate(() => document.body.getAttribute('style'))).toBeNull();
-  });
-});
-
-test('an open list clears the leftmost painted edge of the content, not only its text', async ({ page }) => {
-  await open(page, 1440, 900, BOXED);
-  await jumpTo(page, 1);
-  await expect.poll(() => isAway(page)).toBe(false);
-  const g = await page.evaluate(() => {
-    const ink = (l: Element) => {
-      const range = document.createRange();
-      range.selectNodeContents(l);
-      return range.getBoundingClientRect().right;
-    };
-    return {
-      panelLeft: document.querySelector('.boxed')!.getBoundingClientRect().left,
-      textLeft: document.querySelector('main h2[id]')!.getBoundingClientRect().left,
-      labelsRight: Math.max(...[...document.querySelectorAll('.moss-contents-ruler-label')].map(ink)),
-      hidden: document.querySelector<HTMLElement>('.moss-contents-ruler')!.hidden,
-    };
-  });
-  expect(g.hidden).toBe(false);
-  expect(g.panelLeft, 'the panel reaches past the text').toBeLessThan(g.textLeft - 20);
-  expect(g.labelsRight + 24, 'a gutter before the panel').toBeLessThanOrEqual(g.panelLeft + 1);
+test('a page is never shifted and carries no inline style on the body', async ({ page }) => {
+  await open(page, 1280, 720);
+  expect(await page.evaluate(() => document.body.getAttribute('style'))).toBeNull();
+  expect(await page.evaluate(() => getComputedStyle(document.body).paddingLeft)).toBe('0px');
 });

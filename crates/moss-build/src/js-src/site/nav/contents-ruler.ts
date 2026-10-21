@@ -24,22 +24,18 @@
  *   and the bottom of the window — the list must not scroll, because scrolling
  *   would clip the labels that hang out of it.
  *
- * A page that asks for its contents open (`opts.pictures`, from
- * `contents: open`) keeps the same list and the same measuring, but shows the
- * titles at rest, at the page's body size, with a small picture of the
- * section's first image in place of the dash; a section with no image keeps
- * its dash.
- *
- * Every dash row is the same height at rest and open. Re-spacing on hover was
- * tried and rejected: the row under the pointer moves, and the click lands on
- * a different section.
+ * A page with `contents: pictures` (`opts.pictures`) is the same ruler at rest:
+ * the same dashes, the same place, nothing reserved. Hovering or focusing it
+ * opens the rows around the pointer with a small picture of each section
+ * (contents-lens.ts).
  *
  * Which of this needs an engine — hit-testing, label clearance, clipping — is
  * asserted in tests/render-gates/site/contents-ruler.spec.ts.
  */
 
-import { canvasMeasure, truncateMiddle, type Measure } from "./middle-truncate";
+import { canvasMeasure, truncateMiddle } from "./middle-truncate";
 import { markRows, SECTION_SYNC_EVENT, type SectionSyncDetail } from "./section-event";
+import { mountContentsLens } from "./contents-lens";
 import { pictureImg } from "./section-pictures";
 
 /** Clear space between the widest label and the text column — the same gap
@@ -54,16 +50,6 @@ const MIN_LABEL = 96;
  *  fraction of a pixel; this makes a rounding difference an extra pixel of
  *  margin rather than a clipped letter. */
 const MEASURE_SLACK = 2;
-
-/** The open list's column is sized from its own widest title, but may take at
- *  most this share of the page's text measure (`--moss-content-width`, so a
- *  full-width page allows more than a narrow one); a longer title is cut. */
-const MAX_COLUMN = 0.6;
-
-/** Share of the text measure the text must keep after the shift. Together with
- *  `MAX_COLUMN` it means the list never takes more than the text leaves it;
- *  under this the list gives way and the island's panel is the contents. */
-const MIN_TEXT = 0.4;
 
 /** Fade in when the first section is this far up the window; fade out when the
  *  article's bottom is above the middle. Pinned to the window, the ruler only
@@ -82,9 +68,8 @@ export interface RulerOptions {
   island: HTMLElement;
   /** Space the island's bar occupies at the top of the window. */
   clearance: () => number;
-  /** Set when the page asked for its contents to stay open (`contents: open`):
-   *  the titles show at rest, and each entry is a picture URL, or null for a
-   *  section with no image, which keeps its dash. */
+  /** Set on a page with `contents: pictures`: each entry is a picture URL, or
+   *  null for a section with no image. */
   pictures?: Array<string | null>;
   /** The element the author marked as the end of the main sections
    *  (`contents=end`): the ruler steps aside once its top passes the middle of
@@ -112,7 +97,7 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   nav.className = "moss-contents-ruler";
   nav.setAttribute("aria-label", opts.label);
   nav.hidden = true;
-  if (opts.pictures) nav.dataset.contents = "open";
+  if (opts.pictures) nav.dataset.contents = "pictures";
   const list = document.createElement("ol");
   const links = headings.map((heading, i) => {
     const link = document.createElement("a");
@@ -148,21 +133,7 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   if (main?.parentElement) main.after(nav);
   else document.body.append(nav);
   undo.push(() => nav.remove());
-
-  /**
-   * The left edge the list must clear. The first heading's by default; for an
-   * open list the leftmost painted edge of the content: a page whose sections
-   * sit in boxes or panels starts further left than its text, and the labels
-   * would touch the box. Full-bleed bands (`data-width`) are meant to run past
-   * the column and are not counted.
-   */
-  function contentLeft(): number {
-    const text = first.getBoundingClientRect().left;
-    if (!opts.pictures) return text;
-    const boxes = [...article.children].filter((el) => !el.hasAttribute("data-width"));
-    for (let el = first.parentElement; el && el !== article; el = el.parentElement) boxes.push(el);
-    return Math.min(text, ...boxes.map((el) => el.getBoundingClientRect().left));
-  }
+  if (opts.pictures) undo.push(mountContentsLens({ nav, links, clearance: opts.clearance }));
 
   // Blocks wider than the text column (`data-width`) can sit anywhere in
   // `main`, and script can add them after load: the list is read on layout and
@@ -175,42 +146,6 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   collectBands();
   let away = true;
   let disposed = false;
-  let mo: MutationObserver | undefined;
-
-  /**
-   * Make room in the left margin for an open list: pad the body (as the
-   * sidenote gutter does on the right) so the text starts `column` in. The
-   * padding is derived from measured geometry — the text column's natural
-   * left edge, with the shift removed — and is taken back when the shifted
-   * column would be narrower than `MIN_TEXT`. A centred column that already
-   * has the margin is not moved at all.
-   */
-  function reserveColumn(vertical: boolean, measure: Measure | null): void {
-    if (!opts.pictures) return;
-    const style = document.body.style;
-    const set = (px: number): void => style.setProperty("--moss-contents-inset", `${px}px`);
-    set(0);
-    if (vertical) return;
-    const box = article.getBoundingClientRect();
-    const offset = contentLeft() - box.left;
-    // The column is the list's own width: where its labels start, the widest
-    // title at the open size, and a gutter before the text.
-    const padding = parseFloat(getComputedStyle(labels[0]).paddingInlineStart) || 0;
-    const widest = measure ? Math.max(...titles.map(measure)) : 0;
-    const textMeasure = parseFloat(getComputedStyle(article).maxWidth) || box.width;
-    const column = Math.min(
-      MAX_COLUMN * textMeasure,
-      // Never less than a label that names something (`MIN_LABEL`).
-      Math.ceil(labels[0].getBoundingClientRect().left + Math.max(MIN_LABEL, padding + widest + MEASURE_SLACK) + GUTTER),
-    );
-    const need = column - offset;
-    // A centred block moves half of what the body pads; one that fills the
-    // window shrinks instead, so the pad is capped at the shift it needs.
-    const pad = Math.min(need, Math.max(0, 2 * (need - box.left)));
-    if (pad <= 0) return;
-    set(pad);
-    if (article.getBoundingClientRect().width - 2 * offset < MIN_TEXT * textMeasure) set(0);
-  }
 
   /**
    * One frame's reading and writing, run when the island's scrollspy reports.
@@ -253,24 +188,25 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     nav.hidden = false;
     collectBands();
     const measure = canvasMeasure(labels[0]);
-    reserveColumn(vertical, measure);
     let room = 0;
     if (!vertical) {
-      const textLeft = contentLeft();
+      const textLeft = first.getBoundingClientRect().left;
       room = Math.floor(textLeft - GUTTER - labels[0].getBoundingClientRect().left);
     }
     const listHeight = list.getBoundingClientRect().height;
     const fits = (window.innerHeight - listHeight) / 2 >= opts.clearance();
     const eligible = !vertical && room >= MIN_LABEL && fits;
     nav.hidden = !eligible;
-    if (!eligible && opts.pictures) document.body.style.removeProperty("--moss-contents-inset");
-    // The shift is ours, not a change of the page's: do not re-measure for it.
-    if (opts.pictures) mo?.takeRecords();
     if (eligible) {
       const padding = parseFloat(getComputedStyle(labels[0]).paddingInlineStart) || 0;
       // Writes only, no read-back: the canvas measure plus MEASURE_SLACK is
       // trusted, and the render gate asserts no label overflows in either engine.
       const fit = room - padding - MEASURE_SLACK;
+      if (opts.pictures) {
+        // The hit strips reach from the dash to the end of the room the titles have.
+        const reach = labels[0].getBoundingClientRect().left - links[0].getBoundingClientRect().left + room;
+        nav.style.setProperty("--moss-contents-lane", `${reach}px`);
+      }
       labels.forEach((label, i) => {
         label.style.maxWidth = `${room}px`;
         label.textContent = measure ? truncateMiddle(titles[i], fit, measure) : titles[i];
@@ -299,10 +235,10 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     const bandsMo = new MutationObserver(collectBands);
     bandsMo.observe(scope, { childList: true, subtree: true });
     undo.push(() => bandsMo.disconnect());
-    mo = new MutationObserver(relayout);
+    const mo = new MutationObserver(relayout);
     mo.observe(document.documentElement, { attributes: true });
     mo.observe(document.body, { attributes: true });
-    undo.push(() => mo?.disconnect());
+    undo.push(() => mo.disconnect());
   }
   on(window, "resize", relayout, { passive: true });
   document.fonts?.ready.then(relayout);
@@ -324,7 +260,6 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   // Without hover (a tablet in landscape) the labels need a gesture of their
   // own: the first tap opens them, the next follows the link.
   on(nav, "click", (event) => {
-    if (opts.pictures) return;
     if (window.matchMedia?.("(hover: hover)").matches) return;
     if (!nav.hasAttribute("data-open")) {
       event.preventDefault();
@@ -340,6 +275,5 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     disposed = true;
     undo.forEach((f) => f());
     delete island.dataset.ruler;
-    if (opts.pictures) document.body.style.removeProperty("--moss-contents-inset");
   };
 }

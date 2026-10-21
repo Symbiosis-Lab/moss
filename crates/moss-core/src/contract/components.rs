@@ -3237,9 +3237,15 @@ pub const COMPONENTS: &[ComponentEntry] = &[
             },
             DataAttr {
                 name: "data-contents",
-                values: &["open"],
+                values: &["pictures"],
                 default: "",
-                description: "Present as `open` on a page with `contents: open` in its frontmatter: the titles show at rest, larger, and a section with an image shows a small picture of it in place of its dash.",
+                description: "Present as `pictures` on a page with `contents: pictures` in its frontmatter: hovering or focusing the ruler opens the rows around the pointer, and a section with an image shows a small picture of it beside its title. At rest it is the plain ruler.",
+            },
+            DataAttr {
+                name: "data-lens",
+                values: &[],
+                default: "",
+                description: "Present while a ruler with pictures is open under the pointer or keyboard focus. Written by the site runtime.",
             },
         ],
         example_html: r##"<nav class="moss-contents-ruler" aria-label="Sections on this page"><ol><li><a href="#intro"><span class="moss-contents-ruler-dash"></span><span class="moss-contents-ruler-label">Intro</span></a></li>…</ol></nav>"##,
@@ -3279,7 +3285,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Emerging,
         since: "0",
-        description: "A 40px square picture standing for a section on a page with `contents: open`: the section's first image, read from the image already on the page at the narrowest width moss generated. Written by the site runtime; a section with no image has none and keeps its dash.",
+        description: "A 40px square picture standing for a section on a page with `contents: pictures`: the section's first image, read from the image already on the page at the narrowest width moss generated. Hidden until the ruler opens around it, then scaled up with the row. Written by the site runtime; a section with no image has none.",
     },
     ComponentEntry {
         class: "moss-nav-island-section-title",
@@ -3290,7 +3296,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Emerging,
         since: "0",
-        description: "A sections-panel row's title, in a box of its own beside the row's picture, on a page with `contents: open`. Rows without a picture hold their title directly. Written by the site runtime.",
+        description: "A sections-panel row's title, in a box of its own beside the row's picture, on a page with `contents: pictures`. Rows without a picture hold their title directly. Written by the site runtime.",
     },
     ComponentEntry {
         class: "footer-default",

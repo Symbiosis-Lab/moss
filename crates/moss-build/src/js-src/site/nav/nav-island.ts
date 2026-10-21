@@ -29,7 +29,7 @@
 
 import { applyFold, inlineAvailableExtent, placePanel, trailOverflows } from "./breadcrumb-fold";
 import { mountContentsRuler } from "./contents-ruler";
-import { contentsOpen, pictureImg, sectionPictures } from "./section-pictures";
+import { contentsPictures, pictureImg, sectionPictures } from "./section-pictures";
 import { canvasMeasure, truncateMiddle } from "./middle-truncate";
 import { markRows, SECTION_SYNC_EVENT } from "./section-event";
 import { mountSectionName } from "./section-name";
@@ -227,7 +227,7 @@ export function initNavIsland(): void {
 
   const titles = headings.map(headingText);
 
-  const pictures = contentsOpen() ? sectionPictures(headings) : undefined;
+  const pictures = contentsPictures() ? sectionPictures(headings) : undefined;
 
   if (sectionsMenu) {
     headings.forEach((heading, i) => {

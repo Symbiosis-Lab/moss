@@ -389,10 +389,10 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "How far the page gives up on the right for the sidenote gutter, derived by site.css from `--moss-sidenote-reserve` and applied as `<body>` padding. The places explorer's full-width figure adds it back so the map still reaches the window's edge. Not a theme hook: set `--moss-sidenote-reserve` instead.",
     },
     CustomProp {
-        name: "--moss-contents-inset",
-        owner: "body",
+        name: "--moss-contents-lane",
+        owner: ".moss-contents-ruler",
         default: "0px",
-        description: "How far the page moves right to make room for an open contents list, set by the site runtime (contents-ruler.ts) on a page with `contents: open` and applied as `<body>` left padding. The hero and screen-width bands add it back so they still reach the window's left edge. Absent on every other page. Not a theme hook.",
+        description: "How wide each link of the contents ruler's invisible hit strip is on a page with `contents: pictures`: from the dash to the end of the room the titles have, so the pointer can move from a dash to its title without leaving the strip. Set by the site runtime (contents-ruler.ts) from the measured room. Not a theme hook.",
     },
     CustomProp {
         name: "--moss-place-figure-top",
@@ -475,8 +475,8 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
     ScopeAttr {
         selector: "body",
         name: "data-contents",
-        values: &["open"],
-        description: "Present as `open` when a page asks, with `contents: open` in its frontmatter, for its contents list to stay open: on a wide screen the ruler in the left margin shows every section title at rest, larger than the hover labels, with a small picture (the section's first image) in place of the dash; the nav island's sections panel carries the same pictures. Absent keeps the ruler of dashes whose titles open on hover.",
+        values: &["pictures"],
+        description: "Present as `pictures` when a page asks, with `contents: pictures` in its frontmatter, for pictures in its contents list: on a wide screen the ruler in the left margin stays the ruler of dashes, and hovering it opens the rows around the pointer like a wheel, each section that has an image showing a small picture of it beside its title; the nav island's sections panel carries the same pictures. Absent keeps the plain ruler.",
     },
     ScopeAttr {
         selector: ".moss-eyebrow > span, .moss-subtitle, .moss-key-figure, .moss-facts > div",

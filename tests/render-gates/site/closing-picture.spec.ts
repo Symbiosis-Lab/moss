@@ -6,12 +6,11 @@ import { worstCaseContrast } from '../../e2e/helpers/wcag-contrast';
 
 const PAGES = [
   { name: 'a short page', path: '/' },
-  { name: 'a page with its contents open', path: '/essays/long/', openContents: true },
+  { name: 'a page with pictures in its contents', path: '/essays/long/' },
 ];
 const WIDTHS = [
   { name: 'desktop', width: 1360, height: 800 },
   { name: 'phone', width: 400, height: 800 },
-  // Narrow enough that the contents list reserves a left column on the body.
   { name: 'narrow desktop', width: 900, height: 800 },
 ];
 const SCHEMES = ['light', 'dark'] as const;
@@ -29,7 +28,6 @@ const measure = (page: Page) =>
     return {
       viewport: document.documentElement.clientWidth,
       docHeight: document.documentElement.scrollHeight,
-      bodyPaddingLeft: parseFloat(getComputedStyle(document.body).paddingLeft),
       hero: box(hero),
       footer: box(document.querySelector('footer')!),
       heading: box(content.querySelector('h2')!),
@@ -50,13 +48,9 @@ for (const scheme of SCHEMES) {
     test.describe(`closing picture, ${scheme}, ${wname}`, () => {
       test.use({ viewport: { width, height }, colorScheme: scheme });
 
-      for (const { name, path, openContents } of PAGES) {
+      for (const { name, path } of PAGES) {
         test(`on ${name}: edge to edge, last on the page, words on the picture`, async ({ page }) => {
           await page.goto(path, { waitUntil: 'load' });
-          if (openContents && wname === 'narrow desktop') {
-            // The precondition: the contents list has padded the body on the left.
-            await expect.poll(() => page.evaluate(() => parseFloat(getComputedStyle(document.body).paddingLeft))).toBeGreaterThan(0);
-          }
           const m = await measure(page);
 
           expect(m.hero.left, 'picture starts at the viewport edge').toBeCloseTo(0, 0);
@@ -114,15 +108,11 @@ for (const [system, chosen] of [['light', 'dark'], ['dark', 'light']] as const) 
   });
 }
 
-// The contents inset is the body's physical padding-left, so the bleed must
-// be physical too: in a right-to-left page the picture still spans the viewport.
+// In a right-to-left page the picture still spans the viewport.
 for (const { name, width } of [{ name: 'phone', width: 400 }, { name: 'narrow desktop', width: 900 }]) {
   test(`right-to-left page at ${name} width: the picture still spans the viewport`, async ({ page }) => {
     await page.setViewportSize({ width, height: 800 });
     await page.goto('/essays/long/', { waitUntil: 'load' });
-    if (width === 900) {
-      await expect.poll(() => page.evaluate(() => parseFloat(getComputedStyle(document.body).paddingLeft))).toBeGreaterThan(0);
-    }
     await page.evaluate(() => { document.documentElement.dir = 'rtl'; });
     const m = await measure(page);
     expect(m.hero.left).toBeCloseTo(0, 0);

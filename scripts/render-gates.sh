@@ -77,6 +77,7 @@ GATES_BUILD=(
   notebook-loads
   nav-island
   contents-ruler
+  contents-lens
   header-none
   edge-clamp
   vertical-nav-chrome

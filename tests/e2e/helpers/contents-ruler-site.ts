@@ -46,7 +46,7 @@ const FILLER =
   "is in a hurry. People cross the quay with buckets and say very little, " +
   "and the gulls, who say a great deal, are mostly ignored.";
 
-const paragraphs = (n: number): string =>
+export const paragraphs = (n: number): string =>
   Array.from({ length: n }, (_, i) => `${FILLER} ${"Tide and rope. ".repeat(i + 3)}`).join("\n\n");
 
 const longBody = SECTIONS.map((title, i) => {
@@ -86,7 +86,7 @@ export function chunk(type: string, data: Buffer): Buffer {
 
 /** A flat-colour PNG wider than moss's first ladder rung (800), so the page
  *  carries a `srcset` and the choice of thumbnail has something to choose. */
-function png(width: number, height: number, [r, g, b]: [number, number, number]): Buffer {
+export function png(width: number, height: number, [r, g, b]: [number, number, number]): Buffer {
   const row = Buffer.alloc(1 + width * 3);
   for (let x = 0; x < width; x++) row.set([r, g, b], 1 + x * 3);
   const ihdr = Buffer.alloc(13);
@@ -167,55 +167,10 @@ uid: "crg00105"
 
 ${SHORT_SECTIONS.map((t) => `## ${t}\n\n${paragraphs(3)}`).join("\n\n")}
 `,
-    "Essays/Reading/Full.md": `---
-title: Full width collections
-uid: "crg00107"
-contents: open
-content_width: full
----
-
-:::hero {image=../../cover.svg}
-:::
-
-${paragraphs(2)}
-
-:::{.band screen}
-A band as wide as the window.
-:::
-
-${openBody}
-`,
-    // Short titles: the column is the list's own width, so it is narrow.
-    "Essays/Reading/Brief.md": `---
-title: Brief
-uid: "crg00108"
-contents: open
-content_width: full
----
-
-${["Quays", "Nets", "Ropes"].map((t) => `## ${t}\n\n${paragraphs(4)}`).join("\n\n")}
-`,
-    // One title far longer than the column may be: it is cut at the cap.
-    "Essays/Reading/Capped.md": `---
-title: Capped
-uid: "crg00109"
-contents: open
----
-
-${[LONG_LATIN_TITLE, "Nets", "Ropes"].map((t) => `## ${t}\n\n${paragraphs(4)}`).join("\n\n")}
-`,
-    "Essays/Reading/Boxed.md": `---
-title: Boxed
-uid: "crg00110"
-contents: open
----
-
-${OPEN_SECTIONS.slice(0, 3).map((t) => `::: {.boxed}\n## ${t}\n\n${paragraphs(3)}\n:::`).join("\n\n")}
-`,
     "Essays/Reading/Open.md": `---
 title: Collections
 uid: "crg00106"
-contents: open
+contents: pictures
 ---
 
 ${paragraphs(2)}
@@ -228,8 +183,6 @@ ${openBody}
 lang = "en"
 floating_nav = true
 `,
-    // A section in a panel that reaches past the text on both sides.
-    ".moss/theme/style.css": ".boxed { margin-inline: -40px; padding: 24px 40px; background: #eee; }\n",
   },
 };
 
@@ -244,7 +197,7 @@ export const CONTENTS_HOME_GATE: ScratchSiteSpec = {
     "index.md": `---
 title: Shelf
 uid: "crg00201"
-contents: open
+contents: pictures
 ---
 
 # Shelf

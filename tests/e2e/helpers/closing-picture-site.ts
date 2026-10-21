@@ -54,7 +54,7 @@ An invented site for the closing-picture render gate.
     "Essays/Long.md": `---
 title: A long essay
 uid: "cpg00102"
-contents: open
+contents: pictures
 ---
 
 ${["Quays", "Nets", "Ropes", "Lamps"].map((t) => `## ${t}\n\n${filler(8)}`).join("\n\n")}

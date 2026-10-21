@@ -1,6 +1,6 @@
 /**
  * section-pictures.ts — the small picture that stands for a section in a
- * contents list that has asked for pictures (`contents: open`).
+ * contents list that has asked for pictures (`contents: pictures`).
  *
  * A section's picture is the first `<img>` between its heading and the next
  * heading of the same or a higher level, so a picture inside a subsection
@@ -13,9 +13,9 @@
  * has one file, which is used.
  */
 
-/** Whether the page asked for its contents to stay open, with pictures. */
-export function contentsOpen(): boolean {
-  return document.body.dataset.contents === "open";
+/** Whether the page asked for pictures in its contents list. */
+export function contentsPictures(): boolean {
+  return document.body.dataset.contents === "pictures";
 }
 
 /** The narrowest candidate of a `srcset`, or null when there is none. */

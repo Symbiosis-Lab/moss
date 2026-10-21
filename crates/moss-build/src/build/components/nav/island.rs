@@ -16,8 +16,8 @@ pub(super) enum IslandShape {
     /// button; none when the page has no trail.
     #[default]
     Trail,
-    /// A page that asked for its contents open but has no trail (the home
-    /// page): the island with the page's title as its only crumb.
+    /// A page with `contents: pictures` but no trail (the home page): the
+    /// island, which mounts the ruler, with the page's title as its only crumb.
     TitleOnly(String),
     /// `[site].header = "none"`: the page's only chrome, with no trail.
     Pinned,
@@ -86,8 +86,8 @@ impl<'a> NavigationBuilder<'a> {
         if self.header_mode == super::HeaderMode::Nav && trail.is_some() {
             return String::new();
         }
-        // A page that asked for its contents open but has no trail (the home
-        // page) still gets the island, with itself as the only crumb.
+        // A page with `contents: pictures` but no trail (the home page) still
+        // gets the island, with itself as the only crumb.
         let only;
         let segments = match (trail, &self.island) {
             (Some(trail), _) => trail,
