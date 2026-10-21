@@ -1112,14 +1112,14 @@ footer.container:has(> .moss-subscribe) > .moss-colophon {
  * flex rule so a footer with both is a grid, and so `margin-inline-start:
  * auto` on the form still right-anchors it within its row.
  */
-footer.container:has(> section, > .footer-bottom) {
+footer.container:has(> section:not(.moss-hero), > .footer-bottom) {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
   gap: var(--moss-space-lg) var(--moss-space-xl);
   max-inline-size: var(--moss-site-max-width);
 }
-footer.container:has(> section, > .footer-bottom)::before,
-footer.container:has(> section, > .footer-bottom) > :not(section) {
+footer.container:has(> section:not(.moss-hero), > .footer-bottom)::before,
+footer.container:has(> section:not(.moss-hero), > .footer-bottom) > :not(section:not(.moss-hero)) {
   grid-column: 1 / -1;
 }
 /* The bottom row: what follows a `---` line in footer.md. */
@@ -1141,6 +1141,56 @@ footer.container > section > :last-child {
 footer.container > section > :is(h1, h2, h3, h4, h5, h6) {
   font-size: 1em;
   margin-block-end: var(--moss-space-xs);
+}
+
+/*
+ * Closing picture: a footer.md whose last block is a hero (the build marks it
+ * `moss-hero-closing` and makes it `mobile=overlay`, so the hero rules lay out
+ * the words, panel and crop). The footer gives up its column, padding, divider
+ * and fill so the picture is the page's last painted box; its bleed is the
+ * `.moss-hero` rule below. Other footer content stays in the reading column.
+ */
+body > footer.container:has(> .moss-hero-closing) {
+  /* The colophon's row along the picture's bottom edge. */
+  --moss-closing-strip: 2.25rem;
+  display: block;
+  position: relative;
+  max-inline-size: none;
+  margin-right: 0;
+  padding: 0;
+  border-image: none;
+}
+body > footer.container:has(> .moss-hero-closing)::before {
+  content: none;
+}
+body > footer.container:has(> .moss-hero-closing) > :not(.moss-hero-closing, .moss-colophon) {
+  max-inline-size: var(--moss-content-width);
+  margin-inline: auto;
+  padding-inline: var(--moss-container-padding);
+}
+/* Doubled attribute selectors: out-rank the mobile-overlay hero's own padding
+   and height floor, which assume a hero that opens a page. The height is a
+   frame for the words: about a 21:9 picture, never under what a heading, a
+   link and a credit need on a phone (18rem) or over 40rem. */
+body > footer.container > .moss-hero-closing[data-mobile="overlay"][data-overlay] {
+  inline-size: 100%;
+  margin: 0;
+  min-block-size: var(--moss-hero-max-height, clamp(18rem, 42vw, 40rem));
+  padding: 0 0 var(--moss-closing-strip);
+}
+body > footer.container:has(> .moss-hero-closing) > .moss-colophon {
+  position: absolute;
+  inset-block-end: 0;
+  inset-inline: 0;
+  block-size: var(--moss-closing-strip);
+  margin: 0;
+  padding: 0;
+}
+/* White with the hero text's own shadow: the colophon sits on the picture. */
+body > footer.container:has(> .moss-hero-closing) > .moss-colophon a {
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  padding-block: 0.25rem 0;
 }
 
 /* ==========================================================================
@@ -6835,6 +6885,21 @@ article a:where(:not(.moss-btn)):focus {
    in the HTML template. The base styles here define appearance, not layout.
    ========================================================================== */
 
+/* Full-bleed by DOM position: a body-level flex item, outside <main>.
+   body's padding-right narrows this element's containing block, so
+   adding the INSET back (not the reserve — much less, 0px from 1316px
+   up) lands the banner on the viewport's right edge; `overflow-x: clip`
+   on body absorbs the overhang. The contents inset is body's physical
+   padding-left, so the margin is physical too. No fallback: `body` always
+   declares it. Not a negative margin on the right — that silently did
+   nothing, since an explicit width turns off the `align-items: stretch`
+   a negative margin needs. The closing footer is a second such box. */
+.moss-hero,
+body > footer.container:has(> .moss-hero-closing) {
+  inline-size: calc(100% + var(--moss-sidenote-inset) + var(--moss-contents-inset, 0px));
+  margin-left: calc(-1 * var(--moss-contents-inset, 0px));
+}
+
 .moss-hero {
   position: relative;
   /* `position: relative` alone does NOT create a stacking context (that
@@ -6844,15 +6909,6 @@ article a:where(:not(.moss-btn)):focus {
      paint it behind an opaque theme layer instead of just behind this
      hero's own text. */
   isolation: isolate;
-  /* Full-bleed by DOM position: a body-level flex item, outside <main>.
-     body's padding-right narrows this element's containing block, so
-     adding the INSET back (not the reserve — much less, 0px from 1316px
-     up) lands the banner on the viewport's right edge; `overflow-x: clip`
-     on body absorbs the overhang. No fallback: `body` always declares it.
-     Not a negative margin — that silently did nothing, since an explicit
-     width turns off the `align-items: stretch` a negative margin needs. */
-  inline-size: calc(100% + var(--moss-sidenote-inset) + var(--moss-contents-inset, 0px));
-  margin-left: calc(-1 * var(--moss-contents-inset, 0px));
   /* Reads the same hook as the media cap below, with its own (looser) fallback:
      the wrapper clips, the media scales, so they want different defaults but the
      same off switch. Without this, `--moss-hero-max-height: none` lifted the
@@ -6861,6 +6917,12 @@ article a:where(:not(.moss-btn)):focus {
   max-block-size: var(--moss-hero-max-height, min(80vb, 800px));
   overflow: hidden;
   margin-block-end: var(--moss-space-lg);
+}
+
+/* `dark=` pairs a second picture with the first; the theme picks one. */
+:root:not([data-theme="dark"]) .moss-hero [data-hero-variant="dark"],
+:root[data-theme="dark"] .moss-hero [data-hero-variant="light"] {
+  display: none;
 }
 
 .moss-hero img {
@@ -7097,6 +7159,11 @@ article a:where(:not(.moss-btn)):focus {
 :dir(rtl) .moss-hero[data-align="end"]::before {
   background:
     linear-gradient(to top, rgba(0,0,0,0.62) 0%, rgba(0,0,0,0.30) 32%, transparent 62%),
+    linear-gradient(to right, rgba(0,0,0,0.30) 0%, transparent 55%);
+}
+.moss-hero[data-align="top"]::before {
+  background:
+    linear-gradient(to bottom, rgba(0,0,0,0.62) 0%, rgba(0,0,0,0.30) 32%, transparent 62%),
     linear-gradient(to right, rgba(0,0,0,0.30) 0%, transparent 55%);
 }
 .moss-hero[data-align="center"]::before {
@@ -7367,6 +7434,11 @@ article a:where(:not(.moss-btn)):focus {
     max-block-size: none;
   }
 
+  /* `align=top` lifts the panel to the top of the picture, at the inline-start. */
+  .moss-hero[data-overlay][data-align="top"] {
+    justify-content: flex-start;
+  }
+
   /* `align=end` moves the panel to the inline-end (flex-end resolves per direction). */
   .moss-hero[data-overlay][data-align="end"] {
     align-items: flex-end;
@@ -7597,6 +7669,12 @@ article a:where(:not(.moss-btn)):focus {
     min-block-size: var(--moss-hero-max-height, min(60vb, 480px));
     max-block-size: none;
     padding-block-start: var(--moss-hero-mobile-band, min(45vb, 320px));
+  }
+
+  /* `align=top`: words at the top, the reserved picture band below them. */
+  .moss-hero[data-mobile="overlay"][data-align="top"]:not([data-fit="plate"]) {
+    justify-content: flex-start;
+    padding-block: 0 var(--moss-hero-mobile-band, min(45vb, 320px));
   }
 
   .moss-hero[data-mobile="overlay"]:not([data-fit="plate"]) img,

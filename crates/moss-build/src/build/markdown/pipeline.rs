@@ -1102,7 +1102,13 @@ pub fn process_markdown_file(
     //    returns the rendered HTML + OG-fallback fields. The hook
     //    delegates to `render_hero_html_typed` for byte parity with the
     //    legacy upstream hoist.
-    let hero_extraction = moss_core::ast::extract_hero(&mut doc, &pipeline_hooks);
+    // A footer that ends in a hero closes the page with it: its heroes render
+    // where they are written, not in a hero slot the footer does not have.
+    let hero_extraction = if injects_into_every_page && crate::build::footer::ends_in_hero(&doc) {
+        None
+    } else {
+        moss_core::ast::extract_hero(&mut doc, &pipeline_hooks)
+    };
     let mut hero_html = hero_extraction.as_ref().map(|h| h.html.clone());
     let hero_image_url = hero_extraction.as_ref().and_then(|h| h.image_url.clone());
     let hero_overlay_text = hero_extraction

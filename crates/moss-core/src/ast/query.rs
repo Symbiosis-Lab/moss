@@ -698,6 +698,7 @@ mod tests {
             slide_captions: Vec::new(),
             header: None,
             from: None,
+            dark: None,
         }))]);
         match find_first_block_image(&doc) {
             Some(src) => {

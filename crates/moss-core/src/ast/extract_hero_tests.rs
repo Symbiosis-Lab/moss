@@ -22,6 +22,7 @@ fn hero_block(image_url: Option<&str>, overlay: Vec<Block>) -> Block {
         slide_captions: Vec::new(),
         header: None,
         from: None,
+        dark: None,
     }))
 }
 
@@ -210,4 +211,14 @@ fn alt_key_sets_the_hero_image_alt() {
 
     let (without_alt, _, _) = parse_hero("{image=cover.jpg}", "", &cfg);
     assert_eq!(without_alt.image_alt, "");
+}
+
+/// `dark=` names the picture dark mode shows; without it there is none.
+#[test]
+fn dark_picture_is_read_from_the_attribute_block() {
+    let cfg = ParseConfig::default();
+    let (hero, _, _) = parse_hero("{image=day.jpg dark=night.jpg}", "", &cfg);
+    assert_eq!(hero.dark, Some(Url::unresolved("night.jpg")));
+    let (plain, _, _) = parse_hero("{image=day.jpg}", "", &cfg);
+    assert_eq!(plain.dark, None);
 }

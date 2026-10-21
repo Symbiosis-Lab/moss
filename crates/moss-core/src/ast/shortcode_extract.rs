@@ -176,11 +176,28 @@ fn parse_shortcode_block(
                 }
             }
             if let Some(ref v) = sc.align {
-                if v != "end" && v != "center" {
+                if !matches!(v.as_str(), "top" | "end" | "center" | "start") {
                     warns.warnings.push(format!(
                         "shortcode `:::hero` has unrecognized `align={v}`. \
-                         Only `align=end` and `align=center` are recognized. The attribute is ignored."
+                         Only `align=top`, `align=end` and `align=center` are recognized. The attribute is ignored."
                     ));
+                }
+            }
+            if let Some(dark) = &sc.dark {
+                let is_video = |u: &super::url::Url| {
+                    let raw = match u {
+                        super::url::Url::Unresolved(s) => s.as_str(),
+                        super::url::Url::Resolved(r) => r.href.as_str(),
+                    };
+                    matches!(
+                        crate::resolve::ext_kind::reference_kind_for_ext(raw.rsplit('.').next().unwrap_or("")),
+                        crate::resolve::ext_kind::ExtKind::Video
+                    )
+                };
+                if sc.image.is_none() || !sc.extra_images.is_empty() || sc.image.as_ref().is_some_and(is_video) || is_video(dark) {
+                    warns.warnings.push(
+                        "shortcode `:::hero` has `dark=` without a single picture to pair it with (a slideshow, a video, or no `image=`). The attribute is ignored.".to_string(),
+                    );
                 }
             }
             if let Some(ref v) = sc.header {

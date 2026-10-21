@@ -71,6 +71,31 @@ fn hero_href_is_video(href: &str) -> bool {
     )
 }
 
+/// One hero picture through the image synthesizer. With a snapshot the
+/// `<picture>`/dims/LQIP shape is available; without one only the bare `<img>`
+/// is, since a `.webp` companion nothing registered would 404 in preview.
+/// `extra` is attribute text joined after `alt`.
+fn hero_picture_html(
+    href: &str,
+    alt: &str,
+    eager: bool,
+    extra: &str,
+    assets: Option<&moss_core::asset_snapshot::AssetSnapshot>,
+    plate: bool,
+) -> String {
+    let opts = moss_core::render::image::ImageRenderOptions {
+        eager: eager && assets.is_some(),
+        extra_attrs: (!extra.is_empty()).then_some(extra),
+        ..Default::default()
+    };
+    let empty = moss_core::asset_snapshot::AssetSnapshot::new();
+    let (assets, ctx) = match assets {
+        Some(a) => (a, moss_core::render::image::ImageContext::Hero { plate }),
+        None => (&empty, moss_core::render::image::ImageContext::HeroBare),
+    };
+    moss_core::render::image::synthesize_image_html(href, alt, assets, ctx, &opts)
+}
+
 /// Render the typed [`HeroShortcode`] AST node to HTML.
 ///
 /// Mirrors [`render_hero_html`] but reads from the typed-AST representation
@@ -145,7 +170,7 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
         String::new()
     };
     let align_attr = match args.align.as_deref() {
-        Some(v @ ("end" | "center")) => format!(r#" data-align="{v}""#),
+        Some(v @ ("top" | "end" | "center")) => format!(r#" data-align="{v}""#),
         _ => String::new(),
     };
     // `:::hero {header=over}`: the CSS lays the site header over this hero,
@@ -258,6 +283,18 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
         && resolved_image.as_deref().is_some_and(hero_href_is_video)
         && extra_hrefs.iter().all(|h| hero_href_is_video(h));
 
+    // A pair needs one picture each side: a video or a slideshow has none to
+    // swap (the parser warns).
+    let dark_href = match (&args.dark, &resolved_image) {
+        (Some(moss_core::ast::Url::Resolved(dark)), Some(light))
+            if extra_hrefs.is_empty() && !hero_href_is_video(light) && !hero_href_is_video(&dark.href) =>
+        {
+            Some(dark.href.as_str())
+        }
+        _ => None,
+    };
+    let pair_attr = |v: &str| if dark_href.is_some() { format!(" data-hero-variant=\"{v}\"") } else { String::new() };
+
     let img_part = match (&resolved_image, media_lookup) {
         (Some(href), _) if hero_href_is_video(href) => {
             let empty_snapshot = moss_core::asset_snapshot::AssetSnapshot::new();
@@ -277,71 +314,27 @@ pub(crate) fn render_hero_html_typed<R: Fn(&str) -> String>(
                 )
             }
         }
-        (Some(href), Some(_lookup)) => {
-            // Route through synthesizer: gives dims, LQIP, optional
-            // <picture><source srcset>, plus loading=eager + fetchpriority.
-            // The hero's inline `style="object-fit:..."` from MediaAttrs is
-            // passed via extra_attrs so it lands AFTER alt, matching the
-            // pre-Step-3 byte shape (regex pass preserved trailing attrs).
-            let extra = if style.is_empty() {
-                None
-            } else {
-                // style already starts with a space — strip it so the
-                // synthesizer's extra_attrs joiner adds exactly one.
-                Some(style.trim_start().to_string())
-            };
-            let opts = moss_core::render::image::ImageRenderOptions {
-                eager: true,
-                extra_attrs: extra.as_deref(),
-                ..Default::default()
-            };
-            let assets = media_assets.expect("media_lookup is Some so assets is Some");
-            moss_core::render::image::synthesize_image_html(
-                href,
-                &args.image_alt,
-                &assets,
-                moss_core::render::image::ImageContext::Hero { plate: is_plate },
-                &opts,
-            )
-        }
-        (Some(href), None) => {
-            // Phase 2E PR2 (2026-05-26): route through the synthesizer's
-            // `HeroBare` carve-out. The byte shape is identical to the
-            // legacy `format!` above — `<img src="X" alt=""[ STYLE] />`
-            // — but the path through `synthesize_image_html` lets us
-            // retire the regex post-pass in a follow-up PR3 once every
-            // emitter routes through the synthesizer. The asset-publish
-            // invariant rules out `ImageContext::Hero` for this branch:
-            // no `MediaDimensionLookup` means no AssetRegistry has been
-            // primed for the source's `.webp` companion, and emitting a
-            // `<source srcset="*.webp">` against an unregistered URL
-            // would 404 in preview mode (see `.claude/CLAUDE.md` §
-            // "Asset publish invariant").
-            //
-            // The inline `style` fragment (already ` style="..."` with a
-            // leading space + escaped) is threaded via `extra_attrs`,
-            // which the synthesizer joins with a single leading space
-            // — strip the existing leading space first to avoid a
-            // double space.
-            let extra = if style.is_empty() {
-                None
-            } else {
-                Some(style.trim_start().to_string())
-            };
-            let opts = moss_core::render::image::ImageRenderOptions {
-                extra_attrs: extra.as_deref(),
-                ..Default::default()
-            };
-            let empty_snapshot = moss_core::asset_snapshot::AssetSnapshot::new();
-            moss_core::render::image::synthesize_image_html(
-                href,
-                &args.image_alt,
-                &empty_snapshot,
-                moss_core::render::image::ImageContext::HeroBare,
-                &opts,
-            )
-        }
+        // `style` starts with a space; the synthesizer adds exactly one.
+        (Some(href), _) => hero_picture_html(
+            href,
+            &args.image_alt,
+            // The closing picture is the last thing on the page.
+            !args.classes.split_whitespace().any(|c| c == "moss-hero-closing"),
+            &format!("{}{}", style.trim_start(), pair_attr("light")),
+            media_assets,
+            is_plate,
+        ),
         (None, _) => String::new(),
+    };
+
+    // `dark=`: the stylesheet shows one of the pair by theme. The dark one is
+    // lazy: it is only needed once the theme is dark.
+    let img_part = match dark_href {
+        Some(dark) => format!(
+            "{img_part}{}",
+            hero_picture_html(dark, "", false, &format!("{}{}", style.trim_start(), pair_attr("dark")), media_assets, is_plate)
+        ),
+        None => img_part,
     };
 
     // Multi-image hero: wrap every slide (primary first) and mark the

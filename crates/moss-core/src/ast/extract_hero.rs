@@ -299,6 +299,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
     let alt_attr = parsed.get("alt").unwrap_or_default().to_string();
     let header = parsed.get("header").map(str::to_string);
     let from = parsed.get("from").map(str::to_string).filter(|v| !v.trim().is_empty());
+    let dark = parsed.get("dark").filter(|v| !v.trim().is_empty()).map(|v| Url::unresolved(v.trim().to_string()));
 
     // Priority 1: `image=` attribute.
     if let Some(image_value) = parsed.get("image") {
@@ -326,6 +327,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 slide_captions: Vec::new(),
                 header: header.clone(),
                 from: from.clone(),
+                dark: dark.clone(),
             },
             false,
             overlay_warnings,
@@ -360,6 +362,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 slide_captions: Vec::new(),
                 header: header.clone(),
                 from: from.clone(),
+                dark: dark.clone(),
             },
             false,
             overlay_warnings,
@@ -435,6 +438,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
             },
             header,
             from,
+            dark,
         },
         used_priority_3,
         overlay_warnings,
@@ -672,14 +676,18 @@ pub(crate) fn hero_asset_spans(
     // attribute block. `parse_attrs_spanned` is handed the rest of the
     // document from the `{` — it returns at the first `}` at item position,
     // so it terminates exactly where the gathered-args form would. See its
-    // doc comment for the constraint that makes this legal.
+    // doc comment for the constraint that makes this legal. A `dark=` picture
+    // is an asset reference whichever way the light one is written.
+    let mut has_image_attr = false;
     if let Some(brace_rel) = opener_masked.find('{') {
         let brace_abs = obase + brace_rel;
         #[allow(clippy::string_slice)]
         // `find` on ASCII '{' → char boundary.
         let rest = &source[brace_abs..];
         if let Ok((_, kvs)) = crate::ast::attrs::parse_attrs_spanned(rest) {
-            if let Some(kv) = kvs.iter().find(|kv| kv.key == "image") {
+            for key in ["image", "dark"] {
+                let Some(kv) = kvs.iter().find(|kv| kv.key == key) else { continue };
+                has_image_attr |= key == "image";
                 let value = brace_abs + kv.value.start..brace_abs + kv.value.end;
                 let mut item = brace_abs + kv.item.start..brace_abs + kv.item.end;
                 // Absorb one leading space so removing the item doesn't
@@ -698,12 +706,14 @@ pub(crate) fn hero_asset_spans(
                     quote: if raw.starts_with('"') { Some('"') } else { None },
                     value,
                     outer: item,
-                    container: PathContainer::ShortcodeAttr { key: "image".to_string() },
+                    container: PathContainer::ShortcodeAttr { key: key.to_string() },
                 });
-                // Body lines are pure overlay when `image=` is present.
-                return;
             }
         }
+    }
+    // Body lines are pure overlay when `image=` is present.
+    if has_image_attr {
+        return;
     }
 
     // Priority 2: a positional path on the directive line, before any `{`.

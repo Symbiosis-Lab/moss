@@ -2321,6 +2321,28 @@ fn hero_without_align_attr_has_none() {
 }
 
 #[test]
+fn hero_align_top_is_recognised_and_start_stays_silent() {
+    for v in ["top", "start", "end", "center"] {
+        let result = extract_shortcodes(&format!(":::hero {{image=hero.jpg align={v}}}\n# Title\n:::\n"));
+        assert!(result.warnings.is_empty(), "align={v}: {:?}", result.warnings);
+    }
+}
+
+#[test]
+fn hero_dark_with_nothing_to_pair_emits_warning() {
+    for md in [
+        ":::hero {dark=night.jpg}\n# Title\n:::\n",
+        ":::hero {image=clip.mp4 dark=night.jpg}\n# Title\n:::\n",
+        ":::hero {dark=night.jpg}\na.jpg\nb.jpg\n# Title\n:::\n",
+    ] {
+        let result = extract_shortcodes(md);
+        assert!(result.warnings.iter().any(|w| w.contains("`dark=`")), "{md:?}: {:?}", result.warnings);
+    }
+    let paired = extract_shortcodes(":::hero {image=day.jpg dark=night.jpg}\n# Title\n:::\n");
+    assert!(paired.warnings.is_empty(), "{:?}", paired.warnings);
+}
+
+#[test]
 fn hero_unknown_align_value_emits_warning() {
     let md = ":::hero {image=hero.jpg align=middle}\n# Title\n:::\n";
     let result = extract_shortcodes(md);
@@ -3117,6 +3139,7 @@ fn spans_agree_with_parsers() {
         ":::hero\na.jpg\nb.jpg\ncopy\n:::\n",
         ":::hero\n![[a.png]]\ncopy\n:::\n",
         ":::hero\ncopy only\n:::\n",
+        ":::hero {image=day.jpg dark=night.jpg}\ncopy\n:::\n",
     ];
     for src in hero_cases {
         let opener = src.lines().next().unwrap();
@@ -3129,6 +3152,9 @@ fn spans_agree_with_parsers() {
         );
         let mut want: Vec<String> = Vec::new();
         if let Some(u) = &hero.image {
+            want.push(crate::media::strip_wikilink(url_raw(u)).to_string());
+        }
+        if let Some(u) = &hero.dark {
             want.push(crate::media::strip_wikilink(url_raw(u)).to_string());
         }
         want.extend(

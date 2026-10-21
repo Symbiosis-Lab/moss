@@ -75,6 +75,22 @@ Set `[site] rss_footer = true` in `.moss/config.toml` to add an RSS feed link to
 
 A footer with nothing to show — no `footer.md`, no `footer: true` pages, no feed link, no subscribe form — doesn't render at all: no empty band, no divider, nothing between your content and moss's own colophon line at the foot of the page. That line is a small moss mark linking to mosspub.com; to hide it, add `.moss-colophon { display: none; }` to `.moss/theme/style.css`.
 
+### Closing picture
+
+End `footer.md` with a `:::hero` and the page closes with that picture, edge to edge, the last thing on the page. The words sit on the picture where `align` puts them (`align=top` is the top, for a sky) at every width, including a phone, and moss's own colophon moves onto the picture's bottom edge. `dark=` names the picture dark mode shows in place of `image=`.
+
+```
+:::hero {image=closing.jpg dark=closing-night.jpg align=top}
+## The shelf is open. What should stand on it next?
+
+[Propose a collection](https://example.org/new)
+
+*Credit line for the picture.*
+:::
+```
+
+The footer drops its column width, padding, divider and fill for this. Anything written above the hero stays in the reading column.
+
 ### Footer slot
 
 Plugins can emit HTML into the `footer-end` slot, the trailing position after the link list — used today for the auto-injected email subscribe form. Authors compose the leading position instead, with `footer.md` or a page's own `slot: footer-left` frontmatter.

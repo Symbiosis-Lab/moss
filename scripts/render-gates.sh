@@ -99,6 +99,7 @@ GATES_BUILD=(
   places-explorer-single
   footer-end-space
   facts-margin
+  closing-picture
 )
 
 # The rest: no config, spec, or harness in this gate's chain ever reads

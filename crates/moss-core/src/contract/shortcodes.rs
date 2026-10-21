@@ -98,6 +98,7 @@ fn entry(kind: ShortcodeKind) -> ShortcodeCatalogEntry {
                 ShortcodeAttrSpec { name: "header", asset_kinds: &[], flag: false },
                 ShortcodeAttrSpec { name: "mobile", asset_kinds: &[], flag: false },
                 ShortcodeAttrSpec { name: "align", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "dark", asset_kinds: &[], flag: false },
                 ShortcodeAttrSpec { name: "from", asset_kinds: &[], flag: false },
             ],
             Some("image"),
@@ -272,6 +273,7 @@ mod tests {
                 "header" => h.header.is_some(),
                 "mobile" => h.mobile.is_some(),
                 "align" => h.align.is_some(),
+                "dark" => h.dark.is_some(),
                 "from" => h.from.is_some(),
                 _ => false,
             };

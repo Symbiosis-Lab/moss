@@ -14,7 +14,7 @@
 //! build warning).
 
 use crate::build::slots::Slot;
-use moss_core::ast::{Block, BlockMeta, Document};
+use moss_core::ast::{Block, BlockMeta, Document, Shortcode};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -431,6 +431,36 @@ pub fn apply_last_known_good_fallback(
 /// A footer with neither headings nor a break is left as it is; one with a
 /// break but no headings gets its top part as a single section.
 pub(crate) fn section_footer_blocks(doc: &mut Document) {
+    // A closing hero stays a direct child of the footer, after its columns.
+    let closing = ends_in_hero(doc).then(|| (doc.blocks.pop(), doc.block_meta.pop()));
+    wrap_footer_sections(doc);
+    if let Some((Some(mut block), Some(meta))) = closing {
+        mark_closing_hero(&mut block);
+        doc.blocks.push(block);
+        doc.block_meta.push(meta);
+    }
+}
+
+/// Whether the document's last block is a `:::hero`.
+pub(crate) fn ends_in_hero(doc: &Document) -> bool {
+    matches!(doc.blocks.last(), Some(Block::Shortcode(Shortcode::Hero(_))))
+}
+
+/// Make a footer's closing hero the page's closing picture: the class
+/// `moss-hero-closing` is what the stylesheet lays out edge to edge, and
+/// `mobile=overlay` keeps the words on the picture on a phone, where a hero
+/// otherwise stacks them below it.
+fn mark_closing_hero(block: &mut Block) {
+    if let Block::Shortcode(Shortcode::Hero(hero)) = block {
+        if !hero.classes.is_empty() {
+            hero.classes.push(' ');
+        }
+        hero.classes.push_str("moss-hero-closing");
+        hero.mobile = Some("overlay".to_string());
+    }
+}
+
+fn wrap_footer_sections(doc: &mut Document) {
     let brk = doc.blocks.iter().position(|b| matches!(b, Block::ThematicBreak));
     let top_end = brk.unwrap_or(doc.blocks.len());
     // A heading opens a section unless it is deeper than the one already open.

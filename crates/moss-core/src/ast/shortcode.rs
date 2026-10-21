@@ -402,6 +402,10 @@ pub struct HeroShortcode {
     /// the listing is empty. Resolved at build time, not here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
+    /// The picture to show in dark mode (`dark=night.jpg`), replacing `image`
+    /// there. The overlay, crop and tone follow the light picture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dark: Option<Url>,
 }
 
 impl HeroShortcode {

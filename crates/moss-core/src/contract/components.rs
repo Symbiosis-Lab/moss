@@ -1304,9 +1304,9 @@ pub const COMPONENTS: &[ComponentEntry] = &[
             },
             DataAttr {
                 name: "data-align",
-                values: &["end"],
+                values: &["top", "end", "center"],
                 default: "",
-                description: "Moves the overlay panel to the INLINE-END edge (right in LTR, left in RTL) instead of the default start. Emitted **only** for `:::hero {align=end}`. For a portrait subject in a wide frame the crop cannot move the subject sideways — the image already spans the full width — so when the subject sits at the start edge, this moves the words to the other end instead. At >= 48rem only: below the mobile breakpoint under `mobile=overlay` the panel is already full width, so this has no visible effect there, and it does nothing to a hero with no overlay text.",
+                description: "`top` lifts the overlay panel to the TOP of the picture (at the inline-start), for a picture whose quiet area is its sky. `end` moves the overlay panel to the INLINE-END edge (right in LTR, left in RTL) instead of the default start. Emitted **only** for `:::hero {align=…}`. For a portrait subject in a wide frame the crop cannot move the subject sideways — the image already spans the full width — so when the subject sits at the start edge, this moves the words to the other end instead. At >= 48rem only: below the mobile breakpoint under `mobile=overlay` the panel is already full width, so this has no visible effect there, and it does nothing to a hero with no overlay text.",
             },
             DataAttr {
                 name: "data-header",
@@ -1384,6 +1384,17 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         status: Status::Confirmed,
         since: "0",
         description: "Caption or credit for a hero image, from `:::hero {caption=\"…\"}`. A SIBLING of `.moss-hero`, immediately after it — not a child: the section is a fixed-height cropping frame, and a photographer's credit has to survive as text below the picture rather than be printed across it. Rendered as inline markdown, so a credit can be a link, exactly like a `byline:` / `colophon:` row.",
+    },
+    ComponentEntry {
+        class: "moss-hero-closing",
+        kind: "instance",
+        parent: "moss-hero",
+        data_attrs: &[],
+        example_html: r#"<footer class="container"><section class="moss-hero moss-hero-closing" data-mobile="overlay" data-align="top" data-overlay>…</section><div class="moss-colophon">…</div></footer>"#,
+        example_markdown: ":::hero {image=closing.jpg dark=closing-night.jpg align=top}\n## The shelf is open.\n:::\n",
+        status: Status::Confirmed,
+        since: "0",
+        description: "The hero that is the last block of `footer.md`: the page's closing picture. The footer drops its column, padding, divider and fill, and the picture runs the viewport's full width as the last painted thing on the page, with its words on it at every width (the build adds `data-mobile=\"overlay\"`) and the colophon on its bottom edge. A `dark=` picture replaces the light one in dark mode through `data-hero-variant=\"light\"|\"dark\"` on each picture.",
     },
     ComponentEntry {
         class: "moss-hero-slides",

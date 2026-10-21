@@ -280,6 +280,9 @@ fn resolve_shortcode_image_urls(
                 if let Some(image_url) = args.image.as_mut() {
                     resolve_asset_url(image_url, "", graph, source_path, found);
                 }
+                if let Some(dark_url) = args.dark.as_mut() {
+                    resolve_asset_url(dark_url, "", graph, source_path, found);
+                }
                 // Multi-image hero: every extra slide resolves exactly like
                 // the primary — skipping this re-creates the 2026-05-29
                 // home-hero regression (raw filenames at depth) per slide.

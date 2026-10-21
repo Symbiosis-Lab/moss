@@ -173,6 +173,9 @@ where
             if let Some(image) = args.image.as_mut() {
                 v.url(image);
             }
+            if let Some(dark) = args.dark.as_mut() {
+                v.url(dark);
+            }
             for image in &mut args.extra_images {
                 v.url(image);
             }

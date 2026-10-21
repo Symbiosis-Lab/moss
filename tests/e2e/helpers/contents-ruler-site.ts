@@ -73,7 +73,7 @@ const CRC = Array.from({ length: 256 }, (_, n) => {
   for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
   return c >>> 0;
 });
-function chunk(type: string, data: Buffer): Buffer {
+export function chunk(type: string, data: Buffer): Buffer {
   const body = Buffer.concat([Buffer.from(type), data]);
   let crc = 0xffffffff;
   for (const byte of body) crc = CRC[(crc ^ byte) & 0xff] ^ (crc >>> 8);

@@ -37,3 +37,23 @@ export function parseColor(css: string): { r: number; g: number; b: number; a: n
   const [r, g, b, a] = nums.map(Number);
   return { r, g, b, a: a ?? 1 };
 }
+
+/**
+ * The panel is translucent, so its EFFECTIVE colour depends on what is
+ * behind it — composite it over pure black and pure white ourselves (the
+ * two extremes that bound every actual pixel of the photo underneath;
+ * `panel_lightness_for_contrast`'s doc comment in color_extract.rs spells
+ * out why those two are enough) rather than trust a screenshot of this one
+ * fixture's accidental backdrop.
+ */
+export function worstCaseContrast(panel: string, text: string): { overBlack: number; overWhite: number } {
+  const p = parseColor(panel);
+  const textLum = relativeLuminance(...(Object.values(parseColor(text)).slice(0, 3) as [number, number, number]));
+  const composite = (backdrop: number) => p.a * p.r + (1 - p.a) * backdrop;
+  const over = (backdrop: number) =>
+    contrastRatio(
+      relativeLuminance(composite(backdrop), p.a * p.g + (1 - p.a) * backdrop, p.a * p.b + (1 - p.a) * backdrop),
+      textLum,
+    );
+  return { overBlack: over(0), overWhite: over(255) };
+}
