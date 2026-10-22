@@ -3,7 +3,7 @@ use moss_core::date::{parse_edtf, Edtf};
 use moss_core::fields::{FieldKind, PageLink, Placed};
 
 fn decl(name: &str, kind: FieldKind, place: Place) -> FieldDecl {
-    FieldDecl { name: name.into(), kind, choices: vec![], place: Some(place), label: vec![], scope: vec![], of: vec![] }
+    FieldDecl { name: name.into(), kind, place: Some(place), ..Default::default() }
 }
 
 fn period(text: &str) -> TypedValue {

@@ -705,11 +705,7 @@ mod tests {
         let declared = [moss_core::fields::FieldDecl {
             name: "kind".into(),
             kind: moss_core::fields::FieldKind::Text,
-            choices: vec![],
-            place: None,
-            label: vec![],
-            scope: vec![],
-            of: vec![],
+            ..Default::default()
         }];
         // Keys cascade does not carry, including the ones excluded on purpose, change nothing.
         for key in ["colour", "typesetting", "sidebar", "draft", "listed", "start"] {

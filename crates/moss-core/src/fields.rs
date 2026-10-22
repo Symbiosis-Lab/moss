@@ -10,8 +10,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 /// The type a declared field holds. Names match the `type` key in config.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FieldKind {
+    #[default]
     Text,
     Number,
     Date,
@@ -58,7 +59,7 @@ impl FieldKind {
 }
 
 /// One `[fields.<name>]` declaration.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FieldDecl {
     pub name: String,
     pub kind: FieldKind,
@@ -68,6 +69,8 @@ pub struct FieldDecl {
     pub place: Option<Place>,
     /// `(language tag, label)` pairs for the row a facts-placed field draws; empty = the capitalised name.
     pub label: Vec<(String, String)>,
+    /// `(language tag, text)` pairs: the link text a url field draws for every value; empty = the address itself.
+    pub text: Vec<(String, String)>,
     /// Folder prefixes (site-relative, no leading slash) this field applies to; empty = whole site.
     pub scope: Vec<String>,
     /// For a group: the fields it draws, in order.
@@ -81,6 +84,11 @@ impl FieldDecl {
             let mut chars = self.name.chars();
             chars.next().map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
         })
+    }
+
+    /// The link text a url field draws in `lang`, when the declaration names one.
+    pub fn text_for(&self, lang: &str) -> Option<&str> {
+        label_in(&self.text, lang)
     }
 }
 

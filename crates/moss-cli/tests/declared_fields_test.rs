@@ -709,3 +709,57 @@ fn a_group_named_in_a_cascade_warns_and_is_not_carried() {
     assert!(err.contains("is not a key cascade carries") && err.contains("or a declared field"), "{err}");
     assert!(!built(&s, "housing/court/index.html").contains("Anna Weber"), "the group's name carries no value to the page");
 }
+
+const ITEM_URL: &str = "[fields.item_url]\ntype = \"url\"\nplace = \"facts\"\nlabel = \"Source\"\n";
+const ITEM: &str = "---\ntitle: Item\nitem_url: https://example.org/items/42\n---\nbody\n";
+
+#[test]
+fn a_url_field_with_text_links_that_text_to_its_value() {
+    let config = format!("{ITEM_URL}text = \"View the item\"\n");
+    let s = site(&config, &[("Collection/item.md", ITEM)]);
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let html = built(&s, "collection/item/index.html");
+    assert!(html.contains("<dt>Source</dt><dd><a href=\"https://example.org/items/42\">View the item</a></dd>"), "{html}");
+}
+
+#[test]
+fn a_url_field_without_text_links_the_address_as_before() {
+    let s = site(ITEM_URL, &[("Collection/item.md", ITEM)]);
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let html = built(&s, "collection/item/index.html");
+    assert!(html.contains("<dd><a href=\"https://example.org/items/42\">https://example.org/items/42</a></dd>"), "{html}");
+    let blank = site(&format!("{ITEM_URL}text = \"\"\n"), &[("Collection/item.md", ITEM)]);
+    assert!(build_strict(&blank).status.success(), "an empty text is a valid text");
+    assert!(built(&blank, "collection/item/index.html").contains(">https://example.org/items/42</a>"), "an empty text draws the address");
+}
+
+#[test]
+fn text_on_a_field_that_is_not_a_url_warns_naming_the_declaration() {
+    let config = "[fields.year]\ntype = \"number\"\ntext = \"Year\"\n";
+    let s = site(config, &[("Collection/item.md", "---\ntitle: Item\nyear: 1927\n---\nbody\n")]);
+    let o = build_lenient(&s);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("[fields.year] has `text`, which only a url field takes"), "{err}");
+}
+
+#[test]
+fn a_url_text_is_drawn_in_the_language_of_the_page() {
+    let config = format!("{ITEM_URL}text = {{ en = \"View\", de = \"Ansehen\" }}\n");
+    let s = site(&config, &[("de/Collection/item.md", ITEM)]);
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let html = built(&s, "de/collection/item/index.html");
+    assert!(html.contains("<a href=\"https://example.org/items/42\">Ansehen</a>"), "{html}");
+}
+
+#[test]
+fn a_url_text_is_the_link_text_of_a_url_part_in_a_group() {
+    let config = "[fields.item_url]\ntype = \"url\"\ntext = \"View the item\"\n[fields.credit]\ntype = \"group\"\nof = [\"item_url\"]\nplace = \"subtitle\"\n";
+    let s = site(config, &[("Collection/item.md", ITEM)]);
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let html = built(&s, "collection/item/index.html");
+    assert!(html.contains("<span data-field=\"item_url\"><a href=\"https://example.org/items/42\">View the item</a></span>"), "{html}");
+}

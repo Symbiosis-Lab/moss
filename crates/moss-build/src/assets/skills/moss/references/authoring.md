@@ -585,6 +585,8 @@ A page then writes plain values, such as `kind: Building`, `years: 1927/1933` or
 | `page`, `pages` | `"[[Page name]]"` or `"[[Page name\|text]]"` | `{ target, alias? }` per link |
 | `group` | no value of its own: it names other fields in `of` and is drawn as one element (see below) | nothing; a page that writes a value for it gets a warning |
 
+A `url` field can name the link text every value of it is drawn with, as `text = "View the item"` in its declaration (a table gives one per language, as `label` does); the link still goes to the address, and when `text` is set the address itself is not shown. A `text` on any other type is a build warning.
+
 A choice's `of` gives one label for every language when it is a string. A table gives a label per language tag (`en`, `de`, `zh-hans`, `zh-hant`); a page in a language without its own label uses the `en` one, then the value itself. Choices keep the order the file writes them, in either form; plugins receive them in that order.
 
 A count's digits follow the page's language. On a German page `.` groups digits and `,` is the decimal, so `1.382 Wohnungen` is 1382 and `48,1 km` is 48.1. Other pages read `,` as the grouping mark and `.` as the decimal.

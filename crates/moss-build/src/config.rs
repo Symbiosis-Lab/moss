@@ -395,8 +395,8 @@ impl ConfigFile {
                     }
                 }
                 let place = Self::declared_place(sub, name, &mut problems);
-                let label = Self::declared_label(sub, name, &mut problems);
-                decls.push(FieldDecl { name: name.clone(), kind: FieldKind::Text, choices: Vec::new(), place, label, scope: Vec::new(), of: Vec::new() });
+                let label = Self::declared_labels(sub, "label", name, &mut problems);
+                decls.push(FieldDecl { name: name.clone(), place, label, ..Default::default() });
                 continue;
             }
             let Some(type_name) = sub.get("type").and_then(|v| v.as_str()) else {
@@ -411,7 +411,7 @@ impl ConfigFile {
                 continue;
             };
             for key in sub.keys() {
-                if !matches!(key.as_str(), "type" | "of" | "place" | "label" | "in") {
+                if !matches!(key.as_str(), "type" | "of" | "place" | "label" | "text" | "in") {
                     problems.push(format!("[fields.{name}] has an unknown key \"{key}\""));
                 }
             }
@@ -454,9 +454,17 @@ impl ConfigFile {
                 (_, None) => Vec::new(),
             };
             let place = Self::declared_place(sub, name, &mut problems);
-            let label = Self::declared_label(sub, name, &mut problems);
+            let label = Self::declared_labels(sub, "label", name, &mut problems);
+            let text = if kind == FieldKind::Url {
+                Self::declared_labels(sub, "text", name, &mut problems)
+            } else {
+                if sub.contains_key("text") {
+                    problems.push(format!("[fields.{name}] has `text`, which only a url field takes; ignoring it"));
+                }
+                Vec::new()
+            };
             let scope = Self::string_list(sub, "in", &format!("fields.{name}"), &mut problems);
-            decls.push(FieldDecl { name: name.clone(), kind, choices, place, label, scope, of });
+            decls.push(FieldDecl { name: name.clone(), kind, choices, place, label, text, scope, of });
         }
         let declared: Vec<String> = decls.iter().filter(|d| d.kind != FieldKind::Group).map(|d| d.name.clone()).collect();
         let groups: Vec<String> = decls.iter().filter(|d| d.kind == FieldKind::Group).map(|d| d.name.clone()).collect();
@@ -514,12 +522,12 @@ impl ConfigFile {
         }
     }
 
-    /// A declaration's `label`, as `(language tag, label)` pairs; empty when absent or malformed.
-    fn declared_label(sub: &toml::Table, name: &str, problems: &mut Vec<String>) -> Vec<(String, String)> {
-        match sub.get("label") {
+    /// A declaration's `label` or `text` key, as `(language tag, string)` pairs; empty when absent or malformed.
+    fn declared_labels(sub: &toml::Table, key: &str, name: &str, problems: &mut Vec<String>) -> Vec<(String, String)> {
+        match sub.get(key) {
             None => Vec::new(),
             Some(v) => Self::choice_labels(v).unwrap_or_else(|| {
-                problems.push(format!("[fields.{name}] `label` must be a string or a table of language labels; ignoring it"));
+                problems.push(format!("[fields.{name}] `{key}` must be a string or a table of language labels; ignoring it"));
                 Vec::new()
             }),
         }

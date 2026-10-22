@@ -40,7 +40,7 @@ pub fn draw(placed: &[Placed], lang: Language, typesetting: Option<&str>, page_h
     let drawn = |place: Place| {
         placed.iter().filter(move |p| p.decl().place == Some(place)).filter_map(|p| {
             let html = match p {
-                Placed::Value(_, v) => inline(v, lang, typesetting, page_href),
+                Placed::Value(d, v) => inline(d, v, lang, typesetting, page_href),
                 Placed::Group(_, parts) => parts_html(parts, lang, typesetting, page_href),
             };
             (!html.is_empty()).then_some((p, html))
@@ -187,7 +187,7 @@ pub fn builtin_part(
     frontmatter: Option<&std::collections::HashMap<String, serde_yaml::Value>>,
     page: PageFormat,
 ) -> Option<(FieldDecl, TypedValue)> {
-    let decl = |kind| FieldDecl { name: name.to_string(), kind, choices: Vec::new(), place: None, label: Vec::new(), scope: Vec::new(), of: Vec::new() };
+    let decl = |kind| FieldDecl { name: name.to_string(), kind, ..Default::default() };
     match name {
         "title" => {
             let title = title.trim();
@@ -209,7 +209,7 @@ fn parts_html(parts: &[(FieldDecl, TypedValue)], lang: Language, typesetting: Op
     parts
         .iter()
         .filter_map(|(d, v)| {
-            let html = inline(v, lang, typesetting, page_href);
+            let html = inline(d, v, lang, typesetting, page_href);
             (!html.is_empty()).then(|| format!("<span data-field=\"{}\">{html}</span>", html_escape(&d.name)))
         })
         .collect::<Vec<_>>()
@@ -223,7 +223,7 @@ fn subtitle_line(field: &str, html: &str) -> String {
 }
 
 /// One value as inline markup.
-fn inline(v: &TypedValue, lang: Language, typesetting: Option<&str>, page_href: &dyn Fn(&str) -> Option<String>) -> String {
+fn inline(decl: &FieldDecl, v: &TypedValue, lang: Language, typesetting: Option<&str>, page_href: &dyn Fn(&str) -> Option<String>) -> String {
     if let Some(datetime) = datetime_attr(v) {
         return format!("<time datetime=\"{}\">{}</time>", html_escape(&datetime), html_escape(&value_text(v, lang, typesetting)));
     }
@@ -237,7 +237,10 @@ fn inline(v: &TypedValue, lang: Language, typesetting: Option<&str>, page_href: 
             }
         }
         TypedValue::Count { number: None, text, .. } if !text.is_empty() => format!("<span>{}</span>", html_escape(text)),
-        TypedValue::Url(u) => format!("<a href=\"{}\">{}</a>", html_escape(u), html_escape(u)),
+        TypedValue::Url(u) => {
+            let text = decl.text_for(lang.as_bcp47_attr()).filter(|t| !t.is_empty()).unwrap_or(u);
+            format!("<a href=\"{}\">{}</a>", html_escape(u), html_escape(text))
+        }
         TypedValue::Page(p) => page_link_html(p, page_href),
         TypedValue::Pages(pages) => pages.iter().map(|p| page_link_html(p, page_href)).collect::<Vec<_>>().join(", "),
         other => html_escape(&value_text(other, lang, typesetting)),
