@@ -199,6 +199,15 @@ export function resizeCamera(camera: Camera, from: Viewport, to: Viewport): Came
   return { ...camera, zoom: (camera.zoom * coverScale(from)) / coverScale(to) };
 }
 
+/** How far past its clean depth the world layer's detail goes before it is gone, as a fraction of that depth: relief, sea floor, urban areas and coast fade out over this band instead of being enlarged. */
+export const WORLD_DETAIL_FADE_BAND = 0.5;
+
+/** The opacity of the world layer's detail at `zoom` when its data stays clean up to `cleanZoom`: 1 at or above that depth (a coarser view), falling to 0 over `WORLD_DETAIL_FADE_BAND`. Below that the map's data says nothing, so the view shows the theme's land tone alone. */
+export function worldDetailOpacity(zoom: number, cleanZoom: number): number {
+  if (zoom <= cleanZoom) return 1;
+  return Math.max(0, 1 - (zoom / cleanZoom - 1) / WORLD_DETAIL_FADE_BAND);
+}
+
 /** The zoom multiplier at which `screenScale` reaches `DETAIL_MAX_SCALE` for this viewport. */
 export function detailMaxZoom(viewport: Viewport): number {
   return DETAIL_MAX_SCALE / coverScale(viewport);

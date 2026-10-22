@@ -395,6 +395,18 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Cross-fade opacity of the explorer's regional tile layer. Written per-frame by tiles.ts's `TileLayer.render` as the camera crosses the fade band short of the world layer's own detail ceiling — 0 outside the band, where `render` also clears every tile element from the DOM, so the property and the content agree. Not a theme hook: a hand-set value is overwritten on the next camera settle.",
     },
     CustomProp {
+        name: "--moss-place-world-detail",
+        owner: "moss-places-viewport",
+        default: "1",
+        description: "How much of the built-in world map's detail (land shapes, relief, rivers, regional tiles) the explorer shows: 1 down to its clean depth, falling to 0 past it, where the viewport ground becomes the flat land tone instead of enlarging shapes the data cannot support. Written by the explorer from the camera's zoom on every settle; detail layers are unaffected. Not a theme hook: a hand-set value is overwritten.",
+    },
+    CustomProp {
+        name: "--moss-place-land",
+        owner: "moss-places-viewport",
+        default: "#e3e6d5",
+        description: "The flat land tone the explorer's ground fades to past the world map's clean depth. `.moss-place-map` already carries the site's light and dark values; the default here matches the light one.",
+    },
+    CustomProp {
         name: "--moss-place-river-scale",
         owner: "[data-map-layer=\"rivers\"]",
         default: "1",

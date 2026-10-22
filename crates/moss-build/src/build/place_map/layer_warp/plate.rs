@@ -36,6 +36,11 @@ pub(crate) struct Plate {
 }
 
 impl Plate {
+    /// `[x0, y0, x1, y1]` of the footprint in world coordinates.
+    pub(crate) fn footprint_world(&self) -> [f64; 4] {
+        self.footprint.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, &(x, y)| [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)])
+    }
+
     /// `[west, south, east, north]` of the footprint in degrees.
     pub(crate) fn footprint_degrees(&self) -> [f64; 4] {
         let mut b = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];

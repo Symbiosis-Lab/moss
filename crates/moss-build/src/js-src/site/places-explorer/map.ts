@@ -47,6 +47,7 @@ import {
   resizeCamera,
   screenScale,
   tileDetailMaxZoom,
+  worldDetailOpacity,
   viewWorldRect,
   worldCleanMaxZoom,
   worldToScreen,
@@ -370,9 +371,14 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     return { width: rect.width, height: rect.height };
   }
 
+  /** The deepest zoom the world layer's own data carries at `anchor`: the regional tiles' depth where a cell is there, else the world's. */
+  function cleanZoom(viewport: Viewport, anchor: Point): number {
+    return tileLayer.hasCellAt(anchor) ? tileDetailMaxZoom(viewport) : worldCleanMaxZoom(viewport);
+  }
+
   /** Zooming in past the world layer's clean depth needs a regional cell under the zoom's anchor (the cursor, the pinch centre, or the view's centre); anywhere else the world layer alone would carry the deeper frame. */
   function currentMaxZoom(viewport: Viewport, anchor: Point = camera): number {
-    const base = tileLayer.hasCellAt(anchor) ? tileDetailMaxZoom(viewport) : worldCleanMaxZoom(viewport);
+    const base = cleanZoom(viewport, anchor);
     const layerZoom = layerCeilingZoom(layers, viewport, anchor);
     return layerZoom === null ? base : Math.max(base, layerZoom);
   }
@@ -680,6 +686,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     worldEl.style.transform = `translate(${translateX}px, ${translateY}px) scale(${camera.zoom * k}, ${camera.zoom})`;
 
     const ceiling = currentMaxZoom(viewport);
+    viewportEl.style.setProperty("--moss-place-world-detail", String(worldDetailOpacity(camera.zoom, cleanZoom(viewport, camera))));
     figure.style.setProperty("--moss-place-river-scale", String(Math.min(1, MIN_ZOOM / camera.zoom)));
 
     if (held && (held.camera.x !== camera.x || held.camera.y !== camera.y || held.camera.zoom !== camera.zoom)) held = null;

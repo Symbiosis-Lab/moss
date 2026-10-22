@@ -7,9 +7,10 @@
 mod fit;
 mod plan;
 mod plate;
+pub(crate) use plate::Plate;
 pub(crate) mod tiles;
 
-pub use plan::{plan_layers, LayerPlan};
+pub use plan::{note_coverage, plan_layers, LayerPlan};
 
 #[cfg(test)]
 mod warp_tests;

@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use super::plate::{load_plates, Plate};
-use super::tiles::{inside, NearPlace};
+use super::tiles::{inside, overlaps, NearPlace};
 use crate::build::assets::paths::compute_binary_hash;
 use crate::build::cli_output::log_note;
 use crate::build::place_map::world_coords;
@@ -31,10 +31,6 @@ pub struct LayerPlan {
     pub(crate) places: Vec<NearPlace>,
 }
 
-fn overlaps(a: [f64; 4], b: [f64; 4]) -> bool {
-    a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1]
-}
-
 fn plate_rank(layer: &MapLayer, id: &str) -> usize {
     layer.annotations.iter().position(|url| url.trim_end_matches('/').rsplit('/').next() == Some(id)).unwrap_or(usize::MAX)
 }
@@ -44,16 +40,26 @@ fn plate_rank(layer: &MapLayer, id: &str) -> usize {
 pub fn plan_layers(layers: &[MapLayer], site_root: &Path, gazetteer: &Gazetteer) -> Vec<LayerPlan> {
     let spots: Vec<(&String, (f64, f64))> =
         gazetteer.iter().filter(|(_, r)| r.precision == Precision::Exact).filter_map(|(name, r)| Some((name, r.coords?))).collect();
-    let plans: Vec<LayerPlan> = layers.iter().map(|layer| plan_layer(layer, site_root, &spots)).collect();
-    if plans.iter().any(|p| !p.plates.is_empty()) {
-        for (name, (lat, lng)) in &spots {
-            let (x, y) = world_coords::project(*lat, *lng);
-            if !plans.iter().flat_map(|p| &p.plates).any(|plate| inside(&plate.footprint, x, y)) {
-                log_note!("place '{name}' lies outside every historical map plate, so it is drawn on the moss landscape");
-            }
+    layers.iter().map(|layer| plan_layer(layer, site_root, &spots)).collect()
+}
+
+/// Notes on how the plates meet the places pages use (`used`: name and
+/// `(lat, lng)`): each place no plate covers, and, per layer, each plate that
+/// covers none. Returns the ids of the latter, per layer, for the tile cost.
+pub fn note_coverage(plans: &[LayerPlan], used: &[(String, (f64, f64))]) -> Vec<Vec<String>> {
+    let spots: Vec<(&String, f64, f64)> = used.iter().map(|(name, (lat, lng))| { let (x, y) = world_coords::project(*lat, *lng); (name, x, y) }).collect();
+    if plans.iter().all(|p| p.plates.is_empty()) {
+        return vec![Vec::new(); plans.len()];
+    }
+    for (name, x, y) in &spots {
+        if !plans.iter().flat_map(|p| &p.plates).any(|plate| inside(&plate.footprint, *x, *y)) {
+            log_note!("place '{name}' lies outside every historical map plate, so it is drawn on the moss landscape");
         }
     }
     plans
+        .iter()
+        .map(|plan| plan.plates.iter().filter(|plate| !spots.iter().any(|(_, x, y)| inside(&plate.footprint, *x, *y))).map(|p| p.id.clone()).collect())
+        .collect()
 }
 
 fn plan_layer(layer: &MapLayer, site_root: &Path, spots: &[(&String, (f64, f64))]) -> LayerPlan {

@@ -1444,6 +1444,7 @@ fn build_inner(
     // three hand-captured copies plus the emit site's own second
     // `embedded()` decode.
     let place_maps_for_places_data = place_maps.clone();
+    let place_kinds: Vec<crate::build::terms::TermKind> = kinds.iter().filter(|k| k.is_place).cloned().collect();
     // Default-on by key absence, same story as `site_config.math` below is
     // built from (see that field's own comment) — computed once here so
     // both the page-rendering config and the places-explorer data emitter,
@@ -1898,8 +1899,10 @@ fn build_inner(
         &mut pending,
     );
     // `layers.json` beside them; nothing is written without `[map.layers]`.
+    let used_places = place_maps_for_places_data.as_ref().map_or_else(Vec::new, |maps| crate::build::terms::places::used_places(&documents, &place_kinds, maps.gazetteer()));
     crate::build::emit::place_map_layers::emit_if_place_typed(
         place_maps_for_places_data.as_ref(),
+        &used_places,
         &stage_dir,
         &mut pending,
     );

@@ -77,15 +77,18 @@ fn layers_json_with(layers: &[MapLayer], plans: &[LayerPlan], tiles: &[Option<St
 /// The pipeline's one call: write `layers.json` beside the map assets when the
 /// place-map context carries layers. Errors are logged, never fatal, like the
 /// other map assets.
-pub fn emit_if_place_typed(render_context: Option<&PlaceMapRenderContext>, output_dir: &Path, pending: &mut PendingManifest) {
+/// `used` is the places pages name, with their coordinates.
+pub fn emit_if_place_typed(render_context: Option<&PlaceMapRenderContext>, used: &[(String, (f64, f64))], output_dir: &Path, pending: &mut PendingManifest) {
     let Some(render_context) = render_context else { return };
     let layers = render_context.layers();
     let plans = render_context.layer_plans();
     let hash = render_context.map_assets_hash();
+    let uncovered = crate::build::place_map::layer_warp::note_coverage(plans, used);
     let tiles: Vec<Option<String>> = layers
         .iter()
         .zip(plans)
-        .map(|(layer, plan)| super::place_map_layer_tiles::emit_layer(layer, plan, hash, output_dir, pending))
+        .zip(&uncovered)
+        .map(|((layer, plan), uncovered)| super::place_map_layer_tiles::emit_layer(layer, plan, uncovered, hash, output_dir, pending))
         .collect();
     let Some(json) = layers_json_with(layers, plans, &tiles) else { return };
     let result = ServedPath::for_place_map_asset(hash, "layers.json")

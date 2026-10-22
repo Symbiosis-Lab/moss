@@ -12,11 +12,11 @@ use std::path::Path;
 
 use rayon::prelude::*;
 
-use crate::build::cli_output::log_warn_problem;
+use crate::build::cli_output::{log_note, log_warn_problem};
 use crate::build::context::BuildContext;
 use crate::build::manifest::{HashBucket, PendingManifest};
-use crate::build::place_map::layer_warp::tiles::{candidates, encode, level_range, render_tile, Loaded, TILE_SIZE};
-use crate::build::place_map::layer_warp::LayerPlan;
+use crate::build::place_map::layer_warp::tiles::{candidates, encode, level_range, overlaps, render_tile, tile_rect, Loaded, TILE_SIZE};
+use crate::build::place_map::layer_warp::{LayerPlan, Plate};
 use crate::build::served_path::ServedPath;
 use crate::config::map_layers::MapLayer;
 
@@ -51,14 +51,33 @@ fn size_text(bytes: u64) -> String {
     if bytes >= 1_000_000 { format!("{:.1} MB", bytes as f64 / 1e6) } else { format!("{:.0} KB", bytes as f64 / 1e3) }
 }
 
+struct TileSize {
+    level: u8,
+    i: u32,
+    j: u32,
+    bytes: u64,
+}
+
+/// Bytes of the tiles that only plate `id` reaches: what dropping it would save.
+fn sole_cost(plan: &LayerPlan, id: &str, sizes: &[TileSize]) -> u64 {
+    let reaches = |plate: &Plate, tile: &TileSize| overlaps(plate.footprint_world(), tile_rect(tile.level, tile.i, tile.j));
+    let Some(plate) = plan.plates.iter().find(|p| p.id == id) else { return 0 };
+    sizes.iter().filter(|t| reaches(plate, t) && !plan.plates.iter().any(|o| o.id != id && reaches(o, t))).map(|t| t.bytes).sum()
+}
+
 /// Writes the layer's tiles and index; the URL of the index when the layer
 /// has any tile. Over budget is a problem (a failure under `--strict`).
-pub(crate) fn emit_layer(layer: &MapLayer, plan: &LayerPlan, hash: &str, output_dir: &Path, pending: &mut PendingManifest) -> Option<String> {
+/// `uncovered` names the plates that cover none of the site's places.
+pub(crate) fn emit_layer(layer: &MapLayer, plan: &LayerPlan, uncovered: &[String], hash: &str, output_dir: &Path, pending: &mut PendingManifest) -> Option<String> {
     if plan.plates.is_empty() {
         return None;
     }
     match emit_tiles(layer, plan, hash, output_dir, pending) {
-        Ok(total) => {
+        Ok(sizes) => {
+            let total: u64 = sizes.iter().map(|t| t.bytes).sum();
+            for id in uncovered {
+                log_note!("plate {id} covers none of the site's places; it is kept, and its tiles cost {}", size_text(sole_cost(plan, id, &sizes)));
+            }
             if let Some(budget) = layer.budget.filter(|b| total > *b) {
                 log_warn_problem!("map layer {} draws {} of tiles, over its budget of {}; lower max_zoom, narrow the bbox, or raise the budget", layer.name, size_text(total), size_text(budget));
             }
@@ -71,13 +90,13 @@ pub(crate) fn emit_layer(layer: &MapLayer, plan: &LayerPlan, hash: &str, output_
     }
 }
 
-fn emit_tiles(layer: &MapLayer, plan: &LayerPlan, hash: &str, output_dir: &Path, pending: &mut PendingManifest) -> Result<u64, String> {
+fn emit_tiles(layer: &MapLayer, plan: &LayerPlan, hash: &str, output_dir: &Path, pending: &mut PendingManifest) -> Result<Vec<TileSize>, String> {
     let index_path = ServedPath::for_place_map_layer_file(hash, &layer.name, "index.json").map_err(|e| e.to_string())?;
     let (min, max) = level_range(plan.extent, layer.max_zoom);
 
     let earlier: Option<TileIndex> = std::fs::read(output_dir.join(index_path.as_str())).ok().and_then(|b| serde_json::from_slice(&b).ok());
     let mut drawn: BTreeMap<u8, Vec<(u32, u32)>> = BTreeMap::new();
-    let mut total = 0u64;
+    let mut sizes: Vec<TileSize> = Vec::new();
     let reused = earlier.is_some_and(|index| {
         let mut staged = Vec::new();
         for (level, tiles) in &index.levels {
@@ -85,18 +104,19 @@ fn emit_tiles(layer: &MapLayer, plan: &LayerPlan, hash: &str, output_dir: &Path,
             for &[i, j] in tiles {
                 let Ok(path) = tile_path(hash, layer, level, i, j) else { return false };
                 let Ok(bytes) = std::fs::read(output_dir.join(path.as_str())) else { return false };
+                sizes.push(TileSize { level, i, j, bytes: bytes.len() as u64 });
                 staged.push((path, bytes));
                 drawn.entry(level).or_default().push((i, j));
             }
         }
         for (path, bytes) in staged {
-            total += bytes.len() as u64;
             pending.register(&path, &bytes, HashBucket::Files);
         }
         true
     });
     if !reused {
         drawn.clear();
+        sizes.clear();
         let loaded: Vec<Loaded> = plan
             .plates
             .iter()
@@ -116,7 +136,7 @@ fn emit_tiles(layer: &MapLayer, plan: &LayerPlan, hash: &str, output_dir: &Path,
             for (i, j, bytes) in tiles {
                 let path = tile_path(hash, layer, level, i, j)?;
                 BuildContext::for_render(output_dir, pending).emit(&path, &bytes, HashBucket::Files).map_err(|e| format!("tile {level}/{i}/{j}: {e}"))?;
-                total += bytes.len() as u64;
+                sizes.push(TileSize { level, i, j, bytes: bytes.len() as u64 });
                 drawn.entry(level).or_default().push((i, j));
             }
         }
@@ -134,5 +154,5 @@ fn emit_tiles(layer: &MapLayer, plan: &LayerPlan, hash: &str, output_dir: &Path,
     };
     let json = serde_json::to_vec(&index).expect("a tile index serializes");
     BuildContext::for_render(output_dir, pending).emit(&index_path, &json, HashBucket::Files).map_err(|e| format!("index: {e}"))?;
-    Ok(total)
+    Ok(sizes)
 }

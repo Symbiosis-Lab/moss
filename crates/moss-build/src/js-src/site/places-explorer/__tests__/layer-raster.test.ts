@@ -299,6 +299,22 @@ describe("LayerRaster", () => {
     expect(levels).toEqual([...levels].sort((a, b) => a - b));
   });
 
+  test("layers are drawn in declaration order, so a later layer covers an earlier one", async () => {
+    const named = (name: string): DetailLayer => ({ ...LAYER, name, tiles: `layers/${name}/index.json` });
+    const order = async (layers: DetailLayer[]) => {
+      const raster = await drawn(14, layers);
+      for (let round = 0; round < 8; round++) {
+        for (const entry of pending.splice(0)) entry.resolve();
+        await flush();
+      }
+      const groups = [...raster.el.querySelectorAll<SVGGElement>("g[data-layer]")];
+      expect(groups.every((g) => g.querySelector("image"))).toBe(true);
+      return groups.map((g) => g.dataset.layer);
+    };
+    expect(await order([named("city"), named("plates")])).toEqual(["city", "plates"]);
+    expect(await order([named("plates"), named("city")])).toEqual(["plates", "city"]);
+  });
+
   test("the layer is clipped to its footprints, one polygon per plate in world coordinates", async () => {
     const wire = wireIndex(12, 15, {
       footprints: [

@@ -18,6 +18,17 @@ pub(crate) fn units_per_pixel(level: u8) -> f64 {
     world_width() / (f64::from(TILE_SIZE) * 2f64.powi(i32::from(level)))
 }
 
+/// `[x0, y0, x1, y1]` of tile `(i, j)` of `level` in world coordinates.
+pub(crate) fn tile_rect(level: u8, i: u32, j: u32) -> [f64; 4] {
+    let side = f64::from(TILE_SIZE) * units_per_pixel(level);
+    [f64::from(i) * side, f64::from(j) * side, f64::from(i + 1) * side, f64::from(j + 1) * side]
+}
+
+/// Whether two `[min_x, min_y, max_x, max_y]` boxes touch.
+pub(crate) fn overlaps(a: [f64; 4], b: [f64; 4]) -> bool {
+    a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1]
+}
+
 /// A place the deepest levels are drawn around.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct NearPlace {
@@ -100,7 +111,7 @@ impl<'a> Loaded<'a> {
     }
 
     fn covers(&self, rect: [f64; 4]) -> bool {
-        self.bounds[0] <= rect[2] && self.bounds[2] >= rect[0] && self.bounds[1] <= rect[3] && self.bounds[3] >= rect[1]
+        overlaps(self.bounds, rect)
     }
 
     /// The colour at a full-image pixel, or `None` outside the mask or the fetched region.

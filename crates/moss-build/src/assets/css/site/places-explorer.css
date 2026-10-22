@@ -204,7 +204,8 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
   touch-action: none;
   cursor: grab;
   border-radius: 8px;
-  background: var(--moss-place-water, #dbe7ea);
+  /* Past the depth the world data carries, its detail fades (`--moss-place-world-detail`, set from the camera's zoom) and the ground is the land tone. */
+  background: color-mix(in srgb, var(--moss-place-water, #dbe7ea) calc(var(--moss-place-world-detail, 1) * 100%), var(--moss-place-land, #e3e6d5));
   block-size: 100%;
 }
 .moss-places-viewport[data-dragging] {
@@ -250,7 +251,7 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
 .moss-places-tiles {
   position: absolute;
   inset: 0;
-  opacity: var(--moss-place-tile-opacity, 0);
+  opacity: calc(var(--moss-place-tile-opacity, 0) * var(--moss-place-world-detail, 1));
   /* Tiles carry a z-index for their draw order; at opacity 1 this element
      is no stacking context of its own, so without this they would compete
      with the markers and cards above the layer. */
@@ -304,6 +305,11 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
   inline-size: 100%;
   block-size: 100%;
   aspect-ratio: auto;
+}
+/* A detail layer's own raster is not the world's data and never fades with it. */
+[data-moss-places-explorer] .moss-places-world > canvas,
+[data-moss-places-explorer] .moss-places-world > svg:not([data-moss-places-layers]) {
+  opacity: var(--moss-place-world-detail, 1);
 }
 
 /* The world's own rivers overlay sits directly in `.moss-places-world`

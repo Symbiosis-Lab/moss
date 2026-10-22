@@ -70,6 +70,27 @@ pub fn warn_unknown_places(documents: &[crate::build::types::ParsedDocument], ki
     }
 }
 
+/// The gazetteer places that pages name through a place-typed kind's fields,
+/// with their coordinates, in name order. A parent such as a borough or the
+/// city is in the gazetteer without being named by any page, and is not here.
+pub fn used_places(documents: &[crate::build::types::ParsedDocument], kinds: &[TermKind], gaz: &crate::vault::places::Gazetteer) -> Vec<(String, (f64, f64))> {
+    let mut used = std::collections::BTreeMap::new();
+    for kind in kinds.iter().filter(|k| k.is_place) {
+        for doc in documents {
+            for field in &kind.fields {
+                for name in super::field_names(doc, field) {
+                    if let Some((display, record)) = gaz.find(&name) {
+                        if let Some(coords) = record.coords {
+                            used.insert(display.clone(), coords);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    used.into_iter().collect()
+}
+
 /// Walk every key's `parents` chain to a fixed point; a key that revisits
 /// one already seen on its own walk is a cycle. Breaks it by removing the
 /// one link that closed the loop, with a diagnostic naming the place whose

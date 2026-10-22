@@ -28,6 +28,10 @@ impl Site {
         site
     }
 
+    fn page(&self, name: &str, location: &str) {
+        std::fs::write(self.dir.path().join(format!("{name}.md")), format!("---\ntitle: {name}\nlocation: {location}\n---\nbody\n")).unwrap();
+    }
+
     /// Copies the fixture plate's three files into `folder`, then lets `edit` change one of them.
     fn plate(&self, folder: &str, edit: impl Fn(&str, Vec<u8>) -> Vec<u8>) {
         let dest = self.dir.path().join(folder);
@@ -197,11 +201,13 @@ fn a_second_build_does_not_draw_a_tile_again() {
 }
 
 #[test]
-fn the_three_notes() {
-    // A place outside the plate; a plate whose control points disagree with their fit by over 30 m;
-    // a plate outside the layer's bbox.
-    let places = format!("{PLACES}\n[\"Far Place\"]\nlat = 40.9\nlng = -73.9\nprecision = \"exact\"\n");
+fn the_notes() {
+    // A used place outside the plate; an unused exact place outside the plate (a gazetteer entry no page names);
+    // a plate whose control points disagree with their fit by over 30 m.
+    let places = format!("{PLACES}\n[\"Far Place\"]\nlat = 40.9\nlng = -73.9\nprecision = \"exact\"\n\n[\"Unused Borough\"]\nlat = 40.95\nlng = -73.8\nprecision = \"exact\"\n");
     let site = Site::new(LAYER, &places);
+    site.page("a", "Trinity Church");
+    site.page("b", "Far Place");
     site.plate("maps/atlas", |name, b| {
         if name.ends_with(".annotation.json") {
             String::from_utf8(b).unwrap().replace("40.705560678246314", "40.707560678246314").into_bytes()
@@ -212,8 +218,19 @@ fn the_three_notes() {
     let out = site.build(&["--strict"]);
     assert!(out.ok, "notes never fail --strict:\n{}", out.log);
     assert!(out.log.contains("place 'Far Place' lies outside every historical map plate"), "{}", out.log);
+    assert!(!out.log.contains("place 'Unused Borough'"), "a place no page names is not noted:\n{}", out.log);
     assert!(!out.log.contains("place 'Trinity Church' lies outside"), "{}", out.log);
+    assert!(!out.log.contains("covers none of the site's places"), "the plate covers a used place:\n{}", out.log);
     assert!(out.log.contains(&format!("map plate {PLATE} fits its control points to within")), "{}", out.log);
+
+    // Only a place outside the plate is used: the plate is kept, and the note says what its tiles cost.
+    let idle = Site::new(LAYER, &places);
+    idle.page("b", "Far Place");
+    idle.plate("maps/atlas", |_, b| b);
+    let out = idle.build(&["--strict"]);
+    assert!(out.ok, "{}", out.log);
+    assert!(out.log.contains(&format!("plate {PLATE} covers none of the site's places; it is kept, and its tiles cost ")), "{}", out.log);
+    assert!(!idle.tiles("atlas").is_empty(), "the plate is still drawn");
 
     let apart = Site::new("[map.layers.atlas]\nkind = \"historical\"\nsource = \"maps/atlas\"\nbbox = [10.0, 10.0, 10.5, 10.5]\n", PLACES);
     apart.plate("maps/atlas", |_, b| b);

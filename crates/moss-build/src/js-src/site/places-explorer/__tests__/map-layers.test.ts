@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { FIT, EDGE_FADE } from "./explorer-fit";
 import "./armed-timers";
-import { aspectX, openingMaxZoom, screenScale, screenToWorld, worldToScreen } from "../camera";
+import { aspectX, openingMaxZoom, screenScale, screenToWorld, worldCleanMaxZoom, worldDetailOpacity, worldToScreen } from "../camera";
 import { degreesPerPxAtZoom, type DetailLayer } from "../layers";
 import { mountPlacesMap } from "../map";
 import { project, unproject } from "../projection";
@@ -94,6 +94,33 @@ describe("zoom ceiling", () => {
     expect(zooms[1]).toBeGreaterThan(zooms[zooms.length - 1]);
     expect(zoomIn(figure).disabled).toBe(true);
     expect(frames).toHaveLength(0);
+  });
+});
+
+describe("the world layer past its clean depth", () => {
+  const detail = (figure: HTMLElement) => Number(figure.querySelector<HTMLElement>(".moss-places-viewport")!.style.getPropertyValue("--moss-place-world-detail"));
+  const clean = worldCleanMaxZoom(VIEWPORT);
+
+  test("the opacity is 1 up to the clean depth, falls past it and is 0 by half as deep again", () => {
+    expect(worldDetailOpacity(clean * 0.2, clean)).toBe(1);
+    expect(worldDetailOpacity(clean, clean)).toBe(1);
+    const mid = worldDetailOpacity(clean * 1.25, clean);
+    expect(mid).toBeGreaterThan(0);
+    expect(mid).toBeLessThan(1);
+    expect(worldDetailOpacity(clean * 1.5, clean)).toBe(0);
+    expect(worldDetailOpacity(clean * 40, clean)).toBe(0);
+  });
+
+  test("a mounted map at the clean depth keeps its detail, a deeper one fades it, and a city-scale one has none", () => {
+    const at = cityCamera(40.75, -73.98, 0.26);
+    expect(at.zoom).toBeCloseTo(clean, 6);
+    expect(detail(mount(at, [LAYER]).figure)).toBe(1);
+    document.body.innerHTML = "";
+    const past = detail(mount(cityCamera(40.75, -73.98, 0.2), [LAYER]).figure);
+    expect(past).toBeGreaterThan(0);
+    expect(past).toBeLessThan(1);
+    document.body.innerHTML = "";
+    expect(detail(mount(cityCamera(40.75, -73.98, 0.0005), [LAYER]).figure)).toBe(0);
   });
 });
 

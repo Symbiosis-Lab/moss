@@ -153,6 +153,24 @@ annotations = ["https://annotations.allmaps.org/maps/<id>"]  # optional: the pla
 
 `kind` and `source` are required. `bbox` is optional: without it the frame is taken from the places in `.moss/places.toml` that have coordinates. A wrong value, a `source` that is missing or outside the site, or a `max_zoom` outside 10 to 19 stops the build and names the table and key. When a site declares a layer, every map figure gets an empty credit line in its corner, and the build writes a small `layers.json` beside the map data for the explorer.
 
+#### Layers over each other
+
+Atlas plates usually cover a few blocks each, so a layer made of plates alone gives separate patches with the moss landscape between them. A good setup is two layers: a whole-city, small-scale sheet as the base, and the plates as the detail. Declare them in that order. Layers are drawn in the order they are declared and a later layer covers an earlier one, so the plates sit over the city sheet and the city sheet fills everything the plates leave.
+
+```toml
+[map.layers.city-sheet]
+kind = "historical"
+source = "maps/city-sheet"       # one plate: the whole city, at a small scale
+max_zoom = 14
+
+[map.layers.block-plates]
+kind = "historical"
+source = "maps/block-plates"     # many plates, a few blocks each
+max_zoom = 17
+```
+
+Where no layer draws, the moss landscape is not enlarged past the depth its data supports: its relief, sea floor and urban areas fade out as the map zooms deeper, and what is left is the theme's land tone.
+
 #### What a historical layer's folder holds
 
 Each plate (one georeferenced map sheet) is three files in the layer's `source` folder, named by one id, usually an Allmaps map id. The build reads only these files and never the network, so it makes no difference how they got there: a fetch plugin, or the recipe below.
@@ -190,7 +208,7 @@ To make the three files by hand with only a shell and `curl`:
 
 The rights statement belongs to the holder, not to Allmaps. Copy it from the holder's catalogue page for the sheet, and read the holder's terms on that live page before publishing: moss records what you give it and cannot check it.
 
-What the build writes: tiles of 256 by 256 pixels as JPEG files under `_moss/map.<hash>/layers/<name>/<level>/<i>/<j>.jpg`, a `layers/<name>/index.json` listing the tiles and each plate's outline, and in `layers.json` the layer's `tiles` address, an extent that is the plates' outlines within `bbox`, and the credit (from `credit`, else the plates). The two deepest levels are drawn only within 300 m of a place, so `max_zoom` costs space only where places are. The credit, each plate's source address and its rights statement are added to `NOTICE.txt`. When the tiles total more than `budget`, the build warns, naming the layer, its size and the budget; with `--strict` that fails the build. A rebuild draws nothing again until a plate file, the layer's settings or a place's coordinates change. Notes (never failures) mention a place that lies outside every plate, a plate outside `bbox`, and a plate whose control points disagree with their fit by more than 30 m.
+What the build writes: tiles of 256 by 256 pixels as JPEG files under `_moss/map.<hash>/layers/<name>/<level>/<i>/<j>.jpg`, a `layers/<name>/index.json` listing the tiles and each plate's outline, and in `layers.json` the layer's `tiles` address, an extent that is the plates' outlines within `bbox`, and the credit (from `credit`, else the plates). The two deepest levels are drawn only within 300 m of a place, so `max_zoom` costs space only where places are. The credit, each plate's source address and its rights statement are added to `NOTICE.txt`. When the tiles total more than `budget`, the build warns, naming the layer, its size and the budget; with `--strict` that fails the build. A rebuild draws nothing again until a plate file, the layer's settings or a place's coordinates change. Notes (never failures) mention a place a page names that lies outside every plate, a plate outside `bbox`, a plate that covers none of the places pages name (with what its tiles cost, so you can decide to drop it), and a plate whose control points disagree with their fit by more than 30 m.
 
 `moss map bbox [<folder>]` prints the frame your places need, as `west,south,east,north` with a margin of 10% of each side (at least 0.01 degree), and a suggested `max_zoom`: the zoom at which the frame's longer side spans about 1024 px, plus 3. It reads only the places that pages name in the place kind's fields, writes nothing, and takes `--json` for `{"bbox": [...], "max_zoom": n, "places": k}`.
 
