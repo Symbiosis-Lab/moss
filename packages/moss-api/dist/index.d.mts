@@ -414,10 +414,18 @@ interface BaseContext {
  * (drives the ambient hairline); every build/preview rebuild → "background".
  * Optional for backward compatibility; absent ⇒ treat as "background".
  *
+ * `site_config` is the site's `.moss/config.toml` as a plain JSON object, so a
+ * plugin can read tables it documents (for example `[map.layers.<name>]`).
+ * It is read-only and `{}` when the site has no config file. Withheld: the
+ * `[plugins]` table (your own settings arrive as `config`) and every key,
+ * at any depth, whose name contains token, secret, password, passwd, api_key,
+ * apikey, credential or private_key. Absent on moss versions before it was added.
+ *
  * @category Hook contexts
  */
 interface ProcessContext extends BaseContext {
   trigger?: TriggerContext;
+  site_config?: Record<string, unknown>;
 }
 /**
  * Context for on_deploy hook (deployer plugins)
@@ -1279,6 +1287,25 @@ declare function readFile(relativePath: string): Promise<string>;
  */
 declare function writeFile(relativePath: string, content: string): Promise<void>;
 /**
+ * Write binary content to a file in the project directory
+ *
+ * Same sandbox as {@link writeFile}: the path must stay inside the project and
+ * `.moss/` is refused. Creates parent directories and replaces an existing file.
+ * The bytes cross to moss as base64, so very large files cost memory twice.
+ *
+ * @param relativePath - Path relative to the project root
+ * @param bytes - Exact bytes to write
+ * @throws Error if the path is refused, the file cannot be written, or called outside a hook
+ *
+ * @example
+ * ```typescript
+ * const image = await fetchUrl("https://example.com/map.jpg");
+ * await writeFileBinary("maps/sheet-1.jpg", image.body);
+ * ```
+ * @category Filesystem
+ */
+declare function writeFileBinary(relativePath: string, bytes: Uint8Array): Promise<void>;
+/**
  * List all files in the project directory
  *
  * Returns file paths relative to the project root.
@@ -1654,6 +1681,14 @@ interface FetchResult {
 interface DownloadOptions {
   /** Timeout in milliseconds (default: 30000) */
   timeoutMs?: number;
+  /**
+   * Name to save the file under, inside `targetDir`. One path segment: no `/`,
+   * `\` or `..`. Default: derived from the URL's last path segment and the
+   * response content type, so URLs that all end in `default.jpg` collide.
+   */
+  filename?: string;
+  /** Extra request headers. moss sends its own `User-Agent` unless you set one. */
+  headers?: Record<string, string>;
 }
 /**
  * Result from an asset download operation
@@ -2266,4 +2301,4 @@ declare function showToast(options: ToastOptions | string): Promise<void>;
  */
 declare function dismissToast(id: string): Promise<void>;
 //#endregion
-export { AddressKind, AdvisoryAction, AdvisoryAppOp, AdvisoryProposal, AdvisoryScope, AdvisorySeverity, ArchType, ArticleInfo, ArtifactSource, BaseContext, BrowserCloseReason, BrowserHandle, CompleteMessage, ConfigureDomainContext, Cookie, DeployAddress, DeployContext, DeploymentInfo, DerivationContribution, DnsRecord, DnsTarget, DownloadOptions, DownloadResult, ErrorMessage, EscapeSpec, ExecuteOptions, ExecuteResult, FetchOptions, FetchResult, FieldDeclaration, GetOptions, HookResult, HookToast, KeyAlgorithm, KeyInfo, LegacySetupVerdict, ListingContext, ListingResult, ListingStyleContribution, LogMessage, MultipartFilePart, MultipartPostOptions, MultipartTextField, OSType, PageRecord, PlatformInfo, PlatformKey, PluginCategory, PluginHook, PluginManifest, PluginMessage, PostOptions, ProcessContext, ProgressMessage, ProjectFileEntry, ProjectInfo, SetupBlocker, SetupContext, SetupField, SetupForm, SetupVerdict, SiteFileInfo, SocialArticleData, SocialComment, SocialDataFile, StartTaskOptions, SyndicateContext, TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, TaskHandle, TauriCore, ToastAction, ToastOptions, ToastType, ToastVariant, TriggerContext, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startTask, writeFile, writePluginFile };
+export { AddressKind, AdvisoryAction, AdvisoryAppOp, AdvisoryProposal, AdvisoryScope, AdvisorySeverity, ArchType, ArticleInfo, ArtifactSource, BaseContext, BrowserCloseReason, BrowserHandle, CompleteMessage, ConfigureDomainContext, Cookie, DeployAddress, DeployContext, DeploymentInfo, DerivationContribution, DnsRecord, DnsTarget, DownloadOptions, DownloadResult, ErrorMessage, EscapeSpec, ExecuteOptions, ExecuteResult, FetchOptions, FetchResult, FieldDeclaration, GetOptions, HookResult, HookToast, KeyAlgorithm, KeyInfo, LegacySetupVerdict, ListingContext, ListingResult, ListingStyleContribution, LogMessage, MultipartFilePart, MultipartPostOptions, MultipartTextField, OSType, PageRecord, PlatformInfo, PlatformKey, PluginCategory, PluginHook, PluginManifest, PluginMessage, PostOptions, ProcessContext, ProgressMessage, ProjectFileEntry, ProjectInfo, SetupBlocker, SetupContext, SetupField, SetupForm, SetupVerdict, SiteFileInfo, SocialArticleData, SocialComment, SocialDataFile, StartTaskOptions, SyndicateContext, TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, TaskHandle, TauriCore, ToastAction, ToastOptions, ToastType, ToastVariant, TriggerContext, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startTask, writeFile, writeFileBinary, writePluginFile };

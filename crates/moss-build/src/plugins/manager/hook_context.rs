@@ -23,8 +23,8 @@ pub(super) trait HookContext: Clone {
 
     /// Runs after the dispatcher fills `config`. The default is nothing; a
     /// context that carries the same map under a second, contract-named key
-    /// mirrors it here.
-    fn on_config_filled(&mut self) {}
+    /// mirrors it here, and `ProcessContext` loads the read-only site config.
+    fn on_config_filled(&mut self, _project_path: &str) {}
 }
 
 macro_rules! impl_hook_context {
@@ -38,11 +38,26 @@ macro_rules! impl_hook_context {
 }
 
 impl_hook_context!(
-    ProcessContext,
     DeployContext,
     SyndicateContext,
     ConfigureDomainContext,
 );
+
+impl HookContext for ProcessContext {
+    fn config_slot(&mut self) -> &mut HashMap<String, serde_json::Value> {
+        &mut self.config
+    }
+
+    fn on_config_filled(&mut self, project_path: &str) {
+        self.site_config = match crate::build::site_config::read_project_config(project_path) {
+            Ok(cfg) => cfg.plugin_view(),
+            Err(e) => {
+                log::warn!(target: "plugin", "site_config unavailable for process hook: {e}");
+                Default::default()
+            }
+        };
+    }
+}
 
 impl HookContext for SetupContext {
     fn config_slot(&mut self) -> &mut HashMap<String, serde_json::Value> {
@@ -52,7 +67,7 @@ impl HookContext for SetupContext {
     /// The setup contract's name for the resolved plain fields is `settings`;
     /// `config` stays as the deprecated alias pre-contract hooks read. One
     /// resolution, two keys on the wire.
-    fn on_config_filled(&mut self) {
+    fn on_config_filled(&mut self, _project_path: &str) {
         self.settings = self.config.clone();
     }
 }
@@ -91,7 +106,7 @@ pub(super) fn hook_config_for_plugin(
 pub(super) fn context_for_plugin<C: HookContext>(project_path: &str, context: &C, plugin: &Plugin) -> C {
     let mut plugin_context = context.clone();
     *plugin_context.config_slot() = hook_config_for_plugin(project_path, plugin);
-    plugin_context.on_config_filled();
+    plugin_context.on_config_filled(project_path);
     plugin_context
 }
 
@@ -187,6 +202,7 @@ mod tests {
                 lang: "en".into(),
             },
             config: HashMap::new(),
+            site_config: Default::default(),
             trigger: TriggerContext::Background,
         };
 
@@ -240,6 +256,7 @@ mod tests {
                 lang: "en".into(),
             },
             config: HashMap::new(),
+            site_config: Default::default(),
             trigger: TriggerContext::Background,
         };
 
@@ -397,5 +414,36 @@ mod tests {
             "a persisted opt-out must reach the syndicate hook"
         );
         assert!(context.config.is_empty(), "the shared context must stay untouched");
+    }
+
+    /// A process hook receives the site's `.moss/config.toml` as `site_config`,
+    /// minus credentials and other plugins' settings; the shared context is
+    /// left untouched.
+    #[test]
+    fn process_context_carries_the_site_config_without_secrets() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let project_path = temp_dir.path().to_str().unwrap();
+        let plugins = discover_with_installed_plugin(
+            temp_dir.path(), "maps", "process", serde_json::json!({}),
+        );
+        std::fs::write(
+            temp_dir.path().join(".moss").join("config.toml"),
+            "[map.layers.sheet]\nzoom = 3\n[services.email]\napi_key = \"sk-live\"\n[plugins.other]\nx = 1\n",
+        )
+        .unwrap();
+
+        let context = ProcessContext::for_build(
+            project_path.to_string(),
+            ProjectInfo { total_files: 0, homepage_file: None, folder_name: None, site_name: None, lang: "en".into() },
+        );
+        let plugin_context = context_for_plugin(project_path, &context, find_plugin(&plugins, "maps"));
+
+        assert_eq!(plugin_context.site_config["map"]["layers"]["sheet"]["zoom"], 3);
+        let wire = serde_json::to_string(&plugin_context).unwrap();
+        assert!(!wire.contains("sk-live"), "a credential must not reach the plugin: {wire}");
+        assert!(plugin_context.site_config.get("plugins").is_none());
+        assert!(context.site_config.is_empty(), "the shared context must stay untouched");
     }
 }

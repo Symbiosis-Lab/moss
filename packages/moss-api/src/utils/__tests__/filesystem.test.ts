@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { readFile, writeFile, listFiles, fileExists } from "../filesystem.js";
+import { readFile, writeFile, writeFileBinary, listFiles, fileExists } from "../filesystem.js";
 
 describe("Filesystem Utilities", () => {
   const originalWindow = globalThis.window;
@@ -182,6 +182,31 @@ describe("Filesystem Utilities", () => {
       await expect(fileExists("file.txt")).rejects.toThrow(
         /must be called from within a plugin hook/
       );
+    });
+  });
+
+  describe("writeFileBinary", () => {
+    it("sends the bytes as base64 with the same identity fields as writeFile", async () => {
+      mockInvoke.mockResolvedValue(null);
+
+      await writeFileBinary("maps/a.jpg", new Uint8Array([0, 255, 216, 128]));
+
+      expect(mockInvoke).toHaveBeenCalledWith("write_project_file_binary", {
+        projectPath: "/path/to/project",
+        pluginName: "test-plugin",
+        relativePath: "maps/a.jpg",
+        dataBase64: "AP/YgA==",
+      });
+    });
+
+    it("encodes a buffer larger than one chunk without losing a byte", async () => {
+      mockInvoke.mockResolvedValue(null);
+      const bytes = Uint8Array.from({ length: 0x8000 * 2 + 5 }, (_, i) => i % 256);
+
+      await writeFileBinary("big.bin", bytes);
+
+      const sent = mockInvoke.mock.calls[0][1].dataBase64 as string;
+      expect(Uint8Array.from(atob(sent), (c) => c.charCodeAt(0))).toEqual(bytes);
     });
   });
 

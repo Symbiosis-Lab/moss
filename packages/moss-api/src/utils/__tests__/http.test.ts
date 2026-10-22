@@ -43,6 +43,31 @@ describe("HTTP Utilities", () => {
       });
     });
 
+    it("passes filename and headers through when given", async () => {
+      mockInvoke.mockResolvedValue({
+        status: 200,
+        ok: true,
+        content_type: "image/jpeg",
+        bytes_written: 3,
+        actual_path: "maps/sheet-1.jpg",
+      });
+
+      const result = await downloadAsset("https://example.com/iiif/default.jpg", "maps", {
+        filename: "sheet-1.jpg",
+        headers: { Referer: "https://example.com/" },
+      });
+
+      expect(mockInvoke).toHaveBeenCalledWith("download_asset", {
+        url: "https://example.com/iiif/default.jpg",
+        projectPath: "/my/project",
+        targetDir: "maps",
+        timeoutMs: 30000,
+        filename: "sheet-1.jpg",
+        headers: { Referer: "https://example.com/" },
+      });
+      expect(result.actualPath).toBe("maps/sheet-1.jpg");
+    });
+
     it("uses custom timeout when provided", async () => {
       mockInvoke.mockResolvedValue({
         status: 200,

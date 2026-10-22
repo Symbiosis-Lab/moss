@@ -39,6 +39,7 @@ pub mod deployment;
 pub mod environment;
 pub mod map_layers;
 pub mod migrations;
+pub mod plugin_view;
 pub mod services;
 pub mod site_settings;
 

@@ -317,6 +317,29 @@ pub async fn write_project_file_impl(
     outcome
 }
 
+/// Binary twin of [`write_project_file_impl`]: same path rules and `.moss/`
+/// fence, bytes arriving base64-encoded.
+pub async fn write_project_file_binary_impl(
+    project_path: &str,
+    plugin_id: Option<&str>,
+    relative_path: &str,
+    data_base64: &str,
+) -> Result<(), String> {
+    use base64::Engine;
+    log::info!(target: "plugin", "write_project_file_binary: path={relative_path}");
+    let outcome = async {
+        let file_path = resolve_plugin_project_path(project_path, plugin_id, relative_path)?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data_base64)
+            .map_err(|e| format!("Invalid base64 data: {e}"))?;
+        write_file_with_dirs(&file_path, &bytes)
+    }.await;
+    if let Err(e) = &outcome {
+        log::warn!(target: "plugin", "write_project_file_binary failed: path={relative_path}: {e}");
+    }
+    outcome
+}
+
 /// Read file from project root
 ///
 /// Allows plugins to read files directly from the project root directory.

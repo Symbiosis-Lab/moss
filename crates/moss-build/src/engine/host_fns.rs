@@ -342,8 +342,10 @@ async fn dispatch_command_core(
             let timeout_ms = args.get("timeoutMs").and_then(|v| v.as_u64());
             // The JS projectPath arg is IGNORED — same authority model as the
             // webview command (AppState); here the per-manager project_path (D1).
+            let filename = args.get("filename").and_then(|v| v.as_str()).map(str::to_string);
+            let headers = opt_headers(&args)?;
             let r = crate::plugins::runtime::download::download_asset_impl(
-                url, host.project_path, target_dir, timeout_ms).await?;
+                url, host.project_path, target_dir, timeout_ms, filename, headers).await?;
             reply_json(&r)
         }
         "html_to_markdown" => {
@@ -416,6 +418,12 @@ async fn dispatch_command_core(
         "write_project_file" => {
             crate::plugins::project_files::write_project_file_impl(
                 host.project_path, host.plugin, &req_str(&args, "relativePath")?, &req_str(&args, "data")?).await?;
+            Ok("null".into())
+        }
+        "write_project_file_binary" => {
+            // Bytes cross the boundary as base64, like every other binary here.
+            crate::plugins::project_files::write_project_file_binary_impl(
+                host.project_path, host.plugin, &req_str(&args, "relativePath")?, &req_str(&args, "dataBase64")?).await?;
             Ok("null".into())
         }
         "list_project_files" => {
@@ -1136,6 +1144,88 @@ mod tests {
         assert!(written.exists(), "asset must land under the HOST project path: {written:?}");
     }
 
+    /// `write_project_file_binary` lands the exact bytes, through the same
+    /// sandbox as the text write: `.moss/` and path escapes are refused.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn binary_write_arm_roundtrips_bytes_and_keeps_the_sandbox() {
+        use base64::Engine;
+        std::fs::create_dir_all(concat!(env!("CARGO_MANIFEST_DIR"), "/target/test-tmp")).unwrap();
+        let proj = tempfile::TempDir::new_in(concat!(env!("CARGO_MANIFEST_DIR"), "/target/test-tmp")).unwrap();
+        let pp = proj.path().to_str().unwrap();
+        let bytes: Vec<u8> = vec![0x00, 0xFF, 0xD8, 0x80, 0x00, 0x0A, 0x0D];
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        let write = |rel: &str, data: &str| {
+            serde_json::json!({ "relativePath": rel, "dataBase64": data }).to_string()
+        };
+
+        dispatch_command_test_stub(pp, None, "write_project_file_binary", &write("maps/a.jpg", &b64))
+            .await.unwrap();
+        assert_eq!(std::fs::read(proj.path().join("maps/a.jpg")).unwrap(), bytes);
+
+        for refused in [".moss/config.toml", ".moss/plugins/x/main.js", "../escape.bin", "a/../../escape.bin", "/abs.bin"] {
+            let err = dispatch_command_test_stub(pp, Some("p"), "write_project_file_binary", &write(refused, &b64))
+                .await.expect_err(refused);
+            assert!(!err.contains("unknown command"), "{refused}: {err}");
+        }
+        assert!(!proj.path().join(".moss/config.toml").exists());
+        assert!(!proj.path().parent().unwrap().join("escape.bin").exists());
+
+        let err = dispatch_command_test_stub(pp, None, "write_project_file_binary", &write("b.bin", "not base64!!"))
+            .await.expect_err("bad base64");
+        assert!(err.contains("base64"), "{err}");
+    }
+
+    /// `download_asset` accepts a file name and request headers, sends moss's
+    /// `User-Agent`, and refuses a name that is not a single path segment.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn download_asset_arm_honours_filename_headers_and_user_agent() {
+        std::fs::create_dir_all(concat!(env!("CARGO_MANIFEST_DIR"), "/target/test-tmp")).unwrap();
+        let proj = tempfile::TempDir::new_in(concat!(env!("CARGO_MANIFEST_DIR"), "/target/test-tmp")).unwrap();
+        let pp = proj.path().to_str().unwrap();
+        let mut server = mockito::Server::new_async().await;
+        let m = server.mock("GET", "/iiif/1/full/max/0/default.jpg")
+            .match_header("user-agent", mockito::Matcher::Regex("^moss/".into()))
+            .match_header("x-probe", "1")
+            .with_status(200).with_header("content-type", "image/jpeg").with_body(vec![9u8, 8, 7])
+            .create_async().await;
+        let args = |name: Option<&str>| serde_json::json!({
+            "url": format!("{}/iiif/1/full/max/0/default.jpg", server.url()),
+            "targetDir": "maps", "timeoutMs": 5000,
+            "filename": name, "headers": { "X-Probe": "1" }
+        }).to_string();
+
+        let reply = dispatch_command_test_stub(pp, None, "download_asset", &args(Some("sheet-1.jpg"))).await.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
+        assert_eq!(v["actual_path"], "maps/sheet-1.jpg");
+        assert_eq!(std::fs::read(proj.path().join("maps/sheet-1.jpg")).unwrap(), vec![9u8, 8, 7]);
+        m.assert_async().await;
+
+        for bad in ["../x.jpg", "a/b.jpg", "a\\b.jpg", ""] {
+            let err = dispatch_command_test_stub(pp, None, "download_asset", &args(Some(bad))).await.expect_err(bad);
+            assert!(err.contains("Invalid file name"), "{bad}: {err}");
+        }
+    }
+
+    /// Every plugin HTTP request carries moss's `User-Agent`, and a plugin
+    /// header of the same name still wins.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn http_get_arm_sends_the_moss_user_agent() {
+        let mut server = mockito::Server::new_async().await;
+        let ua = server.mock("GET", "/ua")
+            .match_header("user-agent", mockito::Matcher::Regex("^moss/".into()))
+            .with_status(200).create_async().await;
+        let own = server.mock("GET", "/own")
+            .match_header("user-agent", "custom/1")
+            .with_status(200).create_async().await;
+        let get = |path: &str, headers: serde_json::Value| serde_json::json!({
+            "url": format!("{}{}", server.url(), path), "headers": headers, "timeoutMs": 5000
+        }).to_string();
+        dispatch_command_test_stub("/tmp/none", None, "http_get", &get("/ua", serde_json::json!({}))).await.unwrap();
+        dispatch_command_test_stub("/tmp/none", None, "http_get", &get("/own", serde_json::json!({ "User-Agent": "custom/1" }))).await.unwrap();
+        ua.assert_async().await;
+        own.assert_async().await;
+    }
+
     /// B.8b RED: file arms roundtrip against a temp project (write→exists→read for
     /// plugin storage; write→read for project file; list_project_files includes the
     /// written file).
@@ -1338,6 +1428,7 @@ mod tests {
             "set_plugin_cookie",
             "write_plugin_file",
             "write_project_file",
+            "write_project_file_binary",
         ];
         for cmd in SDK_COMMANDS {
             // Empty args: every arm parses args (or checks app/state/grants)

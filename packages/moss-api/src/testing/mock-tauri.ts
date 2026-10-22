@@ -28,7 +28,7 @@
  * ```
  */
 
-import { enforceMossFence } from "./mock-moss-fence.js";
+import { enforceInsideProject, enforceMossFence } from "./mock-moss-fence.js";
 
 // Define minimal types for invoke args
 interface InvokeArgs {
@@ -44,6 +44,8 @@ interface InvokeArgs {
  */
 export interface MockFile {
   content: string;
+  /** Exact bytes, set by binary writes (`writeFileBinary`, `downloadAsset`); `content` is then their lossy UTF-8 reading. */
+  bytes?: Uint8Array;
   createdAt: Date;
   modifiedAt: Date;
 }
@@ -58,6 +60,8 @@ export interface MockFilesystem {
   getFile(path: string): MockFile | undefined;
   /** Set a file's content (creates or updates) */
   setFile(path: string, content: string): void;
+  /** Set a file's exact bytes (creates or updates) */
+  setFileBytes(path: string, bytes: Uint8Array): void;
   /** Delete a file */
   deleteFile(path: string): boolean;
   /** List files matching an optional pattern */
@@ -80,6 +84,15 @@ export function createMockFilesystem(): MockFilesystem {
       files.set(path, {
         content,
         createdAt: existing?.createdAt ?? now,
+        modifiedAt: now,
+      });
+    },
+    setFileBytes(path: string, bytes: Uint8Array) {
+      const now = new Date();
+      files.set(path, {
+        content: new TextDecoder().decode(bytes),
+        bytes,
+        createdAt: files.get(path)?.createdAt ?? now,
         modifiedAt: now,
       });
     },
@@ -563,6 +576,10 @@ export function createMockDialogTracker(): MockDialogTracker {
 /**
  * Extract filename from URL (mimics Rust backend behavior)
  */
+function decodeBase64(b64: string): Uint8Array {
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
+
 function extractFilenameFromUrl(url: string): string {
   try {
     const urlObj = new URL(url);
@@ -745,6 +762,18 @@ export function setupMockTauri(options?: SetupMockTauriOptions): MockTauriContex
         return null;
       }
 
+      case "write_project_file_binary": {
+        const relativePath = payload?.relativePath as string;
+        const pluginName = (payload?.pluginName as string | null | undefined) ?? null;
+        enforceMossFence(pluginName, relativePath);
+        enforceInsideProject(relativePath);
+        filesystem.setFileBytes(
+          `${payload?.projectPath as string}/${relativePath}`,
+          decodeBase64(payload?.dataBase64 as string)
+        );
+        return null;
+      }
+
       case "list_project_files": {
         const projectPath = payload?.projectPath as string;
         // Return all file paths relative to the project path
@@ -857,35 +886,9 @@ export function setupMockTauri(options?: SetupMockTauriOptions): MockTauriContex
         return (payload?.html as string) ?? "";
       }
 
-      case "fetch_url": {
-        const url = payload?.url as string;
-        const response = urlConfig.getResponse(url);
-
-        if (response.delay) {
-          return new Promise((resolve) =>
-            setTimeout(
-              () =>
-                resolve({
-                  status: response.status,
-                  ok: response.ok,
-                  body_base64: response.bodyBase64 || "",
-                  content_type: response.contentType || null,
-                }),
-              response.delay
-            )
-          );
-        }
-
-        return {
-          status: response.status,
-          ok: response.ok,
-          body_base64: response.bodyBase64 || "",
-          content_type: response.contentType || null,
-        };
-      }
-
+      case "fetch_url":
+      case "http_get":
       case "http_post": {
-        // HTTP POST - similar to fetch_url but for POST requests
         const url = payload?.url as string;
         const response = urlConfig.getResponse(url);
 
@@ -925,15 +928,26 @@ export function setupMockTauri(options?: SetupMockTauriOptions): MockTauriContex
           throw new Error("Network timeout");
         }
 
-        // Generate actual_path based on URL or use configured value
+        // Mirror the host: a `filename` option replaces the derived name and must be one segment.
+        const filename = payload?.filename as string | undefined;
+        if (filename !== undefined && (!filename || /[\\/\0]|\.\./.test(filename))) {
+          downloadTracker.endDownload(url, false, "Invalid file name");
+          throw new Error(`Invalid file name '${filename}': a single name, no path separators`);
+        }
         const actualPath =
-          response.actualPath || `${targetDir}/${extractFilenameFromUrl(url)}`;
+          response.actualPath ||
+          `${targetDir}/${filename ?? extractFilenameFromUrl(url)}`;
+
+        const body = decodeBase64(response.bodyBase64 || "");
+        if (response.ok) {
+          filesystem.setFileBytes(`${payload?.projectPath ?? projectPath}/${actualPath}`, body);
+        }
 
         const result = {
           status: response.status,
           ok: response.ok,
           content_type: response.contentType || null,
-          bytes_written: response.bytesWritten || 0,
+          bytes_written: response.bytesWritten ?? (response.ok ? body.length : 0),
           actual_path: actualPath,
         };
 

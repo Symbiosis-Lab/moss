@@ -12,6 +12,8 @@ use std::sync::{Arc, Mutex, RwLock};
 pub mod engine_adapter;
 pub mod listing;
 mod hook_context;
+#[cfg(test)]
+mod site_config_plugin_tests;
 pub mod signal_route;
 
 use hook_context::{context_for_plugin, HookContext};

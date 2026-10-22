@@ -716,6 +716,35 @@ async function writeFile(relativePath, content) {
 	});
 }
 /**
+* Write binary content to a file in the project directory
+*
+* Same sandbox as {@link writeFile}: the path must stay inside the project and
+* `.moss/` is refused. Creates parent directories and replaces an existing file.
+* The bytes cross to moss as base64, so very large files cost memory twice.
+*
+* @param relativePath - Path relative to the project root
+* @param bytes - Exact bytes to write
+* @throws Error if the path is refused, the file cannot be written, or called outside a hook
+*
+* @example
+* ```typescript
+* const image = await fetchUrl("https://example.com/map.jpg");
+* await writeFileBinary("maps/sheet-1.jpg", image.body);
+* ```
+* @category Filesystem
+*/
+async function writeFileBinary(relativePath, bytes) {
+	const ctx = getInternalContext();
+	let binary = "";
+	for (let i = 0; i < bytes.length; i += 32768) binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
+	await getTauriCore().invoke("write_project_file_binary", {
+		projectPath: ctx.project_path,
+		pluginName: ctx.plugin_name,
+		relativePath,
+		dataBase64: btoa(binary)
+	});
+}
+/**
 * List all files in the project directory
 *
 * Returns file paths relative to the project root.
@@ -1310,12 +1339,14 @@ async function httpPostMultipart(url, parts, options = {}) {
 */
 async function downloadAsset(url, targetDir, options = {}) {
 	const ctx = getInternalContext();
-	const { timeoutMs = 3e4 } = options;
+	const { timeoutMs = 3e4, filename, headers } = options;
 	const result = await getTauriCore().invoke("download_asset", {
 		url,
 		projectPath: ctx.project_path,
 		targetDir,
-		timeoutMs
+		timeoutMs,
+		filename,
+		headers
 	});
 	return {
 		status: result.status,
@@ -1684,4 +1715,4 @@ async function dismissToast(id) {
 }
 
 //#endregion
-export { TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startTask, writeFile, writePluginFile };
+export { TOAST_DISMISS_EVENT, TOAST_EVENT, TOAST_UPDATE_EVENT, clearPluginCookies, closeBrowser, dismissToast, downloadAsset, emitEvent, executeBinary, fetchUrl, fileExists, getKey, getPlatformInfo, getPluginCookie, getPluginEnvVar, getSecret, getTauriCore, htmlToMarkdown, httpGet, httpPost, httpPostMultipart, listFiles, listKeys, listProjectTree, listSiteFilesWithSizes, onEvent, openBrowser, openBrowserWithHtml, openSystemBrowser, pluginFileExists, readFile, readPluginFile, readSiteFile, rejectSecret, reportError, reportProgress, returnToEditor, sendMessage, setMessageContext, setPluginCookie, setSecret, showBrowserForm, showToast, signWithKey, startTask, writeFile, writeFileBinary, writePluginFile };

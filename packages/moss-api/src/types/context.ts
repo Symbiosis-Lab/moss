@@ -33,10 +33,18 @@ export interface BaseContext {
  * (drives the ambient hairline); every build/preview rebuild → "background".
  * Optional for backward compatibility; absent ⇒ treat as "background".
  *
+ * `site_config` is the site's `.moss/config.toml` as a plain JSON object, so a
+ * plugin can read tables it documents (for example `[map.layers.<name>]`).
+ * It is read-only and `{}` when the site has no config file. Withheld: the
+ * `[plugins]` table (your own settings arrive as `config`) and every key,
+ * at any depth, whose name contains token, secret, password, passwd, api_key,
+ * apikey, credential or private_key. Absent on moss versions before it was added.
+ *
  * @category Hook contexts
  */
 export interface ProcessContext extends BaseContext {
   trigger?: TriggerContext;
+  site_config?: Record<string, unknown>;
 }
 
 /**

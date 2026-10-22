@@ -47,6 +47,7 @@ export {
 export {
   readFile,
   writeFile,
+  writeFileBinary,
   listFiles,
   listProjectTree,
   fileExists,

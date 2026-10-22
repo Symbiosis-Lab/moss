@@ -59,6 +59,11 @@ const MOSS_FENCE_MESSAGE = "Access to .moss/ is not allowed. Use plugin storage 
 function enforceMossFence(pluginId, relativePath) {
 	if (isMossInternalPath(relativePath) && !isOwnSharedSocialDataPath(pluginId ?? null, relativePath)) throw new Error(MOSS_FENCE_MESSAGE);
 }
+/** Throws like the real guard for an absolute path or one that climbs out of the project. */
+function enforceInsideProject(relativePath) {
+	const segments = relativePath.replace(/\\/g, "/").split("/");
+	if (relativePath.startsWith("/") || /^[A-Za-z]:/.test(relativePath) || segments.includes("..")) throw new Error(`Invalid path: ${relativePath} escapes the project folder`);
+}
 
 //#endregion
 //#region src/testing/mock-tauri.ts
@@ -104,6 +109,15 @@ function createMockFilesystem() {
 			files.set(path, {
 				content,
 				createdAt: existing?.createdAt ?? now,
+				modifiedAt: now
+			});
+		},
+		setFileBytes(path, bytes) {
+			const now = /* @__PURE__ */ new Date();
+			files.set(path, {
+				content: new TextDecoder().decode(bytes),
+				bytes,
+				createdAt: files.get(path)?.createdAt ?? now,
 				modifiedAt: now
 			});
 		},
@@ -338,6 +352,9 @@ function createMockDialogTracker() {
 /**
 * Extract filename from URL (mimics Rust backend behavior)
 */
+function decodeBase64(b64) {
+	return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
 function extractFilenameFromUrl(url) {
 	try {
 		const segments = new URL(url).pathname.split("/").filter((s) => s.length > 0);
@@ -431,6 +448,13 @@ function setupMockTauri(options) {
 				filesystem.setFile(fullPath, content);
 				return null;
 			}
+			case "write_project_file_binary": {
+				const relativePath = payload?.relativePath;
+				enforceMossFence(payload?.pluginName ?? null, relativePath);
+				enforceInsideProject(relativePath);
+				filesystem.setFileBytes(`${payload?.projectPath}/${relativePath}`, decodeBase64(payload?.dataBase64));
+				return null;
+			}
 			case "list_project_files": {
 				const projectPath$1 = payload?.projectPath;
 				return filesystem.listFiles().filter((p) => p.startsWith(projectPath$1 + "/")).map((p) => p.substring(projectPath$1.length + 1));
@@ -503,22 +527,8 @@ function setupMockTauri(options) {
 				return filesystem.getFile(fullPath) !== void 0;
 			}
 			case "html_to_markdown": return payload?.html ?? "";
-			case "fetch_url": {
-				const url = payload?.url;
-				const response = urlConfig.getResponse(url);
-				if (response.delay) return new Promise((resolve) => setTimeout(() => resolve({
-					status: response.status,
-					ok: response.ok,
-					body_base64: response.bodyBase64 || "",
-					content_type: response.contentType || null
-				}), response.delay));
-				return {
-					status: response.status,
-					ok: response.ok,
-					body_base64: response.bodyBase64 || "",
-					content_type: response.contentType || null
-				};
-			}
+			case "fetch_url":
+			case "http_get":
 			case "http_post": {
 				const url = payload?.url;
 				const response = urlConfig.getResponse(url);
@@ -544,12 +554,19 @@ function setupMockTauri(options) {
 					downloadTracker.endDownload(url, false, "Network error");
 					throw new Error("Network timeout");
 				}
-				const actualPath = response.actualPath || `${targetDir}/${extractFilenameFromUrl(url)}`;
+				const filename = payload?.filename;
+				if (filename !== void 0 && (!filename || /[\\/\0]|\.\./.test(filename))) {
+					downloadTracker.endDownload(url, false, "Invalid file name");
+					throw new Error(`Invalid file name '${filename}': a single name, no path separators`);
+				}
+				const actualPath = response.actualPath || `${targetDir}/${filename ?? extractFilenameFromUrl(url)}`;
+				const body = decodeBase64(response.bodyBase64 || "");
+				if (response.ok) filesystem.setFileBytes(`${payload?.projectPath ?? projectPath}/${actualPath}`, body);
 				const result = {
 					status: response.status,
 					ok: response.ok,
 					content_type: response.contentType || null,
-					bytes_written: response.bytesWritten || 0,
+					bytes_written: response.bytesWritten ?? (response.ok ? body.length : 0),
 					actual_path: actualPath
 				};
 				if (response.delay) return new Promise((resolve) => setTimeout(() => {
