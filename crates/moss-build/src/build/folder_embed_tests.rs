@@ -2748,7 +2748,7 @@ fn render_place_map_embed(markdown: &str, docs: &[ParsedDocument]) -> String {
     resolve_markers_with_place_maps(
         &resolved.content_markdown, "index.md", docs, &test_project(),
         &std::collections::HashMap::new(), crate::i18n::Language::En,
-        None, None, true, Some(&maps), upcoming::now(),
+        None, None, true, Some(&maps), None, upcoming::now(),
     )
 }
 

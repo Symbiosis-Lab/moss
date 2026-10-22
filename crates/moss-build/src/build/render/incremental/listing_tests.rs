@@ -210,6 +210,18 @@ fn a_child_with_a_frontmatter_description_prunes_on_every_body_edit() {
     );
 }
 
+#[test]
+fn a_child_embedding_other_pages_leaves_the_digest_unchanged() {
+    let mut embedding = vault();
+    let before = digest(&embedding, &key("writings"));
+    embedding[ALPHA].embedded_listing_urls.insert("writings/beta/index.html".into());
+    assert_eq!(
+        digest(&embedding, &key("writings")).contents,
+        before.contents,
+        "the embedded set is body-derived and the host's note reads it, not the card"
+    );
+}
+
 // ---- Gate 2: the card-only-projection trap (§4a-ii) ----------------------
 
 /// Every card field is byte-identical and the listing still re-orders and

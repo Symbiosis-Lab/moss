@@ -34,6 +34,8 @@ pub(crate) mod hero_from;
 pub(crate) mod members;
 mod calendar_tokens;
 pub(crate) mod upcoming;
+mod repeat_note;
+pub(crate) use repeat_note::{note_repeated_child_listing, ListedUrls};
 use maps::place_map_with_placement;
 
 use std::path::Path;
@@ -819,6 +821,7 @@ pub fn expand_markers_in_documents_with_place_maps(
         // Every marker here came from an authored `![[folder/|…]]`, never from
         // `synthesize_children_marker`. One SVG identity sequence per page.
         let ordinal = std::cell::Cell::new(0);
+        let shown = ListedUrls::default();
         let expand = |html: &str| {
             resolve_markers_impl(
                 html,
@@ -833,6 +836,7 @@ pub fn expand_markers_in_documents_with_place_maps(
                 true,
                 place_maps,
                 &ordinal,
+                Some(&shown),
                 now,
             )
         };
@@ -854,6 +858,7 @@ pub fn expand_markers_in_documents_with_place_maps(
         documents[i].body_plan = plan;
         documents[i].html_content = resolved;
         documents[i].hero_html = hero;
+        documents[i].embedded_listing_urls = shown.into_inner();
     }
 }
 
@@ -880,7 +885,7 @@ pub(crate) fn resolve_markers(
 ) -> String {
     resolve_markers_with_place_maps(
         html, from_md_path, all_docs, project, dir_overrides, site_lang,
-        typesetting, media_lookup, math, None, upcoming::now(),
+        typesetting, media_lookup, math, None, None, upcoming::now(),
     )
 }
 
@@ -896,6 +901,7 @@ pub(crate) fn resolve_markers_with_place_maps(
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     math: bool,
     place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
+    shown: Option<&ListedUrls>,
     now: chrono::NaiveDateTime,
 ) -> String {
     resolve_markers_impl(
@@ -911,6 +917,7 @@ pub(crate) fn resolve_markers_with_place_maps(
         false,
         place_maps,
         &std::cell::Cell::new(0),
+        shown,
         now,
     )
 }
@@ -937,6 +944,7 @@ fn resolve_markers_impl(
     is_embed: bool,
     place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
     ordinal: &std::cell::Cell<usize>,
+    shown: Option<&ListedUrls>,
     now: chrono::NaiveDateTime,
 ) -> String {
     if !html.contains(MARKER_FOLDER_LIST) {
@@ -977,6 +985,7 @@ fn resolve_markers_impl(
                     math,
                     is_embed,
                     place_maps,
+                    shown,
                     now,
                 )
             }
@@ -1417,6 +1426,7 @@ fn render_one(
     math: bool,
     is_embed: bool,
     place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
+    shown: Option<&ListedUrls>,
     now: chrono::NaiveDateTime,
 ) -> Result<String, String> {
     // Prefer the marker's `from=` (the original markdown source); the
@@ -1475,6 +1485,9 @@ fn render_one(
         math,
         now,
     );
+    if let Some(shown) = shown {
+        shown.borrow_mut().extend(limited.iter().map(|d| d.url_path.clone()));
+    }
     let children_style = style_resolved.value.clone();
 
     let all_docs_refs: Vec<&ParsedDocument> = all_docs.iter().collect();

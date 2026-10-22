@@ -255,6 +255,8 @@ fn project_child(
     stripped.body_plan = None;
     stripped.outgoing_links = Vec::new();
     stripped.embed_deps = Vec::new();
+    // Body-derived, like `embed_deps`: a child's embedded set must not move the digest.
+    stripped.embedded_listing_urls = Default::default();
     // A card never displays a CHILD's own `lang` — the only lang a
     // listing reads is the HOST's own (`folder_embed.rs`'s `let lang =
     // documents[i].lang`, for localized "N articles" strings), which already

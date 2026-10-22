@@ -540,6 +540,7 @@ pub(super) fn render_page<'d>(
                     &target_folder_path,
                     &from_md_path,
                 );
+                let listed = crate::build::folder_embed::ListedUrls::default();
                 let resolved_html = crate::build::folder_embed::resolve_markers_with_place_maps(
                     &marker,
                     &from_md_path,
@@ -551,8 +552,10 @@ pub(super) fn render_page<'d>(
                     Some(media_lookup),
                     layout_config.assets.math,
                     None,
+                    Some(&listed),
                     now,
                 );
+                crate::build::folder_embed::note_repeated_child_listing(doc, &listed);
                 content.push_str(&crate::build::emit::listing_style::wrap(
                     doc,
                     annotate_children_listing(resolved_html, emit_source_lines),
@@ -901,6 +904,7 @@ pub(super) fn render_page<'d>(
                         &folder_path,
                         &from_md_path,
                     );
+                    let listed = crate::build::folder_embed::ListedUrls::default();
                     let resolved_html = crate::build::folder_embed::resolve_markers_with_place_maps(
                         &marker,
                         &from_md_path,
@@ -912,8 +916,10 @@ pub(super) fn render_page<'d>(
                         Some(media_lookup),
                         layout_config.assets.math,
                         None,
+                        Some(&listed),
                         now,
                     );
+                    crate::build::folder_embed::note_repeated_child_listing(doc, &listed);
                     content.push_str(&crate::build::emit::listing_style::wrap(
                         doc,
                         annotate_children_listing(resolved_html, emit_source_lines),

@@ -210,6 +210,8 @@ fn surface_debug(doc: &ParsedDocument) -> String {
     // in the FACADE (a retargeted embed does change this page's HTML) and out
     // of the surface.
     stripped.embed_deps = Vec::new();
+    // Body-only, read only by the page's own repeat note: left in, a page gaining an embedded page would move every host's surface.
+    stripped.embedded_listing_urls = Default::default();
     // Also body-only, and the one that made this measurable. `hero_html` is
     // the page's own rendered hero, read by exactly one place —
     // `generate_html_inner`'s `hero_section: doc.and_then(|d| d.hero_html…)`
@@ -797,6 +799,16 @@ impl FacadeCache {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn a_changed_embedded_listing_set_leaves_the_surface_unchanged() {
+        let plain = ParsedDocument { content: "body".to_string(), ..Default::default() };
+        let mut embedding = plain.clone();
+        embedding.embedded_listing_urls.insert("posts/a.html".to_string());
+        assert_eq!(surface_debug(&embedding), surface_debug(&plain));
+    }
+
     use super::*;
 
     #[test]

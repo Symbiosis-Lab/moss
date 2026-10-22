@@ -387,6 +387,10 @@ pub struct ParsedDocument {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[specta(skip)]
     pub has_own_map_embed: bool,
+    /// URL paths of the pages this page's body embeds list.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    #[specta(skip)]
+    pub embedded_listing_urls: std::collections::BTreeSet<String>,
     /// Opt-in from frontmatter `route:` to draw this page's `location:` list,
     /// in its existing declared order, as a route: a dashed line through the
     /// stops with numbered badges, on this page's own map and the locator
