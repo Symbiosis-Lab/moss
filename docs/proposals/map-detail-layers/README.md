@@ -1,7 +1,6 @@
 # Detail layers: a historical map or today's streets under a site's places
 
 - **Status:** In progress. Designed in October 2026; the engine changes and the historical layer are being built first.
-- **Discussion:** issue not opened yet.
 - **Where the work would land:** this repository: the build engine (`place_map`), the places explorer script, the CLI (`moss map bbox`), and a fetch plugin. Nothing in the desktop app is needed to use it.
 
 ## The problem
@@ -52,7 +51,7 @@ moss draws layers 1 and 2 at build time into the same kind of static tiles it dr
 Before any data, the explorer has to reach city scale and draw it true.
 
 - **Zoom.** The explorer's deepest zoom is fixed at 0.005° per pixel. Inside a detail layer's extent it may go as deep as the layer's `max_zoom`; outside, the ceiling stays where it is, since there is nothing finer to show.
-- **Projection.** The explorer draws everything in one world projection (Patterson). At 40° north it stretches east–west against north–south by about 13%, which is invisible on a continent and obvious on a street grid. A frame small enough to show streets is drawn in a frame-local projection, an equirectangular projection with its standard parallel at the frame's centre, which is close to true at city scale. The world view keeps Patterson.
+- **Projection.** The explorer draws everything in one world projection (Patterson). At 40° north it stretches east–west against north–south by about 10%, which is invisible on a continent and obvious on a street grid. A frame small enough to show streets is drawn in a frame-local projection, an equirectangular projection with its standard parallel at the frame's centre, which is close to true at city scale. The world view keeps Patterson.
 
 ### Pixels in the folder, provenance in the annotation
 
