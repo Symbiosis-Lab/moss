@@ -65,6 +65,10 @@ pub struct PlaceMapRenderContext {
     /// plain static figure instead of baking in a hash the build might not
     /// actually write.
     explorer_places_hash: Option<String>,
+    /// The site's declared `[map.layers]`, each with its bbox settled.
+    layers: Arc<Vec<crate::config::map_layers::MapLayer>>,
+    /// One plan per layer: plates read and fitted, extent, credit, tile key.
+    layer_plans: Arc<Vec<super::layer_warp::LayerPlan>>,
 }
 
 impl PlaceMapRenderContext {
@@ -84,8 +88,28 @@ impl PlaceMapRenderContext {
             explorer: true,
             map_assets_hash: String::new(),
             explorer_places_hash: None,
+            layers: Arc::default(),
+            layer_plans: Arc::default(),
         }
     }
+
+    /// The site's declared detail layers. Chained like `with_explorer`.
+    pub fn with_layers(mut self, layers: Vec<crate::config::map_layers::MapLayer>) -> Self {
+        self.layers = Arc::new(layers);
+        self
+    }
+
+    /// The plans for the layers given to [`with_layers`](Self::with_layers), in the same order.
+    pub fn with_layer_plans(mut self, plans: Vec<super::layer_warp::LayerPlan>) -> Self {
+        self.layer_plans = Arc::new(plans);
+        self
+    }
+
+    pub(crate) fn layer_plans(&self) -> &[super::layer_warp::LayerPlan] { &self.layer_plans }
+
+    pub(crate) fn layers(&self) -> &[crate::config::map_layers::MapLayer] { &self.layers }
+
+    pub fn has_layers(&self) -> bool { !self.layers.is_empty() }
 
     /// `TermKind::explorer_enabled()` for the place-typed kind this context
     /// was built from. Chained onto `new()` rather than widened into it so
@@ -197,7 +221,7 @@ impl PlaceMapRenderContext {
                 // misread a page's own work.
                 let article = super::places_data::page_url(page_path);
                 let svg = self.with_embed_hydration(locator.svg, &format!("article={article}"), &first.display);
-                Some(svg)
+                Some(self.with_credit_slot(svg))
             }
             Err(error) => {
                 crate::build::cli_output::log_warn_problem!(
@@ -384,7 +408,7 @@ impl PlaceMapRenderContext {
         let svg = if in_place_explorer { self.with_explorer_handshake(key, svg) } else { svg };
         let scope = if key == self.namespace { String::new() } else { format!("place={key}") };
         let svg = if is_embed { self.with_embed_hydration(svg, &scope, &embed_name) } else { svg };
-        Some(svg)
+        Some(self.with_credit_slot(svg))
     }
 
     /// Splice the places-explorer handshake attributes onto the figure's
@@ -409,10 +433,13 @@ impl PlaceMapRenderContext {
             return svg;
         };
         let places = crate::build::served_path::ServedPath::for_places_data_hashed(places_hash);
+        let layers = crate::build::served_path::ServedPath::for_place_map_asset(&self.map_assets_hash, "layers.json")
+            .map_or(String::new(), |p| format!(" data-layers=\"{}\"", p.to_relative_url()));
+        let layers = if self.has_layers() { layers } else { String::new() };
         Self::splice_figure_attrs(
             svg,
             &format!(
-                "data-moss-places-explorer data-world=\"{}\" data-tiles=\"{}\" data-places=\"{}\" data-labels=\"{}\" data-scope=\"{}\"",
+                "data-moss-places-explorer data-world=\"{}\" data-tiles=\"{}\" data-places=\"{}\" data-labels=\"{}\"{layers} data-scope=\"{}\"",
                 world.to_relative_url(),
                 tiles.to_relative_url(),
                 places.to_relative_url(),
@@ -420,6 +447,17 @@ impl PlaceMapRenderContext {
                 self.namespace,
             ),
         )
+    }
+
+    /// End a figure with the empty credit line the explorer fills with the
+    /// credit of the layer in view. Only when the site declares layers, so a
+    /// site without them keeps its figure byte for byte. After the final
+    /// `</a>` of a linked figure, never inside it.
+    fn with_credit_slot(&self, mut svg: String) -> String {
+        if let Some(end) = svg.rfind("</figure>").filter(|_| self.has_layers()) {
+            svg.insert_str(end, r#"<p class="moss-place-map-credit" aria-live="polite"></p>"#);
+        }
+        svg
     }
 
     /// Splice the embed-hydration handshake onto a figure's opening tag: a
@@ -519,7 +557,7 @@ impl PlaceMapRenderContext {
         if key == self.namespace {
             return true;
         }
-        let Some((display, _)) = find_record(&self.gazetteer, name) else {
+        let Some((display, _)) = self.gazetteer.find(name) else {
             return false;
         };
         let mut current = term_folder_key(&self.namespace, display);
@@ -623,7 +661,7 @@ impl PlaceMapContext {
         let mut seen = HashSet::new();
         let mut places = Vec::new();
         for name in names {
-            let Some((display, record)) = find_record(gazetteer, name) else {
+            let Some((display, record)) = gazetteer.find(name) else {
                 continue;
             };
             let key = term_folder_key(namespace, display);
@@ -755,16 +793,6 @@ fn escape_attr(value: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
-}
-
-fn find_record<'a>(
-    gazetteer: &'a crate::vault::places::Gazetteer,
-    name: &str,
-) -> Option<(&'a String, &'a crate::vault::places::PlaceRecord)> {
-    let folded = term_fold(name);
-    gazetteer
-        .iter()
-        .find(|(display, _)| term_fold(display) == folded)
 }
 
 #[cfg(test)]
@@ -1077,6 +1105,35 @@ mod tests {
         assert!(html.contains("data-places=\"/_moss/places.def456.json\""), "{html:.200}");
         assert!(html.contains("data-labels=\"/_moss/map.abc123/labels.json\""), "{html:.200}");
         assert!(html.contains("data-scope=\"places\""), "{html:.200}");
+    }
+
+    fn a_layer() -> crate::config::map_layers::MapLayer {
+        crate::config::map_layers::MapLayer {
+            name: "atlas".into(),
+            kind: crate::config::map_layers::LayerKind::Historical,
+            source: "maps/atlas".into(),
+            bbox: Some([0.0, 0.0, 1.0, 1.0]),
+            max_zoom: 17,
+            budget: None,
+            credit: None,
+            annotations: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_site_without_layers_gets_neither_data_layers_nor_a_credit_slot() {
+        let html = ready_root_context().render_term_map("places", [located_doc("Harbor")].iter(), "places/index.html", 0, false, false).unwrap();
+        assert!(!html.contains("data-layers") && !html.contains("moss-place-map-credit"), "{html:.300}");
+    }
+
+    #[test]
+    fn a_site_with_layers_points_the_explorer_at_layers_json_and_ends_each_figure_with_the_credit_slot() {
+        let context = ready_root_context().with_layers(vec![a_layer()]);
+        let html = context.render_term_map("places", [located_doc("Harbor")].iter(), "places/index.html", 0, false, false).unwrap();
+        assert!(html.contains("data-layers=\"/_moss/map.abc123/layers.json\""), "{html:.300}");
+        assert!(html.ends_with("<p class=\"moss-place-map-credit\" aria-live=\"polite\"></p></figure>"), "{}", &html[html.len().saturating_sub(120)..]);
+        let article = context.render_article_map(&["Harbor".to_string()], false, "posts/a.html", "posts/a.html", 0).unwrap();
+        assert!(article.contains("moss-place-map-credit"), "the article locator needs the slot too");
     }
 
     #[test]

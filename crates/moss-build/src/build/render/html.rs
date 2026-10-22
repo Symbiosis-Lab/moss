@@ -269,7 +269,7 @@ fn splice_body_locator(
     layout: &LayoutConfig,
     placement: LocatorPlacement,
 ) {
-    if placement == LocatorPlacement::Masthead {
+    if matches!(placement, LocatorPlacement::Masthead | LocatorPlacement::Facts) {
         return;
     }
     if let Some(locator) = credits::render_place_locator(doc, layout) {
@@ -425,16 +425,6 @@ pub(super) fn render_page<'d>(
     // Determine template type based on layout and content folders
     let shell_type = ShellRegistry::select_shell_type(doc, is_homepage, project.has_content_folders);
     let is_article_page = shell_type == ShellType::Article;
-    // Vertical pages put the locator after the opening text, every kind of
-    // page alike; horizontal articles float it before the text; the rest keep
-    // it in the masthead.
-    let locator_placement = if vertical_typesetting {
-        LocatorPlacement::AfterText
-    } else if is_article_page {
-        LocatorPlacement::BeforeText
-    } else {
-        LocatorPlacement::Masthead
-    };
 
     // The declared fields the page draws: the eyebrow goes into the body above
     // the title, the rest into the masthead that follows it.
@@ -442,6 +432,25 @@ pub(super) fn render_page<'d>(
         crate::build::components::field_places::draw_for_page(d, all_docs, content_graph, resolved_typesetting)
     });
     let eyebrow = std::mem::take(&mut fields.eyebrow);
+
+    // Where the place-map locator goes, decided once for every page. Vertical
+    // pages put it after the opening text, every kind of page alike; a page
+    // with a facts column has it head that column; horizontal articles float
+    // it before the text; the rest keep it in the masthead.
+    let locator_placement = if vertical_typesetting {
+        LocatorPlacement::AfterText
+    } else if !fields.facts.is_empty() {
+        LocatorPlacement::Facts
+    } else if is_article_page {
+        LocatorPlacement::BeforeText
+    } else {
+        LocatorPlacement::Masthead
+    };
+    if locator_placement == LocatorPlacement::Facts {
+        if let Some(locator) = doc.and_then(|d| credits::render_place_locator(d, layout_config)) {
+            fields.head_facts_with(&locator);
+        }
+    }
 
     // True when the page should advertise a social share card + be indexed: a
     // real public page (not draft/slot_only). `listed: false` pages are still

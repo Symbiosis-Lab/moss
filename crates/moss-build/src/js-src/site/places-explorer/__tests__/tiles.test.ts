@@ -1000,3 +1000,55 @@ describe("cellsCoveringView", () => {
     expect(cellsCoveringView((x, y) => inGrid(x, y) && x !== 17, camera, { width: 400, height: 400 }, GRID)).toBeNull();
   });
 });
+
+describe("TileLayer — rivers moved out of the land wrapper", () => {
+  const TILE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><g data-map-layer="rivers"><path d="M0 0L9 9" stroke-width="1"/></g></svg>';
+  const BASE_URL = "/_moss/tiles/";
+  const VIEWPORT = { width: 800, height: 500 };
+  const CELLS: Array<[number, number]> = [[10, 5], [11, 5]];
+  const bounds = tileCellBounds(10, 5);
+  const CAMERA = { x: (bounds.minX + bounds.maxX) / 2, y: (bounds.minY + bounds.maxY) / 2, zoom: 40 };
+  const flush = async () => {
+    for (let i = 0; i < 4; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+
+  function setup(riversContainer?: HTMLElement) {
+    rasterizeOrFallbackSpy.mockImplementation(async () => ({ el: document.createElementNS("http://www.w3.org/2000/svg", "svg"), release() {} }));
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, text: () => Promise.resolve(TILE_SVG) }) as unknown as Response));
+    const container = document.createElement("div");
+    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: CELLS, k: 4, origins: originsFor(CELLS, 4, 0.1), riversContainer, ...GRID });
+    return { container, layer };
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  test("without a container the rivers stay inside the land wrapper", async () => {
+    const { container, layer } = setup();
+    layer.render(CAMERA, VIEWPORT, 1, { settled: true });
+    await flush();
+    expect(container.querySelectorAll(".moss-places-tile > .moss-places-rivers")).toHaveLength(1);
+  });
+
+  test("with one, each tile's rivers sit in a wrapper there that mirrors the land wrapper, and the land wrapper holds none", async () => {
+    const riversContainer = document.createElement("div");
+    const { container, layer } = setup(riversContainer);
+    layer.render(CAMERA, VIEWPORT, 1, { settled: true });
+    await flush();
+    expect(container.querySelectorAll(".moss-places-rivers")).toHaveLength(0);
+    const land = container.querySelector<HTMLElement>('[data-moss-places-tile="10,5"]')!;
+    const rivers = riversContainer.querySelector<HTMLElement>('[data-moss-places-tile-rivers="10,5"]')!;
+    expect(riversContainer.querySelectorAll(".moss-places-tile > .moss-places-rivers")).toHaveLength(1);
+    for (const property of ["transform", "width", "height", "zIndex", "maskImage"] as const) expect(rivers.style[property]).toBe(land.style[property]);
+    expect(land.style.transform).not.toBe("");
+  });
+
+  test("the tile opacity reaches the rivers container, and clearing the layer removes the rivers too", async () => {
+    const riversContainer = document.createElement("div");
+    const { layer } = setup(riversContainer);
+    layer.render(CAMERA, VIEWPORT, 1, { settled: true });
+    await flush();
+    expect(riversContainer.style.getPropertyValue("--moss-place-tile-opacity")).toBe("1");
+    layer.render({ ...CAMERA, zoom: 1 }, VIEWPORT, 1, { settled: true });
+    expect(riversContainer.children).toHaveLength(0);
+  });
+});

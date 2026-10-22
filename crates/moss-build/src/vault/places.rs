@@ -53,6 +53,14 @@ impl Gazetteer {
         self.0.get(name)
     }
 
+    /// The entry for `name` as a page may spell it: compared by
+    /// `moss_core::terms::term_fold`, so case and spacing do not matter.
+    /// Returns the entry's display name beside its record.
+    pub fn find(&self, name: &str) -> Option<(&String, &PlaceRecord)> {
+        let folded = moss_core::terms::term_fold(name);
+        self.0.iter().find(|(display, _)| moss_core::terms::term_fold(display) == folded)
+    }
+
     /// Every entry, in name order.
     pub fn iter(&self) -> impl Iterator<Item = (&String, &PlaceRecord)> {
         self.0.iter()

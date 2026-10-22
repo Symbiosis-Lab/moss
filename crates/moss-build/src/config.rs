@@ -37,6 +37,7 @@
 
 pub mod deployment;
 pub mod environment;
+pub mod map_layers;
 pub mod migrations;
 pub mod services;
 pub mod site_settings;
@@ -325,6 +326,13 @@ impl ConfigFile {
             .collect();
         nav.sort();
         nav.into_iter().map(|(_, key, weight)| (key, weight)).collect()
+    }
+
+    /// The `[map.layers.<name>]` tables in written order. An error names the
+    /// table and key that is wrong; the build stops on it. `source` and a
+    /// missing `bbox` are settled later by [`map_layers::resolve_layers`].
+    pub fn map_layers(&self) -> Result<Vec<map_layers::MapLayer>, String> {
+        map_layers::parse_layers(self.root.get("map"), |name| self.written_position("map.layers", name))
     }
 
     /// The `[redirects]` table: old address, new address, as the author wrote
@@ -640,6 +648,9 @@ fn written_key_orders(text: &str) -> std::collections::BTreeMap<String, Vec<Stri
     let keys = |t: &dyn toml_edit::TableLike| t.iter().map(|(k, _)| k.to_string()).collect::<Vec<_>>();
     if let Some(terms) = doc.get("terms").and_then(|v| v.as_table_like()) {
         orders.insert("terms".to_string(), keys(terms));
+    }
+    if let Some(layers) = doc.get("map").and_then(|v| v.as_table_like()).and_then(|m| m.get("layers")).and_then(|v| v.as_table_like()) {
+        orders.insert("map.layers".to_string(), keys(layers));
     }
     if let Some(fields) = doc.get("fields").and_then(|v| v.as_table_like()) {
         orders.insert("fields".to_string(), keys(fields));

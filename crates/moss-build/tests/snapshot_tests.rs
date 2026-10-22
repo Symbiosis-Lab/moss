@@ -661,6 +661,21 @@ fn snapshot_places_site() {
     run_snapshot_test("places-site");
 }
 
+/// `[map.layers.<name>]`: `layers.json`, the explorer's `data-layers`
+/// attribute and the empty credit line on every map figure. Sites without
+/// layers are covered byte for byte by every other fixture.
+#[test]
+fn snapshot_map_layers_site() {
+    run_snapshot_test("map-layers-site");
+}
+
+/// A historical layer drawn from a real cropped plate: tiles, the tile index
+/// with the plate's footprint, the derived credit and the notice section.
+#[test]
+fn snapshot_map_layers_plate_site() {
+    run_snapshot_test("map-layers-plate-site");
+}
+
 /// `route: true` over four stops, two of them (Harbor / Harbor Overlook)
 /// resolved to the identical coordinate so the badge-offset rule actually
 /// fires, plus one region-precision stop (Inland Reach) for the hollow

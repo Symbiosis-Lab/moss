@@ -100,13 +100,13 @@ export function mergeByProximity(items: ScreenItem[], threshold: number): Proxim
 }
 
 /** Zoom-scaled, pan-independent screen position: only relative distances matter for clustering, so the viewport-centring offset the camera would add is left out. */
-function projectedScreen(point: Point, zoom: number): Point {
-  return { x: point.x * zoom, y: point.y * zoom };
+function projectedScreen(point: Point, zoom: number, xScale: number): Point {
+  return { x: point.x * zoom * xScale, y: point.y * zoom };
 }
 
 /** Group `points` as they would actually cluster at `zoom`. */
-export function clusterVisible(points: IdPoint[], zoom: number, threshold: number = CLUSTER_DISTANCE): ProximityCluster[] {
-  const items = points.map((point) => ({ id: point.id, screen: projectedScreen(point, zoom) }));
+export function clusterVisible(points: IdPoint[], zoom: number, threshold: number = CLUSTER_DISTANCE, xScale = 1): ProximityCluster[] {
+  const items = points.map((point) => ({ id: point.id, screen: projectedScreen(point, zoom, xScale) }));
   return mergeByProximity(items, threshold);
 }
 

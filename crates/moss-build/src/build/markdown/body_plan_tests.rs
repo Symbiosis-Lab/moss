@@ -431,9 +431,9 @@ fn insert_locator_follows_the_first_text_block_only_when_asked() {
     assert_eq!(locator_order(md, AfterText), ["heading", "first", "locator", "second"]);
     // The opening text is also the last block.
     assert_eq!(locator_order("First paragraph.\n", AfterText), ["first", "locator"]);
-    // No text block: the front in both modes.
+    // No text block: the front after the text, the end before it.
     assert_eq!(locator_order("## Section\n\n---\n", AfterText), ["locator", "heading"]);
-    assert_eq!(locator_order("## Section\n\n---\n", BeforeText), ["locator", "heading"]);
+    assert_eq!(locator_order("## Section\n\n---\n", BeforeText), ["heading", "locator"]);
 }
 
 #[test]
@@ -488,15 +488,15 @@ fn insert_before_text_is_a_noop_for_an_empty_fragment() {
 }
 
 #[test]
-fn insert_before_text_falls_back_to_the_front_with_no_text_block() {
+fn insert_before_text_falls_back_to_the_end_unfloated_with_no_text_block() {
     let hooks = DefaultHooks::new();
     let doc = parse("## Only a heading\n\n---\n");
     let mut plan = render_segmented(&doc, &hooks);
-    plan.insert_locator("<!--LOCATOR-->".to_string(), LocatorPlacement::BeforeText);
+    plan.insert_locator("<div class=\"moss-place-locator moss-align-right\"></div>".to_string(), LocatorPlacement::BeforeText);
     let html = plan.to_html();
     assert!(
-        html.starts_with("<!--LOCATOR-->"),
-        "a body with no text block keeps the locator at the very front: {html}"
+        html.trim_end().ends_with("<div class=\"moss-place-locator moss-align-end\"></div>"),
+        "a body with no text block takes the locator last, unfloated: {html}"
     );
 }
 

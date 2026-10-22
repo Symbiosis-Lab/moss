@@ -37,6 +37,7 @@
  */
 import {
   clampCamera,
+  aspectX,
   coverCamera,
   detailMaxZoom,
   openingMaxZoom,
@@ -46,11 +47,14 @@ import {
   resizeCamera,
   screenScale,
   tileDetailMaxZoom,
+  viewWorldRect,
   worldCleanMaxZoom,
   worldToScreen,
 } from "./camera";
 import { CardRow, worksForRow } from "./cards";
 import { ScopeChip } from "./chip";
+import { LayerRaster } from "./layer-raster";
+import { creditInView, layerCeilingZoom, type DetailLayer } from "./layers";
 import { LabelLayer } from "./labels";
 import { MarkerLayer, pointsForWorks, workIdOf, worldCentroid } from "./markers";
 import { project, WORLD_HEIGHT, WORLD_WIDTH } from "./projection";
@@ -64,6 +68,8 @@ import { hasPoint, type Camera, type EdgeFade, type ExplorerFit, type LabelsData
 
 /** Device pixel ratio honoured up to this for the world raster — a 3x phone gains nothing from tripling an already roomy budget. */
 const WORLD_RASTER_DPR_CAP = 2;
+/** The fewest degrees of longitude an opening fit shows when a layer covers the places: city scale, instead of the regional minimum that suits places with no detail to show. */
+const LAYER_FIT_MIN_SPAN_DEGREES = 0.05;
 /** A rebake only fires once the zoom that would drive it has grown past the last bake by this ratio — without a deadband, panning at a steady zoom (which never needs a sharper texture) would still schedule a decode on every settle. */
 const WORLD_RASTER_REBAKE_RATIO = 1.3;
 /**
@@ -108,6 +114,8 @@ export interface MountOptions {
   places: PlacesData;
   /** `labels.json`'s own parsed body — `null`/`undefined` when the handshake carried no `data-labels` or that fetch failed; the label layer then simply never places anything (progressive enhancement, same posture as a missing locator). */
   labels?: LabelsData | null;
+  /** The detail layers `layers.json` declares; absent or empty leaves every depth, drawing and credit as without them. */
+  layers?: DetailLayer[];
   lang: string;
 }
 
@@ -142,6 +150,9 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   // read off a captured `const` of an object type.
   const worldBase = worldSplit.base;
   const worldBaseMarkup = worldSplit.baseMarkup;
+  const layers = options.layers ?? [];
+  // The credit slot belongs to the build's markup; the interactive layer replaces the figure's children, so it is carried across.
+  const creditEl = figure.querySelector<HTMLElement>(".moss-place-map-credit");
 
   // `--moss-place-figure-top` is the one number places-explorer.css cannot
   // derive on its own (see its own doc on the figure's `block-size`): the
@@ -164,6 +175,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
 
   const worldEl = document.createElement("div");
   worldEl.className = "moss-places-world";
+  worldEl.style.transformOrigin = "0 0";
   if (worldSplit.rivers) {
     worldSplit.rivers.classList.add("moss-places-rivers");
     worldEl.append(worldSplit.rivers);
@@ -172,6 +184,14 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   const tilesEl = document.createElement("div");
   tilesEl.className = "moss-places-tiles";
   worldEl.append(tilesEl);
+  // A historical layer's raster draws above the land and below the rivers. Rivers live inside each regional tile's wrapper, so with such a layer they move to a second container after the raster; without one nothing moves.
+  const layerRaster = layers.some((layer) => layer.tiles) ? new LayerRaster(layers, options.tilesBaseUrl) : null;
+  let tileRiversEl: HTMLElement | undefined;
+  if (layerRaster) {
+    tileRiversEl = document.createElement("div");
+    tileRiversEl.className = "moss-places-tiles";
+    worldEl.append(layerRaster.el, tileRiversEl);
+  }
 
   // ---- world raster -------------------------------------------------------
   // The world's own decoded surface: built once at mount (fired from the
@@ -296,6 +316,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
 
   viewportEl.append(worldEl, labelsEl, markersEl, controlsEl, chipEl, cardsEl);
   figure.replaceChildren(viewportEl, statusEl);
+  if (creditEl) figure.append(creditEl);
   // The no-JS figure is one picture (`role="img"`), and that role makes every
   // descendant presentational: left on, it would hide the live map's buttons,
   // cards and status from assistive tech. Its name moves to the viewport.
@@ -318,6 +339,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     columns: options.tileColumns,
     rows: options.tileRows,
     edgeFade: options.edgeFade,
+    riversContainer: tileRiversEl,
   });
   const initial = urlState.readUrlState();
 
@@ -342,14 +364,21 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
 
   /** Zooming in past the world layer's clean depth needs a regional cell under the zoom's anchor (the cursor, the pinch centre, or the view's centre); anywhere else the world layer alone would carry the deeper frame. */
   function currentMaxZoom(viewport: Viewport, anchor: Point = camera): number {
-    return tileLayer.hasCellAt(anchor) ? tileDetailMaxZoom(viewport) : worldCleanMaxZoom(viewport);
+    const base = tileLayer.hasCellAt(anchor) ? tileDetailMaxZoom(viewport) : worldCleanMaxZoom(viewport);
+    const layerZoom = layerCeilingZoom(layers, viewport, anchor);
+    return layerZoom === null ? base : Math.max(base, layerZoom);
+  }
+
+  /** The camera's centre lies inside a detail layer's extent, where the layer allows the depth. */
+  function layerCoversView(cam: Camera, viewport: Viewport): boolean {
+    return layerCeilingZoom(layers, viewport, cam) !== null;
   }
 
   /** `fit` at `deepest` when that frame can be drawn without enlarging the world layer past its clean depth (it is no deeper, or regional cells cover all of it), and the same fit at the clean depth. */
   function fitCleanly(fit: (maxZoom: number) => Camera, deepest: number, viewport: Viewport): { deep: Camera | null; clean: Camera } {
     const deep = fit(deepest);
     if (deep.zoom <= worldCleanMaxZoom(viewport) + 1e-9) return { deep, clean: deep };
-    return { deep: tileLayer.coversView(deep, viewport) ? deep : null, clean: fit(worldCleanMaxZoom(viewport)) };
+    return { deep: tileLayer.coversView(deep, viewport) || layerCoversView(deep, viewport) ? deep : null, clean: fit(worldCleanMaxZoom(viewport)) };
   }
 
   function announce(message: string): void {
@@ -487,9 +516,13 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     const fitFrame = frame && workFrame(viewport);
     const cover = coverCamera(points, viewport, fitFrame);
     if (!points.length) return { camera: cover };
-    const { deep, clean } = fitCleanly((maxZoom) => fitWork(points, viewport, options.fit, fitFrame, maxZoom), openingMaxZoom(viewport, options.fit.openingDegreesPerPx), viewport);
+    // Places that all lie inside one layer's extent open fitted to themselves, down to the layer's depth; otherwise the opening depth caps the fit.
+    const layerZoom = layerCeilingZoom(layers, viewport, points);
+    const opening = openingMaxZoom(viewport, options.fit.openingDegreesPerPx);
+    const fit = layerZoom === null ? options.fit : { ...options.fit, minSpanDegrees: LAYER_FIT_MIN_SPAN_DEGREES };
+    const { deep, clean } = fitCleanly((maxZoom) => fitWork(points, viewport, fit, fitFrame, maxZoom), layerZoom === null ? opening : Math.max(opening, layerZoom), viewport);
     if (!deep) return { camera: cover };
-    const shown = deep === clean || tileLayer.hasOpaqueViewportCoverage(deep, viewport) ? deep : clean;
+    const shown = deep === clean || layerCoversView(deep, viewport) || tileLayer.hasOpaqueViewportCoverage(deep, viewport) ? deep : clean;
     const opened = shown.zoom > cover.zoom ? shown : cover;
     return deep.zoom > opened.zoom ? { camera: opened, deeper: deep } : { camera: opened };
   }
@@ -591,6 +624,24 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
 
   // ---- camera application -------------------------------------------------
   let gestureFrame: number | null = null;
+  let easeFrame: number | null = null;
+
+  /** Past the ceiling only because a detail layer allowed it, and the view has left that layer: glide back to the ceiling instead of jumping. A new gesture cancels it. */
+  function easeBackToCeiling(): void {
+    if (easeFrame !== null) return;
+    const step = (): void => {
+      easeFrame = null;
+      const viewport = getViewport();
+      if (viewport.width <= 0 || viewport.height <= 0) return;
+      const ceiling = currentMaxZoom(viewport);
+      const next = ceiling + (camera.zoom - ceiling) * 0.8;
+      const done = next <= ceiling * (1 + 1e-3);
+      camera = { ...camera, zoom: done ? ceiling : next };
+      if (!done) easeFrame = requestAnimationFrame(step);
+      applyCamera(done);
+    };
+    easeFrame = requestAnimationFrame(step);
+  }
   function applyCamera(settled: boolean): void {
     if (settled && gestureFrame !== null) {
       cancelAnimationFrame(gestureFrame);
@@ -614,15 +665,18 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     acceptWorldRasterDemand(unitScale, camera.zoom);
     worldEl.style.width = `${WORLD_WIDTH * unitScale}px`;
     worldEl.style.height = `${WORLD_HEIGHT * unitScale}px`;
-    const translateX = -(camera.x - WORLD_WIDTH / 2) * scale;
-    const translateY = -(camera.y - WORLD_HEIGHT / 2) * scale;
-    worldEl.style.transform = `translate(calc(-50% + ${translateX}px), calc(-50% + ${translateY}px)) scale(${camera.zoom})`;
+    const k = aspectX(camera, viewport);
+    // Anchored at the element's own top-left (placed at the viewport's centre), not its centre: the browser rounds the element's laid-out size to 1/64 px, and a centre-anchored transform scales that rounding by the zoom, which at city scale shifts the map by whole pixels off the markers.
+    const translateX = -camera.x * scale * k;
+    const translateY = -camera.y * scale;
+    worldEl.style.transform = `translate(${translateX}px, ${translateY}px) scale(${camera.zoom * k}, ${camera.zoom})`;
 
     const ceiling = currentMaxZoom(viewport);
     figure.style.setProperty("--moss-place-river-scale", String(Math.min(1, MIN_ZOOM / camera.zoom)));
 
     if (held && (held.camera.x !== camera.x || held.camera.y !== camera.y || held.camera.zoom !== camera.zoom)) held = null;
     tileLayer.render(held?.deeper ?? camera, viewport, unitScale, { settled, preload: held !== null });
+    layerRaster?.render(camera, viewport, unitScale);
 
     const visiblePoints = pointsForWorks(options.places.works, options.places.places, scope).filter((point) => {
       const screen = worldToScreen(point, camera, viewport);
@@ -645,6 +699,10 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
       cardRow.render(rows, options.places.places, selectedId);
       labelLayer.render(visiblePoints, camera, viewport, worksById, placesById, reservedLabelRects());
       urlState.writeCamera(camera);
+      if (creditEl && layers.length) {
+        creditEl.textContent = creditInView(layers, viewWorldRect(camera, viewport));
+      }
+      if (layers.length && camera.zoom > ceiling * (1 + 1e-6)) easeBackToCeiling();
       scopeChip.render(scope, options.places.places, options.places.works, markerLayer.ringCount(), currentArticleId);
     }
   }
@@ -666,7 +724,13 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
       }
     },
     onSettle: () => applyCamera(true),
-    onGestureStart: () => worldEl.setAttribute("data-gesture", ""),
+    onGestureStart: () => {
+      if (easeFrame !== null) {
+        cancelAnimationFrame(easeFrame);
+        easeFrame = null;
+      }
+      worldEl.setAttribute("data-gesture", "");
+    },
     maxZoom: (anchor) => currentMaxZoom(getViewport(), anchor),
     cooperative: () => cooperativeGestures,
     // The same deselect a card or marker click on the open work performs; `selectWork(null)` leaves the camera alone.

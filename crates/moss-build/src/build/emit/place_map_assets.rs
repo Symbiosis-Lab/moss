@@ -49,8 +49,10 @@ use crate::build::cache::{ObjectStore, TransformCache, TransformEntry};
 use crate::build::context::BuildContext;
 use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::place_map;
+use crate::build::place_map::layer_warp::LayerPlan;
 use crate::build::place_map::{TILE_COLUMNS, TILE_K, TILE_ROWS};
 use crate::build::served_path::ServedPath;
+use crate::config::map_layers::MapLayer;
 use crate::moss_paths::MossPaths;
 use crate::vault::places::Gazetteer;
 
@@ -150,6 +152,13 @@ mod generator_version_guard {
 /// `directory_name_moves_when_a_places_toml_edit_moves_a_place_to_a_new_cell`
 /// below.
 pub fn assets_hash(context: &place_map::PlaceMapContext, gazetteer: &Gazetteer) -> String {
+    assets_hash_with_layers(context, gazetteer, &[], &[])
+}
+
+/// [`assets_hash`] for a site that declares detail layers: the bytes of
+/// `layers.json` join the hash, so editing a layer moves the directory. With
+/// no layers the hash is exactly `assets_hash`'s.
+pub fn assets_hash_with_layers(context: &place_map::PlaceMapContext, gazetteer: &Gazetteer, layers: &[MapLayer], plans: &[LayerPlan]) -> String {
     let mut buf = Vec::new();
     buf.extend_from_slice(&context.pack_fingerprint());
     buf.extend_from_slice(&GENERATOR_VERSION.to_le_bytes());
@@ -160,6 +169,13 @@ pub fn assets_hash(context: &place_map::PlaceMapContext, gazetteer: &Gazetteer) 
     // generator-only change.
     buf.extend_from_slice(context.labels_bytes());
     buf.extend_from_slice(&tile_index_json(&place_map::relevant_tiles(gazetteer, context.pack())));
+    if let Some(json) = super::place_map_layers::layers_json(layers) {
+        buf.extend_from_slice(&json);
+    }
+    // What the layers' tiles are drawn from: a plate or place edit moves the directory.
+    for plan in plans {
+        buf.extend_from_slice(plan.digest.as_bytes());
+    }
     compute_binary_hash(&buf)
 }
 
@@ -244,7 +260,7 @@ pub fn emit_if_place_typed(
     };
     match place_map::PlaceMapContext::embedded() {
         Ok(context) => {
-            if let Err(error) = emit(&context, render_context.gazetteer(), paths, output_dir, pending) {
+            if let Err(error) = emit_with_layers(&context, render_context.gazetteer(), render_context.layers(), render_context.layer_plans(), paths, output_dir, pending) {
                 crate::build::cli_output::log_warn_problem!("place-map explorer assets could not be emitted: {error}");
             }
         }
@@ -267,9 +283,22 @@ pub fn emit(
     output_dir: &Path,
     pending: &mut PendingManifest,
 ) -> Result<usize, String> {
+    emit_with_layers(context, gazetteer, &[], &[], paths, output_dir, pending)
+}
+
+/// [`emit`] into the directory a site with `layers` is named after.
+pub fn emit_with_layers(
+    context: &place_map::PlaceMapContext,
+    gazetteer: &Gazetteer,
+    layers: &[MapLayer],
+    plans: &[LayerPlan],
+    paths: &MossPaths,
+    output_dir: &Path,
+    pending: &mut PendingManifest,
+) -> Result<usize, String> {
     let objects = ObjectStore::for_site(paths);
     let transforms = TransformCache::for_site(paths);
-    let hash = assets_hash(context, gazetteer);
+    let hash = assets_hash_with_layers(context, gazetteer, layers, plans);
 
     let regional_tiles = place_map::relevant_tiles(gazetteer, context.pack());
     let mut assets = vec![Asset::World];
@@ -366,8 +395,12 @@ pub fn emit(
 
     let notice_sp = ServedPath::for_place_map_asset(&hash, "NOTICE.txt")
         .map_err(|e| format!("Invalid place-map notice path: {e}"))?;
+    let mut notice = NOTICE.to_string();
+    for plan in plans {
+        notice.push_str(&plan.notice);
+    }
     BuildContext::for_render(output_dir, pending)
-        .emit(&notice_sp, NOTICE.as_bytes(), HashBucket::Files)
+        .emit(&notice_sp, notice.as_bytes(), HashBucket::Files)
         .map_err(|e| format!("Failed to emit place-map notice: {e}"))?;
 
     Ok(rendered)

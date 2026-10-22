@@ -46,8 +46,12 @@ pub enum LocatorPlacement {
     /// In the page masthead, after the byline: pages that are not articles.
     Masthead,
     /// In the body, immediately before the first text block, where the
-    /// horizontal float sits beside that text.
+    /// horizontal float sits beside that text. A body with no text block
+    /// takes the end of the body instead, as a block of its own.
     BeforeText,
+    /// Heading the page's facts column, drawn with the facts rather than
+    /// inserted into the body.
+    Facts,
     /// In the body, immediately after the first text block, as a block of its
     /// own: vertical typesetting, where the author's words are read first.
     AfterText,
@@ -81,6 +85,10 @@ pub struct BodyPlan {
     ///
     /// [`first_text_segments`]: BodyPlan::first_text_segments
     pub after_first_text_segments: usize,
+    /// Whether the body has a text block at all (see [`first_text_segments`]).
+    ///
+    /// [`first_text_segments`]: BodyPlan::first_text_segments
+    pub has_text: bool,
 }
 
 /// One piece of the emitted body.
@@ -210,6 +218,7 @@ impl BodyPlan {
             lede_segments: 1,
             first_text_segments: 0,
             after_first_text_segments: 0,
+            has_text: false,
         }
     }
 
@@ -313,9 +322,11 @@ impl BodyPlan {
     /// blockquote), or immediately after it. A leading heading, rule or media
     /// block (figure, table, code block, another shortcode) stays above it at
     /// full width, simply by virtue of coming first in the emitted HTML. A
-    /// body with no text block takes the very front either way, and the first
+    /// body with no text block takes its end, unfloated, so a locator never
+    /// sits above a leading picture with an empty band beside it; the first
     /// text block is a top-level one: a paragraph wrapped in a fenced div is
-    /// not recognised. [`LocatorPlacement::Masthead`] inserts nothing.
+    /// not recognised. [`LocatorPlacement::Masthead`] and
+    /// [`LocatorPlacement::Facts`] insert nothing.
     ///
     /// `idx <= lede_segments` moves `lede_segments` the same way
     /// [`prepend_html`] always does: an insertion landing inside (or right
@@ -330,14 +341,20 @@ impl BodyPlan {
     /// [`prepend_html`]: BodyPlan::prepend_html
     pub fn insert_locator(&mut self, html: String, placement: LocatorPlacement) {
         let after_text = match placement {
-            LocatorPlacement::Masthead => return,
+            LocatorPlacement::Masthead | LocatorPlacement::Facts => return,
             LocatorPlacement::BeforeText => false,
             LocatorPlacement::AfterText => true,
         };
         if html.is_empty() {
             return;
         }
-        let at = if after_text { self.after_first_text_segments } else { self.first_text_segments };
+        let (at, html) = if after_text {
+            (self.after_first_text_segments, html)
+        } else if self.has_text {
+            (self.first_text_segments, html)
+        } else {
+            (self.segments.len(), crate::build::place_map::unfloat_locator(&html))
+        };
         let idx = at.min(self.segments.len());
         self.segments.insert(idx, BodySegment::Html(html));
         if idx <= self.lede_segments {
@@ -598,6 +615,7 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
     // `BodyPlan::first_text_segments`. Resolved here, before the footnote
     // section is appended, for the same reason `lede_segments` is: the
     // about-to-be-flushed endnote segment must never count toward either cut.
+    let has_text = text_block_index.is_some();
     let first_text_segments = first_text_segments.unwrap_or(0);
     let after_first_text_segments = after_first_text_segments.unwrap_or(first_text_segments);
     moss_core::ast::footnotes::render_section(hooks, &mut buf, &doc.blocks, &mut fnotes);
@@ -608,6 +626,7 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
         lede_segments,
         first_text_segments,
         after_first_text_segments,
+        has_text,
     }
 }
 

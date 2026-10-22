@@ -81,3 +81,22 @@ export function unproject(x: number, y: number): { lat: number; lng: number } {
     lng: (lambda * 180) / Math.PI,
   };
 }
+
+/**
+ * The factor that draws a ground east-metre and a ground north-metre at the
+ * same length at `latitude`. One degree of longitude spans `cos(phi)` of a
+ * degree of ground; the drawing gives it `SCALE` world units against
+ * `SCALE * pattersonY'(phi)` for a degree of latitude. Scaling x by
+ * `pattersonY'(phi) * cos(phi)` equalises them: about 0.905 at 40.7 degrees
+ * north (the drawing is 10.5% too wide there), 1 at the equator.
+ */
+export function trueAspect(latitude: number): number {
+  const phi = (latitude * Math.PI) / 180;
+  return pattersonYDerivative(phi) * Math.cos(phi);
+}
+
+/** Degrees of latitude that `worldHeight` world units cover at `latitude`. */
+export function latitudeSpanDegrees(worldHeight: number, latitude: number): number {
+  const phi = (latitude * Math.PI) / 180;
+  return ((worldHeight / (SCALE * pattersonYDerivative(phi))) * 180) / Math.PI;
+}

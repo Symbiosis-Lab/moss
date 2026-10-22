@@ -16,6 +16,7 @@ fn all_on() -> SiteAssets {
         hero_ends: true,
         video_ladder: true,
         places_explorer: true,
+        map_layers: true,
         field_places: true,
     }
 }

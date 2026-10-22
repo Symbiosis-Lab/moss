@@ -8237,15 +8237,14 @@ mod place_locator_position_tests {
     }
 
     #[test]
-    fn locator_falls_back_to_the_front_with_no_text_block() {
+    fn locator_falls_back_to_the_end_with_no_text_block() {
         let html = render_article("## Only a heading\n\n---\n");
         let title = html.find("moss-article-title").expect("title present");
         let locator = html.find("moss-place-locator").expect("locator present");
         let heading = html.find("<h2").expect("heading present");
         assert!(
-            title < locator && locator < heading,
-            "a body with no text block keeps the locator right after the title, before \
-             everything else, got:\n{html}"
+            title < heading && heading < locator,
+            "a body with no text block takes the locator after everything else, got:\n{html}"
         );
     }
 

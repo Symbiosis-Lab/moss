@@ -3269,6 +3269,18 @@ article .moss-place-map-frame:is(.moss-align-left, .moss-align-right):not([data-
     margin-inline: 0;
   }
 }
+/* The locator as a block of its own (after a body with no text, atop the
+   facts column): at its normal width, on the end edge, in the flow. */
+article .moss-place-locator.moss-align-end {
+  margin: 0 0 var(--moss-space-md);
+  margin-inline-start: auto;
+}
+@media (width < 48rem) {
+  article .moss-place-locator.moss-align-end {
+    inline-size: 100%;
+    max-inline-size: 100%;
+  }
+}
 
 /*
  * Colophon — the same credit rows at the foot of the page (`colophon:`), on

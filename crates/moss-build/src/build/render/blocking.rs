@@ -1482,6 +1482,7 @@ pub fn generate_blocking_content_for_build(
                 .and_then(|s| s.assets.as_deref())
                 .is_some_and(|r| r.iter_registered_variants().values().any(|k| k.hls)),
             places_explorer: crate::build::features::should_inject_places_explorer(&term_index, &site_config),
+            map_layers: site_config.place_maps.as_ref().is_some_and(|maps| maps.has_layers()),
             // `search`, `link_preview`, `heading_anchors` and `math` already
             // live here, written by the config phase above. Re-reading them
             // from `site_config` would be a second copy of the same four

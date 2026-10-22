@@ -269,16 +269,16 @@ impl FlatProjection {
     }
 }
 
-const PATTERSON_K1: f64 = 1.0148;
-const PATTERSON_K2: f64 = 0.23185;
-const PATTERSON_K3: f64 = -0.14499;
-const PATTERSON_K4: f64 = 0.02406;
+pub(super) const PATTERSON_K1: f64 = 1.0148;
+pub(super) const PATTERSON_K2: f64 = 0.23185;
+pub(super) const PATTERSON_K3: f64 = -0.14499;
+pub(super) const PATTERSON_K4: f64 = 0.02406;
 
 /// Patterson (2014) cylindrical projection: longitude is linear, and
 /// y = K1·φ + K2·φ⁵ + K3·φ⁷ + K4·φ⁹, the published polynomial, tuned to
 /// keep high-latitude area distortion well below plate carrée's without
 /// the complexity of a true equal-area or conformal projection.
-fn patterson_y(latitude_radians: f64) -> f64 {
+pub(super) fn patterson_y(latitude_radians: f64) -> f64 {
     let squared = latitude_radians * latitude_radians;
     let fourth = squared * squared;
     latitude_radians

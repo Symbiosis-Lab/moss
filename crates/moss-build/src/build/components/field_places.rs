@@ -76,6 +76,18 @@ pub fn draw(placed: &[Placed], lang: Language, typesetting: Option<&str>, page_h
     }
 }
 
+impl Placements {
+    /// Head the facts column with `locator`, the page's place map. The column
+    /// then wraps the list; a page without facts has no column to head.
+    pub fn head_facts_with(&mut self, locator: &str) {
+        if self.facts.is_empty() {
+            return;
+        }
+        let list = self.facts.replacen(" data-beside", "", 1);
+        self.facts = format!("<div class=\"moss-facts-column\" data-beside>\n{}\n{list}</div>\n", crate::build::place_map::unfloat_locator(locator));
+    }
+}
+
 /// One drawn entry: `body` inside `tag`, with `classes` plus `moss-field-group` for a group.
 fn element(p: &Placed, tag: &str, classes: &str, body: &str) -> String {
     format!("{}{body}</{tag}>", open(tag, classes, matches!(p, Placed::Group(..)), Some(p.decl())))

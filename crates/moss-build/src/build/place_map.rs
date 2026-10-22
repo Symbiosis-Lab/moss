@@ -9,12 +9,14 @@ mod globe;
 // decodes the data this file embeds, with no knowledge of a build's
 // documents or gazetteer the way `places_data` has.
 mod labels;
+pub(crate) mod layer_warp;
 // The places-explorer data emitter (`places.<hash>.json`). `pub(crate)`,
 // not private: `build/pipeline.rs` calls `places_data::emit` directly once
 // per build, the same way it reaches `build::emit::feature_styles::emit`.
 pub(crate) mod places_data;
 mod simplify;
 mod svg;
+pub(crate) mod world_coords;
 
 pub use context::{LocatorPlacement, PlaceMapContext, PlaceMapRenderContext, PlaceMapTarget, ResolvedPlace};
 pub use explorer::{emit_tile_svg, emit_world_svg, relevant_tiles, tile_origin_units};
@@ -713,4 +715,11 @@ mod tests {
             DecodeError::InvalidIndex("feature reference")
         );
     }
+}
+
+/// A locator's markup with its float class swapped for `moss-align-end`: the
+/// locator as a block of its own, at the end edge, for the places that give it
+/// a row (after a text-less body, atop the facts column).
+pub fn unfloat_locator(html: &str) -> String {
+    html.replacen("moss-align-right", "moss-align-end", 1)
 }

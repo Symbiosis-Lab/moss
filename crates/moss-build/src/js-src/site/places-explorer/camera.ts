@@ -17,7 +17,7 @@
  * lower zoom number quietly meaning coarser detail.
  */
 
-import { WORLD_WIDTH, WORLD_HEIGHT } from "./projection";
+import { latitudeSpanDegrees, trueAspect, unproject, WORLD_WIDTH, WORLD_HEIGHT } from "./projection";
 import type { Camera, ExplorerFit, Point, Rect, Viewport } from "./types";
 
 /** `viewport` as a `Rect` at the origin — the default "free rectangle" for a caller that has no card row, controls or chip to dodge (every test fixture, and any `fitPoints`/`coverCamera` call this module's own tests make directly). */
@@ -83,11 +83,56 @@ function frameZoomFloor(viewport: Viewport, frame: Rect): number {
   return Math.max(MIN_ZOOM, requiredScale / viewportScale);
 }
 
+/** Latitude span, in degrees, at which the true-aspect correction starts, and the span from which it applies in full. Between them it blends linearly, so zooming in never jumps. */
+export const ASPECT_BLEND_START_DEGREES = 2;
+export const ASPECT_BLEND_FULL_DEGREES = 0.5;
+
+/** The share of the true-aspect correction applied to a view spanning `spanDegrees` of latitude: 0 at or above the start span, 1 at or below the full span. */
+export function aspectBlend(spanDegrees: number): number {
+  const t = (ASPECT_BLEND_START_DEGREES - spanDegrees) / (ASPECT_BLEND_START_DEGREES - ASPECT_BLEND_FULL_DEGREES);
+  return clamp(t, 0, 1);
+}
+
+let aspectMemo: { y: number; zoom: number; width: number; height: number; k: number } | null = null;
+
+/**
+ * The factor the drawing's x axis is scaled by around the camera centre so a
+ * street block reads square at city scale; 1 while the view spans more than
+ * `ASPECT_BLEND_START_DEGREES` of latitude. Depends only on the camera's
+ * latitude and zoom and the viewport, so every reader that positions
+ * something (`worldToScreen`, `screenToWorld`, panning, tile visibility)
+ * and the world layer's own CSS transform get the same value.
+ */
+export function aspectX(camera: Camera, viewport: Viewport): number {
+  const memo = aspectMemo;
+  if (memo && memo.y === camera.y && memo.zoom === camera.zoom && memo.width === viewport.width && memo.height === viewport.height) return memo.k;
+  let k = 1;
+  if (viewport.width > 0 && viewport.height > 0) {
+    const latitude = unproject(WORLD_WIDTH / 2, camera.y).lat;
+    const span = latitudeSpanDegrees(viewport.height / screenScale(camera, viewport), latitude);
+    k = 1 + (trueAspect(latitude) - 1) * aspectBlend(span);
+  }
+  aspectMemo = { y: camera.y, zoom: camera.zoom, width: viewport.width, height: viewport.height, k };
+  return k;
+}
+
+/** Px per world unit along x: `screenScale` times the true-aspect factor. */
+export function screenScaleX(camera: Camera, viewport: Viewport): number {
+  return screenScale(camera, viewport) * aspectX(camera, viewport);
+}
+
+/** The world-space rectangle the viewport shows at `camera`, grown by `padPx` CSS px on every side. */
+export function viewWorldRect(camera: Camera, viewport: Viewport, padPx = 0): Rect {
+  const halfW = (viewport.width / 2 + padPx) / screenScaleX(camera, viewport);
+  const halfH = (viewport.height / 2 + padPx) / screenScale(camera, viewport);
+  return { x: camera.x - halfW, y: camera.y - halfH, width: halfW * 2, height: halfH * 2 };
+}
+
 /** Where `point` (world-space) lands on screen, in CSS px from the viewport's own top-left — the one formula every layer that positions something against the live camera (markers, the ring, tile placement) shares, rather than re-deriving it. */
 export function worldToScreen(point: Point, camera: Camera, viewport: Viewport): Point {
   const scale = screenScale(camera, viewport);
   return {
-    x: viewport.width / 2 + (point.x - camera.x) * scale,
+    x: viewport.width / 2 + (point.x - camera.x) * scale * aspectX(camera, viewport),
     y: viewport.height / 2 + (point.y - camera.y) * scale,
   };
 }
@@ -96,7 +141,7 @@ export function worldToScreen(point: Point, camera: Camera, viewport: Viewport):
 export function screenToWorld(point: Point, camera: Camera, viewport: Viewport): Point {
   const scale = screenScale(camera, viewport);
   return {
-    x: camera.x + (point.x - viewport.width / 2) / scale,
+    x: camera.x + (point.x - viewport.width / 2) / (scale * aspectX(camera, viewport)),
     y: camera.y + (point.y - viewport.height / 2) / scale,
   };
 }

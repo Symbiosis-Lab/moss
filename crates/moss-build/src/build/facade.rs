@@ -1067,6 +1067,7 @@ mod tests {
                 lede_segments: 1,
                 first_text_segments: 0,
                 after_first_text_segments: 0,
+                has_text: false,
             }),
             ..Default::default()
         };

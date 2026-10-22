@@ -1395,6 +1395,12 @@ fn build_inner(
         }
     };
     crate::build::terms::places::attach_parents(&mut kinds, &gazetteer);
+    let map_layers = cfg
+        .as_ref()
+        .map(|c| c.map_layers())
+        .transpose()
+        .and_then(|layers| crate::config::map_layers::resolve_layers(layers.unwrap_or_default(), root.path(), &gazetteer))
+        .map_err(BuildStopped::from)?;
     let place_maps = kinds
         .iter()
         .find(|kind| kind.is_place)
@@ -1407,7 +1413,8 @@ fn build_inner(
                     // unlike the places-explorer data hash, which needs
                     // `derive_terms`'s finished output and is set later, in
                     // `generate_blocking_content_for_build`.
-                    let map_assets_hash = crate::build::emit::place_map_assets::assets_hash(&maps, &gazetteer);
+                    let layer_plans = crate::build::place_map::layer_warp::plan_layers(&map_layers, root.path(), &gazetteer);
+                    let map_assets_hash = crate::build::emit::place_map_assets::assets_hash_with_layers(&maps, &gazetteer, &map_layers, &layer_plans);
                     Some(
                         crate::build::place_map::PlaceMapRenderContext::new(
                             maps,
@@ -1417,6 +1424,8 @@ fn build_inner(
                             parents,
                         )
                         .with_explorer(explorer)
+                        .with_layers(map_layers)
+                        .with_layer_plans(layer_plans)
                         .with_map_assets_hash(map_assets_hash),
                     )
                 }
@@ -1885,6 +1894,12 @@ fn build_inner(
     crate::build::emit::place_map_assets::emit_if_place_typed(
         place_maps_for_places_data.as_ref(),
         &paths,
+        &stage_dir,
+        &mut pending,
+    );
+    // `layers.json` beside them; nothing is written without `[map.layers]`.
+    crate::build::emit::place_map_layers::emit_if_place_typed(
+        place_maps_for_places_data.as_ref(),
         &stage_dir,
         &mut pending,
     );

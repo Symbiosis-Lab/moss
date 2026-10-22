@@ -981,6 +981,8 @@ pub struct SiteAssets {
     /// just carries the answer through to the `places-explorer` script/CSS
     /// gates.
     pub places_explorer: bool,
+    /// The site declares `[map.layers]`, so its map figures carry a credit line.
+    pub map_layers: bool,
 }
 
 impl SiteAssets {

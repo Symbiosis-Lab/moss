@@ -19,7 +19,7 @@
  * ring of one `.moss-places-ring-dot` per member, exactly the design's case
  * 2/3 split.
  */
-import { worldToScreen } from "./camera";
+import { aspectX, worldToScreen } from "./camera";
 import { byWeightThenDateThenTitle } from "./cards";
 import {
   CLUSTER_DISTANCE,
@@ -181,7 +181,7 @@ export class MarkerLayer {
     // An article scope draws one point per place of one work: those never merge.
     const clusters = new Set(points.map(workIdOf)).size === 1
       ? points.map((point) => ({ ids: [point.id], screen: { x: point.x, y: point.y } }))
-      : clusterVisible(points, camera.zoom, CLUSTER_DISTANCE);
+      : clusterVisible(points, camera.zoom, CLUSTER_DISTANCE, aspectX(camera, viewport));
 
     // A pan/zoom can re-cluster the bloomed group's own coordinate into (or
     // out of) another cluster — fold the ring back first, same guard the

@@ -14,6 +14,8 @@ pub mod commands;
 // re-export shims, so crossing them resolves the same items by a shorter path.
 pub mod doctor;
 pub mod list;
+// `map bbox` reads the folder's config, gazetteer and page frontmatter and prints a frame.
+pub mod map;
 // `env` reads and writes the environment through `vault::config`, the one
 // config writer both binaries share.
 pub mod env;

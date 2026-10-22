@@ -14,6 +14,8 @@ pub mod archival;
 pub mod feature_styles;
 pub mod place_map_assets;
 pub mod place_map_labels;
+pub mod place_map_layer_tiles;
+pub mod place_map_layers;
 pub mod scripts;
 pub mod slots;
 pub mod stylesheet;

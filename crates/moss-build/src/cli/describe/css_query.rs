@@ -120,6 +120,7 @@ fn shipping_note(sheet: &str) -> &'static str {
         "site/places-explorer.css" => {
             "shipped only when the site has a place-typed namespace root with the explorer on"
         }
+        "site/map-layers.css" => "shipped only when the site declares [map.layers]",
         "comments.css" => "linked only when the site has synced comments",
         "email.css" => {
             "linked only when the email channel is installed or a page has :::subscribe"

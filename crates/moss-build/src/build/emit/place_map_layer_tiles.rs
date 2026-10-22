@@ -1,0 +1,138 @@
+//! The raster tiles of a historical layer, in the `_moss/map.<hash>/layers/<name>/`
+//! folder beside `layers.json`, and the `index.json` the explorer reads to
+//! learn which tiles exist and where the plates are.
+//!
+//! The map directory's hash already folds in the layer's key (its plates'
+//! content, its config, the places the deep levels are drawn around), so a
+//! tile found there from an earlier build was drawn from the same inputs and
+//! is registered as it is instead of drawn again.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use rayon::prelude::*;
+
+use crate::build::cli_output::log_warn_problem;
+use crate::build::context::BuildContext;
+use crate::build::manifest::{HashBucket, PendingManifest};
+use crate::build::place_map::layer_warp::tiles::{candidates, encode, level_range, render_tile, Loaded, TILE_SIZE};
+use crate::build::place_map::layer_warp::LayerPlan;
+use crate::build::served_path::ServedPath;
+use crate::config::map_layers::MapLayer;
+
+/// How many of the deepest levels are cut to the neighbourhood of a place.
+const NEAR_LEVELS: u8 = 2;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Footprint {
+    plate: String,
+    polygon: Vec<[f64; 2]>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct TileIndex {
+    min_level: u8,
+    max_level: u8,
+    tile_size: u32,
+    levels: BTreeMap<String, Vec<[u32; 2]>>,
+    footprints: Vec<Footprint>,
+}
+
+/// Where the layer's index is, relative to the map directory.
+pub(crate) fn index_url(layer: &MapLayer) -> String {
+    format!("layers/{}/index.json", layer.name)
+}
+
+fn tile_path(hash: &str, layer: &MapLayer, level: u8, i: u32, j: u32) -> Result<ServedPath, String> {
+    ServedPath::for_place_map_layer_file(hash, &layer.name, &format!("{level}/{i}/{j}.jpg")).map_err(|e| e.to_string())
+}
+
+fn size_text(bytes: u64) -> String {
+    if bytes >= 1_000_000 { format!("{:.1} MB", bytes as f64 / 1e6) } else { format!("{:.0} KB", bytes as f64 / 1e3) }
+}
+
+/// Writes the layer's tiles and index; the URL of the index when the layer
+/// has any tile. Over budget is a problem (a failure under `--strict`).
+pub(crate) fn emit_layer(layer: &MapLayer, plan: &LayerPlan, hash: &str, output_dir: &Path, pending: &mut PendingManifest) -> Option<String> {
+    if plan.plates.is_empty() {
+        return None;
+    }
+    match emit_tiles(layer, plan, hash, output_dir, pending) {
+        Ok(total) => {
+            if let Some(budget) = layer.budget.filter(|b| total > *b) {
+                log_warn_problem!("map layer {} draws {} of tiles, over its budget of {}; lower max_zoom, narrow the bbox, or raise the budget", layer.name, size_text(total), size_text(budget));
+            }
+            Some(index_url(layer))
+        }
+        Err(error) => {
+            log_warn_problem!("map layer {} could not be drawn: {error}", layer.name);
+            None
+        }
+    }
+}
+
+fn emit_tiles(layer: &MapLayer, plan: &LayerPlan, hash: &str, output_dir: &Path, pending: &mut PendingManifest) -> Result<u64, String> {
+    let index_path = ServedPath::for_place_map_layer_file(hash, &layer.name, "index.json").map_err(|e| e.to_string())?;
+    let (min, max) = level_range(plan.extent, layer.max_zoom);
+
+    let earlier: Option<TileIndex> = std::fs::read(output_dir.join(index_path.as_str())).ok().and_then(|b| serde_json::from_slice(&b).ok());
+    let mut drawn: BTreeMap<u8, Vec<(u32, u32)>> = BTreeMap::new();
+    let mut total = 0u64;
+    let reused = earlier.is_some_and(|index| {
+        let mut staged = Vec::new();
+        for (level, tiles) in &index.levels {
+            let Ok(level) = level.parse::<u8>() else { return false };
+            for &[i, j] in tiles {
+                let Ok(path) = tile_path(hash, layer, level, i, j) else { return false };
+                let Ok(bytes) = std::fs::read(output_dir.join(path.as_str())) else { return false };
+                staged.push((path, bytes));
+                drawn.entry(level).or_default().push((i, j));
+            }
+        }
+        for (path, bytes) in staged {
+            total += bytes.len() as u64;
+            pending.register(&path, &bytes, HashBucket::Files);
+        }
+        true
+    });
+    if !reused {
+        drawn.clear();
+        let loaded: Vec<Loaded> = plan
+            .plates
+            .iter()
+            .filter_map(|p| match Loaded::open(p) {
+                Ok(l) => Some(l),
+                Err(why) => {
+                    log_warn_problem!("map plate {} skipped: {why}", p.id);
+                    None
+                }
+            })
+            .collect();
+        for level in min..=max {
+            let restrict = level + NEAR_LEVELS > max;
+            let wanted = candidates(level, plan.extent, restrict, &plan.places);
+            let tiles: Vec<(u32, u32, Vec<u8>)> =
+                wanted.par_iter().filter_map(|&(i, j)| render_tile(&loaded, level, i, j).map(|t| (i, j, encode(&t)))).collect();
+            for (i, j, bytes) in tiles {
+                let path = tile_path(hash, layer, level, i, j)?;
+                BuildContext::for_render(output_dir, pending).emit(&path, &bytes, HashBucket::Files).map_err(|e| format!("tile {level}/{i}/{j}: {e}"))?;
+                total += bytes.len() as u64;
+                drawn.entry(level).or_default().push((i, j));
+            }
+        }
+    }
+
+    let index = TileIndex {
+        min_level: min,
+        max_level: max,
+        tile_size: TILE_SIZE,
+        levels: drawn.into_iter().map(|(l, mut t)| {
+            t.sort_unstable();
+            (l.to_string(), t.into_iter().map(|(i, j)| [i, j]).collect())
+        }).collect(),
+        footprints: plan.plates.iter().map(|p| Footprint { plate: p.id.clone(), polygon: p.footprint.iter().map(|&(x, y)| [x, y]).collect() }).collect(),
+    };
+    let json = serde_json::to_vec(&index).expect("a tile index serializes");
+    BuildContext::for_render(output_dir, pending).emit(&index_path, &json, HashBucket::Files).map_err(|e| format!("index: {e}"))?;
+    Ok(total)
+}
