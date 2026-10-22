@@ -4958,7 +4958,7 @@ fn test_image_compression_pipeline_end_to_end() {
     // the base webp on disk.
     assert!(
             html.contains(
-                r#"<source srcset="/photo.w800.webp 800w, /photo.w1600.webp 1600w, /photo.webp 2400w" type="image/webp" sizes="(min-width: 48rem) 47.25rem, 100vw">"#
+                r#"<source srcset="/photo.w800.webp 800w, /photo.w1600.webp 1600w, /photo.webp 2400w" type="image/webp" sizes="auto, (min-width: 48rem) 47.25rem, 100vw">"#
             ),
             "Built HTML should contain <source> ladder for photo.webp (markdown image), got: {}",
             html

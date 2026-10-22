@@ -264,7 +264,7 @@ a.comment-author:hover {
 
 .comment-form-meta {
   display: grid;
-  grid-template-columns: 1fr 1.3fr 1.1fr auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 1.1fr) auto;
   gap: 0.75rem;
   align-items: end;
   margin-top: var(--moss-space-sm, 1rem);
@@ -490,7 +490,7 @@ a.comment-author:hover {
 /* 2+2 layout: name+email on row 1, website+button on row 2 */
 @media (max-width: 37.5rem) {
   .comment-form-meta {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 
   .comment-replies {
@@ -499,14 +499,14 @@ a.comment-author:hover {
   }
 
   .comment-form--reply .comment-form-meta {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 }
 
 /* Full stack on very narrow screens */
 @media (max-width: 25rem) {
   .comment-form-meta {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .comment-form-submit {
@@ -514,7 +514,7 @@ a.comment-author:hover {
   }
 
   .comment-form--reply .comment-form-meta {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .comment-form--reply {
     padding-left: var(--moss-space-xs, 0.5rem);

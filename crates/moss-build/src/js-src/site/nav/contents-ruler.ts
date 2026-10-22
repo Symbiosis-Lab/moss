@@ -59,11 +59,11 @@ const GUTTER = 24;
  *  is a few letters of a title, which names nothing. */
 const MIN_LABEL = 96;
 
-/** Fade in when the first section is this far up the window; fade out when the
- *  article's bottom is above the middle. Pinned to the window, the ruler only
- *  belongs on screen while the article's body is — not over a cover image above
- *  it or over the comments below it. */
-const SHOW_BELOW = 0.85;
+/** Fade out when the article's bottom is above the middle of the window. The
+ *  list comes up when the first section's heading reaches the list's own top,
+ *  so it never stands over an opening, whatever the window's height. Pinned to
+ *  the window, the ruler only belongs on screen while the article's body is —
+ *  not over a cover image above it or over the comments below it. */
 const HIDE_ABOVE = 0.5;
 
 export interface RulerOptions {
@@ -177,7 +177,8 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   function fade(): void {
     if (disposed) return;
     const height = window.innerHeight;
-    const inBody = first.getBoundingClientRect().top < height * SHOW_BELOW;
+    const zone = nav.hidden ? null : list.getBoundingClientRect();
+    const inBody = zone === null || first.getBoundingClientRect().top <= zone.top;
     const notPast = opts.end
       ? opts.end.getBoundingClientRect().top > height * HIDE_ABOVE
       : opts.closing
@@ -186,9 +187,10 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     // A wide block that reaches the ruler's column and shares its height would
     // be painted over: the ruler steps aside until the block has passed.
     // Only worth measuring while the ruler would otherwise be up.
-    const zone = inBody && notPast && !nav.hidden ? list.getBoundingClientRect() : null;
     const covered =
       zone !== null &&
+      inBody &&
+      notPast &&
       bands.some((band) => {
         const box = band.getBoundingClientRect();
         return box.left < zone.right && box.top < zone.bottom && box.bottom > zone.top;

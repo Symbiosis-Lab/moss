@@ -81,7 +81,13 @@ pub const SIZES_PAGE: &str = "(min-width: 48rem) min(1200px, 100vw), 100vw";
 
 /// Default body figures/inline images: viewport-wide on small screens, the
 /// content column (47.25rem) above the 48rem breakpoint.
-pub const SIZES_BODY: &str = "(min-width: 48rem) 47.25rem, 100vw";
+///
+/// Leads with `auto,` for the reason [`SIZES_CARD`] gives: an image a theme
+/// draws small (a cover in a link or a list, an inline icon) is not the column's
+/// width, and `auto` reads the laid-out width of a lazy image. The remainder is
+/// the full-column fallback for an eager image or an engine without `auto`, so
+/// it never understates a picture drawn at the column's width.
+pub const SIZES_BODY: &str = "auto, (min-width: 48rem) 47.25rem, 100vw";
 
 /// Folder-card covers and link-preview thumbs: grid cells, ~half column and up.
 ///

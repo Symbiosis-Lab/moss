@@ -231,10 +231,37 @@ test.describe("nothing is cut off", () => {
               ? (label.clientHeight - parseFloat(getComputedStyle(label).paddingTop) - parseFloat(getComputedStyle(label).paddingBottom)) /
                 parseFloat(getComputedStyle(label.querySelector("strong") ?? label).lineHeight)
               : 0,
-            titleLines: (() => {
+            ...(() => {
               const title = label?.querySelector<HTMLElement>(":scope > strong:first-child");
-              return title ? title.offsetHeight / parseFloat(getComputedStyle(title).lineHeight) : 0;
+              let titleWordRoom = 0;
+              if (title) {
+                const walker = document.createTreeWalker(title, NodeFilter.SHOW_TEXT);
+                for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+                  for (const m of n.textContent!.matchAll(/\S+/g)) {
+                    const probe = document.createElement("span");
+                    probe.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap";
+                    probe.textContent = m[0];
+                    title.append(probe);
+                    titleWordRoom = Math.max(titleWordRoom, probe.getBoundingClientRect().width - (title.clientWidth - 0));
+                    probe.remove();
+                  }
+                }
+              }
+              const lb = label?.getBoundingClientRect();
+              const tb = title?.getBoundingClientRect();
+              const padBottom = label ? parseFloat(getComputedStyle(label).paddingBottom) : 0;
+              return {
+                titleH: title?.clientHeight ?? 0,
+                titleScrollH: title?.scrollHeight ?? 0,
+                titleWordRoom,
+                // How far the title's last line runs below the label's content box: 0 when whole.
+                titleCut: lb && tb ? Math.max(0, tb.bottom - (lb.bottom - padBottom)) : 0,
+                factsShown: label ? parseFloat(getComputedStyle(label).fontSize) > 0 : false,
+              };
             })(),
+            hasLabel: !!label,
+            labelDrawn: label ? Math.min(label.getBoundingClientRect().width, label.getBoundingClientRect().height) : 0,
+            labelText: label?.textContent?.trim() ?? "",
             labelScrollW: label?.scrollWidth ?? 0,
             labelW: label?.clientWidth ?? 0,
             quote: !!quote,
@@ -244,12 +271,24 @@ test.describe("nothing is cut off", () => {
         }),
       );
       for (const r of report) {
-        expect(r.labelH, `tile ${r.i}: label fits the tile's height`).toBeLessThanOrEqual(r.tileH + 1);
-        expect(r.labelScrollW, `tile ${r.i}: label fits the tile's width`).toBeLessThanOrEqual(r.labelW + 1);
-        expect(r.labelH, `tile ${r.i}: label takes at most 40% of the tile`).toBeLessThanOrEqual(r.tileH * 0.4 + 1);
-        expect(r.labelScrollH, `tile ${r.i}: label is not clipped`).toBeLessThanOrEqual(r.labelH + 1);
-        expect(r.titleLines, `tile ${r.i}: the title keeps to two lines`).toBeLessThanOrEqual(2.05);
-        expect(Math.abs(r.labelLines - Math.round(r.labelLines)), `tile ${r.i}: the label ends on a whole line`).toBeLessThan(0.05);
+        if (width >= 768) {
+          expect(r.labelH, `tile ${r.i}: label fits the tile's height`).toBeLessThanOrEqual(r.tileH + 1);
+          expect(r.labelScrollW, `tile ${r.i}: label fits the tile's width`).toBeLessThanOrEqual(r.labelW + 1);
+          // The cap and the whole-line stop apply only while the facts line is shown.
+          if (r.factsShown) {
+            expect(r.labelH, `tile ${r.i}: label takes at most 55% of the tile`).toBeLessThanOrEqual(r.tileH * 0.55 + 1);
+            expect(Math.abs(r.labelLines - Math.round(r.labelLines)), `tile ${r.i}: the label ends on a whole line`).toBeLessThan(0.05);
+          }
+          if (width < 900) expect(r.factsShown, `tile ${r.i}: the facts are hidden under 56.25rem`).toBe(false);
+          expect(r.titleCut, `tile ${r.i}: no line of the title is cut`).toBeLessThanOrEqual(1);
+          // The title is whole: no line of it is cut, and no word is broken to fit.
+          expect(r.titleScrollH, `tile ${r.i}: the title is not cut`).toBeLessThanOrEqual(r.titleH + 1);
+          expect(r.titleWordRoom, `tile ${r.i}: the title's widest word fits a line whole`).toBeLessThanOrEqual(0.5);
+        } else if (r.hasLabel) {
+          // Below 48rem no credit is drawn on a picture; it is still in the page.
+          expect(r.labelDrawn, `tile ${r.i}: the credit is not drawn`).toBeLessThanOrEqual(2);
+          expect(r.labelText, `tile ${r.i}: the credit stays in the markup`).not.toBe("");
+        }
         if (r.quote) expect(r.tileScrollH, `tile ${r.i}: quote is not cut off`).toBeLessThanOrEqual(r.tileH + 1);
         if (r.quote) expect(r.wordOver, `tile ${r.i}: no quote word runs into the padding`).toBeLessThanOrEqual(0.5);
         // A span-2 tile on a full-width page at 900px is about 140px wide: the
@@ -297,21 +336,78 @@ test.describe("collage credits", () => {
     }
   });
 
-  test("the label's title is 0.78rem, its facts 0.66rem, and a linked tile's title ends in an arrow", async ({ page }) => {
+  test("the label's title is 500 weight and at most 0.78rem, its facts 0.66rem, and a linked tile's title ends in an arrow", async ({ page }) => {
     await page.setViewportSize({ width: 1360, height: 900 });
     await page.goto("/mixed/");
     // The lead is large enough to show both lines.
     const caption = page.locator(`${MIXED} > :nth-child(1) figcaption`);
     await expect(caption).toHaveCSS("font-size", "10.56px");
     await expect(caption.locator("strong")).toHaveCSS("font-size", "12.48px");
-    const after = (sel: string) =>
-      page.locator(sel).evaluate((el) => ({ content: getComputedStyle(el, "::after").content, position: getComputedStyle(el, "::after").position }));
-    // The arrow is drawn beside the title, not inside it, so the title's ellipsis cannot cut it.
-    expect(await after(`${MIXED} > :nth-child(1) figcaption`)).toEqual({ content: expect.stringContaining("\u2197"), position: "absolute" });
-    expect((await after(`${MIXED} > :nth-child(1) figcaption > strong`)).content).toBe("none");
-    expect((await after(`${MIXED} > :nth-child(4) figcaption`)).content).toBe("none");
+    await expect(caption.locator("strong")).toHaveCSS("font-weight", "500");
+    const after = (sel: string) => page.locator(sel).evaluate((el) => getComputedStyle(el, "::after").content);
+    // The arrow ends the title's last line, so a longer title never leaves it behind.
+    expect(await after(`${MIXED} > :nth-child(1) figcaption > strong`)).toContain("\u2197");
+    expect(await after(`${MIXED} > :nth-child(1) figcaption`)).toBe("none");
+    expect(await after(`${MIXED} > :nth-child(4) figcaption > strong`)).toBe("none");
     // The arrow is drawn on the title, not written into it.
     await expect(page.locator(`${MIXED} > :nth-child(1) figcaption > strong`)).toHaveText("Harbour at dawn");
+  });
+
+  for (const width of [1360, 900, 768])
+  test(`at ${width}px every title is shown whole on hover, and a long word is not broken`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/full/");
+    const tiles = page.locator(`${MIXED} > [data-tile="picture"]`);
+    const n = await tiles.count();
+    for (let i = 0; i < n; i++) {
+      const tile = tiles.nth(i);
+      await tile.scrollIntoViewIfNeeded();
+      await tile.hover();
+      const title = tile.locator("figcaption > strong:first-child");
+      await expect(title).toBeVisible();
+      const m = await title.evaluate((el) => {
+        const probe = document.createElement("span");
+        probe.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap";
+        let widest = 0;
+        for (const w of el.textContent!.split(/\s+/)) {
+          probe.textContent = w;
+          el.append(probe);
+          widest = Math.max(widest, probe.getBoundingClientRect().width);
+        }
+        probe.remove();
+        const lh = parseFloat(getComputedStyle(el).lineHeight);
+        return { clipped: el.scrollHeight - el.clientHeight, widest, width: el.clientWidth, lines: el.getBoundingClientRect().height / lh, lh };
+      });
+      expect(m.clipped, `tile ${i}: no line of the title is cut`).toBeLessThanOrEqual(1);
+      expect(m.widest, `tile ${i}: the widest word fits a line`).toBeLessThanOrEqual(m.width + 0.5);
+      // The label is the tile's, so its title is never reduced to an ellipsis.
+      expect(await title.evaluate((el) => getComputedStyle(el).textOverflow), `tile ${i}`).not.toBe("ellipsis");
+    }
+  });
+
+  test("below 48rem a picture's credit is not drawn but stays in the page and the tile still links", async ({ page }) => {
+    await page.setViewportSize({ width: 767, height: 900 });
+    await page.goto("/mixed/");
+    const tile = page.locator(`${MIXED} > :nth-child(1)`);
+    const caption = tile.locator("figcaption");
+    const box = await caption.boundingBox();
+    expect(box!.width).toBeLessThanOrEqual(2);
+    expect(box!.height).toBeLessThanOrEqual(2);
+    await expect(caption).toContainText("Harbour at dawn");
+    expect(await caption.evaluate((el) => getComputedStyle(el).display)).not.toBe("none");
+    expect(await caption.evaluate((el) => getComputedStyle(el).visibility)).toBe("visible");
+    await expect(tile.locator("figure > a")).toHaveAttribute("href", /\/upright\/$/);
+    // A link in the hidden credit stays in the tab order, and focusing it shows the credit.
+    const link = page.locator(`${MIXED} > :nth-child(4) figcaption a`);
+    await expect(link).not.toHaveAttribute("tabindex", /.*/);
+    const credit = page.locator(`${MIXED} > :nth-child(4) figcaption`);
+    await expect(credit).toHaveCSS("opacity", "1");
+    expect((await credit.boundingBox())!.width).toBeLessThanOrEqual(2);
+    await link.focus();
+    await expect.poll(async () => (await credit.boundingBox())!.width).toBeGreaterThan(40);
+    await expect(credit).toHaveCSS("opacity", "1");
+    // Read aloud: the tile link's accessible name includes the credit.
+    expect(await tile.locator("figure").evaluate((el) => el.textContent)).toContain("City Museum");
   });
 
   test("at 1360px a caption is hidden at rest and shown on hover, its bold run a title line", async ({ page }) => {
@@ -336,11 +432,11 @@ test.describe("collage credits", () => {
   });
 
   test("a tile too small for both lines keeps the title and hides the facts to the eye only", async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 });
+    await page.setViewportSize({ width: 900, height: 900 });
     await page.goto("/mixed/");
     const caption = page.locator(`${MIXED} > :nth-child(4) figcaption`);
     await expect(caption).toHaveCSS("font-size", "0px");
-    expect(parseFloat(await caption.locator("strong").evaluate((el) => getComputedStyle(el).fontSize))).toBeGreaterThan(10);
+    expect(parseFloat(await caption.locator("strong").evaluate((el) => getComputedStyle(el).fontSize))).toBeGreaterThan(8);
     expect(await caption.evaluate((el) => getComputedStyle(el).display)).not.toBe("none");
   });
 
@@ -365,8 +461,8 @@ test.describe("collage credits", () => {
       };
     });
     expect(m.lines).toBeGreaterThan(2.5);
-    // A credit longer than its tile allows stops at 40%; the viewer has the rest.
-    expect(m.share).toBeLessThanOrEqual(0.405);
+    // A credit longer than its tile allows stops at 55%; the viewer has the rest.
+    expect(m.share).toBeLessThanOrEqual(0.555);
     // …at a whole line, never through one.
     expect(Math.abs(m.content - Math.round(m.content))).toBeLessThan(0.05);
     const fg = parseColor(m.color);
@@ -476,5 +572,122 @@ test.describe("collage on a vertical page", () => {
       expect(t.x).toBeGreaterThanOrEqual(collage.x - EPS);
       expect(t.x + t.w).toBeLessThanOrEqual(collage.x + collage.w + EPS);
     }
+  });
+});
+
+test.describe("a collage quote reads as type on paper", () => {
+  const quote = (n: number) => `${MIXED} > :nth-child(${n})`;
+
+  for (const [width, short, long] of [
+    [1360, [15, 17.5], [13.5, 15]],
+    [390, [15, 16], [13, 15]],
+  ] as const)
+  test(`at ${width}px it sits at the tile's top, small, unhyphenated, its source pinned to the foot`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/full/");
+    for (const [n, [lo, hi]] of [[3, short], [8, long]] as const) {
+      const tile = page.locator(quote(n));
+      const m = await tile.evaluate((el) => {
+        const bq = el.querySelector("blockquote")!;
+        const cap = el.querySelector("figcaption")!;
+        const link = cap.querySelector("a") ?? cap;
+        const t = el.getBoundingClientRect();
+        const b = bq.getBoundingClientRect();
+        const c = cap.getBoundingClientRect();
+        const bs = getComputedStyle(bq);
+        const cs = getComputedStyle(cap);
+        const mid = document.elementFromPoint(t.left + t.width / 2, t.top + t.height / 2);
+        return {
+          size: parseFloat(bs.fontSize),
+          hyphens: bs.hyphens,
+          wrap: bs.textWrapStyle,
+          gapTop: b.top - t.top,
+          gapFoot: t.bottom - c.bottom,
+          capSize: cs.fontSize,
+          capFamily: cs.fontFamily,
+          capColor: cs.color,
+          secondary: getComputedStyle(document.body).getPropertyValue("--moss-color-text-secondary"),
+          decoration: getComputedStyle(link).textDecorationLine,
+          linked: !!cap.querySelector("a"),
+          rule: cs.borderTopWidth,
+          capW: c.width,
+          linkW: link.getBoundingClientRect().width,
+          wholeTileLinks: mid?.closest("a") === link,
+        };
+      });
+      expect(m.size, `quote ${n}`).toBeGreaterThanOrEqual(lo - 0.01);
+      expect(m.size, `quote ${n}`).toBeLessThanOrEqual(hi + 0.01);
+      expect(m.hyphens, `quote ${n}: no automatic hyphenation`).not.toBe("auto");
+      expect(m.gapTop, `quote ${n}: set at the top`).toBeLessThanOrEqual(24);
+      expect(m.gapFoot, `quote ${n}: source at the foot`).toBeLessThanOrEqual(20);
+      expect(m.capSize).toBe("11px");
+      expect(m.capFamily).toMatch(/mono/i);
+      expect(m.decoration).toBe("none");
+      expect(m.rule).toBe("1px");
+      expect(m.capW, `quote ${n}: the hairline is as wide as the source`).toBeCloseTo(m.linkW, -1);
+      if (m.linked) expect(m.wholeTileLinks, `quote ${n}: the whole tile follows the source's link`).toBe(true);
+    }
+  });
+
+  test("a long quote in the narrowest tile steps down, breaks no word and is not cut off", async ({ page }) => {
+    await page.setViewportSize({ width: 768, height: 900 });
+    await page.goto("/full/");
+    const tile = page.locator(quote(8));
+    const m = await tile.evaluate((el) => ({
+      size: parseFloat(getComputedStyle(el.querySelector("blockquote")!).fontSize),
+      cut: el.scrollHeight - el.clientHeight,
+      w: el.getBoundingClientRect().width,
+    }));
+    expect(m.w, "this is a small tile").toBeLessThan(180);
+    expect(m.size).toBeLessThan(15);
+    expect(m.cut).toBeLessThanOrEqual(1);
+  });
+});
+
+test.describe("a picture shown whole", () => {
+  test("keeps paper around it instead of filling the tile edge to edge", async ({ page }) => {
+    await page.setViewportSize({ width: 1360, height: 900 });
+    await page.goto("/mixed/");
+    const img = page.locator(`${MIXED} > :nth-child(2) img`);
+    await expect(img).toHaveCSS("padding-top", "12px");
+    await expect(img).toHaveCSS("padding-left", "12px");
+    const [i, t] = await Promise.all([img.boundingBox(), page.locator(`${MIXED} > :nth-child(2)`).boundingBox()]);
+    expect(i!.height).toBeCloseTo(t!.height, 0);
+    await expect(page.locator(`${MIXED} > :nth-child(4) img`)).toHaveCSS("padding-top", "0px");
+  });
+});
+
+test.describe("nothing widens the page", () => {
+  for (const width of [390, 360]) {
+    test(`at ${width}px a long address in a grid card and a linked picture in a list stay inside the page`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto("/cards/");
+      const m = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+      expect(m.scroll).toBeLessThanOrEqual(m.client);
+    });
+  }
+});
+
+test.describe("the phone gutter and the section face", () => {
+  test("--moss-container-padding-narrow sets the gutter below 48rem and leaves 48rem and up alone", async ({ page }) => {
+    const gutter = () => page.locator("article").evaluate((el) => getComputedStyle(el).paddingLeft);
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto("/narrow-note/");
+    expect(await gutter()).toBe("16px");
+    await page.goto("/mixed/");
+    expect(await gutter(), "an untouched page keeps 1.5rem").toBe("24px");
+    await page.setViewportSize({ width: 1360, height: 800 });
+    await page.goto("/narrow-note/");
+    expect(await gutter(), "the desktop gutter is not the narrow one").toBe("32px");
+  });
+
+  test("--moss-font-section sets section headings and the page title keeps the heading face", async ({ page }) => {
+    await page.goto("/narrow-note/");
+    const face = (sel: string) => page.locator(sel).evaluate((el) => getComputedStyle(el).fontFamily);
+    expect(await face("article h2")).toMatch(/monospace/);
+    // The page title keeps the heading face: the property is set on this very page.
+    const title = await face(".moss-article-title");
+    expect(title).not.toMatch(/monospace/);
+    expect(title).toMatch(/serif/i);
   });
 });

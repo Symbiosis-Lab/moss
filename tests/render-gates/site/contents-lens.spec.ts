@@ -312,11 +312,13 @@ test.describe('contents: pictures', () => {
       const el = nav.querySelector('.moss-contents-ruler-veil')!;
       const cs = getComputedStyle(el);
       const b = el.getBoundingClientRect();
-      return { shadowed, image: cs.backgroundImage, border: cs.borderTopStyle, top: b.top, bottom: b.bottom, left: b.left };
+      return { shadowed, image: cs.backgroundImage, border: cs.borderTopStyle, top: b.top, bottom: b.bottom, left: b.left, opacity: parseFloat(cs.opacity) };
     });
     expect(veil.shadowed, 'nothing in the list casts a shadow').toBe(0);
     expect(veil.image).toMatch(/linear-gradient/);
     expect(veil.border).toBe('none');
+    expect(veil.opacity, 'translucent: the page shows faintly through').toBeLessThan(1);
+    expect(veil.opacity).toBeGreaterThan(0.8);
     expect(veil.left).toBeLessThanOrEqual(0.5);
     const r = await rows(page);
     expect(veil.top).toBeLessThan(r[0].box.top);

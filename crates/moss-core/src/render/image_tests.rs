@@ -962,7 +962,7 @@ fn ladder_srcset_emitted_for_wide_raster() {
     );
     assert!(
             html.contains(
-                r#"<source srcset="photo.w800.webp 800w, photo.w1600.webp 1600w, photo.webp 2000w" type="image/webp" sizes="(min-width: 48rem) 47.25rem, 100vw">"#
+                r#"<source srcset="photo.w800.webp 800w, photo.w1600.webp 1600w, photo.webp 2000w" type="image/webp" sizes="auto, (min-width: 48rem) 47.25rem, 100vw">"#
             ),
             "got: {html}"
         );
@@ -1147,7 +1147,7 @@ fn comma_named_raster_encodes_srcset_commas_but_not_base_src() {
     );
     assert_eq!(
         html,
-        r#"<picture><source srcset="a%2Cb.w800.webp 800w, a%2Cb.w1600.webp 1600w, a%2Cb.webp 2000w" type="image/webp" sizes="(min-width: 48rem) 47.25rem, 100vw"><img src="a,b.jpg" width="2000" height="1200" loading="lazy" alt="cat" /></picture>"#
+        r#"<picture><source srcset="a%2Cb.w800.webp 800w, a%2Cb.w1600.webp 1600w, a%2Cb.webp 2000w" type="image/webp" sizes="auto, (min-width: 48rem) 47.25rem, 100vw"><img src="a,b.jpg" width="2000" height="1200" loading="lazy" alt="cat" /></picture>"#
     );
 }
 
@@ -1165,7 +1165,7 @@ fn comma_named_webp_source_encodes_img_srcset_commas_but_not_base_src() {
     );
     assert_eq!(
         html,
-        r#"<img src="a,b.webp" srcset="a%2Cb.w800.webp 800w, a%2Cb.w1600.webp 1600w, a%2Cb.webp 2000w" sizes="(min-width: 48rem) 47.25rem, 100vw" width="2000" height="1200" loading="lazy" alt="cat" />"#
+        r#"<img src="a,b.webp" srcset="a%2Cb.w800.webp 800w, a%2Cb.w1600.webp 1600w, a%2Cb.webp 2000w" sizes="auto, (min-width: 48rem) 47.25rem, 100vw" width="2000" height="1200" loading="lazy" alt="cat" />"#
     );
 }
 
@@ -1219,7 +1219,7 @@ fn no_comma_filename_srcset_is_not_over_encoded() {
     assert!(!html.contains("%2C"), "no comma to encode; got: {html}");
     assert_eq!(
         html,
-        r#"<picture><source srcset="photo.w800.webp 800w, photo.w1600.webp 1600w, photo.webp 2000w" type="image/webp" sizes="(min-width: 48rem) 47.25rem, 100vw"><img src="photo.jpg" width="2000" height="1200" loading="lazy" alt="cat" /></picture>"#
+        r#"<picture><source srcset="photo.w800.webp 800w, photo.w1600.webp 1600w, photo.webp 2000w" type="image/webp" sizes="auto, (min-width: 48rem) 47.25rem, 100vw"><img src="photo.jpg" width="2000" height="1200" loading="lazy" alt="cat" /></picture>"#
     );
 }
 
@@ -1595,7 +1595,7 @@ fn webp_source_wide_emits_img_srcset_no_picture() {
     );
     assert_eq!(
         html,
-        r#"<img src="photo.webp" srcset="photo.w800.webp 800w, photo.w1600.webp 1600w, photo.webp 1866w" sizes="(min-width: 48rem) 47.25rem, 100vw" width="1866" height="1866" loading="lazy" alt="alt" />"#
+        r#"<img src="photo.webp" srcset="photo.w800.webp 800w, photo.w1600.webp 1600w, photo.webp 1866w" sizes="auto, (min-width: 48rem) 47.25rem, 100vw" width="1866" height="1866" loading="lazy" alt="alt" />"#
     );
     assert!(
         !html.contains("<picture"),

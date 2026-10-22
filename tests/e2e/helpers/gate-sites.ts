@@ -3693,13 +3693,13 @@ const COLLAGE_MIXED = `:::grid {collage}
 *[Montaigne, 1924](https://example.org/essays/)*
 +++
 ![Picture 4](../t4.svg)
-*__A long title for a small tile__ 1902 · Harbour Archive · Public domain*
+*__A long title for a small tile__ 1902 · Harbour Archive · [Public domain](https://example.org/pd)*
 +++
 ![Picture 5](../t5.svg)
-*__Tall__ 1910*
+*__A lighthouse keeper's long winter correspondence with the harbour board__ 1910 · Harbour Archive*
 +++
 ![Picture 6](../t6.svg)
-*__Six__ 1911*
+*__Anticonstitutional__ 1911 · Example Archive · Public domain*
 +++
 ![Picture 7](../t7.svg)
 *__Tall again__ 1912*
@@ -3791,6 +3791,46 @@ content_width: full
 # Full width
 
 ${COLLAGE_MIXED}`,
+    // Cards holding a word with no break point, and a link in a list: nothing may widen the page.
+    "cards/index.md": `---
+title: Cards
+uid: "clg00150"
+---
+
+# Cards
+
+:::grid 2
+[https://example.org/a/very/long/address/with/no/break/points/at/all/that/runs/past/any/phone/screen/width/1234567890](https://example.org/a/very/long/address/with/no/break/points/at/all/that/runs/past/any/phone/screen/widt)
++++
+A short card.
+:::
+
+:::grid 2
+## Card title
+https://example.org/a/very/long/address/with/no/break/points/at/all/that/runs/past/any/phone/screen/width/1234567890
++++
+Other
+:::
+
+:::grid 1
+https://example.org/a/very/long/address/with/no/break/points/at/all/that/runs/past/any/phone/screen/width/1234567890
+:::
+
+- [![](../t1.svg) An item with a picture in a link](/mixed/)
+`,
+    // A theme that sets only the phone gutter and gives the section headings a face.
+    ".moss/theme/style.css": `:root:has(body[data-path="/narrow-note/"]) { --moss-container-padding-narrow: 1rem; }
+body[data-path="/narrow-note/"] { --moss-font-section: ui-monospace, monospace; }
+`,
+    "narrow-note.md": `---
+title: Narrow
+uid: "clg00160"
+---
+
+## A section
+
+Text.
+`,
     // A raster poster: the build reads a picture's pixel size from raster files only.
     "poster.png": Buffer.from("iVBORw0KGgoAAAANSUhEUgAAACgAAAA8CAIAAACb22+3AAAAOElEQVR42u3NQQkAAAgEsEtnEtOZ0hgiDPZfpvpExGKxWCwWi8VisVgsFovFYrFYLBaLxWLxp3gBxqJ0NeApenkAAAAASUVORK5CYII=", "base64"),
     "upright/index.md": `---

@@ -656,6 +656,29 @@ test.describe('the home page', () => {
     expect(r.every((row) => row.visible === 'hidden')).toBe(true);
   });
 
+  for (const height of [700, 1000])
+  test(`at ${height}px tall the list comes up when the first section reaches its own top, not before`, async ({ page }) => {
+    await open(page, 1280, height, OPEN_HOME);
+    // An opening tall enough to leave the first section below the window's foot.
+    await page.evaluate(() => {
+      document.querySelector('main')!.insertAdjacentHTML('afterbegin', '<div style="block-size:1400px"></div>');
+    });
+    await frames(page);
+    const place = async (offset: number) => {
+      await page.evaluate((off) => {
+        const list = document.querySelector('.moss-contents-ruler ol')!.getBoundingClientRect();
+        const first = document.querySelector('main h2[id]')!.getBoundingClientRect();
+        scrollTo(0, scrollY + first.top - (list.top + off));
+      }, offset);
+      await frames(page);
+    };
+    // Heading 30px below the list's top: the list is still away, though the heading is in the window.
+    await place(30);
+    await expect.poll(() => isAway(page)).toBe(true);
+    await place(-30);
+    await expect.poll(() => isAway(page)).toBe(false);
+  });
+
   test.describe('on a phone', () => {
     test.use({ viewport: { width: 390, height: 800 }, isMobile: true, hasTouch: true });
 

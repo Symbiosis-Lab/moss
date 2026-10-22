@@ -2138,6 +2138,51 @@ mod tests {
     }
 
     #[test]
+    fn a_picture_in_a_link_or_a_list_item_leads_with_auto_and_keeps_a_full_column_fallback() {
+        use crate::ast::{render_blocks, Block, Inline, ResolvedUrl, Url, UrlKind};
+        let src = "photos/cat.jpg";
+        let mut snap = AssetSnapshot::new();
+        snap.dimensions.insert(PathBuf::from(src), (2400, 1200));
+        snap.variants.insert(
+            PathBuf::from("photos/cat"),
+            VariantKindSet { webp: true, avif: false, hls: false, poster: false },
+        );
+        let image = || Inline::Image {
+            src: Url::Resolved(ResolvedUrl::new(src, UrlKind::Asset)),
+            alt: String::new(),
+            title: None,
+            is_wikilink: false,
+            wikilink_pothole: None,
+        };
+        let render = |blocks: Vec<Block>| {
+            let hooks = DefaultHooks::with_snapshot(&snap);
+            let mut out = String::new();
+            render_blocks(&hooks, &mut out, &blocks);
+            out
+        };
+        // `auto` reads a lazy picture's drawn width (a cover a theme draws
+        // small); the rest is what an eager picture or an engine without
+        // `auto` falls back to, and must never understate a picture drawn at
+        // the column's width.
+        let sizes = r#"sizes="auto, (min-width: 48rem) 47.25rem, 100vw""#;
+        let linked = render(vec![Block::Paragraph(vec![Inline::Link {
+            url: Url::Resolved(ResolvedUrl::new("/cat/", UrlKind::Asset)),
+            title: None,
+            children: vec![image()],
+            is_wikilink: false,
+            has_pothole: false,
+        }])]);
+        assert!(linked.contains(sizes), "a linked picture: {linked}");
+        let listed = render(vec![Block::List {
+            ordered: false,
+            start: None,
+            items: vec![vec![Block::Paragraph(vec![image(), Inline::Text(" Cat".into())])]],
+            item_source_lines: vec![],
+        }]);
+        assert!(listed.contains(sizes), "a picture in a list item: {listed}");
+    }
+
+    #[test]
     fn hero_overlay_inherits_snapshot_and_grid_cell_sizes_scope() {
         // A hero overlay must not change how anything inside it renders
         // except heading anchors. Two things have to hold, and a bare
@@ -2366,7 +2411,7 @@ mod tests {
         let mut after = String::new();
         super::super::render::render_blocks(&hooks, &mut after, &[figure_block(None)]);
         assert!(
-            after.contains(r#"sizes="(min-width: 48rem) 47.25rem, 100vw""#),
+            after.contains(r#"sizes="auto, (min-width: 48rem) 47.25rem, 100vw""#),
             "grid cell scope leaked; got: {after}"
         );
     }

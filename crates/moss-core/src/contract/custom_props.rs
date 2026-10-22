@@ -167,6 +167,18 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Exact width of the next card's visible slice at the edge of a scrolling row (`:::grid N {scroll}`) — how much of it shows, not an approximation. moss solves the row's `grid-auto-columns` so `data-columns` cards fit fully and precisely this much of the next one peeks past the edge. Raise it for a more insistent hint, lower it toward `0` to hide the cue.",
     },
     CustomProp {
+        name: "--moss-container-padding-narrow",
+        owner: ":root",
+        default: "1.5rem",
+        description: "The page's side gutter below 48rem, a phone. `--moss-container-padding` (`2rem`) is the gutter from 48rem up; below it moss uses this value instead. Set this, on `:root`, to change the phone gutter alone (`1rem` for 16px) without touching the desktop gutter. Setting `--moss-container-padding` itself still changes the gutter at every width.",
+    },
+    CustomProp {
+        name: "--moss-font-section",
+        owner: "article",
+        default: "var(--moss-font-body)",
+        description: "Face of the section headings in a page's text (`#`, `##`, `###` in the body). They use the body face; `--moss-font-heading` sets the page's title, a folder's title and a card's title. Set this to give the section headings a face of their own, for example `var(--moss-font-heading)` for serif sections.",
+    },
+    CustomProp {
         name: "--moss-collage-gap",
         owner: "moss-grid",
         default: "6px",

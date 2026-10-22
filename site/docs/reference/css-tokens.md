@@ -39,7 +39,7 @@ The full size scale runs `--moss-size-{2xs,xs,sm,md,lg,xl,2xl,3xl}`.
 | elevation | `--moss-light-y` | `-0.5` | Where the light comes from, vertically: -1 is above, 1 below. moss is lit from directly above, like paper under a lamp. |
 | elevation | `--moss-shadow-color` | `#2b2117` | The colour of every shadow before opacity. Warm near-black on paper, because a black shadow on a warm ground is the wrong colour; black on the dark ground. |
 | elevation | `--moss-shadow-strength` | `0.5` | Multiplier on every shadow opacity. A dark ground needs a much stronger shadow to read at all. |
-| layout | `--moss-container-padding` | `clamp(1rem, 5vw, 2rem)` | Container side padding |
+| layout | `--moss-container-padding` | `2rem` | Container side padding from 48rem up; `--moss-container-padding-narrow` (default `1.5rem`) below it |
 | layout | `--moss-content-width` | `calc(42 * var(--moss-reading-size))` | Maximum content width. Font-stable: a multiple of --moss-reading-size (a length), NOT a ch value, so text, inline images, and figures resolve to the same column at any element font-size (a ch measure drifts per-element and desyncs text from figures when a theme changes the prose font). 42 ≈ the prior 67ch for the default font; tracks the scale-* presets via --moss-reading-size. |
 | layout | `--moss-content-width-sidebar` | `calc(39 * var(--moss-reading-size))` | Content width when sidebar is active. Font-stable multiple of --moss-reading-size (≈ prior 62ch); see moss-content-width. |
 | layout | `--moss-sidebar-width` | `clamp(200px, 22vw, 320px)` | Width of the side rail beside a page, on a wide screen (below 64rem the rail stacks at full width) |

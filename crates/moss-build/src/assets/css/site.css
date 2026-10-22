@@ -155,7 +155,7 @@
 /* Info grid — aligned label + value rows (two-column grid) */
 .moss-info-grid {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 12px 16px;
   align-items: baseline;
 }
@@ -587,7 +587,7 @@ article h3,
 article h4,
 article h5,
 article h6 {
-  font-family: var(--moss-font-body);
+  font-family: var(--moss-font-section, var(--moss-font-body));
 }
 
 /* Section permalink anchors (moss-heading-anchor). Emitted inside body
@@ -4409,6 +4409,8 @@ body[data-contents="pictures"] {
 
 .moss-contents-ruler[data-lens] .moss-contents-ruler-veil {
   display: block;
+  /* Translucent: the page shows faintly through the names' ground. */
+  opacity: 0.95;
   pointer-events: auto;
 }
 
@@ -5945,8 +5947,9 @@ article a:where(:not(.moss-btn)):focus {
        small, especially for dense CJK). 1.0625rem (17px) keeps a small
        reduction from the 18px desktop base while staying comfortably legible. */
     --moss-reading-size-base: 1.0625rem;
-    /* Slightly larger container padding on mobile for better margins */
-    --moss-container-padding: 1.5rem;
+    /* Slightly larger container padding on mobile for better margins. A theme
+       sets `--moss-container-padding-narrow` to change only the phone gutter. */
+    --moss-container-padding: var(--moss-container-padding-narrow, 1.5rem);
   }
 
   header {
@@ -6445,7 +6448,7 @@ article a:where(:not(.moss-btn)):focus {
    The @container query targets the wrapper, so the rule looks INTO the grid. */
 @container (max-width: 320px) {
   .moss-cards[data-layout="grid"] {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -8267,7 +8270,10 @@ body > footer.container:has(> .moss-hero-closing) {
 
 /* Grid card styling */
 .moss-grid-card {
-  /* Cards are transparent by default, letting content style itself */
+  /* Cards are transparent by default, letting content style itself. A word
+     with no break point (a long address) wraps rather than widen the page. */
+  min-inline-size: 0;
+  overflow-wrap: break-word;
 }
 
 /* A grid stays UNIFORM — every cell's image occupies the same box, whatever the
@@ -8456,8 +8462,13 @@ a.moss-grid-card:hover {
   border-radius: 0;
 }
 .moss-grid[data-collage] .moss-grid-card:has(> .moss-image) { container-type: size; }
-/* A picture shown whole sits on the surface ground, not a band of its own colour. */
-.moss-grid[data-collage] .moss-grid-card img[data-fit="contain"] { background-color: var(--moss-color-surface); }
+/* A picture shown whole sits on the surface ground, not a band of its own colour,
+   with paper around it. */
+.moss-grid[data-collage] .moss-grid-card img[data-fit="contain"] {
+  box-sizing: border-box;
+  padding: 0.75rem;
+  background-color: var(--moss-color-surface);
+}
 @media (hover: hover) and (prefers-reduced-motion: no-preference) {
   .moss-grid[data-collage] .moss-grid-card img { transition: transform 0.3s ease-out; }
   /* A picture shown whole is not zoomed. */
@@ -8466,10 +8477,11 @@ a.moss-grid-card:hover {
 /* A caption is a credit, on a band of the page colour at the tile's foot. It
    slides up on hover or keyboard focus, and opens in the viewer on a touch
    screen. Hidden only to the eye: it stays in the accessibility tree. A bold
-   run at its start is a title line; the rest is a smaller line of facts. It
-   takes at most 40% of the tile, so the picture stays the subject, and stops
-   at a whole line: title and facts share one line pitch, and the cap rounds
-   down to it. */
+   run at its start is a title line, whole at every width from 48rem up; the
+   rest is a smaller line of facts. It takes at most 55% of the tile, so the
+   picture stays the subject, and stops at a whole line: title and facts share
+   one line pitch, and the cap rounds down to it. Below 48rem no credit is
+   drawn on a picture; it stays for assistive technology and the viewer. */
 .moss-grid[data-collage] .moss-grid-card .moss-image figcaption {
   --_label-line: 0.9375rem;
   --_label-pad: var(--moss-space-xs);
@@ -8477,56 +8489,51 @@ a.moss-grid-card:hover {
   inset-inline: 0;
   inset-block-end: 0;
   box-sizing: border-box;
-  max-block-size: 40%;
-  max-block-size: calc(round(down, 40% - 2 * var(--_label-pad), var(--_label-line)) + 2 * var(--_label-pad));
+  max-block-size: 55%;
+  max-block-size: calc(round(down, 55% - 2 * var(--_label-pad), var(--_label-line)) + 2 * var(--_label-pad));
   overflow: hidden;
-  padding: var(--_label-pad) var(--moss-space-sm);
+  padding: var(--_label-pad) 0.625rem;
   color: var(--moss-color-text-secondary);
   font-family: var(--moss-font-mono, ui-monospace, monospace);
   font-size: 0.66rem;
   line-height: var(--_label-line);
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   background: var(--moss-color-bg);
   opacity: 0;
   transform: translateY(100%);
   pointer-events: none;
   transition: opacity 0.15s, transform 0.2s ease-out;
 }
-/* The title keeps to two lines, so a long one in a small tile is cut at its
-   end with an ellipsis, never through a line. */
+/* The title is whole, never clipped: its size follows the tile's width so the
+   longest word fits, and a linked tile's arrow ends it. The arrow is drawn,
+   not read: its alternative text is empty. */
 .moss-grid[data-collage] .moss-grid-card .moss-image figcaption > strong:first-child {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
+  display: block;
   color: var(--moss-color-text);
   font-family: var(--moss-font-body);
-  font-size: 0.78rem;
-  font-weight: 600;
+  font-size: clamp(0.625rem, 8.5cqi, 0.78rem);
+  font-weight: 500;
+  overflow-wrap: break-word;
+  text-wrap: balance;
 }
-/* A linked picture's title points out of the tile. The arrow sits at the end
-   of the title's first line, outside the clamped title, so an ellipsis never
-   cuts it; it is drawn, not read: its alternative text is empty. */
-.moss-grid[data-collage] .moss-image:has(> a) figcaption > strong:first-child { padding-inline-end: 1.25em; }
-.moss-grid[data-collage] .moss-image:has(> a) figcaption:has(> strong:first-child)::after {
-  content: "\2197";
-  content: "\2197" / "";
-  position: absolute;
-  inset-block-start: var(--_label-pad);
-  inset-inline-end: var(--moss-space-sm);
-  color: var(--moss-color-text);
-  font-family: var(--moss-font-body);
-  font-size: 0.78rem;
+.moss-grid[data-collage] .moss-image:has(> a) figcaption > strong:first-child::after {
+  content: "\00a0\2197";
+  content: "\00a0\2197" / "";
+  color: var(--moss-color-accent);
 }
-/* Too small for both lines: the title stays, the facts go (still read aloud).
-   A zero line pitch keeps the hidden facts from leaving an empty line. */
+/* Too small for both lines, or a window under 56.25rem: the title stays, the
+   facts go (still read aloud), and the cap goes with them, so a long title is
+   never cut. A zero line pitch keeps the hidden facts from leaving an empty
+   line. */
 @container (max-width: 11rem) or (max-height: 7.5rem) {
-  .moss-grid[data-collage] .moss-grid-card .moss-image figcaption:has(> strong:first-child) { font-size: 0; line-height: 0; }
+  .moss-grid[data-collage] .moss-grid-card .moss-image figcaption:has(> strong:first-child) { font-size: 0; line-height: 0; max-block-size: none; }
   .moss-grid[data-collage] .moss-grid-card .moss-image figcaption > strong:first-child { line-height: var(--_label-line); }
 }
-/* A short tile has room for one line of title within its 40%. */
-@container (max-height: 7.5rem) {
-  .moss-grid[data-collage] .moss-grid-card .moss-image figcaption > strong:first-child { -webkit-line-clamp: 1; }
+/* Not folded into the container rule above: a container query and a media
+   query cannot share one condition. */
+@media (width < 56.25rem) {
+  .moss-grid[data-collage] .moss-grid-card .moss-image figcaption:has(> strong:first-child) { font-size: 0; line-height: 0; max-block-size: none; }
+  .moss-grid[data-collage] .moss-grid-card .moss-image figcaption > strong:first-child { line-height: var(--_label-line); }
 }
 .moss-grid[data-collage] .moss-grid-card .moss-image figcaption a { color: inherit; }
 @media (hover: hover) {
@@ -8545,23 +8552,56 @@ a.moss-grid-card:hover {
   background: var(--moss-color-bg);
 }
 .moss-grid[data-collage] .moss-grid-card:not([data-tile="picture"]) > :first-child { margin-block-start: 0; }
-/* A quote's size follows its tile's width, so its longest word fits a narrow
-   tile; the row still grows to fit a long quote. */
+/* A quote is set at the tile's top and its source is pinned to the foot, so
+   quotes of different lengths share a baseline for their sources. The size is
+   a step down for a long quote and follows the tile's width (`cqi`) where the
+   tile is narrow, so every word fits whole; no hyphenation. The row grows to
+   fit the words, so nothing is cut off. The source's link covers the tile. */
 .moss-grid[data-collage] [data-tile="quote"] {
   display: flex;
-  padding: var(--moss-space-md);
+  padding: 1.375rem 1.25rem 1.125rem;
   border: 1px solid var(--moss-border-light);
   container-type: inline-size;
 }
-/* A flex item would widen to its longest word, past the tile's padding; a
-   word too long for the narrowest tile breaks instead. */
-.moss-grid[data-collage] [data-tile="quote"] .moss-quote { min-inline-size: 0; }
-.moss-grid[data-collage] [data-tile="quote"] blockquote {
-  font-size: clamp(0.875rem, 13cqi, 1.25rem);
-  overflow-wrap: break-word;
-  hyphens: auto;
+.moss-grid[data-collage] [data-tile="quote"]:hover { border-color: var(--moss-color-text-secondary); }
+.moss-grid[data-collage] [data-tile="quote"] .moss-quote {
+  flex: 1;
+  min-inline-size: 0;
+  justify-content: flex-start;
+  gap: 0.75rem;
 }
-.moss-grid[data-collage] [data-tile="quote"] .moss-quote[data-length="long"] blockquote { font-size: clamp(0.8125rem, 10cqi, 1rem); }
+.moss-grid[data-collage] [data-tile="quote"] blockquote {
+  font-size: max(0.75rem, min(clamp(0.9375rem, 1.25vw, 1.09375rem), 13cqi));
+  line-height: 1.45;
+  overflow-wrap: break-word;
+  hyphens: manual;
+  text-wrap: pretty;
+}
+.moss-grid[data-collage] [data-tile="quote"] .moss-quote[data-length="long"] blockquote {
+  font-size: max(0.75rem, min(clamp(0.84375rem, 1.08vw, 0.9375rem), 11cqi));
+  line-height: 1.4;
+}
+.moss-grid[data-collage] [data-tile="quote"] .moss-quote figcaption {
+  inline-size: max-content;
+  max-inline-size: 100%;
+  margin: auto 0 0;
+  padding-block-start: 0.625rem;
+  border-block-start: 1px solid var(--moss-color-text-secondary);
+  color: var(--moss-color-text-secondary);
+  font-family: var(--moss-font-mono, ui-monospace, monospace);
+  font-size: 0.6875rem;
+  line-height: 1.35;
+}
+.moss-grid[data-collage] [data-tile="quote"] .moss-quote figcaption::before { content: none; }
+.moss-grid[data-collage] [data-tile="quote"] .moss-quote figcaption a {
+  color: inherit;
+  text-decoration: none;
+}
+.moss-grid[data-collage] [data-tile="quote"] .moss-quote figcaption a::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
 
 /* A quote cell: a blockquote and its source line (`figure.moss-quote`), set as
    type in `--moss-font-quote`, in a collage or a plain grid. */
@@ -8600,7 +8640,7 @@ a.moss-grid-card:hover {
    the authored tracks because its inline space follows viewport height. */
 @media (width < 48rem) {
   .moss-grid[data-columns] {
-    --_grid-wrap: 1fr;
+    --_grid-wrap: minmax(0, 1fr);
     --_grid-track: calc(100% / 1.3);
   }
 
@@ -8623,6 +8663,26 @@ a.moss-grid-card:hover {
     aspect-ratio: 4 / 3;
   }
   .moss-grid[data-collage] > :not([data-tile="picture"]) { aspect-ratio: auto; }
+  /* No credit is drawn on a picture; it stays in the accessibility tree and its
+     links stay in the tab order, and a focused link shows the credit (the
+     skip-link pattern). */
+  .moss-grid[data-collage] .moss-grid-card .moss-image figcaption:not(:focus-within),
+  .moss-grid[data-collage] .moss-grid-card:is(:hover, :focus-within) .moss-image figcaption:not(:focus-within) {
+    inset: auto;
+    inline-size: 1px;
+    block-size: 1px;
+    max-block-size: 1px;
+    padding: 0;
+    margin: -1px;
+    clip-path: inset(50%);
+    opacity: 1;
+    transform: none;
+    white-space: nowrap;
+  }
+  .moss-grid[data-collage] .moss-grid-card .moss-image figcaption:focus-within { opacity: 1; transform: none; }
+  .moss-grid[data-collage] [data-tile="quote"] { padding: 1rem 1rem 0.875rem; }
+  .moss-grid[data-collage] [data-tile="quote"] .moss-quote { gap: 0.625rem; }
+  .moss-grid[data-collage] [data-tile="quote"] .moss-quote:not([data-length="long"]) blockquote { font-size: max(0.75rem, min(1rem, 13cqi)); }
 }
 
 /* Scrolling row (`:::grid N {scroll}`): the row stays on ONE line and the
@@ -9730,7 +9790,7 @@ article video[data-loop] {
 /* Mobile adjustments for media grid */
 @media (width < 48rem) {
   .media-grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--moss-space-sm);
   }
 
@@ -9746,7 +9806,7 @@ article video[data-loop] {
 
 @media (max-width: 30rem) {
   .media-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
