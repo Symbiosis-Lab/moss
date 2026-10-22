@@ -400,10 +400,17 @@ pub fn first_text_block(blocks: &[Block]) -> Option<usize> {
 }
 
 fn is_text_block(block: &Block) -> bool {
-    matches!(
-        block,
-        Block::Paragraph(_) | Block::List { .. } | Block::DefinitionList(_) | Block::BlockQuote(_)
-    )
+    match block {
+        // A paragraph holding only pictures renders as a picture, and the
+        // locator's float must not start beside or over it.
+        Block::Paragraph(inlines) => !inlines.iter().all(|inline| match inline {
+            moss_core::ast::Inline::Image { .. } | moss_core::ast::Inline::LineBreak => true,
+            moss_core::ast::Inline::Text(text) => text.trim().is_empty(),
+            _ => false,
+        }),
+        Block::List { .. } | Block::DefinitionList(_) | Block::BlockQuote(_) => true,
+        _ => false,
+    }
 }
 
 /// Whether a raw HTML node is a folder-embed marker. The one predicate every

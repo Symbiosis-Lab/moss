@@ -335,6 +335,25 @@ pub fn claim_field_key(field: &str) -> String {
     }
 }
 
+/// Maps read a page's places from `location`. A place-typed kind fed by other
+/// fields (`fields = ["place"]`) mirrors their names there, so every map,
+/// locator and place line treats the kind's fields as `location`.
+fn mirror_place_fields_into_location(documents: &mut [ParsedDocument], kinds: &[TermKind]) {
+    let fields: Vec<&str> = kinds.iter().filter(|k| k.is_place).flat_map(|k| k.fields.iter().map(String::as_str)).filter(|f| *f != "location").collect();
+    if fields.is_empty() {
+        return;
+    }
+    for doc in documents.iter_mut() {
+        for field in &fields {
+            for name in field_names(doc, field) {
+                if !doc.location.contains(&name) {
+                    doc.location.push(name);
+                }
+            }
+        }
+    }
+}
+
 /// Derive term memberships and claims from a build's kinds table. Mutates
 /// documents in place:
 ///
@@ -359,6 +378,7 @@ pub fn claim_field_key(field: &str) -> String {
 /// Terms are per edition (`ParsedDocument::edition`): a page's terms, claims
 /// and links stay inside the language tree it sits in.
 pub fn derive_terms(documents: &mut [ParsedDocument], kinds: Vec<TermKind>) -> TermIndex {
+    mirror_place_fields_into_location(documents, &kinds);
     inherit::inherit_work_locations(documents);
     let mut index = TermIndex::default();
 

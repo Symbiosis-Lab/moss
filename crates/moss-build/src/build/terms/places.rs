@@ -40,6 +40,36 @@ pub fn attach_parents(kinds: &mut [TermKind], gaz: &crate::vault::places::Gazett
     }
 }
 
+/// A problem for every place name a page writes in a place-typed kind's field
+/// that `.moss/places.toml` does not list: without an entry the page silently
+/// drops off every map. A listed place with no coordinates is not this case
+/// (it is a note, at load).
+pub fn warn_unknown_places(documents: &[crate::build::types::ParsedDocument], kinds: &[TermKind], gaz: &crate::vault::places::Gazetteer) {
+    let known: Vec<(String, &String)> = gaz.iter().map(|(name, _)| (moss_core::terms::term_fold(name), name)).collect();
+    for kind in kinds.iter().filter(|k| k.is_place) {
+        for doc in documents {
+            let page = doc.source_path.as_deref().unwrap_or(doc.url_path.as_str());
+            for field in &kind.fields {
+                for name in super::field_names(doc, field) {
+                    let folded = moss_core::terms::term_fold(&name);
+                    if known.iter().any(|(k, _)| *k == folded) {
+                        continue;
+                    }
+                    let nearest = known
+                        .iter()
+                        .map(|(k, display)| (crate::infra::edit_distance::levenshtein(&folded, k), *display))
+                        .filter(|(d, _)| *d <= 2.max(folded.len() / 4))
+                        .min_by_key(|(d, _)| *d);
+                    let hint = nearest.map(|(_, display)| format!(" (did you mean '{display}'?)")).unwrap_or_default();
+                    crate::build::cli_output::log_warn_problem!(
+                        "[{page}] {field}: '{name}' is not in .moss/places.toml, so this page will not appear on any map{hint}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Walk every key's `parents` chain to a fixed point; a key that revisits
 /// one already seen on its own walk is a cycle. Breaks it by removing the
 /// one link that closed the loop, with a diagnostic naming the place whose

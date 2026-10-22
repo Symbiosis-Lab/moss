@@ -3157,9 +3157,9 @@ body > header .site-name {
      --moss-color-accent. */
   --moss-place-marker: var(--moss-color-accent, #2d5a2d);
   --moss-place-marker-casing: #ffffff;
-  /* A route's dashed line, its leaders, and its hollow (region-precision)
+  /* A route's dashed line and its hollow (region-precision)
      badge — the same muted slate-blue --moss-place-shadow already uses for
-     the filled badge's own chip, so a route's line, leaders and both badge
+     the filled badge's own chip, so a route's line and both badge
      styles read as one quiet hue. A first, more vivid clay tone sat well
      outside every other --moss-place-* token's low saturation. In light
      mode this value matches --moss-place-shadow exactly; the dark value

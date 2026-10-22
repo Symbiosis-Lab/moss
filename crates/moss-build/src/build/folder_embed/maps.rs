@@ -30,6 +30,31 @@ pub(super) fn has_own_embed(html: &str, source: &str) -> bool {
     })
 }
 
+/// `![[/places/|style:map]]` in a page other than the places root: the whole
+/// site's map. `None` when the target is not the place root or the host is the
+/// root page itself, which draws its own explorer in place.
+pub(super) fn render_place_root(
+    parsed: &ParsedMarker<'_>,
+    ordinal: usize,
+    from: &str,
+    docs: &[ParsedDocument],
+    maps: &PlaceMapRenderContext,
+) -> Option<String> {
+    let target = marker_decode(parsed.path);
+    if target.trim_matches('/') != maps.namespace() || !target.ends_with('/') {
+        return None;
+    }
+    let host_is_root = docs
+        .iter()
+        .find(|d| d.source_path.as_deref() == Some(from))
+        .is_some_and(|d| maps.is_explorer_root_for_doc(d));
+    if host_is_root {
+        return None;
+    }
+    let svg = maps.render_root_map_embed(docs.iter(), from, ordinal)?;
+    Some(place_map_with_placement(svg, &parsed.placement, parsed.caption.as_deref()))
+}
+
 pub(super) fn render(
     parsed: &ParsedMarker<'_>,
     ordinal: usize,

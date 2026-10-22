@@ -34,7 +34,9 @@ pub(crate) mod hero_from;
 pub(crate) mod members;
 mod calendar_tokens;
 pub(crate) mod upcoming;
+mod nav_note;
 mod repeat_note;
+pub(crate) use nav_note::note_home_map_of_nav_root;
 pub(crate) use repeat_note::{note_repeated_child_listing, ListedUrls};
 use maps::place_map_with_placement;
 
@@ -1436,8 +1438,13 @@ fn render_one(
     } else {
         parsed.from
     };
-    if parsed.style.as_deref() == Some("map") && !parsed.path.ends_with('/') {
-        return Ok(maps::render(parsed, ordinal, all_docs, place_maps));
+    if parsed.style.as_deref() == Some("map") {
+        if !parsed.path.ends_with('/') {
+            return Ok(maps::render(parsed, ordinal, all_docs, place_maps));
+        }
+        if let Some(html) = place_maps.and_then(|maps| maps::render_place_root(parsed, ordinal, from, all_docs, maps)) {
+            return Ok(html);
+        }
     }
     let (folder_id_slug, target_doc, is_flatten, folder_docs) =
         match list_pages(parsed, from, all_docs, project, dir_overrides, now)? {

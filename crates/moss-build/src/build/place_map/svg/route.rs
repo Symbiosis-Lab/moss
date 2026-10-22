@@ -21,9 +21,9 @@ use crate::vault::places::Precision;
 
 use super::{clamp_dot, globe_line, length, serialize_path, snap, xml_escape, Writer, FINE};
 
-/// The dashed line's, the leaders', and the hollow badge's colour — the
+/// The dashed line's and the hollow badge's colour — the
 /// same muted slate-blue hue `--moss-place-shadow` already uses for the
-/// filled badge's own chip, so a route's line, leaders and both badge
+/// filled badge's own chip, so a route's line and both badge
 /// styles read as one quiet hue rather than two. A first value here
 /// (`#8a4a32`, a clay tone, about 47% saturated) sat far more vivid than
 /// every other `--moss-place-*` token, which stay under 10%. The light
@@ -46,6 +46,9 @@ const ROUTE_FALLBACK: &str = "#5a6488";
 /// purely from sub-pixel blending at that render size.
 const BADGE_DIAMETER: f64 = 24.0;
 const BADGE_RADIUS: f64 = BADGE_DIAMETER / 2.0;
+/// Clear space kept between two numbered badges, which covers the filled
+/// badge's casing ring.
+const BADGE_GAP: f64 = 4.0;
 /// The hollow badge's outline and both badges' number, in viewBox units —
 /// scaled up from `BADGE_DIAMETER`'s own increase for the same reason.
 const BADGE_FONT_SIZE: f64 = 12.0;
@@ -83,77 +86,31 @@ pub(crate) fn route_blocked_diagnostic(page_path: &str, stop: &str) -> String {
     )
 }
 
-/// One stop's drawn badge position.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct RouteBadge {
-    center: (f64, f64),
-    /// `Some(stop)` when this badge was pushed off its stop's true
-    /// projected position to clear an earlier badge, carrying that true
-    /// position for the leader line drawn back to it. `None` when the badge
-    /// sits exactly on its stop.
-    leader_to: Option<(f64, f64)>,
-}
-
-/// Lay out one badge centre per stop, offsetting any that would overlap an
-/// already-placed badge.
-///
-/// Two badges overlap when their centres sit under one badge diameter apart,
-/// read off the stops' actual projected positions, not off wherever an
-/// earlier offset already moved a badge to. An overlapping
-/// badge is pushed one diameter along the perpendicular of its incoming
-/// segment (the direction from the previous stop to this one; the last
-/// segment with real length when this one is degenerate too, or a fixed
-/// fallback before any segment has run at all), repeating a diameter further
-/// out each time it still collides with an earlier badge. Checking against
-/// EVERY earlier badge (not just the immediately previous one) is what makes
-/// a third stop coincident with the first two chain a second diameter
-/// further out instead of landing back on the second badge: two coincident
-/// stops place badge 2 one diameter from badge 1, and a third coincident
-/// stop then collides with BOTH badge 1 (0px away) and badge 2 (exactly one
-/// diameter away, which does not itself collide) — so it starts from badge
-/// 1's position and keeps stepping until clear of both, landing two
-/// diameters out.
-fn badge_centers(stops: &[(f64, f64)]) -> Vec<RouteBadge> {
-    let mut placed: Vec<(f64, f64)> = Vec::with_capacity(stops.len());
-    let mut last_direction = (1.0, 0.0);
-    for (index, &stop) in stops.iter().enumerate() {
-        if index > 0 {
-            if let Some(direction) = normalize((stop.0 - stops[index - 1].0, stop.1 - stops[index - 1].1)) {
-                last_direction = direction;
-            }
-        }
-        let perpendicular = (-last_direction.1, last_direction.0);
-        let mut center = stop;
-        // Bounded by `placed.len()` + 1 passes: each step clears one more
-        // already-placed badge than the last, so it cannot loop past the
-        // number of badges placed so far. The guard is defensive only — it
-        // exists so a future change to this loop fails a test instead of
-        // hanging one.
-        for _ in 0..=placed.len() {
-            match placed.iter().find(|&&p| distance(p, center) < BADGE_DIAMETER) {
-                Some(&collision) => center = (collision.0 + perpendicular.0 * BADGE_DIAMETER, collision.1 + perpendicular.1 * BADGE_DIAMETER),
-                None => break,
-            }
-        }
-        placed.push(center);
+/// Which stops get a numbered badge, as indices into `stops`. Every stop
+/// keeps its dot (the marker layer draws those); a number is only shown
+/// where its badge fits, on the stop itself. The first and last stops are
+/// always numbered. The rest are placed greedily in list order and dropped
+/// when they would touch a badge already placed — the same
+/// drop-on-collision approach the places-explorer's map labels take, so a
+/// dense route reads as dots with numbers spaced along it rather than
+/// badges pushed off their stops.
+fn numbered_stops(stops: &[(f64, f64)]) -> Vec<usize> {
+    let Some(last) = stops.len().checked_sub(1) else { return Vec::new() };
+    let mut shown = vec![0];
+    if last > 0 {
+        shown.push(last);
     }
-    stops
-        .iter()
-        .zip(placed)
-        .map(|(&stop, center)| RouteBadge {
-            center,
-            leader_to: (center != stop).then_some(stop),
-        })
-        .collect()
+    for index in 1..last {
+        if shown.iter().all(|&placed| distance(stops[placed], stops[index]) >= BADGE_DIAMETER + BADGE_GAP) {
+            shown.push(index);
+        }
+    }
+    shown.sort_unstable();
+    shown
 }
 
 fn distance(a: (f64, f64), b: (f64, f64)) -> f64 {
     (a.0 - b.0).hypot(a.1 - b.1)
-}
-
-fn normalize(vector: (f64, f64)) -> Option<(f64, f64)> {
-    let length = vector.0.hypot(vector.1);
-    (length > f64::EPSILON).then(|| (vector.0 / length, vector.1 / length))
 }
 
 /// Every coordinate-bearing stop, in declared order, projected to this
@@ -192,7 +149,7 @@ pub(super) fn draw_line(writer: &mut Writer<'_>, target: &PlaceMapTarget, projec
     ).expect("writing to String cannot fail");
 }
 
-/// The numbered badges (1..N, in list order) and their leaders, drawn OVER
+/// The numbered badges (1..N, in list order) drawn OVER
 /// the marker layer: callers sequence this after `Writer::markers`. Same
 /// `projection: None` no-op as [`draw_line`].
 pub(super) fn draw_badges(writer: &mut Writer<'_>, target: &PlaceMapTarget, projection: Option<&Projection>) {
@@ -205,26 +162,15 @@ pub(super) fn draw_badges(writer: &mut Writer<'_>, target: &PlaceMapTarget, proj
         return;
     }
     let points: Vec<(f64, f64)> = stops.iter().map(|&(_, point)| point).collect();
-    let badges = badge_centers(&points);
-    for (number, (&(place, _), badge)) in stops.iter().zip(badges.iter()).enumerate() {
-        write_badge(writer, number + 1, badge, place.precision);
+    for index in numbered_stops(&points) {
+        let (place, center) = stops[index];
+        write_badge(writer, index + 1, center, place.precision);
     }
 }
 
-fn write_badge(writer: &mut Writer<'_>, number: usize, badge: &RouteBadge, precision: Precision) {
-    // Clamped once, used for both the leader's endpoint and the chip
-    // itself: the chip is what `clamp_dot` actually draws when a badge
-    // near the canvas edge gets pulled inward, so a leader aimed at the
-    // raw, unclamped centre instead would point at empty space next to it.
-    let (cx, cy) = clamp_dot(badge.center, BADGE_RADIUS + 1.0);
+fn write_badge(writer: &mut Writer<'_>, number: usize, center: (f64, f64), precision: Precision) {
+    let (cx, cy) = clamp_dot(center, BADGE_RADIUS + 1.0);
     let (cx, cy) = (snap(cx), snap(cy));
-    if let Some((sx, sy)) = badge.leader_to {
-        let (sx, sy) = (snap(sx), snap(sy));
-        write!(
-            writer.output,
-            "<path d=\"M{sx} {sy}L{cx} {cy}\" fill=\"none\" stroke=\"var(--moss-place-route, {ROUTE_FALLBACK})\" stroke-width=\"1\" vector-effect=\"non-scaling-stroke\" data-map-route=\"leader\"/>"
-        ).expect("writing to String cannot fail");
-    }
     let label = xml_escape(&number.to_string());
     if precision == Precision::Region {
         // An area, not a point: an outline chip in the route's own hue
@@ -361,74 +307,88 @@ mod tests {
         assert!(!message.contains("country,"), "allowed set excludes the blocking tier: {message}");
     }
 
-    // --- badge_centers ---
+    // --- numbered_stops ---
 
     #[test]
-    fn non_overlapping_stops_keep_their_own_centres() {
+    fn spaced_stops_are_all_numbered() {
         let stops = [(0.0, 0.0), (100.0, 0.0), (200.0, 50.0)];
-        let badges = badge_centers(&stops);
-        for (stop, badge) in stops.iter().zip(badges.iter()) {
-            assert_eq!(badge.center, *stop);
-            assert_eq!(badge.leader_to, None);
+        assert_eq!(numbered_stops(&stops), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn crowded_stops_keep_first_and_last_and_drop_numbers_that_touch() {
+        // Stops 10 units apart: a 24-unit badge covers its neighbours.
+        let stops: Vec<(f64, f64)> = (0..30).map(|i| (f64::from(i) * 10.0, 0.0)).collect();
+        let shown = numbered_stops(&stops);
+        assert_eq!(shown.first(), Some(&0));
+        assert_eq!(shown.last(), Some(&29));
+        assert!(shown.len() < stops.len() && shown.len() > 4, "{shown:?}");
+        for pair in shown.windows(2) {
+            let gap = distance(stops[pair[0]], stops[pair[1]]);
+            assert!(gap >= BADGE_DIAMETER, "badges {pair:?} overlap: {gap}");
         }
     }
 
     #[test]
-    fn two_coincident_stops_offset_the_second_by_one_diameter_with_a_leader() {
-        let stops = [(50.0, 50.0), (50.0, 50.0)];
-        let badges = badge_centers(&stops);
-        assert_eq!(badges[0].center, (50.0, 50.0));
-        assert_eq!(badges[0].leader_to, None, "the first badge never moves");
-        assert!(badges[1].leader_to.is_some(), "the offset badge carries a leader back to its stop");
-        assert_eq!(badges[1].leader_to, Some((50.0, 50.0)));
-        let moved = distance(badges[0].center, badges[1].center);
-        assert!((moved - BADGE_DIAMETER).abs() < 1e-9, "offset by exactly one diameter, got {moved}");
+    fn a_single_stop_is_numbered_once() {
+        assert_eq!(numbered_stops(&[(5.0, 5.0)]), vec![0]);
+        assert!(numbered_stops(&[]).is_empty());
     }
 
+    /// 55 stops along a 500 km road: every badge that is drawn sits on its
+    /// own stop (no leaders, no displacement), and the ends are numbered.
     #[test]
-    fn three_coincident_stops_chain_the_third_badge_two_diameters_out() {
-        let stops = [(0.0, 0.0), (0.0, 0.0), (0.0, 0.0)];
-        let badges = badge_centers(&stops);
-        assert_eq!(badges[0].center, (0.0, 0.0));
-        let first_to_second = distance(badges[0].center, badges[1].center);
-        assert!((first_to_second - BADGE_DIAMETER).abs() < 1e-9, "{first_to_second}");
-        let first_to_third = distance(badges[0].center, badges[2].center);
-        assert!(
-            (first_to_third - 2.0 * BADGE_DIAMETER).abs() < 1e-9,
-            "a third coincident stop chains a second diameter out, got {first_to_third}"
-        );
-        // And it must actually clear the second badge too, not just the first.
-        let second_to_third = distance(badges[1].center, badges[2].center);
-        assert!(second_to_third >= BADGE_DIAMETER - 1e-9, "{second_to_third}");
-        assert!(badges[2].leader_to.is_some());
-    }
+    fn a_dense_route_numbers_only_what_fits_and_keeps_each_badge_on_its_stop() {
+        let waypoints = [(139.77, 35.68), (139.10, 35.25), (138.38, 34.97), (137.73, 34.71), (137.00, 35.05), (136.30, 34.90), (135.77, 35.01)];
+        let total: usize = 55;
+        let places: Vec<ResolvedPlace> = (0..total)
+            .map(|i| {
+                let t = i as f64 / (total - 1) as f64 * (waypoints.len() - 1) as f64;
+                let seg = (t.floor() as usize).min(waypoints.len() - 2);
+                let f = t - seg as f64;
+                let (a, b) = (waypoints[seg], waypoints[seg + 1]);
+                place(&format!("Stop {i}"), a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f, Precision::Exact)
+            })
+            .collect();
+        let points: Vec<ProjectedPoint> = places.iter().filter_map(ResolvedPlace::point).collect();
+        let frame = Frame::from_points(&points, places.iter().map(|p| p.precision)).expect("frame");
+        let projection = Projection::new(&frame);
+        let target = PlaceMapTarget { places: places.clone(), frame: Some(frame.clone()), aggregate_name: None, route: true };
+        let ids = Ids::for_seed("dense-route-test");
+        let mut writer = bare_writer(&ids);
+        draw_badges(&mut writer, &target, Some(&projection));
 
-    #[test]
-    fn a_degenerate_leading_segment_still_offsets_along_a_fixed_fallback_direction() {
-        // The first two stops are coincident, so the incoming segment into
-        // badge 2 has no direction of its own; this pins that the fallback
-        // direction still produces a deterministic, reproducible offset
-        // rather than leaving the badge on top of the first.
-        let stops = [(10.0, 10.0), (10.0, 10.0)];
-        let badges = badge_centers(&stops);
-        assert!(distance(badges[0].center, badges[1].center) >= BADGE_DIAMETER - 1e-9);
+        let out = &writer.output;
+        assert!(!out.contains("data-map-route=\"leader\""), "no leader lines: {out}");
+        let mut numbers = Vec::new();
+        for chunk in out.split("data-map-route-badge=\"").skip(1) {
+            let number: usize = chunk[..chunk.find('"').unwrap()].parse().unwrap();
+            // The circle's own cx/cy precede its attribute; read them from the text before it.
+            numbers.push(number);
+        }
+        assert_eq!(numbers.first(), Some(&1));
+        assert_eq!(numbers.last(), Some(&total));
+        assert!(numbers.len() < total && numbers.len() >= 4, "{numbers:?}");
+        for number in numbers {
+            let stop = projection.project(places[number - 1].point().unwrap()).unwrap();
+            let (sx, sy) = clamp_dot(stop, BADGE_RADIUS + 1.0);
+            let needle = format!("cx=\"{}\" cy=\"{}\" r=\"", snap(sx), snap(sy));
+            let badge = out.find(&format!("data-map-route-badge=\"{number}\"")).unwrap();
+            assert!(out[..badge].rfind(&needle).is_some(), "badge {number} is not on its stop ({sx}, {sy}): {out}");
+        }
     }
 
     // --- write_badge ---
 
-    /// A badge centred off-canvas gets pulled in by `clamp_dot` for its own
-    /// chip; its leader must end at that SAME clamped point, not at the raw
-    /// centre `clamp_dot` moved it away from — a leader aimed at the raw
-    /// centre points at empty space next to the chip it's supposed to lead
-    /// to. Chosen far enough off-canvas (`SVG_WIDTH` is 720) that clamping
-    /// is certain to move it.
+    /// A badge centred off-canvas gets pulled in by `clamp_dot`; the chip is
+    /// drawn at that clamped point. Chosen far enough off-canvas
+    /// (`SVG_WIDTH` is 720) that clamping is certain to move it.
     #[test]
-    fn leader_points_at_the_badges_actual_clamped_position_not_its_raw_centre() {
-        let ids = Ids::for_seed("leader-clamp-test");
+    fn a_badge_near_the_edge_is_drawn_at_its_clamped_position() {
+        let ids = Ids::for_seed("badge-clamp-test");
         let mut writer = bare_writer(&ids);
         let raw_centre = (-500.0, 240.0);
-        let badge = RouteBadge { center: raw_centre, leader_to: Some((-10.0, 240.0)) };
-        write_badge(&mut writer, 1, &badge, Precision::City);
+        write_badge(&mut writer, 1, raw_centre, Precision::City);
 
         let (clamped_x, clamped_y) = clamp_dot(raw_centre, BADGE_RADIUS + 1.0);
         let (expected_x, expected_y) = (snap(clamped_x), snap(clamped_y));
@@ -437,19 +397,8 @@ mod tests {
             (snap(raw_centre.0), snap(raw_centre.1)),
             "test is only meaningful if clamping actually moves the centre"
         );
-
-        let leader_endpoint = format!("L{expected_x} {expected_y}\"");
-        assert!(
-            writer.output.contains(&leader_endpoint),
-            "leader must end at the clamped centre ({expected_x}, {expected_y}): {}",
-            writer.output
-        );
         let chip_centre = format!("cx=\"{expected_x}\" cy=\"{expected_y}\"");
-        assert!(
-            writer.output.contains(&chip_centre),
-            "chip must be drawn at the same clamped centre: {}",
-            writer.output
-        );
+        assert!(writer.output.contains(&chip_centre), "{}", writer.output);
     }
 
     // --- badge sizing ---
@@ -471,8 +420,7 @@ mod tests {
 
         let ids = Ids::for_seed("two-digit-badge-test");
         let mut writer = bare_writer(&ids);
-        let badge = RouteBadge { center: (100.0, 100.0), leader_to: None };
-        write_badge(&mut writer, 12, &badge, Precision::City);
+        write_badge(&mut writer, 12, (100.0, 100.0), Precision::City);
         assert!(writer.output.contains(">12<"), "the label must render both digits, not truncate: {}", writer.output);
     }
 

@@ -330,6 +330,33 @@ impl PlaceMapRenderContext {
         route: bool,
         is_embed: bool,
     ) -> Option<String> {
+        self.term_map(key, members, page_path, ordinal, route, is_embed, true)
+    }
+
+    /// The namespace root's map embedded in a page other than the places
+    /// root: the root's explorer runs in its own frame (`?embed=1`) rather
+    /// than upgrading this figure in place, which only the root page itself
+    /// can host.
+    pub fn render_root_map_embed<'a>(
+        &self,
+        members: impl IntoIterator<Item = &'a crate::build::types::ParsedDocument>,
+        page_path: &str,
+        ordinal: usize,
+    ) -> Option<String> {
+        self.term_map(&self.namespace, members, page_path, ordinal, false, true, false)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn term_map<'a>(
+        &self,
+        key: &str,
+        members: impl IntoIterator<Item = &'a crate::build::types::ParsedDocument>,
+        page_path: &str,
+        ordinal: usize,
+        route: bool,
+        is_embed: bool,
+        in_place_explorer: bool,
+    ) -> Option<String> {
         if !self.is_place_key(key) { return None; }
         let members = members.into_iter();
         let own_name = self.gazetteer.iter().find_map(|(display, _)| {
@@ -354,8 +381,9 @@ impl PlaceMapRenderContext {
             .or_else(|| target.places.first().map(|place| place.display.clone()))
             .unwrap_or_else(|| key.to_string());
         let svg = target.has_coordinates().then(|| super::emit_svg(&self.maps, &target, page_path, ordinal))?;
-        let svg = self.with_explorer_handshake(key, svg);
-        let svg = if is_embed { self.with_embed_hydration(svg, &format!("place={key}"), &embed_name) } else { svg };
+        let svg = if in_place_explorer { self.with_explorer_handshake(key, svg) } else { svg };
+        let scope = if key == self.namespace { String::new() } else { format!("place={key}") };
+        let svg = if is_embed { self.with_embed_hydration(svg, &scope, &embed_name) } else { svg };
         Some(svg)
     }
 
@@ -397,7 +425,7 @@ impl PlaceMapRenderContext {
     /// Splice the embed-hydration handshake onto a figure's opening tag: a
     /// `data-moss-place-embed` flag and a `data-hydrate-url` pointing at the
     /// places root, carrying `scope_query` (`place=<key>` for a `style:map`
-    /// embed, `article=<url>` for the article locator) plus `embed=1` — the
+    /// embed, empty for the root, `article=<url>` for the article locator) plus `embed=1` — the
     /// two attributes `places-explorer/embed.ts`'s host-page half reads to
     /// build its own lazy iframe. The static SVG remains the no-JS and
     /// explicit-failure fallback; it stays hidden while the live map loads.
@@ -428,10 +456,11 @@ impl PlaceMapRenderContext {
         // of runtime UI text in this explorer is localised. Baking a finished
         // English sentence in here instead would leave every other locale's
         // embed with an English-only iframe title.
+        let scope_query = if scope_query.is_empty() { String::new() } else { format!("{scope_query}&") };
         let html = Self::splice_figure_attrs(
             svg,
             &format!(
-                "data-moss-place-embed data-hydrate-url=\"{root}?{scope_query}&embed=1\" data-embed-name=\"{}\"",
+                "data-moss-place-embed data-hydrate-url=\"{root}?{scope_query}embed=1\" data-embed-name=\"{}\"",
                 escape_attr(name),
             ),
         );

@@ -127,9 +127,10 @@ Place a map in the body with `style:map`. The embed stays where you write it, wi
 ![[#|style:map|align-right 50%|Places in this article]]
 ![[Travel diary|style:map|wide]]
 ![[/places/kyoto/|style:map|align-left 40%|Kyoto]]
+![[/places/|style:map|wide]]
 ```
 
-`#` selects the current document. A named document selects that document's `location:` values; neither form transcludes its body. A place target ending in `/` keeps the existing place-map behavior. Article maps use all coordinate-bearing locations from the target's frontmatter, with the same precision and `route:` rules as its own map. A heading or block fragment does not select separate location data.
+`#` selects the current document. A named document selects that document's `location:` values; neither form transcludes its body. A place target ending in `/` keeps the existing place-map behavior: `/places/kyoto/` is that place's map, and the place root `/places/` is the whole site's map, so a home page can show every place. On any page but the places root itself, the root embed loads the explorer in a frame, with the static map as the fallback. A destination shows once, so when the home page embeds a place root's map and that root is also a nav item (`nav = true` on its `[terms.<key>]`, or its page has `nav: true`), the build prints a note naming both; nothing is removed. Article maps use all coordinate-bearing locations from the target's frontmatter, with the same precision and `route:` rules as its own map. A heading or block fragment does not select separate location data.
 
 An explicit map of the current document replaces its automatic locator. The `map:` frontmatter switch and `[site].locator` setting still control automatic maps; they do not hide embeds you place in the body. If the target cannot be resolved or has no coordinate-bearing locations, moss reports an unavailable map instead of embedding the article text.
 

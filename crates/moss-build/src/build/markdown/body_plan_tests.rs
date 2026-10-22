@@ -383,6 +383,15 @@ fn first_text_block_skips_a_callout_even_though_it_is_blockquote_syntax() {
     );
 }
 
+#[test]
+fn first_text_block_skips_a_paragraph_that_is_only_a_picture() {
+    // A wikilink picture can stay a paragraph holding only an image; the
+    // locator floats beside the first real text, never over the picture.
+    assert_eq!(first_text_block_of("![[photo.jpg]]\n\nBody paragraph.\n"), Some(1));
+    assert_eq!(first_text_block_of("![[a.jpg]]\n![[b.jpg]]\n\nBody paragraph.\n"), Some(1));
+    assert_eq!(first_text_block_of("![[photo.jpg]] and words\n"), Some(0), "a caption-like line of text is still text");
+}
+
 // ── BodyPlan::first_text_segments / insert_before_text ──────────────────
 
 #[test]
@@ -425,6 +434,18 @@ fn insert_locator_follows_the_first_text_block_only_when_asked() {
     // No text block: the front in both modes.
     assert_eq!(locator_order("## Section\n\n---\n", AfterText), ["locator", "heading"]);
     assert_eq!(locator_order("## Section\n\n---\n", BeforeText), ["locator", "heading"]);
+}
+
+#[test]
+fn insert_locator_lands_after_a_leading_picture_paragraph() {
+    let hooks = DefaultHooks::new();
+    let mut plan = render_segmented(&parse("![[photo.jpg]]\n\nFirst paragraph.\n"), &hooks);
+    plan.insert_locator("<!--LOCATOR-->".to_string(), LocatorPlacement::BeforeText);
+    let html = plan.to_html();
+    let picture = html.find("photo.jpg").expect("picture present");
+    let locator = html.find("<!--LOCATOR-->").expect("locator present");
+    let first = html.find("<p>First").expect("paragraph present");
+    assert!(picture < locator && locator < first, "want picture < locator < text, got:\n{html}");
 }
 
 #[test]

@@ -79,8 +79,8 @@ fn gazetteer_diagnostics_count_as_cli_problems() {
     let gaz = crate::vault::places::parse_gazetteer(&table);
     assert_eq!(
         take_cli_problems(),
-        2,
-        "a missing lng and an invalid precision are each one CLI-visible problem"
+        1,
+        "an invalid precision is a CLI-visible problem; a missing lng is only a note"
     );
     assert_eq!(gaz.get("Osaka").unwrap().coords, None);
     assert_eq!(gaz.get("Nara").unwrap().precision, crate::vault::places::Precision::Country);

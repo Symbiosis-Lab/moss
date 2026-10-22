@@ -1246,6 +1246,9 @@ pub fn generate_blocking_content_for_build(
         // The names a `cards = true` kind shows on listing cards: the same
         // per-page reading, before the same incremental hash.
         crate::build::terms::set_card_credits(&mut documents, &site_config.term_kinds);
+        if let Some(maps) = site_config.place_maps.as_ref() {
+            crate::build::terms::places::warn_unknown_places(&documents, &site_config.term_kinds, maps.gazetteer());
+        }
         log::debug!(target: "timing", "[reduce] derive_terms: {:?}", reduce_start.elapsed());
 
         // Places-explorer handshake, part 1: `places.<hash>.json`'s hash,
@@ -1280,6 +1283,7 @@ pub fn generate_blocking_content_for_build(
         // term embed's `also_in` is already populated, and BEFORE the HTML
         // render phase (which would otherwise emit the marker comment
         // unchanged into the page).
+        crate::build::folder_embed::note_home_map_of_nav_root(&documents, &term_index.nav_entries(&site_config.term_nav));
         crate::build::folder_embed::expand_markers_in_documents_with_place_maps(
             &mut documents,
             project_structure,
