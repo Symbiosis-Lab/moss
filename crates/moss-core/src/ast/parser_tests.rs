@@ -362,6 +362,86 @@ fn heading_contents_end_leaves_no_trailing_space_after_inline_markup() {
 }
 
 #[test]
+fn heading_code_span_keeps_its_braces_and_a_derived_id() {
+    let html = crate::ast::render::render_document(
+        &parse("## The field `{#x}` and `{contents=end}`\n"),
+        &crate::ast::hooks::DefaultHooks::new(),
+    );
+    assert!(html.contains("<code>{#x}</code>") && html.contains(r#"id="the-field-{x}-and-{contents=end}""#), "{html}");
+    assert!(!html.contains("data-contents-end"), "{html}");
+}
+
+#[test]
+fn a_block_with_a_class_or_key_value_stays_text_and_warns() {
+    for (src, text, id) in [
+        ("## Opening {.wide}\n", "Opening {.wide}", "opening-{.wide}"),
+        ("## Note {data-x=1}\n", "Note {data-x=1}", "note-{data-x=1}"),
+    ] {
+        let doc = parse(src);
+        match &doc.blocks[0] {
+            Block::Heading { children, id: got, .. } => {
+                assert_eq!(got.as_deref(), Some(id), "{src:?}");
+                assert!(matches!(&children[..], [Inline::Text(t)] if t == text), "{children:?}");
+            }
+            other => panic!("expected Heading, got {other:?}"),
+        }
+        assert_eq!(doc.warnings.len(), 1, "{:?}", doc.warnings);
+    }
+}
+
+#[test]
+fn explicit_id_colliding_with_a_derived_id_is_numbered() {
+    let doc = parse("## Hours\n\n## Other {#hours}\n");
+    let ids: Vec<String> = doc
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            Block::Heading { id, .. } => id.clone(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ids, ["hours", "hours-1"]);
+}
+
+#[test]
+fn heading_explicit_id_is_the_anchor_and_leaves_the_text() {
+    match first_block("## Opening hours {#hours}\n") {
+        Block::Heading { children, id, contents_end, .. } => {
+            assert_eq!(id.as_deref(), Some("hours"));
+            assert!(!contents_end);
+            assert!(matches!(&children[..], [Inline::Text(t)] if t == "Opening hours"), "{children:?}");
+        }
+        other => panic!("expected Heading, got {other:?}"),
+    }
+    match first_block("## Opening hours {#hours contents=end}\n") {
+        Block::Heading { id, contents_end, .. } => {
+            assert_eq!(id.as_deref(), Some("hours"));
+            assert!(contents_end);
+        }
+        other => panic!("expected Heading, got {other:?}"),
+    }
+    // A block with a class or key=value is text, with its id left derived from it.
+    match first_block("## Opening hours {#hours .wide}\n") {
+        Block::Heading { children, id, .. } => {
+            assert_eq!(id.as_deref(), Some("opening-hours-{hours-.wide}"));
+            assert!(matches!(&children[..], [Inline::Text(t)] if t == "Opening hours {#hours .wide}"), "{children:?}");
+        }
+        other => panic!("expected Heading, got {other:?}"),
+    }
+    // The named id goes through the duplicate pass like any other.
+    let doc = parse("## Hours {#hours}\n\n## Hours {#hours}\n");
+    let ids: Vec<_> = doc
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            Block::Heading { id, .. } => id.clone(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ids, ["hours", "hours-1"]);
+}
+
+#[test]
 fn parses_h6_heading() {
     match first_block("###### tiny\n") {
         Block::Heading { level, .. } => assert_eq!(level, 6),

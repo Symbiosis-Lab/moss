@@ -27,9 +27,10 @@ Reach for the cheapest rung that works; earn each step:
    so moss draws it from frontmatter instead of a classed block repeated on
    every page. Otherwise `::: {.your-class}` wraps markdown in a `<div>`
    with that class. Write the CSS under the class name. One descriptive class,
-   not three stacked utilities. A heading takes no attributes: `## Title {.x}`
-   prints the braces as text, in the heading and in its anchor id, and the build
-   warns; wrap the section in the fenced div instead. The warning looks at `#`
+   not three stacked utilities. A heading takes no class or key=value:
+   `## Title {.x}` prints the braces as text, in the heading and in its anchor
+   id, and the build warns; wrap the section in the fenced div instead. A lone
+   `{#id}` is the exception: `## Title {#id}` names the heading's anchor. The warning looks at `#`
    headings that start a line: a heading inside a blockquote or a list item, and
    a setext heading (underlined with `===` or `---`), are not checked.
 4. **Structural override.** Re-lay-out a page against moss's defaults.
@@ -292,7 +293,7 @@ moss describe --json | jq -r '.components[] | select(.authorable) | .class'
 
 Each entry carries `example_markdown`, which is the invocation moss itself tests — copy that shape rather than reconstructing one. Add a site-specific class to a shortcode invocation and style the class; keep the shortcode generic.
 
-To pin an anchor id, wrap the section in a fenced div: `::: {#veterans}` … `:::` emits `<div id="veterans">`, and `{#id}` after a heading is not supported (it renders as literal text). A heading's own id is its text slugified with punctuation kept (`## Block One.` becomes `block-one.`), matching Obsidian, so link to it exactly as it renders.
+To pin an anchor id, wrap the section in a fenced div: `::: {#veterans}` … `:::` emits `<div id="veterans">`, and a heading names its own id with a lone `{#id}` at its end: `## Opening hours {#hours}` gives `id="hours"`, and the braces leave the title. A class or key=value in the same braces is still printed as text. Without one, a heading's id is its text slugified with punctuation kept (`## Block One.` becomes `block-one.`), matching Obsidian, so link to it exactly as it renders. A heading whose id is named by `{#id}` is linked by that id, `[[Page#hours]]`; its words no longer reach it.
 
 A hero written as the last block of `footer.md` is the page's closing picture (see the footer section). A hero's words belong on its image: the markdown written inside the `:::hero {…} … :::` fence overlays the picture, and that is what makes it a hero rather than an illustration with a heading. The overlay sits bottom-start on every overlaid layout by default; `align=end` moves it to the inline-end edge instead — the right in a left-to-right page, the left in a right-to-left one; `align=top` lifts it to the top of the picture, for a landscape whose quiet area is its sky; `align=center` sets the words in the middle of the picture with centred text, for a short title over a calm image.
 
@@ -724,7 +725,7 @@ A page's own `weight:` is an integer that `sort: weight` orders by — lower fir
 
 A one-page site (an index of collections, each a `##` section) usually wants `header = "none"` under `[site]`: with a single page, the header band holds only the site's name and the theme toggle. Under `none` there is no `<header>`; the theme toggle, search button and language switcher move into the floating nav island, which a site with no header shows on every page. That island has no trail and no site name: one button names the section being read, in all the width the bar has, and opens the sections list, and it shows from the first section heading to the end of the page rather than on scroll-up. A page with fewer than two sections shows the controls alone, from the start. The skip link stays. With no header nothing else names the site, so the home page's own title (and its `subtitle:`) shows at the top of the page, which with a header is visually hidden; write a `# Heading` in the home page's body to replace it. The page's first element does not sit on the window's edge: `main` takes the header's own top space (`--moss-space-lg`) plus the safe-area inset, except on a page that opens with a hero, whose picture keeps the edge. Keep the default header on a multi-page site, and on a multilingual one, since without scripting the island, and so the language links, do not show.
 
-`contents=end` marks where a page's main sections stop, so the left contents ruler does not run over the end matter: `::: {.band screen contents=end}` on a fenced block, or `## Colophon {contents=end}` on a heading (the one attribute a heading takes; the block comes out of the title and the anchor id, and the element gets `data-contents-end`). The ruler lists only the sections before the marker, steps aside once the marker passes the middle of the window and returns on scroll-up; the island's panel keeps every heading and ignores the marker. Whatever the marker, the ruler also steps aside from a block wider than the text column (a `screen` band or gallery) while it overlaps the ruler. On a typed block such as `:::gallery` the marker is not read; wrap it in a `:::{.band contents=end}` div.
+`contents=end` marks where a page's main sections stop, so the left contents ruler does not run over the end matter: `::: {.band screen contents=end}` on a fenced block, or `## Colophon {contents=end}` on a heading (one of the two attributes a heading takes, with `{#id}`; the block comes out of the title, and the element gets `data-contents-end`). The ruler lists only the sections before the marker, steps aside once the marker passes the middle of the window and returns on scroll-up; the island's panel keeps every heading and ignores the marker. Whatever the marker, the ruler also steps aside from a block wider than the text column (a `screen` band or gallery) while it overlaps the ruler. On a typed block such as `:::gallery` the marker is not read; wrap it in a `:::{.band contents=end}` div.
 
 ### The nav bar
 

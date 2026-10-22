@@ -352,6 +352,15 @@ fn a_heading_holding_an_embed_keeps_a_clean_anchor() {
 }
 
 #[test]
+fn an_explicit_heading_id_survives_a_linked_embed() {
+    let doc = parse("## Hours [![[badge.png]]](/awards/) {#opening}\n");
+    match &doc.blocks[0] {
+        Block::Heading { id, .. } => assert_eq!(id.as_deref(), Some("opening")),
+        other => panic!("expected heading, got {other:?}"),
+    }
+}
+
+#[test]
 fn duplicate_heading_numbering_sees_the_restored_slug() {
     // `assign_heading_id_suffixes` runs AFTER restore, so it must number the
     // corrected base slugs. Two headings that only collide once the sentinel

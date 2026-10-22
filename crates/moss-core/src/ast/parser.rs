@@ -670,12 +670,12 @@ fn parse_block(
     }
 }
 
-/// Drop the `{contents=end}` block from the end of a heading's inlines. It is
-/// plain text, so it is the tail of the last text inline.
+/// Drop a heading's attribute block from the end of its inlines. It is plain
+/// text, so it is the tail of the last text inline.
 fn strip_trailing_marker(children: &mut Vec<Inline>) {
     if let Some(Inline::Text(text)) = children.last_mut() {
-        if let Some(title) = crate::heading::attrs::strip_contents_end(text) {
-            *text = title.to_string();
+        if let Some(title) = crate::heading::attrs::heading_attrs(text).map(|a| a.title.to_string()) {
+            *text = title;
         }
     }
     if matches!(children.last(), Some(Inline::Text(t)) if t.is_empty()) {
@@ -702,27 +702,27 @@ fn parse_block_with_tag(
                 HeadingLevel::H5 => 5,
                 HeadingLevel::H6 => 6,
             };
-            // Phase 4 PR2: compute the heading-anchor base slug from the
-            // text/code content between Start(Heading) and End(Heading),
-            // matching production's transform_events behavior. Inline HTML
-            // (`<br>` etc.), images, and link href text are NOT included —
-            // only Event::Text and Event::Code. The post-parse
-            // `assign_heading_id_suffixes` pass disambiguates collisions.
+            // The id is slugged from the text events only (inline HTML, images
+            // and link hrefs are left out); `assign_heading_id_suffixes` then
+            // numbers duplicates, explicit ids included.
             let heading_text = crate::heading::text::events_to_text(events, start + 1, end);
-            // `{contents=end}` is read, not printed: out of the text, the
-            // slug and the children, onto the element as a flag.
-            let marker = crate::heading::attrs::strip_contents_end(&heading_text);
-            let base_slug = obsidian_heading_anchor(marker.unwrap_or(&heading_text));
+            // Attributes are read only from a trailing text run, so a block
+            // inside a code span stays code. `{#id}` names the id verbatim.
+            let trailing_text = matches!(children.last(), Some(Inline::Text(t)) if crate::heading::attrs::heading_attrs(t).is_some());
+            let attrs = if trailing_text { crate::heading::attrs::heading_attrs(&heading_text) } else { None };
+            let title = attrs.as_ref().map_or(heading_text.as_str(), |a| a.title);
+            let id = attrs.as_ref().and_then(|a| a.id).map_or_else(|| obsidian_heading_anchor(title), str::to_string);
+            let contents_end = attrs.as_ref().is_some_and(|a| a.contents_end);
             let mut children = children;
-            if marker.is_some() {
+            if attrs.is_some() {
                 strip_trailing_marker(&mut children);
             }
             (
                 Some(Block::Heading {
                     level: level_num,
                     children,
-                    id: Some(base_slug),
-                    contents_end: marker.is_some(),
+                    id: Some(id),
+                    contents_end,
                 }),
                 end - start + 1,
             )
