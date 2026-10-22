@@ -565,3 +565,124 @@ for (const scheme of SCHEMES) {
     await context.close();
   });
 }
+// The archival edition on a closing picture: the words, the credit (when the
+// picture has one), the edition and the colophon row stack at the foot in that
+// order, never overlapping one another, inside the picture, with nothing below it.
+const ARCHIVAL_SITES = [
+  { name: 'no credit', port: 'closing-picture:archival', credit: false },
+  { name: 'with a credit', port: 'closing-picture:archival-caption', credit: true },
+];
+const ARCHIVAL_WIDTHS = [
+  { name: 'desktop', width: 1360, height: 800 },
+  { name: 'narrow desktop', width: 900, height: 800 },
+  { name: 'phone 390', width: 390, height: 800 },
+];
+for (const site of ARCHIVAL_SITES) {
+  for (const scheme of SCHEMES) {
+    for (const { name: wname, width, height } of ARCHIVAL_WIDTHS) {
+      test.describe(`archival closing picture, ${site.name}, ${scheme}, ${wname}`, () => {
+        test.use({ viewport: { width, height }, colorScheme: scheme });
+
+        test('the foot stacks in reading order, nothing overlaps, nothing below the picture', async ({ page }) => {
+          await page.goto(`http://localhost:${gatePort(site.port)}/`, { waitUntil: 'load' });
+          const m = await page.evaluate(() => {
+            const box = (el: Element | null) => {
+              if (!el) return null;
+              const r = el.getBoundingClientRect();
+              return { left: r.left, right: r.right, top: r.top + scrollY, bottom: r.bottom + scrollY };
+            };
+            const hero = document.querySelector('footer .moss-hero-closing')!;
+            const edition = hero.querySelector('.moss-edition')!;
+            return {
+              docHeight: document.documentElement.scrollHeight,
+              hero: box(hero),
+              words: box(hero.querySelector('.moss-hero-content')),
+              credit: box(hero.querySelector('.moss-hero-credit')),
+              edition: box(edition),
+              colophon: box(document.querySelector('footer .moss-colophon')),
+              ink: getComputedStyle(edition).color,
+              panel: getComputedStyle(edition).backgroundColor,
+              afterFooter: [...document.querySelectorAll('footer ~ *')].filter((e) => {
+                const s = getComputedStyle(e);
+                return s.display !== 'none' && s.position !== 'fixed' && e.getBoundingClientRect().height > 0;
+              }).length,
+            };
+          });
+          type B = { left: number; right: number; top: number; bottom: number };
+          const parts: [string, B | null][] = [
+            ['words', m.words],
+            ['credit', m.credit],
+            ['edition', m.edition],
+            ['colophon', m.colophon],
+          ];
+          const present = parts.filter((p): p is [string, B] => p[1] !== null);
+          expect(present.map((p) => p[0]), 'the parts present').toEqual(
+            site.credit ? ['words', 'credit', 'edition', 'colophon'] : ['words', 'edition', 'colophon'],
+          );
+          for (const [name, r] of present) {
+            expect(r.top, `${name} inside the picture (top)`).toBeGreaterThanOrEqual(m.hero!.top - 1);
+            expect(r.bottom, `${name} inside the picture (bottom)`).toBeLessThanOrEqual(m.hero!.bottom + 1);
+            expect(r.left, `${name} inside the picture (left)`).toBeGreaterThanOrEqual(m.hero!.left - 1);
+            expect(r.right, `${name} inside the picture (right)`).toBeLessThanOrEqual(m.hero!.right + 1);
+          }
+          for (let i = 0; i < present.length; i++) {
+            for (let j = i + 1; j < present.length; j++) {
+              const [an, a] = present[i];
+              const [bn, b] = present[j];
+              const overlap = a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+              expect(overlap, `${an} and ${bn} do not intersect`).toBe(false);
+            }
+          }
+          // Reading order: each part starts at or below the one before it.
+          for (let i = 1; i < present.length; i++) {
+            expect(present[i][1].top, `${present[i][0]} follows ${present[i - 1][0]}`).toBeGreaterThanOrEqual(present[i - 1][1].top - 1);
+          }
+          expect(m.hero!.bottom, 'nothing is below the picture').toBeCloseTo(m.docHeight, 0);
+          expect(m.afterFooter, 'no box follows the footer').toBe(0);
+
+          if (parseColor(m.panel).a > 0) {
+            // No ink reads over the whole band the block can sit in, so it keeps its panel: the panel must carry the ink.
+            const { overBlack, overWhite } = worstCaseContrast(m.panel, m.ink);
+            expect(Math.min(overBlack, overWhite), `edition ${m.ink} on its panel ${m.panel}`).toBeGreaterThanOrEqual(4.5);
+          }
+          // The picture the box sits on, measured with the edition hidden: the
+          // worst pixel under the box must clear AA in the ink the page chose.
+          const area = await page.evaluate(() => {
+            const edition = document.querySelector<HTMLElement>('footer .moss-hero-closing .moss-edition')!;
+            const r = edition.getBoundingClientRect();
+            edition.style.visibility = 'hidden';
+            return { x: r.left + scrollX, y: r.top + scrollY, width: r.width, height: r.height };
+          });
+          const shot = await page.screenshot({ fullPage: true, clip: area });
+          const rgb = await page.evaluate(async (b64) => {
+            const img = new Image();
+            img.src = `data:image/png;base64,${b64}`;
+            await img.decode();
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d')!;
+            ctx.drawImage(img, 0, 0);
+            const px = ctx.getImageData(0, 0, img.width, img.height).data;
+            const out: number[] = [];
+            for (let i = 0; i < px.length; i += 4) out.push(px[i], px[i + 1], px[i + 2]);
+            return out;
+          }, shot.toString('base64'));
+          const ink = luminanceOfCss(m.ink);
+          let worst = Infinity;
+          let worstAt = '';
+          for (let i = 0; i < rgb.length; i += 3) {
+            const ratio = contrastRatio(ink, relativeLuminance(rgb[i], rgb[i + 1], rgb[i + 2]));
+            if (ratio < worst) {
+              worst = ratio;
+              worstAt = `${rgb[i]},${rgb[i + 1]},${rgb[i + 2]}`;
+            }
+          }
+          if (parseColor(m.panel).a === 0) {
+            expect(worst, `edition ${m.ink} on the picture under it (worst pixel ${worstAt}, box ${JSON.stringify(area)})`).toBeGreaterThanOrEqual(4.5);
+          }
+        });
+      });
+    }
+  }
+}

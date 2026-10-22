@@ -409,6 +409,29 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "订阅日历",
             Language::ZhHant => "訂閱行事曆",
         },
+        "edition" => match lang {
+            Language::En => "Edition",
+            Language::De => "Ausgabe",
+            Language::ZhHans => "版本",
+            Language::ZhHant => "版本",
+        },
+        // Between the names of a page's authors in its citation.
+        "name_separator" => match lang {
+            Language::En | Language::De => ", ",
+            Language::ZhHans | Language::ZhHant => "、",
+        },
+        "cite_this_page" => match lang {
+            Language::En => "Cite this page",
+            Language::De => "Diese Seite zitieren",
+            Language::ZhHans => "引用本页",
+            Language::ZhHant => "引用本頁",
+        },
+        "source_files" => match lang {
+            Language::En => "Source files",
+            Language::De => "Quelldateien",
+            Language::ZhHans => "源文件",
+            Language::ZhHant => "原始檔案",
+        },
         "rss" => "RSS",
         "subscribe_via_rss" => match lang {
             Language::En => "Subscribe via RSS",

@@ -97,6 +97,10 @@ pub struct ResolvedSlots {
     /// How the listing pass reaches the plugins; never part of the cache key.
     #[serde(skip)]
     listing_host: Option<crate::build::emit::listing_style::ListingHost>,
+    /// `[site] archival`: what every page says about its build, set by the
+    /// pipeline once the source copy it describes is written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    edition: Option<crate::build::emit::archival::Edition>,
 }
 
 impl ResolvedSlots {
@@ -107,7 +111,13 @@ impl ResolvedSlots {
             feature_styles: Vec::new(),
             listings: HashMap::new(),
             listing_host: None,
+            edition: None,
         }
+    }
+
+    /// Turn the edition blocks on for every page.
+    pub(crate) fn set_edition(&mut self, edition: crate::build::emit::archival::Edition) {
+        self.edition = Some(edition);
     }
 
     /// Record that a feature stylesheet is linked, and return its `<link>` tag.
@@ -252,7 +262,8 @@ pub fn inject_slots(html: &str, slots: &ResolvedSlots, page_path: &str) -> Strin
     for slot_name in crate::build::slots::Slot::ALL.map(|s| s.as_str()) {
         let marker = format!("<!-- slot:{} -->", slot_name);
         let has_marker = result.contains(&marker);
-        if let Some(content) = slots.get_html(slot_name, page_path) {
+        let content = slots.get_html(slot_name, page_path);
+        if let Some(content) = content {
             let has_content = !content.trim().is_empty();
             match slot_name {
                 "footer-left" => footer_left_has_content = has_content,
@@ -270,7 +281,12 @@ pub fn inject_slots(html: &str, slots: &ResolvedSlots, page_path: &str) -> Strin
             result = result.replace(&marker, "");
         }
     }
-    strip_empty_footer(result, footer_left_has_content, footer_end_has_content)
+    let mut edition_placed = false;
+    if let Some(placed) = slots.edition.as_ref().and_then(|e| e.place(&result, page_path)) {
+        result = placed;
+        edition_placed = true;
+    }
+    strip_empty_footer(result, footer_left_has_content, footer_end_has_content || edition_placed)
 }
 
 /// Known slot markers still present in HTML that is about to ship.

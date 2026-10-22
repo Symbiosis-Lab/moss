@@ -162,6 +162,9 @@ const THEME_MOUNT: &str = "_moss/theme";
 /// form off `search_mount_url()`.
 const SEARCH_MOUNT: &str = "_moss/pagefind";
 
+/// Where the published copy of the site's source lives.
+pub const SOURCE_COPY_MOUNT: &str = "_moss/source";
+
 impl ServedPath {
     /// Normalize a source-derived path. Slugs directory segments, preserves
     /// the final basename verbatim. Idempotent — re-wrapping is safe.
@@ -380,6 +383,17 @@ impl ServedPath {
             return Err(ServedPathError::InvalidInput("welcome-email edition must be a bare language-tree name"));
         }
         Ok(ServedPath(format!(".moss-email/welcome.{edition}.json")))
+    }
+
+    /// One file of the published source copy, `_moss/source/<rel>`, at the
+    /// author's own relative path: not slugged, because the copy is read by
+    /// path and its README names files as the author wrote them.
+    pub fn for_source_copy(rel: &str) -> Result<Self, ServedPathError> {
+        let rel = Self::normalize_relative(rel)?;
+        if rel.split('/').any(|segment| segment.starts_with('.')) {
+            return Err(ServedPathError::InvalidInput("source copy path has a hidden segment"));
+        }
+        Ok(ServedPath(format!("{}/{}", SOURCE_COPY_MOUNT, rel)))
     }
 
     /// The redirect table a host that can answer a real 301 reads.

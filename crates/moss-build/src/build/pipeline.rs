@@ -1576,6 +1576,27 @@ fn build_inner(
         None => ResolvedSlots::empty(),
     };
     crate::build::emit::listing_style::apply(&documents, project_structure, &site_result.term_index, &listing_field_decls, &stage_dir, &mut pending, &mut resolved_slots, build_now);
+    // `[site] archival`: off by default; the source copy is written first because the id is a hash of it.
+    let edition = crate::build::emit::archival::from_build(
+        site_bool("archival").unwrap_or(false),
+        crate::build::emit::archival::SiteFacts {
+            structure: project_structure,
+            documents: &documents,
+            site_url: pending.site_url().map(str::to_string),
+            author: site_str("author"),
+            license: site_str("license"),
+            lang: &site_lang,
+            folder_name: root.name_opt(),
+            now: build_now,
+        },
+        &stage_dir,
+        &mut pending,
+        || resolved_slots.link_feature_style("archival"),
+    )
+    .map_err(|e| format!("edition source copy: {e}"))?;
+    if let Some(edition) = edition {
+        resolved_slots.set_edition(edition);
+    }
     // Injects slots (and plugin listings) over the stage, re-registers every page it
     // rewrote, and settles the `MOSS_INCREMENTAL_VERIFY=1` carry check. See `build::emit::slots`.
     crate::build::emit::slots::apply_to_stage_and_manifest(

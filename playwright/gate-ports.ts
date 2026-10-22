@@ -124,12 +124,15 @@ const GATE_PORT_KEYS = [
   'content-grid:default',
   'content-grid:full',
   'closing-picture:sky',
+  'closing-picture:archival',
+  'closing-picture:archival-caption',
   'content-grid:end',
   'content-grid:center',
   'closing-picture:fade',
   'closing-picture:busy-fade',
   'closing-picture:busy-bare',
   'wcag-output',
+  'archival-footer',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

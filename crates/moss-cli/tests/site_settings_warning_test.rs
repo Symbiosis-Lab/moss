@@ -44,9 +44,9 @@ fn unknown_site_key_names_the_closest_known_key() {
 
 #[test]
 fn unknown_site_key_with_no_near_match_says_the_build_does_not_read_it() {
-    let (out, stderr) = strict_build("[site]\narchivl = true\n");
+    let (out, stderr) = strict_build("[site]\nfizzbuzz = true\n");
     assert!(out.status.success(), "a note must not fail --strict; stderr:\n{stderr}");
-    assert!(stderr.contains("unknown key \"archivl\""), "stderr:\n{stderr}");
+    assert!(stderr.contains("unknown key \"fizzbuzz\""), "stderr:\n{stderr}");
     assert!(!stderr.contains("did you mean"), "no near key exists, so none is suggested:\n{stderr}");
 }
 

@@ -10,6 +10,7 @@ pub mod beacon;
 pub mod inventory;
 pub mod listing_style;
 pub mod math_png;
+pub mod archival;
 pub mod feature_styles;
 pub mod place_map_assets;
 pub mod place_map_labels;

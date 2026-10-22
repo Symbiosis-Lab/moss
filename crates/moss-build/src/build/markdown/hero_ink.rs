@@ -175,6 +175,21 @@ pub fn credit_spot(aspect: f32, layout: Layout) -> Spot {
     Spot { rows, cols: vec![(0.0, 1.0)] }
 }
 
+/// Where a closing picture's edition block can sit. Align top puts it under the
+/// words, which reach at most `WORDS_PX`, so the band runs from the picture's top
+/// to that plus the block's height. Any other alignment, and the phone's column
+/// (which sets the picture's height), can put it anywhere: the whole picture.
+const EDITION_PX: f32 = 96.0;
+
+pub fn edition_spot(aspect: f32, align: Option<&str>, layout: Layout) -> Spot {
+    let rows = match (layout, align) {
+        (Layout::Narrow, _) => (0.0, 1.0),
+        (_, Some("top")) => (0.0, ((WORDS_PX + EDITION_PX) / (layout.min_width() * aspect.max(0.01))).min(1.0)),
+        _ => (0.0, 1.0),
+    };
+    Spot { rows, cols: vec![(0.0, 1.0)] }
+}
+
 /// The page colour behind a faded picture: `--moss-color-bg` in the light and
 /// the dark theme, `None` where the theme sets it to a value the build can't
 /// read.
@@ -247,6 +262,18 @@ impl Fade {
     fn over(self, lum: f32, alpha: f32) -> f32 {
         srgb_to_linear((1.0 - alpha) * self.ground + alpha * linear_to_srgb(lum))
     }
+}
+
+/// The ink an edition block takes: one ink that reads in every layout's band,
+/// else `None` and the block keeps its panel. `fade_at` gives a layout's fade,
+/// `None` where the page colour behind a fade is unresolved.
+pub fn edition_ink(grid: &ToneGrid, aspect: f32, align: Option<&str>, fade_at: impl Fn(Layout) -> Option<Option<Fade>>) -> Option<Ink> {
+    let inks: Vec<Option<Ink>> = Layout::ALL
+        .into_iter()
+        .map(|layout| readable_ink(grid, &edition_spot(aspect, align, layout), fade_at(layout)?, Inks::words()))
+        .collect();
+    let first = inks[0]?;
+    inks.iter().all(|ink| *ink == Some(first)).then_some(first)
 }
 
 /// WCAG AA for text.
@@ -431,8 +458,10 @@ pub struct InkRequest<'a> {
 /// sits with the words (`fade=top align=top`). The `-night` set says the same
 /// of the dark theme: the `dark=` picture, or the one picture again, over the
 /// dark page colour where it fades. A faded theme whose page colour is
-/// unresolved measures no words or credit, so they keep their panels. Empty
-/// when nothing was measured.
+/// unresolved measures no words or credit, so they keep their panels.
+/// `data-edition` is the ink the edition block takes, measured over its band
+/// in every layout (absent: the block keeps its panel). Empty when nothing was
+/// measured.
 pub fn ink_attributes(
     lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     light: &str,
@@ -446,6 +475,11 @@ pub fn ink_attributes(
     let closing = closing.is_some();
     let reading = |href: &str, ground: Option<Rgb>| {
         let (grid, aspect) = measure(lookup, href)?;
+        let fade_at = |layout: Layout| match (fade, ground) {
+            (None, _) => Some(None),
+            (Some(_), Some(ground)) => Some(Some(Fade::new(ground, layout))),
+            (Some(_), None) => None,
+        };
         let inked = |spot: &Spot, fade: Option<Fade>, inks: Inks| match backing {
             Backing::Panel => None,
             Backing::Auto => readable_ink(&grid, spot, fade, inks),
@@ -456,12 +490,7 @@ pub fn ink_attributes(
                 .into_iter()
                 .filter(|layout| closing || *layout != Layout::WideFull)
                 .filter_map(|layout| {
-                    let fade = match (fade, ground) {
-                        (None, _) => None,
-                        (Some(_), Some(ground)) => Some(Fade::new(ground, layout)),
-                        (Some(_), None) => return None,
-                    };
-                    let ink = inked(&spot(layout), fade, inks)?;
+                    let ink = inked(&spot(layout), fade_at(layout)?, inks)?;
                     Some(format!("{}:{}", layout.as_str(), ink.as_str()))
                 })
                 .collect()
@@ -469,7 +498,8 @@ pub fn ink_attributes(
         let words = tokens(&|layout| words_spot(align, aspect, layout, closing), Inks::words());
         let credit = if credit_at_top { tokens(&|layout| credit_spot(aspect, layout), Inks::credit()) } else { Vec::new() };
         let foot = closing.then(|| readable_ink(&grid, &foot_spot(), None, Inks::words())).flatten();
-        Some((words.join(" "), foot, credit.join(" ")))
+        let edition = closing.then(|| edition_ink(&grid, aspect, align, fade_at)).flatten();
+        Some((words.join(" "), foot, credit.join(" "), edition))
     };
     let ground = fade.unwrap_or_default();
     let day = reading(light, ground.light);
@@ -477,7 +507,7 @@ pub fn ink_attributes(
     let night = reading(dark.unwrap_or(light), ground.dark);
     let mut out = String::new();
     for (suffix, picture) in [("", day), ("-night", night)] {
-        if let Some((words, foot, credit)) = picture {
+        if let Some((words, foot, credit, edition)) = picture {
             if !words.is_empty() {
                 out.push_str(&format!(r#" data-words{suffix}="{words}""#));
             }
@@ -486,6 +516,9 @@ pub fn ink_attributes(
             }
             if !credit.is_empty() {
                 out.push_str(&format!(r#" data-credit{suffix}="{credit}""#));
+            }
+            if let Some(ink) = edition {
+                out.push_str(&format!(r#" data-edition{suffix}="{}""#, ink.as_str()));
             }
         }
     }
@@ -670,6 +703,19 @@ mod tests {
         assert_eq!(readable_ink(&band(16, 24), &top, None, Inks::words()), None);
         assert_eq!(readable_ink(&band(0, 40), &foot_spot(), None, Inks::words()), Some(Ink::Dark));
         assert_eq!(readable_ink(&band(70, 80), &foot_spot(), None, Inks::words()), None);
+    }
+
+    #[test]
+    fn an_edition_takes_the_ink_only_where_every_layout_reads_it() {
+        let sky = lookup_of(&[("a.png", &banded(SKY, SKY, 1.0))]);
+        let attrs = ink_attributes(Some(&sky), "/a.png", None, plain(Some("top"), Backing::Auto, true));
+        assert!(attrs.contains(r#"data-edition="dark""#), "{attrs}");
+        let ground = lookup_of(&[("b.png", &banded(GROUND, GROUND, 1.0))]);
+        let attrs = ink_attributes(Some(&ground), "/b.png", None, plain(Some("top"), Backing::Auto, true));
+        assert!(attrs.contains(r#"data-edition="light""#), "{attrs}");
+        let split = lookup_of(&[("c.png", &banded(SKY, GROUND, 0.7))]);
+        let attrs = ink_attributes(Some(&split), "/c.png", None, plain(Some("top"), Backing::Auto, true));
+        assert!(!attrs.contains("data-edition="), "{attrs}");
     }
 
     #[test]

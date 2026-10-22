@@ -596,6 +596,11 @@ impl PendingManifest {
         self.inner.site_url = Some(url.to_string());
     }
 
+    /// The site URL recorded by [`set_site_url`][Self::set_site_url].
+    pub(crate) fn site_url(&self) -> Option<&str> {
+        self.inner.site_url.as_deref()
+    }
+
     /// Clone the accumulated state into legacy parts without consuming `self`.
     ///
     /// A `pub(crate)` escape hatch for the blocking phase: after all Pattern A

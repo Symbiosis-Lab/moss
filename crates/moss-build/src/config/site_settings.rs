@@ -18,6 +18,18 @@ pub(crate) fn site_settings() -> Vec<SiteSettingInfo> {
             description: "AI crawler policy written to robots.txt: \"standard\" (search and AI input allowed, AI training refused), \"unrestricted\", or \"restricted\" (all refused).",
         },
         SiteSettingInfo {
+            name: "archival",
+            r#type: "bool",
+            default: Some("false"),
+            description: "Publish a dated, citable copy: every page shows its edition line and a citation, and the source files travel with the site.",
+        },
+        SiteSettingInfo {
+            name: "author",
+            r#type: "string",
+            default: None,
+            description: "The edition's maker, named in a page's citation when the page has no author of its own.",
+        },
+        SiteSettingInfo {
             name: "colophon",
             r#type: "bool",
             default: Some("true"),
@@ -76,6 +88,12 @@ pub(crate) fn site_settings() -> Vec<SiteSettingInfo> {
             r#type: "string",
             default: None,
             description: "Language of the default edition, published at `/`. Unset, it is detected from the pages.",
+        },
+        SiteSettingInfo {
+            name: "license",
+            r#type: "string",
+            default: None,
+            description: "The licence of the edition, stated on every page of an archival copy and in its source README.",
         },
         SiteSettingInfo {
             name: "link_preview",

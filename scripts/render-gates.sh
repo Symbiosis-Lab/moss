@@ -105,6 +105,7 @@ GATES_BUILD=(
   closing-picture
   content-grid
   wcag-output
+  archival-footer
 )
 
 # The rest: no config, spec, or harness in this gate's chain ever reads

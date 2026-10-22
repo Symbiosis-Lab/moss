@@ -162,3 +162,27 @@ export const CLOSING_PICTURE_BUSY_BARE_GATE: ScratchSiteSpec = {
     "footer.md": `:::hero {image=closing.png dark=closing-dark.png align=top fade=top}\n## ${HEADING}\n\n[${LINK_TEXT}](https://example.org/new)\n:::\n`,
   },
 };
+
+/** The closing picture with `[site] archival = true`: its edition block lands on the picture's foot. */
+export const CLOSING_PICTURE_ARCHIVAL_GATE: ScratchSiteSpec = {
+  name: "closing-picture-archival-gate",
+  files: {
+    ".moss/config.toml": `schema_version = 5\n\n[site]\nlang = "en"\narchival = true\n`,
+    "closing.png": landscapePng(1600, 700, SKY, GROUND, 0.7),
+    "closing-dark.png": landscapePng(1600, 700, SKY_NIGHT, [8, 10, 14], 0.7),
+    "index.md": `---\ntitle: Archive Shelf\nuid: "cpa00101"\n---\n\n# Archive Shelf\n\nAn invented site for the archival closing-picture gate.\n`,
+    "footer.md": `:::hero {image=closing.png dark=closing-dark.png align=top}\n## ${HEADING}\n\n[${LINK_TEXT}](https://example.org/new)\n:::\n`,
+  },
+};
+
+/** The archival closing picture with a credit: the credit and the edition stack at the foot. */
+export const CLOSING_PICTURE_ARCHIVAL_CAPTION_GATE: ScratchSiteSpec = {
+  name: "closing-picture-archival-caption-gate",
+  files: {
+    ".moss/config.toml": `schema_version = 5\n\n[site]\nlang = "en"\narchival = true\n`,
+    "closing.png": landscapePng(1600, 700, SKY, GROUND, 0.7),
+    "closing-dark.png": landscapePng(1600, 700, SKY_NIGHT, [8, 10, 14], 0.7),
+    "index.md": `---\ntitle: Archive Shelf\nuid: "cpa00102"\n---\n\n# Archive Shelf\n\nAn invented site for the archival closing-picture gate with a credit.\n`,
+    "footer.md": `:::hero {image=closing.png dark=closing-dark.png align=top caption="${CREDIT}"}\n## ${HEADING}\n\n[${LINK_TEXT}](https://example.org/new)\n:::\n`,
+  },
+};
