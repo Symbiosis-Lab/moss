@@ -1,5 +1,7 @@
 # Authoring a moss site
 
+Read `moss guide` (the overview) first: it holds the task recipes this reference does not repeat.
+
 The canonical worldview is already embedded in this skill. Always confirm live
 vocabulary with `moss describe --json` — it reports the token names, values and
 component vocabulary of the binary you are running, which is the only

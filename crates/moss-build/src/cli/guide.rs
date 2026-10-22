@@ -15,8 +15,8 @@ use super::agents::skill_package;
 pub fn run(args: &[String]) -> i32 {
     match args.first().map(String::as_str) {
         Some("--list") | Some("-l") => {
-            for topic in skill_package::topics() {
-                println!("{topic}");
+            for (name, line) in skill_package::topic_listing() {
+                println!("{name:<20} {line}");
             }
             0
         }

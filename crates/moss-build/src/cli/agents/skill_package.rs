@@ -157,6 +157,35 @@ pub fn topics() -> Vec<String> {
     out
 }
 
+/// The line `moss guide --list` prints for each topic: when to read it. The
+/// tests in this module and in `moss-cli` hold it to the reference files, in
+/// both directions.
+const TOPIC_SUMMARIES: &[(&str, &str)] = &[
+    ("authoring", "read to style or write pages: styling rungs, dark mode, hero, gallery, lists"),
+    ("comments", "read to review, hide or unhide a site's comments before publishing"),
+    ("debugging", "read when a build, plugin or shortcode misbehaves: logs, build diffs, preview checks"),
+    ("example", "read when starting a new site: the canonical folder shape and file contents to copy"),
+    ("import-and-redesign", "read to import an existing site and redesign it in moss rather than copy it"),
+    ("importing", "read to convert an existing website or a folder of files into a moss project"),
+    ("plugins", "read to build a plugin: deploy, syndicate, comments, anything needing a network or API"),
+];
+
+pub fn topic_summary(topic: &str) -> Option<&'static str> {
+    TOPIC_SUMMARIES.iter().find(|(name, _)| *name == topic).map(|(_, line)| *line)
+}
+
+/// The `(name, line)` pairs `moss guide --list` prints: the overview first,
+/// then each topic.
+pub fn topic_listing() -> Vec<(String, &'static str)> {
+    let overview = "the overview: start here; holds the task recipes and where each kind of fact lives";
+    let mut out = vec![("(no topic)".to_string(), overview)];
+    out.extend(topics().into_iter().map(|t| {
+        let line = topic_summary(&t).unwrap_or("");
+        (t, line)
+    }));
+    out
+}
+
 /// The text `moss guide [topic]` prints.
 ///
 /// `None` is the entry point (SKILL.md, frontmatter stripped — it is Claude
@@ -307,6 +336,18 @@ mod tests {
         }
         walk(&SKILL_DIR, &mut out);
         out
+    }
+
+    #[test]
+    fn every_topic_has_a_reason_and_every_reason_names_a_topic() {
+        let found = topics();
+        for topic in &found {
+            assert!(topic_summary(topic).is_some(), "no --list line for `{topic}`");
+        }
+        for (name, line) in TOPIC_SUMMARIES {
+            assert!(found.iter().any(|t| t.as_str() == *name), "--list line for `{name}`, which has no reference file");
+            assert!(line.len() < 100, "`{name}` line is {} characters", line.len());
+        }
     }
 
     /// The description is the trigger, not a label: Claude Code and Cursor both

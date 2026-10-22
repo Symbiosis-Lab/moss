@@ -1,5 +1,7 @@
 # Canonical site example
 
+Read `moss guide` (the overview) first: it holds the task recipes this reference does not repeat.
+
 A minimal moss site the agent can copy and adapt. Personalize the content;
 keep the file-shape intact.
 

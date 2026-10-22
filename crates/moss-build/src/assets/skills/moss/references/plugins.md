@@ -1,5 +1,7 @@
 # Building a moss plugin
 
+Read `moss guide` (the overview) first: it holds the task recipes this reference does not repeat.
+
 ## When something is a plugin (not core)
 
 Core turns a folder into a site with zero external input. A plugin is for the

@@ -1,5 +1,7 @@
 # Converting an existing site into moss
 
+Read `moss guide` (the overview) first: it holds the task recipes this reference does not repeat.
+
 ## From a URL — `moss import`
 
 ```

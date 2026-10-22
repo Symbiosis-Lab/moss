@@ -98,7 +98,7 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         CliCommandInfo {
             name: "guide",
             args: "[<topic>|all|--list]",
-            description: "Print moss's agent guidance: project conventions, the four styling rungs, the hard rules, and the checks that tell you whether a change worked. No argument prints the entry point; `--list` names the topics (authoring, plugins, debugging, importing, example); `all` prints every topic as one document. Reads nothing but the binary, so it needs neither a project nor a network — and unlike a copy written into a project folder, it cannot describe a different moss than the one running it.",
+            description: "Print moss's agent guidance: project conventions, the four styling rungs, the hard rules, and the checks that tell you whether a change worked. No argument prints the entry point; `--list` names each topic with the line saying when to read it; `all` prints every topic as one document. Reads nothing but the binary, so it needs neither a project nor a network — and unlike a copy written into a project folder, it cannot describe a different moss than the one running it.",
         },
         CliCommandInfo {
             name: "rename",
