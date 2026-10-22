@@ -210,7 +210,7 @@ fn renders_code_block_with_lang() {
     }]);
     assert_eq!(
         html,
-        "<pre><code class=\"language-rust\">fn main() {}</code></pre>\n"
+        "<pre tabindex=\"0\"><code class=\"language-rust\">fn main() {}</code></pre>\n"
     );
 }
 
@@ -220,7 +220,7 @@ fn renders_code_block_without_lang() {
         lang: None,
         value: "bare".into(),
     }]);
-    assert_eq!(html, "<pre><code>bare</code></pre>\n");
+    assert_eq!(html, "<pre tabindex=\"0\"><code>bare</code></pre>\n");
 }
 
 #[test]
@@ -1092,7 +1092,7 @@ fn list_blockquote_codeblock_table_hr_emit_data_source_line() {
         "ol missing: {html}"
     );
     assert!(
-        html.contains(r#"<pre data-source-line="4">"#),
+        html.contains(r#"<pre tabindex="0" data-source-line="4">"#),
         "pre missing: {html}"
     );
     assert!(

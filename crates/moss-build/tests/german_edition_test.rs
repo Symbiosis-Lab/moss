@@ -34,7 +34,7 @@ fn a_de_tree_is_dressed_in_german_chrome_and_dates() {
     // The English edition keeps its own chrome and points at the German one.
     let root = site.html("index.html");
     assert!(root.contains("Skip to content") && root.contains(r#"hreflang="de""#), "{root}");
-    assert!(root.contains(r#"hreflang="de">DE</a>"#), "the switcher labels the German edition DE, as it labels English EN: {root}");
+    assert!(root.contains(r#"hreflang="de" lang="de">DE</a>"#), "the switcher labels the German edition DE, as it labels English EN: {root}");
 }
 
 #[test]

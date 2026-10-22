@@ -129,6 +129,7 @@ const GATE_PORT_KEYS = [
   'closing-picture:fade',
   'closing-picture:busy-fade',
   'closing-picture:busy-bare',
+  'wcag-output',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

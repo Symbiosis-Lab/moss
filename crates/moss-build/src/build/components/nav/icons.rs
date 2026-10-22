@@ -37,18 +37,21 @@ impl<'a> NavigationBuilder<'a> {
             let links: Vec<String> = self.translations.iter().map(|t| {
                 let pretty = crate::build::scan::article_map::to_pretty_url(&t.url_path);
                 let href = format!("/{}", pretty.trim_start_matches('/')); // allow:served-path-url-construct (language toggle nav href to translation page, not a framework asset)
+                // `lang` as well as `hreflang`: the label is written in the
+                // target language ("简" on an English page), and without it a
+                // screen reader speaks it in the page's voice (WCAG 3.1.2).
                 format!(
-                    r#"<a href="{}" class="nav-lang-link" hreflang="{}">{}</a>"#,
+                    r#"<a href="{}" class="nav-lang-link" hreflang="{}" lang="{}">{}</a>"#,
                     // The declared tag, not `code()` — whose own doc says to use
                     // the BCP-47 form for an hreflang, and which collapses an
                     // unshipped language onto one of three variants.
-                    href, t.lang_tag, t.display_name
+                    href, t.lang_tag, t.lang_tag, t.display_name
                 )
             }).collect();
             let mut parts = vec![current];
             parts.extend(links);
             icon_items.push(format!(
-                r#"<div class="nav-lang-toggle" aria-label="{}">{}</div>"#,
+                r#"<div class="nav-lang-toggle" role="group" aria-label="{}">{}</div>"#,
                 crate::i18n::t(self.current_lang, "nav_language"),
                 parts.join(" / ")
             ));

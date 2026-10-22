@@ -912,10 +912,14 @@ main > .moss-comments {
    Both defined in :root so user custom.css overrides always win. */
 
 /* Sidebar layout - flexbox-based */
+/* `inline-size`: `main` is an inline-size container, so its intrinsic width
+   is zero, and as an auto-margined flex item of `body` it shrank to that —
+   leaving article and sidebar a few pixels to share at every viewport. */
 main.has-sidebar {
   display: flex;
   flex-wrap: wrap;
   gap: var(--moss-space-lg);
+  inline-size: 100%;
   max-inline-size: var(--moss-site-max-width, 1400px);
   margin: 0 auto;
   padding: 0 var(--moss-container-padding);
@@ -1644,6 +1648,13 @@ body > footer.container > .moss-hero-closing[data-fade="top"][data-align="top"] 
    colophon keep theirs. */
 :where(footer.container) a {
   color: var(--moss-footer-ink, var(--moss-color-accent));
+}
+/* A link inside a footer sentence is told from the words around it by more
+   than colour (WCAG 1.4.1), the way an article's links are. */
+:where(footer.container p) a {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
 }
 :where(footer.container) :is(h1, h2, h3, h4, h5, h6) {
   color: var(--moss-footer-ink, var(--moss-color-text));
@@ -5529,14 +5540,14 @@ article picture[data-aspect="scroll"] {
 
 .moss-table-scroll:focus-visible,
 .moss-grid[data-scroll]:focus-visible,
-article picture[data-aspect="scroll"]:focus-visible {
+article picture[data-aspect="scroll"]:focus-visible,
+pre:focus-visible,
+.moss-embed:focus-visible {
   /* ui-accent, like every other focus ring in this file. accent-quiet is an
      ambient hairline color: in dark mode it composites to 1.19:1 against the
      page, so the one indicator telling a keyboard user they are inside a
      scrollable table was effectively invisible (WCAG 1.4.11).
-     Shared verbatim with `:::grid N {scroll}`'s scrolling row and
-     `data-aspect="scroll"`'s scrolling picture — same affordance, same
-     ring, one declaration. */
+     Embedded media is here because engines draw it no ring of their own. */
   outline: 2px solid var(--moss-color-ui-accent);
   outline-offset: 2px;
 }
@@ -6775,9 +6786,6 @@ article a:where(:not(.moss-btn)):focus {
   color: var(--moss-color-text-secondary);
   opacity: 0.85;
 }
-[data-cover-color] .moss-card-content .moss-card-kicker {
-  color: color-mix(in srgb, var(--moss-cover-ink, #fff) 75%, transparent);
-}
 
 .moss-card-meta {
   font-size: var(--moss-size-xs);
@@ -6837,25 +6845,6 @@ article a:where(:not(.moss-btn)):focus {
 .moss-card-permalink:focus-visible {
   opacity: 1;
   color: var(--moss-color-accent);
-}
-
-/* When content has dominant color background, use white text — or the theme's
-   --moss-cover-ink, which a theme that clears --moss-cover-color sets to its
-   own text colour. The muted lines derive from it by opacity. */
-[data-cover-color] .moss-card-content .moss-card-title {
-  color: var(--moss-cover-ink, #fff);
-}
-
-[data-cover-color] .moss-card-content .moss-card-meta {
-  color: color-mix(in srgb, var(--moss-cover-ink, #fff) 70%, transparent);
-}
-
-/* Description on a dominant-color (covered) card: the content band sets
-   color:#fff inline, but .moss-card-description carries its own
-   var(--moss-color-text-secondary) (dark) and would otherwise render
-   dark-on-dark. Whiten it to match the title/meta overrides above. */
-[data-cover-color] .moss-card-content .moss-card-description {
-  color: color-mix(in srgb, var(--moss-cover-ink, #fff) 85%, transparent);
 }
 
 /* Cover color background: applied when parent card carries a dominant color
@@ -6962,13 +6951,13 @@ article a:where(:not(.moss-btn)):focus {
   margin-block-end: 0.3em;
 }
 
-/* List-layout cards with a cover color: restore white text for meta and kicker
-   (beats the 0-3-0 list muted overrides above). */
-.moss-cards[data-layout="list"] [data-cover-color] .moss-card-meta {
-  color: color-mix(in srgb, var(--moss-cover-ink, #fff) 70%, transparent);
-}
-.moss-cards[data-layout="list"] [data-cover-color] .moss-card-kicker {
-  color: color-mix(in srgb, var(--moss-cover-ink, #fff) 75%, transparent);
+/* Every line on a cover band is set in the full cover ink — white, or the
+   theme's --moss-cover-ink. The band is darkened only until full ink reaches
+   4.5:1, so any fade of it falls short. After the list layout's muted lines,
+   which it must beat at the same specificity. */
+[data-cover-color] .moss-card-content :is(.moss-card-title, .moss-card-meta, .moss-card-kicker, .moss-card-description) {
+  color: var(--moss-cover-ink, #fff);
+  opacity: 1;
 }
 
 /* The page's subtitle under a card's or row's title: quieter and smaller than
@@ -9638,6 +9627,12 @@ article video {
   object-fit: contain;
 }
 
+/* A 3D model keeps the element's own 300px default, which is wider than a
+   phone's text column (WCAG 1.4.10). */
+article model-viewer {
+  max-inline-size: 100%;
+}
+
 /* ==========================================================================
    Ambient loop video (`![[clip.mp4|loop]]`)
    Chrome-free autoplay video: no controls, poster-seeded, with a minimal
@@ -9807,8 +9802,11 @@ article video[data-loop] {
    Nav layout is content-aware via flex-wrap (see .nav-content above) — no
    viewport breakpoint needed. */
 @media (max-width: 64rem) {
+  /* `nowrap`: a wrapping column sizes each line to its widest item's natural
+     width, not the page's, and the article's measure overflowed a phone. */
   main.has-sidebar {
     flex-direction: column;
+    flex-wrap: nowrap;
   }
 
   main.has-sidebar > .latest-sidebar {

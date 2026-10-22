@@ -1652,6 +1652,23 @@ fn test_navigation_with_translations_shows_lang_toggle() {
 }
 
 #[test]
+fn lang_toggle_names_its_group_and_marks_each_link_in_its_own_language() {
+    let documents = vec![make_doc("index.html", "Home", None, None)];
+    let translations = vec![TranslationLink {
+        lang_tag: crate::i18n::Language::ZhHans.as_bcp47_attr().to_string(),
+        url_path: "index.zh-hans.html".to_string(),
+        display_name: "简",
+    }];
+    let nav_html = NavigationBuilder::new(&documents, "Test Site", None, crate::i18n::Language::En, false)
+        .with_translations(crate::i18n::Language::En, "en", translations)
+        .generate_navigation();
+
+    // aria-label on a role-less div names nothing (ARIA prohibits it on `generic`).
+    assert!(nav_html.contains(r#"<div class="nav-lang-toggle" role="group" aria-label="#), "{nav_html}");
+    assert!(nav_html.contains(r#"hreflang="zh-Hans" lang="zh-Hans">简</a>"#), "{nav_html}");
+}
+
+#[test]
 fn test_navigation_no_translations_hides_lang_toggle() {
     let documents = vec![make_doc("index.html", "Home", None, None)];
 

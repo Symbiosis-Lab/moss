@@ -1,18 +1,11 @@
 //! Iframe embed synthesizer.
 //!
-//! Receives a [`TitleParams`] (Stage 2 dispatcher already parsed it), the
-//! source URL, and an [`AssetSnapshot`]. Emits final `<iframe>` HTML.
+//! Receives the parsed [`TitleParams`], the source URL, and an
+//! [`AssetSnapshot`]. Emits final `<iframe>` HTML.
 //!
-//! **Sole iframe HTML emitter.** Two call sites converge here:
-//!
-//! 1. The Stage 2 dispatcher in `pipeline.rs`, after pulldown-cmark parses a
-//!    `Tag::Link` carrying `moss:kind=iframe`.
-//! 2. moss-build's `folder_embed.rs` folder-as-iframe feature, which
-//!    has no pulldown-cmark involvement and calls this synthesizer directly
-//!    with an empty `TitleParams`.
-//!
-//! A pre-Phase-1 moss-core escape valve for this same call site retired once
-//! folder_embed migrated (P2E prereq #2, 2026-05-25).
+//! **Sole iframe HTML emitter.** The markdown embed dispatcher, external URL
+//! embeds (`url_embed.rs`) and moss-build's folder-as-iframe feature, which
+//! passes empty `TitleParams`, all converge here.
 
 use crate::asset_snapshot::AssetSnapshot;
 use crate::media::Placement;
@@ -75,10 +68,13 @@ pub fn synthesize_iframe_html(
     let place = placement_attrs(placement);
     let class_value = place.class_value(CLASS_EMBED);
 
-    let title_attr = match params.get("title") {
-        Some(t) => format!(" title=\"{}\"", html_escape_attr(t)),
-        None => String::new(),
+    // Every frame needs an accessible name (WCAG 4.1.2): the author's or the
+    // provider's title, else the name of the page it shows.
+    let title = match params.get("title") {
+        Some(t) => t.to_string(),
+        None => frame_name_from_src(src),
     };
+    let title_attr = format!(" title=\"{}\"", html_escape_attr(&title));
 
     let width_attr = match params.get("width") {
         Some(w) => format!(" width=\"{}\"", html_escape_attr(w)),
@@ -120,6 +116,17 @@ pub fn synthesize_iframe_html(
         allowfullscreen_attr,
         place.size_style_attr,
     )
+}
+
+/// `app/index.html` → `app`, `charts/sales.html` → `sales`: the last path
+/// segment that names something, without its extension.
+fn frame_name_from_src(src: &str) -> String {
+    let path = src.split(['?', '#']).next().unwrap_or(src).trim_end_matches('/');
+    let mut segments = path.rsplit('/').filter(|s| !s.is_empty() && *s != "." && *s != "..");
+    let last = segments.next().unwrap_or("");
+    let named = if matches!(last, "index.html" | "index.htm") { segments.next().unwrap_or(last) } else { last };
+    let stem = named.strip_suffix(".html").or_else(|| named.strip_suffix(".htm")).unwrap_or(named);
+    if stem.is_empty() { src.to_string() } else { stem.to_string() }
 }
 
 #[cfg(test)]
@@ -177,6 +184,15 @@ mod tests {
             "expected query in src, got: {}",
             out
         );
+    }
+
+    #[test]
+    fn iframe_without_a_title_is_named_after_the_page_it_shows() {
+        let p = params_with(&[("kind", "iframe")]);
+        let named = |src| synthesize_iframe_html(&p, &Placement::default(), src, &empty_snapshot());
+        assert!(named("widget.html").contains(r#"title="widget""#), "{}", named("widget.html"));
+        assert!(named("../app/index.html").contains(r#"title="app""#), "{}", named("../app/index.html"));
+        assert!(named("/charts/sales.htm?k=v").contains(r#"title="sales""#), "{}", named("/charts/sales.htm?k=v"));
     }
 
     #[test]

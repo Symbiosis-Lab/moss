@@ -3793,3 +3793,86 @@ uid: "clg00130"
 `,
   },
 };
+
+// ── WCAG 2.1 AA over built output ──
+// One page of every surface whose accessibility only shows in a real engine:
+// each callout type's tinted band, a code block wider than a phone, a framed
+// page, a 3D model, a language switch, a latest-items sidebar, covered cards
+// and a link inside a footer sentence. Served by playwright/wcag-output.config.ts.
+const CALLOUT_TYPES = ["note", "info", "tip", "warning", "caution", "important", "danger", "success", "question", "failure", "bug", "abstract", "todo", "example", "quote", "pending"];
+export const WCAG_OUTPUT: ScratchSiteSpec = {
+  name: "wcag-output-gate",
+  files: {
+    ".moss/config.toml": CONFIG_TOML,
+    "index.md": `---
+title: Field Notes
+uid: "wcag0001"
+sidebar: "[[Notes]]"
+---
+
+# Field Notes
+
+A scratch site for the accessibility gate.
+
+${CALLOUT_TYPES.map((t) => `> [!${t}]\n> A ${t} callout.`).join("\n\n")}
+
+\`\`\`python
+print("a line long enough that a phone has to scroll it sideways to read the whole of it")
+\`\`\`
+
+![[widget.html]]
+
+![[model.glb]]
+`,
+    // The element lays itself out at 300px whatever the file holds.
+    "model.glb": "placeholder 3D model",
+    "index.zh-hans.md": `---
+title: 田野笔记
+uid: "wcag0002"
+---
+
+# 田野笔记
+
+无障碍检查的测试站点。
+`,
+    "widget.html": `<!doctype html><html lang="en"><head><title>Widget</title></head><body><p>A framed page.</p></body></html>`,
+    // Covered cards: their meta and description lines sit on the cover's
+    // colour. A pale one is darkened only until white reaches 4.5:1 — the
+    // band where any fade of that white falls short.
+    "cover.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="140"><rect width="200" height="140" fill="#e2c48a"/></svg>`,
+    "Notes/index.md": `---
+title: Notes
+uid: "wcag0003"
+children_style: grid
+---
+
+# Notes
+`,
+    "Notes/first.md": `---
+title: The first note
+date: 2026-01-02
+uid: "wcag0004"
+cover: "../cover.svg|color=#e2c48a"
+description: What the first note is about.
+---
+
+# The first note
+
+Body.
+`,
+    "Notes/second.md": `---
+title: The second note
+date: 2026-01-03
+uid: "wcag0005"
+cover: "../cover.svg|color=#e2c48a"
+description: What the second note is about.
+---
+
+# The second note
+
+Body.
+`,
+    "footer.md": `Written by [an editor](/notes/) for this scratch site.
+`,
+  },
+};

@@ -190,11 +190,11 @@ fn cover_ink_token_is_read_by_moss_rules() {
     let out = site.build();
     let css = moss_css(&out).replace(' ', "");
 
-    assert!(css.contains("[data-cover-color].moss-card-content.moss-card-title{color:var(--moss-cover-ink,#fff)}"), "card title: {css}");
-    for line in ["kicker", "meta", "description"] {
-        let rule = format!("[data-cover-color].moss-card-content.moss-card-{line}{{color:color-mix(insrgb,var(--moss-cover-ink,#fff)");
-        assert!(css.contains(&rule), "card {line}: {css}");
-    }
+    // Every line in the full ink, not a fade of it: the band is darkened only until full ink reaches 4.5:1.
+    assert!(
+        css.contains("[data-cover-color].moss-card-content:is(.moss-card-title,.moss-card-meta,.moss-card-kicker,.moss-card-description){color:var(--moss-cover-ink,#fff)"),
+        "cover lines: {css}"
+    );
 }
 
 /// A page whose body is only its opening hero keeps `<main id="main-content">`

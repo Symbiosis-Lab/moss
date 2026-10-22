@@ -450,7 +450,10 @@ fn render_block<H: RenderHooks + ?Sized>(
             }
         }
         Block::CodeBlock { lang, value } => {
-            out.push_str("<pre");
+            // `tabindex`: a long line scrolls the block sideways, and only a
+            // focusable box can be scrolled from the keyboard — same as the
+            // table wrapper below.
+            out.push_str("<pre tabindex=\"0\"");
             push_source_line_attr(out, meta.source_line);
             out.push('>');
             match lang {

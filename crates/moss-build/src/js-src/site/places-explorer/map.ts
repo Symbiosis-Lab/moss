@@ -296,6 +296,16 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
 
   viewportEl.append(worldEl, labelsEl, markersEl, controlsEl, chipEl, cardsEl);
   figure.replaceChildren(viewportEl, statusEl);
+  // The no-JS figure is one picture (`role="img"`), and that role makes every
+  // descendant presentational: left on, it would hide the live map's buttons,
+  // cards and status from assistive tech. Its name moves to the viewport.
+  const figureName = figure.getAttribute("aria-label");
+  figure.removeAttribute("role");
+  figure.removeAttribute("aria-label");
+  if (figureName) {
+    viewportEl.setAttribute("aria-label", figureName);
+    viewportEl.setAttribute("aria-description", strings.map);
+  }
 
   // ---- state -----------------------------------------------------------
   const worksById = new Map(options.places.works.map((work) => [work.id, work]));
