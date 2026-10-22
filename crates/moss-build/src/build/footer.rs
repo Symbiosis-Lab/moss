@@ -430,9 +430,10 @@ pub fn apply_last_known_good_fallback(
 /// by inserting raw-HTML blocks around each run. The break itself is dropped.
 /// A footer with neither headings nor a break is left as it is; one with a
 /// break but no headings gets its top part as a single section.
-pub(crate) fn section_footer_blocks(doc: &mut Document) {
+/// `closes_page`: its last block is the closing picture, which stays outside.
+pub(crate) fn section_footer_blocks(doc: &mut Document, closes_page: bool) {
     // A closing hero stays a direct child of the footer, after its columns.
-    let closing = ends_in_hero(doc).then(|| (doc.blocks.pop(), doc.block_meta.pop()));
+    let closing = closes_page.then(|| (doc.blocks.pop(), doc.block_meta.pop()));
     wrap_footer_sections(doc);
     if let Some((Some(mut block), Some(meta))) = closing {
         mark_closing_hero(&mut block);
@@ -949,7 +950,8 @@ mod tests {
 
     fn sectioned_html(markdown: &str) -> String {
         let mut doc = doc_of(markdown);
-        section_footer_blocks(&mut doc);
+        let closes_page = ends_in_hero(&doc);
+        section_footer_blocks(&mut doc, closes_page);
         moss_core::ast::render_document(&doc, &moss_core::ast::DefaultHooks::new())
     }
 

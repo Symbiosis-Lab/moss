@@ -18,6 +18,8 @@ interface Busy {
   patch?: Rgb;
   /** Every other row of the bottom 18% is this colour. */
   foot?: Rgb;
+  /** The top 4% of the frame is this colour. */
+  strip?: Rgb;
 }
 
 /** A landscape: a flat sky over the top `horizon` of the frame, ground below. */
@@ -29,6 +31,7 @@ export function landscapePng(width: number, height: number, sky: Rgb, ground: Rg
   };
   const rows = Array.from({ length: height }, (_, y) => {
     const inSky = y < height * horizon;
+    if (busy.strip && y < height * 0.04) return rowOf(busy.strip);
     if (inSky) return rowOf(busy.hatch && y % 2 === 0 ? busy.hatch : sky, y < height * 0.3 ? busy.patch : undefined);
     return rowOf(busy.foot && y >= height * 0.82 && y % 2 === 0 ? busy.foot : ground);
   });
@@ -121,5 +124,41 @@ export const CLOSING_PICTURE_SKY_GATE: ScratchSiteSpec = {
     "index.md": `---\ntitle: Tall Shelf\nuid: "cps00101"\n---\n\n# Tall Shelf\n\nAn invented site for the tall closing picture.\n`,
     "Full.md": `---\ntitle: Full\nuid: "cps00102"\ncontent_width: full\n---\n\n# Full\n\nA page whose text column is the site's widest.\n`,
     "footer.md": `:::hero {image=closing.png dark=closing-dark.png align=top caption="${CREDIT}"}\n## ${HEADING}\n\n[${LINK_TEXT}](https://example.org/new)\n:::\n`,
+  },
+};
+
+/**
+ * A closing picture with `fade=top`: a dark strip over the top 4% of a pale
+ * sky, which neither ink reads on until the top fades into the page, and a
+ * dark picture for the dark theme.
+ */
+export const CLOSING_PICTURE_FADE_GATE: ScratchSiteSpec = {
+  name: "closing-picture-fade-gate",
+  files: {
+    ".moss/config.toml": `schema_version = 5\n\n[site]\nlang = "en"\n`,
+    "closing.png": landscapePng(1600, 700, SKY, GROUND, 0.7, { strip: PATCH }),
+    "closing-dark.png": landscapePng(1600, 700, SKY_NIGHT, [8, 10, 14], 0.7),
+    "index.md": `---\ntitle: Faded Shelf\nuid: "cpf00101"\n---\n\n# Faded Shelf\n\nAn invented site for the faded closing picture.\n`,
+    "footer.md": `:::hero {image=closing.png dark=closing-dark.png align=top fade=top caption="${CREDIT}"}\n## ${HEADING}\n\n[${LINK_TEXT}](https://example.org/new)\n:::\n`,
+  },
+};
+
+/** The busy pair with `fade=top`: hatched under the words too, so a phone keeps the words' panel with the credit under it. */
+export const CLOSING_PICTURE_BUSY_FADE_GATE: ScratchSiteSpec = {
+  name: "closing-picture-busy-fade-gate",
+  files: {
+    ...CLOSING_PICTURE_BUSY_GATE.files,
+    "closing.png": landscapePng(1600, 700, SKY, FOOT_LIGHT, 0.7, { hatch: [10, 14, 24], foot: [10, 14, 24] }),
+    "closing-dark.png": landscapePng(1600, 700, SKY_NIGHT, FOOT_NIGHT, 0.7, { hatch: [230, 235, 240], foot: [230, 235, 240] }),
+    "footer.md": `:::hero {image=closing.png dark=closing-dark.png align=top fade=top caption="${CREDIT}"}\n## ${HEADING}\n\n[${LINK_TEXT}](https://example.org/new)\n:::\n`,
+  },
+};
+
+/** The busy faded pair with no credit: the words' panel ends in its own fade on a phone. */
+export const CLOSING_PICTURE_BUSY_BARE_GATE: ScratchSiteSpec = {
+  name: "closing-picture-busy-bare-gate",
+  files: {
+    ...CLOSING_PICTURE_BUSY_FADE_GATE.files,
+    "footer.md": `:::hero {image=closing.png dark=closing-dark.png align=top fade=top}\n## ${HEADING}\n\n[${LINK_TEXT}](https://example.org/new)\n:::\n`,
   },
 };

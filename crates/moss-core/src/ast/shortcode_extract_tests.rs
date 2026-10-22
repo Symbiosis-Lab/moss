@@ -2362,6 +2362,21 @@ fn hero_panel_needs_words_and_a_known_value() {
 }
 
 #[test]
+fn hero_fade_takes_top_and_warns_on_anything_else() {
+    use crate::ast::{Block, Shortcode};
+    let doc = crate::ast::parser::parse(":::hero {image=hero.jpg fade=top}\n# Title\n:::\n");
+    let fade = doc.blocks.iter().find_map(|b| match b {
+        Block::Shortcode(Shortcode::Hero(h)) => Some(h.fade.clone()),
+        _ => None,
+    });
+    assert_eq!(fade, Some(Some("top".to_string())));
+    let fine = extract_shortcodes(":::hero {image=hero.jpg fade=top}\n# Title\n:::\n");
+    assert!(fine.warnings.is_empty(), "{:?}", fine.warnings);
+    let odd = extract_shortcodes(":::hero {image=hero.jpg fade=bottom}\n# Title\n:::\n");
+    assert!(odd.warnings.iter().any(|w| w.contains("unrecognized") && w.contains("fade=bottom")), "{:?}", odd.warnings);
+}
+
+#[test]
 fn hero_unknown_align_value_emits_warning() {
     let md = ":::hero {image=hero.jpg align=middle}\n# Title\n:::\n";
     let result = extract_shortcodes(md);

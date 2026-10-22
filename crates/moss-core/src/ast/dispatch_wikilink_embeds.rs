@@ -688,6 +688,7 @@ mod tests {
                 width: None,
                 mobile: None,
                 panel: None,
+                fade: None,
                 align: None,
                 caption: Vec::new(),
                 slide_captions: Vec::new(),

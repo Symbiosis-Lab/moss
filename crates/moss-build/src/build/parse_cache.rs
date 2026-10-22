@@ -56,9 +56,7 @@
 //!   returns only `a.md`.) Note the depth-2 invalidation is a conservative
 //!   over-approximation, not a correctness requirement: the live resolver
 //!   splices ONE hop, so `b.md`'s bytes never reach `index.md`'s HTML. The
-//!   DEPTH-1 case is the load-bearing one, and it is stale-page-real —
-//!   verified by mutation in
-//!   `tests/incremental_parse_cache.rs::a_transclusion_edit_reaches_the_rendered_html_on_disk`.
+//!   DEPTH-1 case is the load-bearing one: missing it ships a stale page.
 //!
 //! Content hashes go through [`HashIndex`], the existing `stat → sha256`
 //! accelerator, so an unchanged file is not re-read to be hashed. It trusts a
@@ -639,8 +637,9 @@ pub fn site_scalars<'a>(
     site: crate::build::markdown::SiteMarkdown<'a>,
     emit_source_lines: bool,
     has_content_folders: bool,
+    page_ground: crate::build::markdown::hero_ink::PageGround,
 ) -> impl std::fmt::Debug + 'a {
-    (site_lang, site_id, seta_url, site, emit_source_lines, has_content_folders)
+    (site_lang, site_id, seta_url, site, emit_source_lines, has_content_folders, page_ground)
 }
 
 /// Fingerprint of Loop A's non-content inputs.
@@ -941,7 +940,7 @@ mod tests {
                 typesetting: typesetting.map(String::from),
                 ..Default::default()
             };
-            let scalars = site_scalars(crate::i18n::Language::En, None, "", cfg.markdown(), false, false);
+            let scalars = site_scalars(crate::i18n::Language::En, None, "", cfg.markdown(), false, false, Default::default());
             let fp = inputs_fingerprint(
                 &["a.md".to_string()],
                 &page_map,

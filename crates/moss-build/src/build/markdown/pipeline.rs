@@ -1099,6 +1099,9 @@ pub fn process_markdown_file(
     });
 
     super::hero_ink::warn_unreadable_forced_ink(&doc, media_lookup, file_path);
+    // A footer that ends in a hero closes the page with it.
+    let closes_page = injects_into_every_page && crate::build::footer::ends_in_hero(&doc);
+    super::hero_ink::warn_stray_fade(&doc, closes_page, file_path);
 
     // 3. Extract the Hero shortcode for hoisting.
     //    LOCKED ORDER: must run AFTER `resolve_urls` (constraint 2) and
@@ -1107,9 +1110,9 @@ pub fn process_markdown_file(
     //    returns the rendered HTML + OG-fallback fields. The hook
     //    delegates to `render_hero_html_typed` for byte parity with the
     //    legacy upstream hoist.
-    // A footer that ends in a hero closes the page with it: its heroes render
-    // where they are written, not in a hero slot the footer does not have.
-    let hero_extraction = if injects_into_every_page && crate::build::footer::ends_in_hero(&doc) {
+    // A closing picture's footer renders its heroes where they are written,
+    // not in a hero slot the footer does not have.
+    let hero_extraction = if closes_page {
         None
     } else {
         moss_core::ast::extract_hero(&mut doc, &pipeline_hooks)
@@ -1172,7 +1175,7 @@ pub fn process_markdown_file(
     //    but only one that targets a slot is a footer.
     if is_slot_only && injects_into_every_page {
         moss_core::ast::clear_heading_ids(&mut doc);
-        crate::build::footer::section_footer_blocks(&mut doc);
+        crate::build::footer::section_footer_blocks(&mut doc, closes_page);
     }
 
     // 6. Render the typed AST to HTML through `PipelineHooks`. This is THE

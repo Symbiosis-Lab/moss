@@ -1298,6 +1298,76 @@ body > footer.container:has(> .moss-hero-closing) > .moss-colophon a {
     padding-block: 0 calc(var(--moss-closing-strip) + max(100% * var(--item-hero-ratio, 0.5) * 0.5, 11rem));
   }
 }
+/* `fade=top`: the picture rises out of the page, its top fading into the page
+   colour. The mask is on the picture, not the box, since the words sit in the
+   faded part; `hero_ink` measures them over the page colour at these depths. */
+body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 38%);
+  mask-image: linear-gradient(to bottom, transparent, #000 38%);
+}
+@media (width < 48rem) {
+  body > footer.container > .moss-hero-closing[data-fade="top"] :is(img, video) {
+    -webkit-mask-image: linear-gradient(to bottom, transparent, #000 30%);
+    mask-image: linear-gradient(to bottom, transparent, #000 30%);
+  }
+}
+/* With the fade and `align=top` the credit joins the words at the top of the
+   sky: under them, where the words' text starts, and from 80rem beside them at
+   the inline end, level with their first line. */
+body > footer.container > .moss-hero-closing[data-fade="top"][data-align="top"] > .moss-hero-credit {
+  position: relative;
+  inset: auto;
+  align-self: flex-start;
+  margin-block: 0;
+  margin-inline: calc(var(--moss-words-inset) - var(--moss-words-pad)) 0;
+  padding: 0.3rem var(--moss-words-pad);
+  text-align: start;
+}
+/* Under the words the credit runs the width they do, so where both keep their
+   panels they read as one block; on a phone the panel's fade hangs below the
+   credit instead of across it. */
+@media (48rem <= width < 80rem) {
+  body > footer.container > .moss-hero-closing[data-fade="top"][data-align="top"] > :is(.moss-hero-content, .moss-hero-credit) {
+    inline-size: var(--moss-hero-content-width, min(max(600px, 35%), var(--moss-content-width) - 2 * var(--moss-container-padding) + 2 * var(--moss-words-pad)));
+    max-inline-size: none;
+  }
+}
+@media (width < 48rem) {
+  body > footer.container > .moss-hero-closing[data-fade="top"][data-align="top"] > .moss-hero-credit {
+    align-self: stretch;
+    margin-inline: 0;
+    padding: 0 var(--moss-words-inset) var(--moss-space-sm);
+    max-inline-size: none;
+  }
+  body > footer.container > .moss-hero-closing[data-fade="top"][data-align="top"] > .moss-hero-credit::after {
+    content: '';
+    position: absolute;
+    inset-inline: 0;
+    inset-block-start: 100%;
+    block-size: var(--moss-space-lg);
+    background: inherit;
+    -webkit-mask-image: linear-gradient(to bottom, #000, transparent);
+    mask-image: linear-gradient(to bottom, #000, transparent);
+    pointer-events: none;
+  }
+  :is(
+    :root:not([data-theme="dark"]) .moss-hero-closing:not([data-credit~="narrow:dark"], [data-credit~="narrow:light"]),
+    :root[data-theme="dark"] .moss-hero-closing:not([data-credit-night~="narrow:dark"], [data-credit-night~="narrow:light"])
+  )[data-fade="top"][data-align="top"]:has(> .moss-hero-credit) > .moss-hero-content::after {
+    content: none;
+  }
+}
+@media (width >= 80rem) {
+  body > footer.container > .moss-hero-closing[data-fade="top"][data-align="top"] > .moss-hero-credit {
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline-end: 0;
+    max-inline-size: 18rem;
+    margin: 0;
+    padding: var(--moss-words-pad);
+    text-align: end;
+  }
+}
 
 /* ==========================================================================
    moss-hosted subscribe form — inline state transitions
@@ -8106,17 +8176,66 @@ body > footer.container:has(> .moss-hero-closing) {
     background: none;
   }
 }
-/* The foot of a closing picture. */
-:is(:root:not([data-theme="dark"]) .moss-hero-closing[data-foot="dark"], :root[data-theme="dark"] .moss-hero-closing[data-foot-night="dark"]) > .moss-hero-credit,
+/* The foot of a closing picture: the colophon, and the credit unless it sits with the words. */
+:is(:root:not([data-theme="dark"]) .moss-hero-closing[data-foot="dark"], :root[data-theme="dark"] .moss-hero-closing[data-foot-night="dark"]):not([data-fade="top"][data-align="top"]) > .moss-hero-credit,
 :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-foot="dark"], :root[data-theme="dark"] .moss-hero-closing[data-foot-night="dark"]) ~ .moss-colophon a {
   color: var(--moss-hero-tone-color, #2c2825);
   text-shadow: none;
   background: none;
 }
-:is(:root:not([data-theme="dark"]) .moss-hero-closing[data-foot="light"], :root[data-theme="dark"] .moss-hero-closing[data-foot-night="light"]) > .moss-hero-credit,
+:is(:root:not([data-theme="dark"]) .moss-hero-closing[data-foot="light"], :root[data-theme="dark"] .moss-hero-closing[data-foot-night="light"]):not([data-fade="top"][data-align="top"]) > .moss-hero-credit,
 :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-foot="light"], :root[data-theme="dark"] .moss-hero-closing[data-foot-night="light"]) ~ .moss-colophon a {
   color: #fff;
   background: none;
+}
+/* A credit with the words, in the secondary ink measured for it (`data-credit`,
+   per layout and theme like `data-words`); a layout not listed keeps its panel.
+   The two inks are the light and dark themes' `--moss-color-text-secondary`. */
+@media (width < 48rem) {
+  :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="narrow:dark"], :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="narrow:dark"]) > .moss-hero-credit {
+    color: #5d5853;
+    text-shadow: none;
+    background: none;
+  }
+  :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="narrow:light"], :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="narrow:light"]) > .moss-hero-credit {
+    color: #b0a696;
+    text-shadow: none;
+    background: none;
+  }
+}
+@media (48rem <= width < 80rem) {
+  :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="mid:dark"], :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="mid:dark"]) > .moss-hero-credit {
+    color: #5d5853;
+    text-shadow: none;
+    background: none;
+  }
+  :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="mid:light"], :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="mid:light"]) > .moss-hero-credit {
+    color: #b0a696;
+    text-shadow: none;
+    background: none;
+  }
+}
+@media (width >= 80rem) {
+  :is(
+    :root:not([data-theme="dark"]) body:not([data-content-width="full"]) .moss-hero-closing[data-credit~="wide:dark"],
+    :root[data-theme="dark"] body:not([data-content-width="full"]) .moss-hero-closing[data-credit-night~="wide:dark"],
+    :root:not([data-theme="dark"]) body[data-content-width="full"] .moss-hero-closing[data-credit~="wide-full:dark"],
+    :root[data-theme="dark"] body[data-content-width="full"] .moss-hero-closing[data-credit-night~="wide-full:dark"]
+  ) > .moss-hero-credit {
+    color: #5d5853;
+    text-shadow: none;
+    background: none;
+  }
+  :is(
+    :root:not([data-theme="dark"]) body:not([data-content-width="full"]) .moss-hero-closing[data-credit~="wide:light"],
+    :root[data-theme="dark"] body:not([data-content-width="full"]) .moss-hero-closing[data-credit-night~="wide:light"],
+    :root:not([data-theme="dark"]) body[data-content-width="full"] .moss-hero-closing[data-credit~="wide-full:light"],
+    :root[data-theme="dark"] body[data-content-width="full"] .moss-hero-closing[data-credit-night~="wide-full:light"]
+  ) > .moss-hero-credit {
+    color: #b0a696;
+    text-shadow: none;
+    background: none;
+  }
 }
 
 /* ==========================================================================

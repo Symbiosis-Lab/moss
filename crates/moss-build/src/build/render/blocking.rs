@@ -397,7 +397,35 @@ pub fn generate_blocking_content_for_build(
     );
     let reserved_dirs = crate::build::scan::classify::reserved_home_dirs(&project_structure.html_files, &project_structure.passthrough_roots);
     let (home_overrides, home_file_winners) = elect_homes(&project_structure.markdown_files, root, &reserved_dirs);
+    // The theme's stylesheet, read before the pages render (a faded closing
+    // picture is measured over its page colour); hashed and copied to the
+    // output with the CSS/JS assets below. Canonical location:
+    // .moss/theme/style.css; check_misplaced_theme_files() warns about one at
+    // the project root.
+    let user_css_path = {
+        let theme_css = source_path_buf.join(".moss").join("theme").join("style.css");
+        if theme_css.exists() || crate::build::icloud::is_still_in_the_cloud(&theme_css) { Some(theme_css) } else {
+            input_evidence.require(&theme_css, crate::build::cloud_ledger::InputRole::Theme);
+            input_evidence.absent(&theme_css);
+            None
+        }
+    };
+    // The read, not the stat, decides whether this build has a user theme: a
+    // cloud-evicted style.css stats as present but reads as absent, and linking
+    // to a stylesheet this build never emits would 404 every page. Unstyled for
+    // one build, restyled when the download lands.
+    let (user_css_stat, user_css_content) = match user_css_path {
+        Some(ref css_path) => {
+            let (stat, content) = crate::build::stat::stat_then(css_path, |path| {
+                cloud_readiness::read_optional_build_input(path, "user style.css", &input_evidence)
+            });
+            (stat, content?)
+        }
+        None => (None, None),
+    };
     let markdown = crate::build::markdown::SiteMarkdown { lang: root_language(&site_config.lang, project_structure, &home_file_winners), ..site_config.markdown() };
+    // Read before the pages render: a faded closing picture is measured over it.
+    let page_ground = crate::build::markdown::hero_ink::PageGround::of_theme(user_css_content.as_deref());
 
     // Build PageMap: pre-scan all markdown files to compute source_path → url_path mapping.
     // This includes cascading url overrides from folder index files, so child pages
@@ -531,6 +559,7 @@ pub fn generate_blocking_content_for_build(
                 markdown,
                 emit_source_lines,
                 project_structure.has_content_folders,
+                page_ground,
             ),
         ),
     );
@@ -571,7 +600,8 @@ pub fn generate_blocking_content_for_build(
         &project_structure.video_files,
         &dir_overrides,
         services.and_then(|s| s.assets.as_deref()),
-    );
+    )
+    .with_page_ground(page_ground);
 
     // Pre-fetched asset data (dims/LQIP/dominant-color from
     // MediaDimensionLookup, registered WebP/AVIF variants from AssetRegistry)
@@ -1495,31 +1525,6 @@ pub fn generate_blocking_content_for_build(
         }
     }
 
-    // Check for user custom CSS and compute its hash for cache busting.
-    // Canonical location: .moss/theme/style.css. Files at the project root are
-    // ignored; see check_misplaced_theme_files() above for the user-facing warning.
-    // The file is copied to the output directory later with CSS/JS assets.
-    let user_css_path = {
-        let theme_css = source_path_buf.join(".moss").join("theme").join("style.css");
-        if theme_css.exists() || crate::build::icloud::is_still_in_the_cloud(&theme_css) { Some(theme_css) } else {
-            input_evidence.require(&theme_css, crate::build::cloud_ledger::InputRole::Theme);
-            input_evidence.absent(&theme_css);
-            None
-        }
-    };
-    // The read, not the stat, decides whether this build has a user theme: a
-    // cloud-evicted style.css stats as present but reads as absent, and linking
-    // to a stylesheet this build never emits would 404 every page. Unstyled for
-    // one build, restyled when the download lands.
-    let (user_css_stat, user_css_content) = match user_css_path {
-        Some(ref css_path) => {
-            let (stat, content) = crate::build::stat::stat_then(css_path, |path| {
-                cloud_readiness::read_optional_build_input(path, "user style.css", &input_evidence)
-            });
-            (stat, content?)
-        }
-        None => (None, None),
-    };
     let has_user_css = user_css_content.is_some();
     // The stylesheet's references to theme files, pointed at their hashed
     // copies. Hashed after the rewrite so a changed font renames the sheet.
@@ -1551,7 +1556,7 @@ pub fn generate_blocking_content_for_build(
 
     // Check for user custom JS and compute its hash for cache busting.
     // Canonical location: .moss/theme/script.js. Files at the project root are
-    // ignored; see check_misplaced_theme_files() above for the user-facing warning.
+    // ignored; check_misplaced_theme_files() warns about them.
     let user_js_path = {
         let theme_js = source_path_buf.join(".moss").join("theme").join("script.js");
         if theme_js.exists() || crate::build::icloud::is_still_in_the_cloud(&theme_js) { Some(theme_js) } else {

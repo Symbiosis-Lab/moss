@@ -213,6 +213,9 @@ fn parse_shortcode_block(
                     ));
                 }
             }
+            if let Some(v) = sc.fade.as_deref().filter(|v| *v != "top") {
+                warns.warnings.push(format!("shortcode `:::hero` has unrecognized `fade={v}`. Only `fade=top` is recognized. The attribute is ignored."));
+            }
             if let Some(ref v) = sc.header {
                 if v != "over" {
                     warns.warnings.push(format!(

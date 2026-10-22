@@ -126,6 +126,9 @@ const GATE_PORT_KEYS = [
   'closing-picture:sky',
   'content-grid:end',
   'content-grid:center',
+  'closing-picture:fade',
+  'closing-picture:busy-fade',
+  'closing-picture:busy-bare',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

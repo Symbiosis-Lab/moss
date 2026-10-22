@@ -403,6 +403,10 @@ pub struct HeroShortcode {
     /// `Some("always")` always does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub panel: Option<String>,
+    /// `fade=top`: a closing picture's top fades into the page colour. Any
+    /// other hero ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fade: Option<String>,
     /// Caption or credit for the image, from `caption="…"`. Rendered as a
     /// line of text BELOW the hero, never over it, except on a footer's
     /// closing picture, where it is the credit set small inside the picture

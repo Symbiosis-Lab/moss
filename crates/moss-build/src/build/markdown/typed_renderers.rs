@@ -290,28 +290,34 @@ pub(crate) fn render_hero_html_typed(
     };
     // A closing picture measures its picture for the words' ink, and sets its
     // caption inside the picture as a credit along the foot.
-    let closing = args.classes.split_whitespace().any(|c| c == "moss-hero-closing");
+    let closing = args.classes.split_whitespace().any(|c| c == "moss-hero-closing").then(|| crate::build::markdown::hero_ink::Closing {
+        fade: (args.fade.as_deref() == Some("top")).then(|| media_lookup.map(|l| l.page_ground()).unwrap_or_default()),
+        credit: !args.caption.is_empty(),
+    });
+    let fade_attr = if closing.is_some_and(|c| c.fade.is_some()) { r#" data-fade="top""# } else { "" };
     let ink_attrs = match (&resolved_image, is_plate || args.overlay.is_empty()) {
         (Some(light), false) if !hero_href_is_video(light) => crate::build::markdown::hero_ink::ink_attributes(
             media_lookup,
             light,
             dark_href,
-            args.align.as_deref(),
-            crate::build::markdown::hero_ink::Backing::of(args.panel.as_deref(), closing),
-            closing,
+            crate::build::markdown::hero_ink::InkRequest {
+                align: args.align.as_deref(),
+                backing: crate::build::markdown::hero_ink::Backing::of(args.panel.as_deref(), closing.is_some()),
+                closing,
+            },
         ),
         _ => String::new(),
     };
     // The picture's height as a share of its width, for the phone layout's
     // reserved band (`--item-hero-ratio`).
-    let ratio_attr = match (closing, &resolved_image, media_lookup) {
+    let ratio_attr = match (closing.is_some(), &resolved_image, media_lookup) {
         (true, Some(href), Some(lookup)) => {
             let (w, h) = lookup.get(href.strip_prefix('/').unwrap_or(href));
             format!(r#" style="--item-hero-ratio: {:.4}""#, h as f32 / w.max(1) as f32)
         }
         _ => String::new(),
     };
-    let overlay_attr = format!("{overlay_attr}{ink_attrs}{ratio_attr}");
+    let overlay_attr = format!("{overlay_attr}{fade_attr}{ink_attrs}{ratio_attr}");
     let pair_attr = |v: &str| if dark_href.is_some() { format!(" data-hero-variant=\"{v}\"") } else { String::new() };
 
     let img_part = match (&resolved_image, media_lookup) {
@@ -337,7 +343,7 @@ pub(crate) fn render_hero_html_typed(
             href,
             &args.image_alt,
             // The closing picture is the last thing on the page.
-            !args.classes.split_whitespace().any(|c| c == "moss-hero-closing"),
+            closing.is_none(),
             pair_attr("light").trim_start(),
             &attrs,
             media_assets,
@@ -503,7 +509,7 @@ pub(crate) fn render_hero_html_typed(
     // `data-captioned` on the section is the hook for the other half of the
     // promise: a hero that names its subject must not crop the subject out.
     // See the `[data-captioned]` rules in site.css.
-    let credit_html = if closing && !args.caption.is_empty() {
+    let credit_html = if closing.is_some() && !args.caption.is_empty() {
         format!(
             r#"<p class="moss-hero-credit"{}>{}</p>"#,
             panel_style_attr,
@@ -512,7 +518,7 @@ pub(crate) fn render_hero_html_typed(
     } else {
         String::new()
     };
-    let (caption_attr, caption_html) = if args.caption.is_empty() || closing {
+    let (caption_attr, caption_html) = if args.caption.is_empty() || closing.is_some() {
         (String::new(), String::new())
     } else {
         (

@@ -11,7 +11,7 @@
 //! repaints the page background must check its own contrast.
 
 use crate::build::types::SectionAccent;
-use crate::build::scan::wcag::{contrast_ratio, relative_luminance, srgb_to_linear};
+use crate::build::scan::wcag::{contrast_ratio, linear_to_srgb, relative_luminance, srgb_to_linear};
 use moss_core::contract::tokens::{bg_colors, load_tokens};
 use std::sync::LazyLock;
 
@@ -20,10 +20,10 @@ const MIN_CONTRAST: f32 = 4.5;
 /// Lightness step of the search, in OKLCH lightness (0..1).
 const STEP: f32 = 0.005;
 
-type Rgb = (u8, u8, u8);
+pub(crate) type Rgb = (u8, u8, u8);
 
 /// moss's default page background, `(light, dark)`.
-static BACKGROUNDS: LazyLock<(Rgb, Rgb)> = LazyLock::new(|| {
+pub(crate) static BACKGROUNDS: LazyLock<(Rgb, Rgb)> = LazyLock::new(|| {
     let tokens = load_tokens().unwrap_or_else(|e| panic!("tokens.json must parse: {e}"));
     let (light, dark) = bg_colors(&tokens);
     let parse = |hex: &str| parse_hex(hex).unwrap_or_else(|| panic!("--moss-color-bg `{hex}` is not a hex colour"));
@@ -48,16 +48,12 @@ fn to_hex((r, g, b): Rgb) -> String {
     format!("#{r:02x}{g:02x}{b:02x}")
 }
 
-fn luminance((r, g, b): Rgb) -> f32 {
+pub(crate) fn luminance((r, g, b): Rgb) -> f32 {
     relative_luminance(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0)
 }
 
 fn contrast(a: Rgb, b: Rgb) -> f32 {
     contrast_ratio(luminance(a), luminance(b))
-}
-
-fn linear_to_srgb(c: f32) -> f32 {
-    if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
 }
 
 /// sRGB bytes to OKLCH `(lightness, chroma, hue in radians)`.

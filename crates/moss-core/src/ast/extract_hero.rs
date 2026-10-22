@@ -292,6 +292,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
     let mobile = parsed.get("mobile").map(str::to_string);
     let align = parsed.get("align").map(str::to_string);
     let panel = parsed.get("panel").map(str::to_string);
+    let fade = parsed.get("fade").map(str::to_string);
     // Read once, for all three image-source branches below — a caption belongs
     // to the hero, not to whichever syntax named its image.
     let caption = parse_caption_inlines(parsed.get("caption").unwrap_or_default().trim(), config);
@@ -325,6 +326,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 mobile,
                 align,
                 panel: panel.clone(),
+                fade: fade.clone(),
                 caption,
                 slide_captions: Vec::new(),
                 header: header.clone(),
@@ -361,6 +363,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 mobile,
                 align,
                 panel: panel.clone(),
+                fade: fade.clone(),
                 caption,
                 slide_captions: Vec::new(),
                 header: header.clone(),
@@ -434,6 +437,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
             mobile,
             align,
             panel,
+            fade,
             caption,
             slide_captions: if slide_captions.iter().any(|c| !c.is_empty()) {
                 slide_captions

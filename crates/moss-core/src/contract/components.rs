@@ -1330,13 +1330,13 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-words",
                 values: &[],
                 default: "",
-                description: "The layouts where the build measured the picture under the words and found it quiet enough that an ink clears 4.5:1 against its worst case, so the words sit on the picture itself with no panel: a space-separated list of `narrow:dark`, `mid:light`, `wide:dark`, `wide-full:dark` (a phone, 48 to 80rem, and 80rem and up; `wide-full` appears on a closing picture only: 80rem and up on a `content_width: full` page, where its words start further out). A layout not listed keeps the panel. Dark ink is `--moss-hero-tone-color`, light is white. Emitted for a closing picture unless `panel=always`, and for any overlay hero that sets `panel=auto` (measured) or `panel=none` (the better ink, whatever it measures). It names the picture shown in the light theme; `data-words-night` names the `dark=` picture's, or repeats this when the hero has no `dark=`.",
+                description: "The layouts where the build measured the picture under the words and found it quiet enough that an ink clears 4.5:1 against its worst case, so the words sit on the picture itself with no panel: a space-separated list of `narrow:dark`, `mid:light`, `wide:dark`, `wide-full:dark` (a phone, 48 to 80rem, and 80rem and up; `wide-full` appears on a closing picture only: 80rem and up on a `content_width: full` page, where its words start further out). A layout not listed keeps the panel. Dark ink is `--moss-hero-tone-color`, light is white. Emitted for a closing picture unless `panel=always`, and for any overlay hero that sets `panel=auto` (measured) or `panel=none` (the better ink, whatever it measures). It is the light theme's reading; `data-words-night` is the dark theme's. On a closing picture with `fade=top` each theme is measured over its own page colour where the top fades (`--moss-color-bg`, as the theme's stylesheet sets it on `:root` or `:root[data-theme=\"dark\"]`); where the build cannot read that colour it measures nothing for that theme and the words keep the panel.",
             },
             DataAttr {
                 name: "data-words-night",
                 values: &[],
                 default: "",
-                description: "`data-words` for the picture dark mode shows.",
+                description: "`data-words` for the dark theme: the `dark=` picture, or the one picture, measured over the dark page colour where it fades.",
             },
             DataAttr {
                 name: "data-foot",
@@ -1349,6 +1349,24 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 values: &["dark", "light"],
                 default: "",
                 description: "`data-foot` for the picture dark mode shows.",
+            },
+            DataAttr {
+                name: "data-fade",
+                values: &["top"],
+                default: "",
+                description: "Closing picture only, from `fade=top`: the picture's top fades into the page colour, over 38% of the box (30% on a phone), through a mask on the picture itself, so the words and credit above it stay solid. With `align=top` the credit joins the words: under them, and from 80rem beside them at the inline end.",
+            },
+            DataAttr {
+                name: "data-credit",
+                values: &[],
+                default: "",
+                description: "Closing picture with `fade=top` and `align=top` only: the layouts where the credit, set with the words, reads in a secondary ink straight on the picture, as `data-words` lists them (`narrow:dark wide:light`). Measured across the full width of the rows the words and credit reach, so it holds whichever side the credit sits on. Dark is the light theme's `--moss-color-text-secondary` (#5d5853), light the dark theme's (#b0a696). A layout not listed gives the credit a small panel.",
+            },
+            DataAttr {
+                name: "data-credit-night",
+                values: &[],
+                default: "",
+                description: "`data-credit` for the dark theme.",
             },
             DataAttr {
                 name: "data-fit",
@@ -1418,7 +1436,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: ":::hero {image=closing.jpg dark=closing-night.jpg align=top}\n## The shelf is open.\n:::\n",
         status: Status::Confirmed,
         since: "0",
-        description: "The hero that is the last block of `footer.md`: the page's closing picture. The footer drops its column, padding, divider and fill, and the picture runs the viewport's full width as the last painted thing on the page, with its words on it at every width (the build adds `data-mobile=\"overlay\"`), starting where the article's text starts, and the colophon on its bottom edge. From 48rem its box takes the picture's own shape at the window's width, so the whole picture shows, even when taller than the window; `--moss-hero-max-height` caps it and the crop keeps the side away from the words (`align=top` keeps the foot). On a phone a kept panel ends in a fade into the picture instead of a hard edge. It is never darkened, and where its picture is quiet under the words the words sit in ink with no panel (`data-words`); its `caption=` is the picture's credit (`.moss-hero-credit`). A `dark=` picture replaces the light one in dark mode through `data-hero-variant=\"light\"|\"dark\"` on each picture.",
+        description: "The hero that is the last block of `footer.md`: the page's closing picture. The footer drops its column, padding, divider and fill, and the picture runs the viewport's full width as the last painted thing on the page, with its words on it at every width (the build adds `data-mobile=\"overlay\"`), starting where the article's text starts, and the colophon on its bottom edge. From 48rem its box takes the picture's own shape at the window's width, so the whole picture shows, even when taller than the window; `--moss-hero-max-height` caps it and the crop keeps the side away from the words (`align=top` keeps the foot). On a phone a kept panel ends in a fade into the picture instead of a hard edge. It is never darkened, and where its picture is quiet under the words the words sit in ink with no panel (`data-words`); its `caption=` is the picture's credit (`.moss-hero-credit`). A `dark=` picture replaces the light one in dark mode through `data-hero-variant=\"light\"|\"dark\"` on each picture. `fade=top` fades its top into the page (`data-fade`).",
     },
     ComponentEntry {
         class: "moss-hero-credit",
@@ -1429,7 +1447,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: ":::hero {image=closing.jpg align=top caption=\"Etching of the harbour, 1643.\"}\n## The shelf is open.\n:::\n",
         status: Status::Confirmed,
         since: "0",
-        description: "The closing picture's `caption=`, set small inside the picture at its foot on the inline-end side, above the colophon's row, instead of below the picture as an ordinary hero's caption is. Legible by the same rule as the words: in the ink measured along the foot (`data-foot`), or on a small panel of its own where the foot is too busy for either ink.",
+        description: "The closing picture's `caption=`, set small inside the picture at its foot on the inline-end side, above the colophon's row, instead of below the picture as an ordinary hero's caption is. Legible by the same rule as the words: in the ink measured along the foot (`data-foot`), or on a small panel of its own where the foot is too busy for either ink. With `fade=top` and `align=top` it joins the words at the top instead: under them, and from 80rem beside them at the inline end, level with their first line, in the secondary ink measured for it (`data-credit`) or on its small panel.",
     },
     ComponentEntry {
         class: "moss-hero-slides",

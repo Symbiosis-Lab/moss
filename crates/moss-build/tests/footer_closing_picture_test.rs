@@ -171,3 +171,71 @@ fn panel_none_over_a_picture_ink_cannot_read_on_warns_naming_the_hero() {
     std::fs::write(site.root.join("mid.png"), picture(SKY, GROUND, false)).unwrap();
     assert!(!site.rebuild().join("\n").contains("panel=none"));
 }
+
+/// The footer of a site closing on `hero` over the quiet pair, with `theme` as
+/// its stylesheet.
+fn themed(hero: &str, theme: &str) -> String {
+    let site = Site::new(&[
+        ("index.md", "---\ntitle: Harbour\n---\n\n:::hero {image=day.png fade=top}\n# Harbour\n:::\n\nBody text.\n"),
+        ("footer.md", hero),
+        (".moss/theme/style.css", theme),
+    ]);
+    std::fs::write(site.root.join("day.png"), picture(SKY, GROUND, false)).unwrap();
+    std::fs::write(site.root.join("night.png"), picture([20, 28, 48], [230, 235, 240], false)).unwrap();
+    site.rebuild();
+    site.html("index.html")
+}
+
+const FADED: &str = ":::hero {image=day.png dark=night.png align=top fade=top caption=\"Etching, 1643.\"}\n## The shelf is open.\n\n[Propose a collection](https://example.org/new)\n:::\n";
+
+#[test]
+fn a_faded_closing_picture_is_measured_over_the_themes_page_colour() {
+    let plain = themed(FADED, "h1 { letter-spacing: 0; }\n");
+    let footer = footer_of(&plain);
+    assert!(footer.contains(r#"data-fade="top""#), "{footer}");
+    assert!(footer.contains(r#"data-words="narrow:dark"#) && footer.contains(r#"data-words-night="narrow:light"#), "{footer}");
+    assert!(footer.contains(r#"data-credit="narrow:dark"#) && footer.contains(r#"data-credit-night="narrow:light"#), "{footer}");
+    assert!(!plain[..plain.find("<footer").unwrap()].contains("data-fade"), "only a closing picture fades");
+
+    // A black page under the pale day picture: the faded top is dark above a pale sky.
+    let black = footer_of(&themed(FADED, ":root { --moss-color-bg: #000; }\n")).to_string();
+    assert!(!black.contains(r#"data-words=""#) && black.contains(r#"data-words-night="narrow:light"#), "{black}");
+
+    // A colour the build can't read keeps the panels in both themes; the foot is unaffected.
+    let unread = footer_of(&themed(FADED, ":root { --moss-color-bg: var(--paper); }\n")).to_string();
+    assert!(!unread.contains("data-words") && !unread.contains("data-credit"), "{unread}");
+    assert!(unread.contains(r#"data-foot="light""#), "{unread}");
+}
+
+#[test]
+fn fade_on_a_hero_that_does_not_close_the_page_warns() {
+    let site = Site::new(&[("index.md", "---\ntitle: Harbour\n---\n\n:::hero {image=day.png fade=top}\n# Harbour\n:::\n\nBody text.\n")]);
+    std::fs::write(site.root.join("day.png"), picture(SKY, GROUND, false)).unwrap();
+    let logged = site.rebuild().join("\n");
+    assert!(logged.contains("fade=top") && logged.contains("closing picture"), "{logged}");
+    // Another value is the parser's to report as unrecognized, not this warning's.
+    site.write("index.md", "---\ntitle: Harbour\n---\n\n:::hero {image=day.png fade=bottom}\n# Harbour\n:::\n");
+    let logged = site.rebuild().join("\n");
+    assert!(!logged.contains("closing picture"), "{logged}");
+    site.write("footer.md", FADED);
+    site.write("index.md", "---\ntitle: Harbour\n---\n\nBody text.\n");
+    assert!(!site.rebuild().join("\n").contains("fade=top"));
+}
+
+#[test]
+fn a_page_colour_edit_remeasures_the_faded_picture_on_a_content_only_rebuild() {
+    let site = Site::new(&[
+        ("index.md", "---\ntitle: Harbour\n---\n\nBody text.\n"),
+        ("footer.md", FADED),
+        (".moss/theme/style.css", "h1 { letter-spacing: 0; }\n"),
+    ]);
+    std::fs::write(site.root.join("day.png"), picture(SKY, GROUND, false)).unwrap();
+    std::fs::write(site.root.join("night.png"), picture([20, 28, 48], [230, 235, 240], false)).unwrap();
+    site.rebuild();
+    assert!(footer_of(&site.html("index.html")).contains("data-words="));
+    site.write(".moss/theme/style.css", ":root { --moss-color-bg: var(--paper); }\n");
+    let changed = site.root.join(".moss/theme/style.css");
+    site::build_sync(&site.root.to_string_lossy(), moss_build::build::BuildTrigger::ContentOnly(vec![changed])).unwrap();
+    let footer = footer_of(&site.html("index.html")).to_string();
+    assert!(!footer.contains("data-words") && !footer.contains("data-credit"), "a cached parse replayed the old measurement: {footer}");
+}

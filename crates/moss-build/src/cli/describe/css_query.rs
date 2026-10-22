@@ -25,6 +25,8 @@
 //! question is "what does moss style by default", not "what did the last build
 //! happen to emit".
 
+use crate::build::theme_lint::{style_rules, StyleRule};
+
 /// The always-embedded stylesheets, in cascade order. `site.css` first because
 /// it is what nearly every query wants; the rest carry the feature surfaces.
 ///
@@ -58,22 +60,6 @@ fn sheets() -> Vec<(String, &'static str)> {
         .collect()
 }
 
-/// One style rule of a stylesheet, with the context needed to reproduce its effect.
-pub(crate) struct StyleRule<'a> {
-    /// The `@media`/`@supports`/`@layer` conditions the rule sits inside,
-    /// outermost first. Without these a copied rule silently applies at every
-    /// width — the single most common way a theme override goes wrong.
-    pub conditions: Vec<&'a str>,
-    /// The comment block immediately above the rule, if any.
-    pub comment: Option<&'a str>,
-    /// The selector list, trimmed.
-    pub prelude: &'a str,
-    /// Selector list plus declaration block, verbatim.
-    pub rule: &'a str,
-    /// Byte offset of the selector list in the sheet.
-    pub start: usize,
-}
-
 /// Whether `haystack` mentions `needle` as a whole CSS token.
 ///
 /// Substring matching would make `.moss-card` return all 60 `.moss-card-*`
@@ -102,101 +88,6 @@ pub(crate) fn mentions(haystack: &str, needle: &str) -> bool {
         from = end;
     }
     false
-}
-
-/// Walk a stylesheet by brace depth, collecting every style rule along with the
-/// at-rule conditions enclosing it.
-///
-/// Deliberately not a real CSS parser. It has one job — slice out source spans
-/// — and a parser would drop the comments, which are half the value.
-// `i` walks bytes and can sit mid-character, but every slice below is taken at a
-// point where `bytes[i]` matched an ASCII delimiter (`/` `*` `{` `}` `;`) or at
-// `bytes.len()`. An ASCII byte never occurs inside a multi-byte UTF-8 sequence,
-// so those indices — and `prelude_start`, which is only ever assigned one of
-// them — are always char boundaries. None of these can panic.
-#[allow(clippy::string_slice)]
-pub(crate) fn style_rules<'a>(css: &'a str) -> Vec<StyleRule<'a>> {
-    let mut out = Vec::new();
-    let bytes = css.as_bytes();
-    // Stack of open at-rule preludes (`@media (max-width: 32rem)`), so a nested
-    // rule reports every condition it is under.
-    let mut conditions: Vec<&'a str> = Vec::new();
-    // Start of the current prelude — selector list or at-rule header.
-    let mut prelude_start = 0usize;
-    // End of the last comment block seen at the current position, and its span.
-    let mut pending_comment: Option<&'a str> = None;
-    let mut i = 0usize;
-
-    while i < bytes.len() {
-        match bytes[i] {
-            b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                let start = i;
-                i += 2;
-                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                    i += 1;
-                }
-                i = (i + 2).min(bytes.len());
-                // Only a comment sitting alone above a rule is context for it.
-                // One trailing a declaration (`.a { … } /* note */`) belongs to
-                // the line it is on, and hoisting it above the next rule would
-                // put unrelated prose in front of half the output. The tell is
-                // a newline between the previous `}` and the comment.
-                // A comment inside a selector list stays where it is.
-                let gap = &css[prelude_start..start];
-                if gap.trim().is_empty() {
-                    pending_comment = (prelude_start == 0 || gap.contains('\n')).then(|| css[start..i].trim_end());
-                    prelude_start = i;
-                }
-            }
-            b'{' => {
-                let prelude = css[prelude_start..i].trim();
-                let rule_start = prelude_start + (css[prelude_start..].len() - css[prelude_start..].trim_start().len());
-                if prelude.starts_with('@') {
-                    // An at-rule block: descend, remembering the condition.
-                    conditions.push(prelude);
-                    i += 1;
-                    prelude_start = i;
-                    pending_comment = None;
-                    continue;
-                }
-                // A style rule: find its matching close brace. Declaration
-                // blocks do not nest in moss's sheets, so depth-1 suffices.
-                let mut depth = 1;
-                i += 1;
-                while i < bytes.len() && depth > 0 {
-                    match bytes[i] {
-                        b'{' => depth += 1,
-                        b'}' => depth -= 1,
-                        _ => {}
-                    }
-                    i += 1;
-                }
-                out.push(StyleRule {
-                    conditions: conditions.clone(),
-                    comment: pending_comment,
-                    prelude,
-                    rule: css[rule_start..i].trim(),
-                    start: rule_start,
-                });
-                prelude_start = i;
-                pending_comment = None;
-            }
-            b'}' => {
-                conditions.pop();
-                i += 1;
-                prelude_start = i;
-                pending_comment = None;
-            }
-            b';' => {
-                // A statement at this level (`@import`, `@layer a, b;`).
-                i += 1;
-                prelude_start = i;
-                pending_comment = None;
-            }
-            _ => i += 1,
-        }
-    }
-    out
 }
 
 /// Whether `rule` is one a query for `needle` returns. A custom property lives

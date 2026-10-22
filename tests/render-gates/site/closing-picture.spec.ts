@@ -358,3 +358,210 @@ for (const [path, panel] of [['', true], ['full/', false]] as const) {
     else expect(parseColor(bg).a).toBe(0);
   });
 }
+
+// `fade=top`: the picture's top fades into the page colour, and with `align=top`
+// the credit joins the words. Contrast is read off the rendered pixels behind
+// the words and the credit, with both hidden, so it checks what a reader sees.
+const FADE = `http://localhost:${gatePort('closing-picture:fade')}/`;
+
+const openFaded = async (page: Page, theme: string | null = null) => {
+  await page.goto(FADE, { waitUntil: 'load' });
+  if (theme) await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme);
+  await page.evaluate(() => scrollTo(0, 1e6));
+  await page.waitForFunction(() =>
+    [...document.querySelectorAll('footer .moss-hero-closing img')]
+      .filter((i) => getComputedStyle(i).display !== 'none')
+      .every((i) => (i as HTMLImageElement).complete && (i as HTMLImageElement).naturalWidth > 0),
+  );
+};
+
+const fadedBoxes = (page: Page) =>
+  page.evaluate(() => {
+    const box = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+    };
+    const hero = document.querySelector('footer .moss-hero-closing')!;
+    const content = hero.querySelector('.moss-hero-content')!;
+    const credit = hero.querySelector('.moss-hero-credit')!;
+    const img = [...hero.querySelectorAll('img')].find((i) => getComputedStyle(i).display !== 'none')!;
+    const style = getComputedStyle(img);
+    return {
+      hero: box(hero),
+      content: box(content),
+      heading: box(content.querySelector('h2')!),
+      credit: box(credit),
+      colophon: box(document.querySelector('footer .moss-colophon')!),
+      viewport: document.documentElement.clientWidth,
+      docBottom: document.documentElement.scrollHeight - scrollY,
+      mask: style.maskImage && style.maskImage !== 'none' ? style.maskImage : style.webkitMaskImage,
+      words: { ink: getComputedStyle(content).color, panel: getComputedStyle(content).backgroundColor },
+      creditStyle: { ink: getComputedStyle(credit).color, panel: getComputedStyle(credit).backgroundColor, size: parseFloat(getComputedStyle(credit).fontSize), pad: parseFloat(getComputedStyle(credit).paddingInlineStart) },
+      page: getComputedStyle(document.body).backgroundColor,
+      shown: img.getAttribute('data-hero-variant'),
+    };
+  });
+
+/** The pixels in `box` (viewport px), with the words and credit hidden. */
+const backdrop = async (page: Page, box: { left: number; right: number; top: number; bottom: number }) => {
+  await page.addStyleTag({ content: 'footer .moss-hero-closing :is(.moss-hero-content, .moss-hero-credit) { visibility: hidden !important; }' });
+  const shot = await page.screenshot({ clip: { x: box.left, y: box.top, width: box.right - box.left, height: box.bottom - box.top } });
+  return page.evaluate(async (b64) => {
+    const img = new Image();
+    img.src = `data:image/png;base64,${b64}`;
+    await img.decode();
+    const canvas = document.createElement('canvas');
+    [canvas.width, canvas.height] = [img.width, img.height];
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(img, 0, 0);
+    const px = ctx.getImageData(0, 0, img.width, img.height).data;
+    const out: number[][] = [];
+    for (let i = 0; i < px.length; i += 4) out.push([px[i], px[i + 1], px[i + 2]]);
+    return out;
+  }, shot.toString('base64'));
+};
+
+const worstContrast = (ink: string, pixels: number[][]) => pixels.reduce((worst, p) => Math.min(worst, contrastWith(ink, p)), Infinity);
+
+const THEMES = [
+  { name: 'light', system: 'light', toggle: null, dark: false },
+  { name: 'dark by system setting', system: 'dark', toggle: null, dark: true },
+  { name: 'dark by toggle', system: 'light', toggle: 'dark', dark: true },
+] as const;
+
+for (const theme of THEMES) {
+  for (const width of [1360, 390]) {
+    test(`faded closing picture, ${theme.name}, ${width}px: the top fades into the page, the words and credit read on it`, async ({ browser }) => {
+      const context = await browser.newContext({ colorScheme: theme.system, viewport: { width, height: 800 } });
+      const page = await context.newPage();
+      await openFaded(page, theme.toggle);
+      const m = await fadedBoxes(page);
+      expect(m.shown, 'the theme picks the picture').toBe(theme.dark ? 'dark' : 'light');
+      expect(m.mask, 'the picture is masked').toContain('linear-gradient');
+
+      // Nothing follows: the picture is the page's last box and the colophon sits on its foot.
+      expect(m.hero.left).toBeCloseTo(0, 0);
+      expect(m.hero.right).toBeCloseTo(m.viewport, 0);
+      expect(m.hero.bottom).toBeCloseTo(m.docBottom, 0);
+      expect(m.colophon.bottom).toBeLessThanOrEqual(m.hero.bottom + 1);
+      expect(m.colophon.top).toBeGreaterThanOrEqual(m.credit.bottom - 1);
+
+      // The credit sits with the words: beside them at the inline end from 80rem,
+      // under them, where their text starts, on a phone.
+      if (width >= 1280) {
+        expect(m.credit.left, 'beside the words, not over them').toBeGreaterThan(m.content.right);
+        expect(Math.abs(m.credit.right - m.hero.right), 'at the inline end').toBeLessThanOrEqual(m.viewport * 0.06);
+        expect(m.credit.top, 'level with the words').toBeLessThanOrEqual(m.heading.top);
+      } else {
+        expect(m.credit.top, 'under the words').toBeGreaterThanOrEqual(m.content.bottom - 1);
+        expect(Math.abs(m.credit.left + m.creditStyle.pad - m.heading.left), 'where the words start').toBeLessThanOrEqual(2);
+        expect(m.credit.bottom, 'above the picture kept clear on a phone').toBeLessThanOrEqual(m.hero.top + (m.hero.bottom - m.hero.top) * 0.6);
+      }
+      expect(m.creditStyle.size).toBeLessThan(16);
+
+      // In ink, no panel, and AA against every pixel behind them.
+      expect(parseColor(m.words.panel).a, 'no panel behind the words').toBe(0);
+      expect(parseColor(m.creditStyle.panel).a, 'no panel behind the credit').toBe(0);
+      const behindWords = await backdrop(page, m.heading);
+      expect(worstContrast(m.words.ink, behindWords), `words ${m.words.ink}`).toBeGreaterThanOrEqual(4.5);
+      const behindCredit = await backdrop(page, m.credit);
+      expect(worstContrast(m.creditStyle.ink, behindCredit), `credit ${m.creditStyle.ink}`).toBeGreaterThanOrEqual(4.5);
+
+      // The top row of the picture is the page colour; halfway down it is the picture.
+      const top = await backdrop(page, { left: m.hero.left + 2, right: m.hero.right - 2, top: m.hero.top, bottom: m.hero.top + 1 });
+      const pageLum = luminanceOfCss(m.page);
+      expect(top.reduce((most, p) => Math.max(most, Math.abs(lum(p) - pageLum)), 0), 'the picture starts in the page colour').toBeLessThan(0.02);
+      await context.close();
+    });
+  }
+}
+
+test('a faded closing picture in a right-to-left page: the credit sits at the inline end, beside the words', async ({ page }) => {
+  await page.setViewportSize({ width: 1360, height: 800 });
+  await openFaded(page);
+  await page.evaluate(() => { document.documentElement.dir = 'rtl'; });
+  const m = await fadedBoxes(page);
+  expect(m.credit.left - m.hero.left).toBeLessThanOrEqual(m.viewport * 0.06);
+  expect(m.credit.top, 'level with the words').toBeLessThanOrEqual(m.heading.top);
+  expect(m.credit.right, 'not over the words').toBeLessThan(m.content.left);
+});
+
+test('a faded closing picture is still capped by --moss-hero-max-height, and the crop keeps the foot', async ({ page }) => {
+  await page.setViewportSize({ width: 1360, height: 800 });
+  await openFaded(page);
+  await page.evaluate(() => document.documentElement.style.setProperty('--moss-hero-max-height', '400px'));
+  const b = await boxOf(page);
+  expect(Math.abs(b.height - 400)).toBeLessThanOrEqual(1);
+  expect(b.position.split(' ')[1]).toBe('100%');
+});
+
+test('without fade=top nothing fades and the credit stays at the foot', async ({ page }) => {
+  await page.setViewportSize({ width: 1360, height: 800 });
+  await page.goto('/', { waitUntil: 'load' });
+  const m = await page.evaluate(() => {
+    const hero = document.querySelector('footer .moss-hero-closing')!;
+    const img = [...hero.querySelectorAll('img')].find((i) => getComputedStyle(i).display !== 'none')!;
+    const s = getComputedStyle(img);
+    return { fade: hero.hasAttribute('data-fade'), credit: hero.hasAttribute('data-credit'), mask: s.maskImage || s.webkitMaskImage };
+  });
+  expect(m).toEqual({ fade: false, credit: false, mask: 'none' });
+});
+
+// Busy under the words too, with the fade: the words keep their panel, and the
+// credit under them runs the same width on the same panel, so the two read as
+// one block, with the phone's fade hanging below the credit rather than across it.
+const BUSY_FADE = `http://localhost:${gatePort('closing-picture:busy-fade')}/`;
+for (const scheme of SCHEMES) {
+  for (const width of [390, 900]) {
+    test(`busy faded picture, ${scheme}, ${width}px: the credit joins the words' panel`, async ({ browser }) => {
+      const context = await browser.newContext({ colorScheme: scheme, viewport: { width, height: 800 } });
+      const page = await context.newPage();
+      await page.goto(BUSY_FADE, { waitUntil: 'load' });
+      const m = await page.evaluate(() => {
+        const hero = document.querySelector('footer .moss-hero-closing')!;
+        const content = hero.querySelector('.moss-hero-content')!;
+        const credit = hero.querySelector('.moss-hero-credit')!;
+        const [c, k] = [content.getBoundingClientRect(), credit.getBoundingClientRect()];
+        return {
+          content: { left: c.left, right: c.right, bottom: c.bottom },
+          credit: { left: k.left, right: k.right, top: k.top },
+          panels: [getComputedStyle(content).backgroundColor, getComputedStyle(credit).backgroundColor],
+          ink: getComputedStyle(credit).color,
+          tails: [getComputedStyle(content, '::after').content, getComputedStyle(credit, '::after').content],
+        };
+      });
+      expect(parseColor(m.panels[0]).a, 'the words keep their panel').toBeGreaterThan(0.5);
+      expect(m.panels[1], 'the credit is on the same panel').toBe(m.panels[0]);
+      expect(Math.abs(m.credit.top - m.content.bottom), 'directly under the words').toBeLessThanOrEqual(1);
+      expect(Math.abs(m.credit.left - m.content.left)).toBeLessThanOrEqual(1);
+      expect(Math.abs(m.credit.right - m.content.right)).toBeLessThanOrEqual(1);
+      const { overBlack, overWhite } = worstCaseContrast(m.panels[1], m.ink);
+      expect(Math.min(overBlack, overWhite), `credit ${m.ink} on ${m.panels[1]}`).toBeGreaterThanOrEqual(4.5);
+      if (width < 768) expect(m.tails, 'the fade hangs below the credit').toEqual(['none', '""']);
+      await context.close();
+    });
+  }
+}
+
+// The same busy faded picture with no credit: nothing is set under the words,
+// so on a phone their panel still ends in its fade, not a seam.
+const BUSY_BARE = `http://localhost:${gatePort('closing-picture:busy-bare')}/`;
+for (const scheme of SCHEMES) {
+  test(`busy faded picture without a credit, ${scheme}, 390px: the words' panel ends in its fade`, async ({ browser }) => {
+    const context = await browser.newContext({ colorScheme: scheme, viewport: { width: 390, height: 800 } });
+    const page = await context.newPage();
+    await page.goto(BUSY_BARE, { waitUntil: 'load' });
+    const m = await page.evaluate(() => {
+      const hero = document.querySelector('footer .moss-hero-closing')!;
+      const content = hero.querySelector('.moss-hero-content')!;
+      const tail = getComputedStyle(content, '::after');
+      return { credit: hero.querySelectorAll('.moss-hero-credit').length, attr: hero.hasAttribute('data-credit') || hero.hasAttribute('data-credit-night'), panel: getComputedStyle(content).backgroundColor, tail: { content: tail.content, bg: tail.backgroundColor } };
+    });
+    expect(m.credit).toBe(0);
+    expect(m.attr, 'no credit to measure').toBe(false);
+    expect(parseColor(m.panel).a, 'the words keep their panel').toBeGreaterThan(0.5);
+    expect(m.tail.content).not.toBe('none');
+    expect(m.tail.bg, 'the tail is the panel faded').toBe(m.panel);
+    await context.close();
+  });
+}

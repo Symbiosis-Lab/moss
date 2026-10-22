@@ -77,6 +77,9 @@ pub struct MediaDimensionLookup {
     /// `OnceLock` saved — it was memoizing one build per lookup either way,
     /// which is what fixed the O(pages x assets) rebuild measured 2026-08-24.
     snapshot: moss_core::asset_snapshot::AssetSnapshot,
+    /// The page colour per theme that a `fade=top` closing picture is measured
+    /// over; moss's own unless the build read the theme's.
+    page_ground: crate::build::markdown::hero_ink::PageGround,
 }
 
 // How many lookups this thread has built. Each one walks every image and
@@ -87,6 +90,15 @@ thread_local! {
 }
 
 impl MediaDimensionLookup {
+    /// This lookup, measuring faded pictures over `ground`.
+    pub fn with_page_ground(self, page_ground: crate::build::markdown::hero_ink::PageGround) -> Self {
+        Self { page_ground, ..self }
+    }
+
+    pub fn page_ground(&self) -> crate::build::markdown::hero_ink::PageGround {
+        self.page_ground
+    }
+
     /// Creates a new lookup table from image and video metadata.
     ///
     /// # Arguments
@@ -192,7 +204,7 @@ impl MediaDimensionLookup {
         };
         let snapshot =
             crate::build::markdown::pipeline::build_asset_snapshot(&maps, registry, dir_overrides);
-        Self { maps, snapshot }
+        Self { maps, snapshot, page_ground: Default::default() }
     }
 
     /// The picture at `href` (an output URL) as luminance bands, as the scan
