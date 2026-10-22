@@ -987,8 +987,8 @@ mod tests {
     /// kinds table (task A4).
     fn both_kinds() -> Vec<TermKind> {
         vec![
-            TermKind { cards: false, key: AUTHOR_NS.to_string(), fields: vec!["author".to_string()], title: "Authors".to_string(), titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None },
-            TermKind { cards: false, key: TAGS_NS.to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: AUTHOR_NS.to_string(), fields: vec!["author".to_string()], title: "Authors".to_string(), titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: TAGS_NS.to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None },
         ]
     }
 
@@ -1046,7 +1046,7 @@ mod tests {
                 key: "places".to_string(),
                 fields: vec!["location".to_string()],
                 title: "Places".to_string(),
-                titles: Vec::new(), is_place: true,
+                titles: Vec::new(), counts: Vec::new(), is_place: true,
                 parents: Default::default(), explorer: None, line: None,
             },
             TermKind {
@@ -1054,7 +1054,7 @@ mod tests {
                 key: TAGS_NS.to_string(),
                 fields: vec!["tags".to_string()],
                 title: "Tags".to_string(),
-                titles: Vec::new(), is_place: false,
+                titles: Vec::new(), counts: Vec::new(), is_place: false,
                 parents: Default::default(), explorer: None, line: None,
             },
         ];
@@ -1078,7 +1078,7 @@ mod tests {
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
-            titles: Vec::new(), is_place: true,
+            titles: Vec::new(), counts: Vec::new(), is_place: true,
             parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![
@@ -1270,7 +1270,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["jury".to_string()],
             title: "People".to_string(),
-            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("about/kane/index.html", "Kane"), doc("posts/a/index.html", "A")];
         docs[0].jury_page = Some(TermClaim::UseTitle);
@@ -1288,7 +1288,7 @@ mod tests {
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
-            titles: Vec::new(), is_place: true, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), counts: Vec::new(), is_place: true, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("about/kyoto/index.html", "Kyoto"), doc("posts/a/index.html", "A")];
         docs[0].place_page = Some(TermClaim::UseTitle);
@@ -1307,7 +1307,7 @@ mod tests {
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
-            titles: Vec::new(), is_place: true,
+            titles: Vec::new(), counts: Vec::new(), is_place: true,
             parents: parents.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             explorer: None, line: None,
         }
@@ -1408,7 +1408,7 @@ mod tests {
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
-            titles: Vec::new(), is_place: true,
+            titles: Vec::new(), counts: Vec::new(), is_place: true,
             parents,
             explorer: None, line: None,
         }];
@@ -1457,7 +1457,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["jury".to_string()],
             title: "People".to_string(),
-            titles: Vec::new(), is_place: false,
+            titles: Vec::new(), counts: Vec::new(), is_place: false,
             parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("about/kane/index.html", "Kane")];
@@ -1565,7 +1565,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string()],
             title: "People".to_string(),
-            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("posts/a/index.html", "A")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -1594,7 +1594,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string()],
             title: "People".to_string(),
-            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("about/chen/index.html", "陳小華"), doc("posts/a/index.html", "A")];
         docs[0].author_page = Some(TermClaim::UseTitle);
@@ -1644,7 +1644,7 @@ mod tests {
             key: "authors".to_string(),
             fields: Vec::new(),
             title: "作者".to_string(),
-            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("authors/index.html", "authors")];
         let index = derive_terms(&mut docs, off);
@@ -1659,7 +1659,7 @@ mod tests {
             key: "authors".to_string(),
             fields: vec!["author".to_string()],
             title: "作者".to_string(),
-            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("posts/a/index.html", "A")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -1679,7 +1679,7 @@ mod tests {
             key: "authors".to_string(),
             fields: vec!["author".to_string()],
             title: "Authors".to_string(),
-            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("posts/a/index.html", "A"), doc("posts/b/index.html", "B")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -1703,7 +1703,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string(), "jury".to_string()],
             title: "People".to_string(),
-            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("posts/a/index.html", "A"), doc("posts/b/index.html", "B")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -1721,7 +1721,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string(), "jury".to_string()],
             title: "People".to_string(),
-            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("seasons/one/index.html", "One"), doc("posts/a/index.html", "A")];
         docs[0].jury = vec!["Ada Lin".to_string()];
@@ -1751,7 +1751,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string(), "jury".to_string()],
             title: "People".to_string(),
-            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("posts/a/index.html", "A"), doc("seasons/one/index.html", "One")];
         docs[0].author = vec!["Kane".to_string()];
@@ -1783,7 +1783,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string()],
             title: "People".to_string(),
-            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![
             doc("ada-lin/index.html", "Ada Lin"),
@@ -1842,14 +1842,14 @@ mod tests {
     /// the built-in loses the field, the declared kind gains it.
     fn author_moved_to_people() -> Vec<TermKind> {
         vec![
-            TermKind { cards: false, key: "authors".to_string(), fields: Vec::new(), title: "Authors".to_string(), titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None },
-            TermKind { cards: false, key: "tags".to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: "authors".to_string(), fields: Vec::new(), title: "Authors".to_string(), titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: "tags".to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None },
             TermKind {
                 cards: false,
                 key: "people".to_string(),
                 fields: vec!["author".to_string(), "editor".to_string()],
                 title: "People".to_string(),
-                titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+                titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
             },
         ]
     }
@@ -1919,14 +1919,14 @@ mod tests {
     #[test]
     fn a_moved_tags_namespace_root_also_gets_a_redirect() {
         let moved = vec![
-            TermKind { cards: false, key: "authors".to_string(), fields: vec!["author".to_string()], title: "Authors".to_string(), titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None },
-            TermKind { cards: false, key: "tags".to_string(), fields: Vec::new(), title: "Tags".to_string(), titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: "authors".to_string(), fields: vec!["author".to_string()], title: "Authors".to_string(), titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: "tags".to_string(), fields: Vec::new(), title: "Tags".to_string(), titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None },
             TermKind {
                 cards: false,
                 key: "topics".to_string(),
                 fields: vec!["tags".to_string()],
                 title: "Topics".to_string(),
-                titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+                titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
             },
         ];
         let mut docs = vec![doc("posts/a/index.html", "A")];
@@ -1951,9 +1951,9 @@ mod tests {
                 key: "authors".to_string(),
                 fields: vec!["author".to_string()],
                 title: "Authors".to_string(),
-                titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+                titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
             },
-            TermKind { cards: false, key: "tags".to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None },
+            TermKind { cards: false, key: "tags".to_string(), fields: vec!["tags".to_string()], title: "Tags".to_string(), titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None },
         ];
         let mut docs = vec![doc("posts/a/index.html", "A")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -1970,7 +1970,7 @@ mod tests {
             key: "authors".to_string(),
             fields: Vec::new(),
             title: "Authors".to_string(),
-            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("posts/a/index.html", "A")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -1987,7 +1987,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string(), "editor".to_string()],
             title: "People".to_string(),
-            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("posts/a/index.html", "A")];
         docs[0].author = vec!["Ada Lin".to_string()];
@@ -2063,7 +2063,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string()],
             title: "People".to_string(),
-            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         let mut docs = vec![doc("posts/a/index.html", "A")];
         docs[0].author = vec!["Alex Rivera".to_string()];

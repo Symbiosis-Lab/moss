@@ -1150,7 +1150,7 @@ mod tests {
             key: "people".to_string(),
             fields: vec!["author".to_string()],
             title: "People".to_string(),
-            titles: Vec::new(), is_place: false,
+            titles: Vec::new(), counts: Vec::new(), is_place: false,
             parents: Default::default(), explorer: None, line: None,
         }];
         map.terms.insert(

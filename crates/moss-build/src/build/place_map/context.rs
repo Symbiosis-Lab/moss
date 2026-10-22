@@ -1008,7 +1008,7 @@ mod tests {
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
-            titles: Vec::new(), is_place: true,
+            titles: Vec::new(), counts: Vec::new(), is_place: true,
             parents: Default::default(), explorer: None, line: None,
         }];
         crate::build::terms::places::attach_parents(&mut kinds, &gaz);

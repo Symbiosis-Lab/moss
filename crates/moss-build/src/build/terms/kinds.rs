@@ -79,9 +79,21 @@ pub struct TermKind {
     /// default must not add a key to every serialized kind.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cards: bool,
+    /// `[terms.<key>] count`, the card count wording per language tag, as
+    /// `titles` is. Read through [`Self::count_in`]. Skipped when empty, so a
+    /// kind that sets none serializes as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub counts: Vec<(String, String)>,
 }
 
 impl TermKind {
+    /// The card count wording for a page in `lang`, `None` when the kind sets
+    /// none. `false` comes back as empty text, which hides the count.
+    pub fn count_in(&self, lang: &str) -> Option<moss_core::frontmatter_union::ChildrenCount> {
+        moss_core::fields::label_in(&self.counts, lang)
+            .map(|text| moss_core::frontmatter_union::ChildrenCount(text.to_string()))
+    }
+
     /// Whether the places explorer should activate for this kind: only ever
     /// true for the place-typed kind, default-on absent an explicit
     /// `explorer = false`. The one place both the injection predicate
@@ -112,6 +124,7 @@ impl TermKind {
             fields: vec![field.to_string()],
             title: kind_title(key, &[], site_lang),
             titles: Vec::new(),
+            counts: Vec::new(),
             is_place: false,
             parents: Default::default(),
             explorer: None,
@@ -236,6 +249,12 @@ pub fn term_kinds(cfg: &crate::config::ConfigFile, site_lang: &str) -> Vec<TermK
                 fields
             };
             let title = kind_title(&kind.key, &kind.titles, site_lang);
+            if kind.counts.iter().any(|(_, text)| moss_core::frontmatter_union::ChildrenCount(text.clone()).lacks_placeholder()) {
+                crate::build::cli_output::log_warn_problem!(
+                    "[terms.{}] count has no {{n}}, so every card shows the same text",
+                    kind.key
+                );
+            }
             let is_place = match kind.kind_type.as_deref() {
                 Some("place") => true,
                 Some(other) => {
@@ -266,7 +285,7 @@ pub fn term_kinds(cfg: &crate::config::ConfigFile, site_lang: &str) -> Vec<TermK
                     false
                 }
             };
-            TermKind { key: kind.key, fields, title, titles: kind.titles, is_place, parents: Default::default(), explorer, line, cards }
+            TermKind { key: kind.key, fields, title, titles: kind.titles, counts: kind.counts, is_place, parents: Default::default(), explorer, line, cards }
         })
         .collect()
 }

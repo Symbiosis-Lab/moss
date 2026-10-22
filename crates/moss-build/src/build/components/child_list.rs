@@ -505,6 +505,9 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
     let permalink = external_url.as_ref().map(|_| local_url.clone());
 
     let when = doc.event.as_ref().map(|e| crate::build::folder_embed::upcoming::when_of(e, now));
+    let count_only = child_count.is_none() && term_count.is_some();
+    // A listing's `children_count` applies to a card only where the card has no wording of its own.
+    let count_setting = doc.term_card.as_ref().filter(|_| count_only).and_then(|card| card.count_setting.clone());
 
     ChildItemProps {
         // Child list cards/rows are chrome; use the plain-text label.
@@ -513,7 +516,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         date_display,
         date_raw,
         child_count: child_count.or(term_count),
-        count_only: child_count.is_none() && term_count.is_some(),
+        count_only,
         description: explicit_card_text(doc),
         cover,
         cover_type: cover_path_for_type
@@ -522,7 +525,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         kicker: crate::build::scan::page_map::publisher(&doc.raw_frontmatter),
         permalink,
         url_path: doc.url_path.clone(),
-        count_setting: None,
+        count_setting,
         place: doc.place_names.clone().or_else(|| {
             // An event's place is shown even when it names no place page.
             doc.event.as_ref()?;

@@ -193,3 +193,79 @@ fn cards_keep_a_term_indexs_alphabetical_order_whatever_the_mix_of_terms() {
     assert_alphabetical_in_one_group(&site, "boroughs/index.html", &["Astoria", "Bronx", "Brooklyn", "Chelsea", "Harlem", "Queens"]);
     assert_alphabetical_in_one_group(&site, "de/boroughs/index.html", &["Mitte", "Neukoelln", "Pankow"]);
 }
+
+/// A borough site whose kind declares `count_line` (a TOML line under `[terms.boroughs]`).
+fn borough_site_with_count(count_line: &str) -> site::Site {
+    let site = site::Site::new(&[]);
+    site.write(
+        ".moss/config.toml",
+        &format!("schema_version = 6\n\n[site]\nlang = \"en\"\n\n[terms.boroughs]\nfields = [\"borough\"]\nnav = true\n{count_line}"),
+    );
+    site.write("index.md", "---\ntitle: Home\n---\n\nHello.\n");
+    write_notes(
+        &site,
+        &[("a", "Manhattan", "", None), ("b", "Manhattan", "", None), ("c", "Manhattan", "", None), ("d", "Brooklyn", "", None)],
+    );
+    site.rebuild();
+    site
+}
+
+/// All the text of the index card whose title is `name`, count included.
+fn card_text(html: &str, name: &str) -> String {
+    let doc = scraper::Html::parse_document(html);
+    let card = scraper::Selector::parse("a.moss-card").unwrap();
+    doc.select(&card)
+        .map(|c| c.text().collect::<String>())
+        .find(|text| text.contains(name))
+        .unwrap_or_else(|| panic!("no card for {name}"))
+}
+
+#[test]
+fn a_term_kind_count_sets_the_cards_wording_singular_and_plural() {
+    for count_line in [
+        "count = \"{n} photograph|{n} photographs\"\n",
+        "count = { en = \"{n} photograph|{n} photographs\" }\n",
+    ] {
+        let site = borough_site_with_count(count_line);
+        let index = site.html("boroughs/index.html");
+        let many = card_text(&index, "Manhattan");
+        assert!(many.contains("3 photographs"), "{count_line}: {many}");
+        let one = card_text(&index, "Brooklyn");
+        assert!(one.contains("1 photograph") && !one.contains("photographs"), "{count_line}: {one}");
+    }
+}
+
+#[test]
+fn a_term_kind_count_of_false_hides_the_count() {
+    let site = borough_site_with_count("count = false\n");
+    let index = site.html("boroughs/index.html");
+    for name in ["Manhattan", "Brooklyn"] {
+        let text = card_text(&index, name);
+        assert!(!text.contains("article") && !text.contains("photograph"), "{text}");
+    }
+}
+
+#[test]
+fn a_term_kind_without_a_count_keeps_the_default_wording() {
+    let site = borough_site_with_count("");
+    let index = site.html("boroughs/index.html");
+    assert!(card_text(&index, "Manhattan").contains("3 articles"));
+    assert!(card_text(&index, "Brooklyn").contains("1 article"));
+}
+
+#[test]
+fn a_term_kind_count_is_worded_per_language_and_falls_back_to_english() {
+    let site = borough_site_with_count(
+        "count = { en = \"{n} photograph|{n} photographs\", de = \"{n} Foto|{n} Fotos\" }\n",
+    );
+    site.write("de/notes/eins.md", "---\ntitle: Eins\nborough: [Manhattan]\ndate: 2026-01-01\n---\n\nText.\n");
+    site.write("fr/notes/un.md", "---\ntitle: Un\nborough: [Manhattan]\ndate: 2026-01-01\n---\n\nTexte.\n");
+    site.write("fr/notes/deux.md", "---\ntitle: Deux\nborough: [Manhattan]\ndate: 2026-01-02\n---\n\nTexte.\n");
+    site.rebuild();
+    let german = card_text(&site.html("de/boroughs/index.html"), "Manhattan");
+    assert!(german.contains("1 Foto") && !german.contains("Fotos"), "{german}");
+    let french = card_text(&site.html("fr/boroughs/index.html"), "Manhattan");
+    assert!(french.contains("2 photographs"), "{french}");
+    let english = card_text(&site.html("boroughs/index.html"), "Manhattan");
+    assert!(english.contains("3 photographs"), "{english}");
+}

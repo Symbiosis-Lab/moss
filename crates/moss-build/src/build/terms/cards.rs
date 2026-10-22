@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::TermIndex;
+use super::{TermIndex, TermKey};
 use crate::build::scan::article_map::to_pretty_url;
 use crate::build::types::{ParsedDocument, TermCard};
 
@@ -28,6 +28,9 @@ pub fn set_term_cards(documents: &mut [ParsedDocument], index: &TermIndex) {
                 None => (*by_path.get(&format!("{key}/index.html"))?, false),
             };
             let mut card = term_card(key, index, documents, &by_pretty)?;
+            let kind_key = TermKey::parse(key).map_or(key, |term| term.ns);
+            let lang = documents[target].lang.as_bcp47_attr();
+            card.count_setting = index.kinds().iter().find(|kind| kind.key == kind_key).and_then(|kind| kind.count_in(lang));
             if claimed && documents[target].listing_cover().is_some() {
                 card.cover = None;
             }
@@ -62,7 +65,7 @@ fn term_card(
             cover = sorted.into_iter().find_map(|doc| doc.listing_cover().map(str::to_string));
         }
     }
-    (!members.is_empty()).then(|| TermCard { count: members.len(), cover })
+    (!members.is_empty()).then(|| TermCard { count: members.len(), cover, ..Default::default() })
 }
 
 /// The term page sorts each group by date whatever its axis (the generated

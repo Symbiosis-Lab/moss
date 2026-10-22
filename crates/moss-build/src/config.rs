@@ -266,11 +266,20 @@ impl ConfigFile {
                 let fields: Vec<String> =
                     fields.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
                 let titles = table.get("title").and_then(Self::choice_labels).unwrap_or_default();
+                let counts = match table.get("count") {
+                    None => Vec::new(),
+                    Some(value) => Self::count_labels(value).unwrap_or_else(|| {
+                        crate::build::cli_output::log_warn_problem!(
+                            "[terms.{key}] count must be text, a table of text per language, or false; ignoring it"
+                        );
+                        Vec::new()
+                    }),
+                };
                 let kind_type = table.get("type").and_then(|v| v.as_str()).map(str::to_string);
                 let explorer = table.get("explorer").and_then(|v| v.as_bool());
                 let line = table.get("line").and_then(|v| v.as_bool());
                 let cards = table.get("cards").cloned();
-                declared.push(RawKind { key: key.clone(), fields, titles, kind_type, explorer, line, cards });
+                declared.push(RawKind { key: key.clone(), fields, titles, counts, kind_type, explorer, line, cards });
             }
         }
         let declared_keys: std::collections::HashSet<&str> =
@@ -289,6 +298,7 @@ impl ConfigFile {
                     Vec::new()
                 },
                 titles: Vec::new(),
+                counts: Vec::new(),
                 kind_type: None,
                 explorer: None, line: None, cards: None,
             });
@@ -359,6 +369,15 @@ impl ConfigFile {
                 problems.push(format!("[{table}] `{key}` must be a list of strings; ignoring it"));
                 Vec::new()
             }
+        }
+    }
+
+    /// A term kind's `count` as `(language tag, text)` pairs; `false` is the
+    /// empty text under `en`, which every language falls back to.
+    fn count_labels(count: &Value) -> Option<Vec<(String, String)>> {
+        match count {
+            Value::Boolean(false) => Some(vec![("en".to_string(), String::new())]),
+            other => Self::choice_labels(other),
         }
     }
 
@@ -587,6 +606,12 @@ pub struct RawKind {
     /// comes from `i18n::term_root_title`) and for a declared kind that didn't
     /// set one (its title is its key).
     pub titles: Vec<(String, String)>,
+    /// The table's `count`, in the same `(language tag, text)` shape as
+    /// `titles`: the wording of a term's card count, with `{n}` for the number
+    /// and the first `|` splitting the singular form. `count = false` is the
+    /// empty text, which hides the count. Empty when the key is absent and for
+    /// the two built-ins.
+    pub counts: Vec<(String, String)>,
     /// The declared `type = "..."` key, unvalidated — `"place"` is the only
     /// value `build::terms::term_kinds` recognizes today; anything else is a
     /// diagnostic there, not here. `None` for the two built-ins and for a

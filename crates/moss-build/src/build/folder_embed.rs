@@ -444,7 +444,7 @@ pub(crate) fn generate_children(
             // `props_for_document` (frontmatter, then the first byline row) and
             // never from the body excerpt, like the `:::grid` card it shares a
             // renderer with.
-            props.count_setting = count.cloned();
+            props.count_setting = props.count_setting.take().or_else(|| count.cloned());
             if style != "grid" {
                 props.description = crate::build::page::meta::resolve_page_description(
                     crate::build::components::child_list::explicit_card_text(doc).as_deref(),

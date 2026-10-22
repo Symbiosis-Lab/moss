@@ -67,6 +67,9 @@ pub struct SectionAccent {
 pub struct TermCard {
     pub count: usize,
     pub cover: Option<String>,
+    /// The term kind's `count` wording for the card's language; `None` keeps the
+    /// default. Set by `terms::set_term_cards`.
+    pub count_setting: Option<moss_core::frontmatter_union::ChildrenCount>,
 }
 
 /// Parsed markdown document with frontmatter and content.
