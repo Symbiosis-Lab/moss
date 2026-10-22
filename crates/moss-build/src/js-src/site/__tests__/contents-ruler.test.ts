@@ -60,8 +60,6 @@ function placeHeadings(current: number): void {
 
 beforeEach(() => {
   document.body.innerHTML = `${ISLAND}<main></main><footer></footer>`;
-  // No canvas in jsdom: titles are then shown whole and CSS does the clipping.
-  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
 });
 
 describe("the contents ruler", () => {
@@ -101,6 +99,21 @@ describe("the contents ruler", () => {
     const rows = [...document.querySelectorAll('[data-island-menu="sections"] a')];
     expect(rows.map((a) => a.getAttribute("aria-current"))).toEqual([null, "true", null]);
     expect(rows.map((a) => a.hasAttribute("data-read"))).toEqual([true, false, false]);
+  });
+
+  test("a section is current once its heading passes 35% of the window's height", async () => {
+    setPage(["一", "二", "三"]);
+    initNavIsland();
+    const at = async (top: number): Promise<number> => {
+      document.querySelectorAll<HTMLElement>("main h2").forEach((h, i) => {
+        h.getBoundingClientRect = () => ({ top: i < 1 ? -400 : i === 1 ? top : top + 900 }) as DOMRect;
+      });
+      window.dispatchEvent(new Event("scroll"));
+      await nextFrame();
+      return [...document.querySelectorAll(".moss-contents-ruler a")].findIndex((a) => a.getAttribute("aria-current") === "true");
+    };
+    expect(await at(window.innerHeight * 0.3)).toBe(1);
+    expect(await at(window.innerHeight * 0.4)).toBe(0);
   });
 
   test("it asks nothing of the page itself: the event is its only input", () => {
@@ -239,28 +252,20 @@ describe("one pass per frame", () => {
   });
 });
 
-describe("the sections panel's long titles", () => {
-  afterEach(() => vi.restoreAllMocks());
-
-  test("are cut in the middle, as on the ruler and the button, and keep their whole name", () => {
-    const long = "第一章的開頭很長很長很長很長很長很長很長很長很長很長很長的結尾";
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-      measureText: (text: string) => ({ width: [...text].length * 10 }),
-      font: "",
-    } as unknown as CanvasRenderingContext2D);
-    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(150);
-    setPage([long, "短"]);
+describe("a section's short name", () => {
+  test("names it on the ruler, the button and the panel; the heading keeps its text", async () => {
+    setPage(["Opening hours of the reading room", "Two", "Three"]);
+    const first = document.querySelector<HTMLElement>("main h2")!;
+    first.dataset.contentsLabel = "Opening hours";
+    first.insertAdjacentHTML("beforeend", '<a class="moss-heading-anchor" href="#s0"></a>');
     initNavIsland();
+    expect(rulerTitles()).toEqual(["Opening hours", "Two", "Three"]);
+    expect(document.querySelector(".moss-contents-ruler-label")!.textContent).toBe("Opening hours");
+    await scrollTo(0);
+    expect(document.querySelector(".moss-nav-island-section-name")!.textContent).toBe("Opening hours");
     button().dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-    const [first, second] = [...document.querySelectorAll('[data-island-menu="sections"] a')];
-    expect([...first.textContent!].length).toBeLessThanOrEqual(15);
-    const [head, tail] = first.textContent!.split("…");
-    expect(long.startsWith(head)).toBe(true);
-    expect(long.endsWith(tail)).toBe(true);
-    expect(head.length).toBeGreaterThan(0);
-    expect(tail.length).toBeGreaterThan(0);
-    expect(first.getAttribute("aria-label")).toBe(long);
-    expect(second.textContent).toBe("短");
-    expect(second.hasAttribute("aria-label")).toBe(false);
+    const rows = [...document.querySelectorAll('[data-island-menu="sections"] a')].map((a) => a.textContent);
+    expect(rows).toEqual(["Opening hours", "Two", "Three"]);
+    expect(first.textContent).toBe("Opening hours of the reading room");
   });
 });

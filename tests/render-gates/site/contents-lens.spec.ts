@@ -12,12 +12,13 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { contrastRatio, relativeLuminance } from '../../e2e/helpers/wcag-contrast';
-import { FOCAL_ROW, FOCUS_POINT, FULL_SECTIONS, LENS_SECTIONS, LENS_WITH_IMAGE, MANY } from '../../e2e/helpers/contents-lens-site';
+import { BROKEN_SECTIONS, FOCAL_ROW, FOCUS_POINT, FULL_SECTIONS, LENS_SECTIONS, LENS_WITH_IMAGE, MANY, SHORT_NAME } from '../../e2e/helpers/contents-lens-site';
 
 const LENS = '/essays/lens/';
 const PLAIN = '/essays/plain/';
 const MANY_PAGE = '/essays/many/';
 const FULL_PAGE = '/essays/full/';
+const BROKEN_PAGE = '/essays/broken/';
 /** contents-lens.ts: rest, open and focused row heights, and the pointer travel per row. */
 const REST = 20;
 const OPEN_ROW = 26;
@@ -194,6 +195,19 @@ test.describe('contents: pictures', () => {
     const widths = sources[3].srcset.split(',').map((c) => c.trim().split(/\s+/));
     expect(src).toBe(widths.sort((a, b) => parseInt(a[1]) - parseInt(b[1]))[0][0]);
     expect(src).not.toBe(sources[3].src);
+  });
+
+  test('the focused name is a little larger than the rest, and medium weight', async ({ page }) => {
+    await enter(page, 3);
+    const type = await page.$$eval('.moss-contents-ruler-label', (els) =>
+      els.map((el) => ({ size: parseFloat(getComputedStyle(el).fontSize), weight: Number(getComputedStyle(el).fontWeight) })),
+    );
+    const rest = type[0];
+    expect(type[3].size - rest.size, 'grows by about two pixels').toBeCloseTo(2, 0);
+    expect(type[3].weight).toBe(500);
+    expect(rest.weight).toBeLessThan(500);
+    expect(type[2].size, 'a neighbour grows part of the way').toBeGreaterThan(rest.size);
+    expect(type[2].size).toBeLessThan(type[3].size);
   });
 
   test('the focused row stays under the pointer while it moves, one row per pitch of travel', async ({ page }) => {
@@ -447,10 +461,52 @@ test.describe('a full-width page, the narrowest margin a page has', () => {
 
   test('at rest the strips stop at the lane: the page beside the dashes is not the ruler', async ({ page }) => {
     const at = await rows(page);
-    const lane = await page.locator('.moss-contents-ruler').evaluate((el) => parseFloat((el as HTMLElement).style.getPropertyValue('--moss-contents-lane')));
+    // The strips end a gutter short of the reserved lane's edge, where the text starts.
+    const edge = await page.evaluate(() => {
+      const probe = document.createElement('div');
+      probe.style.cssText = 'position:absolute;inline-size:calc(var(--moss-contents-lane) - var(--moss-contents-gutter))';
+      document.body.append(probe);
+      const w = probe.getBoundingClientRect().width;
+      probe.remove();
+      return w;
+    });
     const linkAt = (x: number, y: number) =>
       page.evaluate(([px, py]) => document.elementFromPoint(px, py)?.closest('.moss-contents-ruler')?.tagName ?? null, [x, y]);
-    expect(await linkAt(at[2].dash.x + lane - 4, at[2].rest.centre), 'inside the lane').toBe('NAV');
-    expect(await linkAt(at[2].dash.x + lane + 12, at[2].rest.centre), 'past it, the page').toBeNull();
+    expect(await linkAt(edge - 4, at[2].rest.centre), 'inside the lane').toBe('NAV');
+    expect(await linkAt(edge + 12, at[2].rest.centre), 'past it, the page').toBeNull();
+  });
+});
+
+test.describe('the sections panel at 768px', () => {
+  test('a row whose picture does not load shows its whole name, and a short name stands for its heading', async ({ page }) => {
+    await page.setViewportSize({ width: 768, height: 900 });
+    await page.goto(BROKEN_PAGE);
+    await page.evaluate(() => document.fonts.ready);
+    await page.evaluate(() => document.querySelectorAll<HTMLElement>('main h2[id]')[0].scrollIntoView({ block: 'start' }));
+    await frames(page);
+    // The bar comes back on a scroll up.
+    await page.evaluate(() => window.scrollBy(0, 120));
+    await frames(page);
+    await page.evaluate(() => window.scrollBy(0, -80));
+    await frames(page);
+    await page.waitForFunction(() => document.querySelector('.moss-nav-island')?.getAttribute('data-shown') === 'true');
+    // The thumbnail is lazy: it fails once the panel first opens. Reopened,
+    // the row has given up its picture.
+    const button = page.locator('.moss-nav-island-sections');
+    await button.click();
+    await expect.poll(() => page.locator('[data-island-menu="sections"] a').nth(1).evaluate((a) => a.hasAttribute('data-pic'))).toBe(false);
+    await button.click();
+    await button.click();
+    await expect(page.locator('[data-island-menu="sections"]')).toBeVisible();
+    const rows = await page.$$eval('[data-island-menu="sections"] a', (as) =>
+      as.map((a) => ({ text: a.textContent ?? '', cut: a.scrollWidth > a.clientWidth })),
+    );
+    expect(rows).toEqual([
+      { text: SHORT_NAME, cut: false },
+      { text: BROKEN_SECTIONS[1], cut: false },
+      { text: BROKEN_SECTIONS[2], cut: false },
+    ]);
+    const heading = await page.locator('main h2[id]').first().evaluate((h) => ({ id: h.id, label: (h as HTMLElement).dataset.contentsLabel, text: h.firstChild?.textContent }));
+    expect(heading).toEqual({ id: 'hours', label: SHORT_NAME, text: BROKEN_SECTIONS[0] });
   });
 });

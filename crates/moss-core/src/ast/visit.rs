@@ -613,6 +613,7 @@ mod tests {
             }],
             id: None,
             contents_end: false,
+            contents_label: None,
         }]);
         let mut count = 0;
         visit_urls_mut(&mut doc, |_| count += 1);

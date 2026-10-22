@@ -8,7 +8,7 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { gatePort } from '../../../playwright/gate-ports';
-import { AFTER_END, BAND_PATH, BAND_SECTIONS, CLOSING_PATH, COLLECTIONS, LONG_TITLE, SITE_SUBTITLE } from '../../e2e/helpers/header-none-site';
+import { AFTER_END, BAND_PATH, BAND_SECTIONS, CLOSING_PATH, COLLECTIONS, LONG_TITLE, LONG_TITLE_PATH, BAND_TINT, PICTURES_PATH, UPRIGHT_PATH, PICTURE_SECTIONS, SITE_SUBTITLE } from '../../e2e/helpers/header-none-site';
 
 const BAND_PAGE = `http://localhost:${gatePort('header-none:band')}${BAND_PATH}`;
 const ALL = [...COLLECTIONS, AFTER_END];
@@ -133,6 +133,11 @@ test.describe('a one-page site with header = "none"', () => {
       await jumpTo(page, k);
       expect(await nameOf(page), `section ${k}`).toBe(COLLECTIONS[k]);
     }
+    // A section is current once its heading passes 35% of the window.
+    await placeTop(page, 'main h2[id="nets"]', 0.3);
+    expect(await nameOf(page)).toBe(COLLECTIONS[2]);
+    await placeTop(page, 'main h2[id="nets"]', 0.45);
+    expect(await nameOf(page)).toBe(COLLECTIONS[1]);
     const button = page.locator('.moss-nav-island-sections');
     await expect(button).toBeVisible();
     await button.click();
@@ -234,6 +239,7 @@ const toggleState = (page: Page) =>
       position: getComputedStyle(t).position,
       top: island.hasAttribute('data-top'),
       ruler: island.dataset.ruler,
+      lane: island.dataset.ruler === 'lane',
       box: { left: r.left, right: r.right, top: r.top, bottom: r.bottom },
       bar: { right: bar.right, top: bar.top, bottom: bar.bottom },
       scrollY,
@@ -241,7 +247,7 @@ const toggleState = (page: Page) =>
   });
 
 test.describe('one theme toggle', () => {
-  for (const [width, path] of [[WIDE, '/'], [NARROW, '/'], [WIDE, CLOSING_PATH], [390, '/']] as const) {
+  for (const [width, path] of [[WIDE, '/'], [NARROW, '/'], [WIDE, CLOSING_PATH], [390, '/'], [1360, PICTURES_PATH]] as const) {
     test(`at ${width}px on ${path}, exactly one is visible at every scroll position`, async ({ page }) => {
       await open(page, path, width, 800);
       const height = await page.evaluate(() => document.documentElement.scrollHeight - innerHeight);
@@ -259,9 +265,10 @@ test.describe('one theme toggle', () => {
           expect(c.left, `a control starts inside the window at ${y}px`).toBeGreaterThanOrEqual(0);
           expect(c.right, `and ends inside it`).toBeLessThanOrEqual(width);
         }
-        places.add(s.top ? 'top' : s.ruler === 'on' ? 'list' : 'bar');
+        places.add(s.top ? 'top' : s.ruler === 'on' || s.lane ? 'list' : 'bar');
       }
-      expect([...places].sort(), 'it has been in each of its places').toEqual(width === WIDE ? ['bar', 'list', 'top'] : ['bar', 'top']);
+      const want = path === PICTURES_PATH ? ['list', 'top'] : width === WIDE ? ['bar', 'list', 'top'] : ['bar', 'top'];
+      expect([...places].sort(), 'it has been in each of its places').toEqual(want);
       await expect(page.getByRole('button', { name: 'Toggle theme' })).toHaveCount(1);
     });
   }
@@ -332,6 +339,188 @@ test.describe('one theme toggle', () => {
   });
 });
 
+test.describe('a contents: pictures page reserves a lane for its list', () => {
+  /** Where the list, the bar and the text are at one scroll position. */
+  const state = (page: Page) =>
+    page.evaluate(() => {
+      const nav = document.querySelector<HTMLElement>('.moss-contents-ruler')!;
+      const island = document.querySelector<HTMLElement>('.moss-nav-island')!;
+      const ist = getComputedStyle(island);
+      return {
+        list: !nav.hidden && !nav.hasAttribute('data-away'),
+        bar: island.dataset.shown === 'true' || (ist.visibility === 'visible' && ist.opacity !== '0' && !island.inert),
+        lane: island.dataset.ruler === 'on' || island.dataset.ruler === 'lane',
+        textLeft: document.querySelector('main h2[id]')!.getBoundingClientRect().left,
+        listRight: nav.querySelector('ol')!.getBoundingClientRect().right,
+      };
+    });
+
+  for (const width of [1100, 1360]) {
+    test(`at ${width}px the list is up and the bar never shows, from the first section to the end`, async ({ page }) => {
+      await open(page, PICTURES_PATH, width, 800);
+      await jumpTo(page, 0);
+      await expect.poll(async () => (await state(page)).list).toBe(true);
+      const s = await state(page);
+      expect(s.lane).toBe(true);
+      expect(s.textLeft - s.listRight, 'the text starts a gutter past the list').toBeGreaterThanOrEqual(24 - 0.5);
+      expect(s.textLeft, 'the column narrowed to keep the lane').toBeLessThan(92 + 48);
+
+      const start = await page.evaluate(() => scrollY);
+      const end = await page.evaluate(() => document.documentElement.scrollHeight - innerHeight);
+      for (let y = start; y <= end + 199; y += 200) {
+        await scrollTo(page, Math.min(y, end));
+        const now = await state(page);
+        expect(now.bar, `no bar at ${Math.min(y, end)}px`).toBe(false);
+      }
+      // Over the tinted band the list stays: its words keep the text column.
+      await placeTop(page, '.tinted', 0.2);
+      expect((await state(page)).list, 'up over a band whose words keep the column').toBe(true);
+      expect((await state(page)).bar).toBe(false);
+      // A picture as wide as the window covers the lane: the list steps aside, and no bar comes.
+      await placeTop(page, 'main figure[data-width="screen"]', 0.1);
+      await expect.poll(async () => (await state(page)).list).toBe(false);
+      expect((await state(page)).bar).toBe(false);
+      // And at the closing picture.
+      await placeTop(page, 'footer .moss-hero-closing', 0.3);
+      await expect.poll(async () => (await state(page)).list).toBe(false);
+      expect((await state(page)).bar).toBe(false);
+    });
+  }
+
+  test('the fade behind the open names takes the colour of the band under the list', async ({ page }) => {
+    await open(page, PICTURES_PATH, 1360, 800);
+    await page.evaluate(() => {
+      const band = document.querySelector('.tinted')!.getBoundingClientRect();
+      window.scrollTo(0, band.top + band.height / 2 + window.scrollY - innerHeight / 2);
+    });
+    await frames(page);
+    await expect.poll(async () => (await state(page)).list).toBe(true);
+    const dash = (await page.locator('.moss-contents-ruler-dash').nth(2).boundingBox())!;
+    await page.mouse.move(dash.x + 4, dash.y + 1);
+    await expect.poll(() => page.locator('.moss-contents-ruler').evaluate((el) => el.hasAttribute('data-lens'))).toBe(true);
+    const veil = await page.locator('.moss-contents-ruler-veil').evaluate((el) => getComputedStyle(el).backgroundImage);
+    expect(veil).toContain(BAND_TINT);
+    // Moved off and opened again over the page, it is the page's colour.
+    await page.mouse.move(1000, 400);
+    await expect.poll(() => page.locator('.moss-contents-ruler').evaluate((el) => el.hasAttribute('data-lens'))).toBe(false);
+    await jumpTo(page, 0);
+    await page.mouse.move(dash.x + 4, dash.y + 1);
+    await expect.poll(() => page.locator('.moss-contents-ruler').evaluate((el) => el.hasAttribute('data-lens'))).toBe(true);
+    const page_ = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+    expect(await page.locator('.moss-contents-ruler-veil').evaluate((el) => getComputedStyle(el).backgroundImage)).toContain(page_);
+  });
+
+  test('a page without contents: pictures keeps its column', async ({ page }) => {
+    await open(page, PICTURES_PATH, 1100, 800);
+    const pictures = await page.evaluate(() => ({ lane: getComputedStyle(document.body).getPropertyValue('--moss-contents-lane').trim(), left: document.querySelector('main h2[id]')!.getBoundingClientRect().left }));
+    expect(pictures.lane).not.toBe('');
+    await page.evaluate(() => document.body.removeAttribute('data-contents'));
+    const without = await page.evaluate(() => ({ lane: getComputedStyle(document.body).getPropertyValue('--moss-contents-lane').trim(), left: document.querySelector('main h2[id]')!.getBoundingClientRect().left }));
+    expect(without.lane, 'no lane without the field').toBe('');
+    expect(without.left, 'the full-width column reaches the page gutter again').toBeLessThan(pictures.left - 40);
+  });
+
+  test('a right-to-left or vertical page reserves nothing and keeps the bar', async ({ page }) => {
+    for (const [path, set] of [[PICTURES_PATH, "document.documentElement.setAttribute('dir', 'rtl')"], [UPRIGHT_PATH, '']]) {
+      await open(page, path, 1360, 800);
+      if (set) await page.evaluate(set);
+      await frames(page, 4);
+      const s = await page.evaluate(() => ({
+        lane: getComputedStyle(document.body).getPropertyValue('--moss-contents-lane').trim(),
+        marked: document.querySelector<HTMLElement>('.moss-nav-island')!.dataset.ruler !== 'off',
+        ruler: document.querySelector<HTMLElement>('.moss-contents-ruler')!.hidden,
+      }));
+      expect(s, `${path} ${set}`).toEqual({ lane: '', marked: false, ruler: true });
+    }
+  });
+});
+
+test.describe('a contents: pictures page under a coarse pointer', () => {
+  test.use({ hasTouch: true, isMobile: true });
+
+  test('reserves no lane, so the bar is the contents list', async ({ page }) => {
+    await open(page, PICTURES_PATH, 1360, 800);
+    await jumpTo(page, 1);
+    const s = await page.evaluate(() => ({
+      lane: getComputedStyle(document.body).getPropertyValue('--moss-contents-lane').trim(),
+      ruler: document.querySelector<HTMLElement>('.moss-contents-ruler')!.hidden,
+      shown: document.querySelector<HTMLElement>('.moss-nav-island')!.dataset.shown,
+    }));
+    expect(s).toEqual({ lane: '', ruler: true, shown: 'true' });
+  });
+});
+
+test.describe('at the top, the controls stand at the end of the title line', () => {
+  for (const width of [390, 768, 1360]) {
+    test(`at ${width}px they touch neither the title nor the subtitle`, async ({ page }) => {
+      for (const path of ['/', CLOSING_PATH, LONG_TITLE_PATH, UPRIGHT_PATH]) {
+        await open(page, path, width, 800);
+        const s = await page.evaluate(() => {
+          const lines = (el: Element | null) => {
+            if (!el) return [];
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            return [...range.getClientRects()].filter((r) => r.width > 0);
+          };
+          const controls = [...document.querySelectorAll('.moss-nav-island + .nav-icons > *')].map((el) => el.getBoundingClientRect());
+          const text = [...lines(document.querySelector('main > article > h1')), ...lines(document.querySelector('main .moss-subtitle'))];
+          const hits = controls.flatMap((c) =>
+            text.filter((t) => c.left < t.right && t.left < c.right && c.top < t.bottom && t.top < c.bottom).map((t) => [c.left, c.top, t.left, t.right, t.top]),
+          );
+          const title = document.querySelector('main > article > h1')!.getBoundingClientRect();
+          return { top: document.querySelector('.moss-nav-island')!.hasAttribute('data-top'), hits, controls: controls.length, beside: controls.every((c) => c.top < title.bottom) };
+        });
+        expect(s.top, `${path}: at the top`).toBe(true);
+        expect(s.controls).toBe(3);
+        expect(s.hits, `${path} at ${width}px`).toEqual([]);
+        if (path !== UPRIGHT_PATH) expect(s.beside, `${path}: on the title's line, not above or below it`).toBe(true);
+      }
+    });
+  }
+});
+
+test.describe('a vertical title keeps no room for the controls', () => {
+  for (const width of [390, 1360]) {
+    test(`at ${width}px its first column runs the column's full length`, async ({ page }) => {
+      await open(page, UPRIGHT_PATH, width, 800);
+      const s = await page.evaluate(() => {
+        const h = document.querySelector<HTMLElement>('main > article > h1')!;
+        const cs = getComputedStyle(h);
+        const range = document.createRange();
+        range.selectNodeContents(h);
+        const lines = [...range.getClientRects()].filter((r) => r.width > 0);
+        const first = lines.reduce((a, b) => (b.right > a.right ? b : a));
+        const end = h.getBoundingClientRect().bottom - parseFloat(cs.paddingBottom) - parseFloat(cs.borderBottomWidth);
+        return { mode: cs.writingMode, columns: new Set(lines.map((r) => Math.round(r.right))).size, gap: end - first.bottom, glyph: parseFloat(cs.fontSize) };
+      });
+      expect(s.mode).toBe('vertical-rl');
+      expect(s.columns, 'the title is longer than one column').toBeGreaterThan(1);
+      expect(s.gap, 'no notch at the foot of the first column').toBeLessThan(s.glyph * 1.5);
+    });
+  }
+});
+
+test.describe('without scripting, the title still keeps room for three controls', () => {
+  test.use({ javaScriptEnabled: false });
+
+  test('at 390px a long title wraps before them', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto(LONG_TITLE_PATH);
+    const s = await page.evaluate(() => {
+      const range = document.createRange();
+      range.selectNodeContents(document.querySelector('main > article > h1')!);
+      const text = [...range.getClientRects()].filter((r) => r.width > 0);
+      const controls = [...document.querySelectorAll('.moss-nav-island + .nav-icons > *')].map((el) => el.getBoundingClientRect());
+      return {
+        controls: controls.length,
+        hits: controls.flatMap((c) => text.filter((t) => c.left < t.right && t.left < c.right && c.top < t.bottom && t.top < c.bottom).map((t) => [c.left, t.right])),
+      };
+    });
+    expect(s.controls).toBe(3);
+    expect(s.hits).toEqual([]);
+  });
+});
+
 test.describe('a headerless page gives its first element the header\'s top space', () => {
   for (const width of [1360, 390]) {
     test(`at ${width}px the home title clears the top edge by a spacing step`, async ({ page }) => {
@@ -399,27 +588,27 @@ test.describe('a site that keeps its header', () => {
   });
 });
 
-test.describe('the ruler steps aside from a full-width block', () => {
+test.describe('the plain ruler and a full-width band', () => {
   test.beforeEach(async ({ page }) => {
     await open(page, BAND_PAGE);
   });
 
-  test('while the block overlaps it, and returns once the block has passed', async ({ page }) => {
-    expect(await page.locator('main [data-width="screen"]').count()).toBe(1);
+  test('stays over a band whose words keep the column, and steps aside past the end marker', async ({ page }) => {
+    expect(await page.locator('main div[data-width="screen"]').count()).toBe(1);
     await jumpTo(page, 1);
     await expect.poll(() => isAway(page)).toBe(false);
 
-    // The band crosses the middle of the window, where the ruler sits.
-    await placeTop(page, '[data-width="screen"]', 0.4);
-    await expect.poll(() => isAway(page)).toBe(true);
-
-    // Below the band again (the band is above the window's middle): back.
-    await page.evaluate(() => {
-      const band = document.querySelector('[data-width="screen"]')!;
-      const ol = document.querySelector('.moss-contents-ruler ol')!.getBoundingClientRect();
-      window.scrollTo(0, band.getBoundingClientRect().bottom + window.scrollY - ol.top + 40);
-    });
+    // The band crosses the middle of the window, where the ruler sits. Its
+    // words keep the text column, so it covers nothing and the ruler stays.
+    await placeTop(page, 'main div[data-width="screen"]', 0.4);
     await frames(page);
+    expect(await isAway(page)).toBe(false);
+
+    // A picture as wide as the window reaches the margin through its own
+    // child: the ruler steps aside while it overlaps, and returns after.
+    await placeTop(page, 'main figure[data-width="screen"]', 0.3);
+    await expect.poll(() => isAway(page)).toBe(true);
+    await jumpTo(page, 0);
     await expect.poll(() => isAway(page)).toBe(false);
 
     // A heading can carry the end marker too: the ruler lists the sections
@@ -454,7 +643,7 @@ test.describe('the island names a long section in the room the bar has', () => {
       document.body.append(probe);
       const need = probe.getBoundingClientRect().width;
       probe.remove();
-      return { text, room: name.getBoundingClientRect().width, need, ellipsis: text.includes('…') };
+      return { text, room: name.getBoundingClientRect().width, need, cut: name.scrollWidth > name.clientWidth, ellipsis: cs.textOverflow };
     });
 
   test('at 1360px the whole title shows, the bar having hundreds of pixels to spare', async ({ page }) => {
@@ -462,7 +651,7 @@ test.describe('the island names a long section in the room the bar has', () => {
     await jumpTo(page, COLLECTIONS.indexOf(LONG_TITLE));
     await expect.poll(() => nameOf(page)).toBe(LONG_TITLE);
     const l = await label(page);
-    expect(l.ellipsis).toBe(false);
+    expect(l.cut).toBe(false);
     expect(l.room, 'the label box is wider than the old 16rem button').toBeGreaterThan(300);
     expect(l.need).toBeLessThanOrEqual(l.room);
     const bar = await page.locator('.moss-nav-island-bar').boundingBox();
@@ -474,14 +663,11 @@ test.describe('the island names a long section in the room the bar has', () => {
     await jumpTo(page, COLLECTIONS.indexOf(LONG_TITLE));
     await expect.poll(() => nameOf(page)).not.toBe('');
     const l = await label(page);
-    if (l.text === LONG_TITLE) {
-      expect(l.need).toBeLessThanOrEqual(l.room);
-    } else {
-      expect(l.text).toContain('…');
-      // Whatever is shown fills the room: one more character would not fit.
-      expect(l.need).toBeLessThanOrEqual(l.room);
-      expect(l.room - l.need, 'the cut label fills the box').toBeLessThan(30);
-    }
+    expect(l.text, 'the whole title, cut at its end by CSS').toBe(LONG_TITLE);
+    expect(l.cut).toBe(l.need > l.room);
+    expect(l.ellipsis).toBe('ellipsis');
+    const site = await island(page).locator('.site-name').evaluate((el) => ({ text: el.textContent, cut: el.scrollWidth > el.clientWidth }));
+    expect(site, 'the site name stays whole').toEqual({ text: 'Shelf', cut: false });
     const bar = await page.locator('.moss-nav-island-bar').boundingBox();
     expect(bar!.x + bar!.width).toBeLessThanOrEqual(390);
 

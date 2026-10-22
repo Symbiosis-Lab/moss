@@ -177,27 +177,18 @@ for (const [width, height] of [
       }
     });
 
-    test('no label is clipped, and a cut title keeps its start and its end', async ({ page }) => {
+    test('every label holds its whole title, and a long one ends in an ellipsis', async ({ page }) => {
       const labels = await page.$$eval('.moss-contents-ruler-label', (els) =>
         els.map((el) => ({
           text: el.textContent ?? '',
-          scrollWidth: el.scrollWidth,
-          clientWidth: el.clientWidth,
+          cut: el.scrollWidth > el.clientWidth,
+          ellipsis: getComputedStyle(el).textOverflow,
         })),
       );
-      expect(labels).toHaveLength(SECTIONS.length);
-      labels.forEach((label, i) => {
-        expect(label.scrollWidth, `label ${i} overflows its box`).toBeLessThanOrEqual(label.clientWidth);
-        if (label.text === SECTIONS[i]) return;
-        const parts = label.text.split('…');
-        expect(parts, `label ${i} has exactly one ellipsis`).toHaveLength(2);
-        expect(parts[0].length).toBeGreaterThan(0);
-        expect(parts[1].length).toBeGreaterThan(0);
-        expect(SECTIONS[i].startsWith(parts[0])).toBe(true);
-        expect(SECTIONS[i].endsWith(parts[1])).toBe(true);
-      });
+      expect(labels.map((l) => l.text)).toEqual(SECTIONS);
+      labels.forEach((label, i) => expect(label.ellipsis, `label ${i}`).toBe('ellipsis'));
       if (width === 1280) {
-        expect(labels[SECTIONS.indexOf(LONG_CJK_TITLE)].text).toContain('…');
+        expect(labels[SECTIONS.indexOf(LONG_CJK_TITLE)].cut, 'the long title does not fit').toBe(true);
       }
     });
 
@@ -392,7 +383,7 @@ test.describe('across a morph', () => {
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
 
-  test('the sections panel cuts long titles in the middle too, and none overflows its row', async ({ page }) => {
+  test('the sections panel ends long titles in an ellipsis, each row holding its whole title', async ({ page }) => {
     await page.goto(ARTICLE);
     await page.waitForSelector('.moss-nav-island[data-shown]');
     await page.evaluate(() => document.fonts.ready);
@@ -403,15 +394,12 @@ test.describe('on a phone', () => {
     await page.tap('.moss-nav-island-sections');
     await expect(page.locator('[data-island-menu="sections"]')).toBeVisible();
     const rows = await page.$$eval('[data-island-menu="sections"] a', (as) =>
-      as.map((a) => ({ text: a.textContent ?? '', fits: a.scrollWidth <= a.clientWidth })),
+      as.map((a) => ({ text: a.textContent ?? '', cut: a.scrollWidth > a.clientWidth, ellipsis: getComputedStyle(a).textOverflow })),
     );
-    rows.forEach((row, i) => expect(row.fits, `row ${i} fits`).toBe(true));
+    expect(rows.map((row) => row.text)).toEqual(SECTIONS);
+    rows.forEach((row, i) => expect(row.ellipsis, `row ${i}`).toBe('ellipsis'));
     for (const long of [LONG_CJK_TITLE, LONG_LATIN_TITLE]) {
-      const text = rows[SECTIONS.indexOf(long)].text;
-      const [head, tail] = text.split('…');
-      expect(text, 'cut in the middle').toContain('…');
-      expect(long.startsWith(head) && head.length > 0).toBe(true);
-      expect(long.endsWith(tail) && tail.length > 0).toBe(true);
+      expect(rows[SECTIONS.indexOf(long)].cut, `${long} is cut`).toBe(true);
     }
   });
 
@@ -442,6 +430,7 @@ test.describe('on a phone', () => {
           nameWidth: name.getBoundingClientRect().width,
           fontSize: parseFloat(getComputedStyle(name).fontSize),
           name: name.textContent ?? '',
+          nameCut: name.scrollWidth > name.clientWidth && getComputedStyle(name).textOverflow === 'ellipsis',
           nameShown: getComputedStyle(name).display !== 'none',
         };
       });
@@ -465,14 +454,13 @@ test.describe('on a phone', () => {
       expect(s.barHeight, 'the bar is no taller with a name than without').toBeCloseTo(before.barHeight, 0);
       expect(s.folded, 'the deep trail folds').toBe(true);
       expect(s.nameShown).toBe(true);
-      expect(s.name).toContain('…');
+      expect(s.name, 'the whole title, cut by CSS').toBe(SECTIONS[k]);
+      expect(s.nameCut).toBe(true);
       expect(s.nameWidth).toBeCloseTo(6 * s.fontSize, 0);
       expect(s.buttonWidth, 'the button is the same width with and without a name').toBeCloseTo(before.buttonWidth, 0);
 
-      // WCAG 2.5.3: what is spoken contains what is shown (the ellipsis aside).
-      const [head, tail] = s.name.split('…').map((part) => part.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-      const button = page.locator('.moss-nav-island-sections');
-      await expect(button).toHaveAccessibleName(new RegExp(`^Sections on this page .*${head}.*${tail}$`));
+      // WCAG 2.5.3: what is spoken contains what is shown.
+      await expect(page.locator('.moss-nav-island-sections')).toHaveAccessibleName(`Sections on this page ${SECTIONS[k]}`);
     }
   });
 });

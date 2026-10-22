@@ -30,7 +30,6 @@
 import { applyFold, inlineAvailableExtent, placePanel, trailOverflows } from "./breadcrumb-fold";
 import { mountContentsRuler } from "./contents-ruler";
 import { contentsPictures, pictureImg, sectionPictures } from "./section-pictures";
-import { canvasMeasure, truncateMiddle } from "./middle-truncate";
 import { markRows, SECTION_SYNC_EVENT } from "./section-event";
 import { mountSectionName } from "./section-name";
 
@@ -47,6 +46,11 @@ const SCROLLSPY_CLEARANCE = 28;
 
 /** `pinned` is the island of a site with no header; `trail` is every other. */
 type IslandShape = "trail" | "pinned";
+
+/** A section is current once its heading has passed this fraction of the
+ *  window's height, so the mark changes as the reader reaches it rather than
+ *  once it has nearly scrolled away. */
+const READING_LINE = 0.35;
 
 /** Ignore scroll jitter below this many pixels when deciding direction. */
 const JITTER = 2;
@@ -124,8 +128,11 @@ export function mainSectionCount(headings: HTMLElement[], end: Element | null): 
   return headings.filter((h) => h.compareDocumentPosition(end) & Node.DOCUMENT_POSITION_FOLLOWING).length;
 }
 
-/** A heading's title, without the permalink anchor moss appends to it. */
-function headingText(heading: HTMLElement): string {
+/** A section's name: the author's short name for it (`contents-label`), else
+ *  the heading's title without the permalink anchor moss appends to it. */
+export function headingText(heading: HTMLElement): string {
+  const label = heading.dataset.contentsLabel?.trim();
+  if (label) return label;
   const copy = heading.cloneNode(true) as HTMLElement;
   copy.querySelector(".moss-heading-anchor")?.remove();
   return (copy.textContent ?? "").trim();
@@ -191,7 +198,7 @@ export function initNavIsland(): void {
    * Where a pinned island's controls stand matters to two things, both read
    * here, on layout only: the top of their place at the top (the scroll
    * offset from which they start to leave view), and their width in a row, the slot
-   * the bar keeps free for them. The width is the sum of the controls, so it
+   * the bar and the page's title line keep free for them. The width is the sum of the controls, so it
    * is the same while they stand in a column under the ruler.
    */
   let topEdge = 0;
@@ -202,10 +209,12 @@ export function initNavIsland(): void {
     const tallest = Math.max(...items.map((item) => item.offsetHeight));
     topEdge = bar.offsetTop + (bar.offsetHeight - tallest) / 2;
     const width = items.reduce((sum, item) => sum + item.offsetWidth, 0) + gap * (items.length - 1);
-    island.style.setProperty("--moss-nav-island-controls", `${width}px`);
+    // On `body`: the bar keeps this slot free, and the page's title line
+    // keeps it free for the controls' place at the top.
+    document.body.style.setProperty("--moss-nav-island-controls", `${width}px`);
   }
 
-  teardown.push(() => island.style.removeProperty("--moss-nav-island-controls"));
+  teardown.push(() => document.body.style.removeProperty("--moss-nav-island-controls"));
 
   // Empty the sections panel FIRST, and unconditionally. A morph swaps the
   // document under an island that survives, so rows left from the previous
@@ -263,8 +272,8 @@ export function initNavIsland(): void {
       row.href = `#${heading.id}`;
       const picture = pictures?.[i];
       if (picture) {
-        // The title moves into its own box so that fitting it (below) leaves
-        // the picture alone; the row's other text-only form is untouched.
+        // The title has its own box, which CSS ends with an ellipsis beside
+        // the picture.
         row.setAttribute("data-pic", "");
         const title = document.createElement("span");
         title.className = "moss-nav-island-section-title";
@@ -370,9 +379,10 @@ export function initNavIsland(): void {
     if (yieldToRuler()) {
       // Where the ruler is on screen it is the page's one contents list.
     } else if (shape === "pinned") {
-      // On screen once the first section has reached the reading line, and
-      // there for the rest of the page.
-      setShown(index >= 0);
+      // On screen once the first section has reached the bar (not the
+      // reading line, which a short opening passes on load), and there for
+      // the rest of the page.
+      setShown(headings[0].getBoundingClientRect().top <= scrollspyLine() + LANDING_TOLERANCE);
     } else if (!past) {
       setShown(false);
     } else if (y < lastY - JITTER) {
@@ -390,9 +400,10 @@ export function initNavIsland(): void {
     if (sectionsMenu && !sectionsMenu.hidden) markRows(sectionsMenu.children, index);
   }
 
-  /** Put the island away while the ruler is on screen; true when it did. */
+  /** Put the island away while the ruler is on screen, or wherever the page
+   *  reserves the ruler's lane; true when it did. */
   function yieldToRuler(): boolean {
-    if (island.dataset.ruler !== "on") return false;
+    if ((island.dataset.ruler ?? "off") === "off") return false;
     setShown(false);
     return true;
   }
@@ -506,19 +517,19 @@ export function initNavIsland(): void {
 
   /**
    * The one scrollspy: the position of the last heading whose top has passed
-   * the island (`-1` before the first). Reading only; `pass` publishes it.
+   * `READING_LINE` of the window (`-1` before the first). Reading only; `pass`
+   * publishes it. On a window so short that the line would sit above the bar,
+   * the line is the bar's own (`scrollspyLine`), where a fragment jump parks a
+   * heading, so a jump always marks the section it went to.
    *
    * The comparison carries a one-pixel tolerance because "has passed" is a
    * knife edge: a fragment jump parks the heading AT the line, and a page
-   * whose layout is fractional parks it a fraction below — measured 110.125
-   * against a line of 110. Nothing about that is the reader's scroll position,
-   * so an exact `<=` marked the previous section for the whole class of pages
-   * with a non-integer type scale, which is every Chinese page (the CJK size
-   * multiplier) and every page at a reader font-scale step other than the
-   * default. It only became visible when the Latin default joined them.
+   * whose layout is fractional parks it a fraction below. Without it every
+   * page with a non-integer type scale (every Chinese page, every reader
+   * font-scale step) marked the previous section after a jump.
    */
   function currentSection(): number {
-    const line = scrollspyLine() + LANDING_TOLERANCE;
+    const line = Math.max(scrollspyLine(), window.innerHeight * READING_LINE) + LANDING_TOLERANCE;
     let current = -1;
     headings.forEach((heading, i) => {
       if (heading.getBoundingClientRect().top <= line) current = i;
@@ -547,31 +558,6 @@ export function initNavIsland(): void {
     }
   }
 
-  /** Cut each section row's title in the middle to the row's own width, and
-   *  keep the whole title as the link's name when it was cut. */
-  function fitSectionRows(): void {
-    const rows = [...(sectionsMenu?.children ?? [])] as HTMLElement[];
-    // A row with a picture keeps its title in a box of its own.
-    const textOf = (row: HTMLElement): HTMLElement =>
-      row.querySelector<HTMLElement>(".moss-nav-island-section-title") ?? row;
-    rows.forEach((row, i) => (textOf(row).textContent = titles[i]));
-    const measure = rows[0] && canvasMeasure(textOf(rows[0]));
-    if (!measure) return;
-    const roomOf = (row: HTMLElement): number => {
-      const text = textOf(row);
-      if (text !== row) return text.clientWidth;
-      const style = getComputedStyle(row);
-      return row.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
-    };
-    if (roomOf(rows[0]) <= 0) return;
-    rows.forEach((row, i) => {
-      const text = textOf(row);
-      text.textContent = truncateMiddle(titles[i], roomOf(row), measure);
-      if (text.textContent === titles[i]) row.removeAttribute("aria-label");
-      else row.setAttribute("aria-label", titles[i]);
-    });
-  }
-
   /** `moveFocus` puts the caret on the first row. Keyboard opens want that —
    *  it is the only way to reach the list. Mouse opens must NOT have it: the
    *  focus ring it draws reads as a box around the first entry that the reader
@@ -596,12 +582,7 @@ export function initNavIsland(): void {
     }
     if (!opening) return;
 
-    // Long titles are cut in the middle here as on the ruler and the button,
-    // measured now because a closed panel has no width.
-    if (menu === sectionsMenu) {
-      markRows(menu.children, currentSection());
-      fitSectionRows();
-    }
+    if (menu === sectionsMenu) markRows(menu.children, currentSection());
 
     // The panels are siblings of the bar (it clips its overflow), so their
     // containing block is `.moss-nav-island` — the full-width fixed wrapper.

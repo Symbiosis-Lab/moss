@@ -12,7 +12,7 @@
 
 use super::document::{BlockMeta, Document};
 use super::footnotes::{self, FootnoteCtx};
-use super::hooks::{escape_attr, escape_text, RenderHooks};
+use super::hooks::{escape_attr, escape_text, HeadingMarks, RenderHooks};
 use super::node::{Block, ColumnAlignment, Fold, Inline};
 use super::url::Url;
 
@@ -267,10 +267,12 @@ fn render_block<H: RenderHooks + ?Sized>(
             children,
             id,
             contents_end,
+            contents_label,
         } => {
             let mut content = String::new();
             render_inlines(hooks, &mut content, children, fnotes);
-            hooks.render_heading(out, *level, id.as_deref(), meta.source_line, *contents_end, &content);
+            let marks = HeadingMarks { id: id.as_deref(), contents_end: *contents_end, contents_label: contents_label.as_deref() };
+            hooks.render_heading(out, *level, marks, meta.source_line, &content);
             out.push('\n');
         }
         Block::Paragraph(children) => {

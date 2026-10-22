@@ -684,11 +684,11 @@ pub trait RenderHooks {
         &self,
         out: &mut String,
         level: u8,
-        id: Option<&str>,
+        marks: HeadingMarks<'_>,
         source_line: Option<usize>,
-        contents_end: bool,
         content: &str,
     ) {
+        let HeadingMarks { id, contents_end, contents_label } = marks;
         out.push('<');
         out.push('h');
         out.push((b'0' + level) as char);
@@ -699,6 +699,11 @@ pub trait RenderHooks {
         }
         if contents_end {
             out.push_str(" data-contents-end");
+        }
+        if let Some(label) = contents_label {
+            out.push_str(r#" data-contents-label=""#);
+            out.push_str(&escape_attr(label));
+            out.push('"');
         }
         if let Some(n) = source_line {
             use std::fmt::Write as _;
@@ -735,6 +740,15 @@ pub trait RenderHooks {
         out.push((b'0' + level) as char);
         out.push('>');
     }
+}
+
+/// What a heading's opening tag carries besides its level: its anchor id and
+/// the contents list's marks (`contents=end`, `contents-label="…"`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HeadingMarks<'a> {
+    pub id: Option<&'a str>,
+    pub contents_end: bool,
+    pub contents_label: Option<&'a str>,
 }
 
 /// Default render hooks. moss-core ships this as the base implementation
@@ -1161,7 +1175,7 @@ mod tests {
     fn default_hooks_render_heading_emits_id() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 2, Some("setup"), None, false, "Setup");
+        hooks.render_heading(&mut out, 2, HeadingMarks { id: Some("setup"), ..Default::default() }, None, "Setup");
         assert_eq!(
             out,
             r##"<h2 id="setup">Setup<a class="moss-heading-anchor" href="#setup" aria-label="Permalink to this section"></a></h2>"##
@@ -1172,7 +1186,7 @@ mod tests {
     fn default_hooks_render_heading_without_id() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 3, None, None, false, "Sub");
+        hooks.render_heading(&mut out, 3, HeadingMarks::default(), None, "Sub");
         assert_eq!(out, "<h3>Sub</h3>");
     }
 
@@ -1180,7 +1194,7 @@ mod tests {
     fn default_hooks_render_heading_emits_source_line() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 2, Some("setup"), Some(42), false, "Setup");
+        hooks.render_heading(&mut out, 2, HeadingMarks { id: Some("setup"), ..Default::default() }, Some(42), "Setup");
         assert_eq!(
             out,
             r##"<h2 id="setup" data-source-line="42">Setup<a class="moss-heading-anchor" href="#setup" aria-label="Permalink to this section"></a></h2>"##
@@ -1191,7 +1205,7 @@ mod tests {
     fn default_hooks_render_heading_source_line_without_id() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 1, None, Some(1), false, "Top");
+        hooks.render_heading(&mut out, 1, HeadingMarks::default(), Some(1), "Top");
         assert_eq!(out, r#"<h1 data-source-line="1">Top</h1>"#);
     }
 
@@ -1199,7 +1213,7 @@ mod tests {
     fn default_hooks_render_heading_emits_anchor_when_id_present() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 2, Some("setup"), None, false, "Setup");
+        hooks.render_heading(&mut out, 2, HeadingMarks { id: Some("setup"), ..Default::default() }, None, "Setup");
         assert_eq!(
             out,
             r##"<h2 id="setup">Setup<a class="moss-heading-anchor" href="#setup" aria-label="Permalink to this section"></a></h2>"##
@@ -1210,7 +1224,7 @@ mod tests {
     fn default_hooks_render_heading_no_anchor_when_id_absent() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 3, None, None, false, "Sub");
+        hooks.render_heading(&mut out, 3, HeadingMarks::default(), None, "Sub");
         assert_eq!(out, "<h3>Sub</h3>");
     }
 
@@ -1218,7 +1232,7 @@ mod tests {
     fn default_hooks_render_heading_anchor_preserves_source_line_position() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 2, Some("setup"), Some(42), false, "Setup");
+        hooks.render_heading(&mut out, 2, HeadingMarks { id: Some("setup"), ..Default::default() }, Some(42), "Setup");
         assert_eq!(
             out,
             r##"<h2 id="setup" data-source-line="42">Setup<a class="moss-heading-anchor" href="#setup" aria-label="Permalink to this section"></a></h2>"##
@@ -1229,7 +1243,7 @@ mod tests {
     fn default_hooks_render_heading_anchor_escapes_id_in_href() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 2, Some(r#"a&b"#), None, false, "AB");
+        hooks.render_heading(&mut out, 2, HeadingMarks { id: Some(r#"a&b"#), ..Default::default() }, None, "AB");
         assert_eq!(
             out,
             r##"<h2 id="a&amp;b">AB<a class="moss-heading-anchor" href="#a&amp;b" aria-label="Permalink to this section"></a></h2>"##

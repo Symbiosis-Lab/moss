@@ -66,7 +66,7 @@ fn strict_fails_on_an_attribute_block_but_not_on_braces_that_are_text() {
     let (ok, log) = build("---\ntitle: Essay\n---\n\n## Pictures {.pictures}\n", true);
     assert!(!ok, "an attribute block must fail --strict:\n{log}");
 
-    for heading in ["## Pictures", "## The `{x}` field", "## The `{.x}` rule", "## The field `{.x}`", "## Sets {x}", "## Two {a} and {b}", "```\n## Pictures {.pictures}\n```", "## Origins {#origins}", "## Origins {#origins contents=end}"] {
+    for heading in ["## Pictures", "## The `{x}` field", "## The `{.x}` rule", "## The field `{.x}`", "## Sets {x}", "## Two {a} and {b}", "```\n## Pictures {.pictures}\n```", "## Origins {#origins}", "## Origins {#origins contents=end}", "## Origins of the collection {contents-label=\"Origins\" #origins}"] {
         let (ok, log) = build(&format!("---\ntitle: Essay\n---\n\n{heading}\n"), true);
         assert!(ok, "{heading:?} must not fail --strict:\n{log}");
         assert!(!log.contains("printed as text"), "{heading:?} must not warn:\n{log}");

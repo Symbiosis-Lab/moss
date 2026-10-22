@@ -37,6 +37,11 @@ export const FULL_SECTIONS = [
   "Afterword",
 ];
 
+/** A page whose second section's picture will not load, and whose first
+ *  section has a short name of its own. */
+export const BROKEN_SECTIONS = ["Opening hours of the reading room", "In the works", "Afterword"];
+export const SHORT_NAME = "Opening hours";
+
 const images = ["quay.png", "nets.png", "rope.png"];
 
 const picture = (title: string, i: number): string =>
@@ -110,6 +115,28 @@ content_width: full
 ---
 
 ${full}
+`,
+    "Essays/Broken.md": `---
+title: Broken
+uid: "ctl00107"
+contents: pictures
+---
+
+## ${BROKEN_SECTIONS[0]} {#hours contents-label="${SHORT_NAME}"}
+
+![Quay](quay.png)
+
+${paragraphs(4)}
+
+## ${BROKEN_SECTIONS[1]}
+
+<img src="gone.png" alt="">
+
+${paragraphs(4)}
+
+## ${BROKEN_SECTIONS[2]}
+
+${paragraphs(4)}
 `,
     ".moss/config.toml": `schema_version = 5
 

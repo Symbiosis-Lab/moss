@@ -2639,3 +2639,26 @@ fn collage_grid_outside_three_to_nine_cells_warns_with_its_line() {
         );
     }
 }
+
+#[test]
+fn heading_contents_label_is_an_attribute_not_text() {
+    for src in [
+        "## Opening hours of the reading room {#hours contents-label=\"Opening hours\"}\n",
+        "## Opening hours of the reading room {contents-label=\"Opening hours\" #hours}\n",
+    ] {
+        let html = crate::ast::render::render_document(&parse(src), &crate::ast::hooks::DefaultHooks::new());
+        assert!(
+            html.starts_with(r#"<h2 id="hours" data-contents-label="Opening hours">Opening hours of the reading room<a"#),
+            "{src:?}: {html}"
+        );
+        assert!(parse(src).warnings.is_empty(), "{src:?}");
+    }
+    // A label is never the end marker, whatever it says.
+    match first_block("## End {contents-label=End}\n") {
+        Block::Heading { contents_end, contents_label, .. } => {
+            assert!(!contents_end);
+            assert_eq!(contents_label.as_deref(), Some("End"));
+        }
+        other => panic!("expected Heading, got {other:?}"),
+    }
+}

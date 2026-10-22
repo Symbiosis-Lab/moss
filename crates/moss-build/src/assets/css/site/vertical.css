@@ -530,4 +530,23 @@ body[data-typesetting="vertical"] .moss-subscribe-status {
   font-family: var(--moss-font-heading);
 }
 
+  /* A vertical page reserves no lane for the contents list (site.css, under
+     `contents: pictures`): its margin is not at the left, and its measure is
+     the column length. Same specificity as the rules it undoes, and later. */
+  body[data-typesetting="vertical"][data-contents="pictures"] {
+    --moss-contents-lane: initial;
+    --moss-contents-column: initial;
+  }
+
+  body[data-typesetting="vertical"][data-contents="pictures"] > * {
+    --moss-content-width: inherit;
+  }
+
+  /* Nor does its title keep room for the headerless controls (site.css): its
+     first line runs down the page, not toward them. The core selector,
+     repeated with the vertical mark, so this one is the more specific. */
+  body[data-typesetting="vertical"]:has(> .moss-nav-island[data-header="none"] + .nav-icons) main > article > h1:first-of-type::before {
+    content: none;
+  }
 } /* @layer shortcodes */
+

@@ -766,6 +766,7 @@ fn parse_block_with_tag(
             let title = attrs.as_ref().map_or(heading_text.as_str(), |a| a.title);
             let id = attrs.as_ref().and_then(|a| a.id).map_or_else(|| obsidian_heading_anchor(title), str::to_string);
             let contents_end = attrs.as_ref().is_some_and(|a| a.contents_end);
+            let contents_label = attrs.as_ref().and_then(|a| a.contents_label).map(str::to_string);
             let mut children = children;
             if attrs.is_some() {
                 strip_trailing_marker(&mut children);
@@ -776,6 +777,7 @@ fn parse_block_with_tag(
                     children,
                     id: Some(id),
                     contents_end,
+                    contents_label,
                 }),
                 end - start + 1,
             )

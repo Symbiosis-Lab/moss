@@ -3228,7 +3228,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-header",
                 values: &["none"],
                 default: "",
-                description: "Present as `none` under `[site].header = \"none\"`. That island is the page's only chrome: it has no trail, carries the site's name and the section button, is emitted on every page, and shows from the first section heading to the end of the page instead of on scroll-up, except where the contents ruler is on screen. On a page with fewer than two sections it shows the controls alone, from the start. The controls (`.nav-icons`: search, language, theme) are its next sibling, one element placed by the island's state: at the end of the bar's place at the top of the page (`data-top`), in a column at the foot of the window under the contents ruler where the ruler is on screen (`data-ruler=\"on\"`), and in a slot the bar keeps free at its end otherwise.",
+                description: "Present as `none` under `[site].header = \"none\"`. That island is the page's only chrome: it has no trail, carries the site's name and the section button, is emitted on every page, and shows from the first section heading to the end of the page instead of on scroll-up, except where the contents ruler is on screen. On a page with fewer than two sections it shows the controls alone, from the start. The controls (`.nav-icons`: search, language, theme) are its next sibling, one element placed by the island's state: at the end of the bar's place at the top of the page (`data-top`), in a column at the foot of the window under the contents ruler where the ruler is on screen (`data-ruler` `on` or `lane`), and in a slot the bar keeps free at its end otherwise.",
             },
             DataAttr {
                 name: "data-nameless",
@@ -3238,9 +3238,9 @@ pub const COMPONENTS: &[ComponentEntry] = &[
             },
             DataAttr {
                 name: "data-ruler",
-                values: &["off", "on"],
+                values: &["off", "on", "lane"],
                 default: "off",
-                description: "Whether the contents ruler is on screen. Written by the site runtime; while it is `on` the whole island is hidden and inert, so the page never offers two contents lists at once.",
+                description: "Whether the contents ruler is on screen (`on`), or away from a lane its page reserves for it (`lane`: a `contents: pictures` page where `--moss-contents-lane` is set and the list fits the window's height), or neither (`off`). Written by the site runtime; while it is not `off` the whole island is hidden and inert, so the page never offers two contents lists at once, and a headerless page's controls stand at the foot of the window under the list.",
             },
             DataAttr {
                 name: "data-top",

@@ -456,9 +456,15 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
     },
     CustomProp {
         name: "--moss-nav-island-controls",
-        owner: ".moss-nav-island",
+        owner: "body",
         default: "2.25rem",
-        description: "How wide the headerless island's controls (`.nav-icons`) are in a row: the slot the bar keeps free at its end for them. Measured and written by the site runtime (nav-island.ts) on layout. Not a theme hook.",
+        description: "How wide the headerless island's controls (`.nav-icons`) are in a row: the slot the bar keeps free at its end for them, and the room the page title's first line keeps for them at the top. Measured and written by the site runtime (nav-island.ts) on layout. Not a theme hook.",
+    },
+    CustomProp {
+        name: "--moss-nav-island-controls-guess",
+        owner: "body",
+        default: "3rem",
+        description: "The room the page title's first line keeps for the headerless controls before the site runtime has measured them, or without scripting: 3rem for each control (one, two or three), more than any of them takes. Not a theme hook.",
     },
     CustomProp {
         name: "--moss-contents-inset",
@@ -480,13 +486,31 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
     },
     CustomProp {
         name: "--moss-contents-lane",
-        owner: ".moss-contents-ruler",
-        default: "0px",
-        description: "How wide each link of the contents ruler's invisible hit strip is at rest on a page with `contents: pictures`: from the dash to the gutter before the text column, so the pointer finds the list without hunting for a dash and never rests over the text. Set by the site runtime (contents-ruler.ts) from the measured layout. Not a theme hook.",
+        owner: "body",
+        default: "unset",
+        description: "The lane kept free for the contents list on a page with `contents: pictures`, from the window's left edge to a gutter before the text: `--moss-contents-inset` plus twice `--moss-contents-pad` plus `--moss-contents-row` plus `--moss-contents-gutter` (92px), set only where the window is at least 64rem wide, the pointer is fine and the page is horizontal and left-to-right, and unset everywhere else. Where it is set the page column narrows to `min(column, 100cqi - 2 * lane)`, and, when the list also fits the window's height, the list is up and the floating bar stays away (the island's `data-ruler` is `on` or `lane`); the site runtime reads only whether it is set. The list's invisible hit strips end a gutter short of it. Not a theme hook.",
+    },
+    CustomProp {
+        name: "--moss-contents-column",
+        owner: "body",
+        default: "unset",
+        description: "The page column before the contents list's lane narrows it: `--moss-content-width` as `body` resolves it, copied so the children of `body` can take the smaller of it and the room the lane leaves. Set only where `--moss-contents-lane` is. Not a theme hook.",
+    },
+    CustomProp {
+        name: "--moss-contents-veil",
+        owner: ".moss-contents-ruler-veil",
+        default: "var(--moss-color-bg)",
+        description: "The colour of the fade behind the open names of a `contents: pictures` list: the background colour of the block under the list's middle (a tinted band, or the page), read by the site runtime each time the list opens. Not a theme hook.",
+    },
+    CustomProp {
+        name: "--moss-contents-gutter",
+        owner: "body",
+        default: "24px",
+        description: "The clear space between the contents list's lane and the text column on a page with `contents: pictures`: part of `--moss-contents-lane`, and where the list's hit strips stop. Not a theme hook.",
     },
     CustomProp {
         name: "--moss-contents-row",
-        owner: ".moss-contents-ruler",
+        owner: "body",
         default: "20px",
         description: "The height of one row of the contents ruler, at rest and in its hit strip; the title surfaces and the lens derive their sizes from it. The site runtime assumes 20px, so a theme should leave it.",
     },
@@ -579,6 +603,12 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         name: "data-contents-end",
         values: &[],
         description: "Present on the element an author marked as the end of the page's main sections, with `contents=end` on a fenced div (`::: {.band screen contents=end}`) or on a heading (`## Proposals {contents=end}`). The contents ruler lists only the sections before it and steps aside once the element's top passes the middle of the window, and returns when the reader scrolls back above it. The nav island's sections panel still lists every heading, and the island ignores the marker.",
+    },
+    ScopeAttr {
+        selector: "main :is(h1, h2, h3, h4, h5, h6)",
+        name: "data-contents-label",
+        values: &[],
+        description: "The section's short name, from `{contents-label=\"Short name\"}` at the end of its heading (with `{#id}` and `contents=end` in any order). The contents ruler, the nav island's section name and its sections panel show it instead of the heading's text; the heading itself is unchanged. A name too long for its row is cut at its end with an ellipsis.",
     },
     ScopeAttr {
         selector: "body",

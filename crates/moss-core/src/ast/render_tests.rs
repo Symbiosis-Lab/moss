@@ -33,6 +33,7 @@ fn renders_heading_with_id() {
         children: vec![Inline::Text("Setup".into())],
         id: Some("setup".into()),
         contents_end: false,
+        contents_label: None,
     }]);
     assert_eq!(html, "<h2 id=\"setup\">Setup<a class=\"moss-heading-anchor\" href=\"#setup\" aria-label=\"Permalink to this section\"></a></h2>\n");
 }
@@ -48,6 +49,7 @@ fn renders_level_one_heading_without_permalink_anchor() {
         children: vec![Inline::Text("Title".into())],
         id: Some("title".into()),
         contents_end: false,
+        contents_label: None,
     }]);
     assert_eq!(html, "<h1 id=\"title\">Title</h1>\n");
 }
@@ -1015,6 +1017,7 @@ fn heading_emits_data_source_line_through_hook() {
             children: vec![Inline::Text("Setup".into())],
             id: Some("setup".into()),
             contents_end: false,
+            contents_label: None,
         }],
         vec![BlockMeta {
             source_line: Some(3),

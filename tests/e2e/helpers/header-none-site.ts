@@ -22,6 +22,18 @@ export const AFTER_END = "Colophon";
 /** A page with no `contents=end`: its ruler ends at the closing picture. */
 export const CLOSING_PATH = "/ledger/";
 export const CLOSING_SECTIONS = ["Spring", "Summer", "Autumn", "Winter"];
+/** A full-width page with `contents: pictures`: a tinted band whose words keep
+ *  the text column after its second section, and a picture as wide as the
+ *  window after its third. */
+export const PICTURES_PATH = "/pictures/";
+export const PICTURE_SECTIONS = ["Quays", "Lanterns", "Nets", "Ropewalk", "Salt"];
+export const BAND_TINT = "rgb(40, 60, 90)";
+/** The same field on a page set vertically, under a title longer than one
+ *  column. */
+export const UPRIGHT_PATH = "/upright/";
+
+/** A page whose title is long enough to reach the controls on a phone. */
+export const LONG_TITLE_PATH = "/landings/";
 
 const FILLER =
   "The harbour wall holds the morning for a while before it lets the light " +
@@ -68,6 +80,38 @@ uid: "hng00003"
 # Ledger
 
 ${sections(CLOSING_SECTIONS)}
+`,
+    "Landings.md": `---
+title: The Landings of the Lantern Ferry at Every Harbour Light
+uid: "hng00005"
+---
+
+${sections(["Morning", "Evening"])}
+`,
+    "Pictures.md": `---
+title: Pictures
+uid: "hng00006"
+contents: pictures
+content_width: full
+---
+
+${PICTURE_SECTIONS.map(
+  (title, i) =>
+    `## ${title}\n\n![${title}](closing.png)\n\n${paragraphs(4)}${
+      i === 1 ? "\n\n::: {.tinted screen}\nA band as wide as the window, its words on the text column.\n:::" : ""
+    }${i === 2 ? "\n\n![[closing.png|screen]]" : ""}`,
+).join("\n\n")}
+`,
+    "Upright.md": `---
+title: 書架上的每一件藏品都有它自己的來歷從港口的晨光到燈塔的守夜人再到繩索工坊裡的長廊
+uid: "hng00007"
+contents: pictures
+typesetting: vertical
+---
+
+${PICTURE_SECTIONS.slice(0, 3).map((title) => `## ${title}\n\n![${title}](closing.png)\n\n${paragraphs(1)}`).join("\n\n")}
+`,
+    ".moss/theme/style.css": `.tinted { background: ${BAND_TINT}; color: white; padding-block: 6rem; }
 `,
     "closing.png": png(1200, 600, [70, 110, 150]),
     "footer.md": `:::hero {image=closing.png align=top}
@@ -140,10 +184,13 @@ A band as wide as the window.
 
 ${sections(BAND_SECTIONS.slice(3, -1))}
 
+![[quay.png|screen]]
+
 ## ${BAND_SECTIONS[BAND_SECTIONS.length - 1]} {contents=end}
 
 ${paragraphs(8)}
 `,
+    "quay.png": png(1200, 600, [60, 90, 140]),
     "about.md": `---
 title: About
 uid: "hng00104"

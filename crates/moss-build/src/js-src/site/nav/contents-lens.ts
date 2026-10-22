@@ -149,7 +149,23 @@ export function mountContentsLens({ nav, links }: LensOptions): () => void {
     veil.style.blockSize = px(last.top + last.size - rows[0].top + 2 * VEIL_PAD);
   }
 
+  /** The background colour of what lies under the list's middle (a band,
+   *  or the page), so the fade behind the names matches it. */
+  function ground(): string {
+    const list = nav.querySelector("ol")!.getBoundingClientRect();
+    const under = document.elementsFromPoint((list.left + list.right) / 2, (list.top + list.bottom) / 2);
+    for (const el of under) {
+      if (nav.contains(el)) continue;
+      const colour = getComputedStyle(el).backgroundColor;
+      if (!/^(transparent|rgba\(.*,\s*0\))$/.test(colour)) return colour;
+    }
+    return "";
+  }
+
   function openAt(pointerY: number, focus: number): void {
+    const colour = ground();
+    if (colour) veil.style.setProperty("--moss-contents-veil", colour);
+    else veil.style.removeProperty("--moss-contents-veil");
     lens = {
       f: focus,
       f0: focus,

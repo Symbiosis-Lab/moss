@@ -154,7 +154,7 @@ fn draw(
     }
 
     let description = explicit_card_text(page);
-    let mut words = vec![Block::Heading { level: 1, children: vec![Inline::Text(page.label.clone())], id: None, contents_end: false }];
+    let mut words = vec![Block::Heading { level: 1, children: vec![Inline::Text(page.label.clone())], id: None, contents_end: false, contents_label: None }];
     if let Some(meta) = event_meta::render(page, lang, false, None, event_meta::UpcomingLabel::Shown, now) {
         words.push(Block::Paragraph(vec![Inline::Other(meta)]));
     }

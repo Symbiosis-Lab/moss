@@ -14,13 +14,16 @@
  *
  * - A plain ruler's label may reach no further than one gutter short of the
  *   text column, so its maximum width is `textLeft - GUTTER - labelLeft`, read
- *   from the layout. Titles longer than that are cut in the middle (see
- *   middle-truncate.ts). A `contents: pictures` title is one line, ended
- *   with an ellipsis by CSS.
+ *   from the layout. Titles longer than that, on either ruler, are one line
+ *   ended with an ellipsis by CSS.
  * - Under `MIN_LABEL` of room a label names nothing, so the ruler stays away
- *   and the island is all there is. A `contents: pictures` ruler has no titles
- *   at rest, only dashes, so it needs just the dash lane (the list's own width)
- *   before the gutter.
+ *   and the island is all there is.
+ * - A `contents: pictures` ruler is up wherever the page reserves its lane:
+ *   site.css narrows the column there and sets `--moss-contents-lane` on
+ *   `body`, and this module reads only whether that is set, so the media
+ *   condition has one owner and nothing here measures the margin. Where the
+ *   lane is reserved the island's `data-ruler` is `lane` while the list is
+ *   away, and its bar never shows.
  * - A site can switch it off with CSS (`display: none`, `visibility: hidden`);
  *   whether it is actually rendered is read on every pass, so the island
  *   comes back however it was hidden.
@@ -44,7 +47,6 @@
  * asserted in tests/render-gates/site/contents-ruler.spec.ts.
  */
 
-import { canvasMeasure, truncateMiddle } from "./middle-truncate";
 import { markRows, SECTION_SYNC_EVENT, type SectionSyncDetail } from "./section-event";
 import { mountContentsLens } from "./contents-lens";
 import { pictureImg, type SectionPicture } from "./section-pictures";
@@ -56,11 +58,6 @@ const GUTTER = 24;
 /** Narrowest label worth showing: about seven CJK characters. Anything less
  *  is a few letters of a title, which names nothing. */
 const MIN_LABEL = 96;
-
-/** Slack under the measured label width. Canvas and DOM text widths agree to a
- *  fraction of a pixel; this makes a rounding difference an extra pixel of
- *  margin rather than a clipped letter. */
-const MEASURE_SLACK = 2;
 
 /** Fade in when the first section is this far up the window; fade out when the
  *  article's bottom is above the middle. Pinned to the window, the ruler only
@@ -75,7 +72,9 @@ export interface RulerOptions {
   titles: string[];
   /** The nav's accessible name — the island's localized "sections" string. */
   label: string;
-  /** The island: receives `data-ruler`, and emits `SECTION_SYNC_EVENT`. */
+  /** The island: receives `data-ruler` (`on` while the list is on screen,
+   *  `lane` while it is away from a reserved lane, `off` otherwise), and
+   *  emits `SECTION_SYNC_EVENT`. */
   island: HTMLElement;
   /** Space the island's bar occupies at the top of the window. */
   clearance: () => number;
@@ -116,7 +115,7 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   const links = headings.map((heading, i) => {
     const link = document.createElement("a");
     link.href = `#${heading.id}`;
-    // The visible label may be cut short; the full title is the link's name.
+    // The visible label may be cut short by CSS; the full title is the link's name.
     link.setAttribute("aria-label", titles[i]);
     link.title = titles[i];
     link.innerHTML =
@@ -139,6 +138,7 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   const labels = links.map(
     (link) => link.querySelector<HTMLElement>(".moss-contents-ruler-label")!,
   );
+  labels.forEach((label, i) => (label.textContent = titles[i]));
   nav.append(list);
   // Beside `main`, not inside it: `main` is a size container, which makes it
   // the containing block for fixed descendants and would pin the ruler to the
@@ -151,14 +151,19 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
 
   // Blocks wider than the text column (`data-width`) can sit anywhere in
   // `main`, and script can add them after load: the list is read on layout and
-  // whenever the scope's children change, and tested each frame.
+  // whenever the scope's children change, and tested each frame. What is
+  // tested is each block's children, not the block: a band whose content
+  // keeps the text column covers nothing, while a wide picture or grid covers
+  // the margin through its own child.
   const scope = first.closest("main") ?? article;
   let bands: Element[] = [];
   const collectBands = (): void => {
-    bands = [...scope.querySelectorAll("[data-width]:not([data-width=body])")];
+    bands = [...scope.querySelectorAll("[data-width]:not([data-width=body])")].flatMap((band) => [...band.children]);
   };
   collectBands();
   let away = true;
+  /** The page reserves the list's lane and the list fits: set on layout. */
+  let lane = false;
   let disposed = false;
 
   /**
@@ -195,7 +200,7 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
         : getComputedStyle(nav).display !== "none");
     away = !(inBody && notPast && !covered) && !nav.matches(":focus-within");
     nav.toggleAttribute("data-away", away);
-    island.dataset.ruler = rendered && !away ? "on" : "off";
+    island.dataset.ruler = rendered && !away ? "on" : lane ? "lane" : "off";
   }
 
   function layout(): void {
@@ -208,35 +213,16 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     collectBands();
     const textLeft = vertical ? 0 : first.getBoundingClientRect().left;
     const listBox = list.getBoundingClientRect();
-    // Up to the gutter before the text is the margin the ruler may use. The
-    // dashes need the list's own width of it; the plain ruler's titles need
-    // `MIN_LABEL` more. The open names of a `contents: pictures` ruler are
-    // drawn over the page, so they need none.
-    const margin = textLeft - GUTTER;
-    const room = Math.floor(margin - labels[0].getBoundingClientRect().left);
+    // Up to the gutter before the text is the margin the plain ruler's titles
+    // may use.
+    const room = Math.floor(textLeft - GUTTER - labels[0].getBoundingClientRect().left);
     const fits = (window.innerHeight - listBox.height) / 2 >= opts.clearance();
-    const roomy = opts.pictures ? margin >= listBox.right : room >= MIN_LABEL;
-    const eligible = !vertical && !rtl && roomy && fits;
+    const eligible = opts.pictures
+      ? getComputedStyle(document.body).getPropertyValue("--moss-contents-lane").trim() !== "" && fits
+      : !vertical && !rtl && room >= MIN_LABEL && fits;
     nav.hidden = !eligible;
-    if (eligible) {
-      if (opts.pictures) {
-        // The hit strips reach from the dash to the gutter, never over the text.
-        nav.style.setProperty("--moss-contents-lane", `${margin - links[0].getBoundingClientRect().left}px`);
-        labels.forEach((label, i) => {
-          label.textContent = titles[i];
-        });
-      } else {
-        const measure = canvasMeasure(labels[0]);
-        const padding = parseFloat(getComputedStyle(labels[0]).paddingInlineStart) || 0;
-        // Writes only, no read-back: the canvas measure plus MEASURE_SLACK is
-        // trusted, and the render gate asserts no label overflows in either engine.
-        const fit = room - padding - MEASURE_SLACK;
-        labels.forEach((label, i) => {
-          label.style.maxWidth = `${room}px`;
-          label.textContent = measure ? truncateMiddle(titles[i], fit, measure) : titles[i];
-        });
-      }
-    }
+    lane = Boolean(opts.pictures) && eligible;
+    if (eligible && !opts.pictures) labels.forEach((label) => (label.style.maxWidth = `${room}px`));
     fade();
   }
 

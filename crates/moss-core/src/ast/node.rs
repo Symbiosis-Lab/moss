@@ -207,6 +207,10 @@ pub enum Block {
         /// of the page after the main sections.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         contents_end: bool,
+        /// `## Title {contents-label="Short"}`: the section's name in the
+        /// contents list, the floating bar and its panel.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        contents_label: Option<String>,
     },
     /// A paragraph of inline content.
     Paragraph(Vec<Inline>),
@@ -518,6 +522,7 @@ mod tests {
             children: vec![text("Hello")],
             id: Some("hello".to_string()),
             contents_end: false,
+            contents_label: None,
         };
         match b {
             Block::Heading {
@@ -766,6 +771,7 @@ mod tests {
             children: vec![Inline::Text("Setup".to_string())],
             id: Some("setup".to_string()),
             contents_end: false,
+            contents_label: None,
         };
         let s = serde_json::to_string(&original).expect("serialize");
         let back: Block = serde_json::from_str(&s).expect("deserialize");
