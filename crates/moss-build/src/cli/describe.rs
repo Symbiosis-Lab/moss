@@ -4,7 +4,7 @@
 //! is answering — comes in as `binary_version`.
 
 use moss_core::contract::describe::{
-    DescribePayload, ManifestFieldInfo, PluginHookInfo, SlotInfo,
+    DescribePayload, ManifestFieldInfo, PluginHookInfo, SiteSettingInfo, SlotInfo,
 };
 use moss_core::contract::tokens::load_tokens;
 
@@ -42,7 +42,8 @@ pub fn run(args: &[String], binary_version: &'static str) -> i32 {
     };
     let payload = DescribePayload::new(&tokens)
         .with_binary_version(binary_version)
-        .with_plugin_contract(plugin_hooks(), manifest_fields(), slots(), cli_commands());
+        .with_plugin_contract(plugin_hooks(), manifest_fields(), slots(), cli_commands())
+        .with_site_settings(site_settings());
 
     if json {
         match serde_json::to_string_pretty(&payload) {
@@ -268,6 +269,110 @@ fn slots() -> Vec<SlotInfo> {
         .collect()
 }
 
+/// `[site]` table in `.moss/config.toml` — one entry per key the build reads
+/// through `site_bool` / `site_str`. The drift test in this module fails when
+/// a key is read in code and missing here.
+fn site_settings() -> Vec<SiteSettingInfo> {
+    vec![
+        SiteSettingInfo {
+            name: "ai_policy",
+            r#type: "string",
+            default: Some("standard"),
+            description: "AI crawler policy written to robots.txt: \"standard\" (search and AI input allowed, AI training refused), \"unrestricted\", or \"restricted\" (all refused).",
+        },
+        SiteSettingInfo {
+            name: "colophon",
+            r#type: "bool",
+            default: Some("true"),
+            description: "Show moss's one-line colophon as the footer's last line; false leaves it out of every page.",
+        },
+        SiteSettingInfo {
+            name: "comments",
+            r#type: "bool",
+            default: None,
+            description: "false hides comments on every page; true shows them on pages that do not set `comments:` themselves. Unset follows each page's plugin default.",
+        },
+        SiteSettingInfo {
+            name: "content_width",
+            r#type: "string",
+            default: None,
+            description: "Width preset of the reading column, \"wide\" or \"full\". A page's own `content_width:` overrides it.",
+        },
+        SiteSettingInfo {
+            name: "domain",
+            r#type: "string",
+            default: None,
+            description: "Custom domain the site is published under. `moss domain` reads and checks it.",
+        },
+        SiteSettingInfo {
+            name: "floating_nav",
+            r#type: "bool",
+            default: Some("false"),
+            description: "Show the contents ruler in the left margin on wide screens, on every page, not only pages that set `contents: open`.",
+        },
+        SiteSettingInfo {
+            name: "hard_line_breaks",
+            r#type: "bool",
+            default: Some("true"),
+            description: "A single line break in Markdown renders as a line break, as in Obsidian. false restores CommonMark's soft wrap.",
+        },
+        SiteSettingInfo {
+            name: "header",
+            r#type: "string",
+            default: Some("brand"),
+            description: "Header layout: \"brand\" shows the site name first; \"nav\" shows the link list first, opening with a Home link.",
+        },
+        SiteSettingInfo {
+            name: "heading_anchors",
+            r#type: "bool",
+            default: Some("true"),
+            description: "Give each heading a `#` link to itself. false removes the links.",
+        },
+        SiteSettingInfo {
+            name: "implicit_figure",
+            r#type: "bool",
+            default: Some("true"),
+            description: "A paragraph holding only an image becomes a figure, as in Pandoc. false keeps it a plain paragraph.",
+        },
+        SiteSettingInfo {
+            name: "lang",
+            r#type: "string",
+            default: None,
+            description: "Language of the default edition, published at `/`. Unset, it is detected from the pages.",
+        },
+        SiteSettingInfo {
+            name: "link_preview",
+            r#type: "bool",
+            default: Some("true"),
+            description: "Show a preview popup when a reader hovers a link. false ships no preview script.",
+        },
+        SiteSettingInfo {
+            name: "locator",
+            r#type: "string",
+            default: Some("none"),
+            description: "Small locator map after each place line: \"align-right\", or \"none\" to leave it off.",
+        },
+        SiteSettingInfo {
+            name: "math",
+            r#type: "bool",
+            default: Some("true"),
+            description: "Typeset math in pages. false turns math rendering off.",
+        },
+        SiteSettingInfo {
+            name: "search",
+            r#type: "bool",
+            default: Some("false"),
+            description: "Build the client-side search index and show the search button.",
+        },
+        SiteSettingInfo {
+            name: "typesetting",
+            r#type: "string",
+            default: None,
+            description: "\"vertical\" sets the text in vertical columns, for CJK sites. Unset is horizontal.",
+        },
+    ]
+}
+
 fn print_human(payload: &DescribePayload) {
     println!("moss describe");
     println!("  describe_schema_version: {}", payload.describe_schema_version);
@@ -351,6 +456,54 @@ fn print_human(payload: &DescribePayload) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every `[site]` key the build reads must be listed in `site_settings()`,
+    /// or an author has no way to learn that the setting exists. The scan is
+    /// textual: it matches a helper call with a literal key on one line.
+    #[test]
+    fn every_site_key_read_in_code_is_listed_in_site_settings() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("read source directory") {
+                let path = entry.expect("directory entry").path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        const HELPERS: [&str; 5] = ["site_bool", "site_str", "site_string", "site_table", "site_value"];
+
+        let mut files = Vec::new();
+        walk(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")), &mut files);
+        let listed: Vec<&str> = site_settings().iter().map(|s| s.name).collect();
+
+        let mut missing = Vec::new();
+        for file in &files {
+            let text = std::fs::read_to_string(file).expect("read source file");
+            for (n, line) in text.lines().enumerate() {
+                for helper in HELPERS {
+                    let needle = format!("{helper}(\"");
+                    for (at, _) in line.match_indices(&needle) {
+                        let rest = &line[at + needle.len()..];
+                        let Some(end) = rest.find('"') else { continue };
+                        let key = &rest[..end];
+                        if !key.is_empty()
+                            && key.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+                            && !listed.contains(&key)
+                        {
+                            missing.push(format!("`{key}` at {}:{}", file.display(), n + 1));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "[site] keys read in code but missing from site_settings(): {}",
+            missing.join(", ")
+        );
+    }
 
     /// The `moss describe` manifest table mirrors `PluginManifest` field by
     /// field (a plugin-author discovery contract). Guard the registry fields

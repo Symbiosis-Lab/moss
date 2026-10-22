@@ -47,6 +47,8 @@ pub struct DescribePayload<'a> {
     pub plugin_hooks: Vec<PluginHookInfo>,
     /// Plugin manifest fields: each field in PluginManifest, with type and required flag.
     pub manifest_fields: Vec<ManifestFieldInfo>,
+    /// Site settings: each `[site]` key of `.moss/config.toml` the build reads.
+    pub site_settings: Vec<SiteSettingInfo>,
     /// Template injection slots: each named slot in the build pipeline.
     pub slots: Vec<SlotInfo>,
     /// CLI commands: each subcommand moss exposes.
@@ -82,6 +84,22 @@ pub struct ManifestFieldInfo {
     pub r#type: &'static str,
     /// Whether this field must be present in a valid manifest.
     pub required: bool,
+    /// One-line description.
+    pub description: &'static str,
+}
+
+/// Site setting entry emitted in `site_settings`.
+///
+/// Describes one key under `[site]` in `.moss/config.toml`. Populated by
+/// moss-build's `cli::describe`.
+#[derive(Serialize)]
+pub struct SiteSettingInfo {
+    /// Key name under `[site]`.
+    pub name: &'static str,
+    /// "bool", "string" or "table".
+    pub r#type: &'static str,
+    /// The value when the key is absent, as text; `None` when the build has no fixed default.
+    pub default: Option<&'static str>,
     /// One-line description.
     pub description: &'static str,
 }
@@ -259,6 +277,7 @@ impl<'a> DescribePayload<'a> {
             // empty vecs here; the CLI path fills them via with_plugin_contract().
             plugin_hooks: Vec::new(),
             manifest_fields: Vec::new(),
+            site_settings: Vec::new(),
             slots: Vec::new(),
             cli_commands: Vec::new(),
         }
@@ -295,6 +314,14 @@ impl<'a> DescribePayload<'a> {
         self.manifest_fields = manifest_fields;
         self.slots = slots;
         self.cli_commands = cli_commands;
+        self
+    }
+
+    /// Builder method: attach the `[site]` settings table. Same caller as
+    /// [`DescribePayload::with_plugin_contract`], since the keys are read by
+    /// moss-build.
+    pub fn with_site_settings(mut self, site_settings: Vec<SiteSettingInfo>) -> Self {
+        self.site_settings = site_settings;
         self
     }
 }
