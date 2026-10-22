@@ -124,7 +124,7 @@ fn first_page<'a>(
         .clone()
         .or_else(|| (parsed.when == Some("upcoming")).then(|| "upcoming".to_string()))
         .map(moss_core::Resolved::frontmatter);
-    let ordered = members::order(&pages, target_doc, is_flatten, parsed.sort, None, group.as_ref(), None, math, now);
+    let ordered = members::order(&pages, target_doc, is_flatten, parsed.sort, None, group.as_ref(), None, None, math, now);
     ordered.limited.first().copied()
 }
 

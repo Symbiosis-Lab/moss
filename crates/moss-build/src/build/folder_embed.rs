@@ -1471,6 +1471,7 @@ fn render_one(
         style_override.as_ref(),
         group_override.as_ref(),
         parsed.limit,
+        parsed.when,
         math,
         now,
     );
