@@ -143,7 +143,7 @@ export const CLOSING_PICTURE_FADE_GATE: ScratchSiteSpec = {
   },
 };
 
-/** The busy pair with `fade=top`: hatched under the words too, so a phone keeps the words' panel with the credit under it. */
+/** The busy pair with `fade=top`: hatched under the words too, so the words keep their panel and the credit its own at the foot. */
 export const CLOSING_PICTURE_BUSY_FADE_GATE: ScratchSiteSpec = {
   name: "closing-picture-busy-fade-gate",
   files: {
@@ -154,12 +154,24 @@ export const CLOSING_PICTURE_BUSY_FADE_GATE: ScratchSiteSpec = {
   },
 };
 
-/** The busy faded pair with no credit: the words' panel ends in its own fade on a phone. */
-export const CLOSING_PICTURE_BUSY_BARE_GATE: ScratchSiteSpec = {
-  name: "closing-picture-busy-bare-gate",
+
+/** The capped picture's height, as its fence writes it and as the gate checks it. */
+export const CAP = "clamp(440px, 50vw, 680px)";
+export const capAt = (width: number) => Math.min(680, Math.max(440, width / 2));
+
+/**
+ * A faded closing picture with a cap and a position, the shape of a 1400x1073
+ * print: a dark strip over its top 4%, which the cap crops away from 48rem and
+ * a phone shows only inside the fade.
+ */
+export const CLOSING_PICTURE_CAPPED_GATE: ScratchSiteSpec = {
+  name: "closing-picture-capped-gate",
   files: {
-    ...CLOSING_PICTURE_BUSY_FADE_GATE.files,
-    "footer.md": `:::hero {image=closing.png dark=closing-dark.png align=top fade=top}\n## ${HEADING}\n\n[${LINK_TEXT}](https://example.org/new)\n:::\n`,
+    ".moss/config.toml": `schema_version = 5\n\n[site]\nlang = "en"\n`,
+    "closing.png": landscapePng(1400, 1073, SKY, GROUND, 0.7, { strip: PATCH }),
+    "closing-dark.png": landscapePng(1400, 1073, SKY_NIGHT, [8, 10, 14], 0.7, { strip: [230, 235, 240] }),
+    "index.md": `---\ntitle: Capped Shelf\nuid: "cpc00101"\n---\n\n# Capped Shelf\n\nAn invented site for the capped closing picture.\n`,
+    "footer.md": `:::hero {image="closing.png|focus:50%,72%" dark=closing-dark.png align=top fade=top max-height="${CAP}" caption="${CREDIT}"}\n## ${HEADING}\n\n[${LINK_TEXT}](https://example.org/new)\n:::\n`,
   },
 };
 

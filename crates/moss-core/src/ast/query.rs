@@ -730,6 +730,7 @@ mod tests {
             mobile: None,
             panel: None,
             fade: None,
+            max_height: None,
             align: None,
             caption: Vec::new(),
             slide_captions: Vec::new(),

@@ -2377,6 +2377,20 @@ fn hero_fade_takes_top_and_warns_on_anything_else() {
 }
 
 #[test]
+fn hero_max_height_outside_its_grammar_is_a_problem() {
+    for ok in [r#"max-height="clamp(420px, 50vw, 680px)""#, "max-height=30rem"] {
+        let fine = extract_shortcodes(&format!(":::hero {{image=hero.jpg {ok}}}\n# Title\n:::\n"));
+        assert!(fine.warnings.is_empty(), "{ok}: {:?}", fine.warnings);
+    }
+    for bad in ["\"calc(100vh - 2rem)\"", "60svh"] {
+        let odd = extract_shortcodes(&format!(":::hero {{image=hero.jpg max-height={bad}}}\n# Title\n:::\n"));
+        assert_eq!(odd.warnings.iter().filter(|w| w.contains("max-height=") && w.contains("not capped")).count(), 1, "{bad}: {:?}", odd.warnings);
+    }
+    let doc = crate::ast::parser::parse(":::hero {image=hero.jpg max-height=60svh}\n# Title\n:::\n");
+    assert!(doc.blocks.iter().all(|b| !matches!(b, crate::ast::Block::Shortcode(crate::ast::Shortcode::Hero(h)) if h.max_height.is_some())));
+}
+
+#[test]
 fn hero_unknown_align_value_emits_warning() {
     let md = ":::hero {image=hero.jpg align=middle}\n# Title\n:::\n";
     let result = extract_shortcodes(md);

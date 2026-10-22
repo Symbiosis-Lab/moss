@@ -1342,7 +1342,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-foot",
                 values: &["dark", "light"],
                 default: "",
-                description: "Closing picture only: the ink measured along the picture's foot, used for the credit (`.moss-hero-credit`) and the colophon so they read on the picture without a panel. Absent: the credit sits on a small panel of its own and the colophon stays white with a shadow.",
+                description: "Closing picture only: the words' ink measured along the picture's foot, used for the colophon so it reads on the picture. Absent: the colophon stays white with a shadow. The credit has its own ink (`data-credit`).",
             },
             DataAttr {
                 name: "data-foot-night",
@@ -1354,19 +1354,19 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-fade",
                 values: &["top"],
                 default: "",
-                description: "Closing picture only, from `fade=top`: the picture's top fades into the page colour, over 38% of the box (30% on a phone), through a mask on the picture itself, so the words and credit above it stay solid. With `align=top` the credit joins the words: under them, and from 80rem beside them at the inline end.",
+                description: "Closing picture only, from `fade=top`: the picture's top fades into the page colour, over 38% of the box (half of it on a phone, where the box keeps at least 38rem so the words sit on the faded top), through a mask on the picture itself, so the words above it stay solid. The credit stays at the foot.",
             },
             DataAttr {
                 name: "data-credit",
-                values: &[],
+                values: &["text", "page"],
                 default: "",
-                description: "Closing picture with `fade=top` and `align=top` only: the layouts where the credit, set with the words, reads in a secondary ink straight on the picture, as `data-words` lists them (`narrow:dark wide:light`). Measured across the full width of the rows the words and credit reach, so it holds whichever side the credit sits on. Dark is the light theme's `--moss-color-text-secondary` (#5d5853), light the dark theme's (#b0a696). A layout not listed gives the credit a small panel.",
+                description: "Closing picture with a credit only: the ink the credit takes at the picture's foot in the light theme, measured over the foot at every layout. `text` is the theme's secondary text colour (#5d5853), `page` its page colour (`--moss-color-bg`, as the build reads it from the theme); whichever clears 4.5:1 over the foot's worst case, the better if both do. Absent: the credit keeps a small panel. With `panel=none` the credit takes the better of the two even below 4.5:1, and the build warns, as it does for the words; `panel=always` keeps the credit's panel too.",
             },
             DataAttr {
                 name: "data-credit-night",
-                values: &[],
+                values: &["text", "page"],
                 default: "",
-                description: "`data-credit` for the dark theme.",
+                description: "`data-credit` for the dark theme: `text` is #b0a696, `page` the dark theme's `--moss-color-bg`.",
             },
             DataAttr {
                 name: "data-fit",
@@ -1436,7 +1436,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: ":::hero {image=closing.jpg dark=closing-night.jpg align=top}\n## The shelf is open.\n:::\n",
         status: Status::Confirmed,
         since: "0",
-        description: "The hero that is the last block of `footer.md`: the page's closing picture. The footer drops its column, padding, divider and fill, and the picture runs the viewport's full width as the last painted thing on the page, with its words on it at every width (the build adds `data-mobile=\"overlay\"`), starting where the article's text starts, and the colophon on its bottom edge. From 48rem its box takes the picture's own shape at the window's width, so the whole picture shows, even when taller than the window; `--moss-hero-max-height` caps it and the crop keeps the side away from the words (`align=top` keeps the foot). On a phone a kept panel ends in a fade into the picture instead of a hard edge. It is never darkened, and where its picture is quiet under the words the words sit in ink with no panel (`data-words`); its `caption=` is the picture's credit (`.moss-hero-credit`). A `dark=` picture replaces the light one in dark mode through `data-hero-variant=\"light\"|\"dark\"` on each picture. `fade=top` fades its top into the page (`data-fade`).",
+        description: "The hero that is the last block of `footer.md`: the page's closing picture. The footer drops its column, padding, divider and fill, and the picture runs the viewport's full width as the last painted thing on the page, with its words on it at every width (the build adds `data-mobile=\"overlay\"`), starting where the article's text starts, and the colophon on its bottom edge. From 48rem its box takes the picture's own shape at the window's width, so the whole picture shows, even when taller than the window; the hero's `max-height=` caps it (emitted as `--moss-hero-max-height`), and the crop keeps the side away from the words (`align=top` keeps the foot) unless `image=` names a position, both of which the ink measurement follows. On a phone a kept panel ends in a fade into the picture instead of a hard edge. It is never darkened, and where its picture is quiet under the words the words sit in ink with no panel (`data-words`); its `caption=` is the picture's credit (`.moss-hero-credit`). A `dark=` picture replaces the light one in dark mode through `data-hero-variant=\"light\"|\"dark\"` on each picture. `fade=top` fades its top into the page (`data-fade`).",
     },
     ComponentEntry {
         class: "moss-hero-credit",
@@ -1447,7 +1447,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: ":::hero {image=closing.jpg align=top caption=\"Etching of the harbour, 1643.\"}\n## The shelf is open.\n:::\n",
         status: Status::Confirmed,
         since: "0",
-        description: "The closing picture's `caption=`, set small inside the picture at its foot on the inline-end side, above the colophon's row, instead of below the picture as an ordinary hero's caption is. Legible by the same rule as the words: in the ink measured along the foot (`data-foot`), or on a small panel of its own where the foot is too busy for either ink. With `fade=top` and `align=top` it joins the words at the top instead: under them, and from 80rem beside them at the inline end, level with their first line, in the secondary ink measured for it (`data-credit`) or on its small panel.",
+        description: "The closing picture's `caption=`, set small inside the picture at its foot on the inline-end side, above the colophon's row, instead of below the picture as an ordinary hero's caption is. It stays at the foot at every width, the last thing on the foot before the colophon. Its ink is measured there per theme (`data-credit`): the theme's secondary text colour or its page colour, whichever clears 4.5:1, or a small panel of its own where neither does.",
     },
     ComponentEntry {
         class: "moss-hero-slides",

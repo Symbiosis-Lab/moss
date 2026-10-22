@@ -3,7 +3,7 @@
 // words stay on it at every width, in both themes.
 import { test, expect, Page } from '@playwright/test';
 import { contrastRatio, luminanceOfCss, parseColor, relativeLuminance, worstCaseContrast } from '../../e2e/helpers/wcag-contrast';
-import { CREDIT, GROUND, SKY, SKY_NIGHT } from '../../e2e/helpers/closing-picture-site';
+import { CREDIT, GROUND, SKY, SKY_NIGHT, capAt } from '../../e2e/helpers/closing-picture-site';
 import { gatePort } from '../../../playwright/gate-ports';
 
 const lum = ([r, g, b]: readonly number[]) => relativeLuminance(r, g, b);
@@ -372,13 +372,13 @@ for (const [path, panel] of [['', true], ['full/', false]] as const) {
   });
 }
 
-// `fade=top`: the picture's top fades into the page colour, and with `align=top`
-// the credit joins the words. Contrast is read off the rendered pixels behind
-// the words and the credit, with both hidden, so it checks what a reader sees.
+// `fade=top`: the picture's top fades into the page colour, and the credit stays
+// at the foot. Contrast is read off the rendered pixels behind the words and the
+// credit, with both hidden, so it checks what a reader sees.
 const FADE = `http://localhost:${gatePort('closing-picture:fade')}/`;
 
-const openFaded = async (page: Page, theme: string | null = null) => {
-  await page.goto(FADE, { waitUntil: 'load' });
+const openFaded = async (page: Page, theme: string | null = null, url = FADE) => {
+  await page.goto(url, { waitUntil: 'load' });
   if (theme) await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme);
   await page.evaluate(() => scrollTo(0, 1e6));
   await page.waitForFunction(() =>
@@ -459,17 +459,10 @@ for (const theme of THEMES) {
       expect(m.colophon.bottom).toBeLessThanOrEqual(m.hero.bottom + 1);
       expect(m.colophon.top).toBeGreaterThanOrEqual(m.credit.bottom - 1);
 
-      // The credit sits with the words: beside them at the inline end from 80rem,
-      // under them, where their text starts, on a phone.
-      if (width >= 1280) {
-        expect(m.credit.left, 'beside the words, not over them').toBeGreaterThan(m.content.right);
-        expect(Math.abs(m.credit.right - m.hero.right), 'at the inline end').toBeLessThanOrEqual(m.viewport * 0.06);
-        expect(m.credit.top, 'level with the words').toBeLessThanOrEqual(m.heading.top);
-      } else {
-        expect(m.credit.top, 'under the words').toBeGreaterThanOrEqual(m.content.bottom - 1);
-        expect(Math.abs(m.credit.left + m.creditStyle.pad - m.heading.left), 'where the words start').toBeLessThanOrEqual(2);
-        expect(m.credit.bottom, 'above the picture kept clear on a phone').toBeLessThanOrEqual(m.hero.top + (m.hero.bottom - m.hero.top) * 0.6);
-      }
+      // The credit stays at the foot, on the inline end, last before the colophon.
+      expect(m.credit.top, 'below the words').toBeGreaterThan(m.content.bottom);
+      expect(Math.abs(m.credit.bottom - m.colophon.top), 'on the colophon row').toBeLessThanOrEqual(2);
+      expect(Math.abs(m.credit.right - m.hero.right), 'at the inline end').toBeLessThanOrEqual(1);
       expect(m.creditStyle.size).toBeLessThan(16);
 
       // In ink, no panel, and AA against every pixel behind them.
@@ -489,14 +482,14 @@ for (const theme of THEMES) {
   }
 }
 
-test('a faded closing picture in a right-to-left page: the credit sits at the inline end, beside the words', async ({ page }) => {
+test('a faded closing picture in a right-to-left page: the credit sits at the foot, at the inline end', async ({ page }) => {
   await page.setViewportSize({ width: 1360, height: 800 });
   await openFaded(page);
   await page.evaluate(() => { document.documentElement.dir = 'rtl'; });
   const m = await fadedBoxes(page);
-  expect(m.credit.left - m.hero.left).toBeLessThanOrEqual(m.viewport * 0.06);
-  expect(m.credit.top, 'level with the words').toBeLessThanOrEqual(m.heading.top);
-  expect(m.credit.right, 'not over the words').toBeLessThan(m.content.left);
+  expect(Math.abs(m.credit.left - m.hero.left), 'at the inline end').toBeLessThanOrEqual(1);
+  expect(m.credit.top, 'below the words').toBeGreaterThan(m.content.bottom);
+  expect(Math.abs(m.credit.bottom - m.colophon.top), 'on the colophon row').toBeLessThanOrEqual(2);
 });
 
 test('a faded closing picture is still capped by --moss-hero-max-height, and the crop keeps the foot', async ({ page }) => {
@@ -515,18 +508,18 @@ test('without fade=top nothing fades and the credit stays at the foot', async ({
     const hero = document.querySelector('footer .moss-hero-closing')!;
     const img = [...hero.querySelectorAll('img')].find((i) => getComputedStyle(i).display !== 'none')!;
     const s = getComputedStyle(img);
-    return { fade: hero.hasAttribute('data-fade'), credit: hero.hasAttribute('data-credit'), mask: s.maskImage || s.webkitMaskImage };
+    return { fade: hero.hasAttribute('data-fade'), mask: s.maskImage || s.webkitMaskImage };
   });
-  expect(m).toEqual({ fade: false, credit: false, mask: 'none' });
+  expect(m).toEqual({ fade: false, mask: 'none' });
 });
 
-// Busy under the words too, with the fade: the words keep their panel, and the
-// credit under them runs the same width on the same panel, so the two read as
-// one block, with the phone's fade hanging below the credit rather than across it.
+// Busy under the words and along the foot, with the fade: the words keep their
+// panel (on a phone ending in its fade), and the credit stays at the foot on a
+// small panel of its own.
 const BUSY_FADE = `http://localhost:${gatePort('closing-picture:busy-fade')}/`;
 for (const scheme of SCHEMES) {
   for (const width of [390, 900]) {
-    test(`busy faded picture, ${scheme}, ${width}px: the credit joins the words' panel`, async ({ browser }) => {
+    test(`busy faded picture, ${scheme}, ${width}px: the words keep their panel, the credit its own at the foot`, async ({ browser }) => {
       const context = await browser.newContext({ colorScheme: scheme, viewport: { width, height: 800 } });
       const page = await context.newPage();
       await page.goto(BUSY_FADE, { waitUntil: 'load' });
@@ -534,49 +527,84 @@ for (const scheme of SCHEMES) {
         const hero = document.querySelector('footer .moss-hero-closing')!;
         const content = hero.querySelector('.moss-hero-content')!;
         const credit = hero.querySelector('.moss-hero-credit')!;
-        const [c, k] = [content.getBoundingClientRect(), credit.getBoundingClientRect()];
+        const [h, c, k] = [hero.getBoundingClientRect(), content.getBoundingClientRect(), credit.getBoundingClientRect()];
         return {
-          content: { left: c.left, right: c.right, bottom: c.bottom },
-          credit: { left: k.left, right: k.right, top: k.top },
+          hero: { bottom: h.bottom },
+          content: { bottom: c.bottom },
+          credit: { top: k.top, bottom: k.bottom },
           panels: [getComputedStyle(content).backgroundColor, getComputedStyle(credit).backgroundColor],
           ink: getComputedStyle(credit).color,
-          tails: [getComputedStyle(content, '::after').content, getComputedStyle(credit, '::after').content],
+          tail: getComputedStyle(content, '::after').content,
         };
       });
       expect(parseColor(m.panels[0]).a, 'the words keep their panel').toBeGreaterThan(0.5);
-      expect(m.panels[1], 'the credit is on the same panel').toBe(m.panels[0]);
-      expect(Math.abs(m.credit.top - m.content.bottom), 'directly under the words').toBeLessThanOrEqual(1);
-      expect(Math.abs(m.credit.left - m.content.left)).toBeLessThanOrEqual(1);
-      expect(Math.abs(m.credit.right - m.content.right)).toBeLessThanOrEqual(1);
+      expect(parseColor(m.panels[1]).a, 'the credit keeps a panel').toBeGreaterThan(0.5);
+      expect(m.credit.top, 'the credit is at the foot, below the words').toBeGreaterThan(m.content.bottom);
+      expect(m.credit.bottom).toBeLessThanOrEqual(m.hero.bottom + 1);
       const { overBlack, overWhite } = worstCaseContrast(m.panels[1], m.ink);
       expect(Math.min(overBlack, overWhite), `credit ${m.ink} on ${m.panels[1]}`).toBeGreaterThanOrEqual(4.5);
-      if (width < 768) expect(m.tails, 'the fade hangs below the credit').toEqual(['none', '""']);
+      if (width < 768) expect(m.tail, "the words' panel ends in its fade").toBe('""');
       await context.close();
     });
   }
 }
 
-// The same busy faded picture with no credit: nothing is set under the words,
-// so on a phone their panel still ends in its fade, not a seam.
-const BUSY_BARE = `http://localhost:${gatePort('closing-picture:busy-bare')}/`;
-for (const scheme of SCHEMES) {
-  test(`busy faded picture without a credit, ${scheme}, 390px: the words' panel ends in its fade`, async ({ browser }) => {
-    const context = await browser.newContext({ colorScheme: scheme, viewport: { width: 390, height: 800 } });
-    const page = await context.newPage();
-    await page.goto(BUSY_BARE, { waitUntil: 'load' });
-    const m = await page.evaluate(() => {
-      const hero = document.querySelector('footer .moss-hero-closing')!;
-      const content = hero.querySelector('.moss-hero-content')!;
-      const tail = getComputedStyle(content, '::after');
-      return { credit: hero.querySelectorAll('.moss-hero-credit').length, attr: hero.hasAttribute('data-credit') || hero.hasAttribute('data-credit-night'), panel: getComputedStyle(content).backgroundColor, tail: { content: tail.content, bg: tail.backgroundColor } };
+// `max-height=` and a position on the picture are build data: the build measures
+// the part of the picture the capped box shows, and a phone gives the faded
+// picture a floor so its words sit on the faded top. The credit stays at the
+// foot. Contrast is read off the rendered pixels.
+const CAPPED = `http://localhost:${gatePort('closing-picture:capped')}/`;
+for (const theme of THEMES) {
+  for (const width of [1360, 1100, 900, 768, 390]) {
+    test(`capped faded closing picture, ${theme.name}, ${width}px: measured as shown, words and credit in ink on the picture`, async ({ browser }) => {
+      const context = await browser.newContext({ colorScheme: theme.system, viewport: { width, height: 800 } });
+      const page = await context.newPage();
+      await openFaded(page, theme.toggle, CAPPED);
+      const m = await fadedBoxes(page);
+      const extra = await page.evaluate(() => {
+        const hero = document.querySelector('footer .moss-hero-closing')!;
+        const img = [...hero.querySelectorAll('img')].find((i) => getComputedStyle(i).display !== 'none')!;
+        const after = [...document.querySelectorAll('footer ~ *, footer .moss-hero-closing ~ :not(.moss-colophon)')].filter((e) => {
+          const s = getComputedStyle(e);
+          return s.display !== 'none' && s.position !== 'fixed' && e.getBoundingClientRect().height > 0;
+        });
+        return { position: getComputedStyle(img).objectPosition, cap: getComputedStyle(hero).getPropertyValue('--moss-hero-max-height').trim(), after: after.length };
+      });
+      expect(m.shown).toBe(theme.dark ? 'dark' : 'light');
+      expect(extra.position, 'the position the image names').toBe('50% 72%');
+      expect(extra.cap).toBe('clamp(440px, 50vw, 680px)');
+
+      // The box: the cap from 48rem; on a phone the faded floor, which is taller.
+      const height = m.hero.bottom - m.hero.top;
+      if (width >= 768) expect(Math.abs(height - capAt(width)), `box ${height}`).toBeLessThanOrEqual(1);
+      else expect(height).toBeGreaterThanOrEqual(608 - 1);
+
+      // Nothing follows the picture, and nothing of it is outside it.
+      expect(m.hero.left).toBeCloseTo(0, 0);
+      expect(m.hero.right).toBeCloseTo(m.viewport, 0);
+      expect(m.hero.bottom).toBeCloseTo(m.docBottom, 0);
+      expect(extra.after, 'no box after the picture').toBe(0);
+      for (const [part, r] of [['words', m.content], ['credit', m.credit], ['colophon', m.colophon]] as const) {
+        expect(r.top, `${part} top`).toBeGreaterThanOrEqual(m.hero.top - 1);
+        expect(r.bottom, `${part} bottom`).toBeLessThanOrEqual(m.hero.bottom + 1);
+        expect(r.left, `${part} left`).toBeGreaterThanOrEqual(m.hero.left - 1);
+        expect(r.right, `${part} right`).toBeLessThanOrEqual(m.hero.right + 1);
+      }
+      // The words sit inside the rows the build measured (on a phone the top
+      // 60% of the box); the credit is at the foot, last before the colophon.
+      if (width < 768) expect(m.content.bottom).toBeLessThanOrEqual(m.hero.top + height * 0.6);
+      expect(m.credit.top, 'the credit below the words').toBeGreaterThan(m.content.bottom);
+      expect(Math.abs(m.credit.bottom - m.colophon.top), 'on the colophon row').toBeLessThanOrEqual(2);
+
+      expect(parseColor(m.words.panel).a, 'no panel behind the words').toBe(0);
+      expect(parseColor(m.creditStyle.panel).a, 'no panel behind the credit').toBe(0);
+      const behindWords = await backdrop(page, m.heading);
+      expect(worstContrast(m.words.ink, behindWords), `words ${m.words.ink}`).toBeGreaterThanOrEqual(4.5);
+      const behindCredit = await backdrop(page, m.credit);
+      expect(worstContrast(m.creditStyle.ink, behindCredit), `credit ${m.creditStyle.ink}`).toBeGreaterThanOrEqual(4.5);
+      await context.close();
     });
-    expect(m.credit).toBe(0);
-    expect(m.attr, 'no credit to measure').toBe(false);
-    expect(parseColor(m.panel).a, 'the words keep their panel').toBeGreaterThan(0.5);
-    expect(m.tail.content).not.toBe('none');
-    expect(m.tail.bg, 'the tail is the panel faded').toBe(m.panel);
-    await context.close();
-  });
+  }
 }
 // The archival edition on a closing picture: the words, the credit (when the
 // picture has one), the edition and the colophon row stack at the foot in that

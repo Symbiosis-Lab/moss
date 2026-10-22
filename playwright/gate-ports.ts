@@ -130,7 +130,7 @@ const GATE_PORT_KEYS = [
   'content-grid:center',
   'closing-picture:fade',
   'closing-picture:busy-fade',
-  'closing-picture:busy-bare',
+  'closing-picture:capped',
   'wcag-output',
   'archival-footer',
 ] as const;

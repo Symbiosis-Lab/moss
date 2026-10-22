@@ -100,6 +100,7 @@ fn entry(kind: ShortcodeKind) -> ShortcodeCatalogEntry {
                 ShortcodeAttrSpec { name: "align", asset_kinds: &[], flag: false },
                 ShortcodeAttrSpec { name: "panel", asset_kinds: &[], flag: false },
                 ShortcodeAttrSpec { name: "fade", asset_kinds: &[], flag: false },
+                ShortcodeAttrSpec { name: "max-height", asset_kinds: &[], flag: false },
                 ShortcodeAttrSpec { name: "dark", asset_kinds: &[], flag: false },
                 ShortcodeAttrSpec { name: "from", asset_kinds: &[], flag: false },
             ],
@@ -259,7 +260,8 @@ mod tests {
         use crate::ast::shortcode::Shortcode;
         let hero = catalog().into_iter().find(|e| e.kind == ShortcodeKind::Hero).expect("hero entry");
         for a in hero.attrs.iter().filter(|a| !a.flag && a.asset_kinds.is_empty()) {
-            let md = format!(":::hero {{image=a.jpg {}=x}}\n# T\n:::\n", a.name);
+            let value = if a.name == "max-height" { "500px" } else { "x" };
+            let md = format!(":::hero {{image=a.jpg {}={value}}}\n# T\n:::\n", a.name);
             let doc = crate::ast::parser::parse(&md);
             let h = doc
                 .blocks
@@ -277,6 +279,7 @@ mod tests {
                 "align" => h.align.is_some(),
                 "panel" => h.panel.is_some(),
                 "fade" => h.fade.is_some(),
+                "max-height" => h.max_height.is_some(),
                 "dark" => h.dark.is_some(),
                 "from" => h.from.is_some(),
                 _ => false,

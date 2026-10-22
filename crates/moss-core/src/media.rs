@@ -8,7 +8,9 @@
 
 use std::collections::BTreeMap;
 
+mod max_height;
 mod placement;
+pub use max_height::MaxHeight;
 pub use placement::{extract_placement_from_alias, Placement};
 // `parse_placement_segment` has exactly one caller outside its own module:
 // `segment_without_size` below, the editor's drag-resize write path — hence
@@ -101,6 +103,22 @@ impl Position {
             Position::BottomLeft => "bottom left".into(),
             Position::BottomRight => "bottom right".into(),
             Position::Focus(x, y) => format!("{x}% {y}%").into(),
+        }
+    }
+
+    /// The position as `(x, y)` percentages, as `object-position` reads it.
+    pub fn percentages(&self) -> (u8, u8) {
+        match self {
+            Position::Center => (50, 50),
+            Position::Left => (0, 50),
+            Position::Right => (100, 50),
+            Position::Top => (50, 0),
+            Position::Bottom => (50, 100),
+            Position::TopLeft => (0, 0),
+            Position::TopRight => (100, 0),
+            Position::BottomLeft => (0, 100),
+            Position::BottomRight => (100, 100),
+            Position::Focus(x, y) => (*x, *y),
         }
     }
 

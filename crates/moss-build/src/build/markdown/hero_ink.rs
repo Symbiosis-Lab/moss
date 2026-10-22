@@ -15,10 +15,13 @@
 //! content's own (`max(600px, 35%)`). Pages are taken as left-to-right, which
 //! is what moss emits; a right-to-left page should set `panel=always`.
 //!
-//! A closing picture with `fade=top` shows the page through its top. There
-//! each cell is composited over the page colour of the theme being read
-//! ([`PageGround`]) before it is measured, and its credit, set with the words,
-//! is measured across the whole width of their rows, so either direction holds.
+//! A closing picture's crop is build data ([`Frame`]): its `max-height=` and
+//! the position its `image=` names, so the cells are those its box shows
+//! ([`Crop`]) at each layout. A closing picture with `fade=top` shows the page
+//! through its top. There each cell is composited over the page colour of the
+//! theme being read ([`PageGround`]) before it is measured. The credit sits at
+//! the foot, in whichever of the theme's secondary text colour and its page
+//! colour reads there ([`CreditInk`]).
 
 use image::DynamicImage;
 
@@ -68,13 +71,13 @@ impl Layout {
         }
     }
 
-    /// The narrowest viewport the layout is drawn at, in px: the `48rem` and
-    /// `80rem` media queries of site.css at the default 16px root.
-    fn min_width(self) -> f32 {
+    /// The window widths the layout spans: from the `48rem` and `80rem` media
+    /// queries of site.css at the default 16px root, the widest taken as 2560px.
+    fn widths(self) -> (f32, f32) {
         match self {
-            Layout::Narrow => 320.0,
-            Layout::Mid => 768.0,
-            Layout::Wide | Layout::WideFull => 1280.0,
+            Layout::Narrow => (320.0, 767.0),
+            Layout::Mid => (768.0, 1279.0),
+            Layout::Wide | Layout::WideFull => (1280.0, 2560.0),
         }
     }
 
@@ -98,11 +101,129 @@ impl Layout {
 /// A span as fractions of the picture's height or width.
 pub type Span = (f32, f32);
 
-/// The part of the picture a piece of text can cover.
+/// The part of the picture a piece of text can cover: one area per window
+/// size measured.
 #[derive(Clone, Debug)]
-pub struct Spot {
+pub struct Spot(Vec<Area>);
+
+/// Rows and columns of the picture, with the rows its box shows there, which
+/// place the fade (it is drawn over the box, not the picture).
+#[derive(Clone, Copy, Debug)]
+struct Area {
     rows: Span,
-    cols: Vec<Span>,
+    cols: Span,
+    shown: Span,
+}
+
+impl Spot {
+    /// A spot on a picture its box shows whole.
+    fn uncropped(rows: Span, cols: Span) -> Self {
+        Spot(vec![Area { rows, cols, shown: (0.0, 1.0) }])
+    }
+}
+
+/// The part of a picture its box shows under `object-fit: cover`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Crop {
+    rows: Span,
+    cols: Span,
+}
+
+impl Crop {
+    /// What a box `w` by `h` px shows of a picture `aspect` tall (height over
+    /// width), anchored at `position` (`object-position`, as fractions).
+    pub fn cover(aspect: f32, (w, h): (f32, f32), (x, y): (f32, f32)) -> Self {
+        let window = |shown: f32, at: f32| {
+            let shown = shown.clamp(0.0, 1.0);
+            ((1.0 - shown) * at, (1.0 - shown) * at + shown)
+        };
+        let natural = w * aspect.max(0.01);
+        if natural >= h {
+            Crop { rows: window(h / natural, y), cols: (0.0, 1.0) }
+        } else {
+            Crop { rows: (0.0, 1.0), cols: window(natural / h.max(1.0), x) }
+        }
+    }
+
+    /// The picture under `rows` and `cols` of the box.
+    fn area(self, rows: Span, cols: Span) -> Area {
+        let within = |(a, b): Span, (from, to): Span| (a + from * (b - a), a + to * (b - a));
+        Area { rows: within(self.rows, rows), cols: within(self.cols, cols), shown: self.rows }
+    }
+}
+
+/// How a hero's picture fills its box, as the build set it: the position its
+/// `image=` names (or site.css's default) and, on a closing picture, its
+/// `max-height=` and `fade=top`. A theme's own `--moss-hero-object-position`
+/// or `--moss-hero-max-height` is not seen. The crop is taken as `cover`, the
+/// hero's fit; a `|contain` picture is measured as if covered, which reads its
+/// pixels but not the bars a contained picture leaves.
+#[derive(Clone, Copy, Debug)]
+pub struct Frame {
+    /// `object-position` as fractions.
+    position: (f32, f32),
+    max_height: Option<moss_core::media::MaxHeight>,
+    /// `fade=top`: the page shows through the top, and a phone's box keeps
+    /// [`PHONE_FADE_FLOOR_PX`].
+    pub faded: bool,
+    /// A closing picture, whose box is its own shape or its cap. An ordinary
+    /// hero's box is [`DESKTOP_BOX_RATIO`] of the width from 48rem.
+    pub closing: bool,
+}
+
+/// A faded closing picture's least height on a phone (38rem), so its words
+/// sit on the faded top.
+pub const PHONE_FADE_FLOOR_PX: f32 = 608.0;
+
+impl Frame {
+    /// The frame `position`, `max_height`, `align` and `fade=top` make. The
+    /// default position is site.css's: a closing picture with `align=top`
+    /// keeps its foot, every other hero its top. Only a closing picture is
+    /// capped or faded.
+    pub fn new(position: Option<moss_core::media::Position>, max_height: Option<moss_core::media::MaxHeight>, align: Option<&str>, faded: bool, closing: bool) -> Self {
+        let position = match position.map(|p| p.percentages()) {
+            Some((x, y)) => (f32::from(x) / 100.0, f32::from(y) / 100.0),
+            None if closing && align == Some("top") => (0.5, 1.0),
+            None => (0.5, 0.0),
+        };
+        Frame { position, max_height: max_height.filter(|_| closing), faded: faded && closing, closing }
+    }
+
+    /// The frame of a hero read straight from its fence.
+    pub fn of(hero: &moss_core::ast::HeroShortcode, closing: bool) -> Self {
+        let position = moss_core::media::parse_media_attrs(&hero.attrs).position;
+        Frame::new(position, hero.max_height, hero.align.as_deref(), hero.fade.as_deref() == Some("top"), closing)
+    }
+
+    /// The box's height at `width` px in `layout`. A phone's box without the
+    /// fade is set by its words and the room below them; it is taken as the
+    /// picture's own shape.
+    fn box_height(&self, aspect: f32, layout: Layout, width: f32) -> f32 {
+        let natural = width * aspect.max(0.01);
+        let cap = self.max_height.map(|c| c.px(width));
+        match layout {
+            Layout::Narrow if self.faded => cap.unwrap_or(0.0).max(PHONE_FADE_FLOOR_PX),
+            Layout::Narrow => natural,
+            _ if self.closing => cap.unwrap_or(natural),
+            _ => DESKTOP_BOX_RATIO * width,
+        }
+    }
+
+    /// The picture under the box rows `rows(width, height)` and columns
+    /// `cols`, over the layout's widths: each measured window adds its area,
+    /// since a crop that is not the picture's own shape shows a different part
+    /// at each width.
+    fn spot(&self, aspect: f32, layout: Layout, rows: impl Fn(f32, f32) -> Span, cols: Span) -> Spot {
+        let (from, to) = layout.widths();
+        let areas = (0..=4)
+            .map(|i| from + (to - from) * i as f32 / 4.0)
+            .map(|width| {
+                let height = self.box_height(aspect, layout, width);
+                Crop::cover(aspect, (width, height), self.position).area(rows(width, height), cols)
+            })
+            .collect();
+        Spot(areas)
+    }
 }
 
 /// The most of a box the words can cover: on a phone the bottom 40% is kept
@@ -125,69 +246,44 @@ fn words_span(align: Option<&str>, share: f32) -> Span {
 }
 
 /// Where the words can land for `align` in `layout`, on a picture `aspect`
-/// tall (height over width).
-pub fn words_spot(align: Option<&str>, aspect: f32, layout: Layout, closing: bool) -> Spot {
-    let aspect = aspect.max(0.01);
-    let rows = match (layout, closing) {
-        (Layout::Narrow, _) => words_span(align, WORDS_SHARE),
-        (_, false) => {
-            let shown = (DESKTOP_BOX_RATIO / aspect).min(1.0);
-            let span = words_span(align, WORDS_SHARE);
-            (span.0 * shown, span.1 * shown)
-        }
-        // The box is the picture's own shape, so nothing is cropped.
-        (_, true) => words_span(align, (WORDS_PX / (layout.min_width() * aspect)).min(WORDS_SHARE)),
-    };
-    let share = layout.box_share(closing);
+/// tall (height over width) filling its box as `frame` says.
+pub fn words_spot(align: Option<&str>, aspect: f32, layout: Layout, frame: &Frame) -> Spot {
+    let share = layout.box_share(frame.closing);
     let cols = match align {
-        _ if layout == Layout::Narrow => vec![(0.0, 1.0)],
-        Some("end") => vec![(1.0 - share, 1.0)],
+        _ if layout == Layout::Narrow => (0.0, 1.0),
+        Some("end") => (1.0 - share, 1.0),
         Some("center") => {
             let share = layout.box_share(false);
-            vec![((1.0 - share) / 2.0, (1.0 + share) / 2.0)]
+            ((1.0 - share) / 2.0, (1.0 + share) / 2.0)
         }
-        _ => vec![(0.0, share)],
+        _ => (0.0, share),
     };
-    Spot { rows, cols }
+    let share = |height: f32| if frame.closing && layout != Layout::Narrow { (WORDS_PX / height).min(WORDS_SHARE) } else { WORDS_SHARE };
+    frame.spot(aspect, layout, |_, height| words_span(align, share(height)), cols)
 }
 
 /// A closing picture's foot (credit and colophon): the bottom 18% of the box,
-/// across the width.
-pub fn foot_spot() -> Spot {
-    Spot { rows: (0.82, 1.0), cols: vec![(0.0, 1.0)] }
+/// across the width, at every layout.
+pub fn foot_spot(frame: &Frame, aspect: f32) -> Spot {
+    Spot(Layout::ALL.iter().flat_map(|layout| frame.spot(aspect, *layout, |_, _| (0.82, 1.0), (0.0, 1.0)).0).collect())
 }
 
-/// How tall the credit's three small lines are, with the 0.3rem padding it
-/// has under the words.
+/// How tall the credit's three small lines are, with their 0.3rem padding.
 const CREDIT_PX: f32 = 72.0;
 
-/// Where a closing picture's credit lands when it sits with the words at the
-/// top: under them on a phone and up to 80rem, and from 80rem beside them at
-/// the top, in a box padded by 5% of the width. Taken across the whole width,
-/// so the side it sits at, in either direction, never matters.
-pub fn credit_spot(aspect: f32, layout: Layout) -> Spot {
-    let height = layout.min_width() * aspect.max(0.01);
-    let rows = match layout {
-        Layout::Narrow => (0.0, WORDS_SHARE),
-        Layout::Mid => (0.0, ((WORDS_PX + CREDIT_PX) / height).min(WORDS_SHARE)),
-        Layout::Wide | Layout::WideFull => (0.0, ((CREDIT_PX + 0.1 * layout.min_width()) / height).min(WORDS_SHARE)),
-    };
-    Spot { rows, cols: vec![(0.0, 1.0)] }
-}
-
 /// Where a closing picture's edition block can sit. Align top puts it under the
-/// words, which reach at most `WORDS_PX`, so the band runs from the picture's top
-/// to that plus the block's height. Any other alignment, and the phone's column
-/// (which sets the picture's height), can put it anywhere: the whole picture.
+/// words, which reach at most `WORDS_PX`, so the band runs from the box's top
+/// to that plus the block's height. Any other alignment, and a phone's column,
+/// can put it anywhere in the box.
 const EDITION_PX: f32 = 96.0;
 
-pub fn edition_spot(aspect: f32, align: Option<&str>, layout: Layout) -> Spot {
-    let rows = match (layout, align) {
+pub fn edition_spot(align: Option<&str>, aspect: f32, layout: Layout, frame: &Frame) -> Spot {
+    let rows = |_, height: f32| match (layout, align) {
         (Layout::Narrow, _) => (0.0, 1.0),
-        (_, Some("top")) => (0.0, ((WORDS_PX + EDITION_PX) / (layout.min_width() * aspect.max(0.01))).min(1.0)),
+        (_, Some("top")) => (0.0, ((WORDS_PX + EDITION_PX) / height).min(1.0)),
         _ => (0.0, 1.0),
     };
-    Spot { rows, cols: vec![(0.0, 1.0)] }
+    frame.spot(aspect, layout, rows, (0.0, 1.0))
 }
 
 /// The page colour behind a faded picture: `--moss-color-bg` in the light and
@@ -241,10 +337,12 @@ impl PageGround {
     }
 }
 
+/// How far down the box a faded top runs, as site.css draws it: on a phone,
+/// and from 48rem.
+pub const FADE_DEPTH: (f32, f32) = (0.5, 0.38);
+
 /// The page showing through a faded top: its colour, and how far down the
-/// picture the fade runs (38% of the box, 30% on a phone, as site.css draws it).
-/// The box's rows are taken as the picture's: true for the uncropped picture,
-/// not once `--moss-hero-max-height` crops its top, which the build cannot see.
+/// box the fade runs ([`FADE_DEPTH`]).
 #[derive(Clone, Copy, Debug)]
 pub struct Fade {
     /// The page colour's luminance, as an sRGB grey level: the mask blends in sRGB.
@@ -254,7 +352,7 @@ pub struct Fade {
 
 impl Fade {
     pub fn new(ground: Rgb, layout: Layout) -> Self {
-        let depth = if layout == Layout::Narrow { 0.30 } else { 0.38 };
+        let depth = if layout == Layout::Narrow { FADE_DEPTH.0 } else { FADE_DEPTH.1 };
         Self { ground: linear_to_srgb(luminance(ground)), depth }
     }
 
@@ -267,10 +365,10 @@ impl Fade {
 /// The ink an edition block takes: one ink that reads in every layout's band,
 /// else `None` and the block keeps its panel. `fade_at` gives a layout's fade,
 /// `None` where the page colour behind a fade is unresolved.
-pub fn edition_ink(grid: &ToneGrid, aspect: f32, align: Option<&str>, fade_at: impl Fn(Layout) -> Option<Option<Fade>>) -> Option<Ink> {
+pub fn edition_ink(grid: &ToneGrid, aspect: f32, align: Option<&str>, frame: &Frame, fade_at: impl Fn(Layout) -> Option<Option<Fade>>) -> Option<Ink> {
     let inks: Vec<Option<Ink>> = Layout::ALL
         .into_iter()
-        .map(|layout| readable_ink(grid, &edition_spot(aspect, align, layout), fade_at(layout)?, Inks::words()))
+        .map(|layout| readable_ink(grid, &edition_spot(align, aspect, layout, frame), fade_at(layout)?, Inks::words()))
         .collect();
     let first = inks[0]?;
     inks.iter().all(|ink| *ink == Some(first)).then_some(first)
@@ -339,12 +437,14 @@ impl ToneGrid {
             first..((to.clamp(0.0, 1.0) * n as f32).ceil() as usize).clamp(first + 1, n)
         };
         let mut worst = (f32::MAX, f32::MIN);
-        for band in range(spot.rows, BANDS) {
-            for cols in &spot.cols {
-                for slice in range(*cols, SLICES) {
+        for area in &spot.0 {
+            for band in range(area.rows, BANDS) {
+                for slice in range(area.cols, SLICES) {
                     let (mut lo, mut hi) = self.0[band * SLICES + slice];
                     if let Some(fade) = fade {
-                        let alpha = |row: usize| (row as f32 / BANDS as f32 / fade.depth).min(1.0);
+                        // The mask runs down the box, which shows `area.shown` of the rows.
+                        let (from, to) = area.shown;
+                        let alpha = |row: usize| ((row as f32 / BANDS as f32 - from) / (to - from).max(0.001) / fade.depth).clamp(0.0, 1.0);
                         let (top, bottom) = (alpha(band), alpha(band + 1));
                         lo = fade.over(lo, top).min(fade.over(lo, bottom));
                         hi = fade.over(hi, top).max(fade.over(hi, bottom));
@@ -370,15 +470,10 @@ impl Inks {
         Self { dark: hero_tone_color_luminance(), light: 1.0 }
     }
 
-    /// A credit set with the words: the secondary text colour of the light
-    /// theme and of the dark one, which site.css repeats.
-    pub fn credit() -> Self {
-        Self { dark: luminance(CREDIT_INK.0), light: luminance(CREDIT_INK.1) }
-    }
 }
 
-/// The credit's dark and light ink: `--moss-color-text-secondary` in the light
-/// and the dark theme, which site.css repeats.
+/// The credit's text ink: `--moss-color-text-secondary` in the light and the
+/// dark theme, which site.css repeats.
 pub static CREDIT_INK: std::sync::LazyLock<(Rgb, Rgb)> = std::sync::LazyLock::new(|| {
     let tokens = moss_core::contract::tokens::load_tokens().unwrap_or_else(|e| panic!("tokens.json must parse: {e}"));
     let token = moss_core::contract::tokens::find_token(&tokens, "moss-color-text-secondary");
@@ -396,8 +491,37 @@ pub fn better_ink((darkest, lightest): (f32, f32), inks: Inks) -> (Ink, f32) {
 
 /// The ink whose worst case over `spot` clears [`MIN_CONTRAST`], if either.
 pub fn readable_ink(grid: &ToneGrid, spot: &Spot, fade: Option<Fade>, inks: Inks) -> Option<Ink> {
-    let (ink, contrast) = better_ink(grid.extremes(spot, fade), inks);
-    (contrast >= MIN_CONTRAST).then_some(ink)
+    Backing::Auto.accept(better_ink(grid.extremes(spot, fade), inks))
+}
+
+/// The ink a closing picture's credit takes at the foot, in one theme.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CreditInk {
+    /// The theme's secondary text colour ([`CREDIT_INK`]).
+    Text,
+    /// The theme's page colour (`--moss-color-bg`, as [`PageGround`] reads it).
+    Page,
+}
+
+impl CreditInk {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CreditInk::Text => "text",
+            CreditInk::Page => "page",
+        }
+    }
+}
+
+/// Of the theme's `text` and `page` colours, the one that reads better over a
+/// spot reaching `(darkest, lightest)`, and its worst contrast there. The page
+/// colour is left out where the build cannot read it.
+pub fn credit_ink((darkest, lightest): (f32, f32), text: Rgb, page: Option<Rgb>) -> (CreditInk, f32) {
+    let worst = |ink: Rgb| contrast_ratio(darkest, luminance(ink)).min(contrast_ratio(lightest, luminance(ink)));
+    let text = (CreditInk::Text, worst(text));
+    match page.map(|p| (CreditInk::Page, worst(p))) {
+        Some(page) if page.1 > text.1 => page,
+        _ => text,
+    }
 }
 
 /// How an overlay hero's words are backed (`panel=`).
@@ -424,6 +548,16 @@ impl Backing {
             _ => Backing::Panel,
         }
     }
+
+    /// Whether a measured ink and its worst contrast are used: never under a
+    /// panel, when it clears [`MIN_CONTRAST`] when measured, always when forced.
+    pub fn accept<T>(self, (ink, contrast): (T, f32)) -> Option<T> {
+        match self {
+            Backing::Panel => None,
+            Backing::Auto => (contrast >= MIN_CONTRAST).then_some(ink),
+            Backing::Never => Some(ink),
+        }
+    }
 }
 
 /// One picture's measurement: its grid and its height over its width.
@@ -433,32 +567,27 @@ fn measure(lookup: &crate::build::media::dimensions::MediaDimensionLookup, href:
     Some((lookup.tone_grid(key)?, h as f32 / w.max(1) as f32))
 }
 
-/// A footer's closing picture.
-#[derive(Clone, Copy, Debug)]
-pub struct Closing {
-    /// `fade=top`: the page colour per theme its top fades into.
-    pub fade: Option<PageGround>,
-    /// It has a credit (`caption=`).
-    pub credit: bool,
-}
-
 /// What a hero asks of the measurement besides its pictures.
 #[derive(Clone, Copy, Debug)]
 pub struct InkRequest<'a> {
     pub align: Option<&'a str>,
     pub backing: Backing,
-    pub closing: Option<Closing>,
+    pub frame: Frame,
+    /// A closing picture's credit (`caption=`).
+    pub credit: bool,
+    /// The page colour per theme a faded top shows.
+    pub ground: PageGround,
 }
 
 /// The attributes that carry each picture's measured ink to the stylesheet.
 /// `data-words` lists the layouts where the words sit in ink with no panel
 /// (`narrow:dark wide:light`; a layout not listed keeps the panel). `data-foot`
-/// is the ink along the foot for the credit and colophon (absent: the credit
-/// gets a small panel). `data-credit` is the credit's ink per layout when it
-/// sits with the words (`fade=top align=top`). The `-night` set says the same
+/// is the words' ink along the foot for the colophon. `data-credit` is the
+/// credit's ink at the foot ([`CreditInk`]; absent, it keeps a small panel).
+/// The `-night` set says the same
 /// of the dark theme: the `dark=` picture, or the one picture again, over the
 /// dark page colour where it fades. A faded theme whose page colour is
-/// unresolved measures no words or credit, so they keep their panels.
+/// unresolved measures no words, so they keep their panel.
 /// `data-edition` is the ink the edition block takes, measured over its band
 /// in every layout (absent: the block keeps its panel). Empty when nothing was
 /// measured.
@@ -469,22 +598,16 @@ pub fn ink_attributes(
     request: InkRequest<'_>,
 ) -> String {
     let Some(lookup) = lookup else { return String::new() };
-    let InkRequest { align, backing, closing } = request;
-    let fade = closing.and_then(|c| c.fade);
-    let credit_at_top = fade.is_some() && closing.is_some_and(|c| c.credit) && align == Some("top");
-    let closing = closing.is_some();
-    let reading = |href: &str, ground: Option<Rgb>| {
+    let InkRequest { align, backing, frame, credit, ground } = request;
+    let closing = frame.closing;
+    let reading = |href: &str, page: Option<Rgb>, text: Rgb| {
         let (grid, aspect) = measure(lookup, href)?;
-        let fade_at = |layout: Layout| match (fade, ground) {
-            (None, _) => Some(None),
-            (Some(_), Some(ground)) => Some(Some(Fade::new(ground, layout))),
-            (Some(_), None) => None,
+        let fade_at = |layout: Layout| match (frame.faded, page) {
+            (false, _) => Some(None),
+            (true, Some(page)) => Some(Some(Fade::new(page, layout))),
+            (true, None) => None,
         };
-        let inked = |spot: &Spot, fade: Option<Fade>, inks: Inks| match backing {
-            Backing::Panel => None,
-            Backing::Auto => readable_ink(&grid, spot, fade, inks),
-            Backing::Never => Some(better_ink(grid.extremes(spot, fade), inks).0),
-        };
+        let inked = |spot: &Spot, fade: Option<Fade>, inks: Inks| backing.accept(better_ink(grid.extremes(spot, fade), inks));
         let tokens = |spot: &dyn Fn(Layout) -> Spot, inks: Inks| -> Vec<String> {
             Layout::ALL
                 .into_iter()
@@ -495,16 +618,16 @@ pub fn ink_attributes(
                 })
                 .collect()
         };
-        let words = tokens(&|layout| words_spot(align, aspect, layout, closing), Inks::words());
-        let credit = if credit_at_top { tokens(&|layout| credit_spot(aspect, layout), Inks::credit()) } else { Vec::new() };
-        let foot = closing.then(|| readable_ink(&grid, &foot_spot(), None, Inks::words())).flatten();
-        let edition = closing.then(|| edition_ink(&grid, aspect, align, fade_at)).flatten();
-        Some((words.join(" "), foot, credit.join(" "), edition))
+        let words = tokens(&|layout| words_spot(align, aspect, layout, &frame), Inks::words());
+        let foot_tones = closing.then(|| grid.extremes(&foot_spot(&frame, aspect), None));
+        let foot = foot_tones.and_then(|tones| Backing::Auto.accept(better_ink(tones, Inks::words())));
+        let credit = foot_tones.filter(|_| credit).and_then(|tones| backing.accept(credit_ink(tones, text, page)));
+        let edition = closing.then(|| edition_ink(&grid, aspect, align, &frame, fade_at)).flatten();
+        Some((words.join(" "), foot, credit, edition))
     };
-    let ground = fade.unwrap_or_default();
-    let day = reading(light, ground.light);
+    let day = reading(light, ground.light, CREDIT_INK.0);
     // Without a `dark=` picture the one picture is shown in both themes.
-    let night = reading(dark.unwrap_or(light), ground.dark);
+    let night = reading(dark.unwrap_or(light), ground.dark, CREDIT_INK.1);
     let mut out = String::new();
     for (suffix, picture) in [("", day), ("-night", night)] {
         if let Some((words, foot, credit, edition)) = picture {
@@ -514,8 +637,8 @@ pub fn ink_attributes(
             if let Some(ink) = foot {
                 out.push_str(&format!(r#" data-foot{suffix}="{}""#, ink.as_str()));
             }
-            if !credit.is_empty() {
-                out.push_str(&format!(r#" data-credit{suffix}="{credit}""#));
+            if let Some(ink) = credit {
+                out.push_str(&format!(r#" data-credit{suffix}="{}""#, ink.as_str()));
             }
             if let Some(ink) = edition {
                 out.push_str(&format!(r#" data-edition{suffix}="{}""#, ink.as_str()));
@@ -525,25 +648,33 @@ pub fn ink_attributes(
     out
 }
 
-/// For `panel=none`: the best contrast either ink reaches under the words, in
-/// the layout where it is lowest, when that is under [`MIN_CONTRAST`] (the
-/// author asked for ink that may not read).
+/// For `panel=none`: the lowest of the best contrasts either ink reaches
+/// under the words at each layout, and with `credit` the credit's at the foot,
+/// in the light theme over `light` and the dark one over `dark` (or `light`
+/// again), when that is under [`MIN_CONTRAST`] (the author asked for ink that
+/// may not read).
 pub fn forced_ink_shortfall(
     lookup: &crate::build::media::dimensions::MediaDimensionLookup,
-    hrefs: &[&str],
+    (light, dark): (&str, Option<&str>),
     align: Option<&str>,
-    closing: bool,
+    frame: &Frame,
+    credit: bool,
 ) -> Option<f32> {
-    hrefs
-        .iter()
-        .filter_map(|href| measure(lookup, href))
-        .flat_map(|(grid, aspect)| Layout::ALL.map(|layout| better_ink(grid.extremes(&words_spot(align, aspect, layout, closing), None), Inks::words()).1))
+    let ground = lookup.page_ground();
+    [(light, CREDIT_INK.0, ground.light), (dark.unwrap_or(light), CREDIT_INK.1, ground.dark)]
+        .into_iter()
+        .filter_map(|(href, text, page)| Some((measure(lookup, href)?, text, page)))
+        .flat_map(|((grid, aspect), text, page)| {
+            let words = Layout::ALL.map(|layout| better_ink(grid.extremes(&words_spot(align, aspect, layout, frame), None), Inks::words()).1);
+            let credit = (credit && frame.closing).then(|| credit_ink(grid.extremes(&foot_spot(frame, aspect), None), text, page).1);
+            words.into_iter().chain(credit)
+        })
         .filter(|contrast| *contrast < MIN_CONTRAST)
         .min_by(f32::total_cmp)
 }
 
-/// Warn for each `panel=none` hero whose picture reads under 4.5:1 in either
-/// ink where its words land: the author asked for ink with no panel, and it
+/// Warn for each `panel=none` hero whose picture reads under 4.5:1 where its
+/// words or its credit land: the author asked for ink with no panel, and it
 /// may not be legible. Names the page and the hero's opening words.
 pub fn warn_unreadable_forced_ink(
     doc: &moss_core::ast::Document,
@@ -552,37 +683,57 @@ pub fn warn_unreadable_forced_ink(
 ) {
     use moss_core::ast::{Block, Shortcode, Url};
     let Some(lookup) = lookup else { return };
-    let href = |u: &Url| match u {
-        Url::Resolved(r) => Some(r.href.clone()),
-        Url::Unresolved(_) => None,
-    };
+    fn href(u: &Url) -> Option<&str> {
+        match u {
+            Url::Resolved(r) => Some(r.href.as_str()),
+            Url::Unresolved(_) => None,
+        }
+    }
     for block in &doc.blocks {
         let Block::Shortcode(Shortcode::Hero(hero)) = block else { continue };
         if hero.panel.as_deref() != Some("none") || hero.overlay.is_empty() {
             continue;
         }
-        let hrefs: Vec<String> = hero.image.iter().chain(hero.dark.iter()).filter_map(href).collect();
-        let hrefs: Vec<&str> = hrefs.iter().map(String::as_str).collect();
-        if let Some(contrast) = forced_ink_shortfall(lookup, &hrefs, hero.align.as_deref(), hero.classes.split_whitespace().any(|c| c == "moss-hero-closing")) {
+        let Some(light) = hero.image.as_ref().and_then(href) else { continue };
+        let frame = Frame::of(hero, hero.classes.split_whitespace().any(|c| c == "moss-hero-closing"));
+        if let Some(contrast) = forced_ink_shortfall(lookup, (light, hero.dark.as_ref().and_then(href)), hero.align.as_deref(), &frame, !hero.caption.is_empty()) {
             let words: String = hero.overlay_text.split_whitespace().take(6).collect::<Vec<_>>().join(" ");
             crate::build::cli_output::log_warn_problem!(
-                "[{file_path}] `:::hero {{panel=none}}` (\"{words}\"): neither dark nor light ink reaches {MIN_CONTRAST}:1 over the picture where the words sit (best {contrast:.1}:1), so they may be hard to read. Use `panel=auto` to keep the panel there."
+                "[{file_path}] `:::hero {{panel=none}}` (\"{words}\"): no ink reaches {MIN_CONTRAST}:1 over the picture where the words or the credit sit (best {contrast:.1}:1), so they may be hard to read. Use `panel=auto` to keep the panel there."
             );
         }
     }
 }
 
+/// A closing picture's `max-height=` at 48rem, where it is least (a px or vw
+/// cap never shrinks as the window widens), when it is under what the box
+/// must hold at its tallest: [`WORDS_PX`], which it clips past, and with a
+/// credit [`CREDIT_PX`] more, since the credit at the foot shares the words'
+/// column there and would otherwise sit over them.
+pub fn short_cap(hero: &moss_core::ast::HeroShortcode) -> Option<f32> {
+    let px = hero.max_height?.px(Layout::Mid.widths().0);
+    let need = if hero.caption.is_empty() { WORDS_PX } else { WORDS_PX + CREDIT_PX };
+    (px < need).then_some(px)
+}
+
 /// Warn for `fade=top` on a hero that is not a closing picture (the `:::hero`
-/// that ends a footer), where it does nothing. Another value already warns as
-/// unrecognized.
-pub fn warn_stray_fade(doc: &moss_core::ast::Document, closes_page: bool, file_path: &str) {
+/// that ends a footer), where it does nothing, and for a closing picture
+/// whose `max-height=` is shorter than its words ([`short_cap`]). Another
+/// fade value already warns as unrecognized.
+pub fn warn_closing_options(doc: &moss_core::ast::Document, closes_page: bool, file_path: &str) {
     use moss_core::ast::{Block, Shortcode};
     let last = doc.blocks.len().saturating_sub(1);
     for (i, block) in doc.blocks.iter().enumerate() {
         let Block::Shortcode(Shortcode::Hero(hero)) = block else { continue };
-        if hero.fade.as_deref() == Some("top") && !(closes_page && i == last) {
+        let closing = closes_page && i == last;
+        if hero.fade.as_deref() == Some("top") && !closing {
             crate::build::cli_output::log_warn_problem!(
                 "[{file_path}] `:::hero {{fade=top}}` fades only a closing picture, the `:::hero` that ends footer.md, so it is ignored here."
+            );
+        }
+        if let Some(px) = short_cap(hero).filter(|_| closing && !hero.overlay.is_empty()) {
+            crate::build::cli_output::log_warn_problem!(
+                "[{file_path}] `:::hero {{max-height=…}}` is {px:.0}px tall at 768px wide, under the 22rem its words can take (26.5rem with the credit at its foot), so they may be cut off or covered. Raise the cap's smallest value."
             );
         }
     }
@@ -619,8 +770,22 @@ mod tests {
         DynamicImage::ImageRgb8(img)
     }
 
+    /// An ordinary hero's frame.
+    fn ordinary() -> Frame {
+        Frame::new(None, None, None, false, false)
+    }
+
+    /// A closing picture's, uncapped, with the default position for `align`.
+    fn closing(align: Option<&str>) -> Frame {
+        Frame::new(None, None, align, false, true)
+    }
+
+    fn faded_frame() -> Frame {
+        Frame::new(None, None, Some("top"), true, true)
+    }
+
     fn plain(align: Option<&str>, backing: Backing, closing: bool) -> InkRequest<'_> {
-        InkRequest { align, backing, closing: closing.then_some(Closing { fade: None, credit: true }) }
+        InkRequest { align, backing, frame: Frame::new(None, None, align, false, closing), credit: true, ground: PageGround::default() }
     }
 
     fn lookup_of(pictures: &[(&str, &DynamicImage)]) -> MediaDimensionLookup {
@@ -640,7 +805,7 @@ mod tests {
     fn the_grid_survives_the_cache_encoding() {
         let grid = ToneGrid::from_image(&banded(SKY, GROUND, 0.7));
         let again = ToneGrid::parse(&grid.encode()).unwrap();
-        let all = Spot { rows: (0.0, 1.0), cols: vec![(0.0, 1.0)] };
+        let all = Spot::uncropped((0.0, 1.0), (0.0, 1.0));
         let (a, b) = (grid.extremes(&all, None), again.extremes(&all, None));
         assert!((a.0 - b.0).abs() < 0.001 && (a.1 - b.1).abs() < 0.001);
         assert!(ToneGrid::parse("1,2").is_none());
@@ -650,26 +815,26 @@ mod tests {
     fn a_pale_sky_takes_dark_ink_and_its_dark_ground_takes_light() {
         let grid = ToneGrid::from_image(&banded(SKY, GROUND, 0.7));
         for layout in Layout::ALL {
-            assert_eq!(readable_ink(&grid, &words_spot(Some("top"), 0.4, layout, false), None, Inks::words()), Some(Ink::Dark));
+            assert_eq!(readable_ink(&grid, &words_spot(Some("top"), 0.4, layout, &ordinary()), None, Inks::words()), Some(Ink::Dark));
         }
-        assert_eq!(readable_ink(&grid, &foot_spot(), None, Inks::words()), Some(Ink::Light));
+        assert_eq!(readable_ink(&grid, &foot_spot(&closing(Some("top")), 70.0 / 160.0), None, Inks::words()), Some(Ink::Light));
     }
 
     #[test]
     fn a_mid_tone_area_takes_neither() {
         let grid = ToneGrid::from_image(&banded([120; 3], [120; 3], 0.7));
-        assert_eq!(readable_ink(&grid, &words_spot(Some("top"), 0.4, Layout::Wide, false), None, Inks::words()), None);
+        assert_eq!(readable_ink(&grid, &words_spot(Some("top"), 0.4, Layout::Wide, &ordinary()), None, Inks::words()), None);
     }
 
     #[test]
     fn a_far_dark_patch_spares_the_wide_box_but_not_a_phone() {
         let grid = ToneGrid::from_image(&sky_with_far_patch());
         // Wide: the words box is the start 47% of the width; the patch is at the far end.
-        assert_eq!(readable_ink(&grid, &words_spot(Some("top"), 0.4, Layout::Wide, false), None, Inks::words()), Some(Ink::Dark));
+        assert_eq!(readable_ink(&grid, &words_spot(Some("top"), 0.4, Layout::Wide, &ordinary()), None, Inks::words()), Some(Ink::Dark));
         // `align=end` words sit at the foot of the picture, below the patch.
-        assert_eq!(readable_ink(&grid, &words_spot(Some("end"), 0.4, Layout::Wide, false), None, Inks::words()), Some(Ink::Dark));
+        assert_eq!(readable_ink(&grid, &words_spot(Some("end"), 0.4, Layout::Wide, &ordinary()), None, Inks::words()), Some(Ink::Dark));
         // A phone runs the words across the whole width.
-        assert_eq!(readable_ink(&grid, &words_spot(Some("top"), 0.4, Layout::Narrow, false), None, Inks::words()), None);
+        assert_eq!(readable_ink(&grid, &words_spot(Some("top"), 0.4, Layout::Narrow, &ordinary()), None, Inks::words()), None);
     }
 
     #[test]
@@ -682,8 +847,8 @@ mod tests {
             }
         }
         let grid = ToneGrid::from_image(&DynamicImage::ImageRgb8(img));
-        assert_eq!(readable_ink(&grid, &words_spot(None, 0.8, Layout::Wide, false), None, Inks::words()), Some(Ink::Dark));
-        assert_eq!(readable_ink(&grid, &words_spot(None, 0.8, Layout::Narrow, false), None, Inks::words()), None);
+        assert_eq!(readable_ink(&grid, &words_spot(None, 0.8, Layout::Wide, &ordinary()), None, Inks::words()), Some(Ink::Dark));
+        assert_eq!(readable_ink(&grid, &words_spot(None, 0.8, Layout::Narrow, &ordinary()), None, Inks::words()), None);
     }
 
     #[test]
@@ -698,11 +863,11 @@ mod tests {
             }
             ToneGrid::from_image(&DynamicImage::ImageRgb8(img))
         };
-        let top = words_spot(Some("top"), 0.8, Layout::Wide, true);
+        let top = words_spot(Some("top"), 0.8, Layout::Wide, &closing(Some("top")));
         assert_eq!(readable_ink(&band(40, 80), &top, None, Inks::words()), Some(Ink::Dark));
         assert_eq!(readable_ink(&band(16, 24), &top, None, Inks::words()), None);
-        assert_eq!(readable_ink(&band(0, 40), &foot_spot(), None, Inks::words()), Some(Ink::Dark));
-        assert_eq!(readable_ink(&band(70, 80), &foot_spot(), None, Inks::words()), None);
+        assert_eq!(readable_ink(&band(0, 40), &foot_spot(&closing(Some("top")), 0.8), None, Inks::words()), Some(Ink::Dark));
+        assert_eq!(readable_ink(&band(70, 80), &foot_spot(&closing(Some("top")), 0.8), None, Inks::words()), None);
     }
 
     #[test]
@@ -728,8 +893,8 @@ mod tests {
             }
         }
         let grid = ToneGrid::from_image(&DynamicImage::ImageRgb8(img));
-        assert_eq!(readable_ink(&grid, &words_spot(Some("top"), 0.4, Layout::Wide, true), None, Inks::words()), None);
-        assert_eq!(readable_ink(&grid, &words_spot(Some("top"), 0.4, Layout::WideFull, true), None, Inks::words()), Some(Ink::Dark));
+        assert_eq!(readable_ink(&grid, &words_spot(Some("top"), 0.4, Layout::Wide, &closing(Some("top"))), None, Inks::words()), None);
+        assert_eq!(readable_ink(&grid, &words_spot(Some("top"), 0.4, Layout::WideFull, &closing(Some("top"))), None, Inks::words()), Some(Ink::Dark));
     }
 
     #[test]
@@ -744,7 +909,7 @@ mod tests {
             }
             ToneGrid::from_image(&DynamicImage::ImageRgb8(img))
         };
-        let spot = |closing| words_spot(Some("top"), 0.4, Layout::Wide, closing);
+        let spot = |is_closing: bool| words_spot(Some("top"), 0.4, Layout::Wide, &if is_closing { closing(Some("top")) } else { ordinary() });
         assert_eq!(readable_ink(&patch(60), &spot(false), None, Inks::words()), Some(Ink::Dark));
         assert_eq!(readable_ink(&patch(60), &spot(true), None, Inks::words()), None);
         assert_eq!(readable_ink(&patch(80), &spot(true), None, Inks::words()), Some(Ink::Dark));
@@ -815,7 +980,7 @@ mod tests {
     }
 
     fn faded(align: Option<&str>, ground: PageGround) -> InkRequest<'_> {
-        InkRequest { align, backing: Backing::Auto, closing: Some(Closing { fade: Some(ground), credit: true }) }
+        InkRequest { align, backing: Backing::Auto, frame: Frame::new(None, None, align, true, true), credit: true, ground }
     }
 
     #[test]
@@ -823,13 +988,13 @@ mod tests {
         let grid = ToneGrid::from_image(&strip_at_the_top());
         let (light, dark) = *BACKGROUNDS;
         for layout in Layout::ALL {
-            let spot = words_spot(Some("top"), 70.0 / 160.0, layout, true);
+            let spot = words_spot(Some("top"), 70.0 / 160.0, layout, &faded_frame());
             assert_eq!(readable_ink(&grid, &spot, None, Inks::words()), None, "{layout:?}: the strip is too dark for either ink");
             assert_eq!(readable_ink(&grid, &spot, Some(Fade::new(light, layout)), Inks::words()), Some(Ink::Dark), "{layout:?}: faded into a light page");
             assert_eq!(readable_ink(&grid, &spot, Some(Fade::new(dark, layout)), Inks::words()), None, "{layout:?}: dark page above a pale sky");
         }
         // The foot is below the fade.
-        assert_eq!(readable_ink(&grid, &foot_spot(), Some(Fade::new(light, Layout::Wide)), Inks::words()), Some(Ink::Light));
+        assert_eq!(readable_ink(&grid, &foot_spot(&closing(Some("top")), 70.0 / 160.0), Some(Fade::new(light, Layout::Wide)), Inks::words()), Some(Ink::Light));
     }
 
     #[test]
@@ -856,46 +1021,25 @@ mod tests {
     }
 
     #[test]
-    fn the_credit_is_measured_with_the_words_only_when_it_sits_with_them() {
-        let lookup = lookup_of(&[
-            ("day.png", &banded(SKY, GROUND, 0.7)),
-            ("night.png", &banded([20, 28, 48], [8, 10, 14], 0.7)),
-            ("far.png", &sky_with_far_patch()),
-        ]);
-        let top = ink_attributes(Some(&lookup), "/day.png", Some("/night.png"), faded(Some("top"), PageGround::default()));
-        assert!(top.contains(r#"data-credit="narrow:dark mid:dark wide:dark wide-full:dark""#), "{top}");
-        assert!(top.contains(r#"data-credit-night="narrow:light mid:light wide:light wide-full:light""#), "{top}");
-        // At the foot it is the foot's reading; unfaded or not at the top, no credit tokens.
-        assert!(!ink_attributes(Some(&lookup), "/day.png", None, faded(None, PageGround::default())).contains("data-credit"));
-        assert!(!ink_attributes(Some(&lookup), "/day.png", None, plain(Some("top"), Backing::Auto, true)).contains("data-credit"));
-        // Across the whole width: a patch at the far end, which the wide words box
-        // never reaches, keeps the credit's panel in either direction.
-        let far = ink_attributes(Some(&lookup), "/far.png", None, faded(Some("top"), PageGround::default()));
-        assert!(far.contains("wide:dark") && !far.contains("data-credit=\""), "{far}");
-        // Without a credit there is nothing to measure.
-        let bare = InkRequest { closing: Some(Closing { fade: Some(PageGround::default()), credit: false }), ..faded(Some("top"), PageGround::default()) };
-        assert!(!ink_attributes(Some(&lookup), "/day.png", None, bare).contains("data-credit"));
-        // `panel=always` keeps the credit's panel too.
-        let always = InkRequest { backing: Backing::Panel, ..faded(Some("top"), PageGround::default()) };
-        assert!(!ink_attributes(Some(&lookup), "/day.png", None, always).contains("data-credit"));
+    fn the_credit_takes_the_page_colour_over_a_dark_foot_and_the_text_colour_over_a_pale_one() {
+        let lookup = lookup_of(&[("dark-foot.png", &banded(SKY, GROUND, 0.7)), ("pale-foot.png", &banded(GROUND, SKY, 0.3))]);
+        let dark = ink_attributes(Some(&lookup), "/dark-foot.png", None, plain(Some("top"), Backing::Auto, true));
+        assert!(dark.contains(r#"data-credit="page""#) && dark.contains(r#"data-credit-night="text""#), "{dark}");
+        let pale = ink_attributes(Some(&lookup), "/pale-foot.png", None, plain(Some("top"), Backing::Auto, true));
+        assert!(pale.contains(r#"data-credit="text""#) && pale.contains(r#"data-credit-night="page""#), "{pale}");
+        // Without a credit, or with `panel=always`, nothing is measured for it.
+        let bare = InkRequest { credit: false, ..plain(Some("top"), Backing::Auto, true) };
+        assert!(!ink_attributes(Some(&lookup), "/dark-foot.png", None, bare).contains("data-credit"));
+        assert!(!ink_attributes(Some(&lookup), "/dark-foot.png", None, plain(Some("top"), Backing::Panel, true)).contains("data-credit"));
     }
 
     #[test]
-    fn from_80rem_the_credit_is_measured_over_its_own_rows_at_the_top() {
-        // A dark patch on the start side, 43% to 50% down: below the credit's
-        // box beside the words, within the rows it takes under them.
-        let mut img = RgbImage::from_pixel(160, 70, Rgb(SKY));
-        for y in 30..35 {
-            for x in 0..60 {
-                img.put_pixel(x, y, Rgb(INK));
-            }
+    fn a_mid_tone_foot_keeps_the_credits_panel_in_both_themes() {
+        let lookup = lookup_of(&[("busy.png", &banded(SKY, [120; 3], 0.7))]);
+        for request in [plain(Some("top"), Backing::Auto, true), faded(Some("top"), PageGround::default())] {
+            let attrs = ink_attributes(Some(&lookup), "/busy.png", None, request);
+            assert!(!attrs.contains("data-credit"), "{attrs}");
         }
-        let grid = ToneGrid::from_image(&DynamicImage::ImageRgb8(img));
-        let aspect = 70.0 / 160.0;
-        for layout in [Layout::Wide, Layout::WideFull] {
-            assert_eq!(readable_ink(&grid, &credit_spot(aspect, layout), None, Inks::credit()), Some(Ink::Dark), "{layout:?}");
-        }
-        assert_eq!(readable_ink(&grid, &credit_spot(aspect, Layout::Mid), None, Inks::credit()), None);
     }
 
     #[test]
@@ -929,10 +1073,131 @@ mod tests {
         }
     }
 
+    /// A 100x77 sky (the shape of a 1400x1073 print) with a dark band over `rows` of its height.
+    fn sky_with_band(rows: (u32, u32)) -> ToneGrid {
+        let mut img = RgbImage::from_pixel(100, 77, Rgb(SKY));
+        for y in rows.0..rows.1 {
+            for x in 0..100 {
+                img.put_pixel(x, y, Rgb(INK));
+            }
+        }
+        ToneGrid::from_image(&DynamicImage::ImageRgb8(img))
+    }
+
+    fn capped() -> Frame {
+        Frame::new(Some(moss_core::media::Position::Focus(50, 72)), moss_core::media::MaxHeight::parse("clamp(420px, 50vw, 680px)"), Some("top"), true, true)
+    }
+
+    #[test]
+    fn a_capped_closing_picture_is_measured_over_the_rows_its_box_shows() {
+        // At 1280px the cap is 640px of a 980px-tall picture, anchored at 72%:
+        // the box shows rows 25% to 90%, so a band over the top 10% is cropped away.
+        let aspect = 77.0 / 100.0;
+        let top = sky_with_band((0, 8));
+        for layout in [Layout::Mid, Layout::Wide, Layout::WideFull] {
+            let spot = words_spot(Some("top"), aspect, layout, &capped());
+            assert_eq!(readable_ink(&top, &spot, None, Inks::words()), Some(Ink::Dark), "{layout:?}: the band is above the crop");
+            let uncropped = words_spot(Some("top"), aspect, layout, &closing(Some("top")));
+            assert_eq!(readable_ink(&top, &uncropped, None, Inks::words()), None, "{layout:?}: uncropped, the band is under the words");
+            // Within the crop, under the words: the band keeps the panel.
+            assert_eq!(readable_ink(&sky_with_band((31, 35)), &spot, None, Inks::words()), None, "{layout:?}");
+        }
+        let crop = Crop::cover(aspect, (1280.0, 640.0), (0.5, 0.72));
+        assert!((crop.rows.0 - 0.2525).abs() < 0.001 && (crop.rows.1 - 0.9019).abs() < 0.001 && crop.cols == (0.0, 1.0), "{crop:?}");
+    }
+
+    #[test]
+    fn the_fade_runs_down_the_box_not_the_picture() {
+        // A band at 26-32% of the picture is the top of the capped box at 1280px,
+        // so the fade hides it; uncropped it sits where the picture shows through.
+        let band = sky_with_band((20, 25));
+        let (light, _) = *BACKGROUNDS;
+        let fade = Some(Fade::new(light, Layout::Wide));
+        let capped_spot = Spot(vec![Crop::cover(77.0 / 100.0, (1280.0, 640.0), (0.5, 0.72)).area((0.0, 0.2), (0.0, 1.0))]);
+        assert_eq!(readable_ink(&band, &capped_spot, fade, Inks::words()), Some(Ink::Dark));
+        assert_eq!(readable_ink(&band, &Spot::uncropped((0.26, 0.32), (0.0, 1.0)), fade, Inks::words()), None);
+    }
+
+    #[test]
+    fn a_faded_phone_measures_the_words_over_the_floor_its_box_keeps() {
+        // A wide picture in a 38rem-tall phone box shows only its middle columns,
+        // and all its rows: a dark patch at the start edge is cropped away, and the
+        // words' rows run down the picture's top 60%.
+        let mut img = RgbImage::from_pixel(160, 70, Rgb(SKY));
+        for y in 0..70 {
+            for x in 0..24 {
+                img.put_pixel(x, y, Rgb(INK));
+            }
+        }
+        let grid = ToneGrid::from_image(&DynamicImage::ImageRgb8(img));
+        let faded = faded_frame();
+        let spot = words_spot(Some("top"), 70.0 / 160.0, Layout::Narrow, &faded);
+        assert_eq!(readable_ink(&grid, &spot, None, Inks::words()), Some(Ink::Dark));
+        // Without the fade the phone's box is set by its words, so the whole width counts.
+        assert_eq!(readable_ink(&grid, &words_spot(Some("top"), 70.0 / 160.0, Layout::Narrow, &closing(Some("top"))), None, Inks::words()), None);
+        // The rows: a band under the words (at 50% of the box) keeps the panel.
+        let low = sky_with_band((38, 42));
+        assert_eq!(readable_ink(&low, &words_spot(Some("top"), 77.0 / 100.0, Layout::Narrow, &faded), None, Inks::words()), None);
+    }
+
+    #[test]
+    fn site_css_draws_the_fade_and_the_phone_floor_the_measurement_assumes() {
+        let css = crate::build::emit::stylesheet::CORE_CSS;
+        for depth in [FADE_DEPTH.0, FADE_DEPTH.1] {
+            assert!(css.contains(&format!("linear-gradient(to bottom, transparent, #000 {}%)", (depth * 100.0).round())), "fade {depth}");
+        }
+        assert!(css.contains(&format!("min-block-size: max({}rem, var(--moss-hero-max-height, 0px))", PHONE_FADE_FLOOR_PX / 16.0)));
+    }
+
+    #[test]
+    fn a_capped_align_top_picture_keeps_its_foot_unless_it_names_a_position() {
+        // site.css anchors a closing `align=top` picture at its foot, so the
+        // foot rows the colophon sits on are the picture's own foot, pale here;
+        // a top anchor would put the dark band at 50-65% there instead.
+        let grid = sky_with_band((39, 50));
+        let cap = moss_core::media::MaxHeight::parse("clamp(420px, 50vw, 680px)");
+        let foot = |frame: Frame| readable_ink(&grid, &foot_spot(&frame, 77.0 / 100.0), None, Inks::words());
+        assert_eq!(foot(Frame::new(None, cap, Some("top"), false, true)), Some(Ink::Dark));
+        assert_eq!(foot(Frame::new(Some(moss_core::media::Position::Top), cap, Some("top"), false, true)), None);
+        // An ordinary hero keeps its top unless it names a position.
+        assert_eq!(Frame::new(None, None, Some("top"), false, false).position, (0.5, 0.0));
+    }
+
+    #[test]
+    fn a_cap_under_the_words_box_is_found_at_48rem() {
+        let hero = |cap: &str| moss_core::ast::HeroShortcode { max_height: moss_core::media::MaxHeight::parse(cap), ..Default::default() };
+        assert_eq!(short_cap(&hero("300px")), Some(300.0));
+        assert_eq!(short_cap(&hero("25vw")), Some(192.0));
+        assert_eq!(short_cap(&hero("clamp(420px, 50vw, 680px)")), None);
+        // The credit at the foot needs its rows too: 400px holds the words, not both.
+        let captioned = moss_core::ast::HeroShortcode { caption: vec![moss_core::ast::Inline::Text("Credit".into())], ..hero("400px") };
+        assert_eq!(short_cap(&captioned), Some(400.0));
+        assert_eq!(short_cap(&hero("400px")), None);
+        assert_eq!(short_cap(&moss_core::ast::HeroShortcode { caption: captioned.caption.clone(), ..hero("clamp(440px, 50vw, 680px)") }), None);
+        assert_eq!(short_cap(&moss_core::ast::HeroShortcode::default()), None);
+    }
+
+    #[test]
+    fn a_short_cap_on_the_closing_picture_is_a_problem() {
+        let problems = |md: &str, closes_page: bool| {
+            let _ = crate::build::cli_output::take_cli_problems();
+            warn_closing_options(&moss_core::ast::parse(md), closes_page, "footer.md");
+            crate::build::cli_output::take_cli_problems()
+        };
+        let short = ":::hero {image=a.jpg max-height=300px}\n## Words\n:::\n";
+        assert_eq!(problems(short, true), 1);
+        assert_eq!(problems(short, false), 0, "an ordinary hero's cap is a floor, not a box for its words");
+        assert_eq!(problems(":::hero {image=a.jpg max-height=\"clamp(420px, 50vw, 680px)\"}\n## Words\n:::\n", true), 0);
+    }
+
     #[test]
     fn forcing_ink_over_a_mid_tone_reports_the_shortfall() {
         let lookup = lookup_of(&[("mid.png", &banded([120; 3], [120; 3], 0.7)), ("day.png", &banded(SKY, GROUND, 0.7))]);
-        assert!(forced_ink_shortfall(&lookup, &["/mid.png"], Some("top"), false).is_some_and(|c| c < MIN_CONTRAST));
-        assert!(forced_ink_shortfall(&lookup, &["/day.png"], Some("top"), false).is_none());
+        assert!(forced_ink_shortfall(&lookup, ("/mid.png", None), Some("top"), &ordinary(), false).is_some_and(|c| c < MIN_CONTRAST));
+        assert!(forced_ink_shortfall(&lookup, ("/day.png", None), Some("top"), &ordinary(), false).is_none());
+        // A closing picture's credit counts too: quiet under the words, mid-tone at the foot.
+        let lookup = lookup_of(&[("foot.png", &banded(SKY, [120; 3], 0.7))]);
+        assert!(forced_ink_shortfall(&lookup, ("/foot.png", None), Some("top"), &closing(Some("top")), false).is_none());
+        assert!(forced_ink_shortfall(&lookup, ("/foot.png", None), Some("top"), &closing(Some("top")), true).is_some_and(|c| c < MIN_CONTRAST));
     }
 }

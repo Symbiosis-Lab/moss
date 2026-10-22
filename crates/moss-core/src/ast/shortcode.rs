@@ -407,6 +407,10 @@ pub struct HeroShortcode {
     /// other hero ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fade: Option<String>,
+    /// `max-height=`: the hero's height cap. A value outside
+    /// [`crate::media::MaxHeight`]'s grammar warns at parse and is `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_height: Option<crate::media::MaxHeight>,
     /// Caption or credit for the image, from `caption="…"`. Rendered as a
     /// line of text BELOW the hero, never over it, except on a footer's
     /// closing picture, where it is the credit set small inside the picture

@@ -293,6 +293,12 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
     let align = parsed.get("align").map(str::to_string);
     let panel = parsed.get("panel").map(str::to_string);
     let fade = parsed.get("fade").map(str::to_string);
+    let max_height = parsed.get("max-height").and_then(crate::media::MaxHeight::parse);
+    let cap_problem = parsed.get("max-height").filter(|_| max_height.is_none()).map(|v| format!("shortcode `:::hero` has `max-height={v}`, which is not a height moss can measure: write one length in px, rem or vw (`max-height=500px`) or `clamp()` of three px or vw lengths (`max-height=\"clamp(440px, 50vw, 680px)\"`). The hero is not capped."));
+    let with_cap_problem = |mut d: Diagnostics| {
+        d.warnings.extend(cap_problem.clone());
+        d
+    };
     // Read once, for all three image-source branches below — a caption belongs
     // to the hero, not to whichever syntax named its image.
     let caption = parse_caption_inlines(parsed.get("caption").unwrap_or_default().trim(), config);
@@ -327,6 +333,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 align,
                 panel: panel.clone(),
                 fade: fade.clone(),
+                max_height,
                 caption,
                 slide_captions: Vec::new(),
                 header: header.clone(),
@@ -334,7 +341,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 dark: dark.clone(),
             },
             false,
-            overlay_warnings,
+            with_cap_problem(overlay_warnings),
         );
     }
 
@@ -364,6 +371,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 align,
                 panel: panel.clone(),
                 fade: fade.clone(),
+                max_height,
                 caption,
                 slide_captions: Vec::new(),
                 header: header.clone(),
@@ -371,7 +379,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 dark: dark.clone(),
             },
             false,
-            overlay_warnings,
+            with_cap_problem(overlay_warnings),
         );
     }
 
@@ -438,6 +446,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
             align,
             panel,
             fade,
+            max_height,
             caption,
             slide_captions: if slide_captions.iter().any(|c| !c.is_empty()) {
                 slide_captions
@@ -449,7 +458,7 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
             dark,
         },
         used_priority_3,
-        overlay_warnings,
+        with_cap_problem(overlay_warnings),
     )
 }
 

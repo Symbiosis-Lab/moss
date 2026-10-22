@@ -194,16 +194,18 @@ fn a_faded_closing_picture_is_measured_over_the_themes_page_colour() {
     let footer = footer_of(&plain);
     assert!(footer.contains(r#"data-fade="top""#), "{footer}");
     assert!(footer.contains(r#"data-words="narrow:dark"#) && footer.contains(r#"data-words-night="narrow:light"#), "{footer}");
-    assert!(footer.contains(r#"data-credit="narrow:dark"#) && footer.contains(r#"data-credit-night="narrow:light"#), "{footer}");
+    // The credit is measured at the foot: the dark ground takes the page colour in the light theme.
+    assert!(footer.contains(r#"data-credit="page""#) && footer.contains("data-credit-night="), "{footer}");
     assert!(!plain[..plain.find("<footer").unwrap()].contains("data-fade"), "only a closing picture fades");
 
     // A black page under the pale day picture: the faded top is dark above a pale sky.
     let black = footer_of(&themed(FADED, ":root { --moss-color-bg: #000; }\n")).to_string();
     assert!(!black.contains(r#"data-words=""#) && black.contains(r#"data-words-night="narrow:light"#), "{black}");
 
-    // A colour the build can't read keeps the panels in both themes; the foot is unaffected.
+    // A colour the build can't read keeps the words' panels in both themes, and
+    // the credit cannot take it; the foot is unaffected.
     let unread = footer_of(&themed(FADED, ":root { --moss-color-bg: var(--paper); }\n")).to_string();
-    assert!(!unread.contains("data-words") && !unread.contains("data-credit"), "{unread}");
+    assert!(!unread.contains("data-words") && !unread.contains(r#"="page""#), "{unread}");
     assert!(unread.contains(r#"data-foot="light""#), "{unread}");
 }
 
