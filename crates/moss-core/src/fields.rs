@@ -307,6 +307,28 @@ pub fn parse_value(decl: &FieldDecl, value: &Value, page: PageFormat) -> Result<
     }
 }
 
+/// One declared field as a page states it, by its own frontmatter or by a folder's
+/// cascade. `None` when the field does not apply: the page is outside its `in`
+/// scope, the value is absent or blank, or it is a built-in whose bad value the
+/// schema check reports. Otherwise the typed value, or the reason it does not fit.
+pub fn declare_one(
+    decl: &FieldDecl,
+    file_path: &str,
+    raw: Option<&serde_yaml::Value>,
+    page: PageFormat,
+) -> Option<Result<TypedValue, String>> {
+    if !in_folders(&decl.scope, file_path) {
+        return None;
+    }
+    let raw = raw.filter(|v| !crate::frontmatter::is_blank(v))?;
+    let json = serde_json::to_value(raw).ok()?;
+    match parse_value(decl, &json, page) {
+        Ok(value) => Some(Ok(value)),
+        Err(_) if crate::schema_fields::builtin_field(&decl.name).is_some() => None,
+        Err(reason) => Some(Err(reason)),
+    }
+}
+
 /// Whether a page, by its site-relative source path, sits in one of the
 /// folders of an `in` list. An empty list holds every page, and a page in a
 /// language tree (`de/Housing/x.md`) is also inside `Housing`.

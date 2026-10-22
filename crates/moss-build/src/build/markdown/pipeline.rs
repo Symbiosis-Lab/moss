@@ -312,20 +312,19 @@ fn declared_fields(
     page: moss_core::fields::PageFormat,
 ) -> DeclaredFields {
     let mut out = DeclaredFields::default();
-    for decl in decls.iter().filter(|decl| moss_core::fields::in_folders(&decl.scope, file_path)) {
-        let Some(raw) = moss_core::frontmatter::get_present(frontmatter, &decl.name) else { continue };
-        let Ok(json) = serde_json::to_value(raw) else { continue };
-        let builtin = moss_core::schema_fields::builtin_field(&decl.name).is_some();
-        match moss_core::fields::parse_value(decl, &json, page) {
-            Ok(value) => {
+    for decl in decls {
+        if frontmatter.contains_key(&decl.name) {
+            out.written.insert(decl.name.clone());
+        }
+        match moss_core::fields::declare_one(decl, file_path, frontmatter.get(&decl.name), page) {
+            Some(Ok(value)) => {
                 out.values.insert(decl.name.clone(), value);
             }
-            // moss's own schema check reports a built-in's bad value, so it is not reported twice.
-            Err(_) if builtin => {}
-            Err(reason) => {
+            Some(Err(reason)) => {
                 out.warnings.push(format!("[{file_path}] frontmatter: field '{}': {reason}", decl.name));
                 out.errors.insert(decl.name.clone(), reason);
             }
+            None => {}
         }
     }
     out
@@ -337,6 +336,8 @@ struct DeclaredFields {
     values: std::collections::BTreeMap<String, moss_core::fields::TypedValue>,
     /// Field name to the reason a value does not fit, as the build warning prints it.
     errors: std::collections::BTreeMap<String, String>,
+    /// Every declared field the frontmatter names, blank or not.
+    written: std::collections::BTreeSet<String>,
     warnings: Vec<String>,
 }
 
@@ -503,6 +504,7 @@ pub fn process_markdown_file(
     // frontmatter value line is not matched too early). 0 when no frontmatter.
     let mut declared = std::collections::BTreeMap::new();
     let mut field_errors = std::collections::BTreeMap::new();
+    let mut declared_written = std::collections::BTreeSet::new();
     let (mut frontmatter, markdown_content_raw, raw_frontmatter, frontmatter_line_count) =
         if is_simplified_frontmatter(content) {
             let (fm, body) = parse_simplified_frontmatter(content);
@@ -711,6 +713,7 @@ pub fn process_markdown_file(
         }
         declared = fields.values;
         field_errors = fields.errors;
+        declared_written = fields.written;
     }
 
     // Detect if this is an index file (needed for url_path computation).
@@ -1355,12 +1358,7 @@ pub fn process_markdown_file(
     // The declarations with a `place` that this page has a value for, in
     // declaration order. The render stage draws them: a page link needs the
     // target's title, which only it knows. A folder index and a slot take none.
-    let placed_fields = if is_index_file || is_slot_only {
-        Vec::new()
-    } else {
-        let builtin = |name: &str| crate::build::components::field_places::builtin_part(name, &title, field_source.as_ref(), format);
-        crate::build::components::field_places::placed(site.fields, file_path, &declared, &field_errors, &builtin)
-    };
+    let placed_fields = crate::build::components::field_places::placed_for_page(site.fields, file_path, &title, field_source.as_ref(), format, &declared, &field_errors, is_index_file || is_slot_only);
     let has_field_places = !placed_fields.is_empty();
 
     // Look up pre-computed url_path from PageMap, falling back to inline computation
@@ -1551,6 +1549,7 @@ pub fn process_markdown_file(
 
     Ok(ParsedDocument {
         declared,
+        declared_written,
         field_errors,
         placed_fields,
         title_block: frontmatter.title_block,

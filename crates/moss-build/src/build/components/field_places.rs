@@ -157,6 +157,27 @@ pub fn placed(
         .collect()
 }
 
+/// [`placed`] for one page of the site, with its built-in parts read from the
+/// page itself. A folder index and a slot draw none. The first render and the
+/// cascade pass both place through here, so they agree on the fields.
+#[allow(clippy::too_many_arguments)]
+pub fn placed_for_page(
+    decls: &[FieldDecl],
+    file_path: &str,
+    title: &str,
+    frontmatter: Option<&std::collections::HashMap<String, serde_yaml::Value>>,
+    page: PageFormat,
+    values: &BTreeMap<String, TypedValue>,
+    errors: &BTreeMap<String, String>,
+    folder_index_or_slot: bool,
+) -> Vec<Placed> {
+    if folder_index_or_slot {
+        return Vec::new();
+    }
+    let builtin = |name: &str| builtin_part(name, title, frontmatter, page);
+    placed(decls, file_path, values, errors, &builtin)
+}
+
 /// A built-in part a group names without declaring it: the page's `title`, or
 /// its `date` read the way the date field reads it. `None` when the page has no
 /// value for it, or the name is not a built-in part.

@@ -170,6 +170,7 @@ All notable changes to moss will be documented here.
 - Markdown definition lists render: a term line followed by a `: ` line becomes a `<dl>` with `<dt>` and `<dd>`, so a credit like `Set Design` then `: Ines Varga` is marked up as a term and its definition. A paragraph followed directly by a line starting with `: ` now renders the same way, so a site that used that pattern as prose should check those pages.
 - Folders synced by Nextcloud's Mac app are recognised: the loading screen names Nextcloud instead of showing its storage path, and downloads say they come from Nextcloud.
 - A page can have its own script and stylesheet: put `essay.js` and `essay.css` beside `essay.md` with the same name and only that page links them, the stylesheet after the theme's and the script as a module after the theme's. A folder's home page owns `index.js` and `index.css` the same way.
+- A folder's `cascade:` can carry a declared field (`[fields.<name>]`), so a value every page in the folder repeats is written once. A page's own value wins, and a cascaded value is checked against the field's type and `in` scope as a page's own value is. Before, a declared field named in `cascade:` was ignored with a warning.
 
 ### Changed
 

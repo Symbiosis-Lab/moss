@@ -547,3 +547,165 @@ fn a_group_at_eyebrow_key_figure_and_facts_draws_its_parts_in_that_element() {
         "{html}"
     );
 }
+
+const CREDIT: &str = "[fields.credit]\ntype = \"text\"\nplace = \"eyebrow\"\n";
+
+#[test]
+fn a_cascaded_declared_field_is_drawn_on_each_page_beneath_its_folder_and_a_page_value_wins() {
+    let home = "---\ntitle: Piers\ncascade:\n  credit: Harbour Trust\n---\nThe piers.\n";
+    let plain = "---\ntitle: Pier Four\n---\nbody\n";
+    let s = site(
+        CREDIT,
+        &[
+            ("Piers/index.md", home),
+            ("Piers/four.md", plain),
+            ("Piers/five.md", "---\ntitle: Pier Five\n---\nbody\n"),
+            ("Piers/own.md", "---\ntitle: Own\ncredit: Own Trust\n---\nbody\n"),
+        ],
+    );
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    for rel in ["piers/four/index.html", "piers/five/index.html"] {
+        let html = built(&s, rel);
+        assert!(position(&html, "Harbour Trust") < position(&html, "<h1 class=\"moss-article-title\""), "{rel}: {html}");
+    }
+    let own = built(&s, "piers/own/index.html");
+    assert!(own.contains("Own Trust") && !own.contains("Harbour Trust"), "a page's own value wins: {own}");
+}
+
+#[test]
+fn a_cascaded_value_that_does_not_fit_warns_and_fails_strict_as_a_page_value_does() {
+    let year = "[fields.year]\ntype = \"number\"\nplace = \"eyebrow\"\n";
+    let home = "---\ntitle: Piers\ncascade:\n  year: soon\n---\nThe piers.\n";
+    let s = site(year, &[("Piers/index.md", home), ("Piers/four.md", "---\ntitle: Pier Four\n---\nbody\n")]);
+    let strict = build_strict(&s);
+    let err = String::from_utf8_lossy(&strict.stderr);
+    assert!(!strict.status.success() && err.contains("[Piers/four.md] frontmatter: field 'year'"), "{err}");
+    let lenient = build_lenient(&s);
+    assert!(lenient.status.success(), "{}", String::from_utf8_lossy(&lenient.stderr));
+    assert!(!built(&s, "piers/four/index.html").contains("data-field=\"year\""), "a value that does not fit is not drawn");
+}
+
+#[test]
+fn a_cascaded_declared_field_reaches_only_the_pages_in_its_folder_scope() {
+    let config = format!("{CREDIT}in = [\"Housing\"]\n");
+    let root = "---\ntitle: Home\ncascade:\n  credit: Harbour Trust\n---\nWelcome\n";
+    let s = site(
+        &config,
+        &[
+            ("index.md", root),
+            ("Housing/court.md", "---\ntitle: Court\n---\nbody\n"),
+            ("Notes/note.md", "---\ntitle: Note\n---\nbody\n"),
+        ],
+    );
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(built(&s, "housing/court/index.html").contains("Harbour Trust"));
+    let note = built(&s, "notes/note/index.html");
+    assert!(!note.contains("Harbour Trust") && !note.contains("data-field=\"credit\""), "{note}");
+}
+
+#[test]
+fn an_undeclared_key_in_a_cascade_still_warns_and_the_warning_names_declared_fields() {
+    let home = "---\ntitle: Piers\ncascade:\n  nope: 1\n---\nThe piers.\n";
+    let s = site(CREDIT, &[("Piers/index.md", home), ("Piers/four.md", "---\ntitle: Pier Four\n---\nbody\n")]);
+    let o = build_lenient(&s);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("cascade key \"nope\"") && err.contains("or a declared field"), "{err}");
+}
+
+const YEAR: &str = "[fields.year]\ntype = \"number\"\nplace = \"eyebrow\"\n";
+
+#[test]
+fn a_nested_folders_cascaded_field_does_not_replace_the_outer_folders_value() {
+    let home = "---\ntitle: Piers\ncascade:\n  credit: Harbour Trust\n---\nThe piers.\n";
+    let deep = "---\ntitle: Deep\ncascade:\n  credit: Inner Trust\n---\nbody\n";
+    let s = site(
+        CREDIT,
+        &[("Piers/index.md", home), ("Piers/Deep/index.md", deep), ("Piers/Deep/four.md", "---\ntitle: Pier Four\n---\nbody\n")],
+    );
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let html = built(&s, "piers/deep/four/index.html");
+    assert!(html.contains("Harbour Trust") && !html.contains("Inner Trust"), "{html}");
+}
+
+#[test]
+fn an_outer_folders_value_that_does_not_fit_stops_a_nested_folder_from_filling_in() {
+    let home = "---\ntitle: Piers\ncascade:\n  year: soon\n---\nThe piers.\n";
+    let deep = "---\ntitle: Deep\ncascade:\n  year: 1900\n---\nbody\n";
+    let s = site(YEAR, &[("Piers/index.md", home), ("Piers/Deep/index.md", deep), ("Piers/Deep/four.md", "---\ntitle: Pier Four\n---\nbody\n")]);
+    let o = build_lenient(&s);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("[Piers/Deep/four.md] frontmatter: field 'year'"), "{err}");
+    let html = built(&s, "piers/deep/four/index.html");
+    assert!(!html.contains("data-field=\"year\"") && !html.contains("1900"), "{html}");
+}
+
+#[test]
+fn a_blank_value_the_page_writes_keeps_the_cascade_out() {
+    let home = "---\ntitle: Piers\ncascade:\n  credit: Harbour Trust\n---\nThe piers.\n";
+    let s = site(CREDIT, &[("Piers/index.md", home), ("Piers/blank.md", "---\ntitle: Blank\ncredit: \"\"\n---\nbody\n")]);
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let html = built(&s, "piers/blank/index.html");
+    assert!(!html.contains("Harbour Trust") && !html.contains("data-field=\"credit\""), "a blank page value stays empty: {html}");
+}
+
+#[test]
+fn a_blank_cascaded_value_is_ignored_so_a_nested_folder_can_supply_it() {
+    let home = "---\ntitle: Piers\ncascade:\n  credit: \"\"\n---\nThe piers.\n";
+    let deep = "---\ntitle: Deep\ncascade:\n  credit: Inner Trust\n---\nbody\n";
+    let s = site(
+        CREDIT,
+        &[
+            ("Piers/index.md", home),
+            ("Piers/Deep/index.md", deep),
+            ("Piers/Deep/four.md", "---\ntitle: Pier Four\n---\nbody\n"),
+            ("Piers/plain.md", "---\ntitle: Plain\n---\nbody\n"),
+        ],
+    );
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(built(&s, "piers/deep/four/index.html").contains("Inner Trust"));
+    assert!(!built(&s, "piers/plain/index.html").contains("data-field=\"credit\""), "a blank cascade draws nothing");
+}
+
+#[test]
+fn a_number_and_a_date_cascade_are_checked_and_drawn_like_page_values() {
+    let config = format!("{YEAR}\n[fields.opened]\ntype = \"date\"\nplace = \"eyebrow\"\n");
+    let home = "---\ntitle: Piers\ncascade:\n  year: 1927\n  opened: 1927-03-02\n---\nThe piers.\n";
+    let s = site(&config, &[("Piers/index.md", home), ("Piers/four.md", "---\ntitle: Pier Four\n---\nbody\n")]);
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let html = built(&s, "piers/four/index.html");
+    let h1 = position(&html, "<h1 class=\"moss-article-title\"");
+    assert!(position(&html, "data-field=\"year\"") < h1 && html.contains("1927"), "{html}");
+    assert!(position(&html, "data-field=\"opened\"") < h1, "{html}");
+}
+
+#[test]
+fn a_group_places_parts_cascaded_from_a_folder_home_page_in_order() {
+    let config = "[fields.credit_holder]\ntype = \"text\"\n\n[fields.licence]\ntype = \"text\"\n\n[fields.credit]\ntype = \"group\"\nof = [\"title\", \"credit_holder\", \"licence\"]\nplace = \"subtitle\"\n";
+    let home = "---\ntitle: Housing\ncascade:\n  credit_holder: Anna Weber\n  licence: CC BY 4.0\n---\nThe housing.\n";
+    let s = site(config, &[("Housing/index.md", home), ("Housing/court.md", "---\ntitle: Riverside Court\n---\nbody\n")]);
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let html = built(&s, "housing/court/index.html");
+    assert!(html.contains("<p class=\"moss-subtitle moss-field-group\" data-field=\"credit\">"), "{html}");
+    let title = position(&html, "<span data-field=\"title\">Riverside Court</span>");
+    let holder = position(&html, "<span data-field=\"credit_holder\">Anna Weber</span>");
+    let licence = position(&html, "<span data-field=\"licence\">CC BY 4.0</span></p>");
+    assert!(title < holder && holder < licence, "{html}");
+}
+
+#[test]
+fn a_group_named_in_a_cascade_warns_and_is_not_carried() {
+    let config = "[fields.credit_holder]\ntype = \"text\"\n\n[fields.credit]\ntype = \"group\"\nof = [\"title\", \"credit_holder\"]\nplace = \"subtitle\"\n";
+    let home = "---\ntitle: Housing\ncascade:\n  credit: Anna Weber\n---\nThe housing.\n";
+    let s = site(config, &[("Housing/index.md", home), ("Housing/court.md", "---\ntitle: Riverside Court\n---\nbody\n")]);
+    let o = build_lenient(&s);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("is not a key cascade carries") && err.contains("or a declared field"), "{err}");
+    assert!(!built(&s, "housing/court/index.html").contains("Anna Weber"), "the group's name carries no value to the page");
+}

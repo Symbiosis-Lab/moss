@@ -1174,7 +1174,7 @@ pub fn generate_blocking_content_for_build(
         // Drafts now flow through cascade too, so cascade-defined sort/nav/layout
         // settings apply to them uniformly (a draft is rendered, just hidden
         // from listings).
-        apply_cascade(&mut documents);
+        apply_cascade(&mut documents, markdown.fields);
         log::debug!(target: "timing", "[reduce] apply_cascade: {:?}", reduce_start.elapsed());
         crate::build::scan::section_color::apply_section_colors(&mut documents);
 

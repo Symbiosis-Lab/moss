@@ -594,6 +594,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub declared: std::collections::BTreeMap<String, moss_core::fields::TypedValue>,
+    /// The declared fields this page's frontmatter names, blank or not. A folder's
+    /// cascade leaves these alone, so a page's blank value stays empty.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub declared_written: std::collections::BTreeSet<String>,
     /// For each declared field whose value does not fit, the reason, as the
     /// build warning states it. Filled in the same pass as `declared`.
     #[serde(skip)]

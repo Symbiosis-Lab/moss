@@ -280,7 +280,7 @@ A page's listing picture is what its card shows in a folder listing, a grid card
 
 ### Folder cascade
 
-A folder's home page can declare `cascade:` to push values to every page beneath it, so a value that every page in the folder repeats is written once. The keys cascade carries are `nav`, `breadcrumb`, `footer`, `children`, `children_style`, `children_group`, `children_depth`, `tags`, `description`, `content_width`, `title_block`, `reader_controls`, `sort` and `timezone`. The page that declares it is not included, and a page that sets one of these keys itself keeps its own value. To switch a cascaded key off for one page, set it to an empty value there, such as `description: ""`; the page then has no value for it rather than the folder's. A key outside that list has no effect; the build warns once per source page and names the keys cascade does carry.
+A folder's home page can declare `cascade:` to push values to every page beneath it, so a value that every page in the folder repeats is written once. The keys cascade carries are `nav`, `breadcrumb`, `footer`, `children`, `children_style`, `children_group`, `children_depth`, `tags`, `description`, `content_width`, `title_block`, `reader_controls`, `sort` and `timezone`. It also carries declared fields (see Declared fields), such as `credit_holder: "Example Museum"`. A cascaded field is checked as the page's own value would be: its type, and its `in` scope, so a page outside that scope gets nothing. The page that declares it is not included. A page that sets one of these keys or fields itself keeps its own value, and a blank one counts: to switch a cascaded key or field off for one page, set it to an empty value there, such as `description: ""`, and the page then has no value for it rather than the folder's. A blank value in a cascade is ignored, as a blank value on a page is. A nested folder's value does not replace an outer folder's, even one that does not fit: the outer folder's value wins, as for the other cascaded keys. A key that is neither a cascade key nor a declared field has no effect; the build warns once per source page and names what cascade does carry.
 
 ### Shortcodes
 
@@ -569,7 +569,7 @@ type = "pages"
 in   = ["Housing"]
 ```
 
-A page then writes plain values, such as `kind: Building`, `years: 1927/1933` or `architects: ["[[Anna Weber]]"]`. Quote a page link, because unquoted `[[…]]` is read as a nested list. A link is checked as the author wrote it, so `[[Riverside Court]]` and `[[Housing/Riverside Court]]` both pass. A field a page does not carry is fine.
+A page then writes plain values, such as `kind: Building`, `years: 1927/1933` or `architects: ["[[Anna Weber]]"]`. Quote a page link, because unquoted `[[…]]` is read as a nested list. A link is checked as the author wrote it, so `[[Riverside Court]]` and `[[Housing/Riverside Court]]` both pass. A field a page does not carry is fine. A folder's home page can set a declared field for every page beneath it with `cascade:` (see Folder cascade).
 
 | Type | A page writes | Plugins receive |
 |---|---|---|

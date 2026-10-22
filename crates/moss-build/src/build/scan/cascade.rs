@@ -40,14 +40,15 @@ const CASCADE_KEYS: &[&str] = &[
 ///
 /// This runs as a pre-processing pass after all documents are parsed and before
 /// HTML generation, modifying the `Vec<ParsedDocument>` in place.
-pub(crate) fn apply_cascade(docs: &mut Vec<ParsedDocument>) {
-    // Collect cascade sources: (folder_prefix, cascade_map)
-    let cascades: Vec<(String, std::collections::BTreeMap<String, serde_yaml::Value>)> = {
+pub(crate) fn apply_cascade(docs: &mut Vec<ParsedDocument>, fields: &[moss_core::fields::FieldDecl]) {
+    // Collect cascade sources: (folder_prefix, source page, cascade_map)
+    let cascades: Vec<(String, String, std::collections::BTreeMap<String, serde_yaml::Value>)> = {
         let mut v: Vec<_> = docs
             .iter()
             .filter_map(|doc| {
                 doc.cascade.as_ref().map(|c| {
-                    report_cascade_values(doc, c);
+                    report_cascade_values(doc, c, fields);
+                    let page = doc.source_path.as_deref().unwrap_or(doc.url_path.as_str()).to_string();
                     let folder_prefix = if doc.url_path == "index.html" {
                         // Root index cascades to everything
                         String::new()
@@ -62,18 +63,18 @@ pub(crate) fn apply_cascade(docs: &mut Vec<ParsedDocument>) {
                         // Actually, we just won't emit a cascade for non-index pages.
                         return None;
                     };
-                    Some((folder_prefix, c.clone()))
+                    Some((folder_prefix, page, c.clone()))
                 })?
             })
             .collect();
 
         // Sort by depth (shallower first — fewer '/' in prefix)
-        v.sort_by_key(|(prefix, _)| prefix.matches('/').count());
+        v.sort_by_key(|(prefix, _, _)| prefix.matches('/').count());
         v
     };
 
     // Apply each cascade to matching descendants
-    for (prefix, cascade) in &cascades {
+    for (prefix, page, cascade) in &cascades {
         for doc in docs.iter_mut() {
             // A doc is a descendant if its url_path starts with the folder prefix.
             // For root cascade (prefix == ""), every doc is a descendant.
@@ -98,19 +99,52 @@ pub(crate) fn apply_cascade(docs: &mut Vec<ParsedDocument>) {
                 continue;
             }
 
-            apply_cascade_values(doc, cascade);
+            apply_cascade_values(doc, page, cascade, fields);
         }
     }
+
+    // A cascaded value can change which fields a page draws, so place them once per page, after every cascade has applied.
+    if fields.iter().any(|d| d.place.is_some()) {
+        for doc in docs.iter_mut() {
+            let format = moss_core::fields::PageFormat {
+                lang: doc.lang.as_bcp47_attr(),
+                decimal: crate::build::components::field_text::decimal_mark(doc.lang),
+            };
+            // The page's own `date`, which a group's `date` part reads.
+            let frontmatter: std::collections::HashMap<String, serde_yaml::Value> =
+                doc.date.iter().map(|d| ("date".to_string(), serde_yaml::Value::String(d.clone()))).collect();
+            doc.placed_fields = crate::build::components::field_places::placed_for_page(
+                fields,
+                doc.source_path.as_deref().unwrap_or_default(),
+                &doc.title,
+                Some(&frontmatter),
+                format,
+                &doc.declared,
+                &doc.field_errors,
+                doc.kind == moss_core::PageKind::Folder || doc.slot_only,
+            );
+        }
+    }
+}
+
+/// The declared field a cascade key names. A group holds no value, so its name
+/// is not a key cascade carries.
+fn cascadable_field<'a>(fields: &'a [moss_core::fields::FieldDecl], key: &str) -> Option<&'a moss_core::fields::FieldDecl> {
+    fields.iter().find(|d| d.name == key && d.kind != moss_core::fields::FieldKind::Group)
 }
 
 /// Report what in a source page's cascade cannot take effect. This runs once per
 /// source page, not once per descendant: an unknown key has no effect, and a
 /// `timezone:` that is not a zone name is not applied to any event.
-fn report_cascade_values(doc: &ParsedDocument, cascade: &std::collections::BTreeMap<String, serde_yaml::Value>) {
+fn report_cascade_values(
+    doc: &ParsedDocument,
+    cascade: &std::collections::BTreeMap<String, serde_yaml::Value>,
+    fields: &[moss_core::fields::FieldDecl],
+) {
     let page = doc.source_path.as_deref().unwrap_or(doc.url_path.as_str());
-    for key in cascade.keys().filter(|k| !CASCADE_KEYS.contains(&k.as_str())) {
+    for key in cascade.keys().filter(|k| !CASCADE_KEYS.contains(&k.as_str()) && cascadable_field(fields, k.as_str()).is_none()) {
         log::warn!(
-            "[{page}] cascade key \"{key}\" is not a key cascade carries ({}); it has no effect",
+            "[{page}] cascade key \"{key}\" is not a key cascade carries ({}) or a declared field; it has no effect",
             CASCADE_KEYS.join(", ")
         );
     }
@@ -135,9 +169,17 @@ fn report_cascade_values(doc: &ParsedDocument, cascade: &std::collections::BTree
 /// preserving any explicitly-set frontmatter values.
 fn apply_cascade_values(
     doc: &mut ParsedDocument,
+    page: &str,
     cascade: &std::collections::BTreeMap<String, serde_yaml::Value>,
+    fields: &[moss_core::fields::FieldDecl],
 ) {
     for (key, value) in cascade {
+        if !CASCADE_KEYS.contains(&key.as_str()) {
+            if let Some(decl) = cascadable_field(fields, key) {
+                apply_declared_field(doc, decl, value, page);
+            }
+            continue;
+        }
         match key.as_str() {
             "nav" => {
                 if doc.nav.is_none() {
@@ -266,6 +308,32 @@ fn apply_cascade_values(
     }
 }
 
+/// Carry a cascaded declared field to one descendant, checked as the page's own
+/// value is. A value the page writes itself, blank or not, wins. So does a value
+/// an outer folder states, even one that does not fit, so a nested folder's value
+/// fills in only where no folder above has stated the field.
+fn apply_declared_field(doc: &mut ParsedDocument, decl: &moss_core::fields::FieldDecl, value: &serde_yaml::Value, page: &str) {
+    if doc.declared_written.contains(&decl.name) || doc.declared.contains_key(&decl.name) || doc.field_errors.contains_key(&decl.name) {
+        return;
+    }
+    let file = doc.source_path.clone().unwrap_or_default();
+    let lang = doc.lang;
+    let format = moss_core::fields::PageFormat {
+        lang: lang.as_bcp47_attr(),
+        decimal: crate::build::components::field_text::decimal_mark(lang),
+    };
+    match moss_core::fields::declare_one(decl, &file, Some(value), format) {
+        Some(Ok(typed)) => {
+            doc.declared.insert(decl.name.clone(), typed);
+        }
+        Some(Err(reason)) => {
+            crate::build::cli_output::cli_warn!("[{file}] frontmatter: field '{}': {reason} (cascaded from {page})", decl.name);
+            doc.field_errors.insert(decl.name.clone(), reason);
+        }
+        None => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,7 +371,7 @@ mod tests {
         let grandchild = make_doc("Install", "docs/getting-started/install/index.html");
 
         let mut docs = vec![parent, child, grandchild];
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         // Child should inherit nav: true
         assert_eq!(
@@ -334,7 +402,7 @@ mod tests {
         child.nav = Some(false); // Explicitly opt out
 
         let mut docs = vec![parent, child];
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         assert_eq!(
             docs[1].nav,
@@ -358,7 +426,7 @@ mod tests {
         let child = make_doc("Child", "docs/child/index.html");
 
         let mut docs = vec![parent, child];
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         // Source document should NOT get its own cascade applied
         assert_eq!(
@@ -394,7 +462,7 @@ mod tests {
         let child = make_doc("Page", "docs/page/index.html");
 
         let mut docs = vec![root, folder, child];
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         // Root cascade sets children_style = "list" first,
         // then docs/ cascade tries to set "summary" but field is already Some.
@@ -452,7 +520,7 @@ mod tests {
         let child = make_doc("Guide", "docs/guide/index.html");
 
         let mut docs = vec![root, docs_index, child];
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         // Guide should inherit breadcrumb from root and children_style from docs/
         assert_eq!(
@@ -484,7 +552,7 @@ mod tests {
         let child = make_doc("Page", "docs/page/index.html");
 
         let mut docs = vec![parent, child];
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         assert_eq!(docs[1].nav, Some(true));
         assert_eq!(docs[1].breadcrumb, Some(moss_core::frontmatter_typed::BreadcrumbSetting::Off));
@@ -506,7 +574,7 @@ mod tests {
         let blog_page = make_doc("Blog Post", "blog/post/index.html");
 
         let mut docs = vec![docs_index, blog_page];
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         assert_eq!(
             docs[1].nav,
@@ -530,7 +598,7 @@ mod tests {
         let page_b = make_doc("Guide", "docs/guide/index.html");
 
         let mut docs = vec![root, page_a, page_b];
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         assert_eq!(
             docs[1].breadcrumb,
@@ -563,7 +631,7 @@ mod tests {
         leaf.nav = None;
 
         let mut docs = vec![non_index, leaf];
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         assert_eq!(
             docs[1].nav,
@@ -592,7 +660,7 @@ mod tests {
         let child = make_doc("Page", "docs/page/index.html");
 
         let mut docs = vec![parent, child];
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         // Known key should still work
         assert_eq!(docs[1].nav, Some(true));
@@ -631,9 +699,18 @@ mod tests {
             parent.cascade = Some(HashMap::from([(key.to_string(), sample_for(key))]));
             let mut docs = vec![parent, make_event_doc("Concert", "events/concert/index.html")];
             let before = format!("{:?}", docs[1]);
-            apply_cascade(&mut docs);
+            apply_cascade(&mut docs, &[]);
             assert_ne!(format!("{:?}", docs[1]), before, "`{key}` is in CASCADE_KEYS but changes nothing");
         }
+        let declared = [moss_core::fields::FieldDecl {
+            name: "kind".into(),
+            kind: moss_core::fields::FieldKind::Text,
+            choices: vec![],
+            place: None,
+            label: vec![],
+            scope: vec![],
+            of: vec![],
+        }];
         // Keys cascade does not carry, including the ones excluded on purpose, change nothing.
         for key in ["colour", "typesetting", "sidebar", "draft", "listed", "start"] {
             for value in [serde_yaml::Value::Bool(true), serde_yaml::Value::String("wide".to_string())] {
@@ -641,10 +718,16 @@ mod tests {
                 parent.cascade = Some(HashMap::from([(key.to_string(), value)]));
                 let mut docs = vec![parent, make_event_doc("Concert", "events/concert/index.html")];
                 let before = format!("{:?}", docs[1]);
-                apply_cascade(&mut docs);
+                apply_cascade(&mut docs, &declared);
                 assert_eq!(format!("{:?}", docs[1]), before, "`{key}` is not in CASCADE_KEYS but changes the page");
             }
         }
+        // A declared field name is carried as well.
+        let mut parent = make_doc("Events", "events/index.html");
+        parent.cascade = Some(HashMap::from([("kind".to_string(), serde_yaml::Value::String("Building".to_string()))]));
+        let mut docs = vec![parent, make_event_doc("Concert", "events/concert/index.html")];
+        apply_cascade(&mut docs, &declared);
+        assert!(docs[1].declared.contains_key("kind"), "a declared field cascades to the page beneath it");
     }
 
     /// Empty cascade map is harmless.
@@ -656,7 +739,7 @@ mod tests {
         let child = make_doc("Page", "docs/page/index.html");
 
         let mut docs = vec![parent, child];
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         // No fields should be modified
         assert_eq!(docs[1].nav, None);
@@ -671,7 +754,7 @@ mod tests {
 
         let mut docs = vec![doc_a, doc_b];
         let nav_before = (docs[0].nav, docs[1].nav);
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         assert_eq!((docs[0].nav, docs[1].nav), nav_before);
     }
@@ -690,7 +773,7 @@ mod tests {
         let child = make_doc("Page", "docs/page/index.html");
 
         let mut docs = vec![parent, child];
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         assert_eq!(
             docs[1].content_width.as_deref(),
@@ -714,7 +797,7 @@ mod tests {
         child.content_width = Some("wide".to_string());
 
         let mut docs = vec![parent, child];
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         assert_eq!(
             docs[1].content_width.as_deref(),
@@ -738,7 +821,7 @@ mod tests {
         let child = make_doc("Post", "posts/post/index.html");
 
         let mut docs = vec![parent, child];
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         assert!(
             docs[1].sort.is_some(),
@@ -762,7 +845,7 @@ mod tests {
         child.sort = Some(SortField::Axis(SortAxis::Date));
 
         let mut docs = vec![parent, child];
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         // Child should keep its explicit sort, not inherit from parent
         assert!(
@@ -785,7 +868,7 @@ mod tests {
         let child = make_doc("Page", "docs/page/index.html");
 
         let mut docs = vec![parent, child];
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         assert_eq!(
             docs[1].content_width,
@@ -821,7 +904,7 @@ mod tests {
             folder_with_timezone("Europe/Oslo"),
             make_event_doc("Concert", "events/concert/index.html"),
         ];
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         assert_eq!(
             docs[1].event.as_ref().and_then(|e| e.timezone.as_deref()),
@@ -836,7 +919,7 @@ mod tests {
         own.event.as_mut().unwrap().timezone = Some("Asia/Tokyo".to_string());
 
         let mut docs = vec![folder_with_timezone("Europe/Oslo"), own];
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         assert_eq!(
             docs[1].event.as_ref().and_then(|e| e.timezone.as_deref()),
@@ -851,7 +934,7 @@ mod tests {
             folder_with_timezone("Europe/Oslo"),
             make_doc("About", "events/about/index.html"),
         ];
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         assert!(docs[1].event.is_none());
     }
@@ -864,7 +947,7 @@ mod tests {
             folder_with_timezone("   "),
             make_event_doc("Concert", "events/concert/index.html"),
         ];
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         assert_eq!(docs[1].event.as_ref().and_then(|e| e.timezone.as_deref()), None);
         assert_eq!(crate::build::cache::tests::logged_count(log::Level::Warn, "`   ` (cascaded from"), 0);
@@ -878,7 +961,7 @@ mod tests {
             folder_with_timezone("not a zone"),
             make_event_doc("Concert", "events/concert/index.html"),
         ];
-        apply_cascade(&mut docs);
+        apply_cascade(&mut docs, &[]);
 
         assert_eq!(docs[1].event.as_ref().and_then(|e| e.timezone.as_deref()), None);
         assert_eq!(
