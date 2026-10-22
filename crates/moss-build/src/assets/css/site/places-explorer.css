@@ -104,7 +104,7 @@ html[data-moss-embed] body[data-typesetting="vertical"] {
    set by site.css's `main { container-type: inline-size; }`), centred with
    equal negative inline margins — but applied unconditionally at every
    width, never collapsed back to the text column the way that rule's own
-   `@media (max-width: 48rem)` branch collapses a hand-authored one. This
+   `@media (width < 48rem)` branch collapses a hand-authored one. This
    file owns the figure's layout outright, so it reimplements the same two
    declarations directly (`100cqi`, not the `--moss-escape` indirection
    site.css's rule uses to pick between `wide`/`page`/`screen` — this
@@ -956,7 +956,7 @@ button.moss-places-chip-crumb {
   color: var(--moss-color-text-secondary);
   cursor: pointer;
 }
-@media (max-width: 48rem) {
+@media (width < 48rem) {
   .moss-places-chip-collapsible {
     display: none;
   }

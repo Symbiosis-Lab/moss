@@ -111,7 +111,7 @@ In the first two, the image is announced once, through its caption, so the `<img
 
 An image title (`![Caption](photo.jpg "Hover text")`) is the `title` attribute of the `<img>`, the browser tooltip, and does not change the caption.
 
-An image with no text at all (`![](photo.jpg)` or `![[photo.jpg]]`) gets `alt=""`, which marks it decorative, and the build logs `Accessibility: image '…' on '…' has no alt text`. That line is advice: it does not count as a problem for `--strict`. There is no separate marker for a deliberately decorative image yet, so the line is the cost of leaving one bare.
+An image with no text at all (`![](photo.jpg)` or `![[photo.jpg]]`) gets `alt=""`, which marks it decorative, and the build logs `Accessibility: image '…' on '…' has no alt text`. That line is advice: it does not count as a problem for `--strict`. A picture inside a link that has its own words (`[![](icon.svg) Opening hours](hours/)`) gets no such line, since the link's words name it; a picture that is a link's only content still does. There is no separate marker for a deliberately decorative image yet, so the line is the cost of leaving one bare.
 
 For the wikilink form, the alias becomes a caption only when it isn't a [size or fit/position keyword](#display-control) — those are read first.
 

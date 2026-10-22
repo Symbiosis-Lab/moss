@@ -3680,6 +3680,39 @@ function collageBody(count: number, passageAt?: number): string {
   ).join("\n+++\n");
 }
 
+// Pictures and quotes together; the third tile is a short quote with long words in a narrow tile.
+const COLLAGE_MIXED = `:::grid {collage}
+[![The harbour at dawn|focus:20%,70%](../t1.svg)](/upright/)
+*__Harbour at dawn__ 1890 · City Museum · Public domain*
++++
+![Title page of the first edition|contain](../poster.png)
+*__Title page__ 1855 · Public domain*
++++
+> ${COLLAGE_SHORT_QUOTE}
+
+*[Montaigne, 1924](https://example.org/essays/)*
++++
+![Picture 4](../t4.svg)
+*__A long title for a small tile__ 1902 · Harbour Archive · Public domain*
++++
+![Picture 5](../t5.svg)
+*__Tall__ 1910*
++++
+![Picture 6](../t6.svg)
+*__Six__ 1911*
++++
+![Picture 7](../t7.svg)
+*__Tall again__ 1912*
++++
+> ${COLLAGE_LONG_QUOTE}
+
+*Essays, book three*
++++
+![Picture 9](../t9.svg)
+*__Nine__ 1913*
+:::
+`;
+
 export const COLLAGE_GATE: ScratchSiteSpec = {
   name: "collage-gate",
   files: {
@@ -3692,7 +3725,7 @@ typesetting: vertical
 ---
 
 :::grid {collage}
-${collageBody(5, 2)}
+${collageBody(5, 2).replace("![Picture 4](t4.svg)\n*Credit for picture 4.*", `> ${COLLAGE_LONG_QUOTE}\n\n*Essays, book three*`)}
 :::
 `,
     "t1.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="600" height="400" fill="#4a7"/></svg>
@@ -3737,37 +3770,27 @@ uid: "clg00120"
 
 # Mixed
 
-:::grid {collage}
-[![The harbour at dawn|focus:20%,70%](../t1.svg)](/upright/)
-*__Harbour at dawn__ 1890 · City Museum · Public domain*
-+++
-![Title page of the first edition|contain](../poster.png)
-*__Title page__ 1855 · Public domain*
-+++
+${COLLAGE_MIXED}
+A quote in a plain grid:
+
+:::grid 2
 > ${COLLAGE_SHORT_QUOTE}
 
-*[Montaigne, 1924](https://example.org/essays/)*
+*Montaigne, 1924*
 +++
-![Picture 4](../t4.svg)
-*__A long title for a small tile__ 1902 · Harbour Archive · Public domain*
-+++
-![Picture 5](../t5.svg)
-*__Tall__ 1910*
-+++
-![Picture 6](../t6.svg)
-*__Six__ 1911*
-+++
-![Picture 7](../t7.svg)
-*__Tall again__ 1912*
-+++
-> ${COLLAGE_LONG_QUOTE}
-
-*Essays, book three*
-+++
-![Picture 9](../t9.svg)
-*__Nine__ 1913*
+A cell of plain text beside it.
 :::
 `,
+    // The same collage on a full-width page, where a span-2 tile is as wide as on a real index page.
+    "full/index.md": `---
+title: Full-width Collage
+uid: "clg00140"
+content_width: full
+---
+
+# Full width
+
+${COLLAGE_MIXED}`,
     // A raster poster: the build reads a picture's pixel size from raster files only.
     "poster.png": Buffer.from("iVBORw0KGgoAAAANSUhEUgAAACgAAAA8CAIAAACb22+3AAAAOElEQVR42u3NQQkAAAgEsEtnEtOZ0hgiDPZfpvpExGKxWCwWi8VisVgsFovFYrFYLBaLxWLxp3gBxqJ0NeApenkAAAAASUVORK5CYII=", "base64"),
     "upright/index.md": `---

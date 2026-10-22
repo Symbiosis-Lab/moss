@@ -32,7 +32,7 @@
 
 .moss-title-beside { display: grid; gap: var(--moss-space-md); margin-block-end: var(--moss-space-md); }
 .moss-title-beside > .moss-image { margin: 0; }
-@media (min-width: 48rem) {
+@media (width >= 48rem) {
   .moss-title-beside { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--moss-space-lg); align-items: start; }
 }
 

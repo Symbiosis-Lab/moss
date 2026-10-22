@@ -128,7 +128,7 @@ pub fn image_word_warnings(doc: &Document) -> Vec<String> {
 /// an empty alt and, for a figure, no caption to stand in for it. Only image
 /// files count; a video, audio or PDF written in the image form takes its
 /// label from elsewhere. Descends into grid cells, callouts, lists and table
-/// cells.
+/// cells. A picture inside a link that has its own text is named by that text.
 pub fn images_without_text(doc: &Document) -> Vec<String> {
     fn is_image_file(href: &str) -> bool {
         crate::resolve::ext_kind::reference_kind_for_ext(&crate::path_ext::path_extension_lower(href))
@@ -150,7 +150,9 @@ pub fn images_without_text(doc: &Document) -> Vec<String> {
             match i {
                 Inline::Image { .. } => bare(i, out),
                 Inline::Emphasis(c) | Inline::Strong(c) | Inline::Strikethrough(c) => walk(c, out),
-                Inline::Link { children, .. } => walk(children, out),
+                Inline::Link { children, .. } if super::inlines_to_plain_text(children).trim().is_empty() => {
+                    walk(children, out)
+                }
                 _ => {}
             }
         }

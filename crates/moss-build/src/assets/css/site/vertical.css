@@ -313,9 +313,11 @@ body[data-typesetting="vertical"] .moss-table-scroll {
 }
 
 /* A collage's tracks stay horizontal (site.css), so a tile that holds text
-   takes the page's reading direction back. */
+   takes the page's reading direction back. Its inline axis then runs down the
+   row, which must grow to fit it, so it is no width container. */
 [data-typesetting="vertical"] .moss-grid[data-collage] .moss-grid-card:not([data-tile="picture"]) {
   writing-mode: vertical-rl;
+  container-type: normal;
 }
 
 /* The three `.moss-card*` rules below asked for `--moss-font-serif`, which no
@@ -397,7 +399,7 @@ body[data-typesetting="vertical"] .moss-table-scroll {
 
 /* Preserve authored multi-column tracks at phone width, where inline space is
    viewport height. A single wrapped column keeps its mobile stretch. */
-@media (max-width: 768px) {
+@media (width < 48rem) {
   [data-typesetting="vertical"] .moss-grid:is([data-columns="2"], [data-columns="3"], [data-columns="4"]) {
     --_grid-wrap: var(--_grid-template);
   }

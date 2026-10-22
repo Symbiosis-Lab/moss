@@ -132,6 +132,19 @@ for (const width of [390, 400]) {
   });
 }
 
+// 64rem is half-open: the narrow desktop's tighter padding round the words
+// stops at 1023px, and a page exactly 1024px wide takes the wide one.
+for (const [width, narrow] of [[1023, true], [1024, false]] as const) {
+  test(`at ${width}px the closing picture's words take the ${narrow ? 'narrow desktop' : 'wide'} padding`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto('/', { waitUntil: 'load' });
+    const pad = await page.evaluate(() =>
+      getComputedStyle(document.querySelector('footer .moss-hero-closing')!).getPropertyValue('--moss-words-pad').trim(),
+    );
+    expect(pad === '5%', `--moss-words-pad is ${pad}`).toBe(!narrow);
+  });
+}
+
 test('the credit is the caption, small, and links stay legible', async ({ page }) => {
   await page.goto('/', { waitUntil: 'load' });
   await expect(page.locator('footer .moss-hero-closing .moss-hero-credit')).toHaveText(CREDIT);

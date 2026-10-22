@@ -711,3 +711,77 @@ fn facts_hang_in_the_margin_only_where_it_is_wide_enough() {
     }
     assert_eq!(floated, 1, "one rule hangs the facts in the margin");
 }
+
+/// A viewport edge has one spelling, a half-open range: `width < 48rem` below
+/// it and `width >= 48rem` from it on, and likewise at 64rem and 80rem.
+/// `max-width: 48rem` includes 48rem, so beside a `width >= 48rem` rule a page
+/// exactly that wide took both layouts at once. A width written in `em`, in
+/// `calc()`, or within a pixel of an edge (`767.98px`, `47.99rem`) would dodge
+/// the check, so those are refused in a media query too; other edges are not
+/// this test's business. Every shipped sheet is read; the totality tests keep
+/// the two tables complete.
+fn media_width_problems(source: &str) -> Vec<String> {
+    let edge = r"(48rem|64rem|80rem)";
+    let closed = regex::Regex::new(&format!(
+        r"(max|min)-width\s*:\s*{edge}\b|width\s*(<=|>)\s*{edge}|{edge}\s*(<|>=)\s*width"
+    ))
+    .unwrap();
+    let length = regex::Regex::new(r"(\d+(?:\.\d+)?|\.\d+)(px|rem|em)\b").unwrap();
+    let css = blanked(source);
+    let mut out = Vec::new();
+    for (at, _) in css.match_indices("@media") {
+        let prelude = &css[at..css[at..].find('{').map_or(css.len(), |e| at + e)];
+        if !prelude.contains("width") {
+            continue;
+        }
+        // `blanked` keeps byte offsets but not a comment's line breaks.
+        let line = source[..at].matches('\n').count() + 1;
+        if let Some(m) = closed.find(prelude) {
+            out.push(format!("{line}: `{}` is closed", m.as_str()));
+        }
+        if prelude.contains("calc(") {
+            out.push(format!("{line}: calc() in a width query"));
+        }
+        for m in length.captures_iter(prelude) {
+            let value: f64 = m[1].parse().unwrap();
+            let px = if &m[2] == "px" { value } else { value * 16.0 };
+            if &m[2] == "em" {
+                out.push(format!("{line}: `{}` is in em", &m[0]));
+            } else if [768.0, 1024.0, 1280.0].iter().any(|e| (px - e).abs() <= 1.0 && !(&m[2] == "rem" && px == *e)) {
+                out.push(format!("{line}: `{}` sits beside an edge", &m[0]));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn viewport_edges_are_half_open_ranges() {
+    for ok in ["(width < 48rem)", "(width >= 64rem)", "(48rem <= width < 80rem)", "(max-width: 32rem)", "(max-width: 600px)", "(width < 76rem)"] {
+        assert!(media_width_problems(&format!("@media {ok} {{}}")).is_empty(), "{ok} is half-open");
+    }
+    for bad in [
+        "(max-width: 48rem)",
+        "(min-width:769px)",
+        "(48rem <= width <= 64rem)",
+        "(width > 80rem)",
+        "(max-width: 1023px)",
+        "(width < 768px)",
+        "(width < 767.98px)",
+        "(width < 47.99rem)",
+        "(width >= 64.0625rem)",
+        "(width < 48em)",
+        "(max-width: 30em)",
+        "(width < calc(48rem - 1px))",
+    ] {
+        assert!(!media_width_problems(&format!("@media {bad} {{}}")).is_empty(), "{bad} must be refused");
+    }
+    let sheets = [("site", CORE_CSS), ("mark", MARK_CSS)]
+        .into_iter()
+        .chain(CSS_PARTIALS.iter().map(|p| (p.name, p.source)))
+        .chain(crate::build::emit::feature_styles::FEATURE_STYLES.iter().map(|f| (f.name, f.source)));
+    for (name, source) in sheets {
+        let problems = media_width_problems(source);
+        assert!(problems.is_empty(), "{name}.css: {problems:?} — write an edge as `width < X` / `width >= X` in rem");
+    }
+}

@@ -1214,7 +1214,7 @@ body > footer.container > .moss-hero-closing[data-mobile="overlay"][data-overlay
   --moss-words-pad: 5%;
   --moss-words-inset: calc(max(0px, (100% - var(--moss-sidenote-inset, 0px) - var(--moss-content-width)) / 2) + var(--moss-container-padding));
 }
-@media (48rem <= width <= 64rem) {
+@media (48rem <= width < 64rem) {
   body > footer.container > .moss-hero-closing[data-mobile="overlay"][data-overlay] {
     --moss-words-pad: var(--moss-space-md);
   }
@@ -1423,7 +1423,7 @@ body > footer.container > .moss-hero-closing[data-fade="top"][data-align="top"] 
    and place-locator already treat as the mobile/desktop split; `(pointer:
    coarse)` also reaches a touch device wider than 48rem, e.g. a tablet in
    landscape. */
-@media (max-width: 48rem), (pointer: coarse) {
+@media (width < 48rem), (pointer: coarse) {
   .moss-subscribe-form[data-moss-hosted="true"] .moss-input,
   .moss-subscribe-form[data-moss-hosted="true"] .moss-btn {
     block-size: max(calc(var(--moss-reading-size, 1.125rem) * 1.75), 44px);
@@ -1720,7 +1720,7 @@ footer.container hr::before {
 
    Desktop with a mouse is untouched; `(pointer: coarse)` also reaches a
    touch device wider than 48rem (e.g. a tablet in landscape). */
-@media (max-width: 48rem), (pointer: coarse) {
+@media (width < 48rem), (pointer: coarse) {
   footer.container li {
     margin-bottom: var(--moss-space-lg);
   }
@@ -3279,7 +3279,7 @@ body > header .site-name {
  * (also (0,1,1) total) and loses on source order, since that rule comes
  * later in the file; verified by inspecting both rules' resolved specificity
  * in a real browser before adding the prefix. */
-@media (min-width: 48rem) {
+@media (width >= 48rem) {
   article.container > .moss-place-locator:has(+ blockquote) {
     margin-block-start: calc(var(--moss-space-lg) - var(--moss-space-md));
   }
@@ -3308,7 +3308,7 @@ body > header .site-name {
 article .moss-place-map-frame:is(.moss-align-left, .moss-align-right):not([data-width]) {
   inline-size: 50%;
 }
-@media (max-width: 48rem) {
+@media (width < 48rem) {
   article .moss-place-map-frame:is(.moss-align-left, .moss-align-right) {
     float: none;
     inline-size: 100% !important;
@@ -5140,18 +5140,6 @@ article p:has(> picture:only-child) > picture {
   max-inline-size: 100%;
 }
 
-/* Figcaption typography. Sits below the picture/img with a tight
-   top-margin so the caption visually anchors to its image. Reading-scale, like
-   the prose around it: on a fixed 16px it outgrew the body copy as soon as the
-   reader chose a smaller size on a phone. */
-article .moss-image figcaption {
-  font-size: var(--moss-read-caption);
-  color: var(--moss-color-muted, var(--moss-color-text-secondary, #666));
-  text-align: center;
-  margin-top: var(--moss-space-xs);
-  line-height: 1.4;
-}
-
 /* Bare-paragraph standalone image shape: `<p><img></p>` (no figure wrap).
    Step 8 wraps caption-pattern images in `<figure class="moss-image">`,
    but a sole image with NO caption pattern (and `implicit_figure = false`,
@@ -5389,7 +5377,7 @@ article.container > [data-width="screen"] {
   margin-right: calc((100% - 100cqi) / 2 - var(--moss-sidenote-inset, 0px));
 }
 
-@media (max-width: 48rem) {
+@media (width < 48rem) {
   article.container > [data-width]:not(div[data-width="screen"]:not([class^="moss-"]):not([class*=" moss-"])) {
     /* collapse to the column; a fenced-div `screen` band alone is exempt
        (rule below), so a `screen` figure collapses like the other tokens.
@@ -5444,7 +5432,7 @@ article.container > hr {
  * narrowing to it costs nothing tested. The figure-form image selector is
  * listed both ways (plain compound AND `:has()`) for the same reason the
  * desktop rule now is: real markup carries align on the figure itself. */
-@media (max-width: 48rem) {
+@media (width < 48rem) {
   article img.moss-align-left,
   article img.moss-align-right,
   article figure.moss-image.moss-align-left:not([data-width]),
@@ -5862,7 +5850,7 @@ hr::before {
   display: none;
 }
 
-@media (min-width: 48rem) {
+@media (width >= 48rem) {
   .moss-folder-title {
     font-size: 2rem;
     line-height: 1.6875;
@@ -5922,18 +5910,12 @@ article a:where(:not(.moss-btn)):focus {
 }
 
 /* ==========================================================================
-   11. Responsive - Desktop (min-width: 48rem)
+   11. Responsive - Mobile (width < 48rem). Every viewport edge is a
+   half-open range, `width < X` below and `width >= X` above, so a page at
+   exactly 48rem, 64rem or 80rem is in one layout only.
    ========================================================================== */
 
-@media (min-width: 48rem) {
-  /* Desktop: nav stays flex, content stays centered */
-}
-
-/* ==========================================================================
-   12. Responsive - Mobile (max-width: 48rem)
-   ========================================================================== */
-
-@media (max-width: 48rem) {
+@media (width < 48rem) {
   :root {
     /* Body copy must not drop to the ~16px legibility floor on mobile (too
        small, especially for dense CJK). 1.0625rem (17px) keeps a small
@@ -6022,7 +6004,7 @@ article a:where(:not(.moss-btn)):focus {
 }
 
 /* ==========================================================================
-   12a. Responsive - Touch targets (<=48rem, or any coarse pointer)
+   11a. Responsive - Touch targets (below 48rem, or any coarse pointer)
    --------------------------------------------------------------------------
    Only `.nav-links a` needs a rule here: the theme toggle, language toggle
    and mobile menu button already got their own 44px invisible hit area from
@@ -6088,7 +6070,7 @@ article a:where(:not(.moss-btn)):focus {
    outer edge of the whole list reaches into `.nav-content`'s own ambient
    space (ordinary page background above and to the sides, the content
    column's own padding below), not a neighbor. */
-@media (max-width: 48rem), (pointer: coarse) {
+@media (width < 48rem), (pointer: coarse) {
   .nav-links {
     row-gap: var(--moss-space-lg);
     column-gap: 19px;
@@ -6199,7 +6181,7 @@ article a:where(:not(.moss-btn)):focus {
     outline-offset: 0.35rem;
   }
 
-  /* The link's whole box is already well over 44px tall; 12a's extension
+  /* The link's whole box is already well over 44px tall; 11a's extension
      would only add scrollable overflow to the sheet. */
   .nav-links a::after {
     inset-block: 0;
@@ -7191,7 +7173,7 @@ article a:where(:not(.moss-btn)):focus {
 }
 
 /* Mobile: reset desktop spacing for compact layout */
-@media (max-width: 48rem) {
+@media (width < 48rem) {
   .moss-collection-cover-row {
     gap: var(--moss-space-lg);
   }
@@ -7845,7 +7827,7 @@ body > footer.container:has(> .moss-hero-closing) {
 }
 
 /* Responsive — tablet */
-@media (max-width: 64rem) {
+@media (width < 64rem) {
   .moss-hero-content {
     padding: var(--moss-space-md);
   }
@@ -8427,13 +8409,13 @@ a.moss-grid-card:hover {
      on text tiles in vertical.css. */
   writing-mode: horizontal-tb;
 }
-@media (min-width: 769px) {
+@media (width >= 48rem) {
   .moss-grid[data-collage] { align-items: stretch; }
 }
-@media (max-width: 1023px) {
+@media (width < 64rem) {
   .moss-grid[data-collage] { --_collage-row: 180px; }
 }
-@media (min-width: 1024px) {
+@media (width >= 64rem) {
   .moss-grid[data-collage]:is([data-count="8"], [data-count="9"]) { --_collage-row: 160px; }
 }
 .moss-grid[data-collage]:is([data-count="8"], [data-count="9"]) { --_collage-rows: 3; }
@@ -8495,18 +8477,25 @@ a.moss-grid-card:hover {
 /* A caption is a credit, on a band of the page colour at the tile's foot. It
    slides up on hover or keyboard focus, and opens in the viewer on a touch
    screen. Hidden only to the eye: it stays in the accessibility tree. A bold
-   run at its start is a title line; the rest is a smaller line of facts. */
+   run at its start is a title line; the rest is a smaller line of facts. It
+   takes at most 40% of the tile, so the picture stays the subject, and stops
+   at a whole line: title and facts share one line pitch, and the cap rounds
+   down to it. */
 .moss-grid[data-collage] .moss-grid-card .moss-image figcaption {
+  --_label-line: 0.9375rem;
+  --_label-pad: var(--moss-space-xs);
   position: absolute;
   inset-inline: 0;
   inset-block-end: 0;
-  margin: 0;
-  padding: var(--moss-space-xs) var(--moss-space-sm);
+  box-sizing: border-box;
+  max-block-size: 40%;
+  max-block-size: calc(round(down, 40% - 2 * var(--_label-pad), var(--_label-line)) + 2 * var(--_label-pad));
+  overflow: hidden;
+  padding: var(--_label-pad) var(--moss-space-sm);
   color: var(--moss-color-text-secondary);
   font-family: var(--moss-font-mono, ui-monospace, monospace);
-  font-size: 0.6875rem;
-  line-height: 1.35;
-  text-align: start;
+  font-size: 0.66rem;
+  line-height: var(--_label-line);
   overflow-wrap: anywhere;
   background: var(--moss-color-bg);
   opacity: 0;
@@ -8514,17 +8503,41 @@ a.moss-grid-card:hover {
   pointer-events: none;
   transition: opacity 0.15s, transform 0.2s ease-out;
 }
+/* The title keeps to two lines, so a long one in a small tile is cut at its
+   end with an ellipsis, never through a line. */
 .moss-grid[data-collage] .moss-grid-card .moss-image figcaption > strong:first-child {
-  display: block;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
   color: var(--moss-color-text);
   font-family: var(--moss-font-body);
-  font-size: 0.875rem;
+  font-size: 0.78rem;
   font-weight: 600;
 }
-/* Too small for both lines: the title stays, the facts go (still read aloud). */
+/* A linked picture's title points out of the tile. The arrow sits at the end
+   of the title's first line, outside the clamped title, so an ellipsis never
+   cuts it; it is drawn, not read: its alternative text is empty. */
+.moss-grid[data-collage] .moss-image:has(> a) figcaption > strong:first-child { padding-inline-end: 1.25em; }
+.moss-grid[data-collage] .moss-image:has(> a) figcaption:has(> strong:first-child)::after {
+  content: "\2197";
+  content: "\2197" / "";
+  position: absolute;
+  inset-block-start: var(--_label-pad);
+  inset-inline-end: var(--moss-space-sm);
+  color: var(--moss-color-text);
+  font-family: var(--moss-font-body);
+  font-size: 0.78rem;
+}
+/* Too small for both lines: the title stays, the facts go (still read aloud).
+   A zero line pitch keeps the hidden facts from leaving an empty line. */
 @container (max-width: 11rem) or (max-height: 7.5rem) {
-  .moss-grid[data-collage] .moss-grid-card .moss-image figcaption:has(> strong:first-child) { font-size: 0; }
-  .moss-grid[data-collage] .moss-grid-card .moss-image figcaption > strong:first-child { font-size: 0.8125rem; }
+  .moss-grid[data-collage] .moss-grid-card .moss-image figcaption:has(> strong:first-child) { font-size: 0; line-height: 0; }
+  .moss-grid[data-collage] .moss-grid-card .moss-image figcaption > strong:first-child { line-height: var(--_label-line); }
+}
+/* A short tile has room for one line of title within its 40%. */
+@container (max-height: 7.5rem) {
+  .moss-grid[data-collage] .moss-grid-card .moss-image figcaption > strong:first-child { -webkit-line-clamp: 1; }
 }
 .moss-grid[data-collage] .moss-grid-card .moss-image figcaption a { color: inherit; }
 @media (hover: hover) {
@@ -8543,11 +8556,23 @@ a.moss-grid-card:hover {
   background: var(--moss-color-bg);
 }
 .moss-grid[data-collage] .moss-grid-card:not([data-tile="picture"]) > :first-child { margin-block-start: 0; }
+/* A quote's size follows its tile's width, so its longest word fits a narrow
+   tile; the row still grows to fit a long quote. */
 .moss-grid[data-collage] [data-tile="quote"] {
   display: flex;
   padding: var(--moss-space-md);
   border: 1px solid var(--moss-border-light);
+  container-type: inline-size;
 }
+/* A flex item would widen to its longest word, past the tile's padding; a
+   word too long for the narrowest tile breaks instead. */
+.moss-grid[data-collage] [data-tile="quote"] .moss-quote { min-inline-size: 0; }
+.moss-grid[data-collage] [data-tile="quote"] blockquote {
+  font-size: clamp(0.875rem, 13cqi, 1.25rem);
+  overflow-wrap: break-word;
+  hyphens: auto;
+}
+.moss-grid[data-collage] [data-tile="quote"] .moss-quote[data-length="long"] blockquote { font-size: clamp(0.8125rem, 10cqi, 1rem); }
 
 /* A quote cell: a blockquote and its source line (`figure.moss-quote`), set as
    type in `--moss-font-quote`, in a collage or a plain grid. */
@@ -8584,7 +8609,7 @@ a.moss-grid-card:hover {
 
 /* Horizontal inline space narrows on phones. Vertical typesetting keeps
    the authored tracks because its inline space follows viewport height. */
-@media (max-width: 768px) {
+@media (width < 48rem) {
   .moss-grid[data-columns] {
     --_grid-wrap: 1fr;
     --_grid-track: calc(100% / 1.3);
@@ -8677,10 +8702,10 @@ a.moss-grid-card:hover {
    Each implicit track therefore uses (inline space - peek - N * gap) / N,
    defined once on the grid above and shared by both writing modes.
 
-   A fitting row uses the same wrapping template above the existing 768px
-   breakpoint. Reset both overflow axes together, including the vertical
-   transpose, and remove scroll-only padding so it matches a plain grid. */
-@media (min-width: 769px) {
+   A fitting row uses the same wrapping template from 48rem up. Reset both
+   overflow axes together, including the vertical transpose, and remove
+   scroll-only padding so it matches a plain grid. */
+@media (width >= 48rem) {
   .moss-grid[data-scroll][data-fits] {
     grid-auto-flow: row;
     overflow: visible;
@@ -8898,7 +8923,7 @@ a.moss-grid-card:hover {
    without `--moss-gallery-columns`. `.moss-grid`'s companion rule collapses to a
    single column instead, which is right for prose cells and wrong for a wall
    of thumbnails. */
-@media (max-width: 48rem) {
+@media (width < 48rem) {
   .moss-gallery[data-columns] {
     --moss-gallery-share: calc(
       (100% - (var(--moss-gallery-columns) - 1) * var(--moss-space-sm, 1rem)) /
@@ -9589,13 +9614,16 @@ article figure.moss-image[style*="width"] img {
   width: 100%;
 }
 
-/* 8px gap matches editorial reference (NYT, Atlantic, Substack: 8-10px).
-   With `display: block` on the image (above), the visible gap equals this
-   margin exactly — no inline line-box leading to compensate for. */
-article figure:not(.video-figure) > figcaption {
+/* The one rule for a figure's caption. 8px gap matches editorial reference
+   (NYT, Atlantic, Substack: 8-10px); with `display: block` on the image
+   (above), the visible gap equals this margin exactly. Reading-scale, like
+   the prose around it. A collage tile and a quote set their own captions
+   (roman, start-aligned). */
+article figure:not(.video-figure):where(:not(.moss-grid[data-collage] *, .moss-quote)) > figcaption {
   margin-top: var(--moss-space-xs);
   color: var(--moss-color-text-secondary);
   font-size: var(--moss-read-caption);
+  line-height: 1.4;
   font-style: italic;
   text-align: center;
 }
@@ -9711,7 +9739,7 @@ article video[data-loop] {
 }
 
 /* Mobile adjustments for media grid */
-@media (max-width: 48rem) {
+@media (width < 48rem) {
   .media-grid {
     grid-template-columns: repeat(2, 1fr);
     gap: var(--moss-space-sm);
@@ -9798,10 +9826,10 @@ article video[data-loop] {
   color: inherit;
 }
 
-/* Tablet/Mobile (max-width: 64rem): sidebar stacks below content.
+/* Tablet/Mobile (width < 64rem): sidebar stacks below content.
    Nav layout is content-aware via flex-wrap (see .nav-content above) — no
    viewport breakpoint needed. */
-@media (max-width: 64rem) {
+@media (width < 64rem) {
   /* `nowrap`: a wrapping column sizes each line to its widest item's natural
      width, not the page's, and the article's measure overflowed a phone. */
   main.has-sidebar {

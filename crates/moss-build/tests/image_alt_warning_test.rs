@@ -66,6 +66,12 @@ fn undescribed_images_are_named_with_their_page_and_are_not_strict_problems() {
     // Not an image file: a video written in the image form takes its label elsewhere.
     assert!(warnings_for("![](clip.mp4)\n").iter().all(|w| !w.contains("clip.mp4")));
 
+    // A picture alone in a link is still unnamed; beside the link's own text it is not.
+    let linked = warnings_for("[![](lake.jpg)](notes/lake/)\n");
+    assert!(linked.iter().any(|w| w.contains("lake.jpg")), "got: {linked:?}");
+    let named = warnings_for("[![](lake.jpg) The lake](notes/lake/)\n");
+    assert!(named.iter().all(|w| !w.contains("lake.jpg")), "got: {named:?}");
+
     // A table cell is walked too.
     let table = warnings_for("| a |\n|---|\n| ![](cell.png) |\n");
     assert!(table.iter().any(|w| w.contains("cell.png")), "got: {table:?}");

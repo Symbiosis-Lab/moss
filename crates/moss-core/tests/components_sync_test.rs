@@ -208,7 +208,7 @@ fn css_selectors_match_components_table() {
 /// `moss-grid`'s `data-columns` description must agree with what site.css
 /// actually does at the mobile breakpoint, not contradict it. The
 /// description used to say "there is no mobile collapse to a single
-/// column", while `@media (max-width: 768px) { .moss-grid[data-columns] {
+/// column", while `@media (width < 48rem) { .moss-grid[data-columns] {
 /// grid-template-columns: 1fr; } }` has always collapsed a plain grid there
 /// — the sibling `data-fits` attr's own description already said as much
 /// ("the same breakpoint that would otherwise collapse a plain grid to one

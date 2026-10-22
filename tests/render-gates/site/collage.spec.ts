@@ -105,6 +105,21 @@ test.describe("collage geometry", () => {
     }
   });
 
+  // 48rem is half-open: a page exactly 768px wide keeps the lead column, 767px stacks.
+  for (const [width, wide] of [[767, false], [768, true]] as const) {
+    test(`at ${width}px the collage ${wide ? "keeps its lead column" : "stacks"}`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/");
+      const { collage, tiles } = await boxes(page, counted(7));
+      if (wide) {
+        expect(tiles[0].h).toBeCloseTo(collage.h, 0);
+        expect(tiles[0].w / collage.w).toBeLessThan(0.51);
+      } else {
+        expect(tiles[0].w).toBeCloseTo(collage.w, 0);
+      }
+    });
+  }
+
   test("a one-row collage gets the taller row", async ({ page }) => {
     await page.setViewportSize({ width: 1360, height: 900 });
     await page.goto("/");
@@ -170,30 +185,77 @@ test.describe("collage rows grow only for words", () => {
 });
 
 test.describe("nothing is cut off", () => {
+  for (const [path, full] of [["/mixed/", false], ["/full/", true]] as const)
   for (const width of [1360, 1100, 900, 768, 390]) {
-    test(`at ${width}px no label or quote overflows its tile`, async ({ page }) => {
+    test(`at ${width}px on ${path} no label or quote overflows its tile`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
-      await page.goto("/mixed/");
+      await page.goto(path);
       const report = await page.locator(MIXED).evaluate((grid) =>
         [...grid.children].map((tile, i) => {
           const label = tile.querySelector<HTMLElement>(".moss-image figcaption");
           const quote = tile.querySelector<HTMLElement>(".moss-quote");
+          const words = quote?.querySelector("blockquote");
+          // The widest word, measured as laid out: one range per word.
+          let wordRight = 0;
+          // The widest word set whole, on one line: quote text may hyphenate by
+          // choice, so a broken word alone says nothing about whether it fits.
+          let widest = 0;
+          if (words) {
+            const walker = document.createTreeWalker(words, NodeFilter.SHOW_TEXT);
+            for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+              for (const m of n.textContent!.matchAll(/\S+/g)) {
+                const range = document.createRange();
+                range.setStart(n, m.index!);
+                range.setEnd(n, m.index! + m[0].length);
+                const rects = [...range.getClientRects()].filter((r) => r.width > 0);
+                for (const r of rects) wordRight = Math.max(wordRight, r.right);
+                const probe = document.createElement("span");
+                probe.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap;hyphens:none";
+                probe.textContent = m[0];
+                n.parentElement!.append(probe);
+                widest = Math.max(widest, probe.getBoundingClientRect().width);
+                probe.remove();
+              }
+            }
+          }
+          const box = tile.getBoundingClientRect();
+          const contentRight = box.right - parseFloat(getComputedStyle(tile).paddingRight) - parseFloat(getComputedStyle(tile).borderRightWidth);
           return {
             i,
             tileH: tile.clientHeight,
             tileW: tile.clientWidth,
             tileScrollH: tile.scrollHeight,
             labelH: label?.offsetHeight ?? 0,
+            labelScrollH: label?.scrollHeight ?? 0,
+            labelLines: label
+              ? (label.clientHeight - parseFloat(getComputedStyle(label).paddingTop) - parseFloat(getComputedStyle(label).paddingBottom)) /
+                parseFloat(getComputedStyle(label.querySelector("strong") ?? label).lineHeight)
+              : 0,
+            titleLines: (() => {
+              const title = label?.querySelector<HTMLElement>(":scope > strong:first-child");
+              return title ? title.offsetHeight / parseFloat(getComputedStyle(title).lineHeight) : 0;
+            })(),
             labelScrollW: label?.scrollWidth ?? 0,
             labelW: label?.clientWidth ?? 0,
             quote: !!quote,
+            wordOver: words ? wordRight - contentRight : 0,
+            wordRoom: words ? widest - words.clientWidth : 0,
           };
         }),
       );
       for (const r of report) {
         expect(r.labelH, `tile ${r.i}: label fits the tile's height`).toBeLessThanOrEqual(r.tileH + 1);
         expect(r.labelScrollW, `tile ${r.i}: label fits the tile's width`).toBeLessThanOrEqual(r.labelW + 1);
+        expect(r.labelH, `tile ${r.i}: label takes at most 40% of the tile`).toBeLessThanOrEqual(r.tileH * 0.4 + 1);
+        expect(r.labelScrollH, `tile ${r.i}: label is not clipped`).toBeLessThanOrEqual(r.labelH + 1);
+        expect(r.titleLines, `tile ${r.i}: the title keeps to two lines`).toBeLessThanOrEqual(2.05);
+        expect(Math.abs(r.labelLines - Math.round(r.labelLines)), `tile ${r.i}: the label ends on a whole line`).toBeLessThan(0.05);
         if (r.quote) expect(r.tileScrollH, `tile ${r.i}: quote is not cut off`).toBeLessThanOrEqual(r.tileH + 1);
+        if (r.quote) expect(r.wordOver, `tile ${r.i}: no quote word runs into the padding`).toBeLessThanOrEqual(0.5);
+        // A span-2 tile on a full-width page at 900px is about 140px wide: the
+        // type scales down so every word fits a line whole. Narrower than that,
+        // a word too long for the smallest size breaks rather than overrun.
+        if (full && width >= 900) expect(r.wordRoom, `tile ${r.i}: the widest quote word fits on a line`).toBeLessThanOrEqual(0.5);
       }
     });
   }
@@ -221,6 +283,37 @@ test.describe("picture words reach the page", () => {
 });
 
 test.describe("collage credits", () => {
+  test("a credit and a quote's source are roman and start-aligned, with no theme rule", async ({ page }) => {
+    await page.setViewportSize({ width: 1360, height: 900 });
+    await page.goto("/mixed/");
+    await expect(page.locator(".moss-grid:not([data-collage]) .moss-quote")).toHaveCount(1);
+    for (const sel of [
+      `${MIXED} > :nth-child(4) figcaption`,
+      `${MIXED} > :nth-child(3) .moss-quote figcaption`,
+      ".moss-grid:not([data-collage]) .moss-quote figcaption",
+    ]) {
+      await expect(page.locator(sel)).toHaveCSS("font-style", "normal");
+      await expect(page.locator(sel)).toHaveCSS("text-align", "start");
+    }
+  });
+
+  test("the label's title is 0.78rem, its facts 0.66rem, and a linked tile's title ends in an arrow", async ({ page }) => {
+    await page.setViewportSize({ width: 1360, height: 900 });
+    await page.goto("/mixed/");
+    // The lead is large enough to show both lines.
+    const caption = page.locator(`${MIXED} > :nth-child(1) figcaption`);
+    await expect(caption).toHaveCSS("font-size", "10.56px");
+    await expect(caption.locator("strong")).toHaveCSS("font-size", "12.48px");
+    const after = (sel: string) =>
+      page.locator(sel).evaluate((el) => ({ content: getComputedStyle(el, "::after").content, position: getComputedStyle(el, "::after").position }));
+    // The arrow is drawn beside the title, not inside it, so the title's ellipsis cannot cut it.
+    expect(await after(`${MIXED} > :nth-child(1) figcaption`)).toEqual({ content: expect.stringContaining("\u2197"), position: "absolute" });
+    expect((await after(`${MIXED} > :nth-child(1) figcaption > strong`)).content).toBe("none");
+    expect((await after(`${MIXED} > :nth-child(4) figcaption`)).content).toBe("none");
+    // The arrow is drawn on the title, not written into it.
+    await expect(page.locator(`${MIXED} > :nth-child(1) figcaption > strong`)).toHaveText("Harbour at dawn");
+  });
+
   test("at 1360px a caption is hidden at rest and shown on hover, its bold run a title line", async ({ page }) => {
     await page.setViewportSize({ width: 1360, height: 900 });
     await page.goto("/mixed/");
@@ -230,7 +323,8 @@ test.describe("collage credits", () => {
     await tile.scrollIntoViewIfNeeded();
     await tile.hover();
     await expect(caption).toHaveCSS("opacity", "1");
-    await expect(caption.locator("strong")).toHaveCSS("display", "block");
+    const display = await caption.locator("strong").evaluate((el) => getComputedStyle(el).display);
+    expect(display, "the title is a line of its own").not.toMatch(/inline/);
   });
 
   test("a caption shows on keyboard focus", async ({ page }) => {
@@ -262,9 +356,19 @@ test.describe("collage credits", () => {
     await expect(caption).toHaveCSS("opacity", "1");
     const m = await caption.evaluate((el) => {
       const cs = getComputedStyle(el);
-      return { color: cs.color, bg: cs.backgroundColor, lines: el.getBoundingClientRect().height / parseFloat(cs.lineHeight) };
+      return {
+        color: cs.color,
+        bg: cs.backgroundColor,
+        lines: el.getBoundingClientRect().height / parseFloat(cs.lineHeight),
+        content: (el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)) / parseFloat(cs.lineHeight),
+        share: el.getBoundingClientRect().height / el.closest(".moss-grid-card")!.getBoundingClientRect().height,
+      };
     });
     expect(m.lines).toBeGreaterThan(2.5);
+    // A credit longer than its tile allows stops at 40%; the viewer has the rest.
+    expect(m.share).toBeLessThanOrEqual(0.405);
+    // …at a whole line, never through one.
+    expect(Math.abs(m.content - Math.round(m.content))).toBeLessThan(0.05);
     const fg = parseColor(m.color);
     const bg = parseColor(m.bg);
     expect(bg.a).toBe(1);
@@ -361,6 +465,12 @@ test.describe("collage on a vertical page", () => {
     const grid = page.locator(".moss-grid[data-collage]");
     await expect(grid).toHaveCSS("writing-mode", "horizontal-tb");
     await expect(grid.locator(":scope > :nth-child(3)")).toHaveCSS("writing-mode", "vertical-rl");
+    // A quote tile reads down the page too, and its row still grows to fit it.
+    const quote = grid.locator(":scope > :nth-child(4)");
+    await expect(quote).toHaveAttribute("data-tile", "quote");
+    const fit = await quote.evaluate((el) => ({ h: [el.scrollHeight, el.clientHeight], w: [el.scrollWidth, el.clientWidth] }));
+    expect(fit.h[0], "the quote is not cut off at its foot").toBeLessThanOrEqual(fit.h[1] + 1);
+    expect(fit.w[0], "the quote is not cut off at its side").toBeLessThanOrEqual(fit.w[1] + 1);
     const { collage, tiles } = await boxes(page, counted(5));
     for (const t of tiles) {
       expect(t.x).toBeGreaterThanOrEqual(collage.x - EPS);

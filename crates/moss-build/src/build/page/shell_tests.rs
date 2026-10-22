@@ -907,7 +907,7 @@ fn test_css_sidebar_mobile_alignment() {
     // Now on main.has-sidebar instead of .page-wrapper.has-sidebar
     let rule = get_css_rule_in_media(
         DEFAULT_CSS,
-        "@media (max-width: 64rem)",
+        "@media (width < 64rem)",
         "main.has-sidebar > .latest-sidebar",
     )
     .expect(".latest-sidebar mobile CSS rule should exist");
@@ -1433,8 +1433,8 @@ fn test_css_mobile_reading_size_stays_above_cjk_floor() {
     // small, especially for dense CJK ideographs. The mobile override now
     // re-points --moss-reading-size-base to 1.0625rem (= 17px): a small
     // viewport reduction from 18px that stays comfortably legible.
-    let rule = get_css_rule_in_media(DEFAULT_CSS, "@media (max-width: 48rem)", ":root")
-        .expect(":root override should exist in @media (max-width: 48rem)");
+    let rule = get_css_rule_in_media(DEFAULT_CSS, "@media (width < 48rem)", ":root")
+        .expect(":root override should exist in @media (width < 48rem)");
     assert!(
             rule.contains("--moss-reading-size-base: 1.0625rem"),
             "Mobile :root should set --moss-reading-size-base to 1.0625rem (17px), not the old 1rem (16px) floor, got: {}",
@@ -2302,7 +2302,7 @@ fn test_css_collection_cover_row_mobile_resets_gap() {
     // Mobile: collection cover row should reset to lg gap
     let rule = get_css_rule_in_media(
         DEFAULT_CSS,
-        "@media (max-width: 48rem)",
+        "@media (width < 48rem)",
         ".moss-collection-cover-row",
     )
     .expect(".moss-collection-cover-row mobile CSS rule should exist");
@@ -2319,7 +2319,7 @@ fn test_css_collection_cover_body_mobile_top_aligns() {
     // smaller cover (the desktop `justify-content: center` is overridden).
     let rule = get_css_rule_in_media(
         DEFAULT_CSS,
-        "@media (max-width: 48rem)",
+        "@media (width < 48rem)",
         ".moss-collection-cover-body",
     )
     .expect(".moss-collection-cover-body mobile CSS rule should exist");
