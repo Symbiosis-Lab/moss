@@ -567,7 +567,7 @@ pub fn process_markdown_file(
             // `FrontMatter` with the raw values already coerced away, so there
             // is nothing left to type-check by the time it returns.
             for warning in schema_frontmatter_warnings(file_path, &parsed.frontmatter) {
-                crate::build::cli_output::cli_warn!("{}", warning);
+                crate::build::cli_output::log_warn_problem!("{}", warning);
             }
             // Body reconciliation: gray_matter's `result.content`
             // — which the downstream pipeline + every snapshot fixture were built

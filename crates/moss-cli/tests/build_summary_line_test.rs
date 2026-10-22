@@ -54,6 +54,14 @@ fn a_dead_link_is_a_note_and_does_not_fail_strict() {
 }
 
 #[test]
+fn an_unreadable_date_is_a_warn_problem_that_fails_strict() {
+    let (out, stderr) = strict_build("---\ntitle: Home\ndate: sometime in spring\n---\n\nWelcome.\n");
+    assert!(stderr.contains("[WARN]") && stderr.contains("invalid date format"), "{stderr}");
+    assert!(stderr.contains("Built 1 page · 1 problem"), "{stderr}");
+    assert_eq!(out.status.code(), Some(1), "an unreadable date must fail --strict:\n{stderr}");
+}
+
+#[test]
 fn a_problem_the_author_can_fix_fails_strict() {
     let (out, stderr) = strict_build("---\ntitle: Home\n---\n\n<img src=\"a.png\">\n");
     assert!(stderr.contains("[WARN]") && stderr.contains("raw <img>"), "{stderr}");
