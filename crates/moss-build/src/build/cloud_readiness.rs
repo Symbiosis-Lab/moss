@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 
 use crate::build::icloud;
 
+pub mod fetch;
 pub mod storage;
 pub use storage::{StorageFailure, StorageOperation, recoverable_storage_failure, collect_directory_entries};
 

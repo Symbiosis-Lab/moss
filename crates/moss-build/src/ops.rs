@@ -253,6 +253,22 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
     // root; registering the initial build's session under a relative CLI
     // argument would split its stage lock and task registries from rebuilds.
     run.folder_path = watch::headless::absolute_watch_root(&run.folder_path);
+    // Reads on this process's own threads fail fast on a cloud-only file
+    // instead of blocking until the OS gives up; the download pool's readers
+    // are the only threads that wait on a provider. Then no build starts while
+    // source files are still in the cloud and the provider is not delivering.
+    crate::platform::set_dataless_fail_fast();
+    let folder = std::path::Path::new(&run.folder_path);
+    if folder.is_dir() {
+        if let Err(message) = crate::build::cloud_readiness::fetch::require_sources_local(
+            folder,
+            &crate::build::cloud_readiness::fetch::Wait::production,
+            &mut |line| cli_eprintln!("{}", line),
+        ) {
+            cli_eprintln!("{}", message);
+            std::process::exit(1);
+        }
+    }
     preflight_cli_build(&run.folder_path);
 
     // Register the session before any build work: the pipeline, the seal tail

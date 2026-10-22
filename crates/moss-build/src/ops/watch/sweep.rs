@@ -94,7 +94,7 @@ use crate::system::folder_session::FolderSession;
 
 mod progress;
 mod tick;
-mod walk;
+pub(crate) mod walk;
 
 /// The sweep's tick. Every tick runs the cheap work (top-level `read_dir`
 /// diff, evicted-set arrival scan); every Nth tick runs the stat walk.

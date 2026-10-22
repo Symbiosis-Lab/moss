@@ -116,6 +116,11 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
             description: "Write embeds out as text. Each line holding only a `![[file.ext#fragment]]` embed of a file a plugin derives text from (once its text has been derived; missing text is derived first) or only a `![[note]]` / `![[note#heading]]` transclusion is replaced with the text it stands for, so the page can be edited as plain markdown. Embeds whose text is not available (skipped, unreadable, unresolved) are left as written, frontmatter is kept byte for byte, and a file is written only when something changed. --dry-run reports without writing. A plugin that derives the text must be allowed, as in a build: without `--allow-plugins` one not yet allowed in the app is refused with the same sentence a build prints.",
         },
         CliCommandInfo {
+            name: "fetch",
+            args: "<folder>",
+            description: "Download every file in a folder that is still only in the cloud (Google Drive, iCloud Drive, Dropbox, OneDrive), so the folder can be copied or backed up without each read blocking on the provider. Reads and lists only: it writes nothing in the folder. Progress goes to stderr. Exits 0 when every file is on this device, and 1 when the provider stops delivering (nothing arrives for 90 seconds), naming the provider, how many files are still in the cloud with a short sample, and what to do. `moss build` makes the same check first and exits 1 the same way.",
+        },
+        CliCommandInfo {
             name: "doctor",
             args: "--math [<folder>] | --surface [<folder>] [--all] [--json]",
             description: "Audit a vault without changing it. --math reports every $-span moss would parse as math (these render as their LaTeX source; moss does not typeset math yet), so an imported corpus can be checked before publishing. Escape false positives as \\$. --surface lists markdown constructs a cleaner form could replace: classed divs repeated on three or more pages (a fact a frontmatter field could hold), theme rules that match no element on any page of the last build, and theme selectors keyed on a page address (they break when the page is renamed). --all lists every classed div, even one on a single page, to check that a migration left none. --json prints the surface report as JSON.",
@@ -208,6 +213,7 @@ const EXAMPLE_LINES: &[(&str, &str)] = &[
     ("import", "moss import https://example.com/     # Mirror a site into the current directory"),
     ("import", "moss import https://blog.example.com/post/ ~/Sites/me/articles/"),
     ("import", "moss import --list urls.txt ~/Sites/me/articles/"),
+    ("fetch", "moss fetch ~/blog/                  # Download every cloud-only file; exit 1 if the provider is not delivering"),
     ("doctor", "moss doctor --math ~/blog/            # Every $-span moss would parse as math"),
     ("doctor", "moss doctor --surface ~/blog/ --json  # Repeated classed divs, theme rules that style nothing, address-keyed selectors"),
     ("doctor", "moss doctor --surface ~/blog/ --all   # Every classed div left, even on one page"),
