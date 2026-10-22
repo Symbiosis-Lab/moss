@@ -86,7 +86,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-hero-object-position",
         owner: "moss-hero",
         default: "top",
-        description: "Crop anchor for hero media, which is `object-fit: cover`. The default anchors the top, which suits landscapes; use `center` for portraits and faces.",
+        description: "Crop anchor for hero media, which is `object-fit: cover`. The default anchors the top, which suits landscapes; use `center` for portraits and faces. A hero image's own display words (`focus:X%,Y%`, `top`, `bottom left`, ...) after its pipe set the crop for that image instead.",
     },
     CustomProp {
         name: "--moss-hero-tone-color",

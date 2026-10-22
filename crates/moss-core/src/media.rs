@@ -45,15 +45,20 @@ impl Fit {
     /// Parse from a keyword string (case-insensitive).
     ///
     /// Accepts both CSS syntax (`"scale-down"`) and space-free forms (`"scaledown"`).
+    /// Every spelling [`Fit::from_keyword`] reads, with its fit.
+    pub const KEYWORDS: &[(&str, Fit)] = &[
+        ("cover", Fit::Cover),
+        ("contain", Fit::Contain),
+        ("fill", Fit::Fill),
+        ("none", Fit::None),
+        ("scale-down", Fit::ScaleDown),
+        ("scaledown", Fit::ScaleDown),
+    ];
+
+    /// Parse from a keyword string (case-insensitive).
     pub fn from_keyword(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "cover" => Some(Fit::Cover),
-            "contain" => Some(Fit::Contain),
-            "fill" => Some(Fit::Fill),
-            "none" => Some(Fit::None),
-            "scale-down" | "scaledown" => Some(Fit::ScaleDown),
-            _ => Option::None,
-        }
+        let lower = s.to_lowercase();
+        Self::KEYWORDS.iter().find(|(k, _)| *k == lower).map(|(_, f)| *f)
     }
 }
 
@@ -107,18 +112,36 @@ impl Position {
     ///
     /// Accepts hyphenated (`"top-left"`), concatenated (`"topleft"`), and
     /// space-separated (`"top left"`) forms, and a `focus:X%,Y%` point.
+    /// Every named spelling [`Position::from_keyword`] reads, with its position.
+    pub const KEYWORDS: &[(&str, Position)] = &[
+        ("center", Position::Center),
+        ("left", Position::Left),
+        ("right", Position::Right),
+        ("top", Position::Top),
+        ("bottom", Position::Bottom),
+        ("top-left", Position::TopLeft),
+        ("topleft", Position::TopLeft),
+        ("top left", Position::TopLeft),
+        ("top-right", Position::TopRight),
+        ("topright", Position::TopRight),
+        ("top right", Position::TopRight),
+        ("bottom-left", Position::BottomLeft),
+        ("bottomleft", Position::BottomLeft),
+        ("bottom left", Position::BottomLeft),
+        ("bottom-right", Position::BottomRight),
+        ("bottomright", Position::BottomRight),
+        ("bottom right", Position::BottomRight),
+    ];
+
+    /// Parse from a keyword string (case-insensitive).
+    ///
+    /// Accepts hyphenated (`"top-left"`), concatenated (`"topleft"`), and
+    /// space-separated (`"top left"`) forms, and a `focus:X%,Y%` point.
     pub fn from_keyword(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "center" => Some(Position::Center),
-            "left" => Some(Position::Left),
-            "right" => Some(Position::Right),
-            "top" => Some(Position::Top),
-            "bottom" => Some(Position::Bottom),
-            "top-left" | "topleft" | "top left" => Some(Position::TopLeft),
-            "top-right" | "topright" | "top right" => Some(Position::TopRight),
-            "bottom-left" | "bottomleft" | "bottom left" => Some(Position::BottomLeft),
-            "bottom-right" | "bottomright" | "bottom right" => Some(Position::BottomRight),
-            lower => Self::from_focus(lower),
+        let lower = s.to_lowercase();
+        match Self::KEYWORDS.iter().find(|(k, _)| *k == lower) {
+            Some((_, p)) => Some(*p),
+            None => Self::from_focus(&lower),
         }
     }
 }
@@ -690,6 +713,57 @@ pub(crate) fn classify_image_alias(alias: Option<&str>) -> ImageAliasClass {
             caption: None,
         },
     }
+}
+
+/// Every single-token display word, in the spellings the parsers read, aliases included.
+pub fn display_words() -> Vec<&'static str> {
+    Fit::KEYWORDS
+        .iter()
+        .map(|(k, _)| *k)
+        .chain(Position::KEYWORDS.iter().map(|(k, _)| *k))
+        .filter(|k| !k.contains(' '))
+        .collect()
+}
+
+/// The warning for a caption that looks like a mistyped display word, if it does.
+///
+/// The text stays the caption; this only names it. It covers a `focus:` point that
+/// does not parse, and a single word with two adjacent letters swapped from a display
+/// word (see [`swapped_from`]). Multi-word captions are never flagged.
+pub fn display_word_warning(caption: &str) -> Option<String> {
+    let word = caption.trim();
+    if word.is_empty() || word.contains(char::is_whitespace) {
+        return None;
+    }
+    let lower = word.to_lowercase();
+    let words = display_words();
+    let known = words.join(", ");
+    if lower.starts_with("focus:") && Position::from_keyword(&lower).is_none() {
+        return Some(format!(
+            "'{word}' is not a focus point; write focus:X%,Y% with whole percentages from 0 to 100 (display words: {known})"
+        ));
+    }
+    let near = words.iter().find(|known_word| swapped_from(&lower, known_word))?;
+    Some(format!(
+        "'{word}' is not an image display word; did you mean '{near}'? Display words: {known}"
+    ))
+}
+
+/// Whether `word` is `known` with two adjacent letters swapped.
+///
+/// Only a known word of five letters or more counts, so a short caption one swap
+/// away from a display word is left alone.
+fn swapped_from(word: &str, known: &str) -> bool {
+    let w: Vec<char> = word.chars().collect();
+    let k: Vec<char> = known.chars().collect();
+    k.len() >= 5
+        && w.len() == k.len()
+        && w != k
+        && (0..k.len() - 1).any(|i| {
+            let mut s = w.clone();
+            s.swap(i, i + 1);
+            s == k
+        })
 }
 
 /// Escape a string for safe use in HTML text or attribute values.

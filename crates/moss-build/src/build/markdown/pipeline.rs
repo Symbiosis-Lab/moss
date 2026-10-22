@@ -1162,6 +1162,9 @@ pub fn process_markdown_file(
     for href in moss_core::ast::images_without_text(&doc) {
         crate::build::cli_output::log_note!("Accessibility: image '{href}' on '{file_path}' has no alt text — write it in the brackets: ![describe the image]({href})");
     }
+    for warning in moss_core::ast::wikilink_image_word_warnings(&doc) {
+        crate::build::cli_output::log_note!("Image: {warning} — on '{file_path}'");
+    }
 
     // 5b. A footer (a slot document that is never emitted as a page) is injected
     //    beside every page's own headings: its headings carry no id, and each

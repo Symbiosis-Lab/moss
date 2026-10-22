@@ -1022,3 +1022,51 @@ fn repeated_color_attr_last_wins() {
     let attrs = parse_media_attrs("color=red color=blue");
     assert_eq!(attrs.color.as_deref(), Some("blue"));
 }
+
+// -- display_word_warning -----------------------------------------------
+
+#[test]
+fn display_word_warning_flags_a_transposed_or_one_letter_off_display_word() {
+    let w = display_word_warning("contian").expect("transposed contain");
+    assert!(w.contains("'contian'") && w.contains("'contain'") && w.contains("cover"), "{w}");
+    assert!(display_word_warning("cvoer").expect("transposed cover").contains("'cover'"));
+    assert!(display_word_warning("scale-dwon").expect("scale-down").contains("'scale-down'"));
+    assert!(display_word_warning("centre").is_some());
+}
+
+#[test]
+fn display_word_warning_flags_a_focus_point_that_does_not_parse() {
+    assert!(display_word_warning("focus:50%").expect("no comma").contains("focus:50%"));
+    assert!(display_word_warning("focus:150%,20%").is_some());
+    assert!(display_word_warning("focus:50,20").is_some());
+    assert!(display_word_warning("focus:50%,20%").is_none());
+}
+
+#[test]
+fn display_word_warning_leaves_ordinary_captions_alone() {
+    for caption in ["lake", "bright", "tops", "right", "top", "contains", "enter", "renter", "centers", "bottoms", "Harbour at dusk", "focus: the lake", "cover story"] {
+        assert!(display_word_warning(caption).is_none(), "{caption} should not warn");
+    }
+}
+
+#[test]
+fn every_display_word_parses_and_every_parsed_keyword_is_listed() {
+    for word in display_words() {
+        assert!(
+            Fit::from_keyword(word).is_some() || Position::from_keyword(word).is_some(),
+            "{word} is listed but does not parse"
+        );
+    }
+    for (word, _) in Fit::KEYWORDS {
+        assert_eq!(Fit::from_keyword(word).is_some(), true);
+        if !word.contains(' ') {
+            assert!(display_words().contains(word), "{word} is read but not listed");
+        }
+    }
+    for (word, _) in Position::KEYWORDS {
+        assert!(Position::from_keyword(word).is_some());
+        if !word.contains(' ') {
+            assert!(display_words().contains(word), "{word} is read but not listed");
+        }
+    }
+}

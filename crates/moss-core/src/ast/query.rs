@@ -97,6 +97,34 @@ pub fn marked_media_at(blocks: &[Block], i: usize) -> Option<MarkedMedia> {
     Some(MarkedMedia { marker, href, title: caption.unwrap_or_else(|| alt.clone()) })
 }
 
+/// Each wikilink image whose pipe text is a mistyped display word, as
+/// [`crate::media::display_word_warning`] words it. The text stays the caption.
+pub fn wikilink_image_word_warnings(doc: &Document) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut check = |text: &str| out.extend(crate::media::display_word_warning(text));
+    super::visit::visit_blocks(doc, |block| {
+        match block {
+            Block::Paragraph(inlines) => {
+                for inline in inlines {
+                    if let Inline::Image { is_wikilink: true, alt, .. } = inline {
+                        check(alt);
+                    }
+                }
+            }
+            Block::Figure { image: Inline::Image { is_wikilink: true, alt, .. }, caption, .. } => {
+                match caption.as_deref() {
+                    Some([Inline::Text(text)]) => check(text),
+                    Some(_) => {}
+                    None => check(alt),
+                }
+            }
+            _ => {}
+        }
+        true
+    });
+    out
+}
+
 /// Hrefs of the images in the document that a screen reader gets no text for:
 /// an empty alt and, for a figure, no caption to stand in for it. Only image
 /// files count; a video, audio or PDF written in the image form takes its
