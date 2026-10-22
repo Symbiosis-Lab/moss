@@ -27,8 +27,8 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
     vec![
         CliCommandInfo {
             name: "build",
-            args: "<folder> [--serve [--watch]] [--no-plugins] [--allow-plugins] [--wait-plugins] [--strict] [--site-url=<url>]",
-            description: "Build the site with plugins. --serve starts a local preview server when the build finishes, on port 8080 or the next free port (there is no --port flag; set MOSS_PREVIEW_PORT_BASE=<port> to start the search elsewhere), and --watch, which only works with --serve, rebuilds on every file change and refreshes the preview. Use --no-plugins for fast CI/CD builds. A plugin that came with the folder and was never allowed in the moss app is refused unless --allow-plugins is passed. --strict exits 1 if the build reported any problems (they are printed to stderr and summarized as `moss: N problems …`); without it a build with warnings still exits 0.",
+            args: "[<folder>] [--serve [--watch]] [--no-plugins] [--allow-plugins] [--wait-plugins] [--strict] [--site-url=<url>]",
+            description: "Build the site with plugins. With no folder, builds the site containing the current directory, as `moss history` finds it. --serve starts a local preview server when the build finishes, on port 8080 or the next free port (there is no --port flag; set MOSS_PREVIEW_PORT_BASE=<port> to start the search elsewhere), and --watch, which only works with --serve, rebuilds on every file change and refreshes the preview. Use --no-plugins for fast CI/CD builds. A plugin that came with the folder and was never allowed in the moss app is refused unless --allow-plugins is passed. --strict exits 1 if the build reported any problems (they are printed to stderr and summarized as `moss: N problems …`); without it a build with warnings still exits 0.",
         },
         CliCommandInfo {
             name: "deploy",
