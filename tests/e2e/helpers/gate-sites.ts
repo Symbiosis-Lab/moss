@@ -3566,6 +3566,8 @@ const factsMarginFiles = {
 title: Example Court
 architect: Anna Weber
 scope: Nine floors of flats above a covered market hall
+photographer: Lena Marsh
+reference: REF-2026-NINE-FLOORS-0000000000000000000000000000000000000000-ABCDEFGHIJKLMNOPQRSTUVWXYZ
 ---
 
 # Example Court
@@ -3582,6 +3584,16 @@ label = "Principal architect of record for the whole scheme"
 type = "text"
 place = "facts"
 label = "Scope"
+
+[fields.photographer]
+type = "text"
+place = "facts"
+label = "Photographer"
+
+[fields.reference]
+type = "text"
+place = "facts"
+label = "Reference"
 `,
 };
 

@@ -44,3 +44,30 @@ test('the default column leaves the facts in the right margin', async ({ page })
   expect(m.factsLeft).toBeGreaterThanOrEqual(m.titleRight);
   expect(m.factsRight).toBeLessThanOrEqual(m.clientWidth);
 });
+
+test.describe('labels and values at a desktop width', () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test('a one-word label stays on one line, and a long value wraps inside its column', async ({ page }) => {
+    await page.goto(defaultUrl, { waitUntil: 'load' });
+    const m = await page.evaluate(() => {
+      const row = (field: string) => document.querySelector(`dl.moss-facts > div[data-field="${field}"]`) as HTMLElement;
+      const dt = row('photographer').querySelector('dt') as HTMLElement;
+      const dd = row('reference').querySelector('dd') as HTMLElement;
+      const dl = document.querySelector('dl.moss-facts') as HTMLElement;
+      return {
+        line: parseFloat(getComputedStyle(dt).lineHeight),
+        labelHeight: dt.getBoundingClientRect().height,
+        valueHeight: dd.getBoundingClientRect().height,
+        valueRight: dd.getBoundingClientRect().right,
+        listRight: dl.getBoundingClientRect().right,
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      };
+    });
+    expect(m.labelHeight).toBeLessThan(m.line * 1.5);
+    expect(m.valueHeight).toBeGreaterThan(m.line * 1.5);
+    expect(m.valueRight).toBeLessThanOrEqual(m.listRight + 0.5);
+    expect(m.scrollWidth).toBeLessThanOrEqual(m.clientWidth);
+  });
+});

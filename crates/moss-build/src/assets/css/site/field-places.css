@@ -16,7 +16,7 @@
 .moss-facts { display: grid; grid-template-columns: fit-content(40%) minmax(0, 1fr); column-gap: var(--moss-space-sm); margin: 0 0 var(--moss-space-md); font-size: var(--moss-size-xs); line-height: 1.5; }
 .moss-facts > div { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: baseline; padding-block: var(--moss-space-xs); border-block-start: 1px solid var(--moss-border-light); }
 .moss-facts > div:last-child { border-block-end: 1px solid var(--moss-border-light); }
-.moss-facts dt { color: var(--moss-color-text-secondary); overflow-wrap: anywhere; }
+.moss-facts dt { color: var(--moss-color-text-secondary); overflow-wrap: break-word; }
 .moss-facts dd { margin: 0; min-inline-size: 0; overflow-wrap: anywhere; }
 
 /* On a wide screen the facts hang in the right margin the sidenotes use, so the title and body keep their width. `room` is the margin left after the column and paddings; CSS cannot branch on a length, so it is scaled by 1000 and clamped to saturate at 0 or the full reserve, with a transition under a pixel. With no room the list stays a block in the flow. The rule is skipped where the margin is taken: vertical, full-width and sidebar pages, and pages with sidenotes. */
