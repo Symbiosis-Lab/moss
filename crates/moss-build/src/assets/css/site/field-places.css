@@ -7,6 +7,7 @@
 
 .moss-eyebrow { margin: 0 0 var(--moss-space-xs); font-size: var(--moss-size-xs); line-height: 1.4; color: var(--moss-color-text-secondary); }
 .moss-eyebrow > span + span::before { content: var(--moss-eyebrow-separator, " · "); }
+.moss-field-group > [data-field] + [data-field]::before { content: var(--moss-field-group-separator, " · "); }
 .moss-eyebrow + .moss-article-title { margin-block-start: 0; }
 .moss-subtitle { margin: calc(var(--moss-space-md) * -0.5) 0 var(--moss-space-md); font-family: var(--moss-font-heading); font-size: var(--moss-size-lg); line-height: 1.4; color: var(--moss-color-text-secondary); }
 .moss-key-figure { display: flex; align-items: baseline; gap: var(--moss-space-xs); margin: 0 0 var(--moss-space-md); }

@@ -21,7 +21,12 @@ pub enum FieldKind {
     Count,
     Page,
     Pages,
+    /// Holds no value: names other fields, which its placement draws as one.
+    Group,
 }
+
+/// The built-in fields a group may name in `of` without declaring them: the page's title and its date.
+pub const GROUP_BUILTIN_PARTS: &[&str] = &["title", "date"];
 
 const KIND_NAMES: &[(&str, FieldKind)] = &[
     ("text", FieldKind::Text),
@@ -33,6 +38,7 @@ const KIND_NAMES: &[(&str, FieldKind)] = &[
     ("count", FieldKind::Count),
     ("page", FieldKind::Page),
     ("pages", FieldKind::Pages),
+    ("group", FieldKind::Group),
 ];
 
 impl FieldKind {
@@ -64,6 +70,8 @@ pub struct FieldDecl {
     pub label: Vec<(String, String)>,
     /// Folder prefixes (site-relative, no leading slash) this field applies to; empty = whole site.
     pub scope: Vec<String>,
+    /// For a group: the fields it draws, in order.
+    pub of: Vec<String>,
 }
 
 impl FieldDecl {
@@ -144,6 +152,22 @@ impl Place {
     }
 }
 
+/// A declaration with a `place`, and what it draws on one page.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Placed {
+    Value(FieldDecl, TypedValue),
+    /// A group, with the parts that have a value on this page, in `of` order.
+    Group(FieldDecl, Vec<(FieldDecl, TypedValue)>),
+}
+
+impl Placed {
+    pub fn decl(&self) -> &FieldDecl {
+        match self {
+            Placed::Value(d, _) | Placed::Group(d, _) => d,
+        }
+    }
+}
+
 /// A parsed field value, shaped the way plugins receive it. Serialized
 /// untagged, so the JSON is each variant's own fields.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -195,6 +219,7 @@ pub fn parse_value(decl: &FieldDecl, value: &Value, page: PageFormat) -> Result<
         return Err("has no value; give it one or remove the line".to_string());
     }
     match decl.kind {
+        FieldKind::Group => Err("a group holds no value; write the fields it draws instead".to_string()),
         FieldKind::Text => scalar_text(value).map(TypedValue::Text).ok_or_else(|| "expected text".to_string()),
         FieldKind::Number => match value {
             Value::Number(n) => Ok(TypedValue::Number(n.clone())),

@@ -410,3 +410,140 @@ fn contents_pictures_puts_a_body_attribute_on_that_page_only_and_an_unknown_valu
     assert!(!o.status.success());
     assert!(String::from_utf8_lossy(&o.stderr).contains("contents"), "{}", String::from_utf8_lossy(&o.stderr));
 }
+
+const GROUP: &str = "[fields.credit_holder]\ntype = \"text\"\n\n[fields.licence]\ntype = \"text\"\n\n[fields.credit]\ntype = \"group\"\nof = [\"title\", \"date\", \"credit_holder\", \"licence\"]\nplace = \"subtitle\"\n";
+
+const COURT: &str = "---\ntitle: Riverside Court\ndate: 1927-10-12\ncredit_holder: Anna Weber\nlicence: CC BY 4.0\n---\nbody\n";
+
+#[test]
+fn a_group_draws_its_parts_in_order_as_one_subtitle_each_keeping_its_field() {
+    let s = site(GROUP, &[("Housing/court.md", COURT)]);
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let html = built(&s, "housing/court/index.html");
+    let group = position(&html, "<p class=\"moss-subtitle moss-field-group\" data-field=\"credit\">");
+    let title = position(&html, "<span data-field=\"title\">Riverside Court</span>");
+    let date = position(&html, "<span data-field=\"date\"><time datetime=\"1927-10-12\">");
+    let holder = position(&html, "<span data-field=\"credit_holder\">Anna Weber</span>");
+    let licence = position(&html, "<span data-field=\"licence\">CC BY 4.0</span></p>");
+    assert!(group < title && title < date && date < holder && holder < licence, "{html}");
+    assert!(!html.contains("data-field=\"credit\"><span data-field=\"credit\""), "{html}");
+}
+
+#[test]
+fn a_part_with_no_value_is_left_out_with_its_separator_and_the_rest_keep_their_order() {
+    let page = "---\ntitle: Riverside Court\ncredit_holder: Anna Weber\n---\nbody\n";
+    let s = site(GROUP, &[("Housing/court.md", page)]);
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let html = built(&s, "housing/court/index.html");
+    assert!(
+        html.contains("<p class=\"moss-subtitle moss-field-group\" data-field=\"credit\"><span data-field=\"title\">Riverside Court</span> <span data-field=\"credit_holder\">Anna Weber</span></p>"),
+        "{html}"
+    );
+    assert!(!html.contains("data-field=\"licence\"") && !html.contains("data-field=\"date\""), "{html}");
+}
+
+#[test]
+fn a_date_part_is_formatted_as_the_date_field_is_formatted_alone() {
+    let config = "[fields.issued]\ntype = \"date\"\nplace = \"facts\"\n\n[fields.credit]\ntype = \"group\"\nof = [\"date\", \"issued\"]\nplace = \"subtitle\"\n";
+    let page = "---\ntitle: Riverside Court\ndate: 1927-10-12\nissued: 1927-10-12\n---\nbody\n";
+    let s = site(config, &[("Housing/court.md", page)]);
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let html = built(&s, "housing/court/index.html");
+    let time_in = |block: &str| {
+        let rest = &block[block.find("<time datetime=\"1927-10-12\">").expect("a time element") + "<time datetime=\"1927-10-12\">".len()..];
+        rest[..rest.find("</time>").expect("a closed time element")].to_string()
+    };
+    let group = &html[html.find("data-field=\"credit\"").expect("the group")..];
+    let group = &group[..group.find("</p>").expect("the group's end")];
+    let row = &html[html.find("<div data-field=\"issued\">").expect("the issued row")..];
+    let row = &row[..row.find("</div>").expect("the row's end")];
+    assert_eq!(time_in(group), time_in(row), "{html}");
+}
+
+#[test]
+fn an_invalid_group_declaration_warns_naming_it_and_is_not_drawn() {
+    let invalid = [
+        ("[fields.credit]\ntype = \"group\"\nof = [\"title\", \"nope\"]\nplace = \"subtitle\"\n", "`of` names \"nope\""),
+        ("[fields.credit]\ntype = \"group\"\nof = [\"credit\", \"title\"]\nplace = \"subtitle\"\n", "`of` names \"credit\", which names itself"),
+        (
+            "[fields.a]\ntype = \"group\"\nof = [\"title\"]\n\n[fields.credit]\ntype = \"group\"\nof = [\"a\", \"title\"]\nplace = \"subtitle\"\n",
+            "`of` names \"a\", which names another group",
+        ),
+        ("[fields.credit]\ntype = \"group\"\nof = []\nplace = \"subtitle\"\n", "[fields.credit] is a group with no `of`"),
+        (
+            "[fields.credit_holder]\ntype = \"text\"\n\n[fields.credit]\ntype = \"group\"\nof = [\"credit_holder\", \"credit_holder\"]\nplace = \"subtitle\"\n",
+            "`of` names \"credit_holder\" twice",
+        ),
+        ("[fields.credit]\ntype = \"group\"\nof = [\"title\"]\n", "[fields.credit] is a group with no `place`"),
+        ("[fields.date]\ntype = \"group\"\nof = [\"title\"]\nplace = \"subtitle\"\n", "[fields.date] is a moss field and cannot be redeclared"),
+    ];
+    for (config, warning) in invalid {
+        let s = site(config, &[("Housing/court.md", COURT)]);
+        let o = build_lenient(&s);
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(err.contains(warning), "{warning} missing from {err}");
+        assert!(!built(&s, "housing/court/index.html").contains("moss-field-group"), "a skipped group is not drawn: {config}");
+    }
+}
+
+#[test]
+fn a_page_that_writes_a_value_for_a_group_warns_and_draws_no_group_there() {
+    let s = site(GROUP, &[("Housing/court.md", COURT), ("Housing/plain.md", "---\ntitle: Plain\ncredit: Someone\n---\nbody\n")]);
+    let o = build_lenient(&s);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("[Housing/plain.md] frontmatter: field 'credit': a group holds no value"), "{err}");
+    assert!(!built(&s, "housing/plain/index.html").contains("moss-field-group"), "the page with a value draws no group");
+    assert!(built(&s, "housing/court/index.html").contains("<p class=\"moss-subtitle moss-field-group\" data-field=\"credit\">"));
+}
+
+#[test]
+fn a_group_in_a_folder_scope_is_drawn_only_on_pages_in_that_folder() {
+    let config = "[fields.credit_holder]\ntype = \"text\"\n\n[fields.credit]\ntype = \"group\"\nof = [\"credit_holder\"]\nplace = \"subtitle\"\nin = [\"Housing\"]\n";
+    let s = site(
+        config,
+        &[
+            ("Housing/court.md", "---\ntitle: Riverside Court\ncredit_holder: Anna Weber\n---\nbody\n"),
+            ("Other/plain.md", "---\ntitle: Plain\ncredit_holder: Ben\n---\nbody\n"),
+        ],
+    );
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(built(&s, "housing/court/index.html").contains("<p class=\"moss-subtitle moss-field-group\" data-field=\"credit\">"));
+    assert!(!built(&s, "other/plain/index.html").contains("moss-field-group"), "a page outside the scope draws no group");
+}
+
+#[test]
+fn a_group_at_subtitle_is_not_repeated_by_a_subtitle_the_page_writes_with_the_same_text() {
+    let config = "[fields.credit_holder]\ntype = \"text\"\n\n[fields.credit]\ntype = \"group\"\nof = [\"title\", \"credit_holder\"]\nplace = \"subtitle\"\n";
+    let page = "---\ntitle: Riverside Court\nsubtitle: Riverside Court Anna Weber\ncredit_holder: Anna Weber\n---\nbody\n";
+    let s = site(config, &[("Housing/court.md", page)]);
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let html = built(&s, "housing/court/index.html");
+    assert!(html.contains("<p class=\"moss-subtitle moss-field-group\" data-field=\"credit\">"), "{html}");
+    assert_eq!(html.matches("moss-subtitle").count(), 1, "one subtitle line: {html}");
+}
+
+#[test]
+fn a_group_at_eyebrow_key_figure_and_facts_draws_its_parts_in_that_element() {
+    let config = "[fields.credit_holder]\ntype = \"text\"\n\n[fields.licence]\ntype = \"text\"\n\n[fields.holder_line]\ntype = \"group\"\nof = [\"credit_holder\", \"licence\"]\nplace = \"eyebrow\"\n\n[fields.holder_figure]\ntype = \"group\"\nof = [\"credit_holder\"]\nplace = \"key-figure\"\n\n[fields.credit]\ntype = \"group\"\nof = [\"credit_holder\", \"licence\"]\nplace = \"facts\"\n";
+    let s = site(config, &[("Housing/court.md", COURT)]);
+    let o = build_strict(&s);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let html = built(&s, "housing/court/index.html");
+    assert!(
+        html.contains("<span class=\"moss-field-group\" data-field=\"holder_line\"><span data-field=\"credit_holder\">Anna Weber</span> <span data-field=\"licence\">CC BY 4.0</span></span>"),
+        "{html}"
+    );
+    assert!(
+        html.contains("<p class=\"moss-key-figure moss-field-group\" data-field=\"holder_figure\"><span data-field=\"credit_holder\">Anna Weber</span></p>"),
+        "{html}"
+    );
+    assert!(
+        html.contains("<div data-field=\"credit\"><dt>Credit</dt><dd class=\"moss-field-group\"><span data-field=\"credit_holder\">Anna Weber</span> <span data-field=\"licence\">CC BY 4.0</span></dd></div>"),
+        "{html}"
+    );
+}

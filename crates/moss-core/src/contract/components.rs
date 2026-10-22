@@ -1594,6 +1594,17 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         description: "A line under the page title holding the first declared field, in declaration order, whose `place` is `subtitle`. Emitted only on a page that has a value for it.",
     },
     ComponentEntry {
+        class: "moss-field-group",
+        kind: "standalone",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<p class="moss-subtitle moss-field-group" data-field="credit"><span data-field="title">Riverside Court</span> <span data-field="date"><time datetime="1927-10-12">12 October 1927</time></span></p>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "1",
+        description: "The element a declared group draws in its `place`: the group's parts that have a value, in the order `of` names them, each in its own `<span data-field>`, separated by one space that the stylesheet's `--moss-field-group-separator` absorbs. It sits on the subtitle, key-figure or facts element of its place, or in the eyebrow as a span. Emitted only on a page that has a value for at least one part.",
+    },
+    ComponentEntry {
         class: "moss-key-figure",
         kind: "standalone",
         parent: "",

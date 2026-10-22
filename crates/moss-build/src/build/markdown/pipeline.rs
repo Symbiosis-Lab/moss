@@ -700,11 +700,11 @@ pub fn process_markdown_file(
         crate::i18n::declared_lang_tag(fm_lang, filename_stem, file_path, ancestor_lang);
     // Read once the page's language is known: a choice's label and a count's
     // decimal mark both depend on it.
+    let format = moss_core::fields::PageFormat {
+        lang: doc_lang.as_bcp47_attr(),
+        decimal: crate::build::components::field_text::decimal_mark(doc_lang),
+    };
     if let Some(source) = &field_source {
-        let format = moss_core::fields::PageFormat {
-            lang: doc_lang.as_bcp47_attr(),
-            decimal: crate::build::components::field_text::decimal_mark(doc_lang),
-        };
         let fields = declared_fields(file_path, source, site.fields, format);
         for warning in fields.warnings {
             crate::build::cli_output::cli_warn!("{}", warning);
@@ -1355,14 +1355,11 @@ pub fn process_markdown_file(
     // The declarations with a `place` that this page has a value for, in
     // declaration order. The render stage draws them: a page link needs the
     // target's title, which only it knows. A folder index and a slot take none.
-    let placed_fields: Vec<_> = if is_index_file || is_slot_only {
+    let placed_fields = if is_index_file || is_slot_only {
         Vec::new()
     } else {
-        site.fields
-            .iter()
-            .filter(|d| d.place.is_some())
-            .filter_map(|d| Some((d.clone(), declared.get(&d.name)?.clone())))
-            .collect()
+        let builtin = |name: &str| crate::build::components::field_places::builtin_part(name, &title, field_source.as_ref(), format);
+        crate::build::components::field_places::placed(site.fields, file_path, &declared, &field_errors, &builtin)
     };
     let has_field_places = !placed_fields.is_empty();
 

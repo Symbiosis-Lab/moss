@@ -581,6 +581,7 @@ A page then writes plain values, such as `kind: Building`, `years: 1927/1933` or
 | `period` | `1927/1933` or `1927–1933`, `1927/..` for an open end, or one date | `{ start, end, open, text }`, each date as `{ value, precision, qualifier }`; `open` is true only for an interval with no end |
 | `count` | `1,382 flats` | `{ number, noun, text }`, or `{ text }` when the value is not a number followed by a noun |
 | `page`, `pages` | `"[[Page name]]"` or `"[[Page name\|text]]"` | `{ target, alias? }` per link |
+| `group` | no value of its own: it names other fields in `of` and is drawn as one element (see below) | nothing; a page that writes a value for it gets a warning |
 
 A choice's `of` gives one label for every language when it is a string. A table gives a label per language tag (`en`, `de`, `zh-hans`, `zh-hant`); a page in a language without its own label uses the `en` one, then the value itself. Choices keep the order the file writes them, in either form; plugins receive them in that order.
 
@@ -600,6 +601,17 @@ A count's digits follow the page's language. On a German page `.` groups digits 
 Dates and periods are `<time datetime>` elements carrying the EDTF value (`1927/1933`, or `1923/..` when open). A count is a `<data value>` element with the number as displayed, then its noun. A choice shows its label. A `page` or `pages` value links to the page where moss can resolve it, and shows the link as written (the text after `|` if there is one, else the last part of the name); where it cannot resolve, it shows the same text without a link; several pages are joined with ", ". A field whose value is missing or does not fit is not drawn on that page.
 
 `description` and `publisher` can take a place too, and their type is their own. `[fields.description]` with `place = "eyebrow"` draws the page's own `description:` as written, never the description moss derives from the body when the page has none. A built-in takes only `place` and `label`; no other moss field can take a place.
+
+A group names other fields in `of` and places them as one element. A page does not write a value for the group. `of` lists declared fields, or the page's own `title` or `date`, in the order they are drawn:
+
+```toml
+[fields.credit]
+type  = "group"
+of    = ["title", "date", "credit_holder", "licence"]
+place = "subtitle"
+```
+
+Each part is drawn exactly as its field is drawn alone, with its own `data-field`, so `[data-field="date"]` still styles the date. A part with no value on the page is left out with its separator, and the order of the rest is kept. The stylesheet draws the separator between parts from `--moss-field-group-separator`, which defaults to `" · "`. A group with `in = [...]` is drawn only on pages in those folders, as a field is. In a `key-figure` place only a number or count is set large, so a group of text there draws as a small line, and `subtitle`, `eyebrow` or `facts` suit a text group better. A declaration is a build warning and is skipped when it has no `place`, an empty `of`, a name repeated in `of`, an unknown name in `of`, its own name in `of`, or another group in `of`. A group named `title` or `date` is refused, because those are moss's own fields. A page that writes a value for a group gets a warning naming the field, and the group is not drawn on that page.
 
 Every placed element carries `data-field` with the field's name, and `moss describe --json` lists it among the scope attributes, so it is a guaranteed hook. Style one field with `[data-field="years"]` instead of a selector on the page's address.
 

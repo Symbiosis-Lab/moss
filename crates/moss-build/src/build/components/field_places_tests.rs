@@ -1,9 +1,9 @@
 use super::*;
 use moss_core::date::{parse_edtf, Edtf};
-use moss_core::fields::{FieldKind, PageLink};
+use moss_core::fields::{FieldKind, PageLink, Placed};
 
 fn decl(name: &str, kind: FieldKind, place: Place) -> FieldDecl {
-    FieldDecl { name: name.into(), kind, choices: vec![], place: Some(place), label: vec![], scope: vec![] }
+    FieldDecl { name: name.into(), kind, choices: vec![], place: Some(place), label: vec![], scope: vec![], of: vec![] }
 }
 
 fn period(text: &str) -> TypedValue {
@@ -11,6 +11,10 @@ fn period(text: &str) -> TypedValue {
         Some(Edtf::Interval { start, end }) => TypedValue::Period { start, open: end.is_none(), end, text: text.into() },
         other => panic!("not a period: {other:?}"),
     }
+}
+
+fn values<const N: usize>(pairs: [(FieldDecl, TypedValue); N]) -> Vec<Placed> {
+    pairs.into_iter().map(|(d, v)| Placed::Value(d, v)).collect()
 }
 
 fn no_pages(_: &str) -> Option<String> {
@@ -27,7 +31,7 @@ fn an_eyebrow_holds_its_fields_in_declaration_order_separated_by_a_space() {
         (decl("kind", FieldKind::Choice, Place::Eyebrow), TypedValue::Choice { value: "Building".into(), label: "Built".into() }),
         (decl("years", FieldKind::Period, Place::Eyebrow), period("1927/1933")),
     ];
-    let out = draw(&placed, Language::En, None, &no_pages);
+    let out = draw(&values(placed.clone()), Language::En, None, &no_pages);
     assert_eq!(
         out.eyebrow,
         "<p class=\"moss-eyebrow\"><span data-field=\"kind\">Built</span> <span data-field=\"years\"><time datetime=\"1927/1933\">1927–1933</time></span></p>\n"
@@ -38,7 +42,7 @@ fn an_eyebrow_holds_its_fields_in_declaration_order_separated_by_a_space() {
 #[test]
 fn an_open_period_reads_in_the_pages_language_and_keeps_an_open_datetime() {
     let placed = [(decl("years", FieldKind::Period, Place::Eyebrow), period("1923/.."))];
-    let out = draw(&placed, Language::De, None, &no_pages);
+    let out = draw(&values(placed.clone()), Language::De, None, &no_pages);
     assert!(out.eyebrow.contains("<time datetime=\"1923/..\">ab 1923</time>"), "{}", out.eyebrow);
 }
 
@@ -49,7 +53,7 @@ fn a_count_is_a_data_element_then_its_noun_and_a_bare_count_has_no_span() {
         (decl("figure", FieldKind::Count, Place::KeyFigure), count(1382, Some("flats"))),
         (decl("units", FieldKind::Count, Place::KeyFigure), count(40, None)),
     ];
-    let out = draw(&placed, Language::En, None, &no_pages);
+    let out = draw(&values(placed.clone()), Language::En, None, &no_pages);
     assert_eq!(
         out.key_figures,
         "<p class=\"moss-key-figure\" data-field=\"figure\"><data value=\"1382\">1,382</data> <span>flats</span></p>\n\
@@ -63,7 +67,7 @@ fn only_the_first_subtitle_is_drawn() {
         (decl("district", FieldKind::Text, Place::Subtitle), text("Eastbank")),
         (decl("tagline", FieldKind::Text, Place::Subtitle), text("Other")),
     ];
-    let out = draw(&placed, Language::En, None, &no_pages);
+    let out = draw(&values(placed.clone()), Language::En, None, &no_pages);
     assert_eq!(out.eyebrow, "");
     assert_eq!(out.subtitle, "<p class=\"moss-subtitle\" data-field=\"district\">Eastbank</p>\n");
 }
@@ -81,7 +85,7 @@ fn facts_use_the_label_or_the_capitalised_name_and_link_pages_by_the_text_as_wri
         ),
     ];
     let href = |t: &str| (t == "anna" || t.ends_with("Anna Weber")).then(|| "/people/anna-weber/".to_string());
-    let en = draw(&placed, Language::En, None, &href);
+    let en = draw(&values(placed.clone()), Language::En, None, &href);
     assert_eq!(
         en.facts,
         "<dl class=\"moss-facts\" data-beside>\n\
@@ -89,7 +93,7 @@ fn facts_use_the_label_or_the_capitalised_name_and_link_pages_by_the_text_as_wri
          <div data-field=\"partners\"><dt>Partners</dt><dd><a href=\"/people/anna-weber/\">Dr. Weber</a>, Missing &lt;One&gt;</dd></div>\n\
          </dl>\n"
     );
-    let de = draw(&placed, Language::De, None, &href);
+    let de = draw(&values(placed.clone()), Language::De, None, &href);
     assert!(de.facts.contains("<dt>Architektin</dt>"), "{}", de.facts);
 }
 
@@ -98,7 +102,7 @@ fn an_unplaced_or_empty_field_draws_nothing() {
     let mut unplaced = decl("note", FieldKind::Text, Place::Facts);
     unplaced.place = None;
     let placed = [(unplaced, text("x")), (decl("blank", FieldKind::Pages, Place::Facts), TypedValue::Pages(vec![]))];
-    assert_eq!(draw(&placed, Language::En, None, &no_pages), Placements::default());
+    assert_eq!(draw(&values(placed.clone()), Language::En, None, &no_pages), Placements::default());
 }
 
 mod title_block_after_picture {

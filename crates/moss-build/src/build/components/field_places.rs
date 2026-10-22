@@ -10,8 +10,9 @@ use crate::build::components::child_list;
 use crate::build::types::ParsedDocument;
 use crate::i18n::Language;
 use moss_core::content_graph::ContentGraph;
-use moss_core::fields::{FieldDecl, PageLink, Place, TypedValue};
+use moss_core::fields::{in_folders, FieldDecl, FieldKind, PageFormat, PageLink, Placed, Place, TypedValue};
 use moss_core::media::html_escape;
+use std::collections::BTreeMap;
 
 /// The markup a page's placed fields draw. `eyebrow` goes above the title;
 /// the rest follows it, `subtitle` first and `key_figures` then `facts` after
@@ -31,47 +32,40 @@ impl Placements {
     }
 }
 
-/// `placed` holds the page's placed declarations with a valid value, in
-/// declaration order. `page_href` maps a page-link target to its URL, or `None` when the
-/// target is not a page of this site (it is then drawn as plain text).
-pub fn draw(
-    placed: &[(FieldDecl, TypedValue)],
-    lang: Language,
-    typesetting: Option<&str>,
-    page_href: &dyn Fn(&str) -> Option<String>,
-) -> Placements {
+/// `placed` holds the page's placed declarations in declaration order, each
+/// with a valid value (a group with its parts that have one). `page_href` maps a
+/// page-link target to its URL, or `None` when the target is not a page of this
+/// site (it is then drawn as plain text).
+pub fn draw(placed: &[Placed], lang: Language, typesetting: Option<&str>, page_href: &dyn Fn(&str) -> Option<String>) -> Placements {
     let drawn = |place: Place| {
-        placed.iter().filter(move |(d, _)| d.place == Some(place)).filter_map(|(d, v)| {
-            let html = inline(v, lang, typesetting, page_href);
-            (!html.is_empty()).then_some((d, v, html))
+        placed.iter().filter(move |p| p.decl().place == Some(place)).filter_map(|p| {
+            let html = match p {
+                Placed::Value(_, v) => inline(v, lang, typesetting, page_href),
+                Placed::Group(_, parts) => parts_html(parts, lang, typesetting, page_href),
+            };
+            (!html.is_empty()).then_some((p, html))
         })
     };
-    let field = |d: &FieldDecl| html_escape(&d.name);
 
     // Spaced, so the fields stay separate words in the page's text (search
     // excerpts, copying, reader views); the space collapses into the
     // separator the stylesheet draws.
-    let eyebrow: String = drawn(Place::Eyebrow)
-        .map(|(d, _, html)| format!("<span data-field=\"{}\">{html}</span>", field(d)))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let subtitle = drawn(Place::Subtitle)
-        .next()
-        .map(|(d, _, html)| subtitle_line(&field(d), &html))
-        .unwrap_or_default();
+    let eyebrow: String = drawn(Place::Eyebrow).map(|(p, html)| element(p, "span", "", &html)).collect::<Vec<_>>().join(" ");
+    let subtitle = drawn(Place::Subtitle).next().map(|(p, html)| element(p, "p", "moss-subtitle", &html) + "\n").unwrap_or_default();
     let key_figures: String = drawn(Place::KeyFigure)
-        .map(|(d, v, html)| {
-            let body = if matches!(v, TypedValue::Count { .. } | TypedValue::Number(_)) { html } else { format!("<span>{html}</span>") };
-            format!("<p class=\"moss-key-figure\" data-field=\"{}\">{body}</p>\n", field(d))
+        .map(|(p, html)| {
+            // Only a number or count is set large; any other value, and a group, draws as is.
+            let numeric = matches!(p, Placed::Group(..) | Placed::Value(_, TypedValue::Count { .. } | TypedValue::Number(_)));
+            let body = if numeric { html } else { format!("<span>{html}</span>") };
+            element(p, "p", "moss-key-figure", &body) + "\n"
         })
         .collect();
     let rows: String = drawn(Place::Facts)
-        .map(|(d, _, html)| {
-            format!(
-                "<div data-field=\"{}\"><dt>{}</dt><dd>{html}</dd></div>\n",
-                field(d),
-                html_escape(&d.label_for(lang.as_bcp47_attr()))
-            )
+        .map(|(p, html)| {
+            let d = p.decl();
+            let label = html_escape(&d.label_for(lang.as_bcp47_attr()));
+            let dd = open("dd", "", matches!(p, Placed::Group(..)), None);
+            format!("{}<dt>{label}</dt>{dd}{html}</dd></div>\n", open("div", "", false, Some(d)))
         })
         .collect();
     Placements {
@@ -80,6 +74,25 @@ pub fn draw(
         key_figures,
         facts: if rows.is_empty() { rows } else { format!("<dl class=\"moss-facts\" data-beside>\n{rows}</dl>\n") },
     }
+}
+
+/// One drawn entry: `body` inside `tag`, with `classes` plus `moss-field-group` for a group.
+fn element(p: &Placed, tag: &str, classes: &str, body: &str) -> String {
+    format!("{}{body}</{tag}>", open(tag, classes, matches!(p, Placed::Group(..)), Some(p.decl())))
+}
+
+/// The opening tag of an entry; `field` puts its `data-field` on it.
+fn open(tag: &str, classes: &str, group: bool, field: Option<&FieldDecl>) -> String {
+    let mut class = classes.to_string();
+    if group {
+        if !class.is_empty() {
+            class.push(' ');
+        }
+        class.push_str("moss-field-group");
+    }
+    let class = if class.is_empty() { String::new() } else { format!(" class=\"{class}\"") };
+    let field = field.map_or(String::new(), |d| format!(" data-field=\"{}\"", html_escape(&d.name)));
+    format!("<{tag}{class}{field}>")
 }
 
 /// [`draw`] for a rendered page: a page link resolves through the content
@@ -97,12 +110,89 @@ pub fn draw_for_page(
     };
     let mut drawn = draw(&doc.placed_fields, doc.lang, typesetting, &page_href);
     if let Some(own) = child_list::card_subtitle(doc) {
-        let placed = doc.placed_fields.iter().find(|(d, _)| d.place == Some(Place::Subtitle));
-        if placed.map(|(_, v)| value_text(v, doc.lang, typesetting)).as_deref().map(str::trim) != Some(own.as_str()) {
+        let shown = doc.placed_fields.iter().find_map(|p| match p {
+            Placed::Value(d, v) if d.place == Some(Place::Subtitle) => Some(value_text(v, doc.lang, typesetting)),
+            Placed::Group(d, parts) if d.place == Some(Place::Subtitle) => {
+                Some(parts.iter().map(|(_, v)| value_text(v, doc.lang, typesetting)).collect::<Vec<_>>().join(" "))
+            }
+            _ => None,
+        });
+        if shown.as_deref().map(str::trim) != Some(own.as_str()) {
             drawn.subtitle.push_str(&subtitle_line("subtitle", &html_escape(&own)));
         }
     }
     drawn
+}
+
+/// The declarations a page draws, in declaration order. A group draws the
+/// parts of its `of` that have a value on this page, and nothing when the page
+/// writes a value for the group itself (`errors` holds that page's warning).
+pub fn placed(
+    decls: &[FieldDecl],
+    file_path: &str,
+    values: &BTreeMap<String, TypedValue>,
+    errors: &BTreeMap<String, String>,
+    builtin: &dyn Fn(&str) -> Option<(FieldDecl, TypedValue)>,
+) -> Vec<Placed> {
+    decls
+        .iter()
+        .filter(|d| d.place.is_some() && in_folders(&d.scope, file_path))
+        .filter_map(|d| {
+            if d.kind != FieldKind::Group {
+                return Some(Placed::Value(d.clone(), values.get(&d.name)?.clone()));
+            }
+            if errors.contains_key(&d.name) {
+                return None;
+            }
+            let parts: Vec<(FieldDecl, TypedValue)> = d
+                .of
+                .iter()
+                .filter_map(|name| match decls.iter().find(|p| p.name == *name) {
+                    Some(part) => Some((part.clone(), values.get(name)?.clone())),
+                    None => builtin(name),
+                })
+                .collect();
+            (!parts.is_empty()).then(|| Placed::Group(d.clone(), parts))
+        })
+        .collect()
+}
+
+/// A built-in part a group names without declaring it: the page's `title`, or
+/// its `date` read the way the date field reads it. `None` when the page has no
+/// value for it, or the name is not a built-in part.
+pub fn builtin_part(
+    name: &str,
+    title: &str,
+    frontmatter: Option<&std::collections::HashMap<String, serde_yaml::Value>>,
+    page: PageFormat,
+) -> Option<(FieldDecl, TypedValue)> {
+    let decl = |kind| FieldDecl { name: name.to_string(), kind, choices: Vec::new(), place: None, label: Vec::new(), scope: Vec::new(), of: Vec::new() };
+    match name {
+        "title" => {
+            let title = title.trim();
+            (!title.is_empty()).then(|| (decl(FieldKind::Text), TypedValue::Text(title.to_string())))
+        }
+        "date" => {
+            let decl = decl(FieldKind::Date);
+            let raw = moss_core::frontmatter::get_present(frontmatter?, name)?;
+            let value = moss_core::fields::parse_value(&decl, &serde_json::to_value(raw).ok()?, page).ok()?;
+            Some((decl, value))
+        }
+        _ => None,
+    }
+}
+
+/// A group's parts as markup, each in its own `span` with its own `data-field`.
+/// A part whose value draws nothing is left out.
+fn parts_html(parts: &[(FieldDecl, TypedValue)], lang: Language, typesetting: Option<&str>, page_href: &dyn Fn(&str) -> Option<String>) -> String {
+    parts
+        .iter()
+        .filter_map(|(d, v)| {
+            let html = inline(v, lang, typesetting, page_href);
+            (!html.is_empty()).then(|| format!("<span data-field=\"{}\">{html}</span>", html_escape(&d.name)))
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The page's own `subtitle:` frontmatter is drawn like a declared subtitle

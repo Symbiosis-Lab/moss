@@ -604,7 +604,7 @@ pub struct ParsedDocument {
     /// folder index. Drawn at render by `components::field_places`.
     #[serde(skip)]
     #[specta(skip)]
-    pub placed_fields: Vec<(moss_core::fields::FieldDecl, moss_core::fields::TypedValue)>,
+    pub placed_fields: Vec<moss_core::fields::Placed>,
     /// `title_block:` — `after-picture` draws the title block after the body's
     /// leading picture, `beside-picture` next to it. Set on the page or cascaded from a folder.
     #[serde(skip)]

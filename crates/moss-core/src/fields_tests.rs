@@ -6,7 +6,7 @@ const EN: PageFormat = PageFormat { lang: "en", decimal: DecimalMark::Point };
 const DE: PageFormat = PageFormat { lang: "de", decimal: DecimalMark::Comma };
 
 fn decl(kind: FieldKind) -> FieldDecl {
-    FieldDecl { name: "f".into(), kind, choices: vec![], place: None, label: vec![], scope: vec![] }
+    FieldDecl { name: "f".into(), kind, choices: vec![], place: None, label: vec![], scope: vec![], of: vec![] }
 }
 
 fn choice(values: &[&str]) -> FieldDecl {

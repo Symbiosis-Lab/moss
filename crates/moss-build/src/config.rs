@@ -396,7 +396,7 @@ impl ConfigFile {
                 }
                 let place = Self::declared_place(sub, name, &mut problems);
                 let label = Self::declared_label(sub, name, &mut problems);
-                decls.push(FieldDecl { name: name.clone(), kind: FieldKind::Text, choices: Vec::new(), place, label, scope: Vec::new() });
+                decls.push(FieldDecl { name: name.clone(), kind: FieldKind::Text, choices: Vec::new(), place, label, scope: Vec::new(), of: Vec::new() });
                 continue;
             }
             let Some(type_name) = sub.get("type").and_then(|v| v.as_str()) else {
@@ -415,6 +415,7 @@ impl ConfigFile {
                     problems.push(format!("[fields.{name}] has an unknown key \"{key}\""));
                 }
             }
+            let of = if kind == FieldKind::Group { Self::string_list(sub, "of", &format!("fields.{name}"), &mut problems) } else { Vec::new() };
             let choices = match (kind, sub.get("of")) {
                 (FieldKind::Choice, None) => {
                     problems.push(format!("[fields.{name}] is a choice and needs `of`, a list or a table of labels"));
@@ -445,8 +446,9 @@ impl ConfigFile {
                     problems.push(format!("[fields.{name}] `of` must be a list or a table of labels"));
                     continue;
                 }
+                (FieldKind::Group, _) => Vec::new(),
                 (_, Some(_)) => {
-                    problems.push(format!("[fields.{name}] has `of`, which only a choice takes; ignoring it"));
+                    problems.push(format!("[fields.{name}] has `of`, which only a choice or a group takes; ignoring it"));
                     Vec::new()
                 }
                 (_, None) => Vec::new(),
@@ -454,8 +456,43 @@ impl ConfigFile {
             let place = Self::declared_place(sub, name, &mut problems);
             let label = Self::declared_label(sub, name, &mut problems);
             let scope = Self::string_list(sub, "in", &format!("fields.{name}"), &mut problems);
-            decls.push(FieldDecl { name: name.clone(), kind, choices, place, label, scope });
+            decls.push(FieldDecl { name: name.clone(), kind, choices, place, label, scope, of });
         }
+        let declared: Vec<String> = decls.iter().filter(|d| d.kind != FieldKind::Group).map(|d| d.name.clone()).collect();
+        let groups: Vec<String> = decls.iter().filter(|d| d.kind == FieldKind::Group).map(|d| d.name.clone()).collect();
+        decls.retain(|group| {
+            if group.kind != FieldKind::Group {
+                return true;
+            }
+            if group.place.is_none() {
+                problems.push(format!("[fields.{}] is a group with no `place`, so it draws nowhere; skipping it", group.name));
+                return false;
+            }
+            if group.of.is_empty() {
+                problems.push(format!("[fields.{}] is a group with no `of`; name the fields it draws, in order; skipping it", group.name));
+                return false;
+            }
+            for (at, part) in group.of.iter().enumerate() {
+                if group.of[..at].contains(part) {
+                    problems.push(format!("[fields.{}] `of` names \"{part}\" twice; skipping the group", group.name));
+                    return false;
+                }
+            }
+            for part in &group.of {
+                let reason = if *part == group.name {
+                    "names itself"
+                } else if groups.contains(part) {
+                    "names another group, and a group cannot draw a group"
+                } else if !declared.contains(part) && !moss_core::fields::GROUP_BUILTIN_PARTS.contains(&part.as_str()) {
+                    "is neither a declared field, title nor date"
+                } else {
+                    continue;
+                };
+                problems.push(format!("[fields.{}] `of` names \"{part}\", which {reason}; skipping the group", group.name));
+                return false;
+            }
+            true
+        });
         (decls, problems)
     }
 

@@ -125,6 +125,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "The text drawn between the fields of the eyebrow line above a page title, as a CSS string. The markup puts only a space between fields, which this string's own spaces absorb, so give it spaces on both sides: `\" / \"` for a slash, or `\" \"` for a plain space.",
     },
     CustomProp {
+        name: "--moss-field-group-separator",
+        owner: ".moss-field-group",
+        default: "\" · \"",
+        description: "The text drawn between the parts of a declared field group, as a CSS string. The markup puts one space between the parts, which this string's own spaces absorb, so give it spaces on both sides, as for `--moss-eyebrow-separator`. A part with no value is not in the markup, so it takes its separator with it.",
+    },
+    CustomProp {
         name: "--moss-hint-x",
         owner: "[data-tooltip]",
         default: "0px",
@@ -509,9 +515,9 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         description: "Present as `pictures` when a page asks, with `contents: pictures` in its frontmatter, for pictures in its contents list: on a wide screen the ruler in the left margin stays the ruler of dashes, and hovering it opens the rows around the pointer like a wheel, each section that has an image showing a small picture of it beside its title; the nav island's sections panel carries the same pictures. Absent keeps the plain ruler.",
     },
     ScopeAttr {
-        selector: ".moss-eyebrow > span, .moss-subtitle, .moss-key-figure, .moss-facts > div",
+        selector: ".moss-eyebrow > span, .moss-subtitle, .moss-key-figure, .moss-facts > div, .moss-field-group > [data-field]",
         name: "data-field",
         values: &[],
-        description: "The declared field's name, on each element a placed field draws: each eyebrow span, the subtitle, each key figure and each facts row. Scope one field with `[data-field=\"ja\"]` rather than a selector on the page's address.",
+        description: "The declared field's name, on each element a placed field draws: each eyebrow span, the subtitle, each key figure and each facts row, and each part of a declared group. Scope one field with `[data-field=\"ja\"]` rather than a selector on the page's address.",
     },
 ];
