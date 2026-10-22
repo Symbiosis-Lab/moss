@@ -39,6 +39,7 @@ pub mod deployment;
 pub mod environment;
 pub mod migrations;
 pub mod services;
+pub mod site_settings;
 
 use toml::Value;
 
@@ -132,6 +133,30 @@ impl ConfigFile {
             .get("site")
             .and_then(|site| site.get(field))
             .and_then(|v| v.as_bool())
+    }
+
+    /// One note per `[site]` key the build does not read: it names the key and
+    /// the file, and the nearest known key when one is near. A note, not a
+    /// problem, because older moss versions left keys that no code reads now.
+    /// `title` gets its own line, since the site's name is the home page's `title:`.
+    pub fn unknown_site_keys(&self) -> Vec<String> {
+        use crate::config::site_settings::{nearest_known_key, site_settings};
+        let Some(site) = self.root.get("site").and_then(|v| v.as_table()) else {
+            return Vec::new();
+        };
+        let known: Vec<&str> = site_settings().iter().map(|s| s.name).collect();
+        site.keys()
+            .filter(|key| !known.contains(&key.as_str()))
+            .map(|key| {
+                if key == "title" {
+                    return "[site] title is not a setting in .moss/config.toml; the site's name is the `title:` of its home page".to_string();
+                }
+                match nearest_known_key(key, &known) {
+                    Some(k) => format!("[site] has an unknown key \"{key}\" in .moss/config.toml; did you mean \"{k}\"?"),
+                    None => format!("[site] has an unknown key \"{key}\" in .moss/config.toml; the build does not read it"),
+                }
+            })
+            .collect()
     }
 
     /// The top-level `environment` key. Top-level rather than under `[site]`

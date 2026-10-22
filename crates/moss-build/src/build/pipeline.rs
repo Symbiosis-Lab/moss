@@ -1360,6 +1360,9 @@ fn build_inner(
     for problem in &field_problems {
         crate::build::cli_output::log_warn_problem!("{problem}");
     }
+    for note in cfg.as_ref().map(|c| c.unknown_site_keys()).unwrap_or_default() {
+        crate::build::cli_output::log_note!("{note}");
+    }
     let places_toml_path = paths.places();
     input_evidence.require(&places_toml_path, super::cloud_ledger::InputRole::GeneratedData);
     let (places_toml_stat, places_read) =

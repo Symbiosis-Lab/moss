@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### New
 
+- A key under `[site]` in `.moss/config.toml` that the build does not read gets a note: `[site] colophn = false` says it is unknown and suggests `colophon`, and `[site] title` says a site's name is the home page's `title:`. A note does not fail `--strict`, since older moss versions left keys that no code reads now. Before, the key was ignored without a word.
 - `moss guide --list` says when to read each topic: the overview comes first, then one line per topic. Before, it printed bare topic names, and an agent with no reason to choose one opened `authoring`, the largest, without the task recipes in the overview. Each reference now opens with a line pointing back at `moss guide`.
 - A `[fields.NAME]` with `type = "url"` can take `text = "View the item"`: every value of that field is drawn as that phrase, linked to the address, instead of the address itself, so a long address no longer wraps across a facts row. A table gives a text per language, as `label` does. Without `text` the address is the link text, as before; a `text` on a field of another type is a build warning.
 - A folder's `cascade:` can carry `author:`. Every page beneath it gets that author as its own `author:` would give it: a byline naming them links to their author page and the page is listed there. A page that writes its own `author:` keeps it. A cascade that already carried `author:`, which was ignored with a warning, now applies.

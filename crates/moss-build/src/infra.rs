@@ -11,6 +11,7 @@
 pub mod app_advisory;
 pub mod app_data;
 pub mod atomic_write;
+pub(crate) mod edit_distance;
 pub mod folder_lock;
 pub mod home;
 pub mod liveness;
