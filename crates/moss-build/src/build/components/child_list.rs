@@ -204,6 +204,9 @@ pub struct ChildItemProps {
     pub date_raw: Option<String>,
     /// Number of articles inside. None for leaf articles
     pub child_count: Option<usize>,
+    /// The count belongs to a term's card, not to a folder: the entry sorts
+    /// and groups as a page ([`Self::is_folder`]).
+    pub count_only: bool,
     /// From frontmatter description or auto-extracted. Markdown, not plain
     /// text — a renderer prints it with `page::meta::render_description_html`,
     /// never a bare escape, the way `child_summary`/`grid_card`/this file's
@@ -268,6 +271,10 @@ pub struct ChildItemProps {
 }
 
 impl ChildItemProps {
+    pub(crate) fn is_folder(&self) -> bool {
+        self.child_count.is_some() && !self.count_only
+    }
+
     /// A folder card's count text, or `None` for a leaf or a listing that
     /// hides the count. The one place the setting is applied.
     pub(crate) fn count_label(&self, lang: crate::i18n::Language, typesetting: Option<&str>) -> Option<String> {
@@ -291,7 +298,7 @@ impl ChildItemProps {
     pub(crate) fn date_sort_key(&self) -> moss_core::sort::DateSortKey<'_> {
         moss_core::sort::DateSortKey {
             date: self.date_raw.as_deref(),
-            is_folder: self.child_count.is_some(),
+            is_folder: self.is_folder(),
             label: &self.title,
             url_path: &self.url_path,
         }
@@ -434,6 +441,9 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
             )
         })
         .filter(|n| *n > 0);
+    // A term's card shows a count without being a folder: it keeps the date
+    // and the place in the order of a page.
+    let term_count = doc.term_card.as_ref().map(|card| card.count);
 
     let (child_count, date_raw, date_display) = if let Some(count) = article_count {
         // A folder's own home page can declare `date:` (and `location:`)
@@ -463,7 +473,13 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
 
     // Split pipe-encoded cover to resolve only the path part. Rejoin with
     // attrs so downstream renderers can extract them.
-    let (cover, cover_path_for_type) = match doc.listing_cover() {
+    // A term's card takes its picture from its members (`terms::cards`).
+    let listing_cover = doc
+        .term_card
+        .as_ref()
+        .and_then(|card| card.cover.as_deref())
+        .or_else(|| doc.listing_cover());
+    let (cover, cover_path_for_type) = match listing_cover {
         Some(c) => {
             let (path_part, attrs_str) = moss_core::media::split_pipe(c);
             let resolved = path_resolver.resolve_url(path_part);
@@ -496,7 +512,8 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         url: external_url.unwrap_or(local_url),
         date_display,
         date_raw,
-        child_count,
+        child_count: child_count.or(term_count),
+        count_only: child_count.is_none() && term_count.is_some(),
         description: explicit_card_text(doc),
         cover,
         cover_type: cover_path_for_type

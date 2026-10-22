@@ -503,7 +503,7 @@ Footer headings written in markdown carry no `id` and no permalink link, whateve
 
 ### Term kinds
 
-Name-list fields are listable dimensions, not just metadata. Every value generates a page listing what carries it: `author: 趙雲` gives `/authors/趙雲/`, `tags: [城市]` gives `/tags/城市/`. Nothing to set up, and a link to a term page never 404s.
+Name-list fields are listable dimensions, not just metadata. Every value generates a page listing what carries it: `author: 趙雲` gives `/authors/趙雲/`, `tags: [城市]` gives `/tags/城市/`. Nothing to set up, and a link to a term page never 404s. The kind's root page draws each term as a folder card, the way a listing draws a folder: the picture is the first page's picture in the term page's own order, and the count is how many pages carry the term. A claimed term keeps its claiming page's own card and gains the count (`children_count` does not reach that page, since it has no frontmatter of its own). Cards do not reorder the index: terms stay in one alphabetical list.
 
 Any field a `[terms.<key>]` block names in its `fields` list is a name-list field for that site, so you can invent the dimension you need. Five built-in fields need no declaration: `author:`, `tags:`, `editor:`, `jury:`, `location:`. Out of the box `author:` feeds `/authors/` and `tags:` feeds `/tags/`; `editor:`, `jury:` and `location:` feed nothing until a site says where they go.
 

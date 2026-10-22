@@ -549,7 +549,7 @@ pub(crate) fn generate_children(
     let interleave_dated_folders = group != "year" && parent_axis.shows_date();
     let (folders, articles): (Vec<&ChildItemProps>, Vec<&ChildItemProps>) = sorted
         .into_iter()
-        .partition(|i| i.child_count.is_some() && !(interleave_dated_folders && i.date_display.is_some()));
+        .partition(|i| i.is_folder() && !(interleave_dated_folders && i.date_display.is_some()));
 
     // Folders always render flat, regardless of group setting.
     for folder in &folders {

@@ -56,6 +56,8 @@ mod editions;
 pub use editions::TermKey;
 use editions::scope;
 mod translations;
+mod cards;
+pub use cards::set_term_cards;
 pub use translations::link_term_translations;
 pub use stubs::{claim_stubs, edition_move_stubs, kind_move_stubs};
 
@@ -152,6 +154,16 @@ pub struct TermNavEntry {
 }
 
 impl TermIndex {
+    /// Every term key, claimed or not.
+    pub fn term_keys(&self) -> impl Iterator<Item = &str> {
+        self.sites.keys().map(String::as_str)
+    }
+
+    /// The pretty URL of the page that claims this term, if one does.
+    pub fn claimed_by(&self, term_key: &str) -> Option<&str> {
+        self.sites.get(term_key)?.claimed_by.as_deref()
+    }
+
     /// Pseudo-folder keys that need a GENERATED term page — every term no
     /// real page claims. Sorted (BTreeMap) so page emission is deterministic.
     pub fn unclaimed_keys(&self) -> impl Iterator<Item = &str> {

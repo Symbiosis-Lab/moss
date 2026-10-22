@@ -1683,6 +1683,9 @@ pub fn generate_blocking_content_for_build(
         },
     );
     crate::build::terms::link_term_translations(&mut documents, &term_index);
+    // A term card reads its members' pictures and dates, so it is set once
+    // every pseudo-folder document exists.
+    crate::build::terms::set_term_cards(&mut documents, &term_index);
     super::build_shared::report_verbatim_collisions(&documents, project_structure, &dir_overrides);
     super::build_shared::withhold_shadowed_bodies(&mut documents, project_structure, &dir_overrides);
     // The resolved set now contains both authored and synthetic folders.

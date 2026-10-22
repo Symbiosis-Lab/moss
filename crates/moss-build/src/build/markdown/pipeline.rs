@@ -1573,6 +1573,7 @@ pub fn process_markdown_file(
         logo: frontmatter.logo,
         cover,
         card_cover,
+        term_card: None,
         cover_type: frontmatter.cover_type,
         nav,
         is_root_level,

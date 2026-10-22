@@ -62,6 +62,13 @@ pub struct SectionAccent {
     pub segment: String,
 }
 
+/// The count and picture a term's pseudo-folder card shows.
+#[derive(Debug, Clone, Default)]
+pub struct TermCard {
+    pub count: usize,
+    pub cover: Option<String>,
+}
+
 /// Parsed markdown document with frontmatter and content.
 ///
 /// Represents a processed markdown file ready for HTML generation.
@@ -131,6 +138,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub card_cover: Option<String>,
+    /// A term pseudo-folder's card: its member count and the listing picture of
+    /// the first member in the term page's order. Set by `terms::set_term_cards`.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub term_card: Option<TermCard>,
     /// Explicit cover type override ("video", "iframe", or "image")
     pub cover_type: Option<String>,
     /// Media items marked for collection pages (photography, video, interactive)
