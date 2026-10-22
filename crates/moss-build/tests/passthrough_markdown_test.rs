@@ -207,3 +207,19 @@ fn a_page_and_a_loose_html_file_at_one_address_are_reported_by_name() {
     assert!(site.warned(&["index.md", "`index.html`", "/"]), "got: {:?}", site.warnings);
     assert!(site.problems >= 1);
 }
+
+#[test]
+fn a_page_embeds_an_image_from_a_passthrough_folder_at_its_copied_path() {
+    let site = build(
+        "",
+        &[
+            ("index.md", "---\ntitle: Home\n---\n\n![A photo](app/photo.jpg)\n"),
+            ("app/index.html", APP),
+            ("app/photo.jpg", "fake-jpg"),
+        ],
+    );
+
+    assert_eq!(fs::read(site.out("app/photo.jpg")).unwrap(), b"fake-jpg");
+    let home = fs::read_to_string(site.out("index.html")).unwrap();
+    assert!(home.contains(r#"src="/app/photo.jpg""#), "the embed must point at the copied file: {home}");
+}

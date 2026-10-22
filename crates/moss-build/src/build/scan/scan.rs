@@ -1481,6 +1481,7 @@ pub fn scan_folder_with_dedup_emit_with_error(
     let passthrough_roots = crate::build::scan::classify::compute_passthrough_roots(
         &html_files, &config_passthrough,
     );
+    let mut passthrough_media: Vec<String> = Vec::new();
     if !passthrough_roots.is_empty() {
         log::info!("[scan] {} passthrough subtree(s) detected", passthrough_roots.len());
         // Remove passthrough media from the conversion pipelines so a bundled
@@ -1502,8 +1503,14 @@ pub fn scan_folder_with_dedup_emit_with_error(
         // verbatim. True raw passthrough of `.md`/`.ipynb` is a deliberate
         // follow-up (would require copy_deferred_assets to copy passthrough-path
         // docs despite their extension).
-        image_files.retain(|f| !crate::build::scan::classify::is_in_passthrough(&f.path, &passthrough_roots));
-        video_files.retain(|f| !crate::build::scan::classify::is_in_passthrough(&f.path, &passthrough_roots));
+        // The content graph still indexes these paths (`passthrough_media`), so
+        // an embed of a passthrough image resolves to its copied path.
+        let in_passthrough = |path: &str| crate::build::scan::classify::is_in_passthrough(path, &passthrough_roots);
+        passthrough_media.extend(
+            image_files.iter().chain(video_files.iter()).filter(|f| in_passthrough(&f.path)).map(|f| f.path.clone()),
+        );
+        image_files.retain(|f| !in_passthrough(&f.path));
+        video_files.retain(|f| !in_passthrough(&f.path));
     }
 
     // A folder is shown only once something lives beneath it. Git does not track
@@ -1546,6 +1553,7 @@ pub fn scan_folder_with_dedup_emit_with_error(
         has_content_folders,
         has_language_trees,
         passthrough_roots,
+        passthrough_media,
         dirs,
         empty_folders,
     };
@@ -1594,6 +1602,9 @@ pub fn build_content_graph(project_structure: &ProjectStructure) -> ContentGraph
     for file_info in &project_structure.other_files {
         let slug = generate_slug(&file_info.path);
         builder.add_file(&file_info.path, &slug);
+    }
+    for path in &project_structure.passthrough_media {
+        builder.add_file(path, &generate_slug(path));
     }
 
     // The main scan now walks formerly-excluded asset folders (assets/, images/,

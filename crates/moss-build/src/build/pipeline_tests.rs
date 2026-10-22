@@ -6008,6 +6008,7 @@ fn a_translation_still_in_the_cloud_keeps_its_old_address() {
 
 fn gate_structure(root: &std::path::Path, homepage: Option<&str>, evicted: &[&str]) -> ProjectStructure {
     ProjectStructure {
+        passthrough_media: Vec::new(),
         root_path: root.to_string_lossy().to_string(),
         markdown_files: vec![],
         html_files: vec![],

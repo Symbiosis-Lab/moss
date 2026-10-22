@@ -10,6 +10,7 @@ use moss_core::PageKind;
 
 fn project() -> ProjectStructure {
     ProjectStructure {
+        passthrough_media: Vec::new(),
         root_path: "/tmp/moss-verdict-tests".into(),
         markdown_files: vec![],
         html_files: vec![],

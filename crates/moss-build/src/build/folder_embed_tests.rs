@@ -864,6 +864,7 @@ fn sort_override_changes_order() {
 
 pub(crate) fn test_project() -> ProjectStructure {
     ProjectStructure {
+        passthrough_media: Vec::new(),
         root_path: "/tmp".into(),
         markdown_files: vec![],
         html_files: vec![],

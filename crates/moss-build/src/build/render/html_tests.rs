@@ -2824,6 +2824,7 @@ mod children_field_tests {
 
     fn make_project() -> ProjectStructure {
         ProjectStructure {
+            passthrough_media: Vec::new(),
             root_path: String::new(),
             markdown_files: vec![],
             html_files: vec![],
@@ -6038,6 +6039,7 @@ mod typesetting_tests {
 
     fn make_project() -> ProjectStructure {
         ProjectStructure {
+            passthrough_media: Vec::new(),
             root_path: String::new(),
             markdown_files: vec![],
             html_files: vec![],
@@ -6935,6 +6937,7 @@ mod og_url_tests {
 
     fn make_project() -> ProjectStructure {
         ProjectStructure {
+            passthrough_media: Vec::new(),
             root_path: String::new(),
             markdown_files: vec![],
             html_files: vec![],
@@ -7712,6 +7715,7 @@ mod listable_page_card_tests {
 
     fn make_project() -> ProjectStructure {
         ProjectStructure {
+            passthrough_media: Vec::new(),
             root_path: String::new(),
             markdown_files: vec![],
             html_files: vec![],
@@ -8071,6 +8075,7 @@ mod place_locator_position_tests {
 
     fn make_project() -> ProjectStructure {
         ProjectStructure {
+            passthrough_media: Vec::new(),
             root_path: String::new(),
             markdown_files: vec![],
             html_files: vec![],
@@ -8329,6 +8334,7 @@ mod place_namespace_root_map_tests {
 
     fn make_project() -> ProjectStructure {
         ProjectStructure {
+            passthrough_media: Vec::new(),
             root_path: String::new(),
             markdown_files: vec![],
             html_files: vec![],
@@ -8498,6 +8504,7 @@ mod folder_index_meta_tests {
 
     fn make_project() -> ProjectStructure {
         ProjectStructure {
+            passthrough_media: Vec::new(),
             root_path: String::new(),
             markdown_files: vec![],
             html_files: vec![],

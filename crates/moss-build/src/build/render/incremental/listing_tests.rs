@@ -11,6 +11,7 @@ use super::*;
 
 fn project() -> ProjectStructure {
     ProjectStructure {
+        passthrough_media: Vec::new(),
         root_path: "/tmp/moss-listing-tests".into(),
         markdown_files: vec![],
         html_files: vec![],
