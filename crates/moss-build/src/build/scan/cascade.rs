@@ -24,6 +24,7 @@ const CASCADE_KEYS: &[&str] = &[
     "children_group",
     "children_depth",
     "tags",
+    "author",
     "description",
     "content_width",
     "title_block",
@@ -161,6 +162,11 @@ fn report_cascade_values(
             );
         }
     }
+    if let Some(value) = cascade.get("author") {
+        if moss_core::frontmatter_union::normalize_name_list(value).is_err() {
+            log::warn!("`author:` is not a name or a list of names, so it names no one on the pages beneath (cascaded from {page})");
+        }
+    }
 }
 
 /// Apply individual cascade key-value pairs to a document.
@@ -239,6 +245,15 @@ fn apply_cascade_values(
                         // reads, and `doc.tags == None` implies it is unset.
                         doc.fm_tags = Some(v.clone());
                         doc.tags = Some(v);
+                    }
+                }
+            }
+            "author" => {
+                // Read as the page's own `author:` is, so a cascaded byline links to its term page
+                // like a written one. A key the page writes, blank or not, keeps its own value.
+                if doc.author.is_empty() && !doc.raw_frontmatter.contains_key("author") {
+                    if let Ok(v) = moss_core::frontmatter_union::normalize_name_list(value) {
+                        doc.author = v;
                     }
                 }
             }
@@ -673,6 +688,25 @@ mod tests {
         );
     }
 
+    /// A cascaded `author:` that is not a name or a list of names is reported once, as a page's own is not applied.
+    #[test]
+    fn a_cascaded_author_that_is_not_a_name_is_reported() {
+        // The first call installs the capturing logger, so it must run before the warning.
+        crate::build::cache::tests::logged_count(log::Level::Warn, "");
+        let mut parent = make_doc("Prints", "prints/index.html");
+        let mut mapping = serde_yaml::Mapping::new();
+        mapping.insert(serde_yaml::Value::String("first".into()), serde_yaml::Value::String("Ada".into()));
+        parent.cascade = Some(HashMap::from([("author".to_string(), serde_yaml::Value::Mapping(mapping))]));
+        let child = make_doc("Print", "prints/one/index.html");
+        let mut docs = vec![parent, child];
+        apply_cascade(&mut docs, &[]);
+        assert!(docs[1].author.is_empty());
+        assert_eq!(
+            crate::build::cache::tests::logged_count(log::Level::Warn, "`author:` is not a name or a list of names"),
+            1
+        );
+    }
+
     /// A valid sample value for each key in `CASCADE_KEYS`.
     fn sample_for(key: &str) -> serde_yaml::Value {
         match key {
@@ -682,6 +716,7 @@ mod tests {
                 serde_yaml::Value::String("summary".to_string())
             }
             "tags" => serde_yaml::to_value(vec!["docs"]).unwrap(),
+            "author" => serde_yaml::Value::String("Ada Example".to_string()),
             "content_width" => serde_yaml::Value::String("wide".to_string()),
             "title_block" => serde_yaml::Value::String("beside-picture".to_string()),
             "reader_controls" => serde_yaml::Value::Bool(false),
