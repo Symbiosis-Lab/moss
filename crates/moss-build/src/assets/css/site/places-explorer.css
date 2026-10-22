@@ -1043,6 +1043,12 @@ button.moss-places-chip-crumb {
   scroll-snap-type: x proximity;
   -webkit-overflow-scrolling: touch;
   padding-block-end: 2px;
+  /* A bar would be drawn across the map; the card cut off at the edge is the
+     cue, and map.ts turns a vertical wheel over the row into a sideways one. */
+  scrollbar-width: none;
+}
+.moss-places-cards::-webkit-scrollbar {
+  display: none;
 }
 .moss-places-cards:empty {
   display: none;
@@ -1209,12 +1215,15 @@ button.moss-places-chip-crumb {
 
 /* Everything the collapsed card hides, in full: the description is
    un-clamped here (site.css clamps `.moss-card-description` to two lines for
-   a list card), and the region scrolls rather than clip if the band is too
-   short for it. */
+   a list card), and the open card's region scrolls rather than clip if the
+   band is too short for it. A collapsed region never scrolls, or every card
+   would keep a scrollbar beside its zero-height row. */
 .moss-places-card-detail {
   min-block-size: 0;
+  overflow: hidden;
+}
+.moss-places-cards .moss-card[aria-current="true"] .moss-places-card-detail {
   overflow-y: auto;
-  overflow-x: hidden;
 }
 .moss-places-card-detail .moss-card-description {
   display: block;

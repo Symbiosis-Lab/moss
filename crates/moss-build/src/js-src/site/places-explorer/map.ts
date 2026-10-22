@@ -305,6 +305,14 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   cardsEl.className = "moss-places-cards";
   cardsEl.setAttribute("role", "list");
   cardsEl.setAttribute("aria-label", strings.worksInView);
+  // The row shows no scrollbar, so a mouse wheel is the only way a mouse moves it.
+  cardsEl.addEventListener("wheel", (e) => {
+    if (e.ctrlKey || Math.abs(e.deltaX) >= Math.abs(e.deltaY) || cardsEl.scrollWidth <= cardsEl.clientWidth + 1) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const pixels = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * cardsEl.clientWidth : e.deltaY;
+    cardsEl.scrollLeft += getComputedStyle(cardsEl).direction === "rtl" ? -pixels : pixels;
+  }, { passive: false });
 
   const chipEl = document.createElement("nav");
   chipEl.className = "moss-places-chip";

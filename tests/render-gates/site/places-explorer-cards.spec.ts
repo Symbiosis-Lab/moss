@@ -29,6 +29,34 @@ async function gotoReady(page: Page, search = ""): Promise<void> {
   await page.waitForTimeout(300);
 }
 
+test("only the open card's detail can scroll, so collapsed cards keep no scrollbar", async ({ page }) => {
+  await gotoReady(page);
+  const overflow = () => page.locator(".moss-places-cards .moss-places-card-detail").evaluateAll((els) => els.map((el) => getComputedStyle(el).overflowY));
+  expect(new Set(await overflow())).toEqual(new Set(["hidden"]));
+  await page.locator(".moss-places-cards .moss-card .moss-places-card-select").first().click();
+  await page.waitForTimeout(400);
+  const open = page.locator('.moss-places-cards .moss-card[aria-current="true"] .moss-places-card-detail');
+  await expect(open).toHaveCount(1);
+  expect(await open.evaluate((el) => getComputedStyle(el).overflowY)).toBe("auto");
+});
+
+test("a vertical mouse wheel over the works row scrolls it sideways, not the map", async ({ page }) => {
+  await page.setViewportSize({ width: 600, height: 800 });
+  await page.goto("places/", { waitUntil: "domcontentloaded" });
+  await expect(page.locator(".moss-place-map[data-moss-places-explorer]")).toHaveAttribute("data-moss-places-explorer-ready", "ready", { timeout: 10000 });
+  await page.waitForTimeout(300);
+  const row = page.locator(".moss-places-cards");
+  const overflows = await row.evaluate((el) => el.scrollWidth > el.clientWidth + 1);
+  test.skip(!overflows, "the gate site's cards fit this width");
+  const before = new URL(page.url()).searchParams.get("z");
+  const box = (await page.locator(".moss-places-cards .moss-card").first().boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, 400);
+  await expect.poll(() => row.evaluate((el) => Math.abs(el.scrollLeft))).toBeGreaterThan(50);
+  await page.waitForTimeout(400);
+  expect(new URL(page.url()).searchParams.get("z")).toBe(before);
+});
+
 test("selecting a card expands its detail in place", async ({ page, browserName }) => {
   await gotoReady(page);
   const card = page.locator(".moss-places-cards .moss-card").first();
