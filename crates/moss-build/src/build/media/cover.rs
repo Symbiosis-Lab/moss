@@ -93,14 +93,11 @@ pub fn render_cover_html(
     match cover_type {
         CoverType::Image => {
             if let Some(lookup) = media_lookup {
-                let extra = if style_attr.is_empty() {
-                    None
-                } else {
-                    Some(style_attr.trim_start().to_string())
-                };
+                let style = attrs.to_inline_style();
                 let opts = moss_core::render::image::ImageRenderOptions {
                     eager,
-                    extra_attrs: extra.as_deref(),
+                    style: style.as_deref(),
+                    fit: attrs.fit,
                     ..Default::default()
                 };
                 // Phase 1 B1 (2026-05-25): synthesizer takes `&AssetSnapshot`.

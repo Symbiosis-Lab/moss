@@ -9,10 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING:** `Block::Figure` gains `link: Option<Url>`, the address of the link a captioned picture sits in (`[![x](i.jpg)](url)` with an italic line under it); a struct literal must now name it. The renderer wraps the image, not the caption, in the link, and `visit_urls_mut` and the link resolver visit it.
+- **BREAKING:** `GridCellParts` gains `layout` (a collage tile's span declarations), `tile` (`grid_parts::TileKind`) and `upright`, and `GridCellParts::replace` keeps them when a host swaps a cell's markup; a struct literal must name them.
+- **BREAKING:** `ImageRenderOptions::extra_attrs` no longer carries a `style`: the new `style` and `fit` fields do, and the synthesizer merges them with the placeholder into one attribute and publishes the fit as `data-fit` on the `<img>`.
+- **BREAKING:** `media::is_all_display_keywords` is removed; `media::read_image_words` sorts every `|` segment of an image's pipe text into placement, display words and caption (`ImageWords`), for both image forms.
+- `ast::wikilink_image_word_warnings`, added since the last release, is now `ast::image_word_warnings` and covers standard images after their first pipe.
+
 - **BREAKING:** A page with `draft: true` is no longer published. It is still built and shown in the local preview, and `moss deploy`, plugin deploys and the plugin site-file commands leave it out, so its address stops working on the live site. Before, it was published at its own URL and only hidden from listings, feeds and the sitemap. `moss build` still writes the draft's HTML into `.moss/build.nosync/current/` for the preview, so a folder uploaded by hand includes it. To keep a page reachable by link but out of listings, use `listed: false`. Publishing refuses while a published page links to a draft, and names each link. `PageMeta` gains a `draft` field, `PublishPreflightProjection` gains `drafts_linked`, `RemovalReason` gains `Withheld`, and `SealedManifest::files()` is the publish view with `all_files()` as the full set.
 
 ### Added
 
+- `grid_parts::cell_picture` and `grid_parts::TileKind::of` say whether a grid cell is one picture, a quote (a blockquote and its italic source line) or text; the grid serializer renders a quote cell as `figure.moss-quote`.
 - `reader_controls` joins the built-in fields (`FrontMatter::reader_controls`, a boolean): `false` removes the text-size control from a dated page.
 
 ## [0.19.0] - 2026-10-18

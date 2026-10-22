@@ -18,7 +18,8 @@
  * with it each becomes a button and the large view shows its figure caption,
  * links included. A picture inside a link, a hero, or an element with the
  * `no-viewer` class is left alone, as is one with neither alt text nor
- * caption.
+ * caption. One exception: on a touch screen a linked collage picture opens,
+ * since its credit has no hover there, and the viewer links to its page.
  *
  * Every listener is delegated from the document and the pictures are found
  * when the reader acts, so a page the preview morphs in place works without a
@@ -41,10 +42,13 @@ interface MediaItem {
   articleUrl: string;
   /** The page's own caption element; its children, links included, are copied under the large view. */
   caption?: Element | null;
+  /** `articleUrl` is the picture's own page (a linked collage picture), not the article it sits in. */
+  toPage?: boolean;
 }
 
 const PICTURES = "main figure.moss-image img, main p > picture:only-child > img, main p > img:only-child";
 const SKIPPED = "a, .moss-hero, .no-viewer";
+const COLLAGE_LINK = ".moss-grid[data-collage] figure.moss-image > a[href]";
 const TRIGGERS = `.media-item, .moss-gallery-link, ${PICTURES}`;
 
 const LIGHTBOX = `<button class="lightbox-close" aria-label="Close">&times;</button>
@@ -84,13 +88,17 @@ const LIGHTBOX = `<button class="lightbox-close" aria-label="Close">&times;</but
   // A picture of the page body that opens: not inside a link, a hero or an
   // opted-out element, alone in its paragraph if it is not in a figure, and named.
   function pictureItem(img: HTMLImageElement): MediaItem | null {
-    if (img.closest(SKIPPED)) return null;
+    // A pointer follows a linked collage picture's link; a touch opens it here.
+    const link = img.closest<HTMLAnchorElement>(COLLAGE_LINK);
+    const page = link && matchMedia("(hover: none)").matches ? link : null;
+    if (img.closest(page ? ".moss-hero, .no-viewer" : SKIPPED)) return null;
     const para = img.closest("p");
     if (para && !img.closest("figure") && (para.textContent || "").trim() !== "") return null;
     const caption = img.closest("figure")?.querySelector("figcaption");
     const captionText = (caption?.textContent || "").trim();
     const name = img.alt || captionText;
     if (!name) return null;
+    if (page) return { type: "image", src: img.src, title: captionText, alt: img.alt || name, articleUrl: page.href, caption, toPage: true };
     img.setAttribute("role", "button");
     img.setAttribute("aria-haspopup", "dialog");
     img.tabIndex = 0;
@@ -223,6 +231,9 @@ const LIGHTBOX = `<button class="lightbox-close" aria-label="Close">&times;</but
     if (articleLink) {
       articleLink.href = item.articleUrl;
       articleLink.hidden = !item.articleUrl;
+      // The build writes both labels in the page's language; a viewer the script built has neither.
+      const label = item.toPage ? articleLink.dataset.pageLabel : articleLink.dataset.articleLabel;
+      if (label) articleLink.textContent = label;
     }
   }
 

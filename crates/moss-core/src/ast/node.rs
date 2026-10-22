@@ -360,6 +360,11 @@ pub enum Block {
         /// text. The opt-out from implicit figures puts the line back.
         #[serde(default)]
         italic_caption: bool,
+        /// The address of the link the image sits in (`[![x](i.jpg)](url)`
+        /// with a caption line under it). The renderer wraps the image, not
+        /// the caption, in it.
+        #[serde(default)]
+        link: Option<Url>,
     },
     /// Compound-link grid cell: the entire cell is a single markdown
     /// link `[inner](url)` whose `inner` is parsed as block-level content
@@ -647,6 +652,7 @@ mod tests {
             class_names: Vec::new(),
             img_style: None,
             italic_caption: false,
+            link: None,
         };
         match b {
             Block::Figure {
@@ -679,6 +685,7 @@ mod tests {
             class_names: Vec::new(),
             img_style: None,
             italic_caption: false,
+            link: None,
         };
         let s = serde_json::to_string(&b).expect("serialize");
         let back: Block = serde_json::from_str(&s).expect("deserialize");

@@ -14,7 +14,7 @@
 //! recognition reads exactly what emission read.
 
 use super::hooks::{collapse_tag_adjacent_newlines, escape_attr, RenderHooks};
-use super::node::Block;
+use super::node::{Block, Inline};
 use super::shortcode::GridShortcode;
 
 /// A `:::grid` block's serialized pieces: the opening `<div class="moss-grid"
@@ -55,32 +55,48 @@ pub struct GridCellParts {
     /// Source lines the cell spans, published as `data-source-range` on the
     /// card wrapper. `None` when untracked.
     pub source_range: Option<(usize, usize)>,
+    /// A collage cell's tracks, as custom-property declarations
+    /// (`--moss-collage-span:2;--moss-collage-span-sm:6`). Kept when the
+    /// host replaces the cell, since a tile without its span breaks the rows.
+    pub layout: Option<String>,
+    /// What a collage tile holds; `None` outside a collage.
+    pub tile: Option<TileKind>,
+    /// The cell's lead picture is taller than wide. Only the host can say,
+    /// because it needs the picture's pixel size.
+    pub upright: bool,
 }
 
 impl GridCellParts {
     /// Content plus chrome. The ONE place the card wrapper's bytes are written.
     pub fn to_html(&self) -> String {
+        let mut attrs = String::new();
+        if self.cover_color.is_some() {
+            attrs.push_str(" data-cover-color");
+        }
+        if let Some(tile) = self.tile {
+            attrs.push_str(&format!(r#" data-tile="{}""#, tile.as_str()));
+        }
+        if self.upright {
+            attrs.push_str(" data-upright");
+        }
+        let style: Vec<String> = self
+            .cover_color
+            .as_deref()
+            .map(|c| format!("--item-cover-color: {}", escape_attr(c)))
+            .into_iter()
+            .chain(self.layout.clone())
+            .collect();
+        if !style.is_empty() {
+            attrs.push_str(&format!(r#" style="{}""#, style.join(";")));
+        }
         if self.carded {
-            let color = self
-                .cover_color
-                .as_deref()
-                .map(|c| {
-                    format!(
-                        r#" data-cover-color style="--item-cover-color: {}""#,
-                        escape_attr(c)
-                    )
-                })
-                .unwrap_or_default();
             let range = self
                 .source_range
                 .map(|(a, b)| format!(r#" data-source-range="{a}-{b}""#))
                 .unwrap_or_default();
-            format!(
-                r#"<div class="moss-grid-card"{}{}>{}</div>"#,
-                range, color, self.inner
-            )
+            format!(r#"<div class="moss-grid-card"{}{}>{}</div>"#, range, attrs, self.inner)
         } else {
-            self.inner.clone()
+            on_first_tag(&self.inner, &attrs)
         }
     }
 
@@ -92,7 +108,17 @@ impl GridCellParts {
             carded: false,
             cover_color: None,
             source_range: None,
+            layout: None,
+            tile: None,
+            upright: false,
         }
+    }
+
+    /// Swap the content for final markup that brings its own chrome, keeping
+    /// the cell's place in a collage.
+    pub fn replace(&mut self, html: String) {
+        let (layout, tile, upright) = (self.layout.take(), self.tile, self.upright);
+        *self = Self { layout, tile, upright, ..Self::final_markup(html) };
     }
 }
 
@@ -116,6 +142,24 @@ impl GridParts {
     }
 }
 
+/// `markup` with `attrs` added to its opening tag. Markup that brings its own
+/// chrome (a link card, a collection card) carries a collage tile's span on
+/// its own outer element; a `style` already there takes the declarations first.
+fn on_first_tag(markup: &str, attrs: &str) -> String {
+    let Some(end) = markup.find('>').filter(|_| !attrs.is_empty() && markup.starts_with('<')) else {
+        return markup.to_string();
+    };
+    let tag = &markup[..end];
+    let (attrs, tag) = match (attrs.find(r#" style=""#), tag.find(r#" style=""#)) {
+        (Some(a), Some(t)) => {
+            let decls = attrs[a + 8..].trim_end_matches('"');
+            (attrs[..a].to_string(), format!("{}{};{}", &tag[..t + 8], decls, &tag[t + 8..]))
+        }
+        _ => (attrs.to_string(), tag.to_string()),
+    };
+    format!("{}{}{}", tag, attrs, &markup[end..])
+}
+
 /// The canonical grid serialization. Called by
 /// [`RenderHooks::render_grid_parts`]'s default body; overriding impls that
 /// delegate the `Grid` arm elsewhere call this with the hooks they delegate to.
@@ -124,6 +168,7 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
     args: &GridShortcode,
     source_line: Option<usize>,
 ) -> GridParts {
+    let collage = args.is_collage().then(|| spans(&args.cells)).flatten();
     let mut open_tag = String::new();
     {
         let mut class_attr = String::from("moss-grid");
@@ -150,15 +195,17 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
         // over `.moss-grid[data-columns="1"]` in site.css: a bare `fr` track
         // floors at the item's min-content width, so one wide image in a
         // ratio grid overflows the page sideways.
+        let mut style: Vec<String> = Vec::new();
         if let Some(r) = &args.ratio {
             let cols = r
                 .split(':')
                 .map(|n| format!("minmax(0, {}fr)", n.trim()))
                 .collect::<Vec<_>>()
                 .join(" ");
-            open_tag.push_str(r#" style="--moss-grid-ratio:"#);
-            open_tag.push_str(&cols);
-            open_tag.push('"');
+            style.push(format!("--moss-grid-ratio:{cols}"));
+        }
+        if !style.is_empty() {
+            open_tag.push_str(&format!(r#" style="{}""#, style.join(";")));
         }
         // `scroll` keeps the row on one line and lets the reader drag it
         // sideways; `tabindex="0"` makes an overflowing row
@@ -228,12 +275,15 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
     for (i, cell_blocks) in args.cells.iter().enumerate() {
         let fragment = args.source.fragments.get(i);
         let mut cell_html = String::new();
-        super::render::render_blocks_with_meta(
-            hooks,
-            &mut cell_html,
-            cell_blocks,
-            fragment.map_or(&[], |f| f.blocks.as_slice()),
-        );
+        match quote_cell(cell_blocks) {
+            Some((quote, source)) => render_quote(hooks, &mut cell_html, quote, source),
+            None => super::render::render_blocks_with_meta(
+                hooks,
+                &mut cell_html,
+                cell_blocks,
+                fragment.map_or(&[], |f| f.blocks.as_slice()),
+            ),
+        }
         let collapsed = collapse_tag_adjacent_newlines(&cell_html);
         cells.push(GridCellParts {
             inner: collapsed.trim().to_string(),
@@ -241,9 +291,158 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
             // Filled in later by the host, which can read the image off disk.
             cover_color: None,
             source_range: fragment.and_then(|f| Some((f.first_line?, f.last_line?))),
+            layout: collage.as_ref().and_then(|spans| {
+                let (wide, phone) = spans.get(i.checked_sub(1)?)?;
+                Some(format!("--moss-collage-span:{wide};--moss-collage-span-sm:{phone}"))
+            }),
+            tile: collage.is_some().then(|| TileKind::of(cell_blocks)),
+            upright: false,
         });
     }
     hooks.end_grid_cells();
 
     GridParts { open_tag, cells }
 }
+
+// ── Collage ─────────────────────────────────────────────────────────────
+//
+// CSS can count a grid's children but not which of them are pictures, so a
+// collage's spans and each tile's kind are computed here from the typed cells
+// and handed to the stylesheet as custom properties and `data-tile`.
+
+/// A quote longer than this, in characters, is set smaller (`data-length="long"`).
+const LONG_QUOTE_CHARS: usize = 140;
+
+/// A grid cell that is a quote: a blockquote, then one italic line naming its
+/// source. Returns the blockquote and the source line's inlines.
+pub(crate) fn quote_cell(blocks: &[Block]) -> Option<(&Block, &[Inline])> {
+    let [quote @ Block::BlockQuote(_), Block::Paragraph(line)] = blocks else {
+        return None;
+    };
+    let blank = |i: &Inline| matches!(i, Inline::Text(s) if s.trim().is_empty());
+    let mut parts = line.iter().filter(|i| !blank(i));
+    match (parts.next(), parts.next()) {
+        (Some(Inline::Emphasis(source)), None) if !source.is_empty() => Some((quote, source)),
+        _ => None,
+    }
+}
+
+/// `<figure class="moss-quote">`: the quote, then its source line as the
+/// caption. Only the source line can link, so no link nests in another.
+fn render_quote<H: RenderHooks + ?Sized>(hooks: &H, out: &mut String, quote: &Block, source: &[Inline]) {
+    out.push_str(r#"<figure class="moss-quote""#);
+    if is_long_quote(quote) {
+        out.push_str(r#" data-length="long""#);
+    }
+    out.push('>');
+    super::render::render_blocks_with_meta(hooks, out, std::slice::from_ref(quote), &[]);
+    out.push_str("<figcaption>");
+    out.push_str(&super::render::render_inlines_html(hooks, source));
+    out.push_str("</figcaption></figure>");
+}
+
+/// Whether a quote's words run past the length that gets the smaller size.
+pub(crate) fn is_long_quote(quote: &Block) -> bool {
+    let Block::BlockQuote(children) = quote else {
+        return false;
+    };
+    let chars: usize = children
+        .iter()
+        .map(|b| match b {
+            Block::Paragraph(inlines) => super::plain_text::inlines_to_plain_text(inlines).chars().count(),
+            _ => 0,
+        })
+        .sum();
+    chars > LONG_QUOTE_CHARS
+}
+
+/// What a collage tile holds, published as `data-tile` for the stylesheet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TileKind {
+    /// One picture and nothing else (its credit is the figure's caption).
+    Picture,
+    /// [`quote_cell`]'s shape.
+    Quote,
+    /// Anything else, a picture further down included.
+    Text,
+}
+
+impl TileKind {
+    pub fn of(cell: &[Block]) -> Self {
+        if quote_cell(cell).is_some() {
+            TileKind::Quote
+        } else if matches!(cell, [Block::LinkCard { .. }]) || cell_picture(cell).is_some() {
+            TileKind::Picture
+        } else {
+            TileKind::Text
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            TileKind::Picture => "picture",
+            TileKind::Quote => "quote",
+            TileKind::Text => "text",
+        }
+    }
+}
+
+/// The image of a cell that is one picture: a figure, or a lone image, linked
+/// or not, alone in its paragraph.
+pub fn cell_picture(cell: &[Block]) -> Option<&Inline> {
+    let image = match cell {
+        [Block::Figure { image, .. }] => image,
+        [Block::Paragraph(inlines)] => match inlines.as_slice() {
+            [Inline::Link { children, .. }] => match children.as_slice() {
+                [only] => only,
+                _ => return None,
+            },
+            [only] => only,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    matches!(image, Inline::Image { .. }).then_some(image)
+}
+
+/// For each cell after the lead of a collage of 3 to 9 cells, the columns it
+/// takes of the six right of the lead on a wide screen, and of six on a
+/// phone. `None` outside 3 to 9 cells.
+///
+/// On a wide screen the spans depend only on the count, as do the rows the
+/// stylesheet reads off `data-count`. On a phone a tile that is not a picture
+/// takes a full row at its own height, and the pictures fill rows of three, a
+/// short last row widened.
+pub(crate) fn spans(cells: &[Vec<Block>]) -> Option<Vec<(u8, u8)>> {
+    let rest = cells.get(1..).filter(|r| (2..=8).contains(&r.len()))?;
+    let wide: &[u8] = match rest.len() {
+        2 => &[3, 3],
+        3 => &[2, 2, 2],
+        4 => &[3, 3, 3, 3],
+        5 => &[2, 2, 2, 3, 3],
+        6 => &[2, 2, 2, 2, 2, 2],
+        7 => &[2, 2, 2, 2, 2, 2, 6],
+        _ => &[2, 2, 2, 2, 2, 2, 3, 3],
+    };
+    let is_picture = |c: &Vec<Block>| TileKind::of(c) == TileKind::Picture;
+    let pictures = rest.iter().filter(|c| is_picture(c)).count();
+    let short = pictures % 3;
+    let mut seen = 0;
+    Some(
+        rest.iter()
+            .zip(wide)
+            .map(|(cell, &w)| {
+                if !is_picture(cell) {
+                    return (w, 6);
+                }
+                seen += 1;
+                let in_short_row = seen > pictures - short;
+                (w, if !in_short_row { 2 } else if short == 2 { 3 } else { 6 })
+            })
+            .collect(),
+    )
+}
+
+#[cfg(test)]
+#[path = "grid_parts_tests.rs"]
+mod tests;

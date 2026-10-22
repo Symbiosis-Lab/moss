@@ -58,6 +58,10 @@ fn home_html(body: &str) -> String {
     for (i, name) in ["a", "b", "c"].iter().enumerate() {
         write_picture(&root, &format!("Photos/{name}.jpg"), 40 + i as u8 * 60);
     }
+    image::RgbImage::from_fn(64, 96, |x, y| image::Rgb([90, (x % 200) as u8, (y % 200) as u8]))
+        .save(root.join("Photos/tall.jpg"))
+        .unwrap();
+    std::fs::copy(root.join("Photos/tall.jpg"), root.join("Photos/海报 tall.jpg")).unwrap();
     let built = build(&root);
     assert!(built.is_ok(), "{built:?}");
     let html = fs::read_to_string(root.join(".moss/build.nosync/staging/index.html")).unwrap();
@@ -94,6 +98,44 @@ fn collage_cells_keep_their_display_words() {
             Some("object-fit:contain;object-position:30% 70%".to_string()),
         ],
     );
+}
+
+#[test]
+fn both_image_forms_style_a_captioned_picture_alike() {
+    let html = home_html(
+        "![[Photos/a.jpg|focus:20%,62%|Harbour at dawn]]\n\n![Harbour at dawn|focus:20%,62%](Photos/a.jpg)\n\n[![Harbour at dawn|contain](Photos/b.jpg)](https://example.org/harbour)\n*__Harbour__ 1890 · Public domain*",
+    );
+    assert_eq!(
+        img_styles(&html, "figure.moss-image"),
+        vec![
+            Some("object-position:20% 62%".to_string()),
+            Some("object-position:20% 62%".to_string()),
+            Some("object-fit:contain".to_string()),
+        ],
+    );
+    let doc = scraper::Html::parse_document(&html);
+    let caption = scraper::Selector::parse("figure.moss-image figcaption").unwrap();
+    let captions: Vec<String> = doc.select(&caption).map(|c| c.inner_html()).collect();
+    assert_eq!(captions[..2], ["Harbour at dawn", "Harbour at dawn"]);
+    assert_eq!(captions[2], "<strong>Harbour</strong> 1890 · Public domain");
+    let linked = scraper::Selector::parse(r#"figure.moss-image > a[href="https://example.org/harbour"] img"#).unwrap();
+    let img = doc.select(&linked).next().expect("the link wraps the image");
+    let style = img.value().attr("style").unwrap_or_default();
+    // The placeholder and the display words share the one attribute.
+    assert!(style.contains("background") && style.ends_with("object-fit:contain"), "got: {style}");
+}
+
+#[test]
+fn an_upright_lead_is_marked_and_a_landscape_lead_is_not() {
+    let html = home_html(
+        ":::grid {collage}\n![[Photos/tall.jpg|Tall]]\n+++\n![[Photos/a.jpg|A]]\n+++\n![[Photos/b.jpg|B]]\n:::\n\n:::grid {collage}\n![[Photos/a.jpg|A]]\n+++\n![[Photos/tall.jpg|Tall]]\n+++\n![[Photos/b.jpg|B]]\n:::\n\n:::grid {collage}\n![Poster](<Photos/海报 tall.jpg>)\n*Poster*\n+++\n![[Photos/a.jpg|A]]\n+++\n![[Photos/b.jpg|B]]\n:::",
+    );
+    let doc = scraper::Html::parse_document(&html);
+    let leads = scraper::Selector::parse(".moss-grid[data-collage] > :first-child").unwrap();
+    let marked: Vec<bool> = doc.select(&leads).map(|l| l.value().attr("data-upright").is_some()).collect();
+    assert_eq!(marked, [true, false, true]);
+    let upright = scraper::Selector::parse("[data-upright]").unwrap();
+    assert_eq!(doc.select(&upright).count(), 2, "only a lead is ever marked");
 }
 
 #[test]
@@ -138,8 +180,9 @@ fn capture_logs() {
 #[test]
 fn a_mistyped_caption_warns_with_its_page_and_stays_the_caption() {
     capture_logs();
-    let html = home_html("![[Photos/a.jpg|contian]]\n\n![[Photos/b.jpg|Lake at dusk]]");
+    let html = home_html("![[Photos/a.jpg|contian]]\n\n![[Photos/b.jpg|Lake at dusk]]\n\n![A lake|cvoer](Photos/c.jpg)");
     let logged = LOGGED.lock().unwrap().clone();
+    assert!(logged.iter().any(|m| m.contains("'cvoer'") && m.contains("'cover'")), "a standard image warns too: {logged:?}");
     let warnings: Vec<&String> = logged.iter().filter(|m| m.contains("contian")).collect();
     assert_eq!(warnings.len(), 1, "expected exactly one warning line, got: {logged:?}");
     assert!(

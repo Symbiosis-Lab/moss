@@ -328,6 +328,9 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
     // sentinels their `Inline::Image`. Both BEFORE `assign_heading_id_suffixes`.
     substitute_shortcode_placeholders(&mut blocks, &extraction.nonce, &extraction.extracted);
     super::linked_embed::restore(&mut blocks, &linked_embeds, config);
+    // After the restore, so `[![[x.jpg]]](url)` and `[![x](x.jpg)](url)` reach
+    // it as the same `Link(Image)` shape.
+    promote_linked_figures(&mut blocks, &line_ctx);
 
     // Implicit-figure gating: the per-paragraph `try_promote_to_figure`
     // inside `parse_block_with_tag` always runs (so the figure promotion
@@ -381,6 +384,52 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
     doc
 }
 
+/// Promote every paragraph that is one image wrapped in one link, then a
+/// caption line, to a figure carrying the link. Without the caption line a
+/// linked picture (a logo, a badge) stays a paragraph.
+fn promote_linked_figures(blocks: &mut [Block], line_ctx: &LineCtx<'_>) {
+    for block in blocks.iter_mut() {
+        match block {
+            Block::Paragraph(inlines) => {
+                if let Some(figure) = linked_figure(inlines, line_ctx) {
+                    *block = figure;
+                }
+            }
+            Block::BlockQuote(children)
+            | Block::Callout { children, .. }
+            | Block::FootnoteDefinition { children, .. } => promote_linked_figures(children, line_ctx),
+            Block::List { items, .. } => {
+                for item in items.iter_mut() {
+                    promote_linked_figures(item, line_ctx);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The figure a linked picture with a caption line makes, by the same rule an
+/// unlinked one promotes by.
+fn linked_figure(inlines: &[Inline], line_ctx: &LineCtx<'_>) -> Option<Block> {
+    let blank = |i: &Inline| matches!(i, Inline::Text(s) if s.trim().is_empty());
+    let at = inlines.iter().position(|i| matches!(i, Inline::Link { .. }))?;
+    let Inline::Link { url, children, .. } = &inlines[at] else { return None };
+    let mut images = children.iter().filter(|c| !blank(c));
+    let image = images.next().filter(|i| matches!(i, Inline::Image { .. }))?;
+    if images.next().is_some() {
+        return None;
+    }
+    let mut unlinked = inlines.to_vec();
+    unlinked[at] = image.clone();
+    let em = italic_caption_index(&unlinked)?;
+    match try_promote_image_only(unlinked, &[], 0, line_ctx, Caption::Italic(em)) {
+        Ok(Block::Figure { image, caption, width, align, class_names, img_style, italic_caption, .. }) => {
+            Some(Block::Figure { image, caption, width, align, class_names, img_style, italic_caption, link: Some(url.clone()) })
+        }
+        _ => None,
+    }
+}
+
 /// Recursively undo implicit-figure promotion in `block` and its children.
 ///
 /// Called when `ParseConfig::implicit_figure` is false. Walks the block
@@ -406,12 +455,16 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
 pub(crate) fn unwrap_implicit_figure(block: &mut Block) {
     // Replace this block if it's an undecorated Figure.
     if is_implicit_figure(block) {
-        if let Block::Figure { image, caption, italic_caption, .. } = block {
+        if let Block::Figure { image, caption, italic_caption, link, .. } = block {
             let italic_line = if *italic_caption { caption.take() } else { None };
             let img = std::mem::replace(
                 image,
                 Inline::Text(String::new()), // placeholder, overwritten below
             );
+            let img = match link.take() {
+                Some(url) => Inline::Link { url, title: None, children: vec![img], is_wikilink: false, has_pothole: false },
+                None => img,
+            };
             // The author's italic line under the image is their text, not an
             // inference: the opt-out undoes the figure, so the line goes back
             // as the line it was.
@@ -1193,44 +1246,27 @@ fn try_promote_image_only(
     // Recover the percent from `wikilink_pothole` directly so the figure
     // carries the width on both the with-graph path (wikilink_dispatch) and
     // the no-graph path (fragment/test render with no ContentGraph).
-    let mut placement = crate::media::Placement::default();
+    // Both forms sort their pipe text with `media::read_image_words`, the
+    // reader the with-graph twin in resolve/wikilink_dispatch.rs also uses. A
+    // wikilink's alt is already its caption (the `Tag::Image` arm sorted it);
+    // only its placement and display words are read back off the pothole.
     let mut rewritten_alt: Option<String> = None;
-    match inlines.iter().find(|i| matches!(i, Inline::Image { .. })) {
-        Some(Inline::Image {
-            alt,
-            is_wikilink: false,
-            ..
-        }) => {
-            let (found, rest_alt) = crate::media::extract_placement_from_alias(alt);
-            if !found.is_empty() {
-                placement = found;
-                rewritten_alt = Some(rest_alt);
+    let words = match inlines.iter().find(|i| matches!(i, Inline::Image { .. })) {
+        Some(Inline::Image { alt, is_wikilink: false, .. }) => {
+            let words = standard_image_words(alt);
+            if !words.placement.is_empty() || !words.display.is_empty() {
+                rewritten_alt = Some(words.caption.clone());
             }
+            words
         }
-        Some(Inline::Image {
-            is_wikilink: true,
-            wikilink_pothole,
-            ..
-        }) => {
-            // Recover the placement from the raw pothole. The parser's own
-            // Alias arm has already stripped it out of `alt`, so the pothole
-            // is the only place it survives on this path.
-            // Sync: the with-graph twin lives in resolve/wikilink_dispatch.rs
-            // (image branch) — both read the pipe via
-            // media::extract_placement_from_alias.
-            if let Some(pothole) = wikilink_pothole {
-                let (found, remaining) = crate::media::extract_placement_from_alias(pothole);
-                if !found.is_empty() {
-                    placement = found;
-                    // The remainder is the intended caption; propagate it as
-                    // the rewritten alt, which may be empty when the whole
-                    // pothole was placement.
-                    rewritten_alt = Some(remaining);
-                }
-            }
+        Some(Inline::Image { is_wikilink: true, wikilink_pothole: Some(pothole), .. }) => {
+            crate::media::read_image_words(pothole)
         }
-        _ => {}
-    }
+        _ => crate::media::ImageWords::default(),
+    };
+    let placement = words.placement.clone();
+    let img_style = words.img_style();
+    let is_wikilink = matches!(inlines.iter().find(|i| matches!(i, Inline::Image { .. })), Some(Inline::Image { is_wikilink: true, .. }));
     // `Block::Figure.width` carries both width vocabularies: a named token
     // emits `data-width=`, a percent emits an inline `style="width:NN%"`.
     // A percent wins when both are written (see `placement_attrs`).
@@ -1255,8 +1291,10 @@ fn try_promote_image_only(
     // original `<p><img></p>` shape with its whitespace siblings) — UNLESS it
     // carries a width, which needs a figure to hold the inline
     // `style="width:NN%"` / `data-width=`.
+    // A display-only wikilink stays a paragraph: the dispatcher builds its figure.
     if (alt_text.is_empty() || matches!(source, Caption::None))
         && placement.is_empty()
+        && (is_wikilink || img_style.is_none())
         && italic_at.is_none()
     {
         return Err(inlines);
@@ -1280,6 +1318,7 @@ fn try_promote_image_only(
         line
     });
     let mut image = inlines.swap_remove(image_pos);
+    let alt_rewritten = rewritten_alt.is_some();
     if let (Some(new_alt), Inline::Image { alt, .. }) = (rewritten_alt, &mut image) {
         *alt = new_alt;
     }
@@ -1302,7 +1341,7 @@ fn try_promote_image_only(
             events,
             para_start,
             alt_text,
-            !placement.is_empty(),
+            alt_rewritten,
         ))
     };
 
@@ -1312,9 +1351,20 @@ fn try_promote_image_only(
         width: figure_width,
         align: placement.align.map(|side| side.css_class().to_string()),
         class_names: Vec::new(),
-        img_style: None,
+        img_style,
         italic_caption: has_italic_caption,
+        link: None,
     })
+}
+
+/// A standard image's bracket text, sorted. Display words count only after a
+/// `|`, so an alt that happens to be one (`![Cover](c.jpg)`) stays the alt.
+fn standard_image_words(alt: &str) -> crate::media::ImageWords {
+    if alt.contains('|') {
+        return crate::media::read_image_words(alt);
+    }
+    let (placement, rest) = crate::media::extract_placement_from_alias(alt);
+    crate::media::ImageWords { placement, display: String::new(), caption: rest.trim().to_string() }
 }
 
 /// Build the implicit-figure caption inlines for the promoted image.
@@ -1621,7 +1671,7 @@ fn parse_inline(events: &[Event<'_>], start: usize) -> (Option<Inline>, usize) {
                 // Without this classification, `Block::Figure` detection
                 // would promote wikilink-image paragraphs with synth-derived
                 // "alt" to Figure with bogus figcaptions. The same
-                // classifiers (`is_all_display_keywords` +
+                // classifiers (`media::read_image_words` +
                 // `parse_pothole_params`) run here.
                 //
                 // The ORIGINAL pothole text is preserved on
@@ -1660,13 +1710,9 @@ fn parse_inline(events: &[Event<'_>], start: usize) -> (Option<Inline>, usize) {
                         // themselves are recovered from `wikilink_pothole` by
                         // `dispatch_wikilink_embeds` (with-graph path) or by
                         // `try_promote_to_figure` (no-graph path).
-                        let (_placement, rest) =
-                            crate::media::extract_placement_from_alias(&trimmed);
-                        let rest = rest.trim().to_string();
-                        if rest.is_empty() || crate::media::is_all_display_keywords(&rest) {
-                            // Nothing left, or `contain center` / `left top`
-                            // → display attrs (production maps to style),
-                            // not alt.
+                        let rest = crate::media::read_image_words(&trimmed).caption;
+                        if rest.is_empty() {
+                            // Only placement and display words: no alt.
                             alt.clear();
                         } else {
                             use crate::resolve::wikilink_dispatch::{

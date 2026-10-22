@@ -97,27 +97,26 @@ pub fn marked_media_at(blocks: &[Block], i: usize) -> Option<MarkedMedia> {
     Some(MarkedMedia { marker, href, title: caption.unwrap_or_else(|| alt.clone()) })
 }
 
-/// Each wikilink image whose pipe text is a mistyped display word, as
-/// [`crate::media::display_word_warning`] words it. The text stays the caption.
-pub fn wikilink_image_word_warnings(doc: &Document) -> Vec<String> {
+/// Each pipe segment of an image, in either form, that is a mistyped display
+/// word, as [`crate::media::display_word_warning`] words it. The text stays the caption.
+pub fn image_word_warnings(doc: &Document) -> Vec<String> {
+    fn check(inlines: &[Inline], out: &mut Vec<String>) {
+        for inline in inlines {
+            match inline {
+                // A standard image's words count only after its first pipe.
+                Inline::Image { alt, is_wikilink, .. } => out.extend(
+                    alt.split('|').skip(usize::from(!is_wikilink)).filter_map(crate::media::display_word_warning),
+                ),
+                Inline::Link { children, .. } => check(children, out),
+                _ => {}
+            }
+        }
+    }
     let mut out = Vec::new();
-    let mut check = |text: &str| out.extend(crate::media::display_word_warning(text));
     super::visit::visit_blocks(doc, |block| {
         match block {
-            Block::Paragraph(inlines) => {
-                for inline in inlines {
-                    if let Inline::Image { is_wikilink: true, alt, .. } = inline {
-                        check(alt);
-                    }
-                }
-            }
-            Block::Figure { image: Inline::Image { is_wikilink: true, alt, .. }, caption, .. } => {
-                match caption.as_deref() {
-                    Some([Inline::Text(text)]) => check(text),
-                    Some(_) => {}
-                    None => check(alt),
-                }
-            }
+            Block::Paragraph(inlines) => check(inlines, &mut out),
+            Block::Figure { image, .. } => check(std::slice::from_ref(image), &mut out),
             _ => {}
         }
         true
@@ -436,6 +435,7 @@ mod tests {
             class_names: Vec::new(),
             img_style: None,
             italic_caption: false,
+            link: None,
         }
     }
 

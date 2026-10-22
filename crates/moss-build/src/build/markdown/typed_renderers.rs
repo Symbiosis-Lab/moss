@@ -74,18 +74,23 @@ fn hero_href_is_video(href: &str) -> bool {
 /// One hero picture through the image synthesizer. With a snapshot the
 /// `<picture>`/dims/LQIP shape is available; without one only the bare `<img>`
 /// is, since a `.webp` companion nothing registered would 404 in preview.
-/// `extra` is attribute text joined after `alt`.
+/// `extra` is attribute text joined after `alt`; `display` is the hero's fit
+/// and position, which share the picture's one style attribute.
 fn hero_picture_html(
     href: &str,
     alt: &str,
     eager: bool,
     extra: &str,
+    display: &moss_core::media::MediaAttrs,
     assets: Option<&moss_core::asset_snapshot::AssetSnapshot>,
     plate: bool,
 ) -> String {
+    let style = display.to_inline_style();
     let opts = moss_core::render::image::ImageRenderOptions {
         eager: eager && assets.is_some(),
         extra_attrs: (!extra.is_empty()).then_some(extra),
+        style: style.as_deref(),
+        fit: display.fit,
         ..Default::default()
     };
     let empty = moss_core::asset_snapshot::AssetSnapshot::new();
@@ -232,10 +237,6 @@ pub(crate) fn render_hero_html_typed(
     } else {
         String::new()
     };
-    let style = attrs
-        .to_inline_style()
-        .map(|s| format!(" style=\"{}\"", html_escape(&s)))
-        .unwrap_or_default();
 
     // Build the asset snapshot once when a media lookup is available. Both the
     // image synthesizer (img_part) and the overlay renderer need it; building
@@ -332,13 +333,13 @@ pub(crate) fn render_hero_html_typed(
                 )
             }
         }
-        // `style` starts with a space; the synthesizer adds exactly one.
         (Some(href), _) => hero_picture_html(
             href,
             &args.image_alt,
             // The closing picture is the last thing on the page.
             !args.classes.split_whitespace().any(|c| c == "moss-hero-closing"),
-            &format!("{}{}", style.trim_start(), pair_attr("light")),
+            pair_attr("light").trim_start(),
+            &attrs,
             media_assets,
             is_plate,
         ),
@@ -350,7 +351,7 @@ pub(crate) fn render_hero_html_typed(
     let img_part = match dark_href {
         Some(dark) => format!(
             "{img_part}{}",
-            hero_picture_html(dark, "", false, &format!("{}{}", style.trim_start(), pair_attr("dark")), media_assets, is_plate)
+            hero_picture_html(dark, "", false, pair_attr("dark").trim_start(), &attrs, media_assets, is_plate)
         ),
         None => img_part,
     };
@@ -394,11 +395,7 @@ pub(crate) fn render_hero_html_typed(
         // applies to every IMAGE slide so the crossfade set renders
         // uniformly; the video synthesizer has no extra-attrs channel, so
         // video slides keep the CSS default (cover).
-        let extra_style = if style.is_empty() {
-            None
-        } else {
-            Some(style.trim_start().to_string())
-        };
+        let display_style = attrs.to_inline_style();
         for (i, href) in extra_hrefs.iter().enumerate() {
             if hero_href_is_video(href) {
                 let empty_snapshot = moss_core::asset_snapshot::AssetSnapshot::new();
@@ -424,7 +421,8 @@ pub(crate) fn render_hero_html_typed(
                 continue;
             }
             let opts = moss_core::render::image::ImageRenderOptions {
-                extra_attrs: extra_style.as_deref(),
+                style: display_style.as_deref(),
+                fit: attrs.fit,
                 ..Default::default()
             };
             let synth = match media_lookup {
@@ -947,6 +945,7 @@ mod tests {
                 class_names: Vec::new(),
                 img_style: Some("object-fit:cover;object-position:left".into()),
                 italic_caption: false,
+                link: None,
             }],
             image: Some(Url::Resolved(ResolvedUrl::new("header.png", UrlKind::Asset))),
             ..Default::default()

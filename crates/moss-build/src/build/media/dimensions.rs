@@ -260,6 +260,9 @@ impl MediaDimensionLookup {
     /// # Returns
     /// * `(width, height)` - Either from metadata or fallback (800x600)
     pub fn get(&self, path: &str) -> (u32, u32) {
+        // A resolved href is percent-encoded (`My%20Poster.png`); the map keys are file paths.
+        let decoded = moss_core::resolve::fuzzy_path::percent_decode_path(path);
+        let path = decoded.as_str();
         // Try exact match first
         if let Some(&dims) = self.maps.dimensions.get(path) {
             return dims;

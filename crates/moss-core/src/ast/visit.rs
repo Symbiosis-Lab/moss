@@ -122,12 +122,15 @@ where
         Block::Shortcode(sc) => {
             visit_urls_in_shortcode(sc, v);
         }
-        Block::Figure { image, caption, .. } => {
+        Block::Figure { image, caption, link, .. } => {
             // Descend into the image's src (the load-bearing URL); the
             // caption is a Vec<Inline> that may itself carry links —
             // unlikely in practice (captions default to alt text) but the
             // visitor must not silently skip them.
             visit_urls_in_inline(image, v);
+            if let Some(url) = link {
+                v.url(url);
+            }
             if let Some(cap_inlines) = caption {
                 for inline in cap_inlines {
                     visit_urls_in_inline(inline, v);
@@ -927,6 +930,7 @@ mod tests {
             class_names: Vec::new(),
             img_style: None,
             italic_caption: false,
+            link: None,
         }]);
         let mut seen: Vec<String> = Vec::new();
         visit_urls_mut(&mut doc, |u| match u {
@@ -955,6 +959,7 @@ mod tests {
             class_names: Vec::new(),
             img_style: None,
             italic_caption: false,
+            link: None,
         }]);
         visit_urls_mut(&mut doc, |u| {
             *u = Url::resolved("p.jpg", UrlKind::Asset);
@@ -993,6 +998,7 @@ mod tests {
             class_names: Vec::new(),
             img_style: None,
             italic_caption: false,
+            link: None,
         }]);
         let mut seen: Vec<String> = Vec::new();
         visit_urls_mut(&mut doc, |u| match u {
@@ -1032,6 +1038,7 @@ mod tests {
                 class_names: Vec::new(),
                 img_style: None,
                 italic_caption: false,
+                link: None,
             },
             Block::Paragraph(vec![
                 Inline::Link {

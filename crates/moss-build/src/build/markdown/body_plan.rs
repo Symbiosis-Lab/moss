@@ -36,7 +36,7 @@
 //! `body_plan_tests::plan_reassembles_to_render_document_output`.
 
 use moss_core::ast::{
-    Block, Document, GridCellParts, GridParts, GridShortcode, RenderHooks, Shortcode,
+    grid_parts::TileKind, Block, Document, GridCellParts, GridParts, GridShortcode, RenderHooks, Shortcode,
     SubscribeShortcode,
 };
 
@@ -117,6 +117,8 @@ pub struct GridEmission {
     /// is how the `no-cards` opt-out is detected — not by substring-matching
     /// the serialized opening tag.
     pub classes: String,
+    /// `:::grid {collage}` with a count the collage takes.
+    pub collage: bool,
     pub cells: Vec<GridCellEmission>,
 }
 
@@ -146,10 +148,14 @@ impl GridCellEmission {
     }
 
     /// Swap this cell for final markup that brings its own chrome (a
-    /// collection card, a link preview).
-    pub fn replace(&mut self, html: String) {
+    /// collection card, a link preview). In a collage the card is a picture
+    /// tile when it shows a cover, and a text tile when it does not.
+    pub fn replace(&mut self, html: String, has_cover: bool) {
         self.blocks.clear();
-        self.parts = GridCellParts::final_markup(html);
+        self.parts.replace(html);
+        if self.parts.tile.is_some() {
+            self.parts.tile = Some(if has_cover { TileKind::Picture } else { TileKind::Text });
+        }
     }
 }
 
@@ -620,6 +626,7 @@ fn emission(args: &GridShortcode, parts: GridParts) -> GridEmission {
     GridEmission {
         open_tag: parts.open_tag,
         classes: args.classes.clone(),
+        collage: args.is_collage(),
         cells: args
             .cells
             .iter()

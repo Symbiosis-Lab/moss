@@ -314,7 +314,7 @@ body[data-typesetting="vertical"] .moss-table-scroll {
 
 /* A collage's tracks stay horizontal (site.css), so a tile that holds text
    takes the page's reading direction back. */
-[data-typesetting="vertical"] .moss-grid[data-collage] .moss-grid-card:not(:has(img)) {
+[data-typesetting="vertical"] .moss-grid[data-collage] .moss-grid-card:not([data-tile="picture"]) {
   writing-mode: vertical-rl;
 }
 

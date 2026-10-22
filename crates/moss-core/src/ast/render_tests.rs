@@ -615,6 +615,7 @@ fn figure_renders_with_caption() {
         class_names: Vec::new(),
         img_style: None,
         italic_caption: false,
+        link: None,
     }]);
     assert!(
         html.starts_with(r#"<figure class="moss-image">"#),
@@ -656,6 +657,7 @@ fn figure_without_caption_keeps_alt_as_the_accessible_name() {
         class_names: Vec::new(),
         img_style: None,
         italic_caption: false,
+        link: None,
     }]);
     assert!(
         html.contains(r#"alt="A photo of the wall""#),
@@ -704,6 +706,7 @@ fn figure_with_empty_alt_has_empty_alt_not_a_copy_of_the_caption() {
         class_names: Vec::new(),
         img_style: None,
         italic_caption: false,
+        link: None,
     }]);
     assert!(html.contains(r#"alt="""#), "got: {html}");
 }
@@ -724,6 +727,7 @@ fn figure_alt_equal_to_the_caption_after_trimming_is_empty() {
         class_names: Vec::new(),
         img_style: None,
         italic_caption: false,
+        link: None,
     }]);
     assert!(html.contains(r#"alt="""#), "got: {html}");
 }
@@ -744,6 +748,7 @@ fn figure_with_explicit_alt_keeps_it_apart_from_the_caption() {
         class_names: Vec::new(),
         img_style: None,
         italic_caption: false,
+        link: None,
     }]);
     assert!(html.contains(r#"alt="A lake under a pink sky""#), "got: {html}");
     assert!(html.contains("<figcaption>Hiroshige, 1833. CC0.</figcaption>"), "got: {html}");
@@ -810,6 +815,7 @@ fn figure_renders_without_caption_when_none() {
         class_names: Vec::new(),
         img_style: None,
         italic_caption: false,
+        link: None,
     }]);
     assert!(html.contains("<figure"), "got: {html}");
     assert!(
@@ -836,6 +842,7 @@ fn figure_renders_no_figcaption_for_empty_caption_vec() {
         class_names: Vec::new(),
         img_style: None,
         italic_caption: false,
+        link: None,
     }]);
     assert!(!html.contains("<figcaption"), "got: {html}");
 }
@@ -860,6 +867,7 @@ fn figure_percent_width_emits_inline_style() {
         class_names: vec![],
         img_style: None,
         italic_caption: false,
+        link: None,
     }]);
     assert!(
         html.contains(r#"<figure class="moss-image" style="width:55%""#),
@@ -887,6 +895,7 @@ fn figure_named_width_still_emits_data_width() {
         class_names: vec![],
         img_style: None,
         italic_caption: false,
+        link: None,
     }]);
     assert!(html.contains(r#"data-width="wide""#), "got: {html}");
     assert!(
@@ -914,6 +923,7 @@ fn figure_caption_escapes_html_unsafe_chars() {
         class_names: Vec::new(),
         img_style: None,
         italic_caption: false,
+        link: None,
     }]);
     assert!(
         html.contains("<figcaption>a&lt;b&gt;c</figcaption>"),
@@ -1295,6 +1305,7 @@ fn figure_emits_data_source_line_on_outer_tag() {
         class_names: Vec::new(),
         img_style: None,
         italic_caption: false,
+        link: None,
     }];
     let meta = vec![BlockMeta {
         source_line: Some(9),

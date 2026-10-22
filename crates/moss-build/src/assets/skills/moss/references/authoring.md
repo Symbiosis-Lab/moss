@@ -247,7 +247,9 @@ tokens, etc.) run `moss describe --json`, or see `mosspub.com/docs/reference`
 
 A picture can sit beside the running text: `![[photo.jpg|align-left 40%]]` floats it to the left at 40% of the column and the text runs around it; `align-right` does the same on the other side, and with no percentage the float takes at most half the column. It works for an image, a captioned figure, an embed and a folder listing. Below 48rem the float is dropped and the picture takes the full width, so nothing needs a theme rule for phones.
 
-A picture also takes display words after its pipe, which set how it fills its frame, not where it sits on the page. `![[eagles.jpg|focus:50%,20%]]` keeps the point 50% across and 20% down in view when the picture is cropped. `![[leaf.jpg|contain]]` shows the whole picture instead of cropping it. `![[dock.jpg|cover]]` crops it to fill the frame, `![[dock.jpg|fill]]` stretches it to the frame, `![[dock.jpg|none]]` keeps its own size, and `![[dock.jpg|scale-down]]` is whichever of `none` and `contain` is smaller. The position words `top`, `bottom`, `left`, `right`, `center`, the corners written `top-left` or as two words (`![[harbour.jpg|bottom left]]`) choose the edge a crop keeps. They reach a picture embedded on its own, a hero, a page's cover, a grid or link card's cover, a folder listing's cover, and the pictures of a gallery and of a collage. Two traps. A word moss does not know becomes the picture's caption and alt text, so `![[leaf.jpg|contian]]` captions the picture "contian"; the build notes a misspelling only where it is unambiguous, a `focus:` point that does not parse or a known word with two adjacent letters swapped (`contian`, `cvoer`). In a wiki embed, a display word mixed with anything else makes the whole pipe a caption: `![[leaf.jpg|contain color=black]]` captions the picture "contain color=black" and crops nothing. A display word in a frontmatter `cover:` or a hero's value skips unknown words silently and is not checked for typos.
+A picture also takes display words after its pipe, which set how it fills its frame, not where it sits on the page. Both image forms take them: `![[eagles.jpg|focus:50%,20%]]` and `![Two eagles|focus:50%,20%](eagles.jpg)` keep the point 50% across and 20% down in view when the picture is cropped. `![[leaf.jpg|contain]]` shows the whole picture instead of cropping it. `![[dock.jpg|cover]]` crops it to fill the frame, `![[dock.jpg|fill]]` stretches it to the frame, `![[dock.jpg|none]]` keeps its own size, and `![[dock.jpg|scale-down]]` is whichever of `none` and `contain` is smaller. The position words `top`, `bottom`, `left`, `right`, `center`, the corners written `top-left` or as two words (`![[harbour.jpg|bottom left]]`) choose the edge a crop keeps; bare `left` and `right` move the crop, and `align-left` and `align-right` float the picture. Each `|` segment is read on its own as placement, display words or caption, so `![[leaf.jpg|focus:20%,62%|A leaf in autumn]]` keeps both the point and the caption. On a standard image the words count only after a pipe: `![Cover](c.jpg)` keeps "Cover" as its alt. They reach a picture embedded on its own, a hero, a page's cover, a grid or link card's cover, a folder listing's cover, and the pictures of a gallery and of a collage. Two traps. A word moss does not know becomes the picture's caption and alt text, so `![[leaf.jpg|contian]]` captions the picture "contian"; the build notes a misspelling only where it is unambiguous, a `focus:` point that does not parse or a known word with two adjacent letters swapped (`contian`, `cvoer`). Within one segment, a display word mixed with anything else makes the segment a caption: `![[leaf.jpg|contain color=black]]` captions the picture "contain color=black" and crops nothing; put a pipe between them. A display word in a frontmatter `cover:` or a hero's value skips unknown words silently and is not checked for typos.
+
+A picture inside a link is a figure when an italic line follows it, the same rule as for an unlinked picture: `[![Newton](newton.jpg)](/works/newton/)` then `*Newton, c. 1800*` on the next line links the picture and keeps the line as its caption, on any page. Without the line a linked picture (a logo, a badge) stays as it was, and in a grid cell it is a link card.
 
 ### Text from a file
 
@@ -355,26 +357,26 @@ Separate a grid's cells with a line that holds only `+++`. A grid takes one to s
 
 `:::grid N {scroll}` (2026-09-21) keeps a grid's row on one line and lets the reader drag it sideways instead of it wrapping — `N` becomes how many cards fit in view at once, with a slice of the next one showing as the cue to keep going. Reach for it on a "related articles" or "more like this" strip where reading order matters more than seeing every card at once; add `label="…"` to give the row an accessible name when the surrounding heading doesn't already say what it is. Skip it when every card must be visible without scrolling and use the plain wrapping grid instead.
 
-`:::grid {collage}` sets a collection's highlights as a collage: the first cell is the lead picture and the rest are smaller tiles, some of them details of the lead or a passage of text set as a tile. Write each picture with its credit as an italic line under it, and a passage as a fenced div:
+`:::grid {collage}` sets a collection's highlights as a collage: the first cell is the lead picture and the rest are smaller tiles, pictures or quotes. Write each picture with its credit as an italic line under it, starting with the work's title in bold, and a quote as a blockquote followed by its source as one italic line:
 
 ```
 :::grid {collage}
-![Lead picture](a.jpg)
-*Credit for a.*
+![Lead picture|focus:40%,30%](a.jpg)
+*__The harbour__ 1890 · City Museum · Public domain*
 +++
-![Second](b.jpg)
-*Credit for b.*
+[![Second](b.jpg)](/works/second/)
+*__Second__ 1902 · Public domain*
 +++
-::: {.passage}
-A passage set as type fills its tile.
-:::
+> Communication is health; communication is truth.
+
+*[Source, 1924](https://example.org/essays/)*
 +++
-![Third](c.jpg)
-*Credit for c.*
+![Title page|contain](c.jpg)
+*__Title page__ 1855*
 :::
 ```
 
-On a wide screen the lead takes the left half at full height and the other tiles pack the right half in rows of varied widths, inside a box with a fixed 9:4 shape; on a phone the lead runs full width at 3:2 and the others sit in rows of three squares. Pictures crop to fill their tile. A credit shows over its picture on hover and keyboard focus, and on every device a picture opens in the picture viewer with its credit under it. A cell that is not a picture fills its tile with the page background and clips its text with a fade, so keep a passage short. It takes 3 to 9 cells; any other count builds a plain grid and warns with the line. No column count is needed. Set `--moss-collage-gap` for the space between tiles. Reach for it instead of a grid with a placement rule per tile (`:nth-child`, `grid-area`), which is written for one tile count and does not hold on a phone; use `:::gallery` when the pictures are a set to go through and `:::grid N` when the cells are cards.
+On a wide screen the lead takes one column at full height, half the collage or narrower when its picture is upright, and the other tiles pack the six columns beside it; moss chooses the rows and widths from what the cells hold, for every count from 3 to 9. A row is at least `--moss-collage-row` tall and grows only to fit a quote; on a phone the lead runs full width, a quote takes a full row, and the pictures sit in rows of three. Pictures crop to fill their tile, as their display words set. A credit sits on a band of the page colour at the tile's foot and slides up on hover and keyboard focus: the bold title on its own line, the rest smaller beneath, and only the title when the tile is small. On a touch screen a tap opens the picture viewer with the credit, and a linked picture also gets a link to its page there. A quote is set as type on the page's paper and is never cut off; it uses `--moss-font-quote`, and one over about 140 characters is set smaller. The quote shape works in a plain `:::grid N` too, and only in a grid cell. It takes 3 to 9 cells; any other count builds a plain grid and warns with the line. No column count is needed. Set `--moss-collage-gap` for the space between tiles and `--moss-collage-lead` for the lead's share. Reach for it instead of a grid with a placement rule per tile (`:nth-child`, `grid-area`), which is written for one tile count and does not hold on a phone; use `:::gallery` when the pictures are a set to go through and `:::grid N` when the cells are cards.
 
 Under a scroll row, moss shows where the reader is. A row of up to seven cards gets one dot per card. A longer row gets the current card's number and the total ("12 / 40") between ‹ and › buttons that move one view, because dots stop telling a reader where they are past about seven. The number is the first card in view, or the last card once the row is at its end, and its box is sized for the widest number so nothing beside it moves.
 

@@ -299,25 +299,16 @@ pub trait RenderHooks {
                         out.push('"');
                     }
                     out.push('>');
-                    // Synth path: full attribute set + optional <picture>
-                    // wrap. The per-item inline style from MediaAttrs
-                    // (e.g. object-position) flows through
-                    // ImageRenderOptions::extra_attrs so the synthesizer's
-                    // LQIP / dim emission joins it correctly (the synth
-                    // suppresses its own style= when extra_attrs already
-                    // carries one, matching the legacy regex's has_style
-                    // guard).
-                    let media_style =
-                        crate::media::parse_media_attrs(&item.attrs).to_inline_style();
-                    let style_frag = item
-                        .title
-                        .iter()
-                        .map(|t| format!(r#"title="{}""#, crate::media::html_escape(t)))
-                        .chain(media_style.map(|s| format!(r#"style="{}""#, s)))
-                        .reduce(|a, b| format!("{a} {b}"));
+                    // The item's display words share the synthesizer's one style attribute.
+                    let display = crate::media::parse_media_attrs(&item.attrs);
+                    let media_style = display.to_inline_style();
+                    let style_frag =
+                        item.title.as_ref().map(|t| format!(r#"title="{}""#, crate::media::html_escape(t)));
                     let opts = crate::render::image::ImageRenderOptions {
                         eager: false,
                         extra_attrs: style_frag.as_deref(),
+                        style: media_style.as_deref(),
+                        fit: display.fit,
                         ..Default::default()
                     };
                     let item_html = crate::render::image::synthesize_image_html(
@@ -959,15 +950,12 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
         let ctx = crate::render::image::ImageContext::MarkdownInline;
         // The CommonMark title is the image's `title` attribute, before the
         // `style` fragment; neither is emitted when absent.
-        let extra_parts: Vec<String> = title
-            .map(|t| format!(r#"title="{}""#, crate::media::html_escape(t)))
-            .into_iter()
-            .chain(img_style.map(|s| format!(r#"style="{}""#, crate::media::html_escape(s))))
-            .collect();
-        let style_attr = (!extra_parts.is_empty()).then(|| extra_parts.join(" "));
+        let title_attr = title.map(|t| format!(r#"title="{}""#, crate::media::html_escape(t)));
         let cell_scope = self.grid_cell_sizes.borrow();
         let opts = crate::render::image::ImageRenderOptions {
-            extra_attrs: style_attr.as_deref(),
+            extra_attrs: title_attr.as_deref(),
+            style: img_style,
+            fit: img_style.and_then(crate::media::Fit::of_style),
             grid_cell_sizes: cell_scope.last().map(String::as_str),
             data_width: width,
             vertical: self.vertical,
@@ -1025,6 +1013,9 @@ fn push_bare_img(
         out.push_str(r#" style=""#);
         out.push_str(&escape_attr(s));
         out.push('"');
+        if let Some(fit) = crate::media::Fit::of_style(s) {
+            out.push_str(&format!(r#" data-fit="{}""#, fit.to_css_value()));
+        }
     }
     out.push_str(" />");
 }
@@ -2087,7 +2078,7 @@ mod tests {
         );
         assert_eq!(
             out,
-            r#"<img src="cat.jpg" alt="A cat" style="object-fit:cover" />"#
+            r#"<img src="cat.jpg" alt="A cat" style="object-fit:cover" data-fit="cover" />"#
         );
     }
 
@@ -2116,6 +2107,7 @@ mod tests {
             class_names: Vec::new(),
             img_style: Some("object-fit:cover;object-position:left".into()),
             italic_caption: false,
+            link: None,
         }];
         let sc = Shortcode::Hero(HeroShortcode {
             overlay: overlay_blocks,
@@ -2301,6 +2293,7 @@ mod tests {
             class_names: Vec::new(),
             img_style: None,
             italic_caption: false,
+            link: None,
         }
     }
 

@@ -310,7 +310,11 @@ impl Restore<'_> {
                 class_names: _,
                 img_style: _,
                 italic_caption: _,
+                link,
             } => {
+                if let Some(url) = link {
+                    self.literal_url(url);
+                }
                 self.in_inline(image);
                 if let Some(caption) = caption {
                     self.in_inlines(caption);

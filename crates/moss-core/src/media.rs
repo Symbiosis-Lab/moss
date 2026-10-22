@@ -60,6 +60,11 @@ impl Fit {
         let lower = s.to_lowercase();
         Self::KEYWORDS.iter().find(|(k, _)| *k == lower).map(|(_, f)| *f)
     }
+
+    /// The fit an inline style written by [`MediaAttrs::to_inline_style`] sets.
+    pub(crate) fn of_style(style: &str) -> Option<Self> {
+        style.split(';').find_map(|d| d.trim().strip_prefix("object-fit:")).and_then(Self::from_keyword)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -615,104 +620,64 @@ pub fn extract_width_from_alias(alias: &str) -> (Option<&'static str>, String) {
     (width, remaining.join("|"))
 }
 
-/// Return `true` if every token in `text` is a recognized display keyword.
-///
-/// Handles single-token keywords (`"left"`, `"contain"`) and two-word position
-/// keywords (`"top left"`).  An empty string returns `false`.
-///
-/// Fit and object-position only: alignment is [`Placement`]'s and is stripped
-/// out before anything calls this.
-pub fn is_all_display_keywords(text: &str) -> bool {
-    let tokens: Vec<&str> = text.split_whitespace().collect();
-    if tokens.is_empty() {
-        return false;
-    }
-
-    let mut i = 0;
-    while i < tokens.len() {
-        // Try combining current token with next for two-word positions.
-        if i + 1 < tokens.len() {
-            let combined = format!("{} {}", tokens[i], tokens[i + 1]);
-            if Position::from_keyword(&combined).is_some() {
-                i += 2;
-                continue;
-            }
-        }
-
-        if Fit::from_keyword(tokens[i]).is_some() {
-            i += 1;
-            continue;
-        }
-
-        if Position::from_keyword(tokens[i]).is_some() {
-            i += 1;
-            continue;
-        }
-
-        return false;
-    }
-
-    true
-}
-
-/// Classification of an image-embed pipe alias into its display-vs-caption
-/// role.
-///
-/// The pipe alias of `![[photo.jpg|<alias>]]` is one of three things:
-/// a run of structural display keywords (`cover`, `wide cover`), human-
-/// readable caption prose (`My nice photo`), or absent/empty. This struct
-/// captures the disambiguation so every image-embed call site classifies
-/// identically.
+/// What one `|` segment of an image's pipe text says.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ImageAliasClass {
-    /// Structural display-keyword run (e.g. `"cover"`, `"wide cover"`) to be
-    /// fed to `parse_media_attrs`; `None` when the alias is a caption or
-    /// empty.
-    pub display_keywords: Option<String>,
-    /// Caption text (also used as `alt`) when the alias is human-readable
-    /// prose; `None` for structural/empty aliases.
-    ///
-    /// **Invariant:** never `Some("")`. An empty alias yields `None` so
-    /// callers never emit an empty `<figcaption>`.
-    pub caption: Option<String>,
+pub(crate) enum AliasSegment {
+    /// Where the picture sits (`wide`, `40%`, `align-left`), with any display
+    /// words written in the same segment (`wide cover`) kept as the `String`.
+    Placement(Placement, String),
+    /// How the picture fills its frame: fit, position and `focus:` words only.
+    Display(String),
+    /// Anything else, kept as written: caption text.
+    Caption(String),
 }
 
-/// Classify an image-embed pipe alias into [`ImageAliasClass`].
-///
-/// Mirrors the 3-way split previously inlined in
-/// `ImageRenderer::render_to_markdown` (now lifted so it survives that
-/// struct's deletion in the image-embed synth-collapse):
-///
-/// - `None`                       → both `None`
-/// - `Some("")` (empty)           → both `None` (no empty figcaption)
-/// - `Some(s)` and structural     → `display_keywords = Some(s)`, `caption = None`
-/// - `Some(other)`                → `display_keywords = None`, `caption = Some(other)`
-///
-/// "Structural" here is fit / object-position only. Width and alignment have
-/// already been taken by [`extract_placement_from_alias`] before an alias
-/// reaches this function, so what is left is either image display keywords or
-/// prose.
-pub(crate) fn classify_image_alias(alias: Option<&str>) -> ImageAliasClass {
-    match alias {
-        // Empty alias (`![[file|]]`) is treated as no alias. Matches the
-        // historical `alias.is_empty()` guard exactly (no extra trimming).
-        Some(a) if a.is_empty() => ImageAliasClass {
-            display_keywords: None,
-            caption: None,
-        },
-        Some(a) if is_all_display_keywords(a) => ImageAliasClass {
-            display_keywords: Some(a.to_string()),
-            caption: None,
-        },
-        Some(other) => ImageAliasClass {
-            display_keywords: None,
-            caption: Some(other.to_string()),
-        },
-        None => ImageAliasClass {
-            display_keywords: None,
-            caption: None,
-        },
+/// Sort one `|` segment of an image's pipe text. Both image forms
+/// (`![[x.jpg|…]]` and `![…](x.jpg)`) read every segment through this.
+pub(crate) fn classify_alias_segment(segment: &str) -> AliasSegment {
+    match placement::parse_placement_segment(segment.trim()) {
+        Some((found, rest)) if !found.is_empty() => AliasSegment::Placement(found, rest),
+        Some((_, rest)) => AliasSegment::Display(rest),
+        None => AliasSegment::Caption(segment.to_string()),
     }
+}
+
+/// An image's pipe text, sorted segment by segment.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ImageWords {
+    pub placement: Placement,
+    /// The display words of every segment, space-joined; empty when none.
+    pub display: String,
+    /// The caption segments, rejoined with `|` and trimmed.
+    pub caption: String,
+}
+
+impl ImageWords {
+    /// The `object-fit` / `object-position` declarations the display words ask for.
+    pub fn img_style(&self) -> Option<String> {
+        parse_media_attrs(&self.display).to_inline_style()
+    }
+}
+
+/// Sort `alias` with [`classify_alias_segment`]. Earlier placement segments win.
+pub fn read_image_words(alias: &str) -> ImageWords {
+    let mut words = ImageWords::default();
+    let mut display: Vec<String> = Vec::new();
+    let mut caption: Vec<String> = Vec::new();
+    for segment in alias.split('|') {
+        match classify_alias_segment(segment) {
+            AliasSegment::Placement(found, rest) => {
+                words.placement.fill_from(found);
+                display.push(rest);
+            }
+            AliasSegment::Display(rest) => display.push(rest),
+            AliasSegment::Caption(text) => caption.push(text),
+        }
+    }
+    display.retain(|d| !d.is_empty());
+    words.display = display.join(" ");
+    words.caption = caption.join("|").trim().to_string();
+    words
 }
 
 /// Every single-token display word, in the spellings the parsers read, aliases included.

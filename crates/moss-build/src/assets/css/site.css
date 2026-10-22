@@ -8241,65 +8241,73 @@ a.moss-grid-card:hover {
   text-decoration: underline;
 }
 
-/* Collage (`:::grid {collage}`, 3 to 9 cells; the build emits `data-count`).
-   On a wide screen the first cell is the lead and takes the left half at full
-   height; the rest pack the right half in rows of varied widths inside a fixed
-   9:4 box. The box is a 12-column grid with two or three equal rows; the lead
-   spans every row and the others auto-place right of it, each taking
-   `--_cs` columns (rows sum to 6). Tiles crop (`object-fit: cover`), so every
-   tile is filled whatever the picture's proportions. */
+/* Collage (`:::grid {collage}`, 3 to 9 cells). The first cell is the lead: one
+   column at the height of every row. The others pack the six columns right of
+   it, each taking `--moss-collage-span` of them. The build writes the spans and
+   each tile's `data-tile` from what the cells hold, since CSS cannot tell a
+   picture from a quote; the rows follow `data-count`. A picture's media is absolutely placed, so only words
+   (a quote) can make a row taller than `--moss-collage-row`. */
 .moss-grid[data-collage] {
   --_collage-gap: var(--moss-collage-gap, 6px);
-  --_rows: 2;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  grid-template-rows: repeat(var(--_rows), minmax(0, 1fr));
+  --_collage-row: 216px;
+  --_collage-rows: 2;
+  grid-template-columns: var(--moss-collage-lead, var(--_collage-lead, 6fr)) repeat(6, minmax(0, 1fr));
+  grid-template-rows: repeat(var(--_collage-rows), minmax(var(--moss-collage-row, var(--_collage-row)), auto));
   gap: var(--_collage-gap);
-  aspect-ratio: 9 / 4;
-  /* The tracks and the 9:4 box are horizontal; a vertical page restores the
-     reading direction on text tiles in vertical.css. */
+  /* The tracks are horizontal; a vertical page restores the reading direction
+     on text tiles in vertical.css. */
   writing-mode: horizontal-tb;
 }
 @media (min-width: 769px) {
   .moss-grid[data-collage] { align-items: stretch; }
 }
-.moss-grid[data-collage]:is([data-count="7"], [data-count="8"], [data-count="9"]) { --_rows: 3; }
+@media (max-width: 1023px) {
+  .moss-grid[data-collage] { --_collage-row: 180px; }
+}
+@media (min-width: 1024px) {
+  .moss-grid[data-collage]:is([data-count="8"], [data-count="9"]) { --_collage-row: 160px; }
+}
+.moss-grid[data-collage]:is([data-count="8"], [data-count="9"]) { --_collage-rows: 3; }
+/* One row: taller, so the lead is not cropped to a strip. */
+.moss-grid[data-collage]:is([data-count="3"], [data-count="4"]) { --_collage-row: 300px; --_collage-rows: 1; }
+/* An upright lead (a poster) takes a narrower column. */
+.moss-grid[data-collage]:has(> :first-child[data-upright]) { --_collage-lead: 4fr; }
 .moss-grid[data-collage] > * {
-  grid-column: span var(--_cs, 2);
+  grid-column: span var(--moss-collage-span, 2);
   position: relative;
   min-inline-size: 0;
   min-block-size: 0;
   overflow: hidden;
 }
 .moss-grid[data-collage] > :first-child {
-  grid-column: 1 / 7;
+  grid-column: 1;
   grid-row: 1 / -1;
 }
-/* Widths of the other tiles, by count. Rows: 3 [6][6]; 4 [6][3 3];
-   5 [4 2][2 4]; 6 [2 2 2][2 4]; 7 [4 2][2 4][4 2]; 8 [2 2 2][4 2][2 4];
-   9 [2 2 2][2 4][2 2 2]. The default span is 2. */
-.moss-grid[data-collage][data-count="3"] > :nth-child(n+2),
-.moss-grid[data-collage][data-count="4"] > :nth-child(2) { --_cs: 6; }
-.moss-grid[data-collage][data-count="4"] > :nth-child(n+3) { --_cs: 3; }
-.moss-grid[data-collage][data-count="5"] > :is(:nth-child(2), :nth-child(5)),
-.moss-grid[data-collage][data-count="6"] > :nth-child(6),
-.moss-grid[data-collage][data-count="7"] > :is(:nth-child(2), :nth-child(5), :nth-child(6)),
-.moss-grid[data-collage][data-count="8"] > :is(:nth-child(5), :nth-child(8)),
-.moss-grid[data-collage][data-count="9"] > :nth-child(6) { --_cs: 4; }
+/* Keyboard focus rings the tile, inside its edge, so the clip does not cut it. */
+.moss-grid[data-collage] > :has(:focus-visible) {
+  outline: 2px solid var(--moss-color-accent);
+  outline-offset: -3px;
+}
 
 /* A tile is a picture, or any other cell. */
-.moss-grid[data-collage] .moss-grid-card :is(picture, img) {
+.moss-grid[data-collage] [data-tile="picture"] :is(picture, img) {
   inline-size: 100%;
   block-size: 100%;
   max-inline-size: none;
 }
 /* The article figure spacing rule skips collage tiles (`:where(:not(.moss-grid[data-collage] *))`, at no added specificity),
    so this margin reset needs no more specificity than the tile selector. */
-.moss-grid[data-collage] .moss-image {
+.moss-grid[data-collage] [data-tile="picture"] .moss-image {
   position: absolute;
   inset: 0;
   margin: 0;
   inline-size: 100%;
   block-size: 100%;
+}
+.moss-grid[data-collage] [data-tile="picture"] .moss-image > a {
+  display: block;
+  position: absolute;
+  inset: 0;
 }
 .moss-grid[data-collage] .moss-grid-card img {
   display: block;
@@ -8307,43 +8315,103 @@ a.moss-grid-card:hover {
   object-fit: cover;
   border-radius: 0;
 }
-/* A caption is a credit: over the picture on hover or keyboard focus, in the
-   viewer on every device. It stays in the markup, so it is always there to a
-   reader of the source or of the page without styles. */
-.moss-grid[data-collage] .moss-grid-card figcaption {
+.moss-grid[data-collage] .moss-grid-card:has(> .moss-image) { container-type: size; }
+/* A picture shown whole sits on the surface ground, not a band of its own colour. */
+.moss-grid[data-collage] .moss-grid-card img[data-fit="contain"] { background-color: var(--moss-color-surface); }
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .moss-grid[data-collage] .moss-grid-card img { transition: transform 0.3s ease-out; }
+  /* A picture shown whole is not zoomed. */
+  .moss-grid[data-collage] .moss-grid-card:hover img:not([data-fit="contain"]) { transform: scale(1.03); }
+}
+/* A caption is a credit, on a band of the page colour at the tile's foot. It
+   slides up on hover or keyboard focus, and opens in the viewer on a touch
+   screen. Hidden only to the eye: it stays in the accessibility tree. A bold
+   run at its start is a title line; the rest is a smaller line of facts. */
+.moss-grid[data-collage] .moss-grid-card .moss-image figcaption {
   position: absolute;
   inset-inline: 0;
   inset-block-end: 0;
   margin: 0;
-  padding: var(--moss-space-sm) var(--moss-space-sm) var(--moss-space-xs);
-  color: #fff;
-  font-size: 0.8125rem;
+  padding: var(--moss-space-xs) var(--moss-space-sm);
+  color: var(--moss-color-text-secondary);
+  font-family: var(--moss-font-mono, ui-monospace, monospace);
+  font-size: 0.6875rem;
   line-height: 1.35;
   text-align: start;
-  background: rgb(0 0 0 / 0.72);
+  overflow-wrap: anywhere;
+  background: var(--moss-color-bg);
   opacity: 0;
+  transform: translateY(100%);
   pointer-events: none;
-  transition: opacity 0.15s;
+  transition: opacity 0.15s, transform 0.2s ease-out;
 }
-.moss-grid[data-collage] .moss-grid-card figcaption a { color: inherit; }
+.moss-grid[data-collage] .moss-grid-card .moss-image figcaption > strong:first-child {
+  display: block;
+  color: var(--moss-color-text);
+  font-family: var(--moss-font-body);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+/* Too small for both lines: the title stays, the facts go (still read aloud). */
+@container (max-width: 11rem) or (max-height: 7.5rem) {
+  .moss-grid[data-collage] .moss-grid-card .moss-image figcaption:has(> strong:first-child) { font-size: 0; }
+  .moss-grid[data-collage] .moss-grid-card .moss-image figcaption > strong:first-child { font-size: 0.8125rem; }
+}
+.moss-grid[data-collage] .moss-grid-card .moss-image figcaption a { color: inherit; }
 @media (hover: hover) {
-  .moss-grid[data-collage] .moss-grid-card:is(:hover, :focus-within) figcaption { opacity: 1; }
+  .moss-grid[data-collage] .moss-grid-card:is(:hover, :focus-within) .moss-image figcaption { opacity: 1; transform: none; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .moss-grid[data-collage] .moss-grid-card figcaption { transition: none; }
+  .moss-grid[data-collage] .moss-grid-card .moss-image figcaption { transition: none; }
 }
-/* A cell that is not a picture fills its tile with the page background and
-   clips its text with a fade; it never scrolls. */
-.moss-grid[data-collage] .moss-grid-card:not(:has(img)) {
+/* A cell that is not a picture is set on the page's paper. Its row grows to
+   fit it, so its words are never cut off. */
+.moss-grid[data-collage] .moss-grid-card:not([data-tile="picture"]) {
   box-sizing: border-box;
   padding: var(--moss-space-sm);
   font-size: 0.875rem;
   line-height: 1.4;
   background: var(--moss-color-bg);
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5em), transparent);
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5em), transparent);
 }
-.moss-grid[data-collage] .moss-grid-card:not(:has(img)) > :first-child { margin-block-start: 0; }
+.moss-grid[data-collage] .moss-grid-card:not([data-tile="picture"]) > :first-child { margin-block-start: 0; }
+.moss-grid[data-collage] [data-tile="quote"] {
+  display: flex;
+  padding: var(--moss-space-md);
+  border: 1px solid var(--moss-border-light);
+}
+
+/* A quote cell: a blockquote and its source line (`figure.moss-quote`), set as
+   type in `--moss-font-quote`, in a collage or a plain grid. */
+.moss-quote {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  font-family: var(--moss-font-quote, var(--moss-font-body));
+}
+.moss-quote blockquote {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: var(--moss-color-text);
+  font-size: 1.25rem;
+  line-height: 1.35;
+  text-wrap: pretty;
+}
+.moss-quote[data-length="long"] blockquote { font-size: 1rem; line-height: 1.45; }
+.moss-quote blockquote p { margin: 0 0 0.5em; }
+.moss-quote figcaption {
+  margin-block-start: var(--moss-space-sm);
+  color: var(--moss-color-text-secondary);
+  font-size: 0.8125rem;
+}
+.moss-quote figcaption::before {
+  content: "";
+  display: block;
+  inline-size: 2rem;
+  margin-block-end: var(--moss-space-xs);
+  border-block-start: 1px solid var(--moss-border-medium);
+}
 
 /* Horizontal inline space narrows on phones. Vertical typesetting keeps
    the authored tracks because its inline space follows viewport height. */
@@ -8353,32 +8421,25 @@ a.moss-grid-card:hover {
     --_grid-track: calc(100% / 1.3);
   }
 
-  /* Collage on phones: the lead runs full width at 3:2, then the others sit
-     in rows of three squares; a last row of one or two shares the width. A
-     tile's aspect ratio is its span over two, so every row is as tall as a
-     row of squares. */
+  /* Collage on phones: six columns. The lead runs full width at 4:3, a quote
+     takes a full row at its own height, and pictures take
+     `--moss-collage-span-sm` columns each (2, or 3 and 6 for a short last
+     row), square, 4:3 and 3:2. Dense flow packs pictures around quotes. */
   .moss-grid[data-collage] {
     grid-template-columns: repeat(6, minmax(0, 1fr));
     grid-template-rows: none;
-    aspect-ratio: auto;
+    grid-auto-flow: row dense;
   }
   .moss-grid[data-collage] > * {
-    grid-column: span 2;
-    aspect-ratio: 1;
+    grid-column: span var(--moss-collage-span-sm, 2);
+    aspect-ratio: min(1 + (var(--moss-collage-span-sm, 2) - 2) / 3, 1.5);
   }
   .moss-grid[data-collage] > :first-child {
     grid-column: 1 / -1;
     grid-row: auto;
-    aspect-ratio: 3 / 2;
+    aspect-ratio: 4 / 3;
   }
-  .moss-grid[data-collage]:is([data-count="3"], [data-count="6"], [data-count="9"]) > :nth-last-child(-n+2) {
-    grid-column: span 3;
-    aspect-ratio: 3 / 2;
-  }
-  .moss-grid[data-collage]:is([data-count="5"], [data-count="8"]) > :last-child {
-    grid-column: span 6;
-    aspect-ratio: 3 / 1;
-  }
+  .moss-grid[data-collage] > :not([data-tile="picture"]) { aspect-ratio: auto; }
 }
 
 /* Scrolling row (`:::grid N {scroll}`): the row stays on ONE line and the

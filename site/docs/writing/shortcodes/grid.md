@@ -108,30 +108,32 @@ Under vertical (right-to-left column) typesetting, `scroll` still keeps the row 
 
 ## Collage
 
-Add `collage` to show a collection's highlights as a collage: the first cell is the lead picture and the others are smaller tiles, pictures or a passage of text. No column count is needed.
+Add `collage` to show a collection's highlights as a collage: the first cell is the lead picture and the others are smaller tiles, pictures or quotes. No column count is needed.
 
 ```markdown
 :::grid {collage}
-![Lead picture](a.jpg)
-*Credit for a.*
+![Lead picture|focus:40%,30%](a.jpg)
+*__The harbour__ 1890 · City Museum · Public domain*
 +++
-![Second](b.jpg)
-*Credit for b.*
+[![Second](b.jpg)](/works/second/)
+*__Second__ 1902 · Public domain*
 +++
-::: {.passage}
-A passage set as type fills its tile.
-:::
+> Communication is health; communication is truth.
+
+*[Source, 1924](https://example.org/essays/)*
 +++
-![Third](c.jpg)
-*Credit for c.*
+![Title page|contain](c.jpg)
+*__Title page__ 1855*
 :::
 ```
 
-On a wide screen the lead takes the left half at full height and the other tiles pack the right half in rows of varied widths, inside a box with a fixed 9:4 shape. On a phone the lead runs full width at 3:2 and the others sit in rows of three squares; a last row with fewer tiles shares the width. Pictures crop to fill their tile.
+On a wide screen the lead takes one column at full height, half the collage, or less when its picture is upright like a poster. The other tiles pack the six columns beside it, and moss chooses the rows and each tile's width from what the cells hold. A row is at least `--moss-collage-row` tall and grows only to fit a quote, never for a picture. On a phone the lead runs full width, a quote takes a full row at its own height, and pictures sit in rows of three; a last row with fewer pictures is widened. Pictures crop to fill their tile, as the words after their pipe set: `focus:X%,Y%` keeps a point in view and `contain` shows the whole picture.
 
-The italic line under a picture is its credit. It shows over the picture on hover and keyboard focus, and on every device, including a phone, a picture opens in the picture viewer with its credit under it. A cell that is not a picture, such as a fenced div holding a passage, fills its tile with the page background and fades out the text that does not fit, so keep it short.
+The italic line under a picture is its credit. A bold run at its start is the work's title, set on its own line above a smaller line of facts; a tile too small for both keeps the title. The credit sits on a band of the page colour at the tile's foot and slides up on hover and keyboard focus. On a touch screen a tap opens the picture viewer with the full credit, and for a linked picture a link to its page.
 
-A collage takes 3 to 9 cells. With any other count the build warns with the line and shows a plain grid. Set `--moss-collage-gap` for the space between tiles (default `6px`). Use a collage for a handful of highlights; use [[gallery]] for a set of photos to go through and a plain grid when each cell is a card.
+A blockquote followed by one italic line is a quote, with the line as its source; only the source can be a link. It is set as type on the page's paper inside a hairline and is never cut off. Its face is `--moss-font-quote` (the body face unless set), and a quote over about 140 characters is set smaller. This works in a plain grid too.
+
+A collage takes 3 to 9 cells. With any other count the build warns with the line and shows a plain grid. Set `--moss-collage-gap` for the space between tiles (default `6px`) and `--moss-collage-lead` for the lead's column. Use a collage for a handful of highlights; use [[gallery]] for a set of photos to go through and a plain grid when each cell is a card.
 
 ## Cell content
 

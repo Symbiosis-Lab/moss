@@ -493,6 +493,12 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "在文章中查看",
             Language::ZhHant => "在文章中查看",
         },
+        "open_its_page" => match lang {
+            Language::En => "Open its page",
+            Language::De => "Seite öffnen",
+            Language::ZhHans => "打开其页面",
+            Language::ZhHant => "開啟其頁面",
+        },
 
         // Comments
         // Empty-state section label. The call-to-action lives in the textarea

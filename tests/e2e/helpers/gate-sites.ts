@@ -3664,9 +3664,13 @@ Body.
 };
 
 /** Three collages (4, 7 with one passage tile, 9 tiles) of pictures with mixed proportions. */
-const COLLAGE_PASSAGE = `A passage set as type fills its tile. It carries on well past what one small tile can show, so the text has to be clipped with a fade instead of spilling out of its box and into the tiles around it. The quick brown fox jumps over the lazy dog, again and again, until the tile is full.`;
+const COLLAGE_PASSAGE = `A passage set as type fills its tile. It carries on past what one small tile can show at its least height, so its row grows to fit it rather than cutting it off.`;
 
 const COLLAGE_LONG_CREDIT = `A long credit line that names the photographer, the archive, the year and the licence, so it runs to three lines in a narrow tile.`;
+
+const COLLAGE_SHORT_QUOTE = "Communication is health; communication is truth; communication is happiness.";
+const COLLAGE_LONG_QUOTE =
+  "There is no desire more natural than the desire for knowledge. We try every means that can bring us to it; when reason fails us, we make use of experience, which is a weaker and less worthy means, but truth is so great a thing that we ought not to disdain any channel that leads us to it.";
 
 function collageBody(count: number, passageAt?: number): string {
   return Array.from({ length: count }, (_, i) =>
@@ -3716,28 +3720,75 @@ uid: "clg00101"
 
 # Collage
 
-## Four
+${[3, 4, 5, 6, 7, 8, 9]
+  .map(
+    (n) => `## ${n} tiles
 
 :::grid {collage}
-${collageBody(4)}
+${n === 5 ? collageBody(5).replace("![Picture 3](t3.svg)\n*Credit for picture 3.*", "![White](white.svg)\n*" + COLLAGE_LONG_CREDIT + "*") : collageBody(n)}
+:::`,
+  )
+  .join("\n\n")}
+`,
+    "mixed/index.md": `---
+title: Mixed Collage
+uid: "clg00120"
+---
+
+# Mixed
+
+:::grid {collage}
+[![The harbour at dawn|focus:20%,70%](../t1.svg)](/upright/)
+*__Harbour at dawn__ 1890 · City Museum · Public domain*
++++
+![Title page of the first edition|contain](../poster.png)
+*__Title page__ 1855 · Public domain*
++++
+> ${COLLAGE_SHORT_QUOTE}
+
+*[Montaigne, 1924](https://example.org/essays/)*
++++
+![Picture 4](../t4.svg)
+*__A long title for a small tile__ 1902 · Harbour Archive · Public domain*
++++
+![Picture 5](../t5.svg)
+*__Tall__ 1910*
++++
+![Picture 6](../t6.svg)
+*__Six__ 1911*
++++
+![Picture 7](../t7.svg)
+*__Tall again__ 1912*
++++
+> ${COLLAGE_LONG_QUOTE}
+
+*Essays, book three*
++++
+![Picture 9](../t9.svg)
+*__Nine__ 1913*
 :::
+`,
+    // A raster poster: the build reads a picture's pixel size from raster files only.
+    "poster.png": Buffer.from("iVBORw0KGgoAAAANSUhEUgAAACgAAAA8CAIAAACb22+3AAAAOElEQVR42u3NQQkAAAgEsEtnEtOZ0hgiDPZfpvpExGKxWCwWi8VisVgsFovFYrFYLBaLxWLxp3gBxqJ0NeApenkAAAAASUVORK5CYII=", "base64"),
+    "upright/index.md": `---
+title: Upright Collage
+uid: "clg00130"
+---
 
-## Seven
-
-:::grid {collage}
-${collageBody(7, 3)}
-:::
-
-## Credit
-
-:::grid {collage}
-${collageBody(5).replace("![Picture 3](t3.svg)\n*Credit for picture 3.*", "![White](white.svg)\n*" + COLLAGE_LONG_CREDIT + "*")}
-:::
-
-## Nine
+# Upright
 
 :::grid {collage}
-${collageBody(9)}
+![A poster](../poster.png)
+*__Poster__ 1920*
++++
+![Picture 4](../t4.svg)
+*Credit 4.*
++++
+![Picture 6](../t6.svg)
+*Credit 6.*
++++
+![Picture 9](../t9.svg)
+*Credit 9.*
 :::
 `,
   },

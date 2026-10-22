@@ -173,6 +173,36 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Gap between the tiles of a collage (`:::grid {collage}`), the same in both directions at every width.",
     },
     CustomProp {
+        name: "--moss-collage-lead",
+        owner: "moss-grid",
+        default: "6fr (4fr for an upright lead)",
+        description: "Width of a collage's lead column on a wide screen, against six `1fr` columns for the other tiles. Unset, it is `6fr`, half the collage, or `4fr` when the lead cell is `data-upright` (a picture taller than wide). Setting it fixes the width whatever the lead holds.",
+    },
+    CustomProp {
+        name: "--moss-collage-row",
+        owner: "moss-grid",
+        default: "216px (160px at 8 or 9 tiles, 180px under 1024px, 300px at 3 or 4)",
+        description: "Least height of each collage row on a wide screen. A row is never shorter; it grows only when a quote or other text in it needs more room, never for a picture, whose media is absolutely placed.",
+    },
+    CustomProp {
+        name: "--moss-collage-span",
+        owner: "moss-grid-card",
+        default: "set by the build",
+        description: "How many of the six columns right of the lead a collage tile takes on a wide screen, written by the build into the tile's `style`. Read-only for a theme: a row's spans sum to six.",
+    },
+    CustomProp {
+        name: "--moss-collage-span-sm",
+        owner: "moss-grid-card",
+        default: "set by the build",
+        description: "How many of six columns a collage tile takes on a phone, written by the build into the tile's `style`: 6 for a quote or other text, which takes a full row at its own height; 2 for a picture (square), and 3 (4:3) or 6 (3:2) for the pictures of a short last row. Read-only for a theme.",
+    },
+    CustomProp {
+        name: "--moss-font-quote",
+        owner: "moss-quote",
+        default: "var(--moss-font-body)",
+        description: "Face of a quote cell's words (`figure.moss-quote`). Unset, the body face, whose stack already carries the CJK faces, so a quote in Chinese needs no markup.",
+    },
+    CustomProp {
         name: "--moss-grid-image-ratio",
         owner: "moss-grid-card",
         default: "1 / 1",

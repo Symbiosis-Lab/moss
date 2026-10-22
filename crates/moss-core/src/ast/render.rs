@@ -587,6 +587,7 @@ fn render_block<H: RenderHooks + ?Sized>(
             class_names,
             img_style,
             italic_caption: _,
+            link,
         } => {
             // Image-only paragraphs promoted at parse time become
             // Block::Figure: a `<figure class="moss-image">` wrap around the
@@ -650,6 +651,8 @@ fn render_block<H: RenderHooks + ?Sized>(
             // Render the inner image. Pattern-match the constrained shape;
             // any other inline falls back to the standard inline path so
             // the renderer never panics on a malformed Figure.
+            let mut img_html = String::new();
+            let img_out = &mut img_html;
             match image {
                 Inline::Image {
                     src, alt, title, ..
@@ -663,7 +666,7 @@ fn render_block<H: RenderHooks + ?Sized>(
                         });
                         let alt = if repeats_caption { "" } else { alt.as_str() };
                         hooks.render_image(
-                            out,
+                            img_out,
                             r,
                             alt,
                             title.as_deref(),
@@ -676,19 +679,28 @@ fn render_block<H: RenderHooks + ?Sized>(
                                 false,
                                 "Url::Unresolved({s:?}) reached Block::Figure renderer — visit_urls_mut missing or buggy"
                             );
-                        out.push_str(r#"<img src=""#);
-                        out.push_str(&escape_attr(s));
-                        out.push_str(r#"" alt=""#);
-                        out.push_str(&escape_attr(alt));
-                        out.push_str(r#"" />"#);
+                        img_out.push_str(r#"<img src=""#);
+                        img_out.push_str(&escape_attr(s));
+                        img_out.push_str(r#"" alt=""#);
+                        img_out.push_str(&escape_attr(alt));
+                        img_out.push_str(r#"" />"#);
                     }
                 },
                 _ => {
                     // Defensive: a non-Image inline in a Figure violates
                     // the parser-enforced shape, but the renderer must
                     // still emit something rather than crash.
-                    render_inline(hooks, out, image, fnotes);
+                    render_inline(hooks, img_out, image, fnotes);
                 }
+            }
+            // A linked picture: the link holds the image, never the caption.
+            match link {
+                Some(Url::Resolved(r)) => hooks.render_link(out, r, false, &img_html),
+                Some(Url::Unresolved(s)) => {
+                    debug_assert!(false, "Url::Unresolved({s:?}) reached a Block::Figure link — visit_urls_mut missing or buggy");
+                    out.push_str(&img_html);
+                }
+                None => out.push_str(&img_html),
             }
             if let Some(cap_inlines) = caption {
                 if !cap_inlines.is_empty() {
