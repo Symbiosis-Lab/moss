@@ -2,9 +2,10 @@
  * The scratch site the contents-lens render gate builds.
  *
  * One page with `contents: pictures`: six sections that each open with a
- * picture and a seventh with none. A control page has the same seven titles and
- * no field, to compare the ruler at rest against. A third page has forty
- * sections, a few with pictures. All text is invented.
+ * picture (one cropped to a focal point) and a seventh with none. A control
+ * page has the same seven titles and no field, to compare the ruler at rest
+ * against. A third page has forty sections, a few with pictures. All text is
+ * invented.
  * Served by playwright/contents-lens.config.ts.
  */
 import type { ScratchSiteSpec } from "./scratch-site";
@@ -21,6 +22,9 @@ export const LENS_SECTIONS = [
 ];
 /** The last section has no picture. */
 export const LENS_WITH_IMAGE = [true, true, true, true, true, true, false];
+/** The section whose picture is cropped to a focal point, and that point. */
+export const FOCAL_ROW = 2;
+export const FOCUS_POINT = "20% 70%";
 export const MANY = 40;
 /** A page that fills the window (`content_width: full`), so its left margin is
  *  as narrow as a page's gets, with titles that do not fit it on one line. */
@@ -35,10 +39,13 @@ export const FULL_SECTIONS = [
 
 const images = ["quay.png", "nets.png", "rope.png"];
 
+const picture = (title: string, i: number): string =>
+  i === FOCAL_ROW ? `![[${images[i % 3]}|focus:${FOCUS_POINT.replace(" ", ",")}]]` : `![${title}](${images[i % 3]})`;
+
 const body = (withPictures: boolean): string =>
   LENS_SECTIONS.map(
     (title, i) =>
-      `## ${title}\n\n${withPictures && LENS_WITH_IMAGE[i] ? `![${title}](${images[i % 3]})\n\n` : ""}${paragraphs(5)}`,
+      `## ${title}\n\n${withPictures && LENS_WITH_IMAGE[i] ? `${picture(title, i)}\n\n` : ""}${paragraphs(5)}`,
   ).join("\n\n");
 
 const many = Array.from({ length: MANY }, (_, i) => {

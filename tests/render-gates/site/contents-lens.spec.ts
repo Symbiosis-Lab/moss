@@ -1,23 +1,28 @@
 /**
  * The contents ruler of a page with `contents: pictures`: plain at rest, and
- * opening like a wheel around the pointer.
+ * magnifying in place around the pointer.
  *
- * What only an engine can answer: that the strips under the pointer never
- * move, that the row drawn under the pointer is the strip's own row, how big
- * each row's picture is, and that nothing on the page is offset.
+ * What only an engine can answer: where each open row is drawn, that the
+ * focused row stays under the pointer as it moves and the list stays put past
+ * either end, which row a click follows, how the names fit one line, that the
+ * picture keeps its crop, and that nothing on the page is offset.
  *
  * Fixture: playwright/contents-lens.config.ts -> tests/e2e/helpers/contents-lens-site.ts
  * Run via: bash scripts/render-gates.sh contents-lens
  */
 import { test, expect, type Page } from '@playwright/test';
-import { FULL_SECTIONS, LENS_SECTIONS, LENS_WITH_IMAGE, MANY } from '../../e2e/helpers/contents-lens-site';
+import { contrastRatio, relativeLuminance } from '../../e2e/helpers/wcag-contrast';
+import { FOCAL_ROW, FOCUS_POINT, FULL_SECTIONS, LENS_SECTIONS, LENS_WITH_IMAGE, MANY } from '../../e2e/helpers/contents-lens-site';
 
 const LENS = '/essays/lens/';
 const PLAIN = '/essays/plain/';
 const MANY_PAGE = '/essays/many/';
 const FULL_PAGE = '/essays/full/';
-const PIC = 40;
+/** contents-lens.ts: rest, open and focused row heights, and the pointer travel per row. */
 const REST = 20;
+const OPEN_ROW = 26;
+const FOCUS_ROW = 74;
+const PITCH = 34;
 const N = LENS_SECTIONS.length;
 
 async function frames(page: Page, n = 3): Promise<void> {
@@ -49,67 +54,82 @@ async function intoPage(page: Page): Promise<void> {
 
 interface Row {
   href: string | null;
-  strip: { top: number; bottom: number; x: number };
-  dash: { y: number; x: number };
-  /** Drawn centre, and the drawn height implied by the row's weight. */
-  centre: number;
-  pic: { width: number; centre: number; visible: boolean; src: string | null } | null;
-  labelOpacity: number;
-  labelVisible: boolean;
+  /** The list item: the row's rest box, which never moves. */
+  rest: { top: number; centre: number };
+  /** The link: the drawn row. */
+  box: { top: number; bottom: number; centre: number; height: number };
+  dash: { x: number; y: number };
+  focus: boolean;
+  label: { left: number; right: number; height: number; lineHeight: number; visible: boolean; cut: boolean; ellipsis: string };
+  pic: { left: number; shown: boolean; position: string } | null;
 }
 
 const rows = (page: Page): Promise<Row[]> =>
-  page.evaluate(
-    ({ pic }) =>
-      [...document.querySelectorAll<HTMLElement>('.moss-contents-ruler a')].map((a) => {
-        const box = a.getBoundingClientRect();
-        const dash = a.querySelector('.moss-contents-ruler-dash')!.getBoundingClientRect();
-        const label = a.querySelector<HTMLElement>('.moss-contents-ruler-label')!;
-        const frame = a.querySelector<HTMLElement>('.moss-contents-ruler-pic');
-        const r = frame?.getBoundingClientRect();
-        const labelBox = label.getBoundingClientRect();
-        const cs = getComputedStyle(label);
-        return {
-          href: a.getAttribute('href'),
-          strip: { top: box.top, bottom: box.bottom, x: box.left },
-          dash: { y: dash.top + dash.height / 2, x: dash.left },
-          centre: labelBox.top + labelBox.height / 2,
-          pic: frame && r
-            ? {
-                width: r.width,
-                centre: r.top + r.height / 2,
-                visible: getComputedStyle(frame).visibility === 'visible' && r.width > 0.5,
-                src: frame.querySelector('img')?.getAttribute('src') ?? null,
-              }
-            : null,
-          labelOpacity: Number(cs.opacity),
-          labelVisible: cs.visibility === 'visible',
-        };
-      }),
-    { pic: PIC },
+  page.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>('.moss-contents-ruler a')].map((a) => {
+      const li = a.parentElement!.getBoundingClientRect();
+      const box = a.getBoundingClientRect();
+      const dash = a.querySelector('.moss-contents-ruler-dash')!.getBoundingClientRect();
+      const label = a.querySelector<HTMLElement>('.moss-contents-ruler-label')!;
+      const lb = label.getBoundingClientRect();
+      const ls = getComputedStyle(label);
+      const frame = a.querySelector<HTMLElement>('.moss-contents-ruler-pic');
+      const fs = frame && getComputedStyle(frame);
+      const img = frame?.querySelector('img');
+      return {
+        href: a.getAttribute('href'),
+        rest: { top: li.top, centre: li.top + li.height / 2 },
+        box: { top: box.top, bottom: box.bottom, centre: box.top + box.height / 2, height: box.height },
+        dash: { x: dash.left, y: dash.top + dash.height / 2 },
+        focus: a.hasAttribute('data-focus'),
+        label: {
+          left: lb.left,
+          right: lb.right,
+          height: lb.height,
+          lineHeight: parseFloat(ls.lineHeight),
+          visible: ls.visibility === 'visible' && Number(ls.opacity) > 0,
+          cut: label.scrollWidth > label.clientWidth + 0.5,
+          ellipsis: ls.textOverflow,
+        },
+        pic: frame && fs
+          ? {
+              left: frame.getBoundingClientRect().left,
+              shown: fs.display !== 'none' && /^inset\(0(px)?\)$/.test(fs.clipPath),
+              position: img ? getComputedStyle(img).objectPosition : '',
+            }
+          : null,
+      };
+    }),
   );
 
-const stripCentre = (r: Row): number => (r.strip.top + r.strip.bottom) / 2;
+const isOpen = (page: Page) => page.locator('.moss-contents-ruler').evaluate((el) => el.hasAttribute('data-lens'));
+const focused = async (page: Page): Promise<number> => (await rows(page)).findIndex((r) => r.focus);
 
-/** Hover a point and wait until the ruler is open and the drawing has stopped moving. */
+/** Wait until the open list has stopped moving. */
 async function settle(page: Page): Promise<void> {
-  await expect.poll(() => page.locator('.moss-contents-ruler').evaluate((el) => el.hasAttribute('data-lens'))).toBe(true);
+  await expect.poll(() => isOpen(page)).toBe(true);
   let previous = '';
   for (let i = 0; i < 120; i++) {
     await frames(page, 2);
-    const now = JSON.stringify((await rows(page)).map((r) => [r.centre.toFixed(2), r.pic?.width.toFixed(2)]));
+    const now = JSON.stringify((await rows(page)).map((r) => [r.box.top.toFixed(2), r.box.height.toFixed(2), r.pic?.shown]));
     if (now === previous) return;
     previous = now;
   }
-  throw new Error('the open ruler never stopped moving');
+  throw new Error('the open list never stopped moving');
 }
 
-async function hoverStrip(page: Page, k: number, offset = 0): Promise<{ x: number; y: number }> {
+/** Enter the list over row `k`'s dash at its rest centre plus `offset`, and wait for it to open. */
+async function enter(page: Page, k: number, offset = 0): Promise<{ x: number; y: number }> {
   const r = (await rows(page))[k];
-  const point = { x: r.dash.x + 5, y: stripCentre(r) + offset };
+  const point = { x: r.dash.x + 5, y: r.rest.centre + offset };
   await page.mouse.move(point.x, point.y);
   await settle(page);
   return point;
+}
+
+async function leave(page: Page): Promise<void> {
+  await page.mouse.move(1000, 2);
+  await expect.poll(() => isOpen(page)).toBe(false);
 }
 
 test.describe('contents: pictures', () => {
@@ -118,7 +138,7 @@ test.describe('contents: pictures', () => {
     await intoPage(page);
   });
 
-  test('at rest it is the plain ruler: same dashes, same place, no pictures, nothing offset', async ({ page }) => {
+  test('at rest it is the plain ruler: same dashes, same place, no names, no pictures, nothing offset', async ({ page }) => {
     const lens = await rows(page);
     expect(await page.locator('.moss-contents-ruler').getAttribute('data-contents')).toBe('pictures');
     const textLeft = await page.evaluate(() => document.querySelector('main h2[id]')!.getBoundingClientRect().left);
@@ -133,34 +153,38 @@ test.describe('contents: pictures', () => {
     await intoPage(page);
     const plain = await rows(page);
     expect(await page.evaluate(() => document.querySelector('main h2[id]')!.getBoundingClientRect().left), 'the text starts where it does without the field').toBeCloseTo(textLeft, 0);
-    expect(lens.map((r) => [r.dash.x, r.dash.y, r.strip.top, r.strip.bottom])).toEqual(
-      plain.map((r) => [r.dash.x, r.dash.y, r.strip.top, r.strip.bottom]),
-    );
+    expect(lens.map((r) => [r.dash.x, r.dash.y, r.box.top, r.box.bottom])).toEqual(plain.map((r) => [r.dash.x, r.dash.y, r.box.top, r.box.bottom]));
     expect(lens[0].dash.x).toBeCloseTo(40, 0);
-
-    await open(page, LENS);
-    await intoPage(page);
-    const rest = await rows(page);
-    expect(rest.every((r) => !r.labelVisible), 'no title at rest').toBe(true);
-    expect(rest.every((r) => !r.pic?.visible), 'no picture at rest').toBe(true);
-    expect(rest.every((r) => Math.abs(r.centre - stripCentre(r)) < 1), 'every row sits in its strip').toBe(true);
+    expect(lens.every((r) => !r.label.visible), 'no name at rest').toBe(true);
+    expect(lens.every((r) => !r.pic?.shown), 'no picture at rest').toBe(true);
+    expect(lens.every((r) => Math.abs(r.box.centre - r.rest.centre) < 0.5 && Math.abs(r.box.height - REST) < 0.5), 'every row sits in its rest box').toBe(true);
   });
 
-  test('hovering a row opens it to the picture, its neighbours less, the far rows not at all', async ({ page }) => {
-    await hoverStrip(page, 3);
+  test('opening on a row focuses it under the pointer; rows grow on a curve around it, every name on one line', async ({ page }) => {
+    const point = await enter(page, 3);
     const r = await rows(page);
-    expect(r[3].pic!.width).toBeGreaterThanOrEqual(PIC - 1);
-    expect(r[3].pic!.width).toBeLessThanOrEqual(PIC + 0.5);
+    expect(r.findIndex((row) => row.focus)).toBe(3);
+    expect(Math.abs(r[3].box.centre - point.y), 'the focused row is centred on the pointer').toBeLessThanOrEqual(1);
+    expect(r[3].box.height).toBeCloseTo(FOCUS_ROW, 0);
     for (const k of [2, 4]) {
-      expect(r[k].pic!.width, `row ${k}`).toBeGreaterThan(8);
-      expect(r[k].pic!.width, `row ${k}`).toBeLessThan(r[3].pic!.width - 5);
+      expect(r[k].box.height, `row ${k}`).toBeGreaterThan(OPEN_ROW + 4);
+      expect(r[k].box.height, `row ${k}`).toBeLessThan(FOCUS_ROW - 4);
     }
-    expect(r[0].pic!.visible, 'row 0 is three rows away').toBe(false);
+    expect(r[0].box.height, 'three rows away is the open height').toBeCloseTo(OPEN_ROW, 0);
+    expect(r[6].box.height).toBeCloseTo(OPEN_ROW, 0);
+    for (let i = 1; i < N; i++) expect(r[i].box.top, `rows ${i - 1} and ${i} tile`).toBeCloseTo(r[i - 1].box.bottom, 0);
+    for (const [i, row] of r.entries()) {
+      expect(row.label.visible, `name ${i}`).toBe(true);
+      expect(row.label.height, `name ${i} is one line`).toBeLessThan(row.label.lineHeight * 1.5);
+    }
+
+    // Only the focused row shows its picture, after its name.
+    expect(r.filter((row) => row.pic?.shown).map((row) => row.href)).toEqual([r[3].href]);
+    expect(r[3].pic!.left).toBeGreaterThan(r[3].label.right);
     expect(r[6].pic, 'a section with no picture has none').toBeNull();
-    expect(r.every((row) => row.labelVisible && row.labelOpacity >= 0.5), 'every title stays legible').toBe(true);
-    expect(r[3].labelOpacity).toBeCloseTo(1, 1);
 
     // The picture is the page's own image at the narrowest width moss made.
+    const src = await page.locator('.moss-contents-ruler a').nth(3).locator('img').getAttribute('src');
     const sources = await page.evaluate(() =>
       [...document.querySelectorAll<HTMLImageElement>('main img')].map((img) => ({
         src: img.getAttribute('src'),
@@ -168,71 +192,66 @@ test.describe('contents: pictures', () => {
       })),
     );
     const widths = sources[3].srcset.split(',').map((c) => c.trim().split(/\s+/));
-    const narrowest = widths.sort((a, b) => parseInt(a[1]) - parseInt(b[1]))[0][0];
-    expect(r[3].pic!.src).toBe(narrowest);
-    expect(r[3].pic!.src).not.toBe(sources[3].src);
+    expect(src).toBe(widths.sort((a, b) => parseInt(a[1]) - parseInt(b[1]))[0][0]);
+    expect(src).not.toBe(sources[3].src);
   });
 
-  test('the opened row stays centred under the pointer, wherever it is aimed', async ({ page }) => {
-    for (const k of [0, 3, N - 1]) {
-      const point = await hoverStrip(page, k);
-      const r = (await rows(page))[k];
-      const centre = r.pic ? r.pic.centre : r.centre;
-      expect(Math.abs(centre - point.y), `row ${k}`).toBeLessThanOrEqual(2);
-      await page.mouse.move(2, 2);
-      await expect.poll(() => page.locator('.moss-contents-ruler').evaluate((el) => el.hasAttribute('data-lens'))).toBe(false);
+  test('the focused row stays under the pointer while it moves, one row per pitch of travel', async ({ page }) => {
+    const start = await enter(page, 1);
+    for (const step of [0.5, 1, 1.5, 2, 3, 4, 2.5, 1]) {
+      const y = start.y + step * PITCH;
+      await page.mouse.move(start.x, y, { steps: 3 });
+      await settle(page);
+      const r = await rows(page);
+      const k = r.findIndex((row) => row.focus);
+      expect(k, `after ${step} rows of travel`).toBe(Math.round(1 + step));
+      expect(r[k].box.top, `the focused row holds the pointer after ${step}`).toBeLessThanOrEqual(y + 0.5);
+      expect(r[k].box.bottom).toBeGreaterThanOrEqual(y - 0.5);
+      if (Number.isInteger(step)) expect(Math.abs(r[k].box.centre - y), `centred after ${step}`).toBeLessThanOrEqual(1);
     }
   });
 
-  test('the strip under the pointer is the drawn row under it, and the strips never move', async ({ page }) => {
-    const at = await rows(page);
-    await hoverStrip(page, 0);
-    for (let k = 0; k < N; k++) {
-      // Over the dash, and over the lane well to its right (the `::after`).
-      for (const [dx, offset] of [[5, -8], [5, 0], [5, 8], [90, 0], [90, 7]] as const) {
-        const x = at[k].dash.x + dx;
-        const y = stripCentre(at[k]) + offset;
-        await page.mouse.move(x, y);
-        // Straight away, mid-motion: the link under the pointer is the strip's.
-        const immediate = await page.evaluate(
-          ([px, py]) => document.elementFromPoint(px, py)?.closest('.moss-contents-ruler a')?.getAttribute('href'),
-          [x, y],
-        );
-        expect(immediate, `strip ${k} at ${dx},${offset} before the drawing catches up`).toBe(at[k].href);
+  test('past either end the focus stops and the list stays put', async ({ page }) => {
+    for (const [k, dir] of [[N - 2, 1], [1, -1]] as const) {
+      const start = await enter(page, k);
+      const end = start.y + dir * PITCH;
+      await page.mouse.move(start.x, end, { steps: 3 });
+      await settle(page);
+      const at = await rows(page);
+      expect(at.findIndex((row) => row.focus)).toBe(k + dir);
+      for (const beyond of [15, 30]) {
+        await page.mouse.move(start.x, end + dir * beyond, { steps: 3 });
         await settle(page);
         const now = await rows(page);
-        expect(now.map((r) => [r.strip.top, r.strip.bottom]), 'the strips have not moved').toEqual(at.map((r) => [r.strip.top, r.strip.bottom]));
-        // Each drawn row spans its centre +- half its height; they tile, and the pointer is in row k.
-        const drawn = now.map((r, j) => {
-          const m = r.pic ? Math.min(1, r.pic.width / PIC) : r.labelOpacity > 0 ? 1 : 0;
-          const grown = r.pic ? REST + (48 - REST) * m : REST + 4;
-          return { j, top: r.centre - grown / 2, bottom: r.centre + grown / 2 };
+        expect(await isOpen(page), `still open ${beyond}px past the end`).toBe(true);
+        expect(now.findIndex((row) => row.focus)).toBe(k + dir);
+        now.forEach((row, i) => {
+          expect(row.box.top, `row ${i}, ${beyond}px past`).toBeCloseTo(at[i].box.top, 0);
+          expect(row.box.height).toBeCloseTo(at[i].box.height, 0);
         });
-        const containing = drawn.filter((d) => y >= d.top - 0.75 && y <= d.bottom + 0.75).map((d) => d.j);
-        expect(containing, `the pointer at strip ${k} (${offset}) is over drawn row ${k}`).toContain(k);
       }
+      await leave(page);
     }
   });
 
-  test('clicking goes to the section under the pointer', async ({ page }) => {
-    await hoverStrip(page, 3, 6);
-    const r = (await rows(page))[3];
-    await page.mouse.click(r.dash.x + 5, stripCentre(r) + 6);
+  test('a click on the open list goes to the focused row, wherever it lands', async ({ page }) => {
+    const start = await enter(page, 1);
+    await page.mouse.move(start.x, start.y + 2 * PITCH, { steps: 3 });
+    await settle(page);
+    expect(await focused(page)).toBe(3);
+    // Over the fade, right of the names: not any row's link.
+    const veil = await page.locator('.moss-contents-ruler-veil').boundingBox();
+    const x = veil!.x + veil!.width - 12;
+    await page.mouse.move(x, start.y + 2 * PITCH);
+    await frames(page);
+    expect(await isOpen(page)).toBe(true);
+    await page.mouse.click(x, start.y + 2 * PITCH);
     await frames(page);
     const ids = await page.evaluate(() => [...document.querySelectorAll('main h2[id]')].map((h) => h.id));
     expect(await page.evaluate(() => decodeURIComponent(location.hash.slice(1)))).toBe(ids[3]);
   });
 
-  test('moving onto a title does not close it: the strip reaches the end of the titles', async ({ page }) => {
-    await hoverStrip(page, 2);
-    const label = await page.locator('.moss-contents-ruler a').nth(2).locator('.moss-contents-ruler-label').boundingBox();
-    const r = (await rows(page))[2];
-    await page.mouse.move(label!.x + Math.min(label!.width, 120), stripCentre(r));
-    await frames(page, 6);
-    expect(await page.locator('.moss-contents-ruler').evaluate((el) => el.hasAttribute('data-lens'))).toBe(true);
-  });
-
-  test('keyboard focus opens it at the focused row', async ({ page }) => {
+  test('keyboard focus opens it on the focused row, and Escape closes it', async ({ page }) => {
     // WebKit tabs to links only with Alt held.
     const tab = test.info().project.name === 'webkit' ? 'Alt+Tab' : 'Tab';
     for (let i = 0; i < 120; i++) {
@@ -241,90 +260,134 @@ test.describe('contents: pictures', () => {
     }
     await settle(page);
     let r = await rows(page);
-    expect(r[0].pic!.width).toBeGreaterThanOrEqual(PIC - 1);
-    expect(r[1].pic!.width).toBeLessThan(r[0].pic!.width - 5);
+    expect(r.findIndex((row) => row.focus)).toBe(0);
+    expect(Math.abs(r[0].box.centre - r[0].rest.centre), 'opened on its own rest row').toBeLessThanOrEqual(1);
     await page.keyboard.press(tab);
     await settle(page);
     r = await rows(page);
-    expect(r[1].pic!.width).toBeGreaterThanOrEqual(PIC - 1);
-    expect(r[0].pic!.width).toBeLessThan(r[1].pic!.width - 5);
+    expect(r.findIndex((row) => row.focus)).toBe(1);
+    expect(r[1].box.height).toBeCloseTo(FOCUS_ROW, 0);
+    const ring = await page.evaluate(() => getComputedStyle(document.activeElement!).outlineStyle);
+    expect(ring, 'the focused row is ringed').toBe('solid');
+
+    await page.keyboard.press('Escape');
+    await expect.poll(() => isOpen(page)).toBe(false);
+    expect(await page.evaluate(() => document.activeElement?.getAttribute('href')), 'focus stays where it was').toBe(r[1].href);
   });
 
-  test('keyboard focus rings the drawn row, not the 20px link', async ({ page }) => {
-    const tab = test.info().project.name === 'webkit' ? 'Alt+Tab' : 'Tab';
-    for (let i = 0; i < 120; i++) {
-      await page.keyboard.press(tab);
-      if (await page.evaluate(() => !!document.activeElement?.closest('.moss-contents-ruler'))) break;
-    }
-    await settle(page);
-    const ring = await page.evaluate(() => {
-      const a = document.activeElement as HTMLElement;
-      const pic = a.querySelector('.moss-contents-ruler-pic')!;
-      const label = a.querySelector('.moss-contents-ruler-label')!;
-      const accent = (el: Element) => getComputedStyle(el).outlineColor;
-      return {
-        link: { style: getComputedStyle(a).outlineStyle, color: accent(a) },
-        pic: { style: getComputedStyle(pic).outlineStyle, width: getComputedStyle(pic).outlineWidth, color: accent(pic) },
-        label: { style: getComputedStyle(label).outlineStyle, color: accent(label) },
-      };
+  test('the focused picture keeps the page image\'s focal point', async ({ page }) => {
+    const onPage = await page.evaluate((i) => {
+      const heading = document.querySelectorAll('main h2[id]')[i];
+      let el = heading.nextElementSibling;
+      while (el && !el.querySelector('img')) el = el.nextElementSibling;
+      return getComputedStyle(el!.querySelector('img')!).objectPosition;
+    }, FOCAL_ROW);
+    expect(onPage, 'the fixture really is cropped').toBe(FOCUS_POINT);
+    await enter(page, FOCAL_ROW);
+    const r = await rows(page);
+    expect(r[FOCAL_ROW].pic!.shown).toBe(true);
+    expect(r[FOCAL_ROW].pic!.position).toBe(FOCUS_POINT);
+    expect(r[0].pic!.position, 'an uncropped picture stays centred').toBe('50% 50%');
+  });
+
+  test('behind the names is a fade of the page colour, not a panel', async ({ page }) => {
+    await enter(page, 3);
+    const veil = await page.evaluate(() => {
+      const nav = document.querySelector('.moss-contents-ruler')!;
+      const shadowed = [...nav.querySelectorAll('*')].filter((el) => getComputedStyle(el).boxShadow !== 'none').length;
+      const el = nav.querySelector('.moss-contents-ruler-veil')!;
+      const cs = getComputedStyle(el);
+      const b = el.getBoundingClientRect();
+      return { shadowed, image: cs.backgroundImage, border: cs.borderTopStyle, top: b.top, bottom: b.bottom, left: b.left };
     });
-    expect(ring.link.style, 'the link keeps an outline').toBe('solid');
-    expect(ring.link.color, 'but not a visible one').toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
-    expect(ring.pic.style).toBe('solid');
-    expect(ring.pic.width).toBe('2px');
-    expect(ring.label.style).toBe('solid');
-    expect(ring.pic.color, 'the ring colour is the same as the plain ruler\'s').toBe(ring.label.color);
-    expect(ring.pic.color).not.toMatch(/rgba\(0, 0, 0, 0\)/);
+    expect(veil.shadowed, 'nothing in the list casts a shadow').toBe(0);
+    expect(veil.image).toMatch(/linear-gradient/);
+    expect(veil.border).toBe('none');
+    expect(veil.left).toBeLessThanOrEqual(0.5);
+    const r = await rows(page);
+    expect(veil.top).toBeLessThan(r[0].box.top);
+    expect(veil.bottom).toBeGreaterThan(r[N - 1].box.bottom);
   });
 
-  test('the open list stays inside the window at both ends', async ({ page }) => {
-    const height = page.viewportSize()!.height;
-    for (const k of [0, N - 1]) {
-      await hoverStrip(page, k);
-      for (const r of await rows(page)) {
-        expect(r.centre - 12, `row ${r.href} top`).toBeGreaterThanOrEqual(0);
-        expect(r.centre + 12, `row ${r.href} bottom`).toBeLessThanOrEqual(height);
-      }
-    }
+  for (const scheme of ['light', 'dark'] as const) {
+    test(`every open name clears 4.5:1 on the fade, in ${scheme}`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      await open(page, LENS);
+      await intoPage(page);
+      await enter(page, 0);
+      // Painted by the engine itself, the ink over the page colour, so any
+      // transparency in the ink counts and any colour form resolves to sRGB.
+      const pairs = await page.evaluate(() => {
+        const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true })!;
+        const bg = getComputedStyle(document.body).backgroundColor;
+        const paint = (css: string) => {
+          ctx.fillStyle = bg;
+          ctx.fillRect(0, 0, 1, 1);
+          ctx.fillStyle = css;
+          ctx.fillRect(0, 0, 1, 1);
+          return [...ctx.getImageData(0, 0, 1, 1).data.slice(0, 3)];
+        };
+        const ground = paint(bg);
+        return [...document.querySelectorAll('.moss-contents-ruler-label')].map((l) => ({ ink: paint(getComputedStyle(l).color), ground }));
+      });
+      const lum = ([r, g, b]: number[]) => relativeLuminance(r, g, b);
+      pairs.forEach((p, i) => expect(contrastRatio(lum(p.ink), lum(p.ground)), `name ${i}`).toBeGreaterThanOrEqual(4.5));
+    });
+  }
+
+  test('a right-to-left page keeps the bar instead, until the list mirrors', async ({ page }) => {
+    await page.evaluate(() => document.documentElement.setAttribute('dir', 'rtl'));
+    await frames(page, 4);
+    expect(await page.locator('.moss-contents-ruler').evaluate((el) => (el as HTMLElement).hidden)).toBe(true);
+    expect(await page.locator('.moss-nav-island').evaluate((el) => (el as HTMLElement).dataset.ruler)).toBe('off');
+  });
+
+  test('moving off the list closes it', async ({ page }) => {
+    await enter(page, 2);
+    await leave(page);
+    const r = await rows(page);
+    expect(r.every((row) => !row.focus && Math.abs(row.box.centre - row.rest.centre) < 0.5)).toBe(true);
   });
 });
 
 test.describe('without motion', () => {
-  test('hovering shows every row open at once, statically', async ({ page }) => {
+  test('rows resize around the focus without animating', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await open(page, LENS);
     await intoPage(page);
-    const at = await rows(page);
-    await page.mouse.move(at[3].dash.x + 5, stripCentre(at[3]));
-    await expect.poll(() => page.locator('.moss-contents-ruler').evaluate((el) => el.hasAttribute('data-lens'))).toBe(true);
+    const start = await enter(page, 3);
+    const durations = await page.evaluate(() =>
+      ['.moss-contents-ruler a', '.moss-contents-ruler-pic', '.moss-contents-ruler-veil'].map(
+        (sel) => getComputedStyle(document.querySelector(sel)!).transitionDuration,
+      ),
+    );
+    expect(durations.every((d) => /^0s(, 0s)*$/.test(d)), durations.join(' | ')).toBe(true);
+    // One frame after a move the drawing is already where it ends up.
+    await page.mouse.move(start.x, start.y + PITCH);
+    await frames(page, 1);
     const r = await rows(page);
-    r.forEach((row, i) => {
-      expect([row.labelVisible, row.labelOpacity], `title ${i}`).toEqual([true, 1]);
-      if (LENS_WITH_IMAGE[i]) expect(row.pic!.width, `picture ${i}`).toBeGreaterThanOrEqual(PIC - 1);
-    });
-    const before = JSON.stringify(r.map((row) => row.centre));
-    await page.mouse.move(at[4].dash.x + 5, stripCentre(at[4]));
-    await frames(page, 4);
-    expect(JSON.stringify((await rows(page)).map((row) => row.centre)), 'the pointer moving changes nothing').toBe(before);
+    expect(r.findIndex((row) => row.focus)).toBe(4);
+    expect(r[4].box.height).toBeCloseTo(FOCUS_ROW, 0);
+    expect(Math.abs(r[4].box.centre - (start.y + PITCH))).toBeLessThanOrEqual(1);
+    expect(r[1].box.height).toBeCloseTo(OPEN_ROW, 0);
   });
 });
 
-test.describe('forty sections', () => {
-  test('open the same way, and stay inside the window', async ({ page }) => {
-    await open(page, MANY_PAGE, 1360, 1100);
+test.describe('forty sections, open taller than the window', () => {
+  test('the list fills the window without a gap and the focused row stays on screen', async ({ page }) => {
+    const height = 1100;
+    await open(page, MANY_PAGE, 1360, height);
     await intoPage(page);
-    const count = (await rows(page)).length;
-    expect(count).toBe(MANY);
+    expect((await rows(page)).length).toBe(MANY);
     for (const k of [0, 20, MANY - 1]) {
-      const point = await hoverStrip(page, k);
+      await enter(page, k);
       const r = await rows(page);
-      expect(Math.abs((r[k].pic?.centre ?? r[k].centre) - point.y), `row ${k}`).toBeLessThanOrEqual(2);
-      for (const row of r) {
-        expect(row.centre - 12).toBeGreaterThanOrEqual(0);
-        expect(row.centre + 12).toBeLessThanOrEqual(1100);
-      }
-      await page.mouse.move(2, 2);
-      await expect.poll(() => page.locator('.moss-contents-ruler').evaluate((el) => el.hasAttribute('data-lens'))).toBe(false);
+      expect(r.findIndex((row) => row.focus)).toBe(k);
+      expect(r[k].box.top, `row ${k} on screen`).toBeGreaterThanOrEqual(16 - 0.5);
+      expect(r[k].box.bottom).toBeLessThanOrEqual(height - 16 + 0.5);
+      expect(r[0].box.top, 'no gap above').toBeLessThanOrEqual(16 + 0.5);
+      expect(r[MANY - 1].box.bottom, 'no gap below').toBeGreaterThanOrEqual(height - 16 - 0.5);
+      await leave(page);
     }
   });
 });
@@ -349,206 +412,45 @@ test.describe('a full-width page, the narrowest margin a page has', () => {
     await intoPage(page);
   });
 
-  interface Title {
-    text: string;
-    lines: number;
-    clipped: boolean;
-    box: { left: number; right: number; top: number; bottom: number };
-    surface: { background: string; shadow: string };
-    under: string | null;
-  }
-
-  const titles = (page: Page): Promise<Title[]> =>
-    page.evaluate(() =>
-      [...document.querySelectorAll<HTMLElement>('.moss-contents-ruler-label')].map((label) => {
-        const box = label.getBoundingClientRect();
-        const cs = getComputedStyle(label);
-        const under = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
-        return {
-          text: label.textContent ?? '',
-          lines: Math.round((box.height - 4) / parseFloat(cs.lineHeight)),
-          clipped: label.scrollWidth > label.clientWidth,
-          box: { left: box.left, right: box.right, top: box.top, bottom: box.bottom },
-          surface: { background: cs.backgroundColor, shadow: cs.boxShadow },
-          under: under?.closest('.moss-contents-ruler a')?.getAttribute('href') ?? under?.tagName ?? null,
-        };
-      }),
-    );
-
   test('the ruler is up: the dashes need only their own lane', async ({ page }) => {
     const nav = page.locator('.moss-contents-ruler');
     expect(await nav.evaluate((el) => (el as HTMLElement).hidden || getComputedStyle(el).display === 'none')).toBe(false);
-    expect(await nav.evaluate((el) => el.hasAttribute('data-away'))).toBe(false);
     expect(await page.locator('.moss-contents-ruler a').count()).toBe(FULL_SECTIONS.length);
     const gap = await page.evaluate(() => ({
       list: document.querySelector('.moss-contents-ruler ol')!.getBoundingClientRect().right,
       text: document.querySelector('main h2[id]')!.getBoundingClientRect().left,
     }));
     expect(gap.text - gap.list, 'the dashes clear the text').toBeGreaterThanOrEqual(24);
-    const rest = await titles(page);
-    expect(rest.every((t) => t.under === null || !t.under.startsWith('#')), 'nothing of the ruler is under a hidden title').toBe(true);
   });
 
-  test('an open title is the whole heading, wrapped, never cut, and draws no surface of its own', async ({ page }) => {
-    const textLeft = await page.evaluate(() => document.querySelector('main h2[id]')!.getBoundingClientRect().left);
-    let reachedOverText = false;
-    for (const k of [0, 2, FULL_SECTIONS.length - 1]) {
-      await hoverStrip(page, k);
-      const t = await titles(page);
-      t.forEach((title, i) => {
-        expect(title.text, `title ${i} while row ${k} is focused`).toBe(FULL_SECTIONS[i]);
-        expect(title.text).not.toContain('…');
-        expect(title.clipped, `title ${i} is clipped`).toBe(false);
-        expect(title.surface.background, `title ${i} has no surface`).toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
-        expect(title.surface.shadow).toBe('none');
-        reachedOverText ||= title.box.right > textLeft;
-      });
-      expect(t[0].lines, 'a long title wraps').toBe(2);
-      expect(t[3].lines, 'a title of ninety characters is wrapped whole, not cut').toBeGreaterThanOrEqual(3);
-      expect(t[1].lines, 'a short one stays on a line').toBe(1);
-      // No title box overlaps another.
-      const sorted = [...t].sort((a, b) => a.box.top - b.box.top);
-      for (let i = 1; i < sorted.length; i++) {
-        expect(sorted[i].box.top, `titles ${i - 1} and ${i} overlap`).toBeGreaterThanOrEqual(sorted[i - 1].box.bottom - 0.5);
-      }
-      await page.mouse.move(2, 2);
-      await expect.poll(() => page.locator('.moss-contents-ruler').evaluate((el) => el.hasAttribute('data-lens'))).toBe(false);
-    }
-    expect(reachedOverText, 'a title may reach over the page').toBe(true);
-  });
-
-  const linkAt = (page: Page, x: number, y: number) =>
-    page.evaluate(([px, py]) => document.elementFromPoint(px, py)?.closest('.moss-contents-ruler a')?.getAttribute('href') ?? null, [x, y]);
-
-  test('while open the strips reach every title: the pointer moves onto one and stays, and a click follows it', async ({ page }) => {
-    const at = await rows(page);
-    for (let k = 0; k < FULL_SECTIONS.length; k++) {
-      await hoverStrip(page, k);
-      const box = (await titles(page))[k].box;
-      const x = (box.left + box.right) / 2;
-      const y = stripCentre(at[k]);
-      expect(y, `the strip's height is within title ${k}`).toBeGreaterThan(box.top);
-      expect(y).toBeLessThan(box.bottom);
-      await page.mouse.move(x, y);
-      await frames(page, 4);
-      expect(await linkAt(page, x, y), `the centre of title ${k} is its row's strip`).toBe(at[k].href);
-      expect(await page.locator('.moss-contents-ruler').evaluate((el) => el.hasAttribute('data-lens')), `still open on title ${k}`).toBe(true);
-      expect((await rows(page)).map((r) => [r.strip.top, r.strip.bottom]), 'the strips have not moved').toEqual(at.map((r) => [r.strip.top, r.strip.bottom]));
-      if (k === 3) {
-        await page.mouse.click(x, y);
-        await frames(page);
-        const ids = await page.evaluate(() => [...document.querySelectorAll('main h2[id]')].map((h) => h.id));
-        expect(await page.evaluate(() => decodeURIComponent(location.hash.slice(1)))).toBe(ids[3]);
-      }
-      await page.mouse.move(2, 2);
-      await expect.poll(() => page.locator('.moss-contents-ruler').evaluate((el) => el.hasAttribute('data-lens'))).toBe(false);
-    }
+  test('a long name is one line ended with an ellipsis; the link names the whole title', async ({ page }) => {
+    await enter(page, 3);
+    const r = await rows(page);
+    const names = await page.evaluate(() =>
+      [...document.querySelectorAll('.moss-contents-ruler a')].map((a) => ({
+        label: a.getAttribute('aria-label'),
+        title: a.getAttribute('title'),
+        text: a.querySelector('.moss-contents-ruler-label')!.textContent,
+      })),
+    );
+    names.forEach((name, i) => {
+      expect(name.label, `row ${i}`).toBe(FULL_SECTIONS[i]);
+      expect(name.title).toBe(FULL_SECTIONS[i]);
+      expect(name.text).toBe(FULL_SECTIONS[i]);
+      expect(r[i].label.height, `row ${i} is one line`).toBeLessThan(r[i].label.lineHeight * 1.5);
+    });
+    expect(r[3].label.cut, 'ninety characters do not fit').toBe(true);
+    expect(r[3].label.ellipsis).toBe('ellipsis');
+    expect(r[1].label.cut, 'a short title is whole').toBe(false);
+    expect(FULL_SECTIONS[3].length).toBeGreaterThan(40);
   });
 
   test('at rest the strips stop at the lane: the page beside the dashes is not the ruler', async ({ page }) => {
     const at = await rows(page);
-    const lane = await page.locator('.moss-contents-ruler').evaluate((el) => parseFloat(el.style.getPropertyValue('--moss-contents-lane')));
-    const x = at[0].dash.x - 0 + lane + 12 - 0;
-    const y = stripCentre(at[2]);
-    expect(x, 'the probe is still in the margin').toBeLessThan(await page.evaluate(() => document.querySelector('main h2[id]')!.getBoundingClientRect().left));
-    expect(await linkAt(page, x, y), 'page content, not the ruler').toBeNull();
-    // Open, the same point is the row's strip; closed again, it is the page.
-    await hoverStrip(page, 2);
-    await page.mouse.move(x, y);
-    await frames(page, 4);
-    expect(await linkAt(page, x, y)).toBe(at[2].href);
-    await page.mouse.move(x + 600, y);
-    await expect.poll(() => page.locator('.moss-contents-ruler').evaluate((el) => el.hasAttribute('data-lens'))).toBe(false);
-    expect(await linkAt(page, x, y)).toBeNull();
-  });
-
-  interface Panel {
-    visible: number;
-    shadowed: number;
-    rect: { left: number; right: number; top: number; bottom: number };
-    centre: string | null;
-    background: string;
-    events: string;
-    over: boolean;
-  }
-
-  const panel = (page: Page): Promise<Panel> =>
-    page.evaluate(() => {
-      const nav = document.querySelector('.moss-contents-ruler')!;
-      const surfaces = [...nav.querySelectorAll<HTMLElement>('*')].filter((el) => {
-        const cs = getComputedStyle(el);
-        const b = el.getBoundingClientRect();
-        return cs.boxShadow !== 'none' && cs.display !== 'none' && cs.visibility !== 'hidden' && Number(cs.opacity) > 0 && b.width > 0;
-      });
-      const el = nav.querySelector<HTMLElement>('.moss-contents-ruler-panel')!;
-      const b = el.getBoundingClientRect();
-      const cs = getComputedStyle(el);
-      const at = document.elementFromPoint((b.left + b.right) / 2, (b.top + b.bottom) / 2);
-      const main = getComputedStyle(document.querySelector('main')!).zIndex;
-      return {
-        visible: surfaces.length,
-        shadowed: surfaces.filter((s) => s === el).length,
-        rect: { left: b.left, right: b.right, top: b.top, bottom: b.bottom },
-        centre: at?.closest('.moss-contents-ruler a')?.getAttribute('href') ?? at?.className ?? at?.tagName ?? null,
-        background: cs.backgroundColor,
-        events: cs.pointerEvents,
-        over: Number(getComputedStyle(nav).zIndex) > (main === 'auto' ? 0 : Number(main)),
-      };
-    });
-
-  test('the open list is one panel behind every row, with no page text inside it', async ({ page }) => {
-    const at = await rows(page);
-    expect((await panel(page)).visible, 'no surface at rest').toBe(0);
-    const restPanel = await page.locator('.moss-contents-ruler-panel').evaluate((el) => ({ display: getComputedStyle(el).display, events: getComputedStyle(el).pointerEvents }));
-    expect(restPanel.display === 'none' || restPanel.events === 'none', 'at rest the panel takes no pointer').toBe(true);
-    for (const k of [1, 3]) {
-      await hoverStrip(page, k);
-      const p = await panel(page);
-      expect(p.visible, 'exactly one surface is visible').toBe(1);
-      expect(p.shadowed, 'and it is the panel').toBe(1);
-      expect(p.background, 'it is opaque').not.toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
-      expect(p.events, 'open, the panel is part of the ruler for the pointer').toBe('auto');
-      expect(p.over, 'the ruler is drawn over the page').toBe(true);
-      expect(p.centre, 'under its centre is a row, not page text').toMatch(/^#/);
-      const t = await titles(page);
-      for (const [i, title] of t.entries()) {
-        expect(title.box.left, `title ${i}`).toBeGreaterThanOrEqual(p.rect.left - 0.5);
-        expect(title.box.right, `title ${i}`).toBeLessThanOrEqual(p.rect.right + 0.5);
-        expect(title.box.top, `title ${i}`).toBeGreaterThanOrEqual(p.rect.top - 0.5);
-        expect(title.box.bottom, `title ${i}`).toBeLessThanOrEqual(p.rect.bottom + 0.5);
-      }
-      const dash = (await rows(page))[0].dash.x;
-      expect(p.rect.left, 'it starts at the dashes').toBeLessThanOrEqual(dash);
-      const inside = { x: p.rect.right - 3, y: (p.rect.top + p.rect.bottom) / 2 };
-      await page.mouse.move(2, 2);
-      await expect.poll(() => page.locator('.moss-contents-ruler').evaluate((el) => el.hasAttribute('data-lens'))).toBe(false);
-      expect((await panel(page)).visible, 'no surface again at rest').toBe(0);
-      expect(
-        await page.evaluate(([x, y]) => !document.elementFromPoint(x, y)?.closest('.moss-contents-ruler'), [inside.x, inside.y]),
-        'at rest a point inside the open panel hits the page',
-      ).toBe(true);
-    }
-    expect((await rows(page)).map((r) => [r.strip.top, r.strip.bottom])).toEqual(at.map((r) => [r.strip.top, r.strip.bottom]));
-  });
-
-  test('a pointer moving between rows over the panel, past the strips, never closes the list', async ({ page }) => {
-    const at = await rows(page);
-    await hoverStrip(page, 1);
-    const p = await panel(page);
-    // Inside the panel, in the 8px beyond the strips' far end.
-    const x = p.rect.right - 3;
-    for (const k of [1, 2, 3, 4, 5]) {
-      await page.mouse.move(x, stripCentre(at[k]), { steps: 4 });
-      await frames(page, 6);
-      expect(await page.locator('.moss-contents-ruler').evaluate((el) => el.hasAttribute('data-lens')), `over the panel beside row ${k}`).toBe(true);
-    }
-    await page.mouse.move(x + 60, stripCentre(at[5]));
-    await expect.poll(() => page.locator('.moss-contents-ruler').evaluate((el) => el.hasAttribute('data-lens'))).toBe(false);
-  });
-
-  test('at rest the titles are not drawn', async ({ page }) => {
-    const rest = await rows(page);
-    expect(rest.every((r) => !r.labelVisible)).toBe(true);
-    expect(rest.every((r) => Math.abs(r.centre - stripCentre(r)) < 1)).toBe(true);
+    const lane = await page.locator('.moss-contents-ruler').evaluate((el) => parseFloat((el as HTMLElement).style.getPropertyValue('--moss-contents-lane')));
+    const linkAt = (x: number, y: number) =>
+      page.evaluate(([px, py]) => document.elementFromPoint(px, py)?.closest('.moss-contents-ruler')?.tagName ?? null, [x, y]);
+    expect(await linkAt(at[2].dash.x + lane - 4, at[2].rest.centre), 'inside the lane').toBe('NAV');
+    expect(await linkAt(at[2].dash.x + lane + 12, at[2].rest.centre), 'past it, the page').toBeNull();
   });
 });

@@ -14,10 +14,12 @@ impl<'a> NavigationBuilder<'a> {
     /// empty segment list) share one format string instead of each carrying
     /// their own copy.
     fn plain_site_name_html(&self, home_path: &str, logo_html: &str) -> String {
-        format!(
-            r#"<div class="nav-left"><a href="{}" class="site-name">{}{}</a></div>"#,
-            home_path, logo_html, self.site_title
-        )
+        format!(r#"<div class="nav-left">{}</div>"#, self.site_name_link_html(home_path, logo_html))
+    }
+
+    /// The linked site name, in the masthead and in a headerless island.
+    pub(super) fn site_name_link_html(&self, home_path: &str, logo_html: &str) -> String {
+        format!(r#"<a href="{}" class="site-name">{}{}</a>"#, home_path, logo_html, self.site_title)
     }
 
     /// Build the `.nav-left` fragment: breadcrumb trail or plain site name.

@@ -15,22 +15,30 @@
  * - A plain ruler's label may reach no further than one gutter short of the
  *   text column, so its maximum width is `textLeft - GUTTER - labelLeft`, read
  *   from the layout. Titles longer than that are cut in the middle (see
- *   middle-truncate.ts). A `contents: pictures` title is never cut.
+ *   middle-truncate.ts). A `contents: pictures` title is one line, ended
+ *   with an ellipsis by CSS.
  * - Under `MIN_LABEL` of room a label names nothing, so the ruler stays away
  *   and the island is all there is. A `contents: pictures` ruler has no titles
  *   at rest, only dashes, so it needs just the dash lane (the list's own width)
  *   before the gutter.
  * - A site can switch it off with CSS (`display: none`, `visibility: hidden`);
- *   whether it is actually rendered is read on every pass, so the island's
- *   sections button comes back however it was hidden.
+ *   whether it is actually rendered is read on every pass, so the island
+ *   comes back however it was hidden.
+ * - It stays away on a right-to-left page, whose margin is on the other side,
+ *   until the ruler mirrors; the island is the contents list there.
  * - It also stays away when the dashes would not fit between the island's bar
  *   and the bottom of the window — the list must not scroll, because scrolling
  *   would clip the labels that hang out of it.
  *
  * A page with `contents: pictures` (`opts.pictures`) is the same ruler at rest:
  * the same dashes, the same place, nothing reserved. Hovering or focusing it
- * opens the rows around the pointer with a small picture of each section
- * (contents-lens.ts), each title whole on one panel over the page.
+ * magnifies the rows in place around the pointer, the focused one showing its
+ * section's picture after its name (contents-lens.ts).
+ *
+ * The ruler belongs on screen from the first section to the end of the main
+ * sections: the author's `contents=end` marker passing the middle of the
+ * window, else the page's closing picture coming into view, else the
+ * article's bottom passing the middle.
  *
  * Which of this needs an engine — hit-testing, label clearance, clipping — is
  * asserted in tests/render-gates/site/contents-ruler.spec.ts.
@@ -39,7 +47,7 @@
 import { canvasMeasure, truncateMiddle } from "./middle-truncate";
 import { markRows, SECTION_SYNC_EVENT, type SectionSyncDetail } from "./section-event";
 import { mountContentsLens } from "./contents-lens";
-import { pictureImg } from "./section-pictures";
+import { pictureImg, type SectionPicture } from "./section-pictures";
 
 /** Clear space between the widest label and the text column — the same gap
  *  the text keeps from a sidenote. */
@@ -71,13 +79,16 @@ export interface RulerOptions {
   island: HTMLElement;
   /** Space the island's bar occupies at the top of the window. */
   clearance: () => number;
-  /** Set on a page with `contents: pictures`: each entry is a picture URL, or
-   *  null for a section with no image. */
-  pictures?: Array<string | null>;
+  /** Set on a page with `contents: pictures`: each entry is a section's
+   *  picture, or null for a section with no image. */
+  pictures?: Array<SectionPicture | null>;
   /** The element the author marked as the end of the main sections
    *  (`contents=end`): the ruler steps aside once its top passes the middle of
    *  the window, and returns when the reader scrolls back above it. */
   end?: Element | null;
+  /** The page's closing picture: with no marker, the ruler steps aside as
+   *  soon as it comes into view. */
+  closing?: Element | null;
 }
 
 /** Mount the ruler. Returns its disposer: removes the node and every listener. */
@@ -117,7 +128,7 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
       frame.className = "moss-contents-ruler-pic";
       frame.setAttribute("aria-hidden", "true");
       frame.append(pictureImg(picture, () => link.removeAttribute("data-pic")));
-      link.prepend(frame);
+      link.append(frame);
       link.setAttribute("data-pic", "");
     }
     const item = document.createElement("li");
@@ -136,7 +147,7 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   if (main?.parentElement) main.after(nav);
   else document.body.append(nav);
   undo.push(() => nav.remove());
-  if (opts.pictures) undo.push(mountContentsLens({ nav, links, clearance: opts.clearance }));
+  if (opts.pictures) undo.push(mountContentsLens({ nav, links }));
 
   // Blocks wider than the text column (`data-width`) can sit anywhere in
   // `main`, and script can add them after load: the list is read on layout and
@@ -154,15 +165,19 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
    * One frame's reading and writing, run when the island's scrollspy reports.
    *
    * The ruler counts as on screen when it is rendered (not `hidden`, and not
-   * hidden by the site's own CSS) and not faded. The island hides its sections
-   * button for exactly that case, so there is one contents menu at a time.
+   * hidden by the site's own CSS) and not faded. The island stays put away for
+   * exactly that case, so there is one contents list at a time.
    * Reads come first, then the writes.
    */
   function fade(): void {
     if (disposed) return;
-    const inBody = first.getBoundingClientRect().top < window.innerHeight * SHOW_BELOW;
-    const scopeEnd = (opts.end ?? article).getBoundingClientRect();
-    const notPast = (opts.end ? scopeEnd.top : scopeEnd.bottom) > window.innerHeight * HIDE_ABOVE;
+    const height = window.innerHeight;
+    const inBody = first.getBoundingClientRect().top < height * SHOW_BELOW;
+    const notPast = opts.end
+      ? opts.end.getBoundingClientRect().top > height * HIDE_ABOVE
+      : opts.closing
+        ? opts.closing.getBoundingClientRect().top > height
+        : article.getBoundingClientRect().bottom > height * HIDE_ABOVE;
     // A wide block that reaches the ruler's column and shares its height would
     // be painted over: the ruler steps aside until the block has passed.
     // Only worth measuring while the ruler would otherwise be up.
@@ -186,6 +201,7 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   function layout(): void {
     if (disposed) return;
     const vertical = document.body.dataset.typesetting === "vertical";
+    const rtl = getComputedStyle(first).direction === "rtl";
     // A hidden ruler has no boxes: show it, measure, then decide, all before
     // the next paint.
     nav.hidden = false;
@@ -194,13 +210,13 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     const listBox = list.getBoundingClientRect();
     // Up to the gutter before the text is the margin the ruler may use. The
     // dashes need the list's own width of it; the plain ruler's titles need
-    // `MIN_LABEL` more. The open titles of a `contents: pictures` ruler are
-    // drawn on a panel over the page, so they need none.
+    // `MIN_LABEL` more. The open names of a `contents: pictures` ruler are
+    // drawn over the page, so they need none.
     const margin = textLeft - GUTTER;
     const room = Math.floor(margin - labels[0].getBoundingClientRect().left);
     const fits = (window.innerHeight - listBox.height) / 2 >= opts.clearance();
     const roomy = opts.pictures ? margin >= listBox.right : room >= MIN_LABEL;
-    const eligible = !vertical && roomy && fits;
+    const eligible = !vertical && !rtl && roomy && fits;
     nav.hidden = !eligible;
     if (eligible) {
       if (opts.pictures) {

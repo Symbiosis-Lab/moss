@@ -1,21 +1,27 @@
 /**
  * The scratch sites the header-none render gate builds.
  *
- * ONE_PAGE_GATE: a one-page site with `[site] header = "none"` — a home page of
- * five `##` collections, a full-width band marked `contents=end`, and one more
- * section after it. BAND_GATE: the default header, with a long home page that
+ * ONE_PAGE_GATE: a site with `[site] header = "none"` whose footer ends on a
+ * closing picture — a home page of five `##` collections, a full-width band
+ * marked `contents=end`, and one more section after it, and a second long page
+ * with no marker, whose contents ruler runs to the closing picture. Search is
+ * on and the home page has a translation, so the controls are all three. BAND_GATE: the default header, with a long home page that
  * has a full-width band in the middle of its sections and a second page, so
  * the header, the island and the ruler's step-aside all have a normal site to
  * be checked on. All text is invented.
  * Served by playwright/header-none.config.ts.
  */
 import type { ScratchSiteSpec } from "./scratch-site";
+import { png } from "./contents-ruler-site";
 
 /** The last title is longer than the island's old 16rem label box, and fits the bar. */
 export const LONG_TITLE = "Landings of the Lantern Ferry, 1861–62";
 export const COLLECTIONS = ["Quays", "Lanterns", "Nets", "Ropewalk", LONG_TITLE];
 export const SITE_SUBTITLE = "An index of invented collections";
 export const AFTER_END = "Colophon";
+/** A page with no `contents=end`: its ruler ends at the closing picture. */
+export const CLOSING_PATH = "/ledger/";
+export const CLOSING_SECTIONS = ["Spring", "Summer", "Autumn", "Winter"];
 
 const FILLER =
   "The harbour wall holds the morning for a while before it lets the light " +
@@ -47,6 +53,27 @@ Everything below is the shelf's own housekeeping.
 
 ${sections([AFTER_END])}
 `,
+    "index.zh-hans.md": `---
+title: 书架
+uid: "hng00004"
+---
+
+书架的简短欢迎。
+`,
+    "Ledger.md": `---
+title: Ledger
+uid: "hng00003"
+---
+
+# Ledger
+
+${sections(CLOSING_SECTIONS)}
+`,
+    "closing.png": png(1200, 600, [70, 110, 150]),
+    "footer.md": `:::hero {image=closing.png align=top}
+## The shelf is open.
+:::
+`,
     // One section only: no contents table, so the island is controls alone.
     "short.md": `---
 title: Short
@@ -62,6 +89,7 @@ ${sections(["Only"])}
 [site]
 lang = "en"
 header = "none"
+search = true
 `,
   },
 };

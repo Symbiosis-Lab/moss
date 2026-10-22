@@ -295,10 +295,9 @@ describe("initNavIsland — the island of a site with no header", () => {
       <div class="moss-nav-island-bar">
         <button type="button" class="moss-nav-island-sections"
                 aria-expanded="false" aria-label="sections"></button>
-        <div class="nav-icons"><button class="nav-theme-btn" type="button"></button></div>
       </div>
       <div class="moss-nav-island-menu" data-island-menu="sections" hidden></div>
-    </div>`;
+    </div><div class="nav-icons"><button class="nav-theme-btn" type="button"></button></div>`;
   const island = () => document.querySelector<HTMLElement>(".moss-nav-island")!;
   const sectionsBtn = () => document.querySelector<HTMLButtonElement>(".moss-nav-island-sections")!;
 
@@ -343,6 +342,41 @@ describe("initNavIsland — the island of a site with no header", () => {
     expect(island().dataset.shown).toBe("true");
     await scrollTo([600, 1400]);
     expect(island().dataset.shown).toBe("false");
+  });
+
+  test("where the ruler is on screen the bar stays put away, and returns when it goes", async () => {
+    document.body.innerHTML = `${PINNED}<main><h2 id="a">One</h2><h2 id="b">Two</h2></main>`;
+    placeHeadings([10, 800]);
+    initNavIsland();
+    expect(island().dataset.shown).toBe("true");
+    const pass = async (): Promise<void> => {
+      window.dispatchEvent(new Event("scroll"));
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    };
+    // The ruler writes its state while the scrollspy reports, before the reveal.
+    const ruler = { state: "on" };
+    island().addEventListener("moss-section-sync", () => (island().dataset.ruler = ruler.state));
+    await pass();
+    expect([island().dataset.shown, island().inert]).toEqual(["false", true]);
+    ruler.state = "off";
+    await pass();
+    expect([island().dataset.shown, island().inert]).toEqual(["true", false]);
+  });
+
+  test("the theme toggle keeps its place at the top only while the reader is there", async () => {
+    document.body.innerHTML = `${PINNED}<main><h2 id="a">One</h2><h2 id="b">Two</h2></main>`;
+    placeHeadings([600, 1400]);
+    const bar = document.querySelector<HTMLElement>(".moss-nav-island-bar")!;
+    Object.defineProperties(bar, { offsetTop: { value: 16 }, offsetHeight: { value: 46 } });
+    Object.defineProperty(document.querySelector(".nav-theme-btn")!, "offsetHeight", { value: 36 });
+    initNavIsland();
+    expect(island().hasAttribute("data-top")).toBe(true);
+    for (const [y, top] of [[20, true], [21, false], [400, false], [0, true]] as const) {
+      Object.defineProperty(window, "scrollY", { value: y, configurable: true });
+      window.dispatchEvent(new Event("scroll"));
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+      expect(island().hasAttribute("data-top"), `at ${y}px`).toBe(top);
+    }
   });
 
   test("the name button is labelled with the current section", async () => {

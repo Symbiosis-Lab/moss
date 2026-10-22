@@ -431,16 +431,58 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "How far the page gives up on the right for the sidenote gutter, derived by site.css from `--moss-sidenote-reserve` and applied as `<body>` padding. The places explorer's full-width figure adds it back so the map still reaches the window's edge. Not a theme hook: set `--moss-sidenote-reserve` instead.",
     },
     CustomProp {
+        name: "--moss-nav-island-edge",
+        owner: "body",
+        default: "1px",
+        description: "The floating nav island bar's border width. Declared on `body` with the bar's other geometry so the headerless controls that stand in the bar's end slot are placed from the same numbers. Not a theme hook.",
+    },
+    CustomProp {
+        name: "--moss-nav-island-pad-block",
+        owner: "body",
+        default: "6px",
+        description: "The floating nav island bar's padding above and below its controls. Declared on `body`, beside `--moss-nav-island-edge`, for the same reason. Not a theme hook.",
+    },
+    CustomProp {
+        name: "--moss-nav-island-pad-end",
+        owner: "body",
+        default: "8px",
+        description: "The floating nav island bar's padding at its end edge, before its last control or the headerless controls' slot. Declared on `body`, beside `--moss-nav-island-edge`. Not a theme hook.",
+    },
+    CustomProp {
+        name: "--moss-nav-island-control-pad",
+        owner: "body",
+        default: "12px",
+        description: "The island's sections button padding, both sides together; with its 1em glyph at `--moss-size-lg` it sets the bar's height, and the headerless controls are centred on that. Not a theme hook.",
+    },
+    CustomProp {
+        name: "--moss-nav-island-controls",
+        owner: ".moss-nav-island",
+        default: "2.25rem",
+        description: "How wide the headerless island's controls (`.nav-icons`) are in a row: the slot the bar keeps free at its end for them. Measured and written by the site runtime (nav-island.ts) on layout. Not a theme hook.",
+    },
+    CustomProp {
+        name: "--moss-contents-inset",
+        owner: "body",
+        default: "32px",
+        description: "How far the contents ruler stands from the window's left edge (its dashes start one `--moss-contents-pad` further in, where the headerless controls under the ruler start too). The lens's fade is placed from it. Not a theme hook.",
+    },
+    CustomProp {
+        name: "--moss-contents-pad",
+        owner: "body",
+        default: "8px",
+        description: "The contents ruler list's own side padding, which its hit strips reach back across. Not a theme hook.",
+    },
+    CustomProp {
+        name: "--moss-contents-dash",
+        owner: "body",
+        default: "10px",
+        description: "The length of a contents ruler dash at rest (and of a sections panel row's dash). Not a theme hook.",
+    },
+    CustomProp {
         name: "--moss-contents-lane",
         owner: ".moss-contents-ruler",
         default: "0px",
-        description: "How wide each link of the contents ruler's invisible hit strip is on a page with `contents: pictures`: from the dash to the gutter before the text column, so the pointer can move from a dash toward its title without leaving the strip and never rests over the text. Set by the site runtime (contents-ruler.ts) from the measured layout. Not a theme hook.",
-    },
-    CustomProp {
-        name: "--moss-contents-reach",
-        owner: ".moss-contents-ruler",
-        default: "0px",
-        description: "How far each hit strip of an open `contents: pictures` ruler reaches from the dash: to the far edge of the drawn titles, so the pointer can move onto a title and click it. Set while the ruler is open by the site runtime (contents-lens.ts), removed at rest, when the strips shrink back to `--moss-contents-lane`. Not a theme hook.",
+        description: "How wide each link of the contents ruler's invisible hit strip is at rest on a page with `contents: pictures`: from the dash to the gutter before the text column, so the pointer finds the list without hunting for a dash and never rests over the text. Set by the site runtime (contents-ruler.ts) from the measured layout. Not a theme hook.",
     },
     CustomProp {
         name: "--moss-contents-row",
@@ -451,14 +493,14 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
     CustomProp {
         name: "--moss-contents-measure",
         owner: ".moss-contents-ruler",
-        default: "24ch",
-        description: "How wide an open title of a `contents: pictures` ruler may be before it wraps onto a second line. A theme may set it on `.moss-contents-ruler`.",
+        default: "34ch",
+        description: "How wide an open name of a `contents: pictures` ruler may be; a longer title is ended with an ellipsis, never wrapped. A theme may set it on `.moss-contents-ruler`.",
     },
     CustomProp {
         name: "--moss-contents-ink",
         owner: ".moss-contents-ruler-label",
         default: "1",
-        description: "How much ink an open title of a `contents: pictures` ruler has, from 0 to 1: full at the row under the pointer, falling to a floor that keeps every title legible. Set by the site runtime (contents-lens.ts) on each open frame; the panel behind the titles does not fade with it. Not a theme hook.",
+        description: "How near an open row of a `contents: pictures` ruler is to the focus, from 0 to 1, written on its link: its name's ink runs from a floor that keeps every name legible at 0 to full at 1. Set by the site runtime (contents-lens.ts) while the list is open. Not a theme hook.",
     },
     CustomProp {
         name: "--moss-place-figure-top",

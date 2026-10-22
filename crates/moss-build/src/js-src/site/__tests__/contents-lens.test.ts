@@ -1,149 +1,100 @@
 import { describe, expect, test } from "vitest";
 
-import { falloff, focusAt, layoutRows, LABEL_ROW, PIC_PAD, REST_ROW, type Strip } from "../nav/contents-lens";
-
-/** The stylesheet's 40px picture plus the padding the lens adds. */
-const PIC_ROW = 40 + PIC_PAD;
-
-const strips = (n: number, top = 300): Strip[] =>
-  Array.from({ length: n }, (_, i) => ({ top: top + i * REST_ROW, height: REST_ROW }));
+import { falloff, FOCUS_ROW, layoutRows, OPEN_ROW, PITCH, restFocus, REST_ROW, travel } from "../nav/contents-lens";
 
 describe("falloff", () => {
   test("is 1 at the focus and 0 at and beyond the radius", () => {
     expect(falloff(0)).toBe(1);
-    expect(falloff(2.5)).toBe(0);
+    expect(falloff(2.2)).toBe(0);
     expect(falloff(7)).toBe(0);
   });
   test("is symmetric, falls monotonically, and is a cosine at half the radius", () => {
     expect(falloff(-1)).toBeCloseTo(falloff(1), 10);
     expect(falloff(0.5)).toBeGreaterThan(falloff(1));
     expect(falloff(1)).toBeGreaterThan(falloff(2));
-    expect(falloff(1.25)).toBeCloseTo(0.5, 10);
+    expect(falloff(1.1)).toBeCloseTo(0.5, 10);
   });
 });
 
-describe("focusAt", () => {
-  const s = strips(6);
-  test("maps the pointer to row index plus fraction, a row's centre being its index", () => {
-    expect(focusAt(310, s)).toBeCloseTo(0, 10);
-    expect(focusAt(300 + 2 * 20 + 10, s)).toBeCloseTo(2, 10);
-    expect(focusAt(300 + 2 * 20 + 20, s)).toBeCloseTo(2.5, 10);
-    expect(focusAt(300 + 2 * 20 + 15, s)).toBeCloseTo(2.25, 10);
+describe("restFocus", () => {
+  test("is the row under the pointer, a row's centre being its index", () => {
+    expect(restFocus(300 + 10, 300, 6)).toBeCloseTo(0, 10);
+    expect(restFocus(300 + 2 * REST_ROW + 10, 300, 6)).toBeCloseTo(2, 10);
+    expect(restFocus(300 + 2 * REST_ROW + 15, 300, 6)).toBeCloseTo(2.25, 10);
   });
-  test("is bounded by the half rows beyond the ends", () => {
-    expect(focusAt(100, s)).toBe(-0.5);
-    expect(focusAt(900, s)).toBe(5.5);
+  test("is clamped to the first and last row", () => {
+    expect(restFocus(100, 300, 6)).toBe(0);
+    expect(restFocus(900, 300, 6)).toBe(5);
+  });
+});
+
+describe("travel", () => {
+  test("moves one row per pitch of pointer travel from the entry point", () => {
+    expect(travel(2, 400, 400 + PITCH, 7)).toEqual({ f: 3, y: 400 + PITCH });
+    expect(travel(2, 400, 400 - PITCH / 2, 7)).toEqual({ f: 1.5, y: 400 - PITCH / 2 });
+  });
+  test("past either end the focus stops, and so does the height it is drawn at", () => {
+    const below = travel(5, 400, 400 + 10 * PITCH, 7);
+    expect(below).toEqual({ f: 6, y: 400 + PITCH });
+    expect(travel(5, 400, 400 + 20 * PITCH, 7)).toEqual(below);
+    expect(travel(1, 400, 0, 7)).toEqual({ f: 0, y: 400 - PITCH });
   });
 });
 
 describe("layoutRows", () => {
-  const base = { open: 1, restTop: 300, minY: 40, maxY: 792 };
-  const heights = (n: number) => Array.from({ length: n }, () => PIC_ROW);
-  /** Where the point at focus `f` is drawn: the drawn top of its row plus the way through it. */
-  const drawnAt = (f: number, n: number, over = {}) => {
-    const input = { ...base, f, heights: heights(n), ...over };
-    const rows = layoutRows(input);
-    const t = f + 0.5;
-    const i = Math.min(n - 1, Math.floor(t));
-    const h = REST_ROW + (PIC_ROW - REST_ROW) * rows[i].m;
-    const top = base.restTop + i * REST_ROW + REST_ROW / 2 + rows[i].dy - h / 2;
-    return { y: top + (t - i) * h, rows };
-  };
+  const n = 7;
 
-  test.each([0, 2.5, 5, 0.3, 4.7])("keeps the point at focus %s under the pointer", (f) => {
-    const pointer = base.restTop + (f + 0.5) * REST_ROW;
-    expect(drawnAt(f, 6).y).toBeCloseTo(pointer, 6);
+  test("rows tile, from the open height far away to the focus height at it", () => {
+    const rows = layoutRows(3, 400, n);
+    for (let i = 1; i < n; i++) expect(rows[i].top).toBeCloseTo(rows[i - 1].top + rows[i - 1].size, 10);
+    expect(rows[3].size).toBeCloseTo(FOCUS_ROW, 10);
+    expect(rows[0].size).toBeCloseTo(OPEN_ROW, 10);
+    expect(rows[6].size).toBeCloseTo(OPEN_ROW, 10);
+    expect(rows[2].size).toBeGreaterThan(OPEN_ROW);
+    expect(rows[2].size).toBeLessThan(FOCUS_ROW);
+    expect(rows[2].size).toBeCloseTo(rows[4].size, 10);
   });
 
-  test("the focused row is centred at the pointer, grown to the picture's height, and its neighbours less so", () => {
-    const rows = layoutRows({ ...base, f: 2, heights: heights(6) });
-    expect(rows[2].dy).toBeCloseTo(0, 10);
-    expect(rows[2].m).toBe(1);
-    expect(rows[1].m).toBeCloseTo(falloff(1), 10);
-    expect(rows[3].m).toBeCloseTo(falloff(1), 10);
-    expect(rows[1].m).toBeLessThan(rows[2].m);
-    expect(rows[0].m).toBeCloseTo(falloff(2), 10);
-    expect(rows[5].m).toBe(0);
-  });
-
-  test.each([0, 2.5, 5, 0.3])("the drawn rows tile: each row's size runs to the next row's top (focus %s)", (f) => {
-    const rows = layoutRows({ ...base, f, heights: heights(6), floors: [20, 44, 20, 20, 62, 20] });
-    const top = (j: number) => base.restTop + j * REST_ROW + REST_ROW / 2 + rows[j].dy - rows[j].size / 2;
-    for (let j = 1; j < rows.length; j++) expect(top(j)).toBeCloseTo(top(j - 1) + rows[j - 1].size, 8);
-    expect(rows[4].size).toBeGreaterThanOrEqual(62);
-  });
-
-  test("rows above move up and rows below move down, symmetrically", () => {
-    const rows = layoutRows({ ...base, f: 3, heights: heights(7) });
-    for (let d = 1; d <= 3; d++) expect(rows[3 - d].dy).toBeCloseTo(-rows[3 + d].dy, 8);
-    expect(rows[2].dy).toBeLessThan(0);
-    expect(rows[4].dy).toBeGreaterThan(0);
-  });
-
-  test("drawn rows tile: each row starts where the last ended", () => {
-    const rows = layoutRows({ ...base, f: 2.3, heights: heights(7) });
-    for (let j = 0; j < 6; j++) {
-      const h = (k: number) => REST_ROW + (PIC_ROW - REST_ROW) * rows[k].m;
-      const gap = rows[j + 1].dy + REST_ROW - rows[j].dy - (h(j) + h(j + 1)) / 2;
-      expect(gap).toBeCloseTo(0, 6);
+  test("a whole focus is centred on the height it is held at", () => {
+    for (const k of [0, 3, n - 1]) {
+      const r = layoutRows(k, 400, n)[k];
+      expect(r.top + r.size / 2).toBeCloseTo(400, 10);
     }
   });
 
-  test("a row with no picture grows only to the label's height", () => {
-    const mixed = layoutRows({ ...base, f: 1, heights: [PIC_ROW, LABEL_ROW, PIC_ROW, PIC_ROW] });
-    expect(mixed[1].m).toBe(1);
-    const grown = REST_ROW + (LABEL_ROW - REST_ROW) * mixed[1].m;
-    expect(grown).toBe(LABEL_ROW);
-  });
-
-  test("a row never draws shorter than its floor, even far from the focus, and rows still tile", () => {
-    const floors = [REST_ROW, REST_ROW, REST_ROW, REST_ROW, 36, REST_ROW];
-    const rows = layoutRows({ ...base, f: 0, heights: heights(6), floors });
-    const height = (k: number) => REST_ROW + (rows[k].m > 0 ? (PIC_ROW - REST_ROW) * rows[k].m : 0);
-    expect(rows[4].m, "row 4 is far from the focus").toBe(0);
-    for (let j = 0; j < 5; j++) {
-      const h = (k: number) => Math.max(height(k), floors[k]);
-      const gap = rows[j + 1].dy + REST_ROW - rows[j].dy - (h(j) + h(j + 1)) / 2;
-      expect(gap, `rows ${j} and ${j + 1}`).toBeCloseTo(0, 6);
+  test("between two rows, the row at round(f) contains the height", () => {
+    for (let f = 0; f <= n - 1; f += 0.05) {
+      const r = layoutRows(f, 400, n)[Math.round(f)];
+      expect(r.top, `f = ${f}`).toBeLessThanOrEqual(400 + 1e-9);
+      expect(r.top + r.size, `f = ${f}`).toBeGreaterThanOrEqual(400 - 1e-9);
     }
-    const closed = layoutRows({ ...base, f: 0, open: 0, heights: heights(6), floors });
-    expect(closed.every((r) => r.dy === 0), "closed, the floors add nothing").toBe(true);
   });
 
-  test("closed, nothing moves", () => {
-    const rows = layoutRows({ ...base, open: 0, f: 2, heights: heights(6) });
-    expect(rows.every((r) => r.dy === 0 && r.m === 0)).toBe(true);
+  test("moving the focus moves no row by a jump", () => {
+    let prev = layoutRows(2, 400, n);
+    for (let f = 2.02; f <= 3; f += 0.02) {
+      const next = layoutRows(f, 400, n);
+      next.forEach((r, i) => expect(Math.abs(r.top - prev[i].top), `row ${i} at f = ${f}`).toBeLessThan(3));
+      prev = next;
+    }
   });
 
-  test("clamps at the top: the open list stays below minY", () => {
-    const rows = layoutRows({ ...base, f: -0.5, restTop: 50, minY: 48, heights: heights(6) });
-    expect(50 + rows[0].dy - (REST_ROW + (PIC_ROW - REST_ROW) * rows[0].m) / 2 + REST_ROW / 2).toBeGreaterThanOrEqual(48 - 1e-9);
-  });
+  test("a list that would cross the window is held inside it, and a taller one fills it", () => {
+    const bounds = { top: 16, bottom: 784 };
+    const atTop = layoutRows(0, 20, n, bounds);
+    expect(atTop[0].top).toBeCloseTo(16, 10);
+    const atBottom = layoutRows(n - 1, 780, n, bounds);
+    expect(atBottom[n - 1].top + atBottom[n - 1].size).toBeCloseTo(784, 10);
+    expect(layoutRows(3, 400, n, bounds)).toEqual(layoutRows(3, 400, n));
 
-  test("clamps at the bottom: the open list stays above maxY", () => {
-    const n = 6;
-    const restTop = base.maxY - n * REST_ROW;
-    const rows = layoutRows({ ...base, f: n - 0.5, restTop, heights: heights(n) });
-    const last = rows[n - 1];
-    const h = REST_ROW + (PIC_ROW - REST_ROW) * last.m;
-    const bottom = restTop + (n - 1) * REST_ROW + last.dy + REST_ROW / 2 + h / 2;
-    expect(bottom).toBeLessThanOrEqual(base.maxY + 1e-9);
-  });
-
-  test("with forty rows the growth is capped to the room there is, and nothing leaves the window", () => {
-    const n = 40;
-    const restTop = 40;
-    const rows = layoutRows({ ...base, f: 20, restTop, minY: 40, maxY: 40 + n * REST_ROW + 30, heights: heights(n) });
-    const grown = rows.reduce((a, r) => a + (PIC_ROW - REST_ROW) * r.m, 0);
-    expect(grown).toBeLessThanOrEqual(30 + 1e-9);
-    expect(rows[20].m).toBeGreaterThan(0);
-  });
-
-  test("all open at once: every row full size, the list centred", () => {
-    const n = 6;
-    const rows = layoutRows({ ...base, f: 0, all: true, heights: heights(n) });
-    expect(rows.every((r) => r.m === 1)).toBe(true);
-    expect(rows[0].dy).toBeCloseTo(-rows[n - 1].dy, 8);
-    expect(rows[1].dy - rows[0].dy).toBeCloseTo(PIC_ROW - REST_ROW, 8);
+    const many = 40;
+    for (const [f, y] of [[0, 30], [39, 770], [20, 400]]) {
+      const rows = layoutRows(f, y, many, bounds);
+      expect(rows[0].top, `f = ${f}`).toBeLessThanOrEqual(16 + 1e-9);
+      expect(rows[many - 1].top + rows[many - 1].size, `f = ${f}`).toBeGreaterThanOrEqual(784 - 1e-9);
+      const focused = rows[Math.round(f)];
+      expect(focused.top, `row ${f} is on screen`).toBeGreaterThanOrEqual(16 - 1e-9);
+      expect(focused.top + focused.size).toBeLessThanOrEqual(784 + 1e-9);
+    }
   });
 });

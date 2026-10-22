@@ -2840,9 +2840,19 @@ fn none_mode_builds_no_masthead_and_the_island_carries_the_controls() {
 
     let island = builder(HeaderMode::None).generate_nav_island();
     assert!(island.contains(r#"data-header="none""#), "got: {island}");
-    assert!(island.contains("nav-theme-btn") && island.contains("nav-search-btn"), "got: {island}");
+    assert!(island.contains("nav-search-btn"), "got: {island}");
     assert!(island.contains("moss-nav-island-sections"), "got: {island}");
-    assert!(!island.contains("moss-nav-island-trail") && !island.contains("My Site"), "got: {island}");
+    assert!(!island.contains("moss-nav-island-trail"), "got: {island}");
+    // The bar names the site, before the section.
+    let name = island.find(r#"<a href="/" class="site-name">My Site</a>"#).expect(&island);
+    assert!(name < island.find("moss-nav-island-sections").unwrap(), "got: {island}");
+    // One set of controls, after the island rather than in it, so hiding the
+    // bar never hides them and the toggle's clip-path id stays unique.
+    assert_eq!(island.matches("nav-theme-btn").count(), 1, "got: {island}");
+    assert_eq!(island.matches(r#"id="theme-toggle__classic__cutout""#).count(), 1);
+    let (bar, controls) = island.split_once(r#"</div><div class="nav-icons">"#).expect(&island);
+    assert!(!bar.contains("nav-search-btn"), "got: {island}");
+    assert!(controls.contains("nav-search-btn") && controls.contains("nav-theme-btn"), "got: {island}");
     // Without scripting the island shows itself, so the controls stay reachable.
     assert!(island.contains("<noscript><style>"), "got: {island}");
     assert!(!builder(HeaderMode::Brand).generate_nav_island().contains("noscript"));

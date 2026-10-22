@@ -139,16 +139,19 @@ export function initNavIsland(): void {
   teardown.forEach((undo) => undo());
   teardown = [];
 
-  const island = document.querySelector<HTMLElement>(".moss-nav-island");
-  if (!island) return;
+  const mounted = document.querySelector<HTMLElement>(".moss-nav-island");
+  if (!mounted) return;
+  const island = mounted;
 
-  const bar = island.querySelector<HTMLElement>(".moss-nav-island-bar");
+  const found = island.querySelector<HTMLElement>(".moss-nav-island-bar");
   const trail = island.querySelector<HTMLElement>(".moss-nav-island-trail");
   // A site with `[site].header = "none"` has no masthead to scroll away from:
-  // its island has no trail, only the sections button and the controls, and is
-  // on screen from the first section on instead of on scroll-up.
+  // its island has no trail, only the site's name and the sections button,
+  // with the controls following it as a sibling, and is on screen from the
+  // first section on instead of on scroll-up.
   const shape: IslandShape = island.dataset.header === "none" ? "pinned" : "trail";
-  if (!bar || (shape === "trail" && !trail)) return;
+  if (!found || (shape === "trail" && !trail)) return;
+  const bar = found;
 
   // Writing `data-shown` is what makes the island renderable at all. Do it
   // before the display probe below, or the probe reads the JS-off state and
@@ -156,6 +159,7 @@ export function initNavIsland(): void {
   // order and out of the accessibility tree, not merely transparent.
   island.dataset.shown = "false";
   island.inert = true;
+  island.removeAttribute("data-top");
 
   // The trail's parts; all absent on a pinned island.
   const inTrail = <T extends Element>(selector: string): T[] => [...(trail?.querySelectorAll<T>(selector) ?? [])];
@@ -179,6 +183,29 @@ export function initNavIsland(): void {
   const sectionsMenu = island.querySelector<HTMLElement>('[data-island-menu="sections"]');
   const progress = island.querySelector<HTMLElement>(".moss-nav-island-progress-fill");
   const header = document.querySelector<HTMLElement>("header");
+  // A pinned island's controls are its next sibling (see site.css).
+  const next = island.nextElementSibling as HTMLElement | null;
+  const controls = shape === "pinned" && next?.matches(".nav-icons") ? next : null;
+
+  /**
+   * Where a pinned island's controls stand matters to two things, both read
+   * here, on layout only: the top of their place at the top (the scroll
+   * offset from which they start to leave view), and their width in a row, the slot
+   * the bar keeps free for them. The width is the sum of the controls, so it
+   * is the same while they stand in a column under the ruler.
+   */
+  let topEdge = 0;
+  function measureControls(): void {
+    if (!controls) return;
+    const items = [...controls.children] as HTMLElement[];
+    const gap = parseFloat(getComputedStyle(controls).columnGap) || 0;
+    const tallest = Math.max(...items.map((item) => item.offsetHeight));
+    topEdge = bar.offsetTop + (bar.offsetHeight - tallest) / 2;
+    const width = items.reduce((sum, item) => sum + item.offsetWidth, 0) + gap * (items.length - 1);
+    island.style.setProperty("--moss-nav-island-controls", `${width}px`);
+  }
+
+  teardown.push(() => island.style.removeProperty("--moss-nav-island-controls"));
 
   // Empty the sections panel FIRST, and unconditionally. A morph swaps the
   // document under an island that survives, so rows left from the previous
@@ -222,6 +249,7 @@ export function initNavIsland(): void {
   if (headings.length < MIN_SECTIONS) {
     island.dataset.shown = "true";
     island.inert = false;
+    measureControls();
     return;
   }
 
@@ -269,6 +297,7 @@ export function initNavIsland(): void {
           clearance: scrollspyLine,
           pictures: pictures?.slice(0, main),
           end,
+          closing: document.querySelector("footer .moss-hero-closing"),
         }),
       );
     }
@@ -324,6 +353,7 @@ export function initNavIsland(): void {
     if (relayout) {
       relayout = false;
       layoutTrail();
+      measureControls();
     }
     const y = window.scrollY;
     const past = y > mastheadBottom();
@@ -334,8 +364,12 @@ export function initNavIsland(): void {
     // Listeners (the ruler's fade, the button's name) read next, still before
     // anything below has written.
     island.dispatchEvent(new CustomEvent(SECTION_SYNC_EVENT, { detail: { index } }));
+    // The controls keep their place at the top until they start to leave view.
+    if (controls) island.toggleAttribute("data-top", y < topEdge);
 
-    if (shape === "pinned") {
+    if (yieldToRuler()) {
+      // Where the ruler is on screen it is the page's one contents list.
+    } else if (shape === "pinned") {
       // On screen once the first section has reached the reading line, and
       // there for the rest of the page.
       setShown(index >= 0);
@@ -354,6 +388,20 @@ export function initNavIsland(): void {
     }
     // A closed panel is marked when it opens, not on every frame.
     if (sectionsMenu && !sectionsMenu.hidden) markRows(sectionsMenu.children, index);
+  }
+
+  /** Put the island away while the ruler is on screen; true when it did. */
+  function yieldToRuler(): boolean {
+    if (island.dataset.ruler !== "on") return false;
+    setShown(false);
+    return true;
+  }
+  // Keyboard focus can bring a faded ruler up between scroll passes: the island
+  // goes at once rather than on the next scroll.
+  if (typeof MutationObserver !== "undefined") {
+    const mo = new MutationObserver(yieldToRuler);
+    mo.observe(island, { attributes: true, attributeFilter: ["data-ruler"] });
+    teardown.push(() => mo.disconnect());
   }
 
   let frame = 0;
@@ -421,8 +469,8 @@ export function initNavIsland(): void {
   // — `resize` alone catches only the first.
   //
   // The trail is observed as well as the bar: the bar keeps its width when the
-  // sections button hides (the ruler is up) or changes its name, but the trail
-  // beside it gains or loses exactly that room.
+  // sections button changes its name, but the trail beside it gains or loses
+  // exactly that room.
   if (typeof ResizeObserver !== "undefined") {
     const ro = new ResizeObserver(() => layoutTrail());
     ro.observe(bar);
@@ -597,6 +645,7 @@ export function initNavIsland(): void {
   });
 
   layoutTrail();
+  measureControls();
   pass();
 }
 

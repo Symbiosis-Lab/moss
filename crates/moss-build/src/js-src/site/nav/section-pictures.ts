@@ -10,7 +10,8 @@
  * source or of the `<img>`), the narrowest is used. A list row is a few dozen
  * pixels wide, so the full-size file the page's own `src` names would be many
  * times the bytes for nothing. An image with no ladder (SVG, a small raster)
- * has one file, which is used.
+ * has one file, which is used. The thumbnail keeps the image's own focal point
+ * (its computed `object-position`), so a crop chosen with `focus:` survives.
  */
 
 /** Whether the page asked for pictures in its contents list. */
@@ -38,8 +39,14 @@ export function thumbnailUrl(img: HTMLImageElement): string | null {
 
 const level = (heading: Element): number => Number(heading.tagName[1]);
 
+/** A section's thumbnail: its file, and where its crop is centred. */
+export interface SectionPicture {
+  src: string;
+  position: string;
+}
+
 /** For each section heading, the thumbnail of its first image, or null. */
-export function sectionPictures(headings: HTMLElement[]): Array<string | null> {
+export function sectionPictures(headings: HTMLElement[]): Array<SectionPicture | null> {
   const main = headings[0]?.closest("main") ?? document.body;
   const all = [...main.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6")];
   const images = [...main.querySelectorAll<HTMLImageElement>("img")];
@@ -52,18 +59,20 @@ export function sectionPictures(headings: HTMLElement[]): Array<string | null> {
         heading.compareDocumentPosition(i) & Node.DOCUMENT_POSITION_FOLLOWING &&
         (!end || end.compareDocumentPosition(i) & Node.DOCUMENT_POSITION_PRECEDING),
     );
-    return img ? thumbnailUrl(img) : null;
+    const src = img && thumbnailUrl(img);
+    return src ? { src, position: getComputedStyle(img).objectPosition } : null;
   });
 }
 
 /** A thumbnail `<img>`; when its file will not load it removes itself, so the
  *  row falls back to its dash. */
-export function pictureImg(url: string, onGone: () => void): HTMLImageElement {
+export function pictureImg(picture: SectionPicture, onGone: () => void): HTMLImageElement {
   const img = document.createElement("img");
   img.alt = "";
+  if (picture.position) img.style.objectPosition = picture.position;
   img.loading = "lazy";
   img.decoding = "async";
-  img.src = url;
+  img.src = picture.src;
   img.addEventListener("error", () => {
     img.remove();
     onGone();

@@ -47,7 +47,9 @@ impl<'a> NavigationBuilder<'a> {
     ///
     /// It is **not** the masthead pinned. It is a second, smaller object: the
     /// same breadcrumb trail continued one level (the current page becomes the
-    /// last crumb), a sections button, and a reading-progress rule. No nav
+    /// last crumb), a sections button, and a reading-progress rule. Wherever
+    /// the contents ruler is on screen the island is hidden, so the page offers
+    /// one contents list at a time. No nav
     /// links, no theme toggle, no language switcher — those are set-once
     /// preferences that belong at the top of the document. No search either:
     /// the masthead has it and an inert icon in shipped chrome is worse than no
@@ -76,7 +78,14 @@ impl<'a> NavigationBuilder<'a> {
     /// table is an island whose sections button always has something to open.
     pub fn generate_nav_island(&self) -> String {
         if self.island == IslandShape::Pinned {
-            return self.island_frame(true, &[self.sections_button_html(), self.nav_icons_html()]);
+            // The site name, since nothing else on such a page names the
+            // site. The controls (search, language, theme) follow the island
+            // rather than sitting in it: the stylesheet moves them between the
+            // top of the page, the foot of the contents ruler and the bar's
+            // end by position alone, so they are never hidden with the bar.
+            let site_name = self.site_name_link_html(&self.home_path(), &self.logo_html());
+            let bar = [site_name, self.sections_button_html()];
+            return format!("{}{}", self.island_frame(true, &bar), self.nav_icons_html());
         }
         // `nav` header mode carries no breadcrumb trail — a home segment
         // would reintroduce the brand link this mode exists to drop, in the

@@ -220,17 +220,43 @@ for (const [width, height] of [
       }
     });
 
-    test('the island sections button is hidden while the ruler is up and back when it fades', async ({ page }) => {
-      const display = () =>
-        page.evaluate(() => getComputedStyle(document.querySelector('.moss-nav-island-sections')!).display);
-      expect(await display()).toBe('none');
+    test('the whole island is hidden wherever the ruler shows, even scrolling up, and back once it fades', async ({ page }) => {
+      const island = () =>
+        page.evaluate(() => {
+          const el = document.querySelector<HTMLElement>('.moss-nav-island')!;
+          return { visible: getComputedStyle(el).opacity !== '0', inert: el.inert, shown: el.dataset.shown };
+        });
+      // Scrolling up is what reveals the island; while the ruler is up it does not.
+      await page.evaluate(() => window.scrollBy(0, -120));
+      await frames(page);
+      await expect.poll(() => isAway(page)).toBe(false);
+      await expect.poll(island).toEqual({ visible: false, inert: true, shown: 'false' });
 
-      await scrollTo(page, 0);
+      // Past the article the ruler fades, and a scroll up brings the bar back.
+      await scrollTo(page, 1e6);
       await expect.poll(() => isAway(page)).toBe(true);
-      expect(await display()).not.toBe('none');
+      await page.evaluate(() => window.scrollBy(0, -120));
+      await frames(page);
+      await expect.poll(island).toEqual({ visible: true, inert: false, shown: 'true' });
 
       await intoArticle(page);
-      expect(await display()).toBe('none');
+      await expect.poll(async () => (await island()).shown).toBe('false');
+    });
+
+    test('keyboard focus that brings a faded ruler up puts the island away at once', async ({ page }) => {
+      await scrollTo(page, 1e6);
+      await expect.poll(() => isAway(page)).toBe(true);
+      await page.evaluate(() => window.scrollBy(0, -120));
+      await frames(page);
+      await expect.poll(() => page.locator('.moss-nav-island').evaluate((el) => (el as HTMLElement).dataset.shown)).toBe('true');
+      // Focus and read in one task, with no scroll and no frame in between.
+      const after = await page.evaluate(async () => {
+        document.querySelector<HTMLElement>('.moss-contents-ruler a')!.focus();
+        await Promise.resolve();
+        const el = document.querySelector<HTMLElement>('.moss-nav-island')!;
+        return { ruler: el.dataset.ruler, shown: el.dataset.shown, inert: el.inert };
+      });
+      expect(after).toEqual({ ruler: 'on', shown: 'false', inert: true });
     });
   });
 }

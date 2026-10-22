@@ -3569,6 +3569,19 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
    the page behaves exactly as moss does today. Reveal, folding and the two
    panels are progressive enhancement on top of markup that is already
    complete — every link in here is one the masthead also carries. */
+/* The island's and the contents ruler's geometry, on `body` so that whatever
+   is placed against them (the headerless controls, the lens's fade) reads the
+   same numbers. */
+body {
+  --moss-nav-island-edge: 1px;
+  --moss-nav-island-pad-block: 6px;
+  --moss-nav-island-pad-end: 8px;
+  --moss-nav-island-control-pad: 12px;
+  --moss-contents-inset: 32px;
+  --moss-contents-pad: 8px;
+  --moss-contents-dash: 10px;
+}
+
 .moss-nav-island {
   display: none;
   position: fixed;
@@ -3640,8 +3653,8 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
   align-items: center;
   gap: var(--moss-space-sm);
   min-height: 2.75rem;
-  padding: 6px 8px 6px 14px;
-  border: 1px solid var(--moss-border-light);
+  padding: var(--moss-nav-island-pad-block) var(--moss-nav-island-pad-end) var(--moss-nav-island-pad-block) 14px;
+  border: var(--moss-nav-island-edge) solid var(--moss-border-light);
   border-radius: 10px;
   background: var(--moss-color-bg);
   box-shadow: var(--moss-elevation-2);
@@ -3781,9 +3794,12 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
 
 .moss-nav-island-sections {
   position: relative;
+  box-sizing: border-box;
+  /* A 1em glyph plus its padding: sets the bar's height. */
+  block-size: calc(var(--moss-size-lg) + var(--moss-nav-island-control-pad));
   background: none;
   border: 0;
-  padding: 6px;
+  padding: calc(var(--moss-nav-island-control-pad) / 2);
   cursor: pointer;
   border-radius: 6px;
   color: var(--moss-color-text-secondary);
@@ -3814,20 +3830,61 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
   display: none;
 }
 
-/* While the contents ruler is on screen it is the page's one contents menu.
-   Not on a site with no header: its island is on screen to stay, so the
-   button is the reader's one constant place to see the section's name. */
-.moss-nav-island:not([data-header="none"])[data-ruler="on"] .moss-nav-island-sections,
-.moss-nav-island:not([data-header="none"])[data-ruler="on"] [data-island-menu="sections"] {
-  display: none;
-}
-
 .moss-nav-island-sections[hidden] {
   display: none;
 }
 
-/* `[site].header = "none"`: no trail, so the name takes the room the trail
-   would have had and the controls sit at the far end. */
+/* `[site].header = "none"`: no trail, so the site's name and then the
+   section's take the room the trail would have had, and the bar keeps its end
+   free for the controls (below), as wide as nav-island.ts measures them. */
+.moss-nav-island[data-header="none"] .moss-nav-island-bar {
+  padding-inline-end: calc(var(--moss-nav-island-pad-end) + var(--moss-nav-island-controls, 2.25rem) + 0.25rem);
+}
+
+.moss-nav-island[data-header="none"] .site-name {
+  font-size: var(--moss-size-sm);
+  white-space: nowrap;
+}
+
+/* With no header the controls (`.nav-icons`: search, language, theme) are one
+   element, the island's next sibling, placed by the island's state alone and
+   never moved in the DOM, so keyboard focus survives every move:
+   - at the top of the page (`data-top`, and with scripting off) they are at
+     the end of the bar's place and scroll away with the page's first block;
+   - where the contents ruler is on screen they stand in a column at the foot
+     of the window, starting where the ruler's dashes start;
+   - anywhere else they are fixed in the slot the bar keeps free at its end.
+   Both places are worked out from the bar's and the ruler's own geometry
+   tokens (on `body`), never retyped. */
+.moss-nav-island[data-header="none"] + .nav-icons {
+  position: absolute;
+  z-index: 100;
+  inset-block-start: calc(
+    var(--moss-space-sm) + var(--moss-nav-island-edge) + var(--moss-nav-island-pad-block)
+    + (var(--moss-size-lg) + var(--moss-nav-island-control-pad) - 2.25rem) / 2
+  );
+  inset-inline-end: calc(
+    max(
+      var(--moss-container-padding),
+      (100% - min(var(--moss-nav-width, var(--moss-content-width)), var(--moss-site-max-width))) / 2 + var(--moss-container-padding)
+    )
+    + var(--moss-nav-island-edge) + var(--moss-nav-island-pad-end)
+  );
+  margin: 0;
+}
+
+.moss-nav-island[data-header="none"][data-shown]:not([data-top]) + .nav-icons {
+  position: fixed;
+}
+
+.moss-nav-island[data-header="none"][data-ruler="on"]:not([data-top]) + .nav-icons {
+  flex-direction: column;
+  align-items: flex-start;
+  inset-block: auto max(var(--moss-space-md), env(safe-area-inset-bottom, 0px));
+  inset-inline-end: auto;
+  left: calc(var(--moss-contents-inset) + var(--moss-contents-pad));
+}
+
 .moss-nav-island[data-header="none"] .moss-nav-island-sections {
   flex: 1 1 0;
   min-inline-size: 0;
@@ -3988,8 +4045,8 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
 .moss-contents-ruler {
   position: fixed;
   --moss-contents-row: 20px;
-  --moss-contents-measure: 24ch;
-  left: 32px; /* plus the list's 8px padding: the dashes start 40px in */
+  --moss-contents-measure: 34ch;
+  left: var(--moss-contents-inset); /* plus the list's padding: the dashes start 40px in */
   top: 50%;
   transform: translateY(-50%);
   z-index: 20;
@@ -4013,7 +4070,7 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
 .moss-contents-ruler ol {
   list-style: none;
   margin: 0;
-  padding: 10px 8px; /* a little room around the dashes, still part of the hover target */
+  padding: 10px var(--moss-contents-pad); /* a little room around the dashes, still part of the hover target */
 }
 
 .moss-contents-ruler li {
@@ -4041,7 +4098,7 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
    section. */
 .moss-contents-ruler-dash,
 [data-island-menu="sections"] a::before {
-  inline-size: 10px;
+  inline-size: var(--moss-contents-dash);
   block-size: 1px;
   background: currentColor;
   opacity: 0.45;
@@ -4115,98 +4172,71 @@ html.scale-xlarge { --moss-reading-step: 1.25; }
 }
 
 /* A page with `contents: pictures`: at rest the plain ruler. Hovering or
-   focusing it opens the rows around the pointer (contents-lens.ts), which
-   moves the dash, picture and label of each row by transform and opacity
-   alone. The links themselves never move: each is a fixed hit strip, widened
-   sideways by `::after` and never vertically, so what is under the pointer is
-   decided by the rest geometry and not by what is drawn. At rest the strip
+   focusing it magnifies the rows in place (contents-lens.ts): each link is
+   drawn at its row's height and offset, by `transform` and `block-size`, with
+   its name on one line and, on the focused row, its section's picture after
+   the name. The list items keep their 20px rows, so the list never reflows and
+   never re-centres while it is open. At rest each link's invisible `::after`
    reaches `--moss-contents-lane` (the margin before the text gutter), so the
-   page under the margin stays clickable; while open it reaches
-   `--moss-contents-reach` (the far edge of the drawn titles), so the pointer
-   can move onto a title and click it. The picture size is one value, shared by
-   the ruler and the sections panel. */
+   pointer finds the list without hunting for a dash; while open the fade
+   behind the names takes the pointer instead. The picture size of the
+   sections panel is one value, `--moss-contents-pic`. */
 body[data-contents="pictures"] {
   --moss-contents-pic: 40px;
+}
+
+.moss-contents-ruler[data-contents="pictures"] li {
+  position: relative;
+  block-size: var(--moss-contents-row);
+}
+
+.moss-contents-ruler[data-contents="pictures"] a {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  gap: 12px;
+  transition: transform 180ms ease-out, block-size 180ms ease-out;
 }
 
 .moss-contents-ruler[data-contents="pictures"] a::after {
   content: "";
   position: absolute;
   inset-block: 0;
-  inset-inline-start: -8px; /* the list's own side padding: no dead strip left of the dash */
-  inline-size: calc(var(--moss-contents-lane, 0px) + 8px);
+  inset-inline-start: calc(-1 * var(--moss-contents-pad)); /* no dead strip left of the dash */
+  inline-size: calc(var(--moss-contents-lane, 0px) + var(--moss-contents-pad));
 }
 
-.moss-contents-ruler[data-contents="pictures"][data-lens] a::after {
-  inline-size: calc(max(var(--moss-contents-lane, 0px), var(--moss-contents-reach, 0px)) + 8px);
-}
-
-/* The link is 20px tall while its drawn row opens to the picture's height, so
-   the ring on the link would cut through the picture: the link keeps an
-   invisible outline (still shown in forced-colours mode) and the ring is drawn
-   on the picture and the title instead. */
-.moss-contents-ruler[data-contents="pictures"] a:focus-visible {
-  outline-color: transparent;
-}
-
-.moss-contents-ruler[data-contents="pictures"] a:focus-visible :is(.moss-contents-ruler-pic, .moss-contents-ruler-label) {
-  outline: 2px solid var(--moss-color-ui-accent);
-  outline-offset: 2px;
-  border-radius: 2px;
-}
-
-/* The drawn parts never take the pointer: the strip does. */
-.moss-contents-ruler[data-contents="pictures"] :is(.moss-contents-ruler-dash, .moss-contents-ruler-label, .moss-contents-ruler-pic) {
-  pointer-events: none;
-}
-
-/* Titles start past the picture; hover and focus show them only through the
-   lens, which sets their opacity. A device without hover keeps the plain
-   ruler's tap-to-open.
-
-   An open title may reach over the page past the margin: it shows whole,
-   wrapped at about `--moss-contents-measure`, never cut. Its box is centred on
-   its row and is one row tall for one line, so a short title changes no row.
-   All the open rows sit on one panel (below), not one surface each. */
-.moss-contents-ruler[data-contents="pictures"] .moss-contents-ruler-label {
-  inset-inline-start: calc(var(--moss-contents-pic) + 4px);
-  top: 50%;
-  translate: 0 -50%;
+.moss-contents-ruler[data-lens] a {
   inline-size: max-content;
-  max-inline-size: var(--moss-contents-measure);
-  line-height: 1.25;
-  padding-block: calc((var(--moss-contents-row) - 1lh) / 2);
-  padding-inline: var(--moss-space-xs);
-  white-space: normal;
-  overflow-wrap: anywhere;
-  color: color-mix(in srgb, var(--moss-color-text-secondary) calc(var(--moss-contents-ink, 1) * 100%), transparent);
 }
 
-/* The one floating surface behind the open rows: the page background, a
-   hairline and the floating-chrome elevation. contents-lens.ts moves it with
-   the rows (transform) and sizes it to them; it is out of flow and contained.
-   While open it takes the pointer, so it counts as part of the nav and moving
-   between rows over it keeps the list open; the strips above it still decide
-   which row is under the pointer. At rest it is not drawn and takes nothing,
-   so the page beneath stays clickable. Behind the rows because it comes first
-   in the nav. */
-.moss-contents-ruler-panel {
+/* The current section's dash is 8px longer; the names still start in one
+   column. */
+.moss-contents-ruler[data-contents="pictures"] .moss-contents-ruler-dash {
+  flex: none;
+  margin-inline-end: 8px;
+}
+
+.moss-contents-ruler[data-contents="pictures"] a[aria-current="true"] .moss-contents-ruler-dash {
+  margin-inline-end: 0;
+}
+
+.moss-contents-ruler[data-lens] a::after {
   display: none;
-  position: absolute;
-  inset: 0 auto auto 0;
-  contain: strict;
-  background: var(--moss-color-bg);
-  border-radius: calc(var(--moss-contents-row) * 0.3);
-  box-shadow: 0 0 0 1px var(--moss-border-light), var(--moss-elevation-2);
 }
 
-[data-theme="dark"] .moss-contents-ruler-panel {
-  box-shadow: 0 0 0 1px var(--moss-border-medium), var(--moss-elevation-2);
-}
-
-.moss-contents-ruler[data-lens] .moss-contents-ruler-panel {
-  display: block;
-  pointer-events: auto;
+/* One line, cut with an ellipsis at about `--moss-contents-measure`; the link
+   carries the whole title as its name and tooltip. Ink runs from the secondary
+   text colour far from the focus (which keeps 4.5:1 on the page colour) to
+   the text colour at it. */
+.moss-contents-ruler[data-contents="pictures"] .moss-contents-ruler-label {
+  position: static;
+  flex: none;
+  max-inline-size: var(--moss-contents-measure);
+  padding: 0;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  color: color-mix(in srgb, var(--moss-color-text) calc(var(--moss-contents-ink, 0) * 100%), var(--moss-color-text-secondary));
 }
 
 .moss-contents-ruler[data-contents="pictures"]:not([data-lens]):not([data-open]) .moss-contents-ruler-label {
@@ -4215,22 +4245,36 @@ body[data-contents="pictures"] {
 }
 
 .moss-contents-ruler[data-lens] .moss-contents-ruler-label {
+  opacity: 1;
   visibility: visible;
   transition: none;
 }
 
+.moss-contents-ruler[data-lens] a[data-focus] .moss-contents-ruler-label {
+  color: var(--moss-color-text);
+}
+
+/* Shown on the focused row only, unfolding from a thin line across its
+   middle. The picture keeps the page image's own crop (contents-lens.ts copies
+   its `object-position`). */
 .moss-contents-ruler-pic {
-  position: absolute;
-  inset-inline-start: 0;
-  inset-block-start: 50%;
-  margin-block-start: calc(var(--moss-contents-pic) / -2);
-  inline-size: var(--moss-contents-pic);
-  block-size: var(--moss-contents-pic);
+  display: none;
+  flex: none;
+  inline-size: 64px;
+  block-size: 48px; /* fits the focused row's 74px with room either side */
   border-radius: 4px;
   overflow: hidden;
   background: var(--moss-color-surface);
-  transform-origin: left center;
-  visibility: hidden;
+  clip-path: inset(50% 0);
+  transition: clip-path 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.moss-contents-ruler[data-lens] .moss-contents-ruler-pic {
+  display: block;
+}
+
+.moss-contents-ruler a[data-focus] .moss-contents-ruler-pic {
+  clip-path: inset(0);
 }
 
 .moss-contents-ruler-pic img {
@@ -4240,13 +4284,27 @@ body[data-contents="pictures"] {
   object-fit: cover;
 }
 
-.moss-contents-ruler a[data-lit] .moss-contents-ruler-dash {
-  visibility: hidden;
+/* A soft fade of the page colour behind the open names, from the window's
+   edge (the ruler sits 32px in), so they read over the page. Not a panel: no
+   edge, no shadow. Its soft ends are the 40px the lens leaves past the first
+   and last row. While open it takes the pointer, so moving over it keeps the
+   list open; behind the rows because it comes first in the nav. */
+.moss-contents-ruler-veil {
+  display: none;
+  position: absolute;
+  inset-block-start: 0;
+  left: calc(-1 * var(--moss-contents-inset));
+  inline-size: calc(var(--moss-contents-measure) + 12rem);
+  /* Solid under the names (they start 40px in and are at most the measure
+     long), fading out across the picture beside them. */
+  background: linear-gradient(to right, var(--moss-color-bg) calc(100% - 9rem), transparent);
+  mask-image: linear-gradient(transparent, #000 40px, #000 calc(100% - 40px), transparent);
+  transition: transform 180ms ease-out, block-size 180ms ease-out;
 }
 
-.moss-contents-ruler a[data-pic][aria-current="true"] .moss-contents-ruler-pic {
-  outline: 2px solid var(--moss-color-ui-accent);
-  outline-offset: 2px;
+.moss-contents-ruler[data-lens] .moss-contents-ruler-veil {
+  display: block;
+  pointer-events: auto;
 }
 
 /* The same pictures, at the same size, in the sections panel. The picture sits
@@ -4297,7 +4355,10 @@ body[data-contents="pictures"] [data-island-menu="sections"] a[data-pic] {
 @media (prefers-reduced-motion: reduce) {
   .moss-contents-ruler,
   .moss-contents-ruler-dash,
-  .moss-contents-ruler-label {
+  .moss-contents-ruler-label,
+  .moss-contents-ruler[data-contents="pictures"] a,
+  .moss-contents-ruler-pic,
+  .moss-contents-ruler-veil {
     transition: none;
   }
 }

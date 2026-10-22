@@ -1,58 +1,48 @@
 /**
  * contents-lens.ts — the contents ruler of a page with `contents: pictures`
- * opens like a wheel around the pointer.
+ * magnifies in place around the pointer.
  *
- * At rest the ruler is the plain column of dashes. Two layers make the
- * opening:
+ * At rest the ruler is the plain column of dashes. Open, it is a fisheye with
+ * one focus model:
  *
- * - The hit layer is the ruler's own links, which never move vertically: one
- *   20px strip per section, widened sideways into a lane at rest and, while
- *   open, to the far edge of the drawn titles. The pointer's height over them
- *   gives a continuous focus `f` (row `i`'s centre is `f = i`).
- * - The drawn layer is each link's dash, picture and label, translated and
- *   scaled by transform and opacity only. A label shows the whole title
- *   (wrapped, never cut) and may reach over the page; one panel behind all the
- *   rows is the only surface. Rows near `f` grow to the height a picture
- *   needs; the rest keep their height and are pushed aside, so the drawn rows
- *   tile without gaps and the point under the pointer stays under it.
+ * - The focus `f` (a row index; between two rows it is fractional) starts at
+ *   the row under the pointer when it enters, then moves one row for every
+ *   `PITCH` px the pointer travels from that point, clamped to the first and
+ *   last row. What is picked never depends on what is drawn.
+ * - Row heights follow a cosine around `f`, from `OPEN_ROW` to `FOCUS_ROW`, and
+ *   the list is shifted so the focus sits under the pointer. Past either end
+ *   `f` stops, and the list is drawn for the clamped focus, so it stays put.
+ *   A list that would cross the window's edge is held inside it instead (or,
+ *   taller than the window, made to fill it); picking is unaffected.
+ * - The focused row, `round(f)`, shows its picture after its name, and a click
+ *   anywhere on the open list goes to it.
  *
- * Because every strip is hit-tested at its rest position, aiming at a row
- * never moves it away: the row drawn under the pointer is the strip's own row.
- * The pure half (`falloff`, `focusAt`, `layoutRows`) is unit-tested; the
- * mount below only wires events to it.
+ * Every name is one line, so every row has a known height and nothing is
+ * measured but the rows' rest positions. The motion is CSS transitions, which
+ * reduced motion turns off. The pure half (`falloff`, `restFocus`, `travel`,
+ * `layoutRows`) is unit-tested; the mount below only wires events to it.
  */
 
 /** A dash's row, at rest. */
 export const REST_ROW = 20;
-/** Space above and below a picture in its fully open row. The picture's own
- *  size is read from the stylesheet (`--moss-contents-pic`), not repeated here. */
-export const PIC_PAD = 8;
-/** A row with no picture, fully open: just a little taller than its label. */
-export const LABEL_ROW = 24;
-/** Rows either side of the focus that are touched at all. */
-export const RADIUS = 2.5;
-/** The pointer must rest this long before the ruler opens. */
+/** An open row far from the focus: its name on one line. */
+export const OPEN_ROW = 26;
+/** The focused row: its name and its picture. */
+export const FOCUS_ROW = 74;
+/** Rows either side of the focus that grow at all. */
+export const RADIUS = 2.2;
+/** Pointer travel that moves the focus one row. */
+export const PITCH = 34;
+/** The pointer must rest this long before the list opens. */
 export const INTENT_MS = 80;
-/** A label far from the focus keeps this much ink, so every title is legible. */
-export const LABEL_FLOOR = 0.55;
-/** Below this share of its size (about 5px) a picture reads as a speck beside
- *  its title, so it is not drawn. */
-export const PIC_MIN = 0.12;
-/** Time constants of the focus smoothing: slow when the pointer is near, fast
- *  when it is far, so it neither lags behind a quick move nor jitters. */
-const TAU_SLOW = 90;
-const TAU_FAST = 28;
-/** The focus gap, in rows, from which the smoothing is fastest. */
-const FAR_GAP = 3;
-const OPEN_TAU = 70;
-/** Within this of its goal an animated value stops: the open share (under 1%
- *  is invisible) and the focus (a small fraction of a row, under a pixel). */
-const SNAP_OPEN = 0.005;
-const SNAP_FOCUS = 0.002;
-/** Clear space kept below the open list. */
-const EDGE = 8;
-/** The panel's room above and below the rows. */
-const PANEL_PAD = 4;
+/** A pointer that leaves and comes back within this keeps the list open. */
+const LEAVE_MS = 160;
+/** The fade behind the names reaches this far past the first and last row. */
+const VEIL_PAD = 40;
+/** Clear space the open list keeps from the window's top and bottom. */
+const EDGE = 16;
+
+const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
 
 /** Weight of a row `distance` rows from the focus: 1 at it, 0 at `radius`. */
 export function falloff(distance: number, radius = RADIUS): number {
@@ -60,296 +50,191 @@ export function falloff(distance: number, radius = RADIUS): number {
   return d >= radius ? 0 : 0.5 * (1 + Math.cos((Math.PI * d) / radius));
 }
 
-export interface Strip {
-  top: number;
-  height: number;
+/** The focus under a pointer at `y` over `n` rest rows starting at `restTop`. */
+export function restFocus(y: number, restTop: number, n: number): number {
+  return clamp((y - restTop) / REST_ROW - 0.5, 0, n - 1);
 }
 
 /**
- * The focus for a pointer height over contiguous strips: the row index plus
- * the fraction through the strip, measured from the row's centre. Above the
- * first strip it is -0.5 and below the last it is `n - 0.5`.
+ * The focus after the pointer moved from `y0` (where the focus was `f0`) to
+ * `y`, and the height the list is drawn for: the pointer's own while the focus
+ * is inside the list, the clamped focus's past either end.
  */
-export function focusAt(y: number, strips: Strip[]): number {
-  const n = strips.length;
-  if (y <= strips[0].top) return -0.5;
-  const end = strips[n - 1];
-  if (y >= end.top + end.height) return n - 0.5;
-  const i = strips.findIndex((s) => y < s.top + s.height);
-  return i + (y - strips[i].top) / strips[i].height - 0.5;
-}
-
-export interface LensInput {
-  /** Focus, as `focusAt` returns it. Ignored when `all` is set. */
-  f: number;
-  /** 0 closed .. 1 open. */
-  open: number;
-  /** Open every row at once, centred on the list (reduced motion). */
-  all?: boolean;
-  /** Each row's height when fully open. */
-  heights: number[];
-  /** The least each row may be drawn, once open, wherever the focus is: the
-   *  height of its title, which is shown in full on every row. Defaults to
-   *  `REST_ROW`, which adds nothing. */
-  floors?: number[];
-  /** Top of the first strip. */
-  restTop: number;
-  /** The open list stays between these. */
-  minY: number;
-  maxY: number;
+export function travel(f0: number, y0: number, y: number, n: number): { f: number; y: number } {
+  const f = clamp(f0 + (y - y0) / PITCH, 0, n - 1);
+  return { f, y: y0 + (f - f0) * PITCH };
 }
 
 export interface LensRow {
-  /** Translation of the row's centre from its rest position. */
-  dy: number;
-  /** Share of full size: scales the picture and drives the label. */
-  m: number;
-  /** The row's drawn height; the rows tile, so the list spans the first row's top to the last row's bottom. */
+  /** The drawn row's top, in the same coordinates as `y`. */
+  top: number;
   size: number;
+  /** 1 at the focus, 0 from `RADIUS` rows away. */
+  weight: number;
 }
 
 /**
- * Where each row is drawn. A row's growth is its open height over `REST_ROW`
- * times its weight, but never less than its floor (a title of two lines needs
- * its height even far from the focus); the rows before it add up to its
- * offset, and the offset at the focus is taken back off every row so the point
- * under the pointer stays put. The growth above the floors is capped so the
- * whole list fits between `minY` and `maxY`, and the list is nudged back
- * inside them where it still reaches past an end.
+ * Where each of `n` rows is drawn for focus `f` held at height `y`. The point
+ * `f` stands for, between the centres of the two rows around it, is put at
+ * `y`, so the row at `round(f)` contains `y`, unless that would take the list
+ * past `bounds`: a list that fits is then held inside them, and one taller
+ * than they are covers them without a gap, its focused row inside them.
  */
-export function layoutRows(input: LensInput): LensRow[] {
-  const { f, open, all, heights, restTop, minY, maxY } = input;
-  const n = heights.length;
-  const weight = heights.map((_, j) => (all ? 1 : falloff(j - f)) * open);
-  const base = heights.map((_, j) => Math.max(0, (input.floors?.[j] ?? REST_ROW) - REST_ROW) * open);
-  const extra = heights.map((h, j) => Math.max(0, Math.max(0, h - REST_ROW) * weight[j] - base[j]));
-  const total = extra.reduce((a, b) => a + b, 0);
-  const room = Math.max(0, maxY - minY - n * REST_ROW - base.reduce((a, b) => a + b, 0));
-  const k = total > room ? room / total : 1;
-  const grow = extra.map((g, j) => base[j] + g * k);
-
-  const before: number[] = [];
+export function layoutRows(f: number, y: number, n: number, bounds?: { top: number; bottom: number }): LensRow[] {
+  const weight = Array.from({ length: n }, (_, i) => falloff(i - f));
+  const size = weight.map((w) => OPEN_ROW + (FOCUS_ROW - OPEN_ROW) * w);
+  const tops: number[] = [];
   let sum = 0;
-  for (let j = 0; j < n; j++) {
-    before.push(sum);
-    sum += grow[j];
+  for (const s of size) {
+    tops.push(sum);
+    sum += s;
   }
-  let anchor = sum / 2;
-  if (!all) {
-    const t = Math.min(n, Math.max(0, f + 0.5));
-    const i = Math.min(n - 1, Math.floor(t));
-    anchor = before[i] + (t - i) * grow[i];
+  const i0 = Math.floor(f);
+  const i1 = Math.min(i0 + 1, n - 1);
+  const c0 = tops[i0] + size[i0] / 2;
+  const c1 = tops[i1] + size[i1] / 2;
+  let shift = y - (c0 + (f - i0) * (c1 - c0));
+  if (bounds) {
+    const a = bounds.top;
+    const b = bounds.bottom - sum;
+    shift = clamp(shift, Math.min(a, b), Math.max(a, b));
+    // Taller than the window, the focused row itself stays on screen.
+    const k = Math.round(f);
+    shift = clamp(shift, bounds.top - tops[k], bounds.bottom - tops[k] - size[k]);
   }
-  let shift = before.map((b) => b - anchor);
-
-  const top = restTop + shift[0];
-  const bottom = restTop + n * REST_ROW + shift[n - 1] + grow[n - 1];
-  let nudge = Math.max(0, minY - top);
-  nudge -= Math.max(0, bottom + nudge - maxY);
-  shift = shift.map((s) => s + nudge);
-
-  return shift.map((s, j) => ({ dy: s + grow[j] / 2, m: weight[j] * k, size: REST_ROW + grow[j] }));
+  return size.map((s, i) => ({ top: shift + tops[i], size: s, weight: weight[i] }));
 }
 
 export interface LensOptions {
   nav: HTMLElement;
   links: HTMLElement[];
-  /** The space the island's bar takes at the top of the window. */
-  clearance: () => number;
 }
 
 const px = (n: number): string => `${n.toFixed(2)}px`;
 
 /** Wire the lens to a mounted ruler. Returns its disposer. */
-export function mountContentsLens(opts: LensOptions): () => void {
-  const { nav, links } = opts;
-  const rows = links.map((link) => ({
-    link,
-    dash: link.querySelector<HTMLElement>(".moss-contents-ruler-dash")!,
-    label: link.querySelector<HTMLElement>(".moss-contents-ruler-label")!,
-    pic: link.querySelector<HTMLElement>(".moss-contents-ruler-pic"),
-  }));
-  const reduced = (): boolean => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+export function mountContentsLens({ nav, links }: LensOptions): () => void {
+  const n = links.length;
+  const veil = document.createElement("span");
+  veil.className = "moss-contents-ruler-veil";
+  veil.setAttribute("aria-hidden", "true");
+  nav.prepend(veil);
 
-  let strips: Strip[] = [];
-  let pointerY: number | null = null;
-  let hovering = false;
-  let focused: number | null = null;
+  /** The open list, or null at rest. */
+  let lens: {
+    f: number;
+    f0: number;
+    y0: number;
+    y: number;
+    /** The rows' rest tops: the list items, which never move. */
+    restTops: number[];
+    navTop: number;
+  } | null = null;
   let intent = 0;
-  let frame = 0;
-  let last = 0;
-  let open = 0;
-  let f = 0;
-  let picRow = LABEL_ROW;
-  let titleHeights: number[] = [];
-  let minY = 0;
-  let reach = 0;
-  let navTop = 0;
-  let listPad = 0;
-  const panel = document.createElement("span");
-  panel.className = "moss-contents-ruler-panel";
-  panel.setAttribute("aria-hidden", "true");
-  nav.prepend(panel);
+  let leave = 0;
 
-  const measure = (): void => {
-    const frame = rows.find((r) => r.pic)?.pic;
-    picRow = frame ? frame.offsetHeight + PIC_PAD : LABEL_ROW;
-    minY = opts.clearance();
-    titleHeights = rows.map(({ label }) => label.offsetHeight);
-    reach = Math.max(...rows.map(({ label }) => label.getBoundingClientRect().right)) - links[0].getBoundingClientRect().left;
-    navTop = nav.getBoundingClientRect().top;
-    // The panel starts at the nav's edge, the list's own side padding left of the dashes.
-    listPad = parseFloat(getComputedStyle(nav.querySelector("ol")!).paddingLeft) || 0;
-    strips = links.map((link) => {
-      const box = link.getBoundingClientRect();
-      return { top: box.top, height: box.height };
+  function draw(): void {
+    if (!lens) return;
+    const rows = layoutRows(lens.f, lens.y, n, { top: EDGE, bottom: window.innerHeight - EDGE });
+    const focus = Math.round(lens.f);
+    const { restTops, navTop } = lens;
+    links.forEach((link, i) => {
+      link.style.transform = `translateY(${px(rows[i].top - restTops[i])})`;
+      link.style.blockSize = px(rows[i].size);
+      link.style.setProperty("--moss-contents-ink", rows[i].weight.toFixed(3));
+      link.toggleAttribute("data-focus", i === focus);
     });
-  };
-  const wants = (): boolean => hovering || focused !== null;
-  const target = (): number => (pointerY !== null && hovering ? focusAt(pointerY, strips) : (focused ?? 0));
-
-  function clear(): void {
-    nav.removeAttribute("data-lens");
-    nav.style.removeProperty("--moss-contents-reach");
-    panel.removeAttribute("style");
-    for (const { link, dash, label, pic } of rows) {
-      for (const el of [dash, label, pic]) el?.removeAttribute("style");
-      link.removeAttribute("data-lit");
-    }
+    const last = rows[n - 1];
+    veil.style.transform = `translateY(${px(rows[0].top - VEIL_PAD - navTop)})`;
+    veil.style.blockSize = px(last.top + last.size - rows[0].top + 2 * VEIL_PAD);
   }
 
-  function draw(all: boolean): void {
-    const heights = rows.map(({ link }) => (link.hasAttribute("data-pic") ? picRow : LABEL_ROW));
-    const layout = layoutRows({
-      f,
-      open,
-      all,
-      heights,
-      floors: titleHeights,
-      restTop: strips[0].top,
-      minY,
-      maxY: window.innerHeight - EDGE,
-    });
+  function openAt(pointerY: number, focus: number): void {
+    lens = {
+      f: focus,
+      f0: focus,
+      y0: pointerY,
+      y: pointerY,
+      restTops: links.map((link) => link.parentElement!.getBoundingClientRect().top),
+      navTop: nav.getBoundingClientRect().top,
+    };
     nav.setAttribute("data-lens", "");
-    nav.style.setProperty("--moss-contents-reach", px(reach));
-    const last = rows.length - 1;
-    const spanTop = (j: number): number => strips[0].top + j * REST_ROW + REST_ROW / 2 + layout[j].dy - layout[j].size / 2;
-    const top = spanTop(0) - PANEL_PAD;
-    // Height is the one value written besides the transform: the panel is out
-    // of flow and contained, so it costs no layout of the page.
-    panel.style.transform = `translateY(${px(top - navTop)})`;
-    panel.style.height = px(spanTop(last) + layout[last].size - top + PANEL_PAD);
-    panel.style.width = px(listPad + reach + listPad);
-    panel.style.opacity = String(open);
-    rows.forEach(({ link, dash, label, pic }, j) => {
-      const { dy, m } = layout[j];
-      const move = `translateY(${px(dy)})`;
-      const lit = !!pic && link.hasAttribute("data-pic") && m > PIC_MIN;
-      dash.style.transform = move;
-      label.style.transform = move;
-      // The titles follow the opening alone; only the ink fades with distance.
-      label.style.opacity = String(open);
-      label.style.setProperty("--moss-contents-ink", String(LABEL_FLOOR + (1 - LABEL_FLOOR) * m));
-      if (pic) {
-        pic.style.transform = `${move} scale(${m.toFixed(3)})`;
-        pic.style.opacity = String(m);
-        pic.style.visibility = lit ? "visible" : "hidden";
-      }
-      link.toggleAttribute("data-lit", lit);
-    });
+    draw();
   }
 
-  function step(now: number): void {
-    frame = 0;
-    const dt = Math.min(50, now - (last || now));
-    last = now;
-    const want = wants();
-    const goal = target();
-    if (want && open === 0) f = goal;
-    open += ((want ? 1 : 0) - open) * (1 - Math.exp(-dt / OPEN_TAU));
-    if (Math.abs((want ? 1 : 0) - open) < SNAP_OPEN) open = want ? 1 : 0;
-    const gap = Math.abs(goal - f);
-    const tau = TAU_SLOW + (TAU_FAST - TAU_SLOW) * Math.min(1, gap / FAR_GAP);
-    f = Math.abs(goal - f) < SNAP_FOCUS ? goal : f + (goal - f) * (1 - Math.exp(-dt / tau));
-    if (!want && open === 0) {
-      clear();
-      last = 0;
-      return;
+  function close(): void {
+    clearTimeout(intent);
+    clearTimeout(leave);
+    if (!lens) return;
+    lens = null;
+    nav.removeAttribute("data-lens");
+    veil.removeAttribute("style");
+    for (const link of links) {
+      link.removeAttribute("style");
+      link.removeAttribute("data-focus");
     }
-    draw(false);
-    if (open !== (want ? 1 : 0) || f !== goal) frame = requestAnimationFrame(step);
-    else last = 0;
   }
 
-  /** Bring the drawing up to date: at once without motion, else on the next frame. */
-  function update(): void {
-    if (reduced()) {
-      cancelAnimationFrame(frame);
-      frame = 0;
-      if (wants()) {
-        open = 1;
-        draw(true);
-      } else {
-        open = 0;
-        clear();
-      }
-      return;
-    }
-    if (!frame) frame = requestAnimationFrame(step);
-  }
+  const restCentre = (i: number): number =>
+    links[i].parentElement!.getBoundingClientRect().top + REST_ROW / 2;
+  const restTop = (): number => links[0].parentElement!.getBoundingClientRect().top;
 
-  const listeners: Array<() => void> = [];
-  const on = <K extends keyof HTMLElementEventMap>(type: K, fn: (e: HTMLElementEventMap[K]) => void): void => {
-    nav.addEventListener(type, fn);
-    listeners.push(() => nav.removeEventListener(type, fn));
+  const undo: Array<() => void> = [];
+  const on = <K extends keyof HTMLElementEventMap>(
+    target: HTMLElement | Window,
+    type: K,
+    fn: (e: HTMLElementEventMap[K]) => void,
+  ): void => {
+    target.addEventListener(type, fn as EventListener);
+    undo.push(() => target.removeEventListener(type, fn as EventListener));
   };
-  const onResize = (): void => {
-    if (strips.length === 0) return;
-    measure();
-    if (wants()) update();
-  };
-  window.addEventListener("resize", onResize);
-  listeners.push(() => window.removeEventListener("resize", onResize));
 
   const mouse = (e: PointerEvent): boolean => e.pointerType !== "touch";
-  on("pointerenter", (e) => {
+  on(nav, "pointerenter", (e) => {
     if (!mouse(e)) return;
-    measure();
-    pointerY = e.clientY;
+    clearTimeout(leave);
+    if (lens) return;
+    const entry = e.clientY;
     clearTimeout(intent);
-    intent = window.setTimeout(() => {
-      hovering = true;
-      update();
-    }, reduced() ? 0 : INTENT_MS);
+    intent = window.setTimeout(() => openAt(entry, restFocus(entry, restTop(), n)), INTENT_MS);
   });
-  on("pointermove", (e) => {
-    if (!mouse(e) || strips.length === 0) return;
-    pointerY = e.clientY;
-    if (hovering) update();
+  on(nav, "pointermove", (e) => {
+    if (!lens || !mouse(e)) return;
+    ({ f: lens.f, y: lens.y } = travel(lens.f0, lens.y0, e.clientY, n));
+    draw();
   });
-  on("pointerleave", () => {
+  on(nav, "pointerleave", () => {
     clearTimeout(intent);
-    hovering = false;
-    pointerY = null;
-    update();
+    if (lens) leave = window.setTimeout(close, LEAVE_MS);
   });
-  on("focusin", (e) => {
+  // A click anywhere on the open list goes to the focused row: re-dispatched
+  // on that row's link once the list is closed, so it is an ordinary
+  // fragment jump.
+  on(nav, "click", (e) => {
+    if (!lens) return;
+    const target = links[Math.round(lens.f)];
+    const own = (e.target as Element).closest("a") === target;
+    close();
+    if (own) return;
+    e.preventDefault();
+    target.click();
+  });
+  on(nav, "focusin", (e) => {
     const i = links.indexOf(e.target as HTMLElement);
     if (i < 0 || !(e.target as HTMLElement).matches(":focus-visible")) return;
-    measure();
-    focused = i;
-    update();
+    openAt(restCentre(i), i);
   });
-  on("focusout", () => {
-    focused = null;
-    update();
+  on(nav, "focusout", (e) => {
+    if (!nav.contains(e.relatedTarget as Node | null)) close();
   });
+  on(nav, "keydown", (e) => {
+    if (e.key === "Escape") close();
+  });
+  on(window, "resize", close);
 
   return () => {
-    clearTimeout(intent);
-    cancelAnimationFrame(frame);
-    listeners.forEach((off) => off());
-    clear();
-    panel.remove();
+    close();
+    undo.forEach((off) => off());
+    veil.remove();
   };
 }

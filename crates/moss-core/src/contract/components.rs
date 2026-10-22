@@ -2957,7 +2957,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "Right-hand icon cluster in the nav bar (search, theme toggle, and similar). Stationary chrome, present whether or not the site has nav links.",
+        description: "Right-hand icon cluster in the nav bar (search, theme toggle, and similar). Stationary chrome, present whether or not the site has nav links. Under `[site].header = \"none\"` it is the next sibling of `.moss-nav-island`, placed by the island's state (see its `data-header`).",
     },
     // The rest of the nav interior and the default footer, on the same footing
     // as the masthead block above: emitted since 0, styled in `site.css`, and
@@ -3124,13 +3124,8 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         since: "0",
         description: "A link to another edition of the same page. Carries `hreflang`, so `[hreflang=\"en\"]` is a stable hook for per-language styling.",
     },
-    // The floating nav island — the small bar that appears when the
-    // reader scrolls back up past the masthead on a long page. A SECOND object,
-    // not the masthead re-pinned, which is why it has its own `moss-`-prefixed
-    // vocabulary. Its trail is the one exception: it deliberately reuses
-    // `.site-name` / `.breadcrumb-segment` / `.breadcrumb-label` /
-    // `.breadcrumb-separator` from the masthead above, so a site that restyles
-    // its breadcrumb restyles both at once.
+    // The floating nav island has its own `moss-` vocabulary; its trail reuses
+    // the masthead's breadcrumb classes, so restyling one restyles both.
     ComponentEntry {
         class: "moss-nav-island",
         kind: "chrome",
@@ -3146,7 +3141,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-header",
                 values: &["none"],
                 default: "",
-                description: "Present as `none` under `[site].header = \"none\"`. That island is the page's only chrome: it has no trail, carries the search button, language switcher and theme toggle (`.nav-icons`), is emitted on every page, and shows from the first section heading to the end of the page instead of on scroll-up. On a page with fewer than two sections it shows the controls alone, from the start.",
+                description: "Present as `none` under `[site].header = \"none\"`. That island is the page's only chrome: it has no trail, carries the site's name and the section button, is emitted on every page, and shows from the first section heading to the end of the page instead of on scroll-up, except where the contents ruler is on screen. On a page with fewer than two sections it shows the controls alone, from the start. The controls (`.nav-icons`: search, language, theme) are its next sibling, one element placed by the island's state: at the end of the bar's place at the top of the page (`data-top`), in a column at the foot of the window under the contents ruler where the ruler is on screen (`data-ruler=\"on\"`), and in a slot the bar keeps free at its end otherwise.",
             },
             DataAttr {
                 name: "data-nameless",
@@ -3158,7 +3153,13 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-ruler",
                 values: &["off", "on"],
                 default: "off",
-                description: "Whether the contents ruler is on screen. Written by the site runtime; while it is `on` the island hides its sections button and panel, so the page never offers two contents menus at once.",
+                description: "Whether the contents ruler is on screen. Written by the site runtime; while it is `on` the whole island is hidden and inert, so the page never offers two contents lists at once.",
+            },
+            DataAttr {
+                name: "data-top",
+                values: &[],
+                default: "",
+                description: "Present on an island with `data-header=\"none\"` while the reader is at the top of the page, where the theme toggle that follows the island still has its place in view. Written by the site runtime.",
             },
         ],
         example_html: r#"<div class="moss-nav-island" data-shown="true"><div class="moss-nav-island-bar">…</div></div>"#,
@@ -3220,7 +3221,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Emerging,
         since: "0",
-        description: "Button cluster at the island's end edge. Holds the sections button only — theme, language and search stay in the masthead. Under `[site].header = \"none\"` there is no masthead: the sections button sits directly in the bar, beside the `.nav-icons` cluster that carries those controls.",
+        description: "Button cluster at the island's end edge. Holds the sections button only — theme, language and search stay in the masthead. Under `[site].header = \"none\"` there is no masthead: the sections button sits directly in the bar after the site's name, and the `.nav-icons` cluster that carries those controls follows the island.",
     },
     ComponentEntry {
         class: "moss-nav-island-sections",
@@ -3325,13 +3326,13 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 name: "data-contents",
                 values: &["pictures"],
                 default: "",
-                description: "Present as `pictures` on a page with `contents: pictures` in its frontmatter: hovering or focusing the ruler opens the rows around the pointer, and a section with an image shows a small picture of it beside its title. At rest it is the plain ruler.",
+                description: "Present as `pictures` on a page with `contents: pictures` in its frontmatter: hovering or focusing the ruler magnifies its rows in place around the pointer, each name on one line, and the focused row shows its section's picture after its name. At rest it is the plain ruler.",
             },
             DataAttr {
                 name: "data-lens",
                 values: &[],
                 default: "",
-                description: "Present while a ruler with pictures is open under the pointer or keyboard focus. Written by the site runtime.",
+                description: "Present while a ruler with pictures is open under the pointer or keyboard focus; Escape closes it. Written by the site runtime, which also marks the focused row's link `data-focus`, the row a click on the open list goes to.",
             },
         ],
         example_html: r##"<nav class="moss-contents-ruler" aria-label="Sections on this page"><ol><li><a href="#intro"><span class="moss-contents-ruler-dash"></span><span class="moss-contents-ruler-label">Intro</span></a></li>…</ol></nav>"##,
@@ -3360,18 +3361,18 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Emerging,
         since: "0",
-        description: "A section's title, to the right of its dash and hidden until the ruler is hovered or focused. Cut in the middle to the room left before the text column; the link carries the full title as its accessible name. On a page with `contents: pictures` it is not cut: it shows whole, wrapped at about 24 characters, and may reach over the page, on the ruler's one panel.",
+        description: "A section's title, to the right of its dash and hidden until the ruler is hovered or focused. Cut in the middle to the room left before the text column; the link carries the full title as its accessible name. On a page with `contents: pictures` it is one line of up to about 34 characters (`--moss-contents-measure`), ended with an ellipsis beyond, and may reach over the page; the link carries the full title as its accessible name and tooltip.",
     },
     ComponentEntry {
-        class: "moss-contents-ruler-panel",
+        class: "moss-contents-ruler-veil",
         kind: "instance",
         parent: "moss-contents-ruler",
         data_attrs: &[],
-        example_html: r#"<span class="moss-contents-ruler-panel" aria-hidden="true"></span>"#,
+        example_html: r#"<span class="moss-contents-ruler-veil" aria-hidden="true"></span>"#,
         example_markdown: "",
         status: Status::Emerging,
         since: "0",
-        description: "The one floating surface behind the open rows of a `contents: pictures` ruler: the page background, a hairline and the floating-chrome shadow, from the first row's top to the last row's bottom and from the dashes to the widest title. Not drawn and takes no pointer at rest; while open it moves with the rows and counts as part of the ruler, so a pointer over it keeps the ruler open. Written by the site runtime.",
+        description: "A soft fade of the page colour behind the open names of a `contents: pictures` ruler, from the window's edge, so they read over the page; not a panel, with no edge or shadow. Not drawn and takes no pointer at rest; while open it spans the drawn rows and counts as part of the ruler, so a pointer over it keeps the list open and a click on it goes to the focused row. Written by the site runtime.",
     },
     ComponentEntry {
         class: "moss-contents-ruler-pic",
@@ -3382,7 +3383,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: "",
         status: Status::Emerging,
         since: "0",
-        description: "A 40px square picture standing for a section on a page with `contents: pictures`: the section's first image, read from the image already on the page at the narrowest width moss generated. Hidden until the ruler opens around it, then scaled up with the row. Written by the site runtime; a section with no image has none.",
+        description: "A 64 by 48px picture standing for a section on a page with `contents: pictures`: the section's first image, read from the image already on the page at the narrowest width moss generated, with that image's focal point (`object-position`). Shown after the name of the focused row only, unfolding from a thin line. Written by the site runtime; a section with no image has none.",
     },
     ComponentEntry {
         class: "moss-nav-island-section-title",

@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from "vitest";
-import { sectionPictures, thumbnailUrl } from "../nav/section-pictures";
+import { pictureImg, sectionPictures, thumbnailUrl } from "../nav/section-pictures";
 
 const pic = (name: string) =>
   `<picture><source srcset="${name}-1600.webp 1600w, ${name}-800.webp 800w, ${name}.webp 2400w" type="image/webp" sizes="100vw">` +
@@ -11,7 +11,7 @@ describe("section pictures", () => {
       <h1>Title</h1>${pic("cover")}
       <h2 id="a">A</h2><p>no image</p>
       <h2 id="b">B</h2><h3 id="b1">B1</h3>${pic("deep")}
-      <h2 id="c">C</h2><img src="plain.svg" alt="">${pic("second")}
+      <h2 id="c">C</h2><img src="plain.svg" alt="" style="object-position: 20% 70%">${pic("second")}
     </main>`;
   });
 
@@ -26,11 +26,18 @@ describe("section pictures", () => {
 
   test("a section owns the first image inside it, subsections included; one before the first section belongs to none", () => {
     const heads = [...document.querySelectorAll<HTMLElement>("h2")];
-    expect(sectionPictures(heads)).toEqual([null, "deep-800.webp", "plain.svg"]);
+    expect(sectionPictures(heads).map((p) => p?.src ?? null)).toEqual([null, "deep-800.webp", "plain.svg"]);
   });
 
   test("a subsection stops at the next heading of its own or a higher level", () => {
     const heads = [...document.querySelectorAll<HTMLElement>("h3")];
-    expect(sectionPictures(heads)).toEqual(["deep-800.webp"]);
+    expect(sectionPictures(heads).map((p) => p?.src)).toEqual(["deep-800.webp"]);
+  });
+
+  test("the thumbnail keeps the page image's focal point", () => {
+    const heads = [...document.querySelectorAll<HTMLElement>("h2")];
+    const picture = sectionPictures(heads)[2]!;
+    expect(picture.position).toBe("20% 70%");
+    expect(pictureImg(picture, () => {}).style.objectPosition).toBe("20% 70%");
   });
 });
