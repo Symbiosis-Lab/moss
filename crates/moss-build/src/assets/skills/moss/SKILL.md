@@ -18,6 +18,22 @@ both erode legibility.
 
 **Never ship less than the design needs.** moss has a low floor and a high ceiling: the simple parts of a site are plain markdown and folders, and anything a hand-built site can put on the web a moss site can put there too. When markdown cannot say something — an interactive drawing, a scroll-driven scene, a custom component — keep the words in markdown and take an escape hatch for the rest: raw `<svg>` or `<canvas>` in a partial, `.moss/theme/script.js`, a plugin. Do not cut the design down to what is easy in markdown. If moss blocks something the web can do, or forces a workaround, tell the user it is a moss gap and name the reproduction, rather than quietly shipping less.
 
+## A collection from a spreadsheet
+
+For a folder of items with a metadata file (pictures plus a CSV, as an archive or library hands it over). Never edit the CSV, the pictures or the source note; a script that writes pages runs from outside the site folder, since every file left in the folder is published.
+
+1. **One page per row**, in a folder of its own (`photographs/<slug>.md`). Its body is one picture line embedding the file where it already is: `![Title|](../images/x.jpg)` (the trailing `|` keeps the title as alt text without repeating it as a caption).
+2. **Every other column into frontmatter**, header unchanged as the key, value exactly as the CSV has it. A name for readers goes in the field's `label`, never in the key. Prefix a header that is a moss key with another meaning (`url` becomes `source_url`; `moss describe --json | jq '.frontmatter'` lists them).
+3. **Dates.** `date:` must be a calendar date (`1938`, `1938-05`, `1938-05-18`). If any row's date is not, put every row's value, as written, in one declared text field (`catalogue_date`).
+4. **Facts.** In `.moss/config.toml`, declare each column a visitor should see as a field with `place = "facts"`: every column whose values differ between rows, the identifiers, and the rights statement (even when every row has the same one). Leave out the columns already used elsewhere: the file column is the picture line, and the title column is the page's `title:`.
+5. **Credit and link back.** Declare the item-link column `type = "url"` with `text = "<the credit line the source asks for>"`.
+6. **The creator, once.** If one creator made every item, set `author:` in `cascade:` on the items folder's home page (each page is cited to them) and show the name with a declared field set in the same `cascade:` (`photographer`, `place = "facts"`). `[site] author` is this edition's maker, not the items' creator.
+7. **Citable.** `archival = true` under `[site]`: every page shows its edition and a citation, and the source travels with the site. The site's name is the home page's `title:`; `moss describe --json | jq .site_settings` lists every `[site]` setting. Until the site has an address, the build prints one note that citations name no address; leave it, since it clears once `[site] domain` is an https address.
+8. **Browse.** Make the browse column a term kind (`[terms.boroughs] fields = ["borough"]`, with `count = "{n} photograph|{n} photographs"` so its cards name what they count). On the home page embed one listing per value (`![[/boroughs/brooklyn/|style:grid]]`) and set `children: false` (otherwise every item is listed again below) and `content_width: wide`. Since the home page already shows the boroughs, leave the kind out of the nav: no `nav = true`.
+9. **Pictures whole.** For prints that must not be cropped, set `--moss-card-cover-fit: contain` and a `--moss-card-cover-ratio` close to the prints' own shape in `.moss/theme/style.css` under `:root` (an `aspect-ratio` value: the default is `4 / 3`, upright prints suit `4 / 5`); `contain` shows the whole picture inside that box, with bands where the shapes differ. Give the pictures folder an `index.md` with `listed: false`.
+10. **The source note** becomes a page by adding frontmatter above its unchanged text.
+11. `moss build --strict`, then read every warning and note.
+
 ## Start from a blank folder
 
 1. Create a folder. Its name becomes the site title — choose it deliberately.
@@ -124,6 +140,18 @@ unskimmable minified text — and never edit them: the next build overwrites all
 of them. Read the defaults with `moss describe --css <selector>`; write
 overrides in `.moss/theme/style.css`.
 
+## Before styling: where a fact lives
+
+A fact is a field, and moss places it. Before writing CSS, a classed div or HTML for something a page states (a date, a credit, a place, a role, a label), stop at the first of these that holds:
+
+1. It is a fact about this page: declare a field with a `place` in `.moss/config.toml` (`moss guide authoring`, Declared fields), and write the value in frontmatter.
+2. Every page in a folder shares the value: write it once in `cascade:` on the folder's home page; a page's own value wins.
+3. Several facts read as one line: a group field, `type = "group"` with `of = [...]`, draws the parts that have a value, in order.
+4. A picture needs its crop or framing: display words on the embed, `![[photo.jpg|focus:30%,20%]]` keeps that point in view, `|contain` shows it whole (`moss guide authoring`, images).
+5. A section a link must reach: `## Opening hours {#hours}`, linked as `[[Page#hours]]`.
+
+Only then style it, with the rungs below. Never write `{.class}` on an image, link or inline span: other markdown tools print it as text.
+
 ## The four styling rungs
 
 When a design call needs a visual treatment, stop at the first rung that reaches it:
@@ -166,6 +194,7 @@ For shortcodes and partials (content reuse, not styling tiers), see
 
 ## Hard rules
 
+- Show a destination once. What the home page already shows (a set of listings, a map) is not also a nav item, and a nav item's page is not repeated on the home page; the same holds for a footer link that repeats the nav.
 - Use `::: {.class}` for styling wrappers, never `<div class="...">`. Literal
   HTML earns its place only for semantics markdown cannot express — a `<nav>` or
   `<section>` landmark with an `aria-label`, or a stable hook where a positional

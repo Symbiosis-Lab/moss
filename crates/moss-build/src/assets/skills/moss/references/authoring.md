@@ -274,7 +274,7 @@ The home page's title is the site's name; moss adds it as a hidden heading for s
 
 A page's title is its visible heading, including a page in the navigation, whose nav label may differ from its title. A home page, and any page whose opening `:::hero` stands in for its masthead, gets its title as a visually hidden `<h1>` instead, so screen readers have a heading, unless the body already supplies one: a `# Heading` in the body, or in a `:::hero` block. A hero of only an image and a link does not supply one. To show a visible title on an article, write the title as a `# Heading` that opens the body: when its text equals the page's title, moss keeps it as written and adds no second copy above it. A different opening `# Heading` sits below the injected title.
 
-A folder with no file anywhere beneath it publishes nothing, and the build names it; it gets its page once it holds a page or a file. A home page or folder page lists its child pages by default. `children: false` in its frontmatter turns that listing off, and on a place page it also drops the place's term listing, while links to the place still resolve. When the body's own embeds already list the pages that child listing would show, the build prints a note with that count, and `children: false` keeps only the embeds.
+Every `.md` file in the folder is a page, a note at the root such as `README.md` or `SOURCE.md` included. To publish such a note under another title, add frontmatter above it (`title: About the sources`) and leave its text as written: a source note is a record, and a copy of it would publish twice. Link to it by its file name, `[About the sources](SOURCE.md)`, whatever its `title:` or `url:` say. A folder that holds only pictures your pages embed (an `images/` folder) still gets a listing page at its own address, though not a nav entry; give it an `index.md` with `listed: false` to keep it out of listings. A folder with no file anywhere beneath it publishes nothing, and the build names it; it gets its page once it holds a page or a file. A home page or folder page lists its child pages by default. `children: false` in its frontmatter turns that listing off, and on a place page it also drops the place's term listing, while links to the place still resolve. When the body's own embeds already list the pages that child listing would show, the build prints a note with that count, and `children: false` keeps only the embeds.
 
 Quote a frontmatter value that contains a colon followed by a space, such as `title: "Notes: spring"`. Unquoted, it is invalid YAML, and the whole frontmatter block is ignored rather than the one field, so every field on the page falls back to its default. The build prints `frontmatter: invalid YAML`; `moss build --strict` turns that warning into a failure.
 
@@ -443,7 +443,7 @@ hello@example.com
 
 A heading in the footer gets no permalink mark (a `slot:` page has none on its own page either, since one render serves both), and a `---` there is a plain line, not the three-dot ornament. A dark footer band is three properties in the theme: `--moss-footer-bg`, `--moss-footer-ink` (text, links and headings) and `--moss-footer-rule` (the line above the footer and any `---` in it), with no selectors and no colours repeated for each element. The band runs the full page width. The grid's columns are equal and become one column at 768px; for other widths, or a different arrangement on a phone, give the grid a class (`:::grid 4 {.footer-cols}`) and set `grid-template-columns` on it in the theme. Short link lists read better as two columns side by side on a phone, with a long block (identity, address) spanning both; one column stacks them into a long footer. The footer sits in the page column; a width word (`wide`, `page`, `screen`) does not widen it. moss's own one-line colophon is the footer's last line, inside it, so a footer band's background covers it. To leave the mark out, set `colophon = false` in the `[site]` table of `.moss/config.toml`: the build then emits no colophon on any page, where hiding it from the theme's CSS would still ship it. The footer keeps its own end space whether or not the mark is there. A theme that places the mark in its own row sets the colophon's whole `margin` (the end margin cancels the footer's end space) and padding and keeps the link's padding, which holds the line the hover wording appears on. A site in several languages can keep one `footer.md` per language folder. (2026-10-13: a rebuilt site's theme carried 24 rules placing footer columns by `:nth-of-type` because nothing here said a footer could hold a grid; written as a grid, every one of them went.)
 
-A footer can end in a closing picture. A `:::hero` written as the last block of `footer.md` closes the page with its picture, edge to edge and the last thing painted, with its words on it at every width, a phone included. The words start where the article's text starts and stay within its width, as a full-width band's children do, so the page has one left edge. From 48rem the picture's box takes the picture's own shape at the window's width, so the whole picture shows, even when it is taller than the window. `--moss-hero-max-height` caps it, and the crop then keeps the side away from the words (`align=top` keeps the foot, the other alignments keep the top; or set `--moss-hero-object-position`); the words' ink is measured on the uncropped picture, so set `panel=always` on a closing picture you cap. moss's colophon moves onto the picture's bottom edge, and the footer's own padding, divider and fill go. For a sky, `align=top` puts the words there:
+A footer can end in a closing picture. A `:::hero` written as the last block of `footer.md` closes the page with its picture, edge to edge and the last thing painted, with its words on it at every width, a phone included. The words start where the article's text starts and stay within its width, as a full-width band's children do, so the page has one left edge. From 48rem the picture's box takes the picture's own shape at the window's width, so the whole picture shows, even when it is taller than the window. `--moss-hero-max-height` caps it, and the crop then keeps the side away from the words (`align=top` keeps the foot, the other alignments keep the top; or set `--moss-hero-object-position`); the words' ink is measured on the uncropped picture, so set `panel=always` on a closing picture you cap. moss's colophon moves onto the picture's bottom edge, and the footer's own padding, divider and fill go. With `[site] archival = true` the edition block takes the picture's foot too, in the credit's panel or ink. For a sky, `align=top` puts the words there:
 
 ```
 :::hero {image=closing.jpg dark=closing-night.jpg align=top}
@@ -564,11 +564,15 @@ Any real page can take a generated one's place. `author_page: 趙雲` — or `tr
 Two things that surprise people:
 
 - **Inline `#hashtags` derive no pages** — only frontmatter `tags:` do. An inline tag still reaches `article:tag` metadata and JSON-LD keywords; it is prose, not cataloguing.
-- **Namespace roots are not in nav and not listed by their parent.** A folder holding every author name is wrong as a nav item on most sites, so `/authors/`, `/tags/` and any declared kind's root stay reachable through term links, sitemap and search instead.
+- **Namespace roots are not listed by their parent, and are not in nav unless the kind sets `nav = true`.** A folder holding every author name is wrong as a nav item on most sites, so `/authors/`, `/tags/` and any declared kind's root stay reachable through term links, sitemap and search instead.
+
+A term page embeds as a listing anywhere, the way a folder does: `![[/boroughs/brooklyn/|style:grid]]` lists every page whose `borough:` names Brooklyn, so a home page can offer browsing by a field with one embed per value and no links to keep in step.
 
 To stop a dimension generating pages, either switch the built-in off — `[terms].author = false` or `[terms].tags = false` — or drop the field from the `fields` list of the kind that claims it.
 
 ### Declared fields
+
+The built-in `date:` takes a calendar date (`1938-05-18`). A catalogue's date that is not one, such as `1935 - 1938 (Approximate)`, belongs in a declared text field that keeps it as written, never rewritten into a date moss can parse. Use that one field for every row of a collection, shown with `place = "facts"`: mixing `date:` on most pages with a text field on a few leaves the few without a visible date.
 
 A site can declare its own frontmatter fields in `.moss/config.toml`, each with a type. moss checks every page's value against that type and warns, naming the file and the field, when the value does not fit; listing plugins receive the parsed value. A declaration cannot redefine one of moss's own fields, except that `description` and `publisher` can take a `place` (see below).
 
@@ -828,6 +832,21 @@ Turn on the site search with `search = true` under `[site]` in `.moss/config.tom
 [site]
 search = true
 ```
+
+## Archival copy: dated editions and citation
+
+Turn on `archival = true` under `[site]` in `.moss/config.toml` for a site that is meant to be cited and kept. It is off when the key is unset, and a site without it builds exactly as before. The edition here is the build's own date and id, unrelated to a language edition such as `de/`. On a footer that ends on a closing picture, the edition block sits on that picture's foot, beside its credit, in the same panel or ink.
+
+```toml
+[site]
+archival = true
+author = "Ada Example"   # optional: cites a page that names no author of its own
+license = "CC BY 4.0"    # optional: stated on every page and in the source README
+```
+
+Every page then ends with a line such as `Edition 2026-10-21 · a1b2c3d` and a "Cite this page" block giving the author, the page title, the site title, the edition and the page's address. The author is the page's own `author:`, else `[site] author`; with neither the citation starts with the title. The address is absolute when the build knows the published site's address (an `https` `[site] domain`); a build without one, such as a local preview, cites no address and prints one `[NOTE]` saying so. When `license` is set, its text follows the citation on every page, so a statement that holds for the whole collection (a rights statement, a licence) is written once in the config and reaches each item. The head carries `<meta name="dcterms.modified">` and `<meta name="moss:edition">`. The date is the day of the build, or the day `SOURCE_DATE_EPOCH` names when that is set, so a rebuild can be reproduced. The id is the first seven characters of a hash of the source files: the same source is the same id on any day, and a changed file is a new one. The label and the line follow the page's language.
+
+The build also publishes the site's source under `_moss/source/`: the Markdown pages and data files (`.csv`, `.tsv`, `.json`, `.yaml`, `.yml`, `.bib`) in their own folders, without `.moss/`, hidden files or the images and video already published elsewhere. `_moss/source/README.md` lists the files, the front matter fields the site uses and the licence when `license` is set, and each page's edition line links to it. The README is written in English whatever the site's language.
 
 ## Templates
 
