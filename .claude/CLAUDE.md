@@ -54,4 +54,4 @@ Hooks live in `.githooks/` and install automatically via `pnpm install`'s `prepa
 
 ## Proposals
 
-A design for something moss does not do yet goes in `docs/proposals/<name>/README.md`, with its screens beside it and one issue labelled `proposal`. [docs/proposals/README.md](../docs/proposals/README.md) has the format and the status words. Screens and examples in a proposal use invented site names and addresses, like every fixture here, and the rules above about private paths and names apply to it in full.
+A design for something moss does not do yet goes in `docs/proposals/<name>/README.md`, with its screens beside it. It gets no public issue unless there is a reason for one (an outside contributor to talk with, or public feedback we want): proposals stay internal so they can change fast. [docs/proposals/README.md](../docs/proposals/README.md) has the format and the status words. Screens and examples in a proposal use invented site names and addresses, like every fixture here, and the rules above about private paths and names apply to it in full.
