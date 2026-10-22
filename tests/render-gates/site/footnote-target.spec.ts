@@ -37,10 +37,16 @@ test.describe("footnote :target landing", () => {
     // a clearance rule conditioned on the island's click-time state arrives
     // one step too late. The route to the backref changed — the endnote
     // list no longer sits at the page's foot; it opens as the expanded
-    // sheet — but the upward jump it launches is the same jump.
+    // sheet — and its backref no longer follows the link: sidenotes.ts
+    // scrolls the marker to the middle of the window, and that is what
+    // clears the island here. `scroll-padding-top` clears it only on a plain
+    // fragment jump; removing it alone leaves this test green.
     //
-    // Below the 76rem threshold, the only width where the sheet exists.
-    await page.setViewportSize({ width: 1100, height: 720 });
+    // Below the 76rem threshold, the only width where the sheet exists, and
+    // narrow enough that the contents ruler has no room: from about 1100px
+    // the ruler shows, and the island stays put away wherever it does, so
+    // there is no reveal to clear.
+    await page.setViewportSize({ width: 900, height: 720 });
     await page.goto("/notes/");
 
     await scrollAndSettle(page, 300);
@@ -55,6 +61,10 @@ test.describe("footnote :target landing", () => {
     await expect(
       page.locator('.moss-nav-island[data-shown="true"]'),
       "setup failed to hide the island via downward scroll",
+    ).toHaveCount(0);
+    await expect(
+      page.locator('.moss-nav-island[data-ruler="on"]'),
+      "the contents ruler is up at this width, and the island yields to it",
     ).toHaveCount(0);
 
     // Reader's route: tap the last marker (the fixture cites it deep in the
