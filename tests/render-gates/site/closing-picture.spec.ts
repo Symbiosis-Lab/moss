@@ -432,6 +432,20 @@ const openFaded = async (page: Page, theme: string | null = null, url = FADE) =>
   );
 };
 
+/** The theme's page text colour and page colour, as the engine computes them now. */
+const themeInks = (page: Page) =>
+  page.evaluate(() => {
+    const read = (token: string) => {
+      const probe = document.createElement('i');
+      probe.style.color = `var(${token})`;
+      document.body.append(probe);
+      const colour = getComputedStyle(probe).color;
+      probe.remove();
+      return colour;
+    };
+    return { text: read('--moss-color-text'), page: read('--moss-color-bg') };
+  });
+
 const fadedBoxes = (page: Page) =>
   page.evaluate(() => {
     const box = (el: Element) => {
@@ -638,6 +652,20 @@ for (const scheme of SCHEMES) {
   }
 }
 
+// A faded top shows the page, so the words in ink take the theme's own colours,
+// not moss's fixed near-black and white.
+for (const theme of THEMES) {
+  test(`a faded closing picture's words are the page's text colour, ${theme.name}`, async ({ browser }) => {
+    const context = await browser.newContext({ colorScheme: theme.system, viewport: { width: 1360, height: 800 } });
+    const page = await context.newPage();
+    await openFaded(page, theme.toggle);
+    const m = await fadedBoxes(page);
+    expect(parseColor(m.words.panel).a, 'in ink, no panel').toBe(0);
+    expect(m.words.ink).toBe((await themeInks(page)).text);
+    await context.close();
+  });
+}
+
 // `panel=none` is the author's call: plain ink over the same hatching, with nothing
 // behind the words or the credit, the better ink of the two in each theme.
 const PLAIN = `http://localhost:${gatePort('closing-picture:plain')}/`;
@@ -655,13 +683,15 @@ for (const scheme of SCHEMES) {
           panels: [getComputedStyle(content).backgroundColor, getComputedStyle(credit).backgroundColor],
           ink: [getComputedStyle(content.querySelector('h2')!).color, getComputedStyle(credit).color],
           tail: getComputedStyle(content, '::after').content,
+          shadows: [content, content.querySelector('h2')!, content.querySelector('a')!].map((e) => getComputedStyle(e).textShadow),
         };
       });
+      expect(m.shadows, 'panel=none draws no shadow').toEqual(['none', 'none', 'none']);
       expect(parseColor(m.panels[0]).a, 'no panel behind the words').toBe(0);
       expect(parseColor(m.panels[1]).a, 'no panel behind the credit').toBe(0);
-      // One of the two inks, whichever reads better over the hatching at this layout.
-      const words = luminanceOfCss(m.ink[0]);
-      expect(words < 0.05 || words > 0.8, `words ${m.ink[0]} are the dark or the light ink`).toBe(true);
+      // One of the theme's two inks, its text or its page colour, whichever reads better over the hatching at this layout.
+      const inks = await themeInks(page);
+      expect([inks.text, inks.page], `words ${m.ink[0]}`).toContain(m.ink[0]);
       await context.close();
     });
   }
@@ -739,15 +769,11 @@ for (const theme of THEMES) {
       expect(parseColor(m.creditStyle.panel).a, 'no panel behind the credit').toBe(0);
       // Dark ink on the pale sky in light, light ink on the dark sky in dark; the
       // credit is the page colour over the dark foot in light and the pale foot in dark.
-      const wordsLum = luminanceOfCss(m.words.ink);
+      // The words take the theme's page text colour (a faded top shows the page), whichever theme.
+      expect(m.words.ink, 'words in the theme\'s text colour').toBe((await themeInks(page)).text);
       const creditLum = luminanceOfCss(m.creditStyle.ink);
-      if (theme.dark) {
-        expect(wordsLum, `words ${m.words.ink}`).toBeGreaterThan(0.8);
-        expect(creditLum, `credit ${m.creditStyle.ink}`).toBeLessThan(0.05);
-      } else {
-        expect(wordsLum, `words ${m.words.ink}`).toBeLessThan(0.05);
-        expect(creditLum, `credit ${m.creditStyle.ink}`).toBeGreaterThan(0.8);
-      }
+      if (theme.dark) expect(creditLum, `credit ${m.creditStyle.ink}`).toBeLessThan(0.05);
+      else expect(creditLum, `credit ${m.creditStyle.ink}`).toBeGreaterThan(0.8);
       expect(m.creditStyle.size).toBeLessThan(16);
       expect(worstContrast(m.words.ink, await backdrop(page, m.heading)), 'heading').toBeGreaterThanOrEqual(4.5);
       expect(worstContrast(m.words.ink, await backdrop(page, m.link)), 'link').toBeGreaterThanOrEqual(4.5);

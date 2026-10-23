@@ -550,16 +550,34 @@ impl Inks {
         Self { dark: hero_tone_color_luminance(), light: 1.0 }
     }
 
+    /// The words of a faded closing picture in one theme: they sit on the page
+    /// colour, so the dark ink and the light ink are the theme's text colour
+    /// and page colour, whichever the theme makes darker (the text in the
+    /// light theme, the page in the dark one). Any other picture takes
+    /// [`Inks::words`]; a faded one whose colours are unresolved takes none.
+    fn of_words(faded: bool, text: Option<Rgb>, page: Option<Rgb>, night: bool) -> Option<Self> {
+        if !faded {
+            return Some(Self::words());
+        }
+        let (text, page) = (luminance(text?), luminance(page?));
+        Some(if night { Self { dark: page, light: text } } else { Self { dark: text, light: page } })
+    }
 }
 
 /// The credit's text ink: `--moss-color-text-secondary` in the light and the
 /// dark theme, which site.css repeats.
-pub static CREDIT_INK: std::sync::LazyLock<(Rgb, Rgb)> = std::sync::LazyLock::new(|| {
+pub static CREDIT_INK: std::sync::LazyLock<(Rgb, Rgb)> = std::sync::LazyLock::new(|| token_colours("moss-color-text-secondary"));
+
+/// The page text colour in the light and the dark theme, which a faded closing
+/// picture's words take as one of their inks.
+pub static TEXT_INK: std::sync::LazyLock<(Rgb, Rgb)> = std::sync::LazyLock::new(|| token_colours("moss-color-text"));
+
+fn token_colours(name: &str) -> (Rgb, Rgb) {
     let tokens = moss_core::contract::tokens::load_tokens().unwrap_or_else(|e| panic!("tokens.json must parse: {e}"));
-    let token = moss_core::contract::tokens::find_token(&tokens, "moss-color-text-secondary");
-    let parse = |hex: Option<&str>| hex.and_then(crate::build::components::color_extract::parse_css_color).expect("--moss-color-text-secondary has a light and a dark colour");
+    let token = moss_core::contract::tokens::find_token(&tokens, name);
+    let parse = |hex: Option<&str>| hex.and_then(crate::build::components::color_extract::parse_css_color).unwrap_or_else(|| panic!("--{name} has a light and a dark colour"));
     (parse(token.map(|t| t.0)), parse(token.and_then(|t| t.1)))
-});
+}
 
 /// The ink that reads better over a spot's readings, and its contrast against
 /// the worst window, in units of the AA 4.5:1 the text needs.
@@ -675,6 +693,14 @@ pub struct InkRequest<'a> {
     pub ground: PageGround,
 }
 
+/// One theme around a picture: its page colour, its text colour and whether it is the dark one.
+#[derive(Clone, Copy)]
+struct Theme {
+    page: Option<Rgb>,
+    text: Option<Rgb>,
+    night: bool,
+}
+
 /// What a reading measures.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Part {
@@ -693,16 +719,21 @@ struct Reading {
     layout: Layout,
     spot: Spot,
     tones: Tones,
+    /// The inks the words are judged between; unused by the credit.
+    inks: Inks,
 }
 
 /// The words at each layout (and, on a closing picture, for each page that has
 /// its own column there), and on a closing picture with a `credit` its credit
 /// at each layout. A words reading is left out where the faded page colour
 /// behind it is unresolved.
-fn readings(grid: &Ground, aspect: f32, align: Option<&str>, frame: &Frame, credit: bool, ground: &PageGround, page: Option<Rgb>, forced: bool) -> Vec<Reading> {
+fn readings(grid: &Ground, aspect: f32, align: Option<&str>, frame: &Frame, credit: bool, ground: &PageGround, theme: Theme, forced: bool) -> Vec<Reading> {
+    let page = theme.page;
+    let words_inks = Inks::of_words(frame.faded, theme.text, page, theme.night);
     let mut out = Vec::new();
     for layout in Layout::ALL {
         let Some(fade) = Fade::resolve(frame.faded, page, layout) else { continue };
+        let Some(inks) = words_inks else { continue };
         // A theme that sets the words' type outside what is read keeps their panel, unless the
         // author asked for plain ink, which takes the better ink by the stylesheet's own scale.
         if frame.closing && frame.theme.resized && !forced {
@@ -712,13 +743,13 @@ fn readings(grid: &Ground, aspect: f32, align: Option<&str>, frame: &Frame, cred
         for on in pages {
             let spot = words_spot(align, aspect, layout, frame, *on);
             let token = if frame.closing { on.token(layout) } else { layout.as_str().to_string() };
-            out.push(Reading { part: Part::Words, token, layout, tones: grid.tones(&spot, fade, forced), spot });
+            out.push(Reading { part: Part::Words, token, layout, tones: grid.tones(&spot, fade, forced), spot, inks });
         }
     }
     if frame.closing && credit {
         for layout in Layout::ALL {
             let spot = credit_spot(frame, aspect, layout, ground.colophon);
-            out.push(Reading { part: Part::Credit, token: layout.as_str().to_string(), layout, tones: grid.tones(&spot, None, forced), spot });
+            out.push(Reading { part: Part::Credit, token: layout.as_str().to_string(), layout, tones: grid.tones(&spot, None, forced), spot, inks: Inks::words() });
         }
     }
     out
@@ -748,19 +779,20 @@ pub fn ink_attributes(
     let InkRequest { align, backing, frame, credit, ground } = request;
     let frame = frame.on(&ground);
     let closing = frame.closing;
-    let reading = |href: &str, page: Option<Rgb>, text: Option<Rgb>| {
+    let reading = |href: &str, theme: Theme, text: Option<Rgb>| {
+        let page = theme.page;
         if backing == Backing::Panel && !closing {
             return None;
         }
         let (grid, aspect) = measure(lookup, href)?;
         // Under a panel nothing is measured for the words or the credit.
-        let readings = if backing == Backing::Panel { Vec::new() } else { readings(&grid, aspect, align, &frame, credit, &ground, page, backing == Backing::Never) };
+        let readings = if backing == Backing::Panel { Vec::new() } else { readings(&grid, aspect, align, &frame, credit, &ground, theme, backing == Backing::Never) };
         let tokens = |part: Part, ink: &dyn Fn(&Reading) -> Option<&'static str>| -> Vec<String> {
             readings.iter().filter(|r| r.part == part).filter_map(|r| Some(format!("{}:{}", r.token, ink(r)?))).collect()
         };
         let words = tokens(Part::Words, &|r| {
-            let (ink, contrast) = better_ink(&r.tones, Inks::words());
-            let ink = if backing == Backing::Never && contrast < MIN_CONTRAST { better_ink_by_median(&r.tones, Inks::words()) } else { ink };
+            let (ink, contrast) = better_ink(&r.tones, r.inks);
+            let ink = if backing == Backing::Never && contrast < MIN_CONTRAST { better_ink_by_median(&r.tones, r.inks) } else { ink };
             Some(backing.accept((ink, contrast))?.as_str())
         });
         let credit = tokens(Part::Credit, &|r| {
@@ -773,9 +805,9 @@ pub fn ink_attributes(
         let edition = closing.then(|| edition_ink(&grid, aspect, align, &frame, |layout| Fade::resolve(frame.faded, page, layout))).flatten();
         Some((words.join(" "), foot, credit.join(" "), edition))
     };
-    let day = reading(light, ground.light, ground.credit_light);
+    let day = reading(light, ground.theme(false), ground.credit_light);
     // Without a `dark=` picture the one picture is shown in both themes.
-    let night = reading(dark.unwrap_or(light), ground.dark, ground.credit_dark);
+    let night = reading(dark.unwrap_or(light), ground.theme(true), ground.credit_dark);
     let mut out = String::new();
     for (suffix, picture) in [("", day), ("-night", night)] {
         if let Some((words, foot, credit, edition)) = picture {
@@ -800,8 +832,7 @@ pub fn ink_attributes(
 /// worst window where one passes, else by the median window (see
 /// [`better_ink_by_median`]), with the limiting ratio it reaches and what it
 /// needs.
-fn plain_words_ink(tones: &Tones) -> (Limit, f32) {
-    let inks = Inks::words();
+fn plain_words_ink(tones: &Tones, inks: Inks) -> (Limit, f32) {
     let (ink, contrast) = better_ink(tones, inks);
     let ink = if contrast < MIN_CONTRAST { better_ink_by_median(tones, inks) } else { ink };
     match ink {
@@ -849,11 +880,15 @@ pub fn forced_ink_shortfalls(
     let ground = lookup.page_ground();
     let frame = &frame.on(&ground);
     let mut found: Vec<Shortfall> = Vec::new();
-    for (href, text, page, night) in [(light, ground.credit_light, ground.light, false), (dark.unwrap_or(light), ground.credit_dark, ground.dark, true)] {
+    for (href, text, theme) in [
+        (light, ground.credit_light, ground.theme(false)),
+        (dark.unwrap_or(light), ground.credit_dark, ground.theme(true)),
+    ] {
+        let (page, night) = (theme.page, theme.night);
         let Some((grid, aspect)) = measure(lookup, href) else { continue };
-        for r in readings(&grid, aspect, align, frame, credit, &ground, page, true) {
+        for r in readings(&grid, aspect, align, frame, credit, &ground, theme, true) {
             let limit = match r.part {
-                Part::Words => plain_words_ink(&r.tones),
+                Part::Words => plain_words_ink(&r.tones, r.inks),
                 Part::Credit => plain_credit_ink(&r.tones, text, page),
             };
             let (limit, ink) = limit;
@@ -1211,6 +1246,17 @@ mod tests {
         }
         // The foot is below the fade.
         assert_eq!(readable_ink(&grid, &foot_spot(&closing(Some("top")), 70.0 / 160.0), Some(Fade::new(light, Layout::Wide)), Inks::words()), Some(Ink::Light));
+    }
+
+    #[test]
+    fn a_faded_tops_words_are_judged_in_the_themes_own_colours() {
+        let (text, page) = ((200, 190, 170), (10, 20, 30));
+        let (day, night) = (Inks::of_words(true, Some(text), Some(page), false).unwrap(), Inks::of_words(true, Some(text), Some(page), true).unwrap());
+        assert_eq!((day.dark, day.light), (luminance(text), luminance(page)));
+        assert_eq!((night.dark, night.light), (luminance(page), luminance(text)));
+        let fixed = Inks::words();
+        assert_eq!(Inks::of_words(false, Some(text), Some(page), false).map(|i| (i.dark, i.light)), Some((fixed.dark, fixed.light)));
+        assert!(Inks::of_words(true, None, Some(page), false).is_none(), "an unreadable text colour leaves the panel");
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! What the page around a closing picture is: its colours as the theme sets
 //! them, and its colophon row.
 
-use super::{TypeTheme, CREDIT_INK};
+use super::{Theme, TypeTheme, CREDIT_INK, TEXT_INK};
 use crate::build::scan::section_text::{Rgb, BACKGROUNDS};
 
 /// What the page around a closing picture is: the page colour behind a faded
@@ -15,6 +15,9 @@ pub struct PageGround {
     /// The theme's secondary text colour in each, which the credit can take (`None` where it cannot be read).
     pub credit_light: Option<Rgb>,
     pub credit_dark: Option<Rgb>,
+    /// The theme's page text colour in each, which a faded closing picture's words can take.
+    pub text_light: Option<Rgb>,
+    pub text_dark: Option<Rgb>,
     /// Whether the page sets a colophon row along a closing picture's foot,
     /// which the credit then sits above.
     pub colophon: bool,
@@ -25,11 +28,16 @@ pub struct PageGround {
 impl Default for PageGround {
     fn default() -> Self {
         let (light, dark) = *BACKGROUNDS;
-        Self { light: Some(light), dark: Some(dark), credit_light: Some(CREDIT_INK.0), credit_dark: Some(CREDIT_INK.1), colophon: true, type_theme: TypeTheme::default() }
+        Self { light: Some(light), dark: Some(dark), credit_light: Some(CREDIT_INK.0), credit_dark: Some(CREDIT_INK.1), text_light: Some(TEXT_INK.0), text_dark: Some(TEXT_INK.1), colophon: true, type_theme: TypeTheme::default() }
     }
 }
 
 impl PageGround {
+    /// The light or the dark theme's colours.
+    pub(super) fn theme(&self, night: bool) -> Theme {
+        if night { Theme { page: self.dark, text: self.text_dark, night } } else { Theme { page: self.light, text: self.text_light, night } }
+    }
+
     /// The same page with its colophon row set.
     pub fn with_colophon(self, colophon: bool) -> Self {
         Self { colophon, ..self }
@@ -43,7 +51,8 @@ impl PageGround {
     pub fn of_theme(theme_css: Option<&str>) -> Self {
         let (light, dark) = theme_colours(theme_css, "--moss-color-bg", *BACKGROUNDS);
         let (credit_light, credit_dark) = theme_colours(theme_css, "--moss-color-text-secondary", *CREDIT_INK);
-        Self { light, dark, credit_light, credit_dark, type_theme: TypeTheme::of_theme(theme_css), ..Self::default() }
+        let (text_light, text_dark) = theme_colours(theme_css, "--moss-color-text", *TEXT_INK);
+        Self { light, dark, credit_light, credit_dark, text_light, text_dark, type_theme: TypeTheme::of_theme(theme_css), ..Self::default() }
     }
 }
 

@@ -8180,7 +8180,7 @@ body > footer.container:has(> .moss-hero-closing) {
    rules above, which it ties with. */
 @media (width < 48rem) {
   :is(:root:not([data-theme="dark"]) .moss-hero[data-words~="narrow:dark"][data-mobile="overlay"], :root[data-theme="dark"] .moss-hero[data-words-night~="narrow:dark"][data-mobile="overlay"]) .moss-hero-content {
-    color: var(--moss-hero-tone-color, #2c2825);
+    color: var(--_words-dark, var(--moss-hero-tone-color, #2c2825));
     text-shadow: none;
     background: none;
   }
@@ -8188,7 +8188,7 @@ body > footer.container:has(> .moss-hero-closing) {
     text-shadow: none;
   }
   :is(:root:not([data-theme="dark"]) .moss-hero[data-words~="narrow:light"][data-mobile="overlay"], :root[data-theme="dark"] .moss-hero[data-words-night~="narrow:light"][data-mobile="overlay"]) .moss-hero-content {
-    color: #fff;
+    color: var(--_words-light, #fff);
     background: none;
   }
 }
@@ -8212,7 +8212,7 @@ body > footer.container:has(> .moss-hero-closing) {
     :root:not([data-theme="dark"]) body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words~="mid-full-lane:dark"],
     :root[data-theme="dark"] body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words-night~="mid-full-lane:dark"]
   ) .moss-hero-content {
-    color: var(--moss-hero-tone-color, #2c2825);
+    color: var(--_words-dark, var(--moss-hero-tone-color, #2c2825));
     text-shadow: none;
     background: none;
   }
@@ -8250,7 +8250,7 @@ body > footer.container:has(> .moss-hero-closing) {
     :root:not([data-theme="dark"]) body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words~="mid-full-lane:light"],
     :root[data-theme="dark"] body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words-night~="mid-full-lane:light"]
   ) .moss-hero-content {
-    color: #fff;
+    color: var(--_words-light, #fff);
     background: none;
   }
 }
@@ -8271,7 +8271,7 @@ body > footer.container:has(> .moss-hero-closing) {
     :root:not([data-theme="dark"]) body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words~="wide-full-lane:dark"],
     :root[data-theme="dark"] body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words-night~="wide-full-lane:dark"]
   ) .moss-hero-content {
-    color: var(--moss-hero-tone-color, #2c2825);
+    color: var(--_words-dark, var(--moss-hero-tone-color, #2c2825));
     text-shadow: none;
     background: none;
   }
@@ -8309,9 +8309,25 @@ body > footer.container:has(> .moss-hero-closing) {
     :root:not([data-theme="dark"]) body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words~="wide-full-lane:light"],
     :root[data-theme="dark"] body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words-night~="wide-full-lane:light"]
   ) .moss-hero-content {
-    color: #fff;
+    color: var(--_words-light, #fff);
     background: none;
   }
+}
+/* A faded closing picture's words sit on the page colour, so their inks are
+   the theme's own: the page text and the page colour, the darker of the two
+   being the dark ink (`hero_ink` measures with the same pair). */
+:root:not([data-theme="dark"]) .moss-hero-closing[data-fade="top"] {
+  --_words-dark: var(--moss-color-text);
+  --_words-light: var(--moss-color-bg);
+}
+:root[data-theme="dark"] .moss-hero-closing[data-fade="top"] {
+  --_words-dark: var(--moss-color-bg);
+  --_words-light: var(--moss-color-text);
+}
+/* `panel=none` asks for nothing behind the words, shadow included. */
+.moss-hero[data-panel="none"] .moss-hero-content,
+.moss-hero[data-panel="none"] .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
+  text-shadow: none;
 }
 /* The colophon on a closing picture's foot. */
 :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-foot="dark"], :root[data-theme="dark"] .moss-hero-closing[data-foot-night="dark"]) ~ .moss-colophon a {

@@ -323,7 +323,8 @@ pub(crate) fn render_hero_html_typed(
     } else {
         format!(r#"{cover_attr} style="{}""#, section_style.join("; "))
     };
-    let overlay_attr = format!("{overlay_attr}{fade_attr}{ink_attrs}");
+    let panel_attr = if args.panel.as_deref() == Some("none") { r#" data-panel="none""# } else { "" };
+    let overlay_attr = format!("{overlay_attr}{fade_attr}{panel_attr}{ink_attrs}");
     let pair_attr = |v: &str| if dark_href.is_some() { format!(" data-hero-variant=\"{v}\"") } else { String::new() };
 
     let img_part = match (&resolved_image, media_lookup) {

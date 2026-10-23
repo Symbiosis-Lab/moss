@@ -1359,6 +1359,12 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 description: "Closing picture only, from `fade=top`: the picture's top fades into the page colour, over 38% of the box (half of it on a phone, where the box keeps at least 38rem so the words sit on the faded top), through a mask on the picture itself, so the words above it stay solid. The credit stays at the foot.",
             },
             DataAttr {
+                name: "data-panel",
+                values: &["none"],
+                default: "",
+                description: "From `panel=none`: the author asked for nothing behind the words, so they get no panel and no text shadow, whatever ink they take.",
+            },
+            DataAttr {
                 name: "data-credit",
                 values: &["text", "page"],
                 default: "",
@@ -1438,7 +1444,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: ":::hero {image=closing.jpg dark=closing-night.jpg align=top}\n## The shelf is open.\n:::\n",
         status: Status::Confirmed,
         since: "0",
-        description: "The hero that is the last block of `footer.md`: the page's closing picture. The footer drops its column, padding, divider and fill, and the picture runs the viewport's full width as the last painted thing on the page, with its words on it at every width (the build adds `data-mobile=\"overlay\"`), starting where the article's text starts, and the colophon on its bottom edge. From 48rem its box takes the picture's own shape at the window's width, so the whole picture shows, even when taller than the window; the hero's `max-height=` caps it (emitted as `--moss-hero-max-height`), and the crop keeps the side away from the words (`align=top` keeps the foot) unless `image=` names a position, both of which the ink measurement follows. On a phone a kept panel ends in a fade into the picture instead of a hard edge. It is never darkened, and where its picture is quiet under the words the words sit in ink with no panel (`data-words`); its `caption=` is the picture's credit (`.moss-hero-credit`). With `align=top` the words start `clamp(8px, 2vw, 24px)` below its top edge and its display heading sets at a line height of 1.08, and a link in the words is a button of weight 500 in the text colour, with its border, on the page colour at 80% (inverted on hover), so it reads on any picture whatever ink the words take. A `dark=` picture replaces the light one in dark mode through `data-hero-variant=\"light\"|\"dark\"` on each picture. `fade=top` fades its top into the page (`data-fade`).",
+        description: "The hero that is the last block of `footer.md`: the page's closing picture. The footer drops its column, padding, divider and fill, and the picture runs the viewport's full width as the last painted thing on the page, with its words on it at every width (the build adds `data-mobile=\"overlay\"`), starting where the article's text starts, and the colophon on its bottom edge. From 48rem its box takes the picture's own shape at the window's width, so the whole picture shows, even when taller than the window; the hero's `max-height=` caps it (emitted as `--moss-hero-max-height`), and the crop keeps the side away from the words (`align=top` keeps the foot) unless `image=` names a position, both of which the ink measurement follows. On a phone a kept panel ends in a fade into the picture instead of a hard edge. It is never darkened, and where its picture is quiet under the words the words sit in ink with no panel (`data-words`); its `caption=` is the picture's credit (`.moss-hero-credit`). With `align=top` the words start `clamp(8px, 2vw, 24px)` below its top edge and its display heading sets at a line height of 1.08, and a link in the words is a button of weight 500 in the text colour, with its border, on the page colour at 80% (inverted on hover), so it reads on any picture whatever ink the words take. A `dark=` picture replaces the light one in dark mode through `data-hero-variant=\"light\"|\"dark\"` on each picture. `fade=top` fades its top into the page (`data-fade`); the words that sit in ink on that faded top take the theme's own page text colour and page colour (the darker of the two as the dark ink), not fixed inks.",
     },
     ComponentEntry {
         class: "moss-hero-credit",
