@@ -52,11 +52,71 @@ impl Words {
     }
 }
 
+/// A theme's cap on the heading's width: a length in the grammar `max-height=`
+/// takes, or a number of `ch`, which depends on the face and is taken as 0.5 to
+/// 0.6 em each.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Cap {
+    Length(moss_core::media::MaxHeight),
+    Ch(f32),
+}
+
+impl Cap {
+    fn parse(value: &str) -> Option<Self> {
+        let value = value.trim().trim_end_matches("!important").trim();
+        match value.strip_suffix("ch").map(|n| n.trim().parse::<f32>()) {
+            Some(Ok(n)) if n.is_finite() && n > 0.0 => Some(Cap::Ch(n)),
+            Some(_) => None,
+            None => moss_core::media::MaxHeight::parse(value).map(Cap::Length),
+        }
+    }
+
+    /// The narrowest and the widest the cap can be at a window `width` wide with the heading at `font` px.
+    fn px(self, font: f32, width: f32) -> (f32, f32) {
+        match self {
+            Cap::Length(m) => (m.px(width), m.px(width)),
+            Cap::Ch(n) => (n * CH_NARROW * font, n * CH_WIDE * font),
+        }
+    }
+}
+
+/// What a `ch` is in ems at the least and at the most, whatever the face.
+const CH_NARROW: f32 = 0.5;
+const CH_WIDE: f32 = 0.6;
+
+/// A theme's `line-height` on the heading: a unitless factor of its size, or a
+/// length in the grammar `max-height=` takes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Leading {
+    Factor(f32),
+    Length(moss_core::media::MaxHeight),
+}
+
+impl Leading {
+    fn parse(value: &str) -> Option<Self> {
+        let value = value.trim().trim_end_matches("!important").trim();
+        match value.parse::<f32>() {
+            Ok(n) if n.is_finite() && n > 0.0 => Some(Leading::Factor(n)),
+            Ok(_) => None,
+            Err(_) => moss_core::media::MaxHeight::parse(value).map(Leading::Length),
+        }
+    }
+
+    fn px(self, font: f32, width: f32) -> f32 {
+        match self {
+            Leading::Factor(n) => n * font,
+            Leading::Length(m) => m.px(width),
+        }
+    }
+}
+
 /// What a theme's stylesheet changes in the type or the column the model
 /// assumes. A value the model can read is kept: a plain length for the reading
-/// size or the container padding in `:root`, and a size for the words' heading
-/// or text in the grammar `max-height=` takes (a length, or `clamp()` of px and
-/// vw). Anything else that moves the words, or a weight under 400, sets
+/// size or the container padding in `:root`, a size for the words' heading or
+/// text in the grammar `max-height=` takes (a length, or `clamp()` of px and
+/// vw), and for the heading also that grammar as a cap on its measure
+/// (`max-inline-size`, `max-width`) or a `line-height` (a number or that
+/// grammar). Anything else that moves the words, or a weight under 400, sets
 /// `resized`, and the words keep their panel.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct TypeTheme {
@@ -65,6 +125,10 @@ pub struct TypeTheme {
     pub(super) heading_size: Option<moss_core::media::MaxHeight>,
     pub(super) text_size: Option<moss_core::media::MaxHeight>,
     pub(super) heading_weight: Option<u16>,
+    /// A `max-inline-size` or `max-width` on the heading: it only narrows the
+    /// lines, so it caps the measure the heading is modelled in.
+    pub(super) heading_cap: Option<Cap>,
+    pub(super) heading_line: Option<Leading>,
     pub(super) space_md: Option<f32>,
     pub(super) size_sm: Option<f32>,
     pub(super) size_lg: Option<f32>,
@@ -117,7 +181,10 @@ impl TypeTheme {
             let words = |tags: &[&str]| rule.prelude.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| tags.contains(&t));
             // A rule reaches the closing words by naming the hero, or by the footer's own
             // structure: a heading, paragraph or link under the page's footer.
-            let hero = rule.prelude.contains("moss-hero") || (rule.prelude.contains("footer") && words(&["h1", "h2", "h3", "h4", "h5", "h6", "p", "a"]));
+            let reaches = rule.prelude.contains("moss-hero") || (rule.prelude.contains("footer") && words(&["h1", "h2", "h3", "h4", "h5", "h6", "p", "a"]));
+            // Inside a media query or another condition, the value holds only at some widths: it is not read.
+            let hero = reaches && rule.conditions.is_empty();
+            let heading_only = hero && words(&["h1", "h2", "h3", "h4", "h5", "h6"]) && !words(&["p", "a"]);
             for decl in body.trim_end_matches('}').split(';') {
                 let Some((prop, value)) = decl.split_once(':') else { continue };
                 let prop = prop.trim();
@@ -132,12 +199,14 @@ impl TypeTheme {
                     }
                     "font-size" if hero && words(&["p", "a"]) => moss_core::media::MaxHeight::parse(value.trim().trim_end_matches("!important")).map(|m| theme.text_size = Some(m)),
                     "font-weight" if hero && words(&["h1", "h2", "h3", "h4", "h5", "h6"]) => weight_of(value).filter(|w| *w >= 400).map(|w| theme.heading_weight = Some(w)),
+                    "max-inline-size" | "max-width" if heading_only => Cap::parse(value).map(|c| theme.heading_cap = Some(c)),
+                    "line-height" if heading_only => Leading::parse(value).map(|l| theme.heading_line = Some(l)),
                     _ => None,
                 };
                 let moves = read.is_none()
                     && (matches!(prop, "--moss-reading-size-base" | "--moss-container-padding" | "--moss-space-md" | "--moss-size-sm" | "--moss-size-lg")
                         || UNREAD_TOKENS.contains(&prop)
-                        || (hero && matches!(prop, "font-size" | "font" | "font-weight" | "font-family" | "line-height" | "letter-spacing" | "text-transform" | "padding" | "max-width" | "max-inline-size" | "--moss-hero-content-width")));
+                        || (reaches && matches!(prop, "font-size" | "font" | "font-weight" | "font-family" | "line-height" | "letter-spacing" | "text-transform" | "padding" | "max-width" | "max-inline-size" | "--moss-hero-content-width")));
                 if moves && !theme.resized {
                     on_first_unread(prop, rule.prelude.trim());
                 }
@@ -177,6 +246,8 @@ pub(super) struct Type {
     /// Where the glyphs start, in px from the picture's edge.
     pub(super) inset: f32,
     pub(super) pad: f32,
+    /// Where the first line starts, in px from the picture's top: the box's block-start padding.
+    top: f32,
     font: f32,
     line: f32,
     /// The heading's weight; moss's default is 480.
@@ -185,6 +256,8 @@ pub(super) struct Type {
     text_line: f32,
     /// The width the lines set in.
     measure: f32,
+    /// The width the heading sets in, at the narrowest and the widest: the measure, or a theme's cap if narrower.
+    heading_measure: (f32, f32),
     /// The words box's own width, padding included.
     pub(super) box_px: f32,
 }
@@ -192,12 +265,23 @@ pub(super) struct Type {
 /// The default heading weight (`--moss-hero` headings).
 const HEADING_WEIGHT: u16 = 480;
 
+/// A closing picture's lead heading's line height, as a factor of its size
+/// (`line-height: 1.08` in site.css).
+const HEADING_LEADING: f32 = 1.08;
+
+/// Where a closing picture's words start below its top edge: `clamp(8px, 2vw, 24px)`.
+fn words_top(width: f32) -> f32 {
+    (0.02 * width).clamp(8.0, 24.0)
+}
+
 /// A block of the words: its rows in px from the picture's top, how wide its
 /// longest line can be from the text's start, and the type it is set in.
 pub(super) struct Block {
     pub(super) rows: (f32, f32),
     pub(super) across: f32,
     pub(super) face: super::Face,
+    /// The row of links: a button on a ground of its own, so it is not part of what the words' ink is read over.
+    pub(super) link: bool,
 }
 
 /// The reading size on a phone: site.css's `--moss-reading-size-base` under 48rem.
@@ -212,7 +296,14 @@ impl Type {
         let mut t = Self::scale(width, theme, column, lane);
         if let Some(m) = theme.heading_size {
             t.font = m.px(width);
-            t.line = 1.2 * t.font;
+            t.line = HEADING_LEADING * t.font;
+        }
+        if let Some(l) = theme.heading_line {
+            t.line = l.px(t.font, width);
+        }
+        if let Some(cap) = theme.heading_cap {
+            let (narrow, wide) = cap.px(t.font, width);
+            t.heading_measure = (t.measure.min(narrow), t.measure.min(wide));
         }
         if let Some(m) = theme.text_size {
             t.text_font = m.px(width);
@@ -239,21 +330,23 @@ impl Type {
         let inset = ((width - column_px) / 2.0).max(0.0) + cp;
         if phone {
             let text = theme.size_sm.unwrap_or_else(|| token_px("moss-size-sm"));
-            return Type { inset, pad: 0.05 * width, font: 22.4, line: 26.88, weight: HEADING_WEIGHT, text_font: text, text_line: 1.5 * text, measure: width - 2.0 * inset, box_px: width };
+            let measure = width - 2.0 * inset;
+            return Type { inset, pad: 0.05 * width, top: words_top(width), font: 22.4, line: HEADING_LEADING * 22.4, weight: HEADING_WEIGHT, text_font: text, text_line: 1.5 * text, measure, heading_measure: (measure, measure), box_px: width };
         }
-        let (pad, font, line, text) = if width < 1024.0 { (space_md, 28.0, 33.6, reading) } else { (0.05 * width, 40.0, 48.0, theme.size_lg.unwrap_or_else(|| token_px("moss-size-lg"))) };
+        let (pad, font, text) = if width < 1024.0 { (space_md, 28.0, reading) } else { (0.05 * width, 40.0, theme.size_lg.unwrap_or_else(|| token_px("moss-size-lg"))) };
         let box_px = (0.35 * width).max(600.0).min(column_px - 2.0 * cp + 2.0 * pad);
-        Type { inset, pad, font, line, weight: HEADING_WEIGHT, text_font: text, text_line: 1.5 * text, measure: box_px - 2.0 * pad, box_px }
+        let measure = box_px - 2.0 * pad;
+        Type { inset, pad, top: words_top(width), font, line: HEADING_LEADING * font, weight: HEADING_WEIGHT, text_font: text, text_line: 1.5 * text, measure, heading_measure: (measure, measure), box_px }
     }
 
     /// The most and the fewest lines `ems` of text at `font` px set in the
-    /// measure: a face is narrower than half an em a letter (`NARROWEST`).
-    fn lines(&self, ems: f32, font: f32) -> (f32, f32) {
+    /// measure (its narrowest and widest, for the most and the fewest): a face is narrower than half an em a letter (`NARROWEST`).
+    fn lines(&self, ems: f32, font: f32, (narrow, wide): (f32, f32)) -> (f32, f32) {
         if ems <= 0.0 {
             return (0.0, 0.0);
         }
-        let lines = |factor: f32| (ems * font * factor / self.measure).ceil().max(1.0);
-        (lines(1.0), lines(NARROWEST))
+        let lines = |factor: f32, measure: f32| (ems * font * factor / measure).ceil().max(1.0);
+        (lines(1.0, narrow), lines(NARROWEST, wide))
     }
 
     /// The heading's type: large text (3:1) from 24px, or from 18.66px at weight 700.
@@ -279,40 +372,69 @@ impl Type {
     /// several can end a word short of the measure at the least, so its longest
     /// line is the measure. A button is its text and its padding.
     pub(super) fn blocks(&self, words: &Words) -> Vec<Block> {
-        let (mut least, mut most) = (self.pad, self.pad);
+        let (mut least, mut most) = (self.top, self.top);
         let mut blocks = Vec::new();
-        let mut push = |lines: (f32, f32), line: f32, width: f32, gap: f32, face: super::Face| {
+        let mut push = |lines: (f32, f32), line: f32, width: f32, measure: f32, gap: f32, face: super::Face| {
             if lines.0 > 0.0 {
-                blocks.push(Block { rows: (least, most + (lines.0 + 1.0) * line), across: if lines.0 > 1.0 { self.measure } else { width.min(self.measure) }, face });
+                blocks.push(Block { rows: (least, most + (lines.0 + 1.0) * line), across: if lines.0 > 1.0 { measure } else { width.min(measure) }, face, link: false });
                 least += lines.1 * line + gap;
                 most += lines.0 * line + gap;
             }
         };
         let text_gap = if words.link_count > 0 { LINKS_GAP_PX } else { 0.0 };
-        push(self.lines(words.heading, self.font), self.line, words.heading * self.font, if words.text > 0.0 { HEADING_GAP_PX } else { text_gap }, self.heading_face());
-        push(self.lines(words.text, self.text_font), self.text_line, words.text * self.text_font, text_gap, self.text_face());
+        push(self.lines(words.heading, self.font, self.heading_measure), self.line, words.heading * self.font, self.heading_measure.1, if words.text > 0.0 { HEADING_GAP_PX } else { text_gap }, self.heading_face());
+        push(self.lines(words.text, self.text_font, (self.measure, self.measure)), self.text_line, words.text * self.text_font, self.measure, text_gap, self.text_face());
         if words.link_count > 0 {
             let row = self.text_font + 2.0 * 0.8 * self.text_font;
-            let width = (words.links + 2.6 * words.link_count as f32) * self.text_font + 16.0 * (words.link_count - 1) as f32;
+            let width = (LINK_WEIGHT_WIDTH * words.links + 2.6 * words.link_count as f32) * self.text_font + 16.0 * (words.link_count - 1) as f32;
             let lines = (width / self.measure).ceil().max(1.0);
-            blocks.push(Block { rows: (least, most + lines * row + self.text_line), across: width.min(self.measure), face: self.text_face() });
+            blocks.push(Block { rows: (least, most + lines * row + self.text_line), across: width.min(self.measure), face: self.text_face(), link: true });
         }
         blocks
     }
+
+    pub(super) fn credit(&self, width: f32, credit_em: f32) -> CreditBox {
+        let measure = (width - 2.0 * self.inset).max(CREDIT_FONT_PX);
+        let text = credit_em * CREDIT_FONT_PX * CREDIT_LETTER_WIDEST;
+        CreditBox { lines: (text / measure).ceil().max(1.0), across: text.min(measure), end: self.inset }
+    }
 }
+
+/// How much wider a link's text sets at weight 500 than at 400, as a factor.
+const LINK_WEIGHT_WIDTH: f32 = 1.04;
 
 /// How much of half an em a letter may be in a narrow face.
 const NARROWEST: f32 = 0.7;
 
-/// The credit's type: 12px on a 1.45 line, in a box with 0.3rem above and
-/// below and 5% of the window beside, at most 36rem wide.
+/// The credit's type: 12px on a 1.45 line, set where the page's text column
+/// ends (`--moss-credit-end` in site.css) with 14px below its last line when it
+/// is in ink, and as wide as its text up to the column's width. A theme's face
+/// is not seen, so a letter is taken at 0.6 em, a monospace face's width.
 pub(super) const CREDIT_FONT_PX: f32 = 12.0;
 const CREDIT_LINE_PX: f32 = 17.4;
-const CREDIT_PAD_PX: f32 = 9.6;
-pub(super) const CREDIT_WIDTH_PX: f32 = 576.0;
+const CREDIT_PAD_BELOW_PX: f32 = 14.0;
+const CREDIT_LETTER_WIDEST: f32 = 1.2;
 
-/// How tall the credit is at a window `width` wide, in px.
+/// Where a credit's text sits on a closing picture at a window `width` wide in
+/// a `column`, from the picture's inline end: how many lines it sets, how wide
+/// they reach, and where its text ends.
+pub(super) struct CreditBox {
+    pub(super) lines: f32,
+    pub(super) across: f32,
+    /// From the window's inline end to the text's end: the column's own end.
+    pub(super) end: f32,
+}
+
+impl CreditBox {
+    /// The rows its text covers, as px above the box's bottom edge, the colophon's
+    /// `strip` clear: nearest and farthest.
+    pub(super) fn rows(&self, strip: f32) -> (f32, f32) {
+        (strip + CREDIT_PAD_BELOW_PX, strip + CREDIT_PAD_BELOW_PX + self.lines * CREDIT_LINE_PX)
+    }
+}
+
+/// How tall the credit is at a window `width` wide in the default column, in px.
 pub(super) fn credit_height(credit_em: f32, width: f32) -> f32 {
-    let measure = CREDIT_WIDTH_PX.min(width) - 0.1 * width;
-    CREDIT_PAD_PX + (credit_em * CREDIT_FONT_PX / measure).ceil().max(1.0) * CREDIT_LINE_PX
+    let credit = Type::at(width, &TypeTheme::default(), Column::Default, false).credit(width, credit_em);
+    credit.rows(0.0).1
 }

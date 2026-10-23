@@ -133,6 +133,7 @@ body > footer.container > .moss-hero-closing:has(> .moss-edition)[data-mobile="o
   inset: auto;
   align-self: flex-end;
   margin-block-start: auto;
+  margin-inline-end: var(--moss-credit-end, 0px);
 }
 .moss-hero-closing:has(> .moss-edition) > .moss-edition {
   position: static;

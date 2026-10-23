@@ -227,6 +227,11 @@ All notable changes to moss will be documented here.
 - `moss import` turns a site builder's map block into a map with a directions link.
 - `moss import` lists, page by page, the embedded widgets it could not carry, instead of only counting them.
 - Hover link previews now open only for a link inside a page's written paragraphs. They no longer open over hero captions, image captions, credit lists, cards, lists, navigation, the header or the footer, where a card hid the work the link points at. Links written in ordinary paragraphs keep their previews, so a site that links from its prose is unchanged. The `[site].link_preview = false` setting that turns previews off is now documented in `moss describe`.
+- A closing picture's words start close to the top of the picture (24px on a desktop) and its heading sets tighter; a theme's width cap (a length, `clamp()` or `ch`) or `line-height` on that heading no longer makes the build give up on ink for the words.
+- A link in a closing picture's words is a button in the text colour on the page colour at 80%, so it reads on any picture.
+- A closing picture's credit sits in the page's text column, right-aligned to its end, on one line where it fits, in moss's UI face; `--moss-hero-credit-font` sets another. It is painted in `--moss-color-text-secondary`, and the build measures that same colour.
+- A `panel=none` note gives the worst spot and the typical ground side by side.
+- On a `contents: pictures` page, the controls stay above a closing picture instead of over it.
 
 ### Fixed
 

@@ -101,6 +101,24 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Backing panel behind overlay text in both overlaid hero layouts (desktop, and mobile under `mobile=overlay`), so the text stays legible wherever a drawn line, lettering or a face in the photo falls under it. moss does not set this itself: it publishes a per-render panel colour as `--item-hero-panel-bg`, tinted from the image's own scan-cached dominant colour (`color_extract::panel_background`) and engineered so the panel's WCAG contrast against the overlay text holds even in the worst case of its own translucency — composited over pure black or pure white, which bounds every actual pixel underneath. This token, when a theme sets it (on `:root` or `.moss-hero`), takes precedence over that computed colour. The flat default here only applies when neither exists (no media manifest). A pale ('light'-toned) hero reads this against a different literal fallback, `rgba(250, 248, 244, 0.82)` — same property, the other side of the dark/light text split `--moss-hero-tone-color` makes.",
     },
     CustomProp {
+        name: "--moss-hero-credit-font",
+        owner: "moss-hero-credit",
+        default: "var(--moss-font-body)",
+        description: "The face of a closing picture's credit (`caption=`). It defaults to moss's UI face, `--moss-font-body`; set it to `var(--moss-font-mono)`, or any font stack, to give the credit a face of its own. The build does not see the face: it takes a letter as 0.6 em wide, a monospace face's width, when it works out how many lines the credit sets and so where its ink is measured, which can only make that area larger.",
+    },
+    CustomProp {
+        name: "--moss-credit-end",
+        owner: "moss-hero-closing",
+        default: "0px",
+        description: "Where a closing picture's credit box ends, measured from the picture's inline end: the end of the page's text column less the credit's 0.5rem of padding, so the credit's text is right-aligned to the column's end. Set by moss on the closing picture from `--moss-words-inset`; read-only for a theme (`--moss-hero-credit-font` restyles the credit).",
+    },
+    CustomProp {
+        name: "--moss-closing-clear",
+        owner: "nav-icons",
+        default: "0px",
+        description: "How much of the window's height a closing picture covers from its top edge down to the window's foot, set on the controls by the contents list's script as the page scrolls. The page's controls (search, language, theme), where they stand in the foot of the window beside a `contents: pictures` list, ride that far up, so they stay above the picture instead of over it. Read-only for a theme.",
+    },
+    CustomProp {
         name: "--moss-hero-mobile-band",
         owner: "moss-hero",
         default: "min(45vb, 320px)",

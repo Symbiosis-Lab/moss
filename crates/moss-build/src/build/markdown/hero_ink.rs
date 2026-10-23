@@ -35,10 +35,12 @@
 //! colour reads there ([`CreditInk`]).
 
 mod ground;
+mod page;
 mod words;
 pub use ground::{built as grounds_built, Ground};
+pub use page::PageGround;
 pub use words::{Column, TypeTheme, Words};
-use words::{credit_height, Type, CREDIT_WIDTH_PX, CREDIT_FONT_PX};
+use words::{credit_height, Type, CREDIT_FONT_PX};
 
 use crate::build::components::color_extract::hero_tone_color_luminance;
 use crate::build::scan::section_text::{luminance, Rgb, BACKGROUNDS};
@@ -335,12 +337,10 @@ pub fn words_spot(align: Option<&str>, aspect: f32, layout: Layout, frame: &Fram
     let share = layout.box_share(frame.closing, &frame.theme, page);
     let said = !matches!(frame.words, Words { heading: 0.0, text: 0.0, link_count: 0, .. });
     if frame.closing && align == Some("top") && said {
-        // A phone's columns differ by a few px, so it takes them all; the others the page's own.
-        let columns: Vec<(Column, &[bool])> = if layout == Layout::Narrow { [Column::Default, Column::Wide, Column::Full].map(|c| (c, &[false][..])).to_vec() } else { vec![(page.column, page.lanes())] };
-        let areas = columns.into_iter().flat_map(|(column, lanes)| lanes.iter().map(move |lane| (column, *lane))).flat_map(|(column, lane)| {
+        let areas = type_cases(layout, page).into_iter().flat_map(|(column, lane)| {
             (0..3).flat_map(move |i| {
                 let at = move |width: f32| Type::at(width, &frame.theme, column, lane);
-                let block = move |width: f32| at(width).blocks(&frame.words).into_iter().nth(i);
+                let block = move |width: f32| at(width).blocks(&frame.words).into_iter().nth(i).filter(|b| !b.link);
                 let rows = move |width: f32, height: f32| block(width).map_or((0.0, 0.0), |b| (b.rows.0 / height, b.rows.1 / height));
                 let cols = move |width: f32, _| block(width).map_or((0.0, 0.0), |b| (at(width).inset / width, (at(width).inset + b.across) / width));
                 let face = move |width: f32| block(width).map_or(Face::SMALL, |b| b.face);
@@ -375,13 +375,36 @@ pub fn foot_spot(frame: &Frame, aspect: f32) -> Spot {
     Spot(Layout::ALL.iter().flat_map(|layout| frame.spot(aspect, *layout, |_, height| (1.0 - COLOPHON_PX / height, 1.0), |_, _| (0.0, 1.0), |_| Face::SMALL).0).collect())
 }
 
-/// Where a closing picture's credit can sit: its box at the inline end of the
-/// foot, above the colophon's row, in `layout`.
+/// The text columns a closing picture's words are read in at `layout`, as
+/// `(column, lane)`: the page's own where the layouts differ by page, a phone's
+/// every column, since its columns differ by a few px.
+fn type_cases(layout: Layout, page: Page) -> Vec<(Column, bool)> {
+    if layout == Layout::Narrow {
+        [Column::Default, Column::Wide, Column::Full].map(|c| (c, false)).to_vec()
+    } else {
+        page.lanes().iter().map(|lane| (page.column, *lane)).collect()
+    }
+}
+
+/// Where a closing picture's credit can sit: its text, right-aligned to the end
+/// of the page's text column, in the rows above the colophon's row, in `layout`.
+/// The footer is one for every page, so it is read on every page's column.
 pub fn credit_spot(frame: &Frame, aspect: f32, layout: Layout, colophon: bool) -> Spot {
     let strip = if colophon { COLOPHON_PX } else { 0.0 };
-    let rows = |width: f32, height: f32| (1.0 - (strip + credit_height(frame.words.credit, width)) / height, 1.0 - strip / height);
-    let cols = |width: f32, _| (1.0 - CREDIT_WIDTH_PX.min(width) / width, 1.0);
-    frame.spot(aspect, layout, rows, cols, |_| Face::SMALL)
+    let cases = if layout == Layout::Narrow { type_cases(layout, Page::ALL[0]) } else { Page::ALL.iter().flat_map(|page| type_cases(layout, *page)).collect() };
+    let areas = cases.into_iter().flat_map(|(column, lane)| {
+        let credit = move |width: f32| Type::at(width, &frame.theme, column, lane).credit(width, frame.words.credit);
+        let rows = move |width: f32, height: f32| {
+            let (near, far) = credit(width).rows(strip);
+            (1.0 - far / height, 1.0 - near / height)
+        };
+        let cols = move |width: f32, _| {
+            let c = credit(width);
+            (1.0 - (c.end + c.across) / width, 1.0 - c.end / width)
+        };
+        frame.spot(aspect, layout, rows, cols, |_| Face::SMALL).0
+    });
+    Spot(areas.collect())
 }
 
 /// How tall the edition block is.
@@ -398,67 +421,6 @@ pub fn edition_spot(align: Option<&str>, aspect: f32, layout: Layout, frame: &Fr
         _ => (0.0, 1.0),
     };
     frame.spot(aspect, layout, rows, |_, _| (0.0, 1.0), |_| Face::SMALL)
-}
-
-/// What the page around a closing picture is: the page colour behind a faded
-/// picture, `--moss-color-bg` in the light and the dark theme (`None` where the
-/// theme sets it to a value the build can't read), and its colophon row.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PageGround {
-    pub light: Option<Rgb>,
-    pub dark: Option<Rgb>,
-    /// Whether the page sets a colophon row along a closing picture's foot,
-    /// which the credit then sits above.
-    pub colophon: bool,
-    /// What the theme changes in the type the words are set in.
-    pub type_theme: TypeTheme,
-}
-
-impl Default for PageGround {
-    fn default() -> Self {
-        let (light, dark) = *BACKGROUNDS;
-        Self { light: Some(light), dark: Some(dark), colophon: true, type_theme: TypeTheme::default() }
-    }
-}
-
-impl PageGround {
-    /// The same page with its colophon row set.
-    pub fn with_colophon(self, colophon: bool) -> Self {
-        Self { colophon, ..self }
-    }
-
-    /// moss's colours as the theme's stylesheet overrides them. Read only
-    /// where the authoring guide tells a theme to set a token: `:root {}`,
-    /// which wins in both themes, and `:root[data-theme="dark"] {}`. A
-    /// declaration anywhere else, or a value that is not a plain colour
-    /// (`var()`, `color-mix()`), leaves both themes unresolved.
-    pub fn of_theme(theme_css: Option<&str>) -> Self {
-        let mut ground = Self { type_theme: TypeTheme::of_theme(theme_css), ..Self::default() };
-        let (mut root, mut dark) = (None, None);
-        for rule in crate::build::theme_lint::style_rules(theme_css.unwrap_or_default()) {
-            let Some((_, body)) = rule.rule.split_once('{') else { continue };
-            for decl in body.trim_end_matches('}').split(';') {
-                let Some((prop, value)) = decl.split_once(':') else { continue };
-                if prop.trim() != "--moss-color-bg" {
-                    continue;
-                }
-                let colour = crate::build::components::color_extract::parse_css_color(value.trim().trim_end_matches("!important").trim());
-                let scope: String = rule.prelude.chars().filter(|c| !c.is_whitespace()).collect::<String>().replace('\'', "\"");
-                match (rule.conditions.is_empty(), scope.as_str()) {
-                    (true, ":root") => root = Some(colour),
-                    (true, ":root[data-theme=\"dark\"]") => dark = Some(colour),
-                    _ => return Self { light: None, dark: None, ..ground },
-                }
-            }
-        }
-        if let Some(colour) = root {
-            ground = Self { light: colour, dark: colour, ..ground };
-        }
-        if let Some(colour) = dark {
-            ground.dark = colour;
-        }
-        ground
-    }
 }
 
 /// How far down the box a faded top runs, as site.css draws it: on a phone,
@@ -557,6 +519,11 @@ impl Tones {
         self.0.iter().map(at).fold(Limit { raw: f32::MAX, need: MIN_CONTRAST, normalized: f32::MAX }, |a, b| if b.normalized < a.normalized { b } else { a })
     }
 
+    /// The worst contrast of an ink of luminance `ink` over the typical (median) window of each area, which a few stroke-sized specks cannot move.
+    fn typical(&self, ink: f32) -> f32 {
+        self.0.iter().map(|t| contrast_ratio(t.median.unwrap_or(t.darkest), ink)).fold(f32::MAX, f32::min)
+    }
+
     /// As [`Tones::over_darkest`], over the lightest window.
     fn over_lightest(&self, ink: f32) -> f32 {
         self.0.iter().map(|t| contrast_ratio(t.lightest, ink) * MIN_CONTRAST / t.need).fold(f32::MAX, f32::min)
@@ -611,9 +578,9 @@ pub fn better_ink_by_median(tones: &Tones, inks: Inks) -> Ink {
 }
 
 /// As [`better_ink_by_median`] for the credit's text or page colour.
-pub fn credit_ink_by_median(tones: &Tones, text: Rgb, page: Option<Rgb>) -> CreditInk {
+pub fn credit_ink_by_median(tones: &Tones, text: Option<Rgb>, page: Option<Rgb>) -> CreditInk {
     match page {
-        Some(page) if tones.over_median(luminance(page)) > tones.over_median(luminance(text)) => CreditInk::Page,
+        Some(page) if text.map_or(true, |text| tones.over_median(luminance(page)) > tones.over_median(luminance(text))) => CreditInk::Page,
         _ => CreditInk::Text,
     }
 }
@@ -644,9 +611,9 @@ impl CreditInk {
 /// Of the theme's `text` and `page` colours, the one that reads better over a
 /// spot's readings, and its worst contrast there. The page colour is left out
 /// where the build cannot read it.
-pub fn credit_ink(tones: &Tones, text: Rgb, page: Option<Rgb>) -> (CreditInk, f32) {
+pub fn credit_ink(tones: &Tones, text: Option<Rgb>, page: Option<Rgb>) -> (CreditInk, f32) {
     let worst = |ink: Rgb| tones.over_darkest(luminance(ink)).min(tones.over_lightest(luminance(ink)));
-    let text = (CreditInk::Text, worst(text));
+    let text = (CreditInk::Text, text.map_or(0.0, worst));
     match page.map(|p| (CreditInk::Page, worst(p))) {
         Some(page) if page.1 > text.1 => page,
         _ => text,
@@ -781,7 +748,7 @@ pub fn ink_attributes(
     let InkRequest { align, backing, frame, credit, ground } = request;
     let frame = frame.on(&ground);
     let closing = frame.closing;
-    let reading = |href: &str, page: Option<Rgb>, text: Rgb| {
+    let reading = |href: &str, page: Option<Rgb>, text: Option<Rgb>| {
         if backing == Backing::Panel && !closing {
             return None;
         }
@@ -806,9 +773,9 @@ pub fn ink_attributes(
         let edition = closing.then(|| edition_ink(&grid, aspect, align, &frame, |layout| Fade::resolve(frame.faded, page, layout))).flatten();
         Some((words.join(" "), foot, credit.join(" "), edition))
     };
-    let day = reading(light, ground.light, CREDIT_INK.0);
+    let day = reading(light, ground.light, ground.credit_light);
     // Without a `dark=` picture the one picture is shown in both themes.
-    let night = reading(dark.unwrap_or(light), ground.dark, CREDIT_INK.1);
+    let night = reading(dark.unwrap_or(light), ground.dark, ground.credit_dark);
     let mut out = String::new();
     for (suffix, picture) in [("", day), ("-night", night)] {
         if let Some((words, foot, credit, edition)) = picture {
@@ -833,36 +800,39 @@ pub fn ink_attributes(
 /// worst window where one passes, else by the median window (see
 /// [`better_ink_by_median`]), with the limiting ratio it reaches and what it
 /// needs.
-fn plain_words_ink(tones: &Tones) -> (Ink, Limit) {
+fn plain_words_ink(tones: &Tones) -> (Limit, f32) {
     let inks = Inks::words();
     let (ink, contrast) = better_ink(tones, inks);
     let ink = if contrast < MIN_CONTRAST { better_ink_by_median(tones, inks) } else { ink };
-    let limit = match ink {
-        Ink::Dark => tones.limit(inks.dark, true),
-        Ink::Light => tones.limit(inks.light, false),
-    };
-    (ink, limit)
+    match ink {
+        Ink::Dark => (tones.limit(inks.dark, true), inks.dark),
+        Ink::Light => (tones.limit(inks.light, false), inks.light),
+    }
 }
 
-/// As [`plain_words_ink`] for the credit.
-fn plain_credit_ink(tones: &Tones, text: Rgb, page: Option<Rgb>) -> (CreditInk, Limit) {
+/// As [`plain_words_ink`] for the credit. An ink the build cannot read counts as black.
+fn plain_credit_ink(tones: &Tones, text: Option<Rgb>, page: Option<Rgb>) -> (Limit, f32) {
     let (ink, contrast) = credit_ink(tones, text, page);
     let ink = if contrast < MIN_CONTRAST { credit_ink_by_median(tones, text, page) } else { ink };
-    let lum = luminance(match (ink, page) {
-        (CreditInk::Page, Some(page)) => page,
-        _ => text,
-    });
+    let lum = match (ink, page, text) {
+        (CreditInk::Page, Some(page), _) => luminance(page),
+        (_, _, Some(text)) => luminance(text),
+        _ => 0.0,
+    };
     let (a, b) = (tones.limit(lum, true), tones.limit(lum, false));
-    (ink, if a.normalized <= b.normalized { a } else { b })
+    (if a.normalized <= b.normalized { a } else { b }, lum)
 }
 
-/// Where `panel=none` ink falls short: the part, the layout, the theme, and the
-/// worst ratio the plain ink reaches there with the ratio its text needs.
+/// Where `panel=none` ink falls short: the part, the layout, the theme, the
+/// worst ratio the plain ink reaches there with the ratio its text needs, and
+/// the reading and ink behind it, for the ratio over the typical ground.
 pub struct Shortfall {
     part: Part,
     layout: Layout,
     night: bool,
     limit: Limit,
+    tones: Tones,
+    ink: f32,
 }
 
 /// For `panel=none`: where the plain ink cannot be shown to reach the contrast
@@ -879,20 +849,21 @@ pub fn forced_ink_shortfalls(
     let ground = lookup.page_ground();
     let frame = &frame.on(&ground);
     let mut found: Vec<Shortfall> = Vec::new();
-    for (href, text, page, night) in [(light, CREDIT_INK.0, ground.light, false), (dark.unwrap_or(light), CREDIT_INK.1, ground.dark, true)] {
+    for (href, text, page, night) in [(light, ground.credit_light, ground.light, false), (dark.unwrap_or(light), ground.credit_dark, ground.dark, true)] {
         let Some((grid, aspect)) = measure(lookup, href) else { continue };
         for r in readings(&grid, aspect, align, frame, credit, &ground, page, true) {
             let limit = match r.part {
-                Part::Words => plain_words_ink(&r.tones).1,
-                Part::Credit => plain_credit_ink(&r.tones, text, page).1,
+                Part::Words => plain_words_ink(&r.tones),
+                Part::Credit => plain_credit_ink(&r.tones, text, page),
             };
+            let (limit, ink) = limit;
             if limit.normalized >= MIN_CONTRAST {
                 continue;
             }
             match found.iter_mut().find(|f| f.part == r.part && f.layout == r.layout && f.night == night) {
                 Some(known) if known.limit.normalized <= limit.normalized => {}
-                Some(known) => known.limit = limit,
-                None => found.push(Shortfall { part: r.part, layout: r.layout, night, limit }),
+                Some(known) => (known.limit, known.tones, known.ink) = (limit, r.tones.clone(), ink),
+                None => found.push(Shortfall { part: r.part, layout: r.layout, night, limit, tones: r.tones.clone(), ink }),
             }
         }
     }
@@ -939,7 +910,7 @@ pub fn note_forced_ink(
             let list: Vec<String> = Layout::ALL
                 .into_iter()
                 .filter_map(|layout| shortfalls.iter().find(|f| f.part == part && f.night == night && f.layout == layout))
-                .map(|f| format!("{} ({:.1}:1, needs {:.1}:1)", where_(f.layout), f.limit.raw, f.limit.need))
+                .map(|f| format!("{} ({:.1}:1 at the worst spot, {:.1}:1 over the typical ground, needs {:.1}:1)", where_(f.layout), f.limit.raw, f.tones.typical(f.ink), f.limit.need))
                 .collect();
             if !list.is_empty() {
                 groups.push(format!("the {} in the {} theme {}", if part == Part::Words { "words" } else { "credit" }, if night { "dark" } else { "light" }, list.join(", ")));
@@ -1311,11 +1282,13 @@ mod tests {
     }
 
     #[test]
-    fn site_css_sets_the_credit_in_the_inks_it_is_measured_in() {
+    fn site_css_paints_the_credit_in_the_theme_token_it_is_measured_in() {
+        let css = crate::build::emit::stylesheet::CORE_CSS;
+        assert!(css.contains("color: var(--moss-color-text-secondary);") && !css.contains("color: #5d5853;"));
+        let tokens = moss_core::contract::tokens::load_tokens().unwrap();
+        let token = moss_core::contract::tokens::find_token(&tokens, "moss-color-text-secondary").unwrap();
         let hex = |(r, g, b): crate::build::scan::section_text::Rgb| format!("#{r:02x}{g:02x}{b:02x}");
-        for ink in [CREDIT_INK.0, CREDIT_INK.1] {
-            assert!(crate::build::emit::stylesheet::CORE_CSS.contains(&format!("color: {};", hex(ink))), "site.css sets the credit in {}", hex(ink));
-        }
+        assert_eq!((hex(CREDIT_INK.0), hex(CREDIT_INK.1)), (token.0.to_string(), token.1.unwrap().to_string()), "the default is the token's own value");
     }
 
     /// A 100x77 sky (the shape of a 1400x1073 print) with a dark band over `rows` of its height.
@@ -1476,7 +1449,7 @@ mod tests {
     #[test]
     fn a_long_heading_reaches_the_landscape_and_keeps_its_panel() {
         let lookup = lookup_of(&[("etching.png", &etching())]);
-        let long = "A long heading that wraps across several lines of the words box on a wide screen and carries on";
+        let long = "A long heading that wraps across several lines of the words box on a wide screen and carries on, and on, and on until it reaches down into the landscape, ".repeat(3);
         let hero = format!(":::hero {{image=\"etching.png|focus:50%,72%\" align=top fade=top max-height=\"clamp(440px, 50vw, 680px)\"}}\n## {long}\n\n[Propose](#propose)\n:::");
         let hero = moss_core::ast::parse(&hero);
         let moss_core::ast::Block::Shortcode(moss_core::ast::Shortcode::Hero(hero)) = &hero.blocks[0] else { panic!("a hero") };
@@ -1486,24 +1459,29 @@ mod tests {
     }
 
     #[test]
-    fn the_credit_is_measured_where_its_box_is_at_the_inline_end() {
-        // A pale field at the start of the foot, under no text: the credit sits at the end.
+    fn the_credit_is_measured_where_its_text_sits_at_the_end_of_the_column() {
+        // A dark foot with a pale field over its first 30%, and a pale line in the last pixel column,
+        // in the margin beyond where any page's text column ends.
         let mut img = RgbImage::from_pixel(200, 100, Rgb(GROUND));
         for y in 0..100 {
-            for x in 0..60 {
+            for x in (0..60).chain(199..200) {
                 img.put_pixel(x, y, Rgb(SKY));
             }
         }
         let grid = Ground::from_image(&DynamicImage::ImageRgb8(img));
-        let frame = Frame { words: Words::read("## Words", "A credit."), ..closing(Some("top")) };
         let page = Some(BACKGROUNDS.0);
-        let credit = |layout| {
-            let spot = credit_spot(&frame, 0.5, layout, true);
-            credit_ink(&grid.tones(&spot, None, false), CREDIT_INK.0, page)
+        let credit = |text: &str, layout| {
+            let frame = Frame { words: Words::read("## Words", text), ..closing(Some("top")) };
+            credit_ink(&grid.tones(&credit_spot(&frame, 0.5, layout, true), None, false), Some(CREDIT_INK.0), page)
         };
-        assert_eq!(credit(Layout::Wide).0, CreditInk::Page);
-        assert!(credit(Layout::Wide).1 >= MIN_CONTRAST);
-        assert!(credit(Layout::Narrow).1 < MIN_CONTRAST, "a phone's credit box spans the width");
+        for layout in [Layout::Narrow, Layout::Wide] {
+            let (ink, worst) = credit("A credit.", layout);
+            assert_eq!((ink, worst >= MIN_CONTRAST), (CreditInk::Page, true), "{layout:?}: a short credit sits at the column's end, clear of the margin and of the start");
+        }
+        let long = "A credit that runs the whole width of the column and wraps, so that it reaches back over the start of the foot. ".repeat(2);
+        for layout in [Layout::Narrow, Layout::Wide] {
+            assert!(credit(&long, layout).1 < MIN_CONTRAST, "{layout:?}: a long credit reaches the pale field");
+        }
     }
 
     #[test]
@@ -1585,7 +1563,7 @@ mod tests {
     #[test]
     fn site_css_sets_the_type_the_words_are_modelled_in() {
         let css = crate::build::emit::stylesheet::CORE_CSS;
-        for rule in ["font-size: 2.5rem;", "font-size: 1.75rem;", "font-size: 1.4rem;", "font-size: var(--moss-size-lg);", "--moss-words-pad: 5%;", "--moss-words-pad: var(--moss-space-md);", "--moss-contents-inset: 32px;", "--moss-contents-pad: 8px;", "--moss-contents-row: 20px;", "--moss-contents-gutter: 24px;"] {
+        for rule in ["font-size: 2.5rem;", "font-size: 1.75rem;", "font-size: 1.4rem;", "font-size: var(--moss-size-lg);", "--moss-words-pad: 5%;", "font-weight: 500;", "padding-block: 0 0.875rem;", "--moss-credit-end: calc(var(--moss-words-inset) - 0.5rem);", "padding-block-start: clamp(8px, 2vw, 24px);", "line-height: 1.08;", "--moss-words-pad: var(--moss-space-md);", "--moss-contents-inset: 32px;", "--moss-contents-pad: 8px;", "--moss-contents-row: 20px;", "--moss-contents-gutter: 24px;"] {
             assert!(css.contains(rule), "{rule}");
         }
         assert_eq!(32.0 + 2.0 * 8.0 + 20.0 + 24.0, words::LANE_PX);
@@ -1750,7 +1728,7 @@ mod tests {
         let tones = ground.tones(&Spot::uncropped((0.2, 0.8), (0.1, 0.9), 1000.0, Face::SMALL), None, true);
         assert!(better_ink(&tones, Inks::words()).1 < MIN_CONTRAST, "neither ink clears it");
         assert_eq!(better_ink_by_median(&tones, Inks::words()), Ink::Light);
-        assert_eq!(credit_ink_by_median(&tones, CREDIT_INK.0, Some(BACKGROUNDS.0)), CreditInk::Page);
+        assert_eq!(credit_ink_by_median(&tones, Some(CREDIT_INK.0), Some(BACKGROUNDS.0)), CreditInk::Page);
         // Through the attributes: `panel=none` takes it, the measured choice does not apply.
         let lookup = lookup_of(&[("foot.png", &DynamicImage::ImageRgb8({
             let mut img = RgbImage::from_pixel(400, 200, Rgb([20, 28, 48]));
@@ -1773,5 +1751,114 @@ mod tests {
         let stroke = hairline.read(&area, None, false);
         let pixel = hairline.read_with(&area, None, false, Some(1));
         assert!(stroke.darkest > 0.25 && pixel.darkest < 0.01, "stroke {} pixel {}", stroke.darkest, pixel.darkest);
+    }
+
+    #[test]
+    fn the_words_start_clamp_8_2vw_24_below_the_top_and_the_heading_sets_at_1_08() {
+        let words = Words::read("## Heading", "");
+        for (width, top, font) in [(390.0_f32, 8.0, 22.4), (768.0, 15.36, 28.0), (1024.0, 20.48, 40.0), (1360.0, 24.0, 40.0), (2560.0, 24.0, 40.0)] {
+            let block = Type::at(width, &TypeTheme::default(), Column::Default, false).blocks(&words).remove(0);
+            assert!((block.rows.0 - top).abs() < 0.01, "{width}: the words start {} px down", block.rows.0);
+            assert!((block.rows.1 - block.rows.0 - 2.0 * 1.08 * font).abs() < 0.01, "{width}: one line and the line past it at 1.08");
+        }
+    }
+
+    #[test]
+    fn a_cap_on_the_heading_narrows_its_measure_and_a_line_height_moves_its_rows() {
+        let words = Words::read("## A heading long enough to wrap in a narrow cap, but not in the box", "");
+        let blocks = |css: &str| {
+            let theme = TypeTheme::of_theme(Some(css));
+            assert!(!theme.resized, "{css}");
+            Type::at(1360.0, &theme, Column::Default, false).blocks(&words).remove(0)
+        };
+        let plain = Type::at(1360.0, &TypeTheme::default(), Column::Default, false).blocks(&words).remove(0);
+        let capped = blocks(".moss-hero-closing h2 { max-inline-size: 300px; }");
+        assert!(capped.across <= 300.0 && capped.rows.1 > plain.rows.1, "a cap only narrows: {} px across, rows {:?} against {:?}", capped.across, capped.rows, plain.rows);
+        assert_eq!(blocks(".moss-hero-closing h2 { max-width: 900px; }").across, plain.across, "a cap wider than the box changes nothing");
+        let loose = blocks(".moss-hero-closing h2 { line-height: 1.4; }");
+        assert!(loose.rows.1 > plain.rows.1);
+        let fixed = blocks(".moss-hero-closing h2 { line-height: 60px; }");
+        assert!(fixed.rows.1 - fixed.rows.0 > loose.rows.1 - loose.rows.0);
+        for unread in [
+            ".moss-hero-closing h2 { max-width: calc(20rem + 2px); }",
+            ".moss-hero-closing h2 { max-width: 15em; }",
+            ".moss-hero-closing h2 { line-height: normal; }",
+            ".moss-hero-closing h2 { line-height: calc(1em + 2px); }",
+            ".moss-hero-closing p { max-width: 300px; }",
+            ".moss-hero-closing h2, .moss-hero-closing p { max-width: 300px; }",
+        ] {
+            assert!(TypeTheme::of_theme(Some(unread)).resized, "{unread} is outside what is read");
+        }
+    }
+
+    #[test]
+    fn the_link_row_leaves_the_words_ink_to_the_rest_of_the_words() {
+        // A dark picture in the light theme: the words take the light ink, with the link, which has its own ground, left out.
+        let lookup = lookup_of(&[("dark.png", &banded(GROUND, GROUND, 1.0)), ("mid.png", &banded([120; 3], [120; 3], 1.0))]);
+        let words = |picture: &str, text: &str| {
+            let frame = Frame::new(None, None, Some("top"), false, true, Words::read(text, ""));
+            ink_attributes(Some(&lookup), picture, None, InkRequest { frame, ..plain(Some("top"), Backing::Auto, true) })
+        };
+        let attrs = words("/dark.png", "## Heading\n\n[Go](#go)");
+        assert!(attrs.contains(&format!(r#"data-words="{}""#, closing_tokens("light"))) && attrs.contains("data-words-night="), "{attrs}");
+        // The link alone has nothing to read; over a mid-tone ground text still keeps the panel.
+        assert!(!words("/mid.png", "Some running text.\n\n[Go](#go)").contains("data-words"));
+    }
+
+    #[test]
+    fn a_hero_rule_inside_a_condition_is_not_read() {
+        for css in [
+            "@media (width < 48rem) { .moss-hero-closing h2 { font-size: 20px; } }",
+            "@supports (display: grid) { .moss-hero-closing h2 { max-inline-size: 300px; } }",
+            "@media print { .moss-hero-closing h2 { line-height: 1.5; } }",
+        ] {
+            assert!(TypeTheme::of_theme(Some(css)).resized, "{css}");
+        }
+        assert!(!TypeTheme::of_theme(Some(".moss-hero-closing h2 { font-size: 20px; }")).resized);
+    }
+
+    #[test]
+    fn a_cap_in_ch_takes_its_rows_from_the_narrow_end_and_its_width_from_the_wide_end() {
+        let words = Words::read("## A heading long enough to wrap in a narrow cap, but not in the box", "");
+        let theme = TypeTheme::of_theme(Some(".moss-hero-closing h2 { max-inline-size: 15ch; }"));
+        assert!(!theme.resized && theme.heading_cap.is_some());
+        let at = |t: &TypeTheme| Type::at(1360.0, t, Column::Default, false).blocks(&words).remove(0);
+        let (plain, capped) = (at(&TypeTheme::default()), at(&theme));
+        let (narrow, wide) = (15.0 * 0.5 * 40.0, 15.0 * 0.6 * 40.0);
+        assert!(capped.across <= wide + 0.01 && capped.across > narrow, "the width is the wide end: {}", capped.across);
+        let rows = |measure: f32| ((words.heading * 40.0 / measure).ceil() + 1.0) * 1.08 * 40.0;
+        assert!((capped.rows.1 - capped.rows.0 - rows(narrow)).abs() < 0.01 && capped.rows.1 > plain.rows.1, "the rows are the narrow end's: {:?}", capped.rows);
+    }
+
+    #[test]
+    fn the_credit_takes_the_themes_secondary_colour_as_it_paints_it() {
+        // A pale foot: the default secondary colour (dark) reads on it; a theme that sets it pale cannot, and the page colour is pale too.
+        let lookup = lookup_of(&[("pale.png", &banded(SKY, SKY, 1.0))]);
+        let credit = |css: Option<&str>| ink_attributes(Some(&lookup), "/pale.png", None, InkRequest { ground: PageGround::of_theme(css), ..plain(Some("top"), Backing::Auto, true) });
+        assert!(credit(None).contains(r#"data-credit="narrow:text mid:text wide:text""#));
+        let pale = credit(Some(":root { --moss-color-text-secondary: #f4f4f0; }"));
+        assert!(!pale.contains("data-credit=\""), "{pale}");
+        assert!(!credit(Some(":root { --moss-color-text-secondary: var(--ink); }")).contains("data-credit=\""), "an unread colour keeps the panel");
+    }
+
+    #[test]
+    // Pins the reading as it is, pending a design for small type: a 12px credit's window is one source
+    // pixel, so any foot with a highlight fails it.
+    fn a_few_pale_specks_set_the_worst_reading_but_not_the_typical_one() {
+        // A dark foot with a pale speck every 37 pixels: the credit's page-coloured ink meets a speck as pale
+        // as itself at the worst spot, and the dark foot nearly everywhere else.
+        let mut img = RgbImage::from_pixel(400, 100, Rgb(GROUND));
+        for y in (0..100).step_by(9) {
+            for x in (y % 37..400).step_by(37) {
+                img.put_pixel(x, y, Rgb(SKY));
+            }
+        }
+        let lookup = lookup_of(&[("specks.png", &DynamicImage::ImageRgb8(img))]);
+        let frame = Frame { words: Words::read("## Words", "A credit line."), ..closing(Some("top")) };
+        let credit: Vec<_> = forced_ink_shortfalls(&lookup, ("/specks.png", None), Some("top"), &frame, true).into_iter().filter(|s| s.part == Part::Credit && !s.night).collect();
+        assert_eq!(credit.len(), 3, "every layout falls short at its worst spot");
+        for s in &credit {
+            assert!(s.limit.raw < 1.5 && s.tones.typical(s.ink) >= MIN_CONTRAST, "{:?}: a speck as pale as the ink, a foot it reads on", s.limit);
+        }
     }
 }

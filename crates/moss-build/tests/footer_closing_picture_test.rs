@@ -225,10 +225,10 @@ fn a_faded_closing_picture_is_measured_over_the_themes_page_colour() {
     assert!(footer.contains(r#"data-credit="narrow:page mid:page wide:page""#) && footer.contains("data-credit-night="), "{footer}");
     assert!(!plain[..plain.find("<footer").unwrap()].contains("data-fade"), "only a closing picture fades");
 
-    // A black page under the pale day picture: the faded top is dark above a pale sky.
+    // A black page under the pale day picture: the faded top is dark, so the words, which sit in it, flip to the light ink.
     let black = footer_of(&themed(FADED, ":root { --moss-color-bg: #000; }\n")).to_string();
     let day = black.split(r#"data-words=""#).nth(1).and_then(|rest| rest.split('"').next()).unwrap_or("");
-    assert!(!day.contains("dark") && !day.contains("wide"), "the pale sky shows under the words below the phone's top: {black}");
+    assert!(day.starts_with("narrow:light") && !day.contains("dark"), "the words read over the black page they fade into: {black}");
     assert!(black.contains(r#"data-words-night="narrow:light"#), "{black}");
 
     // A colour the build can't read keeps the words' panels in both themes, and

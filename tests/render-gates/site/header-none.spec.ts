@@ -385,6 +385,21 @@ test.describe('a contents: pictures page reserves a lane for its list', () => {
       await expect.poll(async () => (await state(page)).list).toBe(false);
       expect((await state(page)).bar).toBe(false);
     });
+
+    test(`at ${width}px the controls in the lane stay above the closing picture, never over it`, async ({ page }) => {
+      await open(page, PICTURES_PATH, width, 800);
+      const gap = () =>
+        page.evaluate(() => {
+          const icons = document.querySelector('.nav-icons')!.getBoundingClientRect();
+          return { bottom: icons.bottom, picture: document.querySelector('footer .moss-hero-closing')!.getBoundingClientRect().top, height: innerHeight };
+        });
+      await placeTop(page, 'footer .moss-hero-closing', 1.5);
+      await expect.poll(async () => (await gap()).height - (await gap()).bottom, 'at rest they stand a space above the window foot').toBeLessThan(40);
+      for (const at of [0.9, 0.6, 0.3]) {
+        await placeTop(page, 'footer .moss-hero-closing', at);
+        await expect.poll(async () => { const g = await gap(); return g.bottom <= g.picture + 0.5; }, `the picture's top is at ${at} of the window`).toBe(true);
+      }
+    });
   }
 
   test('the fade behind the open names takes the colour of the band under the list', async ({ page }) => {

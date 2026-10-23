@@ -1218,6 +1218,28 @@ body > footer.container > .moss-hero-closing[data-mobile="overlay"][data-overlay
 body > footer.container > .moss-hero-closing[data-align="top"] :is(img, video) {
   object-position: var(--moss-hero-object-position, bottom);
 }
+/* With the words at the top of the picture they start `clamp(8px, 2vw, 24px)` below its
+   edge, close to the page it rises from, and the display heading sets tight (1.08);
+   `hero_ink` models both. */
+body > footer.container > .moss-hero-closing[data-mobile="overlay"][data-overlay][data-align="top"] > .moss-hero-content {
+  padding-block-start: clamp(8px, 2vw, 24px);
+}
+body > footer.container > .moss-hero-closing[data-align="top"] .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(:is(h1, h2, h3, h4, h5, h6) ~ *) {
+  line-height: 1.08;
+}
+/* The call to action is a button with a ground of its own, the page colour at 80%, in the text
+   colour with its border, so it reads on any picture whatever the words' ink; hovered it inverts.
+   The ink measurement leaves the link row out of what the words' ink is read over. */
+body > footer.container > .moss-hero-closing .moss-hero-content a {
+  font-weight: 500;
+  color: var(--moss-color-text);
+  border-color: var(--moss-color-text);
+  background: color-mix(in srgb, var(--moss-color-bg) 80%, transparent);
+}
+body > footer.container > .moss-hero-closing .moss-hero-content a:hover {
+  color: var(--moss-color-bg);
+  background: var(--moss-color-text);
+}
 /* The words start where the article's text starts and stay within its width.
    `--moss-words-inset` is that start measured from the picture's edge: half
    the room beside the content column plus its padding, less the sidenote
@@ -1225,6 +1247,8 @@ body > footer.container > .moss-hero-closing[data-align="top"] :is(img, video) {
 body > footer.container > .moss-hero-closing[data-mobile="overlay"][data-overlay] {
   --moss-words-pad: 5%;
   --moss-words-inset: calc(max(0px, (100% - var(--moss-sidenote-inset, 0px) - var(--moss-content-width)) / 2) + var(--moss-container-padding));
+  /* Where the credit's box ends, so its text (which has 0.5rem of padding) ends where the column does. */
+  --moss-credit-end: calc(var(--moss-words-inset) - 0.5rem);
 }
 @media (48rem <= width < 64rem) {
   body > footer.container > .moss-hero-closing[data-mobile="overlay"][data-overlay] {
@@ -1282,16 +1306,19 @@ body > footer.container:has(> .moss-hero-closing) > .moss-colophon a {
 .moss-hero.moss-hero-closing[data-overlay]::before {
   content: none;
 }
-/* The credit (`caption=`), last on the foot before the colophon. Panel and tone match the hero's words unless the foot measured quiet (`data-credit`). */
+/* The credit (`caption=`), last on the foot before the colophon: right-aligned to the end of the
+   page's text column, on one line where it fits, in the UI face unless a theme sets
+   `--moss-hero-credit-font`. Panel and tone match the hero's words unless the foot measured quiet (`data-credit`). */
 .moss-hero-closing > .moss-hero-credit {
   position: absolute;
   inset-block-end: var(--moss-closing-strip);
-  inset-inline-end: 0;
+  inset-inline-end: var(--moss-credit-end, 0px);
   z-index: 3;
   box-sizing: border-box;
-  max-inline-size: min(36rem, 100%);
+  max-inline-size: calc(100% - 2 * var(--moss-credit-end, 0px));
   margin: 0;
-  padding: 0.3rem 5%;
+  padding: 0.3rem 0.5rem;
+  font-family: var(--moss-hero-credit-font, var(--moss-font-body));
   font-size: 0.75rem;
   line-height: 1.45;
   text-align: end;
@@ -3907,7 +3934,9 @@ body {
      the end of the bar's place and scroll away with the page's first block;
    - where the contents ruler is on screen, or its lane is reserved
      (`data-ruler` `on` or `lane`; the bar never shows), they stand in a column at the
-     foot of the window, starting where the ruler's dashes start;
+     foot of the window, starting where the ruler's dashes start, and above a
+     closing picture that has come into view (`--moss-closing-clear`, which
+     contents-ruler.ts keeps), not over its picture;
    - anywhere else they are fixed in the slot the bar keeps free at its end.
    Both places are worked out from the bar's and the ruler's own geometry
    tokens (on `body`), never retyped. */
@@ -3968,7 +3997,7 @@ body:has(> .moss-nav-island[data-header="none"] + .nav-icons) main > article:is(
 .moss-nav-island[data-header="none"][data-ruler]:not([data-ruler="off"], [data-top]) + .nav-icons {
   flex-direction: column;
   align-items: flex-start;
-  inset-block: auto max(var(--moss-space-md), env(safe-area-inset-bottom, 0px));
+  inset-block: auto calc(max(var(--moss-space-md), env(safe-area-inset-bottom, 0px)) + var(--moss-closing-clear, 0px));
   inset-inline-end: auto;
   left: calc(var(--moss-contents-inset) + var(--moss-contents-pad));
 }
@@ -8285,11 +8314,8 @@ body > footer.container:has(> .moss-hero-closing) {
    theme and layout, as `data-words` is): the theme's secondary text colour, as
    the build measured it, or its page colour. A layout not listed keeps its panel. */
 @media (width < 48rem) {
-  :root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="narrow:text"] > .moss-hero-credit {
-    color: #5d5853;
-  }
-  :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="narrow:text"] > .moss-hero-credit {
-    color: #b0a696;
+  :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="narrow:text"], :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="narrow:text"]) > .moss-hero-credit {
+    color: var(--moss-color-text-secondary);
   }
   :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="narrow:page"], :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="narrow:page"]) > .moss-hero-credit {
     color: var(--moss-color-bg);
@@ -8302,14 +8328,12 @@ body > footer.container:has(> .moss-hero-closing) {
   ) > .moss-hero-credit {
     text-shadow: none;
     background: none;
+    padding-block: 0 0.875rem;
   }
 }
 @media (48rem <= width < 80rem) {
-  :root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="mid:text"] > .moss-hero-credit {
-    color: #5d5853;
-  }
-  :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="mid:text"] > .moss-hero-credit {
-    color: #b0a696;
+  :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="mid:text"], :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="mid:text"]) > .moss-hero-credit {
+    color: var(--moss-color-text-secondary);
   }
   :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="mid:page"], :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="mid:page"]) > .moss-hero-credit {
     color: var(--moss-color-bg);
@@ -8322,14 +8346,12 @@ body > footer.container:has(> .moss-hero-closing) {
   ) > .moss-hero-credit {
     text-shadow: none;
     background: none;
+    padding-block: 0 0.875rem;
   }
 }
 @media (width >= 80rem) {
-  :root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="wide:text"] > .moss-hero-credit {
-    color: #5d5853;
-  }
-  :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="wide:text"] > .moss-hero-credit {
-    color: #b0a696;
+  :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="wide:text"], :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="wide:text"]) > .moss-hero-credit {
+    color: var(--moss-color-text-secondary);
   }
   :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="wide:page"], :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="wide:page"]) > .moss-hero-credit {
     color: var(--moss-color-bg);
@@ -8342,6 +8364,7 @@ body > footer.container:has(> .moss-hero-closing) {
   ) > .moss-hero-credit {
     text-shadow: none;
     background: none;
+    padding-block: 0 0.875rem;
   }
 }
 

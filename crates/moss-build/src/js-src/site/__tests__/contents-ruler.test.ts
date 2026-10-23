@@ -252,6 +252,26 @@ describe("one pass per frame", () => {
   });
 });
 
+describe("the controls beside a closing picture", () => {
+  test("ride above the part of the window the picture covers", async () => {
+    document.querySelector("footer")!.innerHTML = '<div class="moss-hero-closing"></div>';
+    island().insertAdjacentHTML("afterend", '<div class="nav-icons"></div>');
+    const closing = document.querySelector<HTMLElement>(".moss-hero-closing")!;
+    setPage(["一", "二"]);
+    initNavIsland();
+    const clear = () => document.querySelector<HTMLElement>(".nav-icons")!.style.getPropertyValue("--moss-closing-clear");
+    closing.getBoundingClientRect = () => ({ top: window.innerHeight - 200 }) as DOMRect;
+    await scrollTo(1);
+    expect(clear()).toBe("200px");
+    closing.getBoundingClientRect = () => ({ top: window.innerHeight + 50 }) as DOMRect;
+    await scrollTo(1);
+    expect(clear()).toBe("0px");
+    setPage(["only"]);
+    initNavIsland();
+    expect(clear(), "the property goes with the ruler").toBe("");
+  });
+});
+
 describe("a section's short name", () => {
   test("names it on the ruler, the button and the panel; the heading keeps its text", async () => {
     setPage(["Opening hours of the reading room", "Two", "Three"]);
