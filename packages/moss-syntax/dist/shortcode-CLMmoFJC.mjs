@@ -55,7 +55,12 @@ const SHORTCODES = [
 			{ name: "caption" },
 			{ name: "header" },
 			{ name: "mobile" },
-			{ name: "align" }
+			{ name: "align" },
+			{ name: "panel" },
+			{ name: "fade" },
+			{ name: "max-height" },
+			{ name: "dark" },
+			{ name: "from" }
 		],
 		assetAttr: "image",
 		canonicalTemplate: "hero {image=${1:photo.jpg}}\n# ${2:Title}\n${3:Subtitle}\n:::",
