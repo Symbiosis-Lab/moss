@@ -283,8 +283,11 @@ fn extract_heading_section(body: &str, target_anchor: &str) -> Option<String> {
     // Find the heading whose anchor matches.
     for (i, line) in lines.iter().enumerate() {
         if let Some((level, text)) = parse_heading(line) {
-            let anchor = obsidian_heading_anchor(text);
-            if anchor == target {
+            // A heading with `{#id}` is found by that id or by its words.
+            let attrs = crate::heading::attrs::heading_attrs(text);
+            let words = obsidian_heading_anchor(attrs.as_ref().map_or(text, |a| a.title));
+            let named = attrs.as_ref().and_then(|a| a.id).map(obsidian_heading_anchor);
+            if words == target || named.as_deref() == Some(target.as_str()) {
                 start_idx = Some(i);
                 heading_level = level;
                 break;
@@ -825,6 +828,17 @@ mod tests {
         let input = "---\ntitle: Test\nNo closing delimiter.";
         // No closing `---`, so treat as no frontmatter.
         assert_eq!(strip_frontmatter(input), input);
+    }
+
+    #[test]
+    fn test_extract_heading_section_by_named_id_or_words() {
+        let body = "## Opening hours {#hours}\nOpen daily.\n## Next\nNope.";
+        for target in ["hours", "Opening hours", "opening-hours"] {
+            let s = extract_heading_section(body, target).unwrap_or_else(|| panic!("{target} should match"));
+            assert!(s.contains("Open daily."), "{target}: {s}");
+            assert!(!s.contains("Nope."), "{target}: {s}");
+        }
+        assert!(extract_heading_section(body, "opening-hours-{hours}").is_none());
     }
 
     #[test]

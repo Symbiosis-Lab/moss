@@ -144,6 +144,11 @@ pub struct ShellVars {
     /// video ladder.
     pub lazy_chunk_attrs: String,
     pub navigation: String,
+    /// Whether the page carries the `<header>` band: false under
+    /// `[site].header = "none"`, where the island holds the controls.
+    pub has_header: bool,
+    /// Whether moss's colophon is emitted (`[site].colophon`, default true).
+    pub colophon: bool,
     /// Floating nav island markup, or empty when the page has no
     /// breadcrumb trail to continue. Emitted as a sibling *before* `<header>`
     /// so it is `position: fixed` against the viewport rather than against any
@@ -249,6 +254,10 @@ pub struct ShellVars {
     /// Includes the preceding `window.mossTheme.base` global so the script can
     /// resolve co-located theme assets via `new URL("asset.woff2", mossTheme.base)`.
     pub user_js_tag: Option<String>,
+    /// `<script type="importmap">` for the theme's ES modules, in `<head>`
+    /// ahead of every module script. Empty unless the theme has script files
+    /// besides `script.js`.
+    pub theme_importmap: String,
     /// Site-wide flag: true when ANY document in the site has `sidebar` set.
     /// Used by Task 3 to add `class="has-sidebar-layout"` on the `<html>` element
     /// for content width adjustments.
@@ -360,9 +369,36 @@ impl ShellProcessor {
         let latest_sidebar =
             vars.latest_sidebar.map(|s| format!("{}\n        ", s)).unwrap_or_default();
 
+        // `[site].header = "none"` has no `<header>` at all rather than an
+        // empty band.
+        let header = if !vars.has_header {
+            String::new()
+        } else {
+            format!(
+                "<header>\n        <nav class=\"main-nav container\">\n            <div class=\"nav-content\">\n                {}\n            </div>\n        </nav>\n    </header>",
+                vars.navigation
+            )
+        };
+
         // Every placeholder the templates may carry, in one lookup table. Tokens
         // absent from the current templates (main_class, date, …) stay registered
         // so a template that reintroduces them skips the unknown-token drop.
+        // moss's own voice, derived from one language rather than passed in
+        // pre-rendered pieces — see `ShellVars::ui_lang`. Empty when the site
+        // turns the colophon off.
+        let colophon = if vars.colophon {
+            substitute_template_tokens(
+                COLOPHON_TEMPLATE,
+                &std::collections::HashMap::from([
+                    ("colophon_text", crate::i18n::t(vars.ui_lang, "published_with_moss").to_string()),
+                    ("colophon_name", crate::i18n::t(vars.ui_lang, "colophon_name").to_string()),
+                    ("colophon_lang", vars.ui_lang.as_bcp47_attr().to_string()),
+                    ("moss_mark", MOSS_MARK_SVG.to_string()),
+                ]),
+            )
+        } else {
+            String::new()
+        };
         let values: std::collections::HashMap<&'static str, String> = std::collections::HashMap::from([
             // Escaped like every other attribute value here. The allowlist in
             // `resolve_site_default_lang` is what actually closes this today;
@@ -379,7 +415,7 @@ impl ShellProcessor {
             ("css_path", vars.css_path),
             ("js_path", vars.js_path),
             ("lazy_chunk_attrs", vars.lazy_chunk_attrs),
-            ("navigation", vars.navigation),
+            ("header", header),
             ("nav_island", vars.nav_island),
             ("homepage_content", vars.homepage_content),
             ("body_attrs", vars.body_attrs),
@@ -394,10 +430,7 @@ impl ShellProcessor {
             ("comments_attr", vars.comments_attr),
             // moss's own voice, derived from one language rather than passed
             // in four already-rendered pieces — see `ShellVars::ui_lang`.
-            ("colophon_text", crate::i18n::t(vars.ui_lang, "published_with_moss").to_string()),
-            ("colophon_name", crate::i18n::t(vars.ui_lang, "colophon_name").to_string()),
-            ("colophon_lang", vars.ui_lang.as_bcp47_attr().to_string()),
-            ("moss_mark", MOSS_MARK_SVG.to_string()),
+            ("colophon", colophon),
             ("skip_link_label", crate::i18n::t(vars.ui_lang, "skip_to_content").to_string()),
             ("latest_list", vars.latest_list.unwrap_or_default()),
             ("latest_sidebar", latest_sidebar),
@@ -432,6 +465,7 @@ impl ShellProcessor {
             ("lightbox", vars.lightbox),
             // User JS tag (placed after theme.js, before body-end slot)
             ("user_js_tag", vars.user_js_tag.unwrap_or_default()),
+            ("theme_importmap", vars.theme_importmap),
         ]);
 
         let mut result = substitute_template_tokens(&template, &values);
@@ -459,7 +493,7 @@ impl ShellProcessor {
             // substituted values, so "the first <nav>" is not reliably anything.
             for (open, marked) in [
                 (r#"<nav class="main-nav "#, r#"<nav data-source-none class="main-nav "#),
-                (r#"<div class="moss-nav-island">"#, r#"<div class="moss-nav-island" data-source-none>"#),
+                (r#"<div class="moss-nav-island""#, r#"<div class="moss-nav-island" data-source-none"#),
                 (r#"<nav class="moss-series-nav""#, r#"<nav class="moss-series-nav" data-source-none"#),
                 (r#"<div class="font-anchor""#, r#"<div class="font-anchor" data-source-none"#),
                 (r#"<div class="moss-colophon">"#, r#"<div class="moss-colophon" data-source-none>"#),
@@ -654,6 +688,10 @@ pub fn minify_css(css: &str) -> String {
 /// colophon, scripts) with a single `{main_content}` slot for the per-type
 /// `<main>` content fragment. Spliced in `ShellProcessor::process`.
 pub const SHELL_TEMPLATE: &str = include_str!("../../assets/templates/shell.html");
+
+/// moss's colophon, substituted for the shell's `{colophon}` (empty under
+/// `[site].colophon = false`). Its bounds comment lets the footer take it in.
+pub const COLOPHON_TEMPLATE: &str = include_str!("../../assets/templates/colophon.html");
 
 /// The small moss mark, for `shell.html`'s `{moss_mark}`.
 ///

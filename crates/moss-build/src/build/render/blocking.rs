@@ -46,7 +46,7 @@ use crate::build::scan::sort_inference::populate_direct_children_sorts;
 pub use super::config::SiteConfig;
 pub use crate::build::incremental_gates::IncrementalGates;
 use super::config::resolve_logo_url;
-use super::page_chrome::{ChromeAssets, PageChromeContext, PageFamily};
+use super::page_chrome::{ChromeAssets, PageChromeContext, PageFamily, PageOwnedAssets};
 use super::image_util::PREVIEW_MAX_CHARS;
 use super::preflight::{check_misplaced_theme_files, check_mixed_multilingual_structure};
 use super::html::{RenderCtx, render_page, tab_title};
@@ -142,6 +142,7 @@ fn synthetic_folder_doc(
     folder_display: &std::collections::HashMap<String, String>,
     folder_languages: &std::collections::HashMap<String, crate::i18n::Language>,
     site_lang: crate::i18n::Language,
+    editions: &moss_core::home::Editions,
 ) -> ParsedDocument {
     let folder_leaf = folder.rsplit('/').next().unwrap_or(folder);
     let lang = synthetic_folder_lang(folder, folder_languages, site_lang);
@@ -174,10 +175,13 @@ fn synthetic_folder_doc(
     // exactly like an authored one, not a visible title on one path and a
     // hidden one on the other.
     let is_place_root = term_index.place_namespace_roots().any(|ns| ns == folder);
+    let url_path = format!("{}/index.html", folder);
     ParsedDocument {
         label: title.clone(),
         title,
-        url_path: format!("{}/index.html", folder),
+        edition: editions.of(&url_path),
+        url_path,
+        lang_tag: Some(crate::i18n::lang_tag_in_tree(&format!("{folder}/index.md"), lang)),
         kind: PageKind::Folder,
         slug: folder_leaf.to_string(),
         permalink: format!("/{}/", folder), // allow:served-path-url-construct (folder index page permalink, derived from folder path)
@@ -215,6 +219,16 @@ pub(crate) fn source_metadata(stat: Option<crate::build::stat::FileStat>, bytes:
     // watcher gate never trusts: it always hashes (fail open).
     let stat = stat.unwrap_or(crate::build::stat::FileStat::whole_second(bytes.len() as u64, 0));
     crate::build::types::SourceMetadata::from_stat(format!("{:x}", Sha256::digest(bytes)), stat)
+}
+
+/// What the manifest remembers about a page between builds, `draft` included:
+/// that flag is how a page carried forward unrendered stays out of the publish.
+fn page_meta_of(doc: &crate::build::types::ParsedDocument) -> crate::types::content::PageMeta {
+    crate::types::content::PageMeta {
+        title: doc.title.clone(),
+        date: doc.date.clone(),
+        draft: doc.is_draft(),
+    }
 }
 
 /// Register a page's source hash beside its `source_to_output` mapping.
@@ -263,6 +277,7 @@ pub fn generate_blocking_content(
     let output = generate_blocking_content_for_build(
         root, project_structure, output_dir, services, progress_sender, emit_source_lines,
         site_config, pending, false, false,
+        crate::build::folder_embed::upcoming::now(),
     )?;
     // No slot pass follows this entry point, so its pages are written as rendered.
     crate::build::emit::slots::write_as_rendered(output_dir, pending.take_unwritten_pages())?;
@@ -279,6 +294,7 @@ pub fn generate_blocking_content(
 /// [`generate_blocking_content`]'s plain default. Unlike that one, it leaves the
 /// rendered pages in `pending` for the slot pass to write. `defer_title_cards`
 /// plans sharing cards for the background phase; standalone callers pass false.
+/// `now` is the build's one clock for every past/upcoming decision.
 pub fn generate_blocking_content_for_build(
     root: &crate::vault::paths::VaultRoot,
     project_structure: &ProjectStructure,
@@ -290,6 +306,7 @@ pub fn generate_blocking_content_for_build(
     pending: &mut PendingManifest,
     exits_after_build: bool,
     defer_title_cards: bool,
+    now: chrono::NaiveDateTime,
 ) -> Result<BlockingContentOutput, BuildStopped> {
     let total_start = std::time::Instant::now();
     let mut og_requests = Vec::new();
@@ -355,7 +372,7 @@ pub fn generate_blocking_content_for_build(
                     .map_err(|e| format!("Failed to emit favicon: {}", e))?;
             }
             Err(e) => {
-                log::warn!("could not read favicon for manifest registration {}: {}", rel, e);
+                log::info!("could not read favicon for manifest registration {}: {}", rel, e);
                 pending.apply_message(rel, &favicon.content_hash, HashBucket::Files, None);
             }
         }
@@ -382,8 +399,37 @@ pub fn generate_blocking_content_for_build(
         &project_structure.html_files,
         &project_structure.passthrough_roots,
     );
-    let (home_overrides, home_file_winners) = elect_homes(&project_structure.markdown_files, root, &verbatim_dirs);
+    let reserved_dirs = crate::build::scan::classify::reserved_home_dirs(&project_structure.html_files, &project_structure.passthrough_roots);
+    let (home_overrides, home_file_winners) = elect_homes(&project_structure.markdown_files, root, &reserved_dirs);
+    // The theme's stylesheet, read before the pages render (a faded closing
+    // picture is measured over its page colour); hashed and copied to the
+    // output with the CSS/JS assets below. Canonical location:
+    // .moss/theme/style.css; check_misplaced_theme_files() warns about one at
+    // the project root.
+    let user_css_path = {
+        let theme_css = source_path_buf.join(".moss").join("theme").join("style.css");
+        if theme_css.exists() || crate::build::icloud::is_still_in_the_cloud(&theme_css) { Some(theme_css) } else {
+            input_evidence.require(&theme_css, crate::build::cloud_ledger::InputRole::Theme);
+            input_evidence.absent(&theme_css);
+            None
+        }
+    };
+    // The read, not the stat, decides whether this build has a user theme: a
+    // cloud-evicted style.css stats as present but reads as absent, and linking
+    // to a stylesheet this build never emits would 404 every page. Unstyled for
+    // one build, restyled when the download lands.
+    let (user_css_stat, user_css_content) = match user_css_path {
+        Some(ref css_path) => {
+            let (stat, content) = crate::build::stat::stat_then(css_path, |path| {
+                cloud_readiness::read_optional_build_input(path, "user style.css", &input_evidence)
+            });
+            (stat, content?)
+        }
+        None => (None, None),
+    };
     let markdown = crate::build::markdown::SiteMarkdown { lang: root_language(&site_config.lang, project_structure, &home_file_winners), ..site_config.markdown() };
+    // Read before the pages render: a faded closing picture is measured over it.
+    let page_ground = crate::build::markdown::hero_ink::PageGround::of_theme(user_css_content.as_deref()).with_colophon(site_config.colophon);
 
     // Build PageMap: pre-scan all markdown files to compute source_path → url_path mapping.
     // This includes cascading url overrides from folder index files, so child pages
@@ -407,7 +453,7 @@ pub fn generate_blocking_content_for_build(
         &mut frontmatter_scan_cache,
     );
     if let Err(e) = frontmatter_scan_cache.save(&frontmatter_scan_cache_path) {
-        log::warn!("failed to persist frontmatter-scan cache: {}", e);
+        log::info!("failed to persist frontmatter-scan cache: {}", e);
     }
     log::debug!(target: "timing", "[render] page_map ({} entries): {:?}", page_map.len(), total_start.elapsed());
 
@@ -425,7 +471,7 @@ pub fn generate_blocking_content_for_build(
         &mut folder_lang_cache, &frontmatter_scan_cache,
     );
     if let Err(e) = folder_lang_cache.save(&folder_lang_cache_path) {
-        log::warn!("failed to persist folder-lang cache: {}", e);
+        log::info!("failed to persist folder-lang cache: {}", e);
     }
     log::debug!(target: "timing", "[render] folder_languages ({} folders): {:?}", folder_languages.len(), total_start.elapsed());
 
@@ -517,6 +563,7 @@ pub fn generate_blocking_content_for_build(
                 markdown,
                 emit_source_lines,
                 project_structure.has_content_folders,
+                page_ground,
             ),
         ),
     );
@@ -557,7 +604,9 @@ pub fn generate_blocking_content_for_build(
         &project_structure.video_files,
         &dir_overrides,
         services.and_then(|s| s.assets.as_deref()),
-    );
+    )
+    .with_page_ground(page_ground)
+    .with_root(source_path_buf.to_path_buf());
 
     // Pre-fetched asset data (dims/LQIP/dominant-color from
     // MediaDimensionLookup, registered WebP/AVIF variants from AssetRegistry)
@@ -973,7 +1022,7 @@ pub fn generate_blocking_content_for_build(
                         let source = match source {
                             Ok(source) => source,
                             Err(error) => {
-                                log::warn!("Cannot read '{}' to normalize duplicate uid: {}", reassigned_path, error);
+                                log::info!("Cannot read '{}' to normalize duplicate uid: {}", reassigned_path, error);
                                 return false;
                             }
                         };
@@ -1119,6 +1168,10 @@ pub fn generate_blocking_content_for_build(
     // site default. Reuse it here.
     // Out here because the article map, written far below, carries these to the editor's `url` chip.
     let mut url_collisions: Vec<crate::build::scan::slug::UrlCollision> = Vec::new();
+    // Reverse map (slug folder-key → original on-disk leaf name) so every
+    // auto-generated folder-index TITLE/H1 preserves the author's directory
+    // casing ("Writings") even though the URL slug is lowercased ("writings").
+    let folder_display = folder_display_leaves(&project_structure.dirs, &dir_overrides);
     let editions: moss_core::home::Editions;
     let (layout_config, site_url, has_rss, show_rss_in_footer, term_index, calendar) = {
         // Profile the whole-corpus Reduce chain. Each pass
@@ -1160,7 +1213,7 @@ pub fn generate_blocking_content_for_build(
         // Drafts now flow through cascade too, so cascade-defined sort/nav/layout
         // settings apply to them uniformly (a draft is rendered, just hidden
         // from listings).
-        apply_cascade(&mut documents);
+        apply_cascade(&mut documents, markdown.fields);
         log::debug!(target: "timing", "[reduce] apply_cascade: {:?}", reduce_start.elapsed());
         crate::build::scan::section_color::apply_section_colors(&mut documents);
 
@@ -1202,6 +1255,9 @@ pub fn generate_blocking_content_for_build(
         // The names a `cards = true` kind shows on listing cards: the same
         // per-page reading, before the same incremental hash.
         crate::build::terms::set_card_credits(&mut documents, &site_config.term_kinds);
+        if let Some(maps) = site_config.place_maps.as_ref() {
+            crate::build::terms::places::warn_unknown_places(&documents, &site_config.term_kinds, maps.gazetteer());
+        }
         log::debug!(target: "timing", "[reduce] derive_terms: {:?}", reduce_start.elapsed());
 
         // Places-explorer handshake, part 1: `places.<hash>.json`'s hash,
@@ -1228,7 +1284,7 @@ pub fn generate_blocking_content_for_build(
         )?;
         let calendar = crate::build::feeds::calendar::CalendarPlan::build(&documents, project_structure, &site_url);
 
-        // Resolve folder-list embed markers (`![[/folder/|limit:N,more]]`).
+        // Resolve folder-list embed markers (`![[/folder/|limit:N,more]]`) and settle `from=` heroes.
         // moss-core emits a `<!--MOSS_MARKER_FOLDER_LIST:…-->` marker during
         // wikilink resolution; we expand it here, AFTER
         // `populate_direct_children_sorts` so the target folder's resolved axis
@@ -1236,16 +1292,22 @@ pub fn generate_blocking_content_for_build(
         // term embed's `also_in` is already populated, and BEFORE the HTML
         // render phase (which would otherwise emit the marker comment
         // unchanged into the page).
-        crate::build::folder_embed::expand_markers_in_documents_with_place_maps(
-            &mut documents,
-            project_structure,
-            &dir_overrides,
-            site_config.math,
-            &event_level_image_lookup,
-            site_config.typesetting.as_deref(),
-            site_config.place_maps.as_ref(),
-            Some((&calendar, &site_url)),
-        );
+        crate::build::folder_embed::note_home_map_of_nav_root(&documents, &term_index.nav_entries(&site_config.term_nav));
+        // A kind's root (`![[/districts/|style:grid]]`) lists term pages generated further down.
+        let term_page = |key: &str| synthetic_folder_doc(key, &term_index, &folder_display, &folder_languages, site_lang, &editions);
+        crate::build::terms::with_term_pages(&mut documents, &term_index, term_page, |documents| {
+            crate::build::folder_embed::expand_markers_in_documents_with_place_maps(
+                documents,
+                project_structure,
+                &dir_overrides,
+                site_config.math,
+                &event_level_image_lookup,
+                site_config.typesetting.as_deref(),
+                site_config.place_maps.as_ref(),
+                Some((&calendar, &site_url)),
+                now,
+            )
+        });
         log::debug!(target: "timing", "[reduce] expand_markers_in_documents: {:?}", reduce_start.elapsed());
 
         // Inline `:::subscribe` forms get their page's language scope, judged
@@ -1351,7 +1413,7 @@ pub fn generate_blocking_content_for_build(
         let layout_config = layout_config.with_heading_anchors(site_config.heading_anchors);
         // [site].floating_nav (default false — opt-in) rides along for
         // the same reason: the emitter reads LayoutConfig, not SiteConfig.
-        let layout_config = layout_config.with_floating_nav(site_config.floating_nav);
+        let layout_config = layout_config.with_floating_nav(site_config.floating_nav).with_colophon(site_config.colophon);
         // [site].header (default "brand") rides along for the same reason:
         // the nav renderer reads LayoutConfig, not SiteConfig.
         let layout_config = layout_config.with_header_mode(site_config.header).with_term_nav(term_index.nav_entries(&site_config.term_nav));
@@ -1433,6 +1495,7 @@ pub fn generate_blocking_content_for_build(
                 .and_then(|s| s.assets.as_deref())
                 .is_some_and(|r| r.iter_registered_variants().values().any(|k| k.hls)),
             places_explorer: crate::build::features::should_inject_places_explorer(&term_index, &site_config),
+            map_layers: site_config.place_maps.as_ref().is_some_and(|maps| maps.has_layers()),
             // `search`, `link_preview`, `heading_anchors` and `math` already
             // live here, written by the config phase above. Re-reading them
             // from `site_config` would be a second copy of the same four
@@ -1480,31 +1543,6 @@ pub fn generate_blocking_content_for_build(
         }
     }
 
-    // Check for user custom CSS and compute its hash for cache busting.
-    // Canonical location: .moss/theme/style.css. Files at the project root are
-    // ignored; see check_misplaced_theme_files() above for the user-facing warning.
-    // The file is copied to the output directory later with CSS/JS assets.
-    let user_css_path = {
-        let theme_css = source_path_buf.join(".moss").join("theme").join("style.css");
-        if theme_css.exists() || crate::build::icloud::is_still_in_the_cloud(&theme_css) { Some(theme_css) } else {
-            input_evidence.require(&theme_css, crate::build::cloud_ledger::InputRole::Theme);
-            input_evidence.absent(&theme_css);
-            None
-        }
-    };
-    // The read, not the stat, decides whether this build has a user theme: a
-    // cloud-evicted style.css stats as present but reads as absent, and linking
-    // to a stylesheet this build never emits would 404 every page. Unstyled for
-    // one build, restyled when the download lands.
-    let (user_css_stat, user_css_content) = match user_css_path {
-        Some(ref css_path) => {
-            let (stat, content) = crate::build::stat::stat_then(css_path, |path| {
-                cloud_readiness::read_optional_build_input(path, "user style.css", &input_evidence)
-            });
-            (stat, content?)
-        }
-        None => (None, None),
-    };
     let has_user_css = user_css_content.is_some();
     // The stylesheet's references to theme files, pointed at their hashed
     // copies. Hashed after the rewrite so a changed font renames the sheet.
@@ -1536,7 +1574,7 @@ pub fn generate_blocking_content_for_build(
 
     // Check for user custom JS and compute its hash for cache busting.
     // Canonical location: .moss/theme/script.js. Files at the project root are
-    // ignored; see check_misplaced_theme_files() above for the user-facing warning.
+    // ignored; check_misplaced_theme_files() warns about them.
     let user_js_path = {
         let theme_js = source_path_buf.join(".moss").join("theme").join("script.js");
         if theme_js.exists() || crate::build::icloud::is_still_in_the_cloud(&theme_js) { Some(theme_js) } else {
@@ -1563,6 +1601,8 @@ pub fn generate_blocking_content_for_build(
         );
     }
 
+    let theme_modules = crate::build::assets::theme_modules::ThemeModules::read(&source_path_buf.join(".moss").join("theme"), &input_evidence)?;
+
     // `.moss/config.toml`: read fresh here (the many small readers elsewhere
     // in this crate each pull one field; this is the one place the whole
     // file's bytes are hashed) and registered the same way the theme files
@@ -1588,7 +1628,7 @@ pub fn generate_blocking_content_for_build(
             source_metadata(config_toml_stat, content.as_bytes()),
         ),
         Ok(None) => {}
-        Err(e) => log::warn!("[modified_paths] config.toml unreadable, not tracked this build: {e}"),
+        Err(e) => log::info!("[modified_paths] config.toml unreadable, not tracked this build: {e}"),
     }
 
     // Every content-addressed asset whose HASHED FILENAME appears in emitted
@@ -1627,6 +1667,7 @@ pub fn generate_blocking_content_for_build(
         parts.extend(feature_style_hashes.iter().map(String::as_str));
         parts.push(user_css_version.as_deref().unwrap_or(""));
         parts.push(user_js_version.as_deref().unwrap_or(""));
+        parts.extend(theme_modules.hashes());
         crate::build::facade::debug_hash(&parts)
     };
 
@@ -1634,12 +1675,6 @@ pub fn generate_blocking_content_for_build(
     // Compute site-wide sidebar layout flag: true when ANY document has `sidebar` set.
     // Used by templates to adjust content width (Task 3).
     let has_sidebar_layout = documents.iter().any(|d| d.sidebar.is_some());
-
-    // Reverse map (slug folder-key → original on-disk leaf name) so every
-    // auto-generated folder-index TITLE/H1 preserves the author's directory
-    // casing ("Writings") even though the URL slug is lowercased ("writings").
-    // Consumed by the generated folder plan below.
-    let folder_display = folder_display_leaves(&project_structure.dirs, &dir_overrides);
 
     // Term derivation already ran above, before `expand_markers_in_documents`
     // — see that call site for why. `term_index` is in scope from here on;
@@ -1657,15 +1692,14 @@ pub fn generate_blocking_content_for_build(
         &dir_overrides,
         &term_index,
         &input_evidence,
-        |folder| {
-            let mut doc = synthetic_folder_doc(folder, &term_index, &folder_display, &folder_languages, site_lang);
-            doc.lang_tag = Some(crate::i18n::lang_tag_in_tree(&format!("{folder}/index.md"), doc.lang));
-            doc.edition = editions.of(&doc.url_path);
-            doc
-        },
+        |folder| synthetic_folder_doc(folder, &term_index, &folder_display, &folder_languages, site_lang, &editions),
     );
     crate::build::terms::link_term_translations(&mut documents, &term_index);
+    // A term card reads its members' pictures and dates, so it is set once
+    // every pseudo-folder document exists.
+    crate::build::terms::set_term_cards(&mut documents, &term_index);
     super::build_shared::report_verbatim_collisions(&documents, project_structure, &dir_overrides);
+    super::build_shared::withhold_shadowed_bodies(&mut documents, project_structure, &dir_overrides);
     // The resolved set now contains both authored and synthetic folders.
     // Stamp every explorer root once so its facade includes the shared places
     // asset URL that its own map markup renders below.
@@ -1707,6 +1741,8 @@ pub fn generate_blocking_content_for_build(
     // Built once here rather than once per page. See `BuildShared`.
     let mut shared = super::build_shared::BuildShared::new(scripts, project_structure, &dir_overrides);
     shared.calendar = calendar;
+    shared.theme_modules = theme_modules;
+    shared.now = now;
 
     let rss_href = ServedPath::for_rss("").unwrap().to_relative_url();
     let page_rss_link = has_rss.then(|| format!(r#"<link rel="alternate" type="application/rss+xml" title="RSS" href="{rss_href}">"#));
@@ -1717,12 +1753,14 @@ pub fn generate_blocking_content_for_build(
         .with_dir_overrides(dir_overrides.clone());
     if let Some(v) = user_css_version.as_deref() { page_paths = page_paths.with_user_css_version(v); }
     if let Some(v) = user_js_version.as_deref() { page_paths = page_paths.with_user_js_version(v); }
+    let page_owned = PageOwnedAssets::collect(project_structure, source_path_buf, &input_evidence)?;
     let render_context = RenderCtx {
         chrome: PageChromeContext {
             documents: &documents, project: project_structure, layout: &layout_config, site_lang,
             assets: ChromeAssets {
-                paths: page_paths, scripts: &shared.scripts, has_user_css, has_user_js,
+                paths: page_paths, scripts: &shared.scripts, has_user_css, has_user_js, page_owned: &page_owned,
                 head_alternates: page_rss_link.as_deref(),
+                theme_modules: &shared.theme_modules,
             },
             show_rss_in_footer, emit_source_lines, has_sidebar_layout,
             home_breadcrumb: crate::build::components::nav::home_breadcrumb_setting(&documents),
@@ -1971,10 +2009,7 @@ pub fn generate_blocking_content_for_build(
                     Some(src) => Some((src.clone(), url_sp.clone())),
                     None => None,
                 };
-                let page_meta = doc.source_path.as_ref().map(|_| crate::types::content::PageMeta {
-                    title: doc.title.clone(),
-                    date: doc.date.clone(),
-                });
+                let page_meta = doc.source_path.as_ref().map(|_| page_meta_of(doc));
 
                 // Emit BackgroundProgress so the deploy panel shows what
                 // `wait_for_in_flight_work` is actually waiting on. Monotonic
@@ -2075,7 +2110,7 @@ pub fn generate_blocking_content_for_build(
                     register_page_source(pending, &page_source_hashes, src);
                     pending.register_page_meta(
                         src.clone(),
-                        crate::types::content::PageMeta { title: doc.title.clone(), date: doc.date.clone() },
+                        page_meta_of(doc),
                     );
                 }
                 *count += 1;
@@ -2280,7 +2315,7 @@ pub fn generate_blocking_content_for_build(
                 None,
                 site_config.math, false,
                 &Default::default(),
-                false, None, crate::build::folder_embed::upcoming::now(),
+                false, None, now,
             );
             // The generated half of the same split the claimed term page gets
             // in `folder_embed`, through the same function: a term no page
@@ -2403,6 +2438,8 @@ pub fn generate_blocking_content_for_build(
             .emit(&ServedPath::for_custom_script_hashed(&user_js_hash), user_js_content.as_bytes(), HashBucket::Files)
             .map_err(|e| format!("Failed to emit _moss/theme/script.<hash>.js: {}", e))?;
     }
+
+    shared.theme_modules.emit(&mut BuildContext::for_render(output_dir, pending))?;
 
     // theme.js is emitted with every other runtime script by `scripts.emit()`
     // below — it is the `gate: |_| true` row in SITE_SCRIPTS. The hand-rolled
@@ -2579,7 +2616,7 @@ pub fn generate_blocking_content_for_build(
             if let Some(doc) = homepage_doc {
                 pending.register_page_meta(
                     src.clone(),
-                    crate::types::content::PageMeta { title: doc.title.clone(), date: doc.date.clone() },
+                    page_meta_of(doc),
                 );
             }
         }
@@ -2622,7 +2659,7 @@ pub fn generate_blocking_content_for_build(
         &editions,
     );
     if let Err(e) = article_map.save(&moss_dir) {
-        log::warn!("⚠️ Failed to save article map: {}", e);
+        log::info!("⚠️ Failed to save article map: {}", e);
     }
 
     // `.moss/build.nosync/inventory.json` — what `moss list` reads back. Written here
@@ -2643,7 +2680,7 @@ pub fn generate_blocking_content_for_build(
         project_structure.has_content_folders,
         &layout_config.lang_tag,
     ) {
-        log::warn!("⚠️ Failed to save inventory: {}", e);
+        log::info!("⚠️ Failed to save inventory: {}", e);
     }
 
     // Generate _previews.json for hover link previews
@@ -2680,7 +2717,7 @@ pub fn generate_blocking_content_for_build(
             if let Err(e) = BuildContext::for_render(output_dir, pending)
                 .emit_held(&ServedPath::for_previews_manifest(), json.into_bytes(), HashBucket::Files)
             {
-                log::warn!("Failed to emit _moss/previews.json: {}", e);
+                log::info!("Failed to emit _moss/previews.json: {}", e);
             }
         }
     }
@@ -2812,7 +2849,11 @@ pub fn generate_blocking_content_for_build(
             project_structure.has_content_folders,
         )
         .with_search(layout_config.assets.search)
-        .with_header_mode(layout_config.header)
+        .with_header_mode(match layout_config.header {
+            // A generated media page has no island to carry the controls.
+            crate::build::components::nav::HeaderMode::None => crate::build::components::nav::HeaderMode::Brand,
+            mode => mode,
+        })
         .with_term_nav(layout_config.term_nav.clone(), "")
         .with_asset_snapshot(shared.media_lookup.asset_snapshot());
         let nav_builder = if let Some(ref logo) = layout_config.logo_path {
@@ -2928,8 +2969,9 @@ pub fn generate_blocking_content_for_build(
         let files = pending.files();
         for doc in &documents {
             if let Some(src) = doc.source_path.as_ref() {
-                if files.contains_key(&doc.url_path) && !s2o.contains_key(src) {
-                    log::warn!(
+                // A partial is never emitted; its address may be a real page's.
+                if !doc.slot_only && files.contains_key(&doc.url_path) && !s2o.contains_key(src) {
+                    log::info!(
                         "rename-event-propagation safety net: ParsedDocument with \
                          source_path={:?} and emitted url_path={:?} is missing \
                          from source_to_output. An HTML emission path was added \
@@ -3015,6 +3057,8 @@ pub fn generate_blocking_content_for_build(
         crate::build::terms::kind_move_stubs(&term_index),
         crate::build::terms::claim_stubs(&term_index),
         crate::build::terms::edition_move_stubs(&term_index),
+        super::build_shared::shadowed_edition_home_stubs(&verbatim_dirs, &home_file_winners),
+        folder_plan.passthrough_stubs.clone(),
     ]
     .concat();
     let table_inputs = crate::build::feeds::redirects::TableInputs {
@@ -3043,21 +3087,22 @@ pub fn generate_blocking_content_for_build(
         // forgotten (2026-08-29).
         Ok(health) => {
             use crate::build::feeds::redirects::BaselineHealth;
-            let reason = match health {
-                BaselineHealth::Fine => None,
-                BaselineHealth::Unusable(why) => Some(why.describe()),
-                BaselineHealth::NoBaselineYet => {
-                    Some("this site has no usable record of what is live yet; the next \
-                          publish writes it")
+            // A missing record is a note: it says nothing about the content, and
+            // the next publish ends it. A record that exists and cannot be used
+            // stays a problem.
+            match health {
+                BaselineHealth::Fine => {}
+                BaselineHealth::Unusable(why) => {
+                    log_warn_problem!("{} — a renamed page's old link may 404 until then", why.describe());
                 }
-            };
-            if let Some(reason) = reason {
-                log_warn_problem!(
-                    "{reason} — a renamed page's old link may 404 until then"
-                );
+                BaselineHealth::NoBaselineYet => {
+                    crate::build::cli_output::log_note!(
+                        "this site has no usable record of what is live yet; the next publish writes it — a renamed page's old link may 404 until then"
+                    );
+                }
             }
         }
-        Err(e) => log::warn!("Failed to emit the redirect table: {}", e),
+        Err(e) => log::info!("Failed to emit the redirect table: {}", e),
     }
 
     if has_rss {
@@ -3091,7 +3136,7 @@ pub fn generate_blocking_content_for_build(
             .filter(|src| !hashed.contains(*src))
             .collect();
         if !missing.is_empty() {
-            log::warn!(
+            log::info!(
                 "publish-classification safety net: {} source(s) have an output \
                  mapping but no source hash (e.g. {:?}). An emission or carry \
                  path calls register_source_mapping without the paired \
@@ -3442,7 +3487,7 @@ fn register_favicon_pngs(
                     .map_err(|e| format!("Failed to emit favicon PNG: {}", e))?;
             }
             Err(e) => {
-                log::warn!("could not hash {}: {}", rel, e);
+                log::info!("could not hash {}: {}", rel, e);
                 pending.apply_message(rel, "favicon-png", HashBucket::Files, None);
             }
         }
@@ -3489,7 +3534,7 @@ pub(super) fn resolve_favicon(
         let path = assets_dir.join(&name);
         let defer = |reason: &str| {
             crate::build::cloud_readiness::request_download(&path);
-            log::warn!("favicon {} is {} — using the default until it arrives", name, reason);
+            crate::build::cli_output::log_note!("favicon {} is {} — using the default until it arrives", name, reason);
             None
         };
         if crate::build::icloud::is_evicted(&path) {
@@ -3550,7 +3595,7 @@ pub(super) fn resolve_favicon(
         ) {
             Ok(sizes) => sizes,
             Err(e) => {
-                log::warn!(
+                log::info!(
                     "Failed to rasterize favicon PNGs: {}. Continuing with SVG only.",
                     e
                 );

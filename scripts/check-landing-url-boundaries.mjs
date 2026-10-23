@@ -13,7 +13,7 @@ try {
       await page.route('**/*', route => new URL(route.request().url()).origin === new URL(server.baseURL).origin ? route.continue() : route.abort());
       const hostile = ['javascript:parent.__previewExecuted=true', 'data:text/html,<script>parent.__previewExecuted=true</script>', '//attacker.invalid/', 'https://attacker.invalid/', 'http://['];
       for (const preview of hostile) {
-        await page.goto(new URL(`ui/shell.html?preview=${encodeURIComponent(preview)}`, server.baseURL).href);
+        await page.goto(new URL(`home/ui/shell.html?preview=${encodeURIComponent(preview)}`, server.baseURL).href);
         await page.waitForFunction(() => document.documentElement.dataset.ready === '1');
         assert.equal(await page.evaluate(() => window.__previewExecuted), undefined, `${name}: query preview executed script`);
         assert.equal(await page.locator('#moss-preview-iframe').getAttribute('src'), null, `${name}: query preview accepted ${preview}`);
@@ -33,9 +33,9 @@ try {
         const receipt = async (path) => {
           const params = new URLSearchParams({ target, live: 'https://attacker.invalid/' });
           if (path !== undefined) params.set('pages', JSON.stringify([{ kind: 'added', path, title: 'A page' }]));
-          await page.goto(new URL(`ui/shell.html?${params}`, server.baseURL).href);
+          await page.goto(new URL(`home/ui/shell.html?${params}`, server.baseURL).href);
           await page.waitForFunction(() => window.__shell);
-          await page.addScriptTag({ url: new URL('landing-shell.js', server.baseURL).href });
+          await page.addScriptTag({ url: new URL('home/landing-shell.js', server.baseURL).href });
           await page.evaluate(added => {
             window.__opened = [];
             window.open = href => { window.__opened.push(href); return null; };

@@ -123,7 +123,7 @@ mod tests {
             let (_, background, _, _) = crate::build::render::generate_blocking_content_for_build(
                 &crate::vault::paths::VaultRoot::resolve(dir.path()), &project, &output,
                 None, None, false, crate::build::render::SiteConfig::default(),
-                &mut pending, false, true,
+                &mut pending, false, true, crate::build::folder_embed::upcoming::now(),
             ).unwrap();
             assert_eq!(background.og_requests.len(), if authored { 2 } else { 1 });
             let pages = pending.take_unwritten_pages();

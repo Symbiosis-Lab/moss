@@ -1,0 +1,8 @@
+{
+  "name": "site-config-writer",
+  "version": "0.1.0",
+  "display_name": "Site config writer",
+  "entry": "main.bundle.js",
+  "global_name": "SiteConfigWriter",
+  "capabilities": ["process"]
+}

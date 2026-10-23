@@ -127,11 +127,95 @@ Place a map in the body with `style:map`. The embed stays where you write it, wi
 ![[#|style:map|align-right 50%|Places in this article]]
 ![[Travel diary|style:map|wide]]
 ![[/places/kyoto/|style:map|align-left 40%|Kyoto]]
+![[/places/|style:map|wide]]
 ```
 
-`#` selects the current document. A named document selects that document's `location:` values; neither form transcludes its body. A place target ending in `/` keeps the existing place-map behavior. Article maps use all coordinate-bearing locations from the target's frontmatter, with the same precision and `route:` rules as its own map. A heading or block fragment does not select separate location data.
+`#` selects the current document. A named document selects that document's `location:` values; neither form transcludes its body. A place target ending in `/` keeps the existing place-map behavior: `/places/kyoto/` is that place's map, and the place root `/places/` is the whole site's map, so a home page can show every place. On any page but the places root itself, the root embed loads the explorer in a frame, with the static map as the fallback. A destination shows once, so when the home page embeds a place root's map and that root is also a nav item (`nav = true` on its `[terms.<key>]`, or its page has `nav: true`), the build prints a note naming both; nothing is removed. Article maps use all coordinate-bearing locations from the target's frontmatter, with the same precision and `route:` rules as its own map. A heading or block fragment does not select separate location data.
 
 An explicit map of the current document replaces its automatic locator. The `map:` frontmatter switch and `[site].locator` setting still control automatic maps; they do not hide embeds you place in the body. If the target cannot be resolved or has no coordinate-bearing locations, moss reports an unavailable map instead of embedding the article text.
+
+### Detail layers
+
+Detail layers show a historical map or today's streets under a site's places. A historical layer is drawn at build time from georeferenced scans kept in the site's folder, into static raster tiles, so the published site needs no map service. Streets layers are not drawn yet: moss reads and checks the declaration and tells the places explorer about it.
+
+Declare a layer in `.moss/config.toml`:
+
+```toml
+[map.layers.atlas-1930]
+kind = "historical"          # or "streets"
+source = "maps/atlas-1930"   # a folder inside the site; for a historical layer, its plates
+bbox = [-74.03, 40.68, -73.90, 40.88]   # west, south, east, north, in degrees
+max_zoom = 17                # 10 to 19, default 16
+budget = "40 MB"             # a warning when the tiles total more; an error under --strict
+credit = "Atlas of the City, 1930. Example Public Library"   # else the plates' own credit
+annotations = ["https://annotations.allmaps.org/maps/<id>"]  # optional: the plates' order, first drawn first
+```
+
+`kind` and `source` are required. `bbox` is optional: without it the frame is taken from the places in `.moss/places.toml` that have coordinates. A wrong value, a `source` that is missing or outside the site, or a `max_zoom` outside 10 to 19 stops the build and names the table and key. When a site declares a layer, every map figure gets an empty credit line in its corner, and the build writes a small `layers.json` beside the map data for the explorer.
+
+The `source` folder is read by the build and not published: its pages and files are left out of the site, so no `/maps/` page appears and a link into it is a broken link. A `source` that is the whole site is refused. A site with `[site] archival = true` keeps the whole folder, scans included, in its source copy, with a README section naming where each plate came from: the published site holds a scan only as warped tiles, so the edition does not depend on the library's server staying up.
+
+#### Layers over each other
+
+Atlas plates usually cover a few blocks each, so a layer made of plates alone gives separate patches with the moss landscape between them. A good setup is two layers: a whole-city, small-scale sheet as the base, and the plates as the detail. Declare them in that order. Layers are drawn in the order they are declared and a later layer covers an earlier one, so the plates sit over the city sheet and the city sheet fills everything the plates leave.
+
+```toml
+[map.layers.city-sheet]
+kind = "historical"
+source = "maps/city-sheet"       # one plate: the whole city, at a small scale
+max_zoom = 14
+
+[map.layers.block-plates]
+kind = "historical"
+source = "maps/block-plates"     # many plates, a few blocks each
+max_zoom = 17
+```
+
+Where no layer draws, the moss landscape is not enlarged past the depth its data supports: its relief, sea floor and urban areas fade out as the map zooms deeper, and what is left is the theme's land tone.
+
+The small maps that are drawn without scripts (a page's locator, a `style:map` embed, the map before the explorer loads) use the layers too. When every place on one of those maps has `precision = "exact"` and lies on a layer's plates, the map frames just those places, about a kilometre across at the closest, and shows the plates over the land tone, clipped to their printed edges and credited in the corner. The build writes one JPEG of the layer for each distinct frame beside the tiles, and it counts toward the layer's `budget`. A map with a city, region or country place keeps its wide frame, and so does a map with a place off the plates.
+
+#### What a historical layer's folder holds
+
+Each plate (one georeferenced map sheet) is three files in the layer's `source` folder, named by one id, usually an Allmaps map id. The build reads only these files and never the network, so it makes no difference how they got there: a fetch plugin, or the recipe below.
+
+- `<id>.annotation.json` is the georeference annotation as Allmaps publishes it (IIIF Georeference Annotation). The build uses `target.selector`, an SvgSelector whose `<polygon points="x,y x,y ...">` outlines the plate's printed area in full-image pixels; `body.features`, the control points, each with `properties.resourceCoords` as `[x, y]` in full-image pixels and `geometry.coordinates` as `[longitude, latitude]`; and `body.transformation`, a polynomial of order 1, 2 or 3 (a `thinPlateSpline` is drawn as a first-order polynomial, with a note). `target.source.id` is the image service's address, and `target.source.provider` may name the holder.
+- `<id>.jpg` is the image, whole or a region of it, at any size.
+- `<id>.region.json` says which part of the full image the jpg shows. Its fields: `region` (required) is `[x, y, w, h]`, the part the jpg shows, in full-image pixels, where the full image is the size `target.source` gives, so the whole image is `[0, 0, width, height]`; `scale` (required) is the jpg's pixels per full-image pixel, so the jpg is `w * scale` pixels wide; `credit` is the holder's name, shown in the map's corner (when empty, the annotation's provider is used); `rights` is the rights statement or its address, copied into the site's notice; `georeferenced_by` is optional, who made the georeference (a person or a project; write it for an annotation you made yourself) and appears in the notice when given; `source` is the image service's address (default: `target.source.id`); `annotation` and `image` name the other two files (default: `<id>.annotation.json` and `<id>.jpg`); `version` is `1`; `fetched` is a date for your own records.
+
+A full-image pixel `(u, v)` is the pixel `((u - x) * scale, (v - y) * scale)` of the jpg. The control points, the outline and `region` are all in full-image pixels, so cropping or shrinking the jpg only means changing `region` and `scale` to match.
+
+A plate that cannot be read (a file missing, invalid JSON, an outline or fewer than three control points that cannot be used, an image whose size is not the `region` at `scale` give, or a `region` outside the image size the annotation names) is a build warning naming the plate, and the other plates still draw. Plates are drawn in the order of `annotations` (matched by the id at the end of each address), then by id; where two overlap, the later one covers the earlier.
+
+To make the three files by hand with only a shell and `curl`:
+
+1. Find the plate's Allmaps annotation address, `https://annotations.allmaps.org/maps/<id>`, on the map's page at allmaps.org.
+2. `curl -o <id>.annotation.json https://annotations.allmaps.org/maps/<id>`
+3. Read `target.source.id` (the image service), `width` and `height` from it.
+4. Before fetching, `curl <service>/info.json` and check its `width` and `height` equal the annotation's `target.source` `width` and `height`. If they differ, the library has changed its image since the annotation was made and the control points no longer fit it: redo the annotation (in the Allmaps Editor) before going on. The build refuses such a plate, with a warning that counts under `--strict`, rather than draw it in the wrong place.
+5. Choose a region (the whole image is fine: `[0, 0, width, height]`) and a scale. Pick the scale so the jpg is no larger than the deepest zoom needs; about 0.25 is a good start for a sheet 9000 pixels wide.
+6. `curl -o <id>.jpg "<service>/<x>,<y>,<w>,<h>/<round(w*scale)>,/0/default.jpg"` (for a IIIF Image API 3 service; use `full` in place of the region for the whole image, and `/0/default.jpg` in the path for version 2 as well).
+7. Write `<id>.region.json` yourself. The values come from the steps above: `source` and the sizes from the annotation, `region` and `scale` from the choice you made, and `credit` and `rights` from the holder's catalogue page.
+
+```json
+{
+  "version": 1,
+  "annotation": "95abed283977b2cc.annotation.json",
+  "image": "95abed283977b2cc.jpg",
+  "source": "https://iiif.example.org/iiif/3/5222333",
+  "region": [0, 0, 8873, 6224],
+  "scale": 0.25,
+  "credit": "Example Public Library",
+  "rights": "No known copyright restrictions",
+  "fetched": "2026-10-22"
+}
+```
+
+The rights statement belongs to the holder, not to Allmaps. Copy it from the holder's catalogue page for the sheet, and read the holder's terms on that live page before publishing: moss records what you give it and cannot check it.
+
+What the build writes: tiles of 256 by 256 pixels as JPEG files under `_moss/map.<hash>/layers/<name>/<level>/<i>/<j>.jpg`, a `layers/<name>/index.json` listing the tiles and each plate's outline, and in `layers.json` the layer's `tiles` address, an extent that is the plates' outlines within `bbox`, and the credit (from `credit`, else the plates). The two deepest levels are drawn only within 300 m of a place, so `max_zoom` costs space only where places are; the shallowest level always covers the whole extent, so a layer that spans only two levels still has a picture away from its places, enlarged. The credit, each plate's source address, its rights statement, who georeferenced it (when `region.json` says) and how well its control points fit (the root-mean-square error in metres, so readers can judge a hand-made georeference) are added to `NOTICE.txt`. When the tiles total more than `budget`, the build warns, naming the layer, its size and the budget; with `--strict` that fails the build. A rebuild draws nothing again until a plate file, the layer's settings or a place's coordinates change. Notes (never failures) mention a place a page names that lies outside every plate, a plate outside `bbox`, a plate that covers none of the places pages name (with what its tiles cost, so you can decide to drop it), and a plate whose control points disagree with their fit by more than 30 m.
+
+`moss map bbox [<folder>]` prints the frame your places need, as `west,south,east,north` with a margin of 10% of each side (at least 0.01 degree), and a suggested `max_zoom`: the zoom at which the frame's longer side spans about 1024 px, plus 3. It reads only the places that pages name in the place kind's fields, writes nothing, and takes `--json` for `{"bbox": [...], "max_zoom": n, "places": k}`.
 
 ## Folder listings
 

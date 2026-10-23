@@ -118,8 +118,10 @@ mod tests {
         assert!(diags(&[("timezone", "Etc/GMT+8")]).is_empty());
         assert!(diags(&[("timezone", "Etc/UTC")]).is_empty());
         assert!(diags(&[("timezone", "Asia/Taipei")]).is_empty());
-        for bad in ["Taipei time", "/Asia/Taipei", "Asia//Taipei", "Asia/Taipei/", ""] {
+        for bad in ["Taipei time", "/Asia/Taipei", "Asia//Taipei", "Asia/Taipei/"] {
             assert_eq!(diags(&[("timezone", bad)]).len(), 1, "{bad:?}");
         }
+        // A blank timezone is an absent one.
+        assert!(diags(&[("timezone", "")]).is_empty());
     }
 }

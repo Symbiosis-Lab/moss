@@ -290,18 +290,11 @@ impl Restore<'_> {
     /// irrelevant field to `_` and the answer is recorded in the source.
     fn in_block(&self, block: &mut Block) {
         match block {
-            Block::Heading { children, id, level: _ } => {
-                if self.in_inlines(children) {
-                    // The `id` was slugged mid-parse from the event stream,
-                    // when the heading's text still read `U+E000…`. Recompute
-                    // it from the restored inlines using the OTHER adapter of
-                    // the same one policy (`heading::text`'s module doc: one
-                    // policy, two adapters) — `inlines_to_plain_text` +
-                    // `obsidian_heading_anchor` is exactly the equality
-                    // `heading::text`'s `event_walk_and_inline_walk_agree_…`
-                    // test already asserts must hold for every heading. Only
-                    // sentinel-bearing headings are touched, so no existing
-                    // anchor moves.
+            Block::Heading { children, id, .. } => {
+                // The id was slugged from the sentinel text. Recompute it only
+                // when it is that slug: an id the author named stays.
+                let derived = crate::heading::anchor::obsidian_heading_anchor(&crate::ast::plain_text::inlines_to_plain_text(children));
+                if self.in_inlines(children) && id.as_deref() == Some(derived.as_str()) {
                     let text = crate::ast::plain_text::inlines_to_plain_text(children);
                     *id = Some(crate::heading::anchor::obsidian_heading_anchor(&text));
                 }
@@ -317,7 +310,11 @@ impl Restore<'_> {
                 class_names: _,
                 img_style: _,
                 italic_caption: _,
+                link,
             } => {
+                if let Some(url) = link {
+                    self.literal_url(url);
+                }
                 self.in_inline(image);
                 if let Some(caption) = caption {
                     self.in_inlines(caption);
@@ -333,6 +330,7 @@ impl Restore<'_> {
             // (`> [!note] [![[x.png]]](/u)`), not an inline vector — the
             // author's bytes go back.
             Block::Callout {
+                unknown_kind: _,
                 title,
                 children,
                 kind: _,

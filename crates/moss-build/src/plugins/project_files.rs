@@ -317,6 +317,29 @@ pub async fn write_project_file_impl(
     outcome
 }
 
+/// Binary twin of [`write_project_file_impl`]: same path rules and `.moss/`
+/// fence, bytes arriving base64-encoded.
+pub async fn write_project_file_binary_impl(
+    project_path: &str,
+    plugin_id: Option<&str>,
+    relative_path: &str,
+    data_base64: &str,
+) -> Result<(), String> {
+    use base64::Engine;
+    log::info!(target: "plugin", "write_project_file_binary: path={relative_path}");
+    let outcome = async {
+        let file_path = resolve_plugin_project_path(project_path, plugin_id, relative_path)?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data_base64)
+            .map_err(|e| format!("Invalid base64 data: {e}"))?;
+        write_file_with_dirs(&file_path, &bytes)
+    }.await;
+    if let Err(e) = &outcome {
+        log::warn!(target: "plugin", "write_project_file_binary failed: path={relative_path}: {e}");
+    }
+    outcome
+}
+
 /// Read file from project root
 ///
 /// Allows plugins to read files directly from the project root directory.
@@ -403,6 +426,9 @@ pub async fn read_site_file_impl(
 
     let paths = MossPaths::new(Path::new(project_path));
     let file_path = sandboxed.resolve_under(&paths.current_ptr())?;
+    if crate::build::manifest::publish_view::withheld_in_current(&paths).contains(&sandboxed_key(relative_path)) {
+        return Err(format!("'{relative_path}' is a draft: it is built for preview and never published"));
+    }
 
     let bytes = fs::read(&file_path)
         .map_err(|e| format!("Failed to read site file '{}': {}", relative_path, e))?;
@@ -564,8 +590,16 @@ pub fn list_files_in_dir(site_dir: &std::path::Path) -> Vec<SiteFileInfo> {
 /// time reads (which this stage moved off `current_ptr()` for exactly that
 /// reason).
 pub fn list_site_files_with_sizes_impl(project_path: &std::path::Path) -> Vec<SiteFileInfo> {
-    let site_dir = crate::moss_paths::MossPaths::new(project_path).current_ptr();
-    list_files_in_dir(&site_dir)
+    let paths = crate::moss_paths::MossPaths::new(project_path);
+    let withheld = crate::build::manifest::publish_view::withheld_in_current(&paths);
+    let mut files = list_files_in_dir(&paths.current_ptr());
+    files.retain(|f| !withheld.contains(&sandboxed_key(&f.path)));
+    files
+}
+
+/// A site file's key in the manifest: forward slashes, no leading `./`.
+fn sandboxed_key(relative_path: &str) -> String {
+    relative_path.replace('\\', "/").trim_start_matches("./").to_string()
 }
 
 #[cfg(test)]

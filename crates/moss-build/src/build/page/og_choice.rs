@@ -150,7 +150,7 @@ pub fn resolve(
                 Some(CoverRef::Local(served_path.clone()))
             }
             Err(e) => {
-                log::warn!("OG card render failed for '{}': {}", card_title, e);
+                log::info!("OG card render failed for '{}': {}", card_title, e);
                 None
             }
         }

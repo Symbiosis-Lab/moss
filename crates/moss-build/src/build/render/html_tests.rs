@@ -16,6 +16,15 @@ fn render_for_build(
     site_config: crate::build::render::blocking::SiteConfig,
     exits_after_build: bool,
 ) -> std::path::PathBuf {
+    render_for_build_at(test_dir, site_config, exits_after_build, crate::build::folder_embed::upcoming::now())
+}
+
+fn render_for_build_at(
+    test_dir: &std::path::Path,
+    site_config: crate::build::render::blocking::SiteConfig,
+    exits_after_build: bool,
+    now: chrono::NaiveDateTime,
+) -> std::path::PathBuf {
     let output_dir = test_dir.join(".moss").join("build.nosync").join("site");
     std::fs::create_dir_all(&output_dir).unwrap();
     let project_structure =
@@ -32,6 +41,7 @@ fn render_for_build(
         &mut pending,
         exits_after_build,
         false,
+        now,
     )
     .expect("generate_blocking_content_for_build should succeed");
     crate::build::emit::slots::write_as_rendered(&output_dir, pending.take_unwritten_pages()).unwrap();
@@ -2814,6 +2824,7 @@ mod children_field_tests {
 
     fn make_project() -> ProjectStructure {
         ProjectStructure {
+            passthrough_media: Vec::new(),
             root_path: String::new(),
             markdown_files: vec![],
             html_files: vec![],
@@ -3268,6 +3279,36 @@ mod children_field_tests {
         );
     }
 
+    /// With a header the site's name is on screen already, so the home's own
+    /// title heading is visually hidden; with `header = "none"` nothing else
+    /// shows it, so the heading is visible, with its subtitle after it.
+    #[test]
+    fn the_home_title_is_visible_only_where_no_header_shows_the_site_name() {
+        use crate::build::components::nav::HeaderMode;
+        let mut homepage = make_doc("Harbour Notes", "index.html");
+        homepage.is_root_level = true;
+        homepage.content = "A short welcome.\n".to_string();
+        homepage
+            .raw_frontmatter
+            .insert("subtitle".to_string(), serde_json::json!("Tide tables and tall stories"));
+        let all_docs = vec![homepage.clone()];
+
+        let with_header = render_page(Some(&homepage), &all_docs, true);
+        assert!(
+            with_header.contains(r#"<h1 class="moss-folder-title visually-hidden""#),
+            "the header names the site, so the home's heading stays hidden: {with_header}"
+        );
+
+        let layout = make_layout().with_header_mode(HeaderMode::None);
+        let headerless = render_page_in(Some(&homepage), &all_docs, true, &layout);
+        let h1 = headerless.find(r#"<h1 class="moss-folder-title""#).unwrap_or_else(|| {
+            panic!("with no header the home's heading must be visible: {headerless}")
+        });
+        let subtitle = headerless.find("moss-subtitle").expect("the subtitle is drawn");
+        assert!(h1 < subtitle, "the subtitle follows the title: {headerless}");
+        assert!(!headerless.contains("moss-folder-title visually-hidden"), "{headerless}");
+    }
+
     #[test]
     fn an_inner_page_carries_no_home_marker() {
         let mut homepage = make_doc("Test Site", "index.html");
@@ -3290,11 +3331,20 @@ mod children_field_tests {
         all_docs: &[ParsedDocument],
         is_homepage: bool,
     ) -> String {
+        render_page_in(doc, all_docs, is_homepage, &make_layout())
+    }
+
+    fn render_page_in(
+        doc: Option<&ParsedDocument>,
+        all_docs: &[ParsedDocument],
+        is_homepage: bool,
+        layout: &LayoutConfig,
+    ) -> String {
         generate_html(
             doc,
             all_docs,
             &make_project(),
-            &make_layout(),
+            layout,
             is_homepage,
             None,
             None,
@@ -5987,6 +6037,7 @@ mod typesetting_tests {
 
     fn make_project() -> ProjectStructure {
         ProjectStructure {
+            passthrough_media: Vec::new(),
             root_path: String::new(),
             markdown_files: vec![],
             html_files: vec![],
@@ -6883,6 +6934,7 @@ mod og_url_tests {
 
     fn make_project() -> ProjectStructure {
         ProjectStructure {
+            passthrough_media: Vec::new(),
             root_path: String::new(),
             markdown_files: vec![],
             html_files: vec![],
@@ -7659,6 +7711,7 @@ mod listable_page_card_tests {
 
     fn make_project() -> ProjectStructure {
         ProjectStructure {
+            passthrough_media: Vec::new(),
             root_path: String::new(),
             markdown_files: vec![],
             html_files: vec![],
@@ -8018,6 +8071,7 @@ mod place_locator_position_tests {
 
     fn make_project() -> ProjectStructure {
         ProjectStructure {
+            passthrough_media: Vec::new(),
             root_path: String::new(),
             markdown_files: vec![],
             html_files: vec![],
@@ -8179,15 +8233,14 @@ mod place_locator_position_tests {
     }
 
     #[test]
-    fn locator_falls_back_to_the_front_with_no_text_block() {
+    fn locator_falls_back_to_the_end_with_no_text_block() {
         let html = render_article("## Only a heading\n\n---\n");
         let title = html.find("moss-article-title").expect("title present");
         let locator = html.find("moss-place-locator").expect("locator present");
         let heading = html.find("<h2").expect("heading present");
         assert!(
-            title < locator && locator < heading,
-            "a body with no text block keeps the locator right after the title, before \
-             everything else, got:\n{html}"
+            title < heading && heading < locator,
+            "a body with no text block takes the locator after everything else, got:\n{html}"
         );
     }
 
@@ -8276,6 +8329,7 @@ mod place_namespace_root_map_tests {
 
     fn make_project() -> ProjectStructure {
         ProjectStructure {
+            passthrough_media: Vec::new(),
             root_path: String::new(),
             markdown_files: vec![],
             html_files: vec![],
@@ -8445,6 +8499,7 @@ mod folder_index_meta_tests {
 
     fn make_project() -> ProjectStructure {
         ProjectStructure {
+            passthrough_media: Vec::new(),
             root_path: String::new(),
             markdown_files: vec![],
             html_files: vec![],
@@ -10111,5 +10166,27 @@ mod remote_cover_end_to_end_tests {
         assert!(index_html.contains("author.jpg"), "authored image must survive: {index_html}");
         assert!(!index_html.contains("_moss/link/"), "must not also emit a fetched cover: {index_html}");
         let _ = server.join();
+    }
+}
+
+/// An event's own page, its card in the folder listing and the card on a page
+/// that links it all take the build's clock, never a clock of their own.
+#[test]
+fn one_build_clock_decides_upcoming_for_the_page_and_every_card() {
+    use chrono::NaiveDate;
+    let at = |y| NaiveDate::from_ymd_opt(y, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+    for (year, want, other) in [(2019, "upcoming", "past"), (2021, "past", "upcoming")] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("Events")).unwrap();
+        std::fs::write(root.join("index.md"), "---\ntitle: Home\n---\n\n:::grid\n[[Events/Gala]]\n:::\n").unwrap();
+        std::fs::write(root.join("Events/index.md"), "---\ntitle: Events\n---\n\nWhat is on.\n").unwrap();
+        std::fs::write(root.join("Events/Gala.md"), "---\ntitle: Gala\nuid: gala0001\nstart: 2020-06-01\n---\n\nBody.\n").unwrap();
+        let out = render_for_build_at(root, crate::build::render::blocking::SiteConfig::default(), true, at(year));
+        for page in ["events/gala/index.html", "events/index.html", "index.html"] {
+            let html = std::fs::read_to_string(out.join(page)).unwrap_or_else(|e| panic!("{page}: {e}"));
+            assert!(html.contains(&format!(r#"data-when="{want}""#)), "{page} at {year}: {html}");
+            assert!(!html.contains(&format!(r#"data-when="{other}""#)), "{page} at {year}: {html}");
+        }
     }
 }

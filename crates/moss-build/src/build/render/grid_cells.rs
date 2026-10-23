@@ -67,6 +67,8 @@ pub(crate) struct BuildIndex<'a> {
     pub page_url_path: &'a str,
     /// The rendering page's resolved typesetting, for the card's CJK date and count.
     pub typesetting: Option<&'a str>,
+    /// The build's clock, for the past/upcoming reading of a linked event.
+    pub now: chrono::NaiveDateTime,
 }
 
 /// A grid cell's structure, read from its typed blocks.
@@ -299,6 +301,7 @@ pub(crate) fn resolve_page_body(
     root_path: &str,
     media_lookup: &crate::build::media::dimensions::MediaDimensionLookup,
     typesetting: Option<&str>,
+    now: chrono::NaiveDateTime,
 ) -> BodyPlan {
     let mut plan = match &doc.body_plan {
         Some(p) => p.clone(),
@@ -313,10 +316,12 @@ pub(crate) fn resolve_page_body(
         lang: doc.lang,
         page_url_path: &doc.url_path,
         typesetting,
+        now,
     };
     apply_summary_grids(&mut plan, &index);
     apply_collection_cards(&mut plan, &index);
     apply_cell_cover_colors(&mut plan, &index);
+    mark_upright_leads(&mut plan, &index);
 
     let urls_to_fetch = external_urls_needing_fetch(&plan);
     let link_meta = if urls_to_fetch.is_empty() {
@@ -452,8 +457,8 @@ pub(crate) fn apply_collection_cards(plan: &mut BodyPlan, index: &BuildIndex<'_>
         // the bookkeeping the listing-grid renderer does.
         let mut eager_spent = false;
         for cell in &mut grid.cells {
-            if let Some(html) = card_markup(cell, index, &mut eager_spent, list_has_covers) {
-                cell.replace(html);
+            if let Some((html, has_cover)) = card_markup(cell, index, &mut eager_spent, list_has_covers) {
+                cell.replace(html, has_cover);
             }
         }
     }
@@ -491,6 +496,26 @@ pub(crate) fn apply_cell_cover_colors(plan: &mut BodyPlan, index: &BuildIndex<'_
     }
 }
 
+/// Mark a collage's lead cell `data-upright` when its picture is taller than
+/// wide, so the stylesheet gives it a narrower column. Needs the picture's
+/// pixel size, which only the host can read; a picture whose size is unknown
+/// reads as the landscape fallback and is never marked.
+pub(crate) fn mark_upright_leads(plan: &mut BodyPlan, index: &BuildIndex<'_>) {
+    let Some(lookup) = index.media_lookup else { return };
+    for grid in grids_mut(plan).filter(|g| g.collage) {
+        let Some(lead) = grid.cells.first_mut() else { continue };
+        let Some(Inline::Image { src, .. }) = moss_core::ast::grid_parts::cell_picture(&lead.blocks) else { continue };
+        let Some(src) = resolved(src) else { continue };
+        let (w, h) = lookup.get(src.href.trim_start_matches('/'));
+        lead.parts.upright = h > w;
+    }
+}
+
+/// Not [`moss_core::ast::grid_parts::cell_picture`], which asks whether a cell
+/// is one picture and nothing else (a collage's picture tile): a cover colour
+/// is for the band behind a hand-built cell's own text under its picture, so
+/// it reads only the first block.
+///
 /// The href of the image in a cell's cover position — its FIRST block, alone in
 /// a paragraph or wrapped in a figure. An image further down the cell is an
 /// illustration inside the author's prose, not the thing the cell is a card for.
@@ -514,7 +539,7 @@ fn card_markup(
     index: &BuildIndex<'_>,
     eager_spent: &mut bool,
     list_has_covers: bool,
-) -> Option<String> {
+) -> Option<(String, bool)> {
     let GridCell::Link(link) = classify_cell(&cell.blocks) else {
         return None;
     };
@@ -524,7 +549,7 @@ fn card_markup(
     let props = picked_card_props(&link, index)?;
     let eager = !*eager_spent && props.cover.is_some();
     *eager_spent |= eager;
-    Some(render_item_with_typesetting(
+    let html = render_item_with_typesetting(
         &props,
         index.root_path.map(std::path::Path::new),
         index.lang,
@@ -536,7 +561,8 @@ fn card_markup(
         index.media_lookup,
         eager,
         list_has_covers,
-    ))
+    );
+    Some((html, props.cover.is_some()))
 }
 
 /// External URLs whose cached metadata the card pass wants — every
@@ -602,8 +628,8 @@ pub(crate) fn apply_link_previews(
 ) {
     for grid in grids_mut(plan) {
         for cell in &mut grid.cells {
-            if let Some(html) = external_card_markup(cell, index, link_meta) {
-                cell.replace(html);
+            if let Some((html, has_cover)) = external_card_markup(cell, index, link_meta) {
+                cell.replace(html, has_cover);
             }
         }
     }
@@ -613,7 +639,7 @@ fn external_card_markup(
     cell: &GridCellEmission,
     index: &BuildIndex<'_>,
     link_meta: Option<&HashMap<String, LinkMeta>>,
-) -> Option<String> {
+) -> Option<(String, bool)> {
     let GridCell::Link(link) = classify_cell(&cell.blocks) else {
         return None;
     };
@@ -644,6 +670,7 @@ fn external_card_markup(
     } else {
         fetched_title.unwrap_or_else(|| moss_core::ast::link_card::domain_and_path(link.href))
     };
+    let mut has_cover = true;
     let cover_html = match link.cover_image {
         // Author content always wins: an authored image is never displaced
         // by a fetched og:image, even when one is cached below.
@@ -662,16 +689,19 @@ fn external_card_markup(
                 false,
             )
         }
-        None => remote_cover_html(link_meta.and_then(|m| m.get(link.href)), &title)
-            .unwrap_or_else(|| r#"<div class="moss-card-cover moss-card-no-cover"></div>"#.to_string()),
+        None => remote_cover_html(link_meta.and_then(|m| m.get(link.href)), &title).unwrap_or_else(|| {
+            has_cover = false;
+            r#"<div class="moss-card-cover moss-card-no-cover"></div>"#.to_string()
+        }),
     };
-    Some(render_external_card(
+    let html = render_external_card(
         link.href,
         &title,
         &moss_core::ast::link_card::extract_domain(link.href),
         favicon.as_deref(),
         &cover_html,
-    ))
+    );
+    Some((html, has_cover))
 }
 
 /// The cover for an external cell with no authored image of its own: the
@@ -793,6 +823,7 @@ fn picked_card_props(link: &CellLink<'_>, index: &BuildIndex<'_>) -> Option<Chil
         index.root_path.unwrap_or(""),
         index.dir_overrides,
         index.typesetting,
+        index.now,
     );
     // An explicit link text wins; otherwise the linked page's own label, which
     // `props_for_document` already filled in.

@@ -342,6 +342,18 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         ..FIELD_DEFAULTS
     },
     BuiltinField {
+        name: "subtitle",
+        field_type: FieldType::String,
+        widget: Widget::TextInput,
+        // Frequency=2, Importance=3 → score=76
+        score: 76,
+        description: "A second line for the page's title, such as the title in another script. The page and its listing cards and rows draw it under the page's title",
+        label: Some("Subtitle"),
+        label_key: "chip.subtitle.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
         name: "date",
         field_type: FieldType::String,
         widget: Widget::DatePicker,
@@ -584,7 +596,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         widget: Widget::TextInput,
         // Frequency=3, Importance=2 → score = 100 - (3*6 + 2*4) = 100 - 26 = 74
         score: 74,
-        description: "Linkblog target: when set, internal references to this page (cards, link rewrites, canonical, sitemap) point here instead of the local URL. The page is still built locally — direct visits to its slug still work — but the canonical home is elsewhere on the web. Pattern from JSON Feed 1.1.",
+        description: "Linkblog target: when set, internal references to this page (cards, link rewrites, canonical, sitemap) point here instead of the local URL. The page is still built locally — direct visits to its slug still work — but the canonical home is elsewhere on the web. Pattern from JSON Feed 1.1. A page that is in the nav bar links to this value there instead, and the value may also be `mailto:`, `tel:`, `#anchor` or `/path#anchor`.",
         label_key: "chip.external_url.label",
         group: "This Page",
         ..FIELD_DEFAULTS
@@ -709,7 +721,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         widget: Widget::Checkbox,
         // Frequency=0, Importance=2 → score = 100 - (0*6 + 2*4) = 100 - 8 = 92
         score: 92,
-        description: "Hidden from all listings, feeds, and navigation — still published at its direct URL",
+        description: "Shown in the preview only: never published, and hidden from all listings, feeds, and navigation",
         label_key: "chip.draft.label",
         group: "This Page",
         ..FIELD_DEFAULTS
@@ -723,6 +735,16 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         score: 93,
         description: "When off, hidden from listings, feeds, and sitemap — but still indexed and reachable at its URL",
         label_key: "chip.listed.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "partial",
+        field_type: FieldType::Boolean,
+        widget: Widget::Checkbox,
+        score: 94,
+        description: "Marks a page that exists only to be transcluded into other pages with `![[name]]`: it is never built, so it has no URL and is absent from nav, sitemap, feeds, search and listings (e.g. a reusable inline SVG or a repeated block). With `nav: true` and `external_url`, it is a header nav link to that address and nothing else",
+        label_key: "chip.partial.label",
         group: "This Page",
         ..FIELD_DEFAULTS
     },
@@ -803,12 +825,36 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         name: "title_block",
         field_type: FieldType::String,
         widget: Widget::Select,
-        enum_values: Some(&["after-picture"]),
+        enum_values: Some(&["after-picture", "beside-picture"]),
         // Frequency=1, Importance=2 → score=86
         score: 86,
-        description: "Where the title block (eyebrow, title, subtitle, date, byline, key figures, facts) goes: after-picture puts it under the body's leading picture. Absent keeps it first. A folder sets it for its pages with cascade.",
+        description: "Where the title block (eyebrow, title, subtitle, date, byline, key figures, facts) goes: after-picture puts it under the body's leading picture, beside-picture next to it (two columns on a wide screen, stacked on a phone). Absent keeps it first. A folder sets it for its pages with cascade.",
         label: Some("Title block"),
         label_key: "chip.title_block.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "contents",
+        field_type: FieldType::String,
+        widget: Widget::Select,
+        enum_values: Some(&["pictures"]),
+        // Frequency=0, Importance=1 → score=96
+        score: 96,
+        description: "`pictures` puts a small picture of each section in the contents list in the left margin of a wide screen. At rest the list is the usual ruler of short dashes; hovering it (or tabbing into it) magnifies it in place, each name on one line, and the row under the pointer shows its section's picture after its name and is the one a click follows. Where the window is at least 64rem wide, the pointer is fine and the page is horizontal and left-to-right, the text column narrows to keep a lane free for the list and the floating bar stays away; elsewhere the column is unchanged and the bar is the contents. The nav island's sections panel carries the same pictures. Absent keeps the plain ruler. Independently of this field, `contents=end` on a fenced div (`::: {.band screen contents=end}`) or a heading (`## Proposals {contents=end}`) marks where the main sections stop: the ruler lists only the sections before it and steps aside once it passes the middle of the window",
+        label: Some("Contents"),
+        label_key: "chip.contents.label",
+        group: "This Page",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "reader_controls",
+        field_type: FieldType::Boolean,
+        widget: Widget::Checkbox,
+        // Frequency=1, Importance=1 → score=90
+        score: 91,
+        description: "`false` removes the reader's text-size control (the \"Aa\" button beside the date) from a dated page; unset or `true` keeps it. Event pages never draw it. A folder sets it for its pages with cascade.",
+        label_key: "chip.reader_controls.label",
         group: "This Page",
         ..FIELD_DEFAULTS
     },
@@ -1063,6 +1109,19 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         description: "Keep only pages with a cover or a first picture. \"only\" — e.g. the home page of an artist's site lists the latest works that have a picture. Absent = no filter.",
         label: Some("Covers"),
         label_key: "chip.children_covers.label",
+        group: "Child Styles",
+        ..FIELD_DEFAULTS
+    },
+    BuiltinField {
+        name: "children_when",
+        field_type: FieldType::String,
+        widget: Widget::Select,
+        enum_values: Some(&["past", "upcoming"]),
+        // Frequency=1, Importance=2 → score=86
+        score: 87,
+        description: "Keep only events that have ended (\"past\") or not (\"upcoming\"); a page with no start or date is past. Applied before children_limit. Absent = no filter.",
+        label: Some("When"),
+        label_key: "chip.children_when.label",
         group: "Child Styles",
         ..FIELD_DEFAULTS
     },

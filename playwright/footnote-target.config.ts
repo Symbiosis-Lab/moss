@@ -1,6 +1,7 @@
 /**
- * Render gate: the footnote landing fix — `:target` highlight wash + `scroll-padding-top`
- * island clearance.
+ * Render gate: the footnote landing fix — `:target` highlight wash + island
+ * clearance (`scroll-padding-top` on a plain fragment jump; the sheet's backref
+ * centres its marker instead).
  *
  * Both claims need a real engine: whether the endnote `<li>` clears the
  * floating nav island is a live-layout question (`toBeInViewport` plus a

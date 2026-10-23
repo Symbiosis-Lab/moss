@@ -236,7 +236,7 @@ async fn copy_deferred_assets_registers_symlink_in_manifest() {
     let sealed = test_utils::drain_into_sealed(rx, crate::types::content::SiteHashes::default()).await;
 
     let entry = sealed
-        .files()
+        .all_files()
         .get("cities-heat-map")
         .expect("symlink manifest entry must be registered");
     // `register_with_hash` preserves any existing mode prefix (`100644:` or
@@ -652,7 +652,7 @@ async fn copy_deferred_assets_manifest_hash_is_xxh3_not_sha256() {
 
     // The manifest entry for the source asset.
     let entry = sealed
-        .files()
+        .all_files()
         .get("assets/test-asset.bin")
         .expect("asset must be registered in the sealed manifest");
 
@@ -730,7 +730,7 @@ async fn test_theme_video_overlay_copied_to_output() {
     let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
 
     let entry = sealed
-        .files()
+        .all_files()
         .get("_moss/theme/grain.png")
         .expect("theme overlay must be registered in the sealed manifest");
     let (_, hash) = crate::types::content::parse_entry(entry);
@@ -1136,7 +1136,7 @@ async fn copy_deferred_assets_manifest_entry_not_dropped_by_hash_step() {
     // did `skipped += 1; continue`, bypassing `insert_file_hash` and leaving
     // the entry absent.  `remove_stale_files` then deleted the just-linked
     // output — the confirmed dropped-asset incident class.
-    let entry = sealed.files().get("assets/cover.jpg").expect(
+    let entry = sealed.all_files().get("assets/cover.jpg").expect(
         "manifest entry must be present after a successful link_to — \
                      the hash step must NOT drop a successfully-linked asset",
     );
@@ -1300,7 +1300,7 @@ async fn copy_deferred_assets_sizes_raster_originals_and_copies_others_verbatim(
     // Manifest hash must equal the xxh3 of the SIZED output bytes (deploy
     // verify_file_bytes recomputes this) — proving no full-res hash leaked.
     let jpg_entry = sealed
-        .files()
+        .all_files()
         .get("photo.jpg")
         .expect("photo.jpg in manifest");
     let (_, jpg_hash) = crate::types::content::parse_entry(jpg_entry);
@@ -1927,7 +1927,7 @@ async fn copy_deferred_assets_spa_post_hash_wins_over_a_poisoned_memo() {
     .unwrap();
 
     let sealed = test_utils::drain_into_sealed(rx, SiteHashes::default()).await;
-    let entry = sealed.files().get("app/index.html").expect("asset must be registered");
+    let entry = sealed.all_files().get("app/index.html").expect("asset must be registered");
     let (_, raw_hash) = crate::types::content::parse_entry(entry);
 
     assert_ne!(raw_hash, "0000000000000000", "must not use the poisoned memo entry");
@@ -1993,7 +1993,7 @@ async fn copy_deferred_assets_reuses_the_persisted_manifest_hash_memo_across_bui
     .await
     .unwrap();
     let sealed1 = test_utils::drain_into_sealed(rx1, SiteHashes::default()).await;
-    let (_, raw1) = crate::types::content::parse_entry(sealed1.files().get("assets/data.bin").unwrap());
+    let (_, raw1) = crate::types::content::parse_entry(sealed1.all_files().get("assets/data.bin").unwrap());
     assert_eq!(raw1, real_hash, "build 1 must record the real hash");
 
     let moss_paths = MossPaths::from_moss_dir(moss_dir.clone());
@@ -2025,7 +2025,7 @@ async fn copy_deferred_assets_reuses_the_persisted_manifest_hash_memo_across_bui
     .await
     .unwrap();
     let sealed2 = test_utils::drain_into_sealed(rx2, SiteHashes::default()).await;
-    let (_, raw2) = crate::types::content::parse_entry(sealed2.files().get("assets/data.bin").unwrap());
+    let (_, raw2) = crate::types::content::parse_entry(sealed2.all_files().get("assets/data.bin").unwrap());
     assert_eq!(
         raw2, real_hash,
         "build 2 must reuse the persisted memo and return the real hash, not re-read the corrupted blob"
@@ -2094,7 +2094,7 @@ async fn copy_deferred_assets_records_the_post_injection_oid_for_a_rewritten_spa
         "premise: injection actually ran"
     );
 
-    let entry = sealed.files().get("app/index.html").expect("asset must be registered");
+    let entry = sealed.all_files().get("app/index.html").expect("asset must be registered");
     let (_, manifest_hash) = crate::types::content::parse_entry(entry);
 
     let oid = sealed
@@ -2341,7 +2341,7 @@ fn copy_deferred_assets_skips_a_nested_site() {
     let (tx, rx) = crate::build::coordinator::test_utils::build_test_coordinator();
     let _ = copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
     let sealed = drained_sealed(rx);
-    let names: Vec<&String> = sealed.files().keys().collect();
+    let names: Vec<&String> = sealed.all_files().keys().collect();
     assert!(names.iter().any(|k| k.ends_with("guide.pdf")), "{names:?}");
     assert!(!names.iter().any(|k| k.contains("price-list")), "{names:?}");
 }

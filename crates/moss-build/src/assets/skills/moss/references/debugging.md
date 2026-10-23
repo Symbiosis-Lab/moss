@@ -1,5 +1,7 @@
 # Debugging a moss site
 
+Read `moss guide` (the overview) first: it holds the task recipes this reference does not repeat.
+
 ## Logs
 
 | Platform | Path |

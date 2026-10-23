@@ -76,7 +76,7 @@ impl CarryVerification {
         match std::fs::read(path) {
             Ok(previous) => Some((url_path.to_string(), previous)),
             Err(e) => {
-                log::warn!(
+                log::info!(
                     target: "incremental",
                     "MOSS_INCREMENTAL_VERIFY: cannot read {url_path} to compare: {e}",
                 );
@@ -116,7 +116,7 @@ impl CarryVerification {
                 }
                 Err(e) => {
                     report.unreadable += 1;
-                    log::warn!(
+                    log::info!(
                         target: "incremental",
                         "MOSS_INCREMENTAL_VERIFY: cannot read {} to compare: {e}",
                         path.display(),

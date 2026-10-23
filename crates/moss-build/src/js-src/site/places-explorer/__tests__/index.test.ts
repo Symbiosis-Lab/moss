@@ -12,14 +12,15 @@ import { FIT, EDGE_FADE } from "./explorer-fit";
 import "./armed-timers";
 import { initPlacesExplorer } from "../index";
 import * as raster from "../raster";
+import { project } from "../projection";
 
 const WORLD_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 842.035025 480"></svg>';
 const PLACES_JSON = { works: [], places: [] };
 const TILES_JSON = { k: 4, fit: FIT, edgeFade: EDGE_FADE, columns: 36, rows: 18, origins: {}, cells: [] as Array<[number, number]> };
 const LABELS_JSON = { languages: ["en"], en: { cities: [], ranges: [], peaks: [], rivers: [] } };
 
-function handshakeFigure(withLabels = false): string {
-  const labelsAttr = withLabels ? ' data-labels="/_moss/map.abc/labels.json"' : "";
+function handshakeFigure(withLabels = false, withLayers = false): string {
+  const labelsAttr = (withLabels ? ' data-labels="/_moss/map.abc/labels.json"' : "") + (withLayers ? ' data-layers="/_moss/map.abc/layers.json"' : "");
   return (
     '<figure class="moss-place-map" data-moss-places-explorer ' +
     'data-world="/_moss/map.abc/world.svg" data-tiles="/_moss/map.abc/tiles.json" ' +
@@ -28,13 +29,19 @@ function handshakeFigure(withLabels = false): string {
   );
 }
 
-function stubSuccessfulFetch(placesJson: unknown = PLACES_JSON, labelsOutcome: "ok" | "fail" = "ok"): void {
+const LAYERS_JSON = { version: 1, layers: [{ name: "atlas", kind: "historical", extent: [-74.03, 40.68, -73.9, 40.88], max_zoom: 17, credit: "Atlas of the City, 1930", tiles: null }] };
+
+function stubSuccessfulFetch(placesJson: unknown = PLACES_JSON, labelsOutcome: "ok" | "fail" = "ok", layersOutcome: "ok" | "fail" = "ok"): void {
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("world.svg")) return Promise.resolve({ ok: true, text: () => Promise.resolve(WORLD_SVG) } as Response);
       if (url.endsWith("tiles.json")) return Promise.resolve({ ok: true, json: () => Promise.resolve(TILES_JSON) } as Response);
+      if (url.endsWith("layers.json")) {
+        if (layersOutcome === "fail") return Promise.resolve({ ok: false, status: 404 } as Response);
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(LAYERS_JSON) } as Response);
+      }
       if (url.endsWith("labels.json")) {
         if (labelsOutcome === "fail") return Promise.resolve({ ok: false, status: 404 } as Response);
         return Promise.resolve({ ok: true, json: () => Promise.resolve(LABELS_JSON) } as Response);
@@ -149,6 +156,32 @@ describe("initPlacesExplorer", () => {
     stubSuccessfulFetch(PLACES_JSON, "ok");
     await initPlacesExplorer();
     expect(fetch).toHaveBeenCalledWith(expect.stringContaining("labels.json"), expect.anything());
+  });
+
+  test("a data-layers attribute is fetched once, same-origin, and its credit reaches the figure", async () => {
+    document.body.innerHTML = handshakeFigure(false, true).replace("</figure>", '<p class="moss-place-map-credit"></p></figure>');
+    stubSuccessfulFetch();
+    const centre = project(40.75, -73.98);
+    history.replaceState(null, "", `/places/?p=patterson&z=900&x=${centre.x}&y=${centre.y}`);
+    await initPlacesExplorer();
+    const calls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([url]) => String(url).includes("layers.json"));
+    expect(calls).toHaveLength(1);
+    expect(document.querySelector(".moss-place-map-credit")!.textContent).toBe("Atlas of the City, 1930");
+  });
+
+  test("a failed layers.json fetch leaves the map ready and as it was", async () => {
+    document.body.innerHTML = handshakeFigure(false, true);
+    stubSuccessfulFetch(PLACES_JSON, "ok", "fail");
+    const figure = document.querySelector<HTMLElement>("[data-moss-places-explorer]")!;
+    await initPlacesExplorer();
+    expect(figure.getAttribute("data-moss-places-explorer-ready")).toBe("ready");
+  });
+
+  test("no data-layers attribute never fetches layers.json", async () => {
+    document.body.innerHTML = handshakeFigure(false, false);
+    stubSuccessfulFetch();
+    await initPlacesExplorer();
+    expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining("layers.json"), expect.anything());
   });
 
   test("a work missing byline (and every other skip_serializing_if field) still reaches ready — the wire can omit them, not send null", async () => {

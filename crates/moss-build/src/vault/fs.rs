@@ -151,6 +151,24 @@ pub fn recheck_canonical_allowing_missing(
     }
 }
 
+/// [`recheck_canonical_allowing_missing`], returning the canonical path: the
+/// deepest existing ancestor canonicalized, then the not-yet-created
+/// components appended.
+pub fn canonicalize_allowing_missing(project_root: &Path, target: &Path) -> Result<PathBuf, String> {
+    recheck_canonical_allowing_missing(project_root, target)?;
+    let invalid = || format!("Invalid path: {}", target.display());
+    let mut existing = target;
+    let mut missing = Vec::new();
+    while existing.symlink_metadata().is_err() {
+        missing.push(existing.file_name().ok_or_else(invalid)?);
+        existing = existing.parent().ok_or_else(invalid)?;
+    }
+    let mut canonical = std::fs::canonicalize(existing)
+        .map_err(|e| format!("Failed to resolve '{}': {}", existing.display(), e))?;
+    canonical.extend(missing.into_iter().rev());
+    Ok(canonical)
+}
+
 /// Move one or more files/folders to the OS trash — recoverable via the file
 /// manager, never a permanent unlink. Refuses to trash the project root
 /// itself (callers should never surface Delete on the root; defend in
@@ -272,6 +290,11 @@ pub fn rename_entry_inner(
     let new_parent = new_p
         .parent()
         .ok_or_else(|| "Invalid destination path".to_string())?;
+    if !new_parent.exists() {
+        // `validate_entry_path` already confirmed the deepest existing ancestor is inside the site.
+        std::fs::create_dir_all(new_parent)
+            .map_err(|e| format!("Failed to create '{}': {}", new_parent.display(), e))?;
+    }
     recheck_canonical(project_root, new_parent)?;
 
     // `fs::rename` silently replaces an existing file. Refuse, unless this is

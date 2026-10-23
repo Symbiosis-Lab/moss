@@ -121,3 +121,10 @@ impl Drop for Site {
 pub fn hrefs_in(html: &str) -> Vec<&str> {
     html.split("href=\"").skip(1).filter_map(|p| p.split('"').next()).collect()
 }
+
+/// The page's opening hero section up to its first `</section>`, or "" when it has none.
+pub fn hero_of(html: &str) -> String {
+    let Some(from) = html.find("<section class=\"moss-hero") else { return String::new() };
+    let to = html[from..].find("</section>").map_or(html.len(), |i| from + i);
+    html[from..to].to_string()
+}

@@ -86,6 +86,36 @@ describe("splitMapSvg", () => {
   });
 });
 
+describe("splitMapSvg's flat land and water", () => {
+  const LAYERED = `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80" viewBox="0 0 100 80">
+  <defs><path id="l0" d="M10 10h40v40H10Z"/></defs>
+  <g data-map-layer="water"><rect width="100" height="80" fill="var(--moss-place-water, #dbe7ea)"/></g>
+  <g data-map-layer="coast"><use href="#l0" stroke="#fff"/></g>
+  <g data-map-layer="seafloor"><path d="M0 0"/></g>
+  <g data-map-layer="land"><use href="#l0" fill="var(--moss-place-land, #e3e6d5)"/></g>
+  <g data-map-layer="relief"><path d="M0 0"/></g>
+  <g data-map-layer="lighting"><path d="M0 0"/></g>
+  <g data-map-layer="lakes"><path d="M20 20h5v5Z" fill="var(--moss-place-lakes, #c4dbe4)"/></g>
+  <g data-map-layer="built-up"><path d="M0 0"/></g>
+</svg>`;
+  const layersOf = (svg: SVGSVGElement) => [...svg.querySelectorAll("[data-map-layer]")].map((g) => g.getAttribute("data-map-layer"));
+
+  test("keeps the water, the land and the lakes and nothing that is detail", () => {
+    const split = splitMapSvg(LAYERED)!;
+    expect(layersOf(split.flat().base)).toEqual(["water", "land", "lakes"]);
+    expect(layersOf(split.base)).toContain("relief");
+  });
+
+  test("water and land are painted with different tones, and the markup is the same document", () => {
+    const flat = splitMapSvg(LAYERED)!.flat();
+    const fill = (layer: string) => flat.base.querySelector(`[data-map-layer="${layer}"] > *`)!.getAttribute("fill");
+    expect(fill("water")).toContain("--moss-place-water");
+    expect(fill("land")).toContain("--moss-place-land");
+    expect(flat.baseMarkup).not.toContain("relief");
+    expect(flat.baseMarkup).toContain("--moss-place-land");
+  });
+});
+
 describe("capturePlaceMapTheme", () => {
   test("includes a token that's actually set, formatted as name:value", () => {
     document.documentElement.style.setProperty("--moss-place-land", "#abcdef");

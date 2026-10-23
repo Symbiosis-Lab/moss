@@ -2300,6 +2300,34 @@ fn a_broken_image_paragraph_is_deliberately_not_the_description() {
     assert_eq!(d, "Prose para.");
 }
 
+/// A paragraph that is only links and separators is a row of section links,
+/// not something to say about the page.
+#[test]
+fn a_paragraph_of_only_links_is_not_the_description() {
+    let nav = "[About](#about) · [Cast](#cast) | [[Tickets]] - [Visit](https://example.test)";
+    let d = extract_description(&format!("{nav}\n\nExample Show runs at Example Hall.\n"), true);
+    assert_eq!(d, "Example Show runs at Example Hall.");
+    assert_eq!(extract_description(&format!("{nav}\n"), true), "");
+    let prose = extract_description("[Example Show](a.md) runs at Example Hall.\n", true);
+    assert_eq!(prose, "Example Show runs at Example Hall.");
+}
+
+/// A row of reference-style links is navigation too, with or without a
+/// definition in the same paragraph.
+#[test]
+fn a_row_of_reference_links_is_not_the_description() {
+    let nav = "[About][a] · [Cast][cast] | [Visit]";
+    let input = format!("{nav}\n\nExample Show runs at Example Hall.\n\n[a]: #about\n[cast]: #cast\n");
+    assert_eq!(extract_description(&input, true), "Example Show runs at Example Hall.");
+    assert_eq!(extract_description(&format!("{nav}\n"), true), "");
+}
+
+/// A link row that also holds an equation is content, not navigation.
+#[test]
+fn a_link_row_with_an_equation_is_still_the_description() {
+    assert_eq!(extract_description("[About](#about) · $x^2$\n", true), "[About](#about) · $x^2$".replace("[About](#about)", "About"));
+}
+
 /// The excerpt parses with the SITE's math setting — the same value the page
 /// renders with. On a math-ON site (the default) `$[^a]$` is an equation:
 /// pulldown emits no reference event and the page displays the characters,
@@ -2511,4 +2539,55 @@ fn page_with_excerpt_only_keeps_entry() {
     let entry = preview_entry("Work", None, "Body text").expect("entry");
     assert_eq!(entry["preview"], "Body text");
     assert!(!entry.contains_key("description"));
+}
+
+#[test]
+fn a_sentence_boundary_is_not_read_after_an_abbreviation_or_an_initial() {
+    // Each text overruns the 160-char budget, so only a boundary inside the
+    // budget can be chosen; the abbreviation must not be one.
+    let tail = " and the discussion that followed ran on for a very long time because nobody wanted to leave the room before every last question had been answered fully";
+    for lead in [
+        "We thanked Dr.", "We thanked Mr.", "We thanked Mrs.", "We thanked Ms.", "We thanked Prof.",
+        "We met on St.", "It was us vs.", "Bring paper, pens, etc.", "Some tools, e.g.", "Some tools, i.e.",
+        "See No.", "We thanked Ada B.",
+    ] {
+        let content = format!("{lead} Lovelace{tail}.");
+        let desc = extract_description(&content, true);
+        assert!(!desc.ends_with('.') && desc.ends_with('…'), "cut after `{lead}`: {desc}");
+        assert!(desc.contains("Lovelace"), "cut after `{lead}`: {desc}");
+    }
+    // A real sentence end still counts, including after "I".
+    let content = format!("So did I. Then{tail}.");
+    assert_eq!(extract_description(&content, true), "So did I.");
+}
+
+#[test]
+fn a_card_description_shows_the_plain_excerpts_words_and_no_markdown() {
+    // Each lead overruns the budget with its cut inside a span.
+    let tail = " and the discussion that followed ran on for a long while.";
+    for lead in [
+        "Our group hosted its first public lecture by **Dr. Ada Lovelace** of the Analytical Society on **March 3, 2026 at 4:00 pm** in **Room 12, East Hall of the Old Library Building**",
+        "Our group hosted its first public lecture on engines in the old hall, and the talk ran long, so *everyone who stayed past the end of the evening was given a copy of the notes*",
+        "Our group hosted its first public lecture on engines in the old hall, and the talk ran long, so _everyone who stayed past the end of the evening was given a copy of the notes_",
+        "Our group hosted its first public lecture on engines in the old hall, and the talk ran long, so run `moss build --watch the notes folder and every page under it, then open the preview`",
+        "Our group hosted its first public lecture on engines in the old hall, and the talk ran long, so read [the full notes from the first public lecture on engines and the rest](https://example.com/notes)",
+        "Our group hosted its first public lecture on engines in the old hall, and the talk ran long, so read [[notes/first-lecture|the full notes from the first public lecture on engines and more]]",
+        "Our group hosted its first ![a photograph of the lecture hall, taken from the back row](hall.jpg) public lecture on engines in the old hall, and the talk ran long, so *everyone who stayed past the end was given notes*",
+        "Our group hosted its first public lecture on engines in the old hall, and the talk ran long, see **the notes, [kept here](https://example.com/n), for everyone who came along**",
+    ] {
+        let content = format!("{lead}{tail}");
+        let markdown = extract_description_markdown(&content, true);
+        let html = render_description_html_in_link(&markdown);
+        assert_eq!(
+            strip_markdown_inline(&markdown),
+            extract_description(&content, true),
+            "the card shows different words than the plain excerpt: {markdown}"
+        );
+        for syntax in ["*", "_", "`", "[", "]("] {
+            assert!(!html.contains(syntax), "`{syntax}` leaked into the card: {html}");
+        }
+    }
+    // A lead bold throughout keeps its bold, closed before the ellipsis.
+    let content = format!("Our group hosted its first public lecture by **Dr. Ada Lovelace** of the Analytical Society on **March 3, 2026 at 4:00 pm** in **Room 12, East Hall of the Old Library Building**{tail}");
+    assert!(extract_description_markdown(&content, true).ends_with("**…"));
 }

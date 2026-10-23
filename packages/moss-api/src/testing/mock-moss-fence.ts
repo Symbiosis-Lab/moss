@@ -81,3 +81,11 @@ export function enforceMossFence(pluginId: string | null | undefined, relativePa
     throw new Error(MOSS_FENCE_MESSAGE);
   }
 }
+
+/** Throws like the real guard for an absolute path or one that climbs out of the project. */
+export function enforceInsideProject(relativePath: string): void {
+  const segments = relativePath.replace(/\\/g, "/").split("/");
+  if (relativePath.startsWith("/") || /^[A-Za-z]:/.test(relativePath) || segments.includes("..")) {
+    throw new Error(`Invalid path: ${relativePath} escapes the project folder`);
+  }
+}

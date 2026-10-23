@@ -46,7 +46,7 @@ fn duplicate_name_in_one_row_warns() {
         key: "people".to_string(),
         fields: vec!["author".to_string(), "editor".to_string()],
         title: "People".to_string(),
-        titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+        titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
     }];
     let mut docs = vec![crate::build::types::ParsedDocument {
         url_path: "posts/a/index.html".to_string(),
@@ -79,8 +79,8 @@ fn gazetteer_diagnostics_count_as_cli_problems() {
     let gaz = crate::vault::places::parse_gazetteer(&table);
     assert_eq!(
         take_cli_problems(),
-        2,
-        "a missing lng and an invalid precision are each one CLI-visible problem"
+        1,
+        "an invalid precision is a CLI-visible problem; a missing lng is only a note"
     );
     assert_eq!(gaz.get("Osaka").unwrap().coords, None);
     assert_eq!(gaz.get("Nara").unwrap().precision, crate::vault::places::Precision::Country);
@@ -97,7 +97,7 @@ fn unclaimed_typo_diagnostic_counts_as_a_cli_problem() {
         key: "authors".to_string(),
         fields: vec!["author".to_string()],
         title: "Authors".to_string(),
-        titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+        titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
     }];
     let mut docs = vec![crate::build::types::ParsedDocument {
         url_path: "about/kane/index.html".to_string(),
@@ -119,7 +119,7 @@ fn declared_name_absent_from_any_byline_row_warns() {
         key: "authors".to_string(),
         fields: vec!["author".to_string()],
         title: "Authors".to_string(),
-        titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+        titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
     }];
     let mut docs = vec![crate::build::types::ParsedDocument {
         url_path: "posts/a/index.html".to_string(),
@@ -151,14 +151,14 @@ fn place_names_never_warn_or_link_in_bylines() {
             key: "authors".to_string(),
             fields: vec!["author".to_string()],
             title: "Authors".to_string(),
-            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         },
         crate::build::terms::TermKind {
             cards: false,
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
-            titles: Vec::new(), is_place: true, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), counts: Vec::new(), is_place: true, parents: Default::default(), explorer: None, line: None,
         },
     ];
     let mut docs = vec![crate::build::types::ParsedDocument {
@@ -198,14 +198,14 @@ fn place_name_present_in_a_byline_row_is_left_unlinked() {
             key: "authors".to_string(),
             fields: vec!["author".to_string()],
             title: "Authors".to_string(),
-            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         },
         crate::build::terms::TermKind {
             cards: false,
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
-            titles: Vec::new(), is_place: true, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), counts: Vec::new(), is_place: true, parents: Default::default(), explorer: None, line: None,
         },
     ];
     let mut docs = vec![crate::build::types::ParsedDocument {
@@ -578,5 +578,53 @@ fn headless_log_level_defaults_to_warn_and_honors_the_env_var() {
     match prior {
         Some(v) => std::env::set_var("MOSS_LOG_LEVEL", v),
         None => std::env::remove_var("MOSS_LOG_LEVEL"),
+    }
+}
+
+/// A clean build still says what it covered, and the line does not borrow the
+/// `moss: ` prefix agents grep for problems.
+#[test]
+fn built_summary_names_pages_partials_and_problems() {
+    assert_eq!(built_summary_line(12, 3, 0, 0), "Built 12 pages (3 skipped) · 0 problems");
+    assert_eq!(built_summary_line(1, 1, 1, 0), "Built 1 page (1 skipped) · 1 problem");
+    assert_eq!(built_summary_line(4, 0, 2, 0), "Built 4 pages · 2 problems");
+    assert!(!built_summary_line(4, 0, 0, 0).starts_with("moss: "));
+    assert_eq!(built_summary_line(3, 0, 0, 1), "Built 3 pages · 0 problems · 1 note");
+    assert_eq!(built_summary_line(3, 0, 1, 2), "Built 3 pages · 1 problem · 2 notes");
+}
+
+/// A note prints as `[NOTE]`, is not a problem, and is tallied for the closing line.
+#[test]
+fn a_note_prints_but_does_not_count_as_a_problem() {
+    let note = log::Record::builder().level(log::Level::Warn).target("moss_build::x#note").args(format_args!("a")).build();
+    assert_eq!(log_line_for(&note), Some(("[NOTE] moss_build::x: a".to_string(), false)));
+    super::note_built(3, 0);
+    super::note_cli_note();
+    assert_eq!(super::take_built(), Some((3, 0, 1)));
+}
+
+/// A bare `log::warn!` prints a `[WARN]` line and must count; a line from
+/// `log_warn_problem!` has counted already, so the logger must not count it again.
+#[test]
+fn every_printed_warn_counts_exactly_once() {
+    let bare = log::Record::builder().level(log::Level::Warn).target("moss_build::x").args(format_args!("a")).build();
+    assert_eq!(log_line_for(&bare), Some(("[WARN] moss_build::x: a".to_string(), true)));
+    let counted = log::Record::builder().level(log::Level::Warn).target("moss_build::x#counted").args(format_args!("a")).build();
+    assert_eq!(log_line_for(&counted), Some(("[WARN] moss_build::x: a".to_string(), false)));
+    let info = log::Record::builder().level(log::Level::Info).target("moss_build::x").args(format_args!("a")).build();
+    assert_eq!(log_line_for(&info).map(|l| l.1), Some(false));
+}
+
+/// A build-phase timing note is machine speed, not something the author can
+/// fix in the folder, so neither overrun tier may print as a counted `[WARN]`.
+#[test]
+fn a_phase_budget_overrun_is_not_a_problem() {
+    for ms in [2_000, 4_000] {
+        let (level, message) = crate::build::phase::budget_log("scan", std::time::Duration::from_millis(ms)).unwrap();
+        let args = format_args!("{message}");
+        let record = log::Record::builder().level(level).target("phase").args(args).build();
+        let (line, counts) = log_line_for(&record).unwrap();
+        assert!(!counts, "{line}");
+        assert!(!line.starts_with("[WARN]"), "{line}");
     }
 }

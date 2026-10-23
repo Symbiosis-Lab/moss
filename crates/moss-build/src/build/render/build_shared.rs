@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
+use crate::build::assets::theme_modules::ThemeModules;
 use crate::build::emit::scripts::ScriptAssets;
 use crate::build::media::dimensions::MediaDimensionLookup;
 use crate::build::types::ParsedDocument;
@@ -30,6 +31,13 @@ pub struct BuildShared<'d> {
     /// The calendar files this build writes and the pages that link them. Empty
     /// until the build plans it from its documents.
     pub calendar: crate::build::feeds::calendar::CalendarPlan,
+
+    /// The theme's `script.mjs` and sibling modules; empty without one.
+    pub theme_modules: ThemeModules,
+    /// The build's one clock: every past/upcoming decision (an event page's
+    /// `data-when`, its listing cards, the ordering) reads this, so a build
+    /// that crosses an event's end cannot disagree with itself.
+    pub now: chrono::NaiveDateTime,
 }
 
 impl BuildShared<'_> {
@@ -50,6 +58,8 @@ impl BuildShared<'_> {
             ),
             sequences: SequenceChains::default(),
             calendar: Default::default(),
+            theme_modules: ThemeModules::default(),
+            now: crate::build::folder_embed::upcoming::now(),
         }
     }
 }
@@ -91,6 +101,9 @@ pub(super) struct FolderIndexEntry {
 
 pub(super) struct FolderIndexPlan {
     pub entries: Vec<FolderIndexEntry>,
+    /// `(old address, target)` for each listing a passthrough folder no longer
+    /// gets, for the redirect table.
+    pub passthrough_stubs: Vec<(String, String)>,
 }
 
 impl FolderIndexPlan {
@@ -139,7 +152,12 @@ impl FolderIndexPlan {
                         && source.file_stem().and_then(|s| s.to_str()).is_some_and(|stem|
                             moss_core::home::is_home_file(stem, raw.rsplit('/').next().unwrap_or(raw)))
                 });
-                pending_only || authored_index_pending
+                // A folder whose only pages are partials has nothing to show:
+                // its sources are never built, so an index for it would be a
+                // live, empty page at an address the author never made.
+                let mut under = documents.iter().filter(|doc| doc.source_path.as_ref().is_some_and(|path| path.starts_with(&prefix)));
+                let partials_only = under.clone().next().is_some() && under.all(|doc| doc.slot_only);
+                pending_only || authored_index_pending || partials_only
             }).map(|(_, key)| key).collect();
 
         // A folder whose `index.html` is copied verbatim already has its page.
@@ -154,6 +172,20 @@ impl FolderIndexPlan {
                     mapped.strip_suffix("/index.html").map(str::to_string)
                 })
                 .collect();
+
+        // A passthrough folder is served as the author laid it out: pages
+        // inside it render, but it and the folders within get no listing.
+        let passthrough: Vec<String> = project.passthrough_roots.iter()
+            .filter_map(|root| root.strip_suffix('/'))
+            .filter_map(|dir| {
+                crate::build::scan::page_map::resolve_path_with_overrides(&format!("{dir}/index.html"), dir_overrides)
+                    .strip_suffix("/index.html").map(str::to_string)
+            })
+            .collect();
+        for doc in documents.iter_mut() {
+            let folder = doc.url_path.rsplit_once('/').map_or("", |(dir, _)| dir);
+            doc.passthrough_root = passthrough.iter().find(|root| crate::build::types::folder_within(root, folder)).cloned();
+        }
 
         let authored: HashSet<String> = documents.iter()
             .filter(|d| d.source_path.is_some())
@@ -175,13 +207,26 @@ impl FolderIndexPlan {
         // have an index; empty language directories and authored translation
         // trees do not acquire generated indexes. A term page is a page of
         // its edition, never a folder index of the tree it sits in.
-        let folders: Vec<String> = candidates.into_iter().filter_map(|(folder, has_children)| {
+        let mut folders: Vec<String> = Vec::new();
+        let mut withheld: Vec<String> = Vec::new();
+        for (folder, has_children) in candidates {
             let top = folder.split('/').next().unwrap_or(&folder);
             let empty_language = !has_children && crate::i18n::path::resolve_language_from_folder(top).is_some();
             let tree_suppressed = empty_language || translation_roots.contains(top);
-            (!authored.contains(&folder) && !suppressed.contains(&folder) && !verbatim.contains(&folder)
-                && (term_pages.contains(&folder) || !tree_suppressed))
-                .then_some(folder)
+            let in_passthrough = passthrough.iter().any(|root| crate::build::types::folder_within(root, &folder));
+            if authored.contains(&folder) || suppressed.contains(&folder) || verbatim.contains(&folder)
+                || !(term_pages.contains(&folder) || !tree_suppressed)
+            {
+                continue;
+            }
+            if in_passthrough { withheld.push(folder) } else { folders.push(folder) }
+        }
+        // Each withheld listing forwards to the nearest folder page still served.
+        let passthrough_stubs = withheld.iter().map(|folder| {
+            let target = std::iter::successors(folder.rsplit_once('/').map(|(parent, _)| parent), |p| p.rsplit_once('/').map(|(parent, _)| parent))
+                .find(|p| authored.contains(*p) || verbatim.contains(*p) || folders.iter().any(|f| f == p))
+                .map_or_else(|| "/".to_string(), |p| format!("/{p}/")); // allow:served-path-url-construct (the redirect target is the parent page's address)
+            (format!("{folder}/"), target) // allow:served-path-url-construct (the address the listing had, the redirect source)
         }).collect();
 
         let entries = folders.into_iter().map(|folder| {
@@ -189,7 +234,7 @@ impl FolderIndexPlan {
             documents.push(make_document(&folder));
             FolderIndexEntry { folder, document_index }
         }).collect();
-        Self { entries }
+        Self { entries, passthrough_stubs }
     }
 }
 
@@ -221,6 +266,56 @@ pub(super) fn report_verbatim_collisions(
             crate::build::served_path::served_address(&doc.url_path)
         );
     }
+}
+
+/// Withhold the body of every page whose address a passthrough `.html` file
+/// owns, and warn once per such file whose body was not empty. The file is what
+/// readers get, so its markdown is only metadata: its title and description
+/// still serve the site, but its text must not reach `llms.txt`, a feed or any
+/// other surface built from the documents.
+pub(super) fn withhold_shadowed_bodies(
+    documents: &mut [ParsedDocument],
+    project: &ProjectStructure,
+    dir_overrides: &HashMap<String, String>,
+) {
+    let owned: HashSet<String> = project
+        .html_files
+        .iter()
+        .filter(|f| crate::build::scan::classify::is_in_passthrough(&f.path, &project.passthrough_roots))
+        .map(|f| crate::build::scan::page_map::resolve_path_with_overrides(&f.path, dir_overrides))
+        .collect();
+    for doc in documents.iter_mut().filter(|d| !d.slot_only && owned.contains(&d.url_path)) {
+        let Some(source) = &doc.source_path else { continue };
+        if !doc.content.trim().is_empty() {
+            crate::build::cli_output::log_warn_problem!(
+                "`{source}` has text, but it is never published because the HTML document at {} owns the page",
+                crate::build::served_path::served_address(&doc.url_path)
+            );
+        }
+        doc.content.clear();
+        doc.html_content.clear();
+    }
+}
+
+/// The old addresses of language-tree homes whose `index.md` used to be
+/// published beside the tree's verbatim `index.html`, as `(old address, target)`
+/// pairs for the redirect table. The markdown is now that home's metadata, so
+/// `/fr/index/` forwards to `/fr/`.
+pub(super) fn shadowed_edition_home_stubs(
+    verbatim_dirs: &HashSet<String>,
+    home_file_winners: &HashSet<String>,
+) -> Vec<(String, String)> {
+    let mut stubs: Vec<(String, String)> = home_file_winners
+        .iter()
+        .filter_map(|file| {
+            let (dir, name) = file.split_once('/')?;
+            let stem = name.rsplit_once('.')?.0.to_lowercase();
+            (verbatim_dirs.contains(dir) && moss_core::home::is_known_language_code(dir) && !stem.contains('/'))
+                .then(|| (format!("{dir}/{stem}/"), format!("/{dir}/"))) // allow:served-path-url-construct (the address before the home was metadata, the redirect source)
+        })
+        .collect();
+    stubs.sort();
+    stubs
 }
 
 #[cfg(test)]

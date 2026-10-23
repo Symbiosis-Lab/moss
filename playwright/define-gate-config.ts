@@ -97,8 +97,12 @@ function toWebServerConfig(server: ScratchHttpServer | ViteHarnessServer | MossP
       env: { ...process.env, MOSS_PREVIEW_PORT_BASE: String(server.port) },
     };
   }
+  // `python3 -m http.server`, run as its own `__main__` so it binds and serves
+  // exactly as before, with the listen backlog raised from socketserver's 5: a
+  // page requests its scripts at once, and under load the sixth connection
+  // was dropped, so that page ran without its script.
   return {
-    command: `/usr/bin/python3 -m http.server ${server.port}`,
+    command: `/usr/bin/python3 -c "import runpy, socketserver; socketserver.TCPServer.request_queue_size = 128; runpy.run_module('http.server', run_name='__main__')" ${server.port}`,
     cwd: server.serveDir,
     url: `http://localhost:${server.port}/`,
     reuseExistingServer: false as const,

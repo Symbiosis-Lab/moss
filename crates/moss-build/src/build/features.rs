@@ -655,7 +655,7 @@ pub fn generate_native_slots(
     let stale_footer_buckets =
         crate::build::footer::apply_last_known_good_fallback(project_path, &mut footer_by_lang);
     if !stale_footer_buckets.is_empty() {
-        log::warn!(
+        crate::build::cli_output::log_note!(
             "[footer] falling back to last-known-good content for {} — this build could not read it",
             stale_footer_buckets.join(", ")
         );

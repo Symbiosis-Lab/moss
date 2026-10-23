@@ -43,6 +43,9 @@ pub(crate) struct MediaMaps {
     pub(crate) dimensions: HashMap<String, (u32, u32)>,
     /// Map from source path to dominant color hex string (e.g., "#ff5733")
     pub(crate) colors: HashMap<String, String>,
+    /// Map from an image's source path to itself, indexed under its output URL
+    /// like the rest, so a hero's href finds the file whose luminance it reads.
+    pub(crate) sources: HashMap<String, String>,
     /// Map from source path to LQIP data URI
     pub(crate) lqips: HashMap<String, String>,
     /// Map from source path to the scanned `is_animated` flag (multi-frame GIF
@@ -75,6 +78,14 @@ pub struct MediaDimensionLookup {
     /// `OnceLock` saved — it was memoizing one build per lookup either way,
     /// which is what fixed the O(pages x assets) rebuild measured 2026-08-24.
     snapshot: moss_core::asset_snapshot::AssetSnapshot,
+    /// The page colour per theme that a `fade=top` closing picture is measured
+    /// over; moss's own unless the build read the theme's.
+    page_ground: crate::build::markdown::hero_ink::PageGround,
+    /// The site's folder, where a hero's picture is read from.
+    root: Option<std::path::PathBuf>,
+    /// The luminance of each picture a hero has read, by source path, built the
+    /// first time one asks (`None` for a picture that would not decode).
+    grounds: std::sync::Mutex<HashMap<String, Option<std::sync::Arc<crate::build::markdown::hero_ink::Ground>>>>,
 }
 
 // How many lookups this thread has built. Each one walks every image and
@@ -85,6 +96,15 @@ thread_local! {
 }
 
 impl MediaDimensionLookup {
+    /// This lookup, measuring faded pictures over `ground`.
+    pub fn with_page_ground(self, page_ground: crate::build::markdown::hero_ink::PageGround) -> Self {
+        Self { page_ground, ..self }
+    }
+
+    pub fn page_ground(&self) -> crate::build::markdown::hero_ink::PageGround {
+        self.page_ground
+    }
+
     /// Creates a new lookup table from image and video metadata.
     ///
     /// # Arguments
@@ -116,6 +136,7 @@ impl MediaDimensionLookup {
         BUILT_ON_THIS_THREAD.with(|n| n.set(n.get() + 1));
         let mut dimensions = HashMap::new();
         let mut colors = HashMap::new();
+        let mut sources = HashMap::new();
         let mut lqips = HashMap::new();
         let mut animated = HashMap::new();
 
@@ -171,20 +192,56 @@ impl MediaDimensionLookup {
                 }
             }
         }
+        for meta in images.iter().filter(|m| m.dimensions.is_some()) {
+            sources.insert(meta.path.clone(), meta.path.clone());
+        }
         index_by_output_url(&mut dimensions, dir_overrides);
         index_by_output_url(&mut colors, dir_overrides);
+        index_by_output_url(&mut sources, dir_overrides);
         index_by_output_url(&mut lqips, dir_overrides);
         index_by_output_url(&mut animated, dir_overrides);
 
         let maps = MediaMaps {
             dimensions,
             colors,
+            sources,
             lqips,
             animated,
         };
         let snapshot =
             crate::build::markdown::pipeline::build_asset_snapshot(&maps, registry, dir_overrides);
-        Self { maps, snapshot }
+        Self { maps, snapshot, page_ground: Default::default(), root: None, grounds: Default::default() }
+    }
+
+    /// This lookup, reading a hero's pictures from the site at `root`.
+    pub fn with_root(self, root: std::path::PathBuf) -> Self {
+        Self { root: Some(root), ..self }
+    }
+
+    /// The luminance of the picture at `href` (an output URL), read from the
+    /// file the first time a hero asks and kept for the build. `None` for a
+    /// video, an unreadable picture, or a lookup with no site folder.
+    pub fn ground(&self, href: &str) -> Option<std::sync::Arc<crate::build::markdown::hero_ink::Ground>> {
+        let source = resolve_entry(&self.maps.sources, href)?;
+        let lock = || self.grounds.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(known) = lock().get(source) {
+            return known.clone();
+        }
+        let built = self.root.as_ref().and_then(|root| crate::build::media::decode::sniff_decode(&root.join(source)).ok()).map(|img| std::sync::Arc::new(crate::build::markdown::hero_ink::Ground::from_image(&img)));
+        lock().insert(source.clone(), built.clone());
+        built
+    }
+
+    /// This lookup with the pictures' luminance already read, by source path.
+    #[cfg(test)]
+    pub(crate) fn with_grounds(self, pictures: Vec<(String, crate::build::markdown::hero_ink::Ground)>) -> Self {
+        {
+            let mut grounds = self.grounds.lock().unwrap();
+            for (path, ground) in pictures {
+                grounds.insert(path, Some(std::sync::Arc::new(ground)));
+            }
+        }
+        self
     }
 
     /// This lookup's `AssetSnapshot`. See the `snapshot` field.
@@ -245,6 +302,9 @@ impl MediaDimensionLookup {
     /// # Returns
     /// * `(width, height)` - Either from metadata or fallback (800x600)
     pub fn get(&self, path: &str) -> (u32, u32) {
+        // A resolved href is percent-encoded (`My%20Poster.png`); the map keys are file paths.
+        let decoded = moss_core::resolve::fuzzy_path::percent_decode_path(path);
+        let path = decoded.as_str();
         // Try exact match first
         if let Some(&dims) = self.maps.dimensions.get(path) {
             return dims;

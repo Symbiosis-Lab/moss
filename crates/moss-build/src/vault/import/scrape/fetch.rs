@@ -173,8 +173,9 @@ fn fetch_with_validated_redirects(
     start_url: &str,
     user_agent: &str,
     accept: Option<&str>,
+    referer: Option<&str>,
 ) -> Result<ureq::Response, ureq::Error> {
-    fetch_following_redirects(agent, start_url, user_agent, accept, refuse_unsafe_scrape_url)
+    fetch_following_redirects(agent, start_url, user_agent, accept, referer, refuse_unsafe_scrape_url)
 }
 
 /// [`fetch_with_validated_redirects`]'s body, taking the per-hop validator as
@@ -204,6 +205,7 @@ fn fetch_following_redirects(
     start_url: &str,
     user_agent: &str,
     accept: Option<&str>,
+    referer: Option<&str>,
     validate: impl Fn(&str) -> Result<(), String>,
 ) -> Result<ureq::Response, ureq::Error> {
     // 400: a permanent, never-retried refusal (`should_retry_status` only
@@ -226,6 +228,9 @@ fn fetch_following_redirects(
         let mut req = agent.get(&current).set("User-Agent", user_agent);
         if let Some(accept) = accept {
             req = req.set("Accept", accept);
+        }
+        if let Some(referer) = referer {
+            req = req.set("Referer", referer);
         }
         let response = req.call()?;
         if !(300..400).contains(&response.status()) {
@@ -315,6 +320,7 @@ fn call_with_retry_n(
     timeout: std::time::Duration,
     tries: u32,
     accept: Option<&str>,
+    referer: Option<&str>,
 ) -> Result<ureq::Response, FetchError> {
     let mut last_err = FetchError::message(String::new());
     // What the PREVIOUS attempt's response asked for via `Retry-After`,
@@ -335,7 +341,7 @@ fn call_with_retry_n(
         // (see `fetch_with_validated_redirects`) rather than trusting
         // ureq's own follower, which never re-checks a Location header.
         let agent = crate::system::proxy::proxied_ureq_agent_no_redirects(url, timeout);
-        match fetch_with_validated_redirects(&agent, url, user_agent, accept) {
+        match fetch_with_validated_redirects(&agent, url, user_agent, accept, referer) {
             Ok(resp) => return Ok(resp),
             Err(ureq::Error::Status(code, resp)) => {
                 let err = FetchError { status: Some(code), message: format!("{} {}", code, resp.status_text()) };
@@ -363,9 +369,10 @@ fn call_with_retry(
     user_agent: &str,
     timeout: std::time::Duration,
     accept: Option<&str>,
+    referer: Option<&str>,
 ) -> Result<ureq::Response, FetchError> {
     const TRIES: u32 = 3;
-    call_with_retry_n(url, user_agent, timeout, TRIES, accept)
+    call_with_retry_n(url, user_agent, timeout, TRIES, accept, referer)
 }
 
 /// Translates a fetch's `Result` into the bare `Result<(), Option<u16>>`
@@ -392,7 +399,7 @@ pub(crate) async fn fetch_page(url: &str, user_agent: &str) -> Result<(String, S
     let user_agent = user_agent.to_string();
     tokio::task::spawn_blocking(move || {
         let response =
-            call_with_retry(&url, &user_agent, std::time::Duration::from_secs(30), None)?;
+            call_with_retry(&url, &user_agent, std::time::Duration::from_secs(30), None, None)?;
         let content_type = response.content_type().to_string();
 
         response
@@ -430,6 +437,7 @@ pub(crate) async fn fetch_raw_bytes(url: &str, user_agent: &str) -> Result<Vec<u
             &user_agent,
             std::time::Duration::from_secs(15),
             1,
+            None,
             None,
         )?;
         let mut buf = Vec::new();
@@ -476,6 +484,16 @@ pub(crate) fn hash_url(url: &str) -> String {
 /// Largest single file a page's link may pull into the site.
 pub(crate) const LINKED_FILE_MAX_BYTES: u64 = 100 * 1024 * 1024;
 
+/// The page's origin as `Referer`; nothing on an https to http downgrade.
+fn referer_for(page_url: &str, target_url: &str) -> Option<String> {
+    let page = url::Url::parse(page_url).ok()?;
+    let target = url::Url::parse(target_url).ok()?;
+    if !matches!(page.scheme(), "http" | "https") || (page.scheme() == "https" && target.scheme() == "http") {
+        return None;
+    }
+    Some(format!("{}/", page.origin().ascii_serialization()))
+}
+
 /// What a download did: wrote the file, or refused it for its size.
 pub(crate) enum Downloaded {
     Saved(String),
@@ -486,8 +504,9 @@ pub(crate) async fn download_asset(
     url: &str,
     assets_dir: &Path,
     user_agent: &str,
+    page_url: Option<&str>,
 ) -> Result<String, FetchError> {
-    match download_to(url, assets_dir, user_agent, hashed_filename, u64::MAX).await? {
+    match download_to(url, assets_dir, user_agent, page_url, hashed_filename, u64::MAX).await? {
         Downloaded::Saved(filename) => Ok(filename),
         Downloaded::TooLarge => Err(FetchError::message(format!("{url} is too large to download"))),
     }
@@ -505,10 +524,11 @@ pub(crate) async fn download_linked_file(
     url: &str,
     assets_dir: &Path,
     user_agent: &str,
+    page_url: Option<&str>,
     max_bytes: u64,
     filename: String,
 ) -> Result<Downloaded, FetchError> {
-    download_to(url, assets_dir, user_agent, move |_, _, _| filename, max_bytes).await
+    download_to(url, assets_dir, user_agent, page_url, move |_, _, _| filename, max_bytes).await
 }
 
 /// The name a linked file keeps: the last path segment of its URL,
@@ -539,9 +559,11 @@ async fn download_to(
     url: &str,
     assets_dir: &Path,
     user_agent: &str,
+    page_url: Option<&str>,
     name: impl FnOnce(&str, &Path, &str) -> String + Send + 'static,
     max_bytes: u64,
 ) -> Result<Downloaded, FetchError> {
+    let referer = page_url.and_then(|page| referer_for(page, url));
     let url_clone = url.to_string();
     let assets_dir = assets_dir.to_path_buf();
     let user_agent = user_agent.to_string();
@@ -555,6 +577,7 @@ async fn download_to(
             &user_agent,
             std::time::Duration::from_secs(60),
             Some(crate::vault::import::media::MEDIA_ACCEPT),
+            referer.as_deref(),
         )?;
 
         if response

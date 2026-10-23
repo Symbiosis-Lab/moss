@@ -290,6 +290,12 @@ pub struct ProjectStructure {
     #[serde(skip)]
     #[specta(skip)]
     pub passthrough_roots: std::collections::HashSet<String>,
+    /// Image and video paths inside passthrough subtrees. They are copied
+    /// verbatim, so they stay out of `image_files` / `video_files`, but an embed
+    /// still resolves to them at their copied path.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub passthrough_media: Vec<String>,
     /// Every directory that gets a synthetic folder-index page, as
     /// project-relative (raw, un-slugified) paths with `/` separators — e.g.
     /// `["my-1st-folder", "Notes/2024"]`. A directory is listed only when a
@@ -540,6 +546,9 @@ pub struct SiteHashes {
 pub struct PageMeta {
     pub title: String,
     pub date: Option<String>,
+    /// `draft: true`: built and previewed, never published.
+    #[serde(default)]
+    pub draft: bool,
 }
 
 impl SiteHashes {

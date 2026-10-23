@@ -179,7 +179,7 @@ async fn write_home_note(
 async fn download_logo(url: &str, capture: &Capture<'_>, pacer: &mut HostPacer) -> Option<String> {
     let host = host_of(url);
     pacer.wait(&host).await;
-    let result = download_asset(url, &capture.out_dir.join(ASSETS_SUBDIR), capture.user_agent).await;
+    let result = download_asset(url, &capture.out_dir.join(ASSETS_SUBDIR), capture.user_agent, Some(&capture.home.url)).await;
     observe_pace(pacer, &host, &result);
     match result {
         Ok(file) if LOGO_EXTENSIONS.contains(&file.rsplit('.').next().unwrap_or("")) => Some(file),

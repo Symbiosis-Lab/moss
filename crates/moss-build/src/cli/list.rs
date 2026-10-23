@@ -9,7 +9,7 @@
 //!    the emitted directory tree.
 //! 2. **"Why is this article missing from the index?"** There are FOUR
 //!    different ways a file stops showing up in a listing, and they hide it
-//!    from different places: `draft:` (hidden everywhere, plus `noindex`),
+//!    from different places: `draft:` (built for preview only, never published),
 //!    `listed: false` (out of generated listings, still a public page),
 //!    being a nav item (root-level file in a site that has content folders —
 //!    it moved to the nav bar), and `slot_only` (`footer.md` and friends are
@@ -155,10 +155,10 @@ fn legend(rows: &[InventoryEntry]) -> Option<String> {
     let mut lines = vec!["HIDDEN — why a page is absent from generated listings:".to_string()];
     for k in kinds {
         lines.push(match k {
-            "draft" => "  draft      frontmatter `draft: true` — published at its URL, hidden from every listing, feed, the sitemap and nav; marked noindex".to_string(),
+            "draft" => "  draft      frontmatter `draft: true` — built for preview, never published; hidden from every listing, feed, the sitemap and nav".to_string(),
             "unlisted" => "  unlisted   frontmatter `listed: false` — out of generated listings and feeds, but still a public, indexable page".to_string(),
             "nav-item" => "  nav-item   a root-level file in a site that has content folders: it appears in the nav bar instead of the article list (set `nav: false` to move it back)".to_string(),
-            "slot" => "  slot       layout chrome (footer.md, or `slot:` frontmatter) — renders into a template slot, never its own page".to_string(),
+            "slot" => "  slot       not a page: layout chrome (footer.md, or `slot:` frontmatter) that renders into a template slot, or a `partial: true` transclusion source".to_string(),
             other => format!("  {other}"),
         });
     }

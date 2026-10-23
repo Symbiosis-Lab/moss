@@ -359,7 +359,7 @@ fn extra_attrs_passed_through_verbatim() {
 /// same suppression. Without this, browsers see two `style=` attributes
 /// on one element, honor the last one, and drop the LQIP placeholder.
 #[test]
-fn lqip_style_suppressed_when_extra_attrs_has_style() {
+fn the_placeholder_and_the_display_style_share_one_attribute() {
     let s = snapshot_with(
         "hero.jpg",
         Some((1920, 1080)),
@@ -374,24 +374,20 @@ fn lqip_style_suppressed_when_extra_attrs_has_style() {
         ImageContext::Hero { plate: false },
         &ImageRenderOptions {
             eager: true,
-            extra_attrs: Some(r#"style="object-fit:cover;object-position:50% 50%""#),
+            style: Some("object-fit:cover;object-position:50% 50%"),
+            fit: Some(crate::media::Fit::Cover),
             ..Default::default()
         },
     );
-    // Exactly one `style=` substring — the one the caller passed.
+    // Exactly one `style=` attribute, holding the placeholder and the caller's style.
     assert_eq!(
         html.matches("style=").count(),
         1,
         "expected exactly one style= attribute; got: {html}"
     );
-    // Confirm the caller's style is what survived (not the LQIP).
     assert!(
-        html.contains(r#"style="object-fit:cover"#),
-        "caller-supplied style must survive; got: {html}"
-    );
-    assert!(
-        !html.contains(r#"background-image:url(data:"#),
-        "LQIP must be suppressed when extra_attrs carries style=; got: {html}"
+        html.contains("background-size:cover;object-fit:cover;object-position:50% 50%\""),
+        "the caller's style follows the placeholder; got: {html}"
     );
 }
 
@@ -890,7 +886,7 @@ fn synthesize_gallery_thumb_non_raster_bare_img() {
 }
 
 #[test]
-fn synthesize_gallery_thumb_threads_extra_attrs() {
+fn synthesize_gallery_thumb_threads_its_display_style() {
     // The Gallery hook builds a `style="object-position:..."` fragment
     // from MediaAttrs and passes it via extra_attrs. The synthesizer
     // suppresses its own LQIP-derived style= when extra_attrs already
@@ -904,7 +900,7 @@ fn synthesize_gallery_thumb_threads_extra_attrs() {
         false,
     );
     let opts = ImageRenderOptions {
-        extra_attrs: Some(r#"style="object-position:50% 50%""#),
+        style: Some("object-position:50% 50%"),
         ..Default::default()
     };
     let out = synthesize_image_html("photo.jpg", "", &snap, ImageContext::GalleryThumb, &opts);
@@ -914,8 +910,8 @@ fn synthesize_gallery_thumb_threads_extra_attrs() {
         "expected exactly one style= attribute; got: {out}"
     );
     assert!(
-        out.contains(r#"style="object-position:50% 50%""#),
-        "caller-supplied style must survive; got: {out}"
+        out.contains(r#"style="background-image:url(data:image/jpeg;base64,abc);background-size:cover;object-position:50% 50%""#),
+        "the placeholder and the caller's style share one attribute; got: {out}"
     );
 }
 
@@ -966,7 +962,7 @@ fn ladder_srcset_emitted_for_wide_raster() {
     );
     assert!(
             html.contains(
-                r#"<source srcset="photo.w800.webp 800w, photo.w1600.webp 1600w, photo.webp 2000w" type="image/webp" sizes="(min-width: 48rem) 47.25rem, 100vw">"#
+                r#"<source srcset="photo.w800.webp 800w, photo.w1600.webp 1600w, photo.webp 2000w" type="image/webp" sizes="auto, (min-width: 48rem) 47.25rem, 100vw">"#
             ),
             "got: {html}"
         );
@@ -1151,7 +1147,7 @@ fn comma_named_raster_encodes_srcset_commas_but_not_base_src() {
     );
     assert_eq!(
         html,
-        r#"<picture><source srcset="a%2Cb.w800.webp 800w, a%2Cb.w1600.webp 1600w, a%2Cb.webp 2000w" type="image/webp" sizes="(min-width: 48rem) 47.25rem, 100vw"><img src="a,b.jpg" width="2000" height="1200" loading="lazy" alt="cat" /></picture>"#
+        r#"<picture><source srcset="a%2Cb.w800.webp 800w, a%2Cb.w1600.webp 1600w, a%2Cb.webp 2000w" type="image/webp" sizes="auto, (min-width: 48rem) 47.25rem, 100vw"><img src="a,b.jpg" width="2000" height="1200" loading="lazy" alt="cat" /></picture>"#
     );
 }
 
@@ -1169,7 +1165,7 @@ fn comma_named_webp_source_encodes_img_srcset_commas_but_not_base_src() {
     );
     assert_eq!(
         html,
-        r#"<img src="a,b.webp" srcset="a%2Cb.w800.webp 800w, a%2Cb.w1600.webp 1600w, a%2Cb.webp 2000w" sizes="(min-width: 48rem) 47.25rem, 100vw" width="2000" height="1200" loading="lazy" alt="cat" />"#
+        r#"<img src="a,b.webp" srcset="a%2Cb.w800.webp 800w, a%2Cb.w1600.webp 1600w, a%2Cb.webp 2000w" sizes="auto, (min-width: 48rem) 47.25rem, 100vw" width="2000" height="1200" loading="lazy" alt="cat" />"#
     );
 }
 
@@ -1223,7 +1219,7 @@ fn no_comma_filename_srcset_is_not_over_encoded() {
     assert!(!html.contains("%2C"), "no comma to encode; got: {html}");
     assert_eq!(
         html,
-        r#"<picture><source srcset="photo.w800.webp 800w, photo.w1600.webp 1600w, photo.webp 2000w" type="image/webp" sizes="(min-width: 48rem) 47.25rem, 100vw"><img src="photo.jpg" width="2000" height="1200" loading="lazy" alt="cat" /></picture>"#
+        r#"<picture><source srcset="photo.w800.webp 800w, photo.w1600.webp 1600w, photo.webp 2000w" type="image/webp" sizes="auto, (min-width: 48rem) 47.25rem, 100vw"><img src="photo.jpg" width="2000" height="1200" loading="lazy" alt="cat" /></picture>"#
     );
 }
 
@@ -1471,24 +1467,20 @@ fn email_body_output_unchanged_by_ladder() {
 }
 
 #[test]
-fn synthesize_hero_bare_with_style_via_extra_attrs() {
-    // The legacy fallback passed an inline `style="..."` fragment
-    // built from MediaAttrs::to_inline_style(). PR2 threads that
-    // fragment through `ImageRenderOptions::extra_attrs` — the
-    // synthesizer prepends a single space, matching the legacy byte
-    // shape.
+fn synthesize_hero_bare_with_its_display_style() {
     let out = synthesize_image_html(
         "cover.jpg",
         "",
         &AssetSnapshot::new(),
         ImageContext::HeroBare,
         &ImageRenderOptions {
-            extra_attrs: Some(r#"style="object-fit:cover;object-position:50% 50%""#),
+            style: Some("object-fit:cover;object-position:50% 50%"),
+            fit: Some(crate::media::Fit::Cover),
             ..Default::default()
         },
     );
     assert_eq!(
-        out, r#"<img src="cover.jpg" alt="" style="object-fit:cover;object-position:50% 50%" />"#,
+        out, r#"<img src="cover.jpg" alt="" style="object-fit:cover;object-position:50% 50%" data-fit="cover" />"#,
         "got: {}",
         out
     );
@@ -1603,7 +1595,7 @@ fn webp_source_wide_emits_img_srcset_no_picture() {
     );
     assert_eq!(
         html,
-        r#"<img src="photo.webp" srcset="photo.w800.webp 800w, photo.w1600.webp 1600w, photo.webp 1866w" sizes="(min-width: 48rem) 47.25rem, 100vw" width="1866" height="1866" loading="lazy" alt="alt" />"#
+        r#"<img src="photo.webp" srcset="photo.w800.webp 800w, photo.w1600.webp 1600w, photo.webp 1866w" sizes="auto, (min-width: 48rem) 47.25rem, 100vw" width="1866" height="1866" loading="lazy" alt="alt" />"#
     );
     assert!(
         !html.contains("<picture"),
@@ -2043,4 +2035,20 @@ fn vertical_sizes_render_gate_golden_matches_the_synthesizer() {
     }
     let have = std::fs::read_to_string(&path).unwrap_or_default();
     assert_eq!(have, want, "stale {}: rerun with SNAPSHOTS=overwrite", path.display());
+}
+
+#[test]
+fn a_contained_picture_gets_data_fit_and_no_colour_band() {
+    let s = snapshot_with("pic.jpg", Some((1200, 800)), Some("#123456"), None, false);
+    let opts = ImageRenderOptions {
+        style: Some("object-fit:contain"),
+        fit: Some(crate::media::Fit::Contain),
+        ..Default::default()
+    };
+    let html = synthesize_image_html("pic.jpg", "", &s, ImageContext::MarkdownInline, &opts);
+    assert!(html.contains(r#" style="object-fit:contain" data-fit="contain""#), "got: {html}");
+    assert!(!html.contains("#123456"), "no dominant-colour band behind a whole picture: {html}");
+    let cover = ImageRenderOptions { style: Some("object-fit:cover"), fit: Some(crate::media::Fit::Cover), ..Default::default() };
+    let html = synthesize_image_html("pic.jpg", "", &s, ImageContext::MarkdownInline, &cover);
+    assert!(html.contains(r#"style="background-color:#123456;object-fit:cover" data-fit="cover""#), "got: {html}");
 }

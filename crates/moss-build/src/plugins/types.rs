@@ -342,11 +342,13 @@ pub struct ProcessContext {
     #[serde(default)]
     pub config: HashMap<String, serde_json::Value>,
 
-    /// Why moss is invoking this hook. moss owns this context:
-    /// the plugin reads it to declare task intent via `startTask`, it does
-    /// NOT guess it. Onboarding card → `OnboardingFlow` (drives the ambient
-    /// hairline); every build/preview rebuild → `Background` (quiet). Defaults
-    /// to `Background` for any caller that doesn't set it explicitly.
+    /// The site's `.moss/config.toml`, read-only, minus credential-named keys
+    /// and the `[plugins]` table. Filled per plugin by the dispatcher.
+    #[serde(default)]
+    pub site_config: serde_json::Map<String, serde_json::Value>,
+
+    /// Why moss is invoking this hook; the plugin reads it to declare task
+    /// intent via `startTask` rather than guessing. Defaults to `Background`.
     #[serde(default)]
     pub trigger: TriggerContext,
 }
@@ -361,12 +363,9 @@ impl Default for TriggerContext {
 
 impl ProcessContext {
     /// Construct a `ProcessContext`, deriving `moss_dir` from `project_path`.
-    ///
-    /// The `trigger` is the load-bearing input: it decides whether the
-    /// plugin's tasks reach the ambient hairline (`OnboardingFlow`) or the quiet
-    /// Workspace surface (`Background`). Prefer the named constructors
-    /// [`ProcessContext::for_onboarding`] / [`ProcessContext::for_build`] at call
-    /// sites so the trigger choice is explicit and regression-tested.
+    /// `trigger` decides whether the plugin's tasks reach the ambient hairline
+    /// or the quiet Workspace surface; prefer [`ProcessContext::for_onboarding`]
+    /// / [`ProcessContext::for_build`] so that choice is explicit.
     pub fn new(project_path: String, project_info: ProjectInfo, trigger: TriggerContext) -> Self {
         let moss_dir = format!("{}/.moss", project_path);
         ProcessContext {
@@ -374,6 +373,7 @@ impl ProcessContext {
             moss_dir,
             project_info,
             config: HashMap::new(),
+            site_config: Default::default(),
             trigger,
         }
     }

@@ -31,7 +31,7 @@
 // Rust-owned constants (bundle mount URL + palette strings) arrive via the
 // generated module — `generate-artifacts -- search-runtime` — never hand-mirrored.
 import { BUNDLE_PATH, STRINGS, type SearchStrings } from "./search.generated";
-import { lockPageScroll } from "./viewport";
+import { holdPageScroll } from "./viewport";
 import { pageLanguage } from "./writing-mode";
 
 // ---------------------------------------------------------------------------
@@ -99,8 +99,6 @@ let indexVersion = 0;
 
 /** Element focus returns to on close (the trigger that opened the panel). */
 let returnFocusTo: HTMLElement | null = null;
-/** Undoes the page scroll lock taken on open. */
-let unlockScroll: (() => void) | null = null;
 
 // ---------------------------------------------------------------------------
 // Pagefind loading
@@ -291,7 +289,7 @@ function open(trigger: HTMLElement | null): void {
   returnFocusTo = trigger;
   isOpen = true;
   root.hidden = false;
-  unlockScroll = lockPageScroll();
+  holdPageScroll("search", true);
   input?.focus();
   input?.select();
   // Warm the index while the user is still reaching for the first key.
@@ -302,8 +300,7 @@ function close(): void {
   if (!isOpen) return;
   isOpen = false;
   if (overlay) overlay.hidden = true;
-  unlockScroll?.();
-  unlockScroll = null;
+  holdPageScroll("search", false);
   clearProgress();
   window.clearTimeout(debounceTimer);
   // Closing mid-composition (Esc, backdrop click) doesn't reliably fire
@@ -614,8 +611,9 @@ document.addEventListener("keydown", (e) => {
   const isCmdK = (e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K");
   const isSlash = e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey;
   if (!isCmdK && !isSlash) return;
-  if (!document.querySelector(".nav-search-btn")) return;
   e.preventDefault();
+  // This script ships only where the build made a search index; the button is
+  // a place for focus to return to, and a site with no header has none.
   open(document.querySelector<HTMLElement>(".nav-search-btn"));
 });
 
@@ -630,8 +628,7 @@ document.addEventListener("moss-morph-patched", () => {
   if (overlay && !overlay.isConnected) {
     if (isOpen) {
       isOpen = false;
-      unlockScroll?.();
-      unlockScroll = null;
+      holdPageScroll("search", false);
       returnFocusTo = null;
     }
     // Same gate close() clears: a morph mid-composition doesn't fire

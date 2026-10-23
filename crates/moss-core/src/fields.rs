@@ -10,8 +10,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 /// The type a declared field holds. Names match the `type` key in config.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FieldKind {
+    #[default]
     Text,
     Number,
     Date,
@@ -21,7 +22,12 @@ pub enum FieldKind {
     Count,
     Page,
     Pages,
+    /// Holds no value: names other fields, which its placement draws as one.
+    Group,
 }
+
+/// The built-in fields a group may name in `of` without declaring them: the page's title and its date.
+pub const GROUP_BUILTIN_PARTS: &[&str] = &["title", "date"];
 
 const KIND_NAMES: &[(&str, FieldKind)] = &[
     ("text", FieldKind::Text),
@@ -33,6 +39,7 @@ const KIND_NAMES: &[(&str, FieldKind)] = &[
     ("count", FieldKind::Count),
     ("page", FieldKind::Page),
     ("pages", FieldKind::Pages),
+    ("group", FieldKind::Group),
 ];
 
 impl FieldKind {
@@ -52,7 +59,7 @@ impl FieldKind {
 }
 
 /// One `[fields.<name>]` declaration.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FieldDecl {
     pub name: String,
     pub kind: FieldKind,
@@ -62,8 +69,12 @@ pub struct FieldDecl {
     pub place: Option<Place>,
     /// `(language tag, label)` pairs for the row a facts-placed field draws; empty = the capitalised name.
     pub label: Vec<(String, String)>,
+    /// `(language tag, text)` pairs: the link text a url field draws for every value; empty = the address itself.
+    pub text: Vec<(String, String)>,
     /// Folder prefixes (site-relative, no leading slash) this field applies to; empty = whole site.
     pub scope: Vec<String>,
+    /// For a group: the fields it draws, in order.
+    pub of: Vec<String>,
 }
 
 impl FieldDecl {
@@ -73,6 +84,11 @@ impl FieldDecl {
             let mut chars = self.name.chars();
             chars.next().map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
         })
+    }
+
+    /// The link text a url field draws in `lang`, when the declaration names one.
+    pub fn text_for(&self, lang: &str) -> Option<&str> {
+        label_in(&self.text, lang)
     }
 }
 
@@ -144,6 +160,22 @@ impl Place {
     }
 }
 
+/// A declaration with a `place`, and what it draws on one page.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Placed {
+    Value(FieldDecl, TypedValue),
+    /// A group, with the parts that have a value on this page, in `of` order.
+    Group(FieldDecl, Vec<(FieldDecl, TypedValue)>),
+}
+
+impl Placed {
+    pub fn decl(&self) -> &FieldDecl {
+        match self {
+            Placed::Value(d, _) | Placed::Group(d, _) => d,
+        }
+    }
+}
+
 /// A parsed field value, shaped the way plugins receive it. Serialized
 /// untagged, so the JSON is each variant's own fields.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -195,6 +227,7 @@ pub fn parse_value(decl: &FieldDecl, value: &Value, page: PageFormat) -> Result<
         return Err("has no value; give it one or remove the line".to_string());
     }
     match decl.kind {
+        FieldKind::Group => Err("a group holds no value; write the fields it draws instead".to_string()),
         FieldKind::Text => scalar_text(value).map(TypedValue::Text).ok_or_else(|| "expected text".to_string()),
         FieldKind::Number => match value {
             Value::Number(n) => Ok(TypedValue::Number(n.clone())),
@@ -279,6 +312,28 @@ pub fn parse_value(decl: &FieldDecl, value: &Value, page: PageFormat) -> Result<
             }
             Ok(TypedValue::Pages(out))
         }
+    }
+}
+
+/// One declared field as a page states it, by its own frontmatter or by a folder's
+/// cascade. `None` when the field does not apply: the page is outside its `in`
+/// scope, the value is absent or blank, or it is a built-in whose bad value the
+/// schema check reports. Otherwise the typed value, or the reason it does not fit.
+pub fn declare_one(
+    decl: &FieldDecl,
+    file_path: &str,
+    raw: Option<&serde_yaml::Value>,
+    page: PageFormat,
+) -> Option<Result<TypedValue, String>> {
+    if !in_folders(&decl.scope, file_path) {
+        return None;
+    }
+    let raw = raw.filter(|v| !crate::frontmatter::is_blank(v))?;
+    let json = serde_json::to_value(raw).ok()?;
+    match parse_value(decl, &json, page) {
+        Ok(value) => Some(Ok(value)),
+        Err(_) if crate::schema_fields::builtin_field(&decl.name).is_some() => None,
+        Err(reason) => Some(Err(reason)),
     }
 }
 

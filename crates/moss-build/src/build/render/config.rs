@@ -89,6 +89,11 @@ pub struct SiteConfig {
     ///
     /// Stored resolved, like `math`, so consumers never re-decide the default.
     pub floating_nav: bool,
+    /// `[site].colophon` — moss's one-line "Published with moss" credit.
+    /// Default ON: an absent key resolves to `true` at the construction
+    /// site. Authors who don't want it write `[site].colophon = false`, and
+    /// the build leaves the element out of every page.
+    pub colophon: bool,
     /// `[site].header` — resolved (`HeaderMode::from_config`, which also
     /// carries the default and the unrecognized-value fallback), so
     /// consumers never re-decide either.
@@ -173,6 +178,7 @@ impl Default for SiteConfig {
             link_preview: false,
             heading_anchors: false,
             floating_nav: false,
+            colophon: true,
             header: crate::build::components::nav::HeaderMode::Brand,
             site_url_override: None,
             declared_redirects: Vec::new(),

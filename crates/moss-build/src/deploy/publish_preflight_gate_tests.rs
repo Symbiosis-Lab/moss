@@ -12,6 +12,7 @@ fn record(folder: &str, generation: u64, missing_references: Vec<MissingReferenc
             build_generation: generation,
             missing_references,
             unresolved_inputs: Vec::new(),
+            drafts_linked: Vec::new(),
         },
     );
 }
@@ -111,4 +112,32 @@ fn a_rebuild_that_finds_nothing_clears_an_earlier_refusal() {
         refuse_publish("/clears").is_ok(),
         "a clean rebuild must replace the previous verdict, not merge with it"
     );
+}
+
+fn draft_link(source: &str, reference: &str, draft: &str) -> crate::build::types::DraftLinkOccurrence {
+    crate::build::types::DraftLinkOccurrence {
+        source_path: source.into(),
+        reference: reference.into(),
+        draft_source: draft.into(),
+        line: Some(3),
+    }
+}
+
+/// A draft is never published, so a published page linking to one would ship a
+/// dead link. The refusal names each link and both ways out.
+#[test]
+fn a_published_page_linking_to_a_draft_blocks_the_publish() {
+    crate::system::build_records::records().install_publish_preflight(
+        "/links-a-draft",
+        PublishPreflightProjection {
+            build_generation: 1,
+            missing_references: Vec::new(),
+            unresolved_inputs: Vec::new(),
+            drafts_linked: vec![draft_link("about/team.md", "/notes/wip/", "notes/wip.md")],
+        },
+    );
+    let err = refuse_publish("/links-a-draft").expect_err("a link to a draft must stop the publish");
+    assert!(err.starts_with("Nothing published — 1 link goes to a draft:"), "{err}");
+    assert!(err.contains("`about/team.md` links to `/notes/wip/`, and `notes/wip.md` says `draft: true`."), "{err}");
+    assert!(err.contains("Remove the link, or take `draft: true` off the page, then publish again."), "{err}");
 }

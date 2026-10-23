@@ -301,6 +301,7 @@ fn lede_ends_at_a_widened_figure_but_not_a_body_width_one() {
             class_names: vec![],
             img_style: None,
             italic_caption: false,
+            link: None,
         },
     ];
     assert_eq!(lede_end(&blocks), blocks.len(), "body width is the default measure");
@@ -382,6 +383,15 @@ fn first_text_block_skips_a_callout_even_though_it_is_blockquote_syntax() {
     );
 }
 
+#[test]
+fn first_text_block_skips_a_paragraph_that_is_only_a_picture() {
+    // A wikilink picture can stay a paragraph holding only an image; the
+    // locator floats beside the first real text, never over the picture.
+    assert_eq!(first_text_block_of("![[photo.jpg]]\n\nBody paragraph.\n"), Some(1));
+    assert_eq!(first_text_block_of("![[a.jpg]]\n![[b.jpg]]\n\nBody paragraph.\n"), Some(1));
+    assert_eq!(first_text_block_of("![[photo.jpg]] and words\n"), Some(0), "a caption-like line of text is still text");
+}
+
 // ── BodyPlan::first_text_segments / insert_before_text ──────────────────
 
 #[test]
@@ -421,9 +431,21 @@ fn insert_locator_follows_the_first_text_block_only_when_asked() {
     assert_eq!(locator_order(md, AfterText), ["heading", "first", "locator", "second"]);
     // The opening text is also the last block.
     assert_eq!(locator_order("First paragraph.\n", AfterText), ["first", "locator"]);
-    // No text block: the front in both modes.
+    // No text block: the front after the text, the end before it.
     assert_eq!(locator_order("## Section\n\n---\n", AfterText), ["locator", "heading"]);
-    assert_eq!(locator_order("## Section\n\n---\n", BeforeText), ["locator", "heading"]);
+    assert_eq!(locator_order("## Section\n\n---\n", BeforeText), ["heading", "locator"]);
+}
+
+#[test]
+fn insert_locator_lands_after_a_leading_picture_paragraph() {
+    let hooks = DefaultHooks::new();
+    let mut plan = render_segmented(&parse("![[photo.jpg]]\n\nFirst paragraph.\n"), &hooks);
+    plan.insert_locator("<!--LOCATOR-->".to_string(), LocatorPlacement::BeforeText);
+    let html = plan.to_html();
+    let picture = html.find("photo.jpg").expect("picture present");
+    let locator = html.find("<!--LOCATOR-->").expect("locator present");
+    let first = html.find("<p>First").expect("paragraph present");
+    assert!(picture < locator && locator < first, "want picture < locator < text, got:\n{html}");
 }
 
 #[test]
@@ -466,15 +488,15 @@ fn insert_before_text_is_a_noop_for_an_empty_fragment() {
 }
 
 #[test]
-fn insert_before_text_falls_back_to_the_front_with_no_text_block() {
+fn insert_before_text_falls_back_to_the_end_unfloated_with_no_text_block() {
     let hooks = DefaultHooks::new();
     let doc = parse("## Only a heading\n\n---\n");
     let mut plan = render_segmented(&doc, &hooks);
-    plan.insert_locator("<!--LOCATOR-->".to_string(), LocatorPlacement::BeforeText);
+    plan.insert_locator("<div class=\"moss-place-locator moss-align-right\"></div>".to_string(), LocatorPlacement::BeforeText);
     let html = plan.to_html();
     assert!(
-        html.starts_with("<!--LOCATOR-->"),
-        "a body with no text block keeps the locator at the very front: {html}"
+        html.trim_end().ends_with("<div class=\"moss-place-locator moss-align-end\"></div>"),
+        "a body with no text block takes the locator last, unfloated: {html}"
     );
 }
 

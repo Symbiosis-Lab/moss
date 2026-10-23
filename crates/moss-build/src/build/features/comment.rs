@@ -148,7 +148,7 @@ fn normalize_social_comment(raw: &serde_json::Value, fallback_source: &str, matt
     // Defense-in-depth: sanitize at render-load too. Newly-synced entries are
     // already sanitized at ingest (sync_remote), but legacy comment.json entries
     // and syndicated mirrors may hold unsanitized HTML. Idempotent.
-    let content = sanitize::sanitize_comment_html(raw.get("content").and_then(|c| c.as_str())?);
+    let raw_content = raw.get("content").and_then(|c| c.as_str())?;
 
     // Filter inactive
     if let Some(state) = raw.get("state").and_then(|s| s.as_str()) {
@@ -171,6 +171,14 @@ fn normalize_social_comment(raw: &serde_json::Value, fallback_source: &str, matt
         .unwrap_or_else(|| {
             if fallback_source == "comment" { "artalk".to_string() } else { fallback_source.to_string() }
         });
+
+    // Matters links are relative to matters.town; make them absolute so they
+    // resolve from the author's own domain.
+    let matters_origin = format!("https://{}", matters_domain);
+    let content = sanitize::sanitize_comment_html_with_origin(
+        raw_content,
+        (source == "matters").then_some(matters_origin.as_str()),
+    );
 
     let author_obj = raw.get("author");
     let display_name = author_obj
@@ -388,6 +396,22 @@ mod tests {
     }
 
     #[test]
+    fn test_normalize_social_comment_matters_relative_links_point_at_matters() {
+        let html = r#"<p><a href="/@guo">@guo</a> <a href="/a/abc">post</a> <a href="//cdn.example/x">p</a> <a href="https://example.com/a">abs</a></p>"#;
+        let raw = serde_json::json!({ "id": "m1", "content": html, "author": { "name": "A" } });
+        let c = normalize_social_comment(&raw, "matters", "matters.town").unwrap();
+        assert!(c.content.contains(r#"href="https://matters.town/@guo""#), "{}", c.content);
+        assert!(c.content.contains(r#"href="https://matters.town/a/abc""#), "{}", c.content);
+        assert!(c.content.contains(r#"href="https://example.com/a""#), "{}", c.content);
+        assert!(!c.content.contains("matters.town//cdn"), "{}", c.content);
+        assert!(c.content.contains("rel=\"nofollow ugc noopener\""), "{}", c.content);
+        // Other sources are not rewritten.
+        let raw = serde_json::json!({ "id": "a1", "content": html, "source": "artalk", "author": { "name": "A" } });
+        let c = normalize_social_comment(&raw, "comment", "matters.town").unwrap();
+        assert!(c.content.contains(r#"href="/@guo""#), "{}", c.content);
+    }
+
+    #[test]
     fn test_normalize_social_comment_filters_inactive() {
         let raw = serde_json::json!({
             "id": "x1",
@@ -459,6 +483,26 @@ mod tests {
         // Matters author URL should be resolved
         let uid2_comments = result.get("uid2").unwrap();
         assert!(uid2_comments[0].author.url.is_none()); // "C" has no userName
+    }
+
+    #[test]
+    fn test_matters_mention_renders_as_absolute_link_in_comment_body() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let social_dir = tmp.path().join(".moss").join("data").join("social");
+        std::fs::create_dir_all(&social_dir).unwrap();
+        std::fs::write(social_dir.join("matters.json"), r#"{
+            "schemaVersion": "1.1.0",
+            "articles": { "uid1": { "comments": [{"id": "m1", "source": "matters",
+                "content": "<p><a href=\"/@guo\" class=\"mention\"><span>@Guo</span></a> thanks</p>",
+                "createdAt": "2026-01-02", "author": {"displayName": "B", "userName": "bob"}}] } }
+        }"#).unwrap();
+        let loaded = load_all_social_comments(tmp.path().to_str().unwrap(), MATTERS_DOMAIN_FALLBACK);
+        let html = render::render_comment_section(
+            loaded.get("uid1").unwrap(), "https://api.mosspub.com/comments", "example.com",
+            "uid1", "T", Language::En, &[], 0,
+        );
+        assert!(html.contains(r#"href="https://matters.town/@guo""#), "{html}");
+        assert!(!html.contains(r#"href="/@guo""#), "{html}");
     }
 
     #[test]

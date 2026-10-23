@@ -378,7 +378,7 @@ pub(in crate::build::features) fn process_reviews(
                         item.writer_rating = Some(rating as i32);
                     }
                 } else {
-                    log::warn!(
+                    log::info!(
                         "Review: Failed to fetch {}, no cache available",
                         article.review_of
                     );

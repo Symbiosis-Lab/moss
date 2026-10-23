@@ -90,6 +90,13 @@ fn marker_omits_size_when_absent() {
 }
 
 #[test]
+fn parses_when_past_and_upcoming_and_drops_anything_else() {
+    assert_eq!(parse_params("when:past").when.as_deref(), Some("past"));
+    assert_eq!(parse_params("when=upcoming,limit:3").when.as_deref(), Some("upcoming"));
+    assert_eq!(parse_params("when:soon").when, None);
+}
+
+#[test]
 fn parses_covers_only() {
     let p = parse_params("depth:all,covers:only,limit:6");
     assert_eq!(p.covers, Some("only".to_string()));
@@ -177,6 +184,17 @@ fn a_comma_joined_keyed_segment_tolerates_a_trailing_bare_flag() {
 }
 
 #[test]
+fn an_unknown_key_among_known_ones_is_ignored_and_recorded() {
+    let p = classify_folder_segments("style:grid,when:past,bogus:1");
+    assert_eq!(p.style.as_deref(), Some("grid"));
+    assert_eq!(p.when.as_deref(), Some("past"));
+    assert_eq!(p.caption, None);
+    assert_eq!(p.unknown_keys, vec!["bogus".to_string()]);
+    let m = emit_marker("/p/", "index.md", &p);
+    assert!(m.contains("unknown=bogus"), "{m}");
+}
+
+#[test]
 fn caption_drops_the_placement_words_it_shared_a_segment_with() {
     // `wide cover` is one segment: `wide` is placement, `cover` is left
     // over. The caption must be the leftover text, not the whole segment
@@ -197,4 +215,30 @@ fn marker_roundtrips_count_text_with_separators() {
     let hidden = FolderEmbedParams { count: Some(ChildrenCount(String::new())), ..Default::default() };
     assert!(emit_marker("/p/", "index.md", &hidden).contains("|count=-->"));
     assert!(!emit_marker("/p/", "index.md", &FolderEmbedParams::default()).contains("count"));
+}
+
+#[test]
+fn strip_markers_drops_a_terminated_marker_and_keeps_the_prose() {
+    let text = format!("Before {}path=shows/|style=list{} after", MARKER_FOLDER_LIST, MARKER_END);
+    assert_eq!(strip_markers(&text), "Before  after");
+}
+
+#[test]
+fn strip_markers_drops_an_unterminated_marker_to_the_end() {
+    let text = format!("Before {}path=shows/ no end", MARKER_FOLDER_LIST);
+    assert_eq!(strip_markers(&text), "Before ");
+}
+
+#[test]
+fn strip_markers_leaves_text_without_a_marker_alone() {
+    assert_eq!(strip_markers("Plain words."), "Plain words.");
+}
+
+#[test]
+fn listing_marker_names_a_folder_and_its_options_and_nothing_else() {
+    let marker = listing_marker("shows/|when:upcoming", "index.md").unwrap();
+    assert_eq!(marker_body(&marker), Some("path=shows/|from=index.md|when=upcoming"));
+    assert_eq!(listing_marker("shows", "index.md"), None);
+    assert_eq!(listing_marker("|when:upcoming", "index.md"), None);
+    assert_eq!(listing_marker("", "index.md"), None);
 }

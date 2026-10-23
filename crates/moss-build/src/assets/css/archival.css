@@ -1,0 +1,140 @@
+/* Edition line and citation block (`[site] archival = true`).
+ * Uses moss design tokens, so it follows the theme in light and dark.
+ */
+.moss-edition {
+  color: var(--moss-color-muted, #666);
+  font-size: var(--moss-size-sm, 0.875rem);
+  overflow-wrap: anywhere;
+}
+
+.moss-edition p {
+  margin: var(--moss-space-xs, 0.25rem) 0;
+}
+
+/* The footer's divider rule owns the space above the block. */
+.moss-edition > :first-child {
+  margin-block-start: 0;
+}
+
+.moss-edition a {
+  color: var(--moss-color-accent, inherit);
+}
+
+.moss-cite-label {
+  font-weight: 600;
+  color: var(--moss-color-text, inherit);
+}
+
+/* The moss mark closes the edition line, in both its inks, instead of standing
+   in a band of its own. A footer laid out as columns, around a subscribe form
+   or under a closing picture keeps its own layout. */
+footer.container:has(> .moss-edition + .moss-colophon):not(:has(> section, > .footer-bottom, > .moss-subscribe)) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  column-gap: var(--moss-space-md, 1rem);
+}
+
+footer.container:has(> .moss-edition + .moss-colophon):not(:has(> section, > .footer-bottom, > .moss-subscribe))::before,
+footer.container:has(> .moss-edition + .moss-colophon):not(:has(> section, > .footer-bottom, > .moss-subscribe)) > :not(.moss-edition, .moss-colophon) {
+  flex-basis: 100%;
+}
+
+footer.container > .moss-edition:has(+ .moss-colophon) {
+  flex: 1 1 0;
+  min-inline-size: 0;
+}
+
+/* Centred on the edition line: the colophon takes that line's font size, so
+   `1lh` is the line's height. Flex, so no line box of its own adds height;
+   end-aligned for a footer that gives it a row of its own. */
+footer.container > .moss-edition + .moss-colophon {
+  display: flex;
+  justify-content: flex-end;
+  font-size: var(--moss-size-sm, 0.875rem);
+  margin: 0;
+  padding: calc((1lh - 1rem) / 2) 0 0;
+}
+
+/* A 24px target around the 16px mark, without moving it. */
+.moss-edition + .moss-colophon a {
+  padding: 0.25rem;
+  margin: -0.25rem;
+}
+
+.moss-edition + .moss-colophon .moss-colophon-icon {
+  --moss-mark-paint: var(--moss-mark-ink);
+  --moss-mark-drop-paint: var(--moss-mark-drop);
+}
+
+.moss-edition + .moss-colophon .moss-colophon-icon svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+/* The name appears under the mark, in the footer's end space. */
+.moss-edition + .moss-colophon .moss-colophon-label {
+  inset-block-start: calc(100% + 0.25rem);
+}
+
+/* On a closing picture the edition block is the picture's foot: the credit's
+   panel and measured foot ink, above the colophon's row. This sheet is not in
+   a cascade layer, so these rules out-rank the block's own colour above. */
+.moss-hero-closing > .moss-edition {
+  position: absolute;
+  inset-block-end: var(--moss-closing-strip);
+  inset-inline: 0;
+  z-index: 3;
+  box-sizing: border-box;
+  padding: 0.3rem var(--moss-words-pad) 0.3rem var(--moss-words-inset);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  background: var(--moss-hero-panel-bg, var(--item-hero-panel-bg, rgba(20, 16, 12, 0.82)));
+}
+.moss-hero-closing[data-hero-tone="light"] > .moss-edition {
+  color: var(--moss-hero-tone-color, #2c2825);
+  text-shadow: none;
+  background: var(--moss-hero-panel-bg, var(--item-hero-panel-bg, rgba(250, 248, 244, 0.82)));
+}
+.moss-hero-closing > .moss-edition :is(a, .moss-cite-label) {
+  color: inherit;
+}
+:is(:root:not([data-theme="dark"]) .moss-hero-closing[data-edition="dark"], :root[data-theme="dark"] .moss-hero-closing[data-edition-night="dark"]) > .moss-edition {
+  color: var(--moss-hero-tone-color, #2c2825);
+  text-shadow: none;
+  background: none;
+}
+:is(:root:not([data-theme="dark"]) .moss-hero-closing[data-edition="light"], :root[data-theme="dark"] .moss-hero-closing[data-edition-night="light"]) > .moss-edition {
+  color: #fff;
+  background: none;
+}
+
+/* With an edition, a closing picture's foot is one column in reading order: the
+   words, the credit, the edition, then the strip the colophon's row sits in. The
+   picture is laid behind the column, so the column grows the picture to fit it. */
+body > footer.container > .moss-hero-closing:has(> .moss-edition)[data-mobile="overlay"][data-overlay] {
+  display: flex;
+  flex-direction: column;
+  padding: 0 0 var(--moss-closing-strip);
+}
+@media (width < 48rem) {
+  body > footer.container > .moss-hero-closing:has(> .moss-edition)[data-mobile="overlay"][data-overlay] {
+    padding-block: 0 var(--moss-closing-strip);
+  }
+}
+.moss-hero-closing:has(> .moss-edition) > picture {
+  position: absolute;
+  inset: 0;
+}
+.moss-hero-closing:has(> .moss-edition) > .moss-hero-credit {
+  position: static;
+  inset: auto;
+  align-self: flex-end;
+  margin-block-start: auto;
+}
+.moss-hero-closing:has(> .moss-edition) > .moss-edition {
+  position: static;
+  inset: auto;
+}

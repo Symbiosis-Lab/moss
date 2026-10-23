@@ -5,7 +5,7 @@
 # date" step catches the same drift, but only on a pull request to main —
 # a develop landing bypasses it entirely, which is how dist/ went stale
 # under a src change that landed straight on develop. Same idea, a different
-# artifact, for site/vendor/moss-watercolor/moss-watercolor.js — the
+# artifact, for site/home/vendor/moss-watercolor/moss-watercolor.js — the
 # landing's own checked-in build of packages/moss-watercolor.
 #
 # node is assumed present for anyone developing this repo, but these hooks

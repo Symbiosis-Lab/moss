@@ -12,6 +12,7 @@ fn site() -> SiteUrl {
 
 fn project() -> ProjectStructure {
     ProjectStructure {
+        passthrough_media: Vec::new(),
         root_path: String::new(),
         markdown_files: vec![],
         html_files: vec![],

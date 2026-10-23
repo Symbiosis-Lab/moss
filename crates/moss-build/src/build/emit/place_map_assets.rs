@@ -30,6 +30,9 @@
 //! every time, the same reasoning `media::remote_cover`'s module doc gives —
 //! runs on every build.
 //!
+//! `NOTICE.txt` beside them carries the map data's acknowledgements
+//! ([`NOTICE`]); a site that emits map assets always emits it.
+//!
 //! `tiles.json` lists the emitted regional tiles' `[x, y]` pairs plus `k`,
 //! the factor a tile is drawn at over the world's own scale
 //! (`place_map::geometry::TILE_K`), so the explorer knows which cells exist
@@ -46,10 +49,18 @@ use crate::build::cache::{ObjectStore, TransformCache, TransformEntry};
 use crate::build::context::BuildContext;
 use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::place_map;
+use crate::build::place_map::layer_warp::LayerPlan;
 use crate::build::place_map::{TILE_COLUMNS, TILE_K, TILE_ROWS};
 use crate::build::served_path::ServedPath;
+use crate::config::map_layers::MapLayer;
 use crate::moss_paths::MossPaths;
 use crate::vault::places::Gazetteer;
+
+/// The map data's acknowledgements, shipped as `NOTICE.txt` in every
+/// `_moss/map.<hash>/` directory. The GEBCO grid is public domain on the
+/// condition that its source is acknowledged, so the text is the same file
+/// the pack's source manifest ships beside it.
+const NOTICE: &str = include_str!("../../../data/place-map/NOTICE");
 
 /// `tiles.json`'s own shape: `k` and the grid's `columns`/`rows` alongside
 /// the emitted cells, so the runtime never has to hardcode or re-derive the
@@ -119,7 +130,7 @@ mod generator_version_guard {
         let world = compute_binary_hash(place_map::emit_world_svg(&context).as_bytes());
         assert_eq!(
             (GENERATOR_VERSION, tile.as_str(), world.as_str()),
-            (6, "f7ecd5c30bea6139", "593d9e7750c79f3a"),
+            (6, "8a942696130d9d71", "6b198ee3228d905f"),
             "the emitter's output changed: bump GENERATOR_VERSION before updating the pinned digests, \
              because every site that rebuilds would otherwise keep its old tiles under the new manifest"
         );
@@ -141,6 +152,13 @@ mod generator_version_guard {
 /// `directory_name_moves_when_a_places_toml_edit_moves_a_place_to_a_new_cell`
 /// below.
 pub fn assets_hash(context: &place_map::PlaceMapContext, gazetteer: &Gazetteer) -> String {
+    assets_hash_with_layers(context, gazetteer, &[], &[])
+}
+
+/// [`assets_hash`] for a site that declares detail layers: the bytes of
+/// `layers.json` join the hash, so editing a layer moves the directory. With
+/// no layers the hash is exactly `assets_hash`'s.
+pub fn assets_hash_with_layers(context: &place_map::PlaceMapContext, gazetteer: &Gazetteer, layers: &[MapLayer], plans: &[LayerPlan]) -> String {
     let mut buf = Vec::new();
     buf.extend_from_slice(&context.pack_fingerprint());
     buf.extend_from_slice(&GENERATOR_VERSION.to_le_bytes());
@@ -151,6 +169,13 @@ pub fn assets_hash(context: &place_map::PlaceMapContext, gazetteer: &Gazetteer) 
     // generator-only change.
     buf.extend_from_slice(context.labels_bytes());
     buf.extend_from_slice(&tile_index_json(&place_map::relevant_tiles(gazetteer, context.pack())));
+    if let Some(json) = super::place_map_layers::layers_json(layers) {
+        buf.extend_from_slice(&json);
+    }
+    // What the layers' tiles are drawn from: a plate or place edit moves the directory.
+    for plan in plans {
+        buf.extend_from_slice(plan.digest.as_bytes());
+    }
     compute_binary_hash(&buf)
 }
 
@@ -235,7 +260,7 @@ pub fn emit_if_place_typed(
     };
     match place_map::PlaceMapContext::embedded() {
         Ok(context) => {
-            if let Err(error) = emit(&context, render_context.gazetteer(), paths, output_dir, pending) {
+            if let Err(error) = emit_with_layers(&context, render_context.gazetteer(), render_context.layers(), render_context.layer_plans(), paths, output_dir, pending) {
                 crate::build::cli_output::log_warn_problem!("place-map explorer assets could not be emitted: {error}");
             }
         }
@@ -258,9 +283,22 @@ pub fn emit(
     output_dir: &Path,
     pending: &mut PendingManifest,
 ) -> Result<usize, String> {
+    emit_with_layers(context, gazetteer, &[], &[], paths, output_dir, pending)
+}
+
+/// [`emit`] into the directory a site with `layers` is named after.
+pub fn emit_with_layers(
+    context: &place_map::PlaceMapContext,
+    gazetteer: &Gazetteer,
+    layers: &[MapLayer],
+    plans: &[LayerPlan],
+    paths: &MossPaths,
+    output_dir: &Path,
+    pending: &mut PendingManifest,
+) -> Result<usize, String> {
     let objects = ObjectStore::for_site(paths);
     let transforms = TransformCache::for_site(paths);
-    let hash = assets_hash(context, gazetteer);
+    let hash = assets_hash_with_layers(context, gazetteer, layers, plans);
 
     let regional_tiles = place_map::relevant_tiles(gazetteer, context.pack());
     let mut assets = vec![Asset::World];
@@ -354,6 +392,16 @@ pub fn emit(
     BuildContext::for_render(output_dir, pending)
         .emit(&index_sp, &index_json, HashBucket::Files)
         .map_err(|e| format!("Failed to emit place-map tile index: {e}"))?;
+
+    let notice_sp = ServedPath::for_place_map_asset(&hash, "NOTICE.txt")
+        .map_err(|e| format!("Invalid place-map notice path: {e}"))?;
+    let mut notice = NOTICE.to_string();
+    for plan in plans {
+        notice.push_str(&plan.notice);
+    }
+    BuildContext::for_render(output_dir, pending)
+        .emit(&notice_sp, notice.as_bytes(), HashBucket::Files)
+        .map_err(|e| format!("Failed to emit place-map notice: {e}"))?;
 
     Ok(rendered)
 }
@@ -602,7 +650,30 @@ mod tests {
         assert!(index.cells.is_empty());
         assert_eq!(index.k, TILE_K);
         assert_eq!((index.columns, index.rows), (36, 18));
-        assert_eq!(std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).count(), 2, "world.svg + tiles.json only");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).count(), 3, "world.svg + tiles.json + NOTICE.txt only");
+    }
+
+    /// GEBCO's terms require the grid's source to be acknowledged, so every
+    /// site that ships map assets ships the acknowledgement with them.
+    #[test]
+    fn map_assets_ship_with_the_data_acknowledgements() {
+        let context = place_map::PlaceMapContext::embedded().unwrap();
+        let (_dir, paths) = scratch_paths("notice");
+        let output_dir = tempfile::tempdir().unwrap();
+        let mut pending = PendingManifest::new(SiteHashes::default());
+
+        emit(&context, &empty_gazetteer(), &paths, output_dir.path(), &mut pending).unwrap();
+        let dirs = emitted_map_dirs(output_dir.path());
+        let notice = std::fs::read_to_string(output_dir.path().join("_moss").join(&dirs[0]).join("NOTICE.txt")).unwrap();
+        for needed in [
+            "Natural Earth",
+            "GEBCO Compilation Group (2025) GEBCO 2025 Grid (doi:10.5285/37c52e96-24ea-67ce-e063-7086abc05f29)",
+            "placed in the public domain",
+            "not endorsed by GEBCO",
+            "NOT be used for navigation",
+        ] {
+            assert!(notice.contains(needed), "NOTICE.txt lacks {needed:?}");
+        }
     }
 
     /// Waits until no owned cache publication holds the cache, as the next build would find it.
@@ -658,7 +729,7 @@ mod tests {
             for (x, y) in &cells {
                 assert!(map_dir.join(format!("tile-{x}-{y}.svg")).is_file());
             }
-            assert_eq!(manifest.site_hashes_view().files.len(), cells.len() + 2, "both outputs registered");
+            assert_eq!(manifest.site_hashes_view().files.len(), cells.len() + 3, "both outputs registered");
             assert_eq!(pretend::requests_for(&folder), 0, "directory writes never request a file-byte download");
             assert_eq!(std::fs::read(&sibling).unwrap(), b"preserve shared data");
             if object_folder {
@@ -676,7 +747,7 @@ mod tests {
                 let next = tempfile::tempdir().unwrap();
                 let mut pending = PendingManifest::new(SiteHashes::default());
                 rendered.push(emit(&context, &gaz, &paths, next.path(), &mut pending).unwrap());
-                assert_eq!(pending.seal().site_hashes_view().files.len(), cells.len() + 2);
+                assert_eq!(pending.seal().site_hashes_view().files.len(), cells.len() + 3);
                 wait_for_cache_publications(&paths, "the rebuild's cache publication");
             }
             assert!(rendered[0] < cells.len(), "the settled records spare the first rebuild: {rendered:?}");
@@ -713,7 +784,8 @@ mod tests {
         let map_dir = output.path().join("_moss").join(format!("map.{}", assets_hash(&context, &gaz)));
         assert_eq!(std::fs::read(map_dir.join("world.svg")).unwrap(), svg.as_bytes());
         assert!(map_dir.join("tiles.json").is_file());
-        assert_eq!(pending.seal().site_hashes_view().files.len(), 2);
+        assert!(map_dir.join("NOTICE.txt").is_file());
+        assert_eq!(pending.seal().site_hashes_view().files.len(), 3);
     }
 
     fn emitted_map_dirs(output_dir: &Path) -> Vec<String> {

@@ -97,6 +97,10 @@ pub struct ResolvedSlots {
     /// How the listing pass reaches the plugins; never part of the cache key.
     #[serde(skip)]
     listing_host: Option<crate::build::emit::listing_style::ListingHost>,
+    /// `[site] archival`: what every page says about its build, set by the
+    /// pipeline once the source copy it describes is written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    edition: Option<crate::build::emit::archival::Edition>,
 }
 
 impl ResolvedSlots {
@@ -107,7 +111,13 @@ impl ResolvedSlots {
             feature_styles: Vec::new(),
             listings: HashMap::new(),
             listing_host: None,
+            edition: None,
         }
+    }
+
+    /// Turn the edition blocks on for every page.
+    pub(crate) fn set_edition(&mut self, edition: crate::build::emit::archival::Edition) {
+        self.edition = Some(edition);
     }
 
     /// Record that a feature stylesheet is linked, and return its `<link>` tag.
@@ -170,7 +180,7 @@ impl ResolvedSlots {
     /// `plugin_name` is used for deterministic tie-breaking (alphabetical).
     pub fn merge(&mut self, result: &EnhanceResult, priority: u32, plugin_name: &str) {
         if !result.success {
-            log::warn!("Plugin '{}' returned success=false for slot content; skipping its slots", plugin_name);
+            log::info!("Plugin '{}' returned success=false for slot content; skipping its slots", plugin_name);
             return;
         }
         for (slot_name, content) in &result.slots {
@@ -252,7 +262,8 @@ pub fn inject_slots(html: &str, slots: &ResolvedSlots, page_path: &str) -> Strin
     for slot_name in crate::build::slots::Slot::ALL.map(|s| s.as_str()) {
         let marker = format!("<!-- slot:{} -->", slot_name);
         let has_marker = result.contains(&marker);
-        if let Some(content) = slots.get_html(slot_name, page_path) {
+        let content = slots.get_html(slot_name, page_path);
+        if let Some(content) = content {
             let has_content = !content.trim().is_empty();
             match slot_name {
                 "footer-left" => footer_left_has_content = has_content,
@@ -270,7 +281,12 @@ pub fn inject_slots(html: &str, slots: &ResolvedSlots, page_path: &str) -> Strin
             result = result.replace(&marker, "");
         }
     }
-    strip_empty_footer(result, footer_left_has_content, footer_end_has_content)
+    let mut edition_placed = false;
+    if let Some(placed) = slots.edition.as_ref().and_then(|e| e.place(&result, page_path)) {
+        result = placed;
+        edition_placed = true;
+    }
+    strip_empty_footer(result, footer_left_has_content, footer_end_has_content || edition_placed)
 }
 
 /// Known slot markers still present in HTML that is about to ship.
@@ -328,7 +344,7 @@ fn log_residual_slot_markers(page_path: &str, residual: &[&str]) {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     page_path.hash(&mut h);
     let page_id = h.finish();
-    log::warn!(
+    log::info!(
         target: "slots",
         "unresolved slot marker(s) {:?} shipped in page#{:016x} — slot injection did not cover this file (raw marker will render; in attribute position it leaks a literal \">\")",
         residual,
@@ -440,14 +456,14 @@ fn write_slot_inject_record(
     let json_bytes = match serde_json::to_vec(record) {
         Ok(b) => b,
         Err(e) => {
-            log::warn!("Failed to serialize html/slots record: {}", e);
+            log::info!("Failed to serialize html/slots record: {}", e);
             return;
         }
     };
     let record_oid = match object_store.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request) {
         Ok(oid) => oid,
         Err(e) => {
-            log::warn!("Failed to store html/slots record blob: {}", e);
+            log::info!("Failed to store html/slots record blob: {}", e);
             return;
         }
     };
@@ -460,7 +476,7 @@ fn write_slot_inject_record(
         rec.transforms.insert(SLOT_INJECT_TRANSFORM.to_string(), entry);
     });
     if let Err(e) = merged {
-        log::warn!("Failed to write html/slots transform record: {}", e);
+        log::info!("Failed to write html/slots transform record: {}", e);
     }
 }
 
@@ -491,7 +507,7 @@ impl StoreFailures {
 
     fn report(self) {
         if let Some(reason) = self.first_reason {
-            log::warn!(
+            log::info!(
                 target: "slots",
                 "{} page(s) could not be stored in the content store ({}); they ship from the stage under a fingerprint instead of an immutable copy",
                 self.pages,

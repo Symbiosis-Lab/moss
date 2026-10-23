@@ -30,16 +30,21 @@
 //! `folder_id` because those carry on-disk paths.
 
 mod maps;
+pub(crate) mod hero_from;
 pub(crate) mod members;
 mod calendar_tokens;
 pub(crate) mod upcoming;
+mod nav_note;
+mod repeat_note;
+pub(crate) use nav_note::note_home_map_of_nav_root;
+pub(crate) use repeat_note::{note_repeated_child_listing, ListedUrls};
 use maps::place_map_with_placement;
 
 use std::path::Path;
 
 use moss_core::asset_snapshot::AssetSnapshot;
 use moss_core::frontmatter_union::ChildrenCount;
-use moss_core::resolve::embed_renderer::folder_list::{marker_decode, LAZY_CARDS_TOKEN, MARKER_END, MARKER_FOLDER_LIST};
+use moss_core::resolve::embed_renderer::folder_list::{marker_decode, KNOWN_KEYS, LAZY_CARDS_TOKEN, MARKER_END, MARKER_FOLDER_LIST};
 use moss_core::resolve::embed_renderer::Sizing;
 use moss_core::resolve::title_params::TitleParams;
 use moss_core::sort::{ResolvedSort, SortAxis};
@@ -73,6 +78,8 @@ struct ParsedMarker<'a> {
     /// because this module re-parses the SAME pipe-encoded marker body that
     /// `emit_marker` produced, same as `limit`/`depth`/`group`.
     covers: Option<&'a str>,
+    /// `"past"` or `"upcoming"`: keeps only the pages whose event has ended, or has not.
+    when: Option<&'a str>,
     /// Internal filter: root homepage's own listing — scope to the default language
     /// tree (drop language-prefix subtrees) when the site is multilingual (homepage only).
     scope_default_tree: bool,
@@ -94,6 +101,8 @@ struct ParsedMarker<'a> {
     caption: Option<String>,
     /// The card grid's covers all load lazily (see `FolderEmbedParams::lazy_cards`).
     lazy_cards: bool,
+    /// Keys the embed named that moss does not know, comma-joined.
+    unknown_keys: Option<String>,
 }
 
 fn warn_map_fallback_once(path: &str, reason: &str) {
@@ -106,6 +115,16 @@ fn warn_map_fallback_once(path: &str, reason: &str) {
     ) {
         crate::build::cli_output::log_warn_problem!(
             "map embed '{path}' {reason}; rendering its ordinary listing"
+        );
+    }
+}
+
+fn warn_unknown_options(page: &str, parsed: &ParsedMarker<'_>) {
+    if let Some(keys) = &parsed.unknown_keys {
+        crate::build::cli_output::log_warn_problem!(
+            "[{page}] folder embed '{}' ignores unknown option(s) {keys}; known options: {}",
+            parsed.path,
+            KNOWN_KEYS.join(", ")
         );
     }
 }
@@ -139,6 +158,7 @@ fn parse_marker_body(body: &str) -> Option<ParsedMarker<'_>> {
                 "more" => out.more = Some(marker_decode(v.trim())),
                 "count" => out.count = Some(ChildrenCount(marker_decode(v.trim()))),
                 "covers" => out.covers = Some(v.trim()),
+                "when" => out.when = Some(v.trim()),
                 "width" => out.placement.width = moss_core::media::match_width_token(v.trim()),
                 "align" => {
                     out.placement.align = match v.trim() {
@@ -149,6 +169,7 @@ fn parse_marker_body(body: &str) -> Option<ParsedMarker<'_>> {
                 }
                 "pct" => out.placement.size = Some(v.trim().to_string()),
                 "caption" => out.caption = Some(marker_decode(v.trim())),
+                "unknown" => out.unknown_keys = Some(marker_decode(v.trim())),
                 _ => {}
             }
         } else if tok == "scope_default_tree" {
@@ -421,12 +442,13 @@ pub(crate) fn generate_children(
                 &project.root_path,
                 dir_overrides,
                 typesetting,
+                now,
             );
             // The grid card is one of those paths: its description comes from
             // `props_for_document` (frontmatter, then the first byline row) and
             // never from the body excerpt, like the `:::grid` card it shares a
             // renderer with.
-            props.count_setting = count.cloned();
+            props.count_setting = props.count_setting.take().or_else(|| count.cloned());
             if style != "grid" {
                 props.description = crate::build::page::meta::resolve_page_description(
                     crate::build::components::child_list::explicit_card_text(doc).as_deref(),
@@ -531,7 +553,7 @@ pub(crate) fn generate_children(
     let interleave_dated_folders = group != "year" && parent_axis.shows_date();
     let (folders, articles): (Vec<&ChildItemProps>, Vec<&ChildItemProps>) = sorted
         .into_iter()
-        .partition(|i| i.child_count.is_some() && !(interleave_dated_folders && i.date_display.is_some()));
+        .partition(|i| i.is_folder() && !(interleave_dated_folders && i.date_display.is_some()));
 
     // Folders always render flat, regardless of group setting.
     for folder in &folders {
@@ -614,7 +636,9 @@ pub(crate) fn generate_children(
                     url_path: item.url_path.clone(),
                     place: item.place.clone(),
                     when_html: item.when_html.clone(),
+                    when: item.when,
                     credits: item.credits.clone(),
+                    subtitle: item.subtitle.clone(),
                     source_file: item.source_file.clone(),
                 })
                 .collect();
@@ -708,7 +732,9 @@ fn render_minimal_year_section(
                 url_path: a.url_path.clone(),
                 place: a.place.clone(),
                 when_html: a.when_html.clone(),
+                when: a.when,
                 credits: a.credits.clone(),
+                subtitle: a.subtitle.clone(),
                 source_file: a.source_file.clone(),
             };
             components::child_list::render(&props, true, false, lang, typesetting)
@@ -749,7 +775,8 @@ fn render_minimal_year_section(
 /// every image and video's dimensions/color/LQIP on EVERY build this
 /// function ran at all, regardless of whether any listing actually changed —
 /// corpus-scaled work identical in shape to `page_map`/`external_url_map`'s.
-pub fn expand_markers_in_documents(
+#[cfg(test)]
+pub(crate) fn expand_markers_in_documents(
     documents: &mut [ParsedDocument],
     project: &ProjectStructure,
     dir_overrides: &std::collections::HashMap<String, String>,
@@ -757,7 +784,7 @@ pub fn expand_markers_in_documents(
     media_lookup: &crate::build::media::dimensions::MediaDimensionLookup,
     site_typesetting: Option<&str>,
 ) {
-    expand_markers_in_documents_with_place_maps(documents, project, dir_overrides, math, media_lookup, site_typesetting, None, None)
+    expand_markers_in_documents_with_place_maps(documents, project, dir_overrides, math, media_lookup, site_typesetting, None, None, upcoming::now())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -770,14 +797,13 @@ pub fn expand_markers_in_documents_with_place_maps(
     site_typesetting: Option<&str>,
     place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
     calendar: Option<(&crate::build::feeds::calendar::CalendarPlan, &crate::build::site_url::SiteUrl)>,
+    now: chrono::NaiveDateTime,
 ) {
-    let has_marker = |d: &ParsedDocument| d.html_content.contains(MARKER_FOLDER_LIST);
+    hero_from::resolve_all(documents, project, dir_overrides, math, media_lookup, now);
+    let has_marker = |d: &ParsedDocument| [Some(d.html_content.as_str()), d.hero_html.as_deref()].into_iter().flatten().any(|h| h.contains(MARKER_FOLDER_LIST));
     if !documents.iter().any(has_marker) {
         return;
     }
-    // One clock for every past/upcoming decision this pass makes: the
-    // `group:upcoming` ordering and the calendar links agree exactly.
-    let now = upcoming::now();
     for i in 0..documents.len() {
         if !has_marker(&documents[i]) {
             continue;
@@ -794,12 +820,10 @@ pub fn expand_markers_in_documents_with_place_maps(
         )
         .map(str::to_owned);
         let mut plan = documents[i].body_plan.take();
-        // `tag_embed: true` — every marker this scan finds came from a
-        // literal body `![[folder/|…]]`, never from `synthesize_children_marker`
-        // (that path calls `resolve_markers` directly on a lone marker, before
-        // this pass ever runs; see `resolve_markers_impl`'s doc comment).
-        // Body segments and grid cells share one SVG identity sequence per page.
+        // Every marker here came from an authored `![[folder/|…]]`, never from
+        // `synthesize_children_marker`. One SVG identity sequence per page.
         let ordinal = std::cell::Cell::new(0);
+        let shown = ListedUrls::default();
         let expand = |html: &str| {
             resolve_markers_impl(
                 html,
@@ -814,10 +838,13 @@ pub fn expand_markers_in_documents_with_place_maps(
                 true,
                 place_maps,
                 &ordinal,
+                Some(&shown),
                 now,
             )
         };
         let links_for = calendar_tokens::links_for(calendar, &documents[i], now);
+        // The hero sits before the body, so its listings come first in the page's order.
+        let hero = documents[i].hero_html.as_deref().map(&expand);
         let resolved = match plan.as_mut() {
             Some(p) => {
                 p.map_html(&expand);
@@ -832,6 +859,8 @@ pub fn expand_markers_in_documents_with_place_maps(
         };
         documents[i].body_plan = plan;
         documents[i].html_content = resolved;
+        documents[i].hero_html = hero;
+        documents[i].embedded_listing_urls = shown.into_inner();
     }
 }
 
@@ -844,7 +873,8 @@ pub fn expand_markers_in_documents_with_place_maps(
 ///   from the original markdown source)
 /// - `all_docs` / `project` / `dir_overrides` / `site_lang`: pipeline state
 ///   forwarded to `generate_children`
-pub fn resolve_markers(
+#[cfg(test)]
+pub(crate) fn resolve_markers(
     html: &str,
     from_md_path: &str,
     all_docs: &[ParsedDocument],
@@ -857,7 +887,7 @@ pub fn resolve_markers(
 ) -> String {
     resolve_markers_with_place_maps(
         html, from_md_path, all_docs, project, dir_overrides, site_lang,
-        typesetting, media_lookup, math, None,
+        typesetting, media_lookup, math, None, None, upcoming::now(),
     )
 }
 
@@ -873,6 +903,8 @@ pub(crate) fn resolve_markers_with_place_maps(
     media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
     math: bool,
     place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
+    shown: Option<&ListedUrls>,
+    now: chrono::NaiveDateTime,
 ) -> String {
     resolve_markers_impl(
         html,
@@ -887,7 +919,8 @@ pub(crate) fn resolve_markers_with_place_maps(
         false,
         place_maps,
         &std::cell::Cell::new(0),
-        upcoming::now(),
+        shown,
+        now,
     )
 }
 
@@ -913,6 +946,7 @@ fn resolve_markers_impl(
     is_embed: bool,
     place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
     ordinal: &std::cell::Cell<usize>,
+    shown: Option<&ListedUrls>,
     now: chrono::NaiveDateTime,
 ) -> String {
     if !html.contains(MARKER_FOLDER_LIST) {
@@ -938,21 +972,25 @@ fn resolve_markers_impl(
         let embed_ordinal = ordinal.get();
         ordinal.set(embed_ordinal + 1);
         let rendered = match parse_marker_body(body) {
-            Some(parsed) => render_one(
-                &parsed,
-                embed_ordinal,
-                from_md_path,
-                all_docs,
-                project,
-                dir_overrides,
-                site_lang,
-                typesetting,
-                media_lookup,
-                math,
-                is_embed,
-                place_maps,
-                now,
-            ),
+            Some(parsed) => {
+                warn_unknown_options(from_md_path, &parsed);
+                render_one(
+                    &parsed,
+                    embed_ordinal,
+                    from_md_path,
+                    all_docs,
+                    project,
+                    dir_overrides,
+                    site_lang,
+                    typesetting,
+                    media_lookup,
+                    math,
+                    is_embed,
+                    place_maps,
+                    shown,
+                    now,
+                )
+            }
             None => Err(format!("Invalid folder-embed marker: {body}")),
         };
         // The placeholder stays visible; the problem is also reported where
@@ -1227,36 +1265,27 @@ pub(crate) fn home_defaults(doc: &ParsedDocument) -> HomeDefaults<'_> {
     }
 }
 
-/// Render a single resolved marker. `Err` carries the plain-text problem when
-/// the target does not resolve; the caller renders the placeholder and reports it. `is_embed` — see [`resolve_markers_impl`] — passes
-/// straight through to [`generate_children`], which is where it actually
-/// shapes output.
+enum Listed<'a> {
+    Iframe(String),
+    Pages {
+        folder_slug: String,
+        target_doc: Option<&'a ParsedDocument>,
+        is_flatten: bool,
+        pages: Vec<&'a ParsedDocument>,
+    },
+}
+
+/// An embed's target resolved: an app to frame, or the pages it selects
+/// (before sort and limit). Shared by the embed and by a `from=` hero.
 #[allow(clippy::too_many_arguments)]
-fn render_one(
+fn list_pages<'a>(
     parsed: &ParsedMarker<'_>,
-    ordinal: usize,
-    from_md_path: &str,
-    all_docs: &[ParsedDocument],
+    from: &str,
+    all_docs: &'a [ParsedDocument],
     project: &ProjectStructure,
     dir_overrides: &std::collections::HashMap<String, String>,
-    site_lang: crate::i18n::Language,
-    typesetting: Option<&str>,
-    media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
-    math: bool,
-    is_embed: bool,
-    place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
     now: chrono::NaiveDateTime,
-) -> Result<String, String> {
-    // Prefer the marker's `from=` (the original markdown source); the
-    // page-level `from_md_path` is a safe fallback when older markers omit it.
-    let from = if parsed.from.is_empty() {
-        from_md_path
-    } else {
-        parsed.from
-    };
-    if parsed.style.as_deref() == Some("map") && !parsed.path.ends_with('/') {
-        return Ok(maps::render(parsed, ordinal, all_docs, place_maps));
-    }
+) -> Result<Listed<'a>, String> {
     // Route the three-branch decision through moss-core's `classify_reference`:
     // `dir_has_markdown_index` → FolderListing (Branch 1), else
     // `dir_has_static_index` → FolderIndexIframe (Branch 2), else NotFound.
@@ -1327,7 +1356,7 @@ fn render_one(
                 parsed.size.as_deref(),
                 all_docs,
             ) {
-                return Ok(iframe);
+                return Ok(Listed::Iframe(iframe));
             }
             // Defensive: predicate said iframe but the synthesizer declined.
             return Err(not_found(&folder_id));
@@ -1366,16 +1395,62 @@ fn render_one(
     // "all" flattens all descendants; "direct" (default) is one level only.
     let is_flatten = parsed.depth.as_deref() == Some("all");
     let host = all_docs.iter().find(|d| d.source_path.as_deref() == Some(from));
-    let folder_docs = members::select(
+    let pages = members::select(
         &folder_id_slug,
         is_flatten,
         parsed.scope_default_tree,
         parsed.exclude_nav,
         parsed.covers == Some("only"),
+        parsed.when,
+        now,
         host,
         all_docs,
         project,
     );
+    Ok(Listed::Pages { folder_slug: folder_id_slug, target_doc, is_flatten, pages })
+}
+
+/// Render a single resolved marker. `Err` carries the plain-text problem when
+/// the target does not resolve; the caller renders the placeholder and reports it. `is_embed` — see [`resolve_markers_impl`] — passes
+/// straight through to [`generate_children`], which is where it actually
+/// shapes output.
+#[allow(clippy::too_many_arguments)]
+fn render_one(
+    parsed: &ParsedMarker<'_>,
+    ordinal: usize,
+    from_md_path: &str,
+    all_docs: &[ParsedDocument],
+    project: &ProjectStructure,
+    dir_overrides: &std::collections::HashMap<String, String>,
+    site_lang: crate::i18n::Language,
+    typesetting: Option<&str>,
+    media_lookup: Option<&crate::build::media::dimensions::MediaDimensionLookup>,
+    math: bool,
+    is_embed: bool,
+    place_maps: Option<&crate::build::place_map::PlaceMapRenderContext>,
+    shown: Option<&ListedUrls>,
+    now: chrono::NaiveDateTime,
+) -> Result<String, String> {
+    // Prefer the marker's `from=` (the original markdown source); the
+    // page-level `from_md_path` is a safe fallback when older markers omit it.
+    let from = if parsed.from.is_empty() {
+        from_md_path
+    } else {
+        parsed.from
+    };
+    if parsed.style.as_deref() == Some("map") {
+        if !parsed.path.ends_with('/') {
+            return Ok(maps::render(parsed, ordinal, all_docs, place_maps));
+        }
+        if let Some(html) = place_maps.and_then(|maps| maps::render_place_root(parsed, ordinal, from, all_docs, maps)) {
+            return Ok(html);
+        }
+    }
+    let (folder_id_slug, target_doc, is_flatten, folder_docs) =
+        match list_pages(parsed, from, all_docs, project, dir_overrides, now)? {
+            Listed::Iframe(html) => return Ok(html),
+            Listed::Pages { folder_slug, target_doc, is_flatten, pages } => (folder_slug, target_doc, is_flatten, pages),
+        };
 
     if folder_docs.is_empty() {
         return Ok(String::new());
@@ -1413,9 +1488,13 @@ fn render_one(
         style_override.as_ref(),
         group_override.as_ref(),
         parsed.limit,
+        parsed.when,
         math,
         now,
     );
+    if let Some(shown) = shown {
+        shown.borrow_mut().extend(limited.iter().map(|d| d.url_path.clone()));
+    }
     let children_style = style_resolved.value.clone();
 
     let all_docs_refs: Vec<&ParsedDocument> = all_docs.iter().collect();
@@ -1563,7 +1642,11 @@ fn render_one(
         None => listing,
     };
     Ok(match target_doc {
-        Some(t) if is_embed => format!("{embed}{}", calendar_tokens::token(ordinal, &t.url_path)),
+        // The links describe the listing as shown, so a listing with no event
+        // still to come (`when:past`) leaves none.
+        Some(t) if is_embed && limited.iter().any(|d| upcoming::is_upcoming(d, now)) => {
+            format!("{embed}{}", calendar_tokens::token(ordinal, &t.url_path))
+        }
         _ => embed,
     })
 }
@@ -1636,6 +1719,7 @@ pub fn synthesize_children_marker(
         // never an iframe, so size is irrelevant here.
         size: None,
         covers: doc.children_covers.clone(),
+        when: doc.children_when.clone(),
         // Empty-string guard matches the embed grammar's own `more:`
         // key, which never carries an empty value either.
         more: doc.children_more.clone().filter(|s| !s.is_empty()),
@@ -1646,6 +1730,7 @@ pub fn synthesize_children_marker(
         // caption out of; both are body-embed vocabulary.
         placement: Default::default(),
         caption: None,
+        unknown_keys: Vec::new(),
         // The page's own listing shares the page's one eager slot with its
         // hero or leading image.
         lazy_cards: doc.body_claims_eager,

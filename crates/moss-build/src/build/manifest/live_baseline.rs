@@ -280,7 +280,7 @@ pub fn load(paths: &MossPaths) -> Baseline {
             // records cannot be shown to cover the pages this one dropped, so
             // unioning them in anyway would silently narrow the baseline.
             RecordFacts::Inconsistent => {
-                log::warn!(
+                log::info!(
                     "a publish record has a note ID with no matching page mapping — this is \
                      a half-updated shape from before the last writer of it was fixed, so this \
                      build treats what is live as unknown rather than guessing at it. The \
@@ -297,11 +297,11 @@ pub fn load(paths: &MossPaths) -> Baseline {
         // records cannot be shown to cover it, so its pages would silently go
         // missing from the baseline.
         Baseline::Unreadable(why) => return Baseline::Unreadable(why),
-        Baseline::Absent if entries.is_empty() && !records.is_empty() => {
-            // Records, but no note IDs anywhere. Something HAS been published,
-            // so this is not absence — and the file that used to answer is
-            // gone, so nothing here can.
-            log::warn!(
+        Baseline::Absent if entries.is_empty() && records.iter().any(|r| r.triples.is_none()) => {
+            // Records that predate `triples`: a publish happened but nothing
+            // here can say what it put live. A record with empty `triples` is
+            // a real baseline (a site with no tracked pages), not this.
+            log::info!(
                 "the publish records carry no note IDs and the file that used to \
                  hold them is gone — this build will not detect renames or resolve \
                  duplicate note IDs, rather than deciding either against a history \
@@ -349,7 +349,7 @@ fn read_records(paths: &MossPaths) -> Result<Vec<PublishedSnapshot>, Unreadable>
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => {
-            log::warn!(
+            log::info!(
                 "the publish records at {} could not be listed ({e}) — treating what is \
                  live as unknown rather than as nothing",
                 dir.display()
@@ -365,12 +365,12 @@ fn read_records(paths: &MossPaths) -> Result<Vec<PublishedSnapshot>, Unreadable>
 fn read_record(path: &Path) -> Result<Option<PublishedSnapshot>, Unreadable> {
     match crate::build::cloud_readiness::read_input_if_present(path) {
         Ok(Some(text)) => serde_json::from_str(&text).map(Some).map_err(|e| {
-            log::warn!("the publish record at {} does not parse ({e})", path.display());
+            log::info!("the publish record at {} does not parse ({e})", path.display());
             Unreadable::Corrupt
         }),
         Ok(None) => Ok(None),
         Err(e) => {
-            log::warn!(
+            log::info!(
                 "the publish record at {} could not be read ({e}) — this build will not \
                  detect renames or resolve duplicate note IDs, rather than deciding \
                  either against a record it does not have",
@@ -398,7 +398,7 @@ fn read_legacy(paths: &MossPaths) -> Baseline {
                     entries.extend(from_article_map(&map).entries);
                 }
                 Err(e) => {
-                    log::warn!(
+                    log::info!(
                         "the pre-fix record at {} does not parse ({e}) — treating \
                          it as unreadable; the next publish replaces it",
                         path.display()
@@ -408,7 +408,7 @@ fn read_legacy(paths: &MossPaths) -> Baseline {
             },
             Ok(None) => continue,
             Err(e) => {
-                log::warn!(
+                log::info!(
                     "the pre-fix record at {} could not be read ({e}) — treating what \
                      is live as unknown rather than as nothing",
                     path.display()
@@ -491,7 +491,7 @@ fn backfill_triples(paths: &MossPaths) {
         let mut updated = record.clone();
         updated.triples = Some(join_legacy_pair(&record));
         if let Err(e) = crate::build::manifest::published_record::save(paths, &updated) {
-            log::warn!(
+            log::info!(
                 "could not backfill live-page triples into the publish record ({e}) — the \
                  join runs again next build"
             );
@@ -572,7 +572,7 @@ fn retire_legacy_snapshot(paths: &MossPaths) {
         record.uids.clone_from(&uids);
         record.triples = Some(triples.clone());
         if let Err(e) = crate::build::manifest::published_record::save(paths, &record) {
-            log::warn!(
+            log::info!(
                 "could not move the note IDs into the publish record ({e}) — leaving the \
                  pre-fix file where it is; the next build retries"
             );
@@ -609,7 +609,7 @@ fn remove_superseded(legacy: &Path) {
         // file, so a dataless entry deletes exactly like a materialized one.
         // A failure here is a real permissions
         // problem, and costs only that the file keeps syncing.
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => log::warn!(
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => log::info!(
             "could not remove the superseded record at {} ({e}) — it will keep syncing",
             legacy.display()
         ),

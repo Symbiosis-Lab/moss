@@ -1,4 +1,4 @@
-//! CLI subcommand: `moss domain [link|list]`
+//! CLI subcommand: `moss domain [link|status|list]`
 //!
 //! Exposes the same seta endpoints the Settings UI will use, authenticated with
 //! the project's own identity (`.moss/identity/public.json` + signing key).
@@ -7,19 +7,27 @@
 //!
 //! Subcommands:
 //!   moss domain list <folder>            List owned + assigned domains.
-//!   moss domain link <folder> <domain>   Link a domain to the project's site.
+//!   moss domain link <folder> <domain>   Link a domain to the project's site and
+//!                                        print the DNS records to set.
+//!   moss domain status <folder> <domain> Read live DNS and certificate state.
+//!   All three take `--json` for a stable object.
 //!
 //! Exit codes:
-//!   0  success
+//!   0  success (`status`: the domain is live)
 //!   1  usage / precondition failure (bad folder, no identity, no deployment)
 //!   2  seta error (network, 4xx, 5xx)
+//!   3  `status`: not live yet, waiting for DNS or the certificate
+//!   4  `status`: failed, the hosting service gave up and the link must be redone
 
 use std::path::Path;
 
 use crate::build::site_config::{resolve_environment, site_id_for_folder};
 use crate::identity::keypair::Identity;
+use crate::seta::cdn::{CdnStatus, DomainCdn};
 use crate::seta::client::MossSetaClient;
 use crate::vault_root::VaultRoot;
+
+mod records;
 
 /// Entry point for `moss domain`. `args` is everything AFTER the verb.
 ///
@@ -27,41 +35,28 @@ use crate::vault_root::VaultRoot;
 /// so that the async runtime and any background tasks don't keep the process
 /// alive.
 pub fn run(args: &[String]) -> i32 {
-    let subcommand = match args.first() {
-        Some(s) => s.as_str(),
-        None => {
-            print_help();
-            return 1;
-        }
+    let json = args.iter().any(|a| a == "--json");
+    let args: Vec<String> = args.iter().filter(|a| *a != "--json").cloned().collect();
+    let Some(subcommand) = args.first().map(String::as_str) else {
+        print_help();
+        return 1;
     };
+    let usage = |text: &str| emit(Outcome::fail(json, 1, format!("usage: moss domain {} [--json]", text)));
 
     match subcommand {
-        "list" => {
-            let folder = match args.get(1) {
-                Some(f) => f,
-                None => {
-                    eprintln!("Usage: moss domain list <folder>");
-                    return 1;
-                }
+        "list" => match args.get(1) {
+            Some(folder) => run_async(cmd_list(folder, json)),
+            None => usage("list <folder>"),
+        },
+        "link" | "status" => {
+            let (Some(folder), Some(domain)) = (args.get(1), args.get(2)) else {
+                return usage(&format!("{} <folder> <domain>", subcommand));
             };
-            run_async(cmd_list(folder))
-        }
-        "link" => {
-            let folder = match args.get(1) {
-                Some(f) => f,
-                None => {
-                    eprintln!("Usage: moss domain link <folder> <domain>");
-                    return 1;
-                }
-            };
-            let domain = match args.get(2) {
-                Some(d) => d,
-                None => {
-                    eprintln!("Usage: moss domain link <folder> <domain>");
-                    return 1;
-                }
-            };
-            run_async(cmd_link(folder, domain))
+            if subcommand == "link" {
+                run_async(cmd_link(folder, domain, json))
+            } else {
+                run_async(cmd_status(folder, domain, json))
+            }
         }
         "--help" | "-h" | "help" => {
             print_help();
@@ -81,20 +76,37 @@ fn print_help() {
 
 USAGE:
     moss domain list <folder>
-    moss domain link <folder> <domain>
+    moss domain link <folder> <domain> [--json]
+    moss domain status <folder> <domain> [--json]
 
 DESCRIPTION:
     Authenticates with the project's identity (.moss/identity) and talks to
-    moss-seta. Same codepath the Settings UI will use.
+    the hosting service. Same codepath the Settings UI will use.
+
+    link     Links <domain> (and www.<domain>) to the site. For a domain bought
+             elsewhere it prints the DNS records to set at your registrar; the
+             bare domain redirects to www. For a domain bought through moss,
+             moss manages DNS and there is nothing to set.
+    status   Looks up the records live, reports the certificate, and says
+             whether the domain is live or what it is waiting for.
+    --json   Print one stable JSON object instead of text; an error is
+             {{\"error\": \"...\", \"exit\": N}} on stdout.
+
+    Only a registered domain of two labels (example.com, or www.example.com
+    for the same site) is supported; a subdomain such as blog.example.com is
+    refused.
 
 EXIT CODES:
-    0  success
+    0  success (status: the domain is live)
     1  usage or precondition failure (bad folder, missing identity, no site_id)
-    2  seta error (network, 4xx, 5xx) — retryable
+    2  hosting service error (network, 4xx, 5xx) — retryable
+    3  status: not live yet, waiting for DNS or the certificate
+    4  status: failed, run `moss domain link` again
 
 EXAMPLES:
     moss domain list ~/Sites/landing
-    moss domain link ~/Sites/landing mosspub.com
+    moss domain link ~/Sites/landing example.com
+    moss domain status ~/Sites/landing example.com --json
 "
     );
 }
@@ -132,101 +144,302 @@ fn run_async<F: std::future::Future<Output = i32>>(fut: F) -> i32 {
     }
 }
 
-async fn cmd_list(folder: &str) -> i32 {
-    // Was a raw `Path::new(folder)` — no resolution at all, so `moss domain list .`
-    // read config from a folder path whose name was empty.
-    let root = VaultRoot::resolve(folder);
-    let folder_path = root.path();
-    let client = match client_for_folder(folder_path) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("error: {}", e);
-            return 1;
-        }
-    };
-
-    // Best-effort: read site_id so we can mark which row is "this folder".
-    let current_site = site_id_for_folder(folder_path).ok();
-
-    let response = match client.get_assignable_domains().await {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("error: {}", e);
-            return 2;
-        }
-    };
-
-    if response.domains.is_empty() {
-        println!("(no domains in your account)");
-        return 0;
-    }
-
-    // Columns: HOST, SOURCE, ASSIGNED, FLAG-IF-THIS-SITE.
-    // Using tab separators keeps the output grep-friendly without pulling in
-    // a formatter dep.
-    println!("HOST\tSOURCE\tASSIGNED_TO\tTHIS_SITE");
-    for d in response.domains {
-        // ASCII `-` rather than em-dash so downstream awk/cut pipelines
-        // don't need to handle multi-byte UTF-8 in the "empty" column.
-        let assigned = d
-            .assigned_to
-            .as_ref()
-            .map(|r| r.id.as_str())
-            .unwrap_or("-");
-        let is_this = current_site
-            .as_deref()
-            .map(|s| d.assigned_to.as_ref().map_or(false, |r| r.id == s))
-            .unwrap_or(false);
-        let flag = if is_this { "*" } else { "" };
-        println!("{}\t{}\t{}\t{}", d.host, d.source, assigned, flag);
-    }
-    0
+/// What a command prints and how it exits, so the flows are testable without
+/// capturing the process's own streams.
+pub(crate) struct Outcome {
+    pub code: i32,
+    pub out: String,
+    pub err: String,
 }
 
-async fn cmd_link(folder: &str, domain: &str) -> i32 {
+impl Outcome {
+    /// With `--json` an error is an object on stdout, like every other result.
+    fn fail(json: bool, code: i32, msg: impl std::fmt::Display) -> Self {
+        if json {
+            let v = serde_json::json!({ "error": msg.to_string(), "exit": code });
+            Outcome { code, out: format!("{}\n", v), err: String::new() }
+        } else {
+            Outcome { code, out: String::new(), err: format!("error: {}\n", msg) }
+        }
+    }
+}
+
+fn emit(o: Outcome) -> i32 {
+    print!("{}", o.out);
+    eprint!("{}", o.err);
+    o.code
+}
+
+const RERUN: &str = "Re-running the same command is safe: it reuses what already exists.";
+
+/// Whether moss or the owner runs a domain's DNS decides what is printed and
+/// which host visitors see.
+struct Hosting {
+    apex: String,
+    managed: bool,
+}
+
+impl Hosting {
+    fn source(&self) -> &'static str {
+        if self.managed { "moss" } else { "external" }
+    }
+
+    fn www(&self) -> String {
+        format!("www.{}", self.apex)
+    }
+
+    /// Moss-run domains are served at the apex; owner-run ones redirect the
+    /// apex to www.
+    fn canonical(&self) -> String {
+        if self.managed { self.apex.clone() } else { self.www() }
+    }
+
+    async fn of(client: &MossSetaClient, apex: &str) -> Result<Option<Self>, crate::seta::client::SetaError> {
+        let owned = client.get_assignable_domains().await?;
+        Ok(owned
+            .domains
+            .iter()
+            .find(|d| d.host == apex)
+            .map(|d| Hosting { apex: apex.to_string(), managed: d.source == "moss" }))
+    }
+}
+
+async fn cmd_list(folder: &str, json: bool) -> i32 {
     let root = VaultRoot::resolve(folder);
     let folder_path = root.path();
     let client = match client_for_folder(folder_path) {
         Ok(c) => c,
-        Err(e) => {
-            eprintln!("error: {}", e);
-            return 1;
-        }
+        Err(e) => return emit(Outcome::fail(json, 1, e)),
+    };
+    // Best-effort: read site_id so we can mark which row is "this folder".
+    let current_site = site_id_for_folder(folder_path).ok();
+    emit(list_flow(&client, current_site.as_deref(), json).await)
+}
+
+async fn list_flow(client: &MossSetaClient, current_site: Option<&str>, json: bool) -> Outcome {
+    let response = match client.get_assignable_domains().await {
+        Ok(r) => r,
+        Err(e) => return Outcome::fail(json, 2, e),
+    };
+    let this_site = |d: &crate::seta::domains::AssignableDomain| {
+        current_site.is_some_and(|s| d.assigned_to.as_ref().is_some_and(|r| r.id == s))
+    };
+    if json {
+        let rows: Vec<_> = response
+            .domains
+            .iter()
+            .map(|d| serde_json::json!({
+                "host": d.host,
+                "source": d.source,
+                "assigned_to": d.assigned_to.as_ref().map(|r| r.id.as_str()),
+                "this_site": this_site(d),
+            }))
+            .collect();
+        return Outcome { code: 0, out: format!("{}\n", serde_json::json!({ "domains": rows })), err: String::new() };
+    }
+    if response.domains.is_empty() {
+        return Outcome { code: 0, out: "(no domains in your account)\n".into(), err: String::new() };
+    }
+    // Tab separators keep the output grep-friendly; ASCII `-` marks "empty".
+    let mut out = String::from("HOST\tSOURCE\tASSIGNED_TO\tTHIS_SITE\n");
+    for d in &response.domains {
+        let assigned = d.assigned_to.as_ref().map(|r| r.id.as_str()).unwrap_or("-");
+        out.push_str(&format!("{}\t{}\t{}\t{}\n", d.host, d.source, assigned, if this_site(d) { "*" } else { "" }));
+    }
+    Outcome { code: 0, out, err: String::new() }
+}
+
+async fn cmd_link(folder: &str, domain: &str, json: bool) -> i32 {
+    let root = VaultRoot::resolve(folder);
+    let folder_path = root.path();
+    let client = match client_for_folder(folder_path) {
+        Ok(c) => c,
+        Err(e) => return emit(Outcome::fail(json, 1, e)),
     };
     let site_id = match site_id_for_folder(folder_path) {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: {}", e);
-            return 1;
-        }
+        Err(e) => return emit(Outcome::fail(json, 1, e)),
+    };
+    let target = LinkTarget { client: &client, config_folder: &folder_path.to_string_lossy(), shown_folder: folder, site_id: &site_id };
+    emit(link_flow(&target, domain, json).await)
+}
+
+async fn cmd_status(folder: &str, domain: &str, json: bool) -> i32 {
+    let root = VaultRoot::resolve(folder);
+    let client = match client_for_folder(root.path()) {
+        Ok(c) => c,
+        Err(e) => return emit(Outcome::fail(json, 1, e)),
+    };
+    emit(status_flow(&client, folder, domain, json, &records::SystemLookup).await)
+}
+
+/// Where a link goes and how the folder is named back to the user.
+pub(crate) struct LinkTarget<'a> {
+    pub client: &'a MossSetaClient,
+    /// The resolved folder, for reading and writing its config.
+    pub config_folder: &'a str,
+    /// The folder as the user typed it, for the next command we print.
+    pub shown_folder: &'a str,
+    pub site_id: &'a str,
+}
+
+/// Link the apex, learn whether moss or the owner runs its DNS, and for an
+/// owner-run domain start edge acceleration once and link `www.` too: the
+/// origin redirects a bare domain to www only when a `www.` link exists, and
+/// serves the edge's requests for www only under that same link. Every step
+/// is idempotent, so a failed run is repaired by running it again.
+pub(crate) async fn link_flow(t: &LinkTarget<'_>, input: &str, json: bool) -> Outcome {
+    let apex = match records::normalize_domain(input) {
+        Ok(d) => d,
+        Err(e) => return Outcome::fail(json, 1, e),
+    };
+    let fail = |code: i32, e: &dyn std::fmt::Display| Outcome::fail(json, code, format!("{} {}", e, RERUN));
+    let (client, folder) = (t.client, t.config_folder);
+
+    if let Err(e) = client.link_custom_domain(t.site_id, &apex).await {
+        return fail(2, &e);
+    }
+    // `resolve_site_url` falls back to `[site].domain`; without this write a
+    // linked site keeps resolving og:url/canonical/sitemap to its subdomain.
+    if let Err(e) = crate::vault::config::set_domain_in_config(folder, &apex) {
+        return fail(2, &format!("domain linked, but failed to record it locally: {}", e));
+    }
+    let host = match Hosting::of(client, &apex).await {
+        Ok(Some(h)) => h,
+        Ok(None) => return fail(2, &"the hosting service linked the domain but does not list it"),
+        Err(e) => return fail(2, &e),
     };
 
-    println!("Linking {} to site {}...", domain, site_id);
-    if let Err(e) = client.link_custom_domain(&site_id, domain).await {
-        eprintln!("error: {}", e);
-        return 2;
+    let mut linked = vec![apex.clone()];
+    let mut cdn: Option<DomainCdn> = None;
+    if host.managed {
+        crate::vault::deployment_state::observe_and_record_cdn(client, &apex, folder).await;
+    } else {
+        // Starting acceleration spends a quota shared by every user and mints
+        // fresh validation values, so a re-run reuses what is already there.
+        let current = match client.get_domain_cdn(&apex).await {
+            Ok(c) => c,
+            Err(e) => return fail(2, &e),
+        };
+        let started = if current.records.is_empty() || matches!(current.cdn_status, CdnStatus::Disabled | CdnStatus::Failed) {
+            match client.start_domain_cdn(&apex).await {
+                Ok(c) => c,
+                Err(e) => return fail(2, &e),
+            }
+        } else {
+            current
+        };
+        if let Err(e) = client.link_custom_domain(t.site_id, &host.www()).await {
+            return fail(2, &e);
+        }
+        linked.push(host.www());
+        if let Some(word) = started.cdn_status.wire_word() {
+            let _ = crate::vault::deployment_state::record_cdn_status(folder, word);
+        }
+        cdn = Some(started);
     }
+    let rows = cdn.as_ref().map(|c| records::required_records(&c.records)).unwrap_or_default();
+    let (apex, site_id, www, canonical) = (&host.apex, t.site_id, host.www(), host.canonical());
+    let next = format!("moss domain status {} {}", t.shown_folder, apex);
 
-    // Record what we just told seta — the fix this command exists for.
-    // `resolve_site_url` falls back to `[site].domain`; without this write a
-    // CLI-linked site keeps resolving og:url/canonical/sitemap to
-    // <site_id>.mosspub.com even though seta now thinks the domain belongs
-    // to this site.
-    let folder_str = folder_path.to_string_lossy();
-    if let Err(e) = crate::vault::config::set_domain_in_config(&folder_str, domain) {
-        eprintln!("error: domain linked, but failed to record it locally: {}", e);
-        return 2;
+    let out = if json {
+        let v = serde_json::json!({
+            "domain": apex,
+            "site_id": site_id,
+            "source": host.source(),
+            "canonical_host": canonical,
+            "linked": linked,
+            "cdn_status": cdn.as_ref().and_then(|c| c.cdn_status.wire_word()),
+            "records": rows.iter().map(|r| serde_json::json!({
+                "type": r.record_type, "name": r.name, "value": r.value,
+            })).collect::<Vec<_>>(),
+            "next": next,
+        });
+        format!("{}\n", v)
+    } else if host.managed {
+        format!(
+            "Linked {apex} to site {site_id}.\n\nThis domain was bought through moss, so moss manages its DNS. There is nothing to add.\n"
+        )
+    } else {
+        format!(
+            "Linked {apex} and {www} to site {site_id}.\n\nAt the registrar where {apex} is managed, add these records:\n\n{table}\n\
+             Visitors see {www}; {apex} redirects to it.\n\
+             Leave the MX records and any other TXT records alone: email keeps working.\n\
+             Records can take up to an hour to show. Run `{next}` to see what is left.\n",
+            table = records::render_records(&rows),
+        )
+    };
+    Outcome { code: 0, out, err: String::new() }
+}
+
+pub(crate) async fn status_flow(
+    client: &MossSetaClient,
+    folder: &str,
+    input: &str,
+    json: bool,
+    lookup: &dyn records::Lookup,
+) -> Outcome {
+    let apex = match records::normalize_domain(input) {
+        Ok(d) => d,
+        Err(e) => return Outcome::fail(json, 1, e),
+    };
+    let fail = |e: crate::seta::client::SetaError| Outcome::fail(json, 2, e);
+    let host = match Hosting::of(client, &apex).await {
+        Ok(Some(h)) => h,
+        Ok(None) => return Outcome::fail(json, 1, format!("{} is not linked to your account; run `moss domain link {} {}`", apex, folder, apex)),
+        Err(e) => return fail(e),
+    };
+    let cdn = match client.get_domain_cdn(&apex).await {
+        Ok(c) => c,
+        Err(e) => return fail(e),
+    };
+    // The build canonicalizes to www only once the recorded status is active.
+    if let Some(word) = cdn.cdn_status.wire_word() {
+        let _ = crate::vault::deployment_state::record_cdn_status(folder, word);
     }
+    let retry = format!("moss domain link {} {}", folder, apex);
+    let (checks, verdict) = if host.managed {
+        // Only a moss-run domain's verdict leans on the service's DNS probe.
+        let dns_ok = match client.get_domain_status_for_host(&apex).await {
+            Ok(s) => s.dns_ok,
+            Err(e) => return fail(e),
+        };
+        (Vec::new(), records::managed_verdict(dns_ok, cdn.cdn_status, &retry))
+    } else {
+        let required = records::required_records(&cdn.records);
+        let checks = records::check_records(&apex, &required, cdn.cdn_status, lookup);
+        let verdict = records::verdict(&checks, cdn.records.len(), cdn.cdn_status, &retry);
+        (checks, verdict)
+    };
 
-    // Best-effort: seed [deployment].observed.cdn_status so the build knows
-    // whether to canonicalize to `www.` right away instead of waiting for
-    // the next `get_domain_cdn`/`moss domain link` call. A seta outage here
-    // must never fail a link that already succeeded — see
-    // `observe_and_record_cdn`.
-    crate::vault::deployment_state::observe_and_record_cdn(&client, domain, &folder_str).await;
-
-    println!("ok.");
-    0
+    let canonical = host.canonical();
+    let out = if json {
+        let v = serde_json::json!({
+            "domain": apex,
+            "source": host.source(),
+            "canonical_host": canonical,
+            "verdict": verdict.word(),
+            "reason": match &verdict { records::Verdict::Failed(w) => Some(w.clone()), _ => None },
+            "cdn_status": cdn.cdn_status.wire_word(),
+            "certificate": cdn.cdn_status.certificate_phrase(),
+            "records": checks,
+        });
+        format!("{}\n", v)
+    } else {
+        let mut o = format!("{apex} (visitors see {canonical})\n\n");
+        if host.managed {
+            o.push_str("moss manages this domain's DNS; there are no records to set.\n");
+        } else {
+            o.push_str(&records::render_checks(&checks));
+        }
+        o.push_str(&format!(
+            "\nCertificate: {}\n{}\n",
+            cdn.cdn_status.certificate_phrase(),
+            records::verdict_line(&verdict, &checks)
+        ));
+        o
+    };
+    Outcome { code: verdict.exit_code(), out, err: String::new() }
 }
 
 #[cfg(test)]
@@ -245,6 +458,8 @@ mod tests {
             (&["list"], 1),
             (&["link"], 1),
             (&["link", "/tmp/x"], 1),
+            (&["status"], 1),
+            (&["status", "/tmp/x"], 1),
         ];
         for (args, want) in cases {
             let owned: Vec<String> = args.iter().map(|a| a.to_string()).collect();
@@ -261,3 +476,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "domain/flow_tests.rs"]
+mod flow_tests;

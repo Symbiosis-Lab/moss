@@ -104,7 +104,7 @@ html[data-moss-embed] body[data-typesetting="vertical"] {
    set by site.css's `main { container-type: inline-size; }`), centred with
    equal negative inline margins — but applied unconditionally at every
    width, never collapsed back to the text column the way that rule's own
-   `@media (max-width: 48rem)` branch collapses a hand-authored one. This
+   `@media (width < 48rem)` branch collapses a hand-authored one. This
    file owns the figure's layout outright, so it reimplements the same two
    declarations directly (`100cqi`, not the `--moss-escape` indirection
    site.css's rule uses to pick between `wide`/`page`/`screen` — this
@@ -283,6 +283,18 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
   position: absolute;
   inset: 0;
 }
+/* Past the depth the tile data carries, its detail (and rivers) fade away over the flat land and water under it. */
+.moss-places-tile > canvas:not(.moss-places-tile-flat),
+.moss-places-tile > svg:not(.moss-places-tile-flat) {
+  opacity: var(--moss-place-world-detail, 1);
+}
+/* Behind the detail raster, which stays in flow. Visible only as the detail fades: where the detail is whole, the flat's own antialiased edge would show through the detail's as a lighter hairline along every tile seam. */
+.moss-places-tile > .moss-places-tile-flat {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  opacity: calc(1 - var(--moss-place-world-detail, 1));
+}
 
 /* The world layer's own surface: site.css's `.moss-place-map svg {
    inline-size: 100%; block-size: auto; aspect-ratio: 3 / 2; }` is right for
@@ -304,6 +316,18 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
   inline-size: 100%;
   block-size: 100%;
   aspect-ratio: auto;
+}
+/* Past the depth the world data carries, its detail fades (`--moss-place-world-detail`, set from the camera's zoom) down to the flat land and water under it (`-flat`). A detail layer's own raster is not the world's data and never fades with it. */
+[data-moss-places-explorer] .moss-places-world > canvas:not(.moss-places-world-flat),
+[data-moss-places-explorer] .moss-places-world > svg:not([data-moss-places-layers], .moss-places-world-flat) {
+  opacity: var(--moss-place-world-detail, 1);
+}
+/* Out of flow and behind the detail: in flow, it would stack above the detail
+   surface and push it out of the frame. */
+[data-moss-places-explorer] .moss-places-world > .moss-places-world-flat {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
 }
 
 /* The world's own rivers overlay sits directly in `.moss-places-world`
@@ -956,7 +980,7 @@ button.moss-places-chip-crumb {
   color: var(--moss-color-text-secondary);
   cursor: pointer;
 }
-@media (max-width: 48rem) {
+@media (width < 48rem) {
   .moss-places-chip-collapsible {
     display: none;
   }
@@ -1043,6 +1067,12 @@ button.moss-places-chip-crumb {
   scroll-snap-type: x proximity;
   -webkit-overflow-scrolling: touch;
   padding-block-end: 2px;
+  /* A bar would be drawn across the map; the card cut off at the edge is the
+     cue, and map.ts turns a vertical wheel over the row into a sideways one. */
+  scrollbar-width: none;
+}
+.moss-places-cards::-webkit-scrollbar {
+  display: none;
 }
 .moss-places-cards:empty {
   display: none;
@@ -1209,12 +1239,15 @@ button.moss-places-chip-crumb {
 
 /* Everything the collapsed card hides, in full: the description is
    un-clamped here (site.css clamps `.moss-card-description` to two lines for
-   a list card), and the region scrolls rather than clip if the band is too
-   short for it. */
+   a list card), and the open card's region scrolls rather than clip if the
+   band is too short for it. A collapsed region never scrolls, or every card
+   would keep a scrollbar beside its zero-height row. */
 .moss-places-card-detail {
   min-block-size: 0;
+  overflow: hidden;
+}
+.moss-places-cards .moss-card[aria-current="true"] .moss-places-card-detail {
   overflow-y: auto;
-  overflow-x: hidden;
 }
 .moss-places-card-detail .moss-card-description {
   display: block;

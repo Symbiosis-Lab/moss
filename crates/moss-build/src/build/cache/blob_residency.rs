@@ -36,7 +36,7 @@ impl ObjectStore {
             }
             if !crate::build::io_utils::output_present(&path) {
                 if path.exists() {
-                    log::warn!("[CAS] unusable blob {} at {}, treating as missing", oid, path.display());
+                    log::info!("[CAS] unusable blob {} at {}, treating as missing", oid, path.display());
                 }
                 continue;
             }
@@ -60,7 +60,7 @@ impl ObjectStore {
                     return Some(path);
                 },
                 Ok(hash) => {
-                    log::warn!("[CAS] blob {} hashes to {} — removed, regenerating", oid, hash);
+                    log::info!("[CAS] blob {} hashes to {} — removed, regenerating", oid, hash);
                     // allow:unlink a corrupt blob in an owned CAS directory
                     let _ = fs::remove_file(&path);
                 }

@@ -14,6 +14,9 @@ use crate::i18n::link::TranslationLink;
 mod breadcrumb;
 /// The floating nav island. A child module for the same reason.
 mod island;
+/// The search / language / theme cluster, shared by the masthead and the
+/// island of a site with no header.
+mod icons;
 /// `generate_footer`, and `strip_empty_footer`, which settles the footer it
 /// emits once slots are resolved. A child module for the same reason as the
 /// two above.
@@ -41,6 +44,8 @@ pub struct NavigationBuilder<'a> {
     current_page_url: Option<&'a str>,
     lang: Language,
     breadcrumb_segments: Option<Vec<BreadcrumbSegment>>,
+    /// What the nav island is for this page.
+    island: island::IslandShape,
     /// Render the trail's own `is_current` segment instead of the ordinary
     /// skip (`breadcrumb.rs`'s `nav_left_html`) — an explorer root's only
     /// use (`render/html.rs`/`render/blocking.rs`, both via `is_explorer_root`).
@@ -102,6 +107,7 @@ impl<'a> NavigationBuilder<'a> {
             current_page_url,
             lang,
             breadcrumb_segments: None,
+            island: island::IslandShape::default(),
             breadcrumb_current_visible: false,
             translations: Vec::new(),
             current_lang: lang,
@@ -136,6 +142,9 @@ impl<'a> NavigationBuilder<'a> {
     /// Set `[site].header` — see `HeaderMode`.
     pub fn with_header_mode(mut self, header_mode: HeaderMode) -> Self {
         self.header_mode = header_mode;
+        if header_mode == HeaderMode::None {
+            self.island = island::IslandShape::Pinned;
+        }
         self
     }
 
@@ -164,6 +173,14 @@ impl<'a> NavigationBuilder<'a> {
     pub fn with_breadcrumb(mut self, segments: Vec<BreadcrumbSegment>, force_current_visible: bool) -> Self {
         self.breadcrumb_segments = Some(segments);
         self.breadcrumb_current_visible = force_current_visible;
+        self
+    }
+
+    /// Give a page with no trail an island whose only crumb is `title`.
+    pub fn with_island_only(mut self, title: &str) -> Self {
+        if self.island == island::IslandShape::Trail {
+            self.island = island::IslandShape::TitleOnly(title.to_string());
+        }
         self
     }
 
@@ -265,6 +282,11 @@ impl<'a> NavigationBuilder<'a> {
     /// If nav items exist: renders hamburger + nav-links + nav-icons.
     /// If no nav items: just site name + nav-icons.
     pub fn generate_navigation(&self) -> String {
+        // No header band under `[site].header = "none"`; the island carries
+        // the controls (`nav/island.rs`).
+        if self.header_mode == HeaderMode::None {
+            return String::new();
+        }
         let home_path = self.home_path();
         let logo_html = self.logo_html();
         let nav_mode = self.header_mode == HeaderMode::Nav;
@@ -302,23 +324,22 @@ impl<'a> NavigationBuilder<'a> {
                 // Nav link text: `nav_label` if the page set one, else the
                 // chrome label. Both are plain text, so escape at the write.
                 let label = crate::build::features::html_escape(doc.nav_text());
-                let pretty = crate::build::scan::article_map::to_pretty_url(&doc.url_path);
-                let href = format!("/{}", pretty.trim_start_matches('/')); // allow:served-path-url-construct (nav href to user content page, not a framework asset)
-                let is_current_page = self.current_page_url.map_or(false, |url| url == doc.url_path);
-                // `nav` header mode has no breadcrumb trail to say "you are
-                // somewhere under this section" on a deep page (the section's
-                // own nav item is the only cue left), so it marks that item
-                // itself: `aria-current="true"` for a containing section,
-                // `"page"` reserved for the exact page, same as Home above.
-                // Brand mode is unaffected — its plain `class="active"`-on-
-                // exact-match behavior (and the breadcrumb trail alongside
-                // it) is unchanged.
-                let attrs = if is_current_page {
-                    if nav_mode {
-                        r#" class="active" aria-current="page""#
-                    } else {
-                        r#" class="active""#
+                let href = match crate::build::scan::page_map::nav_external_href(&doc.raw_frontmatter) {
+                    // `external_url:` makes the entry a plain link elsewhere —
+                    // an address, a section anchor, another site.
+                    Some(url) => crate::build::features::html_escape(url),
+                    None => {
+                        let pretty = crate::build::scan::article_map::to_pretty_url(&doc.url_path);
+                        format!("/{}", pretty.trim_start_matches('/')) // allow:served-path-url-construct (nav href to user content page, not a framework asset)
                     }
+                };
+                let is_current_page = self.current_page_url.map_or(false, |url| url == doc.url_path);
+                // The exact page is `aria-current="page"` in both modes. Only
+                // `nav` header mode, which has no breadcrumb trail to say "you
+                // are somewhere under this section", also marks the containing
+                // section (`aria-current="true"`).
+                let attrs = if is_current_page {
+                    r#" class="active" aria-current="page""#
                 } else if nav_mode && is_current_nav_section(doc, self.current_page_url) {
                     r#" class="active" aria-current="true""#
                 } else {
@@ -345,7 +366,7 @@ impl<'a> NavigationBuilder<'a> {
             self.term_nav.iter().filter(|entry| entry.edition == self.page_edition)
         {
             let is_current = self.current_page_url == Some(format!("{key}/index.html").as_str());
-            let attrs = if is_current { r#" class="active""# } else { "" };
+            let attrs = if is_current { r#" class="active" aria-current="page""# } else { "" };
             let item = format!(
                 r#"<a href="/{}/"{attrs}>{}</a>"#, // allow:served-path-url-construct (nav href to a term kind's root page, not a framework asset)
                 crate::build::features::html_escape(key),
@@ -403,8 +424,8 @@ impl<'a> NavigationBuilder<'a> {
         // discloses (WCAG 4.1.2).
         let hamburger = if has_nav_items {
             format!(
-                r#"<button class="mobile-menu-button" onclick="toggleMobileMenu()" aria-label="{}" aria-expanded="false" aria-controls="nav-links"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>"#,
-                crate::i18n::t(self.current_lang, "nav_toggle_menu"),
+                r#"<button class="mobile-menu-button" onclick="toggleMobileMenu()" aria-label="{label}" aria-expanded="false" aria-controls="nav-links"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>"#,
+                label = crate::i18n::t(self.current_lang, "nav_menu"),
             )
         } else {
             String::new()
@@ -420,69 +441,7 @@ impl<'a> NavigationBuilder<'a> {
             String::new()
         };
 
-        // Icon items: search (left), language toggle, theme toggle (right).
-        // Left to right the cluster runs from the most content-related control
-        // to the most presentation-related one: search sits nearest the nav
-        // links it complements (it IS navigation), language changes what
-        // content you read, theme is pure presentation and keeps its
-        // established right-most anchor.
-        let mut icon_items: Vec<String> = Vec::new();
-
-        // Search icon — only when this build actually shipped an index
-        // (`_moss/pagefind/`).
-        // The client runtime binds the click; with JS off the
-        // button is inert, which is why it is a `<button>` and not a link.
-        if self.has_search {
-            let search_label = crate::i18n::t(self.current_lang, "nav_search");
-            icon_items.push(format!(
-                r#"<button class="nav-search-btn" type="button" aria-label="{}"><svg class="search-icon" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" viewBox="0 0 32 32"><circle cx="14" cy="14" r="8.5"/><path d="m20.2 20.2 6.3 6.3"/></svg></button>"#,
-                search_label,
-            ));
-        }
-
-        // Language toggle in nav (site-wide: shows all site languages)
-        if !self.translations.is_empty() {
-            let current = format!(
-                r#"<span class="nav-lang-current">{}</span>"#,
-                crate::i18n::switcher_label(&self.current_lang_tag)
-            );
-            let links: Vec<String> = self.translations.iter().map(|t| {
-                let pretty = crate::build::scan::article_map::to_pretty_url(&t.url_path);
-                let href = format!("/{}", pretty.trim_start_matches('/')); // allow:served-path-url-construct (language toggle nav href to translation page, not a framework asset)
-                format!(
-                    r#"<a href="{}" class="nav-lang-link" hreflang="{}">{}</a>"#,
-                    // The declared tag, not `code()` — whose own doc says to use
-                    // the BCP-47 form for an hreflang, and which collapses an
-                    // unshipped language onto one of three variants.
-                    href, t.lang_tag, t.display_name
-                )
-            }).collect();
-            let mut parts = vec![current];
-            parts.extend(links);
-            icon_items.push(format!(
-                r#"<div class="nav-lang-toggle" aria-label="{}">{}</div>"#,
-                crate::i18n::t(self.current_lang, "nav_language"),
-                parts.join(" / ")
-            ));
-        }
-
-        // Theme toggle icon (toggles light ↔ dark) — "classic" style from toggles.dev
-        //
-        // No `data-tooltip` on any toggle — only `aria-label`. The glyphs are
-        // their own labels (a sun/moon, a magnifier), so a pill repeating
-        // "Toggle theme" was noise; worse, on touch there is no un-hover, so a
-        // tapped toggle's hint just hung there. Hover hints in the nav now
-        // exist only where they carry information the row has hidden — a
-        // truncated breadcrumb label, a fold's `…` levels — and those are
-        // JS-promoted (breadcrumb-hint.ts, breadcrumb-fold.ts), never emitted
-        // here.
-        let theme_label = crate::i18n::t(self.current_lang, "nav_toggle_theme");
-        icon_items.push(format!(
-            r#"<button class="nav-theme-btn" type="button" aria-label="{}" onclick="toggleTheme()"><svg class="theme-toggle-icon" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="1em" height="1em" fill="currentColor" stroke-linecap="round" viewBox="0 0 32 32"><clipPath id="theme-toggle__classic__cutout"><path d="M0-5h30a1 1 0 0 0 9 13v24H0Z"/></clipPath><g clip-path="url(#theme-toggle__classic__cutout)"><circle cx="16" cy="16" r="9.34"/><g stroke="currentColor" stroke-width="1"><path d="M16 5.5v-4"/><path d="M16 30.5v-4"/><path d="M1.5 16h4"/><path d="M26.5 16h4"/><path d="m23.4 8.6 2.8-2.8"/><path d="m5.7 26.3 2.9-2.9"/><path d="m5.8 5.8 2.8 2.8"/><path d="m23.4 23.4 2.9 2.9"/></g></g></svg></button>"#,
-            theme_label,
-        ));
-
-        let nav_icons = format!(r#"<div class="nav-icons">{}</div>"#, icon_items.join(""));
+        let nav_icons = self.nav_icons_html();
         let nav_right = format!(r#"<div class="nav-right">{}{}{}</div>"#, hamburger, nav_links, nav_icons);
 
         format!("{}{}", site_name, nav_right)
@@ -537,7 +496,8 @@ pub struct NavFacts {
 /// intentionally diverges in flat mode.
 ///
 /// `slot_only` wins over an explicit `nav: true` — slot files (e.g. `footer.md`)
-/// are structural chrome and are excluded unconditionally.
+/// are structural chrome and are excluded here, except a link-only partial,
+/// which only [`is_nav_bar_item_doc`] recognises.
 /// `draft` also wins over an explicit `nav: true` — draft pages are hidden from
 /// all listings, including the top nav bar.
 /// The `None` (no explicit frontmatter) case delegates to `is_navigational_page`,
@@ -579,6 +539,9 @@ pub fn is_nav_bar_item_doc(
     doc: &crate::build::types::ParsedDocument,
     has_content_folders: bool,
 ) -> bool {
+    if is_link_only_partial(doc) {
+        return true;
+    }
     is_nav_bar_item(
         NavFacts {
             nav: doc.nav,
@@ -591,6 +554,16 @@ pub fn is_nav_bar_item_doc(
         &doc.clean_stem,
         has_content_folders,
     )
+}
+
+/// A `partial: true` file with `nav: true` and `external_url:` is a header link
+/// to that address (a section anchor, a `mailto:`) with no page behind it.
+fn is_link_only_partial(doc: &crate::build::types::ParsedDocument) -> bool {
+    doc.slot_only
+        && doc.nav == Some(true)
+        && doc.draft != Some(true)
+        && doc.raw_frontmatter.get("partial").and_then(|v| v.as_bool()) == Some(true)
+        && crate::build::scan::page_map::nav_external_href(&doc.raw_frontmatter).is_some()
 }
 
 /// Whether a document should be excluded from article listings because
@@ -844,11 +817,13 @@ fn trail_tail(
         };
 
         // Look up the folder's chrome label (plain text) from all_docs.
-        let title = all_docs
-            .iter()
-            .find(|d| d.url_path == folder_index_path)
-            .map(|d| d.label.clone())
-            .unwrap_or_else(|| titlecase_segment(part));
+        let folder_doc = all_docs.iter().find(|d| d.url_path == folder_index_path);
+        let title = folder_doc.map(|d| d.label.clone()).unwrap_or_else(|| titlecase_segment(part));
+        // A passthrough folder gets no listing page, so an ancestor inside one
+        // that has no page of its own is left out of the trail.
+        let folder_key = folder_index_path.trim_end_matches("/index.html");
+        let has_page = folder_doc.is_some()
+            || !doc.passthrough_root.as_deref().is_some_and(|root| crate::build::types::folder_within(root, folder_key));
 
         if is_last {
             // For the last folder part, check if the file is index.html
@@ -862,11 +837,13 @@ fn trail_tail(
             } else {
                 // There's a non-index file, so the folder is a middle segment
                 // and the file itself is the current page
-                segments.push(BreadcrumbSegment {
-                    title,
-                    url: folder_url(&effective_path),
-                    is_current: false,
-                });
+                if has_page {
+                    segments.push(BreadcrumbSegment {
+                        title,
+                        url: folder_url(&effective_path),
+                        is_current: false,
+                    });
+                }
                 segments.push(BreadcrumbSegment {
                     // Breadcrumb text is chrome; use the plain-text label.
                     title: doc.label.clone(),
@@ -876,11 +853,13 @@ fn trail_tail(
             }
         } else {
             // Middle segment: link to the folder index
-            segments.push(BreadcrumbSegment {
-                title,
-                url: folder_url(&effective_path),
-                is_current: false,
-            });
+            if has_page {
+                segments.push(BreadcrumbSegment {
+                    title,
+                    url: folder_url(&effective_path),
+                    is_current: false,
+                });
+            }
         }
     }
 

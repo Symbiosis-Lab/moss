@@ -138,14 +138,14 @@ fn extract_dmg(dmg: &Path, into: &Path) -> Result<(), StackExecError> {
                 cmd.args(args).arg(&self.target);
                 match run_bounded(&mut cmd, DISK_TIMEOUT, "hdiutil detach") {
                     Ok(out) if out.status.success() => return,
-                    Ok(out) => log::warn!(
+                    Ok(out) => log::info!(
                         "[stack-exec] hdiutil {} {} exited {} — {}",
                         args.join(" "),
                         self.target.display(),
                         out.status,
                         out.stderr.lines().last().unwrap_or("")
                     ),
-                    Err(e) => log::warn!("[stack-exec] {e}"),
+                    Err(e) => log::info!("[stack-exec] {e}"),
                 }
             }
             log::error!(

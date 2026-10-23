@@ -2,6 +2,7 @@
 
 pub mod body_plan;
 pub mod frontmatter;
+pub mod hero_ink;
 pub mod html_post;
 pub mod math;
 pub mod pipeline;

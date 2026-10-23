@@ -449,14 +449,143 @@ pub fn extract_description(content: &str, math: bool) -> String {
 /// (or fragment-plus-next-paragraph) span, at the same 160-char budget — but
 /// with its markdown left in place instead of stripped, for a caller that
 /// will render it with [`render_description_html`] rather than read it as
-/// plain text. Truncating the raw span at a plain-text character budget can
-/// orphan an opening marker (`_word` with no closing `_`); that is the same
-/// "garbled markdown is not description material" territory
-/// `strip_markdown_inline`'s own doc comment already accepts, and
-/// `render_description_html`'s unmatched-delimiter handling shows it as
-/// literal text rather than breaking.
+/// plain text. It is cut where the plain form is cut (see
+/// [`cut_markdown_like_plain`]), so a reader sees the same words either way.
 pub fn extract_description_markdown(content: &str, math: bool) -> String {
-    truncate_at_boundary(&first_paragraph_excerpt(content, true, math).markdown, 160)
+    cut_markdown_like_plain(&first_paragraph_excerpt(content, true, math), 160, math)
+}
+
+/// Cut `excerpt.markdown` after the same visible characters
+/// [`truncate_at_boundary`] keeps of `excerpt.plain`. Counting the raw
+/// markdown instead charges `**`, `_` and link URLs against the budget and
+/// cuts inside a span, which then renders as a literal `**`. A span still
+/// open at the cut (emphasis, a link, a `[[page|text]]` wikilink, code) is
+/// closed; a bare `[[page]]`, an autolink or an image the cut falls inside is
+/// dropped whole, since cutting it would change where it points.
+fn cut_markdown_like_plain(excerpt: &ExcerptText, max_chars: usize, math: bool) -> String {
+    use pulldown_cmark::{Event, LinkType, Parser, Tag, TagEnd};
+    let markdown = excerpt.markdown.trim();
+    let plain = excerpt.plain.trim();
+    let cut_plain = truncate_at_boundary(plain, max_chars);
+    if cut_plain == plain {
+        return markdown.to_string();
+    }
+    let (kept, ellipsis) = match cut_plain.strip_suffix('…') {
+        Some(kept) => (kept, "…"),
+        None => (cut_plain.as_str(), ""),
+    };
+    let mut remaining = kept.chars().count();
+    // Each open span: where it starts, where its content starts, what closes it.
+    let mut open: Vec<(usize, usize, String)> = Vec::new();
+    // The outermost span that cannot be closed part-way, how deep, and
+    // whether its text is visible (an image's alt text is not).
+    let mut atomic: Option<(usize, usize, bool)> = None;
+    let mut cut = None;
+    // The plain form collapses each whitespace run to one space.
+    let mut after_space = false;
+    let mut kept_offsets = |text: &str| -> Vec<usize> {
+        let mut kept = Vec::new();
+        for (i, c) in text.char_indices() {
+            if !(c.is_whitespace() && after_space) {
+                kept.push(i);
+            }
+            after_space = c.is_whitespace();
+        }
+        kept
+    };
+    for (event, range) in Parser::new_ext(markdown, moss_core::ast::parser_options(math)).into_offset_iter() {
+        let source = &markdown[range.clone()];
+        let visible = match &event {
+            Event::Start(_) | Event::End(_) if atomic.is_some() => {
+                let nested = matches!(event, Event::Start(Tag::Link { .. } | Tag::Image { .. }));
+                let closed = matches!(event, Event::End(TagEnd::Link | TagEnd::Image));
+                atomic = atomic.and_then(|(start, depth, shown)| match (nested, closed) {
+                    (true, _) => Some((start, depth + 1, shown)),
+                    (_, true) => (depth > 1).then_some((start, depth - 1, shown)),
+                    _ => Some((start, depth, shown)),
+                });
+                if atomic.is_none() && remaining == 0 {
+                    cut = Some(range.end);
+                    break;
+                }
+                continue;
+            }
+            Event::Start(Tag::Strong | Tag::Emphasis | Tag::Strikethrough) => {
+                let mark = source.chars().next().unwrap_or('*');
+                let run = source.chars().take_while(|&c| c == mark).count();
+                let len = if matches!(event, Event::Start(Tag::Emphasis)) { 1 } else { run.min(2) };
+                open.push((range.start, range.start + len, source[..len].to_string()));
+                continue;
+            }
+            Event::Start(Tag::Link { link_type: LinkType::WikiLink { has_pothole: true }, .. }) => {
+                let text_start = range.start + source.find('|').map_or(source.len(), |i| i + 1);
+                open.push((range.start, text_start, "]]".to_string()));
+                continue;
+            }
+            Event::Start(Tag::Link { link_type, dest_url, .. })
+                if !matches!(link_type, LinkType::WikiLink { .. } | LinkType::Autolink | LinkType::Email) =>
+            {
+                let dest = if dest_url.contains([' ', '(', ')']) { format!("<{dest_url}>") } else { dest_url.to_string() };
+                open.push((range.start, range.start + 1, format!("]({dest})")));
+                continue;
+            }
+            Event::Start(Tag::Link { .. } | Tag::Image { .. }) => {
+                atomic = Some((range.start, 1, matches!(event, Event::Start(Tag::Link { .. }))));
+                continue;
+            }
+            Event::End(TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough | TagEnd::Link) => {
+                open.pop();
+                continue;
+            }
+            Event::Text(_) | Event::Code(_) | Event::InlineMath(_) | Event::DisplayMath(_)
+                if matches!(atomic, Some((_, _, false))) =>
+            {
+                continue
+            }
+            Event::Text(text) | Event::Code(text) => kept_offsets(text),
+            // The plain form keeps math's `$` delimiters.
+            Event::InlineMath(_) | Event::DisplayMath(_) => kept_offsets(source),
+            _ => continue,
+        };
+        let at = |from: usize, text: &str| from + visible.get(remaining).copied().unwrap_or(text.len());
+        let visible_count = visible.len();
+        if visible_count < remaining || (visible_count == remaining && atomic.is_some()) {
+            remaining -= visible_count;
+            continue;
+        }
+        cut = Some(match &event {
+            _ if atomic.is_some() => atomic.map_or(range.start, |(start, _, _)| start),
+            Event::Text(text) if source.len() == text.len() => at(range.start, text),
+            Event::Code(text) => {
+                let run = source.chars().take_while(|&c| c == '`').count();
+                if source.len() == text.len() + 2 * run {
+                    open.push((range.start, range.start + run, source[..run].to_string()));
+                    at(range.start + run, text)
+                } else {
+                    range.start
+                }
+            }
+            // A cut inside math drops the formula: half of one is not text.
+            Event::InlineMath(_) | Event::DisplayMath(_) if visible_count > remaining => range.start,
+            _ if visible_count == remaining => range.end,
+            _ => range.start,
+        });
+        break;
+    }
+    // The walk and the plain stripper disagreed about what is visible; the
+    // plain cut is still the right words.
+    let Some(mut cut) = cut else {
+        return cut_plain;
+    };
+    let mut closers = String::new();
+    while let Some((start, content_start, closer)) = open.pop() {
+        if content_start < cut && !markdown[content_start..cut].trim().is_empty() {
+            closers.push_str(&closer);
+        } else {
+            cut = cut.min(start);
+        }
+    }
+    format!("{}{}{}", markdown[..cut].trim_end(), closers, ellipsis)
 }
 
 /// Extract a page's opening prose from markdown content, both plain (inline
@@ -668,7 +797,7 @@ fn first_paragraph_excerpt(content: &str, strip_callout_marker: bool, math: bool
     for (index, paragraph) in paragraphs.iter().enumerate() {
         let stripped = strip_markdown_inline(paragraph);
         let stripped = stripped.trim();
-        if stripped.is_empty() {
+        if stripped.is_empty() || is_only_links(paragraph, math) {
             continue;
         }
         match lead {
@@ -709,6 +838,40 @@ fn first_paragraph_excerpt(content: &str, strip_callout_marker: bool, math: bool
 struct ExcerptText {
     plain: String,
     markdown: String,
+}
+
+/// Whether `paragraph` is a row of links and separators (`[About](#about) ·
+/// [Cast](#cast)`): navigation, not something the page says. Links of every
+/// form count, including reference links whose definition lives elsewhere.
+fn is_only_links(paragraph: &str, math: bool) -> bool {
+    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+    let mut unresolved = |link: pulldown_cmark::BrokenLink<'_>| {
+        Some((link.reference.to_string().into(), "".into()))
+    };
+    let parser = Parser::new_with_broken_link_callback(
+        paragraph,
+        moss_core::ast::parser_options(math),
+        Some(&mut unresolved),
+    );
+    let (mut depth, mut links) = (0usize, 0usize);
+    for event in parser {
+        match event {
+            Event::Start(Tag::Link { .. } | Tag::Image { .. }) => {
+                depth += 1;
+                links += 1;
+            }
+            Event::End(TagEnd::Link | TagEnd::Image) => depth -= 1,
+            Event::Text(t) | Event::Code(t) | Event::Html(t) | Event::InlineHtml(t)
+                if depth == 0 && t.chars().any(char::is_alphanumeric) =>
+            {
+                return false;
+            }
+            // An equation outside a link is something the page says.
+            Event::InlineMath(_) | Event::DisplayMath(_) if depth == 0 => return false,
+            _ => {}
+        }
+    }
+    links > 0
 }
 
 /// Whether `paragraph` (pre-strip, so its markers survive) is a list rather
@@ -1362,19 +1525,39 @@ pub fn extract_preview(content: &str, max_chars: usize, math: bool) -> String {
     truncate_at_boundary(&first_paragraph_excerpt(content, false, math).plain, max_chars)
 }
 
+/// Whether the word that ends `before` (the text up to a `.`) is a common
+/// abbreviation or a single-capital initial, so the `.` after it does not end
+/// a sentence. Case-insensitive for the abbreviations, except "No" which must
+/// be capitalised; "I" is not an initial, since "so did I." ends a sentence.
+fn ends_with_abbreviation(before: &str) -> bool {
+    let word_start = before
+        .rfind(|c: char| !(c.is_alphanumeric() || c == '.'))
+        .map_or(0, |i| i + before[i..].chars().next().map_or(1, char::len_utf8));
+    let word = &before[word_start..];
+    const ABBREVIATIONS: [&str; 10] = ["dr", "mr", "mrs", "ms", "prof", "st", "vs", "etc", "e.g", "i.e"];
+    let mut letters = word.chars();
+    let initial = matches!((letters.next(), letters.next()), (Some(c), None) if c.is_uppercase() && c != 'I');
+    initial || word == "No" || ABBREVIATIONS.iter().any(|a| word.eq_ignore_ascii_case(a))
+}
+
 /// The byte offset right after each sentence-ending mark in `text`, in
 /// order: ASCII `.`/`!`/`?` count only when followed by whitespace or the
 /// end of the text (so "e.g." or "3.14" mid-sentence is not mistaken for a
-/// boundary); the CJK full-width marks `。`/`！`/`？` always count, since CJK
-/// prose does not put a space after them. [`truncate_at_boundary`]'s only
-/// caller for this.
+/// boundary), unless the word before the `.` is an abbreviation or an
+/// initial ([`ends_with_abbreviation`]); the CJK full-width marks `。`/`！`/`？`
+/// always count, since CJK prose does not put a space after them.
+/// [`truncate_at_boundary`]'s only caller for this.
 fn sentence_end_offsets(text: &str) -> Vec<usize> {
     let mut offsets = Vec::new();
     let mut chars = text.char_indices().peekable();
     while let Some((byte_i, ch)) = chars.next() {
         let is_boundary = match ch {
             '。' | '！' | '？' => true,
-            '.' | '!' | '?' => chars.peek().is_none_or(|&(_, next)| next.is_whitespace()),
+            '!' | '?' => chars.peek().is_none_or(|&(_, next)| next.is_whitespace()),
+            '.' => {
+                chars.peek().is_none_or(|&(_, next)| next.is_whitespace())
+                    && !ends_with_abbreviation(&text[..byte_i])
+            }
             _ => false,
         };
         if is_boundary {

@@ -3991,6 +3991,14 @@
       "skip_schema": false
     },
     {
+      "name": "subtitle",
+      "type": "string",
+      "widget": "text-input",
+      "description": "A second line for the page's title, such as the title in another script. Listing cards and rows draw it under the page's title",
+      "group": "This Page",
+      "skip_schema": false
+    },
+    {
       "name": "date",
       "type": "string",
       "widget": "date-picker",
@@ -4340,6 +4348,18 @@
         "only"
       ],
       "description": "Keep only pages with a cover. \"only\" — e.g. the home page of an artist's site lists the latest works that have a picture. Absent = no filter.",
+      "group": "Child Styles",
+      "skip_schema": false
+    },
+    {
+      "name": "children_when",
+      "type": "string",
+      "widget": "select",
+      "enum_values": [
+        "past",
+        "upcoming"
+      ],
+      "description": "Keep only events that have ended (\"past\") or not (\"upcoming\"); a page with no start or date is past. Applied before children_limit. Absent = no filter.",
       "group": "Child Styles",
       "skip_schema": false
     },

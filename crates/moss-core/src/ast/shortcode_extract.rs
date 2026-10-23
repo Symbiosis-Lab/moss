@@ -20,7 +20,7 @@
 //!   (pulldown-cmark passes HTML comments through `Event::Html` as
 //!   `Block::HtmlBlock`).
 
-use super::attrs::gather_multi_line_attrs;
+use super::attrs::{gather_multi_line_attrs, html_attribute_name};
 use super::cells::split_cells;
 use super::document::{BlockMeta, Document};
 use super::node::{Block, Inline};
@@ -152,7 +152,10 @@ fn parse_shortcode_block(
 ) -> (Option<Shortcode>, Diagnostics) {
     match name {
         "subscribe" => (Some(Shortcode::Subscribe(parse_subscribe_args(args))), Diagnostics::default()),
-        "buttons" => (Some(Shortcode::Buttons(parse_buttons_body(args, body))), Diagnostics::default()),
+        "buttons" => {
+            let (sc, warnings) = parse_buttons_body(args, body);
+            (Some(Shortcode::Buttons(sc)), Diagnostics { warnings, ..Default::default() })
+        }
         "gallery" => {
             let (sc, warns) = parse_gallery_body(args, body, config);
             (Some(Shortcode::Gallery(sc)), Diagnostics { warnings: warns, ..Default::default() })
@@ -173,20 +176,43 @@ fn parse_shortcode_block(
                 }
             }
             if let Some(ref v) = sc.align {
-                if v != "end" && v != "center" {
+                if !matches!(v.as_str(), "top" | "end" | "center" | "start") {
                     warns.warnings.push(format!(
                         "shortcode `:::hero` has unrecognized `align={v}`. \
-                         Only `align=end` and `align=center` are recognized. The attribute is ignored."
+                         Only `align=top`, `align=end` and `align=center` are recognized. The attribute is ignored."
                     ));
                 }
             }
-            if let Some(ref v) = sc.header {
-                if v != "over" {
-                    warns.warnings.push(format!(
-                        "shortcode `:::hero` has unrecognized `header={v}`. \
-                         Only `header=over` is recognized. The attribute is ignored."
-                    ));
+            if let Some(dark) = &sc.dark {
+                let is_video = |u: &super::url::Url| {
+                    let raw = match u {
+                        super::url::Url::Unresolved(s) => s.as_str(),
+                        super::url::Url::Resolved(r) => r.href.as_str(),
+                    };
+                    matches!(
+                        crate::resolve::ext_kind::reference_kind_for_ext(raw.rsplit('.').next().unwrap_or("")),
+                        crate::resolve::ext_kind::ExtKind::Video
+                    )
+                };
+                if sc.image.is_none() || !sc.extra_images.is_empty() || sc.image.as_ref().is_some_and(is_video) || is_video(dark) {
+                    warns.warnings.push(
+                        "shortcode `:::hero` has `dark=` without a single picture to pair it with (a slideshow, a video, or no `image=`). The attribute is ignored.".to_string(),
+                    );
                 }
+            }
+            if sc.panel.is_some() && sc.overlay.is_empty() {
+                warns.warnings.push(
+                    "shortcode `:::hero` has `panel=` but no words over the picture, so there is no panel to set. The attribute is ignored.".to_string(),
+                );
+            }
+            if let Some(v) = sc.panel.as_deref().filter(|v| !matches!(*v, "auto" | "none" | "always")) {
+                warns.warnings.push(format!("shortcode `:::hero` has unrecognized `panel={v}`. Only `panel=auto`, `panel=none` and `panel=always` are recognized. The attribute is ignored."));
+            }
+            if let Some(v) = sc.fade.as_deref().filter(|v| *v != "top") {
+                warns.warnings.push(format!("shortcode `:::hero` has unrecognized `fade={v}`. Only `fade=top` is recognized. The attribute is ignored."));
+            }
+            if let Some(v) = sc.header.as_deref().filter(|v| *v != "over") {
+                warns.warnings.push(format!("shortcode `:::hero` has unrecognized `header={v}`. Only `header=over` is recognized. The attribute is ignored."));
             }
             (Some(Shortcode::Hero(sc)), warns)
         }
@@ -298,6 +324,7 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, O
     let classes = parsed.class_string();
     let width = parsed.width.map(str::to_string);
     let scroll = parsed.scroll;
+    let collage = parsed.collage;
     let label = parsed.get("label").map(str::to_string);
 
     let mut columns: u32 = 1;
@@ -377,6 +404,7 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, O
             source: ShortcodeSource { extra_lines: 0, fragments },
             width,
             scroll,
+            collage,
             label,
         },
         legacy_dash_line,
@@ -886,7 +914,7 @@ fn collect_structural_asset_spans(
                 let lines = (block.body_start..close).map(|k| gallery_line_text(source, table, k));
                 let kinds = gallery_lines(lines, &ParseConfig::default());
                 for (k, kind) in (block.body_start..close).zip(kinds) {
-                    if let Some(GalleryLine::Item(it)) = kind {
+                    if let Some(GalleryLine::Item(it, _)) = kind {
                         if let Some(span) = gallery_body_span(table, k, it) {
                             out.push(span);
                         }
@@ -1081,7 +1109,7 @@ fn italic_line(line: &str, config: &ParseConfig) -> Option<Vec<Inline>> {
 
 /// What a `:::gallery` body line is, once read in order.
 enum GalleryLine {
-    Item(MediaLineSpan),
+    Item(MediaLineSpan, Option<String>),
     /// The italic line directly under an item.
     Caption(Vec<Inline>),
 }
@@ -1101,7 +1129,7 @@ fn gallery_lines<'a>(lines: impl Iterator<Item = &'a str>, config: &ParseConfig)
             }
             let item = gallery_item_span(line);
             after_item = item.is_some();
-            item.map(GalleryLine::Item)
+            item.map(|it| GalleryLine::Item(it, markdown_image_title(line.trim())))
         })
         .collect()
 }
@@ -1146,7 +1174,7 @@ fn parse_gallery_body(args: &str, body: &str, config: &ParseConfig) -> (GalleryS
                     item.caption = caption;
                 }
             }
-            GalleryLine::Item(it) => {
+            GalleryLine::Item(it, title) => {
                 let (alt, alt_only) = match super::parser::alt_only_text(&it.alt) {
                     Some(alt) => (alt, true),
                     None => (it.alt, false),
@@ -1157,6 +1185,7 @@ fn parse_gallery_body(args: &str, body: &str, config: &ParseConfig) -> (GalleryS
                     alt_only,
                     attrs: it.attrs,
                     caption: Vec::new(),
+                    title,
                 });
             }
         }
@@ -1320,9 +1349,22 @@ fn parse_markdown_image(s: &str) -> Option<(String, String, usize)> {
     }
 }
 
-fn parse_buttons_body(args: &str, body: &str) -> ButtonsShortcode {
+/// The CommonMark title of a line that starts with a markdown image, if any.
+fn markdown_image_title(line: &str) -> Option<String> {
+    use pulldown_cmark::{Event, Parser, Tag};
+    Parser::new(line).find_map(|e| {
+        if let Event::Start(Tag::Image { title, .. }) = e {
+            Some(title.to_string()).filter(|t| !t.is_empty())
+        } else {
+            None
+        }
+    })
+}
+
+fn parse_buttons_body(args: &str, body: &str) -> (ButtonsShortcode, Vec<String>) {
     let (_positional, classes) = split_positional_and_classes(args);
     let mut items: Vec<ButtonItem> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
     // Split the body on `+++` cell dividers (unified grammar).
     // Bodies without `+++` produce a single cell containing the entire
     // body — backward-compatible with the legacy "one link per line"
@@ -1333,16 +1375,38 @@ fn parse_buttons_body(args: &str, body: &str) -> ButtonsShortcode {
             if trimmed.is_empty() {
                 continue;
             }
-            if let Some((text, url)) = extract_markdown_link(trimmed) {
-                items.push(ButtonItem {
-                    text,
-                    url: Url::unresolved(url),
-                });
+            // A trailing `{...}` is an attribute block. Buttons take none (the
+            // first is primary, the rest secondary), but the link is still the
+            // author's button: keep it and say the attributes are dropped.
+            let (link, dropped_attrs) = match trimmed.strip_suffix('}').and_then(|r| r.rsplit_once('{')) {
+                Some((head, _)) if head.trim_end().ends_with(')') => (head.trim_end(), true),
+                _ => (trimmed, false),
+            };
+            match extract_markdown_link(link) {
+                Some((text, url)) => {
+                    if url.contains("](") || url.contains(") [") {
+                        warnings.push(format!(
+                            "shortcode `:::buttons` takes one link per line; `{}` has more than one, so its address is wrong",
+                            clip_for_warning(trimmed)
+                        ));
+                    }
+                    if dropped_attrs {
+                        warnings.push(format!(
+                            "shortcode `:::buttons` ignores the attribute block on `{}`: \
+                             the first button is primary and the rest are secondary. The button is kept.",
+                            clip_for_warning(trimmed)
+                        ));
+                    }
+                    items.push(ButtonItem { text, url: Url::unresolved(url) });
+                }
+                None => warnings.push(format!(
+                    "shortcode `:::buttons` expects one `[text](url)` link per line; `{}` is not one and is left out",
+                    clip_for_warning(trimmed)
+                )),
             }
-            // Non-link lines silently ignored (matches legacy behavior).
         }
     }
-    ButtonsShortcode { classes, items }
+    (ButtonsShortcode { classes, items }, warnings)
 }
 
 /// Extract a markdown link `[text](url)` from a single trimmed line.
@@ -1548,6 +1612,10 @@ fn extract_with_state(
 
             let body = body_lines.join("\n");
 
+            if let Some(w) = super::attrs::attr_block_warning(trimmed, args) {
+                collected.warnings.push(w);
+            }
+
             // Branch on the recognized name:
             //
             // 1. Pure-CSS region (empty name, e.g. `:::{.tagline}`) — emit
@@ -1580,15 +1648,6 @@ fn extract_with_state(
                         Default::default()
                     }
                 };
-                // A plain div renders only classes, an id and a width word,
-                // so any other key on the fence is read and then thrown away.
-                if !parsed.kvs.is_empty() {
-                    let keys: Vec<&str> = parsed.kvs.iter().map(|(k, _)| k.as_str()).collect();
-                    collected.advisories.push(format!(
-                        "fenced div `:::{{...}}` does not render attribute(s) {}; only classes, an id and a width word reach the output",
-                        keys.join(", ")
-                    ));
-                }
                 collected.css_regions.push(CssRegionSpan {
                     classes: parsed.classes.clone(),
                     line: config.warning_line_offset + i + 1,
@@ -1602,7 +1661,7 @@ fn extract_with_state(
                     &parsed.classes,
                     parsed.id.as_deref(),
                     parsed.width,
-                    None,
+                    Some(&data_attrs_for(&parsed.kvs)),
                 ));
                 output.push_str("\n\n");
                 output.push_str(&body_processed);
@@ -1623,6 +1682,17 @@ fn extract_with_state(
                     }
                     collected.warnings.extend(diag.warnings);
                     collected.advisories.extend(diag.advisories);
+                    if let Shortcode::Grid(g) = &sc {
+                        if g.collage && !g.is_collage() {
+                            collected.warnings.push(format!(
+                                "`:::grid {{collage}}` on line {} has {} cells, but a collage needs {} to {}; it renders as a plain grid.",
+                                config.warning_line_offset + i + 1,
+                                g.cells.len(),
+                                super::shortcode::COLLAGE_TILES.start(),
+                                super::shortcode::COLLAGE_TILES.end(),
+                            ));
+                        }
+                    }
                     let index = collected.extracted.len();
                     output.push_str(&placeholder_for(&nonce, index));
                     output.push('\n');
@@ -1742,7 +1812,8 @@ fn clip_for_warning(line: &str) -> String {
 ///
 /// `width` is a fenced div's width word (`body` emits nothing); `extra_attrs`
 /// (already with leading space) is appended before `>`, used by the
-/// unknown-name renderer to add `data-name="..."`.
+/// unknown-name renderer to add `data-name="..."` and by the unnamed one
+/// for the block's `key=value` pairs (`data_attrs_for`).
 fn render_div_open(
     classes: &[String],
     id: Option<&str>,
@@ -1775,6 +1846,24 @@ fn render_div_open(
     }
     out.push('>');
     out
+}
+
+/// The `key=value` pairs of a fenced div's attribute block as HTML attributes,
+/// each with a leading space, in source order; keys are named by
+/// [`html_attribute_name`] (`fig=teapot` is `data-fig`, `title=Tea` stays;
+/// `contents=end` is the flag `data-contents-end`).
+fn data_attrs_for(kvs: &[(String, String)]) -> String {
+    kvs.iter()
+        .map(|(key, value)| {
+            // `contents=end` marks where a page's main sections stop: a flag
+            // attribute the contents ruler reads, not a `data-contents` value.
+            if key == "contents" && value == "end" {
+                " data-contents-end".to_string()
+            } else {
+                format!(" {}=\"{}\"", html_attribute_name(key), html_escape_attr(value))
+            }
+        })
+        .collect()
 }
 
 /// HTML-attribute-safe escape. Replaces the five XML special characters

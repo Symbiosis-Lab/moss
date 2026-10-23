@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Retakes the two still pictures of the editor that Meet the editor shows when JavaScript is off
 // (site/assets/guides/). They are taken from the same harvested document the live demo frames,
-// site/ui/app-editor.html, so a refreshed harvest and its fallbacks cannot disagree. Needs no
+// site/home/ui/app-editor.html, so a refreshed harvest and its fallbacks cannot disagree. Needs no
 // build and no server of its own:
 //   PLAYWRIGHT_MODULE=/path/to/node_modules/playwright/index.mjs node scripts/capture-editor-guide-assets.mjs
 
@@ -13,7 +13,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const guideDir = join(root, 'site/assets/guides');
 
 const playwright = await loadPlaywright();
-const { baseURL, close } = await resolveBaseURL(undefined, { root: join(root, 'site/ui') });
+const { baseURL, close } = await resolveBaseURL(undefined, { root: join(root, 'site/home/ui') });
 const browser = await playwright.chromium.launch({ headless: true });
 try {
   // Opens the English fixture and hands back the demo's own target lookup, so a selector the
@@ -46,4 +46,4 @@ try {
   await close();
 }
 
-console.log('Captured editor-ui-source.png and choose-page-source.png from site/ui/app-editor.html');
+console.log('Captured editor-ui-source.png and choose-page-source.png from site/home/ui/app-editor.html');

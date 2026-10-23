@@ -13,6 +13,19 @@ release heading.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-22
+
+### Added
+
+- `ProcessContext.site_config`: the site's `.moss/config.toml` as a plain read-only object, so a `process` hook can read tables a site declares (such as `[map.layers.<name>]`) that `.moss/` path rules keep out of `readFile`. It omits the `[plugins]` table and every key, at any depth, whose name contains `token`, `secret`, `password`, `passwd`, `api_key`, `apikey`, `credential` or `private_key`. It is `{}` for a site without a config file, and absent on moss versions before this one.
+- `writeFileBinary(path, bytes)`: writes a `Uint8Array` into the project with `writeFile`'s sandbox (inside the project, never `.moss/`). Bytes cross to moss as base64.
+- `downloadAsset(url, dir, { filename, headers })`: `filename` (one path segment) names the saved file instead of the URL's last segment, which made every `…/default.jpg` download overwrite the last; `headers` are sent with the request. Both are optional and omitting them behaves as before.
+- Testing: the mock answers `http_get`; `download_asset` and the binary write record the file in the mock filesystem, where `MockFile.bytes` holds the exact bytes (`MockFilesystem.setFileBytes`).
+
+### Changed
+
+- Every plugin HTTP request (`fetchUrl`, `httpGet`, `httpPost`, `downloadAsset`) sends moss's `User-Agent` (`moss/<version> (+https://mosspub.com)`) instead of the HTTP library's default. A `User-Agent` header the plugin passes still wins.
+
 ## [0.14.0] - 2026-10-15
 
 ### Added

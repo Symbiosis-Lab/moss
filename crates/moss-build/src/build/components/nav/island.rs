@@ -7,7 +7,21 @@
 //! under the size the ratchet caps at, and matches how the island reads on
 //! screen — related to the masthead, not part of it.
 
-use super::NavigationBuilder;
+use super::{BreadcrumbSegment, NavigationBuilder};
+
+/// What the island is for this page, decided once when the builder is set up.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(super) enum IslandShape {
+    /// The breadcrumb trail continued by the current page, plus the sections
+    /// button; none when the page has no trail.
+    #[default]
+    Trail,
+    /// A page with `contents: pictures` but no trail (the home page): the
+    /// island, which mounts the ruler, with the page's title as its only crumb.
+    TitleOnly(String),
+    /// `[site].header = "none"`: the page's only chrome, with no trail.
+    Pinned,
+}
 
 /// The `…` disclosure a folding breadcrumb trail opens, plus the separator
 /// that follows it — ONE fragment for both trails (masthead and island), so
@@ -33,7 +47,9 @@ impl<'a> NavigationBuilder<'a> {
     ///
     /// It is **not** the masthead pinned. It is a second, smaller object: the
     /// same breadcrumb trail continued one level (the current page becomes the
-    /// last crumb), a sections button, and a reading-progress rule. No nav
+    /// last crumb), a sections button, and a reading-progress rule. Wherever
+    /// the contents ruler is on screen the island is hidden, so the page offers
+    /// one contents list at a time. No nav
     /// links, no theme toggle, no language switcher — those are set-once
     /// preferences that belong at the top of the document. No search either:
     /// the masthead has it and an inert icon in shipped chrome is worse than no
@@ -61,19 +77,35 @@ impl<'a> NavigationBuilder<'a> {
     /// not, because an emitted island that is never shown without a contents
     /// table is an island whose sections button always has something to open.
     pub fn generate_nav_island(&self) -> String {
+        if self.island == IslandShape::Pinned {
+            // The site name, since nothing else on such a page names the
+            // site. The controls (search, language, theme) follow the island
+            // rather than sitting in it: the stylesheet moves them between the
+            // top of the page, the foot of the contents ruler and the bar's
+            // end by position alone, so they are never hidden with the bar.
+            let site_name = self.site_name_link_html(&self.home_path(), &self.logo_html());
+            let bar = [site_name, self.sections_button_html()];
+            return format!("{}{}", self.island_frame(true, &bar), self.nav_icons_html());
+        }
         // `nav` header mode carries no breadcrumb trail — a home segment
         // would reintroduce the brand link this mode exists to drop, in the
         // one nav surface that isn't gated on it. The Home link the masthead
         // already opens with covers the same "way back" job.
-        if self.header_mode == super::HeaderMode::Nav {
+        let trail = self.breadcrumb_segments.as_deref().filter(|s| !s.is_empty());
+        if self.header_mode == super::HeaderMode::Nav && trail.is_some() {
             return String::new();
         }
-        let Some(segments) = &self.breadcrumb_segments else {
-            return String::new();
+        // A page with `contents: pictures` but no trail (the home page) still
+        // gets the island, with itself as the only crumb.
+        let only;
+        let segments = match (trail, &self.island) {
+            (Some(trail), _) => trail,
+            (None, IslandShape::TitleOnly(title)) => {
+                only = [BreadcrumbSegment { title: title.clone(), url: String::new(), is_current: true }];
+                &only[..]
+            }
+            _ => return String::new(),
         };
-        if segments.is_empty() {
-            return String::new();
-        }
 
         let home_path = self.home_path();
         let logo_html = self.logo_html();
@@ -146,11 +178,51 @@ impl<'a> NavigationBuilder<'a> {
             format!("{}{separator}{more}{}", crumbs[0], crumbs[1..].join(separator))
         };
 
-        let sections_label =
-            crate::build::page::meta::escape_html_attr(crate::i18n::t(lang, "nav_sections"));
         let trail_label =
             crate::build::page::meta::escape_html_attr(crate::i18n::t(lang, "nav_breadcrumb"));
 
+        let sections_button = self.sections_button_html();
+
+        self.island_frame(
+            false,
+            &[
+                format!(r#"<nav class="moss-nav-island-trail" aria-label="{trail_label}">{trail_body}</nav>"#),
+                format!(r#"<span class="moss-nav-island-actions">{sections_button}</span>"#),
+                r#"<span class="moss-nav-island-progress"><span class="moss-nav-island-progress-fill"></span></span>"#.to_string(),
+            ],
+        )
+    }
+
+    /// The island's scaffolding: the bar around `bar`, and the panels beside
+    /// it. The panels are populated by the script and empty in the emitted
+    /// HTML. They are siblings of the bar rather than children because the bar
+    /// clips its own overflow, which makes their containing block
+    /// `.moss-nav-island`; `nav-island.ts` places them against THAT box. The
+    /// `…` panel lists the levels a folding trail dropped, so a pinned island,
+    /// which has no trail, has only the sections panel.
+    fn island_frame(&self, pinned: bool, bar: &[String]) -> String {
+        // Without scripting nothing writes `data-shown`, and a site with no
+        // header has no other place for its language links: a pinned island
+        // shows as a plain bar at the top of the page, without the sections
+        // button and panel the script drives.
+        let no_script = if pinned {
+            "<noscript><style>.moss-nav-island[data-header=none]{display:block;position:absolute}.moss-nav-island[data-header=none] .moss-nav-island-sections,.moss-nav-island[data-header=none] [data-island-menu]{display:none}</style></noscript>"
+        } else {
+            ""
+        };
+        let levels = if pinned { "" } else { r#"<div class="moss-nav-island-menu" data-island-menu="levels" hidden></div>"# };
+        format!(
+            r#"<div class="moss-nav-island"{}><div class="moss-nav-island-bar">{}</div>{levels}<div class="moss-nav-island-menu" data-island-menu="sections" hidden></div>{no_script}</div>"#,
+            if pinned { r#" data-header="none""# } else { "" },
+            bar.concat(),
+        )
+    }
+
+    /// The sections button: a ruler glyph the script fills with the current
+    /// section's name and wires to the sections panel.
+    fn sections_button_html(&self) -> String {
+        let sections_label =
+            crate::build::page::meta::escape_html_attr(crate::i18n::t(self.current_lang, "nav_sections"));
         // The glyph is a ruler: dashes of one length with one longer, the mark
         // the contents ruler and the panel's rows use for the current section.
         // The sections glyph and the progress rule are inert markup until
@@ -160,27 +232,8 @@ impl<'a> NavigationBuilder<'a> {
         // hint sticks after a tap on touch); the island's one hint is the `…`
         // button's, which names levels the bar has hidden and is set by
         // nav-island.ts while folded.
-        let sections_button = format!(
+        format!(
             r#"<button type="button" class="moss-nav-island-sections" aria-expanded="false" aria-label="{sections_label}"><svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 6h6M5 10h6M5 14h13M5 18h6"/></svg></button>"#
-        );
-
-        [
-            r#"<div class="moss-nav-island">"#.to_string(),
-            r#"<div class="moss-nav-island-bar">"#.to_string(),
-            format!(r#"<nav class="moss-nav-island-trail" aria-label="{trail_label}">{trail_body}</nav>"#),
-            format!(r#"<span class="moss-nav-island-actions">{sections_button}</span>"#),
-            r#"<span class="moss-nav-island-progress"><span class="moss-nav-island-progress-fill"></span></span>"#.to_string(),
-            r#"</div>"#.to_string(),
-            // Two panels, one shape. The `…` opens the levels it folded away;
-            // the glyph opens this page's sections. Both are populated by the
-            // script and empty in the emitted HTML. They are siblings of the
-            // bar rather than children because the bar clips its own overflow
-            // — which means their containing block is `.moss-nav-island`, and
-            // `nav-island.ts` must place them against THAT box, not the bar's.
-            r#"<div class="moss-nav-island-menu" data-island-menu="levels" hidden></div>"#.to_string(),
-            r#"<div class="moss-nav-island-menu" data-island-menu="sections" hidden></div>"#.to_string(),
-            r#"</div>"#.to_string(),
-        ]
-        .concat()
+        )
     }
 }

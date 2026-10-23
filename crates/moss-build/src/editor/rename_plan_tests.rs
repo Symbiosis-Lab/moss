@@ -85,17 +85,17 @@ fn plan_rejects_a_destination_outside_the_root_before_touching_the_tree() {
 }
 
 #[test]
-fn plan_rejects_a_missing_destination_parent_before_touching_the_tree() {
+fn plan_plans_a_missing_destination_parent_without_creating_it() {
     let tmp = tempfile::tempdir().unwrap();
     let root = fs::canonicalize(tmp.path()).unwrap();
     w(&root, "target.md", "# Target\n");
     let old = root.join("target.md").to_string_lossy().into_owned();
-    let new = root.join("missing/moved.md").to_string_lossy().into_owned();
+    let new = root.join("missing/deeper/moved.md").to_string_lossy().into_owned();
 
-    let err = plan_moves(&root, &[(old, new)]).unwrap_err();
-    assert!(err.contains("Failed to resolve"), "{err}");
+    let plan = plan_moves(&root, &[(old, new)]).unwrap();
+    assert_eq!(plan.moves[0].new_path, "missing/deeper/moved.md");
     assert!(root.join("target.md").exists());
-    assert!(!root.join("missing").exists());
+    assert!(!root.join("missing").exists(), "planning writes nothing");
 }
 
 #[test]
@@ -1491,6 +1491,22 @@ fn moving_a_linked_page_where_it_is_not_served_refuses_and_says_why() {
     let err = plan_moves(&root, &[(abs("notes/beta.md"), abs("footer.md"))]).expect_err("footer.md is not a page");
 
     assert!(err.contains("blog/post.md") && err.contains("would not be served as a page"), "{err}");
+}
+
+// A `partial: true` page is never served, so it holds no address: a real page
+// that declares the same `url:` keeps it, and renaming that page does not make
+// a link to the address ambiguous.
+#[test]
+fn a_partial_page_does_not_hold_the_address_a_real_page_serves() {
+    let (_t, root) = site(&[
+        ("a.md", "---\npartial: true\nurl: /spot/\n---\n# Block\n"),
+        ("b.md", "---\nurl: /spot/\n---\n# Real\n"),
+        ("blog/post.md", "[l](/spot/)\n"),
+    ]);
+
+    do_move(&root, "b.md", "c.md");
+
+    assert_eq!(r(&root, "blog/post.md"), "[l](/spot/)\n");
 }
 
 // `/` is the site's front door whichever file is served there, so a link to it

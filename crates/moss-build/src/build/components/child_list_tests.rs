@@ -326,7 +326,7 @@ fn flat_row_shows_year_for_month_precision_date() {
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
-        html.contains(r#"<span class="moss-prefix-link-prefix date">1793 · 06</span>"#),
+        html.contains(r#"<span class="moss-prefix-link-prefix date">June 1793</span>"#),
         "{html}"
     );
 }
@@ -496,7 +496,7 @@ fn doc(url_path: &str, label: &str) -> ParsedDocument {
 }
 
 fn props(d: &ParsedDocument, all: &[ParsedDocument]) -> ChildItemProps {
-    props_for_document(d, all, "", &HashMap::new(), None)
+    props_for_document(d, all, "", &HashMap::new(), None, chrono::NaiveDateTime::default())
 }
 
 #[test]
@@ -584,7 +584,7 @@ fn a_pipe_encoded_cover_resolves_only_its_path_and_keeps_its_attrs() {
     }];
     let mut overrides = HashMap::new();
     overrides.insert("images".to_string(), "media".to_string());
-    let p = props_for_document(&docs[0], &docs, "", &overrides, None);
+    let p = props_for_document(&docs[0], &docs, "", &overrides, None, chrono::NaiveDateTime::default());
     assert_eq!(p.cover.as_deref(), Some("/media/plate.png|crop:top"));
     assert_eq!(p.cover_type, Some(CoverType::Image));
 }

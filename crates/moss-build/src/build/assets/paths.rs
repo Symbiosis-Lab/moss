@@ -355,15 +355,22 @@ impl PathResolver {
         )
     }
 
-    /// Full `user_js_tag` HTML: the `window.mossTheme.base` global followed by
-    /// the user theme `<script src>`. Single source so the two emit sites
-    /// (article/home render + folder-index render) can't drift.
-    pub fn user_js_tag(&self) -> String {
-        format!(
-            "\n    <script>window.mossTheme={{base:new URL(\"{}\",location.href).href}};</script>\n    <script src=\"{}\"></script>",
+    /// Full `user_js_tag` HTML: the `window.mossTheme.base` global, then the
+    /// classic `script.js` tag when `classic`, then `module_tag` (the
+    /// `script.mjs` tag, or empty). `None` when the theme has neither. Single
+    /// source so the two emit sites (article/home render + folder-index
+    /// render) can't drift.
+    pub fn user_js_tag(&self, classic: bool, module_tag: &str) -> Option<String> {
+        if !classic && module_tag.is_empty() {
+            return None;
+        }
+        let classic_tag = if classic { format!("\n    <script src=\"{}\"></script>", self.user_js_path()) } else { String::new() };
+        Some(format!(
+            "\n    <script>window.mossTheme={{base:new URL(\"{}\",location.href).href}};</script>{}{}",
             ServedPath::theme_mount_url(),
-            self.user_js_path()
-        )
+            classic_tag,
+            module_tag
+        ))
     }
 
     /// Generate root-relative favicon path

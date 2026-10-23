@@ -1,0 +1,11 @@
+Map data acknowledgements
+
+Natural Earth: vector map data (coastlines, lakes, rivers, ice, reefs, salt flats, urban areas, and the city, mountain-range, peak and river names) are in the public domain. Source and terms: https://www.naturalearthdata.com/about/terms-of-use/
+
+GEBCO: relief and sea-floor shading is derived from the GEBCO 2025 Grid, distributed by the Generic Mapping Tools remote-data service as earth_gebco_03m_g (https://oceania.generic-mapping-tools.org/server/earth/earth_gebco/earth_gebco_server.txt). Source: GEBCO Compilation Group (2025) GEBCO 2025 Grid (doi:10.5285/[UUID])
+
+The GEBCO Grid is placed in the public domain and may be used free of charge. Terms of use: https://www.gebco.net/data-products/gridded-bathymetry/terms-of-use
+
+This map is not endorsed by GEBCO, the IHO or the IOC, and does not carry any official status from them. The shading is a simplified, derived rendering of the grid.
+
+The GEBCO Grid should NOT be used for navigation or for any other purpose involving safety at sea. It is made available 'as is'.

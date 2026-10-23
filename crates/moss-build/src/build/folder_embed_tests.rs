@@ -286,6 +286,42 @@ fn folder_listing_shows_the_byline_row_before_a_body_excerpt() {
 }
 
 #[test]
+fn folder_card_excerpt_is_not_cut_at_an_abbreviation_or_left_with_markdown() {
+    let folder = make_folder_doc("journal/index.html", "Journal");
+    let a = ParsedDocument {
+        content: "Our group hosted its first public lecture by **Dr. Ada Lovelace** of the Analytical Society on April 22, 2026 at 3:00 pm in the main hall, and the audience stayed afterwards to ask questions about the early history of computing machines until well into the evening.".to_string(),
+        ..make_doc("journal/a.html", "A", Some("2025-01-01"))
+    };
+    let docs = vec![folder, a];
+    let params = moss_core::resolve::embed_renderer::folder_list::FolderEmbedParams {
+        style: Some("summary".to_string()),
+        ..Default::default()
+    };
+    let marker = moss_core::resolve::embed_renderer::folder_list::emit_marker(
+        "/journal/",
+        "index.md",
+        &params,
+    );
+    let out = resolve_markers(
+        &marker,
+        "index.md",
+        &docs,
+        &test_project(),
+        &std::collections::HashMap::new(),
+        crate::i18n::Language::En,
+        None,
+        None,
+        true,
+    );
+    assert!(!out.contains("**"), "markdown leaked into the card: {}", out);
+    assert!(
+        out.contains("<strong>Dr. Ada Lovelace</strong> of the Analytical Society on April 22, 2026 at 3:00 pm"),
+        "the sentence was cut at the abbreviation: {}",
+        out
+    );
+}
+
+#[test]
 fn explicit_order_listing_omits_card_dates() {
     // A curated `sort: [list]` folder is a manual sequence, not a
     // chronological feed: its summary cards must not carry the per-card
@@ -828,6 +864,7 @@ fn sort_override_changes_order() {
 
 pub(crate) fn test_project() -> ProjectStructure {
     ProjectStructure {
+        passthrough_media: Vec::new(),
         root_path: "/tmp".into(),
         markdown_files: vec![],
         html_files: vec![],
@@ -2711,7 +2748,7 @@ fn render_place_map_embed(markdown: &str, docs: &[ParsedDocument]) -> String {
     resolve_markers_with_place_maps(
         &resolved.content_markdown, "index.md", docs, &test_project(),
         &std::collections::HashMap::new(), crate::i18n::Language::En,
-        None, None, true, Some(&maps),
+        None, None, true, Some(&maps), None, upcoming::now(),
     )
 }
 
@@ -2768,7 +2805,7 @@ fn pseudo_folder_place_embed_lists_its_derived_members() {
         key: "places".to_string(),
         fields: vec!["location".to_string()],
         title: "Places".to_string(),
-        titles: Vec::new(), is_place: true,
+        titles: Vec::new(), counts: Vec::new(), is_place: true,
         parents: Default::default(), explorer: None, line: None,
     };
     let mut docs = vec![
@@ -2799,7 +2836,7 @@ fn place_map_embed_emits_svg_with_placement_and_caption() {
         key: "places".to_string(),
         fields: vec!["location".to_string()],
         title: "Places".to_string(),
-        titles: Vec::new(), is_place: true,
+        titles: Vec::new(), counts: Vec::new(), is_place: true,
         parents: Default::default(), explorer: None, line: None,
     };
     let mut docs = vec![make_doc("travel/kyoto.html", "Kyoto", Some("2025-01-01"))];
@@ -2838,7 +2875,7 @@ fn pseudo_folder_rollup_ancestor_embed_lists_its_descendants() {
         key: "places".to_string(),
         fields: vec!["location".to_string()],
         title: "Places".to_string(),
-        titles: Vec::new(), is_place: true,
+        titles: Vec::new(), counts: Vec::new(), is_place: true,
         parents: [("places/kyoto".to_string(), "Japan".to_string())].into_iter().collect(),
         explorer: None, line: None,
     };

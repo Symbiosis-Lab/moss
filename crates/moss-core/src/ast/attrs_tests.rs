@@ -552,3 +552,11 @@ fn gather_quoted_brace_does_not_count() {
     assert_eq!(consumed, 3);
     assert!(out.is_some());
 }
+
+#[test]
+fn collage_bare_flag_is_recognized() {
+    let b = ok("{collage}");
+    assert!(b.collage);
+    assert!(!b.is_empty());
+    assert!(b.classes.is_empty());
+}

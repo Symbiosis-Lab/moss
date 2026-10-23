@@ -14,6 +14,7 @@
 //! build warning).
 
 use crate::build::slots::Slot;
+use moss_core::ast::{Block, BlockMeta, Document, Shortcode};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -101,6 +102,27 @@ pub fn is_excluded_from_pages(rel_path: &str) -> bool {
 /// slot-only like `footer.md` but fills no slot: it feeds
 /// `emit::welcome_email` instead, so `slot_from_filename` does not know it.
 pub const WELCOME_EMAIL_FILE: &str = "welcome-email.md";
+
+/// What the frontmatter says about whether a document ships, as the caller knows
+/// it. Callers fill the fields they have and leave the rest at the default, so a
+/// new reason to withhold a page adds a field here and a branch in
+/// [`is_slot_only`] without touching callers that do not know it.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ShipFacts {
+    /// `partial: true`: a transclusion source, never a page.
+    pub partial: bool,
+}
+
+/// Decides whether a document is slot-only: parsed and resolvable, but never
+/// rendered, listed, given an address or counted as a page. Drafts are not
+/// slot-only: they render for the preview and are withheld from publishing
+/// through `PageMeta.draft` (the manifest's publish view). Today that is a reserved slot file (`footer.md`) or a
+/// `partial: true` source. Both producers of `ParsedDocument::slot_only` (the
+/// full parse and the page-map pass) call this, and every other check reads the
+/// flag they set, so a further reason is added here and nowhere else.
+pub fn is_slot_only(rel_path: &str, facts: ShipFacts) -> bool {
+    is_excluded_from_pages(rel_path) || facts.partial
+}
 
 /// Whether this document's rendered HTML lands in a slot — by reserved name
 /// (`footer.md`) or by `slot:` frontmatter.
@@ -382,6 +404,112 @@ pub fn apply_last_known_good_fallback(
 // - `pipeline::run` returns `Vec<ParsedDocument>` (PR7b signature change)
 //   so the caller in `build.rs` hands the typed slice to
 //   `generate_native_slots`, where `collect_footer_slots_by_language` walks it.
+
+// Footer columns: each heading in `footer.md` starts a section.
+//
+// The footer is the rendered `footer.md`, injected as chrome into every page.
+// A heading and the content under it, up to the next heading of the same or a
+// higher level, are wrapped in a `<section>`; content before the first
+// heading is a section of its own. A footer with no heading is left as it is,
+// so only a footer that asks for columns changes shape. The default
+// stylesheet lays sibling sections out as columns.
+//
+// Only headings written directly in the footer split it: one inside a list,
+// a quote or a `::: {.x}` block stays with its parent. The split is made on
+// the document's top-level blocks, before rendering, so raw HTML in the
+// footer cannot confuse it.
+//
+// The footer's headings also carry no id and no permalink (the pipeline
+// clears them with `moss_core::ast::clear_heading_ids`). The footer sits beside
+// the page's own headings on every page, so `## Contact` in both would give two
+// elements one id, and a `#` glyph in the footer links to nothing a reader
+// wants. An id the author wrote into a raw `<h2 id="…">` is untouched.
+
+/// Wrap `doc`'s top-level blocks in `<section>`s at its headings, and the
+/// blocks after its first thematic break in a `<div class="footer-bottom">`,
+/// by inserting raw-HTML blocks around each run. The break itself is dropped.
+/// A footer with neither headings nor a break is left as it is; one with a
+/// break but no headings gets its top part as a single section.
+/// `closes_page`: its last block is the closing picture, which stays outside.
+pub(crate) fn section_footer_blocks(doc: &mut Document, closes_page: bool) {
+    // A closing hero stays a direct child of the footer, after its columns.
+    let closing = closes_page.then(|| (doc.blocks.pop(), doc.block_meta.pop()));
+    wrap_footer_sections(doc);
+    if let Some((Some(mut block), Some(meta))) = closing {
+        mark_closing_hero(&mut block);
+        doc.blocks.push(block);
+        doc.block_meta.push(meta);
+    }
+}
+
+/// Whether the document's last block is a `:::hero`.
+pub(crate) fn ends_in_hero(doc: &Document) -> bool {
+    matches!(doc.blocks.last(), Some(Block::Shortcode(Shortcode::Hero(_))))
+}
+
+/// Make a footer's closing hero the page's closing picture: the class
+/// `moss-hero-closing` is what the stylesheet lays out edge to edge, and
+/// `mobile=overlay` keeps the words on the picture on a phone, where a hero
+/// otherwise stacks them below it.
+fn mark_closing_hero(block: &mut Block) {
+    if let Block::Shortcode(Shortcode::Hero(hero)) = block {
+        if !hero.classes.is_empty() {
+            hero.classes.push(' ');
+        }
+        hero.classes.push_str("moss-hero-closing");
+        hero.mobile = Some("overlay".to_string());
+    }
+}
+
+fn wrap_footer_sections(doc: &mut Document) {
+    let brk = doc.blocks.iter().position(|b| matches!(b, Block::ThematicBreak));
+    let top_end = brk.unwrap_or(doc.blocks.len());
+    // A heading opens a section unless it is deeper than the one already open.
+    let mut open_level = 0u8;
+    let mut starts: Vec<usize> = Vec::new();
+    for (i, block) in doc.blocks[..top_end].iter().enumerate() {
+        if let Block::Heading { level, .. } = block {
+            if starts.is_empty() || *level <= open_level {
+                starts.push(i);
+                open_level = *level;
+            }
+        }
+    }
+    if starts.is_empty() && brk.is_none() {
+        return;
+    }
+    let total = doc.blocks.len();
+    let mut cuts = vec![0];
+    cuts.extend(starts);
+    cuts.push(top_end);
+    let mut pending = std::mem::take(&mut doc.blocks).into_iter().zip(std::mem::take(&mut doc.block_meta));
+    let mut wrapped = Vec::with_capacity(total + 2 * cuts.len() + 2);
+    for pair in cuts.windows(2) {
+        push_run(&mut wrapped, &mut pending, "<section>\n", "</section>\n", pair[1] - pair[0]);
+    }
+    if brk.is_some() {
+        pending.next(); // the break
+        push_run(&mut wrapped, &mut pending, "<div class=\"footer-bottom\">\n", "</div>\n", total - top_end - 1);
+    }
+    (doc.blocks, doc.block_meta) = wrapped.into_iter().unzip();
+}
+
+/// Move the next `len` blocks from `pending` into `out`, between two raw-HTML
+/// blocks; nothing when `len` is 0.
+fn push_run(
+    out: &mut Vec<(Block, BlockMeta)>,
+    pending: &mut impl Iterator<Item = (Block, BlockMeta)>,
+    open: &str,
+    close: &str,
+    len: usize,
+) {
+    if len == 0 {
+        return;
+    }
+    out.push((Block::Other(open.to_string()), BlockMeta::default()));
+    out.extend(pending.take(len));
+    out.push((Block::Other(close.to_string()), BlockMeta::default()));
+}
 
 #[cfg(test)]
 mod tests {
@@ -814,5 +942,69 @@ mod tests {
         assert_eq!(footer.by_lang.get("zh-hant").map(String::as_str), Some("<p>ZHT</p>"), "fresh zh-hant must win");
         assert_eq!(footer.by_lang.get("zh-hans").map(String::as_str), Some("<p>ZH</p>"), "zh-hans must fall back to its own last-known-good");
         assert_eq!(stale, vec!["footer-left (zh-hans)".to_string()]);
+    }
+
+    fn doc_of(markdown: &str) -> Document {
+        moss_core::ast::parse(markdown)
+    }
+
+    fn sectioned_html(markdown: &str) -> String {
+        let mut doc = doc_of(markdown);
+        let closes_page = ends_in_hero(&doc);
+        section_footer_blocks(&mut doc, closes_page);
+        moss_core::ast::render_document(&doc, &moss_core::ast::DefaultHooks::new())
+    }
+
+    #[test]
+    fn a_footer_without_headings_is_unchanged() {
+        let md = "Lead text\n\n- One\n";
+        let plain = moss_core::ast::render_document(&doc_of(md), &moss_core::ast::DefaultHooks::new());
+        assert_eq!(sectioned_html(md), plain);
+    }
+
+    #[test]
+    fn each_heading_starts_a_section_and_the_lead_is_its_own() {
+        let out = sectioned_html("Lead\n\n## Site\n\n- A\n\n## Contact\n\nMail\n");
+        assert_eq!(out.matches("<section>").count(), 3, "{out}");
+        assert!(out.starts_with("<section>\n<p>Lead</p>\n</section>\n<section>\n<h2"), "{out}");
+        assert!(out.ends_with("<p>Mail</p>\n</section>\n"), "{out}");
+    }
+
+    #[test]
+    fn a_deeper_heading_stays_in_its_section_and_a_higher_one_closes_it() {
+        let out = sectioned_html("## A\n\n### A1\n\nx\n\n## B\n\n# C\n");
+        assert_eq!(out.matches("<section>").count(), 3, "{out}");
+        assert!(out.contains("</h3>\n<p>x</p>\n</section>"), "{out}");
+    }
+
+    #[test]
+    fn a_heading_inside_another_block_does_not_split() {
+        let out = sectioned_html("- ## Item\n\n> ## Quoted\n\nx\n");
+        assert!(!out.contains("<section>"), "{out}");
+    }
+
+    #[test]
+    fn a_thematic_break_ends_the_columns_and_starts_the_bottom_row() {
+        let out = sectioned_html("## A\n\nx\n\n## B\n\ny\n\n---\n\nLegal text\n\nMore\n");
+        assert_eq!(out.matches("<section>").count(), 2, "{out}");
+        assert!(out.contains("</section>\n<div class=\"footer-bottom\">\n<p>Legal text</p>\n<p>More</p>\n</div>\n"), "{out}");
+        assert!(!out.contains("<hr"), "{out}");
+    }
+
+    #[test]
+    fn a_break_without_headings_makes_the_top_one_section() {
+        let out = sectioned_html("Top\n\n---\n\nBottom\n");
+        assert_eq!(out, "<section>\n<p>Top</p>\n</section>\n<div class=\"footer-bottom\">\n<p>Bottom</p>\n</div>\n");
+    }
+
+    #[test]
+    fn a_trailing_break_leaves_no_empty_bottom_row() {
+        assert!(!sectioned_html("## A\n\nx\n\n---\n").contains("footer-bottom"));
+    }
+
+    #[test]
+    fn raw_html_does_not_change_where_sections_split() {
+        let md = "## One\n\n<script>for(var i=0;i<3;i++){}</script>\n\n## Two\n\n<ul><li>a<li>b</ul>\n\n## Three\n";
+        assert_eq!(sectioned_html(md).matches("<section>").count(), 3);
     }
 }

@@ -12,10 +12,14 @@
  * Run via: bash scripts/render-gates.sh contents-ruler
  */
 import { test, expect, type Page } from '@playwright/test';
-import { SECTIONS, SHORT_SECTIONS, LONG_CJK_TITLE, LONG_LATIN_TITLE } from '../../e2e/helpers/contents-ruler-site';
+import { gatePort } from '../../../playwright/gate-ports';
+import { SECTIONS, SHORT_SECTIONS, LONG_CJK_TITLE, LONG_LATIN_TITLE, OPEN_SECTIONS, OPEN_WITH_IMAGE } from '../../e2e/helpers/contents-ruler-site';
 
 const ARTICLE = '/essays/reading/long/';
 const SHORT = '/essays/reading/short/';
+const OPEN = '/essays/reading/open/';
+const HOME = '/';
+const OPEN_HOME = `http://localhost:${gatePort('contents-ruler:home')}/`;
 
 /** Two frames: scroll and resize events are delivered per frame, and the ruler
  *  coalesces its own work into one more. */
@@ -173,27 +177,18 @@ for (const [width, height] of [
       }
     });
 
-    test('no label is clipped, and a cut title keeps its start and its end', async ({ page }) => {
+    test('every label holds its whole title, and a long one ends in an ellipsis', async ({ page }) => {
       const labels = await page.$$eval('.moss-contents-ruler-label', (els) =>
         els.map((el) => ({
           text: el.textContent ?? '',
-          scrollWidth: el.scrollWidth,
-          clientWidth: el.clientWidth,
+          cut: el.scrollWidth > el.clientWidth,
+          ellipsis: getComputedStyle(el).textOverflow,
         })),
       );
-      expect(labels).toHaveLength(SECTIONS.length);
-      labels.forEach((label, i) => {
-        expect(label.scrollWidth, `label ${i} overflows its box`).toBeLessThanOrEqual(label.clientWidth);
-        if (label.text === SECTIONS[i]) return;
-        const parts = label.text.split('…');
-        expect(parts, `label ${i} has exactly one ellipsis`).toHaveLength(2);
-        expect(parts[0].length).toBeGreaterThan(0);
-        expect(parts[1].length).toBeGreaterThan(0);
-        expect(SECTIONS[i].startsWith(parts[0])).toBe(true);
-        expect(SECTIONS[i].endsWith(parts[1])).toBe(true);
-      });
+      expect(labels.map((l) => l.text)).toEqual(SECTIONS);
+      labels.forEach((label, i) => expect(label.ellipsis, `label ${i}`).toBe('ellipsis'));
       if (width === 1280) {
-        expect(labels[SECTIONS.indexOf(LONG_CJK_TITLE)].text).toContain('…');
+        expect(labels[SECTIONS.indexOf(LONG_CJK_TITLE)].cut, 'the long title does not fit').toBe(true);
       }
     });
 
@@ -216,17 +211,43 @@ for (const [width, height] of [
       }
     });
 
-    test('the island sections button is hidden while the ruler is up and back when it fades', async ({ page }) => {
-      const display = () =>
-        page.evaluate(() => getComputedStyle(document.querySelector('.moss-nav-island-sections')!).display);
-      expect(await display()).toBe('none');
+    test('the whole island is hidden wherever the ruler shows, even scrolling up, and back once it fades', async ({ page }) => {
+      const island = () =>
+        page.evaluate(() => {
+          const el = document.querySelector<HTMLElement>('.moss-nav-island')!;
+          return { visible: getComputedStyle(el).opacity !== '0', inert: el.inert, shown: el.dataset.shown };
+        });
+      // Scrolling up is what reveals the island; while the ruler is up it does not.
+      await page.evaluate(() => window.scrollBy(0, -120));
+      await frames(page);
+      await expect.poll(() => isAway(page)).toBe(false);
+      await expect.poll(island).toEqual({ visible: false, inert: true, shown: 'false' });
 
-      await scrollTo(page, 0);
+      // Past the article the ruler fades, and a scroll up brings the bar back.
+      await scrollTo(page, 1e6);
       await expect.poll(() => isAway(page)).toBe(true);
-      expect(await display()).not.toBe('none');
+      await page.evaluate(() => window.scrollBy(0, -120));
+      await frames(page);
+      await expect.poll(island).toEqual({ visible: true, inert: false, shown: 'true' });
 
       await intoArticle(page);
-      expect(await display()).toBe('none');
+      await expect.poll(async () => (await island()).shown).toBe('false');
+    });
+
+    test('keyboard focus that brings a faded ruler up puts the island away at once', async ({ page }) => {
+      await scrollTo(page, 1e6);
+      await expect.poll(() => isAway(page)).toBe(true);
+      await page.evaluate(() => window.scrollBy(0, -120));
+      await frames(page);
+      await expect.poll(() => page.locator('.moss-nav-island').evaluate((el) => (el as HTMLElement).dataset.shown)).toBe('true');
+      // Focus and read in one task, with no scroll and no frame in between.
+      const after = await page.evaluate(async () => {
+        document.querySelector<HTMLElement>('.moss-contents-ruler a')!.focus();
+        await Promise.resolve();
+        const el = document.querySelector<HTMLElement>('.moss-nav-island')!;
+        return { ruler: el.dataset.ruler, shown: el.dataset.shown, inert: el.inert };
+      });
+      expect(after).toEqual({ ruler: 'on', shown: 'false', inert: true });
     });
   });
 }
@@ -362,7 +383,7 @@ test.describe('across a morph', () => {
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
 
-  test('the sections panel cuts long titles in the middle too, and none overflows its row', async ({ page }) => {
+  test('the sections panel ends long titles in an ellipsis, each row holding its whole title', async ({ page }) => {
     await page.goto(ARTICLE);
     await page.waitForSelector('.moss-nav-island[data-shown]');
     await page.evaluate(() => document.fonts.ready);
@@ -373,15 +394,12 @@ test.describe('on a phone', () => {
     await page.tap('.moss-nav-island-sections');
     await expect(page.locator('[data-island-menu="sections"]')).toBeVisible();
     const rows = await page.$$eval('[data-island-menu="sections"] a', (as) =>
-      as.map((a) => ({ text: a.textContent ?? '', fits: a.scrollWidth <= a.clientWidth })),
+      as.map((a) => ({ text: a.textContent ?? '', cut: a.scrollWidth > a.clientWidth, ellipsis: getComputedStyle(a).textOverflow })),
     );
-    rows.forEach((row, i) => expect(row.fits, `row ${i} fits`).toBe(true));
+    expect(rows.map((row) => row.text)).toEqual(SECTIONS);
+    rows.forEach((row, i) => expect(row.ellipsis, `row ${i}`).toBe('ellipsis'));
     for (const long of [LONG_CJK_TITLE, LONG_LATIN_TITLE]) {
-      const text = rows[SECTIONS.indexOf(long)].text;
-      const [head, tail] = text.split('…');
-      expect(text, 'cut in the middle').toContain('…');
-      expect(long.startsWith(head) && head.length > 0).toBe(true);
-      expect(long.endsWith(tail) && tail.length > 0).toBe(true);
+      expect(rows[SECTIONS.indexOf(long)].cut, `${long} is cut`).toBe(true);
     }
   });
 
@@ -412,6 +430,7 @@ test.describe('on a phone', () => {
           nameWidth: name.getBoundingClientRect().width,
           fontSize: parseFloat(getComputedStyle(name).fontSize),
           name: name.textContent ?? '',
+          nameCut: name.scrollWidth > name.clientWidth && getComputedStyle(name).textOverflow === 'ellipsis',
           nameShown: getComputedStyle(name).display !== 'none',
         };
       });
@@ -427,7 +446,7 @@ test.describe('on a phone', () => {
       await scrollTo(page, (await page.evaluate(() => window.scrollY)) + 80);
       await scrollTo(page, (await page.evaluate(() => window.scrollY)) - 80);
       await page.waitForFunction(() => document.querySelector('.moss-nav-island')?.getAttribute('data-shown') === 'true');
-      const s = await state();
+      const s = await state(page);
       expect(s.innerWidth).toBe(390);
       expect(s.scrollWidth).toBeLessThanOrEqual(390);
       expect(s.barRight).toBeLessThanOrEqual(390);
@@ -435,14 +454,13 @@ test.describe('on a phone', () => {
       expect(s.barHeight, 'the bar is no taller with a name than without').toBeCloseTo(before.barHeight, 0);
       expect(s.folded, 'the deep trail folds').toBe(true);
       expect(s.nameShown).toBe(true);
-      expect(s.name).toContain('…');
+      expect(s.name, 'the whole title, cut by CSS').toBe(SECTIONS[k]);
+      expect(s.nameCut).toBe(true);
       expect(s.nameWidth).toBeCloseTo(6 * s.fontSize, 0);
       expect(s.buttonWidth, 'the button is the same width with and without a name').toBeCloseTo(before.buttonWidth, 0);
 
-      // WCAG 2.5.3: what is spoken contains what is shown (the ellipsis aside).
-      const [head, tail] = s.name.split('…').map((part) => part.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-      const button = page.locator('.moss-nav-island-sections');
-      await expect(button).toHaveAccessibleName(new RegExp(`^Sections on this page .*${head}.*${tail}$`));
+      // WCAG 2.5.3: what is spoken contains what is shown.
+      await expect(page.locator('.moss-nav-island-sections')).toHaveAccessibleName(`Sections on this page ${SECTIONS[k]}`);
     }
   });
 });
@@ -551,4 +569,140 @@ test.describe('on a touch screen wide enough for the ruler', () => {
     await frames(page);
     expect(await page.evaluate(() => decodeURIComponent(location.hash.slice(1)))).toBe(g.ids[k]);
   });
+});
+
+/** What `contents: pictures` leaves alone: at rest it is the plain ruler. */
+test.describe('a page that does not ask for pictures', () => {
+  test('is unchanged: titles hidden at rest, no pictures, no data-contents', async ({ page }) => {
+    await open(page, 1280, 720);
+    await intoArticle(page);
+    expect(await page.evaluate(() => document.body.dataset.contents)).toBeUndefined();
+    expect(await ruler(page).getAttribute('data-contents')).toBeNull();
+    const r = await page.$$eval('.moss-contents-ruler a', (as) =>
+      as.map((a) => ({
+        label: getComputedStyle(a.querySelector('.moss-contents-ruler-label')!).visibility,
+        pic: a.querySelector('.moss-contents-ruler-pic'),
+      })),
+    );
+    expect(r.every((row) => row.label === 'hidden' && row.pic === null)).toBe(true);
+  });
+});
+
+test.describe('the sections panel of a page with pictures in its contents', () => {
+  test.use({ viewport: { width: 390, height: 800 }, isMobile: true, hasTouch: true });
+
+  test('shows the same pictures, and every title starts in one column', async ({ page }) => {
+    await page.goto(OPEN);
+    await page.waitForSelector('.moss-nav-island[data-shown]');
+    await page.evaluate(() => document.fonts.ready);
+    await jumpTo(page, 2);
+    await scrollTo(page, (await page.evaluate(() => window.scrollY)) + 80);
+    await scrollTo(page, (await page.evaluate(() => window.scrollY)) - 80);
+    await page.waitForFunction(() => document.querySelector('.moss-nav-island')?.getAttribute('data-shown') === 'true');
+    await page.tap('.moss-nav-island-sections');
+    await expect(page.locator('[data-island-menu="sections"]')).toBeVisible();
+
+    const panel = () =>
+      page.$$eval('[data-island-menu="sections"] a', (as) =>
+        as.map((a) => {
+          const img = a.querySelector('img');
+          const title = a.querySelector('.moss-nav-island-section-title') ?? a;
+          const range = document.createRange();
+          range.selectNodeContents(title);
+          return {
+            text: a.getAttribute('aria-label') ?? title.textContent,
+            img: img && { loaded: img.complete && img.naturalWidth > 0, size: img.getBoundingClientRect().width },
+            textLeft: range.getBoundingClientRect().left,
+            fits: a.scrollWidth <= a.clientWidth,
+          };
+        }),
+      );
+    await expect.poll(async () => (await panel()).filter((row) => row.img?.loaded).length).toBe(3);
+    const rows = await panel();
+    expect(rows.map((row) => row.text)).toEqual(OPEN_SECTIONS);
+    rows.forEach((row, i) => {
+      expect(row.img !== null, `row ${i} has a picture iff its section has an image`).toBe(OPEN_WITH_IMAGE[i]);
+      expect(row.textLeft, `title ${i} lines up`).toBeCloseTo(rows[0].textLeft, 0);
+      expect(row.fits, `row ${i} fits`).toBe(true);
+    });
+  });
+});
+
+/** The home page has no breadcrumb trail, which is what used to keep the island and ruler off it. */
+test.describe('the home page', () => {
+  test('without the field has no contents list, as before', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(HOME);
+    await page.evaluate(() => document.fonts.ready);
+    await frames(page);
+    expect(await page.locator('.moss-contents-ruler').count()).toBe(0);
+    expect(await page.locator('.moss-nav-island').count()).toBe(0);
+  });
+
+  test('with the field gets the ruler with a picture for each section that has an image, titles hidden at rest', async ({ page }) => {
+    await open(page, 1280, 800, OPEN_HOME);
+    await jumpTo(page, 1);
+    await expect.poll(() => isAway(page)).toBe(false);
+    expect(await ruler(page).getAttribute('data-contents')).toBe('pictures');
+    const r = await page.$$eval('.moss-contents-ruler a', (as) =>
+      as.map((a) => ({
+        text: a.getAttribute('aria-label'),
+        visible: getComputedStyle(a.querySelector('.moss-contents-ruler-label')!).visibility,
+        pic: a.querySelector('.moss-contents-ruler-pic img') !== null,
+      })),
+    );
+    expect(r.map((row) => row.text)).toEqual(OPEN_SECTIONS);
+    expect(r.map((row) => row.pic)).toEqual(OPEN_WITH_IMAGE);
+    expect(r.every((row) => row.visible === 'hidden')).toBe(true);
+  });
+
+  for (const height of [700, 1000])
+  test(`at ${height}px tall the list comes up when the first section reaches its own top, not before`, async ({ page }) => {
+    await open(page, 1280, height, OPEN_HOME);
+    // An opening tall enough to leave the first section below the window's foot.
+    await page.evaluate(() => {
+      document.querySelector('main')!.insertAdjacentHTML('afterbegin', '<div style="block-size:1400px"></div>');
+    });
+    await frames(page);
+    const place = async (offset: number) => {
+      await page.evaluate((off) => {
+        const list = document.querySelector('.moss-contents-ruler ol')!.getBoundingClientRect();
+        const first = document.querySelector('main h2[id]')!.getBoundingClientRect();
+        scrollTo(0, scrollY + first.top - (list.top + off));
+      }, offset);
+      await frames(page);
+    };
+    // Heading 30px below the list's top: the list is still away, though the heading is in the window.
+    await place(30);
+    await expect.poll(() => isAway(page)).toBe(true);
+    await place(-30);
+    await expect.poll(() => isAway(page)).toBe(false);
+  });
+
+  test.describe('on a phone', () => {
+    test.use({ viewport: { width: 390, height: 800 }, isMobile: true, hasTouch: true });
+
+    test('with the field gets the sections panel with pictures', async ({ page }) => {
+      await page.goto(OPEN_HOME);
+      await page.waitForSelector('.moss-nav-island[data-shown]');
+      await page.evaluate(() => document.fonts.ready);
+      await jumpTo(page, 2);
+      await scrollTo(page, (await page.evaluate(() => window.scrollY)) + 80);
+      await scrollTo(page, (await page.evaluate(() => window.scrollY)) - 80);
+      await page.waitForFunction(() => document.querySelector('.moss-nav-island')?.getAttribute('data-shown') === 'true');
+      await page.tap('.moss-nav-island-sections');
+      await expect(page.locator('[data-island-menu="sections"]')).toBeVisible();
+      const rows = await page.$$eval('[data-island-menu="sections"] a', (as) =>
+        as.map((a) => ({ text: a.getAttribute('aria-label') ?? a.textContent, pic: a.querySelector('img') !== null })),
+      );
+      expect(rows.map((row) => row.text)).toEqual(OPEN_SECTIONS);
+      expect(rows.map((row) => row.pic)).toEqual(OPEN_WITH_IMAGE);
+    });
+  });
+});
+
+test('a page is never shifted and carries no inline style on the body', async ({ page }) => {
+  await open(page, 1280, 720);
+  expect(await page.evaluate(() => document.body.getAttribute('style'))).toBeNull();
+  expect(await page.evaluate(() => getComputedStyle(document.body).paddingLeft)).toBe('0px');
 });

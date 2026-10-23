@@ -102,6 +102,12 @@ describe("site search runtime", () => {
     expect(overlay()!.hidden).toBe(false);
   });
 
+  test("`/` opens the panel on a page with no search button (a site with no header)", () => {
+    document.querySelector(".nav-search-btn")!.remove();
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
+    expect(overlay()!.hidden).toBe(false);
+  });
+
   test("Cmd/Ctrl+K opens the panel", () => {
     document.body.dispatchEvent(
       new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }),

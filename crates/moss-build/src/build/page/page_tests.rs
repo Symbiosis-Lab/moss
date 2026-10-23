@@ -60,6 +60,7 @@ fn test_generate_year_grouped_article_list_filters_index_files() {
     ];
 
     let project = ProjectStructure {
+        passthrough_media: Vec::new(),
         root_path: String::new(),
         markdown_files: vec![],
         html_files: vec![],
@@ -126,6 +127,7 @@ fn test_generate_year_grouped_article_list_excludes_nav_items() {
     ];
 
     let project = ProjectStructure {
+        passthrough_media: Vec::new(),
         root_path: String::new(),
         markdown_files: vec![],
         html_files: vec![],
@@ -181,6 +183,7 @@ fn test_year_grouped_list_uses_pretty_urls() {
     let docs = vec![post];
 
     let project = ProjectStructure {
+        passthrough_media: Vec::new(),
         root_path: String::new(),
         markdown_files: vec![],
         html_files: vec![],
@@ -219,6 +222,7 @@ fn test_year_grouped_list_uses_pretty_urls() {
 
 fn make_project() -> ProjectStructure {
     ProjectStructure {
+        passthrough_media: Vec::new(),
         root_path: String::new(),
         markdown_files: vec![],
         html_files: vec![],

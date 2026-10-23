@@ -38,12 +38,16 @@ const CROSSED: &[(&str, fn(&[String]) -> i32)] = &[
     ("env", moss_build::cli::env::run),
     ("tools", moss_build::cli::tools::run),
     ("domain", moss_build::cli::domain::run),
+    ("map", moss_build::cli::map::run),
     ("import", moss_build::cli::import::run),
     ("deploy", moss_build::cli::deploy::run),
     // `mv` is the app binary's alias for `rename` (`startup/run_mode.rs`).
     ("rename", moss_build::cli::rename::run),
+    ("new", moss_build::cli::new::run),
     ("mv", moss_build::cli::rename::run),
     ("expand", moss_build::cli::expand::run),
+    // Lives beside the cloud-wait loop it shares with `build`, not in `cli/` (file budget).
+    ("fetch", moss_build::build::cloud_readiness::fetch::run),
     // Lives under `deploy/history/`, not `cli/` (file budget — see the
     // publish-history design's "Placement and budgets").
     ("history", moss_build::deploy::history::cli::run),

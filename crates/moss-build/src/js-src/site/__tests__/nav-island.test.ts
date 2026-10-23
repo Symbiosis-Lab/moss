@@ -16,7 +16,7 @@
 import { describe, test, expect, beforeEach, vi } from "vitest";
 
 import { foldPlan, outerWidth } from "../nav/breadcrumb-fold";
-import { initNavIsland } from "../nav/nav-island";
+import { contentsEnd, initNavIsland, mainSectionCount } from "../nav/nav-island";
 
 // A five-level trail: 河灣週刊 / 評選 / 小說組 / 第一屆 / 末代女礦工…
 const TRAIL = [100, 60, 70, 60, 220];
@@ -286,5 +286,128 @@ describe("initNavIsland — the contents gate and the sections panel", () => {
     sectionsBtn().dispatchEvent(new MouseEvent("click", { detail: 0, bubbles: true }));
 
     expect(document.activeElement).toBe(sectionsMenu().firstElementChild);
+  });
+});
+
+describe("initNavIsland — the island of a site with no header", () => {
+  const PINNED = `
+    <div class="moss-nav-island" data-header="none">
+      <div class="moss-nav-island-bar">
+        <button type="button" class="moss-nav-island-sections"
+                aria-expanded="false" aria-label="sections"></button>
+      </div>
+      <div class="moss-nav-island-menu" data-island-menu="sections" hidden></div>
+    </div><div class="nav-icons"><button class="nav-theme-btn" type="button"></button></div>`;
+  const island = () => document.querySelector<HTMLElement>(".moss-nav-island")!;
+  const sectionsBtn = () => document.querySelector<HTMLButtonElement>(".moss-nav-island-sections")!;
+
+  /** jsdom lays nothing out: place each heading's top where the test says. */
+  function placeHeadings(tops: number[]): void {
+    document.querySelectorAll<HTMLElement>("main h2").forEach((h, i) => {
+      h.getBoundingClientRect = () => ({ top: tops[i] }) as DOMRect;
+    });
+  }
+
+  beforeEach(() => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+  });
+
+  test("a page with fewer than two sections shows the controls from the start, without the button", () => {
+    document.body.innerHTML = `${PINNED}<main><h2 id="a">One</h2></main>`;
+    initNavIsland();
+    expect(island().dataset.shown).toBe("true");
+    expect(island().inert).toBe(false);
+    expect(sectionsBtn().hidden).toBe(true);
+  });
+
+  test("it appears when the first section reaches the reading line and then stays", async () => {
+    document.body.innerHTML = `${PINNED}<main><h2 id="a">One</h2><h2 id="b">Two</h2></main>`;
+    placeHeadings([600, 1400]);
+    initNavIsland();
+    expect(island().dataset.shown).toBe("false");
+    expect(sectionsBtn().hidden).toBe(false);
+
+    const scrollTo = async (tops: number[]): Promise<void> => {
+      placeHeadings(tops);
+      window.dispatchEvent(new Event("scroll"));
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    };
+    await scrollTo([10, 800]);
+    expect(island().dataset.shown).toBe("true");
+    await scrollTo([-900, -100]);
+    expect(island().dataset.shown).toBe("true");
+    // Scrolling back up (a smaller scrollY) does not hide it either; only the
+    // title area coming back into view does.
+    await scrollTo([-100, 700]);
+    expect(island().dataset.shown).toBe("true");
+    await scrollTo([600, 1400]);
+    expect(island().dataset.shown).toBe("false");
+  });
+
+  test("where the ruler is on screen the bar stays put away, and returns when it goes", async () => {
+    document.body.innerHTML = `${PINNED}<main><h2 id="a">One</h2><h2 id="b">Two</h2></main>`;
+    placeHeadings([10, 800]);
+    initNavIsland();
+    expect(island().dataset.shown).toBe("true");
+    const pass = async (): Promise<void> => {
+      window.dispatchEvent(new Event("scroll"));
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    };
+    // The ruler writes its state while the scrollspy reports, before the reveal.
+    const ruler = { state: "on" };
+    island().addEventListener("moss-section-sync", () => (island().dataset.ruler = ruler.state));
+    await pass();
+    expect([island().dataset.shown, island().inert]).toEqual(["false", true]);
+    ruler.state = "off";
+    await pass();
+    expect([island().dataset.shown, island().inert]).toEqual(["true", false]);
+  });
+
+  test("the theme toggle keeps its place at the top only while the reader is there", async () => {
+    document.body.innerHTML = `${PINNED}<main><h2 id="a">One</h2><h2 id="b">Two</h2></main>`;
+    placeHeadings([600, 1400]);
+    const bar = document.querySelector<HTMLElement>(".moss-nav-island-bar")!;
+    Object.defineProperties(bar, { offsetTop: { value: 16 }, offsetHeight: { value: 46 } });
+    Object.defineProperty(document.querySelector(".nav-theme-btn")!, "offsetHeight", { value: 36 });
+    initNavIsland();
+    expect(island().hasAttribute("data-top")).toBe(true);
+    for (const [y, top] of [[20, true], [21, false], [400, false], [0, true]] as const) {
+      Object.defineProperty(window, "scrollY", { value: y, configurable: true });
+      window.dispatchEvent(new Event("scroll"));
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+      expect(island().hasAttribute("data-top"), `at ${y}px`).toBe(top);
+    }
+  });
+
+  test("the name button is labelled with the current section", async () => {
+    document.body.innerHTML = `${PINNED}<main><h2 id="a">One</h2><h2 id="b">Two</h2></main>`;
+    placeHeadings([-50, 400]);
+    initNavIsland();
+    expect(sectionsBtn().querySelector(".moss-nav-island-section-name")!.textContent).toBe("One");
+  });
+});
+
+describe("which sections the ruler lists (contents=end)", () => {
+  const page = (html: string) => {
+    document.body.innerHTML = html;
+    const headings = [...document.querySelectorAll<HTMLElement>("main h2")];
+    return mainSectionCount(headings, contentsEnd(headings));
+  };
+  const h = (n: number) => Array.from({ length: n }, (_, i) => `<h2 id="s${i}">S${i}</h2><p>x</p>`).join("");
+
+  test("a marker after the third section ends the list there", () => {
+    expect(page(`<main>${h(3)}<div data-contents-end></div>${h(2).replaceAll("s", "t")}</main>`)).toBe(3);
+  });
+
+  test("a marker on a heading leaves that heading out", () => {
+    expect(page(`<main>${h(2)}<h2 id="end" data-contents-end>End</h2><h2 id="z">Z</h2></main>`)).toBe(2);
+  });
+
+  test("a marker in the footer is not read", () => {
+    expect(page(`<main>${h(4)}</main><footer><div data-contents-end></div></footer>`)).toBe(4);
+  });
+
+  test("a marker before every section is ignored rather than emptying the list", () => {
+    expect(page(`<main><div data-contents-end></div>${h(4)}</main>`)).toBe(4);
   });
 });

@@ -4,7 +4,7 @@
  * Finds the handshake element moss-build's `PlaceMapRenderContext::
  * render_term_map` leaves on a place-typed namespace root's static map
  * figure (`data-moss-places-explorer`, carrying `data-world`/`data-tiles`/
- * `data-places`/`data-labels`/`data-scope`), fetches the world SVG and the
+ * `data-places`/`data-labels`/`data-layers`/`data-scope`), fetches the world SVG and the
  * explorer's data files, and — once the three REQUIRED ones are in hand —
  * hands them to `map.ts` to build the interactive layer in place of the
  * figure's static `<svg>` child. `data-labels` is the one optional URL: its
@@ -43,33 +43,10 @@
  */
 import { mountPlacesMap } from "./map";
 import { attachEmbedModeIfRequested, initPlaceEmbeds, prepareEmbedLayoutIfRequested } from "./embed";
+import { fetchLocal, parseLayers, type DetailLayer } from "./layers";
 import { normalizePlacesData, type EdgeFade, type ExplorerFit, type LabelsData, type PlacesDataWire } from "./types";
 
 export {};
-
-/**
- * Same-origin fetch, matching every other site runtime's own asset-loading
- * guard (`search.ts`'s `loadPagefind`, the source prototype's
- * `fetchLocalAsset`) — the handshake's URLs are always this build's own
- * output, never a third party.
- *
- * `cache: "force-cache"`: every caller's URL is content-hashed
- * (`world.<hash>.svg`, `places.<hash>.json`, `tiles.json` under the same
- * `_moss/map.<hash>/` directory) — a changed byte is a changed URL, so a
- * cached response is correct to reuse unconditionally rather than only
- * when a server's own `Cache-Control` says so. This is what makes "pay
- * once per visit" (a second located-article page's own embed never
- * re-fetches `world.svg`) hold regardless of what the HOSTING server
- * sends — a bare static file server included, which a render gate's own
- * scratch site is.
- */
-async function fetchLocal(url: string): Promise<Response> {
-  const parsed = new URL(url, location.href);
-  if (parsed.origin !== location.origin) throw new Error("places explorer assets must be same-origin");
-  const response = await fetch(parsed.href, { credentials: "same-origin", cache: "force-cache" });
-  if (!response.ok) throw new Error(`asset HTTP ${response.status}`);
-  return response;
-}
 
 /** `tiles.json`'s own shape (`emit::place_map_assets::emit`'s `TileIndex`): `k`, the factor a tile is drawn at over the world's own scale (`place_map::geometry::TILE_K`), `origins`, each tile's canvas top-left in whole canvas units keyed `"x,y"`, `columns` and `rows`, the grid's size in cells, `fit` and `edgeFade`, the fit and outer-edge fade the build chose the cells for, alongside a `[x, y]` pair per emitted regional tile. They travel with the cells, so the runtime reads the build's values instead of keeping copies; the opening frame's arithmetic itself exists on both sides, held together by shared golden vectors. */
 interface TileIndex {
@@ -102,6 +79,7 @@ export async function initPlacesExplorer(root: ParentNode = document): Promise<v
   const tilesUrl = figure.dataset.tiles;
   const placesUrl = figure.dataset.places;
   const labelsUrl = figure.dataset.labels;
+  const layersUrl = figure.dataset.layers;
   if (!worldUrl || !tilesUrl || !placesUrl) return;
 
   try {
@@ -111,7 +89,7 @@ export async function initPlacesExplorer(root: ParentNode = document): Promise<v
     // URL fetched outside the `Promise.all` that still gates everything
     // else — caught on its own, resolving to `null` (no labels) rather than
     // rejecting the whole boot.
-    const [worldSvgText, placesWire, tiles, labels] = await Promise.all([
+    const [worldSvgText, placesWire, tiles, labels, layers] = await Promise.all([
       fetchLocal(worldUrl).then((response) => response.text()),
       fetchLocal(placesUrl).then((response) => response.json() as Promise<PlacesDataWire>),
       fetchLocal(tilesUrl).then((response) => response.json() as Promise<TileIndex>),
@@ -123,6 +101,16 @@ export async function initPlacesExplorer(root: ParentNode = document): Promise<v
               return null;
             })
         : Promise.resolve(null),
+      // Same posture as the labels: a missing file leaves the map as it is without layers.
+      layersUrl
+        ? fetchLocal(layersUrl)
+            .then((response) => response.json())
+            .then(parseLayers)
+            .catch((error): DetailLayer[] => {
+              console.warn("[moss] places explorer layers could not load", error);
+              return [];
+            })
+        : Promise.resolve([] as DetailLayer[]),
     ]);
     const places = normalizePlacesData(placesWire);
     const tilesBaseUrl = tilesUrl.slice(0, tilesUrl.lastIndexOf("/") + 1);
@@ -131,6 +119,7 @@ export async function initPlacesExplorer(root: ParentNode = document): Promise<v
       worldSvgText,
       places,
       labels,
+      layers,
       tileCells: tiles.cells,
       tileK: tiles.k,
       tileOrigins: tiles.origins,

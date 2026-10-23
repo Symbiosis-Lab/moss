@@ -102,6 +102,7 @@ impl<'a> Page<'a> {
             lang: self.lang,
             page_url_path: self.url_path,
             typesetting: self.typesetting,
+            now: crate::build::folder_embed::upcoming::now(),
         }
     }
 
@@ -284,6 +285,22 @@ fn folder_links_in_a_grid_become_collection_cards() {
 }
 
 #[test]
+fn a_collage_cell_replaced_by_a_card_takes_the_cards_tile_kind() {
+    let docs = vec![
+        make_folder("Design Portfolio", "design/index.html", Some("cover.jpg")),
+        make_doc("Project A", "design/project-a/index.html", None),
+        make_folder("Code Projects", "code/index.html", None),
+        make_doc("App 1", "code/app-1/index.html", None),
+    ];
+    let page = Page::new("index.html", &docs);
+    let html = page.cards(":::grid {collage}\n![Lead](lead.jpg)\n+++\n[Design](design/)\n+++\n[Code](code/)\n:::\n");
+    assert_eq!(card_count(&html), 2, "got: {html}");
+    // A bare link is a text cell until the card pass gives it a cover.
+    assert_eq!(html.matches(r#"data-tile="picture""#).count(), 2, "lead and the covered card: {html}");
+    assert_eq!(html.matches(r#"data-tile="text""#).count(), 1, "the coverless card: {html}");
+}
+
+#[test]
 fn a_folder_card_in_a_grid_shows_the_folder_notes_description() {
     let mut folder = make_folder("Theater", "theater/index.html", None);
     folder.description = Some("Pick a room".to_string());
@@ -386,7 +403,7 @@ fn collection_cells_render_through_the_grid_card_emitter() {
     let mut eager = true;
     for doc in &docs {
         let props = crate::build::components::child_list::props_for_document(
-            doc, &docs, "", &overrides, None,
+            doc, &docs, "", &overrides, None, chrono::NaiveDateTime::default(),
         );
         // `list_has_covers=true`: "Ink Study" has a cover, so "Works" (the
         // other cell, coverless) must render through the quote-slot branch,
@@ -1180,7 +1197,7 @@ fn summary_cells_render_through_the_summary_card_emitter() {
     let overrides = HashMap::new();
     for doc in &docs {
         let props = crate::build::components::child_list::props_for_document(
-            doc, &docs, "", &overrides, None,
+            doc, &docs, "", &overrides, None, chrono::NaiveDateTime::default(),
         );
         let expected = crate::build::components::child_summary::render_with_sort(
             &props,

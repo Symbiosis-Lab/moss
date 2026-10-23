@@ -45,7 +45,7 @@
 
 /* Base callout container */
 .callout {
-  --callout-color: #448aff; /* default: note/info blue */
+  --callout-color: var(--callout-note);
   border-left: 3px solid var(--callout-color);
   border-radius: 6px;
   background-color: color-mix(in srgb, var(--callout-color) 8%, var(--moss-color-bg));
@@ -54,12 +54,24 @@
   max-inline-size: var(--moss-content-width);
 }
 
-/* Callout title */
+/* Callout title. The type colours are bright accents that sit at 2:1 on
+   their own tinted band; pulling the ink 55% toward the text colour keeps the
+   hue and clears WCAG 4.5:1 for every type in both themes — and for a colour a
+   theme sets itself, since the text colour flips with the theme. */
 .callout-title {
   font-weight: 480;
-  color: var(--callout-color);
+  color: color-mix(in srgb, var(--callout-color) 45%, var(--moss-color-text));
   margin-bottom: var(--moss-space-xs);
   line-height: 1.4;
+}
+
+/* A folded callout is a <details>; its title is the <summary> */
+summary.callout-title {
+  cursor: pointer;
+}
+
+details.callout:not([open]) > .callout-title {
+  margin-bottom: 0;
 }
 
 /* Callout body */
@@ -79,7 +91,6 @@
 }
 
 /* Per-type accent colors */
-.callout[data-type="note"]     { --callout-color: var(--callout-note); }
 .callout[data-type="info"]     { --callout-color: var(--callout-info); }
 .callout[data-type="tip"]      { --callout-color: var(--callout-tip); }
 .callout[data-type="warning"]  { --callout-color: var(--callout-warning); }

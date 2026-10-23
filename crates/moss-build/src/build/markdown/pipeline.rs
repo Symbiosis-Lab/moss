@@ -293,7 +293,7 @@ fn schema_frontmatter_warnings(
             // both map back to a top-level key the author wrote.
             d.path.as_deref().is_some_and(|p| {
                 let base = p.split('[').next().unwrap_or(p);
-                frontmatter.contains_key(base)
+                moss_core::frontmatter::get_present(frontmatter, base).is_some()
             })
         })
         .map(|d| format!("[{}] frontmatter: {}", file_path, d.message))
@@ -312,20 +312,19 @@ fn declared_fields(
     page: moss_core::fields::PageFormat,
 ) -> DeclaredFields {
     let mut out = DeclaredFields::default();
-    for decl in decls.iter().filter(|decl| moss_core::fields::in_folders(&decl.scope, file_path)) {
-        let Some(raw) = frontmatter.get(&decl.name) else { continue };
-        let Ok(json) = serde_json::to_value(raw) else { continue };
-        let builtin = moss_core::schema_fields::builtin_field(&decl.name).is_some();
-        match moss_core::fields::parse_value(decl, &json, page) {
-            Ok(value) => {
+    for decl in decls {
+        if frontmatter.contains_key(&decl.name) {
+            out.written.insert(decl.name.clone());
+        }
+        match moss_core::fields::declare_one(decl, file_path, frontmatter.get(&decl.name), page) {
+            Some(Ok(value)) => {
                 out.values.insert(decl.name.clone(), value);
             }
-            // moss's own schema check reports a built-in's bad value, so it is not reported twice.
-            Err(_) if builtin => {}
-            Err(reason) => {
+            Some(Err(reason)) => {
                 out.warnings.push(format!("[{file_path}] frontmatter: field '{}': {reason}", decl.name));
                 out.errors.insert(decl.name.clone(), reason);
             }
+            None => {}
         }
     }
     out
@@ -337,6 +336,8 @@ struct DeclaredFields {
     values: std::collections::BTreeMap<String, moss_core::fields::TypedValue>,
     /// Field name to the reason a value does not fit, as the build warning prints it.
     errors: std::collections::BTreeMap<String, String>,
+    /// Every declared field the frontmatter names, blank or not.
+    written: std::collections::BTreeSet<String>,
     warnings: Vec<String>,
 }
 
@@ -503,6 +504,7 @@ pub fn process_markdown_file(
     // frontmatter value line is not matched too early). 0 when no frontmatter.
     let mut declared = std::collections::BTreeMap::new();
     let mut field_errors = std::collections::BTreeMap::new();
+    let mut declared_written = std::collections::BTreeSet::new();
     let (mut frontmatter, markdown_content_raw, raw_frontmatter, frontmatter_line_count) =
         if is_simplified_frontmatter(content) {
             let (fm, body) = parse_simplified_frontmatter(content);
@@ -567,7 +569,7 @@ pub fn process_markdown_file(
             // `FrontMatter` with the raw values already coerced away, so there
             // is nothing left to type-check by the time it returns.
             for warning in schema_frontmatter_warnings(file_path, &parsed.frontmatter) {
-                crate::build::cli_output::cli_warn!("{}", warning);
+                crate::build::cli_output::log_warn_problem!("{}", warning);
             }
             // Body reconciliation: gray_matter's `result.content`
             // — which the downstream pipeline + every snapshot fixture were built
@@ -700,17 +702,18 @@ pub fn process_markdown_file(
         crate::i18n::declared_lang_tag(fm_lang, filename_stem, file_path, ancestor_lang);
     // Read once the page's language is known: a choice's label and a count's
     // decimal mark both depend on it.
+    let format = moss_core::fields::PageFormat {
+        lang: doc_lang.as_bcp47_attr(),
+        decimal: crate::build::components::field_text::decimal_mark(doc_lang),
+    };
     if let Some(source) = &field_source {
-        let format = moss_core::fields::PageFormat {
-            lang: doc_lang.as_bcp47_attr(),
-            decimal: crate::build::components::field_text::decimal_mark(doc_lang),
-        };
         let fields = declared_fields(file_path, source, site.fields, format);
         for warning in fields.warnings {
             crate::build::cli_output::cli_warn!("{}", warning);
         }
         declared = fields.values;
         field_errors = fields.errors;
+        declared_written = fields.written;
     }
 
     // Detect if this is an index file (needed for url_path computation).
@@ -779,6 +782,14 @@ pub fn process_markdown_file(
     // root-absolute. Asset links already do (`pinned_url`), hence only one branch.
     let injects_into_every_page =
         crate::build::footer::targets_a_slot(file_path, frontmatter.slot.as_deref());
+
+    // `partial: true` joins the reserved name here: a transclusion source is
+    // parsed like any page but never emitted, listed, or given a folder index,
+    // and every one of those gates already keys off this flag.
+    let is_slot_only = crate::build::footer::is_slot_only(
+        file_path,
+        crate::build::footer::ShipFacts { partial: frontmatter.partial == Some(true) },
+    );
 
     let resolve_link = |href: &str| -> String {
         // By the time hrefs reach this closure, `moss-core`'s resolve pipeline
@@ -1007,7 +1018,7 @@ pub fn process_markdown_file(
     // Advisories are plain log lines, not problems: the page builds the same
     // either way, so `--strict` does not count them.
     for a in &doc.advisories {
-        log::warn!("[{}] {}", file_path, a);
+        crate::build::cli_output::log_note!("[{}] {}", file_path, a);
     }
 
     // Inline #tags are read from the author's OWN parsed
@@ -1087,6 +1098,11 @@ pub fn process_markdown_file(
         }
     });
 
+    // A footer that ends in a hero closes the page with it.
+    let closes_page = injects_into_every_page && crate::build::footer::ends_in_hero(&doc);
+    super::hero_ink::note_forced_ink(&doc, media_lookup, file_path, closes_page);
+    super::hero_ink::warn_closing_options(&doc, closes_page, file_path);
+
     // 3. Extract the Hero shortcode for hoisting.
     //    LOCKED ORDER: must run AFTER `resolve_urls` (constraint 2) and
     //    BEFORE `find_first_block_image` (constraint 3). Removes the
@@ -1094,12 +1110,25 @@ pub fn process_markdown_file(
     //    returns the rendered HTML + OG-fallback fields. The hook
     //    delegates to `render_hero_html_typed` for byte parity with the
     //    legacy upstream hoist.
-    let hero_extraction = moss_core::ast::extract_hero(&mut doc, &pipeline_hooks);
-    let hero_html = hero_extraction.as_ref().map(|h| h.html.clone());
+    // A closing picture's footer renders its heroes where they are written,
+    // not in a hero slot the footer does not have.
+    let hero_extraction = if closes_page {
+        None
+    } else {
+        moss_core::ast::extract_hero(&mut doc, &pipeline_hooks)
+    };
+    let mut hero_html = hero_extraction.as_ref().map(|h| h.html.clone());
     let hero_image_url = hero_extraction.as_ref().and_then(|h| h.image_url.clone());
     let hero_overlay_text = hero_extraction
         .as_ref()
         .and_then(|h| h.overlay_text.clone());
+    // A hero that names a listing is drawn once every page is known; what the
+    // fence holds is only the fallback. With nothing in the fence there is no
+    // fallback, so no empty hero box is left behind.
+    let hero_drawn_from = hero_extraction.as_ref().and_then(|h| h.drawn_from.clone());
+    if hero_drawn_from.as_ref().is_some_and(|d| !d.shortcode.has_own_content()) {
+        hero_html = None;
+    }
 
     // 4. Capture the first body image for the cover chain.
     //    LOCKED ORDER: must run AFTER `extract_hero` (constraint 3). The
@@ -1131,10 +1160,22 @@ pub fn process_markdown_file(
 
     // An image with no alt and no caption is invisible to a screen reader. It
     // is a prompt to describe the image, not a defect in the build, so it goes
-    // to the log only: `log_warn_problem!` would make `--strict` fail every
+    // to the closing line's notes: `log_warn_problem!` would make `--strict` fail every
     // existing site that has a decorative or not-yet-described image.
     for href in moss_core::ast::images_without_text(&doc) {
-        log::warn!("Accessibility: image '{href}' on '{file_path}' has no alt text — write it in the brackets: ![describe the image]({href})");
+        crate::build::cli_output::log_note!("Accessibility: image '{href}' on '{file_path}' has no alt text — write it in the brackets: ![describe the image]({href})");
+    }
+    for warning in moss_core::ast::image_word_warnings(&doc) {
+        crate::build::cli_output::log_note!("Image: {warning} — on '{file_path}'");
+    }
+
+    // 5b. A footer (a slot document that is never emitted as a page) is injected
+    //    beside every page's own headings: its headings carry no id, and each
+    //    one starts a column. A `partial: true` file is a slot document too,
+    //    but only one that targets a slot is a footer.
+    if is_slot_only && injects_into_every_page {
+        moss_core::ast::clear_heading_ids(&mut doc);
+        crate::build::footer::section_footer_blocks(&mut doc, closes_page);
     }
 
     // 6. Render the typed AST to HTML through `PipelineHooks`. This is THE
@@ -1192,6 +1233,7 @@ pub fn process_markdown_file(
     // Callout presence: same mechanism, gating the `callouts` stylesheet
     // partial (`build/emit/stylesheet.rs`) rather than an injected asset.
     let has_callout = moss_core::ast::has_callout_recursive(&doc);
+    crate::build::cli_output::warn_unknown_callouts(&doc, file_path);
     // Footnote presence: same mechanism again, but this one gates a runtime
     // SCRIPT (the sidenotes bundle) rather than a stylesheet partial.
     let has_footnotes = !moss_core::ast::footnotes::FootnoteIndex::build(&doc.blocks).is_empty();
@@ -1240,7 +1282,6 @@ pub fn process_markdown_file(
     // suppression through `HeadingInputs::slot_only` rather than the
     // pre-2026-05-28 frontmatter-synthesis hack (`title: ""` injected by the
     // now-deleted `render_footer_pages_from_disk`).
-    let is_slot_only = crate::build::footer::is_excluded_from_pages(file_path);
     let heading_inputs = moss_core::heading::HeadingInputs {
         file_path,
         frontmatter_title: frontmatter.title.as_deref(),
@@ -1323,15 +1364,7 @@ pub fn process_markdown_file(
     // The declarations with a `place` that this page has a value for, in
     // declaration order. The render stage draws them: a page link needs the
     // target's title, which only it knows. A folder index and a slot take none.
-    let placed_fields: Vec<_> = if is_index_file || is_slot_only {
-        Vec::new()
-    } else {
-        site.fields
-            .iter()
-            .filter(|d| d.place.is_some())
-            .filter_map(|d| Some((d.clone(), declared.get(&d.name)?.clone())))
-            .collect()
-    };
+    let placed_fields = crate::build::components::field_places::placed_for_page(site.fields, file_path, &title, field_source.as_ref(), format, &declared, &field_errors, is_index_file || is_slot_only);
     let has_field_places = !placed_fields.is_empty();
 
     // Look up pre-computed url_path from PageMap, falling back to inline computation
@@ -1467,6 +1500,7 @@ pub fn process_markdown_file(
     let children_limit = frontmatter.children_limit;
     let children_more = frontmatter.children_more;
     let children_covers = frontmatter.children_covers;
+    let children_when = frontmatter.children_when;
     let children_count = frontmatter.children_count;
     let from_sidebar_alias = frontmatter._from_sidebar_alias;
     let series = frontmatter.series;
@@ -1512,12 +1546,20 @@ pub fn process_markdown_file(
     } else {
         hero_html
     };
+    let hero_from = hero_drawn_from.map(|drawn| crate::build::folder_embed::hero_from::HeroFrom {
+        drawn,
+        fallback_html: hero_html.clone(),
+        fallback_image_url: hero_image_url.clone(),
+        fallback_overlay_text: hero_overlay_text.clone(),
+    });
 
     Ok(ParsedDocument {
         declared,
+        declared_written,
         field_errors,
         placed_fields,
         title_block: frontmatter.title_block,
+        reader_controls: frontmatter.reader_controls,
         card_credits: None,
         label,
         nav_label,
@@ -1534,6 +1576,7 @@ pub fn process_markdown_file(
         logo: frontmatter.logo,
         cover,
         card_cover,
+        term_card: None,
         cover_type: frontmatter.cover_type,
         nav,
         is_root_level,
@@ -1572,7 +1615,9 @@ pub fn process_markdown_file(
         place_names: None,
         is_place_namespace_root: false,
         explorer_places_hash: None,
+        passthrough_root: None,
         has_own_map_embed: false,
+        embedded_listing_urls: Default::default(),
         map,
         route,
         children,
@@ -1585,6 +1630,7 @@ pub fn process_markdown_file(
         children_limit,
         children_more,
         children_covers,
+        children_when,
         children_count,
         from_sidebar_alias,
         series,
@@ -1600,6 +1646,7 @@ pub fn process_markdown_file(
         translation_key: frontmatter.translation_key,
         translations: vec![],
         hero_html,
+        hero_from,
         body_claims_eager,
         hero_image_url,
         body_cover_path,
@@ -1609,6 +1656,7 @@ pub fn process_markdown_file(
             callouts: has_callout,
             footnotes: has_footnotes,
             scroll_rows: has_scroll_row,
+            hero_ends: false,
             viewer: has_viewer,
             field_places: has_field_places,
         },
@@ -1619,7 +1667,7 @@ pub fn process_markdown_file(
         // `footer-left` slot. The flag is set structurally (by filename),
         // not from any YAML key. See PR7b's
         // typed-AST mirror on `moss_core::ast::Document::slot_only`.
-        slot_only: crate::build::footer::is_excluded_from_pages(file_path),
+        slot_only: is_slot_only,
         kind: if is_index_file {
             PageKind::Folder
         } else {
@@ -2360,12 +2408,6 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
                 // `observe_typed_ast` runs on the pre-hoist AST and exercises
                 // this branch).
                 //
-                // `render_hero_html_typed`'s `_resolve_link` parameter
-                // is unread (URL resolution already happened in
-                // `resolve_shortcode_urls`). We pass an identity closure
-                // to satisfy the signature without coupling
-                // `PipelineHooks` to a generic resolver type.
-                let resolver_noop = |s: &str| s.to_string();
                 let hero_mobile_bg: Option<String> = self.media_lookup.and_then(|lookup| {
                     match args.image.as_ref() {
                         Some(moss_core::ast::Url::Resolved(r)) => lookup.get_cover_color_muted(&r.href),
@@ -2374,7 +2416,6 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
                 });
                 let html = crate::build::markdown::typed_renderers::render_hero_html_typed(
                     args,
-                    &resolver_noop,
                     self.media_lookup,
                     source_line,
                     hero_mobile_bg.as_deref(),

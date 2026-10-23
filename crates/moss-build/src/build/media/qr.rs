@@ -205,7 +205,7 @@ pub fn emit_share_qr(
     let svg = match generate_qr_svg(&qr.payload) {
         Ok(svg) => svg,
         Err(e) => {
-            log::warn!("QR generation failed for {}: {}", url_path, e);
+            log::info!("QR generation failed for {}: {}", url_path, e);
             return Ok(());
         }
     };

@@ -321,7 +321,7 @@ pub(crate) fn rewrite_file_links(
         .to_string()
 }
 
-fn extract_image_urls_in_markdown(md: &str) -> Vec<String> {
+pub(crate) fn extract_image_urls_in_markdown(md: &str) -> Vec<String> {
     IMG_PATTERN
         .captures_iter(md)
         .map(|c| c[2].to_string())
@@ -794,6 +794,30 @@ mod tests {
         assert!(out.contains("通灵的仙人掌"), "got: {out}");
         assert!(out.contains("原产美洲的仙人球"), "got: {out}");
         assert!(!out.contains("电影"), "nav chrome leaked in: {out}");
+    }
+
+    // ---- wechat article selector row ------------------------------------
+
+    const WECHAT_ARTICLE: &str = r##"<html><head><title>Invented Post</title></head><body>
+        <div id="page-content"><div id="js_content" style="visibility: hidden; opacity: 0;">
+          <mp-common-profile data-pluginname="mpprofile"><div>Invented Account Card</div><div>Follow</div></mp-common-profile>
+          <p>Lantern harvest begins at dusk.</p>
+          <p><img data-src="https://mmbiz.qpic.cn/invented/640?wx_fmt=jpeg" data-type="jpeg"></p>
+        </div></div>
+        </body></html>"##;
+
+    #[test]
+    fn wechat_article_body_survives_hidden_container_without_profile_card() {
+        let art = extract_article(WECHAT_ARTICLE, "https://mp.weixin.qq.com/s/invented");
+        assert!(art.markdown.contains("Lantern harvest begins at dusk."), "got: {}", art.markdown);
+        assert!(!art.markdown.contains("Invented Account Card"), "card leaked: {}", art.markdown);
+        assert!(!art.markdown.contains("Follow"), "card leaked: {}", art.markdown);
+        assert!(
+            art.markdown.contains("![](https://mmbiz.qpic.cn/invented/640?wx_fmt=jpeg)"),
+            "data-src image missing: {}",
+            art.markdown
+        );
+        assert!(art.media_urls.contains("https://mmbiz.qpic.cn/invented/640?wx_fmt=jpeg"));
     }
 
     #[test]

@@ -137,7 +137,7 @@ pub fn reads_fail_fast() -> bool {
 fn set_policy(scope: c_int, policy: c_int) -> bool {
     // SAFETY: the BSD syscall accepts integer constants from the SDK header.
     let rc = unsafe { setiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, scope, policy) };
-    if rc != 0 { log::warn!("[iopolicy] dataless policy {policy} at scope {scope} failed: {rc}"); }
+    if rc != 0 { log::info!("[iopolicy] dataless policy {policy} at scope {scope} failed: {rc}"); }
     rc == 0
 }
 

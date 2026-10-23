@@ -1,5 +1,7 @@
 # Reviewing and hiding comments
 
+Read `moss guide` (the overview) first: it holds the task recipes this reference does not repeat.
+
 Nothing reviews a new comment before it goes live. Whatever is in the site's comment data at publish time appears on the page, spam included. Before publishing a site that has comments turned on, list them and hide what does not belong.
 
 ## Where comments come from

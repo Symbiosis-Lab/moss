@@ -77,7 +77,7 @@ pub fn download_with_progress(
     if let Some(proxy_url) = crate::system::proxy::resolve_proxy_for_url(url) {
         match ureq::Proxy::new(&proxy_url) {
             Ok(proxy) => builder = builder.proxy(proxy),
-            Err(e) => log::warn!(
+            Err(e) => log::info!(
                 "download: resolved proxy '{}' is invalid ({}); connecting directly",
                 proxy_url,
                 e

@@ -113,6 +113,7 @@ pub fn guard_cli_open_in(folder_path: &str, subcommand: &str, home: Option<&Path
 fn next_step(subcommand: &str, default: String) -> String {
     match subcommand {
         "rename" => "The file is not inside a moss site. Run `moss build` once on the folder that should be the site, then run the rename again.".to_string(),
+        "new" => "The folder is not inside a moss site. Run `moss build` once on the folder that should be the site, then run `moss new` again with a folder inside it.".to_string(),
         _ => default,
     }
 }

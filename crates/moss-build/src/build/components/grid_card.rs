@@ -14,7 +14,7 @@
 
 use std::path::Path;
 
-use super::child_list::{event_card_links, ChildItemProps};
+use super::child_list::{self, event_card_links, ChildItemProps};
 use crate::i18n::{self, Language};
 use crate::build::media::cover::{self, html_escape, CoverType};
 use crate::build::page::meta::render_description_html_in_link;
@@ -189,7 +189,7 @@ fn render_item(
     let event = event_card_links(props, lang);
     let (open, close, title_html, actions_html) = match &event {
         Some(links) => (
-            format!(r#"<div class="moss-card"{}{}>"#, props.source_file_attr(), cover_color_attrs),
+            format!(r#"<div class="moss-card"{}{}>"#, props.root_attrs(), cover_color_attrs),
             "</div>",
             format!(r#"<span class="moss-card-title">{}</span>"#, links.title),
             links.actions.as_str(),
@@ -201,7 +201,7 @@ fn render_item(
                 format!(r#" aria-label="{}""#, html_escape(&props.title))
             };
             (
-                format!(r#"<a href="{}" class="moss-card"{}{}{}>"#, html_escape(&props.url), label_attr, props.source_file_attr(), cover_color_attrs),
+                format!(r#"<a href="{}" class="moss-card"{}{}{}>"#, html_escape(&props.url), label_attr, props.root_attrs(), cover_color_attrs),
                 "</a>",
                 format!(r#"<span class="moss-card-title">{}</span>"#, html_escape(&props.title)),
                 "",
@@ -218,12 +218,13 @@ fn render_item(
     };
 
     format!(
-        r#"{}{}<div class="moss-card-content">{}{}{}{}{}</div>{}"#,
+        r#"{}{}<div class="moss-card-content">{}{}{}{}{}{}</div>{}"#,
         open,
         cover_html,
         kicker_html,
         meta_html,
         title_html,
+        child_list::subtitle_html(props.subtitle.as_deref()),
         description_html,
         actions_html,
         close,

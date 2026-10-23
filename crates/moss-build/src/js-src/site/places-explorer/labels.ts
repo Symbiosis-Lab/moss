@@ -19,7 +19,7 @@
  * re-anchored onto it — anything else would occasionally rename one real
  * place's marker after a different, merely-nearby one.
  */
-import { worldToScreen } from "./camera";
+import { aspectX, worldToScreen } from "./camera";
 import { CLUSTER_DISTANCE, clusterVisible } from "./clusters";
 import { langBucket } from "../subscribe/i18n";
 import { project } from "./projection";
@@ -379,7 +379,7 @@ export class LabelLayer {
   /** Marker boxes at their own ACTUAL rendered screen position — the same cluster-centroid-then-`worldToScreen` `markers.ts` draws a button at, not `clusters.ts`'s own zoom-scaled, pan-independent `ProximityCluster.screen` (meaningful only for distance comparisons between clusters, never for placing anything on the page). A ring's own fanned-out dots are left out of this reservation on purpose — a bloomed ring is a transient, already-attention-grabbing state, and the small cost of a label occasionally sitting near a ring leg is cheaper than threading the ring's own layout through this unrelated module. */
   private markerBoxesFor(points: WorkPoint[], camera: Camera, viewport: Viewport): LabelMarkerBox[] {
     const byId = new Map(points.map((point) => [point.id, point]));
-    return clusterVisible(points, camera.zoom, CLUSTER_DISTANCE).map((cluster) => {
+    return clusterVisible(points, camera.zoom, CLUSTER_DISTANCE, aspectX(camera, viewport)).map((cluster) => {
       const members = cluster.ids.map((id) => byId.get(id)).filter((point): point is WorkPoint => point != null);
       return { screen: worldToScreen(worldCentroid(members), camera, viewport), workIds: members.map(workIdOf) };
     });

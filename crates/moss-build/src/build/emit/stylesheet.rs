@@ -95,6 +95,11 @@ pub const CSS_PARTIALS: &[CssPartial] = &[
         source: include_str!("../../assets/css/site/places-explorer.css"),
         gate: |a| a.places_explorer,
     },
+    CssPartial {
+        name: "map-layers",
+        source: include_str!("../../assets/css/site/map-layers.css"),
+        gate: |a| a.map_layers,
+    },
 ];
 
 /// The core stylesheet — everything not behind a gate.

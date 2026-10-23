@@ -226,7 +226,7 @@ pub(crate) const LAZY_SRC_ATTRS: &[&str] = &["data-src", "data-lazy-src", "data-
 
 /// Promote a lazy-load `data-*` attribute onto `src` when `src` is missing
 /// or empty, so the image survives into the markdown like any other.
-fn promote_lazy_src(
+pub(crate) fn promote_lazy_src(
     el: &mut lol_html::html_content::Element,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let has_real_src = el

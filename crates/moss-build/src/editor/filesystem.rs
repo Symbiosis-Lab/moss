@@ -82,7 +82,13 @@ pub struct TreeNode {
     pub hidden: u32,
     /// See `DirEntry::file_id`.
     pub file_id: Option<String>,
+    /// The file's role on the site when it has a special one, decided by
+    /// `classify::special_file_kind`. Always `None` for folders.
+    #[serde(default)]
+    pub special: Option<SpecialFileKind>,
 }
+
+pub use crate::build::scan::classify::SpecialFileKind;
 
 // Re-export so downstream modules and tests can reference DateSource via
 // editor::filesystem::DateSource — single source of truth lives in moss-core.
@@ -256,6 +262,17 @@ pub fn list_tree_inner_cached_with_error(
     show_internal: bool,
     cache: &PublishDateCacheView<'_>,
 ) -> Result<TreeNode, crate::build::cloud_readiness::storage::Unavailable> {
+    let page_settings_dirs = crate::build::scan::classify::page_settings_dirs(project_path);
+    build_tree_node(path, project_path, show_internal, cache, &page_settings_dirs)
+}
+
+fn build_tree_node(
+    path: &str,
+    project_path: &str,
+    show_internal: bool,
+    cache: &PublishDateCacheView<'_>,
+    page_settings_dirs: &std::collections::HashSet<String>,
+) -> Result<TreeNode, crate::build::cloud_readiness::storage::Unavailable> {
     let (entries, hidden) = list_directory_counted(path, project_path, show_internal)?;
 
     // Basenames of md children whose frontmatter carries the `home: true`
@@ -267,7 +284,7 @@ pub fn list_tree_inner_cached_with_error(
         .into_iter()
         .map(|entry| {
             if entry.is_dir {
-                list_tree_inner_cached_with_error(&entry.path, project_path, show_internal, cache)
+                build_tree_node(&entry.path, project_path, show_internal, cache, page_settings_dirs)
             } else {
                 let (publish_date, date_source) = if entry.name.to_ascii_lowercase().ends_with(".md") {
                     let (date, source, home_marker) = resolve_md_date(&entry, cache);
@@ -278,6 +295,11 @@ pub fn list_tree_inner_cached_with_error(
                 } else {
                     (None, DateSource::None)
                 };
+                let rel = std::path::Path::new(&entry.path)
+                    .strip_prefix(project_path)
+                    .map(|p| p.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_default();
+                let special = crate::build::scan::classify::special_file_kind(&rel, page_settings_dirs);
                 Ok(TreeNode {
                     name: entry.name,
                     path: entry.path,
@@ -289,6 +311,7 @@ pub fn list_tree_inner_cached_with_error(
                     children: None,
                     hidden: 0,
                     file_id: entry.file_id,
+                    special,
                 })
             }
         })
@@ -391,6 +414,7 @@ pub fn list_tree_inner_cached_with_error(
         children: Some(children),
         hidden,
         file_id: dir_file_id,
+        special: None,
     };
     folder_node.publish_date = compute_folder_recency(&folder_node);
     sort_tree_nodes(
@@ -823,6 +847,7 @@ mod tests {
             children: None,
             hidden: 0,
             file_id: None,
+            special: None,
         }
     }
 
@@ -838,6 +863,7 @@ mod tests {
             children: Some(vec![]),
             hidden: 0,
             file_id: None,
+            special: None,
         }
     }
 
@@ -853,6 +879,7 @@ mod tests {
             children: None,
             hidden: 0,
             file_id: None,
+            special: None,
         }
     }
 
@@ -911,6 +938,7 @@ mod tests {
             ]),
             hidden: 0,
             file_id: None,
+            special: None,
         };
         assert_eq!(
             compute_folder_recency(&folder),
@@ -934,6 +962,7 @@ mod tests {
             ]),
             hidden: 0,
             file_id: None,
+            special: None,
         };
         assert!(compute_folder_recency(&folder).is_some());
     }
@@ -951,6 +980,7 @@ mod tests {
             children: Some(vec![node_file("photo.png", 200.0)]),
             hidden: 0,
             file_id: None,
+            special: None,
         };
         assert!(compute_folder_recency(&folder).is_some());
     }
@@ -1148,6 +1178,48 @@ mod tests {
 
     fn list_named_project(proj: &std::path::Path) -> TreeNode {
         list_tree_inner(proj.to_str().unwrap(), proj.to_str().unwrap(), false).unwrap()
+    }
+
+    #[test]
+    fn tree_nodes_carry_their_special_role_and_agent_files_are_listed() {
+        let dir = tempfile::tempdir().unwrap();
+        let proj = dir.path().join("Quarry");
+        for f in [
+            "index.md", "index.html", "AGENTS.md", "footer.md", "404.md", "welcome-email.md", "about.md",
+            "fr/index.md", "fr/index.html", "fr/footer.md", "docs/footer.md", "docs/index.md", "docs/index.html",
+            ".moss/footer.md",
+        ] {
+            let path = proj.join(f);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "# x").unwrap();
+        }
+        std::fs::write(proj.join(".moss/config.toml"), "[build]\npassthrough = [\"index.html\", \"fr/index.html\"]\n").unwrap();
+
+        let tree = list_named_project(&proj);
+        fn collect(node: &TreeNode, root: &str, out: &mut Vec<(String, SpecialFileKind)>) {
+            if let Some(kind) = node.special {
+                out.push((node.path.strip_prefix(root).unwrap().trim_start_matches('/').to_string(), kind));
+            }
+            for child in node.children.iter().flatten() {
+                collect(child, root, out);
+            }
+        }
+        let mut found = Vec::new();
+        collect(&tree, proj.to_str().unwrap(), &mut found);
+        found.sort_by(|a, b| a.0.cmp(&b.0));
+        use SpecialFileKind::*;
+        assert_eq!(
+            found,
+            vec![
+                ("404.md".to_string(), NotFound),
+                ("AGENTS.md".to_string(), AgentInstructions),
+                ("footer.md".to_string(), Footer),
+                ("fr/footer.md".to_string(), Footer),
+                ("fr/index.md".to_string(), PageSettings),
+                ("index.md".to_string(), PageSettings),
+                ("welcome-email.md".to_string(), WelcomeEmail),
+            ]
+        );
     }
 
     #[test]

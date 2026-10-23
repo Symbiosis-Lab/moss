@@ -5,7 +5,7 @@
  * through `getCamera()` and reports a new one through `setCamera()`, so
  * `map.ts` stays the one place that clamps, applies and persists it.
  */
-import { clampCamera, screenScale, screenToWorld } from "./camera";
+import { aspectX, clampCamera, screenScale, screenToWorld } from "./camera";
 import type { Camera, Point, Viewport } from "./types";
 
 export interface GestureCallbacks {
@@ -68,9 +68,11 @@ function zoomAt(viewport: HTMLElement, callbacks: GestureCallbacks, factor: numb
   const anchorWorld = screenToWorld(anchorScreen, camera, viewportSize);
   const targetZoom = camera.zoom * factor;
   const scaleAtTarget = screenScale({ x: camera.x, y: camera.y, zoom: targetZoom }, viewportSize);
+  const y = anchorWorld.y - (anchorScreen.y - viewportSize.height / 2) / scaleAtTarget;
+  const target: Camera = { x: camera.x, y, zoom: targetZoom };
   const candidate: Camera = {
-    x: anchorWorld.x - (anchorScreen.x - viewportSize.width / 2) / scaleAtTarget,
-    y: anchorWorld.y - (anchorScreen.y - viewportSize.height / 2) / scaleAtTarget,
+    x: anchorWorld.x - (anchorScreen.x - viewportSize.width / 2) / (scaleAtTarget * aspectX(target, viewportSize)),
+    y,
     zoom: targetZoom,
   };
   callbacks.setCamera(clampCamera(candidate, viewportSize, callbacks.maxZoom(anchorWorld)));
@@ -129,7 +131,7 @@ export function attachGestures(viewport: HTMLElement, callbacks: GestureCallback
         const camera = callbacks.getCamera();
         const viewportSize = callbacks.getViewport();
         const scale = screenScale(camera, viewportSize);
-        const dx = (midpoint.x - pinch.midpoint.x) / scale;
+        const dx = (midpoint.x - pinch.midpoint.x) / (scale * aspectX(camera, viewportSize));
         const dy = (midpoint.y - pinch.midpoint.y) / scale;
         if (dx !== 0 || dy !== 0) {
           callbacks.setCamera(clampCamera({ x: camera.x - dx, y: camera.y - dy, zoom: camera.zoom }, viewportSize, panMaxZoom(camera, callbacks)));
@@ -147,7 +149,7 @@ export function attachGestures(viewport: HTMLElement, callbacks: GestureCallback
     const camera = callbacks.getCamera();
     const viewportSize = callbacks.getViewport();
     const scale = screenScale(camera, viewportSize);
-    const dx = (event.clientX - drag.startX) / scale;
+    const dx = (event.clientX - drag.startX) / (scale * aspectX(camera, viewportSize));
     const dy = (event.clientY - drag.startY) / scale;
     callbacks.onGestureStart();
     callbacks.setCamera(clampCamera({ x: drag.cameraX - dx, y: drag.cameraY - dy, zoom: camera.zoom }, viewportSize, panMaxZoom(camera, callbacks)));
@@ -245,7 +247,7 @@ export function attachGestures(viewport: HTMLElement, callbacks: GestureCallback
     const viewportSize = callbacks.getViewport();
     const scale = screenScale(camera, viewportSize);
     callbacks.onGestureStart();
-    callbacks.setCamera(clampCamera({ x: camera.x + dx / scale, y: camera.y + dy / scale, zoom: camera.zoom }, viewportSize, panMaxZoom(camera, callbacks)));
+    callbacks.setCamera(clampCamera({ x: camera.x + dx / (scale * aspectX(camera, viewportSize)), y: camera.y + dy / scale, zoom: camera.zoom }, viewportSize, panMaxZoom(camera, callbacks)));
     callbacks.onSettle();
   });
 }

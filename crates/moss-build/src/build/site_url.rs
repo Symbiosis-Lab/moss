@@ -233,7 +233,7 @@ pub fn resolve_for_project(
             // A silent default here is what shipped localhost-flavored
             // builds: an unreadable state.toml (iCloud-dataless file,
             // partial write) must not quietly mean "site not deployed".
-            log::warn!(
+            log::info!(
                 "site URL: could not read deployment state ({}); treating project as undeployed",
                 e
             );

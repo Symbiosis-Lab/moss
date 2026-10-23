@@ -42,6 +42,10 @@ Set `[site] header = "nav"` and the brand drops out of the header entirely, on e
 
 This mode has no breadcrumb trail — Home already gives every page a way back — so a page nested inside a section, deeper than that section's own nav item, has no other "where am I" cue in the header. The nav item for that section marks itself instead: `aria-current="true"` rather than `"page"`, using the same visual treatment as an exact match. Viewing `/essays/2024/some-post/`, for example, highlights the "Essays" nav item even though the page itself isn't `/essays/`.
 
+Set `[site] header = "none"` and there is no header at all: no band, no site name, no nav links. A one-page site, an index of collections each under its own `##` heading, usually wants this, because the band would hold only the site's name (a link to the page you are already on) and the theme toggle. The theme toggle, the search button and the language switcher (whatever the header would have carried besides the name and the links) move into the floating nav island, which a site with no header shows on every page. The island has no breadcrumb trail and no site name: one button names the section you are reading and opens the list of sections, and the controls sit at its end. It stays hidden while the page's title is in view, appears once the first section heading reaches the top of the window, and then stays to the end of the page rather than hiding as you scroll down. A page with fewer than two sections shows the controls alone, from the start. The skip link stays. The page's first element keeps the top space the header would have given it, except on a page that opens with a hero. Without scripting there is no island, so a visitor who cannot run scripts gets neither the toggles nor the language links; keep `header = "brand"` for a multilingual site that serves them.
+
+On a wide screen the page's contents ruler lists the sections in the left margin. Mark where the main sections stop with `contents=end` on a fenced block (`::: {.band screen contents=end}`) or on a heading (`## Colophon {contents=end}`): the ruler lists only the sections before the marker, steps aside once the marker passes the middle of the window, and comes back when the reader scrolls above it. Headings after the marker still appear in the island's sections panel. A long heading can give the contents a shorter name: `## Opening hours of the reading room and its annex {contents-label="Opening hours"}` shows "Opening hours" in the ruler, on the floating bar and in its sections panel, while the heading keeps its full text. The name is quoted when it has spaces, and it combines with `{#id}` and `contents=end` in any order. A name too long for its row ends in an ellipsis. Independently of the marker, the ruler steps aside while a wide block's content reaches its margin (a `screen` picture or gallery), and returns once the block has passed. A band whose words keep the text column covers nothing, so the ruler stays over it. On a page with `contents: pictures`, a wide window with a mouse or trackpad keeps a lane free for the list: the text column narrows so the list never sits on the text, and the floating bar does not show on that page.
+
 ## Breadcrumb
 
 When a page has no nav items around it (e.g., an article deep inside a section), moss shows a breadcrumb trail in place of the site name so visitors can navigate back up the tree.
@@ -73,7 +77,23 @@ footer: true
 
 Set `[site] rss_footer = true` in `.moss/config.toml` to add an RSS feed link to the left footer. It only appears once your site actually has a feed — a preview or otherwise undeployed build resolves no site URL and writes no `rss.xml`, so the toggle alone never links to a feed that isn't there. The feed lives at `/rss.xml`; the same feed is also served at `/feed.xml`, its address before it moved, so existing subscribers keep working.
 
-A footer with nothing to show — no `footer.md`, no `footer: true` pages, no feed link, no subscribe form — doesn't render at all: no empty band, no divider, nothing between your content and moss's own colophon line at the foot of the page. That line is a small moss mark linking to mosspub.com; to hide it, add `.moss-colophon { display: none; }` to `.moss/theme/style.css`.
+A footer with nothing to show — no `footer.md`, no `footer: true` pages, no feed link, no subscribe form — doesn't render at all: no empty band, no divider, nothing between your content and moss's own colophon line at the foot of the page. That line is a small moss mark linking to mosspub.com; to leave it out, set `colophon = false` under `[site]` in `.moss/config.toml` and the build emits none.
+
+### Closing picture
+
+End `footer.md` with a `:::hero` and the page closes with that picture, edge to edge, the last thing on the page. The words sit on the picture where `align` puts them (`align=top` is the top, for a sky) at every width, including a phone, and moss's own colophon moves onto the picture's bottom edge. `dark=` names the picture dark mode shows in place of `image=`. A `caption="…"` on the hero is the picture's credit, set small at its foot on the end side, in the theme's quieter text colour or its page colour, whichever reads there. Where the picture is quiet under the words, they are set in dark or light ink straight on it with no panel, and over a busy picture they keep the panel; `panel=always` or `panel=none` forces either. On a phone the words take the top and the picture keeps at least half of its own height below them. Add `fade=top` and the picture rises out of the page: its top fades into the page colour, and the words sit on the fade. `max-height="clamp(440px, 50vw, 680px)"` caps the picture's height (one length in px, rem or vw, or `clamp()` of px and vw lengths), and `image="closing.jpg|focus:50%,72%"` says which part stays in view; moss measures the words over the part that shows.
+
+```
+:::hero {image=closing.jpg dark=closing-night.jpg align=top}
+## The shelf is open. What should stand on it next?
+
+[Propose a collection](https://example.org/new)
+
+*Credit line for the picture.*
+:::
+```
+
+The footer drops its column width, padding, divider and fill for this. Anything written above the hero stays in the reading column.
 
 ### Footer slot
 

@@ -9,6 +9,7 @@ use moss_core::contract::describe::{
 use moss_core::contract::tokens::load_tokens;
 
 use super::commands::cli_commands;
+use crate::config::site_settings::site_settings;
 
 pub mod css_query;
 
@@ -42,7 +43,8 @@ pub fn run(args: &[String], binary_version: &'static str) -> i32 {
     };
     let payload = DescribePayload::new(&tokens)
         .with_binary_version(binary_version)
-        .with_plugin_contract(plugin_hooks(), manifest_fields(), slots(), cli_commands());
+        .with_plugin_contract(plugin_hooks(), manifest_fields(), slots(), cli_commands())
+        .with_site_settings(site_settings());
 
     if json {
         match serde_json::to_string_pretty(&payload) {
@@ -351,6 +353,55 @@ fn print_human(payload: &DescribePayload) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every `[site]` key the build reads must be listed in `site_settings()`,
+    /// or an author has no way to learn that the setting exists. The scan is
+    /// textual: it matches a helper call with a literal key on one line.
+    #[test]
+    fn every_site_key_read_in_code_is_listed_in_site_settings() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("read source directory") {
+                let path = entry.expect("directory entry").path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        const HELPERS: [&str; 7] = ["site_bool", "site_str", "site_string", "site_table", "site_value", "get_site_bool_field", "get_site_field"];
+
+        let mut files = Vec::new();
+        walk(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")), &mut files);
+        let listed: Vec<&str> = site_settings().iter().map(|s| s.name).collect();
+
+        let mut missing = Vec::new();
+        for file in &files {
+            let text = std::fs::read_to_string(file).expect("read source file");
+            for (n, line) in text.lines().enumerate() {
+                for helper in HELPERS {
+                    for (at, _) in line.match_indices(&format!("{helper}(")) {
+                        let args = line[at + helper.len() + 1..].split(')').next().unwrap_or_default();
+                        let Some(open) = args.find('"') else { continue };
+                        let rest = &args[open + 1..];
+                        let Some(end) = rest.find('"') else { continue };
+                        let key = &rest[..end];
+                        if !key.is_empty()
+                            && key.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+                            && !listed.contains(&key)
+                        {
+                            missing.push(format!("`{key}` at {}:{}", file.display(), n + 1));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "[site] keys read in code but missing from site_settings(): {}",
+            missing.join(", ")
+        );
+    }
 
     /// The `moss describe` manifest table mirrors `PluginManifest` field by
     /// field (a plugin-author discovery contract). Guard the registry fields

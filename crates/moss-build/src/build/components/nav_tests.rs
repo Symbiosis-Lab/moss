@@ -1652,6 +1652,23 @@ fn test_navigation_with_translations_shows_lang_toggle() {
 }
 
 #[test]
+fn lang_toggle_names_its_group_and_marks_each_link_in_its_own_language() {
+    let documents = vec![make_doc("index.html", "Home", None, None)];
+    let translations = vec![TranslationLink {
+        lang_tag: crate::i18n::Language::ZhHans.as_bcp47_attr().to_string(),
+        url_path: "index.zh-hans.html".to_string(),
+        display_name: "简",
+    }];
+    let nav_html = NavigationBuilder::new(&documents, "Test Site", None, crate::i18n::Language::En, false)
+        .with_translations(crate::i18n::Language::En, "en", translations)
+        .generate_navigation();
+
+    // aria-label on a role-less div names nothing (ARIA prohibits it on `generic`).
+    assert!(nav_html.contains(r#"<div class="nav-lang-toggle" role="group" aria-label="#), "{nav_html}");
+    assert!(nav_html.contains(r#"hreflang="zh-Hans" lang="zh-Hans">简</a>"#), "{nav_html}");
+}
+
+#[test]
 fn test_navigation_no_translations_hides_lang_toggle() {
     let documents = vec![make_doc("index.html", "Home", None, None)];
 
@@ -2825,7 +2842,43 @@ fn test_header_mode_from_config_default_and_recognized_values() {
     assert_eq!(HeaderMode::from_config(Some("")), HeaderMode::Brand);
     assert_eq!(HeaderMode::from_config(Some("brand")), HeaderMode::Brand);
     assert_eq!(HeaderMode::from_config(Some("nav")), HeaderMode::Nav);
+    assert_eq!(HeaderMode::from_config(Some("none")), HeaderMode::None);
 }
+
+#[test]
+fn none_mode_builds_no_masthead_and_the_island_carries_the_controls() {
+    let documents = nav_mode_documents();
+    let builder = |mode| {
+        NavigationBuilder::new(&documents, "My Site", Some("index.html"), crate::i18n::Language::En, true)
+            .with_search(true)
+            .with_header_mode(mode)
+    };
+    assert_eq!(builder(HeaderMode::None).generate_navigation(), "");
+
+    let island = builder(HeaderMode::None).generate_nav_island();
+    assert!(island.contains(r#"data-header="none""#), "got: {island}");
+    assert!(island.contains("nav-search-btn"), "got: {island}");
+    assert!(island.contains("moss-nav-island-sections"), "got: {island}");
+    assert!(!island.contains("moss-nav-island-trail"), "got: {island}");
+    // The bar names the site, before the section.
+    let name = island.find(r#"<a href="/" class="site-name">My Site</a>"#).expect(&island);
+    assert!(name < island.find("moss-nav-island-sections").unwrap(), "got: {island}");
+    // One set of controls, after the island rather than in it, so hiding the
+    // bar never hides them and the toggle's clip-path id stays unique.
+    assert_eq!(island.matches("nav-theme-btn").count(), 1, "got: {island}");
+    assert_eq!(island.matches(r#"id="theme-toggle__classic__cutout""#).count(), 1);
+    let (bar, controls) = island.split_once(r#"</div><div class="nav-icons">"#).expect(&island);
+    assert!(!bar.contains("nav-search-btn"), "got: {island}");
+    assert!(controls.contains("nav-search-btn") && controls.contains("nav-theme-btn"), "got: {island}");
+    // Without scripting the island shows itself, so the controls stay reachable.
+    assert!(island.contains("<noscript><style>"), "got: {island}");
+    assert!(!builder(HeaderMode::Brand).generate_nav_island().contains("noscript"));
+
+    // A header that is there keeps its controls and its brand-mode island.
+    assert!(builder(HeaderMode::Brand).generate_navigation().contains("nav-theme-btn"));
+    assert!(!builder(HeaderMode::Brand).generate_nav_island().contains("data-header"));
+}
+
 
 #[test]
 fn test_header_mode_from_config_unrecognized_falls_back_to_brand() {
@@ -3032,9 +3085,9 @@ fn nav_mode_unrelated_section_is_not_marked_current() {
 
 #[test]
 fn brand_mode_never_marks_a_containing_section_current() {
-    // The regression this guards: brand mode keeps its breadcrumb trail for
-    // this job and must render exactly as it always has — no aria-current
-    // anywhere in the nav-links list, exact-match or not.
+    // Brand mode keeps its breadcrumb trail for the "somewhere under this
+    // section" cue, so a deep page marks nothing; only the exact page is
+    // current, and says so to assistive tech.
     let documents = vec![
         make_doc("index.html", "Home", None, None),
         make_folder_doc("essays/index.html", "Essays", Some(1)),
@@ -3052,8 +3105,7 @@ fn brand_mode_never_marks_a_containing_section_current() {
 
     let exact_page = NavigationBuilder::new(&documents, "My Site", Some("essays/index.html"), crate::i18n::Language::En, true)
         .generate_navigation();
-    assert!(!exact_page.contains("aria-current"), "brand mode's exact-match styling is plain class=\"active\" only: {exact_page}");
-    assert!(exact_page.contains(r#"<a href="/essays/" class="active">Essays</a>"#), "got: {exact_page}");
+    assert!(exact_page.contains(r#"<a href="/essays/" class="active" aria-current="page">Essays</a>"#), "got: {exact_page}");
 }
 
 // --- `listed: false` and automatic nav membership ---

@@ -21,11 +21,19 @@ fn renders_paragraph() {
 }
 
 #[test]
+fn renders_the_contents_end_marker_on_the_heading_element() {
+    let html = render_document(&crate::ast::parser::parse("## Proposals {contents=end}\n"), &DefaultHooks::new());
+    assert!(html.starts_with(r#"<h2 id="proposals" data-contents-end>Proposals"#), "{html}");
+}
+
+#[test]
 fn renders_heading_with_id() {
     let html = render(vec![Block::Heading {
         level: 2,
         children: vec![Inline::Text("Setup".into())],
         id: Some("setup".into()),
+        contents_end: false,
+        contents_label: None,
     }]);
     assert_eq!(html, "<h2 id=\"setup\">Setup<a class=\"moss-heading-anchor\" href=\"#setup\" aria-label=\"Permalink to this section\"></a></h2>\n");
 }
@@ -40,6 +48,8 @@ fn renders_level_one_heading_without_permalink_anchor() {
         level: 1,
         children: vec![Inline::Text("Title".into())],
         id: Some("title".into()),
+        contents_end: false,
+        contents_label: None,
     }]);
     assert_eq!(html, "<h1 id=\"title\">Title</h1>\n");
 }
@@ -202,7 +212,7 @@ fn renders_code_block_with_lang() {
     }]);
     assert_eq!(
         html,
-        "<pre><code class=\"language-rust\">fn main() {}</code></pre>\n"
+        "<pre tabindex=\"0\"><code class=\"language-rust\">fn main() {}</code></pre>\n"
     );
 }
 
@@ -212,7 +222,7 @@ fn renders_code_block_without_lang() {
         lang: None,
         value: "bare".into(),
     }]);
-    assert_eq!(html, "<pre><code>bare</code></pre>\n");
+    assert_eq!(html, "<pre tabindex=\"0\"><code>bare</code></pre>\n");
 }
 
 #[test]
@@ -230,6 +240,7 @@ use super::super::node::{CalloutKind, Fold};
 #[test]
 fn renders_basic_callout_with_title() {
     let html = render(vec![Block::Callout {
+        unknown_kind: None,
         kind: CalloutKind::Note,
         fold: None,
         title: Some("Heads up".into()),
@@ -253,6 +264,7 @@ fn renders_basic_callout_with_title() {
 #[test]
 fn renders_callout_falls_back_to_default_title() {
     let html = render(vec![Block::Callout {
+        unknown_kind: None,
         kind: CalloutKind::Warning,
         fold: None,
         title: None,
@@ -265,27 +277,45 @@ fn renders_callout_falls_back_to_default_title() {
 }
 
 #[test]
-fn renders_foldable_callout_with_data_fold_attribute() {
-    let html_open = render(vec![Block::Callout {
-        kind: CalloutKind::Tip,
-        fold: Some(Fold::Open),
-        title: Some("Open".into()),
-        children: vec![],
-    }]);
-    assert!(
-        html_open.contains(r#"data-type="tip""#) && html_open.contains(r#"data-fold="open""#),
-        "expected data-fold='open' attribute, got: {html_open}"
-    );
-
-    let html_closed = render(vec![Block::Callout {
+fn folded_callout_renders_closed_details_with_summary_title() {
+    let html = render(vec![Block::Callout {
+        unknown_kind: None,
         kind: CalloutKind::Tip,
         fold: Some(Fold::Closed),
+        title: Some("More".into()),
+        children: vec![Block::Paragraph(vec![Inline::Text("Body.".into())])],
+    }]);
+    assert!(
+        html.contains(r#"<details class="callout" data-type="tip" data-fold="closed">"#),
+        "closed callout must be a details without `open`, got: {html}"
+    );
+    assert!(
+        html.contains(r#"<summary class="callout-title">More</summary>"#),
+        "title must be the summary, got: {html}"
+    );
+    assert!(
+        html.contains(r#"<div class="callout-content">"#) && html.contains("</details>"),
+        "body stays in callout-content inside the details, got: {html}"
+    );
+    assert!(!html.contains("<div class=\"callout\""), "no div wrapper: {html}");
+}
+
+#[test]
+fn unfolded_plus_callout_renders_open_details() {
+    let html = render(vec![Block::Callout {
+        unknown_kind: None,
+        kind: CalloutKind::Tip,
+        fold: Some(Fold::Open),
         title: None,
         children: vec![],
     }]);
     assert!(
-        html_closed.contains(r#"data-fold="closed""#),
-        "expected data-fold='closed' attribute, got: {html_closed}"
+        html.contains(r#"<details class="callout" data-type="tip" data-fold="open" open>"#),
+        "`+` callout must start open, got: {html}"
+    );
+    assert!(
+        html.contains(r#"<summary class="callout-title">Tip</summary>"#),
+        "default title is still the summary, got: {html}"
     );
 }
 
@@ -294,6 +324,7 @@ fn callout_alias_renders_canonical_data_type_slug() {
     // tldr → abstract; ensures the canonicalized slug is what
     // appears in HTML.
     let html = render(vec![Block::Callout {
+        unknown_kind: None,
         kind: CalloutKind::Abstract,
         fold: None,
         title: Some("TL;DR".into()),
@@ -312,6 +343,7 @@ fn callout_title_is_html_escaped() {
     // `<`, `>`, `&` but NOT `"` — `"` is only dangerous inside HTML
     // attribute values, and title sits between `<div>` tags as text.
     let html = render(vec![Block::Callout {
+        unknown_kind: None,
         kind: CalloutKind::Warning,
         fold: None,
         title: Some(r#"Use <script> & "quotes""#.into()),
@@ -585,6 +617,7 @@ fn figure_renders_with_caption() {
         class_names: Vec::new(),
         img_style: None,
         italic_caption: false,
+        link: None,
     }]);
     assert!(
         html.starts_with(r#"<figure class="moss-image">"#),
@@ -626,6 +659,7 @@ fn figure_without_caption_keeps_alt_as_the_accessible_name() {
         class_names: Vec::new(),
         img_style: None,
         italic_caption: false,
+        link: None,
     }]);
     assert!(
         html.contains(r#"alt="A photo of the wall""#),
@@ -674,6 +708,7 @@ fn figure_with_empty_alt_has_empty_alt_not_a_copy_of_the_caption() {
         class_names: Vec::new(),
         img_style: None,
         italic_caption: false,
+        link: None,
     }]);
     assert!(html.contains(r#"alt="""#), "got: {html}");
 }
@@ -694,6 +729,7 @@ fn figure_alt_equal_to_the_caption_after_trimming_is_empty() {
         class_names: Vec::new(),
         img_style: None,
         italic_caption: false,
+        link: None,
     }]);
     assert!(html.contains(r#"alt="""#), "got: {html}");
 }
@@ -714,6 +750,7 @@ fn figure_with_explicit_alt_keeps_it_apart_from_the_caption() {
         class_names: Vec::new(),
         img_style: None,
         italic_caption: false,
+        link: None,
     }]);
     assert!(html.contains(r#"alt="A lake under a pink sky""#), "got: {html}");
     assert!(html.contains("<figcaption>Hiroshige, 1833. CC0.</figcaption>"), "got: {html}");
@@ -780,6 +817,7 @@ fn figure_renders_without_caption_when_none() {
         class_names: Vec::new(),
         img_style: None,
         italic_caption: false,
+        link: None,
     }]);
     assert!(html.contains("<figure"), "got: {html}");
     assert!(
@@ -806,6 +844,7 @@ fn figure_renders_no_figcaption_for_empty_caption_vec() {
         class_names: Vec::new(),
         img_style: None,
         italic_caption: false,
+        link: None,
     }]);
     assert!(!html.contains("<figcaption"), "got: {html}");
 }
@@ -830,6 +869,7 @@ fn figure_percent_width_emits_inline_style() {
         class_names: vec![],
         img_style: None,
         italic_caption: false,
+        link: None,
     }]);
     assert!(
         html.contains(r#"<figure class="moss-image" style="width:55%""#),
@@ -857,6 +897,7 @@ fn figure_named_width_still_emits_data_width() {
         class_names: vec![],
         img_style: None,
         italic_caption: false,
+        link: None,
     }]);
     assert!(html.contains(r#"data-width="wide""#), "got: {html}");
     assert!(
@@ -884,6 +925,7 @@ fn figure_caption_escapes_html_unsafe_chars() {
         class_names: Vec::new(),
         img_style: None,
         italic_caption: false,
+        link: None,
     }]);
     assert!(
         html.contains("<figcaption>a&lt;b&gt;c</figcaption>"),
@@ -974,6 +1016,8 @@ fn heading_emits_data_source_line_through_hook() {
             level: 2,
             children: vec![Inline::Text("Setup".into())],
             id: Some("setup".into()),
+            contents_end: false,
+            contents_label: None,
         }],
         vec![BlockMeta {
             source_line: Some(3),
@@ -1051,7 +1095,7 @@ fn list_blockquote_codeblock_table_hr_emit_data_source_line() {
         "ol missing: {html}"
     );
     assert!(
-        html.contains(r#"<pre data-source-line="4">"#),
+        html.contains(r#"<pre tabindex="0" data-source-line="4">"#),
         "pre missing: {html}"
     );
     assert!(
@@ -1264,6 +1308,7 @@ fn figure_emits_data_source_line_on_outer_tag() {
         class_names: Vec::new(),
         img_style: None,
         italic_caption: false,
+        link: None,
     }];
     let meta = vec![BlockMeta {
         source_line: Some(9),
@@ -1477,4 +1522,34 @@ fn footnote_marker_inside_definition_is_numbered_in_document_order() {
     let one = endnotes.find("note one");
     let two = endnotes.find("note two");
     assert!(one.is_some() && two.is_some() && one < two, "{html}");
+}
+
+fn collage_grid(cell_count: usize) -> Block {
+    Block::Shortcode(Shortcode::Grid(GridShortcode {
+        columns: 1,
+        collage: true,
+        cells: (0..cell_count)
+            .map(|_| vec![Block::Paragraph(vec![Inline::Text("A".into())])])
+            .collect(),
+        ..Default::default()
+    }))
+}
+
+#[test]
+fn grid_collage_emits_flag_and_tile_count() {
+    for n in [3, 7, 9] {
+        let html = render(vec![collage_grid(n)]);
+        assert!(
+            html.contains(&format!(r#"<div class="moss-grid" data-columns="1" data-collage data-count="{n}">"#)),
+            "got: {html}"
+        );
+    }
+}
+
+#[test]
+fn grid_collage_outside_three_to_nine_is_a_plain_grid() {
+    for n in [1, 2, 10] {
+        let html = render(vec![collage_grid(n)]);
+        assert!(!html.contains("data-collage") && !html.contains("data-count"), "got: {html}");
+    }
 }

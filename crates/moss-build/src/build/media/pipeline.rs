@@ -278,7 +278,7 @@ fn derive_canonical_url(
         return Some(format!("{}://{}/", scheme, prefix));
     }
     let page_path = crate::build::served_path::ServedPath::from_source(mapped_path)
-        .map_err(|e| log::warn!("derive_canonical_url: '{}' rejected by ServedPath: {}", mapped_path, e))
+        .map_err(|e| log::info!("derive_canonical_url: '{}' rejected by ServedPath: {}", mapped_path, e))
         .ok()?;
     Some(crate::build::page::canonical::canonical_url(
         host,
@@ -376,14 +376,14 @@ fn write_spa_inject_record(
     let json_bytes = match serde_json::to_vec(record) {
         Ok(b) => b,
         Err(e) => {
-            log::warn!("Failed to serialize spa/inject record: {}", e);
+            log::info!("Failed to serialize spa/inject record: {}", e);
             return;
         }
     };
     let record_oid = match object_store.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request) {
         Ok(oid) => oid,
         Err(e) => {
-            log::warn!("Failed to store spa/inject record blob: {}", e);
+            log::info!("Failed to store spa/inject record blob: {}", e);
             return;
         }
     };
@@ -396,7 +396,7 @@ fn write_spa_inject_record(
         rec.transforms.insert(SPA_INJECT_TRANSFORM.to_string(), entry);
     });
     if let Err(e) = merged {
-        log::warn!("Failed to write spa/inject transform record: {}", e);
+        log::info!("Failed to write spa/inject transform record: {}", e);
     }
 }
 
@@ -828,7 +828,7 @@ fn recall_or_hash_output(
             hash
         }
         Err(e) => {
-            log::warn!(
+            log::info!(
                 "[background-assets] hashing {} '{}' failed ({}); keeping asset in manifest with CAS-oid fallback",
                 log_context,
                 target.display(),
@@ -895,11 +895,11 @@ fn place_blob(
     match staged.link(object_store, placement.link_oid, placement.target, placement.local) {
         Placement::Held | Placement::Linked => {}
         Placement::Unverified(e) => {
-            log::warn!("[background-assets] Not linking over unverifiable {}: {}", placement.log_label, e);
+            log::info!("[background-assets] Not linking over unverifiable {}: {}", placement.log_label, e);
             return false;
         }
         Placement::Failed(e) => {
-            log::warn!("[background-assets] Failed to link {}: {}", placement.log_label, e);
+            log::info!("[background-assets] Failed to link {}: {}", placement.log_label, e);
             return false;
         }
     }
@@ -1088,21 +1088,23 @@ pub(crate) fn copy_deferred_assets(
     let canonical_source_root = match source_root.canonicalize() {
         Ok(p) => p,
         Err(e) => {
-            log::warn!("[background-assets] canonicalize source_root failed: {}; symlinks will not be preserved", e);
+            log::info!("[background-assets] canonicalize source_root failed: {}; symlinks will not be preserved", e);
             source_root.to_path_buf()
         }
     };
 
+    let layer_sources: Vec<std::path::PathBuf> =
+        crate::config::map_layers::declared_sources(source_root).iter().map(|s| source_root.join(s)).collect();
     for entry in WalkDir::new(source_root)
         .into_iter()
-        // What the scan reads: never a nested site, an excluded folder or the
-        // root agent instructions.
-        .filter_entry(|e| crate::build::scan::classify::left_out_of_site(e).is_none())
+        // What the scan reads: never a nested site, an excluded folder, a
+        // layer source or the root agent instructions.
+        .filter_entry(|e| crate::build::scan::classify::left_out_with_layer_sources(e, &layer_sources).is_none())
     {
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
-                log::warn!("[background-assets] Walk error: {}", e);
+                crate::build::cli_output::log_note!("[background-assets] Walk error: {}", e);
                 continue;
             }
         };
@@ -1380,7 +1382,7 @@ pub(crate) fn copy_deferred_assets(
                             Ok(None) => {} // no-op (nothing to inject)
                             Err(e) => {
                                 // Fail open — leave the file alone, don't break the build.
-                                log::warn!(
+                                log::info!(
                                     "[background-assets] SPA inject failed for {}: {}",
                                     mapped_path, e
                                 );
@@ -1422,7 +1424,7 @@ pub(crate) fn copy_deferred_assets(
                 }
             }
             Err(e) => {
-                log::warn!("[background-assets] Failed to store {}: {}", relative_path, e);
+                log::info!("[background-assets] Failed to store {}: {}", relative_path, e);
                 // Fallback: direct copy without CAS
                 let target = output_dir.join(&mapped_path);
                 if let Err(copy_err) = crate::build::io_utils::copy_output(file_path, &target) {
@@ -1446,7 +1448,7 @@ pub(crate) fn copy_deferred_assets(
             let entry = match entry {
                 Ok(e) => e,
                 Err(e) => {
-                    log::warn!("[background-assets] .moss/theme walk error: {}", e);
+                    crate::build::cli_output::log_note!("[background-assets] .moss/theme walk error: {}", e);
                     continue;
                 }
             };
@@ -1520,7 +1522,7 @@ pub(crate) fn copy_deferred_assets(
                     copied += 1;
                 }
                 Err(e) => {
-                    log::warn!("[background-assets] Failed to store .moss/theme/{}: {}", relative_path, e);
+                    log::info!("[background-assets] Failed to store .moss/theme/{}: {}", relative_path, e);
                     skipped += 1;
                 }
             }
@@ -1624,7 +1626,7 @@ pub(crate) fn copy_deferred_assets(
             oid: staged_oids.get(rel_path).cloned(),
         };
         if let Err(e) = tx.blocking_send(msg) {
-            log::warn!("[background-assets] Failed to send {} to coordinator: {}", rel_path, e);
+            log::info!("[background-assets] Failed to send {} to coordinator: {}", rel_path, e);
         }
     }
     log::info!(
@@ -1644,7 +1646,7 @@ pub(crate) fn copy_deferred_assets(
     // further reads after this send, so no copy is needed.
     let sources_payload = std::mem::take(&mut site_hashes.sources);
     if let Err(e) = tx.blocking_send(EmitMessage::SourcesReplace(sources_payload)) {
-        log::warn!("[background-assets] Failed to send sources to coordinator: {}", e);
+        log::info!("[background-assets] Failed to send sources to coordinator: {}", e);
     }
 
     staged.save();
@@ -1652,7 +1654,7 @@ pub(crate) fn copy_deferred_assets(
     // `ManifestHashMemo`'s doc comment). Best-effort: a failed save just
     // means the next build starts cold, same as today.
     if let Err(e) = manifest_hash_memo.save(&deferred_paths.cache_manifest_hash_memo()) {
-        log::warn!("[background-assets] Failed to persist manifest-hash memo: {}", e);
+        log::info!("[background-assets] Failed to persist manifest-hash memo: {}", e);
     }
     manifest_hash_memo.log_summary();
 

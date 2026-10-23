@@ -280,6 +280,9 @@ fn resolve_shortcode_image_urls(
                 if let Some(image_url) = args.image.as_mut() {
                     resolve_asset_url(image_url, "", graph, source_path, found);
                 }
+                if let Some(dark_url) = args.dark.as_mut() {
+                    resolve_asset_url(dark_url, "", graph, source_path, found);
+                }
                 // Multi-image hero: every extra slide resolves exactly like
                 // the primary — skipping this re-creates the 2026-05-29
                 // home-hero regression (raw filenames at depth) per slide.
@@ -816,7 +819,8 @@ where
         Block::Shortcode(sc) => {
             walk_links_in_shortcode(sc, f);
         }
-        Block::Figure { caption, .. } => {
+        Block::Figure { image, caption, link, .. } => {
+            if let (Some(url), Inline::Image { alt, .. }) = (link, &*image) { f(url, alt, false) }
             if let Some(cap) = caption {
                 for inline in cap {
                     walk_links_in_inline(inline, f);
@@ -824,12 +828,8 @@ where
             }
         }
         Block::LinkCard { url, children } => {
-            // Compound-link card: the wrapping href is a link URL. Use
-            // the inner text content as display_text by recursively
-            // gathering it from the children (best-effort — empty string
-            // if no text is found).
-            // LinkCard wrapping href is never a wikilink (it's a compound
-            // markdown link card), so pass is_wikilink=false.
+            // The card's own href, named by its text (empty if it has none);
+            // a compound markdown link is never a wikilink.
             let display = gather_text_blocks(children);
             f(url, &display, false);
             for nested in children {

@@ -18,6 +18,34 @@ both erode legibility.
 
 **Never ship less than the design needs.** moss has a low floor and a high ceiling: the simple parts of a site are plain markdown and folders, and anything a hand-built site can put on the web a moss site can put there too. When markdown cannot say something — an interactive drawing, a scroll-driven scene, a custom component — keep the words in markdown and take an escape hatch for the rest: raw `<svg>` or `<canvas>` in a partial, `.moss/theme/script.js`, a plugin. Do not cut the design down to what is easy in markdown. If moss blocks something the web can do, or forces a workaround, tell the user it is a moss gap and name the reproduction, rather than quietly shipping less.
 
+## A collection from a spreadsheet
+
+For a folder of items with a metadata file (pictures plus a CSV, as an archive or library hands it over). Never edit the CSV, the pictures or the source note; a script that writes pages runs from outside the site folder, since every file left in the folder is published.
+
+1. **One page per row**, in a folder of its own (`photographs/<slug>.md`). Its body is one picture line embedding the file where it already is: `![Title|](../images/x.jpg)` (the trailing `|` keeps the title as alt text without repeating it as a caption).
+2. **Every other column into frontmatter**, header unchanged as the key, value exactly as the CSV has it. A name for readers goes in the field's `label`, never in the key. Prefix a header that is a moss key with another meaning (`url` becomes `source_url`; `moss describe --json | jq '.frontmatter'` lists them).
+3. **Dates.** `date:` must be a calendar date (`1938`, `1938-05`, `1938-05-18`). If any row's date is not, put every row's value, as written, in one declared text field (`catalogue_date`).
+4. **Facts.** In `.moss/config.toml`, declare each column a visitor should see as a field with `place = "facts"`: every column whose values differ between rows, the identifiers, and the rights statement (even when every row has the same one). Leave out the columns already used elsewhere: the file column is the picture line, and the title column is the page's `title:`.
+5. **Credit and link back.** Declare the item-link column `type = "url"` with `text = "<the credit line the source asks for>"`.
+6. **The creator, once.** If one creator made every item, set `author:` in `cascade:` on the items folder's home page (each page is cited to them) and show the name with a declared field set in the same `cascade:` (`photographer`, `place = "facts"`). `[site] author` is this edition's maker, not the items' creator.
+7. **Citable.** `archival = true` under `[site]`: every page shows its edition and a citation, and the source travels with the site. The site's name is the home page's `title:`; `moss describe --json | jq .site_settings` lists every `[site]` setting. Until the site has an address, the build prints one note that citations name no address; leave it, since it clears once `[site] domain` is an https address.
+8. **Browse.** Make the browse column a term kind (`[terms.boroughs] fields = ["borough"]`, with `count = "{n} photograph|{n} photographs"` so its cards name what they count): every value gets its own page (`/boroughs/brooklyn/`) listing its items. The home page is the way in, not the whole collection: a sentence on what the collection is, a few highlights, and the index. For the highlights, choose 3 to 9 items as a `:::grid {collage}`, one from each value where you can and the best known as the lead, each cell a picture linking to its page with its credit on the next line, title in bold, and a `+++` line between cells:
+
+   ```
+   :::grid {collage}
+   [![Flatiron building|contain](images/flatiron.jpg)](/photographs/flatiron/)
+   *__Flatiron building__ · Manhattan*
+   +++
+   [![Brooklyn Bridge|contain](images/bridge.jpg)](/photographs/bridge/)
+   *__Brooklyn Bridge__ · Brooklyn*
+   :::
+   ```
+
+   Each index card below already shows one picture of its value as its cover, so pick highlights the cards do not show (build once and look). Say in your report which you chose and why. Then embed the index once, `![[/boroughs/|style:grid]]`, and set `children: false` (otherwise every item is listed again below) and `content_width: wide`. Never list every item on the home page. Since the home page already shows the boroughs, leave the kind out of the nav: no `nav = true`.
+9. **Pictures whole.** For prints that must not be cropped, set `--moss-card-cover-fit: contain` and a `--moss-card-cover-ratio` close to the prints' own shape in `.moss/theme/style.css` under `:root` (an `aspect-ratio` value: the default is `4 / 3`, upright prints suit `4 / 5`); `contain` shows the whole picture inside that box, with bands where the shapes differ. Give the pictures folder an `index.md` with `listed: false`.
+10. **The source note** becomes a page by adding frontmatter above its unchanged text.
+11. `moss build --strict`, then read every warning and note.
+
 ## Start from a blank folder
 
 1. Create a folder. Its name becomes the site title — choose it deliberately.
@@ -35,7 +63,9 @@ Inspect built HTML under `.moss/build.nosync/current/` (the active frozen genera
 the `.css` files under its `_moss/` are minified build output — use
 `moss describe --css <selector>` instead of reading them.
 
-**Check your work.** `moss build` exits 0 even when it reported problems; add `--strict` to make warnings fail the build. `moss list [--json]` is the inventory of what actually got published — url, kind, date, and the LANG column that confirms a new language tree registered. Use `moss rename <old> <new>` for renames: it rewrites every `[[wikilink]]` and `[text](link)` project-wide, which hand-editing will not.
+**Check your work.** `moss build` exits 0 even when it reported problems; add `--strict` to make warnings fail the build. `--strict` fails on problems, which the author can fix in the folder; notes are advice and never fail it. A problem prints as `[WARN]` and counts; a note prints as `[NOTE]` (a dead root-relative link is one, since a proxy may serve the path; so is a file the build left out because it is still downloading from cloud storage, or a suspended process); environment, timing and cache notes log at INFO and are hidden unless `MOSS_LOG_LEVEL=info`. A build's last status line is `Built N pages (M skipped) · K problems`, plus ` · J notes` when there are any; `moss: K problems reported above` follows it only when K is not 0, and is the line to grep for. `moss list [--json]` is the inventory of what actually got published — url, kind, date (an event page with `start:` and no `date:` shows its start day), and the LANG column that confirms a new language tree registered. Use `moss rename <old> <new>` for renames: it rewrites every `[[wikilink]]` and `[text](link)` project-wide, which hand-editing will not.
+
+**A site in cloud storage.** A folder in Google Drive, iCloud Drive, Dropbox or OneDrive can hold files that are only in the cloud. `moss build` waits for them while they keep arriving, and exits 1 when the provider has stopped delivering, naming it and saying what to open. `moss fetch <folder>` downloads every cloud-only file in the folder and writes nothing there, so a tool that copies the folder (rsync, a backup) does not block on each file; it exits 1 the same way.
 
 **Before a restructure, save a version.** Moving pages, rewriting the theme, or deleting sections is safer with a named snapshot first: `moss history --save "before restructuring the nav"`. Both `--save` and `--restore` build the whole site first — the same build `moss deploy` runs, minus the publish — so a build that fails refuses to save or restore, and a slow build makes either one just as slow. `moss history [--json]` lists what's saved, newest first — every landed publish gets one automatically, `--save` adds one on demand. `moss history <path> --restore --at <id> [--copy]` brings back one page (`--copy` writes it alongside the current file instead of overwriting it); `moss history --restore --at <id> --yes` brings back the whole site (`--yes` is required, since it can move files to the Trash). A restore saves its own version of the current state first, so a restore is itself undoable the same way. `<id>` is a version's id from the timeline (or an unambiguous prefix), and `--json` includes it. This history lives in `.moss/history/` inside the site folder itself, gitignored and not part of the published output — being inside the folder, it travels along with whatever sync the site already uses, the same as `.moss/config.toml`.
 
@@ -45,7 +75,7 @@ Class names, tokens, shortcodes, and frontmatter fields change between moss
 releases. Never hardcode them from memory. From the project root, run:
 
 ```
-moss describe --json          # everything
+moss describe --json          # everything; the .moss/config.toml [site] keys are under site_settings
 moss describe --json | jq 'keys'   # what "everything" covers, right now
 ```
 
@@ -124,6 +154,18 @@ unskimmable minified text — and never edit them: the next build overwrites all
 of them. Read the defaults with `moss describe --css <selector>`; write
 overrides in `.moss/theme/style.css`.
 
+## Before styling: where a fact lives
+
+A fact is a field, and moss places it. Before writing CSS, a classed div or HTML for something a page states (a date, a credit, a place, a role, a label), stop at the first of these that holds:
+
+1. It is a fact about this page: declare a field with a `place` in `.moss/config.toml` (`moss guide authoring`, Declared fields), and write the value in frontmatter.
+2. Every page in a folder shares the value: write it once in `cascade:` on the folder's home page; a page's own value wins.
+3. Several facts read as one line: a group field, `type = "group"` with `of = [...]`, draws the parts that have a value, in order.
+4. A picture needs its crop or framing: display words on the embed, `![[photo.jpg|focus:30%,20%]]` keeps that point in view, `|contain` shows it whole (`moss guide authoring`, images).
+5. A section a link must reach: `## Opening hours {#hours}`, linked as `[[Page#hours]]`.
+
+Only then style it, with the rungs below. Never write `{.class}` on an image, link or inline span: other markdown tools print it as text.
+
 ## The four styling rungs
 
 When a design call needs a visual treatment, stop at the first rung that reaches it:
@@ -166,17 +208,23 @@ For shortcodes and partials (content reuse, not styling tiers), see
 
 ## Hard rules
 
+- Show a destination once. What the home page already shows (a set of listings, a map) is not also a nav item, and a nav item's page is not repeated on the home page; the same holds for a footer link that repeats the nav.
 - Use `::: {.class}` for styling wrappers, never `<div class="...">`. Literal
   HTML earns its place only for semantics markdown cannot express — a `<nav>` or
   `<section>` landmark with an `aria-label`, or a stable hook where a positional
   selector like `p:first-of-type` would silently restyle the wrong element once
   the page grows. Say which of those applies, in a comment, at the point of use.
+  A `data-*` hook for your own script is the stated exception: write it as
+  `::: {.figure fig=teapot}` (which emits `data-fig="teapot"`), or as a raw
+  `<svg data-figure="…">`/`<canvas>` where the element itself is the drawing.
+  Drawings and your own JavaScript: `moss guide authoring`.
 - Never write inline `style="..."` — put the rule in `.moss/theme/style.css`.
 - Images and media use the standard form: `![](photo.jpg)`, written as a path relative to the page. Wikilinks (`![[photo.jpg]]`) work too and find the file by name. Either way moss resolves the file, so never write a site-absolute or `https://` address for a file in the folder.
 - A deck (standfirst) is a `> blockquote` as the first thing in the body. moss
   injects the title itself, so the deck sits directly under it — do not write a
   `# Title` above the blockquote to position it.
-- Repeated blocks become a partial, transcluded with `![[partial-name]]`.
+- Repeated blocks become a partial, transcluded with `![[partial-name]]`; give the file `partial: true` so it is not also published as a page.
+- In `footer.md`, each heading starts a column: the heading and what follows it, up to the next heading of the same or higher level, become one `<section>`, and the default theme lays the sections side by side. A `footer.md` with no headings stays one flow of paragraphs. See `moss guide authoring`.
 - Frontmatter is for metadata and declared controls, never prose. Some of those
   controls *are* visual — layout, cover, children rendering, content width — so
   check `.frontmatter[]` before reaching for CSS to do something a declared
@@ -244,12 +292,17 @@ model (dark mode, quiet chrome, `@layer` rules), see
   (for a moved page, add the printed `"/old/" = "/new/"` line under
   `[redirects]` in `.moss/config.toml`), or pass `--accept-removals` — only when
   the human has said to lose those addresses.
-- **Custom domain:** `moss domain list <folder>` / `moss domain link <folder>
-  example.com`.
+- **Custom domain:** `moss domain link <folder> example.com` (`www.example.com`
+  works too) links the bare domain and `www`, and for a domain registered elsewhere
+  prints the DNS records to type at the registrar: leave MX and other TXT records
+  alone. `moss domain status <folder> example.com` reads live DNS and the
+  certificate and says what is left; it exits 0 when live, 3 while waiting, 4 if it
+  failed. All three take `--json`. Only a registered domain of two labels is
+  supported, not `blog.example.com`. `moss domain list <folder>` shows what is linked.
 - **Site built by another generator:** `moss deploy <folder> --prebuilt=_site`
   skips `moss build` and uploads that directory as-is.
 - **Any other host:** `moss build <folder> --site-url=https://example.com`,
-  then upload `.moss/build.nosync/current/` yourself. `--site-url` is required there
+  then upload `.moss/build.nosync/current/` yourself, after deleting the pages marked `draft: true`, which are built there for the preview (`moss list` shows which they are). `--site-url` is required there
   because canonical URLs, `og:image`, the sitemap, and RSS are all absolute and
   otherwise derive from mosspub.com deployment state, which any other host
   never sets. Flag details: `moss describe --json`.

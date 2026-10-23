@@ -21,14 +21,9 @@ test("the static figure is replaced by the interactive layer once ready", async 
   await expect(figure.locator("> svg")).toHaveCount(0);
   await expect(figure.locator(".moss-places-viewport")).toHaveCount(1);
   await expect(figure.locator(".moss-places-status")).toHaveCount(1);
-  const bars = await figure.locator(".moss-places-cards").evaluate((row) => {
-    const reference = document.createElement("div");
-    document.body.append(reference);
-    const native = getComputedStyle(reference).scrollbarWidth;
-    reference.remove();
-    return { actual: getComputedStyle(row).scrollbarWidth, native };
-  });
-  expect(bars.actual, "the timeline should retain the browser's native scrollbar").toBe(bars.native);
+  // A scrollbar on the works row would be drawn across the map.
+  const bar = await figure.locator(".moss-places-cards").evaluate((row) => getComputedStyle(row).scrollbarWidth);
+  expect(bar).toBe("none");
 });
 
 test("the full label set mounts quickly and keeps its measured point and river boxes", async ({ page }) => {

@@ -74,7 +74,7 @@ mod tests {
             key: key.to_string(),
             fields: fields.iter().map(|f| f.to_string()).collect(),
             title: key.to_string(),
-            titles: Vec::new(), is_place: false,
+            titles: Vec::new(), counts: Vec::new(), is_place: false,
             parents: Default::default(), explorer: None, line: None,
         }
     }

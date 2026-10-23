@@ -55,14 +55,17 @@ GATES_BUILD=(
   nav-toggle-cluster
   nav-split-order
   nav-split-pack
+  nav-one-row
   header-hit-areas
   lightbox-github-shapes
   grid-card-no-cover
   nav-mobile
   grid-mobile-collapse
+  collage
   card-cover-ratio
   grid-card-image-inline-size
   hero-caption
+  hero-from
   hero-pause
   hero-caption-stack
   content-width-escape
@@ -75,6 +78,8 @@ GATES_BUILD=(
   notebook-loads
   nav-island
   contents-ruler
+  contents-lens
+  header-none
   edge-clamp
   vertical-nav-chrome
   video-embed-shape
@@ -96,6 +101,11 @@ GATES_BUILD=(
   places-explorer-vertical
   places-explorer-single
   footer-end-space
+  facts-margin
+  closing-picture
+  content-grid
+  wcag-output
+  archival-footer
 )
 
 # The rest: no config, spec, or harness in this gate's chain ever reads

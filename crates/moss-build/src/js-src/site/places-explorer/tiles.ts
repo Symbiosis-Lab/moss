@@ -19,7 +19,7 @@
  * density its tile is shown at (up to a size cap) and re-baked, through the
  * same concurrency limit as loads, when that density moves away from it.
  */
-import { detailMaxZoom, screenScale } from "./camera";
+import { detailMaxZoom, screenScale, screenScaleX } from "./camera";
 import { project, unproject } from "./projection";
 import { rasterizeOrFallback, splitMapSvg, WORLD_RASTER_ZOOM_CAP, type MapSvgSplit } from "./raster";
 import type { Camera, EdgeFade, Point, Viewport } from "./types";
@@ -117,7 +117,7 @@ const TILE_VIEW_PAD_PX = 96;
 /** Which of `cells` intersect the current view, padded by `padPx` CSS px on every side. Pure — no fetch, no DOM, so a view can be tested without a camera ever existing (the vitest suite passes a plain `Camera`/`Viewport` pair). */
 export function tilesForView(cells: Array<[number, number]>, camera: Camera, viewport: Viewport, padPx: number = TILE_VIEW_PAD_PX): Array<[number, number]> {
   const scale = screenScale(camera, viewport);
-  const halfW = (viewport.width / 2 + padPx) / scale;
+  const halfW = (viewport.width / 2 + padPx) / screenScaleX(camera, viewport);
   const halfH = (viewport.height / 2 + padPx) / scale;
   const left = camera.x - halfW;
   const right = camera.x + halfW;
@@ -157,9 +157,10 @@ export function cellsCoveringView(
   const required = tilesForView(gridCells(grid), camera, viewport, 0);
   if (required.length === 0) return null;
   const scale = screenScale(camera, viewport);
+  const scaleX = screenScaleX(camera, viewport);
   const view = {
-    left: camera.x - viewport.width / (2 * scale),
-    right: camera.x + viewport.width / (2 * scale),
+    left: camera.x - viewport.width / (2 * scaleX),
+    right: camera.x + viewport.width / (2 * scaleX),
     top: camera.y - viewport.height / (2 * scale),
     bottom: camera.y + viewport.height / (2 * scale),
   };
@@ -226,11 +227,22 @@ export interface TileLayerOptions extends TileGrid {
   k: number;
   /** Each emitted cell's canvas origin, keyed `"x,y"`, in whole canvas units (`tiles.json`'s own `origins`) — see `tileOverlayTransform`. */
   origins: Record<string, [number, number]>;
+  /**
+   * Where each tile's rivers go when they must draw above something between the land and them (a historical layer's raster): a sibling of the tiles' own container, whose wrappers mirror the land wrapper's placement, size and mask. Absent, the rivers stay inside the land wrapper.
+   */
+  riversContainer?: HTMLElement;
+}
+
+/** The tile's detail raster: the flat land and water under it is the wrapper's first child. */
+function detailSurface(wrapper: Element): Element | null {
+  return wrapper.querySelector(":scope > :not(.moss-places-tile-flat)");
 }
 
 /** A fetched, decoded tile: the positioned wrapper div and the raster's own release callback (a no-op on the progressive-enhancement fallback — see `raster.ts`'s `rasterizeOrFallback`). */
 interface LoadedTile {
   el: HTMLElement;
+  /** The wrapper holding only the rivers, when `riversContainer` takes them out of `el`. */
+  riversEl?: HTMLElement;
   release: () => void;
   /** Kept so a sharper raster is a decode, not a second fetch. */
   split: MapSvgSplit;
@@ -303,7 +315,7 @@ export class TileLayer {
     return required !== null && required.every(([x, y]) => {
       const entry = this.elements.get(`${x},${y}`);
       if (entry === undefined || entry === "loading" || entry === "failed" || entry.bakeState !== "ready") return false;
-      const surface = entry.el.firstElementChild;
+      const surface = detailSurface(entry.el);
       if (surface?.tagName.toLowerCase() !== "canvas" || (surface as HTMLCanvasElement).width < 1 || (surface as HTMLCanvasElement).height < 1) return false;
       const wantedDensity = this.bakeableDensity(entry.split, this.density);
       return entry.bakedDensity * TILE_REBAKE_RATIO >= wantedDensity;
@@ -343,7 +355,7 @@ export class TileLayer {
     this.unitScale = unitScale;
     this.density = (unitScale / this.options.k) * camera.zoom;
     const opacity = tileFadeOpacity(camera, viewport);
-    this.container.style.setProperty("--moss-place-tile-opacity", String(preload ? 0 : opacity));
+    for (const el of [this.container, this.options.riversContainer]) el?.style.setProperty("--moss-place-tile-opacity", String(preload ? 0 : opacity));
     this.settledRender = settled;
     this.shown = opacity > 0;
     if (opacity <= 0) {
@@ -369,7 +381,7 @@ export class TileLayer {
       const existing = this.elements.get(key);
       if (existing === "loading" || existing === "failed") continue;
       if (existing) {
-        this.position(existing.el, x, y, unitScale);
+        this.position(existing, x, y, unitScale);
         continue;
       }
       this.elements.set(key, "loading");
@@ -524,6 +536,7 @@ export class TileLayer {
       // below 1× until promotion to bound memory.
       const density = this.onScreen.has(key) ? this.density : Math.min(this.density, 1);
       const { surface, baked } = await this.bake(split, density);
+      const flat = this.flatSurface(split);
       if (generation !== this.generation || this.elements.get(key) !== "loading") {
         surface.release();
         return; // dropped out of the fade band while the raster decoded, or superseded by a clear() + re-queue
@@ -534,19 +547,26 @@ export class TileLayer {
       wrapper.style.position = "absolute";
       wrapper.style.width = `${split.width}px`;
       wrapper.style.height = `${split.height}px`;
-      wrapper.append(surface.el);
-      if (split.rivers) {
-        split.rivers.classList.add("moss-places-rivers");
-        wrapper.append(split.rivers);
-      }
+      wrapper.append(flat.el, surface.el);
       wrapper.style.zIndex = String(tileDrawOrder(x, y, this.options.columns, this.options.rows));
       this.container.append(wrapper);
       const entry: LoadedTile = { el: wrapper, release: surface.release, split, bakedDensity: baked, bakeState: "ready" };
+      if (split.rivers) {
+        split.rivers.classList.add("moss-places-rivers");
+        if (this.options.riversContainer) {
+          const riversEl = wrapper.cloneNode(false) as HTMLElement;
+          riversEl.removeAttribute("data-moss-places-tile");
+          riversEl.dataset.mossPlacesTileRivers = key;
+          riversEl.append(split.rivers);
+          this.options.riversContainer.append(riversEl);
+          entry.riversEl = riversEl;
+        } else wrapper.append(split.rivers);
+      }
       this.elements.set(key, entry);
-      this.position(wrapper, x, y, this.unitScale);
+      this.position(entry, x, y, this.unitScale);
       // A cell the manifest names counts as present while it loads, so its
       // own load changes no neighbour's mask; only its own edges need one.
-      this.applyEdgeMask(wrapper, x, y);
+      this.applyEdgeMask(entry, x, y);
     } catch {
       // A stale generation's own failure must not stomp the CURRENT load's
       // state — it may already be "loading" again under the new generation.
@@ -574,6 +594,13 @@ export class TileLayer {
     return { surface, baked };
   }
 
+  /** The tile's flat land and water, kept as the live vector: it is a few unfiltered paths, and a bitmap would smear the shore into a gradient once enlarged hundreds of times. */
+  private flatSurface(split: MapSvgSplit): { el: SVGSVGElement } {
+    const el = split.flat().base.cloneNode(true) as SVGSVGElement;
+    el.classList.add("moss-places-tile-flat");
+    return { el };
+  }
+
   /** A tile is swapped for a smaller raster only once the density the view needs has fallen, so one that merely left the view keeps its raster for the pan back; an off-screen one is never baked sharper, since nothing shows it. */
   private needsRebake(key: string, entry: LoadedTile): boolean {
     const wanted = this.bakeableDensity(entry.split, this.density);
@@ -595,7 +622,7 @@ export class TileLayer {
       result.surface.release();
       return;
     }
-    entry.el.firstElementChild?.replaceWith(result.surface.el);
+    detailSurface(entry.el)?.replaceWith(result.surface.el);
     entry.release();
     entry.release = result.surface.release;
     entry.bakedDensity = result.baked;
@@ -612,6 +639,7 @@ export class TileLayer {
     for (const value of this.elements.values()) {
       if (value !== "loading" && value !== "failed") {
         value.el.remove();
+        value.riversEl?.remove();
         value.release();
       }
     }
@@ -625,22 +653,28 @@ export class TileLayer {
   }
 
   /** Only the transform — called on every `render()`, including a plain pan where nothing has loaded, failed, or been removed, so this must never touch `mask-image` (see `applyEdgeMask`, called only on those load-state changes). */
-  private position(el: HTMLElement, x: number, y: number, unitScale: number): void {
+  private position(tile: LoadedTile, x: number, y: number, unitScale: number): void {
     const { translateX, translateY, scale } = tileOverlayTransform(this.options.origins[`${x},${y}`], unitScale, this.options.k);
-    el.style.left = "0";
-    el.style.top = "0";
-    el.style.transformOrigin = "0 0";
-    el.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+    for (const el of [tile.el, tile.riversEl]) {
+      if (!el) continue;
+      el.style.left = "0";
+      el.style.top = "0";
+      el.style.transformOrigin = "0 0";
+      el.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+    }
   }
 
-  /** Recompute and (re)apply `mask-image` for `el`, the tile wrapper at `(x, y)` — the only place it is ever written, so it changes only by a call here, never on a plain `render()` pan. The mask works on the wrapper's own CSS box, which `load()` sizes to the tile's native canvas dimensions directly, so a fade distance in canvas units (`tileEdgeMask`) lands in the right place regardless of `unitScale`/zoom, and fades the wrapper's raster AND its rivers overlay together as one composited unit. A tile is never clipped toward a neighbour: a fractional clip edge antialiases into a one-pixel light line, and the current vector clip context plus tile overlap must be verified before changing that edge policy. */
-  private applyEdgeMask(el: HTMLElement, x: number, y: number): void {
+  /** Recompute and (re)apply `mask-image` for `tile`, the wrapper(s) at `(x, y)` — the only place it is ever written, so it changes only by a call here, never on a plain `render()` pan. The mask works on the wrapper's own CSS box, which `load()` sizes to the tile's native canvas dimensions directly, so a fade distance in canvas units (`tileEdgeMask`) lands in the right place regardless of `unitScale`/zoom, and fades the wrapper's raster AND its rivers overlay together as one composited unit. A tile is never clipped toward a neighbour: a fractional clip edge antialiases into a one-pixel light line, and the current vector clip context plus tile overlap must be verified before changing that edge policy. */
+  private applyEdgeMask(tile: LoadedTile, x: number, y: number): void {
     const mask = tileEdgeMask(this.usableCell, this.options, x, y, this.options.k);
-    el.style.maskImage = mask ?? "";
-    el.style.webkitMaskImage = mask ?? "";
-    if (mask) {
-      el.style.maskComposite = "intersect";
-      el.style.webkitMaskComposite = "source-in";
+    for (const el of [tile.el, tile.riversEl]) {
+      if (!el) continue;
+      el.style.maskImage = mask ?? "";
+      el.style.webkitMaskImage = mask ?? "";
+      if (mask) {
+        el.style.maskComposite = "intersect";
+        el.style.webkitMaskComposite = "source-in";
+      }
     }
   }
 
@@ -648,7 +682,7 @@ export class TileLayer {
   private refreshNeighbourEdgeMask(x: number, y: number): void {
     for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]] as const) {
       const neighbour = this.elements.get(`${nx},${ny}`);
-      if (neighbour && neighbour !== "loading" && neighbour !== "failed") this.applyEdgeMask(neighbour.el, nx, ny);
+      if (neighbour && neighbour !== "loading" && neighbour !== "failed") this.applyEdgeMask(neighbour, nx, ny);
     }
   }
 }

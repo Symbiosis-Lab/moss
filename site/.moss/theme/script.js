@@ -32,7 +32,7 @@
 })();
 
 // Authors write a plain link at the end of a paragraph or list item — `[▶](#scene=tree)`, or
-// `[▶](#scene=)` for "just open the surface" with no scripted scene (site/ui/demo/README.md,
+// `[▶](#scene=)` for "just open the surface" with no scripted scene (docs/reference/docs-demo.md,
 // "Markdown markers"). This upgrades every such link into a <moss-demo-marker> and, if the
 // article has any, inserts the one demo frame it drives after the article's first paragraph.
 // `demo.css` hides an unupgraded `a[href^="#scene="]` outright, so a reader without JavaScript
@@ -40,9 +40,9 @@
 // being replaced below, never by a second toggle that could fall out of sync with it).
 const sceneLinks = [...document.querySelectorAll('article a[href^="#scene="]')];
 if (sceneLinks.length > 0) {
-  const demoFrameModule = new URL('../../ui/demo/demo-frame.js', window.mossTheme.base);
-  const editorDemoModule = new URL('../../ui/demo/moss-editor-demo.js', window.mossTheme.base);
-  const markerModule = new URL('../../ui/demo/moss-demo-marker.js', window.mossTheme.base);
+  const demoFrameModule = new URL('../../home/ui/demo/demo-frame.js', window.mossTheme.base);
+  const editorDemoModule = new URL('../../home/ui/demo/moss-editor-demo.js', window.mossTheme.base);
+  const markerModule = new URL('../../home/ui/demo/moss-demo-marker.js', window.mossTheme.base);
   // Sequenced, not parallel: a marker's click dispatches `moss-demo-play`, which only reaches a
   // frame if the frame's document-level listener is already attached — so demo-frame.js (via
   // moss-editor-demo.js, which defines the element) must finish attaching that listener before
@@ -59,7 +59,7 @@ if (sceneLinks.length > 0) {
         marker.setAttribute('name', name);
         link.replaceWith(marker);
       }
-      // One surface per page today (site/ui/demo/README.md, "Surfaces") — every scene a page
+      // One surface per page today (docs/reference/docs-demo.md, "Surfaces") — every scene a page
       // links is checked by scripts/check-demo-scenes.mjs to name the same surface, so inserting
       // the one editor-surface frame unconditionally is correct without first fetching every
       // linked scene's own JSON just to ask which surface it wants.

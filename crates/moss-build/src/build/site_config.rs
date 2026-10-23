@@ -314,7 +314,7 @@ pub fn resolve_environment(project_path: &str) -> HostingEnvironment {
         if let Some(env) = parse_env_name(name.trim()) {
             return env;
         }
-        log::warn!("MOSS_ENV='{}' is not one of staging|local|production; ignoring", name);
+        log::info!("MOSS_ENV='{}' is not one of staging|local|production; ignoring", name);
     }
     if let Ok(url) = std::env::var("MOSS_SETA_URL") {
         // A raw URL carries no environment name. A localhost URL is the local-dev

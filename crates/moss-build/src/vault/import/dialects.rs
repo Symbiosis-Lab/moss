@@ -166,14 +166,67 @@ pub(crate) struct SelectorDialect {
     pub host_suffix: &'static str,
     /// Content containers, most specific first.
     pub selectors: &'static [&'static str],
+    /// Chrome inside the selected subtree, removed before conversion.
+    pub chrome: &'static [&'static str],
+    /// Inline script variables (`var name = "…";`) to read into metadata
+    /// overrides, for platforms that keep date and account only in script.
+    pub script_vars: &'static [(&'static str, ScriptVar)],
 }
+
+/// The metadata field a script variable fills.
+#[derive(Clone, Copy)]
+pub(crate) enum ScriptTarget {
+    Date,
+    Publisher,
+    Author,
+}
+
+/// How a script variable's string becomes the field's value.
+#[derive(Clone, Copy)]
+pub(crate) enum ScriptTransform {
+    /// The string, HTML-entity-decoded; an empty value fills nothing.
+    Text,
+    /// Unix seconds, written as an RFC 3339 timestamp at this UTC offset, so
+    /// the page's date is the calendar day the platform shows its readers.
+    EpochDate { utc_offset_secs: i32 },
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ScriptVar {
+    pub target: ScriptTarget,
+    pub transform: ScriptTransform,
+}
+
+/// Host-gated selector dialects, tried in order; a new platform is a new row.
+pub(crate) static SELECTOR_DIALECTS: &[SelectorDialect] = &[DOUBAN, WECHAT_ARTICLE];
 
 /// Douban reviews/notes: the body lives in a small subtree while a
 /// `<ul class="nav">` global menu (no `<nav>` tag, no clutter class)
 /// dominates the scorer's biggest candidate.
-pub(crate) static DOUBAN: SelectorDialect = SelectorDialect {
+const DOUBAN: SelectorDialect = SelectorDialect {
     host_suffix: "douban.com",
     selectors: &[".review-content", "#link-report .note", ".note"],
+    chrome: &[],
+    script_vars: &[],
+};
+
+/// WeChat Official Account articles: the body container ships with an inline
+/// `visibility: hidden` that a script clears, and the account card sits
+/// inside it. Images carry only `data-src`.
+const WECHAT_ARTICLE: SelectorDialect = SelectorDialect {
+    host_suffix: "mp.weixin.qq.com",
+    selectors: &["#js_content"],
+    chrome: &["mp-common-profile"],
+    // `og:site_name` here is the platform's name, and the page has no date or
+    // byline metadata. Times are China Standard Time (UTC+08:00).
+    script_vars: &[
+        ("ct", ScriptVar {
+            target: ScriptTarget::Date,
+            transform: ScriptTransform::EpochDate { utc_offset_secs: 8 * 3600 },
+        }),
+        ("nickname", ScriptVar { target: ScriptTarget::Publisher, transform: ScriptTransform::Text }),
+        ("author", ScriptVar { target: ScriptTarget::Author, transform: ScriptTransform::Text }),
+    ],
 };
 
 /// What must hold before a chrome row may remove markup.

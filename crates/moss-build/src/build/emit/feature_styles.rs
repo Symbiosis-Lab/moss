@@ -71,6 +71,11 @@ pub const FEATURE_STYLES: &[FeatureStyle] = &[
         source: include_str!("../../assets/css/email.css"),
     },
     FeatureStyle {
+        name: "archival",
+        dev_path: "src/assets/css/archival.css",
+        source: include_str!("../../assets/css/archival.css"),
+    },
+    FeatureStyle {
         name: "review",
         dev_path: "src/assets/css/review.css",
         source: include_str!("../../assets/css/review.css"),

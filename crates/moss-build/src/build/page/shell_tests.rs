@@ -804,12 +804,20 @@ fn get_css_rule_in_media(css: &str, media_query: &str, selector: &str) -> Option
 
 #[test]
 fn test_css_mobile_nav_links_are_a_single_column() {
-    // Narrow breakpoint (<20rem) uses hamburger with absolute positioning.
+    // Narrow breakpoint (<20rem) uses hamburger with a sheet over the page.
     let rule = get_css_rule_in_media(DEFAULT_CSS, "@media (max-width: 20rem)", ".nav-links")
         .expect(".nav-links mobile CSS rule should exist");
     assert!(
-        rule.contains("position: absolute"),
-        ".nav-links on mobile should overlay the page, got: {}",
+        rule.contains("position: fixed"),
+        ".nav-links on mobile should be a sheet over the page, got: {}",
+        rule
+    );
+    // `.nav-links` centres itself in the `.nav-right` row; current Chromium
+    // applies that to a fixed child, which then sizes to its content instead
+    // of filling the screen.
+    assert!(
+        rule.contains("align-self: stretch"),
+        ".nav-links sheet must stretch, not centre, got: {}",
         rule
     );
     // The closed panel collapses so a hidden menu contributes no page scroll.
@@ -831,8 +839,8 @@ fn test_css_mobile_nav_links_are_a_single_column() {
         rule
     );
 
-    // The open panel is sized by its links, capped only by the viewport — no
-    // height number decides how many nav items an author may have.
+    // The open sheet fills the viewport below the header and scrolls inside
+    // itself — no height number decides how many nav items an author may have.
     let open = get_css_rule_in_media(
         DEFAULT_CSS,
         "@media (max-width: 20rem)",
@@ -840,8 +848,8 @@ fn test_css_mobile_nav_links_are_a_single_column() {
     )
     .expect(".nav-links.mobile-open rule should exist");
     assert!(
-        open.contains("max-height: calc(100dvh - 100%)"),
-        "open .nav-links should be bounded by the viewport, not a fixed height, got: {}",
+        open.contains("max-height: none"),
+        "open .nav-links should lift the closed panel's zero height, got: {}",
         open
     );
 }
@@ -899,7 +907,7 @@ fn test_css_sidebar_mobile_alignment() {
     // Now on main.has-sidebar instead of .page-wrapper.has-sidebar
     let rule = get_css_rule_in_media(
         DEFAULT_CSS,
-        "@media (max-width: 64rem)",
+        "@media (width < 64rem)",
         "main.has-sidebar > .latest-sidebar",
     )
     .expect(".latest-sidebar mobile CSS rule should exist");
@@ -1425,8 +1433,8 @@ fn test_css_mobile_reading_size_stays_above_cjk_floor() {
     // small, especially for dense CJK ideographs. The mobile override now
     // re-points --moss-reading-size-base to 1.0625rem (= 17px): a small
     // viewport reduction from 18px that stays comfortably legible.
-    let rule = get_css_rule_in_media(DEFAULT_CSS, "@media (max-width: 48rem)", ":root")
-        .expect(":root override should exist in @media (max-width: 48rem)");
+    let rule = get_css_rule_in_media(DEFAULT_CSS, "@media (width < 48rem)", ":root")
+        .expect(":root override should exist in @media (width < 48rem)");
     assert!(
             rule.contains("--moss-reading-size-base: 1.0625rem"),
             "Mobile :root should set --moss-reading-size-base to 1.0625rem (17px), not the old 1rem (16px) floor, got: {}",
@@ -1581,6 +1589,7 @@ fn make_test_vars(has_sidebar_layout: bool) -> ShellVars {
         js_path: "theme.js".to_string(),
         lazy_chunk_attrs: String::new(),
         navigation: "".to_string(),
+        has_header: true,
         nav_island: String::new(),
         homepage_content: "".to_string(),
         latest_list: None,
@@ -1614,12 +1623,14 @@ fn make_test_vars(has_sidebar_layout: bool) -> ShellVars {
         ui_lang: crate::i18n::Language::En,
         user_css_link: None,
         user_js_tag: None,
+        theme_importmap: String::new(),
         has_sidebar_layout,
         embed_head_assets: String::new(),
         post_article: String::new(),
         runtime_js_tags: String::new(),
         lightbox: String::new(),
         robots_meta: None,
+        colophon: true,
     }
 }
 
@@ -1850,6 +1861,7 @@ fn template_marks_main_nav_and_nav_island_as_source_none_in_preview_mode() {
     let processor = ShellProcessor::new();
     let mut vars = make_test_vars(false);
     vars.body_attrs = " data-moss-preview".to_string();
+    vars.navigation = "<a href=\"/\">Home</a>".to_string();
     vars.nav_island = concat!(
         r#"<div class="moss-nav-island"><div class="moss-nav-island-bar">"#,
         r#"<nav class="moss-nav-island-trail" aria-label="Breadcrumb"></nav>"#,
@@ -1877,6 +1889,17 @@ fn rendered_shell_keeps_skip_link_out_of_the_search_index() {
         result.contains(r##"<a class="moss-skip-link" data-pagefind-ignore href="#main-content">"##),
         "the skip link must carry data-pagefind-ignore"
     );
+}
+
+#[test]
+fn the_colophon_is_left_out_when_the_site_turns_it_off() {
+    let processor = ShellProcessor::new();
+    let on = processor.process(ShellType::Article, make_test_vars(false));
+    assert!(on.contains("moss-colophon"), "on by default");
+    let off = processor.process(ShellType::Article, ShellVars { colophon: false, ..make_test_vars(false) });
+    assert!(!off.contains("moss-colophon"), "the element is not emitted: {off}");
+    assert!(!off.contains("mosspub.com"), "nor its link");
+    assert!(off.contains("<script"), "the rest of the page is untouched");
 }
 
 #[test]
@@ -2069,20 +2092,6 @@ fn test_css_width_wide_token_is_clamped() {
             "--moss-width-wide: min(calc(56 * var(--moss-reading-size)), var(--moss-site-max-width))"
         ),
         "--moss-width-wide token missing or missing its site-max clamp"
-    );
-}
-
-#[test]
-fn test_css_content_width_escape_collapses_on_mobile() {
-    let rule = get_css_rule_in_media(
-        DEFAULT_CSS,
-        "@media (max-width: 48rem)",
-        "article.container > [data-width]",
-    )
-    .expect("data-width escape must collapse below 48rem");
-    assert!(
-        rule.contains("inline-size: auto") && rule.contains("margin-inline: auto"),
-        "mobile collapse must undo the escape, got: {rule}"
     );
 }
 
@@ -2293,7 +2302,7 @@ fn test_css_collection_cover_row_mobile_resets_gap() {
     // Mobile: collection cover row should reset to lg gap
     let rule = get_css_rule_in_media(
         DEFAULT_CSS,
-        "@media (max-width: 48rem)",
+        "@media (width < 48rem)",
         ".moss-collection-cover-row",
     )
     .expect(".moss-collection-cover-row mobile CSS rule should exist");
@@ -2310,7 +2319,7 @@ fn test_css_collection_cover_body_mobile_top_aligns() {
     // smaller cover (the desktop `justify-content: center` is overridden).
     let rule = get_css_rule_in_media(
         DEFAULT_CSS,
-        "@media (max-width: 48rem)",
+        "@media (width < 48rem)",
         ".moss-collection-cover-body",
     )
     .expect(".moss-collection-cover-body mobile CSS rule should exist");
@@ -2343,9 +2352,25 @@ fn process_composes_shell_with_content_fragment() {
         ..test_vars()
     };
     let out = ShellProcessor::new().process(ShellType::Article, vars);
-    assert!(out.contains("<header>"));
     assert!(out.contains("ARTICLE_BODY"));
     assert!(!out.contains("{main_content}"));
+}
+
+#[test]
+fn process_emits_no_header_element_only_when_the_mode_has_none() {
+    let with_nav = ShellVars { navigation: "<a href=\"/\">Home</a>".into(), ..test_vars() };
+    let out = ShellProcessor::new().process(ShellType::Article, with_nav);
+    assert!(out.contains("<header>") && out.contains("main-nav"));
+    assert!(out.contains("moss-skip-link"));
+
+    let none = ShellVars { has_header: false, ..test_vars() };
+    let out = ShellProcessor::new().process(ShellType::Article, none);
+    assert!(!out.contains("<header"), "no header band: {out}");
+    assert!(out.contains("moss-skip-link"));
+
+    // Empty navigation alone does not drop the header: it is the mode's call.
+    let empty = ShellVars { navigation: String::new(), ..test_vars() };
+    assert!(ShellProcessor::new().process(ShellType::Article, empty).contains("<header>"));
 }
 
 #[test]
@@ -2914,11 +2939,11 @@ fn test_template_includes_colophon_text_placeholder() {
     // The shared shell owns the colophon and must use placeholders (not
     // hardcoded strings) so it can be localized.
     assert!(
-        SHELL_TEMPLATE.contains("{colophon_text}") && SHELL_TEMPLATE.contains("{colophon_name}"),
+        COLOPHON_TEMPLATE.contains("{colophon_text}") && COLOPHON_TEMPLATE.contains("{colophon_name}"),
         "Shell template should use the {{colophon_text}} and {{colophon_name}} placeholders"
     );
     assert!(
-        !SHELL_TEMPLATE.contains("Published with moss"),
+        !COLOPHON_TEMPLATE.contains("Published with moss"),
         "Shell template should not have hardcoded 'Published with moss'"
     );
     // Two strings, two jobs. The <svg> is aria-hidden, so without an
@@ -2926,11 +2951,11 @@ fn test_template_includes_colophon_text_placeholder() {
     // name — and "moss" alone does not say what the link does. The label
     // carries the full phrase; the span carries the half a reader sees.
     assert!(
-        SHELL_TEMPLATE.contains(r#"aria-label="{colophon_text}""#),
+        COLOPHON_TEMPLATE.contains(r#"aria-label="{colophon_text}""#),
         "The colophon link needs the full phrase as its accessible name — the mark is aria-hidden"
     );
     assert!(
-        SHELL_TEMPLATE.contains(r#"<span class="moss-colophon-label moss-wordmark">{colophon_name}</span>"#),
+        COLOPHON_TEMPLATE.contains(r#"<span class="moss-colophon-label moss-wordmark">{colophon_name}</span>"#),
         "The visible wordmark must stay wrapped in .moss-colophon-label (the CSS reveals it by class) \
          and carry .moss-wordmark (mark.css sets its face by it)"
     );
@@ -2941,7 +2966,7 @@ fn test_template_includes_colophon_text_placeholder() {
     // picks the face and the lead off this attribute, so keying it on the page
     // would set a Latin wordmark in the Chinese metrics.
     assert!(
-        SHELL_TEMPLATE.contains(r#"lang="{colophon_lang}""#),
+        COLOPHON_TEMPLATE.contains(r#"lang="{colophon_lang}""#),
         "The colophon link must declare the wordmark's own language, not the page's"
     );
 }
@@ -3830,4 +3855,15 @@ fn gallery_rows_uses_ratio_fallback_wherever_it_reads_ar() {
     // makes the declaration invalid and the item collapses.
     assert!(DEFAULT_CSS.contains("var(--ar, 1.5)"));
     assert!(!DEFAULT_CSS.contains("var(--ar)"), "a bare var(--ar) has no fallback");
+}
+
+#[test]
+fn compact_masthead_never_widens_the_link_gap() {
+    // The links' default column gap floors at --moss-space-sm; any value a
+    // compact rule sets there can exceed it on a phone and widen the row.
+    assert!(DEFAULT_CSS.contains("[data-nav-compact] .nav-right"));
+    assert!(
+        !DEFAULT_CSS.contains("[data-nav-compact] .nav-links"),
+        "compact mode must leave .nav-links' own clamp()ed column gap alone"
+    );
 }

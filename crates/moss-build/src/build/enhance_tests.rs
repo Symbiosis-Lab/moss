@@ -1163,3 +1163,9 @@ fn wrap_plugin_head_end_per_page_css_wrapped() {
         "<style>@layer plugins{.post{}}</style>"
     );
 }
+
+#[test]
+fn a_site_without_archival_hashes_the_slots_it_hashed_before_the_edition_field() {
+    let expected = crate::build::assets::paths::compute_binary_hash(br#"{"entries":{},"feature_styles":[],"listings":{}}"#);
+    assert_eq!(resolved_slots_hash(&ResolvedSlots::empty()), expected);
+}

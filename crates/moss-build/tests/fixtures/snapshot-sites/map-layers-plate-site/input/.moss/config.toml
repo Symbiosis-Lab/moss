@@ -1,0 +1,15 @@
+schema_version = 6
+
+[site]
+lang = "en"
+
+[terms.places]
+type = "place"
+fields = ["location"]
+title = "Places"
+
+[map.layers.atlas-1930]
+kind = "historical"
+source = "maps/atlas-1930"
+max_zoom = 15
+budget = "2 MB"

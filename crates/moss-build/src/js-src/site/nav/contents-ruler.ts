@@ -12,28 +12,44 @@
  *
  * Where the geometry matters, it is measured, not breakpointed:
  *
- * - A label may reach no further than one gutter short of the text column, so
- *   its maximum width is `textLeft - GUTTER - labelLeft`, read from the layout.
- *   Titles longer than that are cut in the middle (see middle-truncate.ts).
+ * - A plain ruler's label may reach no further than one gutter short of the
+ *   text column, so its maximum width is `textLeft - GUTTER - labelLeft`, read
+ *   from the layout. Titles longer than that, on either ruler, are one line
+ *   ended with an ellipsis by CSS.
  * - Under `MIN_LABEL` of room a label names nothing, so the ruler stays away
  *   and the island is all there is.
+ * - A `contents: pictures` ruler is up wherever the page reserves its lane:
+ *   site.css narrows the column there and sets `--moss-contents-lane` on
+ *   `body`, and this module reads only whether that is set, so the media
+ *   condition has one owner and nothing here measures the margin. Where the
+ *   lane is reserved the island's `data-ruler` is `lane` while the list is
+ *   away, and its bar never shows.
  * - A site can switch it off with CSS (`display: none`, `visibility: hidden`);
- *   whether it is actually rendered is read on every pass, so the island's
- *   sections button comes back however it was hidden.
+ *   whether it is actually rendered is read on every pass, so the island
+ *   comes back however it was hidden.
+ * - It stays away on a right-to-left page, whose margin is on the other side,
+ *   until the ruler mirrors; the island is the contents list there.
  * - It also stays away when the dashes would not fit between the island's bar
  *   and the bottom of the window — the list must not scroll, because scrolling
  *   would clip the labels that hang out of it.
  *
- * Every dash row is the same height at rest and open. Re-spacing on hover was
- * tried and rejected: the row under the pointer moves, and the click lands on
- * a different section.
+ * A page with `contents: pictures` (`opts.pictures`) is the same ruler at rest:
+ * the same dashes, the same place, nothing reserved. Hovering or focusing it
+ * magnifies the rows in place around the pointer, the focused one showing its
+ * section's picture after its name (contents-lens.ts).
+ *
+ * The ruler belongs on screen from the first section to the end of the main
+ * sections: the author's `contents=end` marker passing the middle of the
+ * window, else the page's closing picture coming into view, else the
+ * article's bottom passing the middle.
  *
  * Which of this needs an engine — hit-testing, label clearance, clipping — is
  * asserted in tests/render-gates/site/contents-ruler.spec.ts.
  */
 
-import { canvasMeasure, truncateMiddle } from "./middle-truncate";
 import { markRows, SECTION_SYNC_EVENT, type SectionSyncDetail } from "./section-event";
+import { mountContentsLens } from "./contents-lens";
+import { pictureImg, type SectionPicture } from "./section-pictures";
 
 /** Clear space between the widest label and the text column — the same gap
  *  the text keeps from a sidenote. */
@@ -43,16 +59,11 @@ const GUTTER = 24;
  *  is a few letters of a title, which names nothing. */
 const MIN_LABEL = 96;
 
-/** Slack under the measured label width. Canvas and DOM text widths agree to a
- *  fraction of a pixel; this makes a rounding difference an extra pixel of
- *  margin rather than a clipped letter. */
-const MEASURE_SLACK = 2;
-
-/** Fade in when the first section is this far up the window; fade out when the
- *  article's bottom is above the middle. Pinned to the window, the ruler only
- *  belongs on screen while the article's body is — not over a cover image above
- *  it or over the comments below it. */
-const SHOW_BELOW = 0.85;
+/** Fade out when the article's bottom is above the middle of the window. The
+ *  list comes up when the first section's heading reaches the list's own top,
+ *  so it never stands over an opening, whatever the window's height. Pinned to
+ *  the window, the ruler only belongs on screen while the article's body is —
+ *  not over a cover image above it or over the comments below it. */
 const HIDE_ABOVE = 0.5;
 
 export interface RulerOptions {
@@ -61,10 +72,22 @@ export interface RulerOptions {
   titles: string[];
   /** The nav's accessible name — the island's localized "sections" string. */
   label: string;
-  /** The island: receives `data-ruler`, and emits `SECTION_SYNC_EVENT`. */
+  /** The island: receives `data-ruler` (`on` while the list is on screen,
+   *  `lane` while it is away from a reserved lane, `off` otherwise), and
+   *  emits `SECTION_SYNC_EVENT`. */
   island: HTMLElement;
   /** Space the island's bar occupies at the top of the window. */
   clearance: () => number;
+  /** Set on a page with `contents: pictures`: each entry is a section's
+   *  picture, or null for a section with no image. */
+  pictures?: Array<SectionPicture | null>;
+  /** The element the author marked as the end of the main sections
+   *  (`contents=end`): the ruler steps aside once its top passes the middle of
+   *  the window, and returns when the reader scrolls back above it. */
+  end?: Element | null;
+  /** The page's closing picture: with no marker, the ruler steps aside as
+   *  soon as it comes into view. */
+  closing?: Element | null;
 }
 
 /** Mount the ruler. Returns its disposer: removes the node and every listener. */
@@ -87,16 +110,26 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   nav.className = "moss-contents-ruler";
   nav.setAttribute("aria-label", opts.label);
   nav.hidden = true;
+  if (opts.pictures) nav.dataset.contents = "pictures";
   const list = document.createElement("ol");
   const links = headings.map((heading, i) => {
     const link = document.createElement("a");
     link.href = `#${heading.id}`;
-    // The visible label may be cut short; the full title is the link's name.
+    // The visible label may be cut short by CSS; the full title is the link's name.
     link.setAttribute("aria-label", titles[i]);
     link.title = titles[i];
     link.innerHTML =
       '<span class="moss-contents-ruler-dash"></span>' +
       '<span class="moss-contents-ruler-label" aria-hidden="true"></span>';
+    const picture = opts.pictures?.[i];
+    if (picture) {
+      const frame = document.createElement("span");
+      frame.className = "moss-contents-ruler-pic";
+      frame.setAttribute("aria-hidden", "true");
+      frame.append(pictureImg(picture, () => link.removeAttribute("data-pic")));
+      link.append(frame);
+      link.setAttribute("data-pic", "");
+    }
     const item = document.createElement("li");
     item.append(link);
     list.append(item);
@@ -105,6 +138,7 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   const labels = links.map(
     (link) => link.querySelector<HTMLElement>(".moss-contents-ruler-label")!,
   );
+  labels.forEach((label, i) => (label.textContent = titles[i]));
   nav.append(list);
   // Beside `main`, not inside it: `main` is a size container, which makes it
   // the containing block for fixed descendants and would pin the ruler to the
@@ -113,58 +147,84 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   if (main?.parentElement) main.after(nav);
   else document.body.append(nav);
   undo.push(() => nav.remove());
+  if (opts.pictures) undo.push(mountContentsLens({ nav, links }));
 
+  // Blocks wider than the text column (`data-width`) can sit anywhere in
+  // `main`, and script can add them after load: the list is read on layout and
+  // whenever the scope's children change, and tested each frame. What is
+  // tested is each block's children, not the block: a band whose content
+  // keeps the text column covers nothing, while a wide picture or grid covers
+  // the margin through its own child.
+  const scope = first.closest("main") ?? article;
+  let bands: Element[] = [];
+  const collectBands = (): void => {
+    bands = [...scope.querySelectorAll("[data-width]:not([data-width=body])")].flatMap((band) => [...band.children]);
+  };
+  collectBands();
   let away = true;
+  /** The page reserves the list's lane and the list fits: set on layout. */
+  let lane = false;
   let disposed = false;
 
   /**
    * One frame's reading and writing, run when the island's scrollspy reports.
    *
    * The ruler counts as on screen when it is rendered (not `hidden`, and not
-   * hidden by the site's own CSS) and not faded. The island hides its sections
-   * button for exactly that case, so there is one contents menu at a time.
+   * hidden by the site's own CSS) and not faded. The island stays put away for
+   * exactly that case, so there is one contents list at a time.
    * Reads come first, then the writes.
    */
   function fade(): void {
     if (disposed) return;
-    const inBody = first.getBoundingClientRect().top < window.innerHeight * SHOW_BELOW;
-    const notPast = article.getBoundingClientRect().bottom > window.innerHeight * HIDE_ABOVE;
+    const height = window.innerHeight;
+    const zone = nav.hidden ? null : list.getBoundingClientRect();
+    const inBody = zone === null || first.getBoundingClientRect().top <= zone.top;
+    const notPast = opts.end
+      ? opts.end.getBoundingClientRect().top > height * HIDE_ABOVE
+      : opts.closing
+        ? opts.closing.getBoundingClientRect().top > height
+        : article.getBoundingClientRect().bottom > height * HIDE_ABOVE;
+    // A wide block that reaches the ruler's column and shares its height would
+    // be painted over: the ruler steps aside until the block has passed.
+    // Only worth measuring while the ruler would otherwise be up.
+    const covered =
+      zone !== null &&
+      inBody &&
+      notPast &&
+      bands.some((band) => {
+        const box = band.getBoundingClientRect();
+        return box.left < zone.right && box.top < zone.bottom && box.bottom > zone.top;
+      });
     const rendered =
       !nav.hidden &&
       (nav.checkVisibility
         ? nav.checkVisibility({ checkVisibilityCSS: true })
         : getComputedStyle(nav).display !== "none");
-    away = !(inBody && notPast) && !nav.matches(":focus-within");
+    away = !(inBody && notPast && !covered) && !nav.matches(":focus-within");
     nav.toggleAttribute("data-away", away);
-    island.dataset.ruler = rendered && !away ? "on" : "off";
+    island.dataset.ruler = rendered && !away ? "on" : lane ? "lane" : "off";
   }
 
   function layout(): void {
     if (disposed) return;
     const vertical = document.body.dataset.typesetting === "vertical";
+    const rtl = getComputedStyle(first).direction === "rtl";
     // A hidden ruler has no boxes: show it, measure, then decide, all before
     // the next paint.
     nav.hidden = false;
-    let room = 0;
-    if (!vertical) {
-      const textLeft = first.getBoundingClientRect().left;
-      room = Math.floor(textLeft - GUTTER - labels[0].getBoundingClientRect().left);
-    }
-    const listHeight = list.getBoundingClientRect().height;
-    const fits = (window.innerHeight - listHeight) / 2 >= opts.clearance();
-    const eligible = !vertical && room >= MIN_LABEL && fits;
+    collectBands();
+    const textLeft = vertical ? 0 : first.getBoundingClientRect().left;
+    const listBox = list.getBoundingClientRect();
+    // Up to the gutter before the text is the margin the plain ruler's titles
+    // may use.
+    const room = Math.floor(textLeft - GUTTER - labels[0].getBoundingClientRect().left);
+    const fits = (window.innerHeight - listBox.height) / 2 >= opts.clearance();
+    const eligible = opts.pictures
+      ? getComputedStyle(document.body).getPropertyValue("--moss-contents-lane").trim() !== "" && fits
+      : !vertical && !rtl && room >= MIN_LABEL && fits;
     nav.hidden = !eligible;
-    if (eligible) {
-      const measure = canvasMeasure(labels[0]);
-      const padding = parseFloat(getComputedStyle(labels[0]).paddingInlineStart) || 0;
-      // Writes only, no read-back: the canvas measure plus MEASURE_SLACK is
-      // trusted, and the render gate asserts no label overflows in either engine.
-      const fit = room - padding - MEASURE_SLACK;
-      labels.forEach((label, i) => {
-        label.style.maxWidth = `${room}px`;
-        label.textContent = measure ? truncateMiddle(titles[i], fit, measure) : titles[i];
-      });
-    }
+    lane = Boolean(opts.pictures) && eligible;
+    if (eligible && !opts.pictures) labels.forEach((label) => (label.style.maxWidth = `${room}px`));
     fade();
   }
 
@@ -185,6 +245,9 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     undo.push(() => ro.disconnect());
   }
   if (typeof MutationObserver !== "undefined") {
+    const bandsMo = new MutationObserver(collectBands);
+    bandsMo.observe(scope, { childList: true, subtree: true });
+    undo.push(() => bandsMo.disconnect());
     const mo = new MutationObserver(relayout);
     mo.observe(document.documentElement, { attributes: true });
     mo.observe(document.body, { attributes: true });

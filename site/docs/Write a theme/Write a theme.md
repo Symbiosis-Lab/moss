@@ -131,6 +131,8 @@ For JavaScript, moss sets `window.mossTheme.base` to the `/_moss/theme/` URL bef
 const url = new URL("asset.woff2", mossTheme.base);
 ```
 
+Every `.js` and `.mjs` file in `.moss/theme/` is served from a content-hashed address through an import map in `<head>`, and `script.mjs` also loads as an ES module. So `import { drawFigure } from "./figures.js"` works from `script.mjs`, `import("./figures.js")` works from `script.js`, and an edit to `figures.js` is never served stale. Each script file is published twice, plain and hashed; other files in the theme folder stay unhashed.
+
 ## Copy a look from another site
 
 A site's look is more than its stylesheet. Copying another site's `style.css` into yours brings its colours and fonts, but the layout also comes from three other places, so copy those too:

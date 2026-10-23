@@ -81,6 +81,44 @@ export async function writeFile(
 }
 
 /**
+ * Write binary content to a file in the project directory
+ *
+ * Same sandbox as {@link writeFile}: the path must stay inside the project and
+ * `.moss/` is refused. Creates parent directories and replaces an existing file.
+ * The bytes cross to moss as base64, so very large files cost memory twice.
+ *
+ * @param relativePath - Path relative to the project root
+ * @param bytes - Exact bytes to write
+ * @throws Error if the path is refused, the file cannot be written, or called outside a hook
+ *
+ * @example
+ * ```typescript
+ * const image = await fetchUrl("https://example.com/map.jpg");
+ * await writeFileBinary("maps/sheet-1.jpg", image.body);
+ * ```
+ * @category Filesystem
+ */
+export async function writeFileBinary(
+  relativePath: string,
+  bytes: Uint8Array
+): Promise<void> {
+  const ctx = getInternalContext();
+
+  // Chunked so a large image does not overflow the argument limit of apply().
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+
+  await getTauriCore().invoke("write_project_file_binary", {
+    projectPath: ctx.project_path,
+    pluginName: ctx.plugin_name,
+    relativePath,
+    dataBase64: btoa(binary),
+  });
+}
+
+/**
  * List all files in the project directory
  *
  * Returns file paths relative to the project root.

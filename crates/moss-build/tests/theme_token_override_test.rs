@@ -122,6 +122,32 @@ fn a_theme_token_is_not_shadowed_by_an_inline_declaration() {
     assert!(css.contains("var(--moss-hero-panel-bg,var(--item-hero-panel-bg"), "panel rule: {css}");
 }
 
+/// The overlay block of a hero is as wide as its longest word unless the
+/// author gives it a width; the property must reach both the width and the
+/// cap, or the cap (`max(600px, 35%)`) silently clamps a wider request.
+#[test]
+fn hero_content_width_property_sets_the_overlay_width() {
+    let site = Site::new();
+    site.write(".moss/config.toml", b"[site]\ndomain = \"example.com\"\n");
+    site.write(".moss/theme/style.css", b":root { --moss-hero-content-width: 29%; }\n");
+    write_png(&site, "poster.png", [48, 96, 160]);
+    site.write(
+        "index.md",
+        b"---\ntitle: Home\n---\n\n:::hero\n![](/poster.png)\n\nExample Show\n:::\n",
+    );
+    let out = site.build();
+    let css = moss_css(&out);
+    assert!(
+        css.contains("inline-size:var(--moss-hero-content-width,auto)"),
+        "overlay width rule: {css}"
+    );
+    assert!(
+        css.contains("max-inline-size:var(--moss-hero-content-width,max(600px,35%))"),
+        "overlay cap rule: {css}"
+    );
+    assert!(read(&out, "index.html").contains("Example Show"));
+}
+
 /// A theme states a header band and its link colour with tokens, not with
 /// selectors that have to outrank moss's own rules. These are the rules that
 /// read the tokens; the render gate `theme-floor-hooks` checks what they paint.
@@ -134,7 +160,7 @@ fn header_tokens_are_read_by_moss_rules() {
     let css = moss_css(&out).replace(' ', "");
 
     assert!(css.contains("body>header{background:var(--moss-header-bg,transparent)}"), "header band: {css}");
-    assert!(css.contains(".main-nava:not(.mobile-open*){color:var(--moss-header-ink,"), "nav ink: {css}");
+    assert!(css.contains(".main-nava{color:var(--moss-header-ink,"), "nav ink: {css}");
     assert!(css.contains("body>header.site-name{color:var(--moss-header-ink,"), "site name ink: {css}");
 }
 
@@ -164,11 +190,11 @@ fn cover_ink_token_is_read_by_moss_rules() {
     let out = site.build();
     let css = moss_css(&out).replace(' ', "");
 
-    assert!(css.contains("[data-cover-color].moss-card-content.moss-card-title{color:var(--moss-cover-ink,#fff)}"), "card title: {css}");
-    for line in ["kicker", "meta", "description"] {
-        let rule = format!("[data-cover-color].moss-card-content.moss-card-{line}{{color:color-mix(insrgb,var(--moss-cover-ink,#fff)");
-        assert!(css.contains(&rule), "card {line}: {css}");
-    }
+    // Every line in the full ink, not a fade of it: the band is darkened only until full ink reaches 4.5:1.
+    assert!(
+        css.contains("[data-cover-color].moss-card-content:is(.moss-card-title,.moss-card-meta,.moss-card-kicker,.moss-card-description){color:var(--moss-cover-ink,#fff)"),
+        "cover lines: {css}"
+    );
 }
 
 /// A page whose body is only its opening hero keeps `<main id="main-content">`

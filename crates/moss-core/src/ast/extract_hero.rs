@@ -51,6 +51,19 @@ pub struct HeroExtraction {
     pub html: String,
     pub image_url: Option<String>,
     pub overlay_text: Option<String>,
+    /// The hero as it will be rendered, kept when it names a listing to draw
+    /// from (`from=`), so the build can render it again once the listing is
+    /// known. `html` and the two fields above are then the fallback.
+    pub drawn_from: Option<HeroDrawnFrom>,
+}
+
+/// A `from=` hero kept for a second render: the shortcode that was rendered
+/// (with `header=` already cleared where it does not open the page) and its
+/// source line.
+#[derive(Debug, Clone)]
+pub struct HeroDrawnFrom {
+    pub shortcode: HeroShortcode,
+    pub source_line: Option<usize>,
 }
 
 /// Find and extract the first top-level Hero shortcode from `doc`.
@@ -123,10 +136,9 @@ pub fn extract_hero(doc: &mut Document, hooks: &dyn RenderHooks) -> Option<HeroE
     let walked = first_paragraph_plain_text(&hero_args.overlay);
     let overlay_text = if !walked.trim().is_empty() {
         Some(walked)
-    } else if !hero_args.overlay_text.trim().is_empty() {
-        Some(hero_args.overlay_text.clone())
     } else {
-        None
+        let source = crate::resolve::embed_renderer::folder_list::strip_markers(&hero_args.overlay_text);
+        (!source.trim().is_empty()).then_some(source)
     };
 
     // Render via the hooks' Hero arm. Production's `PipelineHooks`
@@ -153,10 +165,18 @@ pub fn extract_hero(doc: &mut Document, hooks: &dyn RenderHooks) -> Option<HeroE
     };
     hooks.render_shortcode(&mut html, render_target, hero_source_line);
 
+    let drawn_from = match render_target {
+        Shortcode::Hero(args) if args.from.is_some() => {
+            Some(HeroDrawnFrom { shortcode: args.clone(), source_line: hero_source_line })
+        }
+        _ => None,
+    };
+
     Some(HeroExtraction {
         html,
         image_url,
         overlay_text,
+        drawn_from,
     })
 }
 
@@ -271,6 +291,14 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
     let width = parsed.width.map(str::to_string);
     let mobile = parsed.get("mobile").map(str::to_string);
     let align = parsed.get("align").map(str::to_string);
+    let panel = parsed.get("panel").map(str::to_string);
+    let fade = parsed.get("fade").map(str::to_string);
+    let max_height = parsed.get("max-height").and_then(crate::media::MaxHeight::parse);
+    let cap_problem = parsed.get("max-height").filter(|_| max_height.is_none()).map(|v| format!("shortcode `:::hero` has `max-height={v}`, which is not a height moss can measure: write one length in px, rem or vw (`max-height=500px`) or `clamp()` of three px or vw lengths (`max-height=\"clamp(440px, 50vw, 680px)\"`). The hero is not capped."));
+    let with_cap_problem = |mut d: Diagnostics| {
+        d.warnings.extend(cap_problem.clone());
+        d
+    };
     // Read once, for all three image-source branches below — a caption belongs
     // to the hero, not to whichever syntax named its image.
     let caption = parse_caption_inlines(parsed.get("caption").unwrap_or_default().trim(), config);
@@ -278,6 +306,8 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
     // hero picture; on a body embed it overrides the embed's own `![alt]`.
     let alt_attr = parsed.get("alt").unwrap_or_default().to_string();
     let header = parsed.get("header").map(str::to_string);
+    let from = parsed.get("from").map(str::to_string).filter(|v| !v.trim().is_empty());
+    let dark = parsed.get("dark").filter(|v| !v.trim().is_empty()).map(|v| Url::unresolved(v.trim().to_string()));
 
     // Priority 1: `image=` attribute.
     if let Some(image_value) = parsed.get("image") {
@@ -301,12 +331,17 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 width,
                 mobile,
                 align,
+                panel: panel.clone(),
+                fade: fade.clone(),
+                max_height,
                 caption,
                 slide_captions: Vec::new(),
                 header: header.clone(),
+                from: from.clone(),
+                dark: dark.clone(),
             },
             false,
-            overlay_warnings,
+            with_cap_problem(overlay_warnings),
         );
     }
 
@@ -334,12 +369,17 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 width,
                 mobile,
                 align,
+                panel: panel.clone(),
+                fade: fade.clone(),
+                max_height,
                 caption,
                 slide_captions: Vec::new(),
                 header: header.clone(),
+                from: from.clone(),
+                dark: dark.clone(),
             },
             false,
-            overlay_warnings,
+            with_cap_problem(overlay_warnings),
         );
     }
 
@@ -404,6 +444,9 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
             width,
             mobile,
             align,
+            panel,
+            fade,
+            max_height,
             caption,
             slide_captions: if slide_captions.iter().any(|c| !c.is_empty()) {
                 slide_captions
@@ -411,9 +454,11 @@ pub(super) fn parse_hero(args: &str, body: &str, config: &ParseConfig) -> (HeroS
                 Vec::new()
             },
             header,
+            from,
+            dark,
         },
         used_priority_3,
-        overlay_warnings,
+        with_cap_problem(overlay_warnings),
     )
 }
 
@@ -648,14 +693,18 @@ pub(crate) fn hero_asset_spans(
     // attribute block. `parse_attrs_spanned` is handed the rest of the
     // document from the `{` — it returns at the first `}` at item position,
     // so it terminates exactly where the gathered-args form would. See its
-    // doc comment for the constraint that makes this legal.
+    // doc comment for the constraint that makes this legal. A `dark=` picture
+    // is an asset reference whichever way the light one is written.
+    let mut has_image_attr = false;
     if let Some(brace_rel) = opener_masked.find('{') {
         let brace_abs = obase + brace_rel;
         #[allow(clippy::string_slice)]
         // `find` on ASCII '{' → char boundary.
         let rest = &source[brace_abs..];
         if let Ok((_, kvs)) = crate::ast::attrs::parse_attrs_spanned(rest) {
-            if let Some(kv) = kvs.iter().find(|kv| kv.key == "image") {
+            for key in ["image", "dark"] {
+                let Some(kv) = kvs.iter().find(|kv| kv.key == key) else { continue };
+                has_image_attr |= key == "image";
                 let value = brace_abs + kv.value.start..brace_abs + kv.value.end;
                 let mut item = brace_abs + kv.item.start..brace_abs + kv.item.end;
                 // Absorb one leading space so removing the item doesn't
@@ -674,12 +723,14 @@ pub(crate) fn hero_asset_spans(
                     quote: if raw.starts_with('"') { Some('"') } else { None },
                     value,
                     outer: item,
-                    container: PathContainer::ShortcodeAttr { key: "image".to_string() },
+                    container: PathContainer::ShortcodeAttr { key: key.to_string() },
                 });
-                // Body lines are pure overlay when `image=` is present.
-                return;
             }
         }
+    }
+    // Body lines are pure overlay when `image=` is present.
+    if has_image_attr {
+        return;
     }
 
     // Priority 2: a positional path on the directive line, before any `{`.

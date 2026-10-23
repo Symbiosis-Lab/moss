@@ -28,6 +28,7 @@ fn test_collect_videos_for_conversion_empty() {
     use crate::types::content::{MediaMetadata, ProjectStructure};
 
     let project = ProjectStructure {
+        passthrough_media: Vec::new(),
         root_path: "/test".to_string(),
         markdown_files: vec![],
         html_files: vec![],
@@ -56,6 +57,7 @@ fn test_collect_videos_for_conversion_mov_files() {
     use crate::types::content::{MediaMetadata, ProjectStructure};
 
     let project = ProjectStructure {
+        passthrough_media: Vec::new(),
         root_path: "/test".to_string(),
         markdown_files: vec![],
         html_files: vec![],
@@ -109,6 +111,7 @@ fn test_collect_videos_small_mp4_is_thumbnail_only() {
     use crate::types::content::{MediaMetadata, ProjectStructure};
 
     let project = ProjectStructure {
+        passthrough_media: Vec::new(),
         root_path: "/test".to_string(),
         markdown_files: vec![],
         html_files: vec![],

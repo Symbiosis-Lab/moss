@@ -555,7 +555,7 @@ fn dispatch_embed_form(
             //
             // Four sources of display params are assembled into the figure:
             //   1. width  ← `embed.width` (canonical WidthToken) → figure `data-width=`
-            //   2. caption + alt ← `classify_image_alias` (structural → none,
+            //   2. caption + alt ← `read_image_words` (structural → none,
             //      caption-text → both, empty → none; never `Some("")`)
             //   3. fit/position ← `build_image_media_attrs` → `to_inline_style()`
             //      → inner `<img>` `style=` (NOT the figure)
@@ -569,14 +569,13 @@ fn dispatch_embed_form(
             // reached for a lone embed (within its container), so the figure
             // shape is always correct here.
             if matches!(ext.as_deref(), Some(e) if IMAGE_EXTENSIONS.iter().any(|x| *x == e)) {
-                let media = build_image_media_attrs(parsed.alias, &pothole, parsed.attrs.as_ref());
                 // The alias reaching here is the placement-stripped remainder,
-                // so what is left is either image display keywords or a caption.
-                let alias_class = crate::media::classify_image_alias(parsed.alias);
-                let alt = alias_class.caption.clone().unwrap_or_default();
-                let caption: Option<Vec<crate::ast::node::Inline>> = alias_class
-                    .caption
-                    .map(|c| vec![crate::ast::node::Inline::Text(c)]);
+                // so what is left is display words and a caption.
+                let words = crate::media::read_image_words(parsed.alias.unwrap_or_default());
+                let media = build_image_media_attrs(&words.display, &pothole, parsed.attrs.as_ref());
+                let alt = words.caption;
+                let caption: Option<Vec<crate::ast::node::Inline>> =
+                    (!alt.is_empty()).then(|| vec![crate::ast::node::Inline::Text(alt.clone())]);
                 // `AlignSide::css_class()` returns the canonical
                 // `moss-align-left` / `moss-align-right` class verbatim —
                 // the same class the figure renderer appends.
@@ -626,6 +625,7 @@ fn dispatch_embed_form(
                         class_names: media.class_names,
                         img_style,
                         italic_caption: false,
+                        link: None,
                     }
                 };
                 return WikilinkEmit {
@@ -788,32 +788,17 @@ fn dispatch_wikilink_form(
 /// future wiring; today the function ignores it. Don't grow the merge
 /// logic here until a caller actually populates `parsed.attrs`.
 fn build_image_media_attrs(
-    alias: Option<&str>,
+    display: &str,
     pothole: &PotholeContent,
     _attrs: Option<&crate::ast::attrs::AttrBlock>,
 ) -> MediaAttrs {
     let mut media = MediaAttrs::default();
 
-    // Source 1: alias form — the placement-stripped remainder, so
-    // `wide cover` arrives here as `cover` and parses cleanly. Only fold
-    // when the whole remainder is display keywords; anything else is caption
-    // text and contributes no display params.
-    if let Some(text) = alias.filter(|t| !t.is_empty()) {
-        if crate::media::is_all_display_keywords(text) {
-            let parsed = parse_media_attrs(text);
-            media.fit = parsed.fit;
-            media.position = parsed.position;
-            // Alignment is `Placement`'s, read off the pipe before this runs.
-            // `parse_media_attrs` doesn't populate `class_names` or
-            // `extra_attrs` today (those come from Pandoc blocks, which
-            // aren't wired). The extends here are forward-looking scaffolding
-            // — harmless no-ops on current `MediaAttrs` shape.
-            media.class_names.extend(parsed.class_names);
-            for (k, v) in parsed.extra_attrs {
-                media.extra_attrs.insert(k, v);
-            }
-        }
-    }
+    // Source 1: the alias's display words, sorted from its caption by
+    // `read_image_words`, so those of `focus:20%,62%|A caption` still apply.
+    let parsed = parse_media_attrs(display);
+    media.fit = parsed.fit;
+    media.position = parsed.position;
 
     // Source 2: Params form (K=V pothole). Recognized keys override; the
     // rest flow through as `extra_attrs`.
@@ -1069,7 +1054,7 @@ fn build_synth_params(
 /// Is `text` words for a player's accessible name? Display keywords
 /// (`cover`, `top left`) describe how an image is fitted, not what a player is.
 fn is_label_text(text: &str) -> bool {
-    !crate::media::is_all_display_keywords(text)
+    !matches!(crate::media::classify_alias_segment(text), crate::media::AliasSegment::Display(_))
 }
 
 // ---------------------------------------------------------------------------

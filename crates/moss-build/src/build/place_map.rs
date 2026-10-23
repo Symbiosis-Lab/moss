@@ -9,12 +9,15 @@ mod globe;
 // decodes the data this file embeds, with no knowledge of a build's
 // documents or gazetteer the way `places_data` has.
 mod labels;
+pub(crate) mod layer_crop;
+pub(crate) mod layer_warp;
 // The places-explorer data emitter (`places.<hash>.json`). `pub(crate)`,
 // not private: `build/pipeline.rs` calls `places_data::emit` directly once
 // per build, the same way it reaches `build::emit::feature_styles::emit`.
 pub(crate) mod places_data;
 mod simplify;
 mod svg;
+pub(crate) mod world_coords;
 
 pub use context::{LocatorPlacement, PlaceMapContext, PlaceMapRenderContext, PlaceMapTarget, ResolvedPlace};
 pub use explorer::{emit_tile_svg, emit_world_svg, relevant_tiles, tile_origin_units};
@@ -31,7 +34,7 @@ pub use svg::{
 // Crate-internal only (unlike the block above): context.rs's locator reuses
 // the same coarsest-precision rule emit_svg applies to the full/aggregate
 // map, rather than a second copy of the Precision -> rank mapping.
-pub(crate) use svg::precision_rank;
+pub(crate) use svg::{emit_svg_over, precision_rank};
 // Crate-internal only: context.rs applies the route privacy gate and its one
 // diagnostic at the two call sites that resolve a route-eligible target
 // (`render_locator`, `render_term_map`) — see `svg::route`'s module doc.
@@ -713,4 +716,11 @@ mod tests {
             DecodeError::InvalidIndex("feature reference")
         );
     }
+}
+
+/// A locator's markup with its float class swapped for `moss-align-end`: the
+/// locator as a block of its own, at the end edge, for the places that give it
+/// a row (after a text-less body, atop the facts column).
+pub fn unfloat_locator(html: &str) -> String {
+    html.replacen("moss-align-right", "moss-align-end", 1)
 }

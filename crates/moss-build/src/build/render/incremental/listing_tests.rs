@@ -11,6 +11,7 @@ use super::*;
 
 fn project() -> ProjectStructure {
     ProjectStructure {
+        passthrough_media: Vec::new(),
         root_path: "/tmp/moss-listing-tests".into(),
         markdown_files: vec![],
         html_files: vec![],
@@ -206,6 +207,18 @@ fn a_child_with_a_frontmatter_description_prunes_on_every_body_edit() {
         before.contents,
         "resolve_page_description short-circuits on frontmatter, so the body is \
          invisible to the card — true of 136 of 223 files on the reference vault"
+    );
+}
+
+#[test]
+fn a_child_embedding_other_pages_leaves_the_digest_unchanged() {
+    let mut embedding = vault();
+    let before = digest(&embedding, &key("writings"));
+    embedding[ALPHA].embedded_listing_urls.insert("writings/beta/index.html".into());
+    assert_eq!(
+        digest(&embedding, &key("writings")).contents,
+        before.contents,
+        "the embedded set is body-derived and the host's note reads it, not the card"
     );
 }
 
@@ -556,7 +569,7 @@ fn an_edit_moves_only_the_term_group_of_its_own_edition() {
         key: "authors".into(),
         fields: vec!["author".into()],
         title: "Authors".into(),
-        titles: Vec::new(), is_place: false,
+        titles: Vec::new(), counts: Vec::new(), is_place: false,
         parents: Default::default(),
         explorer: None,
         line: None,

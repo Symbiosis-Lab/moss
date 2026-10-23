@@ -4,12 +4,13 @@ generator_version = "1.0.0"
 natural_earth_theme = "10m physical and cultural"
 natural_earth_release = "mixed per-layer releases; see each source's published_version and archive_version"
 natural_earth_license = "Public domain; see https://www.naturalearthdata.com/about/terms-of-use/"
-gmt_dataset = "earth_relief_03m_g"
-gmt_manifest_url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_server.txt"
-gmt_manifest_date = "2025-05-01"
-gmt_manifest_sha256 = "65c7c03a59d103c329f3ab8f88bb8fb3719e0a73314747aba971906a1f17bb82"
-gmt_provenance = "https://doi.org/10.1029/2019EA000658"
-gmt_license = "not specified in the pinned GMT server manifest"
+elevation_dataset = "earth_gebco_03m_g"
+elevation_manifest_url = "https://oceania.generic-mapping-tools.org/server/earth/earth_gebco/earth_gebco_server.txt"
+elevation_manifest_date = "2025-08-11"
+elevation_manifest_sha256 = "bfb53e3659dff5cb7b5000bd1e1e648de0d3f76a00601a6796f3ac90f214c7c3"
+elevation_scale_metres = 1
+elevation_provenance = "GEBCO Compilation Group (2025) GEBCO 2025 Grid (doi:10.5285/37c52e96-24ea-67ce-e063-7086abc05f29)"
+elevation_license = "The GEBCO Grid is placed in the public domain and may be used free of charge (https://www.gebco.net/data-products/gridded-bathymetry/terms-of-use). Conditions: acknowledge the source; do not suggest official status or endorsement by GEBCO, the IHO or the IOC; do not misrepresent the grid or its source. Not for navigation or any purpose involving safety at sea; provided as is."
 simplification = "In geographic degrees: by area (Visvalingam-Whyatt) for relief, sea-floor and river lines, Douglas-Peucker for the rest; layer tolerances are pinned by the generator."
 projection = "longitude/latitude in WGS84; Rust owns screen projection"
 quantization = 1000
@@ -153,80 +154,81 @@ published_version = "5.0.0"
 members = ["ne_10m_geography_regions_elevation_points.shp", "ne_10m_geography_regions_elevation_points.dbf", "ne_10m_geography_regions_elevation_points.shx", "ne_10m_geography_regions_elevation_points.prj", "ne_10m_geography_regions_elevation_points.cpg"]
 layer = "labels"
 
-# earth_relief_03m_g ships as eight 90x90-degree gridline-registered tiles
+# earth_gebco_03m_g ships as eight 90x90-degree gridline-registered tiles
 # (lossless, signed 16-bit JPEG2000) rather than one file; the fine tier
 # contours this dataset at native resolution. Tile naming gives the
 # southwest corner: N00 spans lat 0..90, S90 spans lat -90..0;
 # E000/E090/W090/W180 each span 90 degrees of longitude starting at that
-# corner.
+# corner. Stored values are whole metres (elevation_scale_metres).
+
 [[sources]]
-name = "earth_relief_03m_g_n00e000"
-artifact = "N00E000.earth_relief_03m_g.jp2"
-url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00E000.earth_relief_03m_g.jp2"
-sha256 = "a7c0459ad149fd93984ebcfda16be889fd2dd52dd70b08d4472bbb9720c57b72"
-size_bytes = 2569883
-member = "N00E000.earth_relief_03m_g.jp2"
+name = "earth_gebco_03m_g_n00e000"
+artifact = "N00E000.earth_gebco_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_gebco/earth_gebco_03m_g/N00E000.earth_gebco_03m_g.jp2"
+sha256 = "b77c35790eb9299c460dbd06e473f2dd7bc2d2d42e077b24bf5e5b764fb99e2e"
+size_bytes = 2160670
+member = "N00E000.earth_gebco_03m_g.jp2"
 layer = "relief"
 
 [[sources]]
-name = "earth_relief_03m_g_n00e090"
-artifact = "N00E090.earth_relief_03m_g.jp2"
-url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00E090.earth_relief_03m_g.jp2"
-sha256 = "be0b684aa6fa326710c5328214d34d2c37531e1cc8f8359ccb5000f4d4ff535b"
-size_bytes = 3015041
-member = "N00E090.earth_relief_03m_g.jp2"
+name = "earth_gebco_03m_g_n00e090"
+artifact = "N00E090.earth_gebco_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_gebco/earth_gebco_03m_g/N00E090.earth_gebco_03m_g.jp2"
+sha256 = "7ab5bacc03c0408acdebf8a9528bcf8588f6a6a7fee7f71ee1e8ca5c4ab5075a"
+size_bytes = 2584543
+member = "N00E090.earth_gebco_03m_g.jp2"
 layer = "relief"
 
 [[sources]]
-name = "earth_relief_03m_g_n00w090"
-artifact = "N00W090.earth_relief_03m_g.jp2"
-url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00W090.earth_relief_03m_g.jp2"
-sha256 = "49638a4d87a268f97a7235c5c5936fe5ab8457664ee28b0fa9cc38037ed3e6d9"
-size_bytes = 2936302
-member = "N00W090.earth_relief_03m_g.jp2"
+name = "earth_gebco_03m_g_n00w090"
+artifact = "N00W090.earth_gebco_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_gebco/earth_gebco_03m_g/N00W090.earth_gebco_03m_g.jp2"
+sha256 = "0b72060cb83d7781cd58385f066b671a8a1f0092af720e8e07c893830c85b2ae"
+size_bytes = 2485928
+member = "N00W090.earth_gebco_03m_g.jp2"
 layer = "relief"
 
 [[sources]]
-name = "earth_relief_03m_g_n00w180"
-artifact = "N00W180.earth_relief_03m_g.jp2"
-url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/N00W180.earth_relief_03m_g.jp2"
-sha256 = "3c410a2e5e97cafb839402b9dd087caa567ea53f1a8aa6a8cf8432e08d459619"
-size_bytes = 2991787
-member = "N00W180.earth_relief_03m_g.jp2"
+name = "earth_gebco_03m_g_n00w180"
+artifact = "N00W180.earth_gebco_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_gebco/earth_gebco_03m_g/N00W180.earth_gebco_03m_g.jp2"
+sha256 = "0db21673603b9edf499cb7e0db8acc2aeda2e00a775580138f585cde7cdc6e7c"
+size_bytes = 2544538
+member = "N00W180.earth_gebco_03m_g.jp2"
 layer = "relief"
 
 [[sources]]
-name = "earth_relief_03m_g_s90e000"
-artifact = "S90E000.earth_relief_03m_g.jp2"
-url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/S90E000.earth_relief_03m_g.jp2"
-sha256 = "6525887ffbfcc6b2dabc64c6da42c6389540b756d38b214ba8133af1520999bd"
-size_bytes = 2793835
-member = "S90E000.earth_relief_03m_g.jp2"
+name = "earth_gebco_03m_g_s90e000"
+artifact = "S90E000.earth_gebco_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_gebco/earth_gebco_03m_g/S90E000.earth_gebco_03m_g.jp2"
+sha256 = "fb034801606de4b9a6768b41c203daefa30247667da70289e14bd024802afadd"
+size_bytes = 2395913
+member = "S90E000.earth_gebco_03m_g.jp2"
 layer = "relief"
 
 [[sources]]
-name = "earth_relief_03m_g_s90e090"
-artifact = "S90E090.earth_relief_03m_g.jp2"
-url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/S90E090.earth_relief_03m_g.jp2"
-sha256 = "d6bf56a882983d011404fc76df1d80a126a80659e7e172f5903d438820f51f69"
-size_bytes = 2787129
-member = "S90E090.earth_relief_03m_g.jp2"
+name = "earth_gebco_03m_g_s90e090"
+artifact = "S90E090.earth_gebco_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_gebco/earth_gebco_03m_g/S90E090.earth_gebco_03m_g.jp2"
+sha256 = "c1a143e0629f07d53f2567d94a79e30a6ea1ec62d856acdccc2e6ccd117e1fbe"
+size_bytes = 2355702
+member = "S90E090.earth_gebco_03m_g.jp2"
 layer = "relief"
 
 [[sources]]
-name = "earth_relief_03m_g_s90w090"
-artifact = "S90W090.earth_relief_03m_g.jp2"
-url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/S90W090.earth_relief_03m_g.jp2"
-sha256 = "d3c2c1dcc4c6fc72eaef033331925a6807289fcf6e8811b37beb6601aabf31c9"
-size_bytes = 2885704
-member = "S90W090.earth_relief_03m_g.jp2"
+name = "earth_gebco_03m_g_s90w090"
+artifact = "S90W090.earth_gebco_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_gebco/earth_gebco_03m_g/S90W090.earth_gebco_03m_g.jp2"
+sha256 = "998a86bdba9add95ec7f56babb84645ec776ff05d539d5010068df8ae761a605"
+size_bytes = 2426119
+member = "S90W090.earth_gebco_03m_g.jp2"
 layer = "relief"
 
 [[sources]]
-name = "earth_relief_03m_g_s90w180"
-artifact = "S90W180.earth_relief_03m_g.jp2"
-url = "https://oceania.generic-mapping-tools.org/server/earth/earth_relief/earth_relief_03m_g/S90W180.earth_relief_03m_g.jp2"
-sha256 = "fa0651ea262690fe50d332a3448e28dd0084a2e13926df220e61c58cc025f991"
-size_bytes = 3109991
-member = "S90W180.earth_relief_03m_g.jp2"
+name = "earth_gebco_03m_g_s90w180"
+artifact = "S90W180.earth_gebco_03m_g.jp2"
+url = "https://oceania.generic-mapping-tools.org/server/earth/earth_gebco/earth_gebco_03m_g/S90W180.earth_gebco_03m_g.jp2"
+sha256 = "44cee073d7d0da7b7746e6a5dd79614e5a5e848d1c975aab443bd4c9e66eae69"
+size_bytes = 2666432
+member = "S90W180.earth_gebco_03m_g.jp2"
 layer = "relief"

@@ -269,7 +269,7 @@ fn splice_body_locator(
     layout: &LayoutConfig,
     placement: LocatorPlacement,
 ) {
-    if placement == LocatorPlacement::Masthead {
+    if matches!(placement, LocatorPlacement::Masthead | LocatorPlacement::Facts) {
         return;
     }
     if let Some(locator) = credits::render_place_locator(doc, layout) {
@@ -365,7 +365,7 @@ fn generate_html_inner<'d>(
     let context = RenderCtx {
         chrome: PageChromeContext {
             documents: all_docs, project, layout: layout_config, site_lang,
-            assets: ChromeAssets { paths: path_resolver, scripts: &shared.scripts, has_user_css, has_user_js, head_alternates },
+            assets: ChromeAssets { paths: path_resolver, scripts: &shared.scripts, has_user_css, has_user_js, page_owned: &Default::default(), head_alternates, theme_modules: &shared.theme_modules },
             show_rss_in_footer, emit_source_lines, has_sidebar_layout,
             home_breadcrumb: crate::build::components::nav::home_breadcrumb_setting(all_docs),
             media_lookup: &shared.media_lookup,
@@ -402,7 +402,8 @@ pub(super) fn render_page<'d>(
     let site_url = context.site_url;
     let output_dir = context.output_dir;
     let source_root = context.source_root;
-    let BuildShared { media_lookup, sequences, .. } = context.shared;
+    let BuildShared { media_lookup, sequences, now, .. } = context.shared;
+    let now = *now;
     let path_resolver = &context.chrome.assets.paths;
     let ui_lang = doc.map(|d| d.lang).unwrap_or(site_lang);
     let page_lang_tag = doc.and_then(|d| d.lang_tag.clone()).unwrap_or_else(|| layout_config.lang_tag.clone());
@@ -424,16 +425,6 @@ pub(super) fn render_page<'d>(
     // Determine template type based on layout and content folders
     let shell_type = ShellRegistry::select_shell_type(doc, is_homepage, project.has_content_folders);
     let is_article_page = shell_type == ShellType::Article;
-    // Vertical pages put the locator after the opening text, every kind of
-    // page alike; horizontal articles float it before the text; the rest keep
-    // it in the masthead.
-    let locator_placement = if vertical_typesetting {
-        LocatorPlacement::AfterText
-    } else if is_article_page {
-        LocatorPlacement::BeforeText
-    } else {
-        LocatorPlacement::Masthead
-    };
 
     // The declared fields the page draws: the eyebrow goes into the body above
     // the title, the rest into the masthead that follows it.
@@ -441,6 +432,25 @@ pub(super) fn render_page<'d>(
         crate::build::components::field_places::draw_for_page(d, all_docs, content_graph, resolved_typesetting)
     });
     let eyebrow = std::mem::take(&mut fields.eyebrow);
+
+    // Where the place-map locator goes, decided once for every page. Vertical
+    // pages put it after the opening text, every kind of page alike; a page
+    // with a facts column has it head that column; horizontal articles float
+    // it before the text; the rest keep it in the masthead.
+    let locator_placement = if vertical_typesetting {
+        LocatorPlacement::AfterText
+    } else if !fields.facts.is_empty() {
+        LocatorPlacement::Facts
+    } else if is_article_page {
+        LocatorPlacement::BeforeText
+    } else {
+        LocatorPlacement::Masthead
+    };
+    if locator_placement == LocatorPlacement::Facts {
+        if let Some(locator) = doc.and_then(|d| credits::render_place_locator(d, layout_config)) {
+            fields.head_facts_with(&locator);
+        }
+    }
 
     // True when the page should advertise a social share card + be indexed: a
     // real public page (not draft/slot_only). `listed: false` pages are still
@@ -482,6 +492,7 @@ pub(super) fn render_page<'d>(
                 &project.root_path,
                 media_lookup,
                 resolved_typesetting,
+                now,
             );
             splice_body_locator(&mut body_plan, doc, layout_config, locator_placement);
             let mut content = body_plan.to_html();
@@ -492,11 +503,14 @@ pub(super) fn render_page<'d>(
             if !is_article_page {
                 content = credits::splice_page_masthead(content, doc, layout_config, emit_source_lines, locator_placement, &fields);
 
-                // The home injects no visible title of its own, but a page
-                // needs one top-level heading: when the body supplies none,
-                // add the folder-index heading, visually hidden.
-                if moss_core::heading::title_outcome(&doc.content, true) != moss_core::heading::TitleOutcome::None {
-                    let h1 = crate::build::components::folder_title::render(&doc.label, emit_source_lines, true);
+                // One top-level heading is required: the header names the
+                // site, so the heading is visually hidden; with no header it
+                // is shown, unless an opening hero stands in for it.
+                use moss_core::heading::{title_outcome, TitleOutcome};
+                let outcome = title_outcome(&doc.content, true);
+                if outcome != TitleOutcome::None {
+                    let headerless = layout_config.header == crate::build::components::nav::HeaderMode::None;
+                    let h1 = crate::build::components::folder_title::render(&doc.label, emit_source_lines, !(headerless && outcome == TitleOutcome::Visible));
                     content = format!("{h1}\n{content}");
                 }
             }
@@ -535,7 +549,8 @@ pub(super) fn render_page<'d>(
                     &target_folder_path,
                     &from_md_path,
                 );
-                let resolved_html = crate::build::folder_embed::resolve_markers(
+                let listed = crate::build::folder_embed::ListedUrls::default();
+                let resolved_html = crate::build::folder_embed::resolve_markers_with_place_maps(
                     &marker,
                     &from_md_path,
                     all_docs,
@@ -545,7 +560,11 @@ pub(super) fn render_page<'d>(
                     resolved_typesetting,
                     Some(media_lookup),
                     layout_config.assets.math,
+                    None,
+                    Some(&listed),
+                    now,
                 );
+                crate::build::folder_embed::note_repeated_child_listing(doc, &listed);
                 content.push_str(&crate::build::emit::listing_style::wrap(
                     doc,
                     annotate_children_listing(resolved_html, emit_source_lines),
@@ -571,6 +590,7 @@ pub(super) fn render_page<'d>(
                 &project.root_path,
                 media_lookup,
                 resolved_typesetting,
+                now,
             );
             // Done before any cover-wrap below reads `body`, so a claimed
             // leaf's `split_at_lede` sees the locator as part of the body
@@ -581,7 +601,7 @@ pub(super) fn render_page<'d>(
                 body.prepend_html(eyebrow);
             }
             let mut content = body.to_html();
-            if crate::build::components::field_places::title_block_after_picture(doc) {
+            if crate::build::components::field_places::title_block_follows_picture(doc) {
                 crate::build::components::field_places::mark_body_start(&mut content);
             }
 
@@ -678,7 +698,10 @@ pub(super) fn render_page<'d>(
                 // below emits both. Same boolean as that gate, so "exactly one
                 // fires" reads off one variable. See render/credits.rs.
                 let folder_byline = (!is_article_page)
-                    .then(|| credits::render_page_masthead(doc, layout_config, emit_source_lines, locator_placement))
+                    .then(|| {
+                        let masthead = credits::render_page_masthead(doc, layout_config, emit_source_lines, locator_placement);
+                        format!("{}{masthead}", fields.subtitle)
+                    })
                     .unwrap_or_default();
                 if resolved_cover.is_some() && !is_article_layout && !is_explorer_root {
                     // Cover branch: folder_cover renders the cover-row with the
@@ -890,7 +913,8 @@ pub(super) fn render_page<'d>(
                         &folder_path,
                         &from_md_path,
                     );
-                    let resolved_html = crate::build::folder_embed::resolve_markers(
+                    let listed = crate::build::folder_embed::ListedUrls::default();
+                    let resolved_html = crate::build::folder_embed::resolve_markers_with_place_maps(
                         &marker,
                         &from_md_path,
                         all_docs,
@@ -900,7 +924,11 @@ pub(super) fn render_page<'d>(
                         resolved_typesetting,
                         Some(media_lookup),
                         layout_config.assets.math,
+                        None,
+                        Some(&listed),
+                        now,
                     );
+                    crate::build::folder_embed::note_repeated_child_listing(doc, &listed);
                     content.push_str(&crate::build::emit::listing_style::wrap(
                         doc,
                         annotate_children_listing(resolved_html, emit_source_lines),
@@ -1135,6 +1163,7 @@ pub(super) fn render_page<'d>(
                     let (date_display, date_raw, _explicit) = components::extract_date_from_doc(d, &project.root_path);
                     components::ArticleListItemProps {
                         credits: None,
+                        subtitle: None,
                         date_display,
                         date_raw,
                         url: crate::build::scan::article_map::to_pretty_url(&d.url_path),
@@ -1143,6 +1172,7 @@ pub(super) fn render_page<'d>(
                         url_path: d.url_path.clone(),
                         place: d.place_names.clone(),
                         when_html: None,
+                        when: None,
                         source_file: d.source_path.clone(),
                     }
                 })
@@ -1257,7 +1287,7 @@ pub(super) fn render_page<'d>(
     let event_calendar_href = doc.and_then(|d| context.shared.calendar.event_href(d));
     let event_meta_html = doc
         .filter(|_| is_article_page)
-        .and_then(|d| components::event_meta::render(d, d.lang, emit_source_lines, event_calendar_href.as_deref()));
+        .and_then(|d| components::event_meta::render(d, d.lang, emit_source_lines, event_calendar_href.as_deref(), components::event_meta::UpcomingLabel::Hidden, now));
     let calendar_at_body_end = if event_meta_html.is_some() { None } else { event_calendar_href };
     let article_date_line_html: Option<String> = if is_article_page
         && doc.is_some()
@@ -1265,20 +1295,26 @@ pub(super) fn render_page<'d>(
     {
         let d = doc.unwrap();
         let doc_lang = d.lang;
+        // The size control's "Aa" would hang off the end of the event facts.
+        let has_size_control = event_meta_html.is_none() && d.reader_controls != Some(false);
         let when_html = event_meta_html.unwrap_or_else(|| {
             let formatted = components::format_display_date(d.date.as_ref().unwrap(), doc_lang, resolved_typesetting);
             let date_fm_attr = if emit_source_lines { r#" data-source-fm="date""# } else { "" };
             format!(r#"<span class="date"{}>{}</span>"#, date_fm_attr, formatted)
         });
-        Some(format!(
-            r#"<div class="date-line">{}<div class="font-anchor"><button class="font-trigger size-std" aria-label="{}" aria-expanded="false" type="button"></button><div class="font-pill" id="fontPill"><button data-scale="small" aria-label="{}"></button><button data-scale="" class="active" aria-label="{}"></button><button data-scale="large" aria-label="{}"></button><button data-scale="xlarge" aria-label="{}"></button></div></div></div>"#,
-            when_html,
-            crate::i18n::t(doc_lang, "reading_preferences"),
-            crate::i18n::t(doc_lang, "text_small"),
-            crate::i18n::t(doc_lang, "text_standard"),
-            crate::i18n::t(doc_lang, "text_large"),
-            crate::i18n::t(doc_lang, "text_xlarge"),
-        ))
+        let size_control_html = if has_size_control {
+            format!(
+                r#"<div class="font-anchor"><button class="font-trigger size-std" aria-label="{}" aria-expanded="false" type="button"></button><div class="font-pill" id="fontPill"><button data-scale="small" aria-label="{}"></button><button data-scale="" class="active" aria-label="{}"></button><button data-scale="large" aria-label="{}"></button><button data-scale="xlarge" aria-label="{}"></button></div></div>"#,
+                crate::i18n::t(doc_lang, "reading_preferences"),
+                crate::i18n::t(doc_lang, "text_small"),
+                crate::i18n::t(doc_lang, "text_standard"),
+                crate::i18n::t(doc_lang, "text_large"),
+                crate::i18n::t(doc_lang, "text_xlarge"),
+            )
+        } else {
+            String::new()
+        };
+        Some(format!(r#"<div class="date-line">{when_html}{size_control_html}</div>"#))
     } else {
         None
     };
@@ -1336,8 +1372,13 @@ pub(super) fn render_page<'d>(
             crate::build::markdown::html_post::prepend_parent_label(&mut homepage_content, &parent);
         }
     }
+    if let Some(d) = doc {
+        crate::build::components::field_places::warn_title_block_unplaced(d, &homepage_content);
+    }
     if doc.is_some_and(crate::build::components::field_places::title_block_after_picture) {
         homepage_content = crate::build::components::field_places::after_leading_picture(&homepage_content);
+    } else if doc.is_some_and(crate::build::components::field_places::title_block_beside_picture) {
+        homepage_content = crate::build::components::field_places::beside_leading_picture(&homepage_content);
     }
     // Calendar links that close the body: a folder's download and subscribe
     // links, and an event's "Add to calendar" when no meta line carries it.
@@ -1595,7 +1636,12 @@ pub(super) fn render_page<'d>(
         ..chrome
     };
 
-    Ok(processor.process(shell_type, vars))
+    let page = processor.process(shell_type, vars);
+    if page.contains(moss_core::resolve::embed_renderer::folder_list::MARKER_FOLDER_LIST) {
+        let name = doc.map_or("a generated page", |d| d.source_path.as_deref().unwrap_or(&d.url_path));
+        crate::build::cli_output::log_warn_problem!("[{name}] a folder listing was left unexpanded in the built page");
+    }
+    Ok(page)
 }
 
 /// Is this page a **step in the reading order** — one of the pages the series

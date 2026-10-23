@@ -25,6 +25,7 @@ pub mod advisory;
 pub mod config;
 pub mod moss_paths;
 pub mod nested_roots;
+pub mod templates;
 pub mod vault_root;
 
 // ── The M6a move (2026-08-28): the compiler itself ──────────────────────────

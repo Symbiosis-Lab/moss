@@ -122,12 +122,15 @@ where
         Block::Shortcode(sc) => {
             visit_urls_in_shortcode(sc, v);
         }
-        Block::Figure { image, caption, .. } => {
+        Block::Figure { image, caption, link, .. } => {
             // Descend into the image's src (the load-bearing URL); the
             // caption is a Vec<Inline> that may itself carry links —
             // unlikely in practice (captions default to alt text) but the
             // visitor must not silently skip them.
             visit_urls_in_inline(image, v);
+            if let Some(url) = link {
+                v.url(url);
+            }
             if let Some(cap_inlines) = caption {
                 for inline in cap_inlines {
                     visit_urls_in_inline(inline, v);
@@ -172,6 +175,9 @@ where
         Shortcode::Hero(args) => {
             if let Some(image) = args.image.as_mut() {
                 v.url(image);
+            }
+            if let Some(dark) = args.dark.as_mut() {
+                v.url(dark);
             }
             for image in &mut args.extra_images {
                 v.url(image);
@@ -606,6 +612,8 @@ mod tests {
                 has_pothole: false,
             }],
             id: None,
+            contents_end: false,
+            contents_label: None,
         }]);
         let mut count = 0;
         visit_urls_mut(&mut doc, |_| count += 1);
@@ -715,6 +723,7 @@ mod tests {
     #[test]
     fn detects_a_callout_anywhere_it_can_appear() {
         let callout = || Block::Callout {
+            unknown_kind: None,
             kind: super::super::node::CalloutKind::Note,
             fold: None,
             title: None,
@@ -811,6 +820,7 @@ mod tests {
     #[test]
     fn visits_urls_inside_callout() {
         let mut doc = Document::from_blocks(vec![Block::Callout {
+            unknown_kind: None,
             kind: super::super::node::CalloutKind::Note,
             fold: None,
             title: None,
@@ -921,6 +931,7 @@ mod tests {
             class_names: Vec::new(),
             img_style: None,
             italic_caption: false,
+            link: None,
         }]);
         let mut seen: Vec<String> = Vec::new();
         visit_urls_mut(&mut doc, |u| match u {
@@ -949,6 +960,7 @@ mod tests {
             class_names: Vec::new(),
             img_style: None,
             italic_caption: false,
+            link: None,
         }]);
         visit_urls_mut(&mut doc, |u| {
             *u = Url::resolved("p.jpg", UrlKind::Asset);
@@ -987,6 +999,7 @@ mod tests {
             class_names: Vec::new(),
             img_style: None,
             italic_caption: false,
+            link: None,
         }]);
         let mut seen: Vec<String> = Vec::new();
         visit_urls_mut(&mut doc, |u| match u {
@@ -1006,6 +1019,7 @@ mod tests {
                 item_source_lines: vec![],
             },
             Block::Callout {
+                unknown_kind: None,
                 kind: CalloutKind::Note,
                 fold: None,
                 title: None,
@@ -1025,6 +1039,7 @@ mod tests {
                 class_names: Vec::new(),
                 img_style: None,
                 italic_caption: false,
+                link: None,
             },
             Block::Paragraph(vec![
                 Inline::Link {

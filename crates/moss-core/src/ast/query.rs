@@ -97,11 +97,38 @@ pub fn marked_media_at(blocks: &[Block], i: usize) -> Option<MarkedMedia> {
     Some(MarkedMedia { marker, href, title: caption.unwrap_or_else(|| alt.clone()) })
 }
 
+/// Each pipe segment of an image, in either form, that is a mistyped display
+/// word, as [`crate::media::display_word_warning`] words it. The text stays the caption.
+pub fn image_word_warnings(doc: &Document) -> Vec<String> {
+    fn check(inlines: &[Inline], out: &mut Vec<String>) {
+        for inline in inlines {
+            match inline {
+                // A standard image's words count only after its first pipe.
+                Inline::Image { alt, is_wikilink, .. } => out.extend(
+                    alt.split('|').skip(usize::from(!is_wikilink)).filter_map(crate::media::display_word_warning),
+                ),
+                Inline::Link { children, .. } => check(children, out),
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    super::visit::visit_blocks(doc, |block| {
+        match block {
+            Block::Paragraph(inlines) => check(inlines, &mut out),
+            Block::Figure { image, .. } => check(std::slice::from_ref(image), &mut out),
+            _ => {}
+        }
+        true
+    });
+    out
+}
+
 /// Hrefs of the images in the document that a screen reader gets no text for:
 /// an empty alt and, for a figure, no caption to stand in for it. Only image
 /// files count; a video, audio or PDF written in the image form takes its
 /// label from elsewhere. Descends into grid cells, callouts, lists and table
-/// cells.
+/// cells. A picture inside a link that has its own text is named by that text.
 pub fn images_without_text(doc: &Document) -> Vec<String> {
     fn is_image_file(href: &str) -> bool {
         crate::resolve::ext_kind::reference_kind_for_ext(&crate::path_ext::path_extension_lower(href))
@@ -123,7 +150,9 @@ pub fn images_without_text(doc: &Document) -> Vec<String> {
             match i {
                 Inline::Image { .. } => bare(i, out),
                 Inline::Emphasis(c) | Inline::Strong(c) | Inline::Strikethrough(c) => walk(c, out),
-                Inline::Link { children, .. } => walk(children, out),
+                Inline::Link { children, .. } if super::inlines_to_plain_text(children).trim().is_empty() => {
+                    walk(children, out)
+                }
                 _ => {}
             }
         }
@@ -408,6 +437,7 @@ mod tests {
             class_names: Vec::new(),
             img_style: None,
             italic_caption: false,
+            link: None,
         }
     }
 
@@ -528,6 +558,8 @@ mod tests {
                 level: 2,
                 children: vec![Inline::Text("Title".into())],
                 id: None,
+                contents_end: false,
+                contents_label: None,
             },
         ]);
         assert!(find_first_block_image(&doc).is_none());
@@ -566,6 +598,8 @@ mod tests {
             level: 2,
             children: vec![img("badge.png"), Inline::Text("Title".into())],
             id: None,
+            contents_end: false,
+            contents_label: None,
         }]);
         assert_eq!(find_first_block_image(&heading), None);
         let table = super::super::parse("| a |\n|---|\n| ![](cell.png) |\n");
@@ -646,6 +680,7 @@ mod tests {
             cells: vec![cell],
             width: None,
             scroll: false,
+            collage: false,
             label: None,
         }))]);
         match find_first_block_image(&doc) {
@@ -693,10 +728,15 @@ mod tests {
             overlay_text: String::new(),
             width: None,
             mobile: None,
+            panel: None,
+            fade: None,
+            max_height: None,
             align: None,
             caption: Vec::new(),
             slide_captions: Vec::new(),
             header: None,
+            from: None,
+            dark: None,
         }))]);
         match find_first_block_image(&doc) {
             Some(src) => {

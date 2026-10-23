@@ -15,7 +15,7 @@ const routes = [...landingRoutes, ...contract.required];
 // the condition the generator's own static substitution has to satisfy
 // on its own, now that landing-i18n.js's apply() no longer re-patches
 // anything at runtime (phase 3).
-const { en, hans, hant } = createRequire(import.meta.url)('../site/landing-i18n.js');
+const { en, hans, hant } = createRequire(import.meta.url)('../site/home/landing-i18n.js');
 const catalogByRoute = { '/': en, '/zh-hans/': hans, '/zh-hant/': hant };
 const escapeHtml = (value) => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 // The same "must be statically present" list generate-landing-locales.mjs

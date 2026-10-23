@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Refuses to pass when site/vendor/moss-watercolor/moss-watercolor.js --
+// Refuses to pass when site/home/vendor/moss-watercolor/moss-watercolor.js --
 // the landing's own checked-in copy of packages/moss-watercolor, loaded by
 // site/index.html as a classic script -- no longer matches a fresh build of
 // that package. The landing has no bundler of its own, so this file is a
@@ -11,7 +11,7 @@
 // `pnpm run build`.
 import { spawnSync } from 'node:child_process';
 
-const TRIGGERS = ['packages/moss-watercolor/src/', 'scripts/build-site-watercolor.mjs', 'site/vendor/moss-watercolor/'];
+const TRIGGERS = ['packages/moss-watercolor/src/', 'scripts/build-site-watercolor.mjs', 'site/home/vendor/moss-watercolor/'];
 
 function run(cmd, args) {
   return spawnSync(cmd, args, { encoding: 'utf8' });
@@ -32,10 +32,10 @@ function main() {
     console.error('check-site-watercolor-freshness: build failed:\n' + (build.stderr || build.stdout));
     process.exit(1);
   }
-  const diff = run('git', ['diff', '--exit-code', '--', 'site/vendor/moss-watercolor']);
+  const diff = run('git', ['diff', '--exit-code', '--', 'site/home/vendor/moss-watercolor']);
   if (diff.status !== 0) {
     console.error(
-      'site/vendor/moss-watercolor/moss-watercolor.js is stale — run `node scripts/build-site-watercolor.mjs`, then `git add site/vendor/moss-watercolor` and commit again.'
+      'site/home/vendor/moss-watercolor/moss-watercolor.js is stale — run `node scripts/build-site-watercolor.mjs`, then `git add site/home/vendor/moss-watercolor` and commit again.'
     );
     process.exit(1);
   }

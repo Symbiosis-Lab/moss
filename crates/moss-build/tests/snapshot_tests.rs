@@ -661,6 +661,21 @@ fn snapshot_places_site() {
     run_snapshot_test("places-site");
 }
 
+/// `[map.layers.<name>]`: `layers.json`, the explorer's `data-layers`
+/// attribute and the empty credit line on every map figure. Sites without
+/// layers are covered byte for byte by every other fixture.
+#[test]
+fn snapshot_map_layers_site() {
+    run_snapshot_test("map-layers-site");
+}
+
+/// A historical layer drawn from a real cropped plate: tiles, the tile index
+/// with the plate's footprint, the derived credit and the notice section.
+#[test]
+fn snapshot_map_layers_plate_site() {
+    run_snapshot_test("map-layers-plate-site");
+}
+
 /// `route: true` over four stops, two of them (Harbor / Harbor Overlook)
 /// resolved to the identical coordinate so the badge-offset rule actually
 /// fires, plus one region-precision stop (Inland Reach) for the hollow
@@ -2391,11 +2406,12 @@ fn test_images_not_promoted_when_md_children_exist() {
 }
 
 /// The `<div class="date-line">…</div>` row of a built page, up to the
-/// reading-size control that always ends it.
+/// reading-size control that ends a dated article's row (an event's row has none).
 fn date_line(html: &str) -> &str {
     let start = html.find(r#"<div class="date-line">"#).expect("page has a meta line");
     let rest = &html[start..];
-    &rest[..rest.find(r#"<div class="font-anchor""#).expect("meta line has the size control")]
+    let end = rest.find(r#"<div class="font-anchor""#).or_else(|| rest.find("</div>")).expect("meta line ends");
+    &rest[..end]
 }
 
 /// The text a reader sees in `html`, with the tags dropped.
@@ -2443,6 +2459,19 @@ fn event_page_shows_event_facts_in_the_meta_line() {
     assert!(date_line(&review).contains("September 15, 2026"));
 }
 
+/// The reading-size control sits on a dated article, not on an event page,
+/// where its "Aa" would hang off the end of the event facts.
+#[test]
+fn event_page_has_no_reading_size_control() {
+    let (_cleanup, output) = build_fixture("event-meta-site");
+    let page = |p: &str| fs::read_to_string(output.join(p).join("index.html")).unwrap();
+    for event in ["events/concert", "events/cancelled", "events/festival"] {
+        let html = page(event);
+        assert!(!html.contains("font-anchor") && !html.contains("fontPill"), "{event} draws the size control");
+    }
+    assert!(page("events/review").contains(r#"class="font-anchor""#), "a dated article keeps it");
+}
+
 /// Titles of the listing items in `html`, in document order.
 fn listing_titles(html: &str) -> Vec<String> {
     let re = regex::Regex::new(r#"moss-prefix-link-title">(?:<a [^>]*>)?([^<]*)<"#).unwrap();
@@ -2466,7 +2495,7 @@ fn upcoming_group_orders_events_by_when_and_marks_the_time() {
         assert!(html.contains(r#"<section class="moss-cards-group" data-group="upcoming">"#), "{page}");
         assert!(html.contains(r#"<section class="moss-cards-group" data-group="earlier">"#), "{page}");
         assert!(
-            html.contains(r#"<time class="moss-when" datetime="2099-03-01T19:30"><span class="moss-when-weekday">Sunday</span>, <span class="moss-when-month">March</span> <span class="moss-when-day">1</span>, <span class="moss-when-year">2099</span><span class="moss-when-sep">, </span><span class="moss-when-time">7:30–10:00 PM</span></time><span class="moss-event-sep"> · </span><span class="moss-event-place">Grand Hall</span>"#),
+            html.contains(r#"<time class="moss-when" datetime="2099-03-01T19:30"><span class="moss-when-weekday">Sunday</span>, <span class="moss-when-month">March</span> <span class="moss-when-day">1</span>, <span class="moss-when-year">2099</span><span class="moss-when-sep">, </span><span class="moss-when-time">7:30–10:00 PM</span></time><span class="moss-event-sep"> · </span><span class="moss-event-upcoming">Upcoming</span><span class="moss-event-sep"> · </span><span class="moss-event-place">Grand Hall</span>"#),
             "{page}"
         );
     }

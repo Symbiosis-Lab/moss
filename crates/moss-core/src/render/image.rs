@@ -226,10 +226,15 @@ pub struct ImageRenderOptions<'a> {
     /// favicons (`link-preview-favicon`) and similar UI affordances.
     pub class: Option<&'a str>,
     /// Raw extra HTML attribute fragment appended after the standard
-    /// attribute block (e.g., `style="object-fit:cover;object-position:50% 50%"`
-    /// for `:::hero` covers carrying `MediaAttrs`). The caller is responsible
-    /// for HTML-escaping values inside this fragment.
+    /// attribute block (a `title`, a `data-*` annotation), never a `style`:
+    /// that is [`Self::display`]'s. The caller HTML-escapes the values.
     pub extra_attrs: Option<&'a str>,
+    /// How the picture fills its frame: the `object-*` declarations of an
+    /// author's display words ([`crate::media::MediaAttrs::to_inline_style`]),
+    /// unescaped. They share the one `style` attribute with the placeholder.
+    pub style: Option<&'a str>,
+    /// The fit those words set, published as `data-fit` for a stylesheet to key on.
+    pub fit: Option<crate::media::Fit>,
     /// Inputs to the `sizes=` table (`sizes_for`) for a body image: the
     /// enclosing grid cell's scope ([`crate::contract::sizes::sizes_for_grid_cell`]),
     /// the figure's raw `data-width` token (for `MarkdownInline`; a
@@ -357,9 +362,10 @@ pub fn synthesize_image_html(
             .map(|s| format!(" {}", s))
             .unwrap_or_default();
         return format!(
-            r#"<img src="{}" alt="{}"{} />"#,
+            r#"<img src="{}" alt="{}"{}{} />"#,
             html_escape(src),
             html_escape(alt),
+            display_attrs(None, options),
             extra,
         );
     }
@@ -960,40 +966,21 @@ pub(crate) fn render_img_tag(
         (r#" loading="lazy""#, "")
     };
 
-    // Suppress LQIP / dominant-color style when extra_attrs already carries
-    // a style= attribute (e.g., `:::hero {attrs="cover-fit=contain"}` passes
-    // `style="object-fit:contain"` through extra_attrs). The browser would
-    // honor the LAST style= it sees and drop the LQIP, so emitting both
-    // produces malformed HTML and loses the placeholder. The legacy regex
-    // pass (`placeholder.rs:413-422`) had the same has_style guard; this
-    // preserves parity. Future work: merge the two declarations into a
-    // single style= via a typed `ImageRenderOptions::media_attrs` field so
-    // the synthesizer owns escaping end-to-end (impl-review item 9).
-    let extra_has_style = options
-        .extra_attrs
-        .map(|s| s.contains("style="))
-        .unwrap_or(false);
-
-    let style_attr = if extra_has_style {
-        String::new()
-    } else if let Some(lqip) = lookup_lqip(assets, src) {
+    let placeholder = match lookup_lqip(assets, src) {
         // An empty LQIP is the scan's "transparent" marker: no placeholder at
         // all, not even the colour below, which would show through the clear
         // pixels as a box.
-        if lqip.is_empty() {
-            String::new()
-        } else {
-            format!(
-                r#" style="background-image:url({});background-size:cover""#,
-                lqip
-            )
-        }
-    } else if let Some(color) = lookup_color(assets, src) {
-        format!(r#" style="background-color:{}""#, color)
-    } else {
-        String::new()
+        Some(lqip) if lqip.is_empty() => None,
+        Some(lqip) => Some(format!("background-image:url({});background-size:cover", lqip)),
+        // A picture shown whole sits on the stylesheet's ground, not on a band of its own colour.
+        None if options.fit == Some(crate::media::Fit::Contain) => None,
+        None => lookup_color(assets, src).map(|color| format!("background-color:{}", color)),
     };
-
+    debug_assert!(
+        !options.extra_attrs.is_some_and(|s| s.starts_with("style=\"") || s.contains(" style=\"")),
+        "a style rides in ImageRenderOptions::style, never in extra_attrs"
+    );
+    let style_attr = display_attrs(placeholder, options);
     let extra = options
         .extra_attrs
         .map(|s| format!(" {}", s))
@@ -1045,6 +1032,20 @@ pub(crate) fn render_img_tag(
         alt = html_escape(alt),
         extra = extra,
     )
+}
+
+/// The one `style` attribute (a placeholder's declarations, then the display
+/// words') and the `data-fit` hook, each omitted when empty.
+fn display_attrs(placeholder: Option<String>, options: &ImageRenderOptions<'_>) -> String {
+    let decls: Vec<String> = placeholder.into_iter().chain(options.style.map(html_escape)).collect();
+    let mut out = String::new();
+    if !decls.is_empty() {
+        out.push_str(&format!(r#" style="{}""#, decls.join(";")));
+    }
+    if let Some(fit) = options.fit {
+        out.push_str(&format!(r#" data-fit="{}""#, fit.to_css_value()));
+    }
+    out
 }
 
 #[cfg(test)]

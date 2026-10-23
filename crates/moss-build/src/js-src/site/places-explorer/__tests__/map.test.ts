@@ -113,6 +113,22 @@ describe("mountPlacesMap — embed seams", () => {
     return { figure, controller };
   }
 
+  test("the live map is no longer one picture to assistive tech", () => {
+    const figure = document.createElement("figure");
+    figure.setAttribute("role", "img");
+    figure.setAttribute("aria-label", "Map of places");
+    document.body.append(figure);
+    mountPlacesMap(figure, {
+      worldSvgText: WORLD_SVG, tilesBaseUrl: "/_moss/map.abc/", tileCells: [], tileK: 4,
+      tileOrigins: {}, tileColumns: 36, tileRows: 18, fit: FIT, edgeFade: EDGE_FADE, places: PLACES, lang: "en",
+    });
+    expect(figure.hasAttribute("role")).toBe(false);
+    expect(figure.hasAttribute("aria-label")).toBe(false);
+    const viewport = figure.querySelector('[role="application"]');
+    expect(viewport?.getAttribute("aria-label")).toBe("Map of places");
+    expect(viewport?.getAttribute("aria-description")).toBeTruthy();
+  });
+
   test("world-only initial paint waits for a current-size bake after a viewport resize", async () => {
     let viewport = { ...VIEWPORT };
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(() => ({
@@ -214,7 +230,7 @@ describe("mountPlacesMap — embed seams", () => {
       for (const [x, y] of visible) {
         const tile = tiles.querySelector<HTMLElement>(`[data-moss-places-tile="${x},${y}"]`);
         expect(tile, `visible cell ${x},${y}`).not.toBeNull();
-        const canvas = tile!.firstElementChild as HTMLCanvasElement;
+        const canvas = tile!.querySelector<HTMLCanvasElement>(":scope > :not(.moss-places-tile-flat)")!;
         expect(canvas.tagName).toBe("CANVAS");
         const requiredPixels = parseFloat(tile!.style.width) * screenScale(camera, viewport) / 4 * 2;
         expect(requiredPixels / canvas.width).toBeLessThanOrEqual(1.3);

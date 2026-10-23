@@ -3840,7 +3840,7 @@ fn body_image_sizes_follow_the_pages_effective_typesetting() {
         .html_content
     };
     let vertical = r#"sizes="calc(1.356 * (100vh - 4rem))""#;
-    let horizontal = r#"sizes="(min-width: 48rem) 47.25rem, 100vw""#;
+    let horizontal = r#"sizes="auto, (min-width: 48rem) 47.25rem, 100vw""#;
 
     let site_vertical = render("", Some("vertical"));
     assert!(site_vertical.contains(vertical), "{site_vertical}");

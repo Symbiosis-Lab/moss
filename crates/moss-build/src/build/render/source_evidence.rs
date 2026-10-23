@@ -49,6 +49,20 @@ pub struct MissingReferenceOccurrence {
     pub source_span: SourceSpan,
 }
 
+/// A link from a published page to a `draft: true` page, which is built for
+/// preview and never published.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct DraftLinkOccurrence {
+    /// Markdown file holding the link, relative to the site root.
+    pub source_path: String,
+    /// The link as the built page carries it.
+    pub reference: String,
+    /// The draft page's source file.
+    pub draft_source: String,
+    /// One-based line of the link in `source_path`, when it could be found.
+    pub line: Option<u32>,
+}
+
 /// The completed build's publish-time evidence, replaced atomically per
 /// folder. An absent projection means no build in this process has answered;
 /// a projection with no references is the completed clean answer.
@@ -62,6 +76,9 @@ pub struct PublishPreflightProjection {
     /// replaces this list, even while an older complete seal remains selected.
     #[serde(default)]
     pub unresolved_inputs: Vec<String>,
+    /// Links from published pages to drafts, which would be dead on the live site.
+    #[serde(default)]
+    pub drafts_linked: Vec<DraftLinkOccurrence>,
 }
 
 /// The one owner of a fresh source's bytes between parsing and the cache
@@ -170,7 +187,7 @@ impl FinalSourceRecord {
                 true
             }
             Err(error) => {
-                log::warn!(
+                log::info!(
                     "Failed to write normalized uid into '{}': {}",
                     self.source_path,
                     error

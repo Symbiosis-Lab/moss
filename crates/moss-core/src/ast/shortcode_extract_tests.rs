@@ -973,6 +973,30 @@ fn css_region_with_classes_and_id() {
 }
 
 #[test]
+fn css_region_key_values_follow_pandocs_html5_attribute_rule() {
+    // A key in pandoc's HTML5 list, `aria-*` or `data-*` is kept as
+    // written; any other key becomes `data-<key>`. `fig=teapot` used to be
+    // parsed and then dropped without a word.
+    let md = "::: {.figure #f1 fig=teapot title=Tea aria-label=Legend data-intensity=\"0.6\" note=\"a \\\"b\\\" <c>\"}\nBody.\n:::\n";
+    let out = extract_shortcodes(md).markdown_with_placeholders;
+    assert!(
+        out.contains(
+            "<div class=\"figure\" id=\"f1\" data-fig=\"teapot\" title=\"Tea\" aria-label=\"Legend\" data-intensity=\"0.6\" data-note=\"a &quot;b&quot; &lt;c&gt;\">"
+        ),
+        "{out}"
+    );
+}
+
+#[test]
+fn css_region_contents_end_is_a_flag_attribute_beside_the_width() {
+    let out = extract_shortcodes("::: {.band screen contents=end}\nBody.\n:::\n").markdown_with_placeholders;
+    assert!(out.contains("<div class=\"band\" data-width=\"screen\" data-contents-end>"), "{out}");
+    // Only the value `end` is the marker; anything else is an ordinary key.
+    let other = extract_shortcodes("::: {.band contents=open}\nBody.\n:::\n").markdown_with_placeholders;
+    assert!(other.contains("data-contents=\"open\"") && !other.contains("data-contents-end"), "{other}");
+}
+
+#[test]
 fn css_region_emits_blank_lines_around_body_for_markdown_processing() {
     // Pulldown-cmark needs a blank line between the `<div>` and the
     // body to treat the body as markdown rather than raw HTML.
@@ -2306,6 +2330,67 @@ fn hero_without_align_attr_has_none() {
 }
 
 #[test]
+fn hero_align_top_is_recognised_and_start_stays_silent() {
+    for v in ["top", "start", "end", "center"] {
+        let result = extract_shortcodes(&format!(":::hero {{image=hero.jpg align={v}}}\n# Title\n:::\n"));
+        assert!(result.warnings.is_empty(), "align={v}: {:?}", result.warnings);
+    }
+}
+
+#[test]
+fn hero_dark_with_nothing_to_pair_emits_warning() {
+    for md in [
+        ":::hero {dark=night.jpg}\n# Title\n:::\n",
+        ":::hero {image=clip.mp4 dark=night.jpg}\n# Title\n:::\n",
+        ":::hero {dark=night.jpg}\na.jpg\nb.jpg\n# Title\n:::\n",
+    ] {
+        let result = extract_shortcodes(md);
+        assert!(result.warnings.iter().any(|w| w.contains("`dark=`")), "{md:?}: {:?}", result.warnings);
+    }
+    let paired = extract_shortcodes(":::hero {image=day.jpg dark=night.jpg}\n# Title\n:::\n");
+    assert!(paired.warnings.is_empty(), "{:?}", paired.warnings);
+}
+
+#[test]
+fn hero_panel_needs_words_and_a_known_value() {
+    let bare = extract_shortcodes(":::hero {image=hero.jpg panel=auto}\n:::\n");
+    assert!(bare.warnings.iter().any(|w| w.contains("`panel=`") && w.contains("no words")), "{:?}", bare.warnings);
+    let odd = extract_shortcodes(":::hero {image=hero.jpg panel=sometimes}\n# Title\n:::\n");
+    assert!(odd.warnings.iter().any(|w| w.contains("unrecognized") && w.contains("sometimes")), "{:?}", odd.warnings);
+    let fine = extract_shortcodes(":::hero {image=hero.jpg panel=none}\n# Title\n:::\n");
+    assert!(fine.warnings.is_empty(), "{:?}", fine.warnings);
+}
+
+#[test]
+fn hero_fade_takes_top_and_warns_on_anything_else() {
+    use crate::ast::{Block, Shortcode};
+    let doc = crate::ast::parser::parse(":::hero {image=hero.jpg fade=top}\n# Title\n:::\n");
+    let fade = doc.blocks.iter().find_map(|b| match b {
+        Block::Shortcode(Shortcode::Hero(h)) => Some(h.fade.clone()),
+        _ => None,
+    });
+    assert_eq!(fade, Some(Some("top".to_string())));
+    let fine = extract_shortcodes(":::hero {image=hero.jpg fade=top}\n# Title\n:::\n");
+    assert!(fine.warnings.is_empty(), "{:?}", fine.warnings);
+    let odd = extract_shortcodes(":::hero {image=hero.jpg fade=bottom}\n# Title\n:::\n");
+    assert!(odd.warnings.iter().any(|w| w.contains("unrecognized") && w.contains("fade=bottom")), "{:?}", odd.warnings);
+}
+
+#[test]
+fn hero_max_height_outside_its_grammar_is_a_problem() {
+    for ok in [r#"max-height="clamp(420px, 50vw, 680px)""#, "max-height=30rem"] {
+        let fine = extract_shortcodes(&format!(":::hero {{image=hero.jpg {ok}}}\n# Title\n:::\n"));
+        assert!(fine.warnings.is_empty(), "{ok}: {:?}", fine.warnings);
+    }
+    for bad in ["\"calc(100vh - 2rem)\"", "60svh"] {
+        let odd = extract_shortcodes(&format!(":::hero {{image=hero.jpg max-height={bad}}}\n# Title\n:::\n"));
+        assert_eq!(odd.warnings.iter().filter(|w| w.contains("max-height=") && w.contains("not capped")).count(), 1, "{bad}: {:?}", odd.warnings);
+    }
+    let doc = crate::ast::parser::parse(":::hero {image=hero.jpg max-height=60svh}\n# Title\n:::\n");
+    assert!(doc.blocks.iter().all(|b| !matches!(b, crate::ast::Block::Shortcode(crate::ast::Shortcode::Hero(h)) if h.max_height.is_some())));
+}
+
+#[test]
 fn hero_unknown_align_value_emits_warning() {
     let md = ":::hero {image=hero.jpg align=middle}\n# Title\n:::\n";
     let result = extract_shortcodes(md);
@@ -3102,6 +3187,7 @@ fn spans_agree_with_parsers() {
         ":::hero\na.jpg\nb.jpg\ncopy\n:::\n",
         ":::hero\n![[a.png]]\ncopy\n:::\n",
         ":::hero\ncopy only\n:::\n",
+        ":::hero {image=day.jpg dark=night.jpg}\ncopy\n:::\n",
     ];
     for src in hero_cases {
         let opener = src.lines().next().unwrap();
@@ -3114,6 +3200,9 @@ fn spans_agree_with_parsers() {
         );
         let mut want: Vec<String> = Vec::new();
         if let Some(u) = &hero.image {
+            want.push(crate::media::strip_wikilink(url_raw(u)).to_string());
+        }
+        if let Some(u) = &hero.dark {
             want.push(crate::media::strip_wikilink(url_raw(u)).to_string());
         }
         want.extend(
@@ -3239,6 +3328,19 @@ fn hero_header_unknown_value_warns_and_is_ignored() {
 }
 
 #[test]
+fn hero_from_attribute_is_parsed() {
+    let md = ":::hero {from=\"work/|when:upcoming\" image=a.jpg}\n# Example Show\n:::\n";
+    let result = extract_shortcodes(md);
+    match &result.extracted[0].shortcode {
+        Shortcode::Hero(args) => {
+            assert_eq!(args.from.as_deref(), Some("work/|when:upcoming"));
+            assert!(matches!(&args.image, Some(Url::Unresolved(u)) if u == "a.jpg"));
+        }
+        other => panic!("expected Hero, got {other:?}"),
+    }
+}
+
+#[test]
 fn empty_name_fenced_div_is_recorded_as_a_css_region_with_its_line() {
     let md = "::: {.eyebrow}\nStation 21\n:::\n";
     let result = extract_shortcodes(md);
@@ -3281,4 +3383,34 @@ fn warning_line_offset_shifts_css_region_lines() {
     let config = ParseConfig { warning_line_offset: 10, ..ParseConfig::default() };
     let result = extract_shortcodes_with_config(md, &config);
     assert_eq!(result.css_regions[0].line, 13);
+}
+
+#[test]
+fn a_button_with_an_attribute_block_is_kept_and_warned_about() {
+    let result = extract_shortcodes("::::buttons\n[Alone](/c/){role=secondary}\n::::\n");
+    match &result.extracted[0].shortcode {
+        Shortcode::Buttons(args) => assert_eq!(args.items.len(), 1),
+        other => panic!("expected Buttons, got {other:?}"),
+    }
+    assert!(
+        result.warnings.iter().any(|w| w.contains("[Alone](/c/){role=secondary}") && w.contains("ignores")),
+        "{:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn a_buttons_line_that_is_not_a_link_is_named_in_a_warning() {
+    let result = extract_shortcodes("::::buttons\n[One](/a/)\nTwo (/b/)\n::::\n");
+    match &result.extracted[0].shortcode {
+        Shortcode::Buttons(args) => assert_eq!(args.items.len(), 1),
+        other => panic!("expected Buttons, got {other:?}"),
+    }
+    assert!(result.warnings.iter().any(|w| w.contains("Two (/b/)")), "{:?}", result.warnings);
+}
+
+#[test]
+fn two_links_on_one_buttons_line_are_named_in_a_warning() {
+    let result = extract_shortcodes("::::buttons\n[a](/a/) [b](/b/)\n::::\n");
+    assert!(result.warnings.iter().any(|w| w.contains("[a](/a/) [b](/b/)") && w.contains("one link per line")), "{:?}", result.warnings);
 }

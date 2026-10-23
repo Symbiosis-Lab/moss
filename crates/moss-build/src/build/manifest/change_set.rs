@@ -202,8 +202,8 @@ impl PublishedSnapshot {
             target: target.to_string(),
             published_at,
             sources: page_source_hashes(sealed),
-            source_to_output: sealed.source_to_output().clone(),
-            files: sealed.files().clone(),
+            source_to_output: sealed.published_source_to_output().into_owned(),
+            files: sealed.files().into_owned(),
             // Filled by the caller, which is the only place that has the
             // article map — see `deploy::landed`.
             uids: HashMap::new(),
@@ -219,6 +219,7 @@ impl PublishedSnapshot {
 ///
 /// A source with no shipped output is left out: it explains no address.
 fn asset_sources_to_outputs(sealed: &SealedManifest) -> HashMap<String, String> {
+    let files = sealed.files();
     sealed
         .sources()
         .keys()
@@ -226,7 +227,7 @@ fn asset_sources_to_outputs(sealed: &SealedManifest) -> HashMap<String, String> 
         .filter_map(|src| {
             let out = ServedPath::from_source(src).ok()?;
             let out = out.as_str();
-            (is_public_address(out) && sealed.files().contains_key(out))
+            (is_public_address(out) && files.contains_key(out))
                 .then(|| (src.clone(), out.to_string()))
         })
         .collect()
@@ -243,7 +244,7 @@ fn asset_sources_to_outputs(sealed: &SealedManifest) -> HashMap<String, String> 
 /// reading the same page set out of the same manifest.
 pub(crate) fn page_source_hashes(sealed: &SealedManifest) -> HashMap<String, String> {
     sealed
-        .source_to_output()
+        .published_source_to_output()
         .keys()
         .filter_map(|src| sealed.sources().get(src).map(|m| (src.clone(), m.hash.clone())))
         .collect()
@@ -285,6 +286,9 @@ pub struct ChangedPage {
 pub enum RemovalReason {
     /// The source that produced it no longer exists in the site folder.
     AuthorRemoved,
+    /// The page's source says `draft: true`: it is built for preview and never
+    /// published, an author's act like deleting it.
+    Withheld,
     /// Anything else: a generated file nobody produces now, a source that
     /// still exists whose address changed, or a record too old to say.
     Unexplained,
@@ -471,7 +475,7 @@ pub fn flat_against(previous: &HashMap<String, String>, current: &SealedManifest
 
 /// How many of `current`'s files `previous` does not already hold.
 pub fn upload_count(previous: &HashMap<String, String>, current: &SealedManifest) -> usize {
-    upload_count_of(previous, current.files())
+    upload_count_of(previous, &current.files())
 }
 
 /// [`upload_count`] for a plain path→entry map, such as a prebuilt folder's.
@@ -493,7 +497,7 @@ where
 
 /// The output paths `previous` has that `current` no longer produces, sorted.
 pub fn removed_files(previous: &HashMap<String, String>, current: &SealedManifest) -> Vec<String> {
-    let mut gone: Vec<String> = vanished_keys(previous, current.files()).map(str::to_string).collect();
+    let mut gone: Vec<String> = vanished_keys(previous, &current.files()).map(str::to_string).collect();
     gone.sort();
     gone
 }
@@ -563,8 +567,8 @@ pub fn classify(previous: Option<&PublishedSnapshot>, current: &SealedManifest) 
     };
 
     let cur_sources = current.sources();
-    let cur_map = current.source_to_output();
-    let cur_files = current.files();
+    let cur_map = &*current.published_source_to_output();
+    let cur_files = &*current.files();
 
     let mut set = ChangeSet { classified: true, ..ChangeSet::default() };
 
@@ -629,7 +633,7 @@ pub fn classify(previous: Option<&PublishedSnapshot>, current: &SealedManifest) 
     }
 
     if carry_gaps > 0 {
-        log::warn!(
+        log::info!(
             "publish change set: {carry_gaps} page(s) have an output mapping but no source \
              hash, so they were classified by output alone. A register_source_mapping call \
              is missing its paired source-hash registration."
@@ -649,7 +653,7 @@ pub fn classify(previous: Option<&PublishedSnapshot>, current: &SealedManifest) 
 fn vanished_outputs<'a>(baseline: &'a PublishedSnapshot, current: &SealedManifest) -> Vec<(&'a str, bool)> {
     let page_outputs: std::collections::HashSet<&str> =
         baseline.source_to_output.values().map(String::as_str).collect();
-    vanished_keys(&baseline.files, current.files()).map(|out| (out, page_outputs.contains(out))).collect()
+    vanished_keys(&baseline.files, &current.files()).map(|out| (out, page_outputs.contains(out))).collect()
 }
 
 /// A video's ladder file (its master playlist, a rung's playlist or segment
@@ -703,13 +707,16 @@ pub fn removed_addresses(
     let page_sources = by_output(&baseline.source_to_output);
     let asset_sources = baseline.asset_source_to_output.as_ref().map(by_output);
     let exists = |src: &&str| source_exists(src);
+    let withheld = current.withheld();
+    let files = current.files();
 
     let mut removed: Vec<RemovedAddress> = vanished_outputs(baseline, current)
         .into_iter()
-        .filter(|(out, _)| is_public_address(out) && !is_ladder_of_published_video(out, current.files()))
+        .filter(|(out, _)| is_public_address(out) && !is_ladder_of_published_video(out, &files))
         .map(|(out, is_page)| {
             let recorded = if is_page { page_sources.get(out) } else { asset_sources.as_ref().and_then(|m| m.get(out)) };
             let reason = match recorded {
+                _ if withheld.contains(out) => RemovalReason::Withheld,
                 Some(srcs) if !srcs.iter().any(exists) => RemovalReason::AuthorRemoved,
                 // A calendar file has no source of its own: it exists while a page
                 // says `start:` (or a listing shows one). Losing it means the author

@@ -25,14 +25,32 @@ pub const ALLOWED_TAGS: &[&str] = &[
 /// - `<a href>` keeps only `http`/`https` URLs (so `javascript:` / `data:` are
 ///   dropped) and is forced to `rel="nofollow ugc noopener"`.
 pub fn sanitize_comment_html(raw: &str) -> String {
+    sanitize_comment_html_with_origin(raw, None)
+}
+
+/// Like [`sanitize_comment_html`], but a root-relative `<a href="/…">` becomes
+/// `{origin}/…`. A comment written on another site (Matters) carries links
+/// relative to that site, which would 404 on the author's own domain.
+/// Protocol-relative (`//host`) and absolute links are left alone.
+pub fn sanitize_comment_html_with_origin(raw: &str, origin: Option<&str>) -> String {
     let tags: HashSet<&str> = ALLOWED_TAGS.iter().copied().collect();
     let schemes: HashSet<&str> = ["http", "https"].into_iter().collect();
-    ammonia::Builder::default()
+    let mut builder = ammonia::Builder::default();
+    builder
         .tags(tags)
         .url_schemes(schemes)
-        .link_rel(Some("nofollow ugc noopener"))
-        .clean(raw)
-        .to_string()
+        .link_rel(Some("nofollow ugc noopener"));
+    if let Some(origin) = origin {
+        let origin = origin.trim_end_matches('/').to_string();
+        builder.attribute_filter(move |element, attr, value| {
+            if element == "a" && attr == "href" && value.starts_with('/') && !value.starts_with("//") {
+                Some(format!("{origin}{value}").into())
+            } else {
+                Some(value.into())
+            }
+        });
+    }
+    builder.clean(raw).to_string()
 }
 
 #[cfg(test)]

@@ -3866,15 +3866,9 @@ fn raw_create_key_moss_theme_excluded() {
         );
 }
 
-/// A root `AGENTS.md` is hidden from the file tree, so announcing its creation
-/// promises a row that does not exist. This is not hypothetical: when moss
-/// wrote this file itself (agent-file sync), the watcher saw a create for the
-/// very file the tree refuses to show, and the editor's only consumer went
-/// looking for a nav row to flash and found none. The same file can
-/// still appear today whenever an author or another agent creates it.
-///
-/// The guard is `is_hidden` — the predicate `list_tree` filters with — so the
-/// two cannot drift apart again.
+/// A root `AGENTS.md` is listed in the tree but never watched: moss writes it
+/// itself (agent-file sync), and its own write must not announce a created
+/// file. The exclusion comes from the watch scope, not from `is_hidden`.
 #[test]
 fn raw_create_key_root_agent_config_excluded() {
     let dir = tempfile::Builder::new()
@@ -3890,7 +3884,7 @@ fn raw_create_key_root_agent_config_excluded() {
         let keys = collect_raw_create_keys(&[ev], root, |_| false);
         assert!(
             keys.is_empty(),
-            "root {name} is hidden by list_tree and must not reach RawFileCreated, got: {keys:?}"
+            "root {name} is outside the watch scope and must not reach RawFileCreated, got: {keys:?}"
         );
     }
 }

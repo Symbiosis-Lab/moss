@@ -565,7 +565,9 @@ impl SetaError {
     /// `Response` itself to this function.
     pub(super) async fn from_failed_response(response: reqwest::Response) -> SetaError {
         let status = response.status().as_u16();
-        let url = response.url().to_string();
+        // Logged below, and the log is what "Send logs" uploads: an auth session
+        // id in the path is a bearer for its status route, so it is not written.
+        let url = super::redact::session_id(response.url().as_str());
         let cf_mitigated = response
             .headers()
             .get("cf-mitigated")

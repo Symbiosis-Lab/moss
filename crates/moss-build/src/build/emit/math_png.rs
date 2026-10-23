@@ -334,7 +334,7 @@ pub fn emit_math_pngs(
             match rasterize_png(&img) {
                 Ok(png) => write_atomic(&disk, &png)?,
                 Err(e) => {
-                    log::warn!("math png rasterize failed for {tex:?}: {e}");
+                    log::info!("math png rasterize failed for {tex:?}: {e}");
                 }
             }
         }
@@ -700,7 +700,7 @@ mod tests {
         std::fs::remove_file(&disk).unwrap();
         std::os::unix::fs::symlink(dir.path().join("no-such-file.png"), &disk).unwrap();
         let mut second = PendingManifest::new(crate::types::content::SiteHashes {
-            files: sealed.files().clone(),
+            files: sealed.all_files().clone(),
             ..Default::default()
         });
         emit_math_pngs(&docs, true, dir.path(), &mut second).unwrap();

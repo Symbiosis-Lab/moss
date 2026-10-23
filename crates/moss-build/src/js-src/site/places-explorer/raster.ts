@@ -119,6 +119,8 @@ export interface MapSvgSplit {
    * just this string's own root `width`/`height`.
    */
   baseMarkup: string;
+  /** `base` with only the layers that tell land from water: the flat tones a view keeps once the detail has faded away. Built on first use, then kept. */
+  flat(): { base: SVGSVGElement; baseMarkup: string };
   /** The source's own canvas size in SVG user units (svg.rs's `canvas_width`/`canvas_height`) — what `rasterize`'s caller scales up from, and what a caller sizing the wrapper that will hold the raster uses directly. */
   width: number;
   height: number;
@@ -169,7 +171,26 @@ export function splitMapSvg(markup: string): MapSvgSplit | null {
   // here — `svg.localName !== "svg"` already returned above otherwise), so
   // the cast needs the `unknown` detour TypeScript can't bridge directly.
   const base = document.importNode(svg, true) as unknown as SVGSVGElement;
-  return { base, baseMarkup: new XMLSerializer().serializeToString(svg), rivers, width, height };
+  let flat: { base: SVGSVGElement; baseMarkup: string } | null = null;
+  return {
+    base,
+    baseMarkup: new XMLSerializer().serializeToString(svg),
+    flat: () => (flat ??= flatten(base)),
+    rivers,
+    width,
+    height,
+  };
+}
+
+/** The layers that say where land and water are: the flat water, the land fill and the lakes. Every other layer is detail (sea-floor bands, relief and lighting, ice, salt, reefs, urban areas) and goes when the view is past the depth the data carries. */
+const FLAT_LAYERS = new Set(["water", "land", "lakes"]);
+
+function flatten(base: SVGSVGElement): { base: SVGSVGElement; baseMarkup: string } {
+  const flat = base.cloneNode(true) as SVGSVGElement;
+  flat.querySelectorAll("[data-map-layer]").forEach((layer) => {
+    if (!FLAT_LAYERS.has(layer.getAttribute("data-map-layer") ?? "")) layer.remove();
+  });
+  return { base: flat, baseMarkup: new XMLSerializer().serializeToString(flat) };
 }
 
 export interface Raster {
@@ -256,4 +277,12 @@ export async function rasterizeOrFallback(baseMarkup: string, fallback: SVGSVGEl
   } catch {
     return { el: fallback, release: () => {} };
   }
+}
+
+/** The flat land and water of `split` at the given pixel size, as a surface the caller stacks under the detail. */
+export async function rasterizeFlat(split: MapSvgSplit, pixelWidth: number, pixelHeight: number, className: string): Promise<Surface> {
+  const flat = split.flat();
+  const surface = await rasterizeOrFallback(flat.baseMarkup, flat.base, pixelWidth, pixelHeight);
+  surface.el.classList.add(className);
+  return surface;
 }

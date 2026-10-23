@@ -55,6 +55,10 @@ pub struct AttrBlock {
     /// every other shortcode that shares this parser leaves it unread, so
     /// writing `scroll` on one is inert rather than an error.
     pub scroll: bool,
+    /// `collage` bare flag, read only by `:::grid` (a lead picture beside a
+    /// packed set of smaller tiles); inert on every other shortcode, like
+    /// `scroll`.
+    pub collage: bool,
 }
 
 impl AttrBlock {
@@ -64,6 +68,7 @@ impl AttrBlock {
             && self.kvs.is_empty()
             && self.width.is_none()
             && !self.scroll
+            && !self.collage
     }
 
     /// Convenience for renderers: get the value for a key.
@@ -135,6 +140,32 @@ pub struct KvSpan {
 /// `InvalidKey { token }` so the caller can surface a useful diagnostic.
 pub fn parse_attrs(input: &str) -> Result<AttrBlock, AttrError> {
     parse_attrs_spanned(input).map(|(block, _)| block)
+}
+
+/// A build warning for a fence's `{…}` block that does not parse, or `None`.
+///
+/// Every shortcode reader falls back to "no attributes" when [`parse_attrs`]
+/// fails, so the whole block vanishes without a trace — `{image=a.jpg|cover}`
+/// builds a hero with no image, because an unquoted value stops at `|` or a
+/// space. Call this once per opener, before the per-name readers, so none of
+/// them has to report the failure itself. `opener` is the fence line, used
+/// only to show the author which block it was.
+pub fn attr_block_warning(opener: &str, args: &str) -> Option<String> {
+    #[allow(clippy::string_slice)] // `find` returns the byte index of an ASCII `{`
+    let block = &args[args.find('{')?..];
+    let err = parse_attrs(block).err()?;
+    let shown: String = opener.chars().take(80).collect();
+    let why = match err {
+        AttrError::EmptyValue { key } => format!("`{key}=` has no usable value"),
+        AttrError::InvalidKey { token } => format!("unexpected `{token}`"),
+        AttrError::UnterminatedQuote => "a quote is never closed".to_string(),
+        AttrError::UnclosedBrace => "the `{` is never closed".to_string(),
+        AttrError::MissingOpenBrace => "no opening `{`".to_string(),
+    };
+    Some(format!(
+        "shortcode attributes in `{shown}` could not be read ({why}), so the whole `{{…}}` block is ignored. \
+         A value containing a space, `|` or any character other than letters, digits and `: / . - _` must be quoted: `image=\"cover.jpg|cover top\"`."
+    ))
 }
 
 /// [`parse_attrs`] plus one [`KvSpan`] per `key=value` item.
@@ -226,6 +257,8 @@ pub fn parse_attrs_spanned(input: &str) -> Result<(AttrBlock, Vec<KvSpan>), Attr
                             block.width = Some(width);
                         } else if key == "scroll" {
                             block.scroll = true;
+                        } else if key == "collage" {
+                            block.collage = true;
                         } else {
                             return Err(AttrError::InvalidKey { token: key });
                         }
@@ -483,6 +516,64 @@ pub fn gather_multi_line_attrs(
 
     // Brace never closed within the document.
     (Some(combined), consumed)
+}
+
+// The attribute names a fenced div's `key=value` pair may keep as written.
+//
+// Copied from pandoc's HTML5 writer: `html5Attributes` and `rdfaAttributes` in
+// `src/Text/Pandoc/XML.hs`, which `toAttrs` in `Text/Pandoc/Writers/HTML.hs`
+// consults (pandoc's `main` branch, October 2026). `label` is left out, as
+// pandoc leaves it out. Sorted, so a lookup is a binary search.
+const STANDARD: &[&str] = &[
+    "abbr", "about", "accept", "accept-charset", "accesskey", "action", "allow", "allowfullscreen",
+    "allowpaymentrequest", "allowusermedia", "alt", "as", "async", "autocapitalize",
+    "autocomplete", "autofocus", "autoplay", "charset", "checked", "cite", "class", "color",
+    "cols", "colspan", "content", "contenteditable", "controls", "coords", "crossorigin", "data",
+    "datatype", "datetime", "decoding", "default", "defer", "dir", "dirname", "disabled",
+    "download", "draggable", "enctype", "enterkeyhint", "fetchpriority", "for", "form",
+    "formaction", "formenctype", "formmethod", "formnovalidate", "formtarget", "headers", "height",
+    "hidden", "high", "href", "hreflang", "http-equiv", "id", "imagesizes", "imagesrcset",
+    "inputmode", "integrity", "is", "ismap", "itemid", "itemprop", "itemref", "itemscope",
+    "itemtype", "kind", "lang", "list", "loading", "loop", "low", "manifest", "max", "maxlength",
+    "media", "method", "min", "minlength", "multiple", "muted", "name", "nomodule", "nonce",
+    "novalidate", "onabort", "onafterprint", "onauxclick", "onbeforeprint", "onbeforeunload",
+    "onblur", "oncancel", "oncanplay", "oncanplaythrough", "onchange", "onclick", "onclose",
+    "oncontextmenu", "oncopy", "oncuechange", "oncut", "ondblclick", "ondrag", "ondragend",
+    "ondragenter", "ondragexit", "ondragleave", "ondragover", "ondragstart", "ondrop",
+    "ondurationchange", "onemptied", "onended", "onerror", "onfocus", "onhashchange", "oninput",
+    "oninvalid", "onkeydown", "onkeypress", "onkeyup", "onlanguagechange", "onload",
+    "onloadeddata", "onloadedmetadata", "onloadend", "onloadstart", "onmessage", "onmessageerror",
+    "onmousedown", "onmouseenter", "onmouseleave", "onmousemove", "onmouseout", "onmouseover",
+    "onmouseup", "onoffline", "ononline", "onpagehide", "onpageshow", "onpaste", "onpause",
+    "onplay", "onplaying", "onpopstate", "onprogress", "onratechange", "onrejectionhandled",
+    "onreset", "onresize", "onscroll", "onsecuritypolicyviolation", "onseeked", "onseeking",
+    "onselect", "onstalled", "onstorage", "onsubmit", "onsuspend", "ontimeupdate", "ontoggle",
+    "onunhandledrejection", "onunload", "onvolumechange", "onwaiting", "onwheel", "open",
+    "optimum", "pattern", "ping", "placeholder", "playsinline", "poster", "prefix", "preload",
+    "property", "readonly", "referrerpolicy", "rel", "required", "resource", "rev", "reversed",
+    "role", "rows", "rowspan", "sandbox", "scope", "selected", "shape", "size", "sizes", "slot",
+    "span", "spellcheck", "src", "srcdoc", "srclang", "srcset", "start", "step", "style",
+    "tabindex", "target", "title", "translate", "type", "typemustmatch", "typeof",
+    "updateviacache", "usemap", "value", "vocab", "width", "workertype", "wrap",
+];
+
+/// The HTML attribute name a fenced div's `key=value` pair is written as, by
+/// pandoc's HTML5 writer rule: a key in pandoc's own list, a `data-` or
+/// `aria-` key, or a key with a `:` in it is kept as written; any other key
+/// becomes `data-<key>`. `id` and `class` are not passed through, since the
+/// fence owns those two attributes.
+pub fn html_attribute_name(key: &str) -> String {
+    let kept = key != "id"
+        && key != "class"
+        && (STANDARD.binary_search(&key).is_ok()
+            || key.contains(':')
+            || key.starts_with("data-")
+            || key.starts_with("aria-"));
+    if kept {
+        key.to_string()
+    } else {
+        format!("data-{key}")
+    }
 }
 
 #[cfg(test)]

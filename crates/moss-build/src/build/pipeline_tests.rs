@@ -199,7 +199,7 @@ fn build_test_full_with_gates(
                 Ok((sealed, _cache_lease)) => {
                     let hashes_path = crate::moss_paths::MossPaths::new(root.path()).hashes();
                     if let Err(e) = sealed.write_to_disk(&hashes_path) {
-                        log::warn!("test seal+persist: failed to write hashes.json: {}", e);
+                        log::info!("test seal+persist: failed to write hashes.json: {}", e);
                     }
                 }
                 Err(e) => {
@@ -4958,7 +4958,7 @@ fn test_image_compression_pipeline_end_to_end() {
     // the base webp on disk.
     assert!(
             html.contains(
-                r#"<source srcset="/photo.w800.webp 800w, /photo.w1600.webp 1600w, /photo.webp 2400w" type="image/webp" sizes="(min-width: 48rem) 47.25rem, 100vw">"#
+                r#"<source srcset="/photo.w800.webp 800w, /photo.w1600.webp 1600w, /photo.webp 2400w" type="image/webp" sizes="auto, (min-width: 48rem) 47.25rem, 100vw">"#
             ),
             "Built HTML should contain <source> ladder for photo.webp (markdown image), got: {}",
             html
@@ -5458,7 +5458,7 @@ fn cold_page_metadata_keeps_complete_home_and_assets_until_recovery() {
     assert!(String::from_utf8_lossy(&original_home).contains("Original Card"));
     assert!(String::from_utf8_lossy(&original_home).contains("card.jpg"));
     let original_image = fs::read(current.join("card.jpg")).unwrap();
-    let stylesheet = first_seal.files().keys().find(|key| key.starts_with("_moss/theme/style.") && key.ends_with(".css"))
+    let stylesheet = first_seal.all_files().keys().find(|key| key.starts_with("_moss/theme/style.") && key.ends_with(".css"))
         .expect("complete generation includes the authored stylesheet");
     let original_css = fs::read(current.join(stylesheet)).unwrap();
     let original_hashes = fs::read(mp.hashes()).unwrap();
@@ -6008,6 +6008,7 @@ fn a_translation_still_in_the_cloud_keeps_its_old_address() {
 
 fn gate_structure(root: &std::path::Path, homepage: Option<&str>, evicted: &[&str]) -> ProjectStructure {
     ProjectStructure {
+        passthrough_media: Vec::new(),
         root_path: root.to_string_lossy().to_string(),
         markdown_files: vec![],
         html_files: vec![],
@@ -6211,7 +6212,7 @@ fn a_readable_page_with_denied_uid_write_keeps_its_consumed_read_evidence() {
 #[test]
 fn a_build_under_a_denied_source_write_session_leaves_every_source_byte_identical() {
     let index = "---\ntitle: Home\n---\nHi";
-    let note = "---\ntitle: Note\npartial: true\n---\nShared text";
+    let note = "---\ntitle: Note\n---\nShared text";
 
     let (dir, _cleanup) = create_test_dir();
     fs::write(dir.join("index.md"), index).unwrap();
@@ -7307,6 +7308,23 @@ fn a_folder_timezone_cascade_gives_its_events_a_zone() {
 }
 
 #[test]
+fn an_empty_value_on_one_page_cancels_a_cascaded_key_there() {
+    let (test_dir, _c) = create_test_dir();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    fs::create_dir_all(test_dir.join("Shows")).unwrap();
+    fs::write(
+        test_dir.join("Shows/index.md"),
+        "---\ntitle: Shows\ncascade:\n  description: Folder blurb\n---\n\nWhat is on.\n",
+    )
+    .unwrap();
+    fs::write(test_dir.join("Shows/kept.md"), "---\ntitle: Kept\n---\n\nBody.\n").unwrap();
+    fs::write(test_dir.join("Shows/cancelled.md"), "---\ntitle: Cancelled\ndescription: \"\"\n---\n\nBody.\n").unwrap();
+    build_test_sealed_at(test_dir.to_str().unwrap(), Some("https://example.test")).expect("build");
+    assert!(staged(&test_dir, "shows/kept/index.html").contains("Folder blurb"), "the cascade reaches a plain page");
+    assert!(!staged(&test_dir, "shows/cancelled/index.html").contains("Folder blurb"), "an empty value cancels it");
+}
+
+#[test]
 fn an_all_day_multi_day_event_ends_the_day_after_its_inclusive_end() {
     let (dir, _c) = event_site(&[("Festival.md", "title: Festival\nuid: fest0001\nstart: 2026-11-01\nend: 2026-11-03\n")]);
     let lines = assert_valid_ics(&staged(&dir, "events/festival/event.ics"));
@@ -7468,6 +7486,26 @@ fn an_embedded_listing_with_nothing_still_to_come_gets_no_calendar_links() {
     assert!(home.contains("Old"), "the listing is there: {home}");
     assert!(!home.contains("moss-calendar-links"), "{home}");
     assert!(staged_exists(&dir, "archive/calendar.ics"), "the past season's own file is still served");
+}
+
+#[test]
+fn an_embed_showing_only_past_events_of_a_folder_with_an_upcoming_one_gets_no_links() {
+    let (dir, _c) = create_test_dir();
+    fs::create_dir_all(dir.join("Season")).unwrap();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\nchildren: false\n---\n\n![[Season/|when:past]]\n\n![[Season/|when:upcoming]]\n").unwrap();
+    fs::write(dir.join("Season/index.md"), "---\ntitle: Season\n---\n\nSeason.\n").unwrap();
+    fs::write(dir.join("Season/Gala.md"), "---\ntitle: Gala\nuid: gala0001\nstart: 2099-05-01\n---\n\nBody.\n").unwrap();
+    fs::write(dir.join("Season/Old.md"), "---\ntitle: Old\nuid: old00001\nstart: 2001-05-01\n---\n\nBody.\n").unwrap();
+    build_test_sealed_at(dir.to_str().unwrap(), Some("https://example.test")).expect("build");
+    let home = staged(&dir, "index.html");
+    assert_eq!(home.matches("moss-calendar-links").count(), 1, "{home}");
+    assert!(home.find("moss-calendar-links").unwrap() > home.find("/season/gala/").unwrap(), "the links follow the upcoming listing: {home}");
+
+    fs::write(dir.join("index.md"), "---\ntitle: Home\nchildren: false\n---\n\n![[Season/|when:past]]\n").unwrap();
+    build_test_sealed_at(dir.to_str().unwrap(), Some("https://example.test")).expect("build");
+    let home = staged(&dir, "index.html");
+    assert!(home.contains("Old"), "{home}");
+    assert!(!home.contains("moss-calendar-links"), "{home}");
 }
 
 /// Regression guard: embedding must not move the links off a folder page that
@@ -7753,4 +7791,108 @@ fn availability_fatal_scan_settles_a_previous_cloud_waiting_gate() {
             assert!(!crate::build::cloud_readiness::take_gate(dir.to_str().unwrap()), "fatal scan must settle the old cloud waiting latch");
         });
     });
+}
+
+/// A `draft: true` page is built, so preview and wikilinks keep working, but
+/// nothing that publishes may see it.
+#[test]
+fn a_draft_page_is_built_for_preview_and_left_out_of_what_publishes() {
+    let (dir, _cleanup) = create_test_dir();
+    let folder = dir.to_str().unwrap();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n").unwrap();
+    fs::write(dir.join("about.md"), "---\ntitle: About\n---\n\nAbout us.\n").unwrap();
+    fs::write(dir.join("wip.md"), "---\ntitle: Secret Plan\ndraft: true\n---\n\nNot yet.\n").unwrap();
+
+    let (promotion, _, _, first) = build_test_promoted_or_withheld(folder).unwrap();
+    assert_eq!(promotion, crate::build::ship::Promotion::Promoted);
+    let draft_html = first.source_to_output()["wip.md"].clone();
+    let about_html = first.source_to_output()["about.md"].clone();
+    let mp = crate::moss_paths::MossPaths::new(&dir);
+
+    assert!(first.all_files().contains_key(&draft_html), "preview must still have the draft");
+    assert!(mp.current_ptr().join(&draft_html).exists(), "the generation keeps the draft for preview");
+    assert!(!first.files().contains_key(&draft_html), "the publish view must not list the draft");
+    assert!(first.files().contains_key(&about_html));
+    let leaked: Vec<_> = first.files().keys().filter(|k| k.contains("wip")).cloned().collect();
+    assert!(leaked.is_empty(), "nothing derived from the draft may publish: {leaked:?}");
+    assert!(!first.published_source_to_output().contains_key("wip.md"));
+    for key in first.files().keys().filter(|k| k.ends_with(".json") || k.ends_with(".xml") || k.ends_with(".txt")) {
+        let text = fs::read_to_string(mp.current_ptr().join(key)).unwrap_or_default();
+        assert!(!text.contains("Secret Plan"), "published {key} names the draft");
+    }
+    let sitemap = fs::read_to_string(mp.current_ptr().join("sitemap.xml")).unwrap_or_default();
+    assert!(!sitemap.contains("wip"), "{sitemap}");
+
+    // The plugin-facing views of the generation leave it out too.
+    let listed: Vec<_> = crate::plugins::project_files::list_site_files_with_sizes_impl(&dir).into_iter().map(|f| f.path).collect();
+    assert!(!listed.contains(&draft_html) && listed.contains(&about_html), "{listed:?}");
+    let handed = crate::deploy::plugin_context::build_deploy_context(folder, &mp.current_ptr()).unwrap();
+    assert!(!handed.site_files.contains(&draft_html) && handed.site_files.contains(&about_html), "{:?}", handed.site_files);
+    let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    let read_draft = runtime.block_on(crate::plugins::project_files::read_site_file_impl(folder, &draft_html));
+    assert!(read_draft.is_err(), "a plugin must not read the draft's bytes");
+    assert!(runtime.block_on(crate::plugins::project_files::read_site_file_impl(folder, &about_html)).is_ok());
+
+    // Rebuilding with no source change carries the page forward unrendered.
+    let (_, _, _, second) = build_test_promoted_or_withheld(folder).unwrap();
+    assert!(second.all_files().contains_key(&draft_html));
+    assert!(!second.files().contains_key(&draft_html), "a carried draft must stay withheld");
+}
+
+/// Marking a published page `draft: true` takes its address offline on the next
+/// publish, and that is the author's act: it must not be refused as an
+/// unexplained removal.
+#[test]
+fn marking_a_published_page_as_a_draft_is_not_an_unexplained_removal() {
+    use crate::build::manifest::change_set::{pending_removals, removed_addresses, PublishedSnapshot, RemovalReason};
+    let (dir, _cleanup) = create_test_dir();
+    let folder = dir.to_str().unwrap();
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\n# Home\n").unwrap();
+    fs::write(dir.join("wip.md"), "---\ntitle: Plan\n---\n\nBody.\n").unwrap();
+    let (_, _, _, live) = build_test_promoted_or_withheld(folder).unwrap();
+    let baseline = PublishedSnapshot::from_sealed(&live, "test", "2026-01-01T00:00:00Z".into());
+    assert!(baseline.files.contains_key("wip/index.html"), "premise: the page was published");
+
+    fs::write(dir.join("wip.md"), "---\ntitle: Plan\ndraft: true\n---\n\nBody.\n").unwrap();
+    let (_, _, _, drafted) = build_test_promoted_or_withheld(folder).unwrap();
+    let removed = removed_addresses(&baseline, &drafted, |src| dir.join(src).exists());
+
+    let gone = removed.iter().find(|r| r.path == "wip/index.html").expect("the address leaves the site");
+    assert_eq!(gone.reason, RemovalReason::Withheld);
+    assert!(pending_removals(&removed, None).is_empty(), "{removed:?}");
+}
+
+/// The whole route from source to the gate: a build of a published page that
+/// links to a draft installs the evidence `refuse_publish` reads, and taking
+/// the link out clears it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_build_whose_published_page_links_to_a_draft_refuses_the_publish() {
+    use crate::build::{run_pipeline, BuildTrigger, PipelineConfig, PluginMode};
+
+    let (dir, _cleanup) = create_test_dir();
+    let folder = dir.to_str().unwrap();
+    let config = |epoch| PipelineConfig {
+        root: crate::vault::paths::VaultRoot::resolve(&dir),
+        progress: crate::build::null_sink(),
+        plugins: PluginMode::Skip,
+        watch: false,
+        start_server: false,
+        host: crate::build::ports::host::test_host_ports(),
+        trigger: BuildTrigger::Full,
+        exits_after_build: true,
+        site_url_override: None,
+        server_port: None,
+        admission_epoch: Some(epoch),
+        live_port: None,
+    };
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\nSee [the plan](wip.md).\n").unwrap();
+    fs::write(dir.join("wip.md"), "---\ntitle: Plan\ndraft: true\n---\n\nNot yet.\n").unwrap();
+
+    run_pipeline(config(crate::build::ship::next_promotion_epoch())).await.expect("build completes");
+    let err = crate::deploy::refuse_publish(folder).expect_err("a link to a draft must stop the publish");
+    assert!(err.contains("1 link goes to a draft") && err.contains("`index.md`") && err.contains("`wip.md` says `draft: true`"), "{err}");
+
+    fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\nNothing linked.\n").unwrap();
+    run_pipeline(config(crate::build::ship::next_promotion_epoch())).await.expect("build completes");
+    assert!(crate::deploy::refuse_publish(folder).is_ok(), "a draft nobody links to publishes fine");
 }

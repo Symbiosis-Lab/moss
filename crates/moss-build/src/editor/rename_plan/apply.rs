@@ -28,8 +28,9 @@ pub fn apply_planned_moves(project_root: &Path, plan: &RenamePlan) -> Result<Ren
     // Not the temp-file-and-rename helper: that replaces the file, and a page
     // in a synced folder must keep its identity, mode and extended attributes.
     // allow:raw_write the vault's own .md source, rewritten in place after a rename -- not build output
-    let applied = apply_planned_moves_with(project_root, plan, &|path, text| std::fs::write(path, text))?;
+    let mut applied = apply_planned_moves_with(project_root, plan, &|path, text| std::fs::write(path, text))?;
         carry_folder_decisions(project_root, applied.moves.iter().map(|m| (m, false)));
+    applied.passthrough = carry_passthrough(project_root, applied.moves.iter().map(|m| (m, false)));
     Ok(applied)
 }
 
@@ -52,6 +53,18 @@ fn carry_folder_decisions<'a>(project_root: &Path, moves: impl Iterator<Item = (
     }
 }
 
+/// `[build].passthrough` entries follow the moved paths (files and folders
+/// alike), read backwards for an undo. A failure is logged, not raised.
+fn carry_passthrough<'a>(project_root: &Path, moves: impl Iterator<Item = (&'a PlannedMove, bool)>) -> Vec<(String, String)> {
+    let pairs: Vec<(String, String)> = moves
+        .map(|(m, reversed)| if reversed { (m.new_path.clone(), m.old_path.clone()) } else { (m.old_path.clone(), m.new_path.clone()) })
+        .collect();
+    super::passthrough::follow_moves(project_root, &pairs).unwrap_or_else(|e| {
+        log::warn!("could not follow a rename in [build].passthrough: {e}");
+        Vec::new()
+    })
+}
+
 /// [`apply_planned_moves`] with the page writer passed in.
 fn apply_planned_moves_with(
     project_root: &Path,
@@ -60,11 +73,23 @@ fn apply_planned_moves_with(
 ) -> Result<RenameApplyResult, String> {
     let canonical_root =
         std::fs::canonicalize(project_root).map_err(|e| format!("Cannot canonicalize root: {}", e))?;
-    let mut applied = RenameApplyResult { moves: Vec::new(), edits: Vec::new(), skipped: Vec::new() };
+    let mut applied = RenameApplyResult::default();
     match apply_steps(&canonical_root, plan, &mut applied, write) {
         Ok(()) => Ok(applied),
         Err(failure) => Err(roll_back(&canonical_root, &applied, &failure)),
     }
+}
+
+/// The root-relative folders above `path` that do not exist yet, shallowest first.
+fn missing_parents(path: &Path, root: &Path) -> Vec<String> {
+    let mut dirs: Vec<String> = path
+        .ancestors()
+        .skip(1)
+        .take_while(|a| a.symlink_metadata().is_err())
+        .filter_map(|a| Some(a.strip_prefix(root).ok()?.to_string_lossy().replace('\\', "/")))
+        .collect();
+    dirs.reverse();
+    dirs
 }
 
 /// Why an apply or undo stopped: what failed, and the pages that could not be
@@ -118,6 +143,7 @@ fn apply_steps(
     for mv in &plan.moves {
         let old_abs = canonical_root.join(&mv.old_path);
         let new_abs = canonical_root.join(&mv.new_path);
+        let created = missing_parents(&new_abs, canonical_root);
         crate::vault::fs::rename_entry_inner(
             canonical_root,
             &old_abs.to_string_lossy(),
@@ -125,6 +151,7 @@ fn apply_steps(
         )
         .map_err(|cause| WriteFailure { cause, damaged: Vec::new() })?;
         applied.moves.push(mv.clone());
+        applied.created_dirs.extend(created);
     }
 
     let mut file_order: Vec<String> = Vec::new();
@@ -219,6 +246,7 @@ pub fn undo_applied(project_root: &Path, applied: &RenameApplyResult) -> Result<
     // allow:raw_write undoing a rename's own reference rewrite -- not build output
     let undone = undo_applied_with(project_root, applied, &|path, text| std::fs::write(path, text))?;
     carry_folder_decisions(project_root, applied.moves.iter().rev().map(|m| (m, true)));
+    carry_passthrough(project_root, applied.moves.iter().rev().map(|m| (m, true)));
     Ok(undone)
 }
 
@@ -262,6 +290,11 @@ fn undo_applied_with(
             &cur_abs.to_string_lossy(),
             &restored_abs.to_string_lossy(),
         )?;
+    }
+
+    // `remove_dir` only removes an empty folder: one that gained anything stays.
+    for dir in applied.created_dirs.iter().rev() {
+        let _ = std::fs::remove_dir(canonical_root.join(dir));
     }
 
     let mut file_order: Vec<String> = Vec::new();

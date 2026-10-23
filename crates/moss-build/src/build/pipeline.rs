@@ -301,7 +301,7 @@ fn read_notebook_sibling(source: &std::path::Path, evidence: &super::cloud_ledge
     if crate::build::icloud::is_evicted(source) {
         evidence.pending(source);
         crate::build::cloud_readiness::request_download(source);
-        log::warn!("notebook {} is still in the cloud — building without it", source.display());
+        crate::build::cli_output::log_note!("notebook {} is still in the cloud — building without it", source.display());
         return None;
     }
     match fs::read_to_string(source) {
@@ -312,7 +312,7 @@ fn read_notebook_sibling(source: &std::path::Path, evidence: &super::cloud_ledge
         Err(e) if crate::build::icloud::is_offline_not_absent(source, &e) => {
             evidence.pending(source);
             crate::build::cloud_readiness::request_download(source);
-            log::warn!("notebook {} is unreadable but not gone — building without it", source.display());
+            crate::build::cli_output::log_note!("notebook {} is unreadable but not gone — building without it", source.display());
             None
         }
         Err(e) => {
@@ -433,7 +433,7 @@ fn run_notebook_processing(
     ) {
         Ok(path) => path,
         Err(e) => {
-            log::warn!("JupyterLite assets not available: {}. Notebooks will be copied without viewer.", e);
+            log::info!("JupyterLite assets not available: {}. Notebooks will be copied without viewer.", e);
             if is_headless {
                 crate::cli_eprintln!("Warning: JupyterLite not available: {}", e);
             }
@@ -458,7 +458,7 @@ fn run_notebook_processing(
                     }
                     Err(e) => {
                         evidence.read_error(&source, e.clone());
-                        log::warn!("Failed to copy notebook {}: {}", item.source_path, e);
+                        log::info!("Failed to copy notebook {}: {}", item.source_path, e);
                     }
                 }
             }
@@ -473,7 +473,7 @@ fn run_notebook_processing(
     let mut bundle_receipts = match copy_dir_recursive(&jl_assets, &jupyter_output) {
         Ok(receipts) => receipts,
         Err(e) => {
-            log::warn!("Failed to copy JupyterLite assets: {}", e);
+            log::info!("Failed to copy JupyterLite assets: {}", e);
             return Vec::new();
         }
     };
@@ -531,7 +531,7 @@ fn run_notebook_processing(
     // obvious.
     let is_cloud_storage = is_cloud_storage_path(source_path);
     if is_cloud_storage && !items.is_empty() {
-        log::warn!(
+        log::info!(
             "Notebook processing on cloud-storage path ({} items): {}. \
              Synchronous I/O may block if the cloud-sync client (Dropbox/\
              OneDrive/Google Drive/iCloud) is reconciling or files are \
@@ -585,14 +585,14 @@ fn run_notebook_processing(
         match rx.recv_timeout(Duration::from_secs(NOTEBOOK_IO_TIMEOUT_SECS)) {
             Ok(Ok(paths)) => IoOutcome::Done(paths),
             Ok(Err(e)) => {
-                log::warn!(
+                log::info!(
                     "[notebook] I/O for '{}' returned an error: {}; continuing",
                     label, e
                 );
                 IoOutcome::Errored(e)
             }
             Err(_) => {
-                log::warn!(
+                crate::build::cli_output::log_note!(
                     "[notebook] I/O for '{}' timed out after {}s. Likely cloud-storage \
                      dehydration (Dropbox CloudStorage / iCloud). The notebook is \
                      skipped on this build; the next rebuild will retry. Worker \
@@ -674,7 +674,7 @@ fn run_notebook_processing(
             let viewer_relative = crate::build::notebook::viewer_path(&item_source_path).unwrap();
             match stage_write(&viewer_html, &viewer_relative, &staging_owned) {
                 Ok(hash) => produced.push((viewer_relative, hash)),
-                Err(e) => log::warn!("Failed to write viewer HTML: {}", e),
+                Err(e) => log::info!("Failed to write viewer HTML: {}", e),
             }
             Ok(produced)
         });
@@ -799,7 +799,7 @@ fn run_notebook_processing(
         .unwrap();
         match stage_write(&manifest, &manifest_path, staging_dir) {
             Ok(hash) => generated_paths.push((manifest_path, hash)),
-            Err(e) => log::warn!("Failed to write JupyterLite contents manifest: {}", e),
+            Err(e) => log::info!("Failed to write JupyterLite contents manifest: {}", e),
         }
     }
 
@@ -1256,7 +1256,7 @@ fn build_inner(
     let lock_wait = t_lock.elapsed();
     log::log!(
         target: "timing",
-        if lock_wait >= STAGE_WRITE_LOCK_WARN { log::Level::Warn } else { log::Level::Debug },
+        if lock_wait >= STAGE_WRITE_LOCK_WARN { log::Level::Info } else { log::Level::Debug },
         "[build] staging: waited {lock_wait:?} for the stage-write lock (above {STAGE_WRITE_LOCK_WARN:?} means the previous build's seal tail is on this build's critical path)",
     );
 
@@ -1311,11 +1311,9 @@ fn build_inner(
             input_evidence.read_bytes(&config_path, text.as_bytes());
             match crate::config::ConfigFile::parse(&text) {
                 Ok(parsed) => Some(parsed),
-                Err(error) => {
-                    input_evidence.read_error(&config_path, error.clone());
-                    log::warn!("config.toml could not be parsed: {error}");
-                    None
-                }
+                // Fatal, not a fallback to defaults: the withheld generation
+                // would otherwise be reported as shipped.
+                Err(error) => return Err(error.into()),
             }
         }
         Ok(None) => {
@@ -1325,10 +1323,11 @@ fn build_inner(
         Err(error) => {
             if super::icloud::is_still_in_the_cloud(&config_path) {
                 input_evidence.pending(&config_path);
+                crate::build::cli_output::log_note!("config.toml is still in the cloud — building without it: {error}");
             } else {
                 input_evidence.read_error(&config_path, error.clone());
+                crate::build::cli_output::log_warn_problem!("config.toml could not be read: {error}");
             }
-            log::warn!("config.toml could not be read: {error}");
             None
         }
     };
@@ -1361,6 +1360,9 @@ fn build_inner(
     for problem in &field_problems {
         crate::build::cli_output::log_warn_problem!("{problem}");
     }
+    for note in cfg.as_ref().map(|c| c.unknown_site_keys()).unwrap_or_default() {
+        crate::build::cli_output::log_note!("{note}");
+    }
     let places_toml_path = paths.places();
     input_evidence.require(&places_toml_path, super::cloud_ledger::InputRole::GeneratedData);
     let (places_toml_stat, places_read) =
@@ -1384,14 +1386,21 @@ fn build_inner(
         Err(e) => {
             if super::icloud::is_still_in_the_cloud(&places_toml_path) {
                 input_evidence.pending(&places_toml_path);
+                crate::build::cli_output::log_note!("places.toml is still in the cloud — building without it: {e}");
             } else {
                 input_evidence.read_error(&places_toml_path, e.clone());
+                crate::build::cli_output::log_warn_problem!("places.toml could not be read: {e}");
             }
-            log::warn!("places.toml could not be read: {e}");
             (crate::vault::places::Gazetteer::default(), None)
         }
     };
     crate::build::terms::places::attach_parents(&mut kinds, &gazetteer);
+    let map_layers = cfg
+        .as_ref()
+        .map(|c| c.map_layers())
+        .transpose()
+        .and_then(|layers| crate::config::map_layers::resolve_layers(layers.unwrap_or_default(), root.path(), &gazetteer))
+        .map_err(BuildStopped::from)?;
     let place_maps = kinds
         .iter()
         .find(|kind| kind.is_place)
@@ -1404,7 +1413,8 @@ fn build_inner(
                     // unlike the places-explorer data hash, which needs
                     // `derive_terms`'s finished output and is set later, in
                     // `generate_blocking_content_for_build`.
-                    let map_assets_hash = crate::build::emit::place_map_assets::assets_hash(&maps, &gazetteer);
+                    let layer_plans = crate::build::place_map::layer_warp::plan_layers(&map_layers, root.path(), &gazetteer);
+                    let map_assets_hash = crate::build::emit::place_map_assets::assets_hash_with_layers(&maps, &gazetteer, &map_layers, &layer_plans);
                     Some(
                         crate::build::place_map::PlaceMapRenderContext::new(
                             maps,
@@ -1414,11 +1424,13 @@ fn build_inner(
                             parents,
                         )
                         .with_explorer(explorer)
+                        .with_layers(map_layers)
+                        .with_layer_plans(layer_plans)
                         .with_map_assets_hash(map_assets_hash),
                     )
                 }
                 Err(error) => {
-                    crate::build::cli_output::log_warn_problem!("bundled place-map data could not be decoded ({error:?}); omitting maps");
+                    log::info!("bundled place-map data could not be decoded ({error:?}); omitting maps");
                     None
                 }
             }
@@ -1432,6 +1444,7 @@ fn build_inner(
     // three hand-captured copies plus the emit site's own second
     // `embedded()` decode.
     let place_maps_for_places_data = place_maps.clone();
+    let place_kinds: Vec<crate::build::terms::TermKind> = kinds.iter().filter(|k| k.is_place).cloned().collect();
     // Default-on by key absence, same story as `site_config.math` below is
     // built from (see that field's own comment) — computed once here so
     // both the page-rendering config and the places-explorer data emitter,
@@ -1485,7 +1498,10 @@ fn build_inner(
         // asked for, not inherited, so a site that never said anything gets no
         // floating nav (as amended 2026-08-30).
         floating_nav: site_bool("floating_nav").unwrap_or(false),
-        // `[site].header` — "brand" (default) or "nav"; an absent or
+        // Default-on by key absence, like `link_preview`: `[site].colophon = false`
+        // is the only way to leave moss's credit out.
+        colophon: site_bool("colophon").unwrap_or(true),
+        // `[site].header` — "brand" (default), "nav" or "none"; an absent or
         // unrecognized value resolves to "brand" (`HeaderMode::from_config`
         // logs a warning on the latter).
         header: crate::build::components::nav::HeaderMode::from_config(site_str("header").as_deref()),
@@ -1535,7 +1551,8 @@ fn build_inner(
     // When the typed-AST migration completes (Phase 4+), this evolves to
     // `Vec<moss_core::ast::Document>`.
     let exits_after_build = matches!(search_freshness, crate::build::feeds::search_lane::Freshness::Now);
-    let (mut site_result, mut background_ctx, documents, carry_verification) = generate_blocking_content_for_build(root, project_structure, &stage_dir, services, progress_sender, emit_source_lines, site_config, &mut pending, exits_after_build, true)?;
+    let build_now = crate::build::folder_embed::upcoming::now();
+    let (mut site_result, mut background_ctx, documents, carry_verification) = generate_blocking_content_for_build(root, project_structure, &stage_dir, services, progress_sender, emit_source_lines, site_config, &mut pending, exits_after_build, true, build_now)?;
     log::debug!(target: "timing", "[build] staging: generate_blocking_content: {:?}", build_start.elapsed());
 
     // Places-explorer data file (`_moss/places.<hash>.json`), gated on the
@@ -1555,7 +1572,7 @@ fn build_inner(
             &mut pending,
             &background_ctx.dir_overrides,
         ) {
-            log::warn!("Failed to emit places-explorer data: {e}");
+            log::info!("Failed to emit places-explorer data: {e}");
         }
     }
 
@@ -1568,7 +1585,28 @@ fn build_inner(
         Some(resolve) => resolve(&documents, &site_lang, site_comments)?,
         None => ResolvedSlots::empty(),
     };
-    crate::build::emit::listing_style::apply(&documents, project_structure, &site_result.term_index, &listing_field_decls, &stage_dir, &mut pending, &mut resolved_slots);
+    crate::build::emit::listing_style::apply(&documents, project_structure, &site_result.term_index, &listing_field_decls, &stage_dir, &mut pending, &mut resolved_slots, build_now);
+    // `[site] archival`: off by default; the source copy is written first because the id is a hash of it.
+    let edition = crate::build::emit::archival::from_build(
+        site_bool("archival").unwrap_or(false),
+        crate::build::emit::archival::SiteFacts {
+            structure: project_structure,
+            documents: &documents,
+            site_url: pending.site_url().map(str::to_string),
+            author: site_str("author"),
+            license: site_str("license"),
+            lang: &site_lang,
+            folder_name: root.name_opt(),
+            now: build_now,
+        },
+        &stage_dir,
+        &mut pending,
+        || resolved_slots.link_feature_style("archival"),
+    )
+    .map_err(|e| format!("edition source copy: {e}"))?;
+    if let Some(edition) = edition {
+        resolved_slots.set_edition(edition);
+    }
     // Injects slots (and plugin listings) over the stage, re-registers every page it
     // rewrote, and settles the `MOSS_INCREMENTAL_VERIFY=1` carry check. See `build::emit::slots`.
     crate::build::emit::slots::apply_to_stage_and_manifest(
@@ -1857,6 +1895,14 @@ fn build_inner(
     crate::build::emit::place_map_assets::emit_if_place_typed(
         place_maps_for_places_data.as_ref(),
         &paths,
+        &stage_dir,
+        &mut pending,
+    );
+    // `layers.json` beside them; nothing is written without `[map.layers]`.
+    let used_places = place_maps_for_places_data.as_ref().map_or_else(Vec::new, |maps| crate::build::terms::places::used_places(&documents, &place_kinds, maps.gazetteer()));
+    crate::build::emit::place_map_layers::emit_if_place_typed(
+        place_maps_for_places_data.as_ref(),
+        &used_places,
         &stage_dir,
         &mut pending,
     );

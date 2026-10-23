@@ -35,7 +35,6 @@ const FOREIGN_FIELD_HINTS: &[(&str, &str)] = &[
     // Short blurb — Hugo (`summary`), Jekyll (`excerpt`).
     ("summary", "description"),
     ("excerpt", "description"),
-    ("subtitle", "description"),
     // Taxonomy — Jekyll/Hugo split tags from categories; moss has one axis.
     ("categories", "tags"),
     ("category", "tags"),
@@ -150,7 +149,7 @@ pub fn validate_frontmatter(
 
     // Check each field defined in the schema.
     for (name, def) in &schema.frontmatter.fields {
-        match fm.get(name) {
+        match crate::frontmatter::get_present(fm, name) {
             None => {
                 if def.required {
                     diags.push(Diagnostic {
@@ -481,6 +480,23 @@ mod tests {
         let diags = validate_frontmatter(&fm, &schema);
         let errors: Vec<_> = diags.iter().filter(|d| d.severity == Severity::Error).collect();
         assert!(errors.is_empty(), "Expected no errors, got: {:?}", errors);
+    }
+
+    #[test]
+    fn a_blank_value_is_validated_as_absent() {
+        let schema = builtin_schema();
+        let fm = make_fm(&[
+            ("title", str_val("Hi")),
+            ("start", serde_yaml::Value::Null),
+            ("location", str_val("")),
+            ("description", str_val("  ")),
+        ]);
+        let diags = validate_frontmatter(&fm, &schema);
+        assert!(diags.iter().all(|d| d.severity != Severity::Error), "{diags:?}");
+        let blank_title = make_fm(&[("title", serde_yaml::Value::Null)]);
+        assert!(validate_frontmatter(&blank_title, &schema)
+            .iter()
+            .any(|d| d.message.contains("required field 'title' is missing")));
     }
 
     #[test]

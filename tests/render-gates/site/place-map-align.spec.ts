@@ -191,19 +191,23 @@ test("a media-first body keeps the figure full width and aligns the map with the
   expect(locatorBox.top, "locator top must be at or above the paragraph's bottom (they overlap vertically)").toBeLessThan(paragraphBox.bottom);
 });
 
-test("a body with no text block keeps the locator at the front, above the now full-width heading", async ({ page }) => {
+test("a body with no text block takes the locator at its end, unfloated, below the full-width heading", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 1000 });
   await page.goto("no-text/", { waitUntil: "domcontentloaded" });
 
-  // Nothing for the locator to sit beside, so the base clear:both rule
-  // (unconditional now — the fix this gate covers removed its one
-  // exception) pushes the heading below the float instead.
-  const { locatorBottom, headingTop } = await page.evaluate(() => {
+  // Nothing for the locator to sit beside, so it follows the body as a
+  // block of its own rather than floating above an empty band.
+  const { locatorTop, headingBottom, floated } = await page.evaluate(() => {
     const locator = document.querySelector(".moss-place-locator")!;
     const heading = document.querySelector("article.container > h2")!;
-    return { locatorBottom: locator.getBoundingClientRect().bottom, headingTop: heading.getBoundingClientRect().top };
+    return {
+      locatorTop: locator.getBoundingClientRect().top,
+      headingBottom: heading.getBoundingClientRect().bottom,
+      floated: getComputedStyle(locator).float,
+    };
   });
-  expect(locatorBottom, `locator bottom ${locatorBottom} vs. heading top ${headingTop}`).toBeLessThanOrEqual(headingTop);
+  expect(locatorTop, `locator top ${locatorTop} vs. heading bottom ${headingBottom}`).toBeGreaterThanOrEqual(headingBottom);
+  expect(floated).toBe("none");
   await fullColumnWidth(page, "article.container > h2");
 });
 

@@ -647,6 +647,7 @@ mod tests {
                 cells: vec![cell],
                 width: None,
                 scroll: false,
+                collage: false,
                 label: None,
             }))]);
         let snap = empty_snapshot();
@@ -686,10 +687,15 @@ mod tests {
                 overlay_text: String::new(),
                 width: None,
                 mobile: None,
+                panel: None,
+                fade: None,
+                max_height: None,
                 align: None,
                 caption: Vec::new(),
                 slide_captions: Vec::new(),
                 header: None,
+                from: None,
+                dark: None,
             }))]);
         let snap = empty_snapshot();
         let graph = empty_graph();

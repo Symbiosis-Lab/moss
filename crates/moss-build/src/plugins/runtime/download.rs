@@ -97,6 +97,8 @@ pub(super) async fn do_http_request(
             }
         };
 
+        // moss's own agent string first, so a caller header can still replace it.
+        request = request.set("User-Agent", &crate::system::user_agent());
         let method_sets_content_type =
             matches!(method, HttpMethod::Post { .. } | HttpMethod::PostBytes { .. });
         if let Some(hdrs) = headers {
@@ -333,6 +335,8 @@ pub async fn download_asset_impl(
     project_path: &str,
     target_dir: String,
     timeout_ms: Option<u64>,
+    filename: Option<String>,
+    headers: Option<HashMap<String, String>>,
 ) -> Result<DownloadAssetResult, String> {
     use std::time::Duration;
 
@@ -344,6 +348,12 @@ pub async fn download_asset_impl(
     }
     if target_dir.contains("..") {
         return Err("Invalid path: directory traversal not allowed".to_string());
+    }
+
+    if let Some(name) = &filename {
+        if name.is_empty() || name == "." || name.contains(['/', '\\', '\0']) || name.contains("..") {
+            return Err(format!("Invalid file name '{name}': a single name, no path separators"));
+        }
     }
 
     let parsed_url: url::Url = url
@@ -375,7 +385,11 @@ pub async fn download_asset_impl(
 
         tokio::task::spawn_blocking(move || {
             let agent = crate::system::proxy::proxied_ureq_agent(&url_inner, timeout_for_ureq);
-            let response = agent.get(&url_inner).call();
+            let mut request = agent.get(&url_inner).set("User-Agent", &crate::system::user_agent());
+            for (key, value) in headers.iter().flatten() {
+                request = request.set(key, value);
+            }
+            let response = request.call();
             process_ureq_response(response, &url_inner, timeout_ms_val)
         })
         .await
@@ -404,7 +418,7 @@ pub async fn download_asset_impl(
 
     let bytes_len = bytes.len() as u64;
 
-    let filename = derive_filename(&parsed_url, content_type.as_deref());
+    let filename = filename.unwrap_or_else(|| derive_filename(&parsed_url, content_type.as_deref()));
     let relative_path = format!("{}/{}", target_dir.trim_end_matches('/'), filename);
 
     let file_path = Path::new(project_path).join(&relative_path);
@@ -474,6 +488,7 @@ pub(crate) async fn do_http_request_full(
             FetchMethod::Post { .. } => agent.post(&url_c).set("Content-Type", "application/json"),
             FetchMethod::Put { .. } => agent.put(&url_c).set("Content-Type", "application/json"),
         };
+        req = req.set("User-Agent", &crate::system::user_agent());
         if let Some(h) = req_headers {
             for (k, v) in h { req = req.set(&k, &v); }
         }

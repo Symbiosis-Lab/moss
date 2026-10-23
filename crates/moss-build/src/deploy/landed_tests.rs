@@ -77,6 +77,24 @@ async fn a_landed_publish_records_what_went_live() {
     );
 }
 
+/// A site whose only page is its home has no article to track, so its article
+/// map is empty. What the publish wrote must still read as a record of what is
+/// live: the next build of that site must not report it missing.
+#[tokio::test]
+async fn a_publish_of_a_site_with_no_tracked_pages_leaves_a_baseline() {
+    let dir = tempfile::tempdir().unwrap();
+    let mp = MossPaths::new(dir.path());
+    std::fs::create_dir_all(mp.build_dir()).unwrap();
+    std::fs::write(mp.article_map(), br#"{"articles":{}}"#).unwrap();
+
+    let history_dir = tempfile::tempdir().unwrap();
+    let manifest = sealed(&[("index.md", "index.html", "h-home", b"H")]);
+    let history = crate::deploy::history::HistoryStore::at(history_dir.path().to_path_buf());
+    super::record_what_is_live(&mp, &manifest, TARGET, &history).await;
+
+    assert_eq!(live_baseline::load(&mp), Baseline::Present(live_baseline::LiveBaseline::default()));
+}
+
 /// The article map is regenerable build output, so a build can legitimately
 /// reach the record with none to read. That must not CLEAR what is live: an
 /// empty map is read as "nothing was ever published", which is the whole

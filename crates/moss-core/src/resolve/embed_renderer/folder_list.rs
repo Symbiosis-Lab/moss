@@ -23,6 +23,9 @@ pub struct FolderEmbedParams {
     /// flattening (`depth:all`) and before `limit`, so a capped listing
     /// counts the limit off the covered set rather than the full set.
     pub covers: Option<String>,
+    /// Listing filter: "past" or "upcoming" keeps only the pages whose event
+    /// has ended, or has not. A page with no start or date is past.
+    pub when: Option<String>,
     /// Raw sizing token (e.g. `"80%"`, `"800x600"`). Parsed to a `Sizing`
     /// at render time and applied ONLY to the static-index iframe branch
     /// (the card-grid listing branch ignores it). Stored raw so the
@@ -59,6 +62,9 @@ pub struct FolderEmbedParams {
     /// that wraps it. Any segment that is neither a keyed param nor
     /// placement.
     pub caption: Option<String>,
+    /// Keys in the keyed grammar that moss does not know. They are ignored
+    /// for the listing and carried in the marker so the build can warn.
+    pub unknown_keys: Vec<String>,
 }
 
 /// Read a whole folder-embed pothole: keyed params, placement and caption,
@@ -101,20 +107,10 @@ pub fn classify_folder_segments(raw: &str) -> FolderEmbedParams {
 }
 
 /// Recognized keys for the keyed (`key:value` / `key=value`) grammar.
-const KNOWN_KEYS: &[&str] = &["limit", "sort", "style", "depth", "group", "covers", "more", "size"];
+pub const KNOWN_KEYS: &[&str] = &["limit", "sort", "style", "depth", "group", "covers", "when", "more", "size"];
 
-/// Whether a segment belongs to the keyed grammar rather than to placement
-/// or the caption.
-///
-/// A `key:value`/`key=value` token must name a recognized key — otherwise a
-/// colon in prose (`Note: 2024`) misfires as the keyed grammar and silently
-/// eats the caption. A token with NEITHER `:` nor `=` is tolerated rather
-/// than disqualifying: `merge_keyed_params` already treats a colon-less
-/// token as a bare flag (a sizing hint, or silently ignored, per its own
-/// comment), so `limit:3,more` must stay keyed with `more` a no-op, the same
-/// as `merge_keyed_params` parses it standalone. At least one recognized
-/// key is still required, or a plain caption ("wide cover", "This is nice")
-/// would misfire as keyed since every one of its tokens is colon-less.
+/// A segment is keyed when it has at least one known key.
+/// Unknown keys beside a known one are ignored and reported.
 fn is_keyed_segment(segment: &str) -> bool {
     if is_size_token(segment) {
         return true;
@@ -131,7 +127,7 @@ fn is_keyed_segment(segment: &str) -> bool {
     for t in &tokens {
         match t.split_once([':', '=']) {
             Some((k, _)) if KNOWN_KEYS.contains(&k.trim()) => has_known_key = true,
-            Some(_) => return false,
+            Some(_) => {} // unknown key: the segment stays keyed, the key is reported
             None => {} // colon-less bare token — tolerated
         }
     }
@@ -174,13 +170,14 @@ fn merge_keyed_params(out: &mut FolderEmbedParams, raw: &str) {
                 "depth" => out.depth = Some(v.trim().to_string()),
                 "group" => out.group = Some(v.trim().to_string()),
                 "covers" => out.covers = Some(v.trim().to_string()),
+                "when" => out.when = Some(v.trim().to_string()).filter(|w| matches!(w.as_str(), "past" | "upcoming")),
                 "more" => {
                     let v = v.trim();
                     if !v.is_empty() {
                         out.more = Some(v.to_string());
                     }
                 }
-                _ => {}
+                other => out.unknown_keys.push(other.to_string()),
             }
         } else if is_size_token(tok) {
             // A bare token that is unambiguously a sizing hint (ends in `%`,
@@ -243,6 +240,21 @@ pub fn mark_cards_lazy(html: &str) -> String {
     out
 }
 
+/// `text` without its folder-list markers: for prose that quotes a block's
+/// source (a description), where a listing has no words to offer.
+pub fn strip_markers(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(MARKER_FOLDER_LIST) {
+        let (before, after) = rest.split_at(start);
+        out.push_str(before);
+        let Some(end) = after.find(MARKER_END) else { return out };
+        rest = after.split_at(end + MARKER_END.len()).1;
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Percent-encode the characters that would otherwise end a marker field or
 /// the marker itself.
 ///
@@ -289,6 +301,23 @@ pub fn marker_decode(value: &str) -> String {
     out
 }
 
+/// The listing marker for a folder embed `inner` (the content of `![[…]]`,
+/// `folder/|options`), or `None` unless its target names a folder, ending in
+/// `/`. One lowering for an embed in a body and for a hero's `from=`.
+pub fn listing_marker(inner: &str, source_path: &str) -> Option<String> {
+    let (target, _) = crate::resolve::embeds::split_embed_target(inner);
+    if !target.ends_with('/') {
+        return None;
+    }
+    let options = inner.split_once('|').map_or("", |(_, options)| options);
+    Some(emit_marker(target, source_path, &classify_folder_segments(options)))
+}
+
+/// The `key=value|…` body of a marker, without its delimiters.
+pub fn marker_body(marker: &str) -> Option<&str> {
+    marker.strip_prefix(MARKER_FOLDER_LIST)?.strip_suffix(MARKER_END)
+}
+
 pub fn emit_marker(path: &str, from: &str, params: &FolderEmbedParams) -> String {
     let mut parts = vec![format!("path={}", path), format!("from={}", from)];
     if let Some(ref s) = params.style {
@@ -302,6 +331,9 @@ pub fn emit_marker(path: &str, from: &str, params: &FolderEmbedParams) -> String
     }
     if let Some(ref c) = params.covers {
         parts.push(format!("covers={}", c));
+    }
+    if let Some(ref w) = params.when {
+        parts.push(format!("when={}", w));
     }
     if let Some(ref m) = params.more {
         parts.push(format!("more={}", marker_encode(m)));
@@ -334,6 +366,9 @@ pub fn emit_marker(path: &str, from: &str, params: &FolderEmbedParams) -> String
     }
     if let Some(n) = params.limit {
         parts.push(format!("limit={}", n));
+    }
+    if !params.unknown_keys.is_empty() {
+        parts.push(format!("unknown={}", marker_encode(&params.unknown_keys.join(","))));
     }
     if params.lazy_cards {
         parts.push(LAZY_CARDS_TOKEN.to_string());

@@ -142,6 +142,124 @@ test.describe('Narrow Viewport (<320px) - Hamburger Menu', () => {
   });
 });
 
+test.describe('Open menu at the 320px edge - full sheet', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 640 });
+  });
+
+  async function openMenu(page) {
+    await page.goto('/about/');
+    await page.locator('.mobile-menu-button').click();
+    await expect(page.locator('.nav-links')).toHaveCSS('opacity', '1');
+  }
+
+  test('the sheet spans the viewport from the header bottom to the viewport bottom', async ({ page }) => {
+    await openMenu(page);
+    const m = await page.evaluate(() => {
+      const r = document.querySelector('.nav-links').getBoundingClientRect();
+      return {
+        left: r.left, right: r.right, top: r.top, bottom: r.bottom,
+        headerBottom: document.querySelector('header').getBoundingClientRect().bottom,
+        w: window.innerWidth, h: window.innerHeight,
+      };
+    });
+    expect(m.left).toBeCloseTo(0, 0);
+    expect(m.right).toBeCloseTo(m.w, 0);
+    expect(m.top).toBeCloseTo(m.headerBottom, 0);
+    expect(m.bottom).toBeCloseTo(m.h, 0);
+    // Opaque: the page behind never shows through.
+    const bg = await page.locator('.nav-links').evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(bg).not.toMatch(/rgba\(.*, 0\)|transparent/);
+  });
+
+  test('links start on the page gutter, level with the logo, and none overflows the sheet', async ({ page }) => {
+    await openMenu(page);
+    const m = await page.evaluate(() => {
+      const logo = document.querySelector('.site-name, .breadcrumb-segment').getBoundingClientRect();
+      const sheet = document.querySelector('.nav-links').getBoundingClientRect();
+      const links = [...document.querySelectorAll('.nav-links a')].map((a) => a.getBoundingClientRect());
+      return {
+        logoLeft: logo.left, firstLeft: links[0].left,
+        outside: links.filter((r) => r.right > sheet.right + 0.5).length,
+        shortest: Math.min(...links.map((r) => r.height)),
+      };
+    });
+    expect(m.firstLeft).toBeCloseTo(m.logoLeft, 0);
+    expect(m.outside).toBe(0);
+    expect(m.shortest).toBeGreaterThanOrEqual(44);
+  });
+
+  test('opening moves focus to the first link and keeps the button name', async ({ page }) => {
+    await openMenu(page);
+    await expect(page.locator('.nav-links a').first()).toBeFocused();
+    await expect(page.locator('.mobile-menu-button')).toHaveAttribute('aria-label', 'Menu');
+    await expect(page.locator('.mobile-menu-button')).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  test('Escape closes the menu and returns focus to the button', async ({ page }) => {
+    await openMenu(page);
+    await page.keyboard.press('Escape');
+    const button = page.locator('.mobile-menu-button');
+    await expect(button).toHaveAttribute('aria-expanded', 'false');
+    await expect(button).toHaveAttribute('aria-label', 'Menu');
+    await expect(button).toBeFocused();
+    await expect(page.locator('.nav-links')).toHaveCSS('visibility', 'hidden');
+  });
+
+  test('the page behind cannot scroll while the menu is open', async ({ page }) => {
+    await page.goto('/about/');
+    // Without a scrollable page the lock proves nothing.
+    await page.evaluate(() => {
+      const filler = document.createElement('div');
+      filler.style.height = '3000px';
+      document.body.appendChild(filler);
+    });
+    expect(await page.evaluate(() => document.documentElement.scrollHeight > innerHeight)).toBe(true);
+    await page.locator('.mobile-menu-button').click();
+    await expect(page.locator('.nav-links')).toHaveCSS('opacity', '1');
+    // A wheel gesture, as a reader would scroll: `scrollTo` ignores the lock.
+    await page.mouse.move(160, 500);
+    await page.mouse.wheel(0, 500);
+    await page.waitForTimeout(150);
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
+    const overflow = () => page.evaluate(() => getComputedStyle(document.documentElement).overflow);
+    expect(await overflow()).toBe('hidden');
+    await page.keyboard.press('Escape');
+    expect(await overflow()).not.toBe('hidden');
+  });
+
+  test('under a header=over hero the links keep the sheet ink through the fade-out', async ({ page }) => {
+    await page.goto('/cover/');
+    const link = page.locator('.nav-links a').first();
+    const color = () => link.evaluate((a) => getComputedStyle(a).color);
+    await page.locator('.mobile-menu-button').click();
+    await expect(page.locator('.nav-links')).toHaveCSS('opacity', '1');
+    const sheetInk = await color();
+    // Start every transition halfway so a colour that is about to change shows
+    // at once instead of after the 160ms fade has run out.
+    await page.addStyleTag({ content: '* { transition-duration: 10s !important; transition-delay: -5s !important; }' });
+    await page.keyboard.press('Escape');
+    expect(await color()).toBe(sheetInk);
+  });
+
+  test('the current page link carries aria-current="page"', async ({ page }) => {
+    await openMenu(page);
+    const current = page.locator('.nav-links a.active');
+    await expect(current).toHaveCount(1);
+    await expect(current).toHaveAttribute('aria-current', 'page');
+  });
+
+  test('the hamburger turns into a cross by transforming its strokes', async ({ page }) => {
+    await openMenu(page);
+    const t = await page.evaluate(() =>
+      [...document.querySelectorAll('.mobile-menu-button line')].map((l) => getComputedStyle(l).transform),
+    );
+    expect(t).toHaveLength(3);
+    expect(t[1]).not.toBe('none');
+    expect(t[2]).not.toBe('none');
+  });
+});
+
 test.describe('Medium Breakpoint Navigation (600px)', () => {
   test.beforeEach(async ({ page }) => {
     // Set tablet viewport (between 20rem and 48rem)

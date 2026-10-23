@@ -1360,6 +1360,11 @@ typesetting: vertical
   },
 };
 
+const POSTER_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR4nGMwSFiAFTEMLQkAlntMAXEm5KkAAAAASUVORK5CYII=",
+  "base64",
+);
+
 // ── The narrow-viewport hamburger menu ───────────────────────────────────────
 // Six nav pages, which is the point: the menu used to open to a fixed
 // `max-height: 200px`, and because `.nav-links` inherits `flex-wrap: wrap` from
@@ -1367,9 +1372,27 @@ typesetting: vertical
 // extra COLUMNS rather than clipping it. Six links rendered as two columns of
 // three in both engines. Three pages would not have shown it. Served by
 // playwright/nav-mobile.config.ts.
+//
+// `cover` is the one page that is not a nav item: a `header=over` hero, for the
+// menu's link colours over a photo.
 export const NAV_MOBILE_GATE: ScratchSiteSpec = {
   name: "nav-mobile-gate",
   files: {
+    "poster.png": POSTER_PNG,
+    "cover.md": `---
+title: Cover
+uid: "nmg00108"
+listed: false
+---
+
+:::hero {header=over}
+![](/poster.png)
+
+Cover words
+:::
+
+Body text.
+`,
     "index.md": `---
 title: Nav Mobile
 uid: "nmg00101"
@@ -1404,7 +1427,7 @@ nav: true
 # Projects
 `,
     "Photography.md": `---
-title: Photography
+title: Photography and Film Archive
 uid: "nmg00105"
 nav: true
 ---
@@ -1894,14 +1917,13 @@ precision = "exact"
   },
 };
 
-// ── route: true draws a line, badges and leaders ─────────────────────────────
+// ── route: true draws a line and badges ─────────────────────────────
 // Four stops in travel order: Harbor and Harbor Overlook share one
-// coordinate, so the badge-offset rule fires and badge 2 carries a leader
-// back to it; Inland Reach is region precision, for the hollow badge; Far
+// coordinate, so badge 2 would overlap badge 1 and is not numbered; Inland Reach is region precision, for the hollow badge; Far
 // Point is a plain fourth stop. The Rust snapshot suite pins the exact SVG
 // bytes this produces; this gate asks what a real browser does with
 // them — DOM order (line under markers), badge contrast in both themes, and
-// the leader's presence — which no byte comparison can see. Served by
+// which numbers are drawn — which no byte comparison can see. Served by
 // playwright/place-map-route.config.ts.
 export const PLACE_MAP_ROUTE_GATE: ScratchSiteSpec = {
   name: "place-map-route-gate",
@@ -1959,8 +1981,8 @@ precision = "city"
  * `list-first.md` and `quote-first.md` have no leading block to skip — the
  * map aligns with the body's very first element, as it always has, whatever
  * shape that element is. `no-text.md` has no paragraph, list or blockquote
- * anywhere in its body, so the locator has nothing to sit before and stays
- * at the front, above the (now full-width) heading.
+ * anywhere in its body, so the locator has nothing to sit before and takes
+ * the end of the body, unfloated, below the full-width heading.
  * Served by playwright/place-map-align.config.ts.
  */
 export const PLACE_MAP_ALIGN_GATE: ScratchSiteSpec = {
@@ -3188,6 +3210,60 @@ precision = "city"
   },
 };
 
+export const NAV_ONE_ROW_GATE: ScratchSiteSpec = {
+  name: "nav-one-row-gate",
+  files: {
+    "index.md": `---
+title: Hall
+uid: "nor00101"
+logo: assets/lockup.svg
+---
+
+# Hall
+
+Scratch site for the one-row masthead render gate.
+`,
+    "assets/lockup.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="45" height="44" viewBox="0 0 45 44"><rect width="45" height="44" fill="#a11d1d"/></svg>`,
+    ".moss/theme/style.css": `.site-logo { height: 44px; }\n`,
+    "Work.md": `---
+title: Work
+uid: "nor00102"
+nav: true
+---
+
+# Work
+`,
+    "About.md": `---
+title: About
+uid: "nor00103"
+nav: true
+---
+
+# About
+`,
+    "Visit.md": `---
+title: Visit
+uid: "nor00104"
+nav: true
+---
+
+# Visit
+`,
+    "index.zh-hans.md": `---
+title: 示例
+uid: "nor00201"
+---
+
+# 示例
+`,
+    ".moss/config.toml": `schema_version = 5
+
+[site]
+lang = "en"
+`,
+  },
+};
+
 export const NAV_SPLIT_PACK_GATE: ScratchSiteSpec = {
   name: "nav-split-pack-gate",
   files: {
@@ -3332,11 +3408,6 @@ Body text.
 // only its opening hero (nothing listed under it: the other pages are
 // `listed: false`), and `about` joins the footer so there is a footer to
 // measure the gap to. Served by playwright/theme-floor-hooks.config.ts.
-const POSTER_PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR4nGMwSFiAFTEMLQkAlntMAXEm5KkAAAAASUVORK5CYII=",
-  "base64",
-);
-
 export const THEME_FLOOR_HOOKS_GATE: ScratchSiteSpec = {
   name: "theme-floor-hooks-gate",
   files: {
@@ -3402,6 +3473,10 @@ listed: false
 ---
 
 Small print.
+
+---
+
+More small print.
 `,
     ".moss/config.toml": CONFIG_TOML,
     ".moss/theme/style.css": `:root {
@@ -3480,4 +3555,412 @@ export const FOOTER_END_SPACE_HIDDEN: ScratchSiteSpec = {
 export const FOOTER_END_SPACE_DEFAULT: ScratchSiteSpec = {
   name: "footer-end-space-default-gate",
   files: { ...footerEndSpaceFiles, ".moss/theme/style.css": null },
+};
+
+// ── Facts list: hangs in the right margin only where it fits ──
+// Two sites that differ only in the theme rule that widens the content
+// column. Served by playwright/facts-margin.config.ts.
+const factsMarginFiles = {
+  "court.md": `---
+title: Example Court
+architect: Anna Weber
+scope: Nine floors of flats above a covered market hall
+photographer: Lena Marsh
+reference: REF-2026-NINE-FLOORS-0000000000000000000000000000000000000000-ABCDEFGHIJKLMNOPQRSTUVWXYZ
+---
+
+# Example Court
+
+Body text.
+`,
+  ".moss/config.toml": `${CONFIG_TOML}
+[fields.architect]
+type = "text"
+place = "facts"
+label = "Principal architect of record for the whole scheme"
+
+[fields.scope]
+type = "text"
+place = "facts"
+label = "Scope"
+
+[fields.photographer]
+type = "text"
+place = "facts"
+label = "Photographer"
+
+[fields.reference]
+type = "text"
+place = "facts"
+label = "Reference"
+`,
+};
+
+export const FACTS_MARGIN_WIDENED: ScratchSiteSpec = {
+  name: "facts-margin-widened-gate",
+  files: {
+    ...factsMarginFiles,
+    ".moss/theme/style.css": `:root { --moss-content-width: 72rem; }
+`,
+  },
+};
+
+export const FACTS_MARGIN_DEFAULT: ScratchSiteSpec = {
+  name: "facts-margin-default-gate",
+  files: { ...factsMarginFiles, ".moss/theme/style.css": null },
+};
+
+// A hero drawn from the first upcoming event of a folder, with its own picture,
+// caption and words as the fallback once the event has ended. The event is far
+// in the future so the build always draws it; the spec moves the browser's
+// clock to test what a visitor sees after the end. Served by
+// playwright/hero-from.config.ts.
+export const HERO_FROM_GATE: ScratchSiteSpec = {
+  name: "hero-from-gate",
+  files: {
+    "cover.svg": HERO_PORTRAIT_SVG,
+    "index.md": `---
+title: Example Company
+uid: "hfg00101"
+---
+
+:::hero {from="shows/|when:upcoming" image=cover.svg caption="Cover: Example Hall (photo: A. Photographer)"}
+# Between seasons
+:::
+
+Text below.
+`,
+    "over.md": `---
+title: Over Company
+uid: "hfg00104"
+---
+
+:::hero {from="shows/|when:upcoming" image=cover.svg header=over}
+# Between seasons
+:::
+
+Text below.
+`,
+    "shows/index.md": `---
+title: Shows
+uid: "hfg00102"
+children: false
+---
+`,
+    "shows/example-show.md": `---
+title: Example Show
+uid: "hfg00103"
+start: 2099-03-01 19:30
+end: 2099-03-01 21:30
+location: Example Hall
+description: A play about bridges.
+---
+
+Body.
+`,
+  },
+  siteUrl: "https://example.test",
+};
+
+/** Three collages (4, 7 with one passage tile, 9 tiles) of pictures with mixed proportions. */
+const COLLAGE_PASSAGE = `A passage set as type fills its tile. It carries on past what one small tile can show at its least height, so its row grows to fit it rather than cutting it off.`;
+
+const COLLAGE_LONG_CREDIT = `A long credit line that names the photographer, the archive, the year and the licence, so it runs to three lines in a narrow tile.`;
+
+const COLLAGE_SHORT_QUOTE = "Communication is health; communication is truth; communication is happiness.";
+const COLLAGE_LONG_QUOTE =
+  "There is no desire more natural than the desire for knowledge. We try every means that can bring us to it; when reason fails us, we make use of experience, which is a weaker and less worthy means, but truth is so great a thing that we ought not to disdain any channel that leads us to it.";
+
+function collageBody(count: number, passageAt?: number): string {
+  return Array.from({ length: count }, (_, i) =>
+    i === passageAt
+      ? `::: {.passage}\n${COLLAGE_PASSAGE}\n:::`
+      : `![Picture ${i + 1}](t${i + 1}.svg)\n*Credit for picture ${i + 1}.*`,
+  ).join("\n+++\n");
+}
+
+// Pictures and quotes together; the third tile is a short quote with long words in a narrow tile.
+const COLLAGE_MIXED = `:::grid {collage}
+[![The harbour at dawn|focus:20%,70%](../t1.svg)](/upright/)
+*__Harbour at dawn__ 1890 · City Museum · Public domain*
++++
+![Title page of the first edition|contain](../poster.png)
+*__Title page__ 1855 · Public domain*
++++
+> ${COLLAGE_SHORT_QUOTE}
+
+*[Montaigne, 1924](https://example.org/essays/)*
++++
+![Picture 4](../t4.svg)
+*__A long title for a small tile__ 1902 · Harbour Archive · [Public domain](https://example.org/pd)*
++++
+![Picture 5](../t5.svg)
+*__A lighthouse keeper's long winter correspondence with the harbour board__ 1910 · Harbour Archive*
++++
+![Picture 6](../t6.svg)
+*__Anticonstitutional__ 1911 · Example Archive · Public domain*
++++
+![Picture 7](../t7.svg)
+*__Tall again__ 1912*
++++
+> ${COLLAGE_LONG_QUOTE}
+
+*Essays, book three*
++++
+![Picture 9](../t9.svg)
+*__Nine__ 1913*
+:::
+`;
+
+export const COLLAGE_GATE: ScratchSiteSpec = {
+  name: "collage-gate",
+  files: {
+    "white.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="600" height="400" fill="#fff"/></svg>
+`,
+    "vertical/index.md": `---
+title: Vertical Collage
+uid: "clg00110"
+typesetting: vertical
+---
+
+:::grid {collage}
+${collageBody(5, 2).replace("![Picture 4](t4.svg)\n*Credit for picture 4.*", `> ${COLLAGE_LONG_QUOTE}\n\n*Essays, book three*`)}
+:::
+`,
+    "t1.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="600" height="400" fill="#4a7"/></svg>
+`,
+    "t2.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600" viewBox="0 0 400 600"><rect width="400" height="600" fill="#a47"/></svg>
+`,
+    "t3.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500" viewBox="0 0 500 500"><rect width="500" height="500" fill="#47a"/></svg>
+`,
+    "t4.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="300" viewBox="0 0 800 300"><rect width="800" height="300" fill="#a74"/></svg>
+`,
+    "t5.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="500" viewBox="0 0 300 500"><rect width="300" height="500" fill="#7a4"/></svg>
+`,
+    "t6.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="600" height="400" fill="#74a"/></svg>
+`,
+    "t7.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600" viewBox="0 0 400 600"><rect width="400" height="600" fill="#aa4"/></svg>
+`,
+    "t8.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500" viewBox="0 0 500 500"><rect width="500" height="500" fill="#4aa"/></svg>
+`,
+    "t9.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="300" viewBox="0 0 800 300"><rect width="800" height="300" fill="#a4a"/></svg>
+`,
+    "index.md": `---
+title: Collage
+uid: "clg00101"
+---
+
+# Collage
+
+${[3, 4, 5, 6, 7, 8, 9]
+  .map(
+    (n) => `## ${n} tiles
+
+:::grid {collage}
+${n === 5 ? collageBody(5).replace("![Picture 3](t3.svg)\n*Credit for picture 3.*", "![White](white.svg)\n*" + COLLAGE_LONG_CREDIT + "*") : collageBody(n)}
+:::`,
+  )
+  .join("\n\n")}
+`,
+    "mixed/index.md": `---
+title: Mixed Collage
+uid: "clg00120"
+---
+
+# Mixed
+
+${COLLAGE_MIXED}
+A quote in a plain grid:
+
+:::grid 2
+> ${COLLAGE_SHORT_QUOTE}
+
+*Montaigne, 1924*
++++
+A cell of plain text beside it.
+:::
+`,
+    // The same collage on a full-width page, where a span-2 tile is as wide as on a real index page.
+    "full/index.md": `---
+title: Full-width Collage
+uid: "clg00140"
+content_width: full
+---
+
+# Full width
+
+${COLLAGE_MIXED}`,
+    // Cards holding a word with no break point, and a link in a list: nothing may widen the page.
+    "cards/index.md": `---
+title: Cards
+uid: "clg00150"
+---
+
+# Cards
+
+:::grid 2
+[https://example.org/a/very/long/address/with/no/break/points/at/all/that/runs/past/any/phone/screen/width/1234567890](https://example.org/a/very/long/address/with/no/break/points/at/all/that/runs/past/any/phone/screen/widt)
++++
+A short card.
+:::
+
+:::grid 2
+## Card title
+https://example.org/a/very/long/address/with/no/break/points/at/all/that/runs/past/any/phone/screen/width/1234567890
++++
+Other
+:::
+
+:::grid 1
+https://example.org/a/very/long/address/with/no/break/points/at/all/that/runs/past/any/phone/screen/width/1234567890
+:::
+
+- [![](../t1.svg) An item with a picture in a link](/mixed/)
+`,
+    // A theme that sets only the phone gutter and gives the section headings a face.
+    ".moss/theme/style.css": `:root:has(body[data-path="/narrow-note/"]) { --moss-container-padding-narrow: 1rem; }
+body[data-path="/narrow-note/"] { --moss-font-section: ui-monospace, monospace; }
+`,
+    "narrow-note.md": `---
+title: Narrow
+uid: "clg00160"
+---
+
+## A section
+
+Text.
+`,
+    // A full-width page that keeps a lane for its contents list: the page column is
+    // `min(1200px, 100cqi - 2 * lane)`, which a tile must not read against itself.
+    "contents-full/index.md": `---
+title: Full-width Collage With Contents
+uid: "clg00170"
+content_width: full
+contents: pictures
+---
+
+# Quotes
+
+## One
+
+:::grid {collage}
+![Picture 1](t1.svg)
+*Credit for picture 1.*
++++
+> ${COLLAGE_SHORT_QUOTE}
+
+*Montaigne, 1924*
++++
+> ${COLLAGE_LONG_QUOTE}
+
+*Essays, book three*
+:::
+`,
+    // A raster poster: the build reads a picture's pixel size from raster files only.
+    "poster.png": Buffer.from("iVBORw0KGgoAAAANSUhEUgAAACgAAAA8CAIAAACb22+3AAAAOElEQVR42u3NQQkAAAgEsEtnEtOZ0hgiDPZfpvpExGKxWCwWi8VisVgsFovFYrFYLBaLxWLxp3gBxqJ0NeApenkAAAAASUVORK5CYII=", "base64"),
+    "upright/index.md": `---
+title: Upright Collage
+uid: "clg00130"
+---
+
+# Upright
+
+:::grid {collage}
+![A poster](../poster.png)
+*__Poster__ 1920*
++++
+![Picture 4](../t4.svg)
+*Credit 4.*
++++
+![Picture 6](../t6.svg)
+*Credit 6.*
++++
+![Picture 9](../t9.svg)
+*Credit 9.*
+:::
+`,
+  },
+};
+
+// ── WCAG 2.1 AA over built output ──
+// One page of every surface whose accessibility only shows in a real engine:
+// each callout type's tinted band, a code block wider than a phone, a framed
+// page, a 3D model, a language switch, a latest-items sidebar, covered cards
+// and a link inside a footer sentence. Served by playwright/wcag-output.config.ts.
+const CALLOUT_TYPES = ["note", "info", "tip", "warning", "caution", "important", "danger", "success", "question", "failure", "bug", "abstract", "todo", "example", "quote", "pending"];
+export const WCAG_OUTPUT: ScratchSiteSpec = {
+  name: "wcag-output-gate",
+  files: {
+    ".moss/config.toml": CONFIG_TOML,
+    "index.md": `---
+title: Field Notes
+uid: "wcag0001"
+sidebar: "[[Notes]]"
+---
+
+# Field Notes
+
+A scratch site for the accessibility gate.
+
+${CALLOUT_TYPES.map((t) => `> [!${t}]\n> A ${t} callout.`).join("\n\n")}
+
+\`\`\`python
+print("a line long enough that a phone has to scroll it sideways to read the whole of it")
+\`\`\`
+
+![[widget.html]]
+
+![[model.glb]]
+`,
+    // The element lays itself out at 300px whatever the file holds.
+    "model.glb": "placeholder 3D model",
+    "index.zh-hans.md": `---
+title: 田野笔记
+uid: "wcag0002"
+---
+
+# 田野笔记
+
+无障碍检查的测试站点。
+`,
+    "widget.html": `<!doctype html><html lang="en"><head><title>Widget</title></head><body><p>A framed page.</p></body></html>`,
+    // Covered cards: their meta and description lines sit on the cover's
+    // colour. A pale one is darkened only until white reaches 4.5:1 — the
+    // band where any fade of that white falls short.
+    "cover.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="140"><rect width="200" height="140" fill="#e2c48a"/></svg>`,
+    "Notes/index.md": `---
+title: Notes
+uid: "wcag0003"
+children_style: grid
+---
+
+# Notes
+`,
+    "Notes/first.md": `---
+title: The first note
+date: 2026-01-02
+uid: "wcag0004"
+cover: "../cover.svg|color=#e2c48a"
+description: What the first note is about.
+---
+
+# The first note
+
+Body.
+`,
+    "Notes/second.md": `---
+title: The second note
+date: 2026-01-03
+uid: "wcag0005"
+cover: "../cover.svg|color=#e2c48a"
+description: What the second note is about.
+---
+
+# The second note
+
+Body.
+`,
+    "footer.md": `Written by [an editor](/notes/) for this scratch site.
+`,
+  },
 };

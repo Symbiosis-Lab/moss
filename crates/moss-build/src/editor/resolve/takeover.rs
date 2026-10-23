@@ -576,7 +576,7 @@ mod tests {
             key: "people".into(),
             fields: vec!["author".into(), "editor".into(), "jury".into()],
             title: "People".into(),
-            titles: Vec::new(),
+            titles: Vec::new(), counts: Vec::new(),
             is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         m.terms.insert("people/kane".into(), TermSite { display: "Kane".into(), claimed_by: None, parent: None });
@@ -627,7 +627,7 @@ mod tests {
             key: "authors".into(),
             fields: Vec::new(),
             title: "作者".into(),
-            titles: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
+            titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None,
         }];
         m.generated = vec!["authors/".into()];
         let t = takeover_for(&m, dir.path(), "s", "authors/", Language::ZhHant).unwrap();

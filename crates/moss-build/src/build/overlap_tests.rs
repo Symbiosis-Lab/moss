@@ -309,7 +309,7 @@ async fn until_background_work_is_done() {
 /// which `ship_phase` recreates rather than copies.
 fn files_differing_from_manifest(generation_dir: &std::path::Path, sealed: &SealedManifest) -> BTreeSet<String> {
     let mut differing = BTreeSet::new();
-    for (rel, entry) in sealed.files() {
+    for (rel, entry) in sealed.all_files() {
         let (mode, expected) = crate::types::content::parse_entry(entry);
         if mode == crate::types::content::MODE_SYMLINK {
             continue;
@@ -435,7 +435,7 @@ fn assert_nothing_diverges(outcome: &Outcome) {
 /// as safe by design — whatever the edit varied.
 fn assert_every_stage_shipped_entry_is_classified(sealed: &SealedManifest) {
     let unclassified: Vec<&String> = sealed
-        .files()
+        .all_files()
         .iter()
         .filter(|(_, entry)| crate::types::content::parse_entry(entry).0 == crate::types::content::MODE_FILE)
         .map(|(key, _)| key)

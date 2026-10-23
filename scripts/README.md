@@ -137,11 +137,11 @@ jobs:
 Pre-commit consistency check for the shortcode demo blocks under
 `site/docs/writing/shortcodes/`. See [../CONTRIBUTING-DOCS.md](../CONTRIBUTING-DOCS.md).
 
-## The docs demo (site/ui) — check-demo-scenes.mjs, check-docs-demo.mjs, record-scene.mjs
+## The docs demo (site/home/ui) — check-demo-scenes.mjs, check-docs-demo.mjs, record-scene.mjs
 
-A documentation page can pin a real moss interface beside the text and let a reader play a short scripted scene against it, or take over at any moment — see [../site/ui/demo/README.md](../site/ui/demo/README.md) for the authoring contract and module map.
+A documentation page can pin a real moss interface beside the text and let a reader play a short scripted scene against it, or take over at any moment — see [../docs/reference/docs-demo.md](../docs/reference/docs-demo.md) for the authoring contract and module map.
 
-`npm run test:demo-player` is the no-browser gate: player unit tests plus `check-demo-scenes.mjs`, which walks every page's `#scene=` links against `site/ui/demo/scenes/*.json` and each scene's surface adapter, in seconds, before a browser is ever involved.
+`npm run test:demo-player` is the no-browser gate: player unit tests plus `check-demo-scenes.mjs`, which walks every page's `#scene=` links against `site/home/ui/demo/scenes/*.json` and each scene's surface adapter, in seconds, before a browser is ever involved.
 
 `check-docs-demo.mjs` is the real-browser check, in both Chromium and WebKit, against a served build:
 

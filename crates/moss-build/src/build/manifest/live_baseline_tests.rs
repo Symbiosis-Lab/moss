@@ -126,6 +126,20 @@ fn a_record_without_note_ids_is_not_absence() {
     assert_eq!(load(&paths), Baseline::Unreadable(Unreadable::PredatesUids));
 }
 
+/// A site with no pages of its own to track (a lone home page) publishes a
+/// record whose `triples` are empty. That record is a baseline saying nothing
+/// is tracked, not a missing one: reading it as "predates note IDs" made every
+/// later build of such a site report a record the publish had already written.
+#[test]
+fn a_record_whose_triples_are_empty_is_a_baseline_not_a_missing_one() {
+    let dir = tmp();
+    let paths = MossPaths::new(dir.path());
+    let published = record_with_triples("moss:site-1", &[]);
+    published_record::save(&paths, &published).unwrap();
+
+    assert_eq!(load(&paths), Baseline::Present(LiveBaseline::default()));
+}
+
 /// The ordinary state of a folder nobody has published: provably nothing, which
 /// is the one state where the heuristics are allowed to run.
 #[test]

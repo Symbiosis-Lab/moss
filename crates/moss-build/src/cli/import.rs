@@ -62,15 +62,24 @@ pub fn run(args: &[String]) -> i32 {
 
     for url in &urls {
         eprintln!("→ {}", redact_query(url));
+        // `file://` is accepted and stripped to a filesystem path.
+        let local = Path::new(url.strip_prefix("file://").unwrap_or(url));
         let result = if is_remote_url(url) {
             let mut config = ScrapeConfig::new(url.clone(), folder.clone());
             config.recursive = parsed.recursive;
             runtime.block_on(scrape_to_folder(config, print_progress))
+        } else if crate::vault::import::douban::is_tofu_backup(local) {
+            runtime
+                .block_on(crate::vault::import::douban::import_tofu_backup(local, &folder))
+                .map(|(res, report)| {
+                    for line in report.lines() {
+                        eprintln!("  ↳ {line}");
+                    }
+                    res
+                })
         } else {
-            // Local file (MHTML web-archive or plain .html). `file://` is
-            // accepted and stripped to a filesystem path.
-            let path = url.strip_prefix("file://").unwrap_or(url);
-            runtime.block_on(import_local_file(Path::new(path), &folder))
+            // Local file (MHTML web-archive or plain .html).
+            runtime.block_on(import_local_file(local, &folder))
         };
 
         match result {

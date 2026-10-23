@@ -53,6 +53,14 @@ impl Gazetteer {
         self.0.get(name)
     }
 
+    /// The entry for `name` as a page may spell it: compared by
+    /// `moss_core::terms::term_fold`, so case and spacing do not matter.
+    /// Returns the entry's display name beside its record.
+    pub fn find(&self, name: &str) -> Option<(&String, &PlaceRecord)> {
+        let folded = moss_core::terms::term_fold(name);
+        self.0.iter().find(|(display, _)| moss_core::terms::term_fold(display) == folded)
+    }
+
     /// Every entry, in name order.
     pub fn iter(&self) -> impl Iterator<Item = (&String, &PlaceRecord)> {
         self.0.iter()
@@ -90,8 +98,8 @@ pub fn parse_gazetteer(table: &toml::value::Table) -> Gazetteer {
         let coords = match (lat, lng) {
             (Some(lat), Some(lng)) => Some((lat, lng)),
             _ => {
-                crate::build::cli_output::log_warn_problem!(
-                    "place '{name}' in .moss/places.toml is missing lat/lng; its parent and precision still apply, but it will not appear on a map"
+                crate::build::cli_output::log_note!(
+                    "place '{name}' in .moss/places.toml has no coordinates (lat/lng); its parent and precision still apply, but it will not appear on a map"
                 );
                 None
             }
@@ -158,6 +166,7 @@ mod tests {
 
     #[test]
     fn an_entry_missing_lng_has_no_coords_but_keeps_its_parent_with_a_diagnostic() {
+        let _ = crate::build::cli_output::take_cli_problems();
         let gaz = parse_gazetteer(&table(
             "[\"Kyoto\"]\nlat = 35.0116\nprecision = \"city\"\nparent = \"Japan\"\n",
         ));
@@ -165,6 +174,7 @@ mod tests {
         assert_eq!(kyoto.coords, None);
         assert_eq!(kyoto.precision, Precision::City);
         assert_eq!(kyoto.parent.as_deref(), Some("Japan"));
+        assert_eq!(crate::build::cli_output::take_cli_problems(), 0, "a place without coordinates is a note, not a --strict problem");
     }
 
     #[test]

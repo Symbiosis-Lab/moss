@@ -53,6 +53,7 @@ pub fn extract_headings_with_config(markdown: &str, config: &ParseConfig) -> Vec
             level,
             children,
             id,
+            ..
         } = block
         {
             let text = inlines_to_plain_text(children);

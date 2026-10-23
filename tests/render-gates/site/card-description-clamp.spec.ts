@@ -1,5 +1,5 @@
-// A card auto-built from a page's own description clamps to two lines with
-// no ellipsis — `.moss-card-description`'s `max-block-size: calc(1.5em * 2)`
+// A card auto-built from a page's own description clamps to three lines with
+// no ellipsis — `.moss-card-description`'s `max-block-size: calc(1.5em * 3)`
 // clips overflow with a bare `overflow: hidden`, so a truncated sentence
 // just stops mid-word with nothing to tell a reader it was cut.
 // `display: -webkit-box` + `-webkit-line-clamp: 2` would paint the ellipsis
@@ -32,7 +32,7 @@ const CSS = fs.readFileSync(path.join(mossBuildAssets(), 'css/site.css'), 'utf8'
 const VERTICAL_CSS = fs.readFileSync(path.join(mossBuildAssets(), 'css/site/vertical.css'), 'utf8');
 
 // Just enough of the token contract for the description's own font math
-// (`max-block-size: calc(1.5em * 2)` reads `--moss-size-sm` through `1em`)
+// (`max-block-size: calc(1.5em * 3)` reads `--moss-size-sm` through `1em`)
 // and for the grid/list container rules around it to lay out realistically.
 const TOKENS = `@layer reset, tokens, base, layout, shortcodes, plugins, themes;
 @layer tokens { :root{
@@ -53,7 +53,7 @@ const TOKENS = `@layer reset, tokens, base, layout, shortcodes, plugins, themes;
 
 const LONG_EN =
   'This description is written long enough on purpose that it must wrap ' +
-  'across more than two lines inside a narrow card column, so the clamp ' +
+  'across more than three lines inside a narrow card column, so the clamp ' +
   'has to cut it off somewhere in the middle of a sentence rather than at ' +
   'a tidy full stop, which is exactly the shape this gate exists to catch.';
 
@@ -126,7 +126,7 @@ for (const layout of ['grid', 'list']) {
     // multicol-based implementation reports `flow-root`), so it is not the
     // signal to assert on.
     expect(long.boxOrient).toBe('vertical');
-    expect(long.lineClamp).toBe('2');
+    expect(long.lineClamp).toBe('3');
     expect(long.overflow).toBe('hidden');
     expect(long.display).not.toBe('block');
   });
@@ -137,7 +137,7 @@ for (const layout of ['grid', 'list']) {
 
     const long = await descBox(page, 0);
     expect(long.boxOrient).toBe('vertical');
-    expect(long.lineClamp).toBe('2');
+    expect(long.lineClamp).toBe('3');
     expect(long.display).not.toBe('block');
   });
 }
@@ -185,8 +185,8 @@ test('the standard line-clamp property ships beside the vendor-prefixed one', ()
   // observable fact is that the declaration exists in the shipped rule,
   // ready for whichever engine implements it first.
   const rule = CSS.match(/(?:^|\n)\.moss-card-description\s*\{[^}]*\}/s)?.[0] ?? '';
-  expect(rule).toMatch(/-webkit-line-clamp:\s*2;/);
-  expect(rule).toMatch(/(?<!-webkit-)line-clamp:\s*2;/);
+  expect(rule).toMatch(/-webkit-line-clamp:\s*3;/);
+  expect(rule).toMatch(/(?<!-webkit-)line-clamp:\s*3;/);
 });
 
 test('vertical typesetting resets the standard property too, for the layout that wants no clamp', () => {

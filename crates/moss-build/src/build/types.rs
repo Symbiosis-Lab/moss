@@ -11,7 +11,7 @@ use specta::Type;
 
 // SeriesField moved to moss-core. Re-exported for backward compat.
 pub use moss_core::frontmatter_typed::SeriesField;
-pub use crate::build::render::{MissingReferenceOccurrence, PublishPreflightProjection, SourceRevision, SourceSpan};
+pub use crate::build::render::{DraftLinkOccurrence, MissingReferenceOccurrence, PublishPreflightProjection, SourceRevision, SourceSpan};
 
 /// Validated event facts shared by page metadata, listings and calendar files.
 /// Present when `start` parses; `end` must also parse and not precede it.
@@ -60,6 +60,16 @@ pub struct SectionAccent {
     pub text_dark: String,
     /// The coloured folder's own url path segment; empty for the site root.
     pub segment: String,
+}
+
+/// The count and picture a term's pseudo-folder card shows.
+#[derive(Debug, Clone, Default)]
+pub struct TermCard {
+    pub count: usize,
+    pub cover: Option<String>,
+    /// The term kind's `count` wording for the card's language; `None` keeps the
+    /// default. Set by `terms::set_term_cards`.
+    pub count_setting: Option<moss_core::frontmatter_union::ChildrenCount>,
 }
 
 /// Parsed markdown document with frontmatter and content.
@@ -131,6 +141,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub card_cover: Option<String>,
+    /// A term pseudo-folder's card: its member count and the listing picture of
+    /// the first member in the term page's order. Set by `terms::set_term_cards`.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub term_card: Option<TermCard>,
     /// Explicit cover type override ("video", "iframe", or "image")
     pub cover_type: Option<String>,
     /// Media items marked for collection pages (photography, video, interactive)
@@ -160,8 +175,8 @@ pub struct ParsedDocument {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[specta(skip)]
     pub is_home_override: bool,
-    /// Draft: rendered and published at its direct URL, but hidden from all
-    /// listings, feeds, sitemap, and navigation (and marked `noindex`).
+    /// Draft: built for the preview, never published; hidden from every
+    /// listing, feed, sitemap and nav, and marked `noindex`.
     pub draft: Option<bool>,
     /// Listed: when `Some(false)`, hidden from moss's auto-generated index
     /// surfaces (feeds/lists/sitemap) via `is_listable()`, but still a public
@@ -180,15 +195,16 @@ pub struct ParsedDocument {
     /// (auto-targets `footer-left`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot: Option<String>,
-    /// True if this document fills a layout slot rather than rendering as a
-    /// standalone page (e.g., `footer.md`). Mirrors
+    /// True if this document is parsed but never emitted as a page: it fills
+    /// a layout slot (e.g., `footer.md`) or is a `partial: true` transclusion
+    /// source. Mirrors
     /// [`moss_core::ast::Document::slot_only`] on the production type so
     /// page-emission, native-slot collection, and auto-H1 injection can
     /// branch on a single structural flag.
     ///
     /// Set at parse time by `process_markdown_file` from the reserved-name
-    /// convention (`crate::build::footer::is_excluded_from_pages`). Authors
-    /// may target additional slots via the `slot:` frontmatter field above,
+    /// convention (`crate::build::footer::is_excluded_from_pages`) or from
+    /// `partial: true`. Authors may target additional slots via the `slot:` frontmatter field above,
     /// but reserved-name detection is the canonical signal.
     ///
     /// Lands as part of the typed-AST migration; replaces the
@@ -353,6 +369,12 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub explorer_places_hash: Option<String>,
+    /// The `[build].passthrough` folder this page sits inside, as a folder key.
+    /// A folder at or under it that has no page of its own gets no listing, so
+    /// the trail does not link it.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub passthrough_root: Option<String>,
     /// The one per-page switch for this page's own map. On a claimed term
     /// page or a place-namespace-root page it gates the term map spliced
     /// below the content (see `is_place_namespace_root`): `Some(false)`
@@ -365,6 +387,10 @@ pub struct ParsedDocument {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[specta(skip)]
     pub has_own_map_embed: bool,
+    /// URL paths of the pages this page's body embeds list.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    #[specta(skip)]
+    pub embedded_listing_urls: std::collections::BTreeSet<String>,
     /// Opt-in from frontmatter `route:` to draw this page's `location:` list,
     /// in its existing declared order, as a route: a dashed line through the
     /// stops with numbered badges, on this page's own map and the locator
@@ -415,6 +441,9 @@ pub struct ParsedDocument {
     /// when ITS OWN index page (the same `ParsedDocument`) has a cover —
     /// no special-casing needed, `cover` is already that page's field.
     pub children_covers: Option<String>,
+    /// Listing filter: "past" or "upcoming" keeps only the pages whose event
+    /// has ended, or has not. Applied before `children_limit`.
+    pub children_when: Option<String>,
     /// What this listing's folder cards say they count; absent = the built-in
     /// "N articles" text. Left out of the exported bindings: the listing
     /// reads it, no UI does.
@@ -480,6 +509,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub hero_html: Option<String>,
+    /// A `from=` hero, drawn once every page is known; `hero_html`,
+    /// `hero_image_url` and `hero_overlay_text` start as its fallback.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub hero_from: Option<crate::build::folder_embed::hero_from::HeroFrom>,
     /// The page's one eager image is its hero or its opening body content, so
     /// its own children listing loads lazily. Set by the body planner.
     #[serde(skip)]
@@ -579,6 +613,11 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub declared: std::collections::BTreeMap<String, moss_core::fields::TypedValue>,
+    /// The declared fields this page's frontmatter names, blank or not. A folder's
+    /// cascade leaves these alone, so a page's blank value stays empty.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub declared_written: std::collections::BTreeSet<String>,
     /// For each declared field whose value does not fit, the reason, as the
     /// build warning states it. Filled in the same pass as `declared`.
     #[serde(skip)]
@@ -589,12 +628,17 @@ pub struct ParsedDocument {
     /// folder index. Drawn at render by `components::field_places`.
     #[serde(skip)]
     #[specta(skip)]
-    pub placed_fields: Vec<(moss_core::fields::FieldDecl, moss_core::fields::TypedValue)>,
+    pub placed_fields: Vec<moss_core::fields::Placed>,
     /// `title_block:` — `after-picture` draws the title block after the body's
-    /// leading picture. Set on the page or cascaded from a folder.
+    /// leading picture, `beside-picture` next to it. Set on the page or cascaded from a folder.
     #[serde(skip)]
     #[specta(skip)]
     pub title_block: Option<String>,
+    /// `reader_controls: false` removes the text-size control from a dated
+    /// page. Set on the page or cascaded from a folder.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub reader_controls: Option<bool>,
     /// Declared listing sort from frontmatter (folder index pages only;
     /// `None` on article pages).
     pub sort: Option<moss_core::sort::SortField>,
@@ -664,6 +708,12 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub missing_reference_occurrences: Vec<MissingReferenceOccurrence>,
+}
+
+/// Whether `folder` is `root` or a folder inside it. The one test for "at or
+/// under a passthrough root", shared by the listing plan and the breadcrumb.
+pub fn folder_within(root: &str, folder: &str) -> bool {
+    folder == root || folder.strip_prefix(root).is_some_and(|rest| rest.starts_with('/'))
 }
 
 impl ParsedDocument {
@@ -750,15 +800,15 @@ impl ParsedDocument {
         self.cover.as_deref().or(self.card_cover.as_deref())
     }
 
+    pub fn is_draft(&self) -> bool { self.draft == Some(true) }
+
     /// Whether this document appears on moss's auto-generated *listing*
     /// surfaces — page lists, folder embeds, year-grouped article lists,
     /// home/folder children, auto-index pages, RSS, llms.txt, sitemap, and the
     /// auto sidebar/sibling listings. False when **any** exclusion fires:
     ///
-    /// 1. `draft == Some(true)` — work-in-progress: rendered and reachable at
-    ///    its direct URL, but hidden from all listings and (via
-    ///    `is_public_page`) marked `noindex` with no share card. (Supersedes
-    ///    the former `unlisted` flag, removed 2026-06.)
+    /// 1. `draft == Some(true)` — rendered for the preview, never published;
+    ///    (via `is_public_page`) `noindex` with no share card.
     /// 2. `listed == Some(false)` — a finished page curated *off-feed*: hidden
     ///    from these listing surfaces but still a public page — indexable,
     ///    share-cardable, reachable (see `is_public_page`).
@@ -833,6 +883,10 @@ pub struct PageFeatures {
     /// runtime script via [`SiteAssets`]. Read from the typed AST
     /// (`moss_core::ast::has_scroll_row_recursive`).
     pub scroll_rows: bool,
+    /// True if the page's hero is drawn from an event that has not ended, so
+    /// it must step aside at view time. Gates `hero-ends.js` via
+    /// [`SiteAssets`]. Set when the hero is drawn, after parsing.
+    pub hero_ends: bool,
     /// True if the page may have a picture the full-screen viewer opens: a
     /// figure, an image or a `:::gallery`. A coarse superset; `fullscreen.js`
     /// decides which pictures actually open. Gates the viewer via
@@ -881,6 +935,8 @@ pub struct SiteAssets {
     pub has_footnotes: bool,
     /// Any page has a `:::grid N {scroll}` row. Gates `scroll-row.js`.
     pub scroll_rows: bool,
+    /// Any page's hero is drawn from an event. Gates `hero-ends.js`.
+    pub hero_ends: bool,
     /// `[site].link_preview` — hover link previews. Defaults ON.
     pub link_preview: bool,
     /// `[site].heading_anchors` — click-to-copy section permalinks. Defaults ON.
@@ -925,6 +981,8 @@ pub struct SiteAssets {
     /// just carries the answer through to the `places-explorer` script/CSS
     /// gates.
     pub places_explorer: bool,
+    /// The site declares `[map.layers]`, so its map figures carry a credit line.
+    pub map_layers: bool,
 }
 
 impl SiteAssets {
@@ -950,6 +1008,7 @@ impl SiteAssets {
             callouts: false,
             has_footnotes: false,
             scroll_rows: false,
+            hero_ends: false,
             viewer: false,
             field_places: false,
             vertical: site_typesetting == Some("vertical"),
@@ -963,8 +1022,9 @@ impl SiteAssets {
             ) == Some("vertical");
             out.has_footnotes |= page.features.footnotes;
             out.scroll_rows |= page.features.scroll_rows;
+            out.hero_ends |= page.features.hero_ends;
             out.viewer |= page.features.viewer;
-            out.field_places |= page.features.field_places;
+            out.field_places |= page.features.field_places || crate::build::components::field_places::title_block_beside_picture(page);
         }
         out
     }

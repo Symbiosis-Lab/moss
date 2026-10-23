@@ -148,6 +148,10 @@ pub struct GalleryItem {
     /// URL resolution as body links. Empty when the item has none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub caption: Vec<Inline>,
+    /// CommonMark image title (`![alt](src "title")`), written as the
+    /// `title` attribute of the `<img>`. `None` for a bare path or wikilink.
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 /// Where a fenced shortcode's inner content sits in the page source, so a click
@@ -190,6 +194,10 @@ impl ShortcodeSource {
         format!("{start}-{}", start + self.extra_lines)
     }
 }
+
+/// Tile counts a `{collage}` grid has a layout for; the stylesheet draws one
+/// arrangement per count.
+pub const COLLAGE_TILES: std::ops::RangeInclusive<usize> = 3..=9;
 
 /// Arguments for [`Shortcode::Grid`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -235,6 +243,11 @@ pub struct GridShortcode {
     /// rather than "how many per row".
     #[serde(default)]
     pub scroll: bool,
+    /// From the bare `collage` keyword: the cells lay out as one lead picture
+    /// and a packed set of smaller tiles. Only honoured for 3 to 9 cells (see
+    /// [`Self::is_collage`]).
+    #[serde(default)]
+    pub collage: bool,
     /// Accessible name for the scrolling row (`label="…"`). Only meaningful
     /// alongside `scroll` — rendered as `aria-label` (with `role="region"`)
     /// on the wrapping element; `None` when the author did not set it, or
@@ -260,7 +273,14 @@ impl GridShortcode {
     /// every width or only once the viewport narrows — see
     /// [`Self::fits_without_scrolling`] for that.
     pub fn is_scroll_row(&self) -> bool {
-        self.scroll && self.cells.len() >= 2
+        self.scroll && !self.collage && self.cells.len() >= 2
+    }
+
+    /// True when the author wrote `{collage}` and the grid has a cell count
+    /// the collage layouts are drawn for. Outside that range the grid renders
+    /// as a plain grid and the build warns.
+    pub fn is_collage(&self) -> bool {
+        self.collage && COLLAGE_TILES.contains(&self.cells.len())
     }
 
     /// True when a scroll row's own cells already fit in one line at its
@@ -375,8 +395,26 @@ pub struct HeroShortcode {
     /// width, so this has no visible effect there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub align: Option<String>,
+    /// Whether the overlay's words sit on a tinted panel (`panel=`). `None`
+    /// leaves it to the hero: an ordinary hero always has the panel, a
+    /// closing picture measures its picture and drops the panel where dark or
+    /// light ink reads on the picture itself. `Some("auto")` asks an ordinary
+    /// hero for that measurement too; `Some("none")` never draws the panel;
+    /// `Some("always")` always does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<String>,
+    /// `fade=top`: a closing picture's top fades into the page colour. Any
+    /// other hero ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fade: Option<String>,
+    /// `max-height=`: the hero's height cap. A value outside
+    /// [`crate::media::MaxHeight`]'s grammar warns at parse and is `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_height: Option<crate::media::MaxHeight>,
     /// Caption or credit for the image, from `caption="…"`. Rendered as a
-    /// line of text BELOW the hero, never over it.
+    /// line of text BELOW the hero, never over it, except on a footer's
+    /// closing picture, where it is the credit set small inside the picture
+    /// at its foot.
     ///
     /// The overlay and the caption answer different questions. The overlay is
     /// text laid *on* the photograph — a title, a standfirst — and it is
@@ -392,6 +430,24 @@ pub struct HeroShortcode {
     /// Empty when the author wrote no caption.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub caption: Vec<Inline>,
+    /// A folder listing to draw the hero from (`from="work/|when:upcoming"`),
+    /// written as a folder embed's target and options. The hero shows that
+    /// listing's first page; its own image and words are the fallback when
+    /// the listing is empty. Resolved at build time, not here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// The picture to show in dark mode (`dark=night.jpg`), replacing `image`
+    /// there. The overlay, crop and tone follow the light picture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dark: Option<Url>,
+}
+
+impl HeroShortcode {
+    /// Whether the fence carries a picture or words of its own, which is what
+    /// a `from=` hero shows when its listing is empty.
+    pub fn has_own_content(&self) -> bool {
+        self.image.is_some() || !self.extra_images.is_empty() || !self.overlay.is_empty()
+    }
 }
 
 /// Arguments for [`Shortcode::Recent`].
@@ -631,6 +687,7 @@ mod tests {
             classes: String::new(),
             items: vec![
                 GalleryItem {
+                    title: None,
                     src: Url::unresolved("a.jpg"),
                     alt: "A".to_string(),
                     alt_only: false,
@@ -638,6 +695,7 @@ mod tests {
                     caption: Vec::new(),
                 },
                 GalleryItem {
+                    title: None,
                     src: Url::unresolved("b.jpg"),
                     alt: "B".to_string(),
                     alt_only: false,
@@ -673,6 +731,7 @@ mod tests {
             columns: Some(4),
             classes: "showcase".to_string(),
             items: vec![GalleryItem {
+                title: None,
                 src: Url::unresolved("p.png"),
                 alt: "Photo".to_string(),
                 alt_only: false,

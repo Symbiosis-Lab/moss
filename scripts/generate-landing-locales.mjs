@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 
 const source = new URL('../site/index.html', import.meta.url);
 const html = await readFile(source, 'utf8');
-const runtime = await readFile(new URL('../site/landing-i18n.js', import.meta.url), 'utf8');
+const runtime = await readFile(new URL('../site/home/landing-i18n.js', import.meta.url), 'utf8');
 const catalogSource = runtime.match(/  const en = \{[\s\S]+?  const catalogs=/)?.[0]
   .replace('  const catalogs=', '  return { en, hans, hant };');
 if (!catalogSource) throw new Error('Could not read landing locale catalogs');

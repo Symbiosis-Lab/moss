@@ -74,6 +74,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 pub(crate) mod preview_originals;
+pub(crate) mod publish_view;
 
 use crate::build::assets::paths::{compute_binary_hash, compute_manifest_generation_id};
 use crate::types::content::{file_entry, SiteHashes};
@@ -595,6 +596,11 @@ impl PendingManifest {
         self.inner.site_url = Some(url.to_string());
     }
 
+    /// The site URL recorded by [`set_site_url`][Self::set_site_url].
+    pub(crate) fn site_url(&self) -> Option<&str> {
+        self.inner.site_url.as_deref()
+    }
+
     /// Clone the accumulated state into legacy parts without consuming `self`.
     ///
     /// A `pub(crate)` escape hatch for the blocking phase: after all Pattern A
@@ -1004,11 +1010,6 @@ impl SealedManifest {
     /// an unreadable output is not a missing one.
     pub(crate) fn mark_unverified(&mut self, rel_path: String, detail: String) {
         self.unverified.insert(rel_path, detail);
-    }
-
-    /// All output-path → mode-tagged-hash entries in the deploy manifest.
-    pub fn files(&self) -> &HashMap<String, String> {
-        &self.inner.files
     }
 
     /// Source-relative path → hash of the bytes that produced it.

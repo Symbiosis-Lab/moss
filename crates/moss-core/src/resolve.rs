@@ -437,9 +437,17 @@ pub(in crate::resolve) fn lower_embed(
 ) -> Option<String> {
     let (file_part, anchor) = embeds::split_embed_target(inner);
 
+    // Folder-list embed: trailing slash dispatches to the
+    // `MOSS_MARKER_FOLDER_LIST` marker that moss-build's marker
+    // handler resolves into a card grid. The pothole carries
+    // params (limit:N, more, sort:axis) in pipe-encoded form.
+    if let Some(marker) = embed_renderer::folder_list::listing_marker(inner, source_path) {
+        return Some(marker);
+    }
+
     let pothole_raw = inner.split_once('|').map_or("", |(_, params)| params);
     let params = embed_renderer::folder_list::classify_folder_segments(pothole_raw);
-    if params.style.as_deref() == Some("map") && !file_part.ends_with('/') {
+    if params.style.as_deref() == Some("map") {
         let target = if file_part.is_empty() && anchor == Some("") {
             source_path.to_string()
         } else {
@@ -462,14 +470,6 @@ pub(in crate::resolve) fn lower_embed(
     // Skip empty target (`![[]]` is meaningless).
     if file_part.is_empty() {
         return None;
-    }
-
-    // Folder-list embed: trailing slash dispatches to the
-    // `MOSS_MARKER_FOLDER_LIST` marker that moss-build's marker
-    // handler resolves into a card grid. The pothole carries
-    // params (limit:N, more, sort:axis) in pipe-encoded form.
-    if file_part.ends_with('/') {
-        return Some(embed_renderer::folder_list::emit_marker(file_part, source_path, &params));
     }
 
     // Resolve via ContentGraph. Bail to no-rewrite if the

@@ -62,7 +62,7 @@ pub(crate) fn repair_staged_html(
     let mut unshippable = failed;
     let scan = crate::build::media::orphan_prune::extract_referenced_tails(stage_dir);
     unshippable.extend(crate::build::ship::prune_orphaned_webp_before_ship(mp, sealed, &scan));
-    let entries = sealed.files().len();
+    let entries = sealed.all_files().len();
     // Same object store `ship_phase` will read from, so a `staged_oid` entry
     // whose stage copy is transiently absent (evicted, mid-write, deleted by
     // something other than moss) is asked of its live CAS blob here too,
@@ -113,7 +113,7 @@ pub fn apply_to_staging(
         let bytes = match std::fs::read(&full) {
             Ok(b) => b,
             Err(e) => {
-                log::warn!("degrade_failed_variants: failed to read {}: {}", full.display(), e);
+                log::info!("degrade_failed_variants: failed to read {}: {}", full.display(), e);
                 continue;
             }
         };
@@ -125,13 +125,13 @@ pub fn apply_to_staging(
             match crate::build::markdown::html_post::degrade_failed_variants(html, path, failed) {
                 Ok(r) => r,
                 Err(e) => {
-                    log::warn!("degrade_failed_variants: rewrite failed for {}: {}", path, e);
+                    log::info!("degrade_failed_variants: rewrite failed for {}: {}", path, e);
                     continue;
                 }
             };
         if let std::borrow::Cow::Owned(new_html) = rewritten {
             if let Err(e) = crate::build::io_utils::write_output(&full, new_html.as_bytes()) {
-                log::warn!("degrade_failed_variants: failed to write {}: {}", full.display(), e);
+                log::info!("degrade_failed_variants: failed to write {}: {}", full.display(), e);
                 continue;
             }
             // The manifest records the bytes the SITE will serve, not the

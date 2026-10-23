@@ -206,6 +206,24 @@ pub fn frontmatter_map(content: &str) -> HashMap<String, serde_yaml::Value> {
     }
 }
 
+/// A field left blank (`start:` or `start: ""`), as a page copied from a
+/// template carries it. Blank means absent: nothing validates or draws it.
+pub fn is_blank(value: &serde_yaml::Value) -> bool {
+    match value {
+        serde_yaml::Value::Null => true,
+        serde_yaml::Value::String(s) => s.trim().is_empty(),
+        _ => false,
+    }
+}
+
+/// The value under `key`, or `None` when it is missing or blank.
+pub fn get_present<'a>(
+    map: &'a HashMap<String, serde_yaml::Value>,
+    key: &str,
+) -> Option<&'a serde_yaml::Value> {
+    map.get(key).filter(|v| !is_blank(v))
+}
+
 /// A parsed markdown document with frontmatter separated from body.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedDocument {

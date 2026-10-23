@@ -122,7 +122,7 @@ pub fn response_invalidates_partial(status: u16) -> bool {
 /// replaying the same failure against the same bytes.
 fn discard_partial(part: &Path, label: &str, why: &str) {
     if part.exists() {
-        log::warn!(
+        log::info!(
             "{label} discarding partial {} — {why}; the next attempt restarts from zero",
             part.display()
         );
@@ -260,7 +260,7 @@ pub fn fetch_verified(
                 last_err = "sha256 mismatch".to_string();
             }
             Err(e) => {
-                log::warn!("{label} attempt {attempt}/{MAX_ATTEMPTS} failed: {e}");
+                log::info!("{label} attempt {attempt}/{MAX_ATTEMPTS} failed: {e}");
                 last_err = e;
             }
         }
@@ -305,7 +305,7 @@ fn agent(url: &str, transport: Transport, label: &str) -> ureq::Agent {
         if let Some(proxy_url) = crate::system::proxy::resolve_proxy_for_url(url) {
             match ureq::Proxy::new(&proxy_url) {
                 Ok(proxy) => builder = builder.proxy(proxy),
-                Err(e) => log::warn!("{label} resolved proxy '{proxy_url}' is invalid ({e})"),
+                Err(e) => log::info!("{label} resolved proxy '{proxy_url}' is invalid ({e})"),
             }
         }
     }
@@ -349,7 +349,7 @@ fn fetch_once<T>(
         match agent(url, transport, label).get(url).call() {
             Ok(resp) => return read(resp),
             Err(e) => {
-                log::warn!("{label} attempt {attempt}/{MAX_ATTEMPTS} failed: {e}");
+                log::info!("{label} attempt {attempt}/{MAX_ATTEMPTS} failed: {e}");
                 last_err = e.to_string();
             }
         }
@@ -397,7 +397,7 @@ fn stream_to_part(
         ResumeOutcome::Append => offset,
         ResumeOutcome::RestartFromZero => {
             if offset > 0 {
-                log::warn!("{label} server ignored Range (status {}) — restarting from 0", response.status());
+                log::info!("{label} server ignored Range (status {}) — restarting from 0", response.status());
             }
             0
         }

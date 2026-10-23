@@ -151,6 +151,13 @@ impl BuildArgs {
     /// `moss build --allow-plugins` with no folder used to resolve the flag
     /// itself as the folder in the app binary and print usage in the open one.
     pub fn parse(args: &[String]) -> Result<BuildArgs, String> {
+        Self::parse_in(args, &std::env::current_dir().unwrap_or_default())
+    }
+
+    /// [`BuildArgs::parse`] with the working directory passed in. With no
+    /// folder, the site is the one containing `cwd`, found by the same walk
+    /// `moss history` uses.
+    pub fn parse_in(args: &[String], cwd: &std::path::Path) -> Result<BuildArgs, String> {
         let mut folder: Option<&str> = None;
         let mut flags = BuildFlags::default();
         for arg in args {
@@ -175,24 +182,26 @@ impl BuildArgs {
                 }
             }
         }
-        match folder {
-            Some(folder) => {
-                // Refresh events have nowhere to go without the SSE carrier
-                // `--serve` starts, so a watch with no serve used to build
-                // once and silently stop watching — caught only after the
-                // build ran, too late for an agent to react to. Caught here
-                // instead, before any build work starts.
-                if flags.watch && !flags.serve {
-                    return Err(format!(
-                        "error: --watch needs --serve: moss build {} --watch --serve\n{}",
-                        folder,
-                        usage()
-                    ));
-                }
-                Ok(BuildArgs { folder: folder.to_string(), flags })
-            }
-            None => Err(usage()),
+        // Refresh events have nowhere to go without the SSE carrier
+        // `--serve` starts, so a watch with no serve used to build
+        // once and silently stop watching — caught only after the
+        // build ran, too late for an agent to react to. Caught here
+        // instead, before any build work starts.
+        if flags.watch && !flags.serve {
+            let shown = folder.map(|f| format!("{f} ")).unwrap_or_default();
+            return Err(format!(
+                "error: --watch needs --serve: moss build {shown}--watch --serve\n{}",
+                usage()
+            ));
         }
+        let folder = match folder {
+            Some(folder) => folder.to_string(),
+            None => {
+                let root = VaultRoot::containing_in(std::path::Path::new("."), cwd);
+                root.path().to_string_lossy().into_owned()
+            }
+        };
+        Ok(BuildArgs { folder, flags })
     }
 }
 
@@ -244,6 +253,22 @@ pub fn run_headless_build(mut run: HeadlessBuildRun) -> ! {
     // root; registering the initial build's session under a relative CLI
     // argument would split its stage lock and task registries from rebuilds.
     run.folder_path = watch::headless::absolute_watch_root(&run.folder_path);
+    // Reads on this process's own threads fail fast on a cloud-only file
+    // instead of blocking until the OS gives up; the download pool's readers
+    // are the only threads that wait on a provider. Then no build starts while
+    // source files are still in the cloud and the provider is not delivering.
+    crate::platform::set_dataless_fail_fast();
+    let folder = std::path::Path::new(&run.folder_path);
+    if folder.is_dir() {
+        if let Err(message) = crate::build::cloud_readiness::fetch::require_sources_local(
+            folder,
+            &crate::build::cloud_readiness::fetch::Wait::production,
+            &mut |line| cli_eprintln!("{}", line),
+        ) {
+            cli_eprintln!("{}", message);
+            std::process::exit(1);
+        }
+    }
     preflight_cli_build(&run.folder_path);
 
     // Register the session before any build work: the pipeline, the seal tail

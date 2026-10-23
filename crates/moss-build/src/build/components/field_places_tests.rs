@@ -1,9 +1,9 @@
 use super::*;
 use moss_core::date::{parse_edtf, Edtf};
-use moss_core::fields::{FieldKind, PageLink};
+use moss_core::fields::{FieldKind, PageLink, Placed};
 
 fn decl(name: &str, kind: FieldKind, place: Place) -> FieldDecl {
-    FieldDecl { name: name.into(), kind, choices: vec![], place: Some(place), label: vec![], scope: vec![] }
+    FieldDecl { name: name.into(), kind, place: Some(place), ..Default::default() }
 }
 
 fn period(text: &str) -> TypedValue {
@@ -11,6 +11,10 @@ fn period(text: &str) -> TypedValue {
         Some(Edtf::Interval { start, end }) => TypedValue::Period { start, open: end.is_none(), end, text: text.into() },
         other => panic!("not a period: {other:?}"),
     }
+}
+
+fn values<const N: usize>(pairs: [(FieldDecl, TypedValue); N]) -> Vec<Placed> {
+    pairs.into_iter().map(|(d, v)| Placed::Value(d, v)).collect()
 }
 
 fn no_pages(_: &str) -> Option<String> {
@@ -27,7 +31,7 @@ fn an_eyebrow_holds_its_fields_in_declaration_order_separated_by_a_space() {
         (decl("kind", FieldKind::Choice, Place::Eyebrow), TypedValue::Choice { value: "Building".into(), label: "Built".into() }),
         (decl("years", FieldKind::Period, Place::Eyebrow), period("1927/1933")),
     ];
-    let out = draw(&placed, Language::En, None, &no_pages);
+    let out = draw(&values(placed.clone()), Language::En, None, &no_pages);
     assert_eq!(
         out.eyebrow,
         "<p class=\"moss-eyebrow\"><span data-field=\"kind\">Built</span> <span data-field=\"years\"><time datetime=\"1927/1933\">1927–1933</time></span></p>\n"
@@ -38,7 +42,7 @@ fn an_eyebrow_holds_its_fields_in_declaration_order_separated_by_a_space() {
 #[test]
 fn an_open_period_reads_in_the_pages_language_and_keeps_an_open_datetime() {
     let placed = [(decl("years", FieldKind::Period, Place::Eyebrow), period("1923/.."))];
-    let out = draw(&placed, Language::De, None, &no_pages);
+    let out = draw(&values(placed.clone()), Language::De, None, &no_pages);
     assert!(out.eyebrow.contains("<time datetime=\"1923/..\">ab 1923</time>"), "{}", out.eyebrow);
 }
 
@@ -49,7 +53,7 @@ fn a_count_is_a_data_element_then_its_noun_and_a_bare_count_has_no_span() {
         (decl("figure", FieldKind::Count, Place::KeyFigure), count(1382, Some("flats"))),
         (decl("units", FieldKind::Count, Place::KeyFigure), count(40, None)),
     ];
-    let out = draw(&placed, Language::En, None, &no_pages);
+    let out = draw(&values(placed.clone()), Language::En, None, &no_pages);
     assert_eq!(
         out.key_figures,
         "<p class=\"moss-key-figure\" data-field=\"figure\"><data value=\"1382\">1,382</data> <span>flats</span></p>\n\
@@ -63,7 +67,7 @@ fn only_the_first_subtitle_is_drawn() {
         (decl("district", FieldKind::Text, Place::Subtitle), text("Eastbank")),
         (decl("tagline", FieldKind::Text, Place::Subtitle), text("Other")),
     ];
-    let out = draw(&placed, Language::En, None, &no_pages);
+    let out = draw(&values(placed.clone()), Language::En, None, &no_pages);
     assert_eq!(out.eyebrow, "");
     assert_eq!(out.subtitle, "<p class=\"moss-subtitle\" data-field=\"district\">Eastbank</p>\n");
 }
@@ -81,7 +85,7 @@ fn facts_use_the_label_or_the_capitalised_name_and_link_pages_by_the_text_as_wri
         ),
     ];
     let href = |t: &str| (t == "anna" || t.ends_with("Anna Weber")).then(|| "/people/anna-weber/".to_string());
-    let en = draw(&placed, Language::En, None, &href);
+    let en = draw(&values(placed.clone()), Language::En, None, &href);
     assert_eq!(
         en.facts,
         "<dl class=\"moss-facts\" data-beside>\n\
@@ -89,7 +93,7 @@ fn facts_use_the_label_or_the_capitalised_name_and_link_pages_by_the_text_as_wri
          <div data-field=\"partners\"><dt>Partners</dt><dd><a href=\"/people/anna-weber/\">Dr. Weber</a>, Missing &lt;One&gt;</dd></div>\n\
          </dl>\n"
     );
-    let de = draw(&placed, Language::De, None, &href);
+    let de = draw(&values(placed.clone()), Language::De, None, &href);
     assert!(de.facts.contains("<dt>Architektin</dt>"), "{}", de.facts);
 }
 
@@ -98,7 +102,7 @@ fn an_unplaced_or_empty_field_draws_nothing() {
     let mut unplaced = decl("note", FieldKind::Text, Place::Facts);
     unplaced.place = None;
     let placed = [(unplaced, text("x")), (decl("blank", FieldKind::Pages, Place::Facts), TypedValue::Pages(vec![]))];
-    assert_eq!(draw(&placed, Language::En, None, &no_pages), Placements::default());
+    assert_eq!(draw(&values(placed.clone()), Language::En, None, &no_pages), Placements::default());
 }
 
 mod title_block_after_picture {
@@ -152,6 +156,55 @@ mod title_block_after_picture {
     }
 
     #[test]
+    fn beside_wraps_the_picture_and_the_title_block_in_one_div_after_leading_divs() {
+        use super::super::beside_leading_picture;
+        let html = page("\n<div class=\"trail\"><p>Road</p></div>\n<figure class=\"moss-image\"><img></figure>\n<p>Text</p>");
+        let out = beside_leading_picture(&html);
+        let at = |s: &str| out.find(s).unwrap_or_else(|| panic!("{s} missing from {out}"));
+        assert!(at("trail") < at("<div class=\"moss-title-beside\"><figure") && at("</figure>") < at("moss-eyebrow") && at("</h1>") < at("</div></div>") && at("</div></div>") < at("<p>Text</p>"), "{out}");
+        assert!(!out.contains(BODY_START));
+    }
+
+    #[test]
+    fn beside_without_a_leading_picture_keeps_the_title_block_first() {
+        use super::super::beside_leading_picture;
+        let out = beside_leading_picture(&page("\n<p>Text first</p>\n<figure class=\"moss-image\"><img></figure>"));
+        assert!(out.starts_with(TITLE.trim_end_matches('\n')) && !out.contains("moss-title-beside") && !out.contains(BODY_START), "{out}");
+    }
+
+    #[test]
+    fn a_picture_alone_in_a_paragraph_counts_as_the_leading_picture() {
+        for picture in [
+            "<p><picture><source srcset=\"a.webp\"><img src=\"a.jpg\" alt=\"\"></picture></p>",
+            "<p><img src=\"a.jpg\" alt=\"Poster\" /></p>",
+            "<p data-source-line=\"3\"><picture><img src=\"a.jpg\" alt=\"\"></picture></p>",
+        ] {
+            let out = after_leading_picture(&page(&format!("\n<div class=\"trail\"></div>\n{picture}\n<p>Text</p>")));
+            let at = |s: &str| out.find(s).unwrap_or_else(|| panic!("{s} missing from {out}"));
+            assert!(at("trail") < at("<img") && at("</p>\n<p class=\"moss-eyebrow\"") < at("<h1") && at("<h1") < at("<p>Text</p>"), "{out}");
+            assert!(!out.contains(BODY_START));
+        }
+    }
+
+    #[test]
+    fn a_paragraph_with_text_around_its_picture_is_not_a_leading_picture() {
+        for body in ["\n<p>See <img src=\"a.jpg\"></p>", "\n<p><img src=\"a.jpg\"> after</p>", "\n<p><img src=\"a.jpg\"><img src=\"b.jpg\"></p>"] {
+            let html = page(body);
+            assert!(super::super::title_block_lacks_picture(&html), "{body}");
+            assert!(after_leading_picture(&html).starts_with(TITLE.trim_end_matches('\n')));
+        }
+    }
+
+    #[test]
+    fn only_a_marked_body_with_no_leading_picture_lacks_one() {
+        use super::super::title_block_lacks_picture;
+        assert!(title_block_lacks_picture(&page("\n<p>Text</p>")));
+        assert!(!title_block_lacks_picture(&page("\n<figure class=\"moss-image\"><img></figure>")));
+        assert!(!title_block_lacks_picture(&page("\n<p><img src=\"a.jpg\"></p>")));
+        assert!(!title_block_lacks_picture("<h1>Authored</h1><p>x</p>"));
+    }
+
+    #[test]
     fn an_unclosed_block_keeps_the_title_block_first() {
         let out = after_leading_picture(&page("\n<div class=\"x\"><figure class=\"moss-image\"><img></figure>"));
         assert!(out.starts_with("<p class=\"moss-eyebrow\""), "{out}");
@@ -166,4 +219,14 @@ fn a_folder_index_and_a_slot_keep_their_title_first() {
     assert!(!title_block_after_picture(&ParsedDocument { slot_only: true, ..page.clone() }));
     assert!(!title_block_after_picture(&ParsedDocument { kind: moss_core::page_kind::PageKind::Folder, ..page.clone() }));
     assert!(!title_block_after_picture(&ParsedDocument { title_block: None, ..page }));
+}
+
+#[test]
+fn beside_picture_follows_the_same_page_rules_as_after_picture() {
+    use crate::build::components::field_places::{title_block_beside_picture, title_block_follows_picture};
+    let page = ParsedDocument { title_block: Some("beside-picture".into()), kind: moss_core::page_kind::PageKind::Article, ..Default::default() };
+    assert!(title_block_beside_picture(&page) && title_block_follows_picture(&page));
+    assert!(!title_block_beside_picture(&ParsedDocument { slot_only: true, ..page.clone() }));
+    assert!(!title_block_beside_picture(&ParsedDocument { kind: moss_core::page_kind::PageKind::Folder, ..page.clone() }));
+    assert!(!title_block_beside_picture(&ParsedDocument { title_block: Some("after-picture".into()), ..page }));
 }

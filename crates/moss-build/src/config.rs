@@ -37,8 +37,11 @@
 
 pub mod deployment;
 pub mod environment;
+pub mod map_layers;
 pub mod migrations;
+pub mod plugin_view;
 pub mod services;
+pub mod site_settings;
 
 use toml::Value;
 
@@ -86,7 +89,7 @@ impl ConfigFile {
         let mut table: toml::Table =
             toml::from_str(text).map_err(|e| format!("Failed to parse config.toml: {}", e))?;
         if let Err(e) = crate::config::migrations::migrate_to_current(&mut table) {
-            log::warn!(target: "config", "in-memory config migration failed, reading raw values: {e}");
+            log::info!(target: "config", "in-memory config migration failed, reading raw values: {e}");
         }
         Ok(Self { root: table, key_orders: written_key_orders(text) })
     }
@@ -132,6 +135,30 @@ impl ConfigFile {
             .get("site")
             .and_then(|site| site.get(field))
             .and_then(|v| v.as_bool())
+    }
+
+    /// One note per `[site]` key the build does not read: it names the key and
+    /// the file, and the nearest known key when one is near. A note, not a
+    /// problem, because older moss versions left keys that no code reads now.
+    /// `title` gets its own line, since the site's name is the home page's `title:`.
+    pub fn unknown_site_keys(&self) -> Vec<String> {
+        use crate::config::site_settings::{nearest_known_key, site_settings};
+        let Some(site) = self.root.get("site").and_then(|v| v.as_table()) else {
+            return Vec::new();
+        };
+        let known: Vec<&str> = site_settings().iter().map(|s| s.name).collect();
+        site.keys()
+            .filter(|key| !known.contains(&key.as_str()))
+            .map(|key| {
+                if key == "title" {
+                    return "[site] title is not a setting in .moss/config.toml; the site's name is the `title:` of its home page".to_string();
+                }
+                match nearest_known_key(key, &known) {
+                    Some(k) => format!("[site] has an unknown key \"{key}\" in .moss/config.toml; did you mean \"{k}\"?"),
+                    None => format!("[site] has an unknown key \"{key}\" in .moss/config.toml; the build does not read it"),
+                }
+            })
+            .collect()
     }
 
     /// The top-level `environment` key. Top-level rather than under `[site]`
@@ -241,11 +268,20 @@ impl ConfigFile {
                 let fields: Vec<String> =
                     fields.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
                 let titles = table.get("title").and_then(Self::choice_labels).unwrap_or_default();
+                let counts = match table.get("count") {
+                    None => Vec::new(),
+                    Some(value) => Self::count_labels(value).unwrap_or_else(|| {
+                        crate::build::cli_output::log_warn_problem!(
+                            "[terms.{key}] count must be text, a table of text per language, or false; ignoring it"
+                        );
+                        Vec::new()
+                    }),
+                };
                 let kind_type = table.get("type").and_then(|v| v.as_str()).map(str::to_string);
                 let explorer = table.get("explorer").and_then(|v| v.as_bool());
                 let line = table.get("line").and_then(|v| v.as_bool());
                 let cards = table.get("cards").cloned();
-                declared.push(RawKind { key: key.clone(), fields, titles, kind_type, explorer, line, cards });
+                declared.push(RawKind { key: key.clone(), fields, titles, counts, kind_type, explorer, line, cards });
             }
         }
         let declared_keys: std::collections::HashSet<&str> =
@@ -264,6 +300,7 @@ impl ConfigFile {
                     Vec::new()
                 },
                 titles: Vec::new(),
+                counts: Vec::new(),
                 kind_type: None,
                 explorer: None, line: None, cards: None,
             });
@@ -290,6 +327,13 @@ impl ConfigFile {
             .collect();
         nav.sort();
         nav.into_iter().map(|(_, key, weight)| (key, weight)).collect()
+    }
+
+    /// The `[map.layers.<name>]` tables in written order. An error names the
+    /// table and key that is wrong; the build stops on it. `source` and a
+    /// missing `bbox` are settled later by [`map_layers::resolve_layers`].
+    pub fn map_layers(&self) -> Result<Vec<map_layers::MapLayer>, String> {
+        map_layers::parse_layers(self.root.get("map"), |name| self.written_position("map.layers", name))
     }
 
     /// The `[redirects]` table: old address, new address, as the author wrote
@@ -334,6 +378,15 @@ impl ConfigFile {
                 problems.push(format!("[{table}] `{key}` must be a list of strings; ignoring it"));
                 Vec::new()
             }
+        }
+    }
+
+    /// A term kind's `count` as `(language tag, text)` pairs; `false` is the
+    /// empty text under `en`, which every language falls back to.
+    fn count_labels(count: &Value) -> Option<Vec<(String, String)>> {
+        match count {
+            Value::Boolean(false) => Some(vec![("en".to_string(), String::new())]),
+            other => Self::choice_labels(other),
         }
     }
 
@@ -395,8 +448,8 @@ impl ConfigFile {
                     }
                 }
                 let place = Self::declared_place(sub, name, &mut problems);
-                let label = Self::declared_label(sub, name, &mut problems);
-                decls.push(FieldDecl { name: name.clone(), kind: FieldKind::Text, choices: Vec::new(), place, label, scope: Vec::new() });
+                let label = Self::declared_labels(sub, "label", name, &mut problems);
+                decls.push(FieldDecl { name: name.clone(), place, label, ..Default::default() });
                 continue;
             }
             let Some(type_name) = sub.get("type").and_then(|v| v.as_str()) else {
@@ -411,10 +464,11 @@ impl ConfigFile {
                 continue;
             };
             for key in sub.keys() {
-                if !matches!(key.as_str(), "type" | "of" | "place" | "label" | "in") {
+                if !matches!(key.as_str(), "type" | "of" | "place" | "label" | "text" | "in") {
                     problems.push(format!("[fields.{name}] has an unknown key \"{key}\""));
                 }
             }
+            let of = if kind == FieldKind::Group { Self::string_list(sub, "of", &format!("fields.{name}"), &mut problems) } else { Vec::new() };
             let choices = match (kind, sub.get("of")) {
                 (FieldKind::Choice, None) => {
                     problems.push(format!("[fields.{name}] is a choice and needs `of`, a list or a table of labels"));
@@ -445,17 +499,61 @@ impl ConfigFile {
                     problems.push(format!("[fields.{name}] `of` must be a list or a table of labels"));
                     continue;
                 }
+                (FieldKind::Group, _) => Vec::new(),
                 (_, Some(_)) => {
-                    problems.push(format!("[fields.{name}] has `of`, which only a choice takes; ignoring it"));
+                    problems.push(format!("[fields.{name}] has `of`, which only a choice or a group takes; ignoring it"));
                     Vec::new()
                 }
                 (_, None) => Vec::new(),
             };
             let place = Self::declared_place(sub, name, &mut problems);
-            let label = Self::declared_label(sub, name, &mut problems);
+            let label = Self::declared_labels(sub, "label", name, &mut problems);
+            let text = if kind == FieldKind::Url {
+                Self::declared_labels(sub, "text", name, &mut problems)
+            } else {
+                if sub.contains_key("text") {
+                    problems.push(format!("[fields.{name}] has `text`, which only a url field takes; ignoring it"));
+                }
+                Vec::new()
+            };
             let scope = Self::string_list(sub, "in", &format!("fields.{name}"), &mut problems);
-            decls.push(FieldDecl { name: name.clone(), kind, choices, place, label, scope });
+            decls.push(FieldDecl { name: name.clone(), kind, choices, place, label, text, scope, of });
         }
+        let declared: Vec<String> = decls.iter().filter(|d| d.kind != FieldKind::Group).map(|d| d.name.clone()).collect();
+        let groups: Vec<String> = decls.iter().filter(|d| d.kind == FieldKind::Group).map(|d| d.name.clone()).collect();
+        decls.retain(|group| {
+            if group.kind != FieldKind::Group {
+                return true;
+            }
+            if group.place.is_none() {
+                problems.push(format!("[fields.{}] is a group with no `place`, so it draws nowhere; skipping it", group.name));
+                return false;
+            }
+            if group.of.is_empty() {
+                problems.push(format!("[fields.{}] is a group with no `of`; name the fields it draws, in order; skipping it", group.name));
+                return false;
+            }
+            for (at, part) in group.of.iter().enumerate() {
+                if group.of[..at].contains(part) {
+                    problems.push(format!("[fields.{}] `of` names \"{part}\" twice; skipping the group", group.name));
+                    return false;
+                }
+            }
+            for part in &group.of {
+                let reason = if *part == group.name {
+                    "names itself"
+                } else if groups.contains(part) {
+                    "names another group, and a group cannot draw a group"
+                } else if !declared.contains(part) && !moss_core::fields::GROUP_BUILTIN_PARTS.contains(&part.as_str()) {
+                    "is neither a declared field, title nor date"
+                } else {
+                    continue;
+                };
+                problems.push(format!("[fields.{}] `of` names \"{part}\", which {reason}; skipping the group", group.name));
+                return false;
+            }
+            true
+        });
         (decls, problems)
     }
 
@@ -477,12 +575,12 @@ impl ConfigFile {
         }
     }
 
-    /// A declaration's `label`, as `(language tag, label)` pairs; empty when absent or malformed.
-    fn declared_label(sub: &toml::Table, name: &str, problems: &mut Vec<String>) -> Vec<(String, String)> {
-        match sub.get("label") {
+    /// A declaration's `label` or `text` key, as `(language tag, string)` pairs; empty when absent or malformed.
+    fn declared_labels(sub: &toml::Table, key: &str, name: &str, problems: &mut Vec<String>) -> Vec<(String, String)> {
+        match sub.get(key) {
             None => Vec::new(),
             Some(v) => Self::choice_labels(v).unwrap_or_else(|| {
-                problems.push(format!("[fields.{name}] `label` must be a string or a table of language labels; ignoring it"));
+                problems.push(format!("[fields.{name}] `{key}` must be a string or a table of language labels; ignoring it"));
                 Vec::new()
             }),
         }
@@ -517,6 +615,12 @@ pub struct RawKind {
     /// comes from `i18n::term_root_title`) and for a declared kind that didn't
     /// set one (its title is its key).
     pub titles: Vec<(String, String)>,
+    /// The table's `count`, in the same `(language tag, text)` shape as
+    /// `titles`: the wording of a term's card count, with `{n}` for the number
+    /// and the first `|` splitting the singular form. `count = false` is the
+    /// empty text, which hides the count. Empty when the key is absent and for
+    /// the two built-ins.
+    pub counts: Vec<(String, String)>,
     /// The declared `type = "..."` key, unvalidated — `"place"` is the only
     /// value `build::terms::term_kinds` recognizes today; anything else is a
     /// diagnostic there, not here. `None` for the two built-ins and for a
@@ -545,6 +649,9 @@ fn written_key_orders(text: &str) -> std::collections::BTreeMap<String, Vec<Stri
     let keys = |t: &dyn toml_edit::TableLike| t.iter().map(|(k, _)| k.to_string()).collect::<Vec<_>>();
     if let Some(terms) = doc.get("terms").and_then(|v| v.as_table_like()) {
         orders.insert("terms".to_string(), keys(terms));
+    }
+    if let Some(layers) = doc.get("map").and_then(|v| v.as_table_like()).and_then(|m| m.get("layers")).and_then(|v| v.as_table_like()) {
+        orders.insert("map.layers".to_string(), keys(layers));
     }
     if let Some(fields) = doc.get("fields").and_then(|v| v.as_table_like()) {
         orders.insert("fields".to_string(), keys(fields));

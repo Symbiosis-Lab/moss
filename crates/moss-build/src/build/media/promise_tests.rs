@@ -6,6 +6,7 @@ const DIMS: (u32, u32) = (2400, 1800);
 
 fn vault_with(plate_ext: &str) -> ProjectStructure {
     ProjectStructure {
+        passthrough_media: Vec::new(),
         root_path: "/vault".to_string(),
         markdown_files: vec![],
         html_files: vec![],

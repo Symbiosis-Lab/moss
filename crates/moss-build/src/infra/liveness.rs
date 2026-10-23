@@ -147,7 +147,7 @@ where
     tokio::select! {
         result = fut => result,
         idle = watchdog(stall) => {
-            log::warn!(target: "deploy", "{what}: no progress for {}s — aborting", idle.as_secs());
+            log::info!(target: "deploy", "{what}: no progress for {}s — aborting", idle.as_secs());
             Err(stalled_message(stall))
         }
     }

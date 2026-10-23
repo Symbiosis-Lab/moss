@@ -155,3 +155,44 @@ fn a_file_outside_every_site_renamed_from_inside_a_site_is_refused_as_in_no_site
     assert!(!err.contains("moss rename"), "{err}");
     assert!(dir.path().join("loose/todo.md").exists() && !dir.path().join("loose/done.md").exists());
 }
+
+#[test]
+fn a_rename_into_a_folder_that_does_not_exist_yet_creates_it() {
+    let site = unbuilt_site();
+    fs::create_dir_all(site.path().join("scene")).unwrap();
+    fs::write(site.path().join("scene/one.md"), "# One\n").unwrap();
+    fs::write(site.path().join("index.md"), "[one](scene/one.md)\n").unwrap();
+
+    let line = rename_in(&args("scene", "home/deep/scene"), site.path(), None).unwrap();
+
+    assert!(site.path().join("home/deep/scene/one.md").exists());
+    assert!(!site.path().join("scene").exists());
+    let index = fs::read_to_string(site.path().join("index.md")).unwrap();
+    assert!(index.contains("home/deep/scene/one.md"), "{index}");
+    assert!(line.contains("1 reference rewritten"), "{line}");
+}
+
+#[test]
+fn a_rename_onto_an_existing_destination_is_still_refused() {
+    let site = unbuilt_site();
+    let err = rename_in(&args("notes/beta.md", "blog/post.md"), site.path(), None).unwrap_err();
+    assert!(err.contains("already exists"), "{err}");
+    assert!(site.path().join("notes/beta.md").exists());
+}
+
+#[test]
+fn a_folder_rename_carries_the_passthrough_entries_inside_it() {
+    let site = unbuilt_site();
+    fs::create_dir_all(site.path().join("scene/sub")).unwrap();
+    fs::write(site.path().join("scene/sub/app.html"), "<p>x</p>").unwrap();
+    fs::create_dir_all(site.path().join(".moss")).unwrap();
+    let config = "# keep me\n[build]\npassthrough = [\n  \"scene\",        # the demo\n  \"!/scene/sub/\",\n  \"scenery\",\n  \"index.html\",\n]\n\n[site]\ntitle = \"T\"\n";
+    fs::write(site.path().join(".moss/config.toml"), config).unwrap();
+
+    let line = rename_in(&args("scene", "home/scene"), site.path(), None).unwrap();
+
+    let after = fs::read_to_string(site.path().join(".moss/config.toml")).unwrap();
+    let expected = config.replace("\"scene\",", "\"home/scene\",").replace("\"!/scene/sub/\"", "\"!/home/scene/sub/\"");
+    assert_eq!(after, expected);
+    assert!(line.contains("2 passthrough entries updated"), "{line}");
+}

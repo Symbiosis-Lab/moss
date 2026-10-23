@@ -109,7 +109,7 @@ pub(super) fn disk_cache_store(key: &str, value: &TypesetMath) {
         );
     });
     if let Err(e) = merged {
-        log::warn!("[math-render] failed to write render-cache record: {e}");
+        log::info!("[math-render] failed to write render-cache record: {e}");
     }
 }
 

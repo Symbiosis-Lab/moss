@@ -345,19 +345,26 @@ pub struct FrontMatter {
     /// regardless of filename. Written by moss on homes it creates; survives rename.
     #[serde(default, deserialize_with = "deserialize_bool_lenient")]
     pub home: Option<bool>,
-    /// Draft: rendered and published at its direct URL, but hidden from all
-    /// listings, feeds, sitemap, and navigation (and marked `noindex`).
+    /// Draft: built so the preview can show it, but never published, and
+    /// hidden from all listings, feeds, sitemap, and navigation (and marked
+    /// `noindex`).
     #[serde(default, deserialize_with = "deserialize_bool_lenient")]
     pub draft: Option<bool>,
     /// Listed: when `false`, the page is hidden from moss's auto-generated
     /// surfaces (home feed, recent, folder embeds, RSS, llms.txt, sitemap, and
     /// auto sidebar listings) but remains indexable, share-cardable, and
     /// reachable at its direct URL. Absent ⇒ listed. Orthogonal to `draft`:
-    /// `draft` adds `noindex` and drops the share card; `listed: false` does
-    /// neither. Nav bar / footer link placement (explicit `nav:` / `footer:`)
+    /// a draft is never published, so it has no address to reach; `listed:
+    /// false` stays published. Nav bar / footer link placement (explicit `nav:` / `footer:`)
     /// are independent of this flag.
     #[serde(default, deserialize_with = "deserialize_bool_lenient")]
     pub listed: Option<bool>,
+    /// Partial: the page exists only to be transcluded into other pages
+    /// (`![[name]]`). It resolves like any page but is never built, listed,
+    /// or given a URL, so it is absent from nav, sitemap, feeds, search and
+    /// `llms.txt`, and is never reported as an unlinked page.
+    #[serde(default, deserialize_with = "deserialize_bool_lenient")]
+    pub partial: Option<bool>,
     /// Page description for SEO and list previews
     pub description: Option<String>,
     /// Content tags for organization
@@ -395,6 +402,9 @@ pub struct FrontMatter {
     /// Listing filter: "only" keeps pages that have a cover. Applied after
     /// flattening and before `children_limit`. Absent = no filter.
     pub children_covers: Option<String>,
+    /// Listing filter: "past" or "upcoming" keeps only the pages whose event
+    /// has ended, or has not. Applied before `children_limit`. Absent = no filter.
+    pub children_when: Option<String>,
     /// What this listing's folder cards say they count: `false` hides it, a
     /// string replaces the text (see [`crate::frontmatter_union::ChildrenCount`]).
     pub children_count: Option<crate::frontmatter_union::ChildrenCount>,
@@ -450,8 +460,11 @@ pub struct FrontMatter {
     pub typesetting: Option<String>,
     /// Content width preset: "wide" or "full"
     pub content_width: Option<String>,
-    /// Where the title block goes: "after-picture" puts it under the body's leading picture
+    /// Where the title block goes: "after-picture" puts it under the body's leading picture, "beside-picture" next to it
     pub title_block: Option<String>,
+    /// `false` removes the reader's text-size control from a dated page; unset or `true` keeps it
+    #[serde(default, deserialize_with = "deserialize_bool_lenient")]
+    pub reader_controls: Option<bool>,
     /// On a folder's home page: the accent colour (`#rgb` or `#rrggbb`) of the
     /// folder's section. Validated and inherited by `build::scan::section_color`.
     #[serde(default, deserialize_with = "deserialize_string_lenient")]
@@ -988,8 +1001,8 @@ pub(crate) fn is_frontmatter_field_line(trimmed: &str) -> bool {
 /// Keys that may be written bare, as `nav` rather than `nav: true`. Must stay in
 /// step with the bare-flag arm of [`parse_simplified_frontmatter`];
 /// `every_bare_flag_is_recognised_by_the_parser` fails if it drifts.
-pub(crate) const SIMPLIFIED_BARE_FLAGS: [&str; 8] = [
-    "nav", "home", "draft", "listed", "breadcrumb", "footer", "comments", "children",
+pub(crate) const SIMPLIFIED_BARE_FLAGS: [&str; 9] = [
+    "nav", "home", "draft", "listed", "partial", "breadcrumb", "footer", "comments", "children",
 ];
 
 /// The field names a simplified frontmatter block declares, in source order.
@@ -1114,6 +1127,13 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                         value
                     ),
                 },
+                "children_when" => match value {
+                    "past" | "upcoming" => frontmatter.children_when = Some(value.to_string()),
+                    _ => eprintln!(
+                        "Warning: children_when: \"{}\" is not valid. Use \"past\" or \"upcoming\".",
+                        value
+                    ),
+                },
                 "description" => frontmatter.description = Some(value.to_string()),
                 "nav_label" => frontmatter.nav_label = Some(value.to_string()),
                 "lang" => frontmatter.lang = Some(value.to_string()),
@@ -1169,7 +1189,7 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                         }
                     };
                 }
-                "nav" | "home" | "draft" | "listed" | "footer" | "comments" => {
+                "nav" | "home" | "draft" | "listed" | "partial" | "footer" | "comments" => {
                     let unquoted = value.trim_matches(|c| c == '\'' || c == '"');
                     // Anything other than "true"/"false" is a likely typo (e.g.
                     // "yes", "Ture"); warn rather than silently defaulting to
@@ -1191,6 +1211,7 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                         "home" => frontmatter.home = flag,
                         "draft" => frontmatter.draft = flag,
                         "listed" => frontmatter.listed = flag,
+                        "partial" => frontmatter.partial = flag,
                         "footer" => frontmatter.footer = flag,
                         "comments" => frontmatter.comments = flag,
                         _ => unreachable!(),
@@ -1220,6 +1241,7 @@ pub fn parse_simplified_frontmatter(content: &str) -> (FrontMatter, String) {
                 "draft" => frontmatter.draft = Some(true),
                 "listed" => frontmatter.listed = Some(true),
                 "breadcrumb" => frontmatter.breadcrumb = Some(BreadcrumbSetting::On),
+                "partial" => frontmatter.partial = Some(true),
                 "footer" => frontmatter.footer = Some(true),
                 "comments" => frontmatter.comments = Some(true),
                 "children" => frontmatter.children = Some(true),
@@ -1715,6 +1737,16 @@ mod tests {
     }
 
     #[test]
+    fn parses_partial_field_in_both_dialects() {
+        let yaml: FrontMatter = serde_yaml::from_str("partial: true\n").expect("parse");
+        assert_eq!(yaml.partial, Some(true));
+        let (kv, _) = parse_simplified_frontmatter("partial: true\n---\nbody\n");
+        assert_eq!(kv.partial, Some(true));
+        let (bare, _) = parse_simplified_frontmatter("partial\n---\nbody\n");
+        assert_eq!(bare.partial, Some(true));
+    }
+
+    #[test]
     fn parses_listed_field_simplified() {
         let (off, _) = parse_simplified_frontmatter("listed: false\n---\nbody\n");
         assert_eq!(off.listed, Some(false));
@@ -1835,12 +1867,12 @@ mod url_path_tests {
         // Bug fix: Title-Case folder must be lowercased in the URL.
         assert_eq!(
             compute_url_path(
-                "News/2026-04-22-morbidelli.md",
+                "News/2026-04-22-lovelace.md",
                 false,
                 None,
-                "2026-04-22-morbidelli"
+                "2026-04-22-lovelace"
             ),
-            "news/2026-04-22-morbidelli/index.html"
+            "news/2026-04-22-lovelace/index.html"
         );
         assert_eq!(
             compute_url_path("Projects/giant-planets.md", false, None, "giant-planets"),

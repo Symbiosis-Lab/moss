@@ -89,9 +89,9 @@ Each line is the old address on the left and the new one on the right, both star
 |---------|-------|----------|------------|
 | _(default)_ | yes | yes | yes |
 | `listed: false` | yes | no | no |
-| `draft: true` | yes | no | no |
+| `draft: true` | preview only | no | no |
 
-A draft is still published at its own address: it is left out of lists, feeds and the sitemap and marked `noindex`, but anyone who has the link can open it. A page with `listed: false` is left out of the same places but not marked `noindex`. To keep a file out of the site entirely, start its name, or the name of its folder, with a `.`. A leading `_` does not hide anything: `_drafts/` is built like any other folder, at `/drafts/`.
+A draft is never published: it shows in the preview, and publishing leaves it out, so its address does not work on the live site. Publishing stops while a published page links to a draft, and names each link. A page with `listed: false` is left out of lists, feeds and the sitemap but is still published and reachable by its link. To keep a file out of the site entirely, start its name, or the name of its folder, with a `.`. A leading `_` does not hide anything: `_drafts/` is built like any other folder, at `/drafts/`.
 
 ## Sort order
 

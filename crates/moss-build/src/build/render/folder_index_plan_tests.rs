@@ -242,3 +242,26 @@ fn a_build_names_each_empty_folder_it_left_out() {
     assert_eq!(named, vec!["drafts".to_string()], "the build names the empty folder once, topmost");
 }
 
+
+#[test]
+fn passthrough_folder_and_its_subfolders_get_no_listing_but_their_pages_render() {
+    let root = tempfile::tempdir().unwrap();
+    write(root.path(), "index.md", "---\ntitle: Garden\n---\n# Garden");
+    write(root.path(), ".moss/config.toml", "[build]\npassthrough = [\"scene\"]\n");
+    write(root.path(), "scene/app.js", "var a = 1;");
+    write(root.path(), "scene/credits.md", "---\ntitle: Credits\n---\nThanks.");
+    write(root.path(), "scene/sketch/README.md", "---\ntitle: Sketch\n---\nNotes.");
+    write(root.path(), "scene/deep/more/page.md", "---\ntitle: Page\n---\nText.");
+    write(root.path(), "notes/entry.md", "---\ntitle: Entry\n---\nText.");
+    let (output, documents) = build(root.path());
+    let generated = generated(&documents);
+    for gone in ["scene/index.html", "scene/deep/index.html", "scene/deep/more/index.html"] {
+        assert!(!generated.contains(gone), "passthrough folder got a listing {gone}: {generated:?}");
+        let written = std::fs::read_to_string(output.join(gone)).unwrap_or_default();
+        assert!(written.is_empty() || written.contains("http-equiv=\"refresh\""), "listing written for {gone}");
+    }
+    assert!(generated.contains("notes/index.html"), "an ordinary folder keeps its listing: {generated:?}");
+    for page in ["scene/credits/index.html", "scene/sketch/index.html", "scene/deep/more/page/index.html"] {
+        assert!(output.join(page).exists(), "markdown inside a passthrough folder must render: {page}");
+    }
+}

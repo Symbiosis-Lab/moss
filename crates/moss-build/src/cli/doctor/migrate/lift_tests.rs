@@ -29,7 +29,7 @@ fn the_field_is_declared_once_with_its_place() {
 
 #[test]
 fn an_already_declared_field_leaves_the_config_alone() {
-    let decl = FieldDecl { name: "stage".into(), kind: FieldKind::Text, choices: vec![], place: Some(Place::Eyebrow), label: vec![], scope: vec![] };
+    let decl = FieldDecl { name: "stage".into(), kind: FieldKind::Text, place: Some(Place::Eyebrow), ..Default::default() };
     assert_eq!(lift(&[page("a.md", PIER)], "[fields.stage]\ntype = \"text\"\nplace = \"eyebrow\"\n", &[decl], Some(Place::Eyebrow)).config, None);
 }
 
@@ -68,7 +68,7 @@ fn a_div_inside_a_code_fence_is_not_touched() {
 
 #[test]
 fn a_value_that_does_not_fit_the_declared_type_is_left() {
-    let decl = FieldDecl { name: "stage".into(), kind: FieldKind::Number, choices: vec![], place: None, label: vec![], scope: vec![] };
+    let decl = FieldDecl { name: "stage".into(), kind: FieldKind::Number, place: None, ..Default::default() };
     let plan = lift(&[page("a.md", PIER)], "[fields.stage]\ntype = \"number\"\n", &[decl], None);
     assert!(plan.pages.is_empty());
     assert!(plan.skipped[0].reason.contains("does not fit"), "{:?}", plan.skipped);
@@ -115,7 +115,7 @@ fn a_list_or_empty_value_already_in_the_frontmatter_is_not_overwritten() {
 
 #[test]
 fn place_none_clears_a_declared_place() {
-    let decl = FieldDecl { name: "stage".into(), kind: FieldKind::Text, choices: vec![], place: Some(Place::Eyebrow), label: vec![], scope: vec![] };
+    let decl = FieldDecl { name: "stage".into(), kind: FieldKind::Text, place: Some(Place::Eyebrow), ..Default::default() };
     let config = "[fields.stage]\ntype = \"text\"\nplace = \"eyebrow\"\n";
     let request = LiftRequest { class: "eyebrow", field: "stage", place: None };
     let plan = plan(&request, &[page("a.md", PIER)], config, &[decl], FORMAT).unwrap();
@@ -124,7 +124,7 @@ fn place_none_clears_a_declared_place() {
 
 #[test]
 fn a_different_place_replaces_the_declared_one() {
-    let decl = FieldDecl { name: "stage".into(), kind: FieldKind::Text, choices: vec![], place: Some(Place::Eyebrow), label: vec![], scope: vec![] };
+    let decl = FieldDecl { name: "stage".into(), kind: FieldKind::Text, place: Some(Place::Eyebrow), ..Default::default() };
     let config = "[fields.stage]\ntype = \"text\"\nplace = \"eyebrow\"\n";
     let plan = lift(&[page("a.md", PIER)], config, &[decl], Some(Place::Subtitle));
     assert_eq!(plan.config.as_deref(), Some("[fields.stage]\ntype = \"text\"\nplace = \"subtitle\"\n"));

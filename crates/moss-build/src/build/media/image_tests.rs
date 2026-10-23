@@ -2384,6 +2384,7 @@ pub(crate) fn build_project_with_images(
     }
 
     let structure = crate::types::content::ProjectStructure {
+        passthrough_media: Vec::new(),
         root_path: root.to_string_lossy().to_string(),
         markdown_files: vec![],
         html_files: vec![],
@@ -6429,6 +6430,7 @@ impl RewriteVault {
     fn collect_of(&self, names: &[&str]) -> Vec<ImageConversionItem> {
         let paths = MossPaths::from_moss_dir(self.moss_dir.clone());
         let structure = crate::types::content::ProjectStructure {
+            passthrough_media: Vec::new(),
             root_path: self.root.to_string_lossy().to_string(),
             markdown_files: vec![],
             html_files: vec![],

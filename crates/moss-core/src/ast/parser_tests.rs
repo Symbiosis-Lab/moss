@@ -17,6 +17,7 @@ fn first_block(md: &str) -> Block {
 fn parses_basic_callout_with_inline_title() {
     match first_block("> [!note] Heads up\n> Body line 1.\n") {
         Block::Callout {
+            unknown_kind: _,
             kind,
             fold,
             title,
@@ -35,6 +36,7 @@ fn parses_basic_callout_with_inline_title() {
 fn parses_titleless_callout() {
     match first_block("> [!warning]\n> Watch out.\n") {
         Block::Callout {
+            unknown_kind: _,
             kind,
             fold,
             title,
@@ -207,6 +209,7 @@ fn callout_multi_paragraph_body_preserves_blocks() {
     let md = "> [!info] Multi\n> First paragraph.\n>\n> Second paragraph.\n";
     match first_block(md) {
         Block::Callout {
+            unknown_kind: _,
             kind,
             title,
             children,
@@ -312,6 +315,7 @@ fn parses_h1_heading() {
             level,
             children,
             id,
+            ..
         } => {
             assert_eq!(level, 1);
             // Phase 4 PR2: parser populates id with the Obsidian anchor slug.
@@ -320,6 +324,121 @@ fn parses_h1_heading() {
         }
         other => panic!("expected Heading, got {other:?}"),
     }
+}
+
+#[test]
+fn heading_contents_end_is_a_flag_not_text() {
+    match first_block("## Proposals {contents=end}\n") {
+        Block::Heading { children, id, contents_end, .. } => {
+            assert!(contents_end);
+            assert_eq!(id.as_deref(), Some("proposals"));
+            assert!(matches!(&children[..], [Inline::Text(t)] if t == "Proposals"), "{children:?}");
+        }
+        other => panic!("expected Heading, got {other:?}"),
+    }
+    // Any other attribute block is still just text, and still warned about.
+    match first_block("## Proposals {.wide}\n") {
+        Block::Heading { contents_end, .. } => assert!(!contents_end),
+        other => panic!("expected Heading, got {other:?}"),
+    }
+    let doc = parse("## A {.wide}\n\n## B {contents=end}\n");
+    assert_eq!(doc.warnings.len(), 1, "{:?}", doc.warnings);
+}
+
+#[test]
+fn heading_contents_end_leaves_no_trailing_space_after_inline_markup() {
+    let html = crate::ast::render::render_document(
+        &parse("## **Bold** {contents=end}\n"),
+        &crate::ast::hooks::DefaultHooks::new(),
+    );
+    assert!(html.starts_with(r#"<h2 id="bold" data-contents-end><strong>Bold</strong><a"#), "{html}");
+    match first_block("## **Bold** {contents=end}\n") {
+        Block::Heading { children, id, .. } => {
+            assert_eq!(id.as_deref(), Some("bold"));
+            assert!(!matches!(children.last(), Some(Inline::Text(t)) if t.ends_with(' ') || t.is_empty()), "{children:?}");
+        }
+        other => panic!("expected Heading, got {other:?}"),
+    }
+}
+
+#[test]
+fn heading_code_span_keeps_its_braces_and_a_derived_id() {
+    let html = crate::ast::render::render_document(
+        &parse("## The field `{#x}` and `{contents=end}`\n"),
+        &crate::ast::hooks::DefaultHooks::new(),
+    );
+    assert!(html.contains("<code>{#x}</code>") && html.contains(r#"id="the-field-{x}-and-{contents=end}""#), "{html}");
+    assert!(!html.contains("data-contents-end"), "{html}");
+}
+
+#[test]
+fn a_block_with_a_class_or_key_value_stays_text_and_warns() {
+    for (src, text, id) in [
+        ("## Opening {.wide}\n", "Opening {.wide}", "opening-{.wide}"),
+        ("## Note {data-x=1}\n", "Note {data-x=1}", "note-{data-x=1}"),
+    ] {
+        let doc = parse(src);
+        match &doc.blocks[0] {
+            Block::Heading { children, id: got, .. } => {
+                assert_eq!(got.as_deref(), Some(id), "{src:?}");
+                assert!(matches!(&children[..], [Inline::Text(t)] if t == text), "{children:?}");
+            }
+            other => panic!("expected Heading, got {other:?}"),
+        }
+        assert_eq!(doc.warnings.len(), 1, "{:?}", doc.warnings);
+    }
+}
+
+#[test]
+fn explicit_id_colliding_with_a_derived_id_is_numbered() {
+    let doc = parse("## Hours\n\n## Other {#hours}\n");
+    let ids: Vec<String> = doc
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            Block::Heading { id, .. } => id.clone(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ids, ["hours", "hours-1"]);
+}
+
+#[test]
+fn heading_explicit_id_is_the_anchor_and_leaves_the_text() {
+    match first_block("## Opening hours {#hours}\n") {
+        Block::Heading { children, id, contents_end, .. } => {
+            assert_eq!(id.as_deref(), Some("hours"));
+            assert!(!contents_end);
+            assert!(matches!(&children[..], [Inline::Text(t)] if t == "Opening hours"), "{children:?}");
+        }
+        other => panic!("expected Heading, got {other:?}"),
+    }
+    match first_block("## Opening hours {#hours contents=end}\n") {
+        Block::Heading { id, contents_end, .. } => {
+            assert_eq!(id.as_deref(), Some("hours"));
+            assert!(contents_end);
+        }
+        other => panic!("expected Heading, got {other:?}"),
+    }
+    // A block with a class or key=value is text, with its id left derived from it.
+    match first_block("## Opening hours {#hours .wide}\n") {
+        Block::Heading { children, id, .. } => {
+            assert_eq!(id.as_deref(), Some("opening-hours-{hours-.wide}"));
+            assert!(matches!(&children[..], [Inline::Text(t)] if t == "Opening hours {#hours .wide}"), "{children:?}");
+        }
+        other => panic!("expected Heading, got {other:?}"),
+    }
+    // The named id goes through the duplicate pass like any other.
+    let doc = parse("## Hours {#hours}\n\n## Hours {#hours}\n");
+    let ids: Vec<_> = doc
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            Block::Heading { id, .. } => id.clone(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ids, ["hours", "hours-1"]);
 }
 
 #[test]
@@ -2258,35 +2377,13 @@ fn unknown_shortcode_inside_a_valid_shortcode_warns() {
     );
 }
 
-/// A plain fenced div renders only classes and an id, so a `lang=` or
-/// `data-*` key on it is advised rather than silently dropped. A class-only
-/// fence stays quiet.
-#[test]
-fn fenced_div_keys_a_plain_div_cannot_render_are_advised() {
-    let doc = crate::ast::parse(":::{.note lang=fr data-tone=warm}\nBody.\n:::\n");
-    assert!(
-        doc.advisories
-            .iter()
-            .any(|a| a.contains("lang") && a.contains("data-tone")),
-        "dropped keys must be named, got {:?}",
-        doc.advisories
-    );
-    assert!(
-        doc.warnings.is_empty(),
-        "a dropped key is an advisory, not a counted warning, got {:?}",
-        doc.warnings
-    );
-    let quiet = crate::ast::parse(":::{.note}\nBody.\n:::\n");
-    assert!(quiet.advisories.is_empty(), "got {:?}", quiet.advisories);
-}
-
 /// A grid cell is parsed as its own fragment, so an advisory raised inside a
 /// cell must reach the outer document, not die with the fragment.
 #[test]
 fn fenced_div_advisory_inside_a_grid_cell_surfaces() {
-    let doc = crate::ast::parse("::::grid\n:::{.note lang=fr}\nBody.\n:::\n::::\n");
+    let doc = crate::ast::parse("::::grid\n:::{.note x=}\nBody.\n:::\n::::\n");
     assert!(
-        doc.advisories.iter().any(|a| a.contains("lang")),
+        doc.advisories.iter().any(|a| a.contains("could not be read")),
         "a cell's advisory must reach the document, got {:?}",
         doc.advisories
     );
@@ -2501,4 +2598,67 @@ fn fragments_are_unannotated_when_tracking_is_off() {
         &crate::ast::hooks::DefaultHooks::new(),
     );
     assert!(!html.contains("data-source"), "{html}");
+}
+
+#[test]
+fn unknown_callout_type_renders_as_note_and_keeps_the_written_name() {
+    match first_block("> [!bio]- Bio\n> Body.\n") {
+        Block::Callout { kind, unknown_kind, .. } => {
+            assert_eq!(kind, CalloutKind::Note);
+            assert_eq!(unknown_kind.as_deref(), Some("bio"));
+        }
+        other => panic!("expected Callout, got {other:?}"),
+    }
+    match first_block("> [!tldr]\n> Body.\n") {
+        Block::Callout { unknown_kind, .. } => assert_eq!(unknown_kind, None),
+        other => panic!("expected Callout, got {other:?}"),
+    }
+}
+
+fn collage_source(cells: usize) -> String {
+    let body = (0..cells).map(|i| format!("Cell {i}")).collect::<Vec<_>>().join("\n+++\n");
+    format!("Intro.\n\n:::grid {{collage}}\n{body}\n:::\n")
+}
+
+#[test]
+fn collage_grid_with_three_to_nine_cells_does_not_warn() {
+    for n in [3, 9] {
+        let doc = crate::ast::parse(&collage_source(n));
+        assert!(doc.warnings.is_empty(), "{n} cells: {:?}", doc.warnings);
+    }
+}
+
+#[test]
+fn collage_grid_outside_three_to_nine_cells_warns_with_its_line() {
+    for n in [2, 10] {
+        let doc = crate::ast::parse(&collage_source(n));
+        assert!(
+            doc.warnings.iter().any(|w| w.contains("collage") && w.contains("on line 3") && w.contains(&format!("{n} cells"))),
+            "{n} cells: {:?}",
+            doc.warnings
+        );
+    }
+}
+
+#[test]
+fn heading_contents_label_is_an_attribute_not_text() {
+    for src in [
+        "## Opening hours of the reading room {#hours contents-label=\"Opening hours\"}\n",
+        "## Opening hours of the reading room {contents-label=\"Opening hours\" #hours}\n",
+    ] {
+        let html = crate::ast::render::render_document(&parse(src), &crate::ast::hooks::DefaultHooks::new());
+        assert!(
+            html.starts_with(r#"<h2 id="hours" data-contents-label="Opening hours">Opening hours of the reading room<a"#),
+            "{src:?}: {html}"
+        );
+        assert!(parse(src).warnings.is_empty(), "{src:?}");
+    }
+    // A label is never the end marker, whatever it says.
+    match first_block("## End {contents-label=End}\n") {
+        Block::Heading { contents_end, contents_label, .. } => {
+            assert!(!contents_end);
+            assert_eq!(contents_label.as_deref(), Some("End"));
+        }
+        other => panic!("expected Heading, got {other:?}"),
+    }
 }

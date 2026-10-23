@@ -20,11 +20,12 @@ async function tracks(page: Page, selector: string): Promise<number[]> {
 
 test.describe("grid mobile collapse", () => {
   for (const vertical of [false, true]) {
-    for (const width of [390, 740, 800, 1280]) {
+    for (const width of [390, 740, 767, 768, 800, 1280]) {
       test(`${vertical ? "vertical" : "horizontal"} grids follow the reading axis at ${width}px`, async ({ page }) => {
         await page.setViewportSize({ width, height: 900 });
         await page.goto(vertical ? "/vertical/" : "/");
-        const collapsed = !vertical && width <= 768;
+        // 48rem is half-open: a page exactly 768px wide keeps its columns.
+        const collapsed = !vertical && width < 768;
         expect(await tracks(page, '.moss-grid[data-columns="3"]')).toHaveLength(collapsed ? 1 : 3);
         const ratio = await tracks(page, '.moss-grid[data-columns="2"]:not(.parity)');
         expect(ratio).toHaveLength(collapsed ? 1 : 2);
@@ -207,7 +208,7 @@ for (const vertical of [false, true]) {
         });
       }, vertical);
       for (const { count, wrap, scroll, fits } of rows) {
-        const mobile = width <= 768;
+        const mobile = width < 768;
         expect(wrap.tracks).toHaveLength(!vertical && mobile ? 1 : count);
         const expected = !vertical && mobile ? scroll.inline / 1.3 : (scroll.inline - 32 - count * 12) / count;
         expect(scroll.track).toBeCloseTo(expected, 0);

@@ -8,8 +8,9 @@
 //! the internet.
 
 use super::dialects::{self, ChromeGate, SelectorDialect};
+use crate::vault::import::scrape::extractor;
 use crate::vault::import::scrape::metadata::{same_name, EventMetadata};
-use crate::vault::import::scrape::converter::{AdapterBody, MetadataOverrides, SiteContent};
+use crate::vault::import::scrape::converter::{AdapterBody, SiteContent};
 
 /// The single entry the scrape pipeline calls
 /// (`scrape::converter::extract_article_with_snapshot`); `snapshot` is the
@@ -26,7 +27,9 @@ pub(crate) fn extract_with_evidence(
     if let Some(content) = super::readymag::extract(html, snapshot, url) {
         return Some(content);
     }
-    apply_selector_dialect(&dialects::DOUBAN, html, url)
+    dialects::SELECTOR_DIALECTS
+        .iter()
+        .find_map(|d| apply_selector_dialect(d, html, url))
 }
 
 /// Pages the state-JSON manifest names that the DOM never links (client-
@@ -57,16 +60,35 @@ fn apply_selector_dialect(d: &SelectorDialect, html: &str, url: &str) -> Option<
             Err(_) => continue,
         };
         if let Some(el) = doc.select(&selector).next() {
-            let inner = el.inner_html();
+            let inner = prepare_selected(&el.inner_html(), d.chrome);
             if !inner.trim().is_empty() {
                 return Some(SiteContent {
                     body: AdapterBody::Html(inner),
-                    overrides: MetadataOverrides::default(),
+                    overrides: super::script_vars::read(html, d.script_vars),
                 });
             }
         }
     }
     None
+}
+
+/// Drop the dialect's chrome from a selected subtree and promote lazy-load
+/// image sources, which the generic path does in its clutter pass.
+fn prepare_selected(inner: &str, chrome: &[&str]) -> String {
+    let mut handlers = vec![lol_html::element!("img", |el| {
+        extractor::promote_lazy_src(el)
+    })];
+    for sel in chrome {
+        handlers.push(lol_html::element!(*sel, |el| {
+            el.remove();
+            Ok(())
+        }));
+    }
+    lol_html::rewrite_str(
+        inner,
+        lol_html::RewriteStrSettings { element_content_handlers: handlers, ..Default::default() },
+    )
+    .unwrap_or_else(|_| inner.to_string())
 }
 
 /// Remove the builder chrome the dialect rows name, before the generic

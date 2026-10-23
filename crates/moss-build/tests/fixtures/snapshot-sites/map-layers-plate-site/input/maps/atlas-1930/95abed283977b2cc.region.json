@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "annotation": "95abed283977b2cc.annotation.json",
+  "image": "95abed283977b2cc.jpg",
+  "source": "https://iiif.nypl.org/iiif/3/5222333",
+  "region": [
+    3400,
+    1700,
+    4000,
+    4200
+  ],
+  "scale": 0.125,
+  "credit": "New York Public Library",
+  "rights": "",
+  "fetched": "2026-10-22"
+}

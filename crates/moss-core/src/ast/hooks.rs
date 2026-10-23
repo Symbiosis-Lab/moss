@@ -299,20 +299,16 @@ pub trait RenderHooks {
                         out.push('"');
                     }
                     out.push('>');
-                    // Synth path: full attribute set + optional <picture>
-                    // wrap. The per-item inline style from MediaAttrs
-                    // (e.g. object-position) flows through
-                    // ImageRenderOptions::extra_attrs so the synthesizer's
-                    // LQIP / dim emission joins it correctly (the synth
-                    // suppresses its own style= when extra_attrs already
-                    // carries one, matching the legacy regex's has_style
-                    // guard).
-                    let media_style =
-                        crate::media::parse_media_attrs(&item.attrs).to_inline_style();
-                    let style_frag = media_style.map(|s| format!(r#"style="{}""#, s));
+                    // The item's display words share the synthesizer's one style attribute.
+                    let display = crate::media::parse_media_attrs(&item.attrs);
+                    let media_style = display.to_inline_style();
+                    let style_frag =
+                        item.title.as_ref().map(|t| format!(r#"title="{}""#, crate::media::html_escape(t)));
                     let opts = crate::render::image::ImageRenderOptions {
                         eager: false,
                         extra_attrs: style_frag.as_deref(),
+                        style: media_style.as_deref(),
+                        fit: display.fit,
                         ..Default::default()
                     };
                     let item_html = crate::render::image::synthesize_image_html(
@@ -688,16 +684,25 @@ pub trait RenderHooks {
         &self,
         out: &mut String,
         level: u8,
-        id: Option<&str>,
+        marks: HeadingMarks<'_>,
         source_line: Option<usize>,
         content: &str,
     ) {
+        let HeadingMarks { id, contents_end, contents_label } = marks;
         out.push('<');
         out.push('h');
         out.push((b'0' + level) as char);
         if let Some(id) = id {
             out.push_str(r#" id=""#);
             out.push_str(&escape_attr(id));
+            out.push('"');
+        }
+        if contents_end {
+            out.push_str(" data-contents-end");
+        }
+        if let Some(label) = contents_label {
+            out.push_str(r#" data-contents-label=""#);
+            out.push_str(&escape_attr(label));
             out.push('"');
         }
         if let Some(n) = source_line {
@@ -735,6 +740,15 @@ pub trait RenderHooks {
         out.push((b'0' + level) as char);
         out.push('>');
     }
+}
+
+/// What a heading's opening tag carries besides its level: its anchor id and
+/// the contents list's marks (`contents=end`, `contents-label="…"`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HeadingMarks<'a> {
+    pub id: Option<&'a str>,
+    pub contents_end: bool,
+    pub contents_label: Option<&'a str>,
 }
 
 /// Default render hooks. moss-core ships this as the base implementation
@@ -948,11 +962,14 @@ impl<'a> RenderHooks for DefaultHooks<'a> {
         // wrap) for inline images. PR3's Block::Figure handles the figure
         // wrap for image-only paragraphs.
         let ctx = crate::render::image::ImageContext::MarkdownInline;
-        let style_attr =
-            img_style.map(|s| format!(r#"style="{}""#, crate::media::html_escape(s)));
+        // The CommonMark title is the image's `title` attribute, before the
+        // `style` fragment; neither is emitted when absent.
+        let title_attr = title.map(|t| format!(r#"title="{}""#, crate::media::html_escape(t)));
         let cell_scope = self.grid_cell_sizes.borrow();
         let opts = crate::render::image::ImageRenderOptions {
-            extra_attrs: style_attr.as_deref(),
+            extra_attrs: title_attr.as_deref(),
+            style: img_style,
+            fit: img_style.and_then(crate::media::Fit::of_style),
             grid_cell_sizes: cell_scope.last().map(String::as_str),
             data_width: width,
             vertical: self.vertical,
@@ -1010,6 +1027,9 @@ fn push_bare_img(
         out.push_str(r#" style=""#);
         out.push_str(&escape_attr(s));
         out.push('"');
+        if let Some(fit) = crate::media::Fit::of_style(s) {
+            out.push_str(&format!(r#" data-fit="{}""#, fit.to_css_value()));
+        }
     }
     out.push_str(" />");
 }
@@ -1155,7 +1175,7 @@ mod tests {
     fn default_hooks_render_heading_emits_id() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 2, Some("setup"), None, "Setup");
+        hooks.render_heading(&mut out, 2, HeadingMarks { id: Some("setup"), ..Default::default() }, None, "Setup");
         assert_eq!(
             out,
             r##"<h2 id="setup">Setup<a class="moss-heading-anchor" href="#setup" aria-label="Permalink to this section"></a></h2>"##
@@ -1166,7 +1186,7 @@ mod tests {
     fn default_hooks_render_heading_without_id() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 3, None, None, "Sub");
+        hooks.render_heading(&mut out, 3, HeadingMarks::default(), None, "Sub");
         assert_eq!(out, "<h3>Sub</h3>");
     }
 
@@ -1174,7 +1194,7 @@ mod tests {
     fn default_hooks_render_heading_emits_source_line() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 2, Some("setup"), Some(42), "Setup");
+        hooks.render_heading(&mut out, 2, HeadingMarks { id: Some("setup"), ..Default::default() }, Some(42), "Setup");
         assert_eq!(
             out,
             r##"<h2 id="setup" data-source-line="42">Setup<a class="moss-heading-anchor" href="#setup" aria-label="Permalink to this section"></a></h2>"##
@@ -1185,7 +1205,7 @@ mod tests {
     fn default_hooks_render_heading_source_line_without_id() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 1, None, Some(1), "Top");
+        hooks.render_heading(&mut out, 1, HeadingMarks::default(), Some(1), "Top");
         assert_eq!(out, r#"<h1 data-source-line="1">Top</h1>"#);
     }
 
@@ -1193,7 +1213,7 @@ mod tests {
     fn default_hooks_render_heading_emits_anchor_when_id_present() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 2, Some("setup"), None, "Setup");
+        hooks.render_heading(&mut out, 2, HeadingMarks { id: Some("setup"), ..Default::default() }, None, "Setup");
         assert_eq!(
             out,
             r##"<h2 id="setup">Setup<a class="moss-heading-anchor" href="#setup" aria-label="Permalink to this section"></a></h2>"##
@@ -1204,7 +1224,7 @@ mod tests {
     fn default_hooks_render_heading_no_anchor_when_id_absent() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 3, None, None, "Sub");
+        hooks.render_heading(&mut out, 3, HeadingMarks::default(), None, "Sub");
         assert_eq!(out, "<h3>Sub</h3>");
     }
 
@@ -1212,7 +1232,7 @@ mod tests {
     fn default_hooks_render_heading_anchor_preserves_source_line_position() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 2, Some("setup"), Some(42), "Setup");
+        hooks.render_heading(&mut out, 2, HeadingMarks { id: Some("setup"), ..Default::default() }, Some(42), "Setup");
         assert_eq!(
             out,
             r##"<h2 id="setup" data-source-line="42">Setup<a class="moss-heading-anchor" href="#setup" aria-label="Permalink to this section"></a></h2>"##
@@ -1223,7 +1243,7 @@ mod tests {
     fn default_hooks_render_heading_anchor_escapes_id_in_href() {
         let hooks = DefaultHooks::new();
         let mut out = String::new();
-        hooks.render_heading(&mut out, 2, Some(r#"a&b"#), None, "AB");
+        hooks.render_heading(&mut out, 2, HeadingMarks { id: Some(r#"a&b"#), ..Default::default() }, None, "AB");
         assert_eq!(
             out,
             r##"<h2 id="a&amp;b">AB<a class="moss-heading-anchor" href="#a&amp;b" aria-label="Permalink to this section"></a></h2>"##
@@ -1447,6 +1467,7 @@ mod tests {
             alt_only: false,
             attrs: String::new(),
             caption,
+            title: None,
         };
         let link = Inline::Link {
             url: Url::resolved("../quay/", UrlKind::Internal),
@@ -1475,6 +1496,7 @@ mod tests {
         let sc = Shortcode::Gallery(GalleryShortcode {
             width: Some("page".to_string()),
             items: vec![GalleryItem {
+                title: None,
                 src: Url::resolved("a.jpg", UrlKind::Asset),
                 alt: String::new(),
                 alt_only: false,
@@ -1510,6 +1532,7 @@ mod tests {
         let sc = Shortcode::Gallery(GalleryShortcode {
             columns: Some(8),
             items: vec![GalleryItem {
+                title: None,
                 src: Url::resolved("a.jpg", UrlKind::Asset),
                 alt: String::new(),
                 alt_only: false,
@@ -1549,6 +1572,7 @@ mod tests {
             alt_only: false,
             attrs: String::new(),
             caption: Vec::new(),
+            title: None,
         };
         let sc = Shortcode::Gallery(GalleryShortcode {
             rows: true,
@@ -1580,6 +1604,7 @@ mod tests {
                 alt_only: false,
                 attrs: String::new(),
                 caption: Vec::new(),
+                title: None,
             }],
             ..Default::default()
         });
@@ -1604,6 +1629,7 @@ mod tests {
                 alt_only: false,
                 attrs: String::new(),
                 caption: Vec::new(),
+                title: None,
             }],
             ..Default::default()
         });
@@ -1624,6 +1650,7 @@ mod tests {
                 alt_only: false,
                 attrs: String::new(),
                 caption: Vec::new(),
+                title: None,
             }],
             ..Default::default()
         });
@@ -1643,6 +1670,7 @@ mod tests {
                 alt_only: true,
                 attrs: String::new(),
                 caption: Vec::new(),
+                title: None,
             }],
             ..Default::default()
         });
@@ -1661,6 +1689,7 @@ mod tests {
                 alt_only: false,
                 attrs: String::new(),
                 caption: Vec::new(),
+                title: None,
             }],
             ..Default::default()
         });
@@ -1729,6 +1758,7 @@ mod tests {
     fn gallery_with_one_item(src: &str) -> Shortcode {
         Shortcode::Gallery(GalleryShortcode {
             items: vec![GalleryItem {
+                title: None,
                 src: Url::resolved(src, UrlKind::Asset),
                 alt: "photo".to_string(),
                 alt_only: false,
@@ -2062,7 +2092,7 @@ mod tests {
         );
         assert_eq!(
             out,
-            r#"<img src="cat.jpg" alt="A cat" style="object-fit:cover" />"#
+            r#"<img src="cat.jpg" alt="A cat" style="object-fit:cover" data-fit="cover" />"#
         );
     }
 
@@ -2091,6 +2121,7 @@ mod tests {
             class_names: Vec::new(),
             img_style: Some("object-fit:cover;object-position:left".into()),
             italic_caption: false,
+            link: None,
         }];
         let sc = Shortcode::Hero(HeroShortcode {
             overlay: overlay_blocks,
@@ -2104,6 +2135,51 @@ mod tests {
             out.contains("object-fit:cover;object-position:left"),
             "hero overlay embed must keep its sizing style; got: {out}"
         );
+    }
+
+    #[test]
+    fn a_picture_in_a_link_or_a_list_item_leads_with_auto_and_keeps_a_full_column_fallback() {
+        use crate::ast::{render_blocks, Block, Inline, ResolvedUrl, Url, UrlKind};
+        let src = "photos/cat.jpg";
+        let mut snap = AssetSnapshot::new();
+        snap.dimensions.insert(PathBuf::from(src), (2400, 1200));
+        snap.variants.insert(
+            PathBuf::from("photos/cat"),
+            VariantKindSet { webp: true, avif: false, hls: false, poster: false },
+        );
+        let image = || Inline::Image {
+            src: Url::Resolved(ResolvedUrl::new(src, UrlKind::Asset)),
+            alt: String::new(),
+            title: None,
+            is_wikilink: false,
+            wikilink_pothole: None,
+        };
+        let render = |blocks: Vec<Block>| {
+            let hooks = DefaultHooks::with_snapshot(&snap);
+            let mut out = String::new();
+            render_blocks(&hooks, &mut out, &blocks);
+            out
+        };
+        // `auto` reads a lazy picture's drawn width (a cover a theme draws
+        // small); the rest is what an eager picture or an engine without
+        // `auto` falls back to, and must never understate a picture drawn at
+        // the column's width.
+        let sizes = r#"sizes="auto, (min-width: 48rem) 47.25rem, 100vw""#;
+        let linked = render(vec![Block::Paragraph(vec![Inline::Link {
+            url: Url::Resolved(ResolvedUrl::new("/cat/", UrlKind::Asset)),
+            title: None,
+            children: vec![image()],
+            is_wikilink: false,
+            has_pothole: false,
+        }])]);
+        assert!(linked.contains(sizes), "a linked picture: {linked}");
+        let listed = render(vec![Block::List {
+            ordered: false,
+            start: None,
+            items: vec![vec![Block::Paragraph(vec![image(), Inline::Text(" Cat".into())])]],
+            item_source_lines: vec![],
+        }]);
+        assert!(listed.contains(sizes), "a picture in a list item: {listed}");
     }
 
     #[test]
@@ -2276,6 +2352,7 @@ mod tests {
             class_names: Vec::new(),
             img_style: None,
             italic_caption: false,
+            link: None,
         }
     }
 
@@ -2319,6 +2396,7 @@ mod tests {
             cells: vec![vec![figure_block(None)]],
             width: Some("page".to_string()),
             scroll: false,
+            collage: false,
             label: None,
         });
         let mut out = String::new();
@@ -2333,7 +2411,7 @@ mod tests {
         let mut after = String::new();
         super::super::render::render_blocks(&hooks, &mut after, &[figure_block(None)]);
         assert!(
-            after.contains(r#"sizes="(min-width: 48rem) 47.25rem, 100vw""#),
+            after.contains(r#"sizes="auto, (min-width: 48rem) 47.25rem, 100vw""#),
             "grid cell scope leaked; got: {after}"
         );
     }
@@ -2350,6 +2428,7 @@ mod tests {
             cells: vec![vec![figure_block(Some("screen"))]],
             width: None,
             scroll: false,
+            collage: false,
             label: None,
         });
         let mut out = String::new();

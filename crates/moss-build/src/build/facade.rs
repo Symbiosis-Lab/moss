@@ -210,6 +210,8 @@ fn surface_debug(doc: &ParsedDocument) -> String {
     // in the FACADE (a retargeted embed does change this page's HTML) and out
     // of the surface.
     stripped.embed_deps = Vec::new();
+    // Body-only, read only by the page's own repeat note: left in, a page gaining an embedded page would move every host's surface.
+    stripped.embedded_listing_urls = Default::default();
     // Also body-only, and the one that made this measurable. `hero_html` is
     // the page's own rendered hero, read by exactly one place —
     // `generate_html_inner`'s `hero_section: doc.and_then(|d| d.hero_html…)`
@@ -227,6 +229,8 @@ fn surface_debug(doc: &ParsedDocument) -> String {
     // `hero_image_url` — the genuinely cross-page half, read by the homepage
     // — deliberately stays.
     stripped.hero_html = None;
+    // The plan a `from=` hero is drawn from carries the same rendered markup.
+    stripped.hero_from = None;
     // `reading_time` is `word_count / 200` (`markdown/pipeline.rs`) — a
     // non-monotone function of the body, so it steps on any edit that crosses
     // a 200-word boundary. Same class as `hero_html`: an audit for this fix
@@ -798,6 +802,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_changed_embedded_listing_set_leaves_the_surface_unchanged() {
+        let plain = ParsedDocument { content: "body".to_string(), ..Default::default() };
+        let mut embedding = plain.clone();
+        embedding.embedded_listing_urls.insert("posts/a.html".to_string());
+        assert_eq!(surface_debug(&embedding), surface_debug(&plain));
+    }
+
+    use super::*;
+
+    #[test]
     fn generated_page_cache_keys_cannot_alias_source_paths() {
         let source = ParsedDocument {
             source_path: Some("folder/index.md".into()),
@@ -1053,6 +1067,7 @@ mod tests {
                 lede_segments: 1,
                 first_text_segments: 0,
                 after_first_text_segments: 0,
+                has_text: false,
             }),
             ..Default::default()
         };

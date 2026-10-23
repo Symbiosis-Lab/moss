@@ -32,6 +32,7 @@ fn a_failed_rollback_names_the_paths_it_left_behind() {
         moves: vec![PlannedMove { old_path: "photo.jpg".into(), new_path: "pic.jpg".into(), is_dir: false }],
         edits: vec![AppliedEdit { file: "page.md".into(), byte_from: 4, byte_to: 11, old_text: "photo.jpg".into(), new_text: "pic.jpg".into() }],
         skipped: vec![],
+        ..Default::default()
     };
 
     let err = roll_back(root, &applied, &WriteFailure { cause: "boom".to_string(), damaged: Vec::new() });
@@ -152,4 +153,47 @@ fn an_undo_that_stops_partway_names_the_pages_it_already_restored() {
         ["a1.md", "a2.md"].into_iter().filter(|p| r(root, p) == "![](media/photo.jpg)\n").collect();
     assert_eq!(restored.len(), 1, "exactly one page was written back");
     assert!(err.contains(&format!("[{}]", restored[0])), "names {}: {err}", restored[0]);
+}
+
+#[test]
+fn undoing_a_rename_puts_the_passthrough_entries_back() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "scene/index.html", "<p>x</p>");
+    let config = "[build]\npassthrough = [\"scene\", \"!scene/old\"] # why\n";
+    w(root, ".moss/config.toml", config);
+    let to = |p: &str| root.join(p).to_string_lossy().into_owned();
+    let plan = plan_moves(root, &[(to("scene"), to("home/scene"))]).expect("plan");
+
+    let applied = apply_planned_moves(root, &plan).expect("apply");
+
+    assert_eq!(r(root, ".moss/config.toml"), config.replace("\"scene\"", "\"home/scene\"").replace("!scene", "!home/scene"));
+    assert_eq!(applied.passthrough.len(), 2);
+    undo_applied(root, &applied).expect("undo");
+    assert_eq!(r(root, ".moss/config.toml"), config);
+}
+
+#[test]
+fn undoing_a_rename_removes_the_folders_it_created_but_not_ones_with_content() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = &fs::canonicalize(tmp.path()).unwrap();
+    w(root, "scene/a.md", "x");
+    w(root, "page.md", "y");
+    let to = |p: &str| root.join(p).to_string_lossy().into_owned();
+    let plan = plan_moves(root, &[(to("scene"), to("home/deep/scene")), (to("page.md"), to("home/page.md"))]).expect("plan");
+
+    let applied = apply_planned_moves(root, &plan).expect("apply");
+    assert_eq!(applied.created_dirs, ["home", "home/deep"]);
+    w(root, "home/keep.txt", "added since");
+    undo_applied(root, &applied).expect("undo");
+
+    assert!(root.join("scene/a.md").exists() && root.join("page.md").exists());
+    assert!(root.join("home/keep.txt").exists(), "a folder with content stays");
+    assert!(!root.join("home/deep").exists(), "the empty created folder goes");
+
+    fs::remove_file(root.join("home/keep.txt")).unwrap();
+    let plan = plan_moves(root, &[(to("scene"), to("h2/scene"))]).expect("plan");
+    let applied = apply_planned_moves(root, &plan).expect("apply");
+    undo_applied(root, &applied).expect("undo");
+    assert!(!root.join("h2").exists());
 }

@@ -47,6 +47,14 @@ export interface FetchResult {
 export interface DownloadOptions {
   /** Timeout in milliseconds (default: 30000) */
   timeoutMs?: number;
+  /**
+   * Name to save the file under, inside `targetDir`. One path segment: no `/`,
+   * `\` or `..`. Default: derived from the URL's last path segment and the
+   * response content type, so URLs that all end in `default.jpg` collide.
+   */
+  filename?: string;
+  /** Extra request headers. moss sends its own `User-Agent` unless you set one. */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -399,7 +407,7 @@ export async function downloadAsset(
   options: DownloadOptions = {}
 ): Promise<DownloadResult> {
   const ctx = getInternalContext();
-  const { timeoutMs = 30000 } = options;
+  const { timeoutMs = 30000, filename, headers } = options;
 
   const result = await getTauriCore().invoke<TauriDownloadResult>(
     "download_asset",
@@ -408,6 +416,8 @@ export async function downloadAsset(
       projectPath: ctx.project_path,
       targetDir,
       timeoutMs,
+      filename,
+      headers,
     }
   );
 

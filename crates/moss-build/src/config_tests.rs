@@ -341,3 +341,15 @@ fn field_decls_fields_that_is_not_a_table_of_tables_is_one_problem() {
     assert_eq!(problems.len(), 1);
 }
 
+#[test]
+fn field_decls_url_text_is_per_language_and_only_a_url_takes_it() {
+    let config = ConfigFile::parse(
+        "[fields.item_url]\ntype = \"url\"\ntext = { en = \"View the item\", de = \"Zum Eintrag\" }\n[fields.year]\ntype = \"number\"\ntext = \"Year\"\n",
+    )
+    .unwrap();
+    let (decls, problems) = config.field_decls();
+    assert_eq!(decls[0].text_for("de"), Some("Zum Eintrag"));
+    assert_eq!(decls[0].text_for("fr"), Some("View the item"));
+    assert!(decls[1].text.is_empty());
+    assert!(problems.iter().any(|p| p.contains("[fields.year] has `text`")), "{problems:?}");
+}

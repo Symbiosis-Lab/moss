@@ -365,7 +365,12 @@ const MEDIA_META_TRANSFORM: &str = "media/meta";
 /// anyway. A transparent image now stores an empty LQIP, which is the marker
 /// the renderer reads as "no placeholder at all". Version-3 entries are
 /// recomputed to pick it up.
-const MEDIA_META_VERSION: u32 = 4;
+///
+/// **4 → 5**: an image's entry gained `tone_bands`. A version-4 entry has none
+/// and would keep a hero from ever measuring its picture, so it is recomputed.
+/// The field has since gone (a hero's picture is read at render time); a
+/// version-5 entry still holding it is read as it is, the field ignored.
+const MEDIA_META_VERSION: u32 = 5;
 
 /// Stat-based cache key for an image's placeholder metadata (dimensions +
 /// dominant color + LQIP), shared by the blocking scan and the background media
@@ -394,7 +399,7 @@ fn resolve_content_hash(
 ) -> Option<String> {
     new_index
         .resolve_from(old_index, stat, abs_path, relative_path)
-        .map_err(|e| log::warn!("Failed to hash {}: {}", relative_path, e))
+        .map_err(|e| log::info!("Failed to hash {}: {}", relative_path, e))
         .ok()
 }
 
@@ -443,7 +448,7 @@ pub(crate) fn write_cached_meta(
     let json_bytes = match serde_json::to_vec(meta) {
         Ok(b) => b,
         Err(e) => {
-            log::warn!("Failed to serialize media meta: {}", e);
+            log::info!("Failed to serialize media meta: {}", e);
             return;
         }
     };
@@ -451,7 +456,7 @@ pub(crate) fn write_cached_meta(
     let meta_oid = match objects.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request) {
         Ok(oid) => oid,
         Err(e) => {
-            log::warn!("Failed to store media meta blob: {}", e);
+            log::info!("Failed to store media meta blob: {}", e);
             return;
         }
     };
@@ -470,7 +475,7 @@ pub(crate) fn write_cached_meta(
         record.transforms.insert(MEDIA_META_TRANSFORM.to_string(), new_entry);
     });
     if let Err(e) = merged {
-        log::warn!("Failed to write media meta transform record: {}", e);
+        log::info!("Failed to write media meta transform record: {}", e);
     }
 }
 
@@ -757,7 +762,7 @@ fn extract_media_metadata_cached(
             return meta;
         }
         // If do_work returned None (panic in work fn), fall through to direct extraction.
-        log::warn!("Singleflight returned None for {}, falling back to direct extraction", hash);
+        log::info!("Singleflight returned None for {}, falling back to direct extraction", hash);
     }
 
     let meta = extract_media_metadata(
@@ -976,8 +981,26 @@ fn collect_source_walk(path: &Path) -> Result<crate::build::cloud_readiness::sto
     }
     let mut nested_boundaries = Vec::new();
     let mut entries = Vec::new();
-    for entry in WalkDir::new(path).into_iter().filter_entry(|e| match left_out_of_site(e) {
+    let layer_sources: Vec<std::path::PathBuf> =
+        crate::config::map_layers::declared_sources(path).iter().map(|s| path.join(s)).collect();
+    for entry in WalkDir::new(path).into_iter().filter_entry(|e| match crate::build::scan::classify::left_out_with_layer_sources(e, &layer_sources) {
         None => true,
+        Some(LeftOut::LayerSource) => {
+            let pages: Vec<String> = WalkDir::new(e.path())
+                .into_iter()
+                .filter_map(Result::ok)
+                .filter(|f| f.file_type().is_file() && crate::build::scan::classify::is_page_path(f.path()))
+                .map(|f| f.path().strip_prefix(path).unwrap_or(f.path()).to_string_lossy().into_owned())
+                .collect();
+            if !pages.is_empty() {
+                crate::build::cli_output::log_note!(
+                    "{} is a map layer's source folder, so it is not published; its pages stay out of the site: {}",
+                    e.file_name().to_string_lossy(),
+                    pages.join(", ")
+                );
+            }
+            false
+        }
         Some(LeftOut::NestedSite) => { nested_boundaries.push(e.path().to_path_buf()); false }
         Some(LeftOut::AgentInstructions) => {
             log::info!("Skipping {}: agent instructions are tooling, not a page", e.file_name().to_string_lossy());
@@ -1397,7 +1420,7 @@ pub fn scan_folder_with_dedup_emit_with_error(
         .map(|f| f.path.as_str())
         .collect();
     if let Err(e) = new_index.save_pruned(&hash_index_path, |path| walked_non_media.contains(path)) {
-        log::warn!("Failed to save hash index: {}", e);
+        log::info!("Failed to save hash index: {}", e);
     }
 
     let total_files = markdown_files.len() + html_files.len() + image_files.len() + video_files.len() + notebook_files.len() + other_files.len();
@@ -1465,6 +1488,7 @@ pub fn scan_folder_with_dedup_emit_with_error(
     let passthrough_roots = crate::build::scan::classify::compute_passthrough_roots(
         &html_files, &config_passthrough,
     );
+    let mut passthrough_media: Vec<String> = Vec::new();
     if !passthrough_roots.is_empty() {
         log::info!("[scan] {} passthrough subtree(s) detected", passthrough_roots.len());
         // Remove passthrough media from the conversion pipelines so a bundled
@@ -1486,8 +1510,14 @@ pub fn scan_folder_with_dedup_emit_with_error(
         // verbatim. True raw passthrough of `.md`/`.ipynb` is a deliberate
         // follow-up (would require copy_deferred_assets to copy passthrough-path
         // docs despite their extension).
-        image_files.retain(|f| !crate::build::scan::classify::is_in_passthrough(&f.path, &passthrough_roots));
-        video_files.retain(|f| !crate::build::scan::classify::is_in_passthrough(&f.path, &passthrough_roots));
+        // The content graph still indexes these paths (`passthrough_media`), so
+        // an embed of a passthrough image resolves to its copied path.
+        let in_passthrough = |path: &str| crate::build::scan::classify::is_in_passthrough(path, &passthrough_roots);
+        passthrough_media.extend(
+            image_files.iter().chain(video_files.iter()).filter(|f| in_passthrough(&f.path)).map(|f| f.path.clone()),
+        );
+        image_files.retain(|f| !in_passthrough(&f.path));
+        video_files.retain(|f| !in_passthrough(&f.path));
     }
 
     // A folder is shown only once something lives beneath it. Git does not track
@@ -1498,7 +1528,10 @@ pub fn scan_folder_with_dedup_emit_with_error(
     dirs.retain(|d| crate::build::scan::classify::gets_index_page(d, &passthrough_roots, &attachment_folder));
     // Name only folders that would have a page once they hold something (not an
     // empty attachment folder or a folder inside a passthrough root).
-    let empty_folders = crate::build::scan::classify::topmost_empty_folders(&dirs, &folders_holding_files);
+    let mut empty_folders = crate::build::scan::classify::topmost_empty_folders(&dirs, &folders_holding_files);
+    // A folder holding only a layer source is not empty: its content is read, just not published.
+    let layer_sources = crate::config::map_layers::declared_sources(path);
+    empty_folders.retain(|f| !layer_sources.iter().any(|s| s.strip_prefix(f.as_str()).is_some_and(|rest| rest.starts_with('/'))));
     dirs.retain(|d| folders_holding_files.contains(d));
     // Skip the listing of a folder that only carries a pre-built app (see
     // `classify::holds_only_prebuilt_apps`). Empty and asset-only folders keep
@@ -1530,10 +1563,12 @@ pub fn scan_folder_with_dedup_emit_with_error(
         has_content_folders,
         has_language_trees,
         passthrough_roots,
+        passthrough_media,
         dirs,
         empty_folders,
     };
     crate::build::scan::case_collision::warn_case_colliding_files(&structure);
+    crate::build::template_check::warn_template_problems(Path::new(folder_path));
     Ok(structure)
 }
 
@@ -1577,6 +1612,9 @@ pub fn build_content_graph(project_structure: &ProjectStructure) -> ContentGraph
     for file_info in &project_structure.other_files {
         let slug = generate_slug(&file_info.path);
         builder.add_file(&file_info.path, &slug);
+    }
+    for path in &project_structure.passthrough_media {
+        builder.add_file(path, &generate_slug(path));
     }
 
     // The main scan now walks formerly-excluded asset folders (assets/, images/,

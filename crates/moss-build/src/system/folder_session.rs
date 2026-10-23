@@ -444,7 +444,7 @@ pub(crate) fn register_session_in_registry(
         tokio::spawn(async move {
             let leaked = prior.shutdown(Duration::from_secs(2)).await;
             if leaked > 0 {
-                log::warn!(
+                log::info!(
                     "FolderSession folder-switch dropped {} task(s) past grace",
                     leaked
                 );
@@ -464,7 +464,7 @@ pub(crate) fn register_session_in_registry(
         tokio::spawn(async move {
             let leaked = prior.shutdown(Duration::from_secs(2)).await;
             if leaked > 0 {
-                log::warn!(
+                log::info!(
                     "FolderSession replaced-via-insert dropped {} task(s) past grace",
                     leaked
                 );

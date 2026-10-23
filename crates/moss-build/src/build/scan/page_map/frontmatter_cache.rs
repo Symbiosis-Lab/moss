@@ -28,6 +28,10 @@ pub(super) struct FrontmatterScanEntry {
     /// the pass that already read every file, instead of re-reading one small
     /// file per folder on every build (118 of them on a 251-file vault).
     pub(super) lang: Option<String>,
+    /// `partial: true`: the page is a transclusion source and never emitted.
+    /// Read by the page-map pass so a partial is `slot_only` there too, not
+    /// only once the full parse has run.
+    partial: bool,
 }
 
 impl FrontmatterScanEntry {
@@ -41,7 +45,7 @@ impl FrontmatterScanEntry {
 /// a missing `lang` is indistinguishable from "this file declares none", so
 /// the folder rung would read every declaration as absent for a whole build.
 /// A mismatch discards the file, which costs one full re-scan exactly once.
-const SCHEMA: u32 = 2;
+const SCHEMA: u32 = 3;
 
 /// Persisted `.moss/build.nosync/cache/frontmatter-scan.json`: the `url:` and
 /// `external_url:` frontmatter fields `build_page_map`/`build_external_url_map`
@@ -116,6 +120,10 @@ impl FrontmatterScanCache {
         self.entries.get(source_path)?.lang.as_deref()
     }
 
+    pub(super) fn is_partial(&self, source_path: &str) -> bool {
+        self.entries.get(source_path).is_some_and(|e| e.partial)
+    }
+
     /// Persist to disk. Goes through `io_utils` because this file lives
     /// under `.moss/build.nosync/` (dataless is treated as absent there).
     pub(crate) fn save(&self, path: &Path) -> std::io::Result<()> {
@@ -188,14 +196,14 @@ pub(super) fn scan_frontmatter_urls_with_evicted(
         let content = match std::fs::read_to_string(&source_file_path) {
             Ok(c) => c,
             Err(e) => {
-                log::warn!("frontmatter scan skipping unreadable '{}': {}", file_path, e);
+                log::info!("frontmatter scan skipping unreadable '{}': {}", file_path, e);
                 continue;
             }
         };
 
         // ONE parser, one pass, both fields — same parse
         // `build_page_map`/`build_external_url_map` used to run separately.
-        let (frontmatter_url, external_url_raw, lang_raw) =
+        let (frontmatter_url, external_url_raw, lang_raw, partial, nav) =
             if crate::build::markdown::is_simplified_frontmatter(&content) {
                 let (fm, _) = crate::build::markdown::parse_simplified_frontmatter(&content);
                 // Unquoted HERE, not below, because only this dialect needs it:
@@ -203,10 +211,10 @@ pub(super) fn scan_frontmatter_urls_with_evicted(
                 // text, so `lang: "zh-hant"` still wears its quotes. The typed
                 // parser went through serde, which already unquoted — stripping
                 // again there would newly ACCEPT `lang: '"en"'`.
-                (fm.url, fm.external_url, fm.lang.map(|c| unquote(c.trim()).to_string()))
+                (fm.url, fm.external_url, fm.lang.map(|c| unquote(c.trim()).to_string()), fm.partial == Some(true), fm.nav)
             } else {
                 let fm = crate::build::markdown::parse_typed_frontmatter(&content);
-                (fm.url, fm.external_url, fm.lang)
+                (fm.url, fm.external_url, fm.lang, fm.partial == Some(true), fm.nav)
             };
 
         // Validated HERE, not at the read site, so a stored code is always one
@@ -229,6 +237,15 @@ pub(super) fn scan_frontmatter_urls_with_evicted(
             // before silently dropping so the user knows why.
             super::warn_invalid_external_url(raw, file_path);
         }
+        if partial && nav == Some(true) && !external_url_raw.as_deref().map(str::trim).is_some_and(super::is_valid_nav_target) {
+            // A partial is no page, so its nav entry is a link or nothing.
+            log::warn!(
+                target: "frontmatter",
+                "{}: `partial: true` with `nav: true` has no `external_url:`, so it adds nothing to the nav bar. \
+                 Set `external_url:` to the address the entry links to, or remove `nav: true`.",
+                file_path,
+            );
+        }
         let external_url = external_url_raw.filter(|u| super::is_valid_external_url(u));
 
         if let Some(FileStat { size, mtime, mtime_nanos, ctime, inode }) = stat {
@@ -244,6 +261,7 @@ pub(super) fn scan_frontmatter_urls_with_evicted(
                     url_override: frontmatter_url.clone(),
                     external_url: external_url.clone(),
                     lang,
+                    partial,
                 },
             );
         } else {

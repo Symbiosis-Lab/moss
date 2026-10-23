@@ -1,5 +1,7 @@
 # Building a moss plugin
 
+Read `moss guide` (the overview) first: it holds the task recipes this reference does not repeat.
+
 ## When something is a plugin (not core)
 
 Core turns a folder into a site with zero external input. A plugin is for the
@@ -44,6 +46,10 @@ several:
 ```
 moss describe --json | jq '.plugin_hooks'
 ```
+
+A `process` hook's context carries `site_config`: the site's `.moss/config.toml` as a plain JSON object, read-only (`{}` when there is none). A plugin reads its own documented tables from it, such as `[map.layers.<name>]`. Withheld: the `[plugins]` table (a plugin's own settings arrive as `config`) and any key, at any depth, named like a credential (`token`, `secret`, `password`, `api_key`, `credential`, `private_key`). `.moss/` paths stay closed to `readFile`/`writeFile`, so this is the only way to read the config.
+
+To save binary files into the site folder, `writeFileBinary(path, bytes)` writes exact bytes under the same rules as `writeFile` (inside the project, never `.moss/`). `downloadAsset(url, dir, { filename, headers })` saves a download under a name you choose; without `filename` it is named from the URL's last segment, so URLs that all end in `default.jpg` overwrite each other. Every plugin HTTP request carries moss's `User-Agent` unless the plugin sets its own header.
 
 ## Derivations: a file type that becomes text
 

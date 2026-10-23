@@ -27,8 +27,8 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
     vec![
         CliCommandInfo {
             name: "build",
-            args: "<folder> [--serve [--watch]] [--no-plugins] [--allow-plugins] [--wait-plugins] [--strict] [--site-url=<url>]",
-            description: "Build the site with plugins. --serve starts a local preview server when the build finishes, and --watch, which only works with --serve, rebuilds on every file change and refreshes the preview. Use --no-plugins for fast CI/CD builds. A plugin that came with the folder and was never allowed in the moss app is refused unless --allow-plugins is passed. --strict exits 1 if the build reported any problems (they are printed to stderr and summarized as `moss: N problems …`); without it a build with warnings still exits 0.",
+            args: "[<folder>] [--serve [--watch]] [--no-plugins] [--allow-plugins] [--wait-plugins] [--strict] [--site-url=<url>]",
+            description: "Build the site with plugins. With no folder, builds the site containing the current directory, as `moss history` finds it. --serve starts a local preview server when the build finishes, on port 8080 or the next free port (there is no --port flag; set MOSS_PREVIEW_PORT_BASE=<port> to start the search elsewhere), and --watch, which only works with --serve, rebuilds on every file change and refreshes the preview. Use --no-plugins for fast CI/CD builds. A plugin that came with the folder and was never allowed in the moss app is refused unless --allow-plugins is passed. --strict exits 1 if the build reported any problems (they are printed to stderr and summarized as `moss: N problems …`); without it a build with warnings still exits 0.",
         },
         CliCommandInfo {
             name: "deploy",
@@ -52,8 +52,8 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         },
         CliCommandInfo {
             name: "domain",
-            args: "<list|link> <folder> [<domain>]",
-            description: "List or link custom domains for a project's site.",
+            args: "<list|link|status> <folder> [<domain>] [--json]",
+            description: "List, link or check custom domains for a project's site; link prints the DNS records to set.",
         },
         CliCommandInfo {
             name: "env",
@@ -98,7 +98,7 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         CliCommandInfo {
             name: "guide",
             args: "[<topic>|all|--list]",
-            description: "Print moss's agent guidance: project conventions, the four styling rungs, the hard rules, and the checks that tell you whether a change worked. No argument prints the entry point; `--list` names the topics (authoring, plugins, debugging, importing, example); `all` prints every topic as one document. Reads nothing but the binary, so it needs neither a project nor a network — and unlike a copy written into a project folder, it cannot describe a different moss than the one running it.",
+            description: "Print moss's agent guidance: project conventions, the four styling rungs, the hard rules, and the checks that tell you whether a change worked. No argument prints the entry point; `--list` names each topic with the line saying when to read it; `all` prints every topic as one document. Reads nothing but the binary, so it needs neither a project nor a network — and unlike a copy written into a project folder, it cannot describe a different moss than the one running it.",
         },
         CliCommandInfo {
             name: "rename",
@@ -106,9 +106,19 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
             description: "Rename a file or folder and rewrite every [[wikilink]] and [text](link) that points at it, project-wide. Scriptable, so it is the safe way to bulk-rename (e.g. localizing filenames) without breaking links. `mv` is an alias.",
         },
         CliCommandInfo {
+            name: "new",
+            args: "<folder> [--template <id>] [--lang <code>] [--title \"<title>\"] [--json]  |  --translation <page.md> --lang <code> [--json]  |  --list [--json]",
+            description: "Make a page from a template, or a page's version in another language. <folder> is a folder in the site; with --template the page starts from that template and lands in the template's own folder when it names one, and --title names the file and sets its title. --translation writes the page's version in <code> at the mirrored path (work/x.md becomes zh-hans/work/x.md), copies its facts across, starts from the template for that language, and links the two with translationKey. --list prints the site's templates, language folders and default language; `--list --json` is the machine-readable form. Refuses rather than guesses: a template whose folder is gone creates nothing.",
+        },
+        CliCommandInfo {
             name: "expand",
             args: "<page.md|folder> [--dry-run] [--allow-plugins]",
             description: "Write embeds out as text. Each line holding only a `![[file.ext#fragment]]` embed of a file a plugin derives text from (once its text has been derived; missing text is derived first) or only a `![[note]]` / `![[note#heading]]` transclusion is replaced with the text it stands for, so the page can be edited as plain markdown. Embeds whose text is not available (skipped, unreadable, unresolved) are left as written, frontmatter is kept byte for byte, and a file is written only when something changed. --dry-run reports without writing. A plugin that derives the text must be allowed, as in a build: without `--allow-plugins` one not yet allowed in the app is refused with the same sentence a build prints.",
+        },
+        CliCommandInfo {
+            name: "fetch",
+            args: "<folder>",
+            description: "Download every file in a folder that is still only in the cloud (Google Drive, iCloud Drive, Dropbox, OneDrive), so the folder can be copied or backed up without each read blocking on the provider. Reads and lists only: it writes nothing in the folder. Progress goes to stderr. Exits 0 when every file is on this device, and 1 when the provider stops delivering (nothing arrives for 90 seconds), naming the provider, how many files are still in the cloud with a short sample, and what to do. `moss build` makes the same check first and exits 1 the same way.",
         },
         CliCommandInfo {
             name: "doctor",
@@ -131,6 +141,11 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
             description: "moss's own version history, kept inside the site at `.moss/history` (not git — a git user already has their own history, and this store never adds commits): every landed publish gets a snapshot, and `--save` takes one on demand. With no path, lists the site's timeline newest first: when, whether it was a publish or a named save, a `live` marker on the version currently published, and what changed. With a path, lists that one page's timeline instead, noting when its content was not kept (over the size ceiling, or unreadable at publish time). `--save [<name>]` builds the site and saves a version of it right now, ending with one line naming the version saved; `--save --json` prints that one version as a single JSON object on stdout instead (build progress and warnings still go to stderr), so a script never has to scrape the saved id out of the build log. `--restore --at <id>` restores that version — a path restores just that page (`--copy` writes it beside the current file instead of overwriting it); with no path it restores the whole site, which needs `--yes` since it can move files to the Trash. `<id>` is a version's id from the timeline, or an unambiguous prefix of one. With no folder, this command operates on the site containing the current directory; pass `<folder>` — a directory that already contains `.moss` — to act on a site from outside it, the same as `moss build <folder>`.",
         },
         CliCommandInfo {
+            name: "map",
+            args: "bbox [<folder>] [--json]",
+            description: "Print the frame the site's places need, for a `[map.layers]` table. `bbox` prints `west,south,east,north` in degrees, computed from the places in .moss/places.toml that pages name in the place-typed kind's fields, plus 10% of each side (at least 0.01 degree), and a suggested `max_zoom` line: the zoom at which the frame's longer side spans about 1024 px, plus 3, kept within 10..19. `--json` prints {\"bbox\": [w, s, e, n], \"max_zoom\": n, \"places\": k}. Reads only the folder and writes nothing. With no folder, it acts on the site containing the current directory. Exits 1 when the site has no place-typed kind or no page names a place with coordinates.",
+        },
+        CliCommandInfo {
             name: "comments",
             args: "list [<folder>] [--json] | hide [<folder>] <id>... [--source <name>] [--json] | unhide [<folder>] <id>... [--source <name>] [--json]",
             description: "Review and hide a site's comments. `list` prints every comment, newest first: id, source, the page it is on (address and title once a build has run, otherwise the page uid), author, time, the first 60 characters of its text, and whether it is hidden; it needs no build. `hide` takes one or more ids from `list` and removes those comments, and the replies under them, from the site at the next publish; `unhide` reverses it. Nothing is erased and nothing is sent anywhere: a hide is a signed event in `.moss/data/social/moderation.jsonl`, signed with the site's own key in `.moss/identity`, which moss never creates for this (no key, no hide). A call validates every id first, so an unknown id changes nothing; an id that exists under two sources needs `--source <name>`; an already-hidden comment is left alone. Nothing reviews new comments before they go live, so list them before publishing and hide the spam. `--json` prints rows, or `{\"changed\": [...], \"unchanged\": [...]}` for hide and unhide, and failures as `{\"error\": ...}`. With no folder, this command operates on the site containing the current directory.",
@@ -140,7 +155,7 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
 
 /// The subcommands that parse `--help` themselves; [`help_for`] declines
 /// them so their per-mode usage stays authoritative.
-const OWN_HELP: [&str; 9] = ["list", "doctor", "migrate", "rename", "expand", "domain", "env", "import", "history"];
+const OWN_HELP: [&str; 10] = ["list", "doctor", "migrate", "rename", "new", "expand", "domain", "env", "import", "history"];
 
 /// Render `moss <cmd> --help` from the table `moss describe` already publishes.
 ///
@@ -195,18 +210,21 @@ const EXAMPLE_LINES: &[(&str, &str)] = &[
     // with no arguments at all.
     ("preview", "moss                                 # Launch the app window"),
     ("domain", "moss domain list ~/blog/             # Show domains linked to this project's site"),
-    ("domain", "moss domain link ~/blog/ example.com # Link a custom domain (same path as the UI)"),
+    ("domain", "moss domain link ~/blog/ example.com # Link a domain; prints the DNS records to set"),
+    ("domain", "moss domain status ~/blog/ example.com # Check live DNS and certificate; exit 0 when live"),
     ("env", "moss env staging ~/blog/             # Set the mosspub.com environment to staging"),
     ("env", "moss env ~/blog/                     # Show the mosspub.com environment"),
     ("tools", "moss tools download ffmpeg         # Fetch FFmpeg so videos are optimized"),
     ("import", "moss import https://example.com/     # Mirror a site into the current directory"),
     ("import", "moss import https://blog.example.com/post/ ~/Sites/me/articles/"),
     ("import", "moss import --list urls.txt ~/Sites/me/articles/"),
+    ("fetch", "moss fetch ~/blog/                  # Download every cloud-only file; exit 1 if the provider is not delivering"),
     ("doctor", "moss doctor --math ~/blog/            # Every $-span moss would parse as math"),
     ("doctor", "moss doctor --surface ~/blog/ --json  # Repeated classed divs, theme rules that style nothing, address-keyed selectors"),
     ("doctor", "moss doctor --surface ~/blog/ --all   # Every classed div left, even on one page"),
     ("migrate", "moss migrate ~/blog/ --lift eyebrow --as series --place eyebrow  # Diff of moving ::: {.eyebrow} into frontmatter"),
     ("migrate", "moss migrate ~/blog/ --lift eyebrow --as series --place eyebrow --apply  # Save a version, then write it"),
+    ("map", "moss map bbox ~/blog/                # The frame the places need, for [map.layers] bbox"),
     ("comments", "moss comments list ~/blog/          # Every comment, newest first, hidden ones marked"),
     ("comments", "moss comments hide ~/blog/ 12 13    # Keep comments 12 and 13 off the site at the next publish"),
 ];
@@ -474,6 +492,13 @@ mod tests {
         let text = help_for("build").expect("build is not self-handled");
         assert!(text.contains("[--serve [--watch]]"), "usage offers --watch on its own: {text}");
         assert!(text.contains("--watch, which only works with --serve"), "help does not say --watch needs --serve: {text}");
+    }
+
+    /// `--serve` has no port flag; the help must say how to move the start.
+    #[test]
+    fn build_help_says_how_to_choose_the_serve_port() {
+        let text = help_for("build").expect("build is not self-handled");
+        assert!(text.contains("MOSS_PREVIEW_PORT_BASE"), "build help does not name the port variable: {text}");
     }
 
     /// The store lives inside the site, at `.moss/history` — the store's own

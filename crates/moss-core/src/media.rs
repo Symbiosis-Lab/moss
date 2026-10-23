@@ -8,7 +8,9 @@
 
 use std::collections::BTreeMap;
 
+mod max_height;
 mod placement;
+pub use max_height::MaxHeight;
 pub use placement::{extract_placement_from_alias, Placement};
 // `parse_placement_segment` has exactly one caller outside its own module:
 // `segment_without_size` below, the editor's drag-resize write path — hence
@@ -45,15 +47,25 @@ impl Fit {
     /// Parse from a keyword string (case-insensitive).
     ///
     /// Accepts both CSS syntax (`"scale-down"`) and space-free forms (`"scaledown"`).
+    /// Every spelling [`Fit::from_keyword`] reads, with its fit.
+    pub const KEYWORDS: &[(&str, Fit)] = &[
+        ("cover", Fit::Cover),
+        ("contain", Fit::Contain),
+        ("fill", Fit::Fill),
+        ("none", Fit::None),
+        ("scale-down", Fit::ScaleDown),
+        ("scaledown", Fit::ScaleDown),
+    ];
+
+    /// Parse from a keyword string (case-insensitive).
     pub fn from_keyword(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "cover" => Some(Fit::Cover),
-            "contain" => Some(Fit::Contain),
-            "fill" => Some(Fit::Fill),
-            "none" => Some(Fit::None),
-            "scale-down" | "scaledown" => Some(Fit::ScaleDown),
-            _ => Option::None,
-        }
+        let lower = s.to_lowercase();
+        Self::KEYWORDS.iter().find(|(k, _)| *k == lower).map(|(_, f)| *f)
+    }
+
+    /// The fit an inline style written by [`MediaAttrs::to_inline_style`] sets.
+    pub(crate) fn of_style(style: &str) -> Option<Self> {
+        style.split(';').find_map(|d| d.trim().strip_prefix("object-fit:")).and_then(Self::from_keyword)
     }
 }
 
@@ -94,6 +106,22 @@ impl Position {
         }
     }
 
+    /// The position as `(x, y)` percentages, as `object-position` reads it.
+    pub fn percentages(&self) -> (u8, u8) {
+        match self {
+            Position::Center => (50, 50),
+            Position::Left => (0, 50),
+            Position::Right => (100, 50),
+            Position::Top => (50, 0),
+            Position::Bottom => (50, 100),
+            Position::TopLeft => (0, 0),
+            Position::TopRight => (100, 0),
+            Position::BottomLeft => (0, 100),
+            Position::BottomRight => (100, 100),
+            Position::Focus(x, y) => (*x, *y),
+        }
+    }
+
     /// A free focus point, `focus:X%,Y%` with integer percentages 0–100.
     /// Anything else, including a bare `X%`, is `None`.
     fn from_focus(lower: &str) -> Option<Self> {
@@ -107,18 +135,36 @@ impl Position {
     ///
     /// Accepts hyphenated (`"top-left"`), concatenated (`"topleft"`), and
     /// space-separated (`"top left"`) forms, and a `focus:X%,Y%` point.
+    /// Every named spelling [`Position::from_keyword`] reads, with its position.
+    pub const KEYWORDS: &[(&str, Position)] = &[
+        ("center", Position::Center),
+        ("left", Position::Left),
+        ("right", Position::Right),
+        ("top", Position::Top),
+        ("bottom", Position::Bottom),
+        ("top-left", Position::TopLeft),
+        ("topleft", Position::TopLeft),
+        ("top left", Position::TopLeft),
+        ("top-right", Position::TopRight),
+        ("topright", Position::TopRight),
+        ("top right", Position::TopRight),
+        ("bottom-left", Position::BottomLeft),
+        ("bottomleft", Position::BottomLeft),
+        ("bottom left", Position::BottomLeft),
+        ("bottom-right", Position::BottomRight),
+        ("bottomright", Position::BottomRight),
+        ("bottom right", Position::BottomRight),
+    ];
+
+    /// Parse from a keyword string (case-insensitive).
+    ///
+    /// Accepts hyphenated (`"top-left"`), concatenated (`"topleft"`), and
+    /// space-separated (`"top left"`) forms, and a `focus:X%,Y%` point.
     pub fn from_keyword(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "center" => Some(Position::Center),
-            "left" => Some(Position::Left),
-            "right" => Some(Position::Right),
-            "top" => Some(Position::Top),
-            "bottom" => Some(Position::Bottom),
-            "top-left" | "topleft" | "top left" => Some(Position::TopLeft),
-            "top-right" | "topright" | "top right" => Some(Position::TopRight),
-            "bottom-left" | "bottomleft" | "bottom left" => Some(Position::BottomLeft),
-            "bottom-right" | "bottomright" | "bottom right" => Some(Position::BottomRight),
-            lower => Self::from_focus(lower),
+        let lower = s.to_lowercase();
+        match Self::KEYWORDS.iter().find(|(k, _)| *k == lower) {
+            Some((_, p)) => Some(*p),
+            None => Self::from_focus(&lower),
         }
     }
 }
@@ -592,104 +638,115 @@ pub fn extract_width_from_alias(alias: &str) -> (Option<&'static str>, String) {
     (width, remaining.join("|"))
 }
 
-/// Return `true` if every token in `text` is a recognized display keyword.
-///
-/// Handles single-token keywords (`"left"`, `"contain"`) and two-word position
-/// keywords (`"top left"`).  An empty string returns `false`.
-///
-/// Fit and object-position only: alignment is [`Placement`]'s and is stripped
-/// out before anything calls this.
-pub fn is_all_display_keywords(text: &str) -> bool {
-    let tokens: Vec<&str> = text.split_whitespace().collect();
-    if tokens.is_empty() {
-        return false;
-    }
-
-    let mut i = 0;
-    while i < tokens.len() {
-        // Try combining current token with next for two-word positions.
-        if i + 1 < tokens.len() {
-            let combined = format!("{} {}", tokens[i], tokens[i + 1]);
-            if Position::from_keyword(&combined).is_some() {
-                i += 2;
-                continue;
-            }
-        }
-
-        if Fit::from_keyword(tokens[i]).is_some() {
-            i += 1;
-            continue;
-        }
-
-        if Position::from_keyword(tokens[i]).is_some() {
-            i += 1;
-            continue;
-        }
-
-        return false;
-    }
-
-    true
-}
-
-/// Classification of an image-embed pipe alias into its display-vs-caption
-/// role.
-///
-/// The pipe alias of `![[photo.jpg|<alias>]]` is one of three things:
-/// a run of structural display keywords (`cover`, `wide cover`), human-
-/// readable caption prose (`My nice photo`), or absent/empty. This struct
-/// captures the disambiguation so every image-embed call site classifies
-/// identically.
+/// What one `|` segment of an image's pipe text says.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ImageAliasClass {
-    /// Structural display-keyword run (e.g. `"cover"`, `"wide cover"`) to be
-    /// fed to `parse_media_attrs`; `None` when the alias is a caption or
-    /// empty.
-    pub display_keywords: Option<String>,
-    /// Caption text (also used as `alt`) when the alias is human-readable
-    /// prose; `None` for structural/empty aliases.
-    ///
-    /// **Invariant:** never `Some("")`. An empty alias yields `None` so
-    /// callers never emit an empty `<figcaption>`.
-    pub caption: Option<String>,
+pub(crate) enum AliasSegment {
+    /// Where the picture sits (`wide`, `40%`, `align-left`), with any display
+    /// words written in the same segment (`wide cover`) kept as the `String`.
+    Placement(Placement, String),
+    /// How the picture fills its frame: fit, position and `focus:` words only.
+    Display(String),
+    /// Anything else, kept as written: caption text.
+    Caption(String),
 }
 
-/// Classify an image-embed pipe alias into [`ImageAliasClass`].
-///
-/// Mirrors the 3-way split previously inlined in
-/// `ImageRenderer::render_to_markdown` (now lifted so it survives that
-/// struct's deletion in the image-embed synth-collapse):
-///
-/// - `None`                       → both `None`
-/// - `Some("")` (empty)           → both `None` (no empty figcaption)
-/// - `Some(s)` and structural     → `display_keywords = Some(s)`, `caption = None`
-/// - `Some(other)`                → `display_keywords = None`, `caption = Some(other)`
-///
-/// "Structural" here is fit / object-position only. Width and alignment have
-/// already been taken by [`extract_placement_from_alias`] before an alias
-/// reaches this function, so what is left is either image display keywords or
-/// prose.
-pub(crate) fn classify_image_alias(alias: Option<&str>) -> ImageAliasClass {
-    match alias {
-        // Empty alias (`![[file|]]`) is treated as no alias. Matches the
-        // historical `alias.is_empty()` guard exactly (no extra trimming).
-        Some(a) if a.is_empty() => ImageAliasClass {
-            display_keywords: None,
-            caption: None,
-        },
-        Some(a) if is_all_display_keywords(a) => ImageAliasClass {
-            display_keywords: Some(a.to_string()),
-            caption: None,
-        },
-        Some(other) => ImageAliasClass {
-            display_keywords: None,
-            caption: Some(other.to_string()),
-        },
-        None => ImageAliasClass {
-            display_keywords: None,
-            caption: None,
-        },
+/// Sort one `|` segment of an image's pipe text. Both image forms
+/// (`![[x.jpg|…]]` and `![…](x.jpg)`) read every segment through this.
+pub(crate) fn classify_alias_segment(segment: &str) -> AliasSegment {
+    match placement::parse_placement_segment(segment.trim()) {
+        Some((found, rest)) if !found.is_empty() => AliasSegment::Placement(found, rest),
+        Some((_, rest)) => AliasSegment::Display(rest),
+        None => AliasSegment::Caption(segment.to_string()),
     }
+}
+
+/// An image's pipe text, sorted segment by segment.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ImageWords {
+    pub placement: Placement,
+    /// The display words of every segment, space-joined; empty when none.
+    pub display: String,
+    /// The caption segments, rejoined with `|` and trimmed.
+    pub caption: String,
+}
+
+impl ImageWords {
+    /// The `object-fit` / `object-position` declarations the display words ask for.
+    pub fn img_style(&self) -> Option<String> {
+        parse_media_attrs(&self.display).to_inline_style()
+    }
+}
+
+/// Sort `alias` with [`classify_alias_segment`]. Earlier placement segments win.
+pub fn read_image_words(alias: &str) -> ImageWords {
+    let mut words = ImageWords::default();
+    let mut display: Vec<String> = Vec::new();
+    let mut caption: Vec<String> = Vec::new();
+    for segment in alias.split('|') {
+        match classify_alias_segment(segment) {
+            AliasSegment::Placement(found, rest) => {
+                words.placement.fill_from(found);
+                display.push(rest);
+            }
+            AliasSegment::Display(rest) => display.push(rest),
+            AliasSegment::Caption(text) => caption.push(text),
+        }
+    }
+    display.retain(|d| !d.is_empty());
+    words.display = display.join(" ");
+    words.caption = caption.join("|").trim().to_string();
+    words
+}
+
+/// Every single-token display word, in the spellings the parsers read, aliases included.
+pub fn display_words() -> Vec<&'static str> {
+    Fit::KEYWORDS
+        .iter()
+        .map(|(k, _)| *k)
+        .chain(Position::KEYWORDS.iter().map(|(k, _)| *k))
+        .filter(|k| !k.contains(' '))
+        .collect()
+}
+
+/// The warning for a caption that looks like a mistyped display word, if it does.
+///
+/// The text stays the caption; this only names it. It covers a `focus:` point that
+/// does not parse, and a single word with two adjacent letters swapped from a display
+/// word (see [`swapped_from`]). Multi-word captions are never flagged.
+pub fn display_word_warning(caption: &str) -> Option<String> {
+    let word = caption.trim();
+    if word.is_empty() || word.contains(char::is_whitespace) {
+        return None;
+    }
+    let lower = word.to_lowercase();
+    let words = display_words();
+    let known = words.join(", ");
+    if lower.starts_with("focus:") && Position::from_keyword(&lower).is_none() {
+        return Some(format!(
+            "'{word}' is not a focus point; write focus:X%,Y% with whole percentages from 0 to 100 (display words: {known})"
+        ));
+    }
+    let near = words.iter().find(|known_word| swapped_from(&lower, known_word))?;
+    Some(format!(
+        "'{word}' is not an image display word; did you mean '{near}'? Display words: {known}"
+    ))
+}
+
+/// Whether `word` is `known` with two adjacent letters swapped.
+///
+/// Only a known word of five letters or more counts, so a short caption one swap
+/// away from a display word is left alone.
+fn swapped_from(word: &str, known: &str) -> bool {
+    let w: Vec<char> = word.chars().collect();
+    let k: Vec<char> = known.chars().collect();
+    k.len() >= 5
+        && w.len() == k.len()
+        && w != k
+        && (0..k.len() - 1).any(|i| {
+            let mut s = w.clone();
+            s.swap(i, i + 1);
+            s == k
+        })
 }
 
 /// Escape a string for safe use in HTML text or attribute values.

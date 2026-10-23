@@ -3,8 +3,8 @@
  * keeps a classic scrollbar's gutter while locked, so the page does not shift
  * sideways, and adds none to a page that had no scrollbar.
  */
-import { afterEach, describe, expect, test } from "vitest";
-import { lockPageScroll } from "../viewport";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { holdPageScroll } from "../viewport";
 
 const root = document.documentElement;
 
@@ -27,41 +27,42 @@ afterEach(() => {
   root.removeAttribute("style");
   delete (root as { clientWidth?: number }).clientWidth;
   delete (root as { getBoundingClientRect?: unknown }).getBoundingClientRect;
+  delete (window as { __mossPageScroll?: unknown }).__mossPageScroll;
 });
 
-describe("lockPageScroll", () => {
+describe("holdPageScroll", () => {
   test("a page with a classic scrollbar keeps its gutter while locked", () => {
     engine(15, true);
-    const unlock = lockPageScroll();
+    holdPageScroll("search", true);
     expect(root.style.overflow).toBe("hidden");
     expect(root.style.scrollbarGutter).toBe("stable");
-    unlock();
+    holdPageScroll("search", false);
     expect(root.style.overflow).toBe("");
     expect(root.style.scrollbarGutter).toBe("");
   });
 
   test("a page without a scrollbar gains no gutter", () => {
     engine(0, true);
-    const release = lockPageScroll();
+    holdPageScroll("search", true);
     expect(root.style.overflow).toBe("hidden");
     expect(root.style.scrollbarGutter).toBe("");
-    release();
+    holdPageScroll("search", false);
   });
 
   test("a classic scrollbar's kept gutter adds no padding", () => {
     engine(15, true);
-    const release = lockPageScroll();
+    holdPageScroll("search", true);
     expect(root.style.scrollbarGutter).toBe("stable");
     expect(root.style.paddingRight).toBe("");
-    release();
+    holdPageScroll("search", false);
   });
 
   test("a styled scrollbar the gutter does not keep is padded back, and unpadded on release", () => {
     // Where the platform overlays its scrollbars, the gutter it keeps is none.
     engine(15, false);
-    const release = lockPageScroll();
+    holdPageScroll("search", true);
     expect(root.style.paddingRight).toBe("15px");
-    release();
+    holdPageScroll("search", false);
     expect(root.style.paddingRight).toBe("");
   });
 
@@ -69,20 +70,39 @@ describe("lockPageScroll", () => {
     engine(15, true);
     root.style.overflow = "clip";
     root.style.scrollbarGutter = "stable both-edges";
-    lockPageScroll()();
+    holdPageScroll("search", true);
+    holdPageScroll("search", false);
     expect(root.style.overflow).toBe("clip");
     expect(root.style.scrollbarGutter).toBe("stable both-edges");
   });
 
-  test("nested locks release in any order, and only the last one unlocks", () => {
+  test("owners nest, and only the last release unlocks", () => {
     engine(15, true);
-    const releaseViewer = lockPageScroll();
-    const releaseSearch = lockPageScroll();
-    releaseViewer();
+    holdPageScroll("fullscreen", true);
+    holdPageScroll("search", true);
+    holdPageScroll("fullscreen", false);
     expect(root.style.overflow).toBe("hidden");
-    releaseViewer();
-    expect(root.style.overflow, "a second release of the same lock changes nothing").toBe("hidden");
-    releaseSearch();
+    holdPageScroll("fullscreen", false);
+    expect(root.style.overflow, "releasing an owner that holds nothing changes nothing").toBe("hidden");
+    holdPageScroll("search", true);
+    holdPageScroll("search", false);
+    expect(root.style.overflow).toBe("");
+    expect(root.style.scrollbarGutter).toBe("");
+  });
+
+  test("bundles that each carry their own copy of the module share one lock", async () => {
+    engine(15, true);
+    vi.resetModules();
+    const a = await import("../viewport");
+    vi.resetModules();
+    const b = await import("../viewport");
+    expect(a.holdPageScroll).not.toBe(b.holdPageScroll);
+
+    a.holdPageScroll("menu", true);
+    b.holdPageScroll("search", true);
+    a.holdPageScroll("menu", false);
+    expect(root.style.overflow).toBe("hidden");
+    b.holdPageScroll("search", false);
     expect(root.style.overflow).toBe("");
     expect(root.style.scrollbarGutter).toBe("");
   });

@@ -4,7 +4,7 @@
 //
 // Two desktop rules can otherwise survive onto a phone:
 //
-//   - The `@media (max-width: 48rem)` override used to spell its selectors
+//   - The `@media (width < 48rem)` override used to spell its selectors
 //     without the `:not([data-width])` the desktop 50%-cap rule carries, so
 //     it under-specified against that rule and lost regardless of source
 //     order — a stylesheet-vs-stylesheet conflict, fixed by matching

@@ -108,3 +108,24 @@ Set a file's content (creates or updates)
 #### Returns
 
 `void`
+
+***
+
+### setFileBytes()
+
+```ts
+setFileBytes(path, bytes): void;
+```
+
+Set a file's exact bytes (creates or updates)
+
+#### Parameters
+
+| Parameter | Type |
+| ------ | ------ |
+| `path` | `string` |
+| `bytes` | `Uint8Array` |
+
+#### Returns
+
+`void`

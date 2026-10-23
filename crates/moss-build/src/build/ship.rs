@@ -267,7 +267,7 @@ pub fn ship_phase(
     let mut failures = 0u32;
     let mut drifted = 0;
 
-    for (rel_path, entry) in sealed.files() {
+    for (rel_path, entry) in sealed.all_files() {
         let stage_path = stage_dir.join(rel_path);
         let site_path = site_dir.join(rel_path);
         if seeded.is_some_and(|base| base.still_holds(rel_path, entry, &site_path)) {
@@ -286,7 +286,7 @@ pub fn ship_phase(
             // both of which are about a stage file this entry does not read.
             ShipRead::Held(bytes) => {
                 if let Err(e) = crate::build::io_utils::write_output(&site_path, bytes) {
-                    log::warn!("[ship_phase] write failed for {:?}: {}", site_path, e);
+                    log::info!("[ship_phase] write failed for {:?}: {}", site_path, e);
                     failures += 1;
                 }
                 continue;
@@ -308,7 +308,7 @@ pub fn ship_phase(
             if rel_path.starts_with(crate::build::served_path::MATH_PNG_PREFIX) {
                 continue;
             }
-            log::warn!(
+            log::info!(
                 "[ship_phase] {:?} is named by the manifest but is not an output; \
                  it went absent after the presence pass",
                 source_path
@@ -325,7 +325,7 @@ pub fn ship_phase(
         if source_path == stage_path {
             if let Some(real_hash) = verify_ship_integrity(rel_path, &stage_path, entry, sealed) {
                 drifted += 1;
-                log::warn!(
+                log::info!(
                     "[ship_phase] {:?} changed after this manifest sealed (now hashes to {}, \
                      manifest says {}) — shipping the current bytes rather than withholding the \
                      page; a concurrent build most likely rewrote this path",
@@ -336,7 +336,7 @@ pub fn ship_phase(
 
         if let Some(parent) = site_path.parent() {
             if let Err(e) = crate::build::io_utils::create_output_dir_all(parent) {
-                log::warn!("[ship_phase] create_dir_all for parent {:?}: {}", parent, e);
+                log::info!("[ship_phase] create_dir_all for parent {:?}: {}", parent, e);
                 failures += 1;
                 continue;
             }
@@ -347,7 +347,7 @@ pub fn ship_phase(
                     #[cfg(unix)]
                     {
                         if let Err(e) = crate::build::io_utils::replace_with_symlink(&target, &site_path) {
-                            log::warn!("[ship_phase] Failed to recreate symlink at {:?}: {}", site_path, e);
+                            log::info!("[ship_phase] Failed to recreate symlink at {:?}: {}", site_path, e);
                             failures += 1;
                         }
                     }
@@ -383,13 +383,13 @@ pub fn ship_phase(
                                 .map_err(|e| e.to_string())
                         };
                         if let Err(e) = res {
-                            log::warn!("[ship_phase] Failed to copy symlink target {:?} -> {:?}: {}", target_abs, site_path, e);
+                            log::info!("[ship_phase] Failed to copy symlink target {:?} -> {:?}: {}", target_abs, site_path, e);
                             failures += 1;
                         }
                     }
                 }
                 Err(e) => {
-                    log::warn!("[ship_phase] read_link failed for {:?}: {}", source_path, e);
+                    log::info!("[ship_phase] read_link failed for {:?}: {}", source_path, e);
                     failures += 1;
                 }
             }
@@ -405,12 +405,12 @@ pub fn ship_phase(
                         // can neither truncate an inode shared with `source_path`
                         // nor materialize a dataless destination.
                         if let Err(e) = crate::build::io_utils::write_output(&site_path, &stripped) {
-                            log::warn!("[ship_phase] write failed for {:?}: {}", site_path, e);
+                            log::info!("[ship_phase] write failed for {:?}: {}", site_path, e);
                             failures += 1;
                         }
                     }
                     Err(e) => {
-                        log::warn!("[ship_phase] read failed for {:?}: {}", source_path, e);
+                        log::info!("[ship_phase] read failed for {:?}: {}", source_path, e);
                         failures += 1;
                     }
                 }
@@ -424,7 +424,7 @@ pub fn ship_phase(
                 // renames, so the destination is never opened with `O_TRUNC`
                 // and a cloud-evicted `site_path` cannot force materialization.
                 if let Err(e) = crate::build::io_utils::copy_output(&source_path, &site_path) {
-                    log::warn!("[ship_phase] copy failed for {:?}: {}", source_path, e);
+                    log::info!("[ship_phase] copy failed for {:?}: {}", source_path, e);
                     failures += 1;
                 }
             }
@@ -607,14 +607,14 @@ pub fn materialize_and_promote(
                  so `current` stays on the last complete one",
                 sealed.generation_id()
             ),
-            WithholdReason::Unverified { entries, sample } => log::warn!(
+            WithholdReason::Unverified { entries, sample } => log::info!(
                 "generation {} withheld: {} of {} entries unverifiable ({})",
                 sealed.generation_id(),
                 entries,
-                sealed.files().len(),
+                sealed.all_files().len(),
                 sample.join(", ")
             ),
-            WithholdReason::ImplausibleLoss { lost, of } => log::warn!(
+            WithholdReason::ImplausibleLoss { lost, of } => log::info!(
                 "generation {} withheld: presence pass lost {} of {} entries (limit {})",
                 sealed.generation_id(),
                 lost,
@@ -637,14 +637,14 @@ pub fn materialize_and_promote(
         crate::build::store_gc::GenerationWriteLock::acquire(&mp.generations_dir(), sealed.generation_id())
             .map_err(|e| format!("Failed to lock generation {}: {}", sealed.generation_id(), e))?;
     let mut drifted = 0;
-    let copied = !write_lock.holds(&gen_dir, sealed.files());
+    let copied = !write_lock.holds(&gen_dir, sealed.all_files());
     if copied {
         // Seeded from the last whole generation by one copy-on-write clone
         // where the platform has one, so only the entries that differ are
         // written; otherwise every entry is copied.
         let base = crate::build::lifecycle::whole_generation(mp).filter(|base| write_lock.seed_from(&gen_dir, base));
         crate::build::io_utils::create_output_dir_all(&gen_dir)
-            .and_then(|()| crate::build::store_gc::prune_to_manifest(&gen_dir, sealed.files()))
+            .and_then(|()| crate::build::store_gc::prune_to_manifest(&gen_dir, sealed.all_files()))
             .map_err(|e| format!("Failed to prepare generation dir: {}", e))?;
         // Ship-by-OID: read a `staged_oid` entry from its
         // immutable CAS blob instead of the mutable `stage_dir` copy. Depends on
@@ -658,6 +658,8 @@ pub fn materialize_and_promote(
     }
     sealed.write_preview_originals(&mp.generations_dir())
         .map_err(|e| format!("Failed to write generation original identities: {e}"))?;
+    sealed.write_publish_view(&mp.generations_dir())
+        .map_err(|e| format!("Failed to record which pages are preview-only: {e}"))?;
     let promoted = crate::build::lifecycle::promote(mp, epoch, render, sealed.generation_id(), copied)
         .map_err(|e| format!("Failed to set current_ptr: {}", e))?;
     // A generation holding bytes its id does not describe keeps its lock file,
@@ -726,7 +728,7 @@ pub(crate) fn prune_orphaned_webp_before_ship(
             .take(3)
             .map(|p| p.display().to_string())
             .collect();
-        log::warn!(
+        log::info!(
             "orphan prune: skipped — {} file(s)/dir(s) under staging could not be read, so the \
              reference set is incomplete and pruning from it could delete live images: {}",
             scan.unreadable.len(),
@@ -841,7 +843,7 @@ pub(crate) fn drop_absent_outputs(
     use crate::build::served_path::MATH_PNG_PREFIX;
     let mut absent: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut unverified: Vec<(String, String)> = Vec::new();
-    for (rel, entry) in sealed.files() {
+    for (rel, entry) in sealed.all_files() {
         let stage_path = stage_dir.join(rel);
         // Same resolution `ship_phase` uses (`resolve_ship_source`): a
         // CAS-backed entry's presence is asked of its CAS blob, never of the
@@ -927,7 +929,7 @@ pub(crate) fn unregistered_referenced_variants(
     stage_dir: &std::path::Path,
 ) -> std::collections::HashSet<String> {
     if !scan.unreadable.is_empty() {
-        log::warn!(
+        log::info!(
             "unregistered-reference pass: {} file(s)/dir(s) under staging could not be read, so \
              some live 404s may go unrepaired this build",
             scan.unreadable.len()
@@ -944,7 +946,7 @@ pub(crate) fn unregistered_referenced_variants(
         .resolved
         .iter()
         .filter(|key| key.ends_with(".webp"))
-        .filter(|key| !sealed.files().contains_key(key.as_str()))
+        .filter(|key| !sealed.all_files().contains_key(key.as_str()))
         .filter(|key| {
             // Positively gone only: an unreadable path strips nothing.
             let path = stage_dir.join(key.as_str());
@@ -1785,7 +1787,7 @@ mod tests {
 
     /// Seed `generation`, on disk, as it would be recorded for the next copy.
     fn whole(mp: &crate::moss_paths::MossPaths, sealed: &SealedManifest) -> Option<WholeGeneration> {
-        WholeGeneration::record(&mp.generation_dir(sealed.generation_id()), sealed.generation_id(), sealed.files())
+        WholeGeneration::record(&mp.generation_dir(sealed.generation_id()), sealed.generation_id(), sealed.all_files())
     }
 
     /// A file edited inside the seed after it finished — by a person, or by

@@ -142,7 +142,7 @@ async fn push_site_inner_impl(
     // are now emitted during generate_blocking_content (Gap #3 fix) so the seal
     // covers them and the generation-id is stable. No post-seal mutation of the
     // generation directory.
-    let mut manifest = sealed.files().clone();
+    let mut manifest = sealed.files().into_owned();
 
     let site_id = site_id.to_string();
 
@@ -937,6 +937,7 @@ mod tests {
                 build_generation: 2,
                 missing_references: Vec::new(),
                 unresolved_inputs: vec!["about.md".into()],
+                drafts_linked: vec![],
             },
         );
         let identity = Identity::generate().unwrap();

@@ -18,7 +18,8 @@ use std::path::Path;
 
 use scraper::{Html, Selector};
 
-use crate::cli::describe::css_query::{mentions, style_rules};
+use crate::build::theme_lint::style_rules;
+use crate::cli::describe::css_query::mentions;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnmatchedRule {

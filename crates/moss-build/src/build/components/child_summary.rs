@@ -142,6 +142,7 @@ pub fn render_with_sort(
     body.push_str(&kicker_html);
     body.push_str(&meta_html);
     body.push_str(&title_html);
+    body.push_str(&child_list::subtitle_html(props.subtitle.as_deref()));
 
     // Description: wrapped in an anchor for linkblog cards so it
     // remains a click target now that the outer is `<div>`.
@@ -200,7 +201,7 @@ pub fn render_with_sort(
     if is_linkblog {
         format!(
             r#"<div class="moss-card" data-linkblog{}{}><div class="moss-card-row"><div class="moss-card-body">{}</div>{}</div></div>"#,
-            props.source_file_attr(),
+            props.root_attrs(),
             props.section_style_attr(),
             body,
             cover_html,
@@ -208,7 +209,7 @@ pub fn render_with_sort(
     } else if event_links.is_some() {
         format!(
             r#"<div class="moss-card"{}{}><div class="moss-card-row"><div class="moss-card-body">{}</div>{}</div></div>"#,
-            props.source_file_attr(),
+            props.root_attrs(),
             props.section_style_attr(),
             body,
             cover_html,
@@ -217,7 +218,7 @@ pub fn render_with_sort(
         format!(
             r#"<a href="{}" class="moss-card"{}{}><div class="moss-card-row"><div class="moss-card-body">{}</div>{}</div></a>"#,
             html_escape(&props.url),
-            props.source_file_attr(),
+            props.root_attrs(),
             props.section_style_attr(),
             body,
             cover_html,

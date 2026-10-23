@@ -63,7 +63,7 @@ fn reconcile(canonical: &Path, sibling: &Path) {
     if !canonical.exists() {
         match std::fs::rename(sibling, canonical) {
             Ok(()) => log::info!("[synced-state] {} had no canonical copy — took the sibling", canonical.display()),
-            Err(e) => log::warn!("[synced-state] could not adopt {}: {e}", sibling.display()),
+            Err(e) => log::info!("[synced-state] could not adopt {}: {e}", sibling.display()),
         }
         return;
     }
@@ -82,7 +82,7 @@ fn reconcile(canonical: &Path, sibling: &Path) {
         crate::build::cloud_readiness::INTERACTIVE_DEADLINE,
     );
     let (Ok(ours), Ok(theirs)) = (ours, theirs) else {
-        log::warn!("[synced-state] {} or its sibling is unreadable — left both in place", canonical.display());
+        log::info!("[synced-state] {} or its sibling is unreadable — left both in place", canonical.display());
         return;
     };
     let ext = canonical.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -101,7 +101,7 @@ fn reconcile(canonical: &Path, sibling: &Path) {
         Ok(true) => log::info!("[synced-state] merged {} into {}", sibling.display(), canonical.display()),
         Ok(false) => log::info!("[synced-state] {} adds nothing to {} — removed", sibling.display(), canonical.display()),
         Err(e) => {
-            log::warn!("[synced-state] could not merge {} into {}: {e} — left in place", sibling.display(), canonical.display());
+            log::info!("[synced-state] could not merge {} into {}: {e} — left in place", sibling.display(), canonical.display());
             return;
         }
     }

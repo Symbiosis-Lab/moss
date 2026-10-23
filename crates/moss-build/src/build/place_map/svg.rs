@@ -19,6 +19,7 @@ use text::{precision_name, xml_escape};
 // render_locator's fix for what picking only the first place's precision
 // broke.
 pub(crate) use text::precision_rank;
+mod detail;
 mod locator;
 use locator::{keep_alternate_bands, LOCATOR_DISPLAY_SCALE};
 pub use locator::{
@@ -35,6 +36,7 @@ pub(crate) use route::{route_blocked_diagnostic, route_precision_gate};
 
 use super::geometry::{marker_radius, FrameTier, TILE_K, TILE_STROKE_BASE_K, ProjectedPoint, Projection, TileSelection, REGION_FADE_DEGREES, REGION_FADE_MIN_RADIUS};
 use super::globe::{globe_line, globe_marker, globe_rings};
+use super::layer_crop::LayerImage;
 use super::{Feature, Pack, PlaceMapContext, PlaceMapTarget, ResolvedPlace};
 use crate::vault::places::Precision;
 
@@ -57,6 +59,7 @@ pub struct SvgMapOptions<'a> {
     pub location: &'a str,
     pub precision: Precision,
     pub href: Option<&'a str>,
+    pub(crate) layers: &'a [LayerImage],
 }
 
 impl<'a> SvgMapOptions<'a> {
@@ -72,6 +75,7 @@ impl<'a> SvgMapOptions<'a> {
             location,
             precision,
             href: None,
+            layers: &[],
         }
     }
 }
@@ -85,6 +89,17 @@ pub fn emit_svg(
     target: &PlaceMapTarget,
     page_path: &str,
     ordinal: usize,
+) -> String {
+    emit_svg_over(context, target, page_path, ordinal, &[])
+}
+
+/// [`emit_svg`] with detail layers drawn over a flat ground.
+pub(crate) fn emit_svg_over(
+    context: &PlaceMapContext,
+    target: &PlaceMapTarget,
+    page_path: &str,
+    ordinal: usize,
+    layers: &[LayerImage],
 ) -> String {
     let location = target
         .aggregate_name
@@ -100,7 +115,7 @@ pub fn emit_svg(
     emit_svg_with_options(
         context,
         target,
-        SvgMapOptions::new(page_path, ordinal, location, precision),
+        SvgMapOptions { layers, ..SvgMapOptions::new(page_path, ordinal, location, precision) },
     )
 }
 
@@ -153,6 +168,7 @@ fn emit_svg_with_mode(
         canvas_height: f64::from(SVG_HEIGHT),
         full_extent: false,
         tile: false,
+        layers: options.layers,
     };
     writer.open_figure(
         target,
@@ -199,6 +215,7 @@ pub(super) fn render_svg(
     writer.open_svg();
     writer.defs();
     writer.water();
+    writer.flat_ground();
 
     let projection = choose_projection(writer, target);
     // A `Tile` frame is drawn in the world's own Patterson projection at
@@ -213,7 +230,7 @@ pub(super) fn render_svg(
     // gets the world map's rank/layer thinning either.
     let wide = !writer.tile && projection.as_ref().is_some_and(Projection::is_wide);
     let wide_locator = writer.locator_profile.is_some() && wide;
-    let grouped = target.frame.as_ref().map(|frame| {
+    let grouped = target.frame.as_ref().filter(|_| writer.layers.is_empty()).map(|frame| {
         let selected = TileSelection::for_frame(context.pack(), frame);
         let mut grouped = grouped_features(context.pack(), &selected);
         if wide {
@@ -245,6 +262,7 @@ pub(super) fn render_svg(
         }
         _ => writer.empty_layers_after_lighting(),
     }
+    writer.detail_layers();
     draw_line(writer, target, projection.as_ref());
     writer.markers(target);
     draw_badges(writer, target, projection.as_ref());
@@ -323,6 +341,8 @@ pub(super) struct Writer<'a> {
     /// terrain lighting and band shadows as the world; the runtime bakes
     /// those effects into a fixed-pixel canvas before camera transforms.
     pub(super) tile: bool,
+    /// Detail layers drawn over a flat ground in place of the world's data.
+    pub(super) layers: &'a [LayerImage],
 }
 
 impl<'a> Writer<'a> {
@@ -352,6 +372,7 @@ impl<'a> Writer<'a> {
             canvas_height,
             full_extent,
             tile: false,
+            layers: &[],
         }
     }
 }
@@ -1155,6 +1176,7 @@ mod tests {
             canvas_height: f64::from(SVG_HEIGHT),
             full_extent: false,
             tile: false,
+            layers: &[],
         };
         writer.emit_band_layer(10_000, &projection, &grouped, 9, "relief", false);
         let d = &writer.output[writer.output.find(" d=\"").unwrap() + 4..];
@@ -1200,6 +1222,7 @@ mod tests {
             canvas_height: f64::from(SVG_HEIGHT),
             full_extent: false,
             tile: false,
+            layers: &[],
         };
         writer.emit_river_layer(10_000, &projection, &grouped, "#5b93bd");
         let d = &writer.output[writer.output.find(" d=\"").unwrap() + 4..];
@@ -1406,6 +1429,7 @@ mod tests {
             canvas_height: f64::from(SVG_HEIGHT),
             full_extent: true,
             tile: false,
+            layers: &[],
         };
         let target = PlaceMapTarget { places: vec![], frame: world_frame(), aggregate_name: None, route: false };
         let projection = choose_projection(&writer, &target).unwrap();

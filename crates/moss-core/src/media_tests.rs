@@ -448,44 +448,6 @@ fn test_parse_attrs_scale_down() {
     assert_eq!(attrs.fit, Some(Fit::ScaleDown));
 }
 
-// -- is_all_display_keywords -------------------------------------------
-
-#[test]
-fn test_is_all_display_keywords_positions() {
-    assert!(is_all_display_keywords("left"));
-    assert!(is_all_display_keywords("right"));
-    assert!(is_all_display_keywords("center"));
-    assert!(is_all_display_keywords("top"));
-    assert!(is_all_display_keywords("bottom"));
-    assert!(is_all_display_keywords("top left"));
-    assert!(is_all_display_keywords("bottom right"));
-}
-
-#[test]
-fn test_is_all_display_keywords_fits() {
-    assert!(is_all_display_keywords("cover"));
-    assert!(is_all_display_keywords("contain"));
-    assert!(is_all_display_keywords("fill"));
-    assert!(is_all_display_keywords("none"));
-    assert!(is_all_display_keywords("scale-down"));
-}
-
-#[test]
-fn test_is_all_display_keywords_combined() {
-    assert!(is_all_display_keywords("contain left"));
-    assert!(is_all_display_keywords("cover top left"));
-    assert!(is_all_display_keywords("cover top-right"));
-    assert!(is_all_display_keywords("scale-down bottom-left"));
-}
-
-#[test]
-fn test_is_all_display_keywords_rejects_non_keywords() {
-    assert!(!is_all_display_keywords("A beautiful sunset"));
-    assert!(!is_all_display_keywords("left side"));
-    assert!(!is_all_display_keywords(""));
-    assert!(!is_all_display_keywords("   "));
-}
-
 // -- html_escape --------------------------------------------------
 
 #[test]
@@ -532,14 +494,6 @@ fn test_parse_media_attrs_align_last_wins() {
     assert_eq!(attrs.align, Some(AlignSide::Left));
 }
 
-#[test]
-fn test_is_all_display_keywords_excludes_alignment() {
-    // Alignment belongs to `Placement` and is stripped before this runs, so
-    // an align keyword reaching here is a leak, not a display keyword.
-    assert!(!is_all_display_keywords("align-left"));
-    assert!(!is_all_display_keywords("align-right"));
-    assert!(!is_all_display_keywords("align-left cover"));
-}
 
 // -- Placement ---------------------------------------------------------
 
@@ -779,67 +733,35 @@ fn test_media_attrs_extra_attrs_non_empty() {
     assert_eq!(keys, vec!["data-id", "data-zoom"]);
 }
 
-// -- classify_image_alias (Phase 1: lifted from ImageRenderer) ----------
+// -- classify_alias_segment / read_image_words --------------------------
 
 #[test]
-fn test_classify_image_alias_none() {
-    let c = classify_image_alias(None);
-    assert_eq!(c.display_keywords, None);
-    assert_eq!(c.caption, None);
-}
-
-#[test]
-fn test_classify_image_alias_empty_is_none_never_some_empty() {
-    // THE invariant: an empty alias yields caption=None, never Some(""),
-    // so no caller emits an empty <figcaption>.
-    let c = classify_image_alias(Some(""));
-    assert_eq!(c.display_keywords, None);
-    assert_eq!(c.caption, None);
-}
-
-#[test]
-fn test_classify_image_alias_structural_single_keyword() {
-    let c = classify_image_alias(Some("cover"));
-    assert_eq!(c.display_keywords.as_deref(), Some("cover"));
-    assert_eq!(c.caption, None);
-}
-
-#[test]
-fn test_classify_image_alias_never_sees_a_width() {
-    // `wide cover` reaches the classifier as `cover`: the width went into
-    // the `Placement` one step earlier. A width arriving here would be a
-    // leak, and it is caption text, not a display keyword.
-    let (p, rest) = extract_placement_from_alias("wide cover");
-    assert_eq!(p.width, Some("wide"));
-    let c = classify_image_alias(Some(&rest));
-    assert_eq!(c.display_keywords.as_deref(), Some("cover"));
-    assert_eq!(c.caption, None);
-}
-
-#[test]
-fn test_classify_image_alias_caption_text() {
-    let c = classify_image_alias(Some("My nice photo"));
-    assert_eq!(c.display_keywords, None);
-    assert_eq!(c.caption.as_deref(), Some("My nice photo"));
-}
-
-#[test]
-fn test_classify_image_alias_structural_vs_caption() {
-    // What reaches the classifier has already had its placement stripped,
-    // so `wide cover` arrives as `cover`.
-    for structural in ["cover", "top left", "contain bottom-right"] {
-        let c = classify_image_alias(Some(structural));
-        assert_eq!(c.display_keywords.as_deref(), Some(structural));
-        assert_eq!(c.caption, None);
+fn each_segment_is_placement_display_or_caption() {
+    assert!(matches!(classify_alias_segment("wide"), AliasSegment::Placement(p, rest) if p.width == Some("wide") && rest.is_empty()));
+    assert!(matches!(classify_alias_segment("align-left 40%"), AliasSegment::Placement(p, _) if p.size.as_deref() == Some("40%")));
+    assert!(matches!(classify_alias_segment("wide cover"), AliasSegment::Placement(_, rest) if rest == "cover"));
+    for display in ["cover", "contain", "top left", "focus:20%,62%", "left", "contain bottom-right"] {
+        assert_eq!(classify_alias_segment(display), AliasSegment::Display(display.to_string()), "{display}");
     }
-    for caption in ["My nice photo", "left side"] {
-        let c = classify_image_alias(Some(caption));
-        assert_eq!(c.display_keywords, None);
-        assert_eq!(c.caption.as_deref(), Some(caption));
+    for caption in ["My nice photo", "left side", "contian", "", "focus:200%,1%"] {
+        assert_eq!(classify_alias_segment(caption), AliasSegment::Caption(caption.to_string()), "{caption:?}");
     }
-    let empty = classify_image_alias(Some(""));
-    assert_eq!(empty.display_keywords, None);
-    assert_eq!(empty.caption, None);
+}
+
+#[test]
+fn read_image_words_sorts_every_segment() {
+    let words = read_image_words("focus:20%,62%|A caption");
+    assert_eq!((words.display.as_str(), words.caption.as_str()), ("focus:20%,62%", "A caption"));
+    assert_eq!(words.img_style().as_deref(), Some("object-position:20% 62%"));
+
+    let words = read_image_words("Title page|contain|wide");
+    assert_eq!(words.placement.width, Some("wide"));
+    assert_eq!((words.display.as_str(), words.caption.as_str()), ("contain", "Title page"));
+
+    // Unknown words stay caption, and an all-caption pipe is unchanged.
+    assert_eq!(read_image_words("contain color=black").caption, "contain color=black");
+    assert_eq!(read_image_words("A|B").caption, "A|B");
+    assert_eq!(read_image_words("").caption, "");
 }
 
 // -- parse_image_width -------------------------------------------------
@@ -1021,4 +943,52 @@ fn repeated_color_attr_last_wins() {
     // Consistent with fit/position: later tokens overwrite earlier ones.
     let attrs = parse_media_attrs("color=red color=blue");
     assert_eq!(attrs.color.as_deref(), Some("blue"));
+}
+
+// -- display_word_warning -----------------------------------------------
+
+#[test]
+fn display_word_warning_flags_a_transposed_or_one_letter_off_display_word() {
+    let w = display_word_warning("contian").expect("transposed contain");
+    assert!(w.contains("'contian'") && w.contains("'contain'") && w.contains("cover"), "{w}");
+    assert!(display_word_warning("cvoer").expect("transposed cover").contains("'cover'"));
+    assert!(display_word_warning("scale-dwon").expect("scale-down").contains("'scale-down'"));
+    assert!(display_word_warning("centre").is_some());
+}
+
+#[test]
+fn display_word_warning_flags_a_focus_point_that_does_not_parse() {
+    assert!(display_word_warning("focus:50%").expect("no comma").contains("focus:50%"));
+    assert!(display_word_warning("focus:150%,20%").is_some());
+    assert!(display_word_warning("focus:50,20").is_some());
+    assert!(display_word_warning("focus:50%,20%").is_none());
+}
+
+#[test]
+fn display_word_warning_leaves_ordinary_captions_alone() {
+    for caption in ["lake", "bright", "tops", "right", "top", "contains", "enter", "renter", "centers", "bottoms", "Harbour at dusk", "focus: the lake", "cover story"] {
+        assert!(display_word_warning(caption).is_none(), "{caption} should not warn");
+    }
+}
+
+#[test]
+fn every_display_word_parses_and_every_parsed_keyword_is_listed() {
+    for word in display_words() {
+        assert!(
+            Fit::from_keyword(word).is_some() || Position::from_keyword(word).is_some(),
+            "{word} is listed but does not parse"
+        );
+    }
+    for (word, _) in Fit::KEYWORDS {
+        assert_eq!(Fit::from_keyword(word).is_some(), true);
+        if !word.contains(' ') {
+            assert!(display_words().contains(word), "{word} is read but not listed");
+        }
+    }
+    for (word, _) in Position::KEYWORDS {
+        assert!(Position::from_keyword(word).is_some());
+        if !word.contains(' ') {
+            assert!(display_words().contains(word), "{word} is read but not listed");
+        }
+    }
 }

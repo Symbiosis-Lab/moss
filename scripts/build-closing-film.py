@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 from urllib.request import urlretrieve
 
-root = Path(__file__).resolve().parents[1] / "site" / "scene5-loop"
+root = Path(__file__).resolve().parents[1] / "site" / "home" / "scene5-loop"
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--sources", type=Path, default=Path("/tmp/moss-film-sources"))
 parser.add_argument("--fetch", action="store_true")

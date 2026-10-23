@@ -6,6 +6,10 @@ use moss_core::terms::{term_fold, term_folder_key};
 use super::{precision_rank, route_blocked_diagnostic, route_precision_gate, Frame, FrameTier, Pack, ProjectedPoint, Projection};
 use crate::vault::places::Precision;
 
+/// CSS widths of a locator (`min(50%, 22rem)`) and a map in the flow.
+const LOCATOR_CSS_WIDTH: f64 = 352.0;
+const EMBED_CSS_WIDTH: f64 = 720.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocatorPlacement { None, AlignRight }
 
@@ -65,6 +69,12 @@ pub struct PlaceMapRenderContext {
     /// plain static figure instead of baking in a hash the build might not
     /// actually write.
     explorer_places_hash: Option<String>,
+    /// The site's declared `[map.layers]`, each with its bbox settled.
+    layers: Arc<Vec<crate::config::map_layers::MapLayer>>,
+    /// One plan per layer: plates read and fitted, extent, credit, tile key.
+    layer_plans: Arc<Vec<super::layer_warp::LayerPlan>>,
+    /// The pictures figures drawn over a layer asked for while rendering.
+    crops: super::layer_crop::CropRegistry,
 }
 
 impl PlaceMapRenderContext {
@@ -84,8 +94,31 @@ impl PlaceMapRenderContext {
             explorer: true,
             map_assets_hash: String::new(),
             explorer_places_hash: None,
+            layers: Arc::default(),
+            layer_plans: Arc::default(),
+            crops: Arc::default(),
         }
     }
+
+    /// The site's declared detail layers. Chained like `with_explorer`.
+    pub fn with_layers(mut self, layers: Vec<crate::config::map_layers::MapLayer>) -> Self {
+        self.layers = Arc::new(layers);
+        self
+    }
+
+    /// The plans for the layers given to [`with_layers`](Self::with_layers), in the same order.
+    pub fn with_layer_plans(mut self, plans: Vec<super::layer_warp::LayerPlan>) -> Self {
+        self.layer_plans = Arc::new(plans);
+        self
+    }
+
+    pub(crate) fn layer_plans(&self) -> &[super::layer_warp::LayerPlan] { &self.layer_plans }
+
+    pub(crate) fn crops(&self) -> &super::layer_crop::CropRegistry { &self.crops }
+
+    pub(crate) fn layers(&self) -> &[crate::config::map_layers::MapLayer] { &self.layers }
+
+    pub fn has_layers(&self) -> bool { !self.layers.is_empty() }
 
     /// `TermKind::explorer_enabled()` for the place-typed kind this context
     /// was built from. Chained onto `new()` rather than widened into it so
@@ -163,32 +196,29 @@ impl PlaceMapRenderContext {
     }
 
     pub fn render_locator(&self, names: &[String], route: bool, page_path: &str, ordinal: usize) -> Option<String> {
-        self.render_article_map(names, route, page_path, page_path, ordinal)
+        self.article_map(names, route, page_path, page_path, ordinal, LOCATOR_CSS_WIDTH)
             .map(|svg| format!(r#"<div class="moss-place-locator moss-align-right">{svg}</div>"#))
     }
 
     pub fn render_article_map(&self, names: &[String], route: bool, page_path: &str, host_path: &str, ordinal: usize) -> Option<String> {
+        self.article_map(names, route, page_path, host_path, ordinal, EMBED_CSS_WIDTH)
+    }
+
+    fn article_map(&self, names: &[String], route: bool, page_path: &str, host_path: &str, ordinal: usize, css_width: f64) -> Option<String> {
         let mut target = self.maps.resolve_locations(&self.namespace, &self.gazetteer, names, route);
         apply_route_gate(&mut target, page_path);
         if !target.has_coordinates() { return None; }
+        let ground = self.street_ground(&mut target, css_width);
         let first = target.places.iter().find(|place| place.point().is_some())?;
-        // The profile (how much detail the locator carries) has to reflect
-        // the WHOLE list's precision, not whichever place happens to be
-        // declared first: emit_svg already picks the coarsest precision
-        // across every declared place for the full/aggregate map, for the
-        // same privacy reason a region-precision place anywhere in the list
-        // demands. A locator that instead kept the first place's precision
-        // (e.g. a [city, city, region, city] list, first = city) requested
-        // full relief/seafloor detail for a frame wide enough to hold a
-        // region, which is how a real multi-place article blew past
-        // LOCATOR_RAW_SAFETY_LIMIT and lost its locator with no warning.
+        // The coarsest precision of the whole list decides the profile, not the first place's: the first one's detail overflows the safety ceiling for a wide list.
         let precision = target
             .places
             .iter()
             .map(|place| place.precision)
             .max_by_key(precision_rank)
             .unwrap_or(Precision::Country);
-        let options = super::SvgMapOptions::new(host_path, ordinal, &first.display, precision);
+        let layers = ground.as_ref().map_or(&[][..], |ground| &ground.images[..]);
+        let options = super::SvgMapOptions { layers, ..super::SvgMapOptions::new(host_path, ordinal, &first.display, precision) };
         match super::emit_locator(&self.maps, &target, options) {
             Ok(locator) => {
                 // The article id `places.<hash>.json` keys THIS page's own
@@ -197,7 +227,7 @@ impl PlaceMapRenderContext {
                 // misread a page's own work.
                 let article = super::places_data::page_url(page_path);
                 let svg = self.with_embed_hydration(locator.svg, &format!("article={article}"), &first.display);
-                Some(svg)
+                Some(self.with_credit_slot(svg, ground.as_ref().map_or("", |ground| &ground.credit)))
             }
             Err(error) => {
                 crate::build::cli_output::log_warn_problem!(
@@ -330,6 +360,33 @@ impl PlaceMapRenderContext {
         route: bool,
         is_embed: bool,
     ) -> Option<String> {
+        self.term_map(key, members, page_path, ordinal, route, is_embed, true)
+    }
+
+    /// The namespace root's map embedded in a page other than the places
+    /// root: the root's explorer runs in its own frame (`?embed=1`) rather
+    /// than upgrading this figure in place, which only the root page itself
+    /// can host.
+    pub fn render_root_map_embed<'a>(
+        &self,
+        members: impl IntoIterator<Item = &'a crate::build::types::ParsedDocument>,
+        page_path: &str,
+        ordinal: usize,
+    ) -> Option<String> {
+        self.term_map(&self.namespace, members, page_path, ordinal, false, true, false)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn term_map<'a>(
+        &self,
+        key: &str,
+        members: impl IntoIterator<Item = &'a crate::build::types::ParsedDocument>,
+        page_path: &str,
+        ordinal: usize,
+        route: bool,
+        is_embed: bool,
+        in_place_explorer: bool,
+    ) -> Option<String> {
         if !self.is_place_key(key) { return None; }
         let members = members.into_iter();
         let own_name = self.gazetteer.iter().find_map(|(display, _)| {
@@ -343,20 +400,17 @@ impl PlaceMapRenderContext {
             self.aggregate(key, label, members)
         };
         apply_route_gate(&mut target, page_path);
-        // The same label `emit_svg`'s own aria-label derives (`target.aggregate_name`
-        // for a listing, else the first marked place's own display name) —
-        // computed again here rather than threaded out of `emit_svg`, since
-        // it is one cheap expression and `emit_svg`'s signature is shared by
-        // every other caller in this crate.
         let embed_name = target
             .aggregate_name
             .clone()
             .or_else(|| target.places.first().map(|place| place.display.clone()))
             .unwrap_or_else(|| key.to_string());
-        let svg = target.has_coordinates().then(|| super::emit_svg(&self.maps, &target, page_path, ordinal))?;
-        let svg = self.with_explorer_handshake(key, svg);
-        let svg = if is_embed { self.with_embed_hydration(svg, &format!("place={key}"), &embed_name) } else { svg };
-        Some(svg)
+        let ground = self.street_ground(&mut target, EMBED_CSS_WIDTH);
+        let svg = target.has_coordinates().then(|| super::emit_svg_over(&self.maps, &target, page_path, ordinal, ground.as_ref().map_or(&[][..], |ground| &ground.images[..])))?;
+        let svg = if in_place_explorer { self.with_explorer_handshake(key, svg) } else { svg };
+        let scope = if key == self.namespace { String::new() } else { format!("place={key}") };
+        let svg = if is_embed { self.with_embed_hydration(svg, &scope, &embed_name) } else { svg };
+        Some(self.with_credit_slot(svg, ground.as_ref().map_or("", |ground| &ground.credit)))
     }
 
     /// Splice the places-explorer handshake attributes onto the figure's
@@ -381,10 +435,13 @@ impl PlaceMapRenderContext {
             return svg;
         };
         let places = crate::build::served_path::ServedPath::for_places_data_hashed(places_hash);
+        let layers = crate::build::served_path::ServedPath::for_place_map_asset(&self.map_assets_hash, "layers.json")
+            .map_or(String::new(), |p| format!(" data-layers=\"{}\"", p.to_relative_url()));
+        let layers = if self.has_layers() { layers } else { String::new() };
         Self::splice_figure_attrs(
             svg,
             &format!(
-                "data-moss-places-explorer data-world=\"{}\" data-tiles=\"{}\" data-places=\"{}\" data-labels=\"{}\" data-scope=\"{}\"",
+                "data-moss-places-explorer data-world=\"{}\" data-tiles=\"{}\" data-places=\"{}\" data-labels=\"{}\"{layers} data-scope=\"{}\"",
                 world.to_relative_url(),
                 tiles.to_relative_url(),
                 places.to_relative_url(),
@@ -394,10 +451,22 @@ impl PlaceMapRenderContext {
         )
     }
 
+    /// End a figure with the empty credit line the explorer fills with the
+    /// credit of the layer in view. Only when the site declares layers, so a
+    /// site without them keeps its figure byte for byte. After the final
+    /// `</a>` of a linked figure, never inside it. `credit`: its layers'.
+    fn with_credit_slot(&self, mut svg: String, credit: &str) -> String {
+        if let Some(end) = svg.rfind("</figure>").filter(|_| self.has_layers()) {
+            let credit = escape_attr(credit);
+            svg.insert_str(end, &format!(r#"<p class="moss-place-map-credit" aria-live="polite">{credit}</p>"#));
+        }
+        svg
+    }
+
     /// Splice the embed-hydration handshake onto a figure's opening tag: a
     /// `data-moss-place-embed` flag and a `data-hydrate-url` pointing at the
     /// places root, carrying `scope_query` (`place=<key>` for a `style:map`
-    /// embed, `article=<url>` for the article locator) plus `embed=1` — the
+    /// embed, empty for the root, `article=<url>` for the article locator) plus `embed=1` — the
     /// two attributes `places-explorer/embed.ts`'s host-page half reads to
     /// build its own lazy iframe. The static SVG remains the no-JS and
     /// explicit-failure fallback; it stays hidden while the live map loads.
@@ -428,10 +497,11 @@ impl PlaceMapRenderContext {
         // of runtime UI text in this explorer is localised. Baking a finished
         // English sentence in here instead would leave every other locale's
         // embed with an English-only iframe title.
+        let scope_query = if scope_query.is_empty() { String::new() } else { format!("{scope_query}&") };
         let html = Self::splice_figure_attrs(
             svg,
             &format!(
-                "data-moss-place-embed data-hydrate-url=\"{root}?{scope_query}&embed=1\" data-embed-name=\"{}\"",
+                "data-moss-place-embed data-hydrate-url=\"{root}?{scope_query}embed=1\" data-embed-name=\"{}\"",
                 escape_attr(name),
             ),
         );
@@ -490,7 +560,7 @@ impl PlaceMapRenderContext {
         if key == self.namespace {
             return true;
         }
-        let Some((display, _)) = find_record(&self.gazetteer, name) else {
+        let Some((display, _)) = self.gazetteer.find(name) else {
             return false;
         };
         let mut current = term_folder_key(&self.namespace, display);
@@ -594,7 +664,7 @@ impl PlaceMapContext {
         let mut seen = HashSet::new();
         let mut places = Vec::new();
         for name in names {
-            let Some((display, record)) = find_record(gazetteer, name) else {
+            let Some((display, record)) = gazetteer.find(name) else {
                 continue;
             };
             let key = term_folder_key(namespace, display);
@@ -726,16 +796,6 @@ fn escape_attr(value: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
-}
-
-fn find_record<'a>(
-    gazetteer: &'a crate::vault::places::Gazetteer,
-    name: &str,
-) -> Option<(&'a String, &'a crate::vault::places::PlaceRecord)> {
-    let folded = term_fold(name);
-    gazetteer
-        .iter()
-        .find(|(display, _)| term_fold(display) == folded)
 }
 
 #[cfg(test)]
@@ -1008,7 +1068,7 @@ mod tests {
             key: "places".to_string(),
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
-            titles: Vec::new(), is_place: true,
+            titles: Vec::new(), counts: Vec::new(), is_place: true,
             parents: Default::default(), explorer: None, line: None,
         }];
         crate::build::terms::places::attach_parents(&mut kinds, &gaz);
@@ -1048,6 +1108,35 @@ mod tests {
         assert!(html.contains("data-places=\"/_moss/places.def456.json\""), "{html:.200}");
         assert!(html.contains("data-labels=\"/_moss/map.abc123/labels.json\""), "{html:.200}");
         assert!(html.contains("data-scope=\"places\""), "{html:.200}");
+    }
+
+    fn a_layer() -> crate::config::map_layers::MapLayer {
+        crate::config::map_layers::MapLayer {
+            name: "atlas".into(),
+            kind: crate::config::map_layers::LayerKind::Historical,
+            source: "maps/atlas".into(),
+            bbox: Some([0.0, 0.0, 1.0, 1.0]),
+            max_zoom: 17,
+            budget: None,
+            credit: None,
+            annotations: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_site_without_layers_gets_neither_data_layers_nor_a_credit_slot() {
+        let html = ready_root_context().render_term_map("places", [located_doc("Harbor")].iter(), "places/index.html", 0, false, false).unwrap();
+        assert!(!html.contains("data-layers") && !html.contains("moss-place-map-credit"), "{html:.300}");
+    }
+
+    #[test]
+    fn a_site_with_layers_points_the_explorer_at_layers_json_and_ends_each_figure_with_the_credit_slot() {
+        let context = ready_root_context().with_layers(vec![a_layer()]);
+        let html = context.render_term_map("places", [located_doc("Harbor")].iter(), "places/index.html", 0, false, false).unwrap();
+        assert!(html.contains("data-layers=\"/_moss/map.abc123/layers.json\""), "{html:.300}");
+        assert!(html.ends_with("<p class=\"moss-place-map-credit\" aria-live=\"polite\"></p></figure>"), "{}", &html[html.len().saturating_sub(120)..]);
+        let article = context.render_article_map(&["Harbor".to_string()], false, "posts/a.html", "posts/a.html", 0).unwrap();
+        assert!(article.contains("moss-place-map-credit"), "the article locator needs the slot too");
     }
 
     #[test]

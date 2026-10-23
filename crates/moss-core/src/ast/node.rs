@@ -29,9 +29,8 @@ use super::url::Url;
 
 /// Canonical callout kind. Obsidian-dialect aliases canonicalize via
 /// [`CalloutKind::from_raw`] (e.g. `tldr`/`summary` → [`CalloutKind::Abstract`]).
-/// Unknown kinds fall back to [`CalloutKind::Note`]; the parser logs at
-/// trace level (Diagnostic threading is a Phase 4 followup — see
-/// `validation::Diagnostic`, today scoped to frontmatter validation).
+/// Unknown kinds fall back to [`CalloutKind::Note`]; the written name is kept
+/// on [`Block::Callout::unknown_kind`] so the build can warn about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CalloutKind {
@@ -52,6 +51,13 @@ pub enum CalloutKind {
     Summary,
     Help,
 }
+
+/// The callout types an author can write, as they appear in the rendered
+/// `data-type`. Aliases (`tldr`, `faq`, ...) collapse into these.
+pub const CALLOUT_TYPES: &[&str] = &[
+    "note", "abstract", "info", "todo", "tip", "success", "question", "warning", "failure",
+    "danger", "bug", "example", "quote",
+];
 
 /// Per-column table alignment declared in GFM source (`|:--|` left,
 /// `|:-:|` center, `|--:|` right; a bare `|---|` is [`ColumnAlignment::None`]).
@@ -197,6 +203,14 @@ pub enum Block {
         /// Heading anchor id (slug). Computed by the parser via
         /// [`crate::heading::anchor::obsidian_heading_anchor`].
         id: Option<String>,
+        /// The heading was written `## Title {contents=end}`: it opens the part
+        /// of the page after the main sections.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        contents_end: bool,
+        /// `## Title {contents-label="Short"}`: the section's name in the
+        /// contents list, the floating bar and its panel.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        contents_label: Option<String>,
     },
     /// A paragraph of inline content.
     Paragraph(Vec<Inline>),
@@ -214,6 +228,10 @@ pub enum Block {
         kind: CalloutKind,
         fold: Option<Fold>,
         title: Option<String>,
+        /// The name the author wrote when it is not a callout type moss
+        /// knows; the callout then renders as a note.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unknown_kind: Option<String>,
         children: Vec<Block>,
     },
     /// `- item` / `1. item`. Each item is a list of blocks (so list items
@@ -346,6 +364,11 @@ pub enum Block {
         /// text. The opt-out from implicit figures puts the line back.
         #[serde(default)]
         italic_caption: bool,
+        /// The address of the link the image sits in (`[![x](i.jpg)](url)`
+        /// with a caption line under it). The renderer wraps the image, not
+        /// the caption, in it.
+        #[serde(default)]
+        link: Option<Url>,
     },
     /// Compound-link grid cell: the entire cell is a single markdown
     /// link `[inner](url)` whose `inner` is parsed as block-level content
@@ -498,12 +521,15 @@ mod tests {
             level: 1,
             children: vec![text("Hello")],
             id: Some("hello".to_string()),
+            contents_end: false,
+            contents_label: None,
         };
         match b {
             Block::Heading {
                 level,
                 children,
                 id,
+                ..
             } => {
                 assert_eq!(level, 1);
                 assert_eq!(children.len(), 1);
@@ -631,6 +657,7 @@ mod tests {
             class_names: Vec::new(),
             img_style: None,
             italic_caption: false,
+            link: None,
         };
         match b {
             Block::Figure {
@@ -663,6 +690,7 @@ mod tests {
             class_names: Vec::new(),
             img_style: None,
             italic_caption: false,
+            link: None,
         };
         let s = serde_json::to_string(&b).expect("serialize");
         let back: Block = serde_json::from_str(&s).expect("deserialize");
@@ -742,6 +770,8 @@ mod tests {
             level: 2,
             children: vec![Inline::Text("Setup".to_string())],
             id: Some("setup".to_string()),
+            contents_end: false,
+            contents_label: None,
         };
         let s = serde_json::to_string(&original).expect("serialize");
         let back: Block = serde_json::from_str(&s).expect("deserialize");
@@ -834,6 +864,7 @@ mod tests {
     #[test]
     fn block_callout_round_trips_through_serde() {
         let original = Block::Callout {
+            unknown_kind: None,
             kind: CalloutKind::Warning,
             fold: Some(Fold::Open),
             title: Some("Hey".to_string()),

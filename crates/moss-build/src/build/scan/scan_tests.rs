@@ -2271,6 +2271,7 @@ fn test_build_content_graph_indexes_files() {
     fs::write(temp_dir.join("notes.md"), "# Notes\n\n## Sub\n").unwrap();
 
     let ps = ProjectStructure {
+        passthrough_media: Vec::new(),
         root_path: temp_dir.to_string_lossy().to_string(),
         markdown_files: vec![
             FileInfo {
@@ -2334,6 +2335,7 @@ fn test_build_content_graph_indexes_html_files() {
     .unwrap();
 
     let ps = ProjectStructure {
+        passthrough_media: Vec::new(),
         root_path: temp_dir.to_string_lossy().to_string(),
         markdown_files: vec![FileInfo {
             path: "experiments/article.md".into(),
@@ -2398,6 +2400,7 @@ fn test_build_content_graph_indexes_asset_directories() {
     fs::write(temp_dir.join("assets/nested/deep.png"), b"fake-png").unwrap();
 
     let ps = ProjectStructure {
+        passthrough_media: Vec::new(),
         root_path: temp_dir.to_string_lossy().to_string(),
         markdown_files: vec![FileInfo {
             path: "hello.md".into(),

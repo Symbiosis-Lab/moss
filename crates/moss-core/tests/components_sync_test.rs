@@ -208,7 +208,7 @@ fn css_selectors_match_components_table() {
 /// `moss-grid`'s `data-columns` description must agree with what site.css
 /// actually does at the mobile breakpoint, not contradict it. The
 /// description used to say "there is no mobile collapse to a single
-/// column", while `@media (max-width: 768px) { .moss-grid[data-columns] {
+/// column", while `@media (width < 48rem) { .moss-grid[data-columns] {
 /// grid-template-columns: 1fr; } }` has always collapsed a plain grid there
 /// — the sibling `data-fits` attr's own description already said as much
 /// ("the same breakpoint that would otherwise collapse a plain grid to one
@@ -406,4 +406,26 @@ fn grid_data_columns_values_match_the_parser_cap() {
         .collect();
     let actual: Vec<String> = attr.values.iter().map(|v| v.to_string()).collect();
     assert_eq!(actual, expected);
+}
+
+/// `describe` must list every callout type an author can write, so the
+/// `data-type` values are exactly the canonical kinds `[!name]` resolves to.
+#[test]
+fn callout_data_type_values_list_every_known_callout_type() {
+    use moss_core::ast::node::{CalloutKind, CALLOUT_TYPES};
+    let callout = COMPONENTS
+        .iter()
+        .find(|c| c.class == "callout")
+        .expect("callout entry");
+    let attr = callout
+        .data_attrs
+        .iter()
+        .find(|a| a.name == "data-type")
+        .expect("data-type entry");
+    assert_eq!(attr.values, CALLOUT_TYPES);
+    for name in CALLOUT_TYPES {
+        let kind = CalloutKind::from_raw(name).unwrap_or_else(|| panic!("{name} must parse"));
+        assert_eq!(kind.as_slug(), *name, "{name} must be its own canonical slug");
+    }
+    assert_eq!(CALLOUT_TYPES.len(), 13);
 }

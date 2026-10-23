@@ -272,7 +272,7 @@ pub(super) fn fetch_artalk_comments(
         let page_key = raw.get("page_key").and_then(|p| p.as_str()).unwrap_or("");
         match translate_page_key(page_key, known_uids, url_path_to_uid) {
             Some(uid) => result.entry(uid).or_default().push(comment),
-            None => log::warn!(
+            None => log::info!(
                 target: "sync",
                 "orphan comment id={} page_key={:?} matches no article uid or url_path",
                 comment.id, page_key

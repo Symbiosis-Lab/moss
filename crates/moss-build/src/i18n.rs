@@ -35,7 +35,7 @@ pub mod site_languages;
 mod strings;
 
 /// Supported languages for UI string translation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize)]
 pub enum Language {
     #[default]
     En,
@@ -693,6 +693,10 @@ mod tests {
         assert_eq!(t(Language::ZhHans, "previous"), "上一个");
         assert_eq!(t(Language::ZhHans, "next"), "下一个");
         assert_eq!(t(Language::ZhHans, "view_in_article"), "在文章中查看");
+        assert_eq!(t(Language::En, "open_its_page"), "Open its page");
+        assert_eq!(t(Language::De, "open_its_page"), "Seite öffnen");
+        assert_eq!(t(Language::ZhHans, "open_its_page"), "打开其页面");
+        assert_eq!(t(Language::ZhHant, "open_its_page"), "開啟其頁面");
     }
 
     #[test]

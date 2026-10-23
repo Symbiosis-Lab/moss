@@ -146,7 +146,12 @@ pub async fn verify_folder_email(
         eprintln!("{}", replaced_email_notice(old, email));
     }
     identity.link_email(email.to_string());
-    identity.save(folder).map_err(|e| e.to_string())?;
+    // The service already links the key to the account, and this file is only a
+    // local copy of that fact: a folder that cannot be written (read-only, a
+    // cloud placeholder) must not fail a publish the service would accept.
+    if let Err(e) = identity.save(folder) {
+        eprintln!("Could not record {email} in this folder ({e}); the service has it, so the publish continues.");
+    }
     eprintln!("Verified {email}.");
     Ok(())
 }

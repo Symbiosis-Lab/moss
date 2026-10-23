@@ -173,7 +173,7 @@ pub(crate) fn encode_rungs(
                     Some(d)
                 }
                 Err(e) => {
-                    log::warn!(
+                    log::info!(
                         "[image] cannot determine dimensions for rung encode of {}: {}",
                         relative_webp, e
                     );
@@ -339,7 +339,7 @@ pub(crate) fn encode_rungs(
             );
         });
         if let Err(e) = merged {
-            log::warn!("[image] failed to write rung transform record: {}", e);
+            log::info!("[image] failed to write rung transform record: {}", e);
         }
         outcomes.push(RungOutcome { width: rung, oid: Some(oid), error: None });
     }

@@ -31,7 +31,7 @@ pub(crate) fn migrate_build_tree(mp: &MossPaths) {
         match std::fs::rename(&legacy, &per_machine) {
             Ok(()) => log::info!("[tree] moved {} to {}", legacy.display(), per_machine.display()),
             Err(e) => {
-                log::warn!("[tree] could not move {} aside ({e}); building beside it", legacy.display());
+                log::info!("[tree] could not move {} aside ({e}); building beside it", legacy.display());
                 return;
             }
         }
@@ -54,7 +54,7 @@ pub(crate) fn migrate_build_tree(mp: &MossPaths) {
         // allow:unlink a root the sync client renamed aside, or the legacy root, after harvest
         match remove_output_dir_all(&root) {
             Ok(()) => log::info!("[tree] harvested and removed {}", root.display()),
-            Err(e) => log::warn!("[tree] harvested {} but could not remove it: {e}", root.display()),
+            Err(e) => log::info!("[tree] harvested {} but could not remove it: {e}", root.display()),
         }
     }
 }
@@ -120,7 +120,7 @@ fn merge(from: &Path, to: &Path, verify: bool) {
                     continue;
                 }
                 if verify && ObjectStore::hash_file(&file.path()).ok().as_deref() != Some(name_str) {
-                    log::warn!("[tree] {} does not hash to its name — left behind", file.path().display());
+                    log::info!("[tree] {} does not hash to its name — left behind", file.path().display());
                     continue;
                 }
                 if dest.parent().is_none_or(|p| create_output_dir_all(p).is_err()) {

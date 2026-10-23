@@ -527,7 +527,7 @@ where
             // rate limit with the page host and must pace independently.
             let asset_host = host_of(media_url);
             state.pacer.wait(&asset_host).await;
-            let download_result = download_asset(media_url, &assets_dir, &config.user_agent).await;
+            let download_result = download_asset(media_url, &assets_dir, &config.user_agent, Some(&url)).await;
             observe_pace(&mut state.pacer, &asset_host, &download_result);
             match download_result {
                 Ok(filename) => {
@@ -556,6 +556,7 @@ where
                     &file_url,
                     &assets_dir,
                     &config.user_agent,
+                    Some(&url),
                     config.linked_file_max_bytes,
                     filename,
                 )

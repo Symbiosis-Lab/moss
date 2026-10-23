@@ -293,7 +293,7 @@ pub(crate) fn lightbox_html(lang: crate::i18n::Language) -> String {
     </div>
     <div class="lightbox-caption">
       <p class="lightbox-title"></p>
-      <a class="lightbox-article-link" href="">{view_in_article} &rarr;</a>
+      <a class="lightbox-article-link" href="" data-article-label="{view_in_article} &rarr;" data-page-label="{open_its_page} &rarr;">{view_in_article} &rarr;</a>
     </div>
     <button class="lightbox-nav lightbox-prev" aria-label="{previous_label}">&lsaquo;</button>
     <button class="lightbox-nav lightbox-next" aria-label="{next_label}">&rsaquo;</button>
@@ -301,6 +301,7 @@ pub(crate) fn lightbox_html(lang: crate::i18n::Language) -> String {
         viewer_label = crate::i18n::t(lang, "image_viewer"),
         close_label = crate::i18n::t(lang, "close"),
         view_in_article = crate::i18n::t(lang, "view_in_article"),
+        open_its_page = crate::i18n::t(lang, "open_its_page"),
         previous_label = crate::i18n::t(lang, "previous"),
         next_label = crate::i18n::t(lang, "next"),
     )

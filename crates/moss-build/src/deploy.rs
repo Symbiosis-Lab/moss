@@ -386,6 +386,9 @@ pub fn refuse_publish(folder_path: &str) -> Result<(), String> {
         if !projection.missing_references.is_empty() {
             return Err(refusal_text(projection.missing_references.len()));
         }
+        if !projection.drafts_linked.is_empty() {
+            return Err(drafts_linked_refusal_text(&projection.drafts_linked));
+        }
     }
     if let Some(promised) = records.promised_dead_links(folder_path) {
         if !promised.in_cloud.is_empty() {
@@ -437,6 +440,23 @@ pub(crate) fn refusal_text(count: usize) -> String {
     format!(
         "Nothing published — {subject}. A published site can't show a broken file. \
          Fix these, then publish again."
+    )
+}
+
+/// The refusal for links from published pages to drafts. A draft is not
+/// published, so each of these would be a dead link on the live site.
+pub(crate) fn drafts_linked_refusal_text(links: &[crate::build::types::DraftLinkOccurrence]) -> String {
+    let head = if links.len() == 1 {
+        "1 link goes to a draft".to_string()
+    } else {
+        format!("{} links go to drafts", links.len())
+    };
+    let lines = removal_gate::capped_lines(links, |l| {
+        format!("`{}` links to `{}`, and `{}` says `draft: true`.", l.source_path, l.reference, l.draft_source)
+    });
+    format!(
+        "Nothing published — {head}:\n{lines}Drafts are not published. Remove the link, or take \
+         `draft: true` off the page, then publish again."
     )
 }
 

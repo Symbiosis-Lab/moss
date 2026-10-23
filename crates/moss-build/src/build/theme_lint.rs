@@ -1,4 +1,5 @@
-//! Lints user theme CSS against moss's contract vocabulary.
+//! Lints user theme CSS against moss's contract vocabulary, and walks a
+//! stylesheet into its rules ([`style_rules`]) for the build and the CLI.
 //!
 //! Best-effort scan: strips CSS block comments, then checks three surfaces
 //! against `moss-core`'s contract tables:
@@ -48,6 +49,7 @@
 //! - Nearest-name suggestions use plain Levenshtein distance over the known
 //!   vocabulary; ties resolve to whichever candidate sorts first.
 
+use crate::infra::edit_distance::levenshtein;
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
@@ -194,26 +196,6 @@ fn nearest_name<'a>(needle: &str, candidates: impl Iterator<Item = &'a str>) -> 
         .unwrap_or_else(|| needle.to_string())
 }
 
-/// Classic dynamic-programming Levenshtein edit distance over bytes (all
-/// candidate vocabulary here is ASCII, so byte distance == char distance).
-fn levenshtein(a: &str, b: &str) -> usize {
-    let a = a.as_bytes();
-    let b = b.as_bytes();
-    let mut prev: Vec<usize> = (0..=b.len()).collect();
-    let mut curr = vec![0usize; b.len() + 1];
-
-    for i in 1..=a.len() {
-        curr[0] = i;
-        for j in 1..=b.len() {
-            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
-            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-
-    prev[b.len()]
-}
-
 /// Does the CSS contain `pattern` as a complete class reference?
 /// A complete reference is followed by a character that is NOT a CSS-class
 /// continuation character (so `.moss-card-grid-overlay` does NOT match `.moss-card-grid`).
@@ -244,6 +226,117 @@ fn strip_comments(css: &str) -> String {
             }
         } else {
             out.push(c);
+        }
+    }
+    out
+}
+
+/// One style rule of a stylesheet, with the context needed to reproduce its effect.
+pub(crate) struct StyleRule<'a> {
+    /// The `@media`/`@supports`/`@layer` conditions the rule sits inside,
+    /// outermost first. Without these a copied rule silently applies at every
+    /// width — the single most common way a theme override goes wrong.
+    pub conditions: Vec<&'a str>,
+    /// The comment block immediately above the rule, if any.
+    pub comment: Option<&'a str>,
+    /// The selector list, trimmed.
+    pub prelude: &'a str,
+    /// Selector list plus declaration block, verbatim.
+    pub rule: &'a str,
+    /// Byte offset of the selector list in the sheet.
+    pub start: usize,
+}
+
+/// Walk a stylesheet by brace depth, collecting every style rule along with the
+/// at-rule conditions enclosing it.
+///
+/// Deliberately not a real CSS parser. It has one job — slice out source spans
+/// — and a parser would drop the comments, which are half the value.
+// `i` walks bytes and can sit mid-character, but every slice below is taken at a
+// point where `bytes[i]` matched an ASCII delimiter (`/` `*` `{` `}` `;`) or at
+// `bytes.len()`. An ASCII byte never occurs inside a multi-byte UTF-8 sequence,
+// so those indices — and `prelude_start`, which is only ever assigned one of
+// them — are always char boundaries. None of these can panic.
+#[allow(clippy::string_slice)]
+pub(crate) fn style_rules<'a>(css: &'a str) -> Vec<StyleRule<'a>> {
+    let mut out = Vec::new();
+    let bytes = css.as_bytes();
+    // Stack of open at-rule preludes (`@media (max-width: 32rem)`), so a nested
+    // rule reports every condition it is under.
+    let mut conditions: Vec<&'a str> = Vec::new();
+    // Start of the current prelude — selector list or at-rule header.
+    let mut prelude_start = 0usize;
+    // End of the last comment block seen at the current position, and its span.
+    let mut pending_comment: Option<&'a str> = None;
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        match bytes[i] {
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                let start = i;
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                i = (i + 2).min(bytes.len());
+                // Only a comment sitting alone above a rule is context for it.
+                // One trailing a declaration (`.a { … } /* note */`) belongs to
+                // the line it is on, and hoisting it above the next rule would
+                // put unrelated prose in front of half the output. The tell is
+                // a newline between the previous `}` and the comment.
+                // A comment inside a selector list stays where it is.
+                let gap = &css[prelude_start..start];
+                if gap.trim().is_empty() {
+                    pending_comment = (prelude_start == 0 || gap.contains('\n')).then(|| css[start..i].trim_end());
+                    prelude_start = i;
+                }
+            }
+            b'{' => {
+                let prelude = css[prelude_start..i].trim();
+                let rule_start = prelude_start + (css[prelude_start..].len() - css[prelude_start..].trim_start().len());
+                if prelude.starts_with('@') {
+                    // An at-rule block: descend, remembering the condition.
+                    conditions.push(prelude);
+                    i += 1;
+                    prelude_start = i;
+                    pending_comment = None;
+                    continue;
+                }
+                // A style rule: find its matching close brace. Declaration
+                // blocks do not nest in moss's sheets, so depth-1 suffices.
+                let mut depth = 1;
+                i += 1;
+                while i < bytes.len() && depth > 0 {
+                    match bytes[i] {
+                        b'{' => depth += 1,
+                        b'}' => depth -= 1,
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                out.push(StyleRule {
+                    conditions: conditions.clone(),
+                    comment: pending_comment,
+                    prelude,
+                    rule: css[rule_start..i].trim(),
+                    start: rule_start,
+                });
+                prelude_start = i;
+                pending_comment = None;
+            }
+            b'}' => {
+                conditions.pop();
+                i += 1;
+                prelude_start = i;
+                pending_comment = None;
+            }
+            b';' => {
+                // A statement at this level (`@import`, `@layer a, b;`).
+                i += 1;
+                prelude_start = i;
+                pending_comment = None;
+            }
+            _ => i += 1,
         }
     }
     out

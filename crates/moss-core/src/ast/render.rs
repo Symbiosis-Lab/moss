@@ -12,7 +12,7 @@
 
 use super::document::{BlockMeta, Document};
 use super::footnotes::{self, FootnoteCtx};
-use super::hooks::{escape_attr, escape_text, RenderHooks};
+use super::hooks::{escape_attr, escape_text, HeadingMarks, RenderHooks};
 use super::node::{Block, ColumnAlignment, Fold, Inline};
 use super::url::Url;
 
@@ -266,10 +266,13 @@ fn render_block<H: RenderHooks + ?Sized>(
             level,
             children,
             id,
+            contents_end,
+            contents_label,
         } => {
             let mut content = String::new();
             render_inlines(hooks, &mut content, children, fnotes);
-            hooks.render_heading(out, *level, id.as_deref(), meta.source_line, &content);
+            let marks = HeadingMarks { id: id.as_deref(), contents_end: *contents_end, contents_label: contents_label.as_deref() };
+            hooks.render_heading(out, *level, marks, meta.source_line, &content);
             out.push('\n');
         }
         Block::Paragraph(children) => {
@@ -280,6 +283,7 @@ fn render_block<H: RenderHooks + ?Sized>(
             out.push_str("</p>\n");
         }
         Block::Callout {
+            unknown_kind: _,
             kind,
             fold,
             title,
@@ -300,7 +304,16 @@ fn render_block<H: RenderHooks + ?Sized>(
             // callouts hadn't moved to a typed `<div>` shape yet at the
             // time; downstream consumer (iframe-bridge) accepts the attr
             // on any wrapper element).
-            out.push_str(r#"<div class="callout" data-type=""#);
+            // A folded callout is a native <details> (keyboard and
+            // screen-reader behaviour for free); the title is its <summary>.
+            let (wrapper, title_tag) = if fold.is_some() {
+                ("details", "summary")
+            } else {
+                ("div", "div")
+            };
+            out.push_str("<");
+            out.push_str(wrapper);
+            out.push_str(r#" class="callout" data-type=""#);
             out.push_str(kind.as_slug());
             out.push_str(r#"""#);
             push_source_line_attr(out, meta.source_line);
@@ -312,6 +325,9 @@ fn render_block<H: RenderHooks + ?Sized>(
                 out.push_str(r#" data-fold=""#);
                 out.push_str(fold_attr);
                 out.push_str(r#"""#);
+                if *fold_state == Fold::Open {
+                    out.push_str(" open");
+                }
             }
             out.push_str(">\n");
             // Title slot: prefer the parser-extracted title; fall back
@@ -322,9 +338,13 @@ fn render_block<H: RenderHooks + ?Sized>(
                 .filter(|t| !t.is_empty())
                 .map(|t| escape_text(t))
                 .unwrap_or_else(|| kind.default_title().to_string());
-            out.push_str(r#"  <div class="callout-title">"#);
+            out.push_str(r#"  <"#);
+            out.push_str(title_tag);
+            out.push_str(r#" class="callout-title">"#);
             out.push_str(&display_title);
-            out.push_str("</div>\n");
+            out.push_str("</");
+            out.push_str(title_tag);
+            out.push_str(">\n");
             // The box itself always survives: its title is text the AUTHOR
             // typed, and hoisting a footnote definition moves the note — it
             // must not delete the prose around it. What goes is the empty
@@ -336,7 +356,9 @@ fn render_block<H: RenderHooks + ?Sized>(
                 out.push_str(&body);
                 out.push_str("</div>\n");
             }
-            out.push_str("</div>\n");
+            out.push_str("</");
+            out.push_str(wrapper);
+            out.push_str(">\n");
         }
         Block::List {
             ordered,
@@ -430,7 +452,10 @@ fn render_block<H: RenderHooks + ?Sized>(
             }
         }
         Block::CodeBlock { lang, value } => {
-            out.push_str("<pre");
+            // `tabindex`: a long line scrolls the block sideways, and only a
+            // focusable box can be scrolled from the keyboard — same as the
+            // table wrapper below.
+            out.push_str("<pre tabindex=\"0\"");
             push_source_line_attr(out, meta.source_line);
             out.push('>');
             match lang {
@@ -567,6 +592,7 @@ fn render_block<H: RenderHooks + ?Sized>(
             class_names,
             img_style,
             italic_caption: _,
+            link,
         } => {
             // Image-only paragraphs promoted at parse time become
             // Block::Figure: a `<figure class="moss-image">` wrap around the
@@ -630,6 +656,8 @@ fn render_block<H: RenderHooks + ?Sized>(
             // Render the inner image. Pattern-match the constrained shape;
             // any other inline falls back to the standard inline path so
             // the renderer never panics on a malformed Figure.
+            let mut img_html = String::new();
+            let img_out = &mut img_html;
             match image {
                 Inline::Image {
                     src, alt, title, ..
@@ -643,7 +671,7 @@ fn render_block<H: RenderHooks + ?Sized>(
                         });
                         let alt = if repeats_caption { "" } else { alt.as_str() };
                         hooks.render_image(
-                            out,
+                            img_out,
                             r,
                             alt,
                             title.as_deref(),
@@ -656,19 +684,28 @@ fn render_block<H: RenderHooks + ?Sized>(
                                 false,
                                 "Url::Unresolved({s:?}) reached Block::Figure renderer — visit_urls_mut missing or buggy"
                             );
-                        out.push_str(r#"<img src=""#);
-                        out.push_str(&escape_attr(s));
-                        out.push_str(r#"" alt=""#);
-                        out.push_str(&escape_attr(alt));
-                        out.push_str(r#"" />"#);
+                        img_out.push_str(r#"<img src=""#);
+                        img_out.push_str(&escape_attr(s));
+                        img_out.push_str(r#"" alt=""#);
+                        img_out.push_str(&escape_attr(alt));
+                        img_out.push_str(r#"" />"#);
                     }
                 },
                 _ => {
                     // Defensive: a non-Image inline in a Figure violates
                     // the parser-enforced shape, but the renderer must
                     // still emit something rather than crash.
-                    render_inline(hooks, out, image, fnotes);
+                    render_inline(hooks, img_out, image, fnotes);
                 }
+            }
+            // A linked picture: the link holds the image, never the caption.
+            match link {
+                Some(Url::Resolved(r)) => hooks.render_link(out, r, false, &img_html),
+                Some(Url::Unresolved(s)) => {
+                    debug_assert!(false, "Url::Unresolved({s:?}) reached a Block::Figure link — visit_urls_mut missing or buggy");
+                    out.push_str(&img_html);
+                }
+                None => out.push_str(&img_html),
             }
             if let Some(cap_inlines) = caption {
                 if !cap_inlines.is_empty() {

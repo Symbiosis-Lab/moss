@@ -53,9 +53,11 @@ pub fn is_not_found_address(rel: &str) -> bool {
 }
 
 /// Is this output path an address a visitor can have stored — anything outside
-/// the content-addressed, rotating `_moss/` namespace?
+/// the content-addressed, rotating `_moss/` namespace, and not one of moss's own
+/// `.moss-*` sidecar files, which nothing links to?
 pub fn is_public_address(path: &str) -> bool {
-    !path.starts_with("_moss/")
+    let name = path.rsplit('/').next().unwrap_or(path);
+    !path.starts_with("_moss/") && !name.starts_with(".moss-")
 }
 
 /// The URL an output path is served at. Only an `index.html` is served at its
@@ -159,6 +161,9 @@ const THEME_MOUNT: &str = "_moss/theme";
 /// `search_mount_url` are both built on it; the client runtime reads the URL
 /// form off `search_mount_url()`.
 const SEARCH_MOUNT: &str = "_moss/pagefind";
+
+/// Where the published copy of the site's source lives.
+pub const SOURCE_COPY_MOUNT: &str = "_moss/source";
 
 impl ServedPath {
     /// Normalize a source-derived path. Slugs directory segments, preserves
@@ -296,7 +301,7 @@ impl ServedPath {
     /// `compute_binary_hash` produces, 16 chars, though any non-empty
     /// lowercase-hex string is accepted so a future longer digest does not
     /// need a new constructor); `filename` is a bare basename — no `/`, no
-    /// `..` — ending `.svg` or `.json`.
+    /// `..` — ending `.svg`, `.json` or `.txt`.
     pub fn for_place_map_asset(assets_hash: &str, filename: &str) -> Result<Self, ServedPathError> {
         if assets_hash.is_empty() {
             return Err(ServedPathError::InvalidInput("place-map assets hash is empty"));
@@ -307,10 +312,32 @@ impl ServedPath {
         if filename.is_empty() || filename.contains('/') || filename.contains("..") {
             return Err(ServedPathError::InvalidInput("place-map asset filename must be a bare basename"));
         }
-        if !(filename.ends_with(".svg") || filename.ends_with(".json")) {
-            return Err(ServedPathError::InvalidInput("place-map asset filename must end .svg or .json"));
+        if !(filename.ends_with(".svg") || filename.ends_with(".json") || filename.ends_with(".txt")) {
+            return Err(ServedPathError::InvalidInput("place-map asset filename must end .svg, .json or .txt"));
         }
         Ok(ServedPath(format!("{PLACE_MAP_ASSET_PREFIX}{assets_hash}/{filename}")))
+    }
+
+    /// A file of a detail layer inside the place-map directory:
+    /// `layers/<layer>/<rest>`. `layer` is a config key (letters, digits, `-`,
+    /// `_`); `rest` is `index.json`, `crops/<hex>.jpg` or `<level>/<i>/<j>.jpg`.
+    pub fn for_place_map_layer_file(assets_hash: &str, layer: &str, rest: &str) -> Result<Self, ServedPathError> {
+        let name_ok = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        if !name_ok(layer) {
+            return Err(ServedPathError::InvalidInput("layer name must be letters, digits, - and _"));
+        }
+        let dir = Self::for_place_map_asset(assets_hash, "layers.json")?;
+        let dir = dir.as_str().trim_end_matches("layers.json");
+        let valid_rest = rest == "index.json"
+            || rest.strip_prefix("crops/").and_then(|name| name.strip_suffix(".jpg")).is_some_and(|stem| !stem.is_empty() && stem.chars().all(|c| c.is_ascii_hexdigit()))
+            || rest.strip_suffix(".jpg").is_some_and(|stem| {
+                let parts: Vec<&str> = stem.split('/').collect();
+                parts.len() == 3 && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+            });
+        if !valid_rest {
+            return Err(ServedPathError::InvalidInput("layer file must be index.json, crops/<hex>.jpg or <level>/<i>/<j>.jpg"));
+        }
+        Ok(ServedPath(format!("{dir}layers/{layer}/{rest}")))
     }
 
     /// Site favicon. `ext` is a bare extension (no dot, no slash).
@@ -378,6 +405,17 @@ impl ServedPath {
             return Err(ServedPathError::InvalidInput("welcome-email edition must be a bare language-tree name"));
         }
         Ok(ServedPath(format!(".moss-email/welcome.{edition}.json")))
+    }
+
+    /// One file of the published source copy, `_moss/source/<rel>`, at the
+    /// author's own relative path: not slugged, because the copy is read by
+    /// path and its README names files as the author wrote them.
+    pub fn for_source_copy(rel: &str) -> Result<Self, ServedPathError> {
+        let rel = Self::normalize_relative(rel)?;
+        if rel.split('/').any(|segment| segment.starts_with('.')) {
+            return Err(ServedPathError::InvalidInput("source copy path has a hidden segment"));
+        }
+        Ok(ServedPath(format!("{}/{}", SOURCE_COPY_MOUNT, rel)))
     }
 
     /// The redirect table a host that can answer a real 301 reads.
@@ -492,6 +530,20 @@ impl ServedPath {
     /// Output: `_moss/theme/script.{hash}.js`.
     pub fn for_custom_script_hashed(hash: &str) -> Self {
         ServedPath(format!("{}/script.{}.js", THEME_MOUNT, hash))
+    }
+
+    /// A theme JavaScript file with its content hash in the name. `rel` is the
+    /// file's path under `.moss/theme/` (`lib/kernel.mjs`); the output is always
+    /// `_moss/theme/lib/kernel.{hash}.js`, whatever the source extension, so a
+    /// static host with no `.mjs` MIME mapping still serves a JavaScript type.
+    pub fn for_theme_script_hashed(rel: &str, hash: &str) -> Result<Self, ServedPathError> {
+        Self::validate_source(rel)?;
+        let normalized = moss_core::slug::normalize_separators(rel.trim());
+        let stem = normalized
+            .strip_suffix(".mjs")
+            .or_else(|| normalized.strip_suffix(".js"))
+            .ok_or(ServedPathError::InvalidInput("theme script must end in .js or .mjs"))?;
+        Ok(ServedPath(format!("{}/{}.{}.js", THEME_MOUNT, stem, hash)))
     }
 
     /// Places-explorer data file, content-hashed. Output:
@@ -941,6 +993,8 @@ mod tests {
         assert_eq!(tile.as_str(), "_moss/map.87ba30f2b3c09ca9/tile-20-12.svg");
         let index = ServedPath::for_place_map_asset("87ba30f2b3c09ca9", "tiles.json").unwrap();
         assert_eq!(index.as_str(), "_moss/map.87ba30f2b3c09ca9/tiles.json");
+        let notice = ServedPath::for_place_map_asset("87ba30f2b3c09ca9", "NOTICE.txt").unwrap();
+        assert_eq!(notice.as_str(), "_moss/map.87ba30f2b3c09ca9/NOTICE.txt");
     }
 
     #[test]
@@ -1218,6 +1272,16 @@ mod tests {
     fn for_custom_script_hashed_embeds_hash() {
         let sp = ServedPath::for_custom_script_hashed("abcd1234ef567890");
         assert_eq!(sp.as_str(), "_moss/theme/script.abcd1234ef567890.js");
+    }
+
+    #[test]
+    fn for_theme_script_hashed_forces_js_extension() {
+        let sp = ServedPath::for_theme_script_hashed("lib/kernel.mjs", "abcd").unwrap();
+        assert_eq!(sp.as_str(), "_moss/theme/lib/kernel.abcd.js");
+        let sp = ServedPath::for_theme_script_hashed("kernel.js", "abcd").unwrap();
+        assert_eq!(sp.as_str(), "_moss/theme/kernel.abcd.js");
+        assert!(ServedPath::for_theme_script_hashed("../kernel.js", "abcd").is_err());
+        assert!(ServedPath::for_theme_script_hashed("kernel.css", "abcd").is_err());
     }
 
     #[test]

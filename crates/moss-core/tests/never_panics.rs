@@ -151,8 +151,8 @@ proptest! {
     }
 
     #[test]
-    fn is_all_display_keywords_never_panics(text in any_str()) {
-        let _ = moss_core::media::is_all_display_keywords(&text);
+    fn read_image_words_never_panics(text in any_str()) {
+        let _ = moss_core::media::read_image_words(&text);
     }
 
     #[test]

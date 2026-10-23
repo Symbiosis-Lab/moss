@@ -568,7 +568,7 @@ pub(crate) fn should_skip(
                     );
                 });
                 if let Err(e) = merged {
-                    log::warn!("[format-probe] failed to write transform record: {}", e);
+                    log::info!("[format-probe] failed to write transform record: {}", e);
                 }
             }
         }
@@ -1044,7 +1044,7 @@ pub(crate) fn convert_single_image(
             // Pattern: Bazel's FindMissingBlobs invariant
             // (bazel.build/remote/caching).
             if let Err(e) = objects.link_to(&cached_oid, &output_webp) {
-                log::warn!("Failed to link cached WebP to staging: {}", e);
+                log::info!("Failed to link cached WebP to staging: {}", e);
             }
             // Rungs ride the warm path too: registered rungs must land in
             // THIS build's staging even when the base is a cache hit — on
@@ -1070,7 +1070,7 @@ pub(crate) fn convert_single_image(
                 rungs,
             };
         } else {
-            log::warn!(
+            log::info!(
                 "Cached WebP for {} failed size check (recorded={}, actual={}) — evicting",
                 filename, recorded_size, actual_size
             );
@@ -1322,7 +1322,7 @@ pub(crate) fn convert_single_image(
         );
     });
     if let Err(e) = merged {
-        log::warn!("Failed to write transform record: {}", e);
+        log::info!("Failed to write transform record: {}", e);
     }
 
     // ---- Step 10: ladder rung encodes (after base success only) ----
@@ -1764,7 +1764,7 @@ fn ensure_staged(objects: &cache::ObjectStore, oid: &str, out: &Path, url: &str)
     match objects.link_to(oid, out) {
         Ok(()) => true,
         Err(e) => {
-            log::warn!("Failed to link webp to staging {}: {}", url, e);
+            log::info!("Failed to link webp to staging {}: {}", url, e);
             false
         }
     }
@@ -2019,7 +2019,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                     return ItemStep::nothing_shipped(Vec::new());
                 }
                 Err(e) => {
-                    log::warn!("Failed to hash image {}: {}", rel_source_str, e);
+                    log::info!("Failed to hash image {}: {}", rel_source_str, e);
                     return ItemStep::base_failed(&rel_source_str, &relative_webp, registered_rungs(), e);
                 }
             }
@@ -2109,7 +2109,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             None => {
                 // singleflight returned None — another concurrent task panicked.
                 // Treat as a transient failure; log and continue.
-                log::warn!("Image singleflight returned None for {}", filename);
+                log::info!("Image singleflight returned None for {}", filename);
                 Err(format!("singleflight returned None for {}", filename))
             }
         };
@@ -2190,7 +2190,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                         // placeholder) + an advisory; the base success above
                         // stands and later rungs were still attempted.
                         if let Some(err) = rung_err {
-                            log::warn!(
+                            log::info!(
                                 "Rung {}w conversion failed for {}: {}",
                                 r.width, filename, err
                             );
@@ -2220,7 +2220,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                         if outcome.rungs.iter().any(|r| r.width == rw) {
                             continue;
                         }
-                        log::warn!(
+                        log::info!(
                             "Registered rung {} was not produced by the encode for {} — marking failed",
                             rung_rel, filename
                         );
@@ -2256,7 +2256,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
                 if is_headless {
                     crate::cli_eprintln!("  [{}/{}] Failed: {}: {}", index + 1, total, filename, e);
                 }
-                log::warn!("Image conversion failed for {}: {}", filename, e);
+                log::info!("Image conversion failed for {}: {}", filename, e);
                 ItemStep::base_failed(&rel_source_str, &relative_webp, registered_rungs(), e)
             }
         }
@@ -2313,7 +2313,7 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
     // the same file concurrently and holds only video entries — a plain overwrite
     // would clobber whichever category was written first. Merge preserves both.
     if let Err(e) = bg_hash_index.into_inner().unwrap().save_merging(&hash_index_path) {
-        log::warn!("Failed to save image HashIndex: {}", e);
+        log::info!("Failed to save image HashIndex: {}", e);
     }
 
     // Cancelled mid-run: register whatever landed so the next rebuild's stale
@@ -2539,7 +2539,7 @@ fn emit_image_outputs_via_channel(
         // output is still on disk; the coordinator failure is already propagated
         // through the BackgroundHandle machinery.
         if let Err(e) = tx.blocking_send(msg) {
-            log::warn!("[image] Failed to register .webp in coordinator: {}", e);
+            log::info!("[image] Failed to register .webp in coordinator: {}", e);
         }
     }
     if suppressed_absent_count > 0 {

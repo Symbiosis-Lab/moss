@@ -273,10 +273,10 @@ pub fn emit_redirect_table(
     match existing {
         Some(_) => {
             if let Err(e) = save_redirects(paths, &merged) {
-                log::warn!("Failed to save redirects.json: {}", e);
+                log::info!("Failed to save redirects.json: {}", e);
             }
         }
-        None => log::warn!(
+        None => crate::build::cli_output::log_note!(
             "redirects.json could not be read (still in the cloud?) — emitting the \
              redirects this build can see, but NOT rewriting the file: overwriting it \
              from an empty history would erase every earlier redirect"
@@ -460,7 +460,7 @@ pub fn load_redirects(paths: &crate::moss_paths::MossPaths) -> Option<BTreeMap<S
         Ok(Some(contents)) => Some(serde_json::from_str(&contents).unwrap_or_default()),
         Ok(None) => Some(BTreeMap::new()),
         Err(e) => {
-            log::warn!("could not read {} ({e})", path.display());
+            log::info!("could not read {} ({e})", path.display());
             None
         }
     };
@@ -1182,7 +1182,7 @@ mod tests {
         // Exactly the one stub the site had already earned, and no other: a
         // negative assertion naming a URL would pass just as well if the
         // baseline logic were absent altogether.
-        let emitted: Vec<&String> = sealed.files().keys().collect();
+        let emitted: Vec<&String> = sealed.all_files().keys().collect();
         assert_eq!(
             emitted,
             vec!["ancient/page/index.html"],

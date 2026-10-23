@@ -201,7 +201,7 @@ impl ObjectStore {
         // allow:unlink a temp inside the CAS shard dir, not staging
         let _ = fs::remove_file(tmp);
         if won { return Ok(()) }
-        log::warn!("CAS store of {} failed: {}", oid, self.failure_context(dest, None));
+        log::info!("CAS store of {} failed: {}", oid, self.failure_context(dest, None));
         Err(format!("Failed to publish blob {}: {}", oid, rename_err))
     }
 
@@ -402,7 +402,7 @@ impl ObjectStore {
             Presence::Present => Ok(()),
             Presence::Unverified(e) => Err(format!("Unverifiable blob {}: {}", oid, e)),
             Presence::Absent | Presence::Evicted => {
-                log::warn!("[CAS] unusable blob detected, removing: {}", oid);
+                log::info!("[CAS] unusable blob detected, removing: {}", oid);
                 // allow:unlink an unusable blob under cache/objects, not staging
                 let _ = fs::remove_file(&path);
                 Err(format!("Unusable blob: {}", oid))

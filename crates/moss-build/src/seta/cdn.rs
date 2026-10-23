@@ -61,6 +61,18 @@ impl CdnStatus {
         matches!(self, Self::Active)
     }
 
+    /// What the certificate is doing, in words for a person.
+    pub fn certificate_phrase(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Validating => "being issued",
+            Self::PendingDcv => "waiting for the hosting service to confirm the validation records",
+            Self::Failed => "failed",
+            Self::Disabled => "not started",
+            Self::Unknown => "unknown",
+        }
+    }
+
     /// The wire word, for persisting into `[deployment].observed`. `Unknown`
     /// has none — the original token was dropped at parse time, and storing a
     /// word this build invented would be worse than storing nothing.

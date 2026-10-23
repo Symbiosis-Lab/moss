@@ -1,9 +1,14 @@
 //! WCAG 2 relative luminance and contrast ratio, the one copy the build's
-//! colour code shares (image-derived card colours and section text colours).
+//! colour code shares (image-derived card colours, section text colours and hero ink).
 
 /// sRGB channel (0.0–1.0) to linear light.
 pub(crate) fn srgb_to_linear(c: f32) -> f32 {
     if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+}
+
+/// Linear light to an sRGB channel (0.0–1.0).
+pub(crate) fn linear_to_srgb(c: f32) -> f32 {
+    if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
 }
 
 /// WCAG 2.x relative luminance of an sRGB colour, channels in 0.0–1.0.

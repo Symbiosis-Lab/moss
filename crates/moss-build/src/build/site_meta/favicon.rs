@@ -134,7 +134,7 @@ pub fn ground_default_favicon(svg: &str) -> String {
     if out.contains(DEFAULT_FAVICON_VIEWBOX_ATTR) {
         out = out.replacen(DEFAULT_FAVICON_VIEWBOX_ATTR, &view_box, 1);
     } else {
-        log::warn!(
+        log::info!(
             "default favicon viewBox is not {} — shipping it uncropped; \
              update DEFAULT_FAVICON_VIEWBOX_ATTR",
             DEFAULT_FAVICON_VIEWBOX_ATTR
@@ -144,14 +144,14 @@ pub fn ground_default_favicon(svg: &str) -> String {
     if let Some(at) = out.find("<path") {
         out.insert_str(at, &ground.circle());
     } else {
-        log::warn!("default favicon has no <path> to put the round ground under — shipping it without one");
+        log::info!("default favicon has no <path> to put the round ground under — shipping it without one");
     }
 
     if out.contains(DEFAULT_FAVICON_DARK_RULE) {
         let dark = format!("{}circle{{fill:{}}}", DEFAULT_FAVICON_DARK_RULE, ground.dark);
         out = out.replacen(DEFAULT_FAVICON_DARK_RULE, &dark, 1);
     } else {
-        log::warn!(
+        log::info!(
             "default favicon has no `{}` rule — the round ground will stay light in dark mode",
             DEFAULT_FAVICON_DARK_RULE
         );

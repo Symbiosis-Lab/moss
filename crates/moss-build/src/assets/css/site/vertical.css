@@ -312,6 +312,14 @@ body[data-typesetting="vertical"] .moss-table-scroll {
   writing-mode: inherit;
 }
 
+/* A collage's tracks stay horizontal (site.css), so a tile that holds text
+   takes the page's reading direction back. Its inline axis then runs down the
+   row, which must grow to fit it, so it is no width container. */
+[data-typesetting="vertical"] .moss-grid[data-collage] .moss-grid-card:not([data-tile="picture"]) {
+  writing-mode: vertical-rl;
+  container-type: normal;
+}
+
 /* The three `.moss-card*` rules below asked for `--moss-font-serif`, which no
    token defines. The reads were invalid at computed-value time, so these cards
    have always rendered in the inherited body face — never a serif one. Dropping
@@ -391,7 +399,7 @@ body[data-typesetting="vertical"] .moss-table-scroll {
 
 /* Preserve authored multi-column tracks at phone width, where inline space is
    viewport height. A single wrapped column keeps its mobile stretch. */
-@media (max-width: 768px) {
+@media (width < 48rem) {
   [data-typesetting="vertical"] .moss-grid:is([data-columns="2"], [data-columns="3"], [data-columns="4"]) {
     --_grid-wrap: var(--_grid-template);
   }
@@ -447,10 +455,10 @@ body[data-typesetting="vertical"] .moss-table-scroll {
   -webkit-line-clamp: none;
 }
 
-/* The horizontal two-line clamp's SIZE limit — the base rule's
+/* The horizontal three-line clamp's SIZE limit — the base rule's
    `max-block-size`, still in effect after the reset above — is a valid
-   rotation for grid and `:::grid` cells (it clamps to two columns instead of
-   two lines), but a LIST card is a column-group whose block length is free:
+   rotation for grid and `:::grid` cells (it clamps to three columns instead of
+   three lines), but a LIST card is a column-group whose block length is free:
    a full description costs columns, not band height, so the size limit is
    undone deliberately here, on top of the box-model reset above (2026-09-06).
    `line-clamp: none` travels with it (not with the box-model reset above)
@@ -522,4 +530,23 @@ body[data-typesetting="vertical"] .moss-subscribe-status {
   font-family: var(--moss-font-heading);
 }
 
+  /* A vertical page reserves no lane for the contents list (site.css, under
+     `contents: pictures`): its margin is not at the left, and its measure is
+     the column length. Same specificity as the rules it undoes, and later. */
+  body[data-typesetting="vertical"][data-contents="pictures"] {
+    --moss-contents-lane: initial;
+    --moss-contents-column: initial;
+  }
+
+  body[data-typesetting="vertical"][data-contents="pictures"] > * {
+    --moss-content-width: inherit;
+  }
+
+  /* Nor does its title keep room for the headerless controls (site.css): its
+     first line runs down the page, not toward them. The core selector,
+     repeated with the vertical mark, so this one is the more specific. */
+  body[data-typesetting="vertical"]:has(> .moss-nav-island[data-header="none"] + .nav-icons) main > article > h1:first-of-type::before {
+    content: none;
+  }
 } /* @layer shortcodes */
+

@@ -1,5 +1,7 @@
 # Importing and redesigning a site
 
+Read `moss guide` (the overview) first: it holds the task recipes this reference does not repeat.
+
 Use this when an existing website should become a moss site that looks better than the original. It is not a faithful port (that is `moss guide importing`) and not a new site from nothing (`moss guide example`). The result has two halves, and both are the deliverable:
 
 - **The vision.** The site as it should look: the original's own aesthetic direction, pushed further, with today's best practice underneath it.

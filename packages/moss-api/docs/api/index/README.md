@@ -530,6 +530,42 @@ await writeFile("article/new-post.md", "# Hello World\n\nContent here.");
 await writeFile("index.md", markdownContent);
 ```
 
+***
+
+### writeFileBinary()
+
+```ts
+function writeFileBinary(relativePath, bytes): Promise<void>;
+```
+
+Write binary content to a file in the project directory
+
+Same sandbox as [writeFile](#writefile): the path must stay inside the project and
+`.moss/` is refused. Creates parent directories and replaces an existing file.
+The bytes cross to moss as base64, so very large files cost memory twice.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `relativePath` | `string` | Path relative to the project root |
+| `bytes` | `Uint8Array` | Exact bytes to write |
+
+#### Returns
+
+`Promise`\<`void`\>
+
+#### Throws
+
+Error if the path is refused, the file cannot be written, or called outside a hook
+
+#### Example
+
+```typescript
+const image = await fetchUrl("https://example.com/map.jpg");
+await writeFileBinary("maps/sheet-1.jpg", image.body);
+```
+
 ## Plugin storage
 
 ### pluginFileExists()

@@ -174,11 +174,11 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "切换深色模式",
             Language::ZhHant => "切換深色模式",
         },
-        "nav_toggle_menu" => match lang {
-            Language::En => "Toggle menu",
-            Language::De => "Menü umschalten",
-            Language::ZhHans => "切换菜单",
-            Language::ZhHant => "切換選單",
+        "nav_menu" => match lang {
+            Language::En => "Menu",
+            Language::De => "Menü",
+            Language::ZhHans => "菜单",
+            Language::ZhHant => "選單",
         },
         // `[site] header = "nav"` masthead: the link list's leading item,
         // replacing the brand link that mode drops.
@@ -363,6 +363,7 @@ pub fn t(lang: Language, key: &str) -> &'static str {
         "event_tickets" => match lang { Language::En => "Tickets", Language::De => "Tickets", Language::ZhHans => "购票", Language::ZhHant => "購票" },
         "event_tickets_for" => match lang { Language::En => " for {}", Language::De => " für {}", Language::ZhHans => "：{}", Language::ZhHant => "：{}" },
         "event_online" => match lang { Language::En => "Online", Language::De => "Online-Teilnahme", Language::ZhHans => "线上参加", Language::ZhHant => "線上參加" },
+        "event_upcoming" => match lang { Language::En => "Upcoming", Language::De => "Demnächst", Language::ZhHans => "即将上演", Language::ZhHant => "即將上演" },
         "event_status_cancelled" => match lang { Language::En => "Cancelled", Language::De => "Abgesagt", Language::ZhHans => "已取消", Language::ZhHant => "已取消" },
         "event_status_postponed" => match lang { Language::En => "Postponed", Language::De => "Verschoben", Language::ZhHans => "已延期", Language::ZhHant => "已延期" },
         "event_status_moved-online" => match lang { Language::En => "Moved online", Language::De => "Findet online statt", Language::ZhHans => "改为线上", Language::ZhHant => "改為線上" },
@@ -407,6 +408,29 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::De => "Kalender abonnieren",
             Language::ZhHans => "订阅日历",
             Language::ZhHant => "訂閱行事曆",
+        },
+        "edition" => match lang {
+            Language::En => "Edition",
+            Language::De => "Ausgabe",
+            Language::ZhHans => "版本",
+            Language::ZhHant => "版本",
+        },
+        // Between the names of a page's authors in its citation.
+        "name_separator" => match lang {
+            Language::En | Language::De => ", ",
+            Language::ZhHans | Language::ZhHant => "、",
+        },
+        "cite_this_page" => match lang {
+            Language::En => "Cite this page",
+            Language::De => "Diese Seite zitieren",
+            Language::ZhHans => "引用本页",
+            Language::ZhHant => "引用本頁",
+        },
+        "source_files" => match lang {
+            Language::En => "Source files",
+            Language::De => "Quelldateien",
+            Language::ZhHans => "源文件",
+            Language::ZhHant => "原始檔案",
         },
         "rss" => "RSS",
         "subscribe_via_rss" => match lang {
@@ -491,6 +515,12 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::De => "Im Artikel ansehen",
             Language::ZhHans => "在文章中查看",
             Language::ZhHant => "在文章中查看",
+        },
+        "open_its_page" => match lang {
+            Language::En => "Open its page",
+            Language::De => "Seite öffnen",
+            Language::ZhHans => "打开其页面",
+            Language::ZhHant => "開啟其頁面",
         },
 
         // Comments
@@ -602,6 +632,13 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::De => "Mehr →",
             Language::ZhHans => "更多 →",
             Language::ZhHant => "更多 →",
+        },
+        // The link a hero drawn from a listing puts under the page's words ({} is its title).
+        "hero_more_about" => match lang {
+            Language::En => "More about {} →",
+            Language::De => "Mehr zu {} →",
+            Language::ZhHans => "了解更多：{} →",
+            Language::ZhHant => "了解更多：{} →",
         },
 
         // Embed error messages (use {} as placeholder, replaced at call site)

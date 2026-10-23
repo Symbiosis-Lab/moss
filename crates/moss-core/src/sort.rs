@@ -113,6 +113,18 @@ pub fn resolve_folder_sort<D: SortableDoc>(
     folder: &D,
     children: &[&D],
 ) -> ResolvedSort {
+    resolve_folder_sort_with_undated(folder, children).0
+}
+
+/// [`resolve_folder_sort`] plus the children whose missing date made an
+/// undeclared sort fall back to title order: empty unless no `sort:` is
+/// declared, no child has a weight, at least one child is dated (a folder of
+/// undated pages is title-ordered by nature) and too few are for the date axis.
+/// Derived from the same inference that picks the axis, so the two cannot drift.
+pub fn resolve_folder_sort_with_undated<'a, D: SortableDoc>(
+    folder: &D,
+    children: &[&'a D],
+) -> (ResolvedSort, Vec<&'a D>) {
     // Exclude subfolder indexes via the kind-aware trait method.
     // The legacy URL-pattern filter (`!url.ends_with("/index.html")`) is
     // wrong under pretty URLs — every article also ends with
@@ -125,8 +137,8 @@ pub fn resolve_folder_sort<D: SortableDoc>(
         .filter(|c| !c.is_folder_index())
         .collect();
 
-    let (axis, explicit_order) = match folder.declared_sort() {
-        Some(SortField::Axis(a)) => (*a, None),
+    let (axis, explicit_order, partly_dated) = match folder.declared_sort() {
+        Some(SortField::Axis(a)) => (*a, None, false),
         Some(SortField::List(items)) => {
             // Entries may be written as Obsidian `[[Wikilinks]]`, quoted refs, or
             // paths (`travel/foo.md`). Normalize each to the bare filename stem so
@@ -136,29 +148,39 @@ pub fn resolve_folder_sort<D: SortableDoc>(
                 .iter()
                 .map(|s| crate::frontmatter_typed::frontmatter_ref_to_stem(s))
                 .collect();
-            (infer_axis(&article_children), Some(stems))
+            (infer_axis(&article_children).0, Some(stems), false)
         }
-        None => (infer_axis(&article_children), None),
+        None => {
+            let (axis, partly_dated) = infer_axis(&article_children);
+            (axis, None, partly_dated)
+        }
     };
 
     let series_default = matches!(axis, SortAxis::Weight) || explicit_order.is_some();
+    let undated = if partly_dated {
+        article_children.into_iter().filter(|c| c.date().is_none()).copied().collect()
+    } else {
+        Vec::new()
+    };
 
-    ResolvedSort { axis, explicit_order, series_default }
+    (ResolvedSort { axis, explicit_order, series_default }, undated)
 }
 
-fn infer_axis<D: SortableDoc>(article_children: &[&&D]) -> SortAxis {
+/// The inferred axis, and whether it is title only because some but too few
+/// children are dated.
+fn infer_axis<D: SortableDoc>(article_children: &[&&D]) -> (SortAxis, bool) {
     if article_children.is_empty() {
-        return SortAxis::Title;
+        return (SortAxis::Title, false);
     }
     if article_children.iter().any(|c| c.weight().is_some()) {
-        return SortAxis::Weight;
+        return (SortAxis::Weight, false);
     }
     let total = article_children.len() as f32;
-    let dated = article_children.iter().filter(|c| c.date().is_some()).count() as f32;
-    if dated / total >= DATE_FRACTION_THRESHOLD {
-        return SortAxis::Date;
+    let dated = article_children.iter().filter(|c| c.date().is_some()).count();
+    if dated as f32 / total >= DATE_FRACTION_THRESHOLD {
+        return (SortAxis::Date, false);
     }
-    SortAxis::Title
+    (SortAxis::Title, dated > 0)
 }
 
 #[cfg(test)]
@@ -226,6 +248,18 @@ mod inference_tests {
     }
     pub(super) fn folder(url: &str, sort: Option<SortField>) -> TestDoc {
         TestDoc { url: url.into(), sort_v: sort, ..Default::default() }
+    }
+
+    #[test]
+    fn names_the_undated_children_only_when_the_date_axis_was_missed() {
+        let f = folder("blog/index.html", None);
+        let (a, b, c) = (art("a", Some("2025-01-01"), None), art("b", None, None), art("c", None, None));
+        let names = |kids: &[&TestDoc]| resolve_folder_sort_with_undated(&f, kids).1.iter().map(|d| d.stem.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&[&a, &b, &c]), ["b", "c"]);
+        assert!(names(&[&b, &c]).is_empty(), "nothing dated: title order is natural");
+        let kids: Vec<TestDoc> = (0..5).map(|i| art(&format!("k{i}"), (i < 4).then_some("2025-01-01"), None)).collect();
+        let refs: Vec<&TestDoc> = kids.iter().collect();
+        assert!(names(&refs).is_empty(), "4 of 5 dated reaches the threshold");
     }
 
     #[test]

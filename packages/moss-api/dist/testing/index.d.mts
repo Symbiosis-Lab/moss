@@ -33,6 +33,8 @@
  */
 interface MockFile {
   content: string;
+  /** Exact bytes, set by binary writes (`writeFileBinary`, `downloadAsset`); `content` is then their lossy UTF-8 reading. */
+  bytes?: Uint8Array;
   createdAt: Date;
   modifiedAt: Date;
 }
@@ -46,6 +48,8 @@ interface MockFilesystem {
   getFile(path: string): MockFile | undefined;
   /** Set a file's content (creates or updates) */
   setFile(path: string, content: string): void;
+  /** Set a file's exact bytes (creates or updates) */
+  setFileBytes(path: string, bytes: Uint8Array): void;
   /** Delete a file */
   deleteFile(path: string): boolean;
   /** List files matching an optional pattern */

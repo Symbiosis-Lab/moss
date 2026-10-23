@@ -105,9 +105,9 @@ fn context_of(page: &str) -> serde_json::Value {
 fn the_plugin_receives_exactly_the_pages_the_listing_shows() {
     let s = site("board");
     write(&s.root, "board/sub/index.md", "---\ntitle: Sub\n---\nsub home\n");
-    write(&s.root, "board/Gamma.md", "---\ntitle: Gamma\n---\ngamma\n");
-    write(&s.root, "board/Gamma.zh-hans.md", "---\ntitle: Gamma ZH\n---\ngamma zh\n");
-    write(&s.root, "board/Hidden.md", "---\ntitle: Hidden\nlisted: false\n---\nhidden\n");
+    write(&s.root, "board/Gamma.md", "---\ntitle: Gamma\ndate: 2026-01-03\n---\ngamma\n");
+    write(&s.root, "board/Gamma.zh-hans.md", "---\ntitle: Gamma ZH\ndate: 2026-01-03\n---\ngamma zh\n");
+    write(&s.root, "board/Hidden.md", "---\ntitle: Hidden\ndate: 2026-01-04\nlisted: false\n---\nhidden\n");
     plugin(&s.root, "boardview", &["board"], DUMP);
     let o = s.build(&["--allow-plugins", "--strict"]);
     assert!(o.status.success(), "{}", stderr(&o));
