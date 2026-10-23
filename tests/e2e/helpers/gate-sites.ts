@@ -1220,6 +1220,43 @@ uid: "hag00102"
 
 Body text under the section heading.
 `,
+    "edge/index.md": `---
+title: Headings that fill their lines
+uid: "hag00103"
+---
+
+## Moorings and tolls, 1626–1705
+
+Text.
+
+## The harbour committee met, 1558–1603
+
+Text.
+
+## Small boats and long arguments, 1757–1827
+
+Text.
+
+## Notes on the lighthouse keepers, 1801–1869
+
+Text.
+
+## Ledgers kept by the pilots of the, 1710–1790
+
+Text.
+
+## Almanacs of the northern channel pilots, 1844–1921
+
+Text.
+
+## A winter of boats and bitter arguments, 1900–1950
+
+Text.
+
+## Lamps, tides and the evening committee, 1688–1750
+
+Text.
+`,
     ".moss/config.toml": CONFIG_TOML,
     ".moss/theme/style.css": null,
   },

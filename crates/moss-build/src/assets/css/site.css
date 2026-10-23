@@ -597,19 +597,28 @@ article h6 {
 }
 
 /* Section permalink anchors (moss-heading-anchor). Emitted inside body
-   headings by render_heading(). Hover/focus reveal only — hidden on touch
-   (no hover = no clutter in headings; focus-visible covers keyboard nav).
+   headings by render_heading(). Hover/focus reveal only (a tap reveals it on
+   touch, where hover sticks; focus-visible covers keyboard nav).
    Quiet at rest, confident on hover: subordinate size (smaller than the
    heading, which it would otherwise inherit at 1em) and a faint tone mixed
    most of the way to the background, so even when revealed it stays a soft
    affordance. Firms up to the accent on direct hover/focus (rule below). */
+:is(h1, h2, h3, h4, h5, h6):has(> .moss-heading-anchor) {
+  position: relative;
+}
 .moss-heading-anchor {
-  /* Out of the line, so the hidden mark never takes room: a no-break range
-     at a line's end keeps its line, and a full line is not pushed to the next
-     by a mark nobody can see. It stays where it would have been, after the
-     last word. */
+  /* Hung in the heading's inline-start gutter, out of the line: it takes no
+     room hidden or shown, so no line wraps or moves, a no-break range keeps
+     its line, and overflow on the start side never scrolls. It stays
+     focusable. The gap is padding so the pointer can cross it. */
   position: absolute;
-  margin-inline-start: 0.4em;
+  inset-block-start: 0;
+  inset-inline-end: 100%;
+  /* The gutter's own width, glyph against the heading, so the mark and its
+     inset ring stay inside the window at the page's edge. */
+  box-sizing: border-box;
+  inline-size: var(--moss-container-padding);
+  text-align: end;
   /* `content: none` on ::after would remove it; the glyph lives there and
      nowhere else. Generated content is not part of the document text, so it
      cannot be selected and cannot be copied — in any engine. This used to be
@@ -620,7 +629,7 @@ article h6 {
      The one-line `user-select` fix shipped 2026-05-31 unverified in a
      browser; it stays as a second line of defence against double-click
      selection, but the `::after` is what makes the promise true. */
-  font-size: 0.8em;
+  font-size: min(0.8em, var(--moss-container-padding));
   font-weight: 400;
   color: color-mix(in oklch, var(--moss-color-text-secondary) 45%, var(--moss-color-bg));
   text-decoration: none;
@@ -632,8 +641,12 @@ article h6 {
   content: "#";
 }
 :is(h1, h2, h3, h4, h5, h6):hover .moss-heading-anchor,
+.moss-heading-anchor:hover,
 .moss-heading-anchor:focus-visible {
   opacity: 1;
+}
+.moss-heading-anchor:focus-visible {
+  outline-offset: -2px;
 }
 .moss-heading-anchor:hover,
 .moss-heading-anchor:focus-visible {
