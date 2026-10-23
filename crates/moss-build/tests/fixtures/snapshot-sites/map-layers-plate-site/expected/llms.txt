@@ -34,14 +34,6 @@ Two places on a drawn historical layer.
 
 ---
 
-## atlas 1930
-
----
-
-## maps
-
----
-
 ## places
 
 # Places

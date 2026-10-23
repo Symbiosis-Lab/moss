@@ -257,6 +257,7 @@ mod tests {
             canvas_height: f64::from(SVG_HEIGHT),
             full_extent: false,
             tile: false,
+            layers: &[],
         }
     }
 

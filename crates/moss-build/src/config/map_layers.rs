@@ -169,6 +169,30 @@ pub fn resolve_layers(mut layers: Vec<MapLayer>, site_root: &Path, gazetteer: &G
     Ok(layers)
 }
 
+/// The declared layers' `source` folders as site-relative `/` paths, read
+/// straight from `.moss/config.toml`. The scan leaves these folders out of the
+/// site (the layer warper still reads them); a config that cannot be read or
+/// parsed declares none, and the build reports it where it uses the config.
+pub fn declared_sources(site_root: &Path) -> Vec<String> {
+    let config = crate::moss_paths::MossPaths::new(site_root).config();
+    let Ok(Some(text)) = crate::build::site_config::read_managed_toml_no_wait(&config) else { return Vec::new() };
+    let Ok(parsed) = crate::config::ConfigFile::parse(&text) else { return Vec::new() };
+    let layers = parsed.map_layers().unwrap_or_default();
+    layers
+        .iter()
+        .filter_map(|layer| {
+            let parts: Vec<_> = Path::new(&layer.source)
+                .components()
+                .filter_map(|c| match c {
+                    Component::Normal(n) => Some(n.to_string_lossy().into_owned()),
+                    _ => None,
+                })
+                .collect();
+            (!parts.is_empty()).then(|| parts.join("/"))
+        })
+        .collect()
+}
+
 fn check_source(layer: &MapLayer, site_root: &Path) -> Result<(), String> {
     let table = format!("[map.layers.{}]", layer.name);
     let relative = Path::new(&layer.source);
@@ -180,6 +204,9 @@ fn check_source(layer: &MapLayer, site_root: &Path) -> Result<(), String> {
     let root = site_root.canonicalize().map_err(|e| format!("{table} cannot read the site folder: {e}"))?;
     if !resolved.starts_with(&root) || !resolved.is_dir() {
         return Err(format!("{table} `source` \"{}\" must be a folder inside the site", layer.source));
+    }
+    if resolved == root {
+        return Err(format!("{table} `source` \"{}\" is the whole site; point it at the folder holding only the layer's plates", layer.source));
     }
     Ok(())
 }

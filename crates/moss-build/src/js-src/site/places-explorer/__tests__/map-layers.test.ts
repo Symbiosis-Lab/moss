@@ -2,6 +2,7 @@
  * A mounted map with detail layers: the zoom ceiling, the true-aspect
  * drawing, the credit slot and the markers that must stay unscaled.
  */
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { FIT, EDGE_FADE } from "./explorer-fit";
 import "./armed-timers";
@@ -11,7 +12,13 @@ import { mountPlacesMap } from "../map";
 import { project, unproject } from "../projection";
 import { readUrlState } from "../state";
 
-const WORLD_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 842.035025 480"></svg>';
+const WORLD_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="842.035025" height="480" viewBox="0 0 842.035025 480">
+  <g data-map-layer="water"><rect width="842" height="480" fill="var(--moss-place-water, #dbe7ea)"/></g>
+  <g data-map-layer="seafloor"><path d="M0 0"/></g>
+  <g data-map-layer="land"><path d="M10 10h40v40H10Z" fill="var(--moss-place-land, #e3e6d5)"/></g>
+  <g data-map-layer="relief"><path d="M0 0"/></g>
+  <g data-map-layer="built-up"><path d="M0 0"/></g>
+</svg>`;
 const VIEWPORT = { width: 800, height: 500 };
 const PLACES = {
   works: [{ id: "w1", title: "W1", byline: [], authors: [], companions: [], places: ["p1"], date: "2024-01-01", description: "", cover: null, url: "/w1/" }],
@@ -122,6 +129,34 @@ describe("the world layer past its clean depth", () => {
     document.body.innerHTML = "";
     expect(detail(mount(cityCamera(40.75, -73.98, 0.0005), [LAYER]).figure)).toBe(0);
   });
+
+  test("past the clean depth the world keeps a flat land-and-water surface under the fading detail", async () => {
+    const { figure } = mount(cityCamera(40.75, -73.98, 0.0005), [LAYER]);
+    expect(detail(figure)).toBe(0);
+    await vi.waitFor(() => expect(figure.querySelector(".moss-places-world-flat")).not.toBeNull());
+    const world = figure.querySelector(".moss-places-world")!;
+    const flat = world.querySelector(".moss-places-world-flat")!;
+    const surface = world.querySelector(".moss-places-world-surface")!;
+    expect(flat.compareDocumentPosition(surface) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect([...flat.querySelectorAll("[data-map-layer]")].map((g) => g.getAttribute("data-map-layer"))).toEqual(["water", "land"]);
+  });
+
+  test("the stylesheet fades the detail surfaces by the world-detail property and never the flat ones", () => {
+    const css = readFileSync("src/assets/css/site/places-explorer.css", "utf8");
+    const rule = (selector: string) => new RegExp(`${selector.replace(/[.[\]()*]/g, "\\$&")}[^{]*\\{([^}]*)\\}`).exec(css)?.[1] ?? "";
+    expect(rule(".moss-places-world > canvas:not(.moss-places-world-flat)")).toContain("opacity: var(--moss-place-world-detail, 1)");
+    expect(rule(".moss-places-tile > canvas:not(.moss-places-tile-flat)")).toContain("opacity: var(--moss-place-world-detail, 1)");
+    expect(css).not.toMatch(/\.moss-places-viewport \{[^}]*--moss-place-land/);
+    expect(css).not.toMatch(/--moss-place-tile-opacity[^;]*\*\s*var\(--moss-place-world-detail/);
+  });
+
+  test("the flat world surface is out of flow and behind the detail, so it never pushes the detail out of the frame", () => {
+    const css = readFileSync("src/assets/css/site/places-explorer.css", "utf8");
+    const body = /\.moss-places-world > \.moss-places-world-flat \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(body).toContain("position: absolute");
+    expect(body).toContain("inset: 0");
+    expect(body).toContain("z-index: -1");
+  });
 });
 
 describe("true aspect", () => {
@@ -214,6 +249,21 @@ describe("credit slot", () => {
     });
     expect(credit(figure)).toBe("static");
     expect(figure.querySelector<HTMLElement>(".moss-places-world")!.style.transform).toMatch(/scale\(([\d.]+), \1\)/);
+  });
+});
+
+describe("card row marker", () => {
+  test("a mounted explorer marks its figure, which the credit's top-left placement keys on", () => {
+    const { figure } = mount(cityCamera(40.75, -73.98, 0.0005), [LAYER]);
+    expect(figure.hasAttribute("data-moss-places-cards")).toBe(true);
+    expect(figure.querySelector(".moss-places-cards")).not.toBeNull();
+  });
+
+  test("a figure the explorer could not mount has no card row and no marker", () => {
+    const figure = document.createElement("figure");
+    document.body.append(figure);
+    expect(mountPlacesMap(figure, { worldSvgText: "not svg", tilesBaseUrl: "/", tileCells: [], tileK: 4, tileOrigins: {}, tileColumns: 36, tileRows: 18, fit: FIT, edgeFade: EDGE_FADE, places: PLACES, lang: "en" })).toBeNull();
+    expect(figure.hasAttribute("data-moss-places-cards")).toBe(false);
   });
 });
 

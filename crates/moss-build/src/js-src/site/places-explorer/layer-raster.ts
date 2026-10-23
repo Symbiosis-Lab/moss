@@ -163,6 +163,8 @@ interface LayerState {
   group: SVGGElement;
   levelGroups: Map<number, SVGGElement>;
   entries: Map<string, TileEntry>;
+  /** Whether the last reconcile chose a level and a plate's footprint is in view: the layer is drawing something. */
+  drawing: boolean;
 }
 
 export class LayerRaster {
@@ -174,6 +176,8 @@ export class LayerRaster {
   private view: { camera: Camera; viewport: Viewport } | null = null;
   private active = 0;
   private tick = 0;
+  /** Called when the set of layers that draw something changes (a layer's index arriving included). */
+  onDrawingChange: (() => void) | null = null;
 
   /** `baseUrl` is the map directory the layers' relative `tiles` URLs resolve against. */
   constructor(layers: readonly DetailLayer[], baseUrl: string) {
@@ -193,7 +197,7 @@ export class LayerRaster {
         const group = document.createElementNS(SVG_NS, "g");
         group.dataset.layer = layer.name;
         this.units.append(group);
-        return { layer, indexUrl, dir: indexUrl.slice(0, indexUrl.lastIndexOf("/") + 1), status: "idle", index: null, group, levelGroups: new Map(), entries: new Map() };
+        return { layer, indexUrl, dir: indexUrl.slice(0, indexUrl.lastIndexOf("/") + 1), status: "idle", index: null, group, levelGroups: new Map(), entries: new Map(), drawing: false };
       });
   }
 
@@ -212,16 +216,28 @@ export class LayerRaster {
     const padded = viewWorldRect(camera, viewport, VIEW_PAD_PX);
     const worldPerPx = 1 / (screenScale(camera, viewport) * Math.min(window.devicePixelRatio || 1, DPR_CAP));
     let busy = false;
+    let drawingChanged = false;
     for (const state of this.states) {
       if (state.status === "idle" && overlaps(worldRect(state.layer), view)) void this.loadIndex(state);
       if (state.status === "loading") busy = true;
       if (state.status !== "ready" || !state.index) continue;
       const level = overlaps(worldRect(state.layer), view) ? levelForView(state.index, worldPerPx) : null;
+      const drawing = level !== null && state.index.footprints.some((footprint) => overlaps(boundsOf(footprint), view));
+      if (drawing !== state.drawing) {
+        state.drawing = drawing;
+        drawingChanged = true;
+      }
       const wanted = level === null ? [] : tilesForRect(state.index, level, padded);
       this.syncTiles(state, wanted, camera);
       busy ||= [...state.entries.values()].some((entry) => entry.kind === "loading") || wanted.some((ref) => !state.entries.has(keyOf(ref)));
     }
     this.el.dataset.mossPlacesLayersState = busy ? "busy" : "idle";
+    if (drawingChanged) this.onDrawingChange?.();
+  }
+
+  /** Whether `layer` draws something at the camera last rendered: a level is chosen and a plate's footprint is in view. */
+  draws(layer: DetailLayer): boolean {
+    return this.states.some((state) => state.layer === layer && state.drawing);
   }
 
   private async loadIndex(state: LayerState): Promise<void> {
@@ -344,6 +360,14 @@ export class LayerRaster {
       this.reconcile();
     }
   }
+}
+
+function boundsOf(polygon: readonly Point[]): Rect {
+  const xs = polygon.map((p) => p.x);
+  const ys = polygon.map((p) => p.y);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
 }
 
 function overlaps(a: Rect, b: Rect): boolean {

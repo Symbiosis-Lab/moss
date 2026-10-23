@@ -84,12 +84,18 @@ pub fn emit_if_place_typed(render_context: Option<&PlaceMapRenderContext>, used:
     let plans = render_context.layer_plans();
     let hash = render_context.map_assets_hash();
     let uncovered = crate::build::place_map::layer_warp::note_coverage(plans, used);
+    let crops = render_context.crops().lock().expect("the crop registry is never held across a panic");
     let tiles: Vec<Option<String>> = layers
         .iter()
         .zip(plans)
         .zip(&uncovered)
-        .map(|((layer, plan), uncovered)| super::place_map_layer_tiles::emit_layer(layer, plan, uncovered, hash, output_dir, pending))
+        .enumerate()
+        .map(|(n, ((layer, plan), uncovered))| {
+            let own: Vec<_> = crops.iter().filter(|(_, job)| job.layer == n).collect();
+            super::place_map_layer_tiles::emit_layer(layer, plan, uncovered, &own, hash, output_dir, pending)
+        })
         .collect();
+    drop(crops);
     let Some(json) = layers_json_with(layers, plans, &tiles) else { return };
     let result = ServedPath::for_place_map_asset(hash, "layers.json")
         .map_err(|e| format!("Invalid layers path: {e}"))

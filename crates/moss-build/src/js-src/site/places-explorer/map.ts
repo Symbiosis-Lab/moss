@@ -59,7 +59,7 @@ import { creditInView, layerCeilingZoom, type DetailLayer } from "./layers";
 import { LabelLayer } from "./labels";
 import { MarkerLayer, pointsForWorks, workIdOf, worldCentroid } from "./markers";
 import { project, WORLD_HEIGHT, WORLD_WIDTH } from "./projection";
-import { rasterizeOrFallback, splitMapSvg, WORLD_RASTER_ZOOM_CAP, type Surface } from "./raster";
+import { rasterizeFlat, rasterizeOrFallback, splitMapSvg, WORLD_RASTER_ZOOM_CAP, type Surface } from "./raster";
 import { inScope } from "./scope";
 import { copyFor } from "./strings";
 import { attachGestures } from "./gestures";
@@ -203,7 +203,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   // decodes from overlapping if two scheduled rebakes still somehow land
   // close together, sharing the one in flight instead of racing a second.
   /** Owned pixels and the physical display demand last certified by their capped budget. Above the world ceiling, a resize can preserve that density without buying more fallback pixels; below it, the world must meet its ordinary pixel budget. */
-  let worldRaster: (Surface & { pixelScale: number; acceptedDisplayScale: number }) | null = null;
+  let worldRaster: (Surface & { flat: Surface; pixelScale: number; acceptedDisplayScale: number }) | null = null;
   let worldBakePromise: Promise<void> | null = null;
   let worldRebakeTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -230,16 +230,23 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
         const dpr = Math.min(window.devicePixelRatio || 1, WORLD_RASTER_DPR_CAP);
         const pixelWidth = WORLD_WIDTH * unitScale * targetZoom * dpr;
         const pixelHeight = WORLD_HEIGHT * unitScale * targetZoom * dpr;
-        const surface = await rasterizeOrFallback(worldBaseMarkup, worldBase, pixelWidth, pixelHeight);
+        const [surface, flat] = await Promise.all([
+          rasterizeOrFallback(worldBaseMarkup, worldBase, pixelWidth, pixelHeight),
+          rasterizeFlat(worldSplit, pixelWidth, pixelHeight, "moss-places-world-flat"),
+        ]);
         surface.el.classList.add("moss-places-world-surface");
         // Always the very first child: whatever has already been inserted
         // (the rivers overlay, the tiles container) stays on top of it,
         // painted-order-wise, exactly like the fetched world SVG used to
         // sit under both before this module existed.
+        // The flat land and water sit under the detail, which fades away over them.
         worldEl.insertBefore(surface.el, worldEl.firstChild);
+        worldEl.insertBefore(flat.el, worldEl.firstChild);
         worldRaster?.el.remove();
         worldRaster?.release();
-        worldRaster = { ...surface, pixelScale: targetScale * dpr, acceptedDisplayScale: unitScale * zoom * dpr };
+        worldRaster?.flat.el.remove();
+        worldRaster?.flat.release();
+        worldRaster = { ...surface, flat, pixelScale: targetScale * dpr, acceptedDisplayScale: unitScale * zoom * dpr };
         acceptWorldRasterDemand(screenScale({ x: 0, y: 0, zoom: 1 }, lastViewport), camera.zoom);
         // A settle that landed mid-bake got this promise back and has already spent its debounce, so nothing else re-checks the scale it saw.
         scheduleWorldRebake();
@@ -325,6 +332,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
 
   viewportEl.append(worldEl, labelsEl, markersEl, controlsEl, chipEl, cardsEl);
   figure.replaceChildren(viewportEl, statusEl);
+  figure.setAttribute("data-moss-places-cards", "");
   if (creditEl) figure.append(creditEl);
   // The no-JS figure is one picture (`role="img"`), and that role makes every
   // descendant presentational: left on, it would hide the live map's buttons,
@@ -714,13 +722,19 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
       cardRow.render(rows, options.places.places, selectedId);
       labelLayer.render(visiblePoints, camera, viewport, worksById, placesById, reservedLabelRects());
       urlState.writeCamera(camera);
-      if (creditEl && layers.length) {
-        creditEl.textContent = creditInView(layers, viewWorldRect(camera, viewport));
-      }
+      updateCredit();
       if (layers.length && camera.zoom > ceiling * (1 + 1e-6)) easeBackToCeiling();
       scopeChip.render(scope, options.places.places, options.places.works, markerLayer.ringCount(), currentArticleId);
     }
   }
+
+  /** The credit of every layer drawing in view; a layer with no raster to draw is credited by its extent alone. */
+  function updateCredit(): void {
+    if (!creditEl || !layers.length) return;
+    const credited = layers.filter((layer) => !layer.tiles || layerRaster?.draws(layer));
+    creditEl.textContent = creditInView(credited, viewWorldRect(camera, getViewport()));
+  }
+  if (layerRaster) layerRaster.onDrawingChange = updateCredit;
 
   // ---- gestures ------------------------------------------------------------
   let cooperativeGestures = false;

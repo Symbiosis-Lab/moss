@@ -764,6 +764,21 @@ describe("TileLayer — re-bakes follow the density needed, within the same conc
     expect(rasterizeOrFallbackSpy).toHaveBeenCalledTimes(CELLS.length);
   });
 
+  test("a tile keeps its land and water as a vector under the detail raster, and no other layer", async () => {
+    const layered = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><g data-map-layer="water"><rect width="100" height="100"/></g><g data-map-layer="seafloor"><path d="M0 0"/></g><g data-map-layer="land"><path d="M0 0h50v50Z"/></g><g data-map-layer="relief"><path d="M0 0"/></g></svg>';
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, text: () => Promise.resolve(layered) }) as unknown as Response));
+    rasterizeOrFallbackSpy.mockImplementation(async () => ({ el: document.createElement("canvas"), release() {} }));
+    const container = document.createElement("div");
+    const layer = new TileLayer(container, { tilesBaseUrl: BASE_URL, availableTiles: [[10, 5]], k: K, origins: originsFor([[10, 5]], K, 0.1), ...GRID });
+    layer.render(CAMERA, VIEWPORT, unitScaleFor(1), { settled: true });
+    await flush();
+    const wrapper = container.querySelector(".moss-places-tile")!;
+    const [flat, detail] = [...wrapper.children];
+    expect(flat.classList.contains("moss-places-tile-flat")).toBe(true);
+    expect([...flat.querySelectorAll("[data-map-layer]")].map((g) => g.getAttribute("data-map-layer"))).toEqual(["water", "land"]);
+    expect(detail.tagName).toBe("CANVAS");
+  });
+
   test("a tile already baked at the size cap is not decoded again when the density grows further", async () => {
     stubFetch();
     rasterizeOrFallbackSpy.mockImplementation(async () => ({ el: document.createElementNS("http://www.w3.org/2000/svg", "svg"), release() {} }));

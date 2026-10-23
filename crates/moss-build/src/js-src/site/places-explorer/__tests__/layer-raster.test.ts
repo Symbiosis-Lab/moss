@@ -285,6 +285,31 @@ describe("LayerRaster", () => {
     expect(groups).toEqual(["13", "14"]);
   });
 
+  describe("past the deepest level, away from a place", () => {
+    /** Levels 12 to 14 cover a 7x7 block; level 15 lists only the cell under the place, as the build draws it. */
+    const nearPlace = () => {
+      const index = wireIndex(12, 15);
+      index.levels["15"] = [cellAt(15)];
+      return index;
+    };
+    const away = { x: CENTER.x + 2.5 * span(14), y: CENTER.y + 0.5 * span(14) };
+
+    test("a view far past max_level draws the deepest level that exists under it, hole-free", async () => {
+      indexResponse = () => ok(nearPlace());
+      const raster = await drawn(19, [{ ...LAYER, maxZoom: 15 }]);
+      for (const entry of [...pending]) entry.resolve();
+      await flush();
+      raster.render(cameraAt(19, away), VIEWPORT, UNIT);
+      await flush();
+      for (const entry of [...pending]) entry.resolve();
+      await flush();
+      const shown = images(raster);
+      const [ai, aj] = cellAt(14, away);
+      expect(shown).toContain(`14/${ai}/${aj}`);
+      expect(shown.every((key) => !key!.startsWith("15/"))).toBe(true);
+    });
+  });
+
   test("a coarser level's group is drawn before a finer one's", async () => {
     const raster = await drawn(14);
     for (const entry of [...pending]) entry.resolve();

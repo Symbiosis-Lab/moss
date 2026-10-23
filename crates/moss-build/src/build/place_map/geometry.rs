@@ -10,6 +10,9 @@ pub const VIEWBOX_WIDTH: f64 = 720.0;
 pub const VIEWBOX_HEIGHT: f64 = 480.0;
 const POLAR_LIMIT: f64 = 85.0;
 pub(super) const MIN_FRAME_DEGREES: f64 = 10.0;
+/// The closest frame a figure drawn over a detail layer may have: about a
+/// kilometre across, the explorer's own minimum span there.
+pub(crate) const STREET_MIN_FRAME_DEGREES: f64 = 0.01;
 /// A frame's latitude floor as a share of its longitude floor, so the
 /// narrowest frame fills the 3:2 canvas.
 const LATITUDE_SHARE: f64 = 0.68;
@@ -91,12 +94,32 @@ impl Frame {
     where
         I: Iterator<Item = Precision>,
     {
-        if points.is_empty() {
-            return None;
-        }
         let floor = precisions
             .map(privacy_floor)
             .fold(MIN_FRAME_DEGREES, f64::max);
+        Self::fitting(points, floor)
+    }
+
+    /// The frame for places drawn over a detail layer: as close as
+    /// [`STREET_MIN_FRAME_DEGREES`], which only exact places may have.
+    /// Precision is the privacy floor, so any coarser place gives `None`
+    /// and the caller keeps [`Self::from_points`]'s frame.
+    pub fn for_streets<I>(points: &[ProjectedPoint], precisions: I) -> Option<Self>
+    where
+        I: Iterator<Item = Precision>,
+    {
+        let mut precisions = precisions.peekable();
+        precisions.peek()?;
+        if precisions.any(|precision| precision != Precision::Exact) {
+            return None;
+        }
+        Self::fitting(points, STREET_MIN_FRAME_DEGREES).filter(|frame| frame.tier == FrameTier::Local)
+    }
+
+    fn fitting(points: &[ProjectedPoint], floor: f64) -> Option<Self> {
+        if points.is_empty() {
+            return None;
+        }
         let latitude_min = points
             .iter()
             .map(|point| point.latitude)
@@ -173,101 +196,8 @@ pub const REGION_FADE_DEGREES: f64 = 1.1;
 /// world map 1.1 degrees is under 3 px, too small for a fade to read.
 pub const REGION_FADE_MIN_RADIUS: f64 = 12.0;
 
-/// Equirectangular crop of a Local/Wide frame, longitude scaled by
-/// cos(center_latitude) (a local standard parallel) so a small crop's
-/// shapes stay close to true instead of stretching east-west away from the
-/// equator. There is no visibility/horizon concept the way there was under
-/// the azimuthal projection this replaced: every point projects, and a
-/// ring or line is clipped to the frame's screen rectangle afterward with
-/// plain Sutherland–Hodgman / segment clipping, not horizon-arc closing.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct FlatProjection {
-    center_longitude: f64,
-    center_latitude: f64,
-    cos_center_latitude: f64,
-    scale: f64,
-}
-
-impl FlatProjection {
-    fn new(frame: &Frame) -> Self {
-        let center_latitude = frame.center_latitude;
-        let cos_center_latitude = center_latitude.to_radians().cos();
-        let half_width = (frame.longitude_span / 2.0).to_radians() * cos_center_latitude;
-        let half_height = (frame.latitude_span / 2.0).to_radians();
-        let scale = (VIEWBOX_WIDTH / 2.0 / half_width.max(f64::EPSILON))
-            .min(VIEWBOX_HEIGHT / 2.0 / half_height.max(f64::EPSILON));
-        Self {
-            center_longitude: frame.center_longitude,
-            center_latitude,
-            cos_center_latitude,
-            scale,
-        }
-    }
-
-    fn project_point(&self, point: ProjectedPoint) -> (f64, f64) {
-        let longitude = unwrap_longitude(point.longitude, self.center_longitude);
-        self.project_unwrapped(longitude, point.latitude)
-    }
-
-    fn project_unwrapped(&self, longitude: f64, latitude: f64) -> (f64, f64) {
-        let x = (longitude - self.center_longitude).to_radians() * self.cos_center_latitude;
-        let y = (latitude - self.center_latitude).to_radians();
-        (
-            VIEWBOX_WIDTH / 2.0 + self.scale * x,
-            VIEWBOX_HEIGHT / 2.0 - self.scale * y,
-        )
-    }
-
-    /// West, east, south and north edges, in degrees, of everything this
-    /// projection can draw: the viewBox plus the clip margin. The frame's
-    /// own span is only a floor; fitting a 3:2 canvas usually shows more
-    /// longitude than the frame asked for.
-    fn visible_bounds(&self) -> (f64, f64, f64, f64) {
-        let half_width = (CLIP_MAX_X - VIEWBOX_WIDTH / 2.0)
-            / (self.scale * self.cos_center_latitude.max(f64::EPSILON));
-        let half_height = (CLIP_MAX_Y - VIEWBOX_HEIGHT / 2.0) / self.scale;
-        let (half_width, half_height) = (half_width.to_degrees(), half_height.to_degrees());
-        (
-            self.center_longitude - half_width,
-            self.center_longitude + half_width,
-            (self.center_latitude - half_height).max(-90.0),
-            (self.center_latitude + half_height).min(90.0),
-        )
-    }
-
-    /// The pack's rings are already planar in [-180, 180] (see
-    /// `raw_screen_copies`), so a frame that reaches past the antimeridian
-    /// draws the copy of each ring shifted a turn east or west.
-    fn copies(&self, points: &[(i32, i32)], quantisation: u32) -> Vec<f64> {
-        let (west, east, ..) = self.visible_bounds();
-        let quantisation = f64::from(quantisation);
-        let min = points.iter().map(|point| f64::from(point.0)).fold(f64::INFINITY, f64::min) / quantisation;
-        let max = points.iter().map(|point| f64::from(point.0)).fold(f64::NEG_INFINITY, f64::max) / quantisation;
-        [-360.0, 0.0, 360.0]
-            .into_iter()
-            .filter(|offset| min + offset <= east && max + offset >= west)
-            .collect()
-    }
-
-    fn project_ring(&self, points: &[(i32, i32)], quantisation: u32) -> Vec<Vec<(f64, f64)>> {
-        raw_screen_copies(points, quantisation, &self.copies(points, quantisation), |longitude, latitude| {
-            self.project_unwrapped(longitude, latitude)
-        })
-        .into_iter()
-        .map(|screen| clip_closed_ring(&screen, CLIP_MIN_X, CLIP_MAX_X, CLIP_MIN_Y, CLIP_MAX_Y))
-        .filter(|ring| ring.len() >= 4)
-        .collect()
-    }
-
-    fn project_part(&self, points: &[(i32, i32)], quantisation: u32) -> Vec<Vec<(f64, f64)>> {
-        raw_screen_copies(points, quantisation, &self.copies(points, quantisation), |longitude, latitude| {
-            self.project_unwrapped(longitude, latitude)
-        })
-        .iter()
-        .flat_map(|screen| clip_polyline(screen, CLIP_MIN_X, CLIP_MAX_X, CLIP_MIN_Y, CLIP_MAX_Y))
-        .collect()
-    }
-}
+mod flat;
+use flat::FlatProjection;
 
 pub(super) const PATTERSON_K1: f64 = 1.0148;
 pub(super) const PATTERSON_K2: f64 = 0.23185;
@@ -543,6 +473,23 @@ impl Projection {
         // it can be compared against DESIGN_PIXELS_PER_DEGREE below.
         let ratio = scale.to_radians() / DESIGN_PIXELS_PER_DEGREE;
         (ratio.min(1.0) * 1000.0).round() / 1000.0
+    }
+
+    /// The longitude, in degrees, at viewBox column `x`; `None` unless the
+    /// projection is the flat one, the only one a street-scale frame uses.
+    pub fn longitude_at(&self, x: f64) -> Option<f64> {
+        match self {
+            Self::Flat(p) => Some(p.center_longitude + ((x - VIEWBOX_WIDTH / 2.0) / p.scale / p.cos_center_latitude).to_degrees()),
+            Self::Patterson(_) => None,
+        }
+    }
+
+    /// The latitude, in degrees, at viewBox row `y` (flat projection only).
+    pub fn latitude_at(&self, y: f64) -> Option<f64> {
+        match self {
+            Self::Flat(p) => Some(p.center_latitude - ((y - VIEWBOX_HEIGHT / 2.0) / p.scale).to_degrees()),
+            Self::Patterson(_) => None,
+        }
     }
 
     /// Project one point. Always succeeds: neither projection has a
@@ -1030,6 +977,28 @@ mod tests {
             assert_eq!(frame.longitude_span, 10.0, "{precision:?}");
             assert_eq!(frame.tier, FrameTier::Local, "{precision:?}");
         }
+    }
+
+    #[test]
+    fn only_exact_places_may_have_a_street_scale_frame() {
+        let point = ProjectedPoint::new(-74.0119, 40.7081).unwrap();
+        let frame = Frame::for_streets(&[point], [Precision::Exact].into_iter()).unwrap();
+        assert_eq!(frame.longitude_span, STREET_MIN_FRAME_DEGREES);
+        assert_eq!(frame.tier, FrameTier::Local);
+        for precision in [Precision::City, Precision::Region, Precision::Country] {
+            assert!(Frame::for_streets(&[point], [precision].into_iter()).is_none(), "{precision:?}");
+            assert!(Frame::for_streets(&[point, point], [Precision::Exact, precision].into_iter()).is_none(), "exact with {precision:?}");
+        }
+        assert!(Frame::for_streets(&[], std::iter::empty()).is_none());
+    }
+
+    #[test]
+    fn a_flat_projection_is_inverted_by_longitude_at_and_latitude_at() {
+        let point = ProjectedPoint::new(-74.0119, 40.7081).unwrap();
+        let projection = Projection::new(&Frame::for_streets(&[point], [Precision::Exact].into_iter()).unwrap());
+        let (x, y) = projection.project(ProjectedPoint::new(-74.0100, 40.7090).unwrap()).unwrap();
+        assert!((projection.longitude_at(x).unwrap() + 74.0100).abs() < 1e-9);
+        assert!((projection.latitude_at(y).unwrap() - 40.7090).abs() < 1e-9);
     }
 
     #[test]

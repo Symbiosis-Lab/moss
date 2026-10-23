@@ -9,6 +9,7 @@ mod globe;
 // decodes the data this file embeds, with no knowledge of a build's
 // documents or gazetteer the way `places_data` has.
 mod labels;
+pub(crate) mod layer_crop;
 pub(crate) mod layer_warp;
 // The places-explorer data emitter (`places.<hash>.json`). `pub(crate)`,
 // not private: `build/pipeline.rs` calls `places_data::emit` directly once
@@ -33,7 +34,7 @@ pub use svg::{
 // Crate-internal only (unlike the block above): context.rs's locator reuses
 // the same coarsest-precision rule emit_svg applies to the full/aggregate
 // map, rather than a second copy of the Precision -> rank mapping.
-pub(crate) use svg::precision_rank;
+pub(crate) use svg::{emit_svg_over, precision_rank};
 // Crate-internal only: context.rs applies the route privacy gate and its one
 // diagnostic at the two call sites that resolve a route-eligible target
 // (`render_locator`, `render_term_map`) — see `svg::route`'s module doc.

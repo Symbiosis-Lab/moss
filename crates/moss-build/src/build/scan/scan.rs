@@ -992,8 +992,26 @@ fn collect_source_walk(path: &Path) -> Result<crate::build::cloud_readiness::sto
     }
     let mut nested_boundaries = Vec::new();
     let mut entries = Vec::new();
-    for entry in WalkDir::new(path).into_iter().filter_entry(|e| match left_out_of_site(e) {
+    let layer_sources: Vec<std::path::PathBuf> =
+        crate::config::map_layers::declared_sources(path).iter().map(|s| path.join(s)).collect();
+    for entry in WalkDir::new(path).into_iter().filter_entry(|e| match crate::build::scan::classify::left_out_with_layer_sources(e, &layer_sources) {
         None => true,
+        Some(LeftOut::LayerSource) => {
+            let pages: Vec<String> = WalkDir::new(e.path())
+                .into_iter()
+                .filter_map(Result::ok)
+                .filter(|f| f.file_type().is_file() && crate::build::scan::classify::is_page_path(f.path()))
+                .map(|f| f.path().strip_prefix(path).unwrap_or(f.path()).to_string_lossy().into_owned())
+                .collect();
+            if !pages.is_empty() {
+                crate::build::cli_output::log_note!(
+                    "{} is a map layer's source folder, so it is not published; its pages stay out of the site: {}",
+                    e.file_name().to_string_lossy(),
+                    pages.join(", ")
+                );
+            }
+            false
+        }
         Some(LeftOut::NestedSite) => { nested_boundaries.push(e.path().to_path_buf()); false }
         Some(LeftOut::AgentInstructions) => {
             log::info!("Skipping {}: agent instructions are tooling, not a page", e.file_name().to_string_lossy());
@@ -1521,7 +1539,10 @@ pub fn scan_folder_with_dedup_emit_with_error(
     dirs.retain(|d| crate::build::scan::classify::gets_index_page(d, &passthrough_roots, &attachment_folder));
     // Name only folders that would have a page once they hold something (not an
     // empty attachment folder or a folder inside a passthrough root).
-    let empty_folders = crate::build::scan::classify::topmost_empty_folders(&dirs, &folders_holding_files);
+    let mut empty_folders = crate::build::scan::classify::topmost_empty_folders(&dirs, &folders_holding_files);
+    // A folder holding only a layer source is not empty: its content is read, just not published.
+    let layer_sources = crate::config::map_layers::declared_sources(path);
+    empty_folders.retain(|f| !layer_sources.iter().any(|s| s.strip_prefix(f.as_str()).is_some_and(|rest| rest.starts_with('/'))));
     dirs.retain(|d| folders_holding_files.contains(d));
     // Skip the listing of a folder that only carries a pre-built app (see
     // `classify::holds_only_prebuilt_apps`). Empty and asset-only folders keep

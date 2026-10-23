@@ -230,7 +230,7 @@ describe("mountPlacesMap — embed seams", () => {
       for (const [x, y] of visible) {
         const tile = tiles.querySelector<HTMLElement>(`[data-moss-places-tile="${x},${y}"]`);
         expect(tile, `visible cell ${x},${y}`).not.toBeNull();
-        const canvas = tile!.firstElementChild as HTMLCanvasElement;
+        const canvas = tile!.querySelector<HTMLCanvasElement>(":scope > :not(.moss-places-tile-flat)")!;
         expect(canvas.tagName).toBe("CANVAS");
         const requiredPixels = parseFloat(tile!.style.width) * screenScale(camera, viewport) / 4 * 2;
         expect(requiredPixels / canvas.width).toBeLessThanOrEqual(1.3);

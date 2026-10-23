@@ -320,7 +320,7 @@ impl ServedPath {
 
     /// A file of a detail layer inside the place-map directory:
     /// `layers/<layer>/<rest>`. `layer` is a config key (letters, digits, `-`,
-    /// `_`); `rest` is `index.json` or `<level>/<i>/<j>.jpg`.
+    /// `_`); `rest` is `index.json`, `crops/<hex>.jpg` or `<level>/<i>/<j>.jpg`.
     pub fn for_place_map_layer_file(assets_hash: &str, layer: &str, rest: &str) -> Result<Self, ServedPathError> {
         let name_ok = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
         if !name_ok(layer) {
@@ -329,12 +329,13 @@ impl ServedPath {
         let dir = Self::for_place_map_asset(assets_hash, "layers.json")?;
         let dir = dir.as_str().trim_end_matches("layers.json");
         let valid_rest = rest == "index.json"
+            || rest.strip_prefix("crops/").and_then(|name| name.strip_suffix(".jpg")).is_some_and(|stem| !stem.is_empty() && stem.chars().all(|c| c.is_ascii_hexdigit()))
             || rest.strip_suffix(".jpg").is_some_and(|stem| {
                 let parts: Vec<&str> = stem.split('/').collect();
                 parts.len() == 3 && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
             });
         if !valid_rest {
-            return Err(ServedPathError::InvalidInput("layer file must be index.json or <level>/<i>/<j>.jpg"));
+            return Err(ServedPathError::InvalidInput("layer file must be index.json, crops/<hex>.jpg or <level>/<i>/<j>.jpg"));
         }
         Ok(ServedPath(format!("{dir}layers/{layer}/{rest}")))
     }

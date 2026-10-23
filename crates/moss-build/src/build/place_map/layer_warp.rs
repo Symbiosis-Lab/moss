@@ -10,6 +10,7 @@ mod plate;
 pub(crate) use plate::Plate;
 pub(crate) mod tiles;
 
+pub(crate) use plan::WARP_VERSION;
 pub use plan::{note_coverage, plan_layers, LayerPlan};
 
 #[cfg(test)]

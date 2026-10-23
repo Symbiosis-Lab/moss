@@ -14,3 +14,4 @@ Historical map layer "atlas-1930"
 Credit: New York Public Library
 Plate 95abed283977b2cc: https://iiif.nypl.org/iiif/3/5222333
   Rights: not stated
+  Fit: 3 m root mean square

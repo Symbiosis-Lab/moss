@@ -204,8 +204,7 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
   touch-action: none;
   cursor: grab;
   border-radius: 8px;
-  /* Past the depth the world data carries, its detail fades (`--moss-place-world-detail`, set from the camera's zoom) and the ground is the land tone. */
-  background: color-mix(in srgb, var(--moss-place-water, #dbe7ea) calc(var(--moss-place-world-detail, 1) * 100%), var(--moss-place-land, #e3e6d5));
+  background: var(--moss-place-water, #dbe7ea);
   block-size: 100%;
 }
 .moss-places-viewport[data-dragging] {
@@ -251,7 +250,7 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
 .moss-places-tiles {
   position: absolute;
   inset: 0;
-  opacity: calc(var(--moss-place-tile-opacity, 0) * var(--moss-place-world-detail, 1));
+  opacity: var(--moss-place-tile-opacity, 0);
   /* Tiles carry a z-index for their draw order; at opacity 1 this element
      is no stacking context of its own, so without this they would compete
      with the markers and cards above the layer. */
@@ -284,6 +283,17 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
   position: absolute;
   inset: 0;
 }
+/* Past the depth the tile data carries, its detail (and rivers) fade away over the flat land and water under it. */
+.moss-places-tile > canvas:not(.moss-places-tile-flat),
+.moss-places-tile > svg:not(.moss-places-tile-flat) {
+  opacity: var(--moss-place-world-detail, 1);
+}
+/* Behind the detail raster, which stays in flow. */
+.moss-places-tile > .moss-places-tile-flat {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+}
 
 /* The world layer's own surface: site.css's `.moss-place-map svg {
    inline-size: 100%; block-size: auto; aspect-ratio: 3 / 2; }` is right for
@@ -306,10 +316,17 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
   block-size: 100%;
   aspect-ratio: auto;
 }
-/* A detail layer's own raster is not the world's data and never fades with it. */
-[data-moss-places-explorer] .moss-places-world > canvas,
-[data-moss-places-explorer] .moss-places-world > svg:not([data-moss-places-layers]) {
+/* Past the depth the world data carries, its detail fades (`--moss-place-world-detail`, set from the camera's zoom) down to the flat land and water under it (`-flat`). A detail layer's own raster is not the world's data and never fades with it. */
+[data-moss-places-explorer] .moss-places-world > canvas:not(.moss-places-world-flat),
+[data-moss-places-explorer] .moss-places-world > svg:not([data-moss-places-layers], .moss-places-world-flat) {
   opacity: var(--moss-place-world-detail, 1);
+}
+/* Out of flow and behind the detail: in flow, it would stack above the detail
+   surface and push it out of the frame. */
+[data-moss-places-explorer] .moss-places-world > .moss-places-world-flat {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
 }
 
 /* The world's own rivers overlay sits directly in `.moss-places-world`

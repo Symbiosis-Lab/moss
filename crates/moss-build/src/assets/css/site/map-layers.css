@@ -1,8 +1,8 @@
 /* moss site stylesheet partial: map-layers
    Shipped only when the site declares `[map.layers]`. The credit line sits in
    the map figure's bottom-right corner and stays empty (hidden) until the
-   places explorer fills it with the credit of the layer in view. Where the
-   explorer's card row overlays the bottom of the map, it sits at the top
+   places explorer fills it with the credit of a layer drawing in view. Where
+   the explorer's card row overlays the bottom of the map, it sits at the top
    instead, under the scope chip and clear of the control column. */
 
 @layer shortcodes {
@@ -25,14 +25,8 @@
   z-index: 2;
 }
 
-/* A collapsed embed is framed by its page, whose expand button holds the bottom-right corner, so the credit stops short of it. */
-figure[data-moss-places-embed-mode="collapsed"] .moss-place-map-credit {
-  inset-inline-end: calc(var(--moss-space-xs) + 52px);
-  max-inline-size: calc(100% - 2 * var(--moss-space-xs) - 52px);
-}
-
-/* The card row has no fixed height (an opened card grows up to most of the map), so nothing above it is safe: the top edge, below the 36px chip and left of the 36px control column (12px inset, 8px gap). */
-figure[data-moss-places-explorer]:not([data-moss-places-embed-mode="collapsed"]) .moss-place-map-credit {
+/* A figure with a card row (`data-moss-places-cards`, set by the explorer) puts the credit at the top: the row has no fixed height (an opened card grows up to most of the map), so nothing along the bottom is safe. Below the 36px chip, left of the 36px control column (12px inset, 8px gap). */
+figure[data-moss-places-cards] .moss-place-map-credit {
   inset-block: calc(12px + 36px + 8px) auto;
   inset-inline: 12px auto;
   max-inline-size: calc(100% - 12px - 36px - 12px - 8px);

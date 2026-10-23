@@ -1093,11 +1093,13 @@ pub(crate) fn copy_deferred_assets(
         }
     };
 
+    let layer_sources: Vec<std::path::PathBuf> =
+        crate::config::map_layers::declared_sources(source_root).iter().map(|s| source_root.join(s)).collect();
     for entry in WalkDir::new(source_root)
         .into_iter()
-        // What the scan reads: never a nested site, an excluded folder or the
-        // root agent instructions.
-        .filter_entry(|e| crate::build::scan::classify::left_out_of_site(e).is_none())
+        // What the scan reads: never a nested site, an excluded folder, a
+        // layer source or the root agent instructions.
+        .filter_entry(|e| crate::build::scan::classify::left_out_with_layer_sources(e, &layer_sources).is_none())
     {
         let entry = match entry {
             Ok(e) => e,

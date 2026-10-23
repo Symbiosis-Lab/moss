@@ -72,6 +72,14 @@ pub(crate) fn level_range(extent: [f64; 4], max_zoom: u8) -> (u8, u8) {
     (min, max)
 }
 
+/// How many of the deepest levels are cut to the neighbourhood of a place.
+const NEAR_LEVELS: u8 = 2;
+
+/// Whether `level` of a layer drawn from `min` to `max` keeps only the tiles near a place: the deepest two levels, except the shallowest, which always covers the whole extent so the explorer has something to draw (and enlarge) wherever no deeper tile exists.
+pub(crate) fn near_places_only(level: u8, min: u8, max: u8) -> bool {
+    level > min && level + NEAR_LEVELS > max
+}
+
 /// The tiles of `level` overlapping `extent`; at the deepest two levels
 /// (`restrict`) only those near one of `places`.
 pub(crate) fn candidates(level: u8, extent: [f64; 4], restrict: bool, places: &[NearPlace]) -> Vec<(u32, u32)> {
@@ -161,21 +169,36 @@ pub(crate) fn render_tile(plates: &[Loaded], level: u8, i: u32, j: u32) -> Optio
     let upp = units_per_pixel(level);
     let side = f64::from(TILE_SIZE) * upp;
     let rect = [f64::from(i) * side, f64::from(j) * side, f64::from(i + 1) * side, f64::from(j + 1) * side];
+    let longitudes: Vec<f64> = (0..TILE_SIZE).map(|c| world_coords::unproject_longitude(rect[0] + (f64::from(c) + 0.5) * upp).to_radians()).collect();
+    let latitudes: Vec<f64> = (0..TILE_SIZE).map(|row| world_coords::unproject_latitude(rect[1] + (f64::from(row) + 0.5) * upp)).collect();
+    sample_grid(plates, rect, &longitudes, &latitudes)
+}
+
+/// The picture of `plates` over a grid of pixels, drawn the way a tile is:
+/// `longitudes` (radians) and `latitudes` (degrees) are the centres of its
+/// columns and rows, west to east and north to south.
+pub(crate) fn render_crop(plates: &[Loaded], longitudes: &[f64], latitudes: &[f64]) -> Option<RgbImage> {
+    let (west, north) = world_coords::project(*latitudes.first()?, longitudes.first()?.to_degrees());
+    let (east, south) = world_coords::project(*latitudes.last()?, longitudes.last()?.to_degrees());
+    sample_grid(plates, [west, north, east, south], longitudes, latitudes)
+}
+
+/// The pixels of a grid, one per longitude column and latitude row, each from
+/// the topmost of the `plates` that reach `rect` (world coordinates).
+fn sample_grid(plates: &[Loaded], rect: [f64; 4], longitudes: &[f64], latitudes: &[f64]) -> Option<RgbImage> {
     let relevant: Vec<&Loaded> = plates.iter().rev().filter(|p| p.covers(rect)).collect();
     if relevant.is_empty() {
         return None;
     }
-    let columns: Vec<f64> = (0..TILE_SIZE).map(|c| world_coords::unproject_longitude(rect[0] + (f64::from(c) + 0.5) * upp).to_radians()).collect();
-    let mut tile = RgbImage::from_pixel(TILE_SIZE, TILE_SIZE, image::Rgb([255, 255, 255]));
+    let mut tile = RgbImage::from_pixel(longitudes.len() as u32, latitudes.len() as u32, image::Rgb([255, 255, 255]));
     let mut drawn = false;
-    for row in 0..TILE_SIZE {
-        let latitude = world_coords::unproject_latitude(rect[1] + (f64::from(row) + 0.5) * upp);
+    for (row, &latitude) in latitudes.iter().enumerate() {
         let my = mercator(latitude, 0.0).1;
-        for (col, &mx) in columns.iter().enumerate() {
+        for (col, &mx) in longitudes.iter().enumerate() {
             for loaded in &relevant {
                 let (u, v) = loaded.plate.to_pixel.eval(mx, my);
                 if let Some(rgb) = loaded.sample(u, v) {
-                    tile.put_pixel(col as u32, row, image::Rgb(rgb));
+                    tile.put_pixel(col as u32, row as u32, image::Rgb(rgb));
                     drawn = true;
                     break;
                 }
@@ -185,11 +208,11 @@ pub(crate) fn render_tile(plates: &[Loaded], level: u8, i: u32, j: u32) -> Optio
     drawn.then_some(tile)
 }
 
-/// The tile as a JPEG.
+/// The picture as a JPEG.
 pub(crate) fn encode(tile: &RgbImage) -> Vec<u8> {
     let mut bytes = Vec::new();
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, JPEG_QUALITY)
         .encode(tile.as_raw(), tile.width(), tile.height(), image::ExtendedColorType::Rgb8)
-        .expect("a 256x256 RGB buffer encodes");
+        .expect("an RGB buffer encodes");
     bytes
 }

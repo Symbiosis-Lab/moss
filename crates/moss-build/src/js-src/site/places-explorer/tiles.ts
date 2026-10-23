@@ -233,6 +233,11 @@ export interface TileLayerOptions extends TileGrid {
   riversContainer?: HTMLElement;
 }
 
+/** The tile's detail raster: the flat land and water under it is the wrapper's first child. */
+function detailSurface(wrapper: Element): Element | null {
+  return wrapper.querySelector(":scope > :not(.moss-places-tile-flat)");
+}
+
 /** A fetched, decoded tile: the positioned wrapper div and the raster's own release callback (a no-op on the progressive-enhancement fallback — see `raster.ts`'s `rasterizeOrFallback`). */
 interface LoadedTile {
   el: HTMLElement;
@@ -310,7 +315,7 @@ export class TileLayer {
     return required !== null && required.every(([x, y]) => {
       const entry = this.elements.get(`${x},${y}`);
       if (entry === undefined || entry === "loading" || entry === "failed" || entry.bakeState !== "ready") return false;
-      const surface = entry.el.firstElementChild;
+      const surface = detailSurface(entry.el);
       if (surface?.tagName.toLowerCase() !== "canvas" || (surface as HTMLCanvasElement).width < 1 || (surface as HTMLCanvasElement).height < 1) return false;
       const wantedDensity = this.bakeableDensity(entry.split, this.density);
       return entry.bakedDensity * TILE_REBAKE_RATIO >= wantedDensity;
@@ -531,6 +536,7 @@ export class TileLayer {
       // below 1× until promotion to bound memory.
       const density = this.onScreen.has(key) ? this.density : Math.min(this.density, 1);
       const { surface, baked } = await this.bake(split, density);
+      const flat = this.flatSurface(split);
       if (generation !== this.generation || this.elements.get(key) !== "loading") {
         surface.release();
         return; // dropped out of the fade band while the raster decoded, or superseded by a clear() + re-queue
@@ -541,7 +547,7 @@ export class TileLayer {
       wrapper.style.position = "absolute";
       wrapper.style.width = `${split.width}px`;
       wrapper.style.height = `${split.height}px`;
-      wrapper.append(surface.el);
+      wrapper.append(flat.el, surface.el);
       wrapper.style.zIndex = String(tileDrawOrder(x, y, this.options.columns, this.options.rows));
       this.container.append(wrapper);
       const entry: LoadedTile = { el: wrapper, release: surface.release, split, bakedDensity: baked, bakeState: "ready" };
@@ -588,6 +594,13 @@ export class TileLayer {
     return { surface, baked };
   }
 
+  /** The tile's flat land and water, kept as the live vector: it is a few unfiltered paths, and a bitmap would smear the shore into a gradient once enlarged hundreds of times. */
+  private flatSurface(split: MapSvgSplit): { el: SVGSVGElement } {
+    const el = split.flat().base.cloneNode(true) as SVGSVGElement;
+    el.classList.add("moss-places-tile-flat");
+    return { el };
+  }
+
   /** A tile is swapped for a smaller raster only once the density the view needs has fallen, so one that merely left the view keeps its raster for the pan back; an off-screen one is never baked sharper, since nothing shows it. */
   private needsRebake(key: string, entry: LoadedTile): boolean {
     const wanted = this.bakeableDensity(entry.split, this.density);
@@ -609,7 +622,7 @@ export class TileLayer {
       result.surface.release();
       return;
     }
-    entry.el.firstElementChild?.replaceWith(result.surface.el);
+    detailSurface(entry.el)?.replaceWith(result.surface.el);
     entry.release();
     entry.release = result.surface.release;
     entry.bakedDensity = result.baked;

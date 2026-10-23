@@ -82,14 +82,27 @@ pub fn build_date(source_date_epoch: Option<&str>, now: chrono::NaiveDateTime) -
     date.format("%Y-%m-%d").to_string()
 }
 
-/// The files the source copy holds, relative to the site root, sorted.
-fn source_files(structure: &ProjectStructure) -> Vec<&str> {
-    let mut files: Vec<&str> = structure
+/// The files the source copy holds, relative to the site root, sorted. A map
+/// layer's source folder is out of the scanned structure but is source a
+/// rebuilt folder needs, so all its files join the copy here, scans included:
+/// the published site carries a scan only as warped tiles.
+fn source_files(structure: &ProjectStructure) -> Vec<String> {
+    let root = Path::new(&structure.root_path);
+    let layer_files = crate::config::map_layers::declared_sources(root).into_iter().flat_map(|source| {
+        walkdir::WalkDir::new(root.join(source))
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_file())
+            .filter_map(|e| e.path().strip_prefix(root).ok().map(|r| moss_core::slug::normalize_separators(&r.to_string_lossy())))
+            .collect::<Vec<_>>()
+    });
+    let mut files: Vec<String> = structure
         .markdown_files
         .iter()
         .chain(&structure.other_files)
         .filter(|file| SOURCE_EXTENSIONS.contains(&file.file_type.as_str()))
-        .map(|file| file.path.as_str())
+        .map(|file| file.path.clone())
+        .chain(layer_files)
         .filter(|path| !path.split('/').any(|segment| segment == "_moss" || segment == "node_modules"))
         .collect();
     files.sort_unstable();
@@ -163,8 +176,8 @@ fn emit_source_copy(inputs: EditionInputs<'_>, stage_dir: &Path, pending: &mut P
     for rel in source_files(inputs.structure) {
         // A file the sync client has not materialised yet is left out of this
         // edition rather than failing the build.
-        let Ok(bytes) = std::fs::read(root.join(rel)) else { continue };
-        let Ok(served) = ServedPath::for_source_copy(rel) else { continue };
+        let Ok(bytes) = std::fs::read(root.join(&rel)) else { continue };
+        let Ok(served) = ServedPath::for_source_copy(&rel) else { continue };
         BuildContext::for_render(stage_dir, pending).emit(&served, &bytes, HashBucket::Files)?;
         inventory.push_str(&format!("{rel}\0{}\n", compute_binary_hash(&bytes)));
         copied.push(rel);
@@ -174,7 +187,7 @@ fn emit_source_copy(inputs: EditionInputs<'_>, stage_dir: &Path, pending: &mut P
     if site_url.is_none() {
         crate::build::cli_output::log_note!("no published site address is known ([site] domain), so the page citations name no address");
     }
-    let readme = readme(&copied, inputs.documents, inputs.license.as_deref(), &inputs.date, &id);
+    let readme = readme(Path::new(&inputs.structure.root_path), &copied, inputs.documents, inputs.license.as_deref(), &inputs.date, &id);
     let served = ServedPath::from_cached(SOURCE_README).map_err(std::io::Error::other)?;
     BuildContext::for_render(stage_dir, pending).emit(&served, readme.as_bytes(), HashBucket::Files)?;
     Ok(Edition {
@@ -188,7 +201,7 @@ fn emit_source_copy(inputs: EditionInputs<'_>, stage_dir: &Path, pending: &mut P
     })
 }
 
-fn readme(files: &[&str], documents: &[ParsedDocument], license: Option<&str>, date: &str, id: &str) -> String {
+fn readme(root: &Path, files: &[String], documents: &[ParsedDocument], license: Option<&str>, date: &str, id: &str) -> String {
     let mut fields: BTreeMap<&str, usize> = BTreeMap::new();
     for document in documents {
         for key in document.raw_frontmatter.keys() {
@@ -207,8 +220,45 @@ fn readme(files: &[&str], documents: &[ParsedDocument], license: Option<&str>, d
             out.push_str(&format!("- `{field}` ({count})\n"));
         }
     }
+    out.push_str(&layer_sections(root));
     if let Some(license) = license {
         out.push_str(&format!("\n## Licence\n\n{license}\n"));
+    }
+    out
+}
+
+/// One section per map layer folder: what its three kinds of file are, and
+/// where each plate came from, read from the plate's `region.json`.
+fn layer_sections(root: &Path) -> String {
+    let mut out = String::new();
+    for source in crate::config::map_layers::declared_sources(root) {
+        out.push_str(&format!(
+            "\n## Map layer `{source}`\n\nA historical map the site draws under its places. For each plate, `<id>.annotation.json` is its georeference (control points tying the scan to places on the earth), the image is the part of the scan the site uses, and `<id>.region.json` says which part, at what scale, where it came from and under what rights.\n\n"
+        ));
+        let mut regions: Vec<_> = walkdir::WalkDir::new(root.join(&source))
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_file() && e.file_name().to_string_lossy().ends_with(".region.json"))
+            .map(|e| e.into_path())
+            .collect();
+        regions.sort();
+        for path in regions {
+            let id = path.file_name().map(|n| n.to_string_lossy().trim_end_matches(".region.json").to_string()).unwrap_or_default();
+            let region: serde_json::Value = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+            let field = |k: &str| region.get(k).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_string);
+            let mut line = format!("- `{id}`: from {}", field("source").unwrap_or_else(|| "a source not stated".into()));
+            if let Some(credit) = field("credit") {
+                line.push_str(&format!("; {credit}"));
+            }
+            if let Some(rights) = field("rights") {
+                line.push_str(&format!("; rights: {rights}"));
+            }
+            if let Some(by) = field("georeferenced_by") {
+                line.push_str(&format!("; georeferenced by {by}"));
+            }
+            out.push_str(&line);
+            out.push('\n');
+        }
     }
     out
 }

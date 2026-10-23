@@ -410,13 +410,13 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-place-world-detail",
         owner: "moss-places-viewport",
         default: "1",
-        description: "How much of the built-in world map's detail (land shapes, relief, rivers, regional tiles) the explorer shows: 1 down to its clean depth, falling to 0 past it, where the viewport ground becomes the flat land tone instead of enlarging shapes the data cannot support. Written by the explorer from the camera's zoom on every settle; detail layers are unaffected. Not a theme hook: a hand-set value is overwritten.",
+        description: "How much of the built-in world map's detail (sea-floor and relief bands, urban areas, rivers) the explorer shows: 1 down to its clean depth, falling to 0 past it, where only the flat land and water tones remain instead of enlarged shapes the data cannot support. Written by the explorer from the camera's zoom on every settle; detail layers are unaffected. Not a theme hook: a hand-set value is overwritten.",
     },
     CustomProp {
         name: "--moss-place-land",
         owner: "moss-places-viewport",
         default: "#e3e6d5",
-        description: "The flat land tone the explorer's ground fades to past the world map's clean depth. `.moss-place-map` already carries the site's light and dark values; the default here matches the light one.",
+        description: "The flat land tone of the world map, which stays once its detail has faded past the clean depth. `.moss-place-map` already carries the site's light and dark values; the default here matches the light one.",
     },
     CustomProp {
         name: "--moss-place-river-scale",

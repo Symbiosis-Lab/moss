@@ -3,8 +3,9 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::fit::{self, mercator};
-use super::plate::load_plates;
+use super::plate::{load_plate, load_plates};
 use super::tiles::{self, Loaded};
+use crate::build::cli_output::take_cli_problems;
 use crate::build::place_map::world_coords;
 
 const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/layer-plate");
@@ -153,4 +154,58 @@ fn the_deepest_levels_keep_only_tiles_near_a_place() {
     let near = tiles::candidates(17, extent, true, &[place]);
     assert!(!near.is_empty() && near.len() < all.len(), "{} of {}", near.len(), all.len());
     assert!(tiles::candidates(17, extent, true, &[]).is_empty(), "no places, no deep tiles");
+}
+
+#[test]
+fn the_shallowest_level_is_never_cut_to_the_places() {
+    // A layer that spans two levels or fewer would otherwise draw nothing away from a place.
+    assert!(!tiles::near_places_only(14, 14, 15));
+    assert!(tiles::near_places_only(15, 14, 15));
+    assert!(!tiles::near_places_only(15, 15, 15));
+    let spans: Vec<bool> = (12..=16).map(|level| tiles::near_places_only(level, 12, 16)).collect();
+    assert_eq!(spans, [false, false, false, true, true]);
+}
+
+/// The synthetic plate with `region.json`'s region and scale replaced, and the annotation's source size.
+fn synthetic_with(dir: &Path, region: &str, scale: f64, source_size: (u32, u32)) {
+    synthetic(dir);
+    let mut annotation: Value = serde_json::from_slice(&std::fs::read(dir.join("syn.annotation.json")).unwrap()).unwrap();
+    annotation["target"]["source"]["width"] = source_size.0.into();
+    annotation["target"]["source"]["height"] = source_size.1.into();
+    std::fs::write(dir.join("syn.annotation.json"), annotation.to_string()).unwrap();
+    let text = std::fs::read_to_string(dir.join("syn.region.json")).unwrap().replace("\"region\":[0,0,100,100]", &format!("\"region\":{region}")).replace("\"scale\":1", &format!("\"scale\":{scale}"));
+    std::fs::write(dir.join("syn.region.json"), text).unwrap();
+}
+
+#[test]
+fn a_plate_whose_image_does_not_match_its_region_is_refused_and_counted() {
+    let dir = tempfile::tempdir().unwrap();
+    // The image is 100x100, so a 200x100 region at scale 1 cannot be it.
+    synthetic_with(dir.path(), "[0,0,200,100]", 1.0, (200, 100));
+    let why = load_plate(dir.path(), "syn").err().expect("refused");
+    assert!(why.contains("100x100") && why.contains("200x100") && why.contains("Allmaps Editor"), "{why}");
+    take_cli_problems();
+    assert!(load_plates(dir.path()).is_empty());
+    assert_eq!(take_cli_problems(), 1, "a refused plate counts under --strict");
+}
+
+#[test]
+fn a_region_outside_the_annotations_own_image_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    // The image matches the region, but the annotation was made on a smaller image.
+    synthetic_with(dir.path(), "[0,0,100,100]", 1.0, (80, 80));
+    let why = load_plate(dir.path(), "syn").err().expect("refused");
+    assert!(why.contains("outside") && why.contains("80x80") && why.contains("Allmaps Editor"), "{why}");
+}
+
+#[test]
+fn a_matching_image_and_a_one_pixel_rounding_are_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    synthetic(dir.path());
+    assert!(load_plate(dir.path(), "syn").is_ok());
+    // 100 px at scale 0.995 rounds to 100; at 0.99 it is 99, one pixel short, still accepted.
+    synthetic_with(dir.path(), "[0,0,100,100]", 0.99, (100, 100));
+    assert!(load_plate(dir.path(), "syn").is_ok());
+    synthetic_with(dir.path(), "[0,0,100,100]", 0.98, (100, 100));
+    assert!(load_plate(dir.path(), "syn").is_err());
 }

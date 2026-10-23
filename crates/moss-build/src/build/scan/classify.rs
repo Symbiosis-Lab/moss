@@ -90,6 +90,9 @@ pub enum LeftOut {
     /// pages: a dot-prefixed placeholder such as `.keeper.md.icloud` stands
     /// for a page still in the cloud and must reach the scan.
     HiddenFile,
+    /// A folder a `[map.layers.<name>]` table names as its `source`: the
+    /// layer's raw plates, read by the build and never published.
+    LayerSource,
 }
 
 /// The one rule for which files belong to the site: `Some` for an entry a walk
@@ -98,6 +101,15 @@ pub enum LeftOut {
 /// build cannot link is never offered or found by the editor either.
 pub fn left_out_of_site(entry: &walkdir::DirEntry) -> Option<LeftOut> {
     left_out(entry.path(), entry.file_type().is_dir(), entry.depth())
+}
+
+/// [`left_out_of_site`] that also leaves out the `layer_sources`, as absolute
+/// folder paths spelled the way the walk spells them.
+pub fn left_out_with_layer_sources(entry: &walkdir::DirEntry, layer_sources: &[std::path::PathBuf]) -> Option<LeftOut> {
+    if entry.file_type().is_dir() && layer_sources.iter().any(|s| s == entry.path()) {
+        return Some(LeftOut::LayerSource);
+    }
+    left_out_of_site(entry)
 }
 
 /// [`left_out_of_site`] for an entry at `path`, `depth` levels below the site

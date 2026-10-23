@@ -47,6 +47,7 @@ function mount(layers: DetailLayer[], degreesPerPx = 0.0005) {
   const camera = { x: CENTER.x, y: CENTER.y, zoom };
   history.replaceState(null, "", `/places/?p=patterson&z=${zoom}&x=${camera.x}&y=${camera.y}`);
   const figure = document.createElement("figure");
+  figure.innerHTML = '<p class="moss-place-map-credit"></p>';
   document.body.append(figure);
   mountPlacesMap(figure, {
     worldSvgText: WORLD_SVG, tilesBaseUrl: "/_moss/map.abc/", tileCells: [[10, 13]], tileK: 4,
@@ -138,5 +139,21 @@ describe("placement under true aspect", () => {
     expect(world.querySelector("[data-moss-places-layers]")).not.toBeNull();
     expect(world.contains(figure.querySelector(".moss-places-markers"))).toBe(false);
     expect(world.contains(figure.querySelector(".moss-places-labels"))).toBe(false);
+  });
+});
+
+describe("credit", () => {
+  const CREDITED: DetailLayer = { ...LAYER, credit: "Atlas of the City, 1930" };
+  const credit = (figure: HTMLElement) => figure.querySelector(".moss-place-map-credit")!.textContent;
+
+  test("is empty while the extent is in view but no level is drawn, and appears once one is", async () => {
+    const far = mount([CREDITED], 0.05);
+    await flush();
+    expect(credit(far.figure)).toBe("");
+    document.body.innerHTML = "";
+    const near = mount([CREDITED]);
+    expect(credit(near.figure)).toBe("");
+    await flush();
+    expect(credit(near.figure)).toBe("Atlas of the City, 1930");
   });
 });

@@ -29,6 +29,8 @@ pub(crate) struct Plate {
     pub rms_metres: f64,
     pub source: String,
     pub rights: String,
+    /// Who made the georeference, when `region.json` says.
+    pub georeferenced_by: Option<String>,
     pub credit: String,
     pub title: Option<String>,
     /// Content hash of the plate's three files.
@@ -39,6 +41,14 @@ impl Plate {
     /// `[x0, y0, x1, y1]` of the footprint in world coordinates.
     pub(crate) fn footprint_world(&self) -> [f64; 4] {
         self.footprint.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, &(x, y)| [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)])
+    }
+
+    /// Whether the world point has pixels: inside the mask and the fetched region.
+    pub(crate) fn has_pixels_at(&self, x: f64, y: f64) -> bool {
+        let (mx, my) = mercator(world_coords::unproject_latitude(y), world_coords::unproject_longitude(x));
+        let (u, v) = self.to_pixel.eval(mx, my);
+        let r = self.region;
+        (r[0]..r[0] + r[2]).contains(&u) && (r[1]..r[1] + r[3]).contains(&v) && super::tiles::inside(&self.mask, u, v)
     }
 
     /// `[west, south, east, north]` of the footprint in degrees.
@@ -132,7 +142,25 @@ fn requested_order(id: &str, annotation: &Value) -> u8 {
     }
 }
 
-fn load_plate(folder: &Path, id: &str) -> Result<Plate, String> {
+const CHANGED_IMAGE: &str = "the library's image has changed since the annotation was made; re-georeference it, e.g. in the Allmaps Editor";
+
+/// A plate is refused when its fetched image cannot be the `region` it names at `scale`, or when that region is not inside the image the annotation was made on: the control points are pixels of the old image, so a re-cut image would be warped to the wrong place with a residual that looks fine.
+fn check_image_fits_annotation(annotation: &Value, region: [f64; 4], scale: f64, image: (u32, u32)) -> Result<(), String> {
+    let source = &annotation["target"]["source"];
+    if let (Some(w), Some(h)) = (number(&source["width"]), number(&source["height"])) {
+        if region[0] < 0.0 || region[1] < 0.0 || region[0] + region[2] > w + 1.0 || region[1] + region[3] > h + 1.0 {
+            return Err(format!("region [{}, {}, {}, {}] lies outside the annotation's own image size {w}x{h}; {CHANGED_IMAGE}", region[0], region[1], region[2], region[3]));
+        }
+    }
+    let expected = ((region[2] * scale).round(), (region[3] * scale).round());
+    let (actual_w, actual_h) = (f64::from(image.0), f64::from(image.1));
+    if (actual_w - expected.0).abs() > 1.0 || (actual_h - expected.1).abs() > 1.0 {
+        return Err(format!("the image is {actual_w}x{actual_h} px, but region {}x{} at scale {scale} should give {}x{}; {CHANGED_IMAGE}", region[2], region[3], expected.0, expected.1));
+    }
+    Ok(())
+}
+
+pub(super) fn load_plate(folder: &Path, id: &str) -> Result<Plate, String> {
     let (annotation, annotation_bytes) = json(&folder.join(format!("{id}.annotation.json")))?;
     let (region, region_bytes) = json(&folder.join(format!("{id}.region.json")))?;
     if region["version"].as_u64().is_some_and(|v| v != 1) {
@@ -155,9 +183,10 @@ fn load_plate(folder: &Path, id: &str) -> Result<Plate, String> {
         return Err("region.json `region` must be [x, y, w, h] with a positive size".into());
     }
     let region_box = [region_box[0], region_box[1], region_box[2], region_box[3]];
-    if !region["scale"].as_f64().is_some_and(|s| s > 0.0 && s.is_finite()) {
+    let Some(scale) = region["scale"].as_f64().filter(|s| *s > 0.0 && s.is_finite()) else {
         return Err("region.json `scale` must be a positive number".into());
-    }
+    };
+    check_image_fits_annotation(&annotation, region_box, scale, (iw, ih))?;
 
     let mask = selector_polygon(&annotation)?;
     let points = control_points(&annotation);
@@ -214,6 +243,7 @@ fn load_plate(folder: &Path, id: &str) -> Result<Plate, String> {
         rms_metres,
         source,
         rights: text(&region["rights"]),
+        georeferenced_by: Some(text(&region["georeferenced_by"])).filter(|t| !t.is_empty()),
         credit,
         title,
         digest: compute_binary_hash(&all),

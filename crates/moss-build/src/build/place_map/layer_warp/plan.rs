@@ -13,7 +13,7 @@ use crate::config::map_layers::{LayerKind, MapLayer};
 use crate::vault::places::{Gazetteer, Precision};
 
 /// Changes when the way tiles are drawn does, so tiles drawn the old way are not reused.
-const WARP_VERSION: u32 = 1;
+pub(crate) const WARP_VERSION: u32 = 2;
 /// A plate whose control points disagree with its own fit by more than this is noted.
 const RMS_NOTE_METRES: f64 = 30.0;
 
@@ -114,7 +114,10 @@ fn plan_layer(layer: &MapLayer, site_root: &Path, spots: &[(&String, (f64, f64))
     let mut notice = format!("\nHistorical map layer \"{}\"\nCredit: {credit}\n", layer.name);
     for p in &plates {
         let rights = if p.rights.is_empty() { "not stated" } else { &p.rights };
-        notice.push_str(&format!("Plate {}: {}\n  Rights: {rights}\n", p.id, if p.source.is_empty() { "source not stated" } else { &p.source }));
+        notice.push_str(&format!("Plate {}: {}\n  Rights: {rights}\n  Fit: {:.0} m root mean square\n", p.id, if p.source.is_empty() { "source not stated" } else { &p.source }, p.rms_metres));
+        if let Some(by) = &p.georeferenced_by {
+            notice.push_str(&format!("  Georeferenced by: {by}\n"));
+        }
     }
 
     let places: Vec<NearPlace> = spots.iter().map(|(_, (lat, lng))| NearPlace::new(*lat, *lng)).collect();

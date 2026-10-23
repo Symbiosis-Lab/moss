@@ -15,13 +15,11 @@ use rayon::prelude::*;
 use crate::build::cli_output::{log_note, log_warn_problem};
 use crate::build::context::BuildContext;
 use crate::build::manifest::{HashBucket, PendingManifest};
-use crate::build::place_map::layer_warp::tiles::{candidates, encode, level_range, overlaps, render_tile, tile_rect, Loaded, TILE_SIZE};
+use crate::build::place_map::layer_crop::{crop_axes, CropJob};
+use crate::build::place_map::layer_warp::tiles::{candidates, encode, level_range, near_places_only, overlaps, render_crop, render_tile, tile_rect, Loaded, TILE_SIZE};
 use crate::build::place_map::layer_warp::{LayerPlan, Plate};
 use crate::build::served_path::ServedPath;
 use crate::config::map_layers::MapLayer;
-
-/// How many of the deepest levels are cut to the neighbourhood of a place.
-const NEAR_LEVELS: u8 = 2;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Footprint {
@@ -65,16 +63,17 @@ fn sole_cost(plan: &LayerPlan, id: &str, sizes: &[TileSize]) -> u64 {
     sizes.iter().filter(|t| reaches(plate, t) && !plan.plates.iter().any(|o| o.id != id && reaches(o, t))).map(|t| t.bytes).sum()
 }
 
-/// Writes the layer's tiles and index; the URL of the index when the layer
-/// has any tile. Over budget is a problem (a failure under `--strict`).
+/// Writes the layer's tiles and index, and the `crops` figures asked for (by
+/// file name); the URL of the index when the layer has any tile. Over budget
+/// is a problem (a failure under `--strict`), the crops counting toward it.
 /// `uncovered` names the plates that cover none of the site's places.
-pub(crate) fn emit_layer(layer: &MapLayer, plan: &LayerPlan, uncovered: &[String], hash: &str, output_dir: &Path, pending: &mut PendingManifest) -> Option<String> {
+pub(crate) fn emit_layer(layer: &MapLayer, plan: &LayerPlan, uncovered: &[String], crops: &[(&String, &CropJob)], hash: &str, output_dir: &Path, pending: &mut PendingManifest) -> Option<String> {
     if plan.plates.is_empty() {
         return None;
     }
     match emit_tiles(layer, plan, hash, output_dir, pending) {
         Ok(sizes) => {
-            let total: u64 = sizes.iter().map(|t| t.bytes).sum();
+            let total: u64 = sizes.iter().map(|t| t.bytes).sum::<u64>() + emit_crops(layer, plan, crops, hash, output_dir, pending);
             for id in uncovered {
                 log_note!("plate {id} covers none of the site's places; it is kept, and its tiles cost {}", size_text(sole_cost(plan, id, &sizes)));
             }
@@ -88,6 +87,38 @@ pub(crate) fn emit_layer(layer: &MapLayer, plan: &LayerPlan, uncovered: &[String
             None
         }
     }
+}
+
+/// Writes each picture of `crops` (file name and job) not already in the
+/// output from the earlier build; the bytes of all of them. A picture drawn
+/// from the same plates over the same frame has the same name, so it is reused.
+fn emit_crops(layer: &MapLayer, plan: &LayerPlan, crops: &[(&String, &CropJob)], hash: &str, output_dir: &Path, pending: &mut PendingManifest) -> u64 {
+    let mut loaded: Option<Vec<Loaded>> = None;
+    let mut total = 0;
+    for (name, job) in crops {
+        let Ok(path) = ServedPath::for_place_map_layer_file(hash, &layer.name, &format!("crops/{name}.jpg")) else { continue };
+        let bytes = match std::fs::read(output_dir.join(path.as_str())) {
+            Ok(bytes) => {
+                pending.register(&path, &bytes, HashBucket::Files);
+                bytes
+            }
+            Err(_) => {
+                let plates = loaded.get_or_insert_with(|| plan.plates.iter().filter_map(|p| Loaded::open(p).map_err(|why| log_warn_problem!("map plate {} skipped: {why}", p.id)).ok()).collect());
+                let Some(picture) = crop_axes(job).and_then(|(longitudes, latitudes)| render_crop(plates, &longitudes, &latitudes)) else {
+                    log_warn_problem!("map layer {} could not be drawn into a figure: no plate has pixels in its frame", layer.name);
+                    continue;
+                };
+                let bytes = encode(&picture);
+                if let Err(error) = BuildContext::for_render(output_dir, pending).emit(&path, &bytes, HashBucket::Files) {
+                    log_warn_problem!("map layer {} figure {name}: {error}", layer.name);
+                    continue;
+                }
+                bytes
+            }
+        };
+        total += bytes.len() as u64;
+    }
+    total
 }
 
 fn emit_tiles(layer: &MapLayer, plan: &LayerPlan, hash: &str, output_dir: &Path, pending: &mut PendingManifest) -> Result<Vec<TileSize>, String> {
@@ -129,7 +160,7 @@ fn emit_tiles(layer: &MapLayer, plan: &LayerPlan, hash: &str, output_dir: &Path,
             })
             .collect();
         for level in min..=max {
-            let restrict = level + NEAR_LEVELS > max;
+            let restrict = near_places_only(level, min, max);
             let wanted = candidates(level, plan.extent, restrict, &plan.places);
             let tiles: Vec<(u32, u32, Vec<u8>)> =
                 wanted.par_iter().filter_map(|&(i, j)| render_tile(&loaded, level, i, j).map(|t| (i, j, encode(&t)))).collect();
