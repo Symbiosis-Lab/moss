@@ -82,6 +82,40 @@ Text.
 
 Text.
 `,
+    "short.md": `---
+title: Cove
+subtitle: ${SUBTITLE}
+uid: "tdg00005"
+---
+
+Text.
+`,
+    "long.md": `---
+title: ${LONG_TITLE}
+subtitle: ${SUBTITLE}
+uid: "tdg00006"
+content_width: full
+---
+
+Text.
+`,
+    "hero.md": `---
+title: Hero
+uid: "tdg00009"
+---
+
+:::hero
+[Read the cards](/cards/)
+:::
+
+:::grid 2
+${card(1, "One", "Text one.")}
++++
+${card(2, "Two", "Text two.")}
+:::
+
+After the grid.
+`,
     ".moss/config.toml": `schema_version = 5
 
 [site]

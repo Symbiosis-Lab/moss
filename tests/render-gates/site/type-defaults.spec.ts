@@ -116,3 +116,64 @@ test.describe("a year range in a heading", () => {
   });
 });
 
+test.describe("a subtitle beside the title", () => {
+  const shapes = ["inline-block"] as const;
+
+  async function geometry(page: Page) {
+    return page.evaluate(() => {
+      const title = document.querySelector("article > h1")!;
+      const sub = document.querySelector(".moss-subtitle")!;
+      const range = document.createRange();
+      range.selectNodeContents(title);
+      const text = range.getBoundingClientRect();
+      const controls = document.querySelector(".nav-icons")!.getBoundingClientRect();
+      const lines = [...title.getClientRects(), ...sub.getClientRects(), ...range.getClientRects()];
+      return {
+        gap: sub.getBoundingClientRect().left - text.right,
+        sameLine: Math.abs(sub.getBoundingClientRect().top - text.top) < 40,
+        controls: { left: controls.left, right: controls.right, top: controls.top, bottom: controls.bottom },
+        lines: lines.map((r) => ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom })),
+      };
+    });
+  }
+
+  for (const shape of shapes) {
+    test(`a short title and its ${shape} subtitle sit together, with no gap for the controls`, async ({ page }) => {
+      for (const width of [390, 1360]) {
+        await open(page, "/short/", width);
+        await page.addStyleTag({ content: `.moss-folder-title, .moss-article-title, .moss-subtitle { display: ${shape}; }` });
+        const g = await geometry(page);
+        expect(g.sameLine, `${shape} at ${width}px`).toBe(true);
+        expect(g.gap, `${shape} at ${width}px`).toBeLessThan(16);
+      }
+    });
+
+    test(`a long title and its ${shape} subtitle wrap before the controls`, async ({ page }) => {
+      for (const width of [390, 1360]) {
+        await open(page, "/long/", width);
+        await page.addStyleTag({ content: `.moss-folder-title, .moss-article-title, .moss-subtitle { display: ${shape}; }` });
+        const g = await geometry(page);
+        const c = g.controls;
+        for (const r of g.lines) {
+          const sharesRow = r.bottom > c.top && r.top < c.bottom;
+          if (sharesRow && r.right > 0) expect(r.right, `${shape} at ${width}px, line at y=${r.top}`).toBeLessThanOrEqual(c.left + 0.5);
+        }
+      }
+    });
+  }
+});
+
+test.describe("the room kept for the controls", () => {
+  for (const width of [1280, 390]) {
+    test(`a hero page's hidden title keeps none, at ${width}px`, async ({ page }) => {
+      await open(page, "/hero/", width);
+      const w = await page.evaluate(() => {
+        const grid = document.querySelector(".moss-grid")!.getBoundingClientRect().width;
+        const after = [...document.querySelectorAll("article > p")].pop()!.getBoundingClientRect().width;
+        return { grid, after };
+      });
+      expect(w.grid).toBeCloseTo(w.after, 0);
+    });
+  }
+});
+

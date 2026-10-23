@@ -3928,10 +3928,13 @@ body {
   margin: 0;
 }
 
-/* Their place at the top is the end of the page title's line: its first line
-   keeps that room free with a float as wide as nav-island.ts measures the
-   controls, so a long title wraps before them rather than running under them,
-   and its later lines take the whole column. Before (or without) scripting
+/* Their place at the top is the end of the page's first line: the article keeps
+   that room free with a float as wide as nav-island.ts measures the controls,
+   so a long title, or a title with a subtitle beside it, wraps before them
+   rather than running under them, and the later lines take the whole column.
+   A hidden title (a hero page's) opens no such line, so it keeps nothing.
+   The float belongs to the article, not to the title, so a title set inline or
+   inline-block with its subtitle is not widened by it. Before (or without) scripting
    the room is guessed from how many controls there are, at 3rem each, which
    is more than any of them takes. Once the controls have moved to the bar or
    the list's foot the room is off screen. A vertical page takes it back in
@@ -3948,7 +3951,7 @@ body:has(> .moss-nav-island[data-header="none"] + .nav-icons > :nth-child(3)) {
   --moss-nav-island-controls-guess: 9rem;
 }
 
-body:has(> .moss-nav-island[data-header="none"] + .nav-icons) main > article > h1:first-of-type::before {
+body:has(> .moss-nav-island[data-header="none"] + .nav-icons) main > article:is(:has(> h1:not(.visually-hidden):first-child), :has(> :is(p, a):first-child + h1:not(.visually-hidden)))::before {
   content: "";
   float: inline-end;
   inline-size: calc(
