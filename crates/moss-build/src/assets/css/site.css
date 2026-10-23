@@ -7652,7 +7652,7 @@ body > footer.container:has(> .moss-hero-closing) {
    means a hierarchy, so the second one keeps the smaller size above; the sizes
    step down, they are not flattened. */
 .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(:is(h1, h2, h3, h4, h5, h6) ~ *) {
-  font-size: 2.5rem;
+  font-size: var(--moss-hero-title-size, 2.5rem);
 }
 
 .moss-hero-content a {
@@ -7661,7 +7661,8 @@ body > footer.container:has(> .moss-hero-closing) {
      white over the image, body text in the mobile stacked block. */
   color: inherit;
   border: 1px solid currentColor;
-  padding: 0.5em 1.2em;
+  font-size: var(--moss-hero-link-size, 1em);
+  padding: var(--moss-hero-link-padding, 0.5em 1.2em);
   border-radius: 4px;
   text-decoration: none;
   margin-block-start: var(--moss-space-sm);
@@ -7938,7 +7939,7 @@ body > footer.container:has(> .moss-hero-closing) {
   }
 
   .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(:is(h1, h2, h3, h4, h5, h6) ~ *) {
-    font-size: 1.75rem;
+    font-size: var(--moss-hero-title-size, 1.75rem);
   }
 }
 
@@ -8133,7 +8134,7 @@ body > footer.container:has(> .moss-hero-closing) {
   }
 
   .moss-hero[data-mobile="overlay"] .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(:is(h1, h2, h3, h4, h5, h6) ~ *):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
-    font-size: 1.4rem;
+    font-size: var(--moss-hero-title-size, 1.4rem);
   }
 
   .moss-hero[data-mobile="overlay"] .moss-hero-content p {

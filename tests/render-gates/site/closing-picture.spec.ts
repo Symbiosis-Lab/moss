@@ -652,6 +652,20 @@ for (const scheme of SCHEMES) {
   }
 }
 
+for (const width of [1360, 390]) {
+  test(`the closing heading and link take their size and padding from tokens, ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await openFaded(page);
+    await page.addStyleTag({ content: ':root { --moss-hero-title-size: 33px; --moss-hero-link-size: 19px; --moss-hero-link-padding: 1em 2em; }' });
+    const m = await page.evaluate(() => {
+      const content = document.querySelector('footer .moss-hero-closing .moss-hero-content')!;
+      const link = getComputedStyle(content.querySelector('a')!);
+      return { title: getComputedStyle(content.querySelector('h2')!).fontSize, link: link.fontSize, pad: [link.paddingTop, link.paddingLeft] };
+    });
+    expect(m).toEqual({ title: '33px', link: '19px', pad: ['19px', '38px'] });
+  });
+}
+
 // A faded top shows the page, so the words in ink take the theme's own colours,
 // not moss's fixed near-black and white.
 for (const theme of THEMES) {

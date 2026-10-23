@@ -129,6 +129,9 @@ pub struct TypeTheme {
     /// lines, so it caps the measure the heading is modelled in.
     pub(super) heading_cap: Option<Cap>,
     pub(super) heading_line: Option<Leading>,
+    /// `--moss-hero-link-size` and `--moss-hero-link-padding` (block, inline, in em).
+    pub(super) link_size: Option<moss_core::media::MaxHeight>,
+    pub(super) link_pad: Option<(f32, f32)>,
     pub(super) space_md: Option<f32>,
     pub(super) size_sm: Option<f32>,
     pub(super) size_lg: Option<f32>,
@@ -147,6 +150,15 @@ fn plain_px(value: &str) -> Option<f32> {
         Some(n) => n.trim().parse::<f32>().ok().map(|n| n * 16.0),
         None => value.strip_suffix("px")?.trim().parse().ok(),
     }
+}
+
+/// `0.5em` or `0.5em 1.2em` as (block, inline) in em.
+fn em_pair(value: &str) -> Option<(f32, f32)> {
+    let em = |v: &str| v.strip_suffix("em")?.trim().parse::<f32>().ok();
+    let value = value.trim().trim_end_matches("!important");
+    let mut parts = value.split_whitespace();
+    let (block, inline) = (em(parts.next()?)?, parts.next().map_or(Some(None), |v| em(v).map(Some))?);
+    parts.next().is_none().then_some((block, inline.unwrap_or(block)))
 }
 
 /// The weight a `font-weight` value names, `None` for one the build cannot read.
@@ -194,6 +206,9 @@ impl TypeTheme {
                     "--moss-space-md" if root => plain_px(value).map(|px| theme.space_md = Some(px)),
                     "--moss-size-sm" if root => plain_px(value).map(|px| theme.size_sm = Some(px)),
                     "--moss-size-lg" if root => plain_px(value).map(|px| theme.size_lg = Some(px)),
+                    "--moss-hero-title-size" if root => moss_core::media::MaxHeight::parse(value.trim().trim_end_matches("!important")).map(|m| theme.heading_size = Some(m)),
+                    "--moss-hero-link-size" if root => moss_core::media::MaxHeight::parse(value.trim().trim_end_matches("!important")).map(|m| theme.link_size = Some(m)),
+                    "--moss-hero-link-padding" if root => em_pair(value).map(|p| theme.link_pad = Some(p)),
                     "font-size" if hero && words(&["h1", "h2", "h3", "h4", "h5", "h6"]) => {
                         moss_core::media::MaxHeight::parse(value.trim().trim_end_matches("!important")).map(|m| theme.heading_size = Some(m))
                     }
@@ -204,7 +219,7 @@ impl TypeTheme {
                     _ => None,
                 };
                 let moves = read.is_none()
-                    && (matches!(prop, "--moss-reading-size-base" | "--moss-container-padding" | "--moss-space-md" | "--moss-size-sm" | "--moss-size-lg")
+                    && (matches!(prop, "--moss-reading-size-base" | "--moss-container-padding" | "--moss-space-md" | "--moss-size-sm" | "--moss-size-lg" | "--moss-hero-title-size" | "--moss-hero-link-size" | "--moss-hero-link-padding")
                         || UNREAD_TOKENS.contains(&prop)
                         || (reaches && matches!(prop, "font-size" | "font" | "font-weight" | "font-family" | "line-height" | "letter-spacing" | "text-transform" | "padding" | "max-width" | "max-inline-size" | "--moss-hero-content-width")));
                 if moves && !theme.resized {
@@ -254,6 +269,9 @@ pub(super) struct Type {
     weight: u16,
     text_font: f32,
     text_line: f32,
+    /// The links' size and their padding (block, inline) in em.
+    link_font: f32,
+    link_pad: (f32, f32),
     /// The width the lines set in.
     measure: f32,
     /// The width the heading sets in, at the narrowest and the widest: the measure, or a theme's cap if narrower.
@@ -287,6 +305,9 @@ pub(super) struct Block {
 /// The reading size on a phone: site.css's `--moss-reading-size-base` under 48rem.
 const PHONE_READING_PX: f32 = 17.0;
 
+/// A link button's padding in em, block then inline (`padding: 0.5em 1.2em`).
+const LINK_PAD_EM: (f32, f32) = (0.5, 1.2);
+
 /// The gap under the heading (`--moss-space-sm`), and from a block to the links' row.
 const HEADING_GAP_PX: f32 = 8.0;
 const LINKS_GAP_PX: f32 = 24.0;
@@ -309,6 +330,8 @@ impl Type {
             t.text_font = m.px(width);
             t.text_line = 1.5 * t.text_font;
         }
+        t.link_font = theme.link_size.map_or(t.text_font, |m| m.px(width));
+        t.link_pad = theme.link_pad.unwrap_or(LINK_PAD_EM);
         t.weight = theme.heading_weight.unwrap_or(HEADING_WEIGHT);
         t
     }
@@ -331,12 +354,12 @@ impl Type {
         if phone {
             let text = theme.size_sm.unwrap_or_else(|| token_px("moss-size-sm"));
             let measure = width - 2.0 * inset;
-            return Type { inset, pad: 0.05 * width, top: words_top(width), font: 22.4, line: HEADING_LEADING * 22.4, weight: HEADING_WEIGHT, text_font: text, text_line: 1.5 * text, measure, heading_measure: (measure, measure), box_px: width };
+            return Type { inset, pad: 0.05 * width, top: words_top(width), font: 22.4, line: HEADING_LEADING * 22.4, weight: HEADING_WEIGHT, text_font: text, text_line: 1.5 * text, link_font: text, link_pad: LINK_PAD_EM, measure, heading_measure: (measure, measure), box_px: width };
         }
         let (pad, font, text) = if width < 1024.0 { (space_md, 28.0, reading) } else { (0.05 * width, 40.0, theme.size_lg.unwrap_or_else(|| token_px("moss-size-lg"))) };
         let box_px = (0.35 * width).max(600.0).min(column_px - 2.0 * cp + 2.0 * pad);
         let measure = box_px - 2.0 * pad;
-        Type { inset, pad, top: words_top(width), font, line: HEADING_LEADING * font, weight: HEADING_WEIGHT, text_font: text, text_line: 1.5 * text, measure, heading_measure: (measure, measure), box_px }
+        Type { inset, pad, top: words_top(width), font, line: HEADING_LEADING * font, weight: HEADING_WEIGHT, text_font: text, text_line: 1.5 * text, link_font: text, link_pad: LINK_PAD_EM, measure, heading_measure: (measure, measure), box_px }
     }
 
     /// The most and the fewest lines `ems` of text at `font` px set in the
@@ -385,8 +408,9 @@ impl Type {
         push(self.lines(words.heading, self.font, self.heading_measure), self.line, words.heading * self.font, self.heading_measure.1, if words.text > 0.0 { HEADING_GAP_PX } else { text_gap }, self.heading_face());
         push(self.lines(words.text, self.text_font, (self.measure, self.measure)), self.text_line, words.text * self.text_font, self.measure, text_gap, self.text_face());
         if words.link_count > 0 {
-            let row = self.text_font + 2.0 * 0.8 * self.text_font;
-            let width = (LINK_WEIGHT_WIDTH * words.links + 2.6 * words.link_count as f32) * self.text_font + 16.0 * (words.link_count - 1) as f32;
+            // A line and a hair of border, and the padding twice over, in the link's own em.
+            let row = (1.6 + 2.0 * self.link_pad.0) * self.link_font;
+            let width = (LINK_WEIGHT_WIDTH * words.links + (2.0 * self.link_pad.1 + 0.2) * words.link_count as f32) * self.link_font + 16.0 * (words.link_count - 1) as f32;
             let lines = (width / self.measure).ceil().max(1.0);
             blocks.push(Block { rows: (least, most + lines * row + self.text_line), across: width.min(self.measure), face: self.text_face(), link: true });
         }

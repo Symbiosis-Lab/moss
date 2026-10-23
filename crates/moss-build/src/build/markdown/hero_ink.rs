@@ -1609,7 +1609,7 @@ mod tests {
     #[test]
     fn site_css_sets_the_type_the_words_are_modelled_in() {
         let css = crate::build::emit::stylesheet::CORE_CSS;
-        for rule in ["font-size: 2.5rem;", "font-size: 1.75rem;", "font-size: 1.4rem;", "font-size: var(--moss-size-lg);", "--moss-words-pad: 5%;", "font-weight: 500;", "padding-block: 0 0.875rem;", "--moss-credit-end: calc(var(--moss-words-inset) - 0.5rem);", "padding-block-start: clamp(8px, 2vw, 24px);", "line-height: 1.08;", "--moss-words-pad: var(--moss-space-md);", "--moss-contents-inset: 32px;", "--moss-contents-pad: 8px;", "--moss-contents-row: 20px;", "--moss-contents-gutter: 24px;"] {
+        for rule in ["font-size: var(--moss-hero-title-size, 2.5rem);", "font-size: var(--moss-hero-title-size, 1.75rem);", "font-size: var(--moss-hero-title-size, 1.4rem);", "font-size: var(--moss-hero-link-size, 1em);", "padding: var(--moss-hero-link-padding, 0.5em 1.2em);", "font-size: var(--moss-size-lg);", "--moss-words-pad: 5%;", "font-weight: 500;", "padding-block: 0 0.875rem;", "--moss-credit-end: calc(var(--moss-words-inset) - 0.5rem);", "padding-block-start: clamp(8px, 2vw, 24px);", "line-height: 1.08;", "--moss-words-pad: var(--moss-space-md);", "--moss-contents-inset: 32px;", "--moss-contents-pad: 8px;", "--moss-contents-row: 20px;", "--moss-contents-gutter: 24px;"] {
             assert!(css.contains(rule), "{rule}");
         }
         assert_eq!(32.0 + 2.0 * 8.0 + 20.0 + 24.0, words::LANE_PX);
@@ -1740,6 +1740,29 @@ mod tests {
         let small = TypeTheme::of_theme(Some(".moss-hero-content h2 { font-size: 8px; }"));
         assert!(!small.resized);
         assert_eq!(read(&Frame { theme: small, ..frame }), None);
+    }
+
+    #[test]
+    fn the_hero_size_tokens_are_read_like_the_rules_they_stand_for() {
+        let sky = hatched(2048, 880, 1, 8);
+        let frame = saying("## A short heading");
+        let read = |frame: &Frame| readable_ink(&sky, &words_spot(Some("top"), 880.0 / 2048.0, Layout::Wide, frame, PAGE), None, Inks::words());
+        let small = TypeTheme::of_theme(Some(":root { --moss-hero-title-size: 8px; }"));
+        assert!(!small.resized);
+        assert_eq!(read(&Frame { theme: small, ..frame }), None, "an 8px heading is measured at 8px");
+        for kept in [":root { --moss-hero-link-size: 1.1rem; --moss-hero-link-padding: 0.6em 1.4em; }", ":root { --moss-hero-link-padding: 0.5em; }"] {
+            assert!(!TypeTheme::of_theme(Some(kept)).resized, "{kept}");
+        }
+        for moves in [":root { --moss-hero-link-padding: 8px 16px; }", ":root { --moss-hero-title-size: calc(2rem + 2px); }", "body { --moss-hero-title-size: 2rem; }"] {
+            assert!(TypeTheme::of_theme(Some(moves)).resized, "{moves}");
+        }
+        // A larger, roomier link button makes a taller links' row.
+        let row = |theme: TypeTheme| {
+            let words = Words::read("A heading\n\n[Go](#go)", "");
+            Type::at(1360.0, &theme, Column::Default, false).blocks(&words).last().map(|b| b.rows.1 - b.rows.0).unwrap()
+        };
+        let big = TypeTheme::of_theme(Some(":root { --moss-hero-link-size: 2rem; --moss-hero-link-padding: 1em; }"));
+        assert!(row(big) > row(TypeTheme::default()) + 20.0);
     }
 
     #[test]

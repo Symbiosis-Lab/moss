@@ -74,7 +74,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-hero-content-width",
         owner: "moss-hero-content",
         default: "auto",
-        description: "Width of the words block over a hero's picture, from tablet width up (a phone stacks or full-widths it). Unset, the block is as wide as its text, so a title over a wide poster can shrink to its longest word; give it a length or a percentage of the hero (e.g. `29%`, `24rem`) to use the poster's clear area. It also replaces the block's default cap of `max(600px, 35%)`, so a wider value is not clamped.",
+        description: "Width of the words block over a hero's picture, from tablet width up (a phone stacks or full-widths it). Unset, the block is as wide as its text, so a title over a wide poster can shrink to its longest word; give it a length or a percentage of the hero (e.g. `29%`, `24rem`) to use the poster's clear area. It also replaces the block's default cap of `max(600px, 35%)`, so a wider value is not clamped. On a closing picture this is how to set the words' measure.",
     },
     CustomProp {
         name: "--moss-hero-progress",
@@ -93,6 +93,24 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         owner: "moss-hero",
         default: "#2c2825",
         description: "Text colour over a pale ('light'-toned) hero image, in both overlaid layouts (desktop, and mobile in `data-mobile=\"overlay\"`). Deliberately not `var(--moss-color-text)`: that token is `#2c2825` in light mode but `#d4cbba` in dark, while the photograph underneath does not repaint with the colour scheme, so the token's dark-mode value would put pale text back on the same pale image. Set this to tune the exact shade; it stays fixed across both colour schemes.",
+    },
+    CustomProp {
+        name: "--moss-hero-title-size",
+        owner: "moss-hero-content",
+        default: "2.5rem (1.75rem under 64rem, 1.4rem on a phone overlay)",
+        description: "Font size of a hero's lead heading, at every width: set it once (a length, or `clamp()` of px and vw) and the stepped defaults no longer apply. A closing picture's ink measurement reads it when it is declared in `:root`, so the words can stay in ink with no panel.",
+    },
+    CustomProp {
+        name: "--moss-hero-link-size",
+        owner: "moss-hero-content",
+        default: "1em",
+        description: "Font size of the link button in a hero's words (the closing picture's call to action). Read by the ink measurement when declared in `:root`.",
+    },
+    CustomProp {
+        name: "--moss-hero-link-padding",
+        owner: "moss-hero-content",
+        default: "0.5em 1.2em",
+        description: "Padding of the link button in a hero's words, block then inline, in `em` of the link's own size. Read by the ink measurement when declared in `:root` as one or two `em` values; any other form leaves the words their panel.",
     },
     CustomProp {
         name: "--moss-hero-panel-bg",

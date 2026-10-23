@@ -1097,7 +1097,7 @@ fn test_css_hero_heading_treatment_is_not_h1_only() {
     )
     .expect("hero lead-heading rule should exist");
     assert!(
-        lead.contains("font-size: 2.5rem"),
+        lead.contains("font-size: var(--moss-hero-title-size, 2.5rem)"),
         "the lead hero heading keeps the display size, got: {}",
         lead
     );
