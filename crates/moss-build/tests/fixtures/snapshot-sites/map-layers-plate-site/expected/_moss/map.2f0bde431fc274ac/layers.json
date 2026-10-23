@@ -1,1 +1,1 @@
-{"version":1,"layers":[{"name":"atlas-1930","kind":"historical","extent":[-74.01790553943675,40.70460814164731,-74.008915348969,40.7094451320416],"frame":[-74.024,40.6948,-74.0018,40.7181],"max_zoom":15,"credit":"New York Public Library","tiles":"layers/atlas-1930/index.json"}]}
+{"version":1,"layers":[{"name":"atlas-1930","kind":"historical","extent":[-74.017906,40.704608,-74.008915,40.709445],"frame":[-74.024,40.6948,-74.0018,40.7181],"max_zoom":15,"credit":"New York Public Library","tiles":"layers/atlas-1930/index.json"}]}

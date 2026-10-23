@@ -18,6 +18,7 @@ use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::place_map::layer_crop::{crop_axes, CropJob};
 use crate::build::place_map::layer_warp::tiles::{candidates, encode, level_range, near_places_only, overlaps, render_crop, render_tile, tile_rect, Loaded, TILE_SIZE};
 use crate::build::place_map::layer_warp::{LayerPlan, Plate};
+use crate::build::place_map::world_coords::written;
 use crate::build::served_path::ServedPath;
 use crate::config::map_layers::MapLayer;
 
@@ -181,7 +182,7 @@ fn emit_tiles(layer: &MapLayer, plan: &LayerPlan, hash: &str, output_dir: &Path,
             t.sort_unstable();
             (l.to_string(), t.into_iter().map(|(i, j)| [i, j]).collect())
         }).collect(),
-        footprints: plan.plates.iter().map(|p| Footprint { plate: p.id.clone(), polygon: p.footprint.iter().map(|&(x, y)| [x, y]).collect() }).collect(),
+        footprints: plan.plates.iter().map(|p| Footprint { plate: p.id.clone(), polygon: p.footprint.iter().map(|&(x, y)| [written(x), written(y)]).collect() }).collect(),
     };
     let json = serde_json::to_vec(&index).expect("a tile index serializes");
     BuildContext::for_render(output_dir, pending).emit(&index_path, &json, HashBucket::Files).map_err(|e| format!("index: {e}"))?;

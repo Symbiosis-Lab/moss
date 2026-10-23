@@ -12,6 +12,7 @@ use std::path::Path;
 use crate::build::context::BuildContext;
 use crate::build::manifest::{HashBucket, PendingManifest};
 use crate::build::place_map::layer_warp::LayerPlan;
+use crate::build::place_map::world_coords::written;
 use crate::build::place_map::PlaceMapRenderContext;
 use crate::build::served_path::ServedPath;
 use crate::config::map_layers::MapLayer;
@@ -62,7 +63,7 @@ fn layers_json_with(layers: &[MapLayer], plans: &[LayerPlan], tiles: &[Option<St
                 LayerJson {
                     name: &layer.name,
                     kind: layer.kind.as_str(),
-                    extent: plan.map_or(frame, |p| p.extent),
+                    extent: plan.map_or(frame, |p| p.extent.map(written)),
                     frame,
                     max_zoom: layer.max_zoom,
                     credit: plan.map_or_else(|| layer.credit.as_deref().unwrap_or(""), |p| p.credit.as_str()),
@@ -139,6 +140,20 @@ mod tests {
             json,
             r#"{"version":1,"layers":[{"name":"atlas-1930","kind":"historical","extent":[-74.03,40.68,-73.9,40.88],"frame":[-74.03,40.68,-73.9,40.88],"max_zoom":17,"credit":"Atlas of the City, 1930","tiles":null}]}"#
         );
+    }
+
+    #[test]
+    fn a_drawn_extent_is_written_to_six_decimals() {
+        let plan = LayerPlan {
+            plates: Vec::new(),
+            digest: String::new(),
+            extent: [-74.01790553943675, 40.70460814164731, -74.008915348969, 40.7094451320416],
+            credit: String::new(),
+            notice: String::new(),
+            places: Vec::new(),
+        };
+        let json = String::from_utf8(layers_json_with(&[layer(None)], &[plan], &[Some("t".into())]).unwrap()).unwrap();
+        assert!(json.contains(r#""extent":[-74.017906,40.704608,-74.008915,40.709445]"#), "{json}");
     }
 
     #[test]

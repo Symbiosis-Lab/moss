@@ -14,6 +14,13 @@ pub(crate) fn world_width() -> f64 {
     world_viewbox_width()
 }
 
+/// A coordinate as the build writes it: 6 decimals, about 0.1 m in degrees
+/// and a sixth of a tile pixel in world units at zoom 19. The digits past
+/// that come from libm, which differs between platforms; the output must not.
+pub(crate) fn written(v: f64) -> f64 {
+    (v * 1e6).round() / 1e6
+}
+
 fn patterson_y_derivative(phi: f64) -> f64 {
     let p2 = phi * phi;
     let p4 = p2 * p2;
