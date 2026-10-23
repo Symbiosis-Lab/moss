@@ -145,6 +145,8 @@ impl GridParts {
 /// `markup` with `attrs` added to its opening tag. Markup that brings its own
 /// chrome (a link card, a collection card) carries a collage tile's span on
 /// its own outer element; a `style` already there takes the declarations first.
+// Every index is a `find` of ASCII ('>' or ` style="`), so each slice lands on a char boundary.
+#[allow(clippy::string_slice)]
 fn on_first_tag(markup: &str, attrs: &str) -> String {
     let Some(end) = markup.find('>').filter(|_| !attrs.is_empty() && markup.starts_with('<')) else {
         return markup.to_string();
