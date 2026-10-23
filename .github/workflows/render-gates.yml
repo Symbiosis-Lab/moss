@@ -1,13 +1,9 @@
 # Site/cascade render gates — published-page CSS and cascade behavior,
 # ported from the private desktop repo.
 #
-# A separate workflow rather than a job in pr.yml: pr.yml has no
-# detect-changes/path-filtering machinery today (every job in it runs on
-# every PR — see its own header comment), so adding a `push: branches:
-# [develop]` trigger there would start running ALL of its jobs — Rust Tests,
-# Clippy, cargo-audit, the moss-core packaging check, the CLI build, Packages
-# Tests — on every push to develop, not just these two. A dedicated,
-# path-filtered workflow file avoids that side effect entirely.
+# Runs on pull requests only: a push to develop starts no CI, so develop can
+# be pushed freely and the release pull request is where these gates run.
+# Kept apart from pr.yml so the path filter decides whether it runs at all.
 #
 # Two legs, same gates, different engine: Chromium on Linux (cheap) and
 # WebKit on macOS (also free here, and it is the engine Safari readers
@@ -23,21 +19,6 @@ name: Render gates
 on:
   pull_request:
     branches: [develop, main]
-    paths:
-      - 'tests/render-gates/**'
-      - 'tests/e2e/helpers/**'
-      - 'tests/support/**'
-      - 'playwright/**'
-      - 'scripts/render-gates.sh'
-      - 'crates/moss-build/**'
-      - 'crates/moss-core/**'
-      - 'crates/moss-cli/**'
-      - 'packages/moss-syntax/**'
-      - 'Cargo.lock'
-      - 'pnpm-lock.yaml'
-      - '.github/workflows/render-gates.yml'
-  push:
-    branches: [develop]
     paths:
       - 'tests/render-gates/**'
       - 'tests/e2e/helpers/**'
