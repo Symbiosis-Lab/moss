@@ -1,6 +1,6 @@
 # Detail layers: a historical map or today's streets under a site's places
 
-- **Status:** In progress. Designed in October 2026; the engine changes and the historical layer are being built first.
+- **Status:** In progress. The engine changes and the historical layer are built: city-scale zoom and true aspect, `[map.layers]`, `moss map bbox`, warped plate tiles in the explorer and in each page's small map, the credit, the notes and the checks against scans that no longer match their annotation. The streets layer is not built yet.
 - **Where the work would land:** this repository: the build engine (`place_map`), the places explorer script, the CLI (`moss map bbox`), and a fetch plugin. Nothing in the desktop app is needed to use it.
 
 ## The problem
