@@ -220,6 +220,28 @@ test.describe("equal rows", () => {
     expect(new Set(g.heights).size).toBe(1);
   });
 
+  test("counts the children each card renders, so a wrapped card adds no empty tracks", async ({ page }) => {
+    await open(page, "/wrapped/", 1280);
+    const parts = await page.locator(".moss-grid").evaluate((g) => g.style.getPropertyValue("--moss-grid-parts"));
+    expect(parts).toBe("3");
+  });
+
+  test("the parts of a card sit 10px apart and the grid's row gap is the space between cards", async ({ page }) => {
+    await open(page, "/wrapped/", 1280);
+    await page.addStyleTag({ content: ".moss-grid { row-gap: 30px; }" });
+    const m = await page.locator(".moss-grid").evaluate((g) => {
+      const cards = [...g.querySelectorAll(":scope > .moss-grid-card")];
+      // The second row, so the first card's wrapped neighbour does not set the track heights.
+      const parts = [...cards[2].querySelectorAll(":scope > .part")].map((e) => e.getBoundingClientRect());
+      return {
+        inside: [parts[1].top - parts[0].bottom, parts[2].top - parts[1].bottom],
+        between: cards[2].getBoundingClientRect().top - cards[0].getBoundingClientRect().bottom,
+      };
+    });
+    expect(m.inside).toEqual([10, 10]);
+    expect(m.between).toBe(30);
+  });
+
   test("a grid without it keeps each card's own height", async ({ page }) => {
     await open(page, "/rows/", 1280);
     const t = await tops(page, 1);

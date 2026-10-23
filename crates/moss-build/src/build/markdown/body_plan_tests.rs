@@ -177,6 +177,18 @@ fn grid_blocks_become_their_own_segment_with_typed_cells() {
 }
 
 #[test]
+fn an_equal_rows_card_moss_cannot_count_is_one_problem_per_grid() {
+    let problems = |md: &str| {
+        let _ = crate::build::cli_output::take_cli_problems();
+        warn_uncountable_cards(&parse(md), "page.md");
+        crate::build::cli_output::take_cli_problems()
+    };
+    assert_eq!(problems(":::grid 2 {rows=equal}\n<div>\n<p>open</p>\n\nText.\n+++\n<div>\n<p>again</p>\n:::\n"), 1, "two bad cards, one grid");
+    assert_eq!(problems(":::grid 2 {rows=equal}\n<div>\n\n<p>closed</p>\n\n</div>\n+++\n### Two\n:::\n"), 0);
+    assert_eq!(problems(":::grid 2\n<div>\n<p>open</p>\n+++\n### Two\n:::\n"), 0, "only rows=equal counts parts");
+}
+
+#[test]
 fn no_cards_is_read_from_typed_classes_not_the_serialized_tag() {
     let hooks = DefaultHooks::new();
     let doc = parse(":::grid 2 {.no-cards}\n[A](a/)\n:::\n");

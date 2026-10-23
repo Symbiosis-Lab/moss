@@ -1125,6 +1125,7 @@ pub fn process_markdown_file(
     let closes_page = injects_into_every_page && crate::build::footer::ends_in_hero(&doc);
     super::hero_ink::note_forced_ink(&doc, media_lookup, file_path, closes_page);
     super::hero_ink::warn_closing_options(&doc, closes_page, file_path);
+    super::body_plan::warn_uncountable_cards(&doc, file_path);
 
     // 3. Extract the Hero shortcode for hoisting.
     //    LOCKED ORDER: must run AFTER `resolve_urls` (constraint 2) and

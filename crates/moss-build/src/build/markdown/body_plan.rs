@@ -127,6 +127,8 @@ pub struct GridEmission {
     pub classes: String,
     /// `:::grid {collage}` with a count the collage takes.
     pub collage: bool,
+    /// `{rows=equal}`, which [`GridParts::assemble`] counts the cards' parts for.
+    pub equal_rows: bool,
     pub cells: Vec<GridCellEmission>,
 }
 
@@ -172,7 +174,7 @@ impl GridEmission {
     /// newline `render_block`'s `Shortcode` arm appends.
     pub fn to_html(&self) -> String {
         let cells: Vec<String> = self.cells.iter().map(|c| c.parts.to_html()).collect();
-        format!("{}\n", GridParts::assemble(&self.open_tag, &cells))
+        format!("{}\n", GridParts::assemble(&self.open_tag, &cells, self.equal_rows))
     }
 
     /// True when the author opted this grid out of collection-card conversion
@@ -653,6 +655,7 @@ fn emission(args: &GridShortcode, parts: GridParts) -> GridEmission {
         open_tag: parts.open_tag,
         classes: args.classes.clone(),
         collage: args.is_collage(),
+        equal_rows: parts.equal_rows,
         cells: args
             .cells
             .iter()
@@ -668,3 +671,18 @@ fn emission(args: &GridShortcode, parts: GridParts) -> GridEmission {
 #[cfg(test)]
 #[path = "body_plan_tests.rs"]
 mod tests;
+
+/// Report a `{rows=equal}` grid with a card whose parts moss cannot count: raw
+/// HTML with an unclosed or stray tag. Once per grid, read off the typed cells
+/// (the raw blocks of a card must close their own tags), with the page's path.
+pub(crate) fn warn_uncountable_cards(doc: &Document, file_path: &str) {
+    for block in &doc.blocks {
+        let Block::Shortcode(Shortcode::Grid(args)) = block else { continue };
+        let raw = |cell: &Vec<Block>| -> String { cell.iter().filter_map(|b| if let Block::Other(html) = b { Some(html.as_str()) } else { None }).collect() };
+        if args.has_equal_rows() && args.cells.iter().any(|c| moss_core::ast::card_parts(&format!("<div>{}</div>", raw(c))).is_none()) {
+            crate::build::cli_output::log_warn_problem!(
+                "[{file_path}] a `{{rows=equal}}` grid has a card with raw HTML moss cannot count (an unclosed or stray tag), so its rows may not line up; close every tag inside the card."
+            );
+        }
+    }
+}

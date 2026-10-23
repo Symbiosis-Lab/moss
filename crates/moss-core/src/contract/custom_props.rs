@@ -224,7 +224,13 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-grid-parts",
         owner: "moss-grid-card",
         default: "1",
-        description: "How many tracks each card of a `:::grid {rows=equal}` spans: the most parts (picture, title, text, list, …) any card in the grid has, written by the build into the grid's `style`. Read-only for a theme.",
+        description: "How many tracks each card of a `:::grid {rows=equal}` spans: the most children (picture, title, text, list, a fenced `{.class}` block, …) any card in the grid has once it is rendered, written by the build into the grid's `style`. A raw-HTML or fenced wrapper around a whole card counts as one. Read-only for a theme.",
+    },
+    CustomProp {
+        name: "--moss-grid-part-gap",
+        owner: "moss-grid-card",
+        default: "10px",
+        description: "The space between the parts of one card in a `:::grid {rows=equal}`. The grid's own `gap` stays the space between cards.",
     },
     CustomProp {
         name: "--moss-collage-span-sm",

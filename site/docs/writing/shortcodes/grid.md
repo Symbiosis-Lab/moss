@@ -161,7 +161,7 @@ Some text.
 :::
 ```
 
-It works for cards of any shape: moss counts the blocks of every card (a picture, a heading, a paragraph, a list each count one) and gives each card that many shared tracks, so a card with fewer parts than its neighbours leaves its last tracks empty. A collection card made from a `[[note]]` link has two parts, its cover and its text. A raw HTML block counts as one part, so its top-level elements share one track and can overlap under `rows=equal`; wrap them in a single element. The browser must support subgrid, as every current one does; without it the cards keep their own heights. `rows=equal` has no effect on a collage or a scrolling row.
+It works for cards of any shape: moss counts the children each card renders (a picture, a heading, a paragraph, a list, a fenced `::: {.label}` block each count one) and gives each card that many shared tracks, so a card with fewer parts than its neighbours leaves its last tracks empty. A collection card made from a `[[note]]` link has two parts, its cover and its text. A wrapper around a whole card, raw HTML or a fenced `::: {.work}`, is one child, so the parts inside it are not lined up; leave the wrapper off. The parts of a card sit `--moss-grid-part-gap` apart (10px by default), and the grid's own `gap` is the space between cards. Raw HTML with an unclosed tag cannot be counted: every build prints a warning for it, and `moss build --strict` makes it fatal. The browser must support subgrid, as every current one does; without it the cards keep their own heights. `rows=equal` has no effect on a collage or a scrolling row.
 
 ## Cell content
 

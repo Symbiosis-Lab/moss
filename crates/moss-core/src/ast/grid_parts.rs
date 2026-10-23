@@ -16,6 +16,7 @@
 use super::hooks::{collapse_tag_adjacent_newlines, escape_attr, RenderHooks};
 use super::node::{Block, Inline};
 use super::shortcode::GridShortcode;
+use crate::inert_regions::{tag_end, VOID_ELEMENTS};
 
 /// A `:::grid` block's serialized pieces: the opening `<div class="moss-grid"
 /// …>` tag and one [`GridCellParts`] per cell.
@@ -26,6 +27,8 @@ pub struct GridParts {
     pub open_tag: String,
     /// One entry per [`GridShortcode::cells`] entry, in the same order.
     pub cells: Vec<GridCellParts>,
+    /// `{rows=equal}`: the parts of the cards line up, so [`GridParts::assemble`] counts them.
+    pub equal_rows: bool,
 }
 
 /// One grid cell's content and the card-chrome decision made about it.
@@ -127,15 +130,21 @@ impl GridParts {
     /// of [`RenderHooks::render_shortcode`] emits.
     pub fn to_html(&self) -> String {
         let cells: Vec<String> = self.cells.iter().map(GridCellParts::to_html).collect();
-        Self::assemble(&self.open_tag, &cells)
+        Self::assemble(&self.open_tag, &cells, self.equal_rows)
     }
 
     /// Re-assemble with `replacement` cells (same order) inside this grid's own
     /// opening tag, so `data-columns`, the ratio `style=`, `data-width` and
     /// `data-source-range` survive any cell substitution.
-    pub fn assemble(open_tag: &str, cells: &[String]) -> String {
-        let mut out = String::with_capacity(open_tag.len() + 8);
-        out.push_str(open_tag);
+    pub fn assemble(open_tag: &str, cells: &[String], equal_rows: bool) -> String {
+        let mut out = String::with_capacity(open_tag.len() + 32);
+        if equal_rows {
+            // A collection card counts its cover and its content, so no floor is needed.
+            let parts = cells.iter().filter_map(|c| card_parts(c)).max().unwrap_or(1).max(1);
+            out.push_str(&on_first_tag(open_tag, &format!(r#" style="--moss-grid-parts:{parts}""#)));
+        } else {
+            out.push_str(open_tag);
+        }
         out.push_str(&cells.join("\n"));
         out.push_str("</div>");
         out
@@ -203,7 +212,6 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
         });
     }
     hooks.end_grid_cells();
-    let parts = args.has_equal_rows().then(|| args.cells.iter().map(|c| parts_of(c)).max().unwrap_or(1).max(2));
     let mut open_tag = String::new();
     {
         let mut class_attr = String::from("moss-grid");
@@ -239,13 +247,10 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
                 .join(" ");
             style.push(format!("--moss-grid-ratio:{cols}"));
         }
-        if let Some(parts) = parts {
-            style.push(format!("--moss-grid-parts:{parts}"));
-        }
         if !style.is_empty() {
             open_tag.push_str(&format!(r#" style="{}""#, style.join(";")));
         }
-        if parts.is_some() {
+        if args.has_equal_rows() {
             open_tag.push_str(r#" data-rows="equal""#);
         }
         // `scroll` keeps the row on one line and lets the reader drag it
@@ -305,7 +310,89 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
     }
 
 
-    GridParts { open_tag, cells }
+    GridParts { open_tag, cells, equal_rows: args.has_equal_rows() }
+}
+
+// ── Parts of a card ─────────────────────────────────────────────────────
+//
+// `{rows=equal}` gives every card one grid track per part, and a part is a
+// child of the card in the page, not a block of the author's source: a raw
+// HTML wrapper turns a dozen source blocks into one child. So the count is
+// read off the markup the card ends up as, after every pass that rewrote it.
+
+/// Elements whose content is text, so a `<` inside is not a tag.
+const RAW_TEXT: &[&str] = &["script", "style", "textarea", "title"];
+
+/// The children of the first element in `html` (text runs count as one child
+/// each, as grid makes an item of them), or `None` when the markup is not one
+/// element with balanced tags, so the count would be a guess.
+pub fn card_parts(html: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut parts = 0usize;
+    let mut closed_root = false;
+    let mut rest = html.trim_start();
+    while !rest.is_empty() {
+        let Some(lt) = rest.find('<') else {
+            // Trailing text: a child of the card, or stray text after it.
+            return text_run(rest, depth, &mut parts).then_some(parts);
+        };
+        if lt > 0 && !text_run(&rest[..lt], depth, &mut parts) {
+            return None;
+        }
+        rest = &rest[lt..];
+        if let Some(after) = rest.strip_prefix("<!--") {
+            rest = &after[after.find("-->")? + 3..];
+            continue;
+        }
+        let end = tag_end(rest)?;
+        let tag = &rest[1..end - 1];
+        rest = &rest[end..];
+        if tag.starts_with('!') || tag.starts_with('?') {
+            continue;
+        }
+        if tag.starts_with('/') {
+            depth = depth.checked_sub(1)?;
+            closed_root |= depth == 0;
+            continue;
+        }
+        if closed_root {
+            return None;
+        }
+        let name = tag_name(tag);
+        if depth == 1 {
+            parts += 1;
+        }
+        let void = VOID_ELEMENTS.contains(&name.as_str()) || tag.ends_with('/');
+        if !void {
+            depth += 1;
+            if RAW_TEXT.contains(&name.as_str()) {
+                let close = format!("</{name}");
+                let at = rest.to_ascii_lowercase().find(&close)?;
+                rest = &rest[at..];
+            }
+        } else if depth == 0 {
+            return None;
+        }
+    }
+    (closed_root && depth == 0).then_some(parts)
+}
+
+/// Account for text between tags; false when it sits outside the card.
+fn text_run(text: &str, depth: usize, parts: &mut usize) -> bool {
+    if text.trim().is_empty() {
+        return true;
+    }
+    if depth == 0 {
+        return false;
+    }
+    if depth == 1 {
+        *parts += 1;
+    }
+    true
+}
+
+fn tag_name(tag: &str) -> String {
+    tag.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect::<String>().to_ascii_lowercase()
 }
 
 // ── Collage ─────────────────────────────────────────────────────────────
@@ -386,18 +473,6 @@ fn cjk_script(quote: &Block) -> Option<Cjk> {
         Some(Cjk::Japanese)
     } else {
         Some(Cjk::Chinese)
-    }
-}
-
-/// How many parts a card holds, counted from its typed blocks: one track each
-/// under `{rows=equal}`. A quote is one part, a link card has its children, and
-/// a raw HTML block counts as one however many elements it holds. A cell moss
-/// swaps for a collection card has two parts, so no grid counts fewer.
-fn parts_of(cell: &[Block]) -> usize {
-    match cell {
-        [Block::LinkCard { children, .. }] => children.len(),
-        _ if quote_cell(cell).is_some() => 1,
-        _ => cell.len(),
     }
 }
 

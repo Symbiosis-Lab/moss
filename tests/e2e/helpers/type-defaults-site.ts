@@ -129,6 +129,43 @@ ${card(2, "Two", "Text two.")}
 
 After the grid.
 `,
+    "wrapped.md": `---
+title: Wrapped
+uid: "tdg00011"
+---
+
+:::grid 2 {rows=equal}
+<div class="part" style="margin:0;height:20px">A1</div>
+
+<div class="part" style="margin:0;height:20px">A2</div>
+
+<div class="part" style="margin:0;height:20px">A3</div>
++++
+::: {.work}
+<div class="part" style="margin:0;height:20px">B1</div>
+
+<div class="part" style="margin:0;height:20px">B2</div>
+
+<div class="part" style="margin:0;height:20px">B3</div>
+
+<div class="part" style="margin:0;height:20px">B4</div>
+
+<div class="part" style="margin:0;height:20px">B5</div>
+:::
++++
+<div class="part" style="margin:0;height:20px">C1</div>
+
+<div class="part" style="margin:0;height:20px">C2</div>
+
+<div class="part" style="margin:0;height:20px">C3</div>
++++
+<div class="part" style="margin:0;height:20px">D1</div>
+
+<div class="part" style="margin:0;height:20px">D2</div>
+
+<div class="part" style="margin:0;height:20px">D3</div>
+:::
+`,
     "mixed.md": `---
 title: Mixed
 uid: "tdg00010"

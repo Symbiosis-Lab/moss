@@ -5,6 +5,8 @@
 //! `nowrap` span stops that without touching the heading's text, its id or its
 //! contents-list label, which are all built from the source before this runs.
 
+use crate::inert_regions::tag_end;
+
 use std::borrow::Cow;
 
 /// The byte ranges of digit–dash–digit runs in `text`: digits joined by one or
@@ -39,21 +41,6 @@ fn ranges(text: &str) -> Vec<(usize, usize)> {
         }
     }
     found
-}
-
-/// Where the tag at the start of `s` ends (just past its `>`): the first `>`
-/// outside a quoted attribute value.
-fn tag_end(s: &str) -> Option<usize> {
-    let mut quote = None;
-    for (i, c) in s.char_indices() {
-        match (quote, c) {
-            (None, '"' | '\'') => quote = Some(c),
-            (Some(q), c) if c == q => quote = None,
-            (None, '>') => return Some(i + 1),
-            _ => {}
-        }
-    }
-    None
 }
 
 /// Wraps each digit–dash–digit run in a heading's inline HTML in

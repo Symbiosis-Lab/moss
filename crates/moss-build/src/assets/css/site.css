@@ -8569,8 +8569,8 @@ a.moss-grid-card:hover {
 
 /* Equal rows (`:::grid {rows=equal}`): the parts of the cards in a row line up
    across it, as in a listing's grid (see `.moss-cards[data-layout="grid"]`).
-   Each card spans one track per part (`--moss-grid-parts`, the most parts any
-   card has) and adopts them, so the row's first part is as tall as the tallest
+   Each card spans one track per part (`--moss-grid-parts`, the most children any
+   card has once rendered) and adopts them, so the row's first part is as tall as the tallest
    first part, and so on. A card with fewer parts leaves its last tracks empty;
    an empty track has no height. */
 @supports (grid-template-rows: subgrid) {
@@ -8581,7 +8581,9 @@ a.moss-grid-card:hover {
     display: grid;
     grid-template-rows: subgrid;
     grid-row: span var(--moss-grid-parts, 1);
-    row-gap: 0;
+    /* A subgrid's own gap replaces the grid's between its parts, so the grid's
+       row gap stays the space between cards. */
+    row-gap: var(--moss-grid-part-gap, 10px);
   }
   /* A collection card has two parts, its cover and its content, as in a
      listing's grid. */

@@ -235,13 +235,7 @@ fn mask_code_regions(text: &str) -> String {
     moss_core::inert_regions::mask_inert(text)
 }
 
-/// HTML5 void elements — these are the ONLY tags that can self-close.
-/// Everything else (iframe, video, script, textarea, div, span, etc.)
-/// requires an explicit closing tag.
-const VOID_ELEMENTS: &[&str] = &[
-    "area", "base", "br", "col", "embed", "hr", "img", "input",
-    "link", "meta", "param", "source", "track", "wbr",
-];
+use moss_core::inert_regions::VOID_ELEMENTS;
 
 /// Fix self-closing non-void HTML tags.
 ///

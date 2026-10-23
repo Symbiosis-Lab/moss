@@ -154,13 +154,45 @@ fn equal_rows_gives_each_card_the_most_parts_any_card_has() {
     let html = render_md(
         ":::grid 3 {rows=equal}\n![A](a.jpg)\n\n### One\n\nText.\n+++\n![B](b.jpg)\n\n### Two\n\nText.\n\n- a\n- b\n+++\n### Three\n:::",
     );
-    assert!(html.contains(r#"style="--moss-grid-parts:4" data-rows="equal""#), "got: {html}");
+    assert!(html.contains(r#"data-rows="equal" style="--moss-grid-parts:4""#), "got: {html}");
 }
 
 #[test]
 fn equal_rows_counts_a_link_cards_children_not_the_link() {
     let html = render_md(":::grid 2 {rows=equal}\n[![A](a.jpg)\n### One\nText](/x/)\n+++\n### Two\n:::");
-    assert!(html.contains(r#"--moss-grid-parts:3" data-rows="equal""#), "got: {html}");
+    assert!(html.contains(r#"data-rows="equal" style="--moss-grid-parts:3""#), "got: {html}");
+}
+
+#[test]
+fn equal_rows_counts_what_a_card_renders_not_the_blocks_it_was_written_as() {
+    // A fenced wrapper is one child of the card however many blocks it holds,
+    // and a fenced label is one child, not an open block, a paragraph and a close.
+    let wrapped = "::: {.work}\n![A](a.jpg)\n\n::: {.label}\n1607\n:::\n\n### One\n\nText.\n\n- a\n- b\n:::";
+    let html = render_md(&format!(":::grid 2 {{rows=equal}}\n{wrapped}\n+++\n### Two\n:::"));
+    assert!(html.contains(r#"style="--moss-grid-parts:1""#), "got: {html}");
+    // The same card unwrapped renders each block as its own child.
+    let html = render_md(
+        ":::grid 2 {rows=equal}\n![A](a.jpg)\n\n::: {.label}\n1607\n:::\n\n### One\n\nText.\n+++\n### Two\n:::",
+    );
+    assert!(html.contains(r#"style="--moss-grid-parts:4""#), "got: {html}");
+}
+
+#[test]
+fn equal_rows_keeps_the_ratio_beside_the_parts() {
+    let html = render_md(":::grid 2 1:2 {rows=equal}\n### A\n\ntext\n+++\n### B\n:::");
+    assert!(html.contains("--moss-grid-parts:2;--moss-grid-ratio:minmax(0, 1fr) minmax(0, 2fr)"), "got: {html}");
+}
+
+#[test]
+fn card_parts_reads_the_children_of_the_first_element() {
+    assert_eq!(card_parts(r#"<div class="c"><h3>A</h3><p>x <b>y</b></p><img src="a>b.jpg"><!-- c --></div>"#), Some(3));
+    assert_eq!(card_parts("<div>words<p>x</p></div>"), Some(2));
+    assert_eq!(card_parts("<div><script>if (a < b) {}</script><p>x</p></div>"), Some(2));
+    assert_eq!(card_parts("<a><div><p>x</p></div></a>"), Some(1));
+    // Not one balanced element: the count would be a guess.
+    for bad in ["", "text", "<div><p>x</div>", "<div></div><div></div>", "<div>", "<img src=a>"] {
+        assert_eq!(card_parts(bad), None, "{bad}");
+    }
 }
 
 #[test]
@@ -177,9 +209,9 @@ fn a_grid_without_rows_equal_emits_nothing_for_it() {
 }
 
 #[test]
-fn a_grid_with_one_part_per_card_still_leaves_room_for_a_collection_card() {
+fn a_grid_with_one_part_per_card_gets_one_track_and_no_dead_gap() {
     let html = render_md(":::grid 2 {rows=equal}\n### A\n+++\n### B\n:::");
-    assert!(html.contains("--moss-grid-parts:2"), "got: {html}");
+    assert!(html.contains("--moss-grid-parts:1"), "got: {html}");
 }
 
 #[test]
