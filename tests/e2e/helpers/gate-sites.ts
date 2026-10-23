@@ -1917,14 +1917,13 @@ precision = "exact"
   },
 };
 
-// ── route: true draws a line, badges and leaders ─────────────────────────────
+// ── route: true draws a line and badges ─────────────────────────────
 // Four stops in travel order: Harbor and Harbor Overlook share one
-// coordinate, so the badge-offset rule fires and badge 2 carries a leader
-// back to it; Inland Reach is region precision, for the hollow badge; Far
+// coordinate, so badge 2 would overlap badge 1 and is not numbered; Inland Reach is region precision, for the hollow badge; Far
 // Point is a plain fourth stop. The Rust snapshot suite pins the exact SVG
 // bytes this produces; this gate asks what a real browser does with
 // them — DOM order (line under markers), badge contrast in both themes, and
-// the leader's presence — which no byte comparison can see. Served by
+// which numbers are drawn — which no byte comparison can see. Served by
 // playwright/place-map-route.config.ts.
 export const PLACE_MAP_ROUTE_GATE: ScratchSiteSpec = {
   name: "place-map-route-gate",
@@ -1982,8 +1981,8 @@ precision = "city"
  * `list-first.md` and `quote-first.md` have no leading block to skip — the
  * map aligns with the body's very first element, as it always has, whatever
  * shape that element is. `no-text.md` has no paragraph, list or blockquote
- * anywhere in its body, so the locator has nothing to sit before and stays
- * at the front, above the (now full-width) heading.
+ * anywhere in its body, so the locator has nothing to sit before and takes
+ * the end of the body, unfloated, below the full-width heading.
  * Served by playwright/place-map-align.config.ts.
  */
 export const PLACE_MAP_ALIGN_GATE: ScratchSiteSpec = {

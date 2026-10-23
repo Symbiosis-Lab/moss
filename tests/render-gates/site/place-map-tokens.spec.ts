@@ -285,7 +285,11 @@ test("the locator's map runs the full column width below the mobile breakpoint",
 // reaches furthest past a clamp measured in viewBox units.
 test("an antimeridian place's dot is drawn whole on the phone-width world map", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
+  // The explorer replaces this static map once its script runs; this gate is
+  // about the static one, so keep the script from racing the measurement.
+  await page.route("**/places-explorer*.js", (route) => route.abort());
   await page.goto("places/", { waitUntil: "domcontentloaded" });
+  await page.locator('.moss-place-map svg [data-map-marker="places/taveuni"]').waitFor({ state: "attached" });
   const { map, dot } = await page.evaluate(() => {
     const svg = document.querySelector(".moss-place-map svg") as SVGSVGElement;
     const marker = svg.querySelector('[data-map-marker="places/taveuni"]') as SVGGraphicsElement;

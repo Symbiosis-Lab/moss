@@ -288,11 +288,12 @@ main:has(article.container > figure[data-moss-places-explorer] + h1:last-child) 
 .moss-places-tile > svg:not(.moss-places-tile-flat) {
   opacity: var(--moss-place-world-detail, 1);
 }
-/* Behind the detail raster, which stays in flow. */
+/* Behind the detail raster, which stays in flow. Visible only as the detail fades: where the detail is whole, the flat's own antialiased edge would show through the detail's as a lighter hairline along every tile seam. */
 .moss-places-tile > .moss-places-tile-flat {
   position: absolute;
   inset: 0;
   z-index: -1;
+  opacity: calc(1 - var(--moss-place-world-detail, 1));
 }
 
 /* The world layer's own surface: site.css's `.moss-place-map svg {

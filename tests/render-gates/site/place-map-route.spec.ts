@@ -8,8 +8,9 @@
  *  - each badge's number is legible against its own chip — sampled-pixel
  *    contrast >= 4.5:1 — for both the filled (exact/city) and the hollow
  *    (region) style, light and dark;
- *  - the offset badge (Harbor Overlook, coincident with Harbor) carries a
- *    leader line back to its real stop.
+ *  - a badge sits only on its own stop, with no leader lines: the one
+ *    coincident with an earlier badge (Harbor Overlook) is not numbered,
+ *    and the first and last stops always are.
  *
  * Fixture: PLACE_MAP_ROUTE_GATE (tests/e2e/helpers/gate-sites.ts). Run via:
  *   npx playwright test -c playwright/place-map-route.config.ts
@@ -176,14 +177,16 @@ for (const [device, viewport] of [
       await expect(page.locator(`.moss-place-locator ${ROUTE_LINE}`)).toBeVisible();
     });
 
-    test(`the offset badge carries a leader back to its stop — ${device}, ${theme}`, async ({ page }) => {
+    test(`badges stay on their stops: no leaders, a coincident number dropped, the ends kept — ${device}, ${theme}`, async ({ page }) => {
       await page.setViewportSize(viewport);
       await setTheme(page, theme);
-      await expect(page.locator(ROUTE_LEADER)).toHaveCount(1);
-      // Badge 2 (Harbor Overlook) is the one coincident with badge 1
-      // (Harbor) in the fixture's gazetteer — it is the one offset, so it
-      // is the one with a leader.
-      await expect(page.locator('[data-map-route-badge="2"]')).toHaveCount(1);
+      await expect(page.locator(ROUTE_LINE)).toBeAttached();
+      await expect(page.locator(ROUTE_LEADER)).toHaveCount(0);
+      // Badge 2 (Harbor Overlook) shares badge 1's coordinate, so it would
+      // overlap it and is not numbered; the first and last always are.
+      await expect(page.locator('[data-map-route-badge="1"]')).toHaveCount(1);
+      await expect(page.locator('[data-map-route-badge="2"]')).toHaveCount(0);
+      await expect(page.locator('[data-map-route-badge="4"]')).toHaveCount(1);
     });
 
     test(`filled and hollow badges are both legible (contrast >= 4.5:1) — ${device}, ${theme}`, async ({ page }) => {

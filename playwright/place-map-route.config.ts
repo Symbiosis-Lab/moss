@@ -1,9 +1,9 @@
 /**
- * Render gate: a route-enabled page's dashed line, numbered badges and
- * leader draw correctly in a real browser — DOM order (the line sits under
+ * Render gate: a route-enabled page's dashed line, numbered badges
+ * draw correctly in a real browser — DOM order (the line sits under
  * the marker layer, badges over it), badge legibility (sampled-pixel
  * contrast >= 4.5:1 for both the filled and the hollow badge, light and
- * dark), and the offset badge's leader line, at a desktop and a phone width.
+ * dark), and which badges are numbered (none offset, no leaders), at a desktop and a phone width.
  *
  * The Rust snapshot suite (snapshot_places_route_site) pins the exact SVG
  * bytes this same fixture shape produces; it cannot say what a browser does
