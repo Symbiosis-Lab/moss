@@ -106,6 +106,7 @@ GATES_BUILD=(
   content-grid
   wcag-output
   archival-footer
+  type-defaults
 )
 
 # The rest: no config, spec, or harness in this gate's chain ever reads

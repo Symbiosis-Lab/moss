@@ -105,8 +105,7 @@ A `logo:` image is not exempt from this. Dark ink on a transparent background di
 
 moss splits "accent" in two: `--moss-color-accent` is the content accent (links
 in prose), and `--moss-color-ui-accent` is the chrome accent (nav, buttons). To
-keep chrome neutral while content links stay accented, point the chrome one at
-the text color:
+keep chrome neutral, point the chrome one at the text color:
 
 ```css
 :root {
@@ -114,8 +113,12 @@ the text color:
 }
 ```
 
-That leaves prose links accented and makes buttons and nav blend with the
-surrounding text. Run `moss describe --json` for both current values.
+That makes buttons and nav blend with the surrounding text. Links in prose
+rest in the text color, underlined, and take `--moss-color-accent` only on hover
+and focus. To accent them at rest, set `--moss-link-color`, and set
+`--moss-link-hover-color` to a different color (for example
+`var(--moss-color-accent-hover)`) so a hover or focus still shows. Run
+`moss describe --json` for the current values.
 
 ### The header's navigation
 

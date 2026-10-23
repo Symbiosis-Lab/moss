@@ -209,6 +209,18 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "How many of six columns a collage tile takes on a phone, written by the build into the tile's `style`: 6 for a quote or other text, which takes a full row at its own height; 2 for a picture (square), and 3 (4:3) or 6 (3:2) for the pictures of a short last row. Read-only for a theme.",
     },
     CustomProp {
+        name: "--moss-link-color",
+        owner: "article",
+        default: "var(--moss-color-text)",
+        description: "Colour of a link in a page's text (`article a`, not a button). Links rest in the text colour and are underlined; set this to accent them, for example `--moss-link-color: var(--moss-color-accent)`.",
+    },
+    CustomProp {
+        name: "--moss-link-hover-color",
+        owner: "article",
+        default: "var(--moss-color-accent)",
+        description: "Colour of a link in a page's text under the pointer or with focus. In the dark theme the default is `--moss-color-accent-hover`. A theme that accents its resting links sets this to a different colour, for example `var(--moss-color-accent-hover)`, so a hover or focus still shows.",
+    },
+    CustomProp {
         name: "--moss-font-quote",
         owner: "moss-quote",
         default: "var(--moss-font-body)",

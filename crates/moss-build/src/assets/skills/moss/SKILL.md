@@ -174,8 +174,9 @@ When a design call needs a visual treatment, stop at the first rung that reaches
 
 1. **Token override.** Set `--moss-*` tokens in `:root {}`. Run
    `moss describe --json` for every current token name, its light value, and its
-   `dark_value`. To keep nav/buttons neutral while content links stay accented,
-   set `--moss-color-ui-accent: var(--moss-color-text)`.
+   `dark_value`. To keep nav/buttons neutral, set
+   `--moss-color-ui-accent: var(--moss-color-text)`; to accent links in prose
+   at rest, set `--moss-link-color` (and `--moss-link-hover-color`).
 2. **Selector on semantic HTML.** Target the existing semantic structure (a
    heading, a blockquote, a list) with a plain CSS rule. No new markup.
 3. **A declared field with a `place`, or a named-class fenced div.** First ask
