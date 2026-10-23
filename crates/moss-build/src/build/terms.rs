@@ -57,7 +57,7 @@ pub use editions::TermKey;
 use editions::scope;
 mod translations;
 mod cards;
-pub use cards::set_term_cards;
+pub use cards::{set_term_cards, with_term_pages};
 pub use translations::link_term_translations;
 pub use stubs::{claim_stubs, edition_move_stubs, kind_move_stubs};
 

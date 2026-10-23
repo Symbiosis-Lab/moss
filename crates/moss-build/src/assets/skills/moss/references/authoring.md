@@ -568,7 +568,7 @@ Two things that surprise people:
 - **Inline `#hashtags` derive no pages** — only frontmatter `tags:` do. An inline tag still reaches `article:tag` metadata and JSON-LD keywords; it is prose, not cataloguing.
 - **Namespace roots are not listed by their parent, and are not in nav unless the kind sets `nav = true`.** A folder holding every author name is wrong as a nav item on most sites, so `/authors/`, `/tags/` and any declared kind's root stay reachable through term links, sitemap and search instead.
 
-A term page embeds as a listing anywhere, the way a folder does: `![[/boroughs/brooklyn/|style:grid]]` lists every page whose `borough:` names Brooklyn, so a home page can offer browsing by a field with one embed per value and no links to keep in step.
+A term page embeds as a listing anywhere, the way a folder does: `![[/boroughs/brooklyn/|style:grid]]` lists every page whose `borough:` names Brooklyn, so a home page can offer browsing by a field with one embed per value and no links to keep in step. The kind's own root embeds as its index: `![[/boroughs/|style:grid]]` draws one card per borough, with its cover and its count, each linking to the borough's page, so a home page offers every value with one embed that grows with the data.
 
 To stop a dimension generating pages, either switch the built-in off — `[terms].author = false` or `[terms].tags = false` — or drop the field from the `fields` list of the kind that claims it.
 

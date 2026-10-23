@@ -142,6 +142,7 @@ fn synthetic_folder_doc(
     folder_display: &std::collections::HashMap<String, String>,
     folder_languages: &std::collections::HashMap<String, crate::i18n::Language>,
     site_lang: crate::i18n::Language,
+    editions: &moss_core::home::Editions,
 ) -> ParsedDocument {
     let folder_leaf = folder.rsplit('/').next().unwrap_or(folder);
     let lang = synthetic_folder_lang(folder, folder_languages, site_lang);
@@ -174,10 +175,13 @@ fn synthetic_folder_doc(
     // exactly like an authored one, not a visible title on one path and a
     // hidden one on the other.
     let is_place_root = term_index.place_namespace_roots().any(|ns| ns == folder);
+    let url_path = format!("{}/index.html", folder);
     ParsedDocument {
         label: title.clone(),
         title,
-        url_path: format!("{}/index.html", folder),
+        edition: editions.of(&url_path),
+        url_path,
+        lang_tag: Some(crate::i18n::lang_tag_in_tree(&format!("{folder}/index.md"), lang)),
         kind: PageKind::Folder,
         slug: folder_leaf.to_string(),
         permalink: format!("/{}/", folder), // allow:served-path-url-construct (folder index page permalink, derived from folder path)
@@ -1163,6 +1167,10 @@ pub fn generate_blocking_content_for_build(
     // site default. Reuse it here.
     // Out here because the article map, written far below, carries these to the editor's `url` chip.
     let mut url_collisions: Vec<crate::build::scan::slug::UrlCollision> = Vec::new();
+    // Reverse map (slug folder-key → original on-disk leaf name) so every
+    // auto-generated folder-index TITLE/H1 preserves the author's directory
+    // casing ("Writings") even though the URL slug is lowercased ("writings").
+    let folder_display = folder_display_leaves(&project_structure.dirs, &dir_overrides);
     let editions: moss_core::home::Editions;
     let (layout_config, site_url, has_rss, show_rss_in_footer, term_index, calendar) = {
         // Profile the whole-corpus Reduce chain. Each pass
@@ -1284,17 +1292,21 @@ pub fn generate_blocking_content_for_build(
         // render phase (which would otherwise emit the marker comment
         // unchanged into the page).
         crate::build::folder_embed::note_home_map_of_nav_root(&documents, &term_index.nav_entries(&site_config.term_nav));
-        crate::build::folder_embed::expand_markers_in_documents_with_place_maps(
-            &mut documents,
-            project_structure,
-            &dir_overrides,
-            site_config.math,
-            &event_level_image_lookup,
-            site_config.typesetting.as_deref(),
-            site_config.place_maps.as_ref(),
-            Some((&calendar, &site_url)),
-            now,
-        );
+        // A kind's root (`![[/districts/|style:grid]]`) lists term pages generated further down.
+        let term_page = |key: &str| synthetic_folder_doc(key, &term_index, &folder_display, &folder_languages, site_lang, &editions);
+        crate::build::terms::with_term_pages(&mut documents, &term_index, term_page, |documents| {
+            crate::build::folder_embed::expand_markers_in_documents_with_place_maps(
+                documents,
+                project_structure,
+                &dir_overrides,
+                site_config.math,
+                &event_level_image_lookup,
+                site_config.typesetting.as_deref(),
+                site_config.place_maps.as_ref(),
+                Some((&calendar, &site_url)),
+                now,
+            )
+        });
         log::debug!(target: "timing", "[reduce] expand_markers_in_documents: {:?}", reduce_start.elapsed());
 
         // Inline `:::subscribe` forms get their page's language scope, judged
@@ -1663,12 +1675,6 @@ pub fn generate_blocking_content_for_build(
     // Used by templates to adjust content width (Task 3).
     let has_sidebar_layout = documents.iter().any(|d| d.sidebar.is_some());
 
-    // Reverse map (slug folder-key → original on-disk leaf name) so every
-    // auto-generated folder-index TITLE/H1 preserves the author's directory
-    // casing ("Writings") even though the URL slug is lowercased ("writings").
-    // Consumed by the generated folder plan below.
-    let folder_display = folder_display_leaves(&project_structure.dirs, &dir_overrides);
-
     // Term derivation already ran above, before `expand_markers_in_documents`
     // — see that call site for why. `term_index` is in scope from here on;
     // both synthetic-index loops below consult it for term-page titles.
@@ -1685,12 +1691,7 @@ pub fn generate_blocking_content_for_build(
         &dir_overrides,
         &term_index,
         &input_evidence,
-        |folder| {
-            let mut doc = synthetic_folder_doc(folder, &term_index, &folder_display, &folder_languages, site_lang);
-            doc.lang_tag = Some(crate::i18n::lang_tag_in_tree(&format!("{folder}/index.md"), doc.lang));
-            doc.edition = editions.of(&doc.url_path);
-            doc
-        },
+        |folder| synthetic_folder_doc(folder, &term_index, &folder_display, &folder_languages, site_lang, &editions),
     );
     crate::build::terms::link_term_translations(&mut documents, &term_index);
     // A term card reads its members' pictures and dates, so it is set once

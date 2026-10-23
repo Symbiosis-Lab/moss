@@ -42,6 +42,22 @@ pub fn set_term_cards(documents: &mut [ParsedDocument], index: &TermIndex) {
     }
 }
 
+/// Runs `expand` with a page stood in for every unclaimed term, cards set, so a
+/// listing expanded before the generated pages exist (a kind's root,
+/// `![[/districts/|style:grid]]`) finds them. The stand-ins leave afterwards.
+pub fn with_term_pages(
+    documents: &mut Vec<ParsedDocument>,
+    index: &TermIndex,
+    term_page: impl Fn(&str) -> ParsedDocument,
+    expand: impl FnOnce(&mut [ParsedDocument]),
+) {
+    let page_count = documents.len();
+    documents.extend(index.unclaimed_keys().map(term_page));
+    set_term_cards(documents, index);
+    expand(documents);
+    documents.truncate(page_count);
+}
+
 fn term_card(
     key: &str,
     index: &TermIndex,
