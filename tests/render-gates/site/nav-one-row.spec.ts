@@ -58,6 +58,27 @@ test("a masthead that fits at full spacing is not tightened at 1280px", async ({
   expect(m.compact).toBe(false);
 });
 
+test("above phone width a near-fitting masthead splits rather than tightening", async ({ page }) => {
+  await open(page, 1280);
+  // Widen the name until full gaps overflow by 2px while tight gaps would fit.
+  await page.evaluate(() => {
+    const content = document.querySelector(".nav-content") as HTMLElement;
+    const name = document.querySelector(".nav-left .site-name") as HTMLElement;
+    const gap = (el: Element) => parseFloat(getComputedStyle(el).columnGap) || 0;
+    const links = [...document.querySelectorAll<HTMLElement>(".nav-links > *")];
+    const linkRow = links.reduce((s, l) => s + l.offsetWidth, 0) + gap(document.querySelector(".nav-links")!) * (links.length - 1);
+    const icons = (document.querySelector(".nav-icons") as HTMLElement).offsetWidth;
+    const rest = linkRow + icons + gap(content) + gap(document.querySelector(".nav-right")!);
+    name.style.display = "inline-block";
+    name.style.width = `${content.clientWidth - rest + 2}px`;
+    window.dispatchEvent(new Event("resize"));
+  });
+  await page.waitForTimeout(100);
+  const m = await masthead(page);
+  expect(m.compact, "the tight row is for phones").toBe(false);
+  expect(m.split).toBe(true);
+});
+
 test("a masthead that cannot fit even tight still splits at 330px", async ({ page }) => {
   await open(page, 330);
   const m = await masthead(page);

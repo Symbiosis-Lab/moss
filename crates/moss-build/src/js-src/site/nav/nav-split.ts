@@ -19,8 +19,9 @@
  * the name takes row 1 alone, then the links and the toggles at its end edge
  * share row 2.
  *
- * Before splitting it tries a tighter single row: `data-nav-compact` draws the
- * outer and toggle gaps in, and the masthead splits only if that still overflows.
+ * On a phone (up to 48rem), before splitting it tries a tighter single row:
+ * `data-nav-compact` draws the outer and toggle gaps in, and the masthead
+ * splits only if that still overflows. Wider, a near-fit splits at once.
  *
  * Every measured input — site-name width, per-link widths, toggle-cluster
  * width — is the same in every mode, and the column gaps are re-read after each
@@ -59,6 +60,8 @@ export interface RowWidths {
 export function oneRowFits(w: RowWidths): boolean {
   return w.name + w.outerGap + w.links + w.innerGap + w.icons <= w.container + 1;
 }
+
+const PHONE_QUERY = "(max-width: 48rem)";
 
 /** Everything the previous `initNavSplit()` bound, undone on the next call. */
 let teardown: Array<() => void> = [];
@@ -136,11 +139,13 @@ export function initNavSplit(): void {
         innerGap,
       });
     };
-    // Full spacing, then tight gaps, then two rows.
+    // Full spacing, then (on a phone) tight gaps, then two rows.
     setMode(navContent!, null);
     if (fitsOneRow()) return;
-    setMode(navContent!, "compact");
-    if (fitsOneRow()) return;
+    if (window.matchMedia?.(PHONE_QUERY).matches) {
+      setMode(navContent!, "compact");
+      if (fitsOneRow()) return;
+    }
     setMode(navContent!, "split");
   }
 
