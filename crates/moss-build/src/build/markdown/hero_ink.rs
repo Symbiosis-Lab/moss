@@ -550,11 +550,10 @@ impl Inks {
         Self { dark: hero_tone_color_luminance(), light: 1.0 }
     }
 
-    /// The words of a faded closing picture in one theme: they sit on the page
-    /// colour, so the dark ink and the light ink are the theme's text colour
-    /// and page colour, whichever the theme makes darker (the text in the
-    /// light theme, the page in the dark one). Any other picture takes
-    /// [`Inks::words`]; a faded one whose colours are unresolved takes none.
+    /// A faded closing picture's words sit on the page colour: the dark ink is the
+    /// theme's text in the light theme and its page colour in the dark one, the
+    /// light ink the other. Any other picture takes [`Inks::words`]; a faded one
+    /// whose colours are unresolved takes none.
     fn of_words(faded: bool, text: Option<Rgb>, page: Option<Rgb>, night: bool) -> Option<Self> {
         if !faded {
             return Some(Self::words());
@@ -568,8 +567,7 @@ impl Inks {
 /// dark theme, which site.css repeats.
 pub static CREDIT_INK: std::sync::LazyLock<(Rgb, Rgb)> = std::sync::LazyLock::new(|| token_colours("moss-color-text-secondary"));
 
-/// The page text colour in the light and the dark theme, which a faded closing
-/// picture's words take as one of their inks.
+/// The page text colour in the light and the dark theme: a faded top's words take it as an ink.
 pub static TEXT_INK: std::sync::LazyLock<(Rgb, Rgb)> = std::sync::LazyLock::new(|| token_colours("moss-color-text"));
 
 fn token_colours(name: &str) -> (Rgb, Rgb) {
@@ -719,7 +717,6 @@ struct Reading {
     layout: Layout,
     spot: Spot,
     tones: Tones,
-    /// The inks the words are judged between; unused by the credit.
     inks: Inks,
 }
 
@@ -732,8 +729,7 @@ fn readings(grid: &Ground, aspect: f32, align: Option<&str>, frame: &Frame, cred
     let words_inks = Inks::of_words(frame.faded, theme.text, page, theme.night);
     let mut out = Vec::new();
     for layout in Layout::ALL {
-        let Some(fade) = Fade::resolve(frame.faded, page, layout) else { continue };
-        let Some(inks) = words_inks else { continue };
+        let (Some(fade), Some(inks)) = (Fade::resolve(frame.faded, page, layout), words_inks) else { continue };
         // A theme that sets the words' type outside what is read keeps their panel, unless the
         // author asked for plain ink, which takes the better ink by the stylesheet's own scale.
         if frame.closing && frame.theme.resized && !forced {
@@ -973,6 +969,11 @@ pub fn short_cap(hero: &moss_core::ast::HeroShortcode) -> Option<(f32, f32)> {
     (px < need).then_some((px, need))
 }
 
+/// Whether a closing picture, or a hero that is only its picture, has no alt text.
+fn lacks_alt(hero: &moss_core::ast::HeroShortcode, closing: bool) -> bool {
+    hero.image.is_some() && hero.image_alt.trim().is_empty() && (closing || hero.overlay.is_empty())
+}
+
 /// Warn for `fade=top` on a hero that is not a closing picture (the `:::hero`
 /// that ends a footer), where it does nothing, and for a closing picture
 /// whose `max-height=` is shorter than its words ([`short_cap`]). Another
@@ -986,6 +987,11 @@ pub fn warn_closing_options(doc: &moss_core::ast::Document, closes_page: bool, f
         if hero.fade.as_deref() == Some("top") && !closing {
             crate::build::cli_output::log_warn_problem!(
                 "[{file_path}] `:::hero {{fade=top}}` fades only a closing picture, the `:::hero` that ends footer.md, so it is ignored here."
+            );
+        }
+        if lacks_alt(hero, closing) {
+            crate::build::cli_output::log_note!(
+                "[{file_path}] `:::hero` has a picture and no `alt=`, so a screen reader skips it. Describe it with `:::hero {{image=… alt=\"…\"}}`; a picture that is only decoration can stay as it is."
             );
         }
         if let Some((px, need)) = short_cap(hero).filter(|_| closing && !hero.overlay.is_empty()) {
@@ -1452,6 +1458,18 @@ mod tests {
         assert_eq!(problems(short, true), 1);
         assert_eq!(problems(short, false), 0, "an ordinary hero's cap is a floor, not a box for its words");
         assert_eq!(problems(":::hero {image=a.jpg max-height=\"clamp(420px, 50vw, 680px)\"}\n## Words\n:::\n", true), 0);
+    }
+
+    #[test]
+    fn a_closing_or_picture_only_hero_without_alt_is_noted() {
+        let lacks = |md: &str, closes_page: bool| {
+            let doc = moss_core::ast::parse(md);
+            doc.blocks.iter().any(|b| matches!(b, moss_core::ast::Block::Shortcode(moss_core::ast::Shortcode::Hero(h)) if lacks_alt(h, closes_page)))
+        };
+        assert!(lacks(":::hero {image=a.jpg}\n## Words\n:::\n", true), "a closing picture");
+        assert!(lacks(":::hero {image=a.jpg}\n:::\n", false), "a picture alone");
+        assert!(!lacks(":::hero {image=a.jpg alt=\"Two herons\"}\n## Words\n:::\n", true));
+        assert!(!lacks(":::hero {image=a.jpg}\n## Words\n:::\n", false), "words over the picture name the hero");
     }
 
     #[test]
