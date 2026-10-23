@@ -14,7 +14,7 @@ type Rgb = [number, number, number];
 interface Busy {
   /** Every other sky row is this colour, as an etching's lines are. */
   hatch?: Rgb;
-  /** A patch of this colour over the right half of the top 30% of the frame. */
+  /** A patch of this colour over the right 44% of the top 30% of the frame. */
   patch?: Rgb;
   /** Every other row of the bottom 18% is this colour. */
   foot?: Rgb;
@@ -26,7 +26,7 @@ interface Busy {
 export function landscapePng(width: number, height: number, sky: Rgb, ground: Rgb, horizon: number, busy: Busy = {}): Buffer {
   const rowOf = ([r, g, b]: Rgb, patch?: Rgb) => {
     const row = Buffer.alloc(1 + width * 3);
-    for (let x = 0; x < width; x++) row.set(patch && x >= width / 2 ? patch : [r, g, b], 1 + x * 3);
+    for (let x = 0; x < width; x++) row.set(patch && x >= width * 0.56 ? patch : [r, g, b], 1 + x * 3);
     return row;
   };
   const rows = Array.from({ length: height }, (_, y) => {
@@ -45,6 +45,40 @@ export function landscapePng(width: number, height: number, sky: Rgb, ground: Rg
     chunk("IDAT", deflateSync(Buffer.concat(rows))),
     chunk("IEND", Buffer.alloc(0)),
   ]);
+}
+
+/** A picture drawn by `pixel(fx, fy)` over unit coordinates. */
+function drawnPng(width: number, height: number, pixel: (fx: number, fy: number) => Rgb): Buffer {
+  const rows = Array.from({ length: height }, (_, y) => {
+    const row = Buffer.alloc(1 + width * 3);
+    for (let x = 0; x < width; x++) row.set(pixel(x / width, y / height), 1 + x * 3);
+    return row;
+  });
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr.set([8, 2, 0, 0, 0], 8);
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", deflateSync(Buffer.concat(rows))),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+/**
+ * An etching's tones: a pale sky down to a ramp into a dark landscape, with a
+ * clump of trees rising out of it on the right. `invert` is the night print.
+ */
+function etchingPng(width: number, height: number, invert: boolean): Buffer {
+  const paper: Rgb = invert ? [20, 28, 48] : [226, 233, 241];
+  const ink: Rgb = invert ? [214, 224, 236] : [40, 62, 104];
+  return drawnPng(width, height, (fx, fy) => {
+    const ground = Math.min(1, Math.max(0, (fy - 0.7) / 0.06));
+    const tree = fx > 0.7 && fx < 0.95 && fy > 0.7 ? 1 : 0;
+    const t = Math.max(ground, tree);
+    return [0, 1, 2].map((i) => Math.round(paper[i] + (ink[i] - paper[i]) * t)) as Rgb;
+  });
 }
 
 export const SKY: Rgb = [205, 218, 232];
@@ -154,6 +188,14 @@ export const CLOSING_PICTURE_BUSY_FADE_GATE: ScratchSiteSpec = {
   },
 };
 
+/** The busy pair with `panel=none`: plain ink over the hatching, no panel behind the words or the credit. */
+export const CLOSING_PICTURE_PLAIN_GATE: ScratchSiteSpec = {
+  name: "closing-picture-plain-gate",
+  files: {
+    ...CLOSING_PICTURE_BUSY_FADE_GATE.files,
+    "footer.md": `:::hero {image=closing.png dark=closing-dark.png align=top fade=top panel=none caption="${CREDIT}"}\n## ${HEADING}\n\n[${LINK_TEXT}](https://example.org/new)\n:::\n`,
+  },
+};
 
 /** The capped picture's height, as its fence writes it and as the gate checks it. */
 export const CAP = "clamp(440px, 50vw, 680px)";
@@ -196,5 +238,21 @@ export const CLOSING_PICTURE_ARCHIVAL_CAPTION_GATE: ScratchSiteSpec = {
     "closing-dark.png": landscapePng(1600, 700, SKY_NIGHT, [8, 10, 14], 0.7),
     "index.md": `---\ntitle: Archive Shelf\nuid: "cpa00102"\n---\n\n# Archive Shelf\n\nAn invented site for the archival closing-picture gate with a credit.\n`,
     "footer.md": `:::hero {image=closing.png dark=closing-dark.png align=top caption="${CREDIT}"}\n## ${HEADING}\n\n[${LINK_TEXT}](https://example.org/new)\n:::\n`,
+  },
+};
+
+/**
+ * A faded, capped closing picture whose picture is pale at the top and dark
+ * below: the words are a short heading and a link over the pale sky, and the
+ * credit sits on the dark foot. Neither needs a panel.
+ */
+export const CLOSING_PICTURE_LANDSCAPE_GATE: ScratchSiteSpec = {
+  name: "closing-picture-landscape-gate",
+  files: {
+    ".moss/config.toml": `schema_version = 5\n\n[site]\nlang = "en"\n`,
+    "closing.png": etchingPng(1400, 1073, false),
+    "closing-dark.png": etchingPng(1400, 1073, true),
+    "index.md": `---\ntitle: Landscape Shelf\nuid: "cpl00101"\ncontent_width: full\n---\n\n# Landscape Shelf\n\nAn invented site for the landscape closing picture.\n`,
+    "footer.md": `:::hero {image="closing.png|focus:50%,72%" dark=closing-dark.png align=top fade=top max-height="${CAP}" caption="${CREDIT}"}\n## ${HEADING}\n\n[${LINK_TEXT}](https://example.org/new)\n:::\n`,
   },
 };

@@ -3831,6 +3831,32 @@ uid: "clg00160"
 
 Text.
 `,
+    // A full-width page that keeps a lane for its contents list: the page column is
+    // `min(1200px, 100cqi - 2 * lane)`, which a tile must not read against itself.
+    "contents-full/index.md": `---
+title: Full-width Collage With Contents
+uid: "clg00170"
+content_width: full
+contents: pictures
+---
+
+# Quotes
+
+## One
+
+:::grid {collage}
+![Picture 1](t1.svg)
+*Credit for picture 1.*
++++
+> ${COLLAGE_SHORT_QUOTE}
+
+*Montaigne, 1924*
++++
+> ${COLLAGE_LONG_QUOTE}
+
+*Essays, book three*
+:::
+`,
     // A raster poster: the build reads a picture's pixel size from raster files only.
     "poster.png": Buffer.from("iVBORw0KGgoAAAANSUhEUgAAACgAAAA8CAIAAACb22+3AAAAOElEQVR42u3NQQkAAAgEsEtnEtOZ0hgiDPZfpvpExGKxWCwWi8VisVgsFovFYrFYLBaLxWLxp3gBxqJ0NeApenkAAAAASUVORK5CYII=", "base64"),
     "upright/index.md": `---

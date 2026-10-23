@@ -1135,7 +1135,6 @@ pub(crate) fn convert_single_image(
         // average plus a JPEG encode and drop both results.
         let (dominant_color, lqip_data_uri) =
             crate::build::scan::scan::compute_color_and_lqip_from_image(&img);
-        let tone_bands = crate::build::markdown::hero_ink::ToneGrid::from_image(&img).encode();
         let dims = (img.width(), img.height());
         {
             // The blocking scan already wrote this stat key with `is_animated`
@@ -1153,7 +1152,6 @@ pub(crate) fn convert_single_image(
                 &crate::build::cache::CachedMediaMeta {
                     dimensions: Some(dims),
                     dominant_color: dominant_color.clone(),
-                    tone_bands: Some(tone_bands),
                     lqip_data_uri: lqip_data_uri.clone(),
                     is_animated,
                 },

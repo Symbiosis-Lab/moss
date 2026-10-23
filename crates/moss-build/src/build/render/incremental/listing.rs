@@ -576,7 +576,7 @@ pub fn listing_globals(
 fn without_placeholders(files: &[MediaMetadata]) -> Vec<MediaMetadata> {
     files
         .iter()
-        .map(|m| MediaMetadata { dominant_color: None, tone_bands: None, lqip_data_uri: None, ..m.clone() })
+        .map(|m| MediaMetadata { dominant_color: None, lqip_data_uri: None, ..m.clone() })
         .collect()
 }
 
@@ -595,7 +595,7 @@ pub fn image_placeholders(project: &ProjectStructure) -> BTreeMap<String, String
     project
         .image_files
         .iter()
-        .map(|m| (m.path.clone(), debug_hash(&(&m.dominant_color, &m.lqip_data_uri, &m.tone_bands))))
+        .map(|m| (m.path.clone(), debug_hash(&(&m.dominant_color, &m.lqip_data_uri))))
         .collect()
 }
 

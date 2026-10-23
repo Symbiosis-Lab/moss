@@ -5,6 +5,12 @@ import { test, expect, Page } from '@playwright/test';
 import { contrastRatio, luminanceOfCss, parseColor, relativeLuminance, worstCaseContrast } from '../../e2e/helpers/wcag-contrast';
 import { CREDIT, GROUND, SKY, SKY_NIGHT, capAt } from '../../e2e/helpers/closing-picture-site';
 import { gatePort } from '../../../playwright/gate-ports';
+import { readFileSync } from 'node:fs';
+
+// What the stylesheet's real boxes must sit inside: hero_ink's type model for these words.
+const MODEL: Record<string, Record<'heading' | 'link', { left: number; right: number; top: number; bottom: number }>> = JSON.parse(
+  readFileSync(new URL('./closing-picture-model.json', import.meta.url), 'utf8'),
+);
 
 const lum = ([r, g, b]: readonly number[]) => relativeLuminance(r, g, b);
 const contrastWith = (ink: string, ground: readonly number[]) => contrastRatio(luminanceOfCss(ink), lum(ground));
@@ -22,7 +28,7 @@ const SCHEMES = ['light', 'dark'] as const;
 
 const measure = (page: Page) =>
   page.evaluate(() => {
-    const box = (el: Element) => {
+    const box = (el: Element | Range) => {
       const r = el.getBoundingClientRect();
       return { left: r.left, right: r.right, top: r.top + scrollY, bottom: r.bottom + scrollY };
     };
@@ -36,6 +42,18 @@ const measure = (page: Page) =>
       hero: box(hero),
       footer: box(document.querySelector('footer')!),
       heading: box(content.querySelector('h2')!),
+      // The glyph line boxes of the heading (a Range's client rects), not its element box, which is the whole measure.
+      headingText: (() => {
+        const range = document.createRange();
+        range.selectNodeContents(content.querySelector('h2')!);
+        const rects = [...range.getClientRects()];
+        return {
+          left: Math.min(...rects.map((r) => r.left)),
+          right: Math.max(...rects.map((r) => r.right)),
+          top: Math.min(...rects.map((r) => r.top)),
+          bottom: Math.max(...rects.map((r) => r.bottom)),
+        };
+      })(),
       link: box(content.querySelector('a')!),
       colophon: box(document.querySelector('footer .moss-colophon')!),
       colophonInk: getComputedStyle(document.querySelector('footer .moss-colophon a')!).color,
@@ -360,8 +378,8 @@ for (const scheme of SCHEMES) {
 
 // The words start at the text column, so the stretch of picture they cover
 // depends on the page's content width: a dark patch over the right half of the
-// sky keeps the panel on a default-width page (the words reach 65% across) and
-// spares it on a `content_width: full` one (48%).
+// sky keeps the panel on a default-width page (the words reach 61% across at
+// 2560px) and spares it on a `content_width: full` one (53%).
 for (const [path, panel] of [['', true], ['full/', false]] as const) {
   test(`a dark patch over the right half of the sky ${panel ? 'keeps' : 'spares'} the panel on ${panel ? 'a default-width' : 'a full-width'} page at 1360px`, async ({ page }) => {
     await page.setViewportSize({ width: 1360, height: 800 });
@@ -403,6 +421,19 @@ const fadedBoxes = (page: Page) =>
       hero: box(hero),
       content: box(content),
       heading: box(content.querySelector('h2')!),
+      // The glyph line boxes of the heading (a Range's client rects), not its element box, which is the whole measure.
+      headingText: (() => {
+        const range = document.createRange();
+        range.selectNodeContents(content.querySelector('h2')!);
+        const rects = [...range.getClientRects()];
+        return {
+          left: Math.min(...rects.map((r) => r.left)),
+          right: Math.max(...rects.map((r) => r.right)),
+          top: Math.min(...rects.map((r) => r.top)),
+          bottom: Math.max(...rects.map((r) => r.bottom)),
+        };
+      })(),
+      link: box(content.querySelector('a')!),
       credit: box(credit),
       colophon: box(document.querySelector('footer .moss-colophon')!),
       viewport: document.documentElement.clientWidth,
@@ -443,14 +474,26 @@ const THEMES = [
 ] as const;
 
 for (const theme of THEMES) {
-  for (const width of [1360, 390]) {
+  for (const width of [2560, 1360, 768, 390]) {
     test(`faded closing picture, ${theme.name}, ${width}px: the top fades into the page, the words and credit read on it`, async ({ browser }) => {
-      const context = await browser.newContext({ colorScheme: theme.system, viewport: { width, height: 800 } });
+      const context = await browser.newContext({ colorScheme: theme.system, viewport: { width, height: width > 2000 ? 1300 : 800 } });
       const page = await context.newPage();
       await openFaded(page, theme.toggle);
       const m = await fadedBoxes(page);
       expect(m.shown, 'the theme picks the picture').toBe(theme.dark ? 'dark' : 'light');
       expect(m.mask, 'the picture is masked').toContain('linear-gradient');
+
+      // The glyphs sit inside the rows and columns the ink measurement reads (hero_ink's type model).
+      const rel = (b: { left: number; right: number; top: number; bottom: number }) => ({ left: b.left - m.hero.left, right: b.right - m.hero.left, top: b.top - m.hero.top, bottom: b.bottom - m.hero.top });
+      for (const [part, real] of [['heading', rel(m.headingText)], ['link', rel(m.link)]] as const) {
+        const want = MODEL[String(width)][part];
+        const where = `${part} at ${width}px: real ${JSON.stringify(real)}, modelled ${JSON.stringify(want)}`;
+        // A line's client rect is its font's content area, a few px above its line box.
+        expect(real.top, where).toBeGreaterThanOrEqual(want.top - 6);
+        expect(real.bottom, where).toBeLessThanOrEqual(want.bottom + 2);
+        expect(real.left, where).toBeGreaterThanOrEqual(want.left - 2);
+        expect(real.right, where).toBeLessThanOrEqual(want.right + 2);
+      }
 
       // Nothing follows: the picture is the page's last box and the colophon sits on its foot.
       expect(m.hero.left).toBeCloseTo(0, 0);
@@ -549,6 +592,35 @@ for (const scheme of SCHEMES) {
   }
 }
 
+// `panel=none` is the author's call: plain ink over the same hatching, with nothing
+// behind the words or the credit, the better ink of the two in each theme.
+const PLAIN = `http://localhost:${gatePort('closing-picture:plain')}/`;
+for (const scheme of SCHEMES) {
+  for (const width of [390, 1360]) {
+    test(`panel=none over a busy picture, ${scheme}, ${width}px: plain ink, no panel behind the words or the credit`, async ({ browser }) => {
+      const context = await browser.newContext({ colorScheme: scheme, viewport: { width, height: 800 } });
+      const page = await context.newPage();
+      await page.goto(PLAIN, { waitUntil: 'load' });
+      const m = await page.evaluate(() => {
+        const hero = document.querySelector('footer .moss-hero-closing')!;
+        const content = hero.querySelector('.moss-hero-content')!;
+        const credit = hero.querySelector('.moss-hero-credit')!;
+        return {
+          panels: [getComputedStyle(content).backgroundColor, getComputedStyle(credit).backgroundColor],
+          ink: [getComputedStyle(content.querySelector('h2')!).color, getComputedStyle(credit).color],
+          tail: getComputedStyle(content, '::after').content,
+        };
+      });
+      expect(parseColor(m.panels[0]).a, 'no panel behind the words').toBe(0);
+      expect(parseColor(m.panels[1]).a, 'no panel behind the credit').toBe(0);
+      // One of the two inks, whichever reads better over the hatching at this layout.
+      const words = luminanceOfCss(m.ink[0]);
+      expect(words < 0.05 || words > 0.8, `words ${m.ink[0]} are the dark or the light ink`).toBe(true);
+      await context.close();
+    });
+  }
+}
+
 // `max-height=` and a position on the picture are build data: the build measures
 // the part of the picture the capped box shows, and a phone gives the faded
 // picture a floor so its words sit on the faded top. The credit stays at the
@@ -606,6 +678,39 @@ for (const theme of THEMES) {
     });
   }
 }
+// A picture that is pale where the words sit and dark below them: the build
+// measures the glyphs' own rows and the credit's own box, so both are in ink
+// with no panel, at a phone's width and a wide one, in each theme.
+const LANDSCAPE = `http://localhost:${gatePort('closing-picture:landscape')}/`;
+for (const theme of THEMES) {
+  for (const width of [1360, 768, 390]) {
+    test(`pale-sky closing picture, ${theme.name}, ${width}px: words and credit in ink, no panel`, async ({ browser }) => {
+      const context = await browser.newContext({ colorScheme: theme.system, viewport: { width, height: 800 } });
+      const page = await context.newPage();
+      await openFaded(page, theme.toggle, LANDSCAPE);
+      const m = await fadedBoxes(page);
+      expect(parseColor(m.words.panel).a, 'no panel behind the words').toBe(0);
+      expect(parseColor(m.creditStyle.panel).a, 'no panel behind the credit').toBe(0);
+      // Dark ink on the pale sky in light, light ink on the dark sky in dark; the
+      // credit is the page colour over the dark foot in light and the pale foot in dark.
+      const wordsLum = luminanceOfCss(m.words.ink);
+      const creditLum = luminanceOfCss(m.creditStyle.ink);
+      if (theme.dark) {
+        expect(wordsLum, `words ${m.words.ink}`).toBeGreaterThan(0.8);
+        expect(creditLum, `credit ${m.creditStyle.ink}`).toBeLessThan(0.05);
+      } else {
+        expect(wordsLum, `words ${m.words.ink}`).toBeLessThan(0.05);
+        expect(creditLum, `credit ${m.creditStyle.ink}`).toBeGreaterThan(0.8);
+      }
+      expect(m.creditStyle.size).toBeLessThan(16);
+      expect(worstContrast(m.words.ink, await backdrop(page, m.heading)), 'heading').toBeGreaterThanOrEqual(4.5);
+      expect(worstContrast(m.words.ink, await backdrop(page, m.link)), 'link').toBeGreaterThanOrEqual(4.5);
+      expect(worstContrast(m.creditStyle.ink, await backdrop(page, m.credit)), 'credit').toBeGreaterThanOrEqual(4.5);
+      await context.close();
+    });
+  }
+}
+
 // The archival edition on a closing picture: the words, the credit (when the
 // picture has one), the edition and the colophon row stack at the foot in that
 // order, never overlapping one another, inside the picture, with nothing below it.

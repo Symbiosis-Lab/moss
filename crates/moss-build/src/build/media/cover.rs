@@ -347,7 +347,6 @@ mod tests {
             modified: None,
             dimensions: Some((4515, 6158)),
             dominant_color: None,
-            tone_bands: None,
             lqip_data_uri: None,
         };
         let mut overrides = std::collections::HashMap::new();

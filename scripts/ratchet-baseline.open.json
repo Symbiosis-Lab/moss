@@ -8,7 +8,7 @@
       "armed": true,
       "value": {
         "crates/moss-build/src/build/assets/binary_resolver.rs": 1200,
-        "crates/moss-build/src/build/cache.rs": 1800,
+        "crates/moss-build/src/build/cache.rs": 1700,
         "crates/moss-build/src/build/folder_embed.rs": 1800,
         "crates/moss-build/src/build/markdown/html_post.rs": 1100,
         "crates/moss-build/src/build/markdown/pipeline.rs": 2500,
@@ -53,7 +53,8 @@
         "crates/moss-build/src/build/components/color_extract.rs": 900,
         "crates/moss-build/src/build/components/nav.rs": 900,
         "crates/moss-core/src/content_graph.rs": 900,
-        "crates/moss-core/src/frontmatter.rs": 1000
+        "crates/moss-core/src/frontmatter.rs": 1000,
+        "crates/moss-build/src/build/markdown/hero_ink.rs": 1000
       },
       "oversized": {
         "crates/moss-build/src/build.rs": "Crate root: dozens of submodule declarations plus the single run_pipeline entry point (zero-flicker staging, seal, ship, generation GC) that the rest of build/ hangs off of; deliberately tauri-free via the HostPorts ports pattern that replaced tauri::AppHandle, not a Tauri-command surface — retires by splitting run_pipeline's own body into its own file, which nothing here currently plans.",

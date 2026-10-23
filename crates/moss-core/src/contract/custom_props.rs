@@ -512,7 +512,13 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-contents-lane",
         owner: "body",
         default: "unset",
-        description: "The lane kept free for the contents list on a page with `contents: pictures`, from the window's left edge to a gutter before the text: `--moss-contents-inset` plus twice `--moss-contents-pad` plus `--moss-contents-row` plus `--moss-contents-gutter` (92px), set only where the window is at least 64rem wide, the pointer is fine and the page is horizontal and left-to-right, and unset everywhere else. Where it is set the page column narrows to `min(column, 100cqi - 2 * lane)`, and, when the list also fits the window's height, the list is up and the floating bar stays away (the island's `data-ruler` is `on` or `lane`); the site runtime reads only whether it is set. The list's invisible hit strips end a gutter short of it. Not a theme hook.",
+        description: "The lane kept free for the contents list on a page with `contents: pictures`, from the window's left edge to a gutter before the text: `--moss-contents-inset` plus twice `--moss-contents-pad` plus `--moss-contents-row` plus `--moss-contents-gutter` (92px), set only where the window is at least 64rem wide, the pointer is fine and the page is horizontal and left-to-right, and unset everywhere else. Where it is set the page column narrows to `min(column, --moss-page-inline - 2 * lane)`, and, when the list also fits the window's height, the list is up and the floating bar stays away (the island's `data-ruler` is `on` or `lane`); the site runtime reads only whether it is set. The list's invisible hit strips end a gutter short of it. Not a theme hook.",
+    },
+    CustomProp {
+        name: "--moss-page-inline",
+        owner: "main > *",
+        default: "100vw",
+        description: "`main`'s width, as a registered length (`@property`), computed where `main`'s children set it so a block inside a nested size container reads the page's width and not its container's. Outside `main` it is 100vw. Not a theme hook.",
     },
     CustomProp {
         name: "--moss-contents-column",

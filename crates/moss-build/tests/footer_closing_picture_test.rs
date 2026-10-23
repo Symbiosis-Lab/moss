@@ -105,8 +105,26 @@ fn site_with(hero: &str, hatched: bool) -> String {
 #[test]
 fn a_quiet_sky_takes_ink_with_no_panel_and_a_busy_one_keeps_its_panel() {
     let quiet = site_with(HERO, false);
-    assert!(quiet.contains(r#"data-words="narrow:dark mid:dark wide:dark wide-full:dark""#), "dark ink on the pale sky: {quiet}");
-    assert!(quiet.contains(r#"data-words-night="narrow:light mid:light wide:light wide-full:light""#), "light ink on the dark picture: {quiet}");
+    // A closing picture has a reading for each layout and the page's column and contents lane.
+    let everywhere = |ink: &str| {
+        let mut tokens = vec![format!("narrow:{ink}")];
+        for layout in ["mid", "wide"] {
+            for lane in ["", "-lane"] {
+                for column in ["default", "wide", "full"] {
+                    tokens.push(format!("{layout}-{column}{lane}:{ink}"));
+                }
+            }
+        }
+        tokens.sort();
+        tokens
+    };
+    let tokens_of = |footer: &str, attr: &str| {
+        let mut tokens: Vec<String> = footer.split(&format!(" {attr}=\"")).nth(1).and_then(|r| r.split('"').next()).unwrap_or("").split(' ').map(str::to_string).collect();
+        tokens.sort();
+        tokens
+    };
+    assert_eq!(tokens_of(&quiet, "data-words"), everywhere("dark"), "dark ink on the pale sky: {quiet}");
+    assert_eq!(tokens_of(&quiet, "data-words-night"), everywhere("light"), "light ink on the dark picture: {quiet}");
     assert!(quiet.contains(r#"data-foot="light""#), "the foot of the day picture is dark ground: {quiet}");
 
     let busy = site_with(HERO, true);
@@ -172,6 +190,15 @@ fn panel_none_over_a_picture_ink_cannot_read_on_warns_naming_the_hero() {
     assert!(!site.rebuild().join("\n").contains("panel=none"));
 }
 
+#[test]
+fn plain_ink_on_a_closing_picture_is_noted_by_layout_and_theme() {
+    let site = Site::new(&[("index.md", "---\ntitle: Harbour\n---\n\nBody text.\n"), ("footer.md", &HERO.replace("align=top", "align=top panel=none"))]);
+    std::fs::write(site.root.join("day.png"), picture(SKY, GROUND, true)).unwrap();
+    std::fs::write(site.root.join("night.png"), picture([20, 28, 48], [230, 235, 240], true)).unwrap();
+    let logged = site.rebuild().join("\n");
+    assert!(logged.contains("panel=none") && logged.contains("the words in the light theme") && logged.contains("needs") && logged.contains("80rem wide"), "the note names the layouts with the real ratios: {logged}");
+}
+
 /// The footer of a site closing on `hero` over the quiet pair, with `theme` as
 /// its stylesheet.
 fn themed(hero: &str, theme: &str) -> String {
@@ -195,17 +222,19 @@ fn a_faded_closing_picture_is_measured_over_the_themes_page_colour() {
     assert!(footer.contains(r#"data-fade="top""#), "{footer}");
     assert!(footer.contains(r#"data-words="narrow:dark"#) && footer.contains(r#"data-words-night="narrow:light"#), "{footer}");
     // The credit is measured at the foot: the dark ground takes the page colour in the light theme.
-    assert!(footer.contains(r#"data-credit="page""#) && footer.contains("data-credit-night="), "{footer}");
+    assert!(footer.contains(r#"data-credit="narrow:page mid:page wide:page""#) && footer.contains("data-credit-night="), "{footer}");
     assert!(!plain[..plain.find("<footer").unwrap()].contains("data-fade"), "only a closing picture fades");
 
     // A black page under the pale day picture: the faded top is dark above a pale sky.
     let black = footer_of(&themed(FADED, ":root { --moss-color-bg: #000; }\n")).to_string();
-    assert!(!black.contains(r#"data-words=""#) && black.contains(r#"data-words-night="narrow:light"#), "{black}");
+    let day = black.split(r#"data-words=""#).nth(1).and_then(|rest| rest.split('"').next()).unwrap_or("");
+    assert!(!day.contains("dark") && !day.contains("wide"), "the pale sky shows under the words below the phone's top: {black}");
+    assert!(black.contains(r#"data-words-night="narrow:light"#), "{black}");
 
     // A colour the build can't read keeps the words' panels in both themes, and
     // the credit cannot take it; the foot is unaffected.
     let unread = footer_of(&themed(FADED, ":root { --moss-color-bg: var(--paper); }\n")).to_string();
-    assert!(!unread.contains("data-words") && !unread.contains(r#"="page""#), "{unread}");
+    assert!(!unread.contains("data-words") && !unread.contains(":page"), "{unread}");
     assert!(unread.contains(r#"data-foot="light""#), "{unread}");
 }
 

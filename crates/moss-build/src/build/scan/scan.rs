@@ -173,22 +173,15 @@ pub fn should_swap_dimensions(orientation: u32) -> bool {
 /// Returns `(dominant_color, lqip_data_uri)` — both are `None` if the
 /// image cannot be loaded (SVG, corrupt, etc.).
 pub fn extract_color_and_lqip(path: &Path) -> (Option<String>, Option<String>) {
-    let (color, lqip, _) = extract_color_lqip_tone(path);
-    (color, lqip)
-}
-
-/// [`extract_color_and_lqip`] plus the picture's tone bands, from the same load.
-fn extract_color_lqip_tone(path: &Path) -> (Option<String>, Option<String>, Option<String>) {
     // Content-sniffed, same reason as `extract_image_dimensions` above:
     // `image::open` alone picks the decoder from the extension, so a
     // mislabeled file decoded fine by `media::decode::sniff_decode` would
     // otherwise fail here too and silently lose its color/LQIP.
     let img = match crate::build::media::decode::sniff_decode(path) {
         Ok(img) => img,
-        Err(_) => return (None, None, None),
+        Err(_) => return (None, None),
     };
-    let (color, lqip) = compute_color_and_lqip_from_image(&img);
-    (color, lqip, Some(crate::build::markdown::hero_ink::ToneGrid::from_image(&img).encode()))
+    compute_color_and_lqip_from_image(&img)
 }
 
 /// Compute `(dominant_color, lqip_data_uri)` from an already-decoded image.
@@ -324,14 +317,14 @@ pub fn extract_media_metadata(
     };
 
     // Extract dominant color + LQIP for images, or just color for videos
-    let (dominant_color, lqip_data_uri, tone_bands) = if evicted {
-        (None, None, None)
+    let (dominant_color, lqip_data_uri) = if evicted {
+        (None, None)
     } else if is_image {
-        extract_color_lqip_tone(path)
+        extract_color_and_lqip(path)
     } else if let Some(mgr) = ffmpeg {
-        (crate::build::media::dimensions::extract_video_dominant_color(mgr, path), None, None)
+        (crate::build::media::dimensions::extract_video_dominant_color(mgr, path), None)
     } else {
-        (None, None, None)
+        (None, None)
     };
 
     MediaMetadata {
@@ -341,7 +334,6 @@ pub fn extract_media_metadata(
         modified,
         dimensions,
         dominant_color,
-        tone_bands,
         lqip_data_uri,
         is_animated: !evicted && sniff_is_animated(path, extension),
     }
@@ -376,6 +368,8 @@ const MEDIA_META_TRANSFORM: &str = "media/meta";
 ///
 /// **4 → 5**: an image's entry gained `tone_bands`. A version-4 entry has none
 /// and would keep a hero from ever measuring its picture, so it is recomputed.
+/// The field has since gone (a hero's picture is read at render time); a
+/// version-5 entry still holding it is read as it is, the field ignored.
 const MEDIA_META_VERSION: u32 = 5;
 
 /// Stat-based cache key for an image's placeholder metadata (dimensions +
@@ -434,7 +428,6 @@ impl From<&MediaMetadata> for CachedMediaMeta {
         Self {
             dimensions: meta.dimensions,
             dominant_color: meta.dominant_color.clone(),
-            tone_bands: meta.tone_bands.clone(),
             lqip_data_uri: meta.lqip_data_uri.clone(),
             is_animated: meta.is_animated,
         }
@@ -619,7 +612,6 @@ fn extract_media_metadata_cached(
                 modified,
                 dimensions: cached.dimensions,
                 dominant_color: cached.dominant_color,
-                tone_bands: cached.tone_bands,
                 lqip_data_uri: cached.lqip_data_uri,
                 is_animated: cached.is_animated,
             };
@@ -641,7 +633,6 @@ fn extract_media_metadata_cached(
                 modified,
                 dimensions: cached.dimensions,
                 dominant_color: cached.dominant_color,
-                tone_bands: cached.tone_bands,
                 lqip_data_uri: cached.lqip_data_uri,
                 is_animated: cached.is_animated,
             };
@@ -691,7 +682,6 @@ fn extract_media_metadata_cached(
                 modified,
                 dimensions: cached.dimensions,
                 dominant_color: cached.dominant_color,
-                tone_bands: cached.tone_bands,
                 lqip_data_uri: cached.lqip_data_uri,
                 is_animated: cached.is_animated,
             };
@@ -714,7 +704,6 @@ fn extract_media_metadata_cached(
             modified,
             dimensions: extract_image_dimensions(abs_path),
             dominant_color: None,
-            tone_bands: None,
             lqip_data_uri: None,
             is_animated: sniff_is_animated(abs_path, extension),
         };

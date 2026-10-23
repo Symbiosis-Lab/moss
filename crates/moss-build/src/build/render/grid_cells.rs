@@ -733,7 +733,6 @@ fn remote_cover_html(meta: Option<&LinkMeta>, alt: &str) -> Option<String> {
         modified: None,
         dimensions: Some((meta.cover_width.unwrap_or(800), meta.cover_height.unwrap_or(600))),
         dominant_color: meta.cover_color.clone(),
-        tone_bands: None,
         lqip_data_uri: meta.cover_lqip.clone(),
         is_animated: false,
     };

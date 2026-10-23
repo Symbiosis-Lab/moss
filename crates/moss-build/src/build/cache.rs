@@ -791,9 +791,6 @@ pub struct CachedMediaMeta {
     pub dimensions: Option<(u32, u32)>,
     /// Dominant color as hex string, e.g. `"#FF5733"`.
     pub dominant_color: Option<String>,
-    /// Luminance extremes by horizontal band, as `MediaMetadata::tone_bands`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tone_bands: Option<String>,
     /// LQIP (Low Quality Image Placeholder) as a base64 data URI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lqip_data_uri: Option<String>,

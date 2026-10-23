@@ -43,8 +43,9 @@ pub(crate) struct MediaMaps {
     pub(crate) dimensions: HashMap<String, (u32, u32)>,
     /// Map from source path to dominant color hex string (e.g., "#ff5733")
     pub(crate) colors: HashMap<String, String>,
-    /// Map from source path to the encoded `MediaMetadata::tone_bands`
-    pub(crate) tones: HashMap<String, String>,
+    /// Map from an image's source path to itself, indexed under its output URL
+    /// like the rest, so a hero's href finds the file whose luminance it reads.
+    pub(crate) sources: HashMap<String, String>,
     /// Map from source path to LQIP data URI
     pub(crate) lqips: HashMap<String, String>,
     /// Map from source path to the scanned `is_animated` flag (multi-frame GIF
@@ -80,6 +81,11 @@ pub struct MediaDimensionLookup {
     /// The page colour per theme that a `fade=top` closing picture is measured
     /// over; moss's own unless the build read the theme's.
     page_ground: crate::build::markdown::hero_ink::PageGround,
+    /// The site's folder, where a hero's picture is read from.
+    root: Option<std::path::PathBuf>,
+    /// The luminance of each picture a hero has read, by source path, built the
+    /// first time one asks (`None` for a picture that would not decode).
+    grounds: std::sync::Mutex<HashMap<String, Option<std::sync::Arc<crate::build::markdown::hero_ink::Ground>>>>,
 }
 
 // How many lookups this thread has built. Each one walks every image and
@@ -130,7 +136,7 @@ impl MediaDimensionLookup {
         BUILT_ON_THIS_THREAD.with(|n| n.set(n.get() + 1));
         let mut dimensions = HashMap::new();
         let mut colors = HashMap::new();
-        let mut tones = HashMap::new();
+        let mut sources = HashMap::new();
         let mut lqips = HashMap::new();
         let mut animated = HashMap::new();
 
@@ -140,9 +146,6 @@ impl MediaDimensionLookup {
             }
             if let Some(ref color) = meta.dominant_color {
                 colors.insert(meta.path.clone(), color.clone());
-            }
-            if let Some(ref tone) = meta.tone_bands {
-                tones.insert(meta.path.clone(), tone.clone());
             }
             if let Some(ref lqip) = meta.lqip_data_uri {
                 lqips.insert(meta.path.clone(), lqip.clone());
@@ -189,29 +192,56 @@ impl MediaDimensionLookup {
                 }
             }
         }
+        for meta in images.iter().filter(|m| m.dimensions.is_some()) {
+            sources.insert(meta.path.clone(), meta.path.clone());
+        }
         index_by_output_url(&mut dimensions, dir_overrides);
         index_by_output_url(&mut colors, dir_overrides);
-        index_by_output_url(&mut tones, dir_overrides);
+        index_by_output_url(&mut sources, dir_overrides);
         index_by_output_url(&mut lqips, dir_overrides);
         index_by_output_url(&mut animated, dir_overrides);
 
         let maps = MediaMaps {
             dimensions,
             colors,
-            tones,
+            sources,
             lqips,
             animated,
         };
         let snapshot =
             crate::build::markdown::pipeline::build_asset_snapshot(&maps, registry, dir_overrides);
-        Self { maps, snapshot, page_ground: Default::default() }
+        Self { maps, snapshot, page_ground: Default::default(), root: None, grounds: Default::default() }
     }
 
-    /// The picture at `href` (an output URL) as luminance bands, as the scan
-    /// measured them. `None` until the scan has (a preview's first build), for
-    /// a video or an unreadable picture.
-    pub fn tone_grid(&self, href: &str) -> Option<crate::build::markdown::hero_ink::ToneGrid> {
-        crate::build::markdown::hero_ink::ToneGrid::parse(resolve_entry(&self.maps.tones, href)?)
+    /// This lookup, reading a hero's pictures from the site at `root`.
+    pub fn with_root(self, root: std::path::PathBuf) -> Self {
+        Self { root: Some(root), ..self }
+    }
+
+    /// The luminance of the picture at `href` (an output URL), read from the
+    /// file the first time a hero asks and kept for the build. `None` for a
+    /// video, an unreadable picture, or a lookup with no site folder.
+    pub fn ground(&self, href: &str) -> Option<std::sync::Arc<crate::build::markdown::hero_ink::Ground>> {
+        let source = resolve_entry(&self.maps.sources, href)?;
+        let lock = || self.grounds.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(known) = lock().get(source) {
+            return known.clone();
+        }
+        let built = self.root.as_ref().and_then(|root| crate::build::media::decode::sniff_decode(&root.join(source)).ok()).map(|img| std::sync::Arc::new(crate::build::markdown::hero_ink::Ground::from_image(&img)));
+        lock().insert(source.clone(), built.clone());
+        built
+    }
+
+    /// This lookup with the pictures' luminance already read, by source path.
+    #[cfg(test)]
+    pub(crate) fn with_grounds(self, pictures: Vec<(String, crate::build::markdown::hero_ink::Ground)>) -> Self {
+        {
+            let mut grounds = self.grounds.lock().unwrap();
+            for (path, ground) in pictures {
+                grounds.insert(path, Some(std::sync::Arc::new(ground)));
+            }
+        }
+        self
     }
 
     /// This lookup's `AssetSnapshot`. See the `snapshot` field.

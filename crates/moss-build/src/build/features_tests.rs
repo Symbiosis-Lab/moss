@@ -1637,7 +1637,6 @@ fn colophon_slot_merge_routes_cover_through_synthesizer_when_lookup_provided() {
         modified: None,
         dimensions: Some((1200, 800)),
         dominant_color: None,
-        tone_bands: None,
         lqip_data_uri: None,
     }];
     let lookup = MediaDimensionLookup::new(&images, &[], &std::collections::HashMap::new(), None);

@@ -935,7 +935,6 @@ mod tests {
             modified: None,
             dimensions: Some((3000, 600)),
             dominant_color: None,
-            tone_bands: None,
             lqip_data_uri: None,
             is_animated: false,
         }];

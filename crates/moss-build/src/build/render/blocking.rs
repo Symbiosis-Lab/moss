@@ -429,7 +429,7 @@ pub fn generate_blocking_content_for_build(
     };
     let markdown = crate::build::markdown::SiteMarkdown { lang: root_language(&site_config.lang, project_structure, &home_file_winners), ..site_config.markdown() };
     // Read before the pages render: a faded closing picture is measured over it.
-    let page_ground = crate::build::markdown::hero_ink::PageGround::of_theme(user_css_content.as_deref());
+    let page_ground = crate::build::markdown::hero_ink::PageGround::of_theme(user_css_content.as_deref()).with_colophon(site_config.colophon);
 
     // Build PageMap: pre-scan all markdown files to compute source_path → url_path mapping.
     // This includes cascading url overrides from folder index files, so child pages
@@ -605,7 +605,8 @@ pub fn generate_blocking_content_for_build(
         &dir_overrides,
         services.and_then(|s| s.assets.as_deref()),
     )
-    .with_page_ground(page_ground);
+    .with_page_ground(page_ground)
+    .with_root(source_path_buf.to_path_buf());
 
     // Pre-fetched asset data (dims/LQIP/dominant-color from
     // MediaDimensionLookup, registered WebP/AVIF variants from AssetRegistry)

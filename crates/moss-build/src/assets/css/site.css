@@ -4268,11 +4268,23 @@ body[data-contents="pictures"] {
    list (inset, padding, row, padding) and the gutter before the text. A
    vertical page takes the lane back in site/vertical.css.
 
-   `100cqi` is resolved where the column is used, not here: inside `main` it
-   is `main`'s width, so a scrollbar does not shift the text off the lane;
-   outside `main` (the footer, the island) it falls back to the small
-   viewport width; and inside a nested inline-size container it would be that
-   container's width, so such a container should set its own measure. */
+   `--moss-page-inline` is `main`'s width, as a registered length (computed
+   once, where `main`'s children set it): the formula below reads it on the
+   same element, where `100cqi` is live against `main`, so the column is the
+   room `main` really has (a scrollbar's gutter left out) and a block inside a
+   nested size container (a collage tile, a card listing) inherits that column
+   instead of reading `100cqi` against its own container. A custom property
+   substitutes `var()` where it is declared, so the formula must be declared on
+   `main`'s children, not on `main`; the footer and the island, outside `main`,
+   read 100vw. */
+@property --moss-page-inline {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 100vw;
+}
+main > * {
+  --moss-page-inline: 100cqi;
+}
 @media (width >= 64rem) and (pointer: fine) {
   body[data-contents="pictures"]:dir(ltr) {
     --moss-contents-lane: calc(
@@ -4282,8 +4294,9 @@ body[data-contents="pictures"] {
     --moss-contents-column: var(--moss-content-width);
   }
 
-  body[data-contents="pictures"]:dir(ltr) > * {
-    --moss-content-width: min(var(--moss-contents-column), 100cqi - 2 * var(--moss-contents-lane));
+  body[data-contents="pictures"]:dir(ltr) > *,
+  body[data-contents="pictures"]:dir(ltr) > main > * {
+    --moss-content-width: min(var(--moss-contents-column), var(--moss-page-inline) - 2 * var(--moss-contents-lane));
   }
 }
 
@@ -8123,30 +8136,84 @@ body > footer.container:has(> .moss-hero-closing) {
     background: none;
   }
 }
+/* Mid and wide: an ordinary hero reads `mid` and `wide`. A closing picture's words start
+   at its page's text column, so it has a reading for each: `<layout>-<column>`, with
+   `-lane` on a page that keeps the contents list's lane (`hero_ink`). */
 @media (48rem <= width < 80rem) {
-  :is(:root:not([data-theme="dark"]) .moss-hero[data-words~="mid:dark"], :root[data-theme="dark"] .moss-hero[data-words-night~="mid:dark"]) .moss-hero-content {
+  :is(
+    :root:not([data-theme="dark"]) .moss-hero:not(.moss-hero-closing)[data-words~="mid:dark"],
+    :root[data-theme="dark"] .moss-hero:not(.moss-hero-closing)[data-words-night~="mid:dark"],
+    :root:not([data-theme="dark"]) body:not([data-content-width="wide"]):not([data-content-width="full"]):not([data-contents="pictures"]) .moss-hero-closing[data-words~="mid-default:dark"],
+    :root[data-theme="dark"] body:not([data-content-width="wide"]):not([data-content-width="full"]):not([data-contents="pictures"]) .moss-hero-closing[data-words-night~="mid-default:dark"],
+    :root:not([data-theme="dark"]) body:not([data-content-width="wide"]):not([data-content-width="full"])[data-contents="pictures"] .moss-hero-closing[data-words~="mid-default-lane:dark"],
+    :root[data-theme="dark"] body:not([data-content-width="wide"]):not([data-content-width="full"])[data-contents="pictures"] .moss-hero-closing[data-words-night~="mid-default-lane:dark"],
+    :root:not([data-theme="dark"]) body[data-content-width="wide"]:not([data-contents="pictures"]) .moss-hero-closing[data-words~="mid-wide:dark"],
+    :root[data-theme="dark"] body[data-content-width="wide"]:not([data-contents="pictures"]) .moss-hero-closing[data-words-night~="mid-wide:dark"],
+    :root:not([data-theme="dark"]) body[data-content-width="wide"][data-contents="pictures"] .moss-hero-closing[data-words~="mid-wide-lane:dark"],
+    :root[data-theme="dark"] body[data-content-width="wide"][data-contents="pictures"] .moss-hero-closing[data-words-night~="mid-wide-lane:dark"],
+    :root:not([data-theme="dark"]) body[data-content-width="full"]:not([data-contents="pictures"]) .moss-hero-closing[data-words~="mid-full:dark"],
+    :root[data-theme="dark"] body[data-content-width="full"]:not([data-contents="pictures"]) .moss-hero-closing[data-words-night~="mid-full:dark"],
+    :root:not([data-theme="dark"]) body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words~="mid-full-lane:dark"],
+    :root[data-theme="dark"] body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words-night~="mid-full-lane:dark"]
+  ) .moss-hero-content {
     color: var(--moss-hero-tone-color, #2c2825);
     text-shadow: none;
     background: none;
   }
-  :is(:root:not([data-theme="dark"]) .moss-hero[data-words~="mid:dark"], :root[data-theme="dark"] .moss-hero[data-words-night~="mid:dark"]) .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
+  :is(
+    :root:not([data-theme="dark"]) .moss-hero:not(.moss-hero-closing)[data-words~="mid:dark"],
+    :root[data-theme="dark"] .moss-hero:not(.moss-hero-closing)[data-words-night~="mid:dark"],
+    :root:not([data-theme="dark"]) body:not([data-content-width="wide"]):not([data-content-width="full"]):not([data-contents="pictures"]) .moss-hero-closing[data-words~="mid-default:dark"],
+    :root[data-theme="dark"] body:not([data-content-width="wide"]):not([data-content-width="full"]):not([data-contents="pictures"]) .moss-hero-closing[data-words-night~="mid-default:dark"],
+    :root:not([data-theme="dark"]) body:not([data-content-width="wide"]):not([data-content-width="full"])[data-contents="pictures"] .moss-hero-closing[data-words~="mid-default-lane:dark"],
+    :root[data-theme="dark"] body:not([data-content-width="wide"]):not([data-content-width="full"])[data-contents="pictures"] .moss-hero-closing[data-words-night~="mid-default-lane:dark"],
+    :root:not([data-theme="dark"]) body[data-content-width="wide"]:not([data-contents="pictures"]) .moss-hero-closing[data-words~="mid-wide:dark"],
+    :root[data-theme="dark"] body[data-content-width="wide"]:not([data-contents="pictures"]) .moss-hero-closing[data-words-night~="mid-wide:dark"],
+    :root:not([data-theme="dark"]) body[data-content-width="wide"][data-contents="pictures"] .moss-hero-closing[data-words~="mid-wide-lane:dark"],
+    :root[data-theme="dark"] body[data-content-width="wide"][data-contents="pictures"] .moss-hero-closing[data-words-night~="mid-wide-lane:dark"],
+    :root:not([data-theme="dark"]) body[data-content-width="full"]:not([data-contents="pictures"]) .moss-hero-closing[data-words~="mid-full:dark"],
+    :root[data-theme="dark"] body[data-content-width="full"]:not([data-contents="pictures"]) .moss-hero-closing[data-words-night~="mid-full:dark"],
+    :root:not([data-theme="dark"]) body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words~="mid-full-lane:dark"],
+    :root[data-theme="dark"] body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words-night~="mid-full-lane:dark"]
+  ) .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
     text-shadow: none;
   }
-  :is(:root:not([data-theme="dark"]) .moss-hero[data-words~="mid:light"], :root[data-theme="dark"] .moss-hero[data-words-night~="mid:light"]) .moss-hero-content {
+  :is(
+    :root:not([data-theme="dark"]) .moss-hero:not(.moss-hero-closing)[data-words~="mid:light"],
+    :root[data-theme="dark"] .moss-hero:not(.moss-hero-closing)[data-words-night~="mid:light"],
+    :root:not([data-theme="dark"]) body:not([data-content-width="wide"]):not([data-content-width="full"]):not([data-contents="pictures"]) .moss-hero-closing[data-words~="mid-default:light"],
+    :root[data-theme="dark"] body:not([data-content-width="wide"]):not([data-content-width="full"]):not([data-contents="pictures"]) .moss-hero-closing[data-words-night~="mid-default:light"],
+    :root:not([data-theme="dark"]) body:not([data-content-width="wide"]):not([data-content-width="full"])[data-contents="pictures"] .moss-hero-closing[data-words~="mid-default-lane:light"],
+    :root[data-theme="dark"] body:not([data-content-width="wide"]):not([data-content-width="full"])[data-contents="pictures"] .moss-hero-closing[data-words-night~="mid-default-lane:light"],
+    :root:not([data-theme="dark"]) body[data-content-width="wide"]:not([data-contents="pictures"]) .moss-hero-closing[data-words~="mid-wide:light"],
+    :root[data-theme="dark"] body[data-content-width="wide"]:not([data-contents="pictures"]) .moss-hero-closing[data-words-night~="mid-wide:light"],
+    :root:not([data-theme="dark"]) body[data-content-width="wide"][data-contents="pictures"] .moss-hero-closing[data-words~="mid-wide-lane:light"],
+    :root[data-theme="dark"] body[data-content-width="wide"][data-contents="pictures"] .moss-hero-closing[data-words-night~="mid-wide-lane:light"],
+    :root:not([data-theme="dark"]) body[data-content-width="full"]:not([data-contents="pictures"]) .moss-hero-closing[data-words~="mid-full:light"],
+    :root[data-theme="dark"] body[data-content-width="full"]:not([data-contents="pictures"]) .moss-hero-closing[data-words-night~="mid-full:light"],
+    :root:not([data-theme="dark"]) body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words~="mid-full-lane:light"],
+    :root[data-theme="dark"] body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words-night~="mid-full-lane:light"]
+  ) .moss-hero-content {
     color: #fff;
     background: none;
   }
 }
-/* Wide: a closing picture's words start at the text column, so on a `content_width: full`
-   page (a wider column) it has its own reading, `wide-full`; any other hero reads `wide`. */
 @media (width >= 80rem) {
   :is(
     :root:not([data-theme="dark"]) .moss-hero:not(.moss-hero-closing)[data-words~="wide:dark"],
     :root[data-theme="dark"] .moss-hero:not(.moss-hero-closing)[data-words-night~="wide:dark"],
-    :root:not([data-theme="dark"]) body:not([data-content-width="full"]) .moss-hero-closing[data-words~="wide:dark"],
-    :root[data-theme="dark"] body:not([data-content-width="full"]) .moss-hero-closing[data-words-night~="wide:dark"],
-    :root:not([data-theme="dark"]) body[data-content-width="full"] .moss-hero-closing[data-words~="wide-full:dark"],
-    :root[data-theme="dark"] body[data-content-width="full"] .moss-hero-closing[data-words-night~="wide-full:dark"]
+    :root:not([data-theme="dark"]) body:not([data-content-width="wide"]):not([data-content-width="full"]):not([data-contents="pictures"]) .moss-hero-closing[data-words~="wide-default:dark"],
+    :root[data-theme="dark"] body:not([data-content-width="wide"]):not([data-content-width="full"]):not([data-contents="pictures"]) .moss-hero-closing[data-words-night~="wide-default:dark"],
+    :root:not([data-theme="dark"]) body:not([data-content-width="wide"]):not([data-content-width="full"])[data-contents="pictures"] .moss-hero-closing[data-words~="wide-default-lane:dark"],
+    :root[data-theme="dark"] body:not([data-content-width="wide"]):not([data-content-width="full"])[data-contents="pictures"] .moss-hero-closing[data-words-night~="wide-default-lane:dark"],
+    :root:not([data-theme="dark"]) body[data-content-width="wide"]:not([data-contents="pictures"]) .moss-hero-closing[data-words~="wide-wide:dark"],
+    :root[data-theme="dark"] body[data-content-width="wide"]:not([data-contents="pictures"]) .moss-hero-closing[data-words-night~="wide-wide:dark"],
+    :root:not([data-theme="dark"]) body[data-content-width="wide"][data-contents="pictures"] .moss-hero-closing[data-words~="wide-wide-lane:dark"],
+    :root[data-theme="dark"] body[data-content-width="wide"][data-contents="pictures"] .moss-hero-closing[data-words-night~="wide-wide-lane:dark"],
+    :root:not([data-theme="dark"]) body[data-content-width="full"]:not([data-contents="pictures"]) .moss-hero-closing[data-words~="wide-full:dark"],
+    :root[data-theme="dark"] body[data-content-width="full"]:not([data-contents="pictures"]) .moss-hero-closing[data-words-night~="wide-full:dark"],
+    :root:not([data-theme="dark"]) body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words~="wide-full-lane:dark"],
+    :root[data-theme="dark"] body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words-night~="wide-full-lane:dark"]
   ) .moss-hero-content {
     color: var(--moss-hero-tone-color, #2c2825);
     text-shadow: none;
@@ -8155,20 +8222,36 @@ body > footer.container:has(> .moss-hero-closing) {
   :is(
     :root:not([data-theme="dark"]) .moss-hero:not(.moss-hero-closing)[data-words~="wide:dark"],
     :root[data-theme="dark"] .moss-hero:not(.moss-hero-closing)[data-words-night~="wide:dark"],
-    :root:not([data-theme="dark"]) body:not([data-content-width="full"]) .moss-hero-closing[data-words~="wide:dark"],
-    :root[data-theme="dark"] body:not([data-content-width="full"]) .moss-hero-closing[data-words-night~="wide:dark"],
-    :root:not([data-theme="dark"]) body[data-content-width="full"] .moss-hero-closing[data-words~="wide-full:dark"],
-    :root[data-theme="dark"] body[data-content-width="full"] .moss-hero-closing[data-words-night~="wide-full:dark"]
+    :root:not([data-theme="dark"]) body:not([data-content-width="wide"]):not([data-content-width="full"]):not([data-contents="pictures"]) .moss-hero-closing[data-words~="wide-default:dark"],
+    :root[data-theme="dark"] body:not([data-content-width="wide"]):not([data-content-width="full"]):not([data-contents="pictures"]) .moss-hero-closing[data-words-night~="wide-default:dark"],
+    :root:not([data-theme="dark"]) body:not([data-content-width="wide"]):not([data-content-width="full"])[data-contents="pictures"] .moss-hero-closing[data-words~="wide-default-lane:dark"],
+    :root[data-theme="dark"] body:not([data-content-width="wide"]):not([data-content-width="full"])[data-contents="pictures"] .moss-hero-closing[data-words-night~="wide-default-lane:dark"],
+    :root:not([data-theme="dark"]) body[data-content-width="wide"]:not([data-contents="pictures"]) .moss-hero-closing[data-words~="wide-wide:dark"],
+    :root[data-theme="dark"] body[data-content-width="wide"]:not([data-contents="pictures"]) .moss-hero-closing[data-words-night~="wide-wide:dark"],
+    :root:not([data-theme="dark"]) body[data-content-width="wide"][data-contents="pictures"] .moss-hero-closing[data-words~="wide-wide-lane:dark"],
+    :root[data-theme="dark"] body[data-content-width="wide"][data-contents="pictures"] .moss-hero-closing[data-words-night~="wide-wide-lane:dark"],
+    :root:not([data-theme="dark"]) body[data-content-width="full"]:not([data-contents="pictures"]) .moss-hero-closing[data-words~="wide-full:dark"],
+    :root[data-theme="dark"] body[data-content-width="full"]:not([data-contents="pictures"]) .moss-hero-closing[data-words-night~="wide-full:dark"],
+    :root:not([data-theme="dark"]) body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words~="wide-full-lane:dark"],
+    :root[data-theme="dark"] body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words-night~="wide-full-lane:dark"]
   ) .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
     text-shadow: none;
   }
   :is(
     :root:not([data-theme="dark"]) .moss-hero:not(.moss-hero-closing)[data-words~="wide:light"],
     :root[data-theme="dark"] .moss-hero:not(.moss-hero-closing)[data-words-night~="wide:light"],
-    :root:not([data-theme="dark"]) body:not([data-content-width="full"]) .moss-hero-closing[data-words~="wide:light"],
-    :root[data-theme="dark"] body:not([data-content-width="full"]) .moss-hero-closing[data-words-night~="wide:light"],
-    :root:not([data-theme="dark"]) body[data-content-width="full"] .moss-hero-closing[data-words~="wide-full:light"],
-    :root[data-theme="dark"] body[data-content-width="full"] .moss-hero-closing[data-words-night~="wide-full:light"]
+    :root:not([data-theme="dark"]) body:not([data-content-width="wide"]):not([data-content-width="full"]):not([data-contents="pictures"]) .moss-hero-closing[data-words~="wide-default:light"],
+    :root[data-theme="dark"] body:not([data-content-width="wide"]):not([data-content-width="full"]):not([data-contents="pictures"]) .moss-hero-closing[data-words-night~="wide-default:light"],
+    :root:not([data-theme="dark"]) body:not([data-content-width="wide"]):not([data-content-width="full"])[data-contents="pictures"] .moss-hero-closing[data-words~="wide-default-lane:light"],
+    :root[data-theme="dark"] body:not([data-content-width="wide"]):not([data-content-width="full"])[data-contents="pictures"] .moss-hero-closing[data-words-night~="wide-default-lane:light"],
+    :root:not([data-theme="dark"]) body[data-content-width="wide"]:not([data-contents="pictures"]) .moss-hero-closing[data-words~="wide-wide:light"],
+    :root[data-theme="dark"] body[data-content-width="wide"]:not([data-contents="pictures"]) .moss-hero-closing[data-words-night~="wide-wide:light"],
+    :root:not([data-theme="dark"]) body[data-content-width="wide"][data-contents="pictures"] .moss-hero-closing[data-words~="wide-wide-lane:light"],
+    :root[data-theme="dark"] body[data-content-width="wide"][data-contents="pictures"] .moss-hero-closing[data-words-night~="wide-wide-lane:light"],
+    :root:not([data-theme="dark"]) body[data-content-width="full"]:not([data-contents="pictures"]) .moss-hero-closing[data-words~="wide-full:light"],
+    :root[data-theme="dark"] body[data-content-width="full"]:not([data-contents="pictures"]) .moss-hero-closing[data-words-night~="wide-full:light"],
+    :root:not([data-theme="dark"]) body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words~="wide-full-lane:light"],
+    :root[data-theme="dark"] body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words-night~="wide-full-lane:light"]
   ) .moss-hero-content {
     color: #fff;
     background: none;
@@ -8185,20 +8268,67 @@ body > footer.container:has(> .moss-hero-closing) {
   background: none;
 }
 /* The credit at the foot, in the ink measured for it there (`data-credit`, per
-   theme): the theme's secondary text colour, as the build measured it, or its
-   page colour. Without one it keeps its panel. */
-:root:not([data-theme="dark"]) .moss-hero-closing[data-credit="text"] > .moss-hero-credit {
-  color: #5d5853;
+   theme and layout, as `data-words` is): the theme's secondary text colour, as
+   the build measured it, or its page colour. A layout not listed keeps its panel. */
+@media (width < 48rem) {
+  :root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="narrow:text"] > .moss-hero-credit {
+    color: #5d5853;
+  }
+  :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="narrow:text"] > .moss-hero-credit {
+    color: #b0a696;
+  }
+  :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="narrow:page"], :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="narrow:page"]) > .moss-hero-credit {
+    color: var(--moss-color-bg);
+  }
+  :is(
+    :root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="narrow:text"],
+    :root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="narrow:page"],
+    :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="narrow:text"],
+    :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="narrow:page"]
+  ) > .moss-hero-credit {
+    text-shadow: none;
+    background: none;
+  }
 }
-:root[data-theme="dark"] .moss-hero-closing[data-credit-night="text"] > .moss-hero-credit {
-  color: #b0a696;
+@media (48rem <= width < 80rem) {
+  :root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="mid:text"] > .moss-hero-credit {
+    color: #5d5853;
+  }
+  :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="mid:text"] > .moss-hero-credit {
+    color: #b0a696;
+  }
+  :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="mid:page"], :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="mid:page"]) > .moss-hero-credit {
+    color: var(--moss-color-bg);
+  }
+  :is(
+    :root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="mid:text"],
+    :root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="mid:page"],
+    :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="mid:text"],
+    :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="mid:page"]
+  ) > .moss-hero-credit {
+    text-shadow: none;
+    background: none;
+  }
 }
-:is(:root:not([data-theme="dark"]) .moss-hero-closing[data-credit="page"], :root[data-theme="dark"] .moss-hero-closing[data-credit-night="page"]) > .moss-hero-credit {
-  color: var(--moss-color-bg);
-}
-:is(:root:not([data-theme="dark"]) .moss-hero-closing[data-credit], :root[data-theme="dark"] .moss-hero-closing[data-credit-night]) > .moss-hero-credit {
-  text-shadow: none;
-  background: none;
+@media (width >= 80rem) {
+  :root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="wide:text"] > .moss-hero-credit {
+    color: #5d5853;
+  }
+  :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="wide:text"] > .moss-hero-credit {
+    color: #b0a696;
+  }
+  :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="wide:page"], :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="wide:page"]) > .moss-hero-credit {
+    color: var(--moss-color-bg);
+  }
+  :is(
+    :root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="wide:text"],
+    :root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="wide:page"],
+    :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="wide:text"],
+    :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="wide:page"]
+  ) > .moss-hero-credit {
+    text-shadow: none;
+    background: none;
+  }
 }
 
 /* ==========================================================================

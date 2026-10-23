@@ -691,3 +691,60 @@ test.describe("the phone gutter and the section face", () => {
     expect(title).toMatch(/serif/i);
   });
 });
+test.describe("a quote inside a tile does not read the page's column against the tile", () => {
+  test("a full-width page with a contents lane sets its quotes as wide as their tiles at 1360px", async ({ page }) => {
+    await page.setViewportSize({ width: 1360, height: 900 });
+    await page.goto("/contents-full/");
+    const r = await page.locator(MIXED).evaluate((grid) => ({
+      height: grid.getBoundingClientRect().height,
+      quotes: [...grid.querySelectorAll<HTMLElement>(".moss-quote")].map((q) => {
+        const p = q.querySelector("p")!;
+        const tile = q.closest<HTMLElement>("[data-tile]")!;
+        return { cap: getComputedStyle(p).maxInlineSize, tile: tile.getBoundingClientRect().width, p: p.getBoundingClientRect().width, lines: p.getClientRects().length };
+      }),
+    }));
+    expect(r.quotes.length).toBe(2);
+    for (const q of r.quotes) {
+      expect(q.p, `paragraph ${q.p}px in a ${q.tile}px tile (cap ${q.cap})`).toBeGreaterThan(q.tile / 2);
+    }
+    expect(r.height, "the collage keeps its height").toBeLessThan(1200);
+  });
+});
+
+test.describe("a card listing keeps the page column as its reading cap", () => {
+  for (const [path, width] of [["/mixed/", 1360], ["/contents-full/", 1360]] as const) {
+    test(`at ${width}px on ${path} a list layout inside a wider container is capped at the column`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(path);
+      const r = await page.evaluate(() => {
+        const article = document.querySelector("article")!;
+        const box = document.createElement("div");
+        box.className = "moss-cards-container";
+        box.style.inlineSize = "1500px";
+        box.innerHTML = '<div class="moss-cards" data-layout="list"></div>';
+        article.append(box);
+        const list = box.firstElementChild as HTMLElement;
+        return { cap: getComputedStyle(list).maxInlineSize, column: getComputedStyle(article).maxInlineSize };
+      });
+      expect(r.column).toMatch(/px$/);
+      expect(r.cap).toBe(r.column);
+    });
+  }
+});
+
+test.describe("the contents lane's column is measured against main, not the window", () => {
+  test("a paragraph's cap follows main's width when the body gives some of it up", async ({ page }) => {
+    await page.setViewportSize({ width: 1360, height: 900 });
+    await page.goto("/contents-full/");
+    // Room taken from the right of `main` (a sidenote reserve or a scrollbar does the same):
+    // 100vw still says 1360px, `main`'s content box says less.
+    await page.evaluate(() => { document.body.style.paddingRight = "80px"; });
+    const r = await page.evaluate(() => {
+      const main = document.querySelector("main")!;
+      const p = main.querySelector("p")!;
+      return { main: main.getBoundingClientRect().width, cap: parseFloat(getComputedStyle(p).maxInlineSize), column: parseFloat(getComputedStyle(main.querySelector("article")!).maxInlineSize) };
+    });
+    expect(r.main, "main gave up the padding").toBeLessThan(1300);
+    expect(r.column, "the column is main's width less two lanes (92px each), not the window's").toBeCloseTo(Math.min(1200, r.main - 184), 0);
+  });
+});

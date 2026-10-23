@@ -3205,7 +3205,6 @@ fn media_entry(path: &str, dimensions: Option<(u32, u32)>) -> crate::types::cont
         modified: None,
         dimensions,
         dominant_color: None,
-        tone_bands: None,
         lqip_data_uri: None,
     }
 }

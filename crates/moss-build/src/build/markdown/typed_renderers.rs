@@ -295,7 +295,7 @@ pub(crate) fn render_hero_html_typed(
     // A closing picture measures its picture for the words' ink, and sets its
     // caption inside the picture as a credit along the foot.
     let closing = args.classes.split_whitespace().any(|c| c == "moss-hero-closing");
-    let frame = crate::build::markdown::hero_ink::Frame::new(attrs.position, args.max_height, args.align.as_deref(), args.fade.as_deref() == Some("top"), closing);
+    let frame = crate::build::markdown::hero_ink::Frame::new(attrs.position, args.max_height, args.align.as_deref(), args.fade.as_deref() == Some("top"), closing, crate::build::markdown::hero_ink::Words::read(&args.overlay_text, &moss_core::ast::inlines_to_plain_text(&args.caption)));
     let fade_attr = if frame.faded { r#" data-fade="top""# } else { "" };
     let ink_attrs = match (&resolved_image, is_plate || args.overlay.is_empty()) {
         (Some(light), false) if !hero_href_is_video(light) => crate::build::markdown::hero_ink::ink_attributes(
@@ -952,7 +952,6 @@ mod tests {
             // `sizes=`) is exercised rather than the single-URL shape.
             dimensions: Some((2400, 1200)),
             dominant_color: Some("#123456".to_string()),
-            tone_bands: None,
             lqip_data_uri: Some("data:image/jpeg;base64,zzz".to_string()),
         };
         let lookup = MediaDimensionLookup::new(&[meta], &[], &std::collections::HashMap::new(), None);
