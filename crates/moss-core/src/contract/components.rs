@@ -1695,6 +1695,17 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         since: "1",
         description: "Clickable permalink appended inside an author-written body heading that carries a slug id; links to the heading's `#`-fragment. The element is EMPTY — the `#` a reader sees is drawn by `site.css` as `::after` content, so selecting a heading never copies it. Never emitted for a level-1 heading (a page's own title, not a section of it — the `id` is still there, so an existing `#title` link still resolves) or for any heading on the home page (levels 2-6 included: a reader lands there by visiting the site, not by a deep link into one of its sections). Also never emitted for a display title: the auto-injected `moss-article-title` H1, a `:::hero` overlay heading, and a `:::grid` cell heading all get none.",
     },
+    ComponentEntry {
+        class: "moss-nobreak",
+        kind: "instance",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<h2>Maren Oduya, <span class="moss-nobreak">1626–1705</span></h2>"#,
+        example_markdown: "## Maren Oduya, 1626–1705",
+        status: Status::Confirmed,
+        since: "0.20",
+        description: "Wraps a run of digits joined by hyphens or dashes (a year range such as 1626–1705) in a heading, so the run is never split across two lines; the build adds it to the page title, a folder title and every body heading, and nowhere else. Styled `white-space: nowrap`.",
+    },
     // -------------------------------------------------------------------
     // Grid + gallery + buttons containers (free-form layouts).
     // -------------------------------------------------------------------

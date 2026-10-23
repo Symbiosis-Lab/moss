@@ -65,6 +65,23 @@ uid: "tdg00003"
 
 A paragraph with [a link](/cards/) in it.
 `,
+    "range.md": `---
+title: ${RANGE_TITLE}
+uid: "tdg00004"
+---
+
+## ${LONG_NAME}, 1626–1705
+
+Text.
+
+## Reign, 1558-1603
+
+Text.
+
+## Plain heading
+
+Text.
+`,
     ".moss/config.toml": `schema_version = 5
 
 [site]

@@ -590,6 +590,12 @@ article h6 {
   font-family: var(--moss-font-section, var(--moss-font-body));
 }
 
+/* A number range in a heading ("1626–1705") never breaks across lines; the
+   build wraps each such run in this span. */
+.moss-nobreak {
+  white-space: nowrap;
+}
+
 /* Section permalink anchors (moss-heading-anchor). Emitted inside body
    headings by render_heading(). Hover/focus reveal only — hidden on touch
    (no hover = no clutter in headings; focus-visible covers keyboard nav).
@@ -598,6 +604,11 @@ article h6 {
    most of the way to the background, so even when revealed it stays a soft
    affordance. Firms up to the accent on direct hover/focus (rule below). */
 .moss-heading-anchor {
+  /* Out of the line, so the hidden mark never takes room: a no-break range
+     at a line's end keeps its line, and a full line is not pushed to the next
+     by a mark nobody can see. It stays where it would have been, after the
+     last word. */
+  position: absolute;
   margin-inline-start: 0.4em;
   /* `content: none` on ::after would remove it; the glyph lives there and
      nowhere else. Generated content is not part of the document text, so it

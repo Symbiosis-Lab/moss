@@ -720,7 +720,7 @@ pub trait RenderHooks {
             let _ = write!(out, r#" data-source-line="{}""#, n);
         }
         out.push('>');
-        out.push_str(content);
+        out.push_str(&crate::heading::range::keep_ranges_together(content));
         // Permalink anchor — only when the heading has a slug id AND
         // `emit_heading_anchors(level)` says yes (never for level 1 by
         // default; see that method's doc for the rest of the policy).
@@ -1253,6 +1253,14 @@ mod tests {
             out,
             r##"<h2 id="setup">Setup<a class="moss-heading-anchor" href="#setup" aria-label="Permalink to this section"></a></h2>"##
         );
+    }
+
+    #[test]
+    fn default_hooks_render_heading_keeps_a_year_range_together() {
+        let hooks = DefaultHooks::new();
+        let mut out = String::new();
+        hooks.render_heading(&mut out, 2, HeadingMarks::default(), None, "Maren Oduya, 1626\u{2013}1705");
+        assert_eq!(out, "<h2>Maren Oduya, <span class=\"moss-nobreak\">1626\u{2013}1705</span></h2>");
     }
 
     #[test]

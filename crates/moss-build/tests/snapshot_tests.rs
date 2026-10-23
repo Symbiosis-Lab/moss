@@ -129,6 +129,16 @@ fn normalize_html(content: &str) -> String {
     let path_re = regex::Regex::new(r#"(?:/Users|/home)/[^"'\s<>]+"#).unwrap();
     normalized = path_re.replace_all(&normalized, "[PATH]").to_string();
 
+    // A folder-name title keeps its digit-dash-digit runs in no-break spans,
+    // which cut the random directory name in pieces; join it first.
+    let split_dir_re =
+        regex::Regex::new(r#"moss_snapshot_test_(?:[a-f0-9-]|<span class="moss-nobreak">|</span>)+"#).unwrap();
+    normalized = split_dir_re
+        .replace_all(&normalized, |m: &regex::Captures| {
+            m[0].replace(r#"<span class="moss-nobreak">"#, "").replace("</span>", "")
+        })
+        .to_string();
+
     // Normalize temp directory names (moss_snapshot_test_UUID pattern)
     // These appear in titles and site names
     let temp_dir_re = regex::Regex::new(r"moss_snapshot_test_[a-f0-9-]{36}").unwrap();

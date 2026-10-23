@@ -20,6 +20,7 @@
 pub mod anchor;
 pub mod attrs;
 pub mod extract;
+pub mod range;
 pub mod state;
 pub mod text;
 
