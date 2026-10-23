@@ -374,6 +374,10 @@ Separate a grid's cells with a line that holds only `+++`. A grid takes one to s
 
 `:::grid N {scroll}` (2026-09-21) keeps a grid's row on one line and lets the reader drag it sideways instead of it wrapping — `N` becomes how many cards fit in view at once, with a slice of the next one showing as the cue to keep going. Reach for it on a "related articles" or "more like this" strip where reading order matters more than seeing every card at once; add `label="…"` to give the row an accessible name when the surrounding heading doesn't already say what it is. Skip it when every card must be visible without scrolling and use the plain wrapping grid instead.
 
+A collage quote written in Chinese or Japanese (moss reads the quote's own letters, and marks one with enough kana `lang="ja"`) is set in `--moss-font-cjk`, by default the heading face, at 17px to 21px (16px on a phone) with wide tracking; a long quote keeps its smaller size. A theme's `--moss-font-quote` still takes precedence.
+
+`:::grid 3 {rows=equal}` lines the parts of the cards in a row up across it: the picture, the title and the text of every card start at the same heights, however many parts each card has. moss counts the blocks of every card, takes the most, and gives every card that many shared tracks, so a card with fewer parts leaves its last tracks empty; a collection card from a `[[note]]` link has two parts, and a raw HTML block counts as one however many elements it holds. It needs subgrid, which every current browser has, and does nothing on a collage or a scroll row.
+
 `:::grid {collage}` sets a collection's highlights as a collage: the first cell is the lead picture and the rest are smaller tiles, pictures or quotes. Write each picture with its credit as an italic line under it, starting with the work's title in bold, and a quote as a blockquote followed by its source as one italic line:
 
 ```

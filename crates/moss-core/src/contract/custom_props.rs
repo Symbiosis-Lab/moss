@@ -203,6 +203,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "How many of the six columns right of the lead a collage tile takes on a wide screen, written by the build into the tile's `style`. Read-only for a theme: a row's spans sum to six.",
     },
     CustomProp {
+        name: "--moss-grid-parts",
+        owner: "moss-grid-card",
+        default: "1",
+        description: "How many tracks each card of a `:::grid {rows=equal}` spans: the most parts (picture, title, text, list, …) any card in the grid has, written by the build into the grid's `style`. Read-only for a theme.",
+    },
+    CustomProp {
         name: "--moss-collage-span-sm",
         owner: "moss-grid-card",
         default: "set by the build",
@@ -219,6 +225,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         owner: "article",
         default: "var(--moss-color-accent)",
         description: "Colour of a link in a page's text under the pointer or with focus. In the dark theme the default is `--moss-color-accent-hover`. A theme that accents its resting links sets this to a different colour, for example `var(--moss-color-accent-hover)`, so a hover or focus still shows.",
+    },
+    CustomProp {
+        name: "--moss-font-cjk",
+        owner: "moss-quote",
+        default: "var(--moss-font-heading)",
+        description: "Face of a collage quote tile whose words are Chinese or Japanese (`data-script=\"cjk\"`, written by the build), set at 17px to 21px with wide tracking. The default is the heading face, whose Han serifs follow the page's Traditional or Simplified setting. `--moss-font-quote`, when set, wins.",
     },
     CustomProp {
         name: "--moss-font-quote",

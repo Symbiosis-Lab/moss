@@ -325,6 +325,7 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, O
     let width = parsed.width.map(str::to_string);
     let scroll = parsed.scroll;
     let collage = parsed.collage;
+    let equal_rows = parsed.get("rows") == Some("equal");
     let label = parsed.get("label").map(str::to_string);
 
     let mut columns: u32 = 1;
@@ -405,6 +406,7 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, O
             width,
             scroll,
             collage,
+            equal_rows,
             label,
         },
         legacy_dash_line,

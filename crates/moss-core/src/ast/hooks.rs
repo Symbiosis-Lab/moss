@@ -2440,6 +2440,7 @@ mod tests {
             width: Some("page".to_string()),
             scroll: false,
             collage: false,
+            equal_rows: false,
             label: None,
         });
         let mut out = String::new();
@@ -2472,6 +2473,7 @@ mod tests {
             width: None,
             scroll: false,
             collage: false,
+            equal_rows: false,
             label: None,
         });
         let mut out = String::new();

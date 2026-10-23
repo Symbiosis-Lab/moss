@@ -148,3 +148,50 @@ fn a_tile_is_a_picture_only_when_the_picture_is_all_it_holds() {
     let html = render_md(":::grid {collage}\n![A](a.jpg)\n+++\nWords.\n\n![B](b.jpg)\n+++\n![C](c.jpg)\n:::");
     assert!(html.contains(r#"<div class="moss-grid-card" data-tile="text" style="--moss-collage-span:3;--moss-collage-span-sm:6">"#), "got: {html}");
 }
+
+#[test]
+fn equal_rows_gives_each_card_the_most_parts_any_card_has() {
+    let html = render_md(
+        ":::grid 3 {rows=equal}\n![A](a.jpg)\n\n### One\n\nText.\n+++\n![B](b.jpg)\n\n### Two\n\nText.\n\n- a\n- b\n+++\n### Three\n:::",
+    );
+    assert!(html.contains(r#"style="--moss-grid-parts:4" data-rows="equal""#), "got: {html}");
+}
+
+#[test]
+fn equal_rows_counts_a_link_cards_children_not_the_link() {
+    let html = render_md(":::grid 2 {rows=equal}\n[![A](a.jpg)\n### One\nText](/x/)\n+++\n### Two\n:::");
+    assert!(html.contains(r#"--moss-grid-parts:3" data-rows="equal""#), "got: {html}");
+}
+
+#[test]
+fn a_grid_without_rows_equal_emits_nothing_for_it() {
+    for md in [
+        ":::grid 2\n### A\n+++\n### B\n:::",
+        ":::grid 2 {rows=other}\n### A\n+++\n### B\n:::",
+        ":::grid 3 {collage rows=equal}\n![A](a.jpg)\n+++\n![B](b.jpg)\n+++\n![C](c.jpg)\n:::",
+        ":::grid 2 {scroll rows=equal}\n### A\n+++\n### B\n:::",
+    ] {
+        let html = render_md(md);
+        assert!(!html.contains("data-rows") && !html.contains("--moss-grid-parts"), "got: {html}");
+    }
+}
+
+#[test]
+fn a_grid_with_one_part_per_card_still_leaves_room_for_a_collection_card() {
+    let html = render_md(":::grid 2 {rows=equal}\n### A\n+++\n### B\n:::");
+    assert!(html.contains("--moss-grid-parts:2"), "got: {html}");
+}
+
+#[test]
+fn a_quote_in_chinese_says_so_and_a_quote_in_japanese_marks_the_quote_alone() {
+    let figure = |q: &str| render_md(&format!(":::grid 2\n> {q}\n\n*Source*\n+++\n> x\n\n*Source*\n:::"));
+    let zh = figure("海天一色，燈塔獨明。");
+    assert!(zh.contains(r#"<figure class="moss-quote" data-script="cjk"><blockquote>"#), "got: {zh}");
+    let ja = figure("朝の港に霧が降りて、船は静かに眠る。");
+    assert!(ja.contains(r#"<figure class="moss-quote" data-script="cjk"><blockquote lang="ja">"#), "got: {ja}");
+    assert_eq!(ja.matches("lang=").count(), 1, "got: {ja}");
+    let zh_with_kana = figure("海天一色，燈塔獨明，月の下。");
+    assert!(zh_with_kana.contains("data-script") && !zh_with_kana.contains("lang="), "got: {zh_with_kana}");
+    let en = figure("Never be discouraged, 灯台 said.");
+    assert!(!en.contains("data-script"), "got: {en}");
+}

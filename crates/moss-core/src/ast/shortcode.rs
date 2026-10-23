@@ -248,6 +248,10 @@ pub struct GridShortcode {
     /// [`Self::is_collage`]).
     #[serde(default)]
     pub collage: bool,
+    /// From `rows=equal`: the parts of the cards in a row (picture, title,
+    /// text, …) line up across it. Not honoured for a collage or a scroll row.
+    #[serde(default)]
+    pub equal_rows: bool,
     /// Accessible name for the scrolling row (`label="…"`). Only meaningful
     /// alongside `scroll` — rendered as `aria-label` (with `role="region"`)
     /// on the wrapping element; `None` when the author did not set it, or
@@ -281,6 +285,13 @@ impl GridShortcode {
     /// as a plain grid and the build warns.
     pub fn is_collage(&self) -> bool {
         self.collage && COLLAGE_TILES.contains(&self.cells.len())
+    }
+
+    /// True when the cards' parts line up across a row: `rows=equal` on a grid
+    /// that is neither a collage nor a scroll row, which place their cells
+    /// their own way.
+    pub fn has_equal_rows(&self) -> bool {
+        self.equal_rows && !self.collage && !self.scroll
     }
 
     /// True when a scroll row's own cells already fit in one line at its

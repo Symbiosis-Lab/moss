@@ -648,6 +648,7 @@ mod tests {
                 width: None,
                 scroll: false,
                 collage: false,
+                equal_rows: false,
                 label: None,
             }))]);
         let snap = empty_snapshot();

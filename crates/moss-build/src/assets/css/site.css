@@ -8531,6 +8531,29 @@ a.moss-grid-card:hover {
   text-decoration: underline;
 }
 
+/* Equal rows (`:::grid {rows=equal}`): the parts of the cards in a row line up
+   across it, as in a listing's grid (see `.moss-cards[data-layout="grid"]`).
+   Each card spans one track per part (`--moss-grid-parts`, the most parts any
+   card has) and adopts them, so the row's first part is as tall as the tallest
+   first part, and so on. A card with fewer parts leaves its last tracks empty;
+   an empty track has no height. */
+@supports (grid-template-rows: subgrid) {
+  .moss-grid[data-rows="equal"] {
+    align-items: stretch;
+  }
+  .moss-grid[data-rows="equal"] > :is(.moss-grid-card, .moss-card) {
+    display: grid;
+    grid-template-rows: subgrid;
+    grid-row: span var(--moss-grid-parts, 1);
+    row-gap: 0;
+  }
+  /* A collection card has two parts, its cover and its content, as in a
+     listing's grid. */
+  .moss-grid[data-rows="equal"] > .moss-card .moss-card-cover { grid-row: 1; }
+  .moss-grid[data-rows="equal"] > .moss-card .moss-card-content { grid-row: 2; }
+  .moss-grid[data-rows="equal"] > .moss-card .moss-card-no-cover { display: none; }
+}
+
 /* Collage (`:::grid {collage}`, 3 to 9 cells). The first cell is the lead: one
    column at the height of every row. The others pack the six columns right of
    it, each taking `--moss-collage-span` of them. The build writes the spans and
@@ -8778,6 +8801,30 @@ a.moss-grid-card:hover {
   inline-size: 2rem;
   margin-block-end: var(--moss-space-xs);
   border-block-start: 1px solid var(--moss-border-medium);
+}
+
+/* A collage quote the build marked `data-script="cjk"` (its letters are mostly
+   Han or kana) is set in the CJK face, a step larger and tracked out, as such
+   text is. The heading stack leads with Han faces and switches to Traditional
+   ones on a Traditional page. A long quote keeps its smaller size and scales
+   with its tile like any other; a short one has no word to fit whole, so it
+   takes the design's size without the tile cap. `--moss-font-quote` still wins when set. */
+.moss-grid[data-collage] [data-tile="quote"] .moss-quote[data-script="cjk"] blockquote {
+  font-family: var(--moss-font-quote, var(--moss-font-cjk, var(--moss-font-heading)));
+  line-height: 1.6;
+  letter-spacing: 0.08em;
+}
+.moss-grid[data-collage] [data-tile="quote"] .moss-quote[data-script="cjk"]:not([data-length="long"]) blockquote {
+  font-size: clamp(17px, 1.5vw, 21px);
+}
+@media (width < 48rem) {
+  .moss-grid[data-collage] [data-tile="quote"] .moss-quote[data-script="cjk"]:not([data-length="long"]) blockquote {
+    font-size: 16px;
+  }
+}
+/* Japanese goes in Mincho faces first, so its kanji do not fall back to the Chinese forms. */
+.moss-grid[data-collage] [data-tile="quote"] .moss-quote[data-script="cjk"] blockquote:lang(ja) {
+  font-family: var(--moss-font-quote, var(--moss-font-cjk, 'Hiragino Mincho ProN', 'Yu Mincho', 'Source Han Serif JP', 'Noto Serif JP', var(--moss-font-heading)));
 }
 
 /* Horizontal inline space narrows on phones. Vertical typesetting keeps

@@ -133,7 +133,35 @@ The italic line under a picture is its credit. A bold run at its start is the wo
 
 A blockquote followed by one italic line is a quote, with the line as its source; only the source can be a link. It is set as type on the page's paper inside a hairline and is never cut off. In a collage its size follows its tile's width, so a short quote's longest word fits a narrow tile; a word too long for the smallest size breaks rather than run into the hairline. Its face is `--moss-font-quote` (the body face unless set), and a quote over about 140 characters is set smaller. This works in a plain grid too.
 
+A quote written in Chinese or Japanese is set in `--moss-font-cjk` (by default the heading face, which leads with Han serifs and follows the page's Traditional or Simplified setting) at 17px to 21px, 16px on a phone, with wide letter-spacing; a long quote keeps its smaller size. moss reads the quote's own letters, so no markup is needed, and a quote with enough kana is also marked `lang="ja"`. A theme's `--moss-font-quote` takes precedence.
+
 A collage takes 3 to 9 cells. With any other count the build warns with the line and shows a plain grid. Set `--moss-collage-gap` for the space between tiles (default `6px`) and `--moss-collage-lead` for the lead's column. Use a collage for a handful of highlights; use [[gallery]] for a set of photos to go through and a plain grid when each cell is a card.
+
+## Equal rows
+
+Add `rows=equal` and the parts of the cards in a row line up across it: if the first card's picture is taller than its neighbour's, both titles still start at the same height, and so do the texts under them.
+
+```markdown
+:::grid 3 {rows=equal}
+![Lighthouse](a.jpg)
+
+### The lighthouse
+
+A short line.
++++
+![Ferry](b.jpg)
+
+### The ferry that crossed at night
+
+A longer text that takes three lines where the others take one.
++++
+### A card with no picture
+
+Some text.
+:::
+```
+
+It works for cards of any shape: moss counts the blocks of every card (a picture, a heading, a paragraph, a list each count one) and gives each card that many shared tracks, so a card with fewer parts than its neighbours leaves its last tracks empty. A collection card made from a `[[note]]` link has two parts, its cover and its text. A raw HTML block counts as one part, so its top-level elements share one track and can overlap under `rows=equal`; wrap them in a single element. The browser must support subgrid, as every current one does; without it the cards keep their own heights. `rows=equal` has no effect on a collage or a scrolling row.
 
 ## Cell content
 

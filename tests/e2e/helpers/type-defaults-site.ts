@@ -99,6 +99,19 @@ content_width: full
 
 Text.
 `,
+    "rows.md": `---
+title: Rows
+uid: "tdg00007"
+---
+
+:::grid 3 {rows=equal}
+${CARDS}
+:::
+
+:::grid 3
+${CARDS}
+:::
+`,
     "hero.md": `---
 title: Hero
 uid: "tdg00009"
@@ -115,6 +128,48 @@ ${card(2, "Two", "Text two.")}
 :::
 
 After the grid.
+`,
+    "mixed.md": `---
+title: Mixed
+uid: "tdg00010"
+---
+
+:::grid 3 {rows=equal}
+${card(1, "A prose card with a title that runs to several lines", "Some text.", "\n\n- a list\n- of two")}
++++
+[[cards]]
++++
+${card(2, "Short", "Short.")}
+:::
+`,
+    "quotes.md": `---
+title: Quotes
+uid: "tdg00008"
+---
+
+:::grid {collage}
+![Lead](p1.svg)
+*Lead credit.*
++++
+> ${CJK_QUOTE}
+
+*Inscription*
++++
+> ${KANA_QUOTE}
+
+*Haiku*
++++
+> ${LATIN_QUOTE}
+
+*Essays*
++++
+> ${LONG_CJK_QUOTE}
+
+*Long inscription*
++++
+![Fourth](p4.svg)
+*Fourth credit.*
+:::
 `,
     ".moss/config.toml": `schema_version = 5
 

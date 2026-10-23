@@ -177,3 +177,107 @@ test.describe("the room kept for the controls", () => {
   }
 });
 
+test.describe("equal rows", () => {
+  const tops = (page: Page, grid: number) =>
+    page.locator(".moss-grid").nth(grid).evaluate((g) => {
+      const read = (sel: string) => [...g.querySelectorAll(`:scope > .moss-grid-card ${sel}`)].map((e) => Math.round(e.getBoundingClientRect().top));
+      return {
+        title: [...g.querySelectorAll(":scope > .moss-grid-card")].map((c) => Math.round(c.querySelector("h3")!.getBoundingClientRect().top)),
+        text: read("> p:not(:has(img))"),
+        height: [...g.querySelectorAll(":scope > .moss-grid-card")].map((c) => Math.round(c.getBoundingClientRect().height)),
+      };
+    });
+
+  test("{rows=equal} lines the titles and the texts of cards with different shapes up across the row", async ({ page }) => {
+    await open(page, "/rows/", 1280);
+    const grid = await page.locator(".moss-grid").first().getAttribute("data-rows");
+    expect(grid).toBe("equal");
+    const t = await tops(page, 0);
+    // Card two's title runs to several lines, so without shared tracks its text starts lower than card one's.
+    expect(t.title[0]).toBe(t.title[1]);
+    expect(t.text[0]).toBe(t.text[1]);
+    expect(t.height[0]).toBe(t.height[1]);
+    expect(t.height[1]).toBe(t.height[2]);
+  });
+
+  test("a collection card among prose cards shares the row's tracks", async ({ page }) => {
+    await open(page, "/mixed/", 1280);
+    const g = await page.locator(".moss-grid").evaluate((grid) => {
+      const prose = grid.querySelector(":scope > .moss-grid-card")!;
+      const card = grid.querySelector(":scope > .moss-card")!;
+      const top = (e: Element | null) => Math.round(e!.getBoundingClientRect().top);
+      return {
+        display: getComputedStyle(card).display,
+        cover: top(card.querySelector(".moss-card-cover")),
+        picture: top(prose.querySelector("figure")),
+        content: top(card.querySelector(".moss-card-content")),
+        title: top(prose.querySelector("h3")) - parseFloat(getComputedStyle(prose.querySelector("h3")!).marginTop),
+        heights: [...grid.children].map((c) => Math.round(c.getBoundingClientRect().height)),
+      };
+    });
+    expect(g.display).toBe("grid");
+    expect(Math.abs(g.content - g.title)).toBeLessThanOrEqual(1);
+    expect(new Set(g.heights).size).toBe(1);
+  });
+
+  test("a grid without it keeps each card's own height", async ({ page }) => {
+    await open(page, "/rows/", 1280);
+    const t = await tops(page, 1);
+    expect(t.text[0], `texts ${t.text}`).not.toBe(t.text[1]);
+  });
+
+  test("the rows stay equal on a phone, one card per row", async ({ page }) => {
+    await open(page, "/rows/", 390);
+    const rects = await page.locator(".moss-grid").first().evaluate((g) =>
+      [...g.querySelectorAll(":scope > .moss-grid-card")].map((c) => {
+        const r = c.getBoundingClientRect();
+        return { top: r.top, bottom: r.bottom };
+      }),
+    );
+    for (let i = 1; i < rects.length; i++) expect(rects[i].top).toBeGreaterThanOrEqual(rects[i - 1].bottom - 0.5);
+  });
+});
+
+test.describe("a collage quote in Chinese or Japanese", () => {
+  const quote = (page: Page, text: string) =>
+    page.locator(".moss-quote blockquote", { hasText: text }).evaluate((b) => {
+      const cs = getComputedStyle(b);
+      return { size: parseFloat(cs.fontSize), spacing: cs.letterSpacing, line: parseFloat(cs.lineHeight), face: cs.fontFamily, lang: b.closest("[lang]")?.getAttribute("lang") ?? "" };
+    });
+
+  test("is set in the CJK face at the design's size, line height and tracking", async ({ page }) => {
+    await open(page, "/quotes/", 1360);
+    for (const text of ["海天一色", "朝の港に"]) {
+      const q = await quote(page, text);
+      expect(q.size).toBeCloseTo(Math.min(21, Math.max(17, 13.6 * 1.5)), 1);
+      expect(parseFloat(q.spacing)).toBeCloseTo(q.size * 0.08, 1);
+      expect(q.line).toBeCloseTo(q.size * 1.6, 1);
+      expect(q.face).toContain("Source Han Serif");
+    }
+    expect((await quote(page, "朝の港に")).lang).toBe("ja");
+    expect((await quote(page, "朝の港に")).face).toMatch(/^"?Hiragino Mincho ProN/);
+  });
+
+  test("a long one keeps the smaller size, scaling with its tile", async ({ page }) => {
+    await open(page, "/quotes/", 1360);
+    const short = await quote(page, "海天一色，燈塔獨明。");
+    const long = await page.locator(".moss-quote[data-length='long'] blockquote").evaluate((b) => parseFloat(getComputedStyle(b).fontSize));
+    expect(long).toBeLessThan(short.size);
+    expect(long).toBeLessThanOrEqual(15);
+  });
+
+  test("is 16px on a phone", async ({ page }) => {
+    await open(page, "/quotes/", 390);
+    expect((await quote(page, "海天一色")).size).toBe(16);
+  });
+
+  test("--moss-font-cjk sets the face, and a Latin quote is left alone", async ({ page }) => {
+    await open(page, "/quotes/", 1360);
+    const before = await quote(page, "Communication is health");
+    expect(before.face).not.toContain("Source Han Serif");
+    expect(before.spacing).toBe("normal");
+    await page.addStyleTag({ content: ":root { --moss-font-cjk: 'Invented Face', serif; }" });
+    expect((await quote(page, "海天一色")).face).toContain("Invented Face");
+    expect((await quote(page, "Communication is health")).face).toBe(before.face);
+  });
+});

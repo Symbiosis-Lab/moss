@@ -1544,6 +1544,12 @@ pub const COMPONENTS: &[ComponentEntry] = &[
             values: &["long"],
             default: "",
             description: "`long` when the quote runs past about 140 characters; it is set smaller.",
+        },
+        DataAttr {
+            name: "data-script",
+            values: &["cjk"],
+            default: "",
+            description: "`cjk` when most of the quote's letters are Chinese or Japanese. A collage tile then sets it in `--moss-font-cjk`, larger and tracked out. A quote in which a tenth of the letters are kana also marks its `<blockquote>` `lang=\"ja\"`.",
         }],
         example_html: r#"<figure class="moss-quote"><blockquote><p>Communication is health.</p></blockquote><figcaption><a href="...">Source</a></figcaption></figure>"#,
         example_markdown: ":::grid {collage}\n![A picture](a.jpg)\n+++\n> Communication is health.\n\n*[Source](https://example.org/)*\n+++\n![Another](b.jpg)\n:::\n",
@@ -1743,6 +1749,12 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 values: &[],
                 default: "",
                 description: "Presence flag: emitted from the bare `collage` keyword (`:::grid {collage}`) when the grid has 3 to 9 cells; with any other count the build warns and the grid stays plain. The first cell is the lead; on a wide screen it takes one column (`--moss-collage-lead`, half the collage, narrower when it is `data-upright`) at the height of every row, and the others pack six columns right of it. The rows follow the count (one for 3 or 4 tiles, two for 5 to 7, three for 8 or 9); the build computes each tile's spans (`--moss-collage-span`, `--moss-collage-span-sm`) and kind (`data-tile`) from what the cells hold. A row is at least `--moss-collage-row` tall and grows only to fit a quote or other text, never for a picture. On a phone the lead runs full width at 4:3, a quote or text tile takes a full row at its own height, and pictures fill rows of three squares, a short last row widened. Pictures crop with `object-fit: cover`, or as the display words after their pipe set (`focus:X%,Y%` for the point kept in view, `contain` to show the whole picture, `top`, `bottom left` and the other position words), and zoom slightly on hover unless shown whole. Keyboard focus rings the tile. A picture's caption is a credit on a band of the page colour at the tile's foot, shown on hover or keyboard focus and in the viewer on a touch screen; a bold run at its start is set as a title line of at most two lines (one in a short tile), ending in an ellipsis when it is longer, and a tile too small for both keeps only the title (the rest stays in the accessibility tree). A linked picture's title has a drawn ↗ beside it, with empty alternative text. The credit takes at most 40% of the tile and stops at a whole line, so a long credit's last lines are left to the viewer. A cell that is not a picture is set on the page's paper and never cut off; a quote's size follows its tile's width (`clamp()` over container units), so its longest word fits a narrow tile, and a word too long for the smallest size breaks or hyphenates. The collage's tracks are always horizontal; on a vertically typeset page a text tile still reads in the page's vertical direction.",
+            },
+            DataAttr {
+                name: "data-rows",
+                values: &["equal"],
+                default: "",
+                description: "Emitted from `rows=equal` (`:::grid 3 {rows=equal}`): the parts of the cards in a row (picture, title, text, whatever each holds) line up across it, each card spanning `--moss-grid-parts` tracks of the grid. Not honoured for a collage or a scroll row.",
             },
             DataAttr {
                 name: "data-count",

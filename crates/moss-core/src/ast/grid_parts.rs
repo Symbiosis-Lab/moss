@@ -171,6 +171,39 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
     source_line: Option<usize>,
 ) -> GridParts {
     let collage = args.is_collage().then(|| spans(&args.cells)).flatten();
+    // Each cell renders into its own buffer; `Block::LinkCard` brings its own wrapping `<a>`.
+    let mut cells: Vec<GridCellParts> = Vec::with_capacity(args.cells.len());
+    // Scope image `sizes=` to the cell track while cells render.
+    hooks.begin_grid_cells(args.columns, args.width.as_deref());
+    for (i, cell_blocks) in args.cells.iter().enumerate() {
+        let fragment = args.source.fragments.get(i);
+        let mut cell_html = String::new();
+        match quote_cell(cell_blocks) {
+            Some((quote, source)) => render_quote(hooks, &mut cell_html, quote, source),
+            None => super::render::render_blocks_with_meta(
+                hooks,
+                &mut cell_html,
+                cell_blocks,
+                fragment.map_or(&[], |f| f.blocks.as_slice()),
+            ),
+        }
+        let collapsed = collapse_tag_adjacent_newlines(&cell_html);
+        cells.push(GridCellParts {
+            inner: collapsed.trim().to_string(),
+            carded: !matches!(cell_blocks.as_slice(), [Block::LinkCard { .. }]),
+            // Filled in later by the host, which can read the image off disk.
+            cover_color: None,
+            source_range: fragment.and_then(|f| Some((f.first_line?, f.last_line?))),
+            layout: collage.as_ref().and_then(|spans| {
+                let (wide, phone) = spans.get(i.checked_sub(1)?)?;
+                Some(format!("--moss-collage-span:{wide};--moss-collage-span-sm:{phone}"))
+            }),
+            tile: collage.is_some().then(|| TileKind::of(cell_blocks)),
+            upright: false,
+        });
+    }
+    hooks.end_grid_cells();
+    let parts = args.has_equal_rows().then(|| args.cells.iter().map(|c| parts_of(c)).max().unwrap_or(1).max(2));
     let mut open_tag = String::new();
     {
         let mut class_attr = String::from("moss-grid");
@@ -206,8 +239,14 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
                 .join(" ");
             style.push(format!("--moss-grid-ratio:{cols}"));
         }
+        if let Some(parts) = parts {
+            style.push(format!("--moss-grid-parts:{parts}"));
+        }
         if !style.is_empty() {
             open_tag.push_str(&format!(r#" style="{}""#, style.join(";")));
+        }
+        if parts.is_some() {
+            open_tag.push_str(r#" data-rows="equal""#);
         }
         // `scroll` keeps the row on one line and lets the reader drag it
         // sideways; `tabindex="0"` makes an overflowing row
@@ -265,43 +304,6 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
         open_tag.push('>');
     }
 
-    // Phase 4 PR4.5 (2026-05-28): cells are typed `Vec<Block>`. Each cell
-    // renders into its own scratch buffer, gets tag-adjacent newlines
-    // collapsed (so the byte shape matches pulldown-cmark's `push_html`), then
-    // gets wrapped — or not, for `Block::LinkCard`, which renders its own
-    // wrapping `<a>`. `to_html` joins with `\n` to match the byte shape of the
-    // long-deleted `render_grid_html_typed`.
-    let mut cells: Vec<GridCellParts> = Vec::with_capacity(args.cells.len());
-    // Scope image `sizes=` to the cell track while cells render.
-    hooks.begin_grid_cells(args.columns, args.width.as_deref());
-    for (i, cell_blocks) in args.cells.iter().enumerate() {
-        let fragment = args.source.fragments.get(i);
-        let mut cell_html = String::new();
-        match quote_cell(cell_blocks) {
-            Some((quote, source)) => render_quote(hooks, &mut cell_html, quote, source),
-            None => super::render::render_blocks_with_meta(
-                hooks,
-                &mut cell_html,
-                cell_blocks,
-                fragment.map_or(&[], |f| f.blocks.as_slice()),
-            ),
-        }
-        let collapsed = collapse_tag_adjacent_newlines(&cell_html);
-        cells.push(GridCellParts {
-            inner: collapsed.trim().to_string(),
-            carded: !matches!(cell_blocks.as_slice(), [Block::LinkCard { .. }]),
-            // Filled in later by the host, which can read the image off disk.
-            cover_color: None,
-            source_range: fragment.and_then(|f| Some((f.first_line?, f.last_line?))),
-            layout: collage.as_ref().and_then(|spans| {
-                let (wide, phone) = spans.get(i.checked_sub(1)?)?;
-                Some(format!("--moss-collage-span:{wide};--moss-collage-span-sm:{phone}"))
-            }),
-            tile: collage.is_some().then(|| TileKind::of(cell_blocks)),
-            upright: false,
-        });
-    }
-    hooks.end_grid_cells();
 
     GridParts { open_tag, cells }
 }
@@ -333,14 +335,70 @@ pub(crate) fn quote_cell(blocks: &[Block]) -> Option<(&Block, &[Inline])> {
 /// caption. Only the source line can link, so no link nests in another.
 fn render_quote<H: RenderHooks + ?Sized>(hooks: &H, out: &mut String, quote: &Block, source: &[Inline]) {
     out.push_str(r#"<figure class="moss-quote""#);
+    let script = cjk_script(quote);
+    if script.is_some() {
+        out.push_str(r#" data-script="cjk""#);
+    }
     if is_long_quote(quote) {
         out.push_str(r#" data-length="long""#);
     }
     out.push('>');
+    let from = out.len();
     super::render::render_blocks_with_meta(hooks, out, std::slice::from_ref(quote), &[]);
+    if matches!(script, Some(Cjk::Japanese)) {
+        // On the quote alone, so the source line after it is not read as Japanese.
+        if let Some(at) = out[from..].find("<blockquote") {
+            out.insert_str(from + at + "<blockquote".len(), r#" lang="ja""#);
+        }
+    }
     out.push_str("<figcaption>");
     out.push_str(&super::render::render_inlines_html(hooks, source));
     out.push_str("</figcaption></figure>");
+}
+
+enum Cjk {
+    Chinese,
+    Japanese,
+}
+
+/// The CJK script a quote is written in, when most of its letters are Han or
+/// kana. A tenth of the Han and kana being kana means Japanese; fewer is a
+/// Chinese quote that happens to hold a の.
+fn cjk_script(quote: &Block) -> Option<Cjk> {
+    let Block::BlockQuote(children) = quote else {
+        return None;
+    };
+    let (mut han, mut kana, mut other) = (0usize, 0usize, 0usize);
+    for block in children {
+        let Block::Paragraph(inlines) = block else { continue };
+        for c in super::plain_text::inlines_to_plain_text(inlines).chars() {
+            match c as u32 {
+                0x3040..=0x30FF => kana += 1,
+                0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0x20000..=0x2A6DF => han += 1,
+                _ if c.is_alphabetic() => other += 1,
+                _ => {}
+            }
+        }
+    }
+    if han + kana <= other {
+        None
+    } else if kana * 10 >= han + kana {
+        Some(Cjk::Japanese)
+    } else {
+        Some(Cjk::Chinese)
+    }
+}
+
+/// How many parts a card holds, counted from its typed blocks: one track each
+/// under `{rows=equal}`. A quote is one part, a link card has its children, and
+/// a raw HTML block counts as one however many elements it holds. A cell moss
+/// swaps for a collection card has two parts, so no grid counts fewer.
+fn parts_of(cell: &[Block]) -> usize {
+    match cell {
+        [Block::LinkCard { children, .. }] => children.len(),
+        _ if quote_cell(cell).is_some() => 1,
+        _ => cell.len(),
+    }
 }
 
 /// Whether a quote's words run past the length that gets the smaller size.
