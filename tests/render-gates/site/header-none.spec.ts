@@ -246,6 +246,35 @@ const toggleState = (page: Page) =>
     };
   });
 
+test.describe('the controls at the top of a page with no header', () => {
+  for (const width of [1360, 390]) {
+    test(`at ${width}px their centre is the title's first line and their end is the column's end`, async ({ page }) => {
+      await open(page, CLOSING_PATH, width, 800);
+      const m = await page.evaluate(() => {
+        const icons = document.querySelector('.moss-nav-island + .nav-icons')!.getBoundingClientRect();
+        const theme = document.querySelector('.moss-nav-island + .nav-icons .nav-theme-btn')!.getBoundingClientRect();
+        const article = document.querySelector('main article')!;
+        const title = document.querySelector('main article > h1')!;
+        const range = document.createRange();
+        range.selectNodeContents(title);
+        const line = range.getClientRects()[0];
+        const box = article.getBoundingClientRect();
+        const style = getComputedStyle(article);
+        return {
+          scrollY,
+          themeCentre: (theme.top + theme.bottom) / 2 + scrollY,
+          lineCentre: (line.top + line.bottom) / 2 + scrollY,
+          end: Math.max(icons.right, theme.right),
+          columnEnd: box.right - parseFloat(style.paddingRight) - parseFloat(style.borderRightWidth),
+        };
+      });
+      expect(m.scrollY).toBe(0);
+      expect(Math.abs(m.themeCentre - m.lineCentre), JSON.stringify(m)).toBeLessThanOrEqual(1);
+      expect(Math.abs(m.end - m.columnEnd), JSON.stringify(m)).toBeLessThanOrEqual(1);
+    });
+  }
+});
+
 test.describe('one theme toggle', () => {
   for (const [width, path] of [[WIDE, '/'], [NARROW, '/'], [WIDE, CLOSING_PATH], [390, '/'], [1360, PICTURES_PATH]] as const) {
     test(`at ${width}px on ${path}, exactly one is visible at every scroll position`, async ({ page }) => {

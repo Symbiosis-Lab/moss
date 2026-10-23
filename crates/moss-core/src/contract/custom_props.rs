@@ -551,6 +551,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "How wide the headerless island's controls (`.nav-icons`) are in a row: the slot the bar keeps free at its end for them, and the room the page title's first line keeps for them at the top. Measured and written by the site runtime (nav-island.ts) on layout. Not a theme hook.",
     },
     CustomProp {
+        name: "--moss-nav-title-line",
+        owner: "body",
+        default: "unset",
+        description: "Where the centre of the page title's first line is, in px from the top of the headerless island's controls' containing block: at the top of the page the controls (`.nav-icons`) stand centred on it. Measured and written by the site runtime (nav-island.ts); unset on a page with no title, which keeps the bar's place. Not a theme hook.",
+    },
+    CustomProp {
         name: "--moss-nav-island-controls-guess",
         owner: "body",
         default: "3rem",

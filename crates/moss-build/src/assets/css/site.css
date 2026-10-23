@@ -3956,17 +3956,19 @@ body {
 .moss-nav-island[data-header="none"] + .nav-icons {
   position: absolute;
   z-index: 100;
-  inset-block-start: calc(
+  --_top: calc(
     var(--moss-space-sm) + var(--moss-nav-island-edge) + var(--moss-nav-island-pad-block)
     + (var(--moss-size-lg) + var(--moss-nav-island-control-pad) - 2.25rem) / 2
   );
-  inset-inline-end: calc(
+  --_end: calc(
     max(
       var(--moss-container-padding),
       (100% - min(var(--moss-nav-width, var(--moss-content-width)), var(--moss-site-max-width))) / 2 + var(--moss-container-padding)
     )
     + var(--moss-nav-island-edge) + var(--moss-nav-island-pad-end)
   );
+  inset-block-start: var(--_top);
+  inset-inline-end: var(--_end);
   margin: 0;
 }
 
@@ -4001,6 +4003,22 @@ body:has(> .moss-nav-island[data-header="none"] + .nav-icons) main > article:is(
     + var(--moss-nav-island-pad-end) + var(--moss-space-sm)
   );
   block-size: 1lh;
+}
+
+/* At the top, on the title's first line (nav-island.ts measures its centre) and
+   ending where the text column ends: the fixed slot's end less the bar's own
+   inset. Both are invalid until the centre is written, so a page without a
+   title keeps the bar's place. */
+.moss-nav-island[data-header="none"][data-top] + .nav-icons {
+  --_title-top: calc(var(--moss-nav-title-line) - 1.125rem);
+  --_title-end: calc(
+    0 * var(--moss-nav-title-line) + max(
+      var(--moss-container-padding),
+      (100% - min(var(--moss-nav-width, var(--moss-content-width)), var(--moss-site-max-width))) / 2 + var(--moss-container-padding)
+    )
+  );
+  inset-block-start: var(--_title-top, var(--_top));
+  inset-inline-end: var(--_title-end, var(--_end));
 }
 
 .moss-nav-island[data-header="none"][data-shown]:not([data-top]) + .nav-icons {
