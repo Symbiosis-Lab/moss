@@ -156,9 +156,9 @@ pub fn render(
         props
             .date_raw
             .as_deref()
-            .map(|d| date_formatters::format_month_prefix(d, lang, typesetting))
+            .map(|d| date_formatters::time_html(&date_formatters::format_month_prefix(d, lang, typesetting), d))
             .unwrap_or_else(|| {
-                date_formatters::format_month_prefix(&props.date_display, lang, typesetting)
+                html_escape(&date_formatters::format_month_prefix(&props.date_display, lang, typesetting))
             })
     } else {
         // Year + month (e.g., "2025 · 11")
@@ -332,12 +332,13 @@ fn with_place_html(date_html: &str, place: Option<&str>) -> String {
 }
 
 /// A leaf's date-and-place text: the event's `<time>` when it has one, else
-/// the plain date, then the page's listed names when a term kind shows them
-/// on cards. The one choice between the two, for every listing form.
-pub(crate) fn leaf_meta(date_text: &str, when_html: Option<&str>, place: Option<&str>, credits: Option<&str>) -> String {
+/// the date markup (`date_html`, already escaped and `<time>`-wrapped by
+/// whoever produced it), then the page's listed names when a term kind shows
+/// them on cards. The one choice between the two, for every listing form.
+pub(crate) fn leaf_meta(date_html: &str, when_html: Option<&str>, place: Option<&str>, credits: Option<&str>) -> String {
     let base = match when_html {
         Some(h) => with_event_place(h, place),
-        None => with_place(date_text, place),
+        None => with_place_html(date_html, place),
     };
     match credits {
         None => base,
@@ -382,7 +383,7 @@ pub(crate) fn meta_text(
 ) -> String {
     match count_label {
         Some(count) => match date_display {
-            Some(date) => format!("{} · {}", with_place(date, place), html_escape(count)),
+            Some(date) => format!("{} · {}", with_place_html(date, place), html_escape(count)),
             None => html_escape(count),
         },
         None => leaf_meta(date_display.unwrap_or(""), when_html, place, credits),
@@ -455,7 +456,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         // date, never from the fallback: a folder with no date of its own
         // keeps showing just its count, exactly as before.
         let date_display = doc.date.as_deref().map(|d| {
-            date_formatters::format_compact_date(d, doc.lang, typesetting)
+            date_formatters::time_html(&date_formatters::format_compact_date(d, doc.lang, typesetting), d)
         });
         let date_raw = doc.date.clone().or_else(|| {
             crate::build::folder_embed::folder_latest_date(doc, all_docs, root_path)
@@ -466,7 +467,8 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         // page gets CJK numerals.
         let (dd, raw, is_explicit) = date_formatters::extract_date_from_doc(doc, root_path);
         let dd_opt = (is_explicit && dd != "Unknown" && !dd.is_empty()).then(|| {
-            date_formatters::format_compact_date(raw.as_deref().unwrap_or(&dd), doc.lang, typesetting)
+            let shown = raw.as_deref().unwrap_or(&dd);
+            date_formatters::time_html(&date_formatters::format_compact_date(shown, doc.lang, typesetting), shown)
         });
         (None, raw, dd_opt)
     };
@@ -671,7 +673,7 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
         // "year · month" when the date has a month, "year" when that's all
         // it has. Same compact form grid cards use. The page's resolved
         // place, if any, goes right next to it — see `with_place`.
-        let date = date_formatters::format_compact_date(date_raw, lang, typesetting);
+        let date = date_formatters::time_html(&date_formatters::format_compact_date(date_raw, lang, typesetting), date_raw);
         let date = leaf_meta(&date, props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref());
         let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
         format!(

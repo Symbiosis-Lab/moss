@@ -162,7 +162,6 @@ fn test_render_card_escapes_html() {
     let props = ChildItemProps {
         title: "<script>alert('xss')</script>".to_string(),
         url: "/test/?a=1&b=2".to_string(),
-        date_display: Some("<b>bold</b>".to_string()),
         description: Some("A & B < C".to_string()),
         cover: Some("/img?x=1&y=2".to_string()),
         ..Default::default()
@@ -177,7 +176,6 @@ fn test_render_card_escapes_html() {
     assert!(!html.contains("<script>"));
     assert!(html.contains("&lt;script&gt;"));
     assert!(html.contains("a=1&amp;b=2"));
-    assert!(html.contains("&lt;b&gt;bold&lt;/b&gt;"));
     assert!(html.contains("A &amp; B &lt; C"));
     assert!(html.contains("x=1&amp;y=2"));
 }
@@ -920,5 +918,19 @@ fn event_summary_card_without_tickets_keeps_its_whole_card_anchor() {
     assert_eq!(
         html,
         r#"<a href="spring-gala.html" class="moss-card"><div class="moss-card-row"><div class="moss-card-body"><h3 class="moss-card-title">Spring Gala</h3></div></div></a>"#
+    );
+}
+
+#[test]
+fn a_card_date_is_a_time_element_carrying_the_full_date() {
+    let props = ChildItemProps {
+        date_display: Some(crate::build::components::time_html("March 2026", "2026-03-04")),
+        date_raw: Some("2026-03-04".to_string()),
+        ..article_props("Note", "/notes/note/")
+    };
+    let html = render_with_sort(&props, crate::i18n::Language::En, None, None, moss_core::sort::SortAxis::Date);
+    assert!(
+        html.contains(r#"<div class="moss-card-meta"><time datetime="2026-03-04">March 2026</time></div>"#),
+        "{html}"
     );
 }

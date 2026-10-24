@@ -49,7 +49,7 @@ fn test_render_minimal_mode() {
     // Minimal mode - shows only "11" (month only)
     let html_minimal = render(&articles, true, crate::i18n::Language::En, None, false);
     assert!(html_minimal.contains(r#"<section class="moss-cards-minimal-year-group minimal">"#));
-    assert!(html_minimal.contains(r#"<span class="moss-prefix-link-prefix date">11</span>"#)); // Month only with shared class
+    assert!(html_minimal.contains(r#"<span class="moss-prefix-link-prefix date"><time datetime="2025-11-17">11</time></span>"#)); // Month only with shared class
     assert!(!html_minimal.contains("2025 · 11")); // No full date format
 }
 
@@ -260,7 +260,7 @@ fn vertical_cjk_rows_still_group_by_year() {
 
     // The dated row carries its month in Chinese; the year-only rows carry no
     // prefix at all, because the heading immediately above already says it.
-    assert!(html.contains(r#"<span class="moss-prefix-link-prefix date">十二月</span>"#), "{html}");
+    assert!(html.contains(r#"<span class="moss-prefix-link-prefix date"><time datetime="1703-12-01">十二月</time></span>"#), "{html}");
     assert!(!html.contains("1703</span>"), "{html}");
     assert_eq!(html.matches("moss-prefix-link-prefix").count(), 1, "{html}");
 }
@@ -288,6 +288,6 @@ fn horizontal_rows_keep_arabic_headings_and_drop_the_bare_year_prefix() {
     let html = render(&articles, true, crate::i18n::Language::En, None, false);
     assert!(html.contains("<h2>2025</h2>"), "{html}");
     assert_eq!(html.matches("<section").count(), 1, "{html}");
-    assert!(html.contains(r#"<span class="moss-prefix-link-prefix date">11</span>"#), "{html}");
+    assert!(html.contains(r#"<span class="moss-prefix-link-prefix date"><time datetime="2025-11-17">11</time></span>"#), "{html}");
     assert_eq!(html.matches("moss-prefix-link-prefix").count(), 1, "{html}");
 }

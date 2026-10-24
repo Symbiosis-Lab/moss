@@ -94,8 +94,8 @@ fn test_render_minimal_shows_month_only() {
     let html = render(&props, true, false, Language::En, None);
 
     // Should show only month "11", not "2025 · 11"
-    assert!(html.contains(r#"<span class="moss-prefix-link-prefix date">11</span>"#));
-    assert!(!html.contains("2025"));
+    assert!(html.contains(r#"<span class="moss-prefix-link-prefix date"><time datetime="2025-11-17">11</time></span>"#));
+    assert!(!html.contains("2025 "));
 }
 
 #[test]
@@ -187,9 +187,9 @@ fn test_render_child_article() {
     };
     let html = render_child(&props, crate::i18n::Language::ZhHans, None);
     assert!(html.contains(r#"<div class="moss-card">"#));
-    // No year heading sits above a flat row, so the prefix carries full
-    // precision — "2025 · 11", not "11" alone.
-    assert!(html.contains(r#"<span class="moss-prefix-link-prefix date">2025 · 11</span>"#));
+    // No year heading sits above a flat row, so the prefix carries the year
+    // and month, not the month alone.
+    assert!(html.contains(r#"<span class="moss-prefix-link-prefix date"><time datetime="2025-11-17">2025年11月</time></span>"#), "{html}");
     assert!(html.contains(r#"<span class="moss-prefix-link-title">My Article</span>"#));
     assert!(html.contains(r#"href="/blog/my-article/""#));
 }
@@ -207,7 +207,7 @@ fn render_child_shows_the_resolved_place_next_to_a_leafs_date() {
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
-        html.contains(r#"<span class="moss-prefix-link-prefix date">1924 · 10 · Cambridge</span>"#),
+        html.contains(r#"<span class="moss-prefix-link-prefix date"><time datetime="1924-10-01">October 1924</time> · Cambridge</span>"#),
         "{html}"
     );
 }
@@ -234,7 +234,7 @@ fn render_child_puts_the_listed_names_after_the_date_and_place() {
         ..Default::default()
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
-    let expected = format!(r#"<span class="moss-prefix-link-prefix date">1924 · 10 · Cambridge<span class="moss-event-sep"> · </span>{credits}</span>"#);
+    let expected = format!(r#"<span class="moss-prefix-link-prefix date"><time datetime="1924-10-01">October 1924</time> · Cambridge<span class="moss-event-sep"> · </span>{credits}</span>"#);
     assert!(html.contains(&expected), "{html}");
 }
 
@@ -326,7 +326,7 @@ fn flat_row_shows_year_for_month_precision_date() {
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
-        html.contains(r#"<span class="moss-prefix-link-prefix date">June 1793</span>"#),
+        html.contains(r#"<span class="moss-prefix-link-prefix date"><time datetime="1793-06">June 1793</time></span>"#),
         "{html}"
     );
 }
@@ -360,7 +360,7 @@ fn flat_row_shows_bare_year_for_year_precision_date() {
     };
     let html = render_child(&props, crate::i18n::Language::En, None);
     assert!(
-        html.contains(r#"<span class="moss-prefix-link-prefix date">1793</span>"#),
+        html.contains(r#"<span class="moss-prefix-link-prefix date"><time datetime="1793">1793</time></span>"#),
         "{html}"
     );
 }
@@ -538,7 +538,7 @@ fn a_leaf_falls_back_from_frontmatter_to_a_filename_date() {
     // The raw date is the filename stem as written; only the leading
     // year-month run has to parse.
     assert_eq!(p.date_raw.as_deref(), Some("2021-04-09-spring"));
-    assert_eq!(p.date_display.as_deref(), Some("2021 · 04"));
+    assert_eq!(p.date_display.as_deref(), Some("<time datetime=\"2021-04-09\">April 2021</time>"));
 }
 
 #[test]

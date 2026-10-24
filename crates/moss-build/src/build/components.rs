@@ -67,5 +67,5 @@ pub(crate) fn cards_container(
 // Re-export commonly used items
 pub use child_list::ArticleListItemProps;
 
-pub use date::{extract_date_from_doc, format_article_date, format_compact_date, format_date_string, format_display_date, format_vertical_cjk_date, format_vertical_cjk_date_compact};
+pub use date::{time_html, extract_date_from_doc, format_article_date, format_compact_date, format_date_string, format_display_date, format_vertical_cjk_date, format_vertical_cjk_date_compact};
 pub use year_group::render as render_year_grouped_list;
