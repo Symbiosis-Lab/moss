@@ -8877,7 +8877,7 @@ a.moss-grid-card:hover {
    fit it, so its words are never cut off. */
 .moss-grid[data-collage] .moss-grid-card:not([data-tile="picture"]) {
   box-sizing: border-box;
-  padding: var(--moss-space-sm);
+  padding: var(--_tile-pad, var(--moss-space-sm));
   font-size: 0.875rem;
   line-height: 1.4;
   background: var(--moss-color-bg);
@@ -8888,10 +8888,12 @@ a.moss-grid-card:hover {
    a step down for a long quote and never below that floor, however narrow the
    tile. A long word is hyphenated by the page's language (one of seven letters or
    more); only a word with no break point, an address, breaks anywhere. The row
-   grows to fit the words, so nothing is cut off. The source's link covers the tile. */
+   grows to fit the words, so nothing is cut off. The source's link covers the tile.
+   The padding goes through `--_tile-pad`, which the rule above reads, so it
+   holds whichever of the two rules comes later. */
 .moss-grid[data-collage] [data-tile="quote"] {
   display: flex;
-  padding: 1.375rem 1.25rem 1.125rem;
+  --_tile-pad: 1.375rem 1.25rem 1.125rem;
   border: 1px solid var(--moss-border-light);
 }
 .moss-grid[data-collage] [data-tile="quote"]:hover { border-color: var(--moss-color-text-secondary); }
@@ -9036,7 +9038,7 @@ a.moss-grid-card:hover {
     white-space: nowrap;
   }
   .moss-grid[data-collage] .moss-grid-card .moss-image figcaption:focus-within { opacity: 1; transform: none; }
-  .moss-grid[data-collage] [data-tile="quote"] { padding: 1rem 1rem 0.875rem; }
+  .moss-grid[data-collage] [data-tile="quote"] { --_tile-pad: 1rem 1rem 0.875rem; }
   .moss-grid[data-collage] [data-tile="quote"] .moss-quote { gap: 0.625rem; }
   .moss-grid[data-collage] [data-tile="quote"] .moss-quote:not([data-length="long"]) blockquote { font-size: 1rem; }
 }

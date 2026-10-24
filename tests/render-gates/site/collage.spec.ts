@@ -615,6 +615,28 @@ test.describe("a collage quote reads as type on paper", () => {
     }
   });
 
+  test("at 1360px a quote tile's own padding applies: the words sit 22px from the top and 20px from the side", async ({ page }) => {
+    await page.setViewportSize({ width: 1360, height: 900 });
+    await page.goto("/full/");
+    const m = await page.locator(quote(3)).evaluate((el) => {
+      const t = el.getBoundingClientRect();
+      const p = el.querySelector("blockquote p")!.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      return {
+        padding: cs.padding,
+        side: p.left - t.left - parseFloat(cs.borderLeftWidth),
+        top: p.top - t.top - parseFloat(cs.borderTopWidth),
+      };
+    });
+    expect(m.padding).toBe("22px 20px 18px");
+    expect(m.side, "the words' inset from the tile edge").toBeCloseTo(20, 1);
+    expect(m.top, "the words' inset from the tile top").toBeCloseTo(22, 1);
+
+    // The same padding holds when the generic tile rule comes after the quote's.
+    await page.addStyleTag({ content: `.moss-grid[data-collage] .moss-grid-card:not([data-tile="picture"]) { padding: var(--_tile-pad, var(--moss-space-sm)); }` });
+    await expect(page.locator(quote(3))).toHaveCSS("padding", "22px 20px 18px");
+  });
+
   test("a long quote in the narrowest tile steps down, breaks no word and is not cut off", async ({ page }) => {
     await page.setViewportSize({ width: 768, height: 900 });
     await page.goto("/full/");
