@@ -155,6 +155,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "How much of the window's height a closing picture covers from its top edge down to the window's foot, set on the controls by the contents list's script as the page scrolls. The page's controls (search, language, theme), where they stand in the foot of the window beside a `contents: pictures` list, ride that far up, so they stay above the picture instead of over it. Read-only for a theme.",
     },
     CustomProp {
+        name: "--moss-contents-faint",
+        owner: "moss-contents-ruler",
+        default: "var(--moss-color-text-secondary)",
+        description: "The colour the open contents list's names fade to, far from the pointer. The list's script sets it on the list when it opens, as the mix of the text colour toward the colour under the list (the page, or a band) that just reaches 4.6:1 against the fade behind the names over a black picture and over a white one, so a name never falls below AA. Until then, and where the text colour itself does not reach 4.6:1 there, the names fade to `--moss-color-text-secondary`. Written by the script, not a theme hook: set `--moss-color-text` and the background instead.",
+    },
+    CustomProp {
         name: "--moss-hero-mobile-band",
         owner: "moss-hero",
         default: "min(45vb, 320px)",

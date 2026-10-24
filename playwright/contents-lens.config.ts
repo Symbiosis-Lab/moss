@@ -13,7 +13,7 @@
  */
 import './localhost-no-proxy';
 import { buildScratchSite } from '../tests/e2e/helpers/scratch-site';
-import { CONTENTS_LENS_GATE } from '../tests/e2e/helpers/contents-lens-site';
+import { CONTENTS_LENS_FALLBACK_GATE, CONTENTS_LENS_GATE } from '../tests/e2e/helpers/contents-lens-site';
 import { defineGateConfig } from './define-gate-config';
 import { gatePort } from './gate-ports';
 
@@ -22,5 +22,8 @@ const PORT = gatePort('contents-lens');
 export default defineGateConfig({
   gate: 'contents-lens',
   use: { baseURL: `http://localhost:${PORT}/`, colorScheme: 'light' },
-  webServer: { serveDir: buildScratchSite(CONTENTS_LENS_GATE), port: PORT },
+  webServer: [
+    { serveDir: buildScratchSite(CONTENTS_LENS_GATE), port: PORT },
+    { serveDir: buildScratchSite(CONTENTS_LENS_FALLBACK_GATE), port: gatePort('contents-lens:fallback') },
+  ],
 });

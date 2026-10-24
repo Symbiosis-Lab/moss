@@ -105,6 +105,55 @@ export function layoutRows(f: number, y: number, n: number, bounds?: { top: numb
   return size.map((s, i) => ({ top: shift + tops[i], size: s, weight: weight[i] }));
 }
 
+/** Contrast the faintest name keeps against the fade behind it. */
+const FAINT_TARGET = 4.6;
+/** The fade's opacity (site.css), which the picture beside the list shows through. */
+const VEIL_OPACITY = 0.95;
+
+type Rgb = [number, number, number];
+
+/** Any CSS colour as sRGB bytes, read back from a painted pixel so every syntax
+ *  the engine knows (`oklch()`, `lab()`, `color-mix()`) comes out alike; null
+ *  where it is see-through, unreadable, or there is no canvas. */
+export function rgbOf(css: string): Rgb | null {
+  const ctx = document.createElement("canvas").getContext?.("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.clearRect(0, 0, 1, 1);
+  ctx.fillStyle = css;
+  ctx.fillRect(0, 0, 1, 1);
+  const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+  return a === 255 ? [r, g, b] : null;
+}
+
+const luminance = (c: Rgb): number => {
+  const [r, g, b] = c.map((v) => v / 255).map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+const contrast = (a: Rgb, b: Rgb): number => {
+  const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p);
+  return (x + 0.05) / (y + 0.05);
+};
+
+/**
+ * The faintest name colour over a fade of `ground` (the page, or a band): the
+ * mix of `text` toward the ground that still keeps `FAINT_TARGET` against the
+ * fade over a black and over a white picture. Null where the text itself does
+ * not reach it, and the names keep the stylesheet's secondary colour.
+ */
+export function faintOver(text: Rgb, ground: Rgb): Rgb | null {
+  const veils = [0, 255].map((under) => ground.map((c) => c * VEIL_OPACITY + under * (1 - VEIL_OPACITY)) as Rgb);
+  const worst = (c: Rgb): number => Math.min(...veils.map((v) => contrast(c, v)));
+  const mix = (t: number): Rgb => ground.map((v, i) => Math.round(v + (text[i] - v) * t)) as Rgb;
+  if (worst(text) < FAINT_TARGET) return null;
+  let [lo, hi] = [0, 1];
+  for (let i = 0; i < 24; i++) {
+    const mid = (lo + hi) / 2;
+    if (worst(mix(mid)) >= FAINT_TARGET) hi = mid;
+    else lo = mid;
+  }
+  return mix(hi);
+}
+
 export interface LensOptions {
   nav: HTMLElement;
   links: HTMLElement[];
@@ -166,6 +215,20 @@ export function mountContentsLens({ nav, links }: LensOptions): () => void {
     const colour = ground();
     if (colour) veil.style.setProperty("--moss-contents-veil", colour);
     else veil.style.removeProperty("--moss-contents-veil");
+    // The floor under the names is worked out for the colour under the list: a
+    // band's, or else the page's.
+    const text = (() => {
+      const probe = document.createElement("span");
+      probe.style.color = "var(--moss-color-text)";
+      nav.append(probe);
+      const c = rgbOf(getComputedStyle(probe).color);
+      probe.remove();
+      return c;
+    })();
+    const under = (colour ? rgbOf(colour) : null) ?? rgbOf(getComputedStyle(document.body).backgroundColor);
+    const faint = text && under ? faintOver(text, under) : null;
+    if (faint) nav.style.setProperty("--moss-contents-faint", `rgb(${faint.join(" ")})`);
+    else nav.style.removeProperty("--moss-contents-faint");
     lens = {
       f: focus,
       f0: focus,
@@ -184,6 +247,7 @@ export function mountContentsLens({ nav, links }: LensOptions): () => void {
     if (!lens) return;
     lens = null;
     nav.removeAttribute("data-lens");
+    nav.style.removeProperty("--moss-contents-faint");
     veil.removeAttribute("style");
     for (const link of links) {
       link.removeAttribute("style");

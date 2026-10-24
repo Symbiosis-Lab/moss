@@ -121,6 +121,7 @@ const GATE_PORT_KEYS = [
   'header-none',
   'header-none:band',
   'contents-lens',
+  'contents-lens:fallback',
   'content-grid:default',
   'content-grid:full',
   'closing-picture:sky',

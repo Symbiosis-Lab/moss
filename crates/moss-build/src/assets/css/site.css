@@ -4424,9 +4424,12 @@ main > * {
 }
 
 /* One line, cut with an ellipsis at about `--moss-contents-measure`; the link
-   carries the whole title as its name and tooltip. Ink runs from the secondary
-   text colour far from the focus (which keeps 4.5:1 on the page colour) to
-   the text colour at it. */
+   carries the whole title as its name and tooltip. Ink runs from the faintest
+   colour that still reaches 4.6:1 on the veil behind the names (over a black or
+   a white picture) far from the focus, to the text colour at it.
+   `--moss-contents-faint` is worked out by contents-lens.ts when the list
+   opens; until then, and where the text colour itself falls short, the names
+   fade to the secondary text colour, which keeps 4.5:1 too. */
 .moss-contents-ruler[data-contents="pictures"] .moss-contents-ruler-label {
   position: static;
   flex: none;
@@ -4436,7 +4439,7 @@ main > * {
   text-overflow: ellipsis;
   /* Grows by 2px toward the focus, on the same curve as the ink. */
   font-size: calc(0.8125rem + 0.125rem * var(--moss-contents-ink, 0));
-  color: color-mix(in srgb, var(--moss-color-text) calc(var(--moss-contents-ink, 0) * 100%), var(--moss-color-text-secondary));
+  color: color-mix(in srgb, var(--moss-color-text) calc(var(--moss-contents-ink, 0) * 100%), var(--moss-contents-faint, var(--moss-color-text-secondary)));
 }
 
 .moss-contents-ruler[data-contents="pictures"]:not([data-lens]):not([data-open]) .moss-contents-ruler-label {
@@ -4453,6 +4456,10 @@ main > * {
 .moss-contents-ruler[data-lens] a[data-focus] .moss-contents-ruler-label {
   color: var(--moss-color-text);
   font-weight: 500;
+}
+
+.moss-contents-ruler[data-lens] a[data-focus] .moss-contents-ruler-dash {
+  opacity: 1;
 }
 
 /* Shown on the focused row only, unfolding from a thin line across its
@@ -4495,9 +4502,9 @@ main > * {
   position: absolute;
   inset-block-start: 0;
   left: calc(-1 * var(--moss-contents-inset));
-  inline-size: calc(var(--moss-contents-measure) + 12rem);
+  inline-size: calc(var(--moss-contents-measure) + 14rem);
   /* Solid under the names (they start 40px in and are at most the measure
-     long), fading out across the picture beside them. */
+     long, with room to spare), fading out across the picture beside them. */
   background: linear-gradient(to right, var(--moss-contents-veil, var(--moss-color-bg)) calc(100% - 9rem), transparent);
   mask-image: linear-gradient(transparent, #000 40px, #000 calc(100% - 40px), transparent);
   transition: transform 180ms ease-out, block-size 180ms ease-out;

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { falloff, FOCUS_ROW, layoutRows, OPEN_ROW, PITCH, restFocus, REST_ROW, travel } from "../nav/contents-lens";
+import { faintOver, falloff, FOCUS_ROW, layoutRows, OPEN_ROW, PITCH, restFocus, REST_ROW, travel } from "../nav/contents-lens";
 
 describe("falloff", () => {
   test("is 1 at the focus and 0 at and beyond the radius", () => {
@@ -96,5 +96,35 @@ describe("layoutRows", () => {
       expect(focused.top, `row ${f} is on screen`).toBeGreaterThanOrEqual(16 - 1e-9);
       expect(focused.top + focused.size).toBeLessThanOrEqual(784 + 1e-9);
     }
+  });
+});
+
+describe("faintOver", () => {
+  const lum = (c: number[]) => {
+    const [r, g, b] = c.map((v) => v / 255).map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const ratio = (a: number[], b: number[]) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
+  const worst = (c: number[], ground: number[]) => Math.min(...[0, 255].map((u) => ratio(c, ground.map((v) => v * 0.95 + u * 0.05))));
+
+  test.each([
+    ["the default light page", [44, 40, 37], [250, 248, 245]],
+    ["the default dark page", [232, 228, 220], [28, 25, 20]],
+    ["a page that is white in both themes", [17, 17, 17], [255, 255, 255]],
+    ["a light band", [40, 36, 32], [214, 226, 240]],
+    ["a dark band", [240, 238, 232], [30, 50, 80]],
+  ])("holds 4.6:1 on the fade over a black and over a white picture: %s", (_name, text, ground) => {
+    const faint = faintOver([text[0], text[1], text[2]], [ground[0], ground[1], ground[2]])!;
+    expect(worst(faint, ground)).toBeGreaterThanOrEqual(4.6);
+    expect(worst(faint, ground)).toBeLessThan(4.9);
+  });
+  test("is fainter than the text and closer to the ground", () => {
+    const faint = faintOver([44, 40, 37], [250, 248, 245])!;
+    expect(faint[0]).toBeGreaterThan(44);
+    expect(faint[0]).toBeLessThan(250);
+  });
+  test("is null where the text itself does not reach it", () => {
+    expect(faintOver([40, 36, 32], [40, 60, 90])).toBeNull();
+    expect(faintOver([90, 86, 80], [28, 25, 20])).toBeNull();
   });
 });
