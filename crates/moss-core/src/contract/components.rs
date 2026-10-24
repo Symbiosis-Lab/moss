@@ -195,6 +195,8 @@ pub const UNPREFIXED_LEGACY_CLASSES: &[&str] = &[
     "wikilink",
     // The expand/exit-fullscreen control of an embedded iframe (immersive mode).
     "immersive-fullscreen-btn",
+    // The box site script puts around an embedded local iframe.
+    "immersive-iframe-wrapper",
     // Written by authors, like `no-cards`; moss only reads it.
     "no-viewer",
 ];
@@ -5169,6 +5171,17 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         status: Status::Emerging,
         since: "1",
         description: "The expand control moss adds over an embedded iframe (a places map or any embed that goes fullscreen); inside fullscreen it is the exit control, a solid 36px circle with the same shadow as the map's own zoom controls so it reads over any map colour.",
+    },
+    ComponentEntry {
+        class: "immersive-iframe-wrapper",
+        kind: "container",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<div class="immersive-iframe-wrapper"><iframe src="/map/"></iframe><button type="button" class="immersive-fullscreen-btn" aria-label="Enter fullscreen">…</button></div>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "1",
+        description: "Added by site script, not in the built HTML: the box around a local iframe that is a direct child of the article (a places map or any embed of a page on the same site), holding the iframe and its fullscreen and open-in-new-window controls. It copies the iframe's `moss-align-left` or `moss-align-right` class and `data-width`, so a floated or wide embed keeps its placement. An iframe from another site is not wrapped.",
     },
     ComponentEntry {
         class: "moss-places-card-read",
