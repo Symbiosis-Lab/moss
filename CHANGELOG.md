@@ -242,6 +242,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A paragraph in a quote's blockquote no longer adds margin at the blockquote's edges: the last one left about 7.5px under the words, in a collage and in a plain grid. Paragraphs are now spaced only from each other.
 - A collage quote tile is padded as designed: 22px above, 20px at the sides and 18px below (16px, 16px and 14px on a phone). The padding rule of every non-picture tile outranked the quote's own, so a quote tile had 16px all round at every width. The tile now reads its padding from `--_tile-pad`, which the quote sets.
 - A collage quote is no longer set below its reading size in a narrow tile: between 768px and 1100px a quote shrank to 12px to 14px so that its longest word fitted whole, where it now stays at 15px (13.5px for a long quote, 16px on a phone), a long word is hyphenated by the page's language (words of seven letters or more) rather than set smaller, and the row grows to fit the words.
 - The keyboard focus ring on a collage tile is visible: it was painted under the tile's picture, so a focused tile differed from a blurred one only by its caption. The ring is now drawn above the picture, inside the tile's edge.

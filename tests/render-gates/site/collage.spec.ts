@@ -637,6 +637,30 @@ test.describe("a collage quote reads as type on paper", () => {
     await expect(page.locator(quote(3))).toHaveCSS("padding", "22px 20px 18px");
   });
 
+  test("a quote's paragraphs add no margin at the blockquote's edges and keep the gap between them", async ({ page }) => {
+    await page.setViewportSize({ width: 1360, height: 900 });
+    await page.goto("/paras/");
+    const m = await page.locator(`${MIXED} > :nth-child(2)`).evaluate((el) => {
+      const bq = el.querySelector("blockquote")!.getBoundingClientRect();
+      const [a, b] = [...el.querySelectorAll("blockquote p")].map((p) => p.getBoundingClientRect());
+      const t = el.getBoundingClientRect();
+      return { top: a.top - t.top - 1, startGap: a.top - bq.top, endGap: bq.bottom - b.bottom, between: b.top - a.bottom };
+    });
+    expect(m.top, "the words' top is the tile's padding").toBeCloseTo(22, 1);
+    expect(m.startGap, "no margin above the first paragraph").toBeCloseTo(0, 1);
+    expect(m.endGap, "no margin below the last paragraph").toBeCloseTo(0, 1);
+    expect(m.between, "the gap between paragraphs stays").toBeGreaterThan(4);
+
+    await page.goto("/mixed/");
+    const plain = await page.locator(".moss-grid:not([data-collage]) .moss-quote").evaluate((el) => {
+      const bq = el.querySelector("blockquote")!.getBoundingClientRect();
+      const p = el.querySelector("blockquote p:last-child")!.getBoundingClientRect();
+      return { inside: bq.bottom - p.bottom, toSource: el.querySelector("figcaption")!.getBoundingClientRect().top - bq.bottom };
+    });
+    expect(plain.inside, "a quote in a plain grid: no margin under its last paragraph").toBeCloseTo(0, 1);
+    expect(plain.toSource, "the gap before the source is the source's own").toBeCloseTo(16, 1);
+  });
+
   test("a long quote in the narrowest tile steps down, breaks no word and is not cut off", async ({ page }) => {
     await page.setViewportSize({ width: 768, height: 900 });
     await page.goto("/full/");

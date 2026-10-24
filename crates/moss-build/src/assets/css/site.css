@@ -8956,7 +8956,8 @@ a.moss-grid-card:hover {
   text-wrap: pretty;
 }
 .moss-quote[data-length="long"] blockquote { font-size: 1rem; line-height: 1.45; }
-.moss-quote blockquote p { margin: 0 0 0.5em; }
+.moss-quote blockquote p { margin: 0; }
+.moss-quote blockquote p + p { margin-block-start: 0.5em; }
 .moss-quote figcaption {
   margin-block-start: var(--moss-space-sm);
   color: var(--moss-color-text-secondary);

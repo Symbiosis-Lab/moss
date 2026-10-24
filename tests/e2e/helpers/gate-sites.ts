@@ -3928,6 +3928,29 @@ contents: pictures
 `,
     // A raster poster: the build reads a picture's pixel size from raster files only.
     "poster.png": Buffer.from("iVBORw0KGgoAAAANSUhEUgAAACgAAAA8CAIAAACb22+3AAAAOElEQVR42u3NQQkAAAgEsEtnEtOZ0hgiDPZfpvpExGKxWCwWi8VisVgsFovFYrFYLBaLxWLxp3gBxqJ0NeApenkAAAAASUVORK5CYII=", "base64"),
+    // A quote of two paragraphs, to measure the blockquote's outer margins and the gap between its paragraphs.
+    "paras/index.md": `---
+title: Two-paragraph Quote
+uid: "clg00150"
+content_width: full
+---
+
+# Paragraphs
+
+:::grid {collage}
+![Picture 1](../t1.svg)
+*Credit 1.*
++++
+> The first paragraph of a quote that runs on for a little while.
+>
+> The second paragraph, which closes it.
+
+*Essays, book one*
++++
+![Picture 3](../t3.svg)
+*Credit 3.*
+:::
+`,
     "upright/index.md": `---
 title: Upright Collage
 uid: "clg00130"
