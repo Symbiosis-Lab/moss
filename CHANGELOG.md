@@ -242,6 +242,7 @@ All notable changes to moss will be documented here.
 
 ### Fixed
 
+- A grid card no longer keeps dead space at its foot when its last part is a fenced div around a paragraph: the card's last child and that child's last child now have no bottom margin in every grid, where before only a direct last paragraph was reset. Existing grids lose it too, by what ends the card: a row of buttons 32px, text then a list 24px, a list 16px, a `<details>` 8px, a picture nothing.
 - A paragraph in a quote's blockquote no longer adds margin at the blockquote's edges: the last one left about 7.5px under the words, in a collage and in a plain grid. Paragraphs are now spaced only from each other.
 - A collage quote tile is padded as designed: 22px above, 20px at the sides and 18px below (16px, 16px and 14px on a phone). The padding rule of every non-picture tile outranked the quote's own, so a quote tile had 16px all round at every width. The tile now reads its padding from `--_tile-pad`, which the quote sets.
 - A collage quote's source is 10px below 48rem, as designed for a phone; it was 11px at every width.

@@ -8571,21 +8571,27 @@ body > footer.container:has(> .moss-hero-closing) {
   margin-top: 0;
 }
 
-.moss-grid-card > p:last-of-type {
-  margin-bottom: 0;
+/* A card ends flush: its last paragraph (even when a list or picture follows
+   it) and its last child, and that child's last child when a part is a fenced
+   div around a paragraph. The reset reaches two levels, so a list nested
+   deeper keeps its margin. It sits in the shortcodes layer, so a theme rule
+   overrides it. */
+.moss-grid-card > p:last-of-type,
+.moss-grid-card > :last-child,
+.moss-grid-card > :last-child > :last-child {
+  margin-block-end: 0;
 }
 
 /* Ma 間 within a card: internal vertical gaps must be tighter than the
    inter-card row gap, so elements inside a card feel grouped together.
-   Image margin-bottom already set to xs (8px) by the img rule above.
    Title and description paragraphs: collapse the default p+p gap.
-   The > p:last-of-type rule above (specificity 0,2,1) overrides the
+   The last-child reset above (0,2,0 and up) overrides the
    p { margin-bottom } rule below (0,1,1), keeping the last p flush. */
 .moss-grid-card p + p {
   margin-top: var(--moss-space-xs); /* 8px — vs 24px default p+p */
 }
 .moss-grid-card p {
-  margin-bottom: var(--moss-space-xs); /* 8px — overridden to 0 for last-of-type */
+  margin-bottom: var(--moss-space-xs); /* 8px — zeroed by the card-foot reset above */
 }
 
 /* LINK-card inner text — cards are navigational, not inline text links, so

@@ -490,6 +490,29 @@ test.describe("collage credits", () => {
   });
 });
 
+test.describe("an ordinary grid card", () => {
+  test("ends with no trailing margin when its last part is a div wrapping a paragraph", async ({ page }) => {
+    await page.setViewportSize({ width: 1360, height: 900 });
+    await page.goto("/parts/");
+    for (const card of await page.locator(".moss-grid-card").all()) {
+      const m = await card.evaluate((el) => {
+        const p = el.querySelector(".note p")!;
+        const part = el.querySelector(".note")!;
+        const cs = getComputedStyle(el);
+        const foot = el.getBoundingClientRect().bottom - parseFloat(cs.paddingBottom) - parseFloat(cs.borderBottomWidth);
+        return {
+          part: getComputedStyle(part).marginBottom,
+          p: getComputedStyle(p).marginBottom,
+          slack: foot - p.getBoundingClientRect().bottom,
+        };
+      });
+      expect(m.part).toBe("0px");
+      expect(m.p).toBe("0px");
+      expect(m.slack, "the paragraph ends at the card's content edge").toBeCloseTo(0, 1);
+    }
+  });
+});
+
 test.describe("a picture shown whole", () => {
   test("is not zoomed on hover, after its placeholder is cleared, while a cropped one is", async ({ page }) => {
     await page.setViewportSize({ width: 1360, height: 900 });

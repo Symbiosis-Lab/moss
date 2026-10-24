@@ -3951,6 +3951,28 @@ content_width: full
 *Credit 3.*
 :::
 `,
+    // An ordinary grid whose last part is a fenced div wrapping one paragraph.
+    "parts/index.md": `---
+title: Card Parts
+uid: "clg00160"
+---
+
+# Parts
+
+:::grid 2
+### First
+
+::: {.note}
+A wrapped paragraph.
+:::
++++
+### Second
+
+::: {.note}
+Another wrapped paragraph.
+:::
+:::
+`,
     "upright/index.md": `---
 title: Upright Collage
 uid: "clg00130"
