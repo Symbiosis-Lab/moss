@@ -56,6 +56,8 @@ body[data-page="home"] .moss-hero { --moss-hero-object-position: center; }
 
 **The side gutter.** `--moss-container-padding` is the page's side gutter from 48rem up (`2rem`); `--moss-container-padding-narrow` (default `1.5rem`) is the gutter below 48rem, so set that one to change a phone's gutter (`1rem` for 16px) and leave the desktop alone. The section headings in a page's text use the body face: `--moss-font-heading` sets the page, folder and card titles, and `--moss-font-section` sets the section headings.
 
+**Content images.** Every content image carries its `width` and `height`, and moss sets `block-size: auto` on it. Never set `width: auto` or `inline-size: auto` on `article img` (or any rule reaching content images): a lazy image that has not loaded yet then has no width and measures 0 by 0 until it is scrolled near, so the page shifts and a full-page capture shows gaps. Size them with `inline-size: 100%` or a `max-inline-size` instead.
+
 **Read the rule you are displacing.** `moss describe --css <selector>` prints
 every shipped rule mentioning that selector, across all of moss's stylesheets,
 with its `@layer` and its comments. Read it before overriding it — half of a
