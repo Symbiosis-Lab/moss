@@ -74,7 +74,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-hero-content-width",
         owner: "moss-hero-content",
         default: "auto",
-        description: "Width of the words block over a hero's picture, from tablet width up (a phone stacks or full-widths it). Unset, the block is as wide as its text, so a title over a wide poster can shrink to its longest word; give it a length or a percentage of the hero (e.g. `29%`, `24rem`) to use the poster's clear area. It also replaces the block's default cap of `max(600px, 35%)`, so a wider value is not clamped. On a closing picture this is how to set the words' measure.",
+        description: "Width of the words block over a hero's picture, measured as its border box (the block's padding is inside it), from tablet width up (a phone stacks or full-widths it). Unset, the block is as wide as its text, so a title over a wide poster can shrink to its longest word; give it a length or a percentage of the hero (e.g. `29%`, `24rem`) to use the poster's clear area. It also replaces the block's default cap of `max(600px, 35%)`, so a wider value is not clamped. On a closing picture this sets the block's width; a title's own measure belongs on the heading, as `max-inline-size` in `ch` on the closing heading, which moss reads.",
     },
     CustomProp {
         name: "--moss-hero-progress",
