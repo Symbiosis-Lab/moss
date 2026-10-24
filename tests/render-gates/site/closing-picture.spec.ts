@@ -918,3 +918,39 @@ for (const site of ARCHIVAL_SITES) {
     }
   }
 }
+
+// Heading, text and links keep a gap each, and a heading straight before the links two, whatever the words hold.
+const gapsOf = (page: import('@playwright/test').Page) =>
+  page.evaluate(() => {
+    const box = (sel: string) => document.querySelector(`footer .moss-hero-closing .moss-hero-content ${sel}`)!.getBoundingClientRect();
+    const heading = box('h2');
+    const text = document.querySelectorAll('footer .moss-hero-closing .moss-hero-content p').length > 1 ? box('p') : null;
+    const link = box('a');
+    return text ? { heading: text.top - heading.bottom, text: link.top - text.bottom } : { heading: link.top - heading.bottom, text: null };
+  });
+
+for (const width of [1360, 390]) {
+  test(`the closing words keep their gaps, set by --moss-hero-words-gap, ${width}px`, async ({ browser }) => {
+    for (const [url, text] of [[BUSY_FADE, true], [`http://localhost:${gatePort('closing-picture')}/`, false]] as const) {
+      const page = await browser.newPage({ viewport: { width, height: 800 } });
+      await page.goto(url, { waitUntil: 'load' });
+      const rest = await gapsOf(page);
+      const gaps = text ? 1 : 2; // a heading straight before the links is the heading's gap and the link's
+      expect(rest.heading, 'heading to the next block, by default').toBeCloseTo(16 * gaps, 0);
+      if (text) expect(rest.text, 'text to the links, by default').toBeCloseTo(16, 0);
+      await page.addStyleTag({ content: ':root { --moss-hero-words-gap: 28px; }' });
+      const set = await gapsOf(page);
+      expect(set.heading, 'heading to the next block, with the token').toBeCloseTo(28 * gaps, 0);
+      if (text) expect(set.text, 'text to the links, with the token').toBeCloseTo(28, 0);
+      await page.close();
+    }
+  });
+}
+
+test('--moss-hero-credit-size sets the credit size', async ({ page }) => {
+  await page.goto(`http://localhost:${gatePort('closing-picture')}/`, { waitUntil: 'load' });
+  const size = () => page.locator('footer .moss-hero-credit').evaluate((e) => getComputedStyle(e).fontSize);
+  expect(await size()).toBe('12px');
+  await page.addStyleTag({ content: ':root { --moss-hero-credit-size: 15px; }' });
+  expect(await size()).toBe('15px');
+});

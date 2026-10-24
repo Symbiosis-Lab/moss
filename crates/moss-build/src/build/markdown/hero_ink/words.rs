@@ -132,6 +132,10 @@ pub struct TypeTheme {
     /// `--moss-hero-link-size` and `--moss-hero-link-padding` (block, inline, in em).
     pub(super) link_size: Option<moss_core::media::MaxHeight>,
     pub(super) link_pad: Option<(f32, f32)>,
+    /// `--moss-hero-words-gap`, a length in `:root`.
+    pub(super) words_gap: Option<moss_core::media::Length>,
+    /// `--moss-hero-credit-size`, a length in `:root`.
+    pub(super) credit_size: Option<moss_core::media::Length>,
     pub(super) space_md: Option<f32>,
     pub(super) size_sm: Option<f32>,
     pub(super) size_lg: Option<f32>,
@@ -142,6 +146,11 @@ pub struct TypeTheme {
 /// (the others a theme may set, `--moss-space-md`, `--moss-size-sm` and
 /// `--moss-size-lg`, are read when plain lengths).
 const UNREAD_TOKENS: [&str; 5] = ["--moss-reading-size", "--moss-reading-script-scale", "--moss-reading-step", "--moss-content-width", "--moss-site-max-width"];
+
+/// A token read only in `:root`: `None` elsewhere, where it holds at some elements only.
+fn when(root: bool, read: impl FnOnce() -> Option<()>) -> Option<Option<()>> {
+    Some(if root { read() } else { None })
+}
 
 /// `1.5rem` or `24px` as px at the 16px root.
 fn plain_px(value: &str) -> Option<f32> {
@@ -200,28 +209,34 @@ impl TypeTheme {
             for decl in body.trim_end_matches('}').split(';') {
                 let Some((prop, value)) = decl.split_once(':') else { continue };
                 let prop = prop.trim();
-                let read = match prop {
-                    "--moss-reading-size-base" if root => plain_px(value).map(|px| theme.reading_base = Some(px)),
-                    "--moss-container-padding" if root => plain_px(value).map(|px| theme.container_pad = Some(px)),
-                    "--moss-space-md" if root => plain_px(value).map(|px| theme.space_md = Some(px)),
-                    "--moss-size-sm" if root => plain_px(value).map(|px| theme.size_sm = Some(px)),
-                    "--moss-size-lg" if root => plain_px(value).map(|px| theme.size_lg = Some(px)),
-                    "--moss-hero-title-size" if root => moss_core::media::MaxHeight::parse(value.trim().trim_end_matches("!important")).map(|m| theme.heading_size = Some(m)),
-                    "--moss-hero-link-size" if root => moss_core::media::MaxHeight::parse(value.trim().trim_end_matches("!important")).map(|m| theme.link_size = Some(m)),
-                    "--moss-hero-link-padding" if root => em_pair(value).map(|p| theme.link_pad = Some(p)),
+                // `Some` is a property the model knows: `Some(None)` is one it could not read here.
+                let read: Option<Option<()>> = match prop {
+                    "--moss-reading-size-base" => when(root, || plain_px(value).map(|px| theme.reading_base = Some(px))),
+                    "--moss-container-padding" => when(root, || plain_px(value).map(|px| theme.container_pad = Some(px))),
+                    "--moss-space-md" => when(root, || plain_px(value).map(|px| theme.space_md = Some(px))),
+                    "--moss-size-sm" => when(root, || plain_px(value).map(|px| theme.size_sm = Some(px))),
+                    "--moss-size-lg" => when(root, || plain_px(value).map(|px| theme.size_lg = Some(px))),
+                    "--moss-hero-title-size" => when(root, || moss_core::media::MaxHeight::parse(value.trim().trim_end_matches("!important")).map(|m| theme.heading_size = Some(m))),
+                    "--moss-hero-link-size" => when(root, || moss_core::media::MaxHeight::parse(value.trim().trim_end_matches("!important")).map(|m| theme.link_size = Some(m))),
+                    "--moss-hero-link-padding" => when(root, || em_pair(value).map(|p| theme.link_pad = Some(p))),
+                    "--moss-hero-credit-size" => when(root, || moss_core::media::Length::parse(value.trim().trim_end_matches("!important")).map(|l| theme.credit_size = Some(l))),
+                    "--moss-hero-words-gap" => when(root, || moss_core::media::Length::parse(value.trim().trim_end_matches("!important")).map(|l| theme.words_gap = Some(l))),
                     "font-size" if hero && words(&["h1", "h2", "h3", "h4", "h5", "h6"]) => {
-                        moss_core::media::MaxHeight::parse(value.trim().trim_end_matches("!important")).map(|m| theme.heading_size = Some(m))
+                        Some(moss_core::media::MaxHeight::parse(value.trim().trim_end_matches("!important")).map(|m| theme.heading_size = Some(m)))
                     }
-                    "font-size" if hero && words(&["p", "a"]) => moss_core::media::MaxHeight::parse(value.trim().trim_end_matches("!important")).map(|m| theme.text_size = Some(m)),
-                    "font-weight" if hero && words(&["h1", "h2", "h3", "h4", "h5", "h6"]) => weight_of(value).filter(|w| *w >= 400).map(|w| theme.heading_weight = Some(w)),
-                    "max-inline-size" | "max-width" if heading_only => Cap::parse(value).map(|c| theme.heading_cap = Some(c)),
-                    "line-height" if heading_only => Leading::parse(value).map(|l| theme.heading_line = Some(l)),
+                    "font-size" if hero && words(&["p", "a"]) => Some(moss_core::media::MaxHeight::parse(value.trim().trim_end_matches("!important")).map(|m| theme.text_size = Some(m))),
+                    "font-weight" if hero && words(&["h1", "h2", "h3", "h4", "h5", "h6"]) => Some(weight_of(value).filter(|w| *w >= 400).map(|w| theme.heading_weight = Some(w))),
+                    "max-inline-size" | "max-width" if heading_only => Some(Cap::parse(value).map(|c| theme.heading_cap = Some(c))),
+                    "line-height" if heading_only => Some(Leading::parse(value).map(|l| theme.heading_line = Some(l))),
                     _ => None,
                 };
-                let moves = read.is_none()
-                    && (matches!(prop, "--moss-reading-size-base" | "--moss-container-padding" | "--moss-space-md" | "--moss-size-sm" | "--moss-size-lg" | "--moss-hero-title-size" | "--moss-hero-link-size" | "--moss-hero-link-padding")
-                        || UNREAD_TOKENS.contains(&prop)
-                        || (reaches && matches!(prop, "font-size" | "font" | "font-weight" | "font-family" | "line-height" | "letter-spacing" | "text-transform" | "padding" | "max-width" | "max-inline-size" | "--moss-hero-content-width")));
+                let moves = match read {
+                    Some(read) => read.is_none(),
+                    None => {
+                        UNREAD_TOKENS.contains(&prop)
+                            || (reaches && matches!(prop, "font-size" | "font" | "font-weight" | "font-family" | "line-height" | "letter-spacing" | "text-transform" | "padding" | "max-width" | "max-inline-size" | "--moss-hero-content-width"))
+                    }
+                };
                 if moves && !theme.resized {
                     on_first_unread(prop, rule.prelude.trim());
                 }
@@ -272,6 +287,10 @@ pub(super) struct Type {
     /// The links' size and their padding (block, inline) in em.
     link_font: f32,
     link_pad: (f32, f32),
+    /// The gap from the heading to the text and from the text to the links (`--moss-hero-words-gap`).
+    gap: f32,
+    /// The credit's font size in px (`--moss-hero-credit-size`).
+    pub(super) credit_font: f32,
     /// The width the lines set in.
     measure: f32,
     /// The width the heading sets in, at the narrowest and the widest: the measure, or a theme's cap if narrower.
@@ -307,10 +326,6 @@ const PHONE_READING_PX: f32 = 17.0;
 
 /// A link button's padding in em, block then inline (`padding: 0.5em 1.2em`).
 const LINK_PAD_EM: (f32, f32) = (0.5, 1.2);
-
-/// The gap under the heading (`--moss-space-sm`), and from a block to the links' row.
-const HEADING_GAP_PX: f32 = 8.0;
-const LINKS_GAP_PX: f32 = 24.0;
 
 impl Type {
     pub(super) fn at(width: f32, theme: &TypeTheme, column: Column, lane: bool) -> Self {
@@ -354,12 +369,12 @@ impl Type {
         if phone {
             let text = theme.size_sm.unwrap_or_else(|| token_px("moss-size-sm"));
             let measure = width - 2.0 * inset;
-            return Type { inset, pad: 0.05 * width, top: words_top(width), font: 22.4, line: HEADING_LEADING * 22.4, weight: HEADING_WEIGHT, text_font: text, text_line: 1.5 * text, link_font: text, link_pad: LINK_PAD_EM, measure, heading_measure: (measure, measure), box_px: width };
+            return Type { inset, pad: 0.05 * width, top: words_top(width), font: 22.4, line: HEADING_LEADING * 22.4, weight: HEADING_WEIGHT, text_font: text, text_line: 1.5 * text, link_font: text, link_pad: LINK_PAD_EM, gap: theme.words_gap.map_or_else(|| token_px("moss-space-sm"), |l| l.px(width)), credit_font: theme.credit_size.map_or(CREDIT_FONT_PX, |l| l.px(width)), measure, heading_measure: (measure, measure), box_px: width };
         }
         let (pad, font, text) = if width < 1024.0 { (space_md, 28.0, reading) } else { (0.05 * width, 40.0, theme.size_lg.unwrap_or_else(|| token_px("moss-size-lg"))) };
         let box_px = (0.35 * width).max(600.0).min(column_px - 2.0 * cp + 2.0 * pad);
         let measure = box_px - 2.0 * pad;
-        Type { inset, pad, top: words_top(width), font, line: HEADING_LEADING * font, weight: HEADING_WEIGHT, text_font: text, text_line: 1.5 * text, link_font: text, link_pad: LINK_PAD_EM, measure, heading_measure: (measure, measure), box_px }
+        Type { inset, pad, top: words_top(width), font, line: HEADING_LEADING * font, weight: HEADING_WEIGHT, text_font: text, text_line: 1.5 * text, link_font: text, link_pad: LINK_PAD_EM, gap: theme.words_gap.map_or_else(|| token_px("moss-space-sm"), |l| l.px(width)), credit_font: theme.credit_size.map_or(CREDIT_FONT_PX, |l| l.px(width)), measure, heading_measure: (measure, measure), box_px }
     }
 
     /// The most and the fewest lines `ems` of text at `font` px set in the
@@ -404,8 +419,8 @@ impl Type {
                 most += lines.0 * line + gap;
             }
         };
-        let text_gap = if words.link_count > 0 { LINKS_GAP_PX } else { 0.0 };
-        push(self.lines(words.heading, self.font, self.heading_measure), self.line, words.heading * self.font, self.heading_measure.1, if words.text > 0.0 { HEADING_GAP_PX } else { text_gap }, self.heading_face());
+        let text_gap = if words.link_count > 0 { self.gap } else { 0.0 };
+        push(self.lines(words.heading, self.font, self.heading_measure), self.line, words.heading * self.font, self.heading_measure.1, if words.text > 0.0 { self.gap } else { 2.0 * text_gap }, self.heading_face());
         push(self.lines(words.text, self.text_font, (self.measure, self.measure)), self.text_line, words.text * self.text_font, self.measure, text_gap, self.text_face());
         if words.link_count > 0 {
             // A line and a hair of border, and the padding twice over, in the link's own em.
@@ -418,9 +433,10 @@ impl Type {
     }
 
     pub(super) fn credit(&self, width: f32, credit_em: f32) -> CreditBox {
-        let measure = (width - 2.0 * self.inset).max(CREDIT_FONT_PX);
-        let text = credit_em * CREDIT_FONT_PX * CREDIT_LETTER_WIDEST;
-        CreditBox { lines: (text / measure).ceil().max(1.0), across: text.min(measure), end: self.inset }
+        let font = self.credit_font;
+        let measure = (width - 2.0 * self.inset).max(font);
+        let text = credit_em * font * CREDIT_LETTER_WIDEST;
+        CreditBox { lines: (text / measure).ceil().max(1.0), across: text.min(measure), end: self.inset, line: CREDIT_LEADING * font }
     }
 }
 
@@ -430,12 +446,12 @@ const LINK_WEIGHT_WIDTH: f32 = 1.04;
 /// How much of half an em a letter may be in a narrow face.
 const NARROWEST: f32 = 0.7;
 
-/// The credit's type: 12px on a 1.45 line, set where the page's text column
+/// The credit's type: 12px (`--moss-hero-credit-size`) on a 1.45 line, set where the page's text column
 /// ends (`--moss-credit-end` in site.css) with 14px below its last line when it
 /// is in ink, and as wide as its text up to the column's width. A theme's face
 /// is not seen, so a letter is taken at 0.6 em, a monospace face's width.
 pub(super) const CREDIT_FONT_PX: f32 = 12.0;
-const CREDIT_LINE_PX: f32 = 17.4;
+const CREDIT_LEADING: f32 = 1.45;
 const CREDIT_PAD_BELOW_PX: f32 = 14.0;
 const CREDIT_LETTER_WIDEST: f32 = 1.2;
 
@@ -447,18 +463,14 @@ pub(super) struct CreditBox {
     pub(super) across: f32,
     /// From the window's inline end to the text's end: the column's own end.
     pub(super) end: f32,
+    /// One line's height in px.
+    line: f32,
 }
 
 impl CreditBox {
     /// The rows its text covers, as px above the box's bottom edge, the colophon's
     /// `strip` clear: nearest and farthest.
     pub(super) fn rows(&self, strip: f32) -> (f32, f32) {
-        (strip + CREDIT_PAD_BELOW_PX, strip + CREDIT_PAD_BELOW_PX + self.lines * CREDIT_LINE_PX)
+        (strip + CREDIT_PAD_BELOW_PX, strip + CREDIT_PAD_BELOW_PX + self.lines * self.line)
     }
-}
-
-/// How tall the credit is at a window `width` wide in the default column, in px.
-pub(super) fn credit_height(credit_em: f32, width: f32) -> f32 {
-    let credit = Type::at(width, &TypeTheme::default(), Column::Default, false).credit(width, credit_em);
-    credit.rows(0.0).1
 }

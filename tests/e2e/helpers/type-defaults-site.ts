@@ -288,6 +288,40 @@ The stage.
 The stage.
 :::
 `,
+    // Parts that are fenced divs around one paragraph, and a card with a word that has no break point.
+    "divparts.md": `---
+title: Div parts
+uid: "tdg00040"
+---
+
+:::grid 2 {rows=equal}
+::: {.label}
+Label one
+:::
+
+::: {.facts}
+Fact one.
+:::
+
+Body of card one.
++++
+::: {.label}
+Label two
+:::
+
+::: {.facts}
+Fact two.
+:::
+
+Body of card two, which runs a little longer than the first card's body does.
+:::
+
+:::grid 2 {rows=equal}
+Find it at [https://example.org/a/very/long/address/with/no/break/points/at/all/that/runs/past/any/phone/screen/width/1234567890](https://example.org/a/very/long/address).
++++
+A short card.
+:::
+`,
     "wrapped.md": `---
 title: Wrapped
 uid: "tdg00011"

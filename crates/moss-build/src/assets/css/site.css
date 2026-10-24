@@ -1341,7 +1341,7 @@ body > footer.container:has(> .moss-hero-closing) > .moss-colophon a {
   margin: 0;
   padding: 0.3rem 0.5rem;
   font-family: var(--moss-hero-credit-font, var(--moss-font-body));
-  font-size: 0.75rem;
+  font-size: var(--moss-hero-credit-size, 0.75rem);
   line-height: 1.45;
   text-align: end;
   color: #fff;
@@ -5934,7 +5934,7 @@ hr::before {
 .moss-article-title,
 .article-title {
   font-family: var(--moss-font-heading);
-  font-size: var(--moss-read-title);
+  font-size: var(--moss-title-size, var(--moss-read-title));
   font-weight: var(--moss-font-heading-weight);
   line-height: 1.5;
   margin-block-start: 0;
@@ -5955,7 +5955,7 @@ hr::before {
    folder pages independently of articles. */
 .moss-folder-title {
   font-family: var(--moss-font-heading);
-  font-size: var(--moss-read-title);
+  font-size: var(--moss-title-size, min(var(--moss-read-title), 2rem));
   font-weight: var(--moss-font-heading-weight);
   line-height: 1.5;
   /* Mirror .moss-article-title's below-gap (--moss-space-md). The former
@@ -5974,7 +5974,6 @@ hr::before {
 
 @media (width >= 48rem) {
   .moss-folder-title {
-    font-size: 2rem;
     line-height: 1.6875;
   }
 }
@@ -7668,7 +7667,7 @@ body > footer.container:has(> .moss-hero-closing) {
 .moss-hero-content :is(h1, h2, h3, h4, h5, h6) {
   font-size: 1.75rem;
   line-height: 1.2;
-  margin: 0 0 var(--moss-space-sm);
+  margin: 0 0 var(--moss-hero-words-gap, var(--moss-space-sm));
   text-shadow: 0 2px 4px rgba(0,0,0,0.3);
 }
 
@@ -7692,7 +7691,7 @@ body > footer.container:has(> .moss-hero-closing) {
   padding: var(--moss-hero-link-padding, 0.5em 1.2em);
   border-radius: 4px;
   text-decoration: none;
-  margin-block-start: var(--moss-space-sm);
+  margin-block-start: var(--moss-hero-words-gap, var(--moss-space-sm));
   transition: background 0.2s;
 }
 
@@ -8656,6 +8655,8 @@ a.moss-grid-card:hover {
   }
   .moss-grid[data-rows="equal"] > :is(.moss-grid-card, .moss-card) {
     display: grid;
+    /* An implicit column is `auto`, which a word with no break point would widen. */
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: subgrid;
     grid-row: span var(--moss-grid-parts, 1);
   }
@@ -8701,6 +8702,10 @@ a.moss-grid-card:hover {
   .moss-grid[data-rows="equal"] > .moss-grid-card > * {
     margin-block: 0;
   }
+  /* A part that is a fenced div holds its paragraph, so the reset reaches the
+     part's first and last child too. */
+  .moss-grid[data-rows="equal"] > .moss-grid-card > * > :first-child { margin-block-start: 0; }
+  .moss-grid[data-rows="equal"] > .moss-grid-card > * > :last-child { margin-block-end: 0; }
   /* A collection card has two parts, its cover and its content, as in a
      listing's grid. */
   .moss-grid[data-rows="equal"] > .moss-card .moss-card-cover { grid-row: 1; }
@@ -8750,10 +8755,15 @@ a.moss-grid-card:hover {
   grid-column: 1;
   grid-row: 1 / -1;
 }
-/* Keyboard focus rings the tile, inside its edge, so the clip does not cut it. */
-.moss-grid[data-collage] > :has(:focus-visible) {
+/* Keyboard focus rings the tile, inside its edge so the clip does not cut it. The ring is
+   drawn by an overlay above the tile's positioned picture, which would hide the tile's own outline. */
+.moss-grid[data-collage] > :has(:focus-visible)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
   outline: 2px solid var(--moss-color-accent);
   outline-offset: -3px;
+  pointer-events: none;
 }
 
 /* A tile is a picture, or any other cell. */
@@ -8875,14 +8885,14 @@ a.moss-grid-card:hover {
 .moss-grid[data-collage] .moss-grid-card:not([data-tile="picture"]) > :first-child { margin-block-start: 0; }
 /* A quote is set at the tile's top and its source is pinned to the foot, so
    quotes of different lengths share a baseline for their sources. The size is
-   a step down for a long quote and follows the tile's width (`cqi`) where the
-   tile is narrow, so every word fits whole; no hyphenation. The row grows to
-   fit the words, so nothing is cut off. The source's link covers the tile. */
+   a step down for a long quote and never below that floor, however narrow the
+   tile. A long word is hyphenated by the page's language (one of seven letters or
+   more); only a word with no break point, an address, breaks anywhere. The row
+   grows to fit the words, so nothing is cut off. The source's link covers the tile. */
 .moss-grid[data-collage] [data-tile="quote"] {
   display: flex;
   padding: 1.375rem 1.25rem 1.125rem;
   border: 1px solid var(--moss-border-light);
-  container-type: inline-size;
 }
 .moss-grid[data-collage] [data-tile="quote"]:hover { border-color: var(--moss-color-text-secondary); }
 .moss-grid[data-collage] [data-tile="quote"] .moss-quote {
@@ -8892,14 +8902,15 @@ a.moss-grid-card:hover {
   gap: 0.75rem;
 }
 .moss-grid[data-collage] [data-tile="quote"] blockquote {
-  font-size: max(0.75rem, min(clamp(0.9375rem, 1.25vw, 1.09375rem), 13cqi));
+  font-size: clamp(0.9375rem, 1.25vw, 1.09375rem);
   line-height: 1.45;
   overflow-wrap: break-word;
-  hyphens: manual;
+  hyphens: auto;
+  hyphenate-limit-chars: 7 3 3;
   text-wrap: pretty;
 }
 .moss-grid[data-collage] [data-tile="quote"] .moss-quote[data-length="long"] blockquote {
-  font-size: max(0.75rem, min(clamp(0.84375rem, 1.08vw, 0.9375rem), 11cqi));
+  font-size: clamp(0.84375rem, 1.08vw, 0.9375rem);
   line-height: 1.4;
 }
 .moss-grid[data-collage] [data-tile="quote"] .moss-quote figcaption {
@@ -9027,7 +9038,7 @@ a.moss-grid-card:hover {
   .moss-grid[data-collage] .moss-grid-card .moss-image figcaption:focus-within { opacity: 1; transform: none; }
   .moss-grid[data-collage] [data-tile="quote"] { padding: 1rem 1rem 0.875rem; }
   .moss-grid[data-collage] [data-tile="quote"] .moss-quote { gap: 0.625rem; }
-  .moss-grid[data-collage] [data-tile="quote"] .moss-quote:not([data-length="long"]) blockquote { font-size: max(0.75rem, min(1rem, 13cqi)); }
+  .moss-grid[data-collage] [data-tile="quote"] .moss-quote:not([data-length="long"]) blockquote { font-size: 1rem; }
 }
 
 /* Scrolling row (`:::grid N {scroll}`): the row stays on ONE line and the

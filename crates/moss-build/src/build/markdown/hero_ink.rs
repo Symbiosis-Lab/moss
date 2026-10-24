@@ -40,7 +40,7 @@ mod words;
 pub use ground::{built as grounds_built, Ground};
 pub use page::PageGround;
 pub use words::{Column, TypeTheme, Words};
-use words::{credit_height, Type, CREDIT_FONT_PX};
+use words::{Type, CREDIT_FONT_PX};
 
 use crate::build::components::color_extract::hero_tone_color_luminance;
 use crate::build::scan::section_text::{luminance, Rgb, BACKGROUNDS};
@@ -402,7 +402,7 @@ pub fn credit_spot(frame: &Frame, aspect: f32, layout: Layout, colophon: bool) -
             let c = credit(width);
             (1.0 - (c.end + c.across) / width, 1.0 - c.end / width)
         };
-        frame.spot(aspect, layout, rows, cols, |_| Face::SMALL).0
+        frame.spot(aspect, layout, rows, cols, |width| Face { font: Type::at(width, &frame.theme, Column::Default, false).credit_font, need: MIN_CONTRAST }).0
     });
     Spot(areas.collect())
 }
@@ -961,11 +961,11 @@ pub fn note_forced_ink(
 /// credit its height more, since the credit at the foot shares the words'
 /// column there and would otherwise sit over them. Returns the cap and what
 /// the box needs.
-pub fn short_cap(hero: &moss_core::ast::HeroShortcode) -> Option<(f32, f32)> {
+pub fn short_cap(hero: &moss_core::ast::HeroShortcode, theme: &TypeTheme) -> Option<(f32, f32)> {
     let width = Layout::Mid.widths().0;
     let px = hero.max_height?.px(width);
     let credit = moss_core::ast::plain_text::inlines_to_plain_text(&hero.caption);
-    let need = if credit.is_empty() { WORDS_PX } else { WORDS_PX + credit_height(Words::read("", &credit).credit, width) };
+    let need = if credit.is_empty() { WORDS_PX } else { WORDS_PX + Type::at(width, theme, Column::Default, false).credit(width, Words::read("", &credit).credit).rows(0.0).1 };
     (px < need).then_some((px, need))
 }
 
@@ -978,7 +978,7 @@ fn lacks_alt(hero: &moss_core::ast::HeroShortcode, closing: bool) -> bool {
 /// that ends a footer), where it does nothing, and for a closing picture
 /// whose `max-height=` is shorter than its words ([`short_cap`]). Another
 /// fade value already warns as unrecognized.
-pub fn warn_closing_options(doc: &moss_core::ast::Document, closes_page: bool, file_path: &str) {
+pub fn warn_closing_options(doc: &moss_core::ast::Document, closes_page: bool, file_path: &str, theme: &TypeTheme) {
     use moss_core::ast::{Block, Shortcode};
     let last = doc.blocks.len().saturating_sub(1);
     for (i, block) in doc.blocks.iter().enumerate() {
@@ -994,7 +994,7 @@ pub fn warn_closing_options(doc: &moss_core::ast::Document, closes_page: bool, f
                 "[{file_path}] `:::hero` has a picture and no `alt=`, so a screen reader skips it. Describe it with `:::hero {{image=… alt=\"…\"}}`; a picture that is only decoration can stay as it is."
             );
         }
-        if let Some((px, need)) = short_cap(hero).filter(|_| closing && !hero.overlay.is_empty()) {
+        if let Some((px, need)) = short_cap(hero, theme).filter(|_| closing && !hero.overlay.is_empty()) {
             crate::build::cli_output::log_warn_problem!(
                 "[{file_path}] `:::hero {{max-height=…}}` is {px:.0}px tall at 768px wide, under the {need:.0}px its words and credit can take, so they may be cut off or covered. Raise the cap's smallest value."
             );
@@ -1436,22 +1436,22 @@ mod tests {
     #[test]
     fn a_cap_under_the_words_box_is_found_at_48rem() {
         let hero = |cap: &str| moss_core::ast::HeroShortcode { max_height: moss_core::media::MaxHeight::parse(cap), ..Default::default() };
-        assert_eq!(short_cap(&hero("300px")).map(|c| c.0), Some(300.0));
-        assert_eq!(short_cap(&hero("25vw")).map(|c| c.0), Some(192.0));
-        assert_eq!(short_cap(&hero("clamp(420px, 50vw, 680px)")), None);
+        assert_eq!(short_cap(&hero("300px"), &TypeTheme::default()).map(|c| c.0), Some(300.0));
+        assert_eq!(short_cap(&hero("25vw"), &TypeTheme::default()).map(|c| c.0), Some(192.0));
+        assert_eq!(short_cap(&hero("clamp(420px, 50vw, 680px)"), &TypeTheme::default()), None);
         // The credit at the foot needs its rows too: 370px holds the words, not both.
         let captioned = moss_core::ast::HeroShortcode { caption: vec![moss_core::ast::Inline::Text("Credit".into())], ..hero("370px") };
-        assert_eq!(short_cap(&captioned).map(|c| c.0), Some(370.0));
-        assert_eq!(short_cap(&hero("370px")), None);
-        assert_eq!(short_cap(&moss_core::ast::HeroShortcode { caption: captioned.caption.clone(), ..hero("clamp(440px, 50vw, 680px)") }), None);
-        assert_eq!(short_cap(&moss_core::ast::HeroShortcode::default()), None);
+        assert_eq!(short_cap(&captioned, &TypeTheme::default()).map(|c| c.0), Some(370.0));
+        assert_eq!(short_cap(&hero("370px"), &TypeTheme::default()), None);
+        assert_eq!(short_cap(&moss_core::ast::HeroShortcode { caption: captioned.caption.clone(), ..hero("clamp(440px, 50vw, 680px)") }, &TypeTheme::default()), None);
+        assert_eq!(short_cap(&moss_core::ast::HeroShortcode::default(), &TypeTheme::default()), None);
     }
 
     #[test]
     fn a_short_cap_on_the_closing_picture_is_a_problem() {
         let problems = |md: &str, closes_page: bool| {
             let _ = crate::build::cli_output::take_cli_problems();
-            warn_closing_options(&moss_core::ast::parse(md), closes_page, "footer.md");
+            warn_closing_options(&moss_core::ast::parse(md), closes_page, "footer.md", &TypeTheme::default());
             crate::build::cli_output::take_cli_problems()
         };
         let short = ":::hero {image=a.jpg max-height=300px}\n## Words\n:::\n";
@@ -1627,7 +1627,7 @@ mod tests {
     #[test]
     fn site_css_sets_the_type_the_words_are_modelled_in() {
         let css = crate::build::emit::stylesheet::CORE_CSS;
-        for rule in ["font-size: var(--moss-hero-title-size, 2.5rem);", "font-size: var(--moss-hero-title-size, 1.75rem);", "font-size: var(--moss-hero-title-size, 1.4rem);", "font-size: var(--moss-hero-link-size, 1em);", "padding: var(--moss-hero-link-padding, 0.5em 1.2em);", "font-size: var(--moss-size-lg);", "--moss-words-pad: 5%;", "font-weight: 500;", "padding-block: 0 0.875rem;", "--moss-credit-end: calc(var(--moss-words-inset) - 0.5rem);", "padding-block-start: clamp(8px, 2vw, 24px);", "line-height: 1.08;", "--moss-words-pad: var(--moss-space-md);", "--moss-contents-inset: 32px;", "--moss-contents-pad: 8px;", "--moss-contents-row: 20px;", "--moss-contents-gutter: 24px;"] {
+        for rule in ["margin: 0 0 var(--moss-hero-words-gap, var(--moss-space-sm));", "margin-block-start: var(--moss-hero-words-gap, var(--moss-space-sm));", "font-size: var(--moss-hero-title-size, 2.5rem);", "font-size: var(--moss-hero-title-size, 1.75rem);", "font-size: var(--moss-hero-title-size, 1.4rem);", "font-size: var(--moss-hero-link-size, 1em);", "padding: var(--moss-hero-link-padding, 0.5em 1.2em);", "font-size: var(--moss-size-lg);", "--moss-words-pad: 5%;", "font-weight: 500;", "padding-block: 0 0.875rem;", "--moss-credit-end: calc(var(--moss-words-inset) - 0.5rem);", "padding-block-start: clamp(8px, 2vw, 24px);", "line-height: 1.08;", "--moss-words-pad: var(--moss-space-md);", "--moss-contents-inset: 32px;", "--moss-contents-pad: 8px;", "--moss-contents-row: 20px;", "--moss-contents-gutter: 24px;"] {
             assert!(css.contains(rule), "{rule}");
         }
         assert_eq!(32.0 + 2.0 * 8.0 + 20.0 + 24.0, words::LANE_PX);
@@ -1768,7 +1768,7 @@ mod tests {
         let small = TypeTheme::of_theme(Some(":root { --moss-hero-title-size: 8px; }"));
         assert!(!small.resized);
         assert_eq!(read(&Frame { theme: small, ..frame }), None, "an 8px heading is measured at 8px");
-        for kept in [":root { --moss-hero-link-size: 1.1rem; --moss-hero-link-padding: 0.6em 1.4em; }", ":root { --moss-hero-link-padding: 0.5em; }"] {
+        for kept in [":root { --moss-hero-link-size: 1.1rem; --moss-hero-link-padding: 0.6em 1.4em; }", ":root { --moss-hero-link-padding: 0.5em; }", ":root { --moss-hero-title-size: clamp(1.875rem, 3.9vw, 3.125rem); }"] {
             assert!(!TypeTheme::of_theme(Some(kept)).resized, "{kept}");
         }
         for moves in [":root { --moss-hero-link-padding: 8px 16px; }", ":root { --moss-hero-title-size: calc(2rem + 2px); }", "body { --moss-hero-title-size: 2rem; }"] {
@@ -1781,6 +1781,38 @@ mod tests {
         };
         let big = TypeTheme::of_theme(Some(":root { --moss-hero-link-size: 2rem; --moss-hero-link-padding: 1em; }"));
         assert!(row(big) > row(TypeTheme::default()) + 20.0);
+    }
+
+    #[test]
+    fn the_credit_size_token_is_read_and_sizes_the_credit() {
+        let font = |theme: &TypeTheme| Type::at(1360.0, theme, Column::Default, false).credit_font;
+        let size = TypeTheme::of_theme(Some(":root { --moss-hero-credit-size: 1rem; }"));
+        assert!(!size.resized);
+        assert_eq!(font(&size), 16.0);
+        assert_eq!(font(&TypeTheme::default()), CREDIT_FONT_PX);
+        for unreadable in ["calc(1rem + 1px)", "-4px", "0px", "inf"] {
+            assert!(TypeTheme::of_theme(Some(&format!(":root {{ --moss-hero-credit-size: {unreadable}; --moss-hero-words-gap: {unreadable}; }}"))).resized, "{unreadable}");
+        }
+        // A long credit sets more lines at a larger size, so its area is taller.
+        let credit = "A credit line that names the photographer, the archive and the year of the print. ".repeat(3);
+        let height = |theme: TypeTheme| Type::at(1360.0, &theme, Column::Default, false).credit(1360.0, Words::read("", &credit).credit).rows(0.0).1;
+        assert!(height(size) > height(TypeTheme::default()));
+        // The short-cap check measures the credit in the theme's size.
+        let hero = moss_core::ast::HeroShortcode { max_height: moss_core::media::MaxHeight::parse("370px"), caption: vec![moss_core::ast::Inline::Text("Credit".into())], ..Default::default() };
+        assert!(short_cap(&hero, &TypeTheme::default()).is_some());
+        let big = TypeTheme::of_theme(Some(":root { --moss-hero-credit-size: 4rem; }"));
+        assert!(short_cap(&hero, &big).unwrap().1 > short_cap(&hero, &TypeTheme::default()).unwrap().1);
+    }
+
+    #[test]
+    fn the_words_gap_token_moves_the_links_row_by_the_gap() {
+        let top = |theme: &TypeTheme, words: &str| Type::at(1360.0, theme, Column::Default, false).blocks(&Words::read(words, "")).last().map(|b| b.rows.0).unwrap();
+        let wide = TypeTheme::of_theme(Some(":root { --moss-hero-words-gap: 40px; }"));
+        assert!(!wide.resized);
+        // Text then links: one gap. A heading straight before the links: the heading's gap and the link's.
+        assert_eq!(top(&wide, "Some text\n\n[Go](#go)") - top(&TypeTheme::default(), "Some text\n\n[Go](#go)"), 40.0 - 16.0);
+        assert_eq!(top(&wide, "## A heading\n\n[Go](#go)") - top(&TypeTheme::default(), "## A heading\n\n[Go](#go)"), 2.0 * (40.0 - 16.0));
+        assert!(TypeTheme::of_theme(Some(":root { --moss-hero-words-gap: calc(1rem + 2px); }")).resized);
     }
 
     #[test]

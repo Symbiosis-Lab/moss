@@ -65,6 +65,12 @@ pub struct CustomProp {
 /// a hook nothing declares is a hook no agent can find.
 pub const CUSTOM_PROPS: &[CustomProp] = &[
     CustomProp {
+        name: "--moss-title-size",
+        owner: "moss-article-title",
+        default: "an article's title: --moss-read-title (40px); a folder's title: 2rem, and no more than that on a phone",
+        description: "Font size of a page's title and a folder's title, at every width: set it once (a length, or `clamp()`) and the defaults no longer apply. Without it a folder's title is 2rem from 48rem up and follows the reading size below that, capped at 2rem so a phone's title is never larger than a desktop's.",
+    },
+    CustomProp {
         name: "--moss-hero-max-height",
         owner: "moss-hero",
         default: "70vb",
@@ -98,7 +104,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-hero-title-size",
         owner: "moss-hero-content",
         default: "2.5rem (1.75rem under 64rem, 1.4rem on a phone overlay)",
-        description: "Font size of a hero's lead heading, at every width: set it once (a length, or `clamp()` of px and vw) and the stepped defaults no longer apply. A closing picture's ink measurement reads it when it is declared in `:root`, so the words can stay in ink with no panel.",
+        description: "Font size of a hero's lead heading, at every width: set it once (a length, or `clamp()` of px, rem and vw) and the stepped defaults no longer apply. A closing picture's ink measurement reads it when it is declared in `:root`, so the words can stay in ink with no panel.",
     },
     CustomProp {
         name: "--moss-hero-link-size",
@@ -111,6 +117,18 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         owner: "moss-hero-content",
         default: "0.5em 1.2em",
         description: "Padding of the link button in a hero's words, block then inline, in `em` of the link's own size. Read by the ink measurement when declared in `:root` as one or two `em` values; any other form leaves the words their panel.",
+    },
+    CustomProp {
+        name: "--moss-hero-words-gap",
+        owner: "moss-hero-content",
+        default: "var(--moss-space-sm)",
+        description: "The space between a hero's heading and its text, and between its text and its row of links. One value sets both. A heading followed straight by the links is two gaps from them: the heading's and the link's. Read by the ink measurement when it is a positive px, rem or vw length in `:root`.",
+    },
+    CustomProp {
+        name: "--moss-hero-credit-size",
+        owner: "moss-hero-credit",
+        default: "0.75rem",
+        description: "Font size of a closing picture's credit (`caption=`), on a 1.45 line. Read by the ink measurement when it is a positive px, rem or vw length in `:root`, so the credit's area and the contrast it needs follow the size.",
     },
     CustomProp {
         name: "--moss-hero-panel-bg",

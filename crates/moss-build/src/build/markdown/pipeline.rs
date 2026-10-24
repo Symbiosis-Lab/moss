@@ -1124,7 +1124,7 @@ pub fn process_markdown_file(
     // A footer that ends in a hero closes the page with it.
     let closes_page = injects_into_every_page && crate::build::footer::ends_in_hero(&doc);
     super::hero_ink::note_forced_ink(&doc, media_lookup, file_path, closes_page);
-    super::hero_ink::warn_closing_options(&doc, closes_page, file_path);
+    super::hero_ink::warn_closing_options(&doc, closes_page, file_path, &media_lookup.map(|l| l.page_ground().type_theme).unwrap_or_default());
     super::body_plan::warn_uncountable_cards(&doc, file_path);
 
     // 3. Extract the Hero shortcode for hoisting.

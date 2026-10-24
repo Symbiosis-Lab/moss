@@ -220,6 +220,29 @@ test.describe("equal rows", () => {
     expect(new Set(g.heights).size).toBe(1);
   });
 
+  test("a part that is a fenced div around one paragraph adds no margin of its own", async ({ page }) => {
+    await open(page, "/divparts/", 1280);
+    const parts = await page.locator(".moss-grid").first().evaluate((g) =>
+      [...g.querySelectorAll(":scope > .moss-grid-card > :is(.label, .facts)")].map((part) => ({
+        part: part.getBoundingClientRect().height,
+        p: part.querySelector("p")!.getBoundingClientRect().height,
+      })),
+    );
+    expect(parts.length).toBe(4);
+    // A margin inside the part would make its track taller than its text.
+    for (const m of parts) expect(m.part).toBe(m.p);
+  });
+
+  test("a long unbroken word wraps inside its card at 390px", async ({ page }) => {
+    await open(page, "/divparts/", 390);
+    const cards = await page.locator(".moss-grid").nth(1).evaluate((g) =>
+      [...g.children].map((c) => ({ box: c.clientWidth, content: c.scrollWidth })),
+    );
+    for (const c of cards) expect(c.content).toBeLessThanOrEqual(c.box);
+    const page_ = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
+    expect(page_).toBe(true);
+  });
+
   test("counts the children each card renders, so a wrapped card adds no empty tracks", async ({ page }) => {
     await open(page, "/wrapped/", 1280);
     const parts = await page.locator(".moss-grid").evaluate((g) => g.style.getPropertyValue("--moss-grid-parts"));
@@ -440,5 +463,41 @@ test.describe("text rendering in the dark theme", () => {
     await page.evaluate(() => localStorage.setItem("moss-theme", "light"));
     await open(page, "/cards/");
     expect(await smoothing(page)).toBe("auto");
+  });
+});
+
+test.describe("the page title's size", () => {
+  const title = (page: Page) => page.locator("h1.moss-article-title, h1.moss-folder-title").evaluate((h) => parseFloat(getComputedStyle(h).fontSize));
+
+  test("a phone's title is no larger than a desktop's, for a folder and for an article", async ({ page }) => {
+    for (const url of ["/", "/divparts/"]) {
+      await open(page, url, 1360);
+      const desktop = await title(page);
+      await open(page, url, 390);
+      expect(await title(page), url).toBeLessThanOrEqual(desktop);
+    }
+  });
+
+  test("the folder title keeps 32px on a desktop and the article title 40px", async ({ page }) => {
+    await open(page, "/", 1360);
+    expect(await title(page)).toBe(32);
+    await open(page, "/divparts/", 1360);
+    expect(Math.round(await title(page))).toBe(40);
+  });
+
+  test("--moss-read-title still sizes a folder title from 48rem up", async ({ page }) => {
+    await open(page, "/", 1360);
+    await page.addStyleTag({ content: ":root { --moss-read-title: 20px; }" });
+    expect(await title(page)).toBe(20);
+  });
+
+  test("--moss-title-size sets both titles at both widths", async ({ page }) => {
+    for (const url of ["/", "/divparts/"]) {
+      for (const width of [390, 1360]) {
+        await open(page, url, width);
+        await page.addStyleTag({ content: ":root { --moss-title-size: 26px; }" });
+        expect(await title(page), `${url} at ${width}`).toBe(26);
+      }
+    }
   });
 });

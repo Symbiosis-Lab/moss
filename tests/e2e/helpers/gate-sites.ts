@@ -3704,7 +3704,7 @@ const COLLAGE_PASSAGE = `A passage set as type fills its tile. It carries on pas
 
 const COLLAGE_LONG_CREDIT = `A long credit line that names the photographer, the archive, the year and the licence, so it runs to three lines in a narrow tile.`;
 
-const COLLAGE_SHORT_QUOTE = "Communication is health; communication is truth; communication is happiness.";
+const COLLAGE_SHORT_QUOTE = "Communication is health; communication is truth; communication is happiness, the uncharacteristically humane kind.";
 const COLLAGE_LONG_QUOTE =
   "There is no desire more natural than the desire for knowledge. We try every means that can bring us to it; when reason fails us, we make use of experience, which is a weaker and less worthy means, but truth is so great a thing that we ought not to disdain any channel that leads us to it.";
 
@@ -3827,6 +3827,39 @@ content_width: full
 # Full width
 
 ${COLLAGE_MIXED}`,
+    // Two quotes among pictures, on a default-width page: the tablet widths where a tile is narrow.
+    "pair/index.md": `---
+title: Two Quotes
+uid: "clg00180"
+---
+
+# Two quotes
+
+:::grid {collage}
+![Picture 1](../t1.svg)
+*Credit for picture 1.*
++++
+![Picture 2](../t2.svg)
+*Credit for picture 2.*
++++
+> ${COLLAGE_SHORT_QUOTE}
+
+*Montaigne, 1924*
++++
+![Picture 4](../t4.svg)
+*Credit for picture 4.*
++++
+![Picture 5](../t5.svg)
+*Credit for picture 5.*
++++
+> ${COLLAGE_LONG_QUOTE}
+
+*Essays, book three*
++++
+![Picture 7](../t7.svg)
+*Credit for picture 7.*
+:::
+`,
     // Cards holding a word with no break point, and a link in a list: nothing may widen the page.
     "cards/index.md": `---
 title: Cards
