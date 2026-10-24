@@ -307,6 +307,7 @@ pub fn fetch_buttondown_username(api_key: &str) -> Option<String> {
 /// plumbing the strings as data- attributes through the DOM.
 struct MossSubscribeCopy {
     placeholder: &'static str,
+    input_label: &'static str,
     label: &'static str,
     check_email: &'static str,
     already_subscribed: &'static str,
@@ -317,6 +318,7 @@ fn moss_subscribe_copy(lang: Language) -> MossSubscribeCopy {
     match lang {
         Language::En => MossSubscribeCopy {
             placeholder: "your@email.com",
+            input_label: "Email address",
             label: "Subscribe",
             check_email: "Check your email to confirm.",
             already_subscribed: "You're already subscribed.",
@@ -324,6 +326,7 @@ fn moss_subscribe_copy(lang: Language) -> MossSubscribeCopy {
         },
         Language::ZhHans => MossSubscribeCopy {
             placeholder: "邮箱",
+            input_label: "邮箱地址",
             label: "订阅",
             check_email: "请在邮箱中确认订阅",
             already_subscribed: "你已订阅。",
@@ -331,6 +334,7 @@ fn moss_subscribe_copy(lang: Language) -> MossSubscribeCopy {
         },
         Language::ZhHant => MossSubscribeCopy {
             placeholder: "電子郵件",
+            input_label: "電子郵件地址",
             label: "訂閱",
             check_email: "請在電子郵件中確認訂閱",
             already_subscribed: "你已訂閱。",
@@ -338,6 +342,7 @@ fn moss_subscribe_copy(lang: Language) -> MossSubscribeCopy {
         },
         Language::De => MossSubscribeCopy {
             placeholder: "ihre@email.de",
+            input_label: "E-Mail-Adresse",
             label: "Abonnieren",
             check_email: "Bitte bestätigen Sie das Abonnement in Ihrer E-Mail.",
             already_subscribed: "Sie haben bereits abonniert.",
@@ -369,7 +374,7 @@ fn subscribe_form_inner(
     };
     let envelope_svg = r##"<svg class="moss-subscribe-status__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l8 6 8-6M4 7v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V7M4 7l1-1h14l1 1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
     format!(
-        r#"<input type="email" name="email" class="moss-input" placeholder="{placeholder}" required>
+        r#"<input type="email" name="email" class="moss-input" placeholder="{placeholder}" aria-label="{input_label}" required>
   <span class="moss-btn-slot">
     <button type="submit" class="moss-btn">
       <span class="moss-btn__label">{label}</span>
@@ -384,6 +389,7 @@ fn subscribe_form_inner(
     <span data-copy="error" hidden>{error}</span>
   </div>"#,
         placeholder = placeholder,
+        input_label = c.input_label,
         label = label,
         check_email = c.check_email,
         already = c.already_subscribed,

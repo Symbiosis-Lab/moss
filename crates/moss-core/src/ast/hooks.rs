@@ -170,6 +170,12 @@ pub trait RenderHooks {
         None
     }
 
+    /// The production HTML for a `:::subscribe` form, when the host supplies
+    /// one; `None` leaves `render_shortcode` on its skeleton.
+    fn subscribe_form_html(&self, _args: &crate::ast::shortcode::SubscribeShortcode) -> Option<String> {
+        None
+    }
+
     /// Emit a shortcode block as HTML.
     ///
     /// The default impl produces a minimal HTML skeleton suitable for the
@@ -180,6 +186,10 @@ pub trait RenderHooks {
     fn render_shortcode(&self, out: &mut String, sc: &Shortcode, source_line: Option<usize>) {
         match sc {
             Shortcode::Subscribe(args) => {
+                if let Some(html) = self.subscribe_form_html(args) {
+                    out.push_str(&html);
+                    return;
+                }
                 // Test-harness skeleton; moss-build's PipelineHooks renders
                 // the production HTML (form action URL, language defaults,
                 // status spans). Description prose moved out of the
@@ -792,9 +802,30 @@ pub struct DefaultHooks<'a> {
     /// that knows the image is the page's opening one; see
     /// [`DefaultHooks::eager_image`].
     eager_image: bool,
+    /// Replaces the skeleton the `Subscribe` arm emits; see
+    /// [`DefaultHooks::with_subscribe_form`].
+    subscribe_form: Option<SubscribeFormFn<'a>>,
+}
+
+/// Renders a `:::subscribe` shortcode to its production HTML.
+#[derive(Clone, Copy)]
+pub struct SubscribeFormFn<'a>(pub &'a dyn Fn(&crate::ast::shortcode::SubscribeShortcode) -> String);
+
+impl std::fmt::Debug for SubscribeFormFn<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SubscribeFormFn")
+    }
 }
 
 impl<'a> DefaultHooks<'a> {
+    /// A hosting crate that owns the site context a subscribe form needs
+    /// (site id, language) hands its renderer over, so a form nested in a
+    /// grid cell, which renders through this instance, is not the skeleton.
+    pub fn with_subscribe_form(mut self, render: SubscribeFormFn<'a>) -> Self {
+        self.subscribe_form = Some(render);
+        self
+    }
+
     /// Mark the page as vertically typeset; only body images' `sizes=` reads it.
     pub fn vertical(mut self, vertical: bool) -> Self {
         self.vertical = vertical;
@@ -884,6 +915,10 @@ impl<'a> DefaultHooks<'a> {
 const GALLERY_LINK_TEMPLATE_EN: &str = "Open image {n} of {m}";
 
 impl<'a> RenderHooks for DefaultHooks<'a> {
+    fn subscribe_form_html(&self, args: &crate::ast::shortcode::SubscribeShortcode) -> Option<String> {
+        self.subscribe_form.map(|render| (render.0)(args))
+    }
+
     fn gallery_link_template(&self) -> &str {
         self.gallery_link_template.unwrap_or(GALLERY_LINK_TEMPLATE_EN)
     }

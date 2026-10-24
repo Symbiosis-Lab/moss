@@ -3627,6 +3627,35 @@ fn per_page_language_subscribe_in_zh_hans_subdir() {
     );
 }
 
+/// A `:::subscribe` inside a `:::grid` cell is the real hosted form (a
+/// `<form>` with a named, labelled email input), the same one it is at the top
+/// level, not the moss-core skeleton.
+#[test]
+fn subscribe_in_grid_cell_renders_the_real_labelled_form() {
+    let md = "---\ntitle: Example Lab\n---\n\n:::grid 2\nAbout us\n+++\n:::subscribe\n:::\n:::\n";
+    let empty_map = HashMap::new();
+    let doc = process_markdown_file(
+        "index.md",
+        md,
+        "test-site",
+        &empty_map,
+        false,
+        Language::En,
+        Some("test-site"),
+        crate::build::markdown::SiteMarkdown::default(),
+        None,
+        None,
+        None,
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, derived_facts: &Default::default(), authored_source: None },
+    )
+    .expect("should parse");
+    let html = &doc.html_content;
+    assert!(html.contains("<form class=\"moss-subscribe-form\""), "cell form must be a real <form>, got:\n{html}");
+    assert!(html.contains("name=\"email\""), "email input must be named, got:\n{html}");
+    assert!(html.contains("aria-label=\"Email address\""), "email input needs an accessible name, got:\n{html}");
+    assert!(!html.contains("<input type=\"email\" placeholder"), "moss-core skeleton leaked, got:\n{html}");
+}
+
 /// A frontmatter field moss doesn't recognize is normally silent by design.
 /// `slug:` was silent too — and it is the custom-URL field in Hugo, Jekyll,
 /// Zola and Astro, so a writer arriving from any of them pinned a URL, got

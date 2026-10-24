@@ -2212,6 +2212,23 @@ struct PipelineHooks<'a> {
 }
 
 impl<'a> PipelineHooks<'a> {
+    /// Scope is "" here: the site's language sections are not known until
+    /// every page has parsed. `render_segmented` keeps a top-level form as its
+    /// own segment and the Reduce phase re-renders it with the page's scope
+    /// (`email::stamp_inline_subscribe_scopes`); a form inside a grid cell
+    /// keeps the root audience. Unpublished sites (empty site_id) render the
+    /// pending form, consistent with the auto-injected footer form.
+    fn render_subscribe_form(&self, args: &moss_core::ast::SubscribeShortcode) -> String {
+        crate::build::features::email::render_hosted_subscribe_form(
+            Some(self.site_id).filter(|s| !s.is_empty()),
+            self.lang,
+            "",
+            args.placeholder.as_deref(),
+            args.button.as_deref(),
+            self.seta_base,
+        )
+    }
+
     /// `DefaultHooks` bound to this render's asset snapshot, for the shortcode
     /// arms that delegate their whole byte shape to moss-core.
     fn asset_bound_hooks(&self) -> moss_core::ast::DefaultHooks<'a> {
@@ -2254,7 +2271,9 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
         args: &moss_core::ast::GridShortcode,
         source_line: Option<usize>,
     ) -> moss_core::ast::GridParts {
-        let hooks = moss_core::ast::DefaultHooks::grid_cells(self.assets);
+        let subscribe = |a: &moss_core::ast::SubscribeShortcode| self.render_subscribe_form(a);
+        let hooks = moss_core::ast::DefaultHooks::grid_cells(self.assets)
+            .with_subscribe_form(moss_core::ast::SubscribeFormFn(&subscribe));
         moss_core::ast::render_grid_parts(&hooks, args, source_line)
     }
 
@@ -2354,21 +2373,7 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
     ) {
         match sc {
             moss_core::ast::Shortcode::Subscribe(args) => {
-                // Scope is "" here: the site's language sections are not known
-                // until every page has parsed. `render_segmented` keeps this
-                // form as its own segment and the Reduce phase re-renders it
-                // with the page's scope (`email::stamp_inline_subscribe_scopes`).
-                // Unpublished sites (empty site_id) render the pending form,
-                // consistent with the auto-injected footer form.
-                let html = crate::build::features::email::render_hosted_subscribe_form(
-                    Some(self.site_id).filter(|s| !s.is_empty()),
-                    self.lang,
-                    "",
-                    args.placeholder.as_deref(),
-                    args.button.as_deref(),
-                    self.seta_base,
-                );
-                out.push_str(&html);
+                out.push_str(&self.render_subscribe_form(args));
             }
             moss_core::ast::Shortcode::Grid(args) => {
                 // moss-core's own Grid arm, verbatim: the asset binding lives
