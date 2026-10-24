@@ -220,6 +220,15 @@
   background: rgba(106, 154, 90, 0.25);
 }
 
+/* Light text on a dark ground renders heavier under macOS subpixel
+   smoothing; greyscale smoothing evens it out. Dark only, so light pages keep
+   subpixel rendering. The pre-paint script stamps data-theme from the system
+   setting as well as from the toggle, so this one rule covers both. */
+[data-theme="dark"] {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
 /* A section's readable text colour. The build writes both variants beside
    --moss-section-color (on <body> and on a listing card); this picks the one
    for the current theme. The variants are computed against this stylesheet's

@@ -370,3 +370,30 @@ test.describe("a collage quote in Chinese or Japanese", () => {
     expect((await quote(page, "Communication is health")).face).toBe(before.face);
   });
 });
+
+test.describe("text rendering in the dark theme", () => {
+  const smoothing = (page: Page) => page.evaluate(() => getComputedStyle(document.body).getPropertyValue("-webkit-font-smoothing"));
+
+  test("light text on a dark page is smoothed, by the system setting and by the toggle", async ({ page }) => {
+    await page.emulateMedia({ colorScheme: "dark" });
+    await open(page, "/cards/");
+    expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe("dark");
+    expect(await smoothing(page)).toBe("antialiased");
+
+    await page.emulateMedia({ colorScheme: "light" });
+    await page.evaluate(() => localStorage.setItem("moss-theme", "dark"));
+    await open(page, "/cards/");
+    expect(await smoothing(page)).toBe("antialiased");
+  });
+
+  test("a light page keeps the platform's subpixel rendering", async ({ page }) => {
+    await page.emulateMedia({ colorScheme: "light" });
+    await open(page, "/cards/");
+    expect(await smoothing(page)).toBe("auto");
+
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.evaluate(() => localStorage.setItem("moss-theme", "light"));
+    await open(page, "/cards/");
+    expect(await smoothing(page)).toBe("auto");
+  });
+});
