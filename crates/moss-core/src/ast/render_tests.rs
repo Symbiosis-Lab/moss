@@ -1572,3 +1572,12 @@ fn an_image_inside_a_link_reads_its_alt_words_like_a_bare_image() {
         assert!(!html.contains("focus:"), "no raw alt words may leak: {html}");
     }
 }
+
+#[test]
+fn a_raw_style_block_is_found_only_at_a_tag_boundary() {
+    let has = |md: &str| crate::ast::has_raw_style_block(&super::super::parser::parse(md));
+    assert!(has("<style>p { color: red; }</style>\n"));
+    assert!(has("<STYLE media=\"print\">p { color: red; }</STYLE>\n"));
+    assert!(!has("<styled-box>text</styled-box>\n"));
+    assert!(!has("Plain text.\n"));
+}

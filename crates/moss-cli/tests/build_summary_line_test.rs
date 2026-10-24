@@ -119,3 +119,13 @@ fn advice_about_a_working_page_is_a_note_not_a_strict_failure() {
     assert!(stderr.contains("[NOTE]") && stderr.contains("has no alt text"), "{stderr}");
     assert!(stderr.contains("0 problems"), "{stderr}");
 }
+
+#[test]
+fn a_raw_style_block_in_a_page_is_a_note_naming_the_page() {
+    let (out, stderr) = strict_build("---\ntitle: Home\n---\n\nWelcome.\n\n<style>.moss-prose { color: red; }</style>\n");
+    assert!(
+        stderr.contains("[NOTE]") && stderr.contains("'index.md'") && stderr.contains("<style>") && stderr.contains("overrides the theme"),
+        "{stderr}"
+    );
+    assert_eq!(out.status.code(), Some(0), "a note must not fail --strict:\n{stderr}");
+}

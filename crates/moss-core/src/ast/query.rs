@@ -178,6 +178,22 @@ pub fn images_without_text(doc: &Document) -> Vec<String> {
     out
 }
 
+/// Whether the page body carries a raw `<style>` element. Its rules sit outside
+/// the theme's cascade layers, so they beat every theme rule.
+pub fn has_raw_style_block(doc: &Document) -> bool {
+    let mut found = false;
+    super::visit::visit_blocks(doc, |block| {
+        if let Block::Other(html) = block {
+            let lower = html.to_ascii_lowercase();
+            found |= lower.match_indices("<style").any(|(at, tag)| {
+                lower[at + tag.len()..].starts_with(|c: char| c == '>' || c == '/' || c.is_whitespace())
+            });
+        }
+        true
+    });
+    found
+}
+
 /// The source of the page's first content picture, or `None`.
 ///
 /// A content picture is one the author put on the page to be looked at: a

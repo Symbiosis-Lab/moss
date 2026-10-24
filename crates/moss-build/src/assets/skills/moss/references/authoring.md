@@ -128,6 +128,8 @@ the document. You never need `!important`.
 A `@layer` block written inside your own `style.css` creates a *nested* layer
 inside `themes` and changes precedence unpredictably. Write plain CSS.
 
+A raw `<style>` block in a page body is not in any layer, so its rules beat every theme rule, yours included. Build notes name the page; put those rules in `.moss/theme/style.css` instead, where they stay in `themes` and can be overridden.
+
 ## The `.moss/theme/` packaging API
 
 `.moss/theme/` is mirrored **verbatim** to `/_moss/theme/` in the built site.
