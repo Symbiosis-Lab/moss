@@ -409,6 +409,18 @@ impl BackgroundDerive {
         let stop = || cancel.load(Ordering::SeqCst) || !crate::build::lifecycle::is_latest_render(&self.lifecycle_paths, self.render);
         read_all(&self.paths, &self.root, &self.jobs, reporter, &stop, true);
         if stop() {
+            // A stopped read sends no last count, and a listener would show it
+            // as still reading. The jobs in flight have drained by now.
+            if let Some(reporter) = reporter {
+                reporter.report(&PipelineEvent::BackgroundProgress {
+                    task: "derive".to_string(),
+                    current: 0,
+                    total: 0,
+                    message: String::new(),
+                    completed: true,
+                    advisories: vec![],
+                });
+            }
             return;
         }
         let Some(worker) = crate::ops::watch::worker::get(&self.folder) else { return };

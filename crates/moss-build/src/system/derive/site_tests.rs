@@ -76,3 +76,25 @@ fn a_cancelled_background_read_asks_for_nothing() {
     crate::ops::watch::worker::deregister(&f.folder, &watcher);
     assert!(!asked);
 }
+
+#[test]
+fn a_cancelled_background_read_says_it_has_stopped() {
+    use crate::build::ports::reporter::BuildReporter;
+    #[derive(Default)]
+    struct Recording(std::sync::Mutex<Vec<PipelineEvent>>);
+    impl BuildReporter for Recording {
+        fn report(&self, event: &PipelineEvent) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+    }
+    let f = fixture();
+    let render = f.render();
+    let reporter = Recording::default();
+    f.job(Some(render)).run(Some(&reporter), &std::sync::atomic::AtomicBool::new(true));
+    let events = reporter.0.lock().unwrap();
+    let last = events.iter().rev().find_map(|e| match e {
+        PipelineEvent::BackgroundProgress { task, completed, .. } if task == "derive" => Some(*completed),
+        _ => None,
+    });
+    assert_eq!(last, Some(true), "the last derive tick closes the read");
+}

@@ -1159,7 +1159,7 @@ pub fn collect_raw_create_keys(
 /// naming something the tree does not show is a promise about a row that does not exist.
 /// The filter therefore defers to `scan::classify::is_hidden` — the same predicate
 /// `list_tree` filters with — rather than keeping a second list in step by hand.
-fn raw_create_key(root: &Path, abs: &Path) -> Option<String> {
+pub(crate) fn raw_create_key(root: &Path, abs: &Path) -> Option<String> {
     // path_is_watchable rejects dot-dirs (e.g. `.git`), `node_modules` and nested sites
     // ANYWHERE in the path, and a dotfile that is not a page (`.secret.jpg`). It is still needed alongside `is_hidden`, which only
     // applies its dotfile rule at the project root. It does NOT exclude all `.moss/`

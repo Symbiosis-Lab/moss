@@ -7,9 +7,11 @@
 
 use std::path::{Path, PathBuf};
 
+use notify::event::{ModifyKind, RenameMode};
+use notify::EventKind;
 use notify_debouncer_full::DebouncedEvent;
 
-use crate::build::watch::collect_raw_create_keys;
+use crate::build::watch::{collect_raw_create_keys, raw_create_key};
 use crate::moss_paths::MossPaths;
 use crate::vault::derive_folders::{decisions, heal_renamed_folders, Decision};
 use crate::vault::derive_state::site_registry;
@@ -45,11 +47,7 @@ pub fn react(folder_path: &str, events: &[DebouncedEvent], renames: &[(String, S
     if let Err(e) = heal_renamed_folders(&site, &on_disk) {
         log::warn!(target: "derive", "could not follow a renamed folder in config.toml: {e}");
     }
-    let root = Path::new(folder_path);
-    let created: Vec<PathBuf> = collect_raw_create_keys(events, root, |p| p.is_dir())
-        .into_iter()
-        .map(|key| root.join(key))
-        .collect();
+    let created = arrivals(events, Path::new(folder_path));
     if created.is_empty() || !decisions(&site).values().any(|d| matches!(d, Decision::Show(_))) {
         return;
     }
@@ -59,6 +57,22 @@ pub fn react(folder_path: &str, events: &[DebouncedEvent], renames: &[(String, S
         }
         Err(e) => log::warn!(target: "derive", "could not list the site's plugins: {e}"),
     }
+}
+
+/// Files that just appeared: created, or moved in. A file dragged in from
+/// elsewhere on the same disk is a rename the debouncer cannot pair, reported
+/// as `Name(Any)` or `Name(To)` with only the destination. A rename inside the
+/// site is a paired `Name(Both)` and is not an arrival.
+fn arrivals(events: &[DebouncedEvent], root: &Path) -> Vec<PathBuf> {
+    let mut keys = collect_raw_create_keys(events, root, |p| p.is_dir());
+    for ev in events {
+        if matches!(ev.kind, EventKind::Modify(ModifyKind::Name(mode)) if mode != RenameMode::Both) {
+            keys.extend(ev.paths.iter().filter(|p| p.is_file()).filter_map(|p| raw_create_key(root, p)));
+        }
+    }
+    keys.sort();
+    keys.dedup();
+    keys.into_iter().map(|key| root.join(key)).collect()
 }
 
 #[cfg(test)]
