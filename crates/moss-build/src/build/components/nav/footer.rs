@@ -42,7 +42,8 @@ impl<'a> NavigationBuilder<'a> {
     ///
     /// When `footer.md` is absent, the wrapper still emits with default
     /// content: an auto-generated link list from pages with `footer: true`
-    /// frontmatter, plus an optional RSS link.
+    /// frontmatter, plus an optional RSS link. When it is present, the page
+    /// links are dropped at slot injection and only the RSS link stays.
     ///
     /// `current_page_url` is used to mark the matching footer link as
     /// `.active` (parallel to `generate_navigation`).
@@ -61,7 +62,7 @@ impl<'a> NavigationBuilder<'a> {
             (None, None) => a.nav_text().cmp(b.nav_text()),
         });
 
-        let mut default_links = Vec::new();
+        let mut page_links = Vec::new();
         for doc in &footer_pages {
             let pretty = crate::build::scan::article_map::to_pretty_url(&doc.url_path);
             let href = format!("/{}", pretty.trim_start_matches('/')); // allow:served-path-url-construct (footer nav href to user content page, not a framework asset)
@@ -71,10 +72,18 @@ impl<'a> NavigationBuilder<'a> {
                 "footer-link"
             };
             // Footer link text is navigation chrome: `nav_label` else label.
-            default_links.push(format!(
+            page_links.push(format!(
                 r#"<a href="{}" class="{}">{}</a>"#,
                 href, class, crate::build::features::html_escape(doc.nav_text())
             ));
+        }
+        // One bounded part, separator to the feed link included, so
+        // `strip_empty_footer` drops it whole when footer.md replaces it.
+        const SEP: &str = " · ";
+        let mut default_links = Vec::new();
+        if !page_links.is_empty() {
+            let sep = if show_rss { SEP } else { "" };
+            default_links.push(format!("<!-- footer:pages -->{}{sep}<!-- /footer:pages -->", page_links.join(SEP)));
         }
 
         if show_rss {
@@ -113,7 +122,7 @@ impl<'a> NavigationBuilder<'a> {
         } else {
             format!(
                 "\n        <p class=\"footer-default\">{}</p>",
-                default_links.join(" · ")
+                default_links.join("")
             )
         };
 
@@ -172,6 +181,8 @@ pub(crate) fn strip_empty_footer(html: String, footer_left_has_content: bool, fo
     const OPEN: &str = "<!-- moss:footer -->";
     const HAS_CONTENT: &str = "<!-- footer:has-content -->";
     const CLOSE: &str = "<!-- /moss:footer -->";
+    const PAGES_OPEN: &str = "<!-- footer:pages -->";
+    const PAGES_CLOSE: &str = "<!-- /footer:pages -->";
     const COLOPHON_OPEN: &str = "<!-- moss:colophon -->";
     const COLOPHON_CLOSE: &str = "<!-- /moss:colophon -->";
 
@@ -186,7 +197,24 @@ pub(crate) fn strip_empty_footer(html: String, footer_left_has_content: bool, fo
     let close_end = open_start + close_rel + CLOSE.len();
 
     let region = &html[open_start..close_end];
-    let has_default_content = region.contains(HAS_CONTENT);
+    let mut has_default_content = region.contains(HAS_CONTENT);
+    let mut region = std::borrow::Cow::Borrowed(region);
+    if let Some((a, b)) = region.find(PAGES_OPEN).zip(region.find(PAGES_CLOSE)).filter(|(a, b)| a < b) {
+        let end = b + PAGES_CLOSE.len();
+        let mut dropped = region.to_string();
+        if footer_left_has_content {
+            dropped.replace_range(a..end, "");
+            if dropped.contains("<p class=\"footer-default\"></p>") {
+                dropped = dropped.replacen("<p class=\"footer-default\"></p>", "", 1).replacen(HAS_CONTENT, "", 1);
+                has_default_content = false;
+            }
+        } else {
+            dropped.replace_range(b..end, "");
+            dropped.replace_range(a..a + PAGES_OPEN.len(), "");
+        }
+        region = std::borrow::Cow::Owned(dropped);
+    }
+    let region = &*region;
 
     if !(footer_left_has_content || footer_end_has_content || has_default_content) {
         return erase_colophon_bounds(format!("{}{}", &html[..open_start], &html[close_end..]));

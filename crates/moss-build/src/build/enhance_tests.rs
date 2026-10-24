@@ -277,6 +277,36 @@ fn strip_empty_footer_keeps_a_footer_with_footer_md_content() {
 }
 
 #[test]
+fn footer_md_replaces_the_footer_true_page_links_but_keeps_the_feed_link() {
+    let mut slots = ResolvedSlots::empty();
+    slots.merge(
+        &EnhanceResult {
+            success: true,
+            slots: HashMap::from([(
+                "footer-left".to_string(),
+                EnhanceContent::Static { html: "<p>Example Lab</p>".to_string() },
+            )]),
+        },
+        0,
+        "native",
+    );
+    let with_feed = "<!-- moss:footer --><!-- footer:has-content --><footer class=\"container\">\n        <!-- slot:footer-left --><p class=\"footer-default\"><!-- footer:pages --><a href=\"/about/\" class=\"footer-link\">About</a> · <!-- /footer:pages --><a href=\"/rss.xml\" class=\"footer-link\" data-external>RSS</a></p>\n        <!-- slot:footer-end -->\n</footer><!-- /moss:footer -->";
+    let out = inject_slots(with_feed, &slots, "index.html");
+    assert!(!out.contains("/about/"), "footer.md replaces the footer: true links: {out}");
+    assert!(out.contains("<p class=\"footer-default\"><a href=\"/rss.xml\""), "the feed link stays, with no stray separator: {out}");
+    assert!(!out.contains("footer:pages"), "sentinels never ship: {out}");
+
+    let pages_only = "<!-- moss:footer --><!-- footer:has-content --><footer class=\"container\">\n        <!-- slot:footer-left --><p class=\"footer-default\"><!-- footer:pages --><a href=\"/about/\" class=\"footer-link\">About</a><!-- /footer:pages --></p>\n        <!-- slot:footer-end -->\n</footer><!-- /moss:footer -->";
+    let out = inject_slots(pages_only, &slots, "index.html");
+    assert!(!out.contains("footer-default") && !out.contains("/about/"), "no empty link row is left behind: {out}");
+    assert!(out.contains("Example Lab"), "{out}");
+
+    let out = inject_slots(pages_only, &ResolvedSlots::empty(), "index.html");
+    assert!(out.contains("<p class=\"footer-default\"><a href=\"/about/\" class=\"footer-link\">About</a></p>"), "without footer.md the links ship as before: {out}");
+    assert!(!out.contains("footer:pages"), "sentinels never ship: {out}");
+}
+
+#[test]
 fn an_authored_footer_tag_in_the_body_is_never_mistaken_for_the_chrome_footer() {
     // moss passes raw HTML through markdown verbatim, so a page can
     // legitimately contain its own `<footer>` — a byline, a credits block —
