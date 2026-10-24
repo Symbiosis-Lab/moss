@@ -1357,6 +1357,9 @@ pub fn process_markdown_file(
     // (render/html.rs, render/blocking.rs) from `doc.title`; the body is
     // passed through untouched here. `article_title_outcome` makes the title
     // decision, including an opening hero that stands in for the title.
+    if let Some(body_heading) = moss_core::heading::body_heading_replacing_title(heading_inputs, is_nav_page) {
+        crate::build::cli_output::log_note!("Heading: in '{file_path}' the body's `# {body_heading}` replaces the page title '{}'; to keep the title as the page heading, open the body with `# {}` and make the other heading `##`", heading.text, heading.text);
+    }
     match moss_core::heading::article_title_outcome(heading_inputs, is_nav_page) {
         TitleOutcome::None => {}
         outcome => body_plan.prepend_html(inject_article_title_h1(

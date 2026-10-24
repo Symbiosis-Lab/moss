@@ -212,6 +212,11 @@ pub fn hero_at_top_owns_title(body_markdown: &str) -> bool {
 /// combine this with [`hero_at_top_owns_title`] through [`title_outcome`]
 /// rather than themselves.
 pub fn body_supplies_title(body_markdown: &str) -> bool {
+    first_body_h1(body_markdown).is_some()
+}
+
+/// The text of the first level-1 heading [`body_supplies_title`] counts.
+fn first_body_h1(body_markdown: &str) -> Option<&str> {
     let mut fence: Option<&str> = None;
     for line in body_markdown.lines().map(str::trim_start) {
         let marker = if line.starts_with("```") { Some("```") } else if line.starts_with("~~~") { Some("~~~") } else { None };
@@ -223,15 +228,13 @@ pub fn body_supplies_title(body_markdown: &str) -> bool {
             };
             continue;
         }
-        if fence.is_none()
-            && line
-                .strip_prefix('#')
-                .is_some_and(|rest| rest.starts_with([' ', '\t']) && !rest.trim().is_empty())
-        {
-            return true;
+        if fence.is_none() {
+            if let Some(rest) = line.strip_prefix('#').filter(|r| r.starts_with([' ', '\t']) && !r.trim().is_empty()) {
+                return Some(rest.trim());
+            }
         }
     }
-    false
+    None
 }
 
 /// Compute the full heading state for a page.
@@ -321,11 +324,29 @@ fn same_heading_text_key(text: &str) -> String {
 /// On a nav page (`is_nav_item`) a `#` heading in the body replaces the
 /// injected title, so only the body heading shows. On any other page both show.
 pub fn article_title_outcome(input: HeadingInputs<'_>, is_nav_item: bool) -> TitleOutcome {
-    let resolved = resolve(input);
-    if !resolved.visible || body_opens_with_title(input.body_markdown, &resolved.text) {
+    if title_to_inject(input).is_none() {
         return TitleOutcome::None;
     }
     title_outcome(input.body_markdown, is_nav_item)
+}
+
+/// The resolved title when the page would inject one: it is visible and the
+/// body does not open with its text.
+fn title_to_inject(input: HeadingInputs<'_>) -> Option<HeadingState> {
+    let resolved = resolve(input);
+    (resolved.visible && !body_opens_with_title(input.body_markdown, &resolved.text)).then_some(resolved)
+}
+
+/// The body `# Heading` that takes the place of the injected title of a nav
+/// page, if there is one. Only a nav page: elsewhere the title stays above an
+/// authored heading, and the hero case is not advice about the body's opening.
+pub fn body_heading_replacing_title(input: HeadingInputs<'_>, is_nav_item: bool) -> Option<&str> {
+    title_to_inject(input)?;
+    if is_nav_item && title_outcome(input.body_markdown, is_nav_item) == TitleOutcome::None {
+        first_body_h1(input.body_markdown)
+    } else {
+        None
+    }
 }
 
 fn resolve(input: HeadingInputs<'_>) -> HeadingState {
