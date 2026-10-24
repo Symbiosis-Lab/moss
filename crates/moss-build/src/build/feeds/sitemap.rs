@@ -10,38 +10,59 @@ pub struct SitemapEntry {
     pub lastmod: Option<String>,
 }
 
-/// Whether a raw `.html` file carries a `<meta name="robots">` whose content has
-/// a `noindex` or `none` token. Raw pages are copied through unparsed, so the
-/// file is the only place that says. Only the first 8 KiB is read: a
-/// cut-off tail is not an error.
+/// Whether a raw `.html` file's head carries a `<meta name="robots">` or
+/// `<meta name="googlebot">` with a `noindex` or `none` token. Read until the
+/// body starts, at most 4 MiB; past that, or on a read error, the page counts
+/// as noindex, so a tag that was not seen never publishes a hidden address.
 pub(crate) fn declares_noindex(path: &std::path::Path) -> bool {
     use lol_html::{element, HtmlRewriter, Settings};
     use std::io::Read;
 
-    let mut head = Vec::new();
-    if std::fs::File::open(path).and_then(|f| f.take(8192).read_to_end(&mut head)).is_err() {
-        return false;
-    }
+    const LIMIT: usize = 4 << 20;
+    let Ok(mut file) = std::fs::File::open(path) else { return false };
     let found = std::cell::Cell::new(false);
+    let head_over = std::cell::Cell::new(false);
     let mut rewriter = HtmlRewriter::new(
         Settings {
-            element_content_handlers: vec![element!("meta[name]", |el| {
-                let robots = el.get_attribute("name").is_some_and(|n| n.eq_ignore_ascii_case("robots"));
-                let blocks = el.get_attribute("content").is_some_and(|c| {
-                    c.split(|ch: char| ch == ',' || ch.is_whitespace())
-                        .any(|t| t.eq_ignore_ascii_case("noindex") || t.eq_ignore_ascii_case("none"))
-                });
-                if robots && blocks {
-                    found.set(true);
-                }
-                Ok(())
-            })],
+            element_content_handlers: vec![
+                element!("meta[name]", |el| {
+                    let for_crawlers = el
+                        .get_attribute("name")
+                        .is_some_and(|n| n.eq_ignore_ascii_case("robots") || n.eq_ignore_ascii_case("googlebot"));
+                    let blocks = el.get_attribute("content").is_some_and(|c| {
+                        c.split(|ch: char| ch == ',' || ch.is_whitespace())
+                            .any(|t| t.eq_ignore_ascii_case("noindex") || t.eq_ignore_ascii_case("none"))
+                    });
+                    if for_crawlers && blocks && !head_over.get() {
+                        found.set(true);
+                    }
+                    Ok(())
+                }),
+                element!("body", |_| {
+                    head_over.set(true);
+                    Ok(())
+                }),
+            ],
             ..Settings::default()
         },
         |_: &[u8]| {},
     );
-    let _ = rewriter.write(&head);
-    let _ = rewriter.end();
+    let (mut buf, mut read) = ([0u8; 16384], 0);
+    while !found.get() && !head_over.get() {
+        if read >= LIMIT {
+            return true;
+        }
+        match file.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                read += n;
+                if rewriter.write(&buf[..n]).is_err() {
+                    return true;
+                }
+            }
+            Err(_) => return true,
+        }
+    }
     found.get()
 }
 

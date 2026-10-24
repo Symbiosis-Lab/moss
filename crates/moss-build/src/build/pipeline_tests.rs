@@ -7094,11 +7094,9 @@ fn the_sitemap_leaves_out_html_pages_that_declare_noindex() {
     for (name, html) in pages {
         fs::write(test_dir.join(name), html).unwrap();
     }
-    // Only the first 8 KiB is read: a meta past it is not seen, one inside it is.
     let noindex = "<meta name=\"robots\" content=\"noindex\">";
     let padded = |pad: usize| format!("<html><head>{}{noindex}</head></html>", " ".repeat(pad));
-    fs::write(test_dir.join("too-late.html"), padded(9000)).unwrap();
-    fs::write(test_dir.join("just-inside.html"), padded(8000)).unwrap();
+    fs::write(test_dir.join("late.html"), padded(9000)).unwrap();
     fs::create_dir_all(test_dir.join("share/abc123")).unwrap();
     fs::write(
         test_dir.join("share/abc123/index.html"),
@@ -7108,10 +7106,42 @@ fn the_sitemap_leaves_out_html_pages_that_declare_noindex() {
 
     build_test_at_site_url(folder_path).expect("build");
     let sitemap = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/sitemap.xml")).unwrap();
-    for kept in ["music.html", "about.html", "commented.html", "too-late.html"] {
+    for kept in ["music.html", "about.html", "commented.html"] {
         assert!(sitemap.contains(&format!("/{kept}</loc>")), "the sitemap must list {kept}\n{sitemap}");
     }
-    for out in ["scales.html", "closed.html", "just-inside.html", "share/abc123/", "hidden/"] {
+    for out in ["scales.html", "closed.html", "late.html", "share/abc123/", "hidden/"] {
+        assert!(!sitemap.contains(&format!("/{out}</loc>")), "the sitemap must not list {out}\n{sitemap}");
+    }
+}
+
+/// Hand-written pages put the robots meta wherever their head has room: after
+/// a long inline stylesheet, or addressed to one crawler by name. Each is as
+/// much a hidden page as the plain tag, and none may be listed.
+#[test]
+fn the_sitemap_leaves_out_html_pages_whose_noindex_sits_deep_or_names_a_crawler() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    let style = "a{color:red}\n".repeat(2000);
+    fs::create_dir_all(test_dir.join("drafts/abc123")).unwrap();
+    // A head that never ends within the 4 MiB read ceiling cannot be vouched for.
+    fs::write(test_dir.join("endless.html"), format!("<html><head><style>{}", "a{}\n".repeat(1_100_000))).unwrap();
+    let pages = [
+        ("drafts/abc123/index.html", format!("<html><head><style>{style}</style><meta name=\"robots\" content=\"noindex, nofollow\"></head><body>x</body></html>")),
+        ("drafts/abc123/other.html", "<html><head><meta content=\"NoIndex\" name=\"googlebot\"></head><body>x</body></html>".to_string()),
+        ("open.html", format!("<html><head><style>{style}</style></head><body><meta name=\"robots\" content=\"noindex\"></body></html>")),
+        ("allowed.html", "<html><head><meta name=\"googlebot\" content=\"nosnippet\"></head><body>x</body></html>".to_string()),
+    ];
+    for (name, html) in pages {
+        fs::write(test_dir.join(name), html).unwrap();
+    }
+
+    build_test_at_site_url(folder_path).expect("build");
+    let sitemap = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/sitemap.xml")).unwrap();
+    for kept in ["open.html", "allowed.html"] {
+        assert!(sitemap.contains(&format!("/{kept}</loc>")), "the sitemap must list {kept}\n{sitemap}");
+    }
+    for out in ["drafts/abc123/", "drafts/abc123/other.html", "endless.html"] {
         assert!(!sitemap.contains(&format!("/{out}</loc>")), "the sitemap must not list {out}\n{sitemap}");
     }
 }
