@@ -2040,7 +2040,7 @@ location: "Lisbon"
 
 Prose that should flow beside the locator, once the photograph above it has cleared out of the way entirely.
 `,
-    "photo.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="48"><rect width="64" height="48" fill="#6a7a9a"/></svg>
+    "photo.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600"><rect width="800" height="600" fill="#6a7a9a"/></svg>
 `,
     "no-text.md": `---
 title: No Text
