@@ -1553,3 +1553,22 @@ fn grid_collage_outside_three_to_nine_is_a_plain_grid() {
         assert!(!html.contains("data-collage") && !html.contains("data-count"), "got: {html}");
     }
 }
+
+#[test]
+fn an_image_inside_a_link_reads_its_alt_words_like_a_bare_image() {
+    for md in [
+        "[![A lake|focus:10%,20%|](a.png)](/x)",
+        "[![A lake|focus:10%,20%|](a.png)\n**label**](/x)",
+    ] {
+        let mut doc = super::super::parser::parse(md);
+        crate::ast::visit_urls_mut(&mut doc, |url| {
+            if let Url::Unresolved(s) = url {
+                *url = Url::resolved(s.clone(), UrlKind::Internal);
+            }
+        });
+        let html = render_document(&doc, &DefaultHooks::new());
+        assert!(html.contains(r#"alt="A lake""#), "alt must be the words only: {html}");
+        assert!(html.contains("object-position:10% 20%"), "focus must apply: {html}");
+        assert!(!html.contains("focus:"), "no raw alt words may leak: {html}");
+    }
+}
