@@ -129,6 +129,91 @@ ${card(2, "Two", "Text two.")}
 
 After the grid.
 `,
+    "gap.md": `---
+title: gap
+uid: "tdg00012"
+---
+
+:::grid 2 {rows=equal}
+Label
+
+Body text of card 1.
++++
+Label
+
+Body text of card 2.
++++
+Label
+
+Body text of card 3.
++++
+Label
+
+Body text of card 4.
+:::
+
+## After the grid
+
+Text.
+`,
+    "gap3.md": `---
+title: gap3
+uid: "tdg00014"
+---
+
+:::grid 3 {rows=equal}
+Label
+
+Body text of card 1.
++++
+Label
+
+Body text of card 2.
++++
+Label
+
+Body text of card 3.
++++
+Label
+
+Body text of card 4.
++++
+Label
+
+Body text of card 5.
+:::
+
+## After the grid
+
+Text.
+`,
+    "gapplain.md": `---
+title: gapplain
+uid: "tdg00015"
+---
+
+:::grid 2
+Label
+
+Body text of card 1.
++++
+Label
+
+Body text of card 2.
++++
+Label
+
+Body text of card 3.
++++
+Label
+
+Body text of card 4.
+:::
+
+## After the grid
+
+Text.
+`,
     "wrapped.md": `---
 title: Wrapped
 uid: "tdg00011"

@@ -248,7 +248,13 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-grid-part-gap",
         owner: "moss-grid-card",
         default: "10px",
-        description: "The space between the parts of one card in a `:::grid {rows=equal}`. The grid's own `gap` stays the space between cards.",
+        description: "The space between the parts of one card in a `:::grid {rows=equal}`. It is also the grid's row gap there, so a theme's own `gap` on such a grid does not set it (the part gap wins, `!important`): set `--moss-grid-card-gap` for the space between cards.",
+    },
+    CustomProp {
+        name: "--moss-grid-card-gap",
+        owner: "moss-grid-card",
+        default: "the grid's usual row gap",
+        description: "The space between the rows of cards in a `:::grid {rows=equal}`, written as a top margin on every card below the first row. Needed because the grid's own row gap is the gap between a card's parts there (`--moss-grid-part-gap`). A value below the part gap is raised to the part gap.",
     },
     CustomProp {
         name: "--moss-collage-span-sm",

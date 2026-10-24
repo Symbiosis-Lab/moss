@@ -226,9 +226,9 @@ test.describe("equal rows", () => {
     expect(parts).toBe("3");
   });
 
-  test("the parts of a card sit 10px apart and the grid's row gap is the space between cards", async ({ page }) => {
+  test("the parts of a card sit 10px apart and --moss-grid-card-gap is the space between cards", async ({ page }) => {
     await open(page, "/wrapped/", 1280);
-    await page.addStyleTag({ content: ".moss-grid { row-gap: 30px; }" });
+    await page.addStyleTag({ content: ":root { --moss-grid-card-gap: 30px; }" });
     const m = await page.locator(".moss-grid").evaluate((g) => {
       const cards = [...g.querySelectorAll(":scope > .moss-grid-card")];
       // The second row, so the first card's wrapped neighbour does not set the track heights.
@@ -240,6 +240,62 @@ test.describe("equal rows", () => {
     });
     expect(m.inside).toEqual([10, 10]);
     expect(m.between).toBe(30);
+  });
+
+  const cardGap = (page: Page) => page.addStyleTag({ content: ":root { --moss-grid-card-gap: 44px; }" });
+  const cardTops = (page: Page) =>
+    page.locator(".moss-grid").evaluate((g) => {
+      const cards = [...g.querySelectorAll(":scope > .moss-grid-card")].map((c) => c.getBoundingClientRect());
+      return { cards, rows: [...new Set(cards.map((c) => Math.round(c.top)))] };
+    });
+
+  test("a short part keeps its height however far apart the cards are", async ({ page }) => {
+    await open(page, "/gap/", 1280);
+    await cardGap(page);
+    const m = await page.locator(".moss-grid").evaluate((g) => {
+      const cards = [...g.querySelectorAll(":scope > .moss-grid-card")];
+      return {
+        labels: cards.map((c) => c.querySelector("p")!.getBoundingClientRect().height),
+        lineHeight: parseFloat(getComputedStyle(cards[0].querySelector("p")!).lineHeight),
+        between: cards[2].getBoundingClientRect().top - cards[0].getBoundingClientRect().bottom,
+      };
+    });
+    for (const h of m.labels) expect(h).toBeCloseTo(m.lineHeight, 0);
+    expect(m.between).toBe(44);
+  });
+
+  test("rows of cards are the card gap apart for a short last row and on a phone", async ({ page }) => {
+    await open(page, "/gap3/", 1280);
+    await cardGap(page);
+    let t = await cardTops(page);
+    expect(t.rows.length).toBe(2);
+    expect(t.cards[3].top - t.cards[0].bottom).toBe(44);
+    expect(t.cards[4].top - t.cards[1].bottom).toBe(44);
+    await open(page, "/gap/", 390);
+    await cardGap(page);
+    t = await cardTops(page);
+    for (let i = 1; i < t.cards.length; i++) expect(t.cards[i].top - t.cards[i - 1].bottom).toBe(44);
+  });
+
+  test("the grid keeps its own margins: a heading after it sits as far away as after a plain grid", async ({ page }) => {
+    const after = async (url: string) => {
+      await open(page, url, 1280);
+      return page.evaluate(() => document.querySelector("article h2")!.getBoundingClientRect().top - document.querySelector(".moss-grid")!.getBoundingClientRect().bottom);
+    };
+    const plain = await after("/gapplain/");
+    expect(await after("/gap/")).toBe(plain);
+    await cardGap(page);
+    expect(await page.evaluate(() => document.querySelector("article h2")!.getBoundingClientRect().top - document.querySelector(".moss-grid")!.getBoundingClientRect().bottom)).toBe(plain);
+  });
+
+  test("a theme's grid gap does not set the parts apart", async ({ page }) => {
+    await open(page, "/wrapped/", 1280);
+    await page.addStyleTag({ content: ".moss-grid { gap: 48px 24px; }" });
+    const inside = await page.locator(".moss-grid").evaluate((g) => {
+      const parts = [...g.querySelectorAll(":scope > .moss-grid-card")[2].querySelectorAll(":scope > .part")].map((e) => e.getBoundingClientRect());
+      return [parts[1].top - parts[0].bottom, parts[2].top - parts[1].bottom];
+    });
+    expect(inside).toEqual([10, 10]);
   });
 
   test("a grid without it keeps each card's own height", async ({ page }) => {

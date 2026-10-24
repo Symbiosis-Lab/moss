@@ -8432,9 +8432,8 @@ body > footer.container:has(> .moss-hero-closing) {
      gap shorthand is <row> <col>: row=clamp(16px,1.25lh,32px) col=24px.
      Three levels: internal p+p (8px) < col (24px) ≤ row (24–32px).
      Fallback for browsers without 1lh (Safari < 16.4 / macOS 12). */
-  gap: var(--moss-space-lg) var(--moss-space-md);
-  gap: clamp(var(--moss-space-sm), 1.25lh, var(--moss-space-lg))
-       var(--moss-space-md);
+  --_grid-row-gap: var(--moss-space-lg);
+  gap: var(--_grid-row-gap) var(--moss-space-md);
   align-items: flex-start;
   /* Asymmetric: top stays --moss-space-md (24px, NOT lg — see "Block rhythm"
      below .moss-gallery, which stays symmetric md/md), bottom is
@@ -8456,6 +8455,12 @@ body > footer.container:has(> .moss-hero-closing) {
   --_grid-overflow-x: auto;
   --_grid-overflow-y: visible;
   grid-template-columns: var(--_grid-wrap);
+}
+
+@supports (block-size: 1lh) {
+  .moss-grid {
+    --_grid-row-gap: clamp(var(--moss-space-sm), 1.25lh, var(--moss-space-lg));
+  }
 }
 
 /* Ma 間: a heading BINDS to the grid it owns at `sm` (16px) — tighter than the
@@ -8607,18 +8612,42 @@ a.moss-grid-card:hover {
    Each card spans one track per part (`--moss-grid-parts`, the most children any
    card has once rendered) and adopts them, so the row's first part is as tall as the tallest
    first part, and so on. A card with fewer parts leaves its last tracks empty;
-   an empty track has no height. */
+   an empty track has no height.
+   A subgrid's tracks are the grid's, gutter included, so the grid's row gap is
+   the gap between parts (`--moss-grid-part-gap`), and it still falls between
+   one card's last track and the next card's first. The space between rows of
+   cards is that gap plus the first-row-excluded cards' `margin-block-start`,
+   which tops it up to `--moss-grid-card-gap`. The row gap is `!important`: in
+   an earlier layer it still beats a theme's `gap`, which would otherwise set
+   the parts apart. */
 @supports (grid-template-rows: subgrid) {
   .moss-grid[data-rows="equal"] {
     align-items: stretch;
+    --_part-gap: var(--moss-grid-part-gap, 10px);
+    --_card-top-up: max(0px, calc(var(--moss-grid-card-gap, var(--_grid-row-gap)) - var(--_part-gap)));
+    row-gap: var(--_part-gap) !important;
   }
   .moss-grid[data-rows="equal"] > :is(.moss-grid-card, .moss-card) {
     display: grid;
     grid-template-rows: subgrid;
     grid-row: span var(--moss-grid-parts, 1);
-    /* A subgrid's own gap replaces the grid's between its parts, so the grid's
-       row gap stays the space between cards. */
-    row-gap: var(--moss-grid-part-gap, 10px);
+  }
+  /* Every card below the first row, by the column count: one column on a
+     phone, `data-columns` from 48rem. */
+  @media (width < 48rem) {
+    .moss-grid[data-rows="equal"][data-columns] > :is(.moss-grid-card, .moss-card):nth-child(n + 2) {
+      margin-block-start: var(--_card-top-up);
+    }
+  }
+  @media (width >= 48rem) {
+    .moss-grid[data-rows="equal"][data-columns="1"] > :is(.moss-grid-card, .moss-card):nth-child(n + 2),
+    .moss-grid[data-rows="equal"][data-columns="2"] > :is(.moss-grid-card, .moss-card):nth-child(n + 3),
+    .moss-grid[data-rows="equal"][data-columns="3"] > :is(.moss-grid-card, .moss-card):nth-child(n + 4),
+    .moss-grid[data-rows="equal"][data-columns="4"] > :is(.moss-grid-card, .moss-card):nth-child(n + 5),
+    .moss-grid[data-rows="equal"][data-columns="5"] > :is(.moss-grid-card, .moss-card):nth-child(n + 6),
+    .moss-grid[data-rows="equal"][data-columns="6"] > :is(.moss-grid-card, .moss-card):nth-child(n + 7) {
+      margin-block-start: var(--_card-top-up);
+    }
   }
   /* A collection card has two parts, its cover and its content, as in a
      listing's grid. */
