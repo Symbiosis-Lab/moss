@@ -97,6 +97,19 @@ fn weight_of(value: &str) -> Option<u16> {
 
 impl TypeTheme {
     pub fn of_theme(theme_css: Option<&str>) -> Self {
+        Self::read(theme_css, |_, _| {})
+    }
+
+    /// Say, once, which declaration of the theme moves a closing picture's words
+    /// beyond what the measurement reads. Called only for a site that has a
+    /// closing picture, since the note means nothing otherwise.
+    pub fn note_unread(theme_css: Option<&str>) {
+        Self::read(theme_css, |prop, prelude| {
+            crate::build::cli_output::log_note!("theme: `{prop}` on `{prelude}` is outside what the ink measurement reads, so a closing picture's words keep their panel (sizes read as `max-height=` does; weight 400 or more).");
+        });
+    }
+
+    fn read(theme_css: Option<&str>, mut on_first_unread: impl FnMut(&str, &str)) -> Self {
         let mut theme = Self::default();
         for rule in crate::build::theme_lint::style_rules(theme_css.unwrap_or_default()) {
             let Some((_, body)) = rule.rule.split_once('{') else { continue };
@@ -126,7 +139,7 @@ impl TypeTheme {
                         || UNREAD_TOKENS.contains(&prop)
                         || (hero && matches!(prop, "font-size" | "font" | "font-weight" | "font-family" | "line-height" | "letter-spacing" | "text-transform" | "padding" | "max-width" | "max-inline-size" | "--moss-hero-content-width")));
                 if moves && !theme.resized {
-                    crate::build::cli_output::log_note!("theme: `{prop}` on `{}` is outside what the ink measurement reads, so a closing picture's words keep their panel (sizes read as `max-height=` does; weight 400 or more).", rule.prelude.trim());
+                    on_first_unread(prop, rule.prelude.trim());
                 }
                 theme.resized |= moves;
             }

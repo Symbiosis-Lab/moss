@@ -1192,6 +1192,10 @@ pub fn generate_blocking_content_for_build(
         }
         log::debug!(target: "timing", "[reduce] slug_dedup ({} docs): {:?}", documents.len(), reduce_start.elapsed());
 
+        if documents.iter().any(|d| d.slot_only && d.html_content.contains("moss-hero-closing")) {
+            crate::build::markdown::hero_ink::TypeTheme::note_unread(user_css_content.as_deref());
+        }
+
         // Slot files (reserved-name `footer.md`) STAY in
         // `documents` so the per-page emission loop can see them — they're
         // structurally flagged via `ParsedDocument.slot_only` and the HTML
