@@ -342,9 +342,9 @@ fn handle_symlink_unix(
 
     // Step 5: containment check.
     if !canonical_target.starts_with(canonical_root) {
-        log::warn!(
-            "[copy] Skipping symlink that escapes site root: {} -> {} (resolved: {})",
-            rel_path, target.display(), canonical_target.display()
+        crate::build::cli_output::log_note!(
+            "[copy] Skipping symlink {} -> {}: it points outside the site folder, so it is not published. Remove it, or replace it with a copy of the file inside the folder.",
+            rel_path, target.display()
         );
         return SymlinkOutcome::SkippedEscape { rel_path: rel_path.to_string() };
     }
@@ -459,8 +459,8 @@ pub fn handle_alias_entry(
         }
     };
     if !canonical_target.starts_with(canonical_root) {
-        log::warn!(
-            "[copy] Skipping alias that escapes site root: {} -> {}",
+        crate::build::cli_output::log_note!(
+            "[copy] Skipping alias {} -> {}: it points outside the site folder, so it is not published. Remove it, or replace it with a copy of the file inside the folder.",
             rel_path, canonical_target.display()
         );
         return Some(SymlinkOutcome::SkippedEscape { rel_path });
