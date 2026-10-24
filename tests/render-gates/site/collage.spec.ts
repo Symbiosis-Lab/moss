@@ -606,7 +606,7 @@ test.describe("a collage quote reads as type on paper", () => {
       expect(m.hyphens, `quote ${n}: hyphenated by the page's language`).toBe("auto");
       expect(m.gapTop, `quote ${n}: set at the top`).toBeLessThanOrEqual(24);
       expect(m.gapFoot, `quote ${n}: source at the foot`).toBeLessThanOrEqual(20);
-      expect(m.capSize).toBe("11px");
+      expect(m.capSize, `quote ${n}: the source is 11px, 10px on a phone`).toBe(width === 390 ? "10px" : "11px");
       expect(m.capFamily).toMatch(/mono/i);
       expect(m.decoration).toBe("none");
       expect(m.rule).toBe("1px");

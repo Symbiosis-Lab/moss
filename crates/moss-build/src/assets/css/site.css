@@ -9041,6 +9041,7 @@ a.moss-grid-card:hover {
   .moss-grid[data-collage] .moss-grid-card .moss-image figcaption:focus-within { opacity: 1; transform: none; }
   .moss-grid[data-collage] [data-tile="quote"] { --_tile-pad: 1rem 1rem 0.875rem; }
   .moss-grid[data-collage] [data-tile="quote"] .moss-quote { gap: 0.625rem; }
+  .moss-grid[data-collage] [data-tile="quote"] .moss-quote figcaption { font-size: 0.625rem; }
   .moss-grid[data-collage] [data-tile="quote"] .moss-quote:not([data-length="long"]) blockquote { font-size: 1rem; }
 }
 
