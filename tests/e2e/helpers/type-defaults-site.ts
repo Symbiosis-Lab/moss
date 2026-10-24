@@ -214,6 +214,26 @@ Body text of card 4.
 
 Text.
 `,
+    "margins.md": `---
+title: Margins
+uid: "tdg00013"
+---
+
+:::grid 2 {rows=equal}
+### Plain
+
+A description.
+
+The stage.
++++
+### Listed
+
+- one
+- two
+
+The stage.
+:::
+`,
     "wrapped.md": `---
 title: Wrapped
 uid: "tdg00011"

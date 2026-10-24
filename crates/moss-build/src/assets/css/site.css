@@ -8649,6 +8649,13 @@ a.moss-grid-card:hover {
       margin-block-start: var(--_card-top-up);
     }
   }
+  /* A part's own block margins (a paragraph after a paragraph, the last
+     paragraph, a list) would sit on top of the part gap and differ from one
+     card to the next, so the same part would sit at different offsets in
+     different rows. The part gap does the spacing. */
+  .moss-grid[data-rows="equal"] > .moss-grid-card > * {
+    margin-block: 0;
+  }
   /* A collection card has two parts, its cover and its content, as in a
      listing's grid. */
   .moss-grid[data-rows="equal"] > .moss-card .moss-card-cover { grid-row: 1; }

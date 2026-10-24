@@ -298,6 +298,17 @@ test.describe("equal rows", () => {
     expect(inside).toEqual([10, 10]);
   });
 
+  test("a part sits one part gap from the one before it, whatever the paragraphs around it", async ({ page }) => {
+    await open(page, "/margins/", 1280);
+    const gaps = await page.locator(".moss-grid").evaluate((g) =>
+      [...g.querySelectorAll(":scope > .moss-grid-card")].map((c) => {
+        const kids = [...c.children].map((k) => k.getBoundingClientRect());
+        return kids.slice(1).map((r, i) => r.top - kids[i].bottom);
+      }),
+    );
+    for (const row of gaps) for (const g of row) expect(g).toBe(10);
+  });
+
   test("a grid without it keeps each card's own height", async ({ page }) => {
     await open(page, "/rows/", 1280);
     const t = await tops(page, 1);
