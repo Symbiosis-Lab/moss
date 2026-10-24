@@ -389,6 +389,15 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, O
     if used_cols_alias {
         fragment.warnings.push(cols_alias_warning("grid"));
     }
+    let mid_columns = parsed.get("mid").and_then(|v| match v.parse::<u32>() {
+        Ok(n) if (1..=MAX_GRID_COLUMNS).contains(&n) => Some(n),
+        _ => {
+            fragment.warnings.push(format!(
+                "shortcode `:::grid` has `mid={v}`, which is not a column count from 1 to {MAX_GRID_COLUMNS}; it is ignored."
+            ));
+            None
+        }
+    });
     if columns > MAX_GRID_COLUMNS {
         fragment.warnings.push(format!(
             "shortcode `:::grid` asks for {columns} columns, but the layout supports up to {MAX_GRID_COLUMNS}; this grid uses {MAX_GRID_COLUMNS}."
@@ -407,6 +416,7 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, O
             scroll,
             collage,
             equal_rows,
+            mid_columns,
             label,
         },
         legacy_dash_line,

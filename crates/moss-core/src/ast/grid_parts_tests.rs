@@ -227,3 +227,13 @@ fn a_quote_in_chinese_says_so_and_a_quote_in_japanese_marks_the_quote_alone() {
     let en = figure("Never be discouraged, 灯台 said.");
     assert!(!en.contains("data-script"), "got: {en}");
 }
+
+#[test]
+fn mid_writes_the_mid_width_column_count_and_a_ratio_grid_keeps_its_count() {
+    let html = render_md(":::grid 3 {mid=2 rows=equal}\n### A\n+++\n### B\n+++\n### C\n:::");
+    assert!(html.contains(r#"data-columns="3" data-columns-mid="2""#), "got: {html}");
+    let html = render_md(":::grid 3 {mid=9}\n### A\n:::");
+    assert!(!html.contains("data-columns-mid"), "got: {html}");
+    let html = render_md(":::grid 2 9:11 {rows=equal}\n### A\n+++\n### B\n:::");
+    assert!(html.contains(r#"data-columns="2""#) && html.contains("--moss-grid-ratio"), "got: {html}");
+}

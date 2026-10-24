@@ -1763,6 +1763,12 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 description: "Emitted from `rows=equal` (`:::grid 3 {rows=equal}`): the parts of the cards in a row (picture, title, text, whatever each holds) line up across it, each card spanning `--moss-grid-parts` tracks of the grid. Not honoured for a collage or a scroll row.",
             },
             DataAttr {
+                name: "data-columns-mid",
+                values: &["1", "2", "3", "4", "5", "6"],
+                default: "",
+                description: "Emitted from `mid=N` (`:::grid 3 {mid=2}`): the column count from 48rem up to 64rem, where the grid has `data-columns` columns again. Overrides an author ratio in that range. Not honoured for a collage or a scroll row.",
+            },
+            DataAttr {
                 name: "data-count",
                 values: &["3", "4", "5", "6", "7", "8", "9"],
                 default: "",

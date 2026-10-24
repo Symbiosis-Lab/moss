@@ -698,6 +698,7 @@ mod tests {
             scroll: false,
             collage: false,
             equal_rows: false,
+            mid_columns: None,
             label: None,
         }))]);
         match find_first_block_image(&doc) {

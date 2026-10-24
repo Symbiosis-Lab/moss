@@ -252,6 +252,11 @@ pub struct GridShortcode {
     /// text, …) line up across it. Not honoured for a collage or a scroll row.
     #[serde(default)]
     pub equal_rows: bool,
+    /// From `mid=N`: the column count from 48rem up to 64rem, where the grid
+    /// has `columns` again. Emitted as `data-columns-mid`; ignored by a collage
+    /// and a scroll row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mid_columns: Option<u32>,
     /// Accessible name for the scrolling row (`label="…"`). Only meaningful
     /// alongside `scroll` — rendered as `aria-label` (with `role="region"`)
     /// on the wrapping element; `None` when the author did not set it, or

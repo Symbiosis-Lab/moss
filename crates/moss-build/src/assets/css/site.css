@@ -8497,6 +8497,17 @@ body > footer.container:has(> .moss-hero-closing) {
 .moss-grid[data-columns="5"] { --_grid-count: 5; }
 .moss-grid[data-columns="6"] { --_grid-count: 6; }
 
+/* `mid=N` on a grid: N columns from 48rem up to 64rem, where `data-columns`
+   applies again. It replaces an author ratio in that range. */
+@media (48rem <= width < 64rem) {
+  .moss-grid[data-columns-mid="1"]:not([data-scroll], [data-collage]) { --_grid-template: repeat(1, minmax(0, 1fr)); }
+  .moss-grid[data-columns-mid="2"]:not([data-scroll], [data-collage]) { --_grid-template: repeat(2, minmax(0, 1fr)); }
+  .moss-grid[data-columns-mid="3"]:not([data-scroll], [data-collage]) { --_grid-template: repeat(3, minmax(0, 1fr)); }
+  .moss-grid[data-columns-mid="4"]:not([data-scroll], [data-collage]) { --_grid-template: repeat(4, minmax(0, 1fr)); }
+  .moss-grid[data-columns-mid="5"]:not([data-scroll], [data-collage]) { --_grid-template: repeat(5, minmax(0, 1fr)); }
+  .moss-grid[data-columns-mid="6"]:not([data-scroll], [data-collage]) { --_grid-template: repeat(6, minmax(0, 1fr)); }
+}
+
 /* Grid card styling */
 .moss-grid-card {
   /* Cards are transparent by default, letting content style itself. A word
@@ -8616,6 +8627,13 @@ a.moss-grid-card:hover {
   text-decoration: underline;
 }
 
+/* Registered so the card gap resolves where the grid sets it, at the grid's
+   line height, and not again on a card with its own type size. */
+@property --_card-top-up {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
 /* Equal rows (`:::grid {rows=equal}`): the parts of the cards in a row line up
    across it, as in a listing's grid (see `.moss-cards[data-layout="grid"]`).
    Each card spans one track per part (`--moss-grid-parts`, the most children any
@@ -8641,20 +8659,38 @@ a.moss-grid-card:hover {
     grid-template-rows: subgrid;
     grid-row: span var(--moss-grid-parts, 1);
   }
-  /* Every card below the first row, by the column count: one column on a
-     phone, `data-columns` from 48rem. */
+  /* A hidden card takes no place in the grid and is not counted. */
+  .moss-grid[data-rows="equal"] > [hidden] { display: none; }
+  /* Every card below the first row, by the column count in force: one column
+     on a phone, `data-columns` from 48rem, `data-columns-mid` from 48rem to
+     64rem when the grid has one. The count is the one the build wrote, so a
+     card that spans columns or a theme that changes the columns is not
+     followed. */
   @media (width < 48rem) {
-    .moss-grid[data-rows="equal"][data-columns] > :is(.moss-grid-card, .moss-card):nth-child(n + 2) {
+    .moss-grid[data-rows="equal"][data-columns] > :is(.moss-grid-card, .moss-card):nth-child(n + 2 of :not([hidden])) {
       margin-block-start: var(--_card-top-up);
     }
   }
   @media (width >= 48rem) {
-    .moss-grid[data-rows="equal"][data-columns="1"] > :is(.moss-grid-card, .moss-card):nth-child(n + 2),
-    .moss-grid[data-rows="equal"][data-columns="2"] > :is(.moss-grid-card, .moss-card):nth-child(n + 3),
-    .moss-grid[data-rows="equal"][data-columns="3"] > :is(.moss-grid-card, .moss-card):nth-child(n + 4),
-    .moss-grid[data-rows="equal"][data-columns="4"] > :is(.moss-grid-card, .moss-card):nth-child(n + 5),
-    .moss-grid[data-rows="equal"][data-columns="5"] > :is(.moss-grid-card, .moss-card):nth-child(n + 6),
-    .moss-grid[data-rows="equal"][data-columns="6"] > :is(.moss-grid-card, .moss-card):nth-child(n + 7) {
+    .moss-grid[data-rows="equal"][data-columns="1"] > :is(.moss-grid-card, .moss-card):nth-child(n + 2 of :not([hidden])),
+    .moss-grid[data-rows="equal"][data-columns="2"] > :is(.moss-grid-card, .moss-card):nth-child(n + 3 of :not([hidden])),
+    .moss-grid[data-rows="equal"][data-columns="3"] > :is(.moss-grid-card, .moss-card):nth-child(n + 4 of :not([hidden])),
+    .moss-grid[data-rows="equal"][data-columns="4"] > :is(.moss-grid-card, .moss-card):nth-child(n + 5 of :not([hidden])),
+    .moss-grid[data-rows="equal"][data-columns="5"] > :is(.moss-grid-card, .moss-card):nth-child(n + 6 of :not([hidden])),
+    .moss-grid[data-rows="equal"][data-columns="6"] > :is(.moss-grid-card, .moss-card):nth-child(n + 7 of :not([hidden])) {
+      margin-block-start: var(--_card-top-up);
+    }
+  }
+  @media (48rem <= width < 64rem) {
+    .moss-grid[data-rows="equal"][data-columns-mid] > :is(.moss-grid-card, .moss-card):nth-child(n) {
+      margin-block-start: 0;
+    }
+    .moss-grid[data-rows="equal"][data-columns-mid="1"] > :is(.moss-grid-card, .moss-card):nth-child(n + 2 of :not([hidden])),
+    .moss-grid[data-rows="equal"][data-columns-mid="2"] > :is(.moss-grid-card, .moss-card):nth-child(n + 3 of :not([hidden])),
+    .moss-grid[data-rows="equal"][data-columns-mid="3"] > :is(.moss-grid-card, .moss-card):nth-child(n + 4 of :not([hidden])),
+    .moss-grid[data-rows="equal"][data-columns-mid="4"] > :is(.moss-grid-card, .moss-card):nth-child(n + 5 of :not([hidden])),
+    .moss-grid[data-rows="equal"][data-columns-mid="5"] > :is(.moss-grid-card, .moss-card):nth-child(n + 6 of :not([hidden])),
+    .moss-grid[data-rows="equal"][data-columns-mid="6"] > :is(.moss-grid-card, .moss-card):nth-child(n + 7 of :not([hidden])) {
       margin-block-start: var(--_card-top-up);
     }
   }

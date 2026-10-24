@@ -187,6 +187,60 @@ Body text of card 5.
 
 Text.
 `,
+    "gapmid.md": `---
+title: gapmid
+uid: "tdg00016"
+---
+
+:::grid 3 {mid=2 rows=equal}
+Label
+
+Body text of card 1.
++++
+Label
+
+Body text of card 2.
++++
+Label
+
+Body text of card 3.
++++
+Label
+
+Body text of card 4.
+:::
+
+## After the grid
+
+Text.
+`,
+    "gapratio.md": `---
+title: gapratio
+uid: "tdg00017"
+---
+
+:::grid 2 9:11 {rows=equal}
+Label
+
+Body text of card 1.
++++
+Label
+
+Body text of card 2.
++++
+Label
+
+Body text of card 3.
++++
+Label
+
+Body text of card 4.
+:::
+
+## After the grid
+
+Text.
+`,
     "gapplain.md": `---
 title: gapplain
 uid: "tdg00015"

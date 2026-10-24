@@ -224,6 +224,9 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
         open_tag.push_str(r#"" data-columns=""#);
         open_tag.push_str(&args.columns.to_string());
         open_tag.push('"');
+        if let Some(mid) = args.mid_columns {
+            open_tag.push_str(&format!(r#" data-columns-mid="{mid}""#));
+        }
         // A ratio rides as a CUSTOM PROPERTY, never as an inline
         // `grid-template-columns`. An inline declaration outranks every
         // stylesheet rule, so a theme's own override (or any future rule

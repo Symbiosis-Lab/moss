@@ -277,6 +277,51 @@ test.describe("equal rows", () => {
     for (let i = 1; i < t.cards.length; i++) expect(t.cards[i].top - t.cards[i - 1].bottom).toBe(44);
   });
 
+  test("mid= sets the columns between 48rem and 64rem, and the card gap follows them", async ({ page }) => {
+    await open(page, "/gapmid/", 900);
+    await cardGap(page);
+    let t = await cardTops(page);
+    expect(t.rows.length).toBe(2);
+    expect(t.cards[2].top).toBe(t.cards[3].top);
+    expect(t.cards[2].top - t.cards[0].bottom).toBe(44);
+    await open(page, "/gapmid/", 1280);
+    expect((await cardTops(page)).rows.length).toBe(2);
+    expect(await page.locator(".moss-grid").evaluate((g) => getComputedStyle(g).gridTemplateColumns.split(" ").length)).toBe(3);
+  });
+
+  test("a hidden card takes no place and is not counted", async ({ page }) => {
+    await open(page, "/gap/", 1280);
+    await cardGap(page);
+    await page.locator(".moss-grid > .moss-grid-card").first().evaluate((c) => c.setAttribute("hidden", ""));
+    const t = await cardTops(page);
+    expect(t.cards[0].height).toBe(0);
+    expect(t.cards[3].top - t.cards[1].bottom).toBe(44);
+  });
+
+  test("the card gap follows the emitted column count, so a theme's column override misplaces it", async ({ page }) => {
+    await open(page, "/gap3/", 1280);
+    await cardGap(page);
+    await page.addStyleTag({ content: ".moss-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }" });
+    const t = await cardTops(page);
+    // Cards 3 and 4 share a row, but only card 4 is past the third column.
+    expect(t.cards[3].top - t.cards[2].top).toBe(34);
+  });
+
+  test("the default card gap is the grid's own, whatever size the cards' text is", async ({ page }) => {
+    await open(page, "/gap/", 1280);
+    const between = async () => (await cardTops(page)).cards[2].top - (await cardTops(page)).cards[0].bottom;
+    const plain = await between();
+    await page.addStyleTag({ content: ".moss-grid-card { font-size: 13px; line-height: 1; }" });
+    expect(await between()).toBe(plain);
+  });
+
+  test("a ratio grid gets the card gap too", async ({ page }) => {
+    await open(page, "/gapratio/", 1280);
+    await cardGap(page);
+    const t = await cardTops(page);
+    expect(t.cards[2].top - t.cards[0].bottom).toBe(44);
+  });
+
   test("the grid keeps its own margins: a heading after it sits as far away as after a plain grid", async ({ page }) => {
     const after = async (url: string) => {
       await open(page, url, 1280);
