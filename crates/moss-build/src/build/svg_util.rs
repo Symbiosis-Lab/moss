@@ -5,6 +5,30 @@
 //! hex strings, otherwise we'd risk attribute-quote-escape attacks if a
 //! site-config value ever leaked through unchecked.
 
+/// The pixel box an SVG file asks for, for the `width`/`height` attributes of
+/// its `<img>`: its own `width` and `height` when both are plain numbers
+/// (optionally `px`), else its `viewBox` scaled to 800 wide so the box keeps
+/// the file's aspect ratio. `None` when the root element gives neither.
+pub fn svg_dimensions(path: &std::path::Path) -> Option<(u32, u32)> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let options = roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() };
+    let doc = roxmltree::Document::parse_with_options(&text, options).ok()?;
+    let root = doc.root_element();
+    if root.tag_name().name() != "svg" {
+        return None;
+    }
+    let px = |v: &str| v.trim().trim_end_matches("px").trim().parse::<f64>().ok().filter(|n| *n > 0.0);
+    let size = |name: &str| root.attribute(name).and_then(px);
+    if let (Some(w), Some(h)) = (size("width"), size("height")) {
+        return Some(((w.round() as u32).max(1), (h.round() as u32).max(1)));
+    }
+    let nums: Vec<f64> = root.attribute("viewBox")?.split([' ', ',']).filter(|t| !t.is_empty()).filter_map(|t| t.parse().ok()).collect();
+    match nums[..] {
+        [_, _, w, h] if w > 0.0 && h > 0.0 => Some((800, ((800.0 * h / w).round() as u32).max(1))),
+        _ => None,
+    }
+}
+
 /// Returns true iff `s` is a valid CSS-style hex color: `#rgb`, `#rgba`,
 /// `#rrggbb`, or `#rrggbbaa`. Used to guard the SVG attribute interpolation
 /// path. Anything else (named colors, `var(--token)`, malformed input) is

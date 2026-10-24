@@ -919,6 +919,11 @@ fn scanned_cover<'a>(
             || moss_core::resolve::output_url::resolve_path_with_overrides(&m.path, dir_overrides)
                 == key
     })?;
+    // An SVG's scanned size is a layout box, not pixels: the card cannot draw
+    // it and a platform preview does not take it.
+    if meta.path.to_ascii_lowercase().ends_with(".svg") {
+        return None;
+    }
     let dims = meta.dimensions?;
     Some((meta, dims))
 }
@@ -955,6 +960,19 @@ mod plate_tests {
         assert!(needs_plate(1080, 1350), "a portrait photograph");
         // Nothing to divide by, and nothing to decide.
         assert!(!needs_plate(0, 100));
+    }
+
+    /// An SVG cover has a scanned size (its layout box) but is neither drawn
+    /// into a card as a plate nor offered to a platform preview with it.
+    #[test]
+    fn an_svg_cover_is_never_a_plate() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("mark.svg"), r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"/>"#).unwrap();
+        let images = vec![scanned("mark.svg", (800, 800))];
+        let cover = CoverRef::Local(crate::build::served_path::ServedPath::from_source("mark.svg").unwrap());
+        assert!(needs_plate(800, 800));
+        assert!(plate_source(&images, &cover, &std::collections::HashMap::new(), dir.path()).is_none());
+        assert_eq!(scanned_dims(&images, &cover, &std::collections::HashMap::new()), None);
     }
 
     /// The cover URL is percent-encoded and its directory segments are

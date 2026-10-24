@@ -3240,13 +3240,12 @@ fn site_logo_missing_from_the_manifest_keeps_the_bare_shape() {
 }
 
 #[test]
-fn svg_site_logo_keeps_the_bare_shape() {
+fn svg_site_logo_carries_the_size_its_file_declares() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().join("mark.svg");
     std::fs::write(&path, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="8"/>"#).unwrap();
-    // The scanner records no size for an svg, so the manifest has no entry for it.
     let dimensions = crate::build::scan::scan::extract_image_dimensions(&path);
-    assert_eq!(dimensions, None);
+    assert_eq!(dimensions, Some((24, 8)));
     let lookup = crate::build::media::dimensions::MediaDimensionLookup::new(
         &[media_entry("mark.svg", dimensions)],
         &[],
@@ -3255,7 +3254,7 @@ fn svg_site_logo_keeps_the_bare_shape() {
     );
     let html = logo_header_html(Some(lookup.asset_snapshot()), "/mark.svg");
     assert!(
-        html.contains(r#"<img class="site-logo" src="/mark.svg" alt="" aria-hidden="true">"#),
-        "an svg logo keeps today's output: {html}"
+        html.contains(r#"<img class="site-logo" src="/mark.svg" width="24" height="8" alt="" aria-hidden="true">"#),
+        "an svg logo is sized like a raster one; the stylesheet's height and width:auto still decide its display size: {html}"
     );
 }

@@ -138,6 +138,9 @@ pub fn extract_image_dimensions(path: &Path) -> Option<(u32, u32)> {
             }
             Some((width, height))
         }
+        Err(_) if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg")) => {
+            crate::build::svg_util::svg_dimensions(path)
+        }
         Err(e) => {
             log::debug!("Could not read image dimensions for {:?}: {}", path, e);
             None
@@ -370,7 +373,10 @@ const MEDIA_META_TRANSFORM: &str = "media/meta";
 /// and would keep a hero from ever measuring its picture, so it is recomputed.
 /// The field has since gone (a hero's picture is read at render time); a
 /// version-5 entry still holding it is read as it is, the field ignored.
-const MEDIA_META_VERSION: u32 = 5;
+///
+/// **5 → 6**: an SVG's size is read from its own width, height or viewBox; a
+/// version-5 entry holds `None` for it.
+const MEDIA_META_VERSION: u32 = 6;
 
 /// Stat-based cache key for an image's placeholder metadata (dimensions +
 /// dominant color + LQIP), shared by the blocking scan and the background media

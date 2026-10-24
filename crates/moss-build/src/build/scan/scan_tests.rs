@@ -1958,6 +1958,25 @@ fn a_pre_fix_media_meta_entry_is_not_reused_after_the_version_bump() {
     );
 }
 
+/// A version-5 `media/meta` entry holds no size for an SVG, and the file never
+/// changes, so only the version in the key makes it miss.
+#[test]
+fn a_version_5_media_meta_entry_is_not_reused() {
+    let fx = ScanFixture::new("stale_media_meta_v5");
+    let hash = "hash-of-a-previously-scanned-svg";
+    let stale = CachedMediaMeta { dimensions: None, dominant_color: None, lqip_data_uri: None, is_animated: false };
+    let json_bytes = serde_json::to_vec(&stale).unwrap();
+    let meta_oid = fx.objects.store_bytes(&json_bytes, crate::build::cache::RecordMode::Request).unwrap();
+    let old_entry = TransformEntry { oid: meta_oid, size: json_bytes.len() as u64, params: serde_json::json!({ "v": 5 }) };
+    let record = TransformRecord {
+        source_oid: hash.to_string(),
+        source_size: 1,
+        transforms: HashMap::from([(MEDIA_META_TRANSFORM.to_string(), old_entry)]),
+    };
+    fx.transforms.put(&record, crate::build::cache::RecordMode::Request).unwrap();
+    assert!(read_cached_meta(&fx.transforms, &fx.objects, hash).is_none());
+}
+
 // =========================================================================
 // What the walk feeds the hash index: the file's whole stat record
 // =========================================================================
@@ -2936,3 +2955,25 @@ fn an_empty_folder_inside_a_prebuilt_app_is_not_named_as_empty() {
     assert!(!ps.empty_folders.iter().any(|f| f.starts_with("app")), "{:?}", ps.empty_folders);
 }
 
+
+/// The `image` decoder cannot read an SVG. Its own width and height win; with
+/// only a viewBox the box keeps the viewBox's aspect ratio, 800 wide.
+#[test]
+fn svg_dimensions_follow_the_files_own_aspect_ratio() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let write = |name: &str, svg: &str| {
+        let p = dir.path().join(name);
+        fs::write(&p, svg).unwrap();
+        p
+    };
+    let view_box_only = write("wide.svg", r#"<?xml version="1.0"?><!-- Example Lab --><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10"><rect width="20" height="10"/></svg>"#);
+    assert_eq!(extract_image_dimensions(&view_box_only), Some((800, 400)));
+    let sized = write("sized.svg", r#"<svg xmlns="http://www.w3.org/2000/svg" width="120px" height="40" viewBox="0 0 240 80"/>"#);
+    assert_eq!(extract_image_dimensions(&sized), Some((120, 40)));
+    let neither = write("none.svg", r#"<svg xmlns="http://www.w3.org/2000/svg"/>"#);
+    assert_eq!(extract_image_dimensions(&neither), None);
+    let extreme = write("flat.svg", r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100000 1"/>"#);
+    assert_eq!(extract_image_dimensions(&extreme), Some((800, 1)));
+    let doctype = write("doctype.svg", "<?xml version=\"1.0\"?><!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\"><svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 4 3\"/>");
+    assert_eq!(extract_image_dimensions(&doctype), Some((800, 600)));
+}
