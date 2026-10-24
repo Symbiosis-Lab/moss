@@ -126,7 +126,7 @@ sort: title
 When `sort` is absent, moss infers it from the children:
 
 1. Any child has a `weight` field → `sort: weight`
-2. At least 80% of children have a `date` field → `sort: date`
+2. At least half of the children have a `date` field → `sort: date`, with undated children listed last
 3. Otherwise → `sort: title`
 
 Most folders need no `sort` declaration: a blog folder is automatically `date`, a docs folder with weights is automatically `weight`, and a folder of dateless projects is automatically `title`.
