@@ -129,3 +129,26 @@ fn a_raw_style_block_in_a_page_is_a_note_naming_the_page() {
     );
     assert_eq!(out.status.code(), Some(0), "a note must not fail --strict:\n{stderr}");
 }
+
+/// The guide's way to keep a working file out of the site: a name starting
+/// with a dot is never built, where a draft still is.
+#[test]
+fn a_dot_prefixed_file_is_not_built_but_a_draft_is() {
+    let moss_home = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let site = std::fs::canonicalize(tmp.path()).unwrap();
+    std::fs::write(site.join("index.md"), "---\ntitle: Home\n---\n\nWelcome.\n").unwrap();
+    std::fs::write(site.join(".scratch.md"), "---\ntitle: Scratch\n---\n\nWorking.\n").unwrap();
+    std::fs::write(site.join("drafty.md"), "---\ntitle: Drafty\ndraft: true\n---\n\nDraft body.\n").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_moss-cli"))
+        .args(["build", site.to_str().unwrap(), "--no-plugins"])
+        .env("MOSS_HOME", moss_home.path())
+        .env("MOSS_SITE_URL", "https://example.com")
+        .stdin(Stdio::null())
+        .output()
+        .expect("run moss-cli");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let built = site.join(".moss/build.nosync/current");
+    assert!(built.join("drafty/index.html").exists(), "a draft still builds into the preview output");
+    assert!(!built.join("scratch").exists() && !built.join(".scratch").exists(), "a dot-prefixed file is never built");
+}
