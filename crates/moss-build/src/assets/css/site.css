@@ -3956,9 +3956,9 @@ body {
      the end of the bar's place and scroll away with the page's first block;
    - where the contents ruler is on screen, or its lane is reserved
      (`data-ruler` `on` or `lane`; the bar never shows), they stand in a column at the
-     foot of the window, starting where the ruler's dashes start, and above a
-     closing picture that has come into view (`--moss-closing-clear`, which
-     contents-ruler.ts keeps), not over its picture;
+     foot of the window, starting where the ruler's dashes start, and are
+     hidden whenever the list is away (`lane`): over the opening, a wide block
+     and the closing picture, the top-of-page controls covering the opening;
    - anywhere else they are fixed in the slot the bar keeps free at its end.
    Both places are worked out from the bar's and the ruler's own geometry
    tokens (on `body`), never retyped. */
@@ -4037,9 +4037,15 @@ body:has(> .moss-nav-island[data-header="none"] + .nav-icons) main > article:is(
 .moss-nav-island[data-header="none"][data-ruler]:not([data-ruler="off"], [data-top]) + .nav-icons {
   flex-direction: column;
   align-items: flex-start;
-  inset-block: auto calc(max(var(--moss-space-md), env(safe-area-inset-bottom, 0px)) + var(--moss-closing-clear, 0px));
+  inset-block: auto max(var(--moss-space-md), env(safe-area-inset-bottom, 0px));
   inset-inline-end: auto;
   left: calc(var(--moss-contents-inset) + var(--moss-contents-pad));
+  transition: opacity 250ms ease, visibility 250ms;
+}
+
+.moss-nav-island[data-header="none"][data-ruler="lane"]:not([data-top]) + .nav-icons:not(:focus-within) {
+  opacity: 0;
+  visibility: hidden;
 }
 
 .moss-nav-island[data-header="none"] .moss-nav-island-sections {

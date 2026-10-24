@@ -149,12 +149,6 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Where a closing picture's credit box ends, measured from the picture's inline end: the end of the page's text column less the credit's 0.5rem of padding, so the credit's text is right-aligned to the column's end. Set by moss on the closing picture from `--moss-words-inset`; read-only for a theme (`--moss-hero-credit-font` restyles the credit).",
     },
     CustomProp {
-        name: "--moss-closing-clear",
-        owner: "nav-icons",
-        default: "0px",
-        description: "How much of the window's height a closing picture covers from its top edge down to the window's foot, set on the controls by the contents list's script as the page scrolls. The page's controls (search, language, theme), where they stand in the foot of the window beside a `contents: pictures` list, ride that far up, so they stay above the picture instead of over it. Read-only for a theme.",
-    },
-    CustomProp {
         name: "--moss-contents-faint",
         owner: "moss-contents-ruler",
         default: "var(--moss-color-text-secondary)",

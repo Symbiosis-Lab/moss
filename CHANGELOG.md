@@ -239,7 +239,7 @@ All notable changes to moss will be documented here.
 - A link in a closing picture's words is a button in the text colour on the page colour at 80%, so it reads on any picture.
 - A closing picture's credit sits in the page's text column, right-aligned to its end, on one line where it fits, in moss's UI face; `--moss-hero-credit-font` sets another. It is painted in `--moss-color-text-secondary`, and the build measures that same colour.
 - A `panel=none` note gives the worst spot and the typical ground side by side.
-- On a `contents: pictures` page, the controls stay above a closing picture instead of over it.
+- On a `contents: pictures` page, the controls (search, language, theme) in the foot of the window are hidden while the closing picture is in view, wherever the contents list itself is away, and return with it, instead of floating over the picture's sky. They stay reachable at the top of the page and, with the list, as it comes back. `--moss-closing-clear` is gone.
 
 ### Fixed
 

@@ -24,8 +24,7 @@
  *   condition has one owner and nothing here measures the margin. Where the
  *   lane is reserved the island's `data-ruler` is `lane` while the list is
  *   away, and its bar never shows. The controls stand in the lane at the foot
- *   of the window, so while the closing picture is in view `--moss-closing-clear`
- *   on them says how much of the window it covers, and they ride above it.
+ *   of the window while the list is up and are hidden with it (site.css).
  * - A site can switch it off with CSS (`display: none`, `visibility: hidden`);
  *   whether it is actually rendered is read on every pass, so the island
  *   comes back however it was hidden.
@@ -166,9 +165,6 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   let away = true;
   /** The page reserves the list's lane and the list fits: set on layout. */
   let lane = false;
-  let lastClear = "";
-  /** The island's controls, which stand clear of a closing picture in the lane. */
-  const controls = opts.closing && island.nextElementSibling?.matches(".nav-icons") ? (island.nextElementSibling as HTMLElement) : null;
   let disposed = false;
 
   /**
@@ -182,7 +178,6 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
   function fade(): void {
     if (disposed) return;
     const height = window.innerHeight;
-    const closingTop = opts.closing?.getBoundingClientRect().top ?? height;
     const zone = nav.hidden ? null : list.getBoundingClientRect();
     const inBody = zone === null || first.getBoundingClientRect().top <= zone.top;
     const notPast = opts.end
@@ -208,9 +203,7 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
         : getComputedStyle(nav).display !== "none");
     away = !(inBody && notPast && !covered) && !nav.matches(":focus-within");
     nav.toggleAttribute("data-away", away);
-    island.dataset.ruler = rendered && !away ? "on" : lane ? "lane" : "off";
-    const clear = `${Math.max(0, height - closingTop)}px`;
-    if (clear !== lastClear) controls?.style.setProperty("--moss-closing-clear", (lastClear = clear));
+    island.dataset.ruler = rendered && !away ? "on" : lane && rendered ? "lane" : "off";
   }
 
   function layout(): void {
@@ -296,6 +289,5 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
     disposed = true;
     undo.forEach((f) => f());
     delete island.dataset.ruler;
-    controls?.style.removeProperty("--moss-closing-clear");
   };
 }
