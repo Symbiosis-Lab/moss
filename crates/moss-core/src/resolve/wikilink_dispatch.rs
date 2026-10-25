@@ -573,9 +573,13 @@ fn dispatch_embed_form(
                 // so what is left is display words and a caption.
                 let words = crate::media::read_image_words(parsed.alias.unwrap_or_default());
                 let media = build_image_media_attrs(&words.display, &pothole, parsed.attrs.as_ref());
-                let alt = words.caption;
+                // A bare trailing `|` means alt only, as in `![Description|](x.jpg)`.
+                let (alt, captioned) = match crate::ast::parser::alt_only_text(&words.caption) {
+                    Some(alt) => (alt, false),
+                    None => (words.caption, true),
+                };
                 let caption: Option<Vec<crate::ast::node::Inline>> =
-                    (!alt.is_empty()).then(|| vec![crate::ast::node::Inline::Text(alt.clone())]);
+                    (captioned && !alt.is_empty()).then(|| vec![crate::ast::node::Inline::Text(alt.clone())]);
                 // `AlignSide::css_class()` returns the canonical
                 // `moss-align-left` / `moss-align-right` class verbatim —
                 // the same class the figure renderer appends.

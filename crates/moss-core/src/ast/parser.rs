@@ -1244,10 +1244,12 @@ fn try_promote_image_only(
     // only: drop the pipe from the alt (a placement before it stays, for the
     // extraction below) and, unless an italic line is the caption, the figure
     // has none. An inline image in prose never gets here and keeps its pipe.
-    let bare_pipe = line_ctx
-        .bracket_text(events, para_start)
-        .is_some_and(|raw| alt_only_text(raw).is_some());
-    if let (true, Some(Inline::Image { alt, is_wikilink: false, .. })) =
+    // A wiki embed's pipe text is already the alt, so the rule reads it directly.
+    let bare_pipe = match inlines.iter().find(|i| matches!(i, Inline::Image { .. })) {
+        Some(Inline::Image { alt, is_wikilink: true, .. }) => alt_only_text(alt).is_some(),
+        _ => line_ctx.bracket_text(events, para_start).is_some_and(|raw| alt_only_text(raw).is_some()),
+    };
+    if let (true, Some(Inline::Image { alt, .. })) =
         (bare_pipe, inlines.iter_mut().find(|i| matches!(i, Inline::Image { .. })))
     {
         if let Some(head) = alt.trim_end().strip_suffix('|') {
