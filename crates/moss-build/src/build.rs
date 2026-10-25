@@ -815,6 +815,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
 
 
     crate::infra::moss_paths::ensure_moss_gitignore(&moss_dir_path)?;
+    crate::infra::moss_paths::note_hidden_moss_files(config.source());
 
     // Retire what an older moss left behind: the synced ~5 MB copy of the
     // record of what is live in `.moss/data/`, which on one vault was the

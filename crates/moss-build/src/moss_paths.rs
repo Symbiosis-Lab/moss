@@ -1856,6 +1856,38 @@ pub(crate) fn ensure_moss_gitignore(moss_root: &std::path::Path) -> Result<(), S
     Ok(())
 }
 
+/// Note when the site's root `.gitignore` hides tracked `.moss` files: the
+/// rule must be `.moss/*` (or `.moss/**`) with a `!` line for each path moss
+/// keeps in version control. A directory rule (`.moss/`) cannot be undone by
+/// `!` lines, since git does not look inside an ignored directory. Never edits
+/// the file; `.moss/.gitignore` does not cover every file under `.moss`, so
+/// the rule must not simply be deleted.
+pub(crate) fn note_hidden_moss_files(site_root: &std::path::Path) {
+    let Ok(text) = std::fs::read_to_string(site_root.join(".gitignore")) else { return };
+    let rules: Vec<&str> = text.lines().map(str::trim).filter(|l| excluded_dir(l) == Some(".moss")).collect();
+    if rules.is_empty() {
+        return;
+    }
+    let tracked: Vec<&str> = MOSS_PATH_RULES
+        .iter()
+        .filter(|r| !r.gitignore && r.rel.starts_with(".moss/"))
+        .filter(|r| !MOSS_PATH_RULES.iter().any(|o| o.gitignore && r.rel.starts_with(o.rel)))
+        .map(|r| r.rel)
+        .collect();
+    let reincluded = |rel: &str| {
+        text.lines().any(|l| l.trim().strip_prefix('!').is_some_and(|p| p.trim_start_matches('/').trim_end_matches('/') == rel.trim_end_matches('/')))
+    };
+    let wildcard = rules.iter().all(|l| l.ends_with("/*") || l.ends_with("/**"));
+    if wildcard && tracked.iter().all(|r| reincluded(r)) {
+        return;
+    }
+    let fix: Vec<String> = std::iter::once(".moss/*".to_string()).chain(tracked.iter().map(|r| format!("!{r}"))).collect();
+    crate::build::cli_output::log_note!(
+        ".gitignore hides .moss files that belong in version control (theme, config, redirects); replace the .moss rule with these lines: {}",
+        fix.join(" then ")
+    );
+}
+
 #[cfg(test)]
 mod gitignore_writer_tests {
     use super::*;
