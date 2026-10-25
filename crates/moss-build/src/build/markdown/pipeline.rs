@@ -34,6 +34,19 @@ use super::html_post::{
     prepare_markdown_source, resolve_to_root_relative, strip_percent_comments,
 };
 
+/// The text the parser reads for a whole file: its body with CriticMarkup
+/// accepted and `%%` comments stripped, in either frontmatter dialect. Emits
+/// nothing, so a second read of the same file (the page as authored) cannot
+/// repeat the build's warnings.
+fn parse_ready_body(content: &str) -> String {
+    let body = if is_simplified_frontmatter(content) {
+        parse_simplified_frontmatter(content).1
+    } else {
+        normalize_body_like_gray_matter(moss_core::frontmatter::parse(content).render_body())
+    };
+    super::html_post::strip_percent_comments(&super::html_post::accept_criticmarkup(&body)).into_owned()
+}
+
 /// Reproduce gray_matter's body normalization byte-for-byte.
 ///
 /// The traditional-YAML branch historically took the markdown body from
@@ -1012,12 +1025,19 @@ pub fn process_markdown_file(
     let mut doc = moss_core::ast::parse_with_config(&markdown_content, &parse_config);
     // Mirrors the `frontmatter:` warning line above: a misspelled shortcode
     // used to leave no trace but a `moss-unknown-shortcode` div in the output.
-    for w in &doc.warnings {
+    // A page whose embeds were expanded into `content` would repeat each
+    // embedded file's findings under its own name, so read them from the
+    // page as authored; the embedded file reports its own.
+    let authored_doc = page.authored_source.filter(|a| *a != content).map(|a| {
+        moss_core::ast::parse_with_config(&parse_ready_body(a), &parse_config)
+    });
+    let findings = authored_doc.as_ref().unwrap_or(&doc);
+    for w in &findings.warnings {
         crate::build::cli_output::cli_warn!("[{}] {}", file_path, w);
     }
     // Advisories are plain log lines, not problems: the page builds the same
     // either way, so `--strict` does not count them.
-    for a in &doc.advisories {
+    for a in &findings.advisories {
         crate::build::cli_output::log_note!("[{}] {}", file_path, a);
     }
 
@@ -1236,7 +1256,6 @@ pub fn process_markdown_file(
     // Callout presence: same mechanism, gating the `callouts` stylesheet
     // partial (`build/emit/stylesheet.rs`) rather than an injected asset.
     let has_callout = moss_core::ast::has_callout_recursive(&doc);
-    crate::build::cli_output::warn_unknown_callouts(&doc, file_path);
     // Footnote presence: same mechanism again, but this one gates a runtime
     // SCRIPT (the sidenotes bundle) rather than a stylesheet partial.
     let has_footnotes = !moss_core::ast::footnotes::FootnoteIndex::build(&doc.blocks).is_empty();

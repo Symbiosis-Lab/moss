@@ -213,19 +213,6 @@ fn take_built() -> Option<(usize, usize, usize)> {
     })
 }
 
-/// Warn once per callout whose type moss does not know; it renders as a note.
-pub(crate) fn warn_unknown_callouts(doc: &moss_core::ast::Document, file_path: &str) {
-    moss_core::ast::visit_blocks(doc, |block| {
-        if let moss_core::ast::Block::Callout { unknown_kind: Some(name), .. } = block {
-            log_warn_problem!(
-                "[{file_path}] callout type '{name}' is not one moss knows, so it renders as a note; known types: {}",
-                moss_core::ast::node::CALLOUT_TYPES.join(", ")
-            );
-        }
-        true
-    });
-}
-
 /// Record that one CLI-visible problem line was printed. Called by
 /// [`cli_warn!`] and [`log_warn_problem!`] — never call this directly and
 /// print separately, or the count can drift from what was actually shown.

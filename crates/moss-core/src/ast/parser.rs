@@ -372,6 +372,31 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
         doc.warnings.extend(crate::heading::attrs::warnings(markdown, config.warning_line_offset));
     }
     doc.advisories = extraction.advisories;
+    if heading_ids == HeadingIds::Number {
+        let mut count = 0;
+        let mut unknown_callouts = Vec::new();
+        super::visit_blocks(&doc, |block| {
+            match block {
+                Block::Paragraph(inlines) => {
+                    count += inlines.iter().filter(|i| matches!(i, Inline::Text(t) if t.trim() == "+++")).count();
+                }
+                Block::Callout { unknown_kind: Some(name), .. } => unknown_callouts.push(name.clone()),
+                _ => {}
+            }
+            true
+        });
+        for name in unknown_callouts {
+            doc.warnings.push(format!(
+                "callout type '{name}' is not one moss knows, so it renders as a note; known types: {}",
+                super::node::CALLOUT_TYPES.join(", ")
+            ));
+        }
+        if count > 0 {
+            doc.advisories.push(format!(
+                "{count} line(s) of `+++` outside :::grid and :::buttons render as plain text; the divider only splits cells inside those blocks"
+            ));
+        }
+    }
 
     // Obsidian parity: a single newline inside a paragraph becomes `<br>`.
     // Runs last, over the finished tree, because pulldown-cmark 0.13 has no
