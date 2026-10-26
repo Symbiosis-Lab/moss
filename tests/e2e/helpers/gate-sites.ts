@@ -2203,8 +2203,9 @@ precision = "city"
 };
 
 // ── Preview server ↔ static build layout parity ──────────────────────────────
-// One page combining every shape the preview server's own injected CSS
-// (`PREVIEW_CHEAP_REFLOW_STYLE` in iframe_bridge.rs) can touch: a scroll row
+// One page combining the shapes that have made the preview server's own
+// injections (`inject_preview_assets` in iframe_bridge.rs) measure differently
+// from the static build: a scroll row
 // with enough cards that most start outside the row's own visible area, a
 // wrapping (non-scroll) grid of images, standalone figures well below the
 // fold, a tabular embed, a hero, and enough filler prose between them that
@@ -2225,9 +2226,8 @@ const PARITY_HERO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="1600" he
 `;
 
 // Placeholder CJK prose (invented for this fixture, no real source) padding
-// the page so later media start below the fold — this gate's whole point is
-// content-visibility behaviour on off-screen media, which a short page could
-// never exercise.
+// the page so later media start below the fold: lazy loading and scripts act
+// on off-screen media, which a short page would never exercise.
 const PARITY_FILLER_LINE =
   "第一段。這是為了撐開版面高度而寫的占位文字，讓下面的圖片在頁面剛載入時還在畫面之外。";
 
@@ -2253,9 +2253,8 @@ export const PREVIEW_PARITY_GATE: ScratchSiteSpec = {
     "figure.svg": PARITY_FIGURE_SVG,
     "hero.svg": PARITY_HERO_SVG,
     // A tabular embed (`![[data.csv]]` → `.moss-embed.moss-embed-table`,
-    // resolved by moss-core's csv_table renderer) — the fourth shape
-    // PREVIEW_CHEAP_REFLOW_STYLE's selector names alongside figures, bare
-    // images, and generic embeds.
+    // resolved by moss-core's csv_table renderer) — a block embed
+    // beside the figures and images.
     "data.csv": `label,value\nAlpha,12\nBeta,7\nGamma,19\nDelta,3\nEpsilon,25\n`,
     "index.md": `---
 title: Preview Parity Gate

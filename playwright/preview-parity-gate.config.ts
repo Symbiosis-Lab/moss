@@ -1,6 +1,6 @@
 /**
- * Render gate: the preview server's own injections (`PREVIEW_CHEAP_REFLOW_STYLE`
- * and everything else `inject_preview_assets` adds — see iframe_bridge.rs) must
+ * Render gate: the preview server's own injections (everything
+ * `inject_preview_assets` adds — see iframe_bridge.rs) must
  * never change a page's LAYOUT relative to the static build. See the spec
  * header for the full story and the class of bug this guards.
  *

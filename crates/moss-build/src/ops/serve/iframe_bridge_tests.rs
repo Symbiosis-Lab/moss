@@ -21,26 +21,6 @@ fn test_script_contains_capture_responder() {
 }
 
 #[test]
-fn test_injects_preview_only_cheap_reflow_style() {
-    let html =
-        "<html><body><article><figure class=\"moss-image\"><img/></figure></article></body></html>";
-    let out = inject_preview_assets(html, false);
-    // Injected into the preview response…
-    assert!(out.contains("moss-preview-cheap-reflow"));
-    assert!(out.contains("content-visibility:auto"));
-    assert!(out.contains("contain-intrinsic-size"));
-    // …scoped to MEDIA blocks only (text stays laid out → find-in-page +
-    // editor↔preview scroll-sync unaffected).
-    assert!(out.contains("figure.moss-image"));
-    assert!(
-        !out.contains("article section"),
-        "must not target text sections"
-    );
-    // …and NEVER present in the source/published HTML (preview-only injection).
-    assert!(!html.contains("moss-preview-cheap-reflow"));
-}
-
-#[test]
 fn test_injects_slot_reveal_keyframes() {
     // The shell reveals a slot file's footer by writing one `animation`
     // property over RPC (`NavigationManager.revealFooter`). That write is
@@ -60,67 +40,13 @@ fn test_injects_slot_reveal_keyframes() {
 }
 
 #[test]
-fn test_cheap_reflow_reserves_height_only_never_width() {
-    // Regression: the one-value form `contain-intrinsic-size: auto 600px`
-    // applies to BOTH axes, so every off-screen figure claimed a 600px
-    // intrinsic WIDTH. `.moss-grid` tracks are `repeat(N, 1fr)` =
-    // `minmax(auto, 1fr)`, whose automatic minimum is the item's min-content
-    // contribution — so a 3-column grid laid out at `600px 600px 600px`
-    // inside a ~692px column and overflowed the page, snapping back only
-    // once the figure scrolled into view. Published output was never
-    // affected, which is why this reproduced ONLY in the preview.
-    //
-    // The two-value form is `<width> <height>`: width must claim no
-    // intrinsic size, height keeps the placeholder that stops off-screen
-    // media collapsing the fake scrollbar's reported height.
-    let out = inject_preview_assets("<html><body></body></html>", false);
-    assert!(
-        out.contains("contain-intrinsic-size:auto none auto 600px"),
-        "must use the two-value <width> <height> form; got: {out}"
-    );
-    assert!(
-        !out.contains("contain-intrinsic-size:auto 600px"),
-        "one-value form applies to BOTH axes and blows out grid tracks"
-    );
-}
-
-#[test]
-fn test_cheap_reflow_excludes_scroll_row_cards() {
-    // Regression: a `:::grid N {scroll}` row (`.moss-grid[data-scroll]`) lays
-    // its cards out with `grid-auto-flow: column` on ONE shared grid row
-    // track. When a card scrolled out of the interest rect fell back to this
-    // rule's 600px placeholder height, that height became the row track's
-    // size — every card in the row (not just the off-screen one) rendered
-    // 600px+ tall until the row was scrolled. Measured: a 22-card scroll row
-    // was 669px tall in preview vs. 269px in the static build. Static
-    // builds never get this style at all, so published sites were
-    // unaffected — this reproduced ONLY in the preview.
-    let out = inject_preview_assets("<html><body></body></html>", false);
-    assert!(
-        out.contains("figure.moss-image:not(.moss-grid[data-scroll] *)"),
-        "figures inside a scroll row must be excluded from the placeholder height; got: {out}"
-    );
-    assert!(
-        out.contains("p:has(> img):not(.moss-grid[data-scroll] *)"),
-        "bare images inside a scroll row must be excluded; got: {out}"
-    );
-    assert!(
-        out.contains("p:has(> picture):not(.moss-grid[data-scroll] *)"),
-        "pictures inside a scroll row must be excluded; got: {out}"
-    );
-}
-
-#[test]
-fn test_cheap_reflow_never_targets_embeds() {
-    // A PDF <object> as a grid item, skipped and restored by content-visibility,
-    // freezes the preview in a WebKit layout loop.
-    let out = inject_preview_assets("<html><body></body></html>", false);
-    let rule = out
-        .split("<style id=\"moss-preview-cheap-reflow\">")
-        .nth(1)
-        .and_then(|rest| rest.split("</style>").next())
-        .expect("cheap-reflow style injected");
-    assert!(!rule.contains("moss-embed"), "embeds must keep content-visibility: visible; got: {rule}");
+fn test_preview_never_skips_rendering_of_page_content() {
+    // content-visibility:auto clips paint to the box and makes it the containing
+    // block of absolute descendants; no selector can tell a safe figure from one
+    // author CSS moves content out of.
+    let out = inject_preview_assets("<html><body><article><figure class=\"moss-image\"><img/></figure></article></body></html>", false);
+    assert!(!out.contains("content-visibility"), "preview must paint what will publish; got: {out}");
+    assert!(!out.contains("contain-intrinsic-size"), "got: {out}");
 }
 
 #[test]
