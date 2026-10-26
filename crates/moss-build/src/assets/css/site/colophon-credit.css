@@ -73,8 +73,8 @@
 
 .moss-colophon-credit ~ a .moss-colophon-icon svg {
   display: inline-block;
-  width: 1rem;
-  height: 1rem;
+  width: 1em;
+  height: 1em;
   vertical-align: baseline;
 }
 

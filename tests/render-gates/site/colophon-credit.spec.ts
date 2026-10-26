@@ -39,13 +39,17 @@ for (const width of [1280, 390, 360, 320]) {
         return {
           markBottom: markRect.bottom,
           baseline,
-          markSize: markRect.width,
+          markW: markRect.width,
+          markH: markRect.height,
+          fontSize: parseFloat(getComputedStyle(credit).fontSize),
           dotInLink: !!document.querySelector('.moss-colophon > a > .moss-colophon-dot'),
           label: getComputedStyle(document.querySelector('.moss-colophon-label') as Element).display,
           hits: [...document.querySelectorAll('.moss-colophon a')].map(hit),
         };
       });
-      expect(m.markSize).toBe(16);
+      // The mark scales with the credit's own size, so its sprigs match the capitals.
+      expect(Math.abs(m.markH - m.fontSize)).toBeLessThanOrEqual(0.5);
+      expect(Math.abs(m.markW - m.fontSize)).toBeLessThanOrEqual(0.5);
       expect(m.dotInLink).toBe(true);
       expect(m.label).toBe('none');
       // Same line only when the credit and the mark share it; at 320px a wrapped mark sits below.
