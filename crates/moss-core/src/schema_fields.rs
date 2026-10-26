@@ -730,7 +730,6 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         name: "listed",
         field_type: FieldType::Boolean,
         widget: Widget::Checkbox,
-        default_json: Some("false"),
         // Frequency=0, Importance=2 → score=92
         score: 93,
         description: "When off, hidden from listings, feeds, and sitemap — but still indexed and reachable at its URL",
@@ -1027,7 +1026,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         enum_values: Some(&["year", "none", "upcoming"]),
         // Frequency=2, Importance=2 → score=80
         score: 80,
-        description: "How children are grouped: year (default for list), none (default for card), or upcoming",
+        description: "How children are grouped: year, none, or upcoming. Unset, a listing that is not summary-style and has dated pages groups by year",
         label: Some("Group"),
         label_key: "chip.children_group.label",
         group: "Child Styles",
@@ -1038,10 +1037,9 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         field_type: FieldType::String,
         widget: Widget::Select,
         enum_values: Some(&["direct", "all"]),
-        default_json: Some("\"direct\""),
         // Frequency=2, Importance=2 → score=80
         score: 81,
-        description: "Whether to include only immediate children or all descendants",
+        description: "Whether to include only immediate children or all descendants. Unset, the homepage lists all and every other page lists direct children",
         label: Some("Depth"),
         label_key: "chip.children_depth.label",
         group: "Child Styles",
