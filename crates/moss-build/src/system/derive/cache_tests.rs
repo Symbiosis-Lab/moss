@@ -125,7 +125,7 @@ fn another_derivation_does_not_see_this_ones_result() {
 }
 
 #[test]
-fn rebuilding_a_local_binary_or_changing_the_pin_misses_without_a_version_bump() {
+fn rebuilding_a_local_binary_or_changing_the_fragments_misses_without_a_version_bump() {
     let f = fixture();
     let e = entry(&f.bin(DERIVED), "1.0.0");
     let first = derive_cached(&f.site, &e, &f.input).unwrap();
@@ -135,11 +135,8 @@ fn rebuilding_a_local_binary_or_changing_the_pin_misses_without_a_version_bump()
     let rebuilt = derive_cached(&f.site, &e, &f.input).unwrap();
     assert_ne!(rebuilt, first);
 
-    // Same content, same version, a changed declaration.
+    // Same content, same version, changed fragments.
     f.disable();
-    let mut repinned = e.clone();
-    repinned.contribution.run.binary = "other".into();
-    assert!(derive_cached(&f.site, &repinned, &f.input).is_err(), "a changed `run` must re-run");
     let mut refragmented = e.clone();
     refragmented.contribution.fragments.clear();
     assert_eq!(lookup_cached(&f.site, &refragmented, &f.input), None);

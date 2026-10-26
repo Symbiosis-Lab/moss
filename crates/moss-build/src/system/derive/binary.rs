@@ -12,9 +12,8 @@ use crate::system::derive::registry::DerivationEntry;
 use crate::system::large_download::ProgressFn;
 use crate::system::stack_exec::{self, layout, StackHome};
 
-/// Hash of what the declaration pins: the binary's sources (with their hashes)
-/// and the fragments it may produce. Changing either changes what a result
-/// means, whether or not the plugin's version moved with it.
+/// Hash of the whole declaration, locations included: names the install
+/// directory, so a changed URL or archive installs afresh.
 fn declaration_hash(entry: &DerivationEntry) -> String {
     use sha2::{Digest, Sha256};
     let pinned = serde_json::json!({
@@ -61,15 +60,29 @@ fn local_binary_hash(entry: &DerivationEntry) -> Option<String> {
     resolve_binary(entry).ok().filter(|_| local).and_then(|path| content_hash(&path).ok())
 }
 
-/// What a cached result depends on besides the input file: the declaration's
-/// pin, and for a `path` source (a binary under local development) the
-/// binary's own content, since nothing else says it was rebuilt.
+/// What a cached result depends on besides the input file: the declared
+/// fragments and the executable's identity, never where it came from. An
+/// installed executable (downloaded or `path`) is identified by its content,
+/// so moving the same binary between the two keeps every result. Before a
+/// download is installed its declared archive sha256 stands in, which keys
+/// differently from the installed executable.
 pub fn pin_fingerprint(entry: &DerivationEntry) -> String {
-    let declaration = declaration_hash(entry);
-    match local_binary_hash(entry) {
-        Some(binary) => format!("{declaration}:{binary}"),
-        None => declaration,
-    }
+    fingerprint(entry, resolve_binary(entry).ok().as_deref())
+}
+
+fn fingerprint(entry: &DerivationEntry, installed: Option<&std::path::Path>) -> String {
+    use crate::plugins::contributions::stack::StackSource;
+    use sha2::{Digest, Sha256};
+    let stack = entry.contribution.as_stack(&stack_id(entry), &entry.plugin_version);
+    let identity = match installed.and_then(|path| content_hash(path).ok()) {
+        Some(hash) => format!("exe:{hash}"),
+        None => match layout::winning_source(&stack) {
+            Some(StackSource::Download { sha256, .. }) => format!("archive:{}", sha256.clone().unwrap_or_default()),
+            _ => "absent".to_string(),
+        },
+    };
+    let pinned = serde_json::json!({ "fragments": entry.contribution.fragments, "binary": identity });
+    format!("{:x}", Sha256::digest(pinned.to_string().as_bytes()))
 }
 
 /// The content hashes of the `path`-sourced binaries a plugin's derivations

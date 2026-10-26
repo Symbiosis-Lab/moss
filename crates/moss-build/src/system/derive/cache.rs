@@ -2,10 +2,10 @@
 //!
 //! Keyed by the input file's content hash, the transform name
 //! `derive:<plugin>/<derivation>`, the plugin's manifest version and a
-//! fingerprint of its pin (the declared binary sources and fragments, plus a
-//! local binary's content), so editing a file, shipping a new plugin version,
-//! re-pinning without a version bump or rebuilding a local binary re-derives
-//! and nothing else does. Both outcomes are stored — a skip is as expensive to
+//! fingerprint of its pin (the declared fragments and the executable's content,
+//! not where it came from), so editing a file, shipping a new plugin version,
+//! re-pinning to different bytes or rebuilding a local binary re-derives and
+//! nothing else does. Both outcomes are stored — a skip is as expensive to
 //! rediscover as a result. A failure is stored only as a note for `--status`:
 //! it is usually the environment's doing, so it never stops a retry.
 
