@@ -4033,13 +4033,31 @@ uid: "clg00130"
 // ── WCAG 2.1 AA over built output ──
 // One page of every surface whose accessibility only shows in a real engine:
 // each callout type's tinted band, a code block wider than a phone, a framed
-// page, a 3D model, a language switch, a latest-items sidebar, covered cards
-// and a link inside a footer sentence. Served by playwright/wcag-output.config.ts.
+// page, a 3D model, a language switch, a latest-items sidebar, covered cards,
+// a link inside a footer sentence, and a note with comments and text to
+// select. Served by playwright/wcag-output.config.ts.
 const CALLOUT_TYPES = ["note", "info", "tip", "warning", "caution", "important", "danger", "success", "question", "failure", "bug", "abstract", "todo", "example", "quote", "pending"];
 export const WCAG_OUTPUT: ScratchSiteSpec = {
   name: "wcag-output-gate",
   files: {
-    ".moss/config.toml": CONFIG_TOML,
+    // Comments with a server address, so the form renders live; the spec
+    // stands in for the server.
+    ".moss/config.toml": `${CONFIG_TOML}
+[services.comments]
+enabled = true
+server_url = "https://comments.example.test"
+`,
+    ".moss/data/social/comment.json": JSON.stringify({
+      schemaVersion: "1",
+      articles: {
+        wcag0004: {
+          comments: [
+            { id: "7", source: "artalk", content: "<p>A first comment.</p>", createdAt: "2026-01-04T10:00:00Z", author: { displayName: "Ana" } },
+            { id: "8", source: "artalk", content: "<p>A reply to it.</p>", createdAt: "2026-01-05T10:00:00Z", author: { displayName: "Ben" }, replyToId: "7" },
+          ],
+        },
+      },
+    }),
     "index.md": `---
 title: Field Notes
 uid: "wcag0001"
@@ -4094,7 +4112,7 @@ description: What the first note is about.
 
 # The first note
 
-Body.
+A sentence long enough to select a phrase from with the keyboard.
 `,
     "Notes/second.md": `---
 title: The second note

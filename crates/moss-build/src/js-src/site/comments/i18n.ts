@@ -2,7 +2,7 @@
  * Copy table for the comment widget's client-side status messages.
  *
  * Follows the `js-src/site/subscribe/i18n.ts` pattern: a tiny set
- * (6 strings × 3 locales) duplicated by hand rather than plumbed through
+ * duplicated by hand per locale rather than plumbed through
  * the DOM. The server-rendered parts of the comment section (form labels,
  * counts, dates) come from the Rust registry
  * (`i18n::strings`); this table covers only the strings
@@ -17,11 +17,9 @@ import { langBucket, type Lang } from '../subscribe/i18n';
 export interface CommentWidgetCopy {
   /** Shown when submit is attempted without a name. */
   nameRequired: string;
-  /** Shown while the POST is in flight. */
-  submitting: string;
-  /** Shown while the captcha challenge is being solved. */
+  /** Names the captcha dialog while the challenge is being solved. */
   verifying: string;
-  /** Shown after a successful post. */
+  /** Announced after a successful post. */
   posted: string;
   /** Author label for the optimistic insert when no name was given. */
   anonymous: string;
@@ -34,7 +32,6 @@ export interface CommentWidgetCopy {
 export const COPY: Record<Lang, CommentWidgetCopy> = {
   en: {
     nameRequired: 'Name is required',
-    submitting: 'Submitting...',
     verifying: 'Verifying…',
     posted: 'Sent',
     anonymous: 'Anonymous',
@@ -43,7 +40,6 @@ export const COPY: Record<Lang, CommentWidgetCopy> = {
   },
   de: {
     nameRequired: 'Bitte geben Sie einen Namen an',
-    submitting: 'Wird gesendet …',
     verifying: 'Wird überprüft …',
     posted: 'Gesendet',
     anonymous: 'Anonym',
@@ -52,7 +48,6 @@ export const COPY: Record<Lang, CommentWidgetCopy> = {
   },
   'zh-hans': {
     nameRequired: '请填写名字',
-    submitting: '提交中…',
     verifying: '验证中…',
     posted: '已发送',
     anonymous: '匿名',
@@ -61,7 +56,6 @@ export const COPY: Record<Lang, CommentWidgetCopy> = {
   },
   'zh-hant': {
     nameRequired: '請填寫名字',
-    submitting: '提交中…',
     verifying: '驗證中…',
     posted: '已發送',
     anonymous: '匿名',

@@ -490,18 +490,21 @@ interface LiveComment {
       const overlay = document.createElement("div");
       overlay.setAttribute("role", "dialog");
       overlay.setAttribute("aria-modal", "true");
-      overlay.setAttribute("aria-label", "Verification");
+      overlay.setAttribute("aria-label", copy.verifying);
       overlay.style.cssText =
         "position:fixed;inset:0;z-index:2147483646;display:flex;align-items:center;" +
         "justify-content:center;background:rgba(0,0,0,.5)";
       const frame = document.createElement("iframe");
-      frame.title = "Verification";
+      frame.title = copy.verifying;
       frame.src = server + "/api/v2/captcha/?t=" + Date.now();
       frame.style.cssText =
         "width:340px;max-width:92vw;height:240px;border:0;border-radius:12px;" +
         "background:var(--moss-color-surface,#fff);box-shadow:var(--moss-elevation-3)";
       overlay.appendChild(frame);
       document.body.appendChild(overlay);
+      // A modal takes focus while open and gives it back when it closes.
+      const returnFocus = document.activeElement as HTMLElement | null;
+      frame.focus();
 
       let settled = false;
       const finish = (act: () => void): void => {
@@ -512,6 +515,7 @@ interface LiveComment {
         overlay.removeEventListener("click", onClick);
         document.removeEventListener("keydown", onKey);
         overlay.remove();
+        returnFocus?.focus();
         act();
       };
       const cancel = (): void => finish(() => reject(new Error("cancelled")));
@@ -550,10 +554,13 @@ interface LiveComment {
   function setState(s: FormState): void {
     form.dataset.state = s;
     btn.setAttribute("aria-busy", s === "loading" ? "true" : "false");
-    btn.disabled = s === "loading";
+    // aria-disabled, not disabled: disabling the focused button throws the
+    // keyboard reader's focus to <body>. The loading guard in the submit
+    // handler is what stops a second POST.
+    btn.setAttribute("aria-disabled", s === "loading" ? "true" : "false");
     if (s !== "error") {
       status.textContent = "";
-      status.classList.remove("comment-form-status--error");
+      status.classList.remove("comment-form-status--error", "visually-hidden");
     }
   }
 
@@ -655,6 +662,10 @@ interface LiveComment {
       .then((data: Record<string, unknown>) => {
         // Success: morph button to ✓, auto-revert after 3s.
         setState("success");
+        // The ✓ on the button says it to the eye; the live region says it to
+        // a screen reader.
+        status.textContent = copy.posted;
+        status.classList.add("visually-hidden");
         scheduleAutoRevert();
         textarea!.value = "";
         // Capture before resetting — the rid fallback below reads it.
@@ -663,8 +674,11 @@ interface LiveComment {
         // closes the float shell when one is open; cancelReply() re-homes the form for the
         // reply case (the shell is NOT open then, so cancel() alone no-ops and would strand
         // the form inside the thread) and clears the reply placeholder + replyToId.
+        const hadFocus = form.contains(document.activeElement);
         quoteFloat?.cancel();
         cancelReply();
+        // Moving the form out of the thread drops the focus inside it.
+        if (hadFocus && !form.contains(document.activeElement)) btn.focus();
 
         const created = normalizeComment({
           id: typeof data.id === "number" || typeof data.id === "string" ? data.id : Date.now(),

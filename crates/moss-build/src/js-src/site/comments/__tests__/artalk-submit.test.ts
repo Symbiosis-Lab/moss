@@ -644,7 +644,7 @@ describe("artalk captcha handshake (Artalk iframe flow)", () => {
 
     // The modal iframe targets the captcha page WITH a trailing slash — required
     // so Artalk's relative ./verify resolves under the /comments proxy prefix.
-    const frame = document.querySelector('iframe[title="Verification"]') as HTMLIFrameElement | null;
+    const frame = document.querySelector('iframe[title="Verifying…"]') as HTMLIFrameElement | null;
     expect(frame).not.toBeNull();
     expect(frame!.src).toContain("/api/v2/captcha/?t=");
 
@@ -653,7 +653,7 @@ describe("artalk captcha handshake (Artalk iframe flow)", () => {
 
     expect(postCount).toBe(2);
     expect(document.getElementById("comment-artalk-42")).not.toBeNull();
-    expect(document.querySelector('iframe[title="Verification"]')).toBeNull();
+    expect(document.querySelector('iframe[title="Verifying…"]')).toBeNull();
     vi.useRealTimers();
   });
 
@@ -703,15 +703,22 @@ describe("artalk captcha handshake (Artalk iframe flow)", () => {
 
     (document.getElementById("moss-comment-text") as HTMLTextAreaElement).value = "hi";
     const form = document.getElementById("moss-comment-form") as HTMLFormElement;
+    const submit = form.querySelector('[type="submit"]') as HTMLButtonElement;
+    submit.focus();
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    // A modal takes focus, and is named in the page's language.
+    expect(dialog!.contains(document.activeElement)).toBe(true);
+    expect(dialog!.getAttribute("aria-label")).toBe("Verifying…");
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await vi.advanceTimersByTimeAsync(0);
 
     expect(document.querySelector('[role="dialog"]')).toBeNull();
-    expect((form.querySelector('[type="submit"]') as HTMLButtonElement).disabled).toBe(false);
+    expect(document.activeElement).toBe(submit);
+    expect(submit.disabled).toBe(false);
     vi.useRealTimers();
   });
 

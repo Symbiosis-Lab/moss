@@ -78,26 +78,30 @@ import type { CardSegment, CardBlock } from "./share-card/text";
 // block-text.ts's header.
 import { cleanBlockText, splitIntoLines } from "./block-text";
 
-const COPY: Record<Lang, { share: string; comment: string; copy: string }> = {
+const COPY: Record<Lang, { share: string; comment: string; copy: string; group: string }> = {
   en: {
     share: "Share",
     comment: "Comment",
     copy: "Copy",
+    group: "Selected text",
   },
   de: {
     share: "Teilen",
     comment: "Kommentieren",
     copy: "Kopieren",
+    group: "Markierter Text",
   },
   "zh-hans": {
     share: "分享",
     comment: "评论",
     copy: "复制",
+    group: "选中的文字",
   },
   "zh-hant": {
     share: "分享",
     comment: "留言",
     copy: "複製",
+    group: "選取的文字",
   },
 };
 
@@ -143,6 +147,8 @@ export function initSelectionActions(): void {
       requestAnimationFrame(() => handleDesktopSelection(article, popover));
     });
 
+    installKeyboardSelection(article, popover);
+
     document.addEventListener("mousedown", (e) => {
       // Right-click must not dismiss: the reader is opening a context menu on
       // the selection (or a moss menu, once one exists here), and hiding the
@@ -182,9 +188,11 @@ export function initSelectionActions(): void {
 
 // ── DOM creation ─────────────────────────────────────────────────────────
 
-function createPopover(labels: { share: string; comment: string; copy: string }, hasComments: boolean): HTMLDivElement {
+function createPopover(labels: { share: string; comment: string; copy: string; group: string }, hasComments: boolean): HTMLDivElement {
   const el = document.createElement("div");
   el.className = "sel-popover";
+  el.setAttribute("role", "group");
+  el.setAttribute("aria-label", labels.group);
   const commentHtml = hasComments
     ? `<span class="sel-sep"></span>
     <button class="sel-comment" type="button">${labels.comment}</button>`
@@ -687,6 +695,69 @@ export function truncateFromStart(text: string, budget: number): string | null {
 }
 
 // ── Visibility helpers ───────────────────────────────────────────────────
+
+/**
+ * The desktop bar for a keyboard reader. A selection made from the keyboard
+ * (Shift+arrows, select-all) shows the bar as a pointer selection does. While
+ * it is up, the next Tab moves into it; Tab and Shift+Tab walk its buttons,
+ * and leaving either end or pressing Escape closes it and gives back the
+ * selection and the focus the reader had. The bar sits at the end of <body>,
+ * so without this the next Tab would go to the next link on the page. The walk
+ * is done here rather than left to the browser because WebKit skips buttons on
+ * Tab unless the reader has turned that on.
+ */
+function installKeyboardSelection(article: Element, popover: HTMLDivElement): void {
+  let fromKeyboard = false;
+  let saved: { range: Range; focus: HTMLElement | null } | null = null;
+
+  const buttons = () => Array.from(popover.querySelectorAll<HTMLButtonElement>("button"));
+  const close = () => {
+    // A focused button that is hidden can stay the active element, and would
+    // then swallow the next keyup.
+    if (popover.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
+    hideElement(popover);
+    fromKeyboard = false;
+    if (!saved) return;
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(saved.range);
+    saved.focus?.focus();
+    saved = null;
+  };
+
+  document.addEventListener("keyup", (e) => {
+    if (popover.contains(e.target as Node) || e.key === "Tab" || e.key === "Escape") return;
+    handleDesktopSelection(article, popover);
+    fromKeyboard = popover.classList.contains("visible");
+  });
+  document.addEventListener("mouseup", () => {
+    fromKeyboard = false;
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (!popover.classList.contains("visible")) return;
+    const inside = popover.contains(document.activeElement);
+    if (!inside) {
+      if (e.key !== "Tab" || e.shiftKey || !fromKeyboard) return;
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      e.preventDefault();
+      const active = document.activeElement;
+      saved = {
+        range: sel.getRangeAt(0).cloneRange(),
+        focus: active instanceof HTMLElement && active !== document.body ? active : null,
+      };
+      buttons()[0]?.focus();
+      return;
+    }
+    if (e.key !== "Tab" && e.key !== "Escape") return;
+    e.preventDefault();
+    const all = buttons();
+    const next = e.key === "Tab" ? all[all.indexOf(document.activeElement as HTMLButtonElement) + (e.shiftKey ? -1 : 1)] : undefined;
+    if (next) next.focus();
+    else close();
+  });
+}
 
 function showElement(el: HTMLElement): void {
   el.classList.add("visible");

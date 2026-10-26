@@ -233,7 +233,8 @@ a.comment-author:hover {
   min-height: 3rem;
   padding: 0.25rem 0;
   border: none;
-  border-bottom: 1px solid var(--moss-border-medium, #d1cdc4);
+  /* border-strong: the underline is the field's only boundary (WCAG 1.4.11). */
+  border-bottom: 1px solid var(--moss-border-strong, #8e8b85);
   font-family: inherit;
   font-size: var(--moss-reading-size, 1.125rem);
   line-height: 1.7;
@@ -274,7 +275,7 @@ a.comment-author:hover {
 .comment-field {
   background: transparent;
   border: none;
-  border-bottom: 1px solid var(--moss-border-medium, #d1cdc4);
+  border-bottom: 1px solid var(--moss-border-strong, #8e8b85);
   padding: 0.5rem 0;
   font-family: inherit;
   font-size: var(--moss-size-sm, 1rem);
@@ -325,7 +326,7 @@ a.comment-author:hover {
   outline-offset: 2px;
 }
 
-.comment-form-submit:disabled {
+.comment-form-submit:is(:disabled, [aria-disabled="true"]) {
   opacity: 0.5;
   cursor: not-allowed;
 }
