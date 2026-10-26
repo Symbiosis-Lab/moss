@@ -439,7 +439,7 @@ pub(crate) async fn run(
                             // the watcher stays totally silent through the
                             // next pass too, the change cannot have been in
                             // flight, and the silence is the aged strike.
-                            strike.arm(&folder_str, top_level_dirty);
+                            strike.arm(&folder_str, top_level_dirty, newest_landing(&report.drifted, &fresh));
                         }
                     }
                     None if drift_allowed => {
@@ -742,6 +742,21 @@ pub(crate) fn undispatched_paths(
         .filter(|(rel, d)| dispatched.get(*rel) != Some(&d.stamp))
         .map(|(rel, _)| rel.clone())
         .collect()
+}
+
+/// When the newest of `fresh` landed on this disk, or `None` when any one's
+/// time is unknown. ctime, not mtime: a synced file keeps the mtime another
+/// machine gave it. Whole seconds only, so a change counts from the end of
+/// its second.
+pub(crate) fn newest_landing(
+    drifted: &std::collections::BTreeMap<String, drift::Drift>,
+    fresh: &[String],
+) -> Option<std::time::SystemTime> {
+    fresh
+        .iter()
+        .map(|r| drifted.get(r).and_then(|d| d.stamp.3))
+        .try_fold(0i64, |newest, c| c.filter(|c| *c > 0).map(|c| newest.max(c)))
+        .map(|secs| std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs as u64 + 1))
 }
 
 /// One more failed pass (root unreadable, or deadline blown); at the

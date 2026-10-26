@@ -6542,6 +6542,31 @@ fn slot_only_sources_appear_in_sealed_sources() {
     }
 }
 
+/// A Finder alias whose target will not resolve is skipped from the output,
+/// but the walk still judges it, so it needs a `sources` entry for the same
+/// reason as the slot files above.
+#[cfg(target_os = "macos")]
+#[test]
+fn an_unresolvable_alias_appears_in_sealed_sources() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "# Home\nwelcome").unwrap();
+    let mut bookmark = b"book\0\0\0\0".to_vec();
+    bookmark.extend_from_slice(&[0xFFu8; 200]);
+    fs::write(test_dir.join("old-app"), &bookmark).unwrap();
+
+    build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
+
+    let hashes = load_previous_hashes(folder_path);
+    assert!(
+        hashes.sources.contains_key("old-app"),
+        "an unresolvable alias is absent from sealed `sources`, so the sweep reads it as \
+         a new file every pass; got {:?}",
+        hashes.sources.keys().collect::<Vec<_>>()
+    );
+    assert!(!hashes.files.keys().any(|k| k.contains("old-app")), "it is still not published");
+}
+
 /// The publish gate's evidence must survive a real build.
 ///
 /// `deploy::refuse_publish` is the only thing between an author and a

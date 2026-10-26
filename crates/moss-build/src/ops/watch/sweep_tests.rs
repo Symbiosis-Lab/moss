@@ -950,6 +950,21 @@ fn a_neighbour_joining_the_drift_set_does_not_re_dispatch_the_rest() {
     );
 }
 
+/// A strike is judged against when the newest change landed here, and only
+/// when every drifted file says when.
+#[test]
+fn newest_landing_is_the_end_of_the_newest_ctime_second() {
+    let at = |ctime: Option<i64>| drift::Drift { kind: drift::DriftKind::Edited, stamp: (1, 50, 0, ctime, None) };
+    let mut now = std::collections::BTreeMap::new();
+    now.insert("a.md".to_string(), at(Some(100)));
+    now.insert("b.md".to_string(), at(Some(200)));
+    let fresh = vec!["a.md".to_string(), "b.md".to_string()];
+    assert_eq!(newest_landing(&now, &fresh), Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(201)));
+    now.insert("gone.md".to_string(), at(None));
+    let with_unknown = vec!["a.md".to_string(), "gone.md".to_string()];
+    assert_eq!(newest_landing(&now, &with_unknown), None, "an unknown time leaves the strike rule as it was");
+}
+
 /// The suppression must not become permanent: a path that changes again is
 /// a new incident, and the whole point of the sweep is to catch it.
 #[test]
@@ -1019,6 +1034,14 @@ async fn a_sweep_straight_after_a_build_finds_no_drift() {
     std::fs::write(test_dir.join("posts/one.md"), "# One\n").unwrap();
     // Deliberately ignored: canonical location is .moss/theme/style.css.
     std::fs::write(test_dir.join("style.css"), "body { margin: 0 }\n").unwrap();
+    // A Finder alias whose target will not resolve: skipped from the output,
+    // still judged by the walk.
+    #[cfg(target_os = "macos")]
+    {
+        let mut bookmark = b"book\0\0\0\0".to_vec();
+        bookmark.extend_from_slice(&[0xFFu8; 200]);
+        std::fs::write(test_dir.join("old-app"), &bookmark).unwrap();
+    }
 
     build_once(folder_path).await;
 

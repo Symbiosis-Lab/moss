@@ -48,6 +48,17 @@ pub(crate) fn migrate_build_tree(mp: &MossPaths) {
         leftovers.push(legacy);
     }
     for root in leftovers {
+        match sightings(&root) {
+            1 => {}
+            2 => {
+                log::info!(
+                    "[tree] {} came back after it was removed: a sync client is restoring it, so it is left until the next launch",
+                    root.display()
+                );
+                continue;
+            }
+            _ => continue,
+        }
         for (sub, verify) in [("objects", true), ("transforms", false)] {
             merge(&root.join("cache").join(sub), &mp.store_dir().join(sub), verify);
         }
@@ -57,6 +68,18 @@ pub(crate) fn migrate_build_tree(mp: &MossPaths) {
             Err(e) => log::info!("[tree] harvested {} but could not remove it: {e}", root.display()),
         }
     }
+}
+
+/// How many times this process has met `root` beside the live tree. A root
+/// the provider restores after its removal (a placeholder whose delete it
+/// never took) would otherwise be harvested and removed at every build start.
+fn sightings(root: &Path) -> u32 {
+    static SEEN: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<PathBuf, u32>>> =
+        std::sync::LazyLock::new(Default::default);
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    let n = seen.entry(root.to_path_buf()).or_insert(0);
+    *n = n.saturating_add(1);
+    *n
 }
 
 /// `<name> <digits>` directories beside `root`, the shape a sync client's
@@ -199,5 +222,22 @@ mod tests {
         assert!(!store.blob_path(&forged).exists(), "a blob that does not hash to its name was not");
         assert!(!aside.exists(), "the sibling is gone");
         assert!(!legacy.exists(), "and so is the legacy root");
+    }
+
+    /// A sync client that has not taken the delete puts the root back before
+    /// the next build; removing it again on every build only fights it.
+    #[test]
+    fn a_root_that_comes_back_is_left_until_the_next_launch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mp = MossPaths::new(tmp.path());
+        std::fs::create_dir_all(mp.build_dir()).unwrap();
+        let aside = mp.root().join("build 2");
+        std::fs::create_dir_all(aside.join("cache")).unwrap();
+        migrate_build_tree(&mp);
+        assert!(!aside.exists(), "the first sighting is removed");
+
+        std::fs::create_dir_all(aside.join("cache")).unwrap();
+        migrate_build_tree(&mp);
+        assert!(aside.exists(), "a root that came back is left alone this launch");
     }
 }

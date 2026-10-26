@@ -3352,7 +3352,7 @@ pub fn generate_blocking_content_for_build(
             Some(&input_evidence),
         );
         if !items.is_empty() {
-            log::info!(
+            log::debug!(
                 "🖼  Found {} image(s) for background WebP conversion",
                 items.len()
             );

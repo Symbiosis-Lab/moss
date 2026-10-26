@@ -144,7 +144,7 @@ async fn arming_then_silence_matures_into_a_recreate_request() {
     let mut arm = StrikeArm::new();
 
     // Pass N: the sweep catches drift the watcher never delivered.
-    arm.arm(folder, false);
+    arm.arm(folder, false, None);
     // Pass N+1: nothing arrived in the whole window.
     assert!(arm.mature(folder), "silence over the window is the aged strike");
     tokio::time::timeout(Duration::from_secs(1), h.recreate_requested())
@@ -162,9 +162,25 @@ fn a_batch_inside_the_window_disarms_the_candidate() {
     let folder = "/tmp/moss-strike-arm-batch";
     let h = register(folder);
     let mut arm = StrikeArm::new();
-    arm.arm(folder, false);
+    arm.arm(folder, false, None);
     h.note_batch();
     assert!(!arm.mature(folder));
+    deregister(folder, &h);
+}
+
+/// The sweep can catch a change the watcher already delivered (its baseline
+/// lags the build that absorbed it). A batch since the change proves the
+/// watcher alive, so the catch must not put it on trial.
+#[test]
+fn a_change_the_watcher_already_spoke_after_never_arms() {
+    let folder = "/tmp/moss-strike-arm-spoke-after";
+    let h = register(folder);
+    let mut arm = StrikeArm::new();
+    let changed_at = std::time::SystemTime::now() - Duration::from_secs(5);
+    h.note_batch();
+    arm.arm(folder, false, Some(changed_at));
+    assert!(!arm.mature(folder), "a watcher that spoke after the change is not on trial");
+    assert_eq!(h.recreations.load(std::sync::atomic::Ordering::SeqCst), 0);
     deregister(folder, &h);
 }
 
@@ -179,7 +195,7 @@ fn a_top_level_change_never_arms_the_candidate() {
     let folder = "/tmp/moss-strike-arm-top-level";
     let h = register(folder);
     let mut arm = StrikeArm::new();
-    arm.arm(folder, true);
+    arm.arm(folder, true, None);
     assert!(!arm.mature(folder), "top-level dirt suppresses the walk half of the arming too");
     assert_eq!(h.recreations.load(std::sync::atomic::Ordering::SeqCst), 0);
     deregister(folder, &h);
@@ -191,7 +207,7 @@ fn an_unreadable_root_disarms_the_candidate() {
     let folder = "/tmp/moss-strike-arm-unreadable";
     let h = register(folder);
     let mut arm = StrikeArm::new();
-    arm.arm(folder, false);
+    arm.arm(folder, false, None);
     arm.disarm();
     assert!(!arm.mature(folder));
     deregister(folder, &h);

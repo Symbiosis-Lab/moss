@@ -1496,7 +1496,7 @@ pub fn scan_folder_with_dedup_emit_with_error(
     );
     let mut passthrough_media: Vec<String> = Vec::new();
     if !passthrough_roots.is_empty() {
-        log::info!("[scan] {} passthrough subtree(s) detected", passthrough_roots.len());
+        log::debug!("[scan] {} passthrough subtree(s) detected", passthrough_roots.len());
         // Remove passthrough media from the conversion pipelines so a bundled
         // web app's own images/videos are copied byte-for-byte (WebP/transcode
         // would rewrite filenames the app's HTML/CSS/JS already reference).
