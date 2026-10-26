@@ -570,7 +570,10 @@ pub fn get_available_channels_with_status(
 /// Two things can decide this. The row carries a `refusal` — withdrawn, or
 /// built for a newer moss — which keeps it LISTED either way: the plugin has
 /// stopped running and the row is where the user finds out, and the catalog
-/// is the only surface that can remove it. Or the plugin's own manifest says
+/// is the only surface that can remove it. An `unavailable` refusal is not of
+/// that kind: nothing has stopped running, it only says why this computer
+/// cannot install the plugin, so it is gated like any other offer. Or the
+/// plugin's own manifest says
 /// this version isn't ready to be offered yet (`preview`) and the user hasn't
 /// turned on preview features, which hides. Nothing else affects a row —
 /// capability narrowing happens at the entry points.
@@ -595,7 +598,8 @@ pub fn get_available_channels_with_status(
 /// refusal lives at the loader (`crate::plugins::admission`), and this
 /// only decides whether the row explaining it is on screen.
 pub fn channel_is_listed(channel: &AvailablePlugin, show_preview: bool) -> bool {
-    channel.refusal.is_some() || channel.installed || !channel.preview || show_preview
+    let stopped = channel.refusal.as_ref().is_some_and(|r| !matches!(r, Refusal::Unavailable { .. }));
+    stopped || channel.installed || !channel.preview || show_preview
 }
 
 /// Install a plugin into a project.
@@ -1410,6 +1414,17 @@ deploy = "other-deployer"
         // just stopped working has to be told why, and that is exactly the
         // user for whom the readiness rule says "hide it".
         assert!(channel_is_listed(&row_revoked(true, false), false));
+    }
+
+    #[test]
+    fn a_plugin_unavailable_here_is_still_hidden_until_the_user_opts_in() {
+        let unavailable = |preview| AvailablePlugin {
+            refusal: Some(Refusal::Unavailable { platforms: vec!["darwin-arm64".into()] }),
+            ..row(preview, false)
+        };
+        assert!(!channel_is_listed(&unavailable(true), false));
+        assert!(channel_is_listed(&unavailable(true), true));
+        assert!(channel_is_listed(&unavailable(false), false));
     }
 
     #[test]
