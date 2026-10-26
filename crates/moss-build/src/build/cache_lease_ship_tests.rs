@@ -164,7 +164,8 @@ async fn advertise_sealed_drops_the_cache_lease_before_collect_build_store() {
             ..Default::default()
         },
     )
-    .await;
+    .await
+    .expect("the caller hand-off returns the seal");
 
     super::SHIP_PHASE_LEASE_SAMPLE
         .scope(lease_sample.clone(), crate::build::seal_phase::run_now(pending))
@@ -245,7 +246,8 @@ async fn advertise_sealed_ships_held_bytes_then_hands_deploy_a_manifest_without_
         &mp.project_root().to_string_lossy(),
         SealGuards::default(),
     )
-    .await;
+    .await
+    .expect("the caller hand-off returns the seal");
     crate::build::seal_phase::run_now(pending).await;
 
     let adopted = adopted.lock().unwrap().take().expect("the tail must have adopted its manifest");

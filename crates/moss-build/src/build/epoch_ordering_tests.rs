@@ -348,3 +348,171 @@ async fn a_build_that_waited_for_the_folder_build_lock_is_ordered_after_the_wait
     assert_ne!(promoted, 0, "the build never promoted");
     assert!(promoted >= released_at, "the build promoted under a stamp older than the moment it got the lock");
 }
+
+// ── Seal tails that a newer seal has overtaken ──────────────────────────────
+
+fn sealed_page(stage: &std::path::Path, body: &[u8]) -> crate::build::manifest::SealedManifest {
+    use crate::build::manifest::{HashBucket, PendingManifest};
+    std::fs::write(stage.join("index.html"), body).unwrap();
+    let mut pending = PendingManifest::new(crate::types::content::SiteHashes::default());
+    pending.register(&crate::build::served_path::ServedPath::from_source("index.html").unwrap(), body, HashBucket::Files);
+    pending.seal()
+}
+
+async fn tail(
+    mp: &crate::moss_paths::MossPaths,
+    session: &std::sync::Arc<crate::system::folder_session::FolderSession>,
+    sealed: crate::build::manifest::SealedManifest,
+    render: u64,
+    handoff: crate::build::Handoff,
+) -> Option<crate::build::seal_phase::PendingSeal> {
+    let ports = crate::build::SealPorts {
+        events: crate::build::null_sink(),
+        announcer: crate::build::ports::host::test_host_ports().announcer.clone(),
+        server_diff: None,
+    };
+    crate::build::advertise_sealed(
+        &ports,
+        mp,
+        &mp.hashes(),
+        &mp.staging_dir(),
+        sealed,
+        None,
+        std::sync::Arc::new(|_: &str| false),
+        Some(session.clone()),
+        crate::build::ship::next_promotion_epoch(),
+        render,
+        Some(render),
+        crate::build::feeds::search_lane::Freshness::Now,
+        &mp.project_root().to_string_lossy(),
+        crate::build::SealGuards { handoff, ..Default::default() },
+    )
+    .await
+}
+
+/// Holds the folder's lifecycle record, as a detached tail does for its whole
+/// life: an idle record is evicted by the next lookup of another folder,
+/// which parallel tests make constantly.
+struct SealFixture {
+    _tmp: tempfile::TempDir,
+    _record: std::sync::Arc<crate::build::lifecycle::LifecycleCell>,
+    mp: crate::moss_paths::MossPaths,
+    session: std::sync::Arc<crate::system::folder_session::FolderSession>,
+}
+
+fn seal_fixture() -> SealFixture {
+    let (tmp, folder) = fixture();
+    let mp = crate::moss_paths::MossPaths::new(&folder);
+    std::fs::create_dir_all(mp.staging_dir()).unwrap();
+    let session = crate::system::folder_session::FolderSession::new(mp.project_root().to_path_buf());
+    SealFixture { _record: crate::build::lifecycle::lock_for(&mp), _tmp: tmp, mp, session }
+}
+
+/// Tails run detached and finish in any order. One that lands after a newer
+/// render's tail must not roll back what that tail wrote: `hashes.json`, and
+/// the seal the debounce lane will promote.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_older_tail_that_lands_after_a_newer_one_changes_nothing() {
+    let SealFixture { mp, session, .. } = &seal_fixture();
+    let older = sealed_page(&mp.staging_dir(), b"<html><body>older</body></html>");
+    let newer = sealed_page(&mp.staging_dir(), b"<html><body>newer</body></html>");
+    let newer_gen = newer.generation_id().to_string();
+
+    assert!(tail(&mp, &session, newer, 2, crate::build::Handoff::Lane).await.is_none());
+    let hashes_after_newer = std::fs::read(mp.hashes()).expect("the newer tail writes hashes.json");
+    assert!(tail(&mp, &session, older, 1, crate::build::Handoff::Lane).await.is_none());
+
+    assert_eq!(std::fs::read(mp.hashes()).unwrap(), hashes_after_newer, "the older tail must not rewrite hashes.json");
+    crate::build::seal_phase::settle(&mp).await;
+    assert_eq!(mp.current_generation_id().expect("a generation is promoted"), newer_gen, "the lane must promote the newer seal");
+}
+
+/// The common case under fast saving: several tails seal together and queue
+/// on the stage-write lock. One that is overtaken while it waits must leave
+/// the lock at once, writing nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tail_overtaken_while_it_waits_for_the_lock_writes_nothing() {
+    let SealFixture { mp, session, .. } = &seal_fixture();
+    let older = sealed_page(&mp.staging_dir(), b"<html><body>older</body></html>");
+    let held = session.lock_stage_write().await;
+
+    let waiting = {
+        let (root, session) = (mp.project_root().to_path_buf(), session.clone());
+        tokio::spawn(async move {
+            let mp = crate::moss_paths::MossPaths::new(&root);
+            tail(&mp, &session, older, 1, crate::build::Handoff::Lane).await.is_none()
+        })
+    };
+    // The tail notes its seal before it asks for the lock.
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while !crate::build::lifecycle::newer_render_sealed(&mp, Some(0)) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the tail must note its seal before it waits for the lock");
+    crate::build::lifecycle::note_sealed(&mp, Some(2));
+    drop(held);
+
+    assert!(waiting.await.unwrap());
+    assert!(!mp.hashes().exists(), "an overtaken tail must not write hashes.json");
+    crate::build::seal_phase::settle(&mp).await;
+    assert!(mp.current_generation_id().is_err(), "nor hand the lane a seal to promote");
+}
+
+/// The one-shot arm's caller reads `current` as soon as the tail returns, so
+/// its tail never yields, whatever else has sealed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_caller_hand_off_never_yields() {
+    let SealFixture { mp, session, .. } = &seal_fixture();
+    crate::build::lifecycle::note_sealed(&mp, Some(9));
+    let sealed = sealed_page(&mp.staging_dir(), b"<html><body>one-shot</body></html>");
+    let pending = tail(&mp, &session, sealed, 1, crate::build::Handoff::Caller).await;
+    assert!(pending.is_some(), "the caller gets its seal back");
+    assert!(mp.hashes().exists(), "and the tail wrote hashes.json");
+}
+
+#[test]
+fn a_render_is_overtaken_only_by_a_newer_sealed_one() {
+    let SealFixture { mp, .. } = &seal_fixture();
+    crate::build::lifecycle::note_sealed(mp, None);
+    assert!(!crate::build::lifecycle::newer_render_sealed(&mp, Some(1)), "nothing has sealed");
+    crate::build::lifecycle::note_sealed(&mp, Some(3));
+    crate::build::lifecycle::note_sealed(&mp, Some(2));
+    assert!(crate::build::lifecycle::newer_render_sealed(&mp, Some(2)), "3 overtakes 2, even noted first");
+    assert!(!crate::build::lifecycle::newer_render_sealed(&mp, Some(3)), "a render does not overtake itself");
+    assert!(!crate::build::lifecycle::newer_render_sealed(&mp, None), "no render, no verdict");
+}
+
+/// The lane hand-off happens under the stage-write lock. A newer tail that
+/// seals while an older one is about to hand off must wait for it, or the
+/// older request lands last and the lane promotes the older render.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_newer_tail_cannot_hand_off_before_an_older_one_that_holds_the_lock() {
+    let SealFixture { mp, session, .. } = &seal_fixture();
+    let older = sealed_page(&mp.staging_dir(), b"<html><body>older</body></html>");
+    let newer = sealed_page(&mp.staging_dir(), b"<html><body>newer</body></html>");
+    let newer_gen = newer.generation_id().to_string();
+
+    let newer = std::sync::Mutex::new(Some(newer));
+    let spawned = std::sync::Arc::new(std::sync::Mutex::new(None::<tokio::task::JoinHandle<()>>));
+    let hook: std::sync::Arc<dyn Fn() + Send + Sync> = {
+        let (root, session, spawned) = (mp.project_root().to_path_buf(), session.clone(), spawned.clone());
+        std::sync::Arc::new(move || {
+            let Some(newer) = newer.lock().unwrap().take() else { return };
+            let (root, session) = (root.clone(), session.clone());
+            // Spawned outside the hook's scope, so the newer tail runs no hook.
+            *spawned.lock().unwrap() = Some(tokio::runtime::Handle::current().spawn(async move {
+                let mp = crate::moss_paths::MossPaths::new(&root);
+                tail(&mp, &session, newer, 2, crate::build::Handoff::Lane).await;
+            }));
+            // Time enough for the newer tail to finish, if the lock let it.
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        })
+    };
+    crate::build::SEAL_HANDOFF_TEST_HOOK.scope(hook, tail(mp, session, older, 1, crate::build::Handoff::Lane)).await;
+    spawned.lock().unwrap().take().expect("the older tail reached its hand-off").await.unwrap();
+
+    crate::build::seal_phase::settle(mp).await;
+    assert_eq!(mp.current_generation_id().expect("a generation is promoted"), newer_gen, "the newer seal must be the lane's last");
+}

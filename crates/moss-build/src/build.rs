@@ -1419,7 +1419,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                         let mp_for_mat = crate::moss_paths::MossPaths::new(
                             std::path::Path::new(&folder_path_for_mat),
                         );
-                        let pending = advertise_sealed(
+                        let handed_back = advertise_sealed(
                             &seal_ports,
                             &mp_for_mat,
                             &hashes_path,
@@ -1440,17 +1440,15 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                                 final_sweep: None,
                                 cache_lease,
                                 build_root_identity: start_identity,
+                                // Long-lived runtime: the materialize is
+                                // debounced (`build::seal_phase`), and the
+                                // hand-off is non-blocking, so `end_ui_bound()`
+                                // below fires once the per-build half is done.
+                                handoff: Handoff::Lane,
                             },
                         )
                         .await;
-                        // Long-lived runtime: debounce the materialize
-                        // (`build::seal_phase`) instead of running it inline
-                        // — this is the fix this whole change exists for.
-                        // Non-blocking: hands the request to the folder's
-                        // lane and returns immediately, so `end_ui_bound()`
-                        // below fires once the (fast) per-build half is done
-                        // rather than waiting out the materialize debounce.
-                        crate::build::seal_phase::request(mp_for_mat.root(), pending);
+                        debug_assert!(handed_back.is_none(), "the lane hand-off keeps nothing for its caller");
                     }
                     Err(e) => {
                         log::error!("seal+persist: background work failed: {}", e);
@@ -1507,7 +1505,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                     let _ = ONE_SHOT_TAIL_TEST_HOOK.try_with(|hook| hook("rendered"));
                     let mp = crate::moss_paths::MossPaths::new(std::path::Path::new(&folder_path));
                     let session = crate::system::folder_session::registry().get(&folder_path);
-                    let mut pending = advertise_sealed(
+                    let Some(mut pending) = advertise_sealed(
                         &SealPorts {
                             events: config.host.events.clone(),
                             announcer: config.host.announcer.clone(),
@@ -1535,9 +1533,13 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
                             final_sweep: Some(crate::build::lifecycle::final_build_permit(&mp)),
                             cache_lease,
                             build_root_identity: start_identity,
+                            handoff: Handoff::Caller,
                         },
                     )
-                    .await;
+                    .await
+                    else {
+                        unreachable!("Handoff::Caller always returns the seal")
+                    };
                     #[cfg(test)]
                     let _ = ONE_SHOT_TAIL_TEST_HOOK.try_with(|hook| hook("sealed"));
                     // Held across the seal above; released by the materialize
@@ -1811,12 +1813,25 @@ pub(crate) struct SealGuards {
     /// that same tail's own `collect_build_store` call can trigger cache GC
     /// (see the `drop(guards.cache_lease)` there).
     ///
-    /// `advertise_sealed` has zero early-return (`return`/`?`) statements
-    /// between entry and that `drop` — load-bearing, not incidental:
-    /// introducing one would let RAII release `cache_lease` before
+    /// `advertise_sealed`'s only early return is the overtaken tail's, which
+    /// hands nothing on to materialize, so releasing the lease there is safe.
+    /// Any other early return would let RAII release `cache_lease` before
     /// `materialize_and_promote` runs, silently reopening the GC race this
     /// field exists to close, with no compiler error to catch it.
     pub cache_lease: Option<crate::build::lifecycle::CacheWriteLease>,
+    /// Where the finished seal goes; see [`Handoff`].
+    pub handoff: Handoff,
+}
+
+/// Where `advertise_sealed` sends the seal it finishes.
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Handoff {
+    /// Back to the caller, which materializes it at once: the one-shot arm,
+    /// whose caller reads `current` as soon as this returns.
+    #[default]
+    Caller,
+    /// To the folder's debounce lane: the long-lived arm.
+    Lane,
 }
 
 /// The focused preview switch is separate from the whole-generation evidence
@@ -1935,9 +1950,12 @@ tokio::task_local! {
 // Test-only: called by a one-shot build's inline tail with "rendered" before
 // its seal, "sealed" after it, and "shipping" just before its materialize
 // copies the generation: the span another moss process could build in.
+// `SEAL_HANDOFF_TEST_HOOK` is called by every seal tail just before its
+// hand-off, under the stage-write lock.
 #[cfg(test)]
 tokio::task_local! {
     pub(crate) static ONE_SHOT_TAIL_TEST_HOOK: std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+    pub(crate) static SEAL_HANDOFF_TEST_HOOK: std::sync::Arc<dyn Fn() + Send + Sync>;
 }
 
 /// The seal's per-build half: everything that depends only on `stage_dir` and
@@ -1977,8 +1995,11 @@ async fn advertise_sealed(
     // below, inline; `cache_lease` and `build_root_identity` travel into the
     // returned `PendingSeal` for the materialize phase to read or drop.
     guards: SealGuards,
-) -> crate::build::seal_phase::PendingSeal {
+) -> Option<crate::build::seal_phase::PendingSeal> {
     let sealed_at = std::time::Instant::now();
+    // A caller hand-off never yields: its caller reads `current` next.
+    let yields = guards.handoff == Handoff::Lane;
+    crate::build::lifecycle::note_sealed(mp, render_seq);
     // Right after seal, before any repair pass can rewrite `stage_dir`: the
     // reference point `ship_phase`'s integrity check compares against, for
     // every entry it will read from the mutable stage path rather than an
@@ -2010,9 +2031,9 @@ async fn advertise_sealed(
     // rebuild's writes into that same directory. See
     // `FolderSession::stage_write_lock` doc comment for the full rationale.
     //
-    // Held only across THIS phase's own writes (repair + the hashes.json
-    // below), not across the materialize phase any more — that phase runs
-    // later, often much later behind the seal's idle debounce, and holding a
+    // Held across THIS phase's own writes (repair + the hashes.json below)
+    // and its lane hand-off, not across the materialize phase — that phase
+    // runs later, often much later behind the seal's idle debounce, and holding a
     // per-folder write lock for that whole window would serialize every
     // rebuild behind it, which is exactly the latency this split exists to
     // remove. `run_materialize_phase` re-acquires the same lock, freshly, for
@@ -2025,6 +2046,13 @@ async fn advertise_sealed(
         Some(s) => Some(s.lock_stage_write().await),
         None => None,
     };
+    // Tails that seal together queue on this lock. A newer sealed render's
+    // tail writes everything this one would, so this one leaves, rather than
+    // wait its turn or land after it and roll it back.
+    if yields && crate::build::lifecycle::newer_render_sealed(mp, render_seq) {
+        log::info!("seal tail for render #{} left to a newer sealed render", render_seq.unwrap_or_default());
+        return None;
+    }
 
     // Remove every variant that must not ship, then repair the HTML that
     // referenced it. Runs before the hashes.json write below, which would
@@ -2124,21 +2152,14 @@ async fn advertise_sealed(
     // `hashes.json` describe a page set nothing will ever promote, the same
     // reason the pre-split code refused it via `tail_owns_shared_state`. The
     // materialize phase's own `Superseded`/`Err` outcomes need no matching
-    // withdrawal here — the debouncer is level-triggered, so whichever
-    // build's phase-1 ran LAST is the one whose hashes.json write stands by
-    // the time materialize actually runs.
+    // withdrawal here — the debouncer is level-triggered, and an overtaken
+    // tail leaves before this write, so the write that stands is the newest
+    // sealed render's.
     if verdict == crate::build::ship::ShipVerdict::Ship {
         if let Err(e) = sealed.write_to_disk(hashes_path) {
             log::info!("advertise_sealed: failed to write hashes.json: {}", e);
         }
     }
-
-    // Seal-persist-race-404 fix: release the stage-write guard now — the
-    // repair pass and the hashes.json write above are the only things in
-    // this phase that touch `stage_dir`/`hashes.json`. Dropped before
-    // `session` moves into the returned `PendingSeal` below, and before the
-    // guard could otherwise outlive the borrow it holds on `session`.
-    drop(_stage_write_guard);
 
     // Post-seal asset diff (`AssetsSettled` / the LQIP swap): its real
     // dependency is `stage_dir`, which every build repairs above regardless
@@ -2174,10 +2195,9 @@ async fn advertise_sealed(
     // Everything from here down needs a materialized generation (or needs to
     // know whether one exists) — handed to the materialize phase, which runs
     // it now (the CLI/one-shot arm) or debounced (the long-lived arm). The
-    // stage-write guard is dropped here, not carried into that phase: it will
-    // re-acquire its own, later, only for the span that actually reads
-    // `stage_dir`.
-    crate::build::seal_phase::PendingSeal {
+    // stage-write guard is not carried into that phase: it re-acquires its
+    // own, later, only for the span that actually reads `stage_dir`.
+    let pending = crate::build::seal_phase::PendingSeal {
         sealed,
         verdict,
         ports: ports.clone(),
@@ -2189,12 +2209,25 @@ async fn advertise_sealed(
         render_seq,
         freshness,
         is_pinned,
-        session,
+        session: session.clone(),
         cache_lease: guards.cache_lease,
         build_root_identity: guards.build_root_identity,
         folder_lock: None,
         media_rerender_owed,
-    }
+    };
+    // Under the guard, so within one folder session the lane's requests
+    // arrive in lock order and its last is the newest render's.
+    #[cfg(test)]
+    let _ = SEAL_HANDOFF_TEST_HOOK.try_with(|hook| hook());
+    let handed_back = match guards.handoff {
+        Handoff::Caller => Some(pending),
+        Handoff::Lane => {
+            crate::build::seal_phase::request(mp.root(), pending);
+            None
+        }
+    };
+    drop(_stage_write_guard);
+    handed_back
 }
 
 /// Retain generations and sweep the content-addressed cache after a successful
