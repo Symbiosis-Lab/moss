@@ -1957,7 +1957,7 @@
         "wide",
         "full"
       ],
-      "description": "Page width: default (67ch) for prose, wide (80ch) for grids/tables, full (site max) for dashboards",
+      "description": "Page width: default (42 reading sizes, 756px at 18px) for prose, wide (50 reading sizes, 900px at 18px) for grids/tables, full (the site max width) for dashboards",
       "group": "Layout & Presentation",
       "skip_schema": false
     },

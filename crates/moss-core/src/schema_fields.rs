@@ -815,7 +815,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         enum_values: Some(&["wide", "full"]),
         // Frequency=2, Importance=3 → score=76
         score: 77,
-        description: "Page width: default (67ch) for prose, wide (80ch) for grids/tables, full (site max) for dashboards",
+        description: "Page width: default (42 reading sizes, 756px at 18px) for prose, wide (50 reading sizes, 900px at 18px) for grids/tables, full (the site max width) for dashboards",
         label: Some("Width"),
         label_key: "chip.content_width.label",
         group: "This Page",

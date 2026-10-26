@@ -572,7 +572,7 @@ impl Default for ShellProcessor {
 ///
 /// Typography-first design system with:
 /// - 18px base font size for comfortable long-form reading
-/// - 67ch optimal line length for sustained reading
+/// - a 42-reading-size column (about 67 characters) for sustained reading
 /// - 1.7 line-height for enhanced readability
 /// - Warm, paper-inspired color palette reducing eye strain
 /// - CSS custom properties for maintainability
