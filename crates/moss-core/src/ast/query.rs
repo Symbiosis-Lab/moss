@@ -85,10 +85,7 @@ pub fn marked_media_at(blocks: &[Block], i: usize) -> Option<MarkedMedia> {
         _ => return None,
     };
     let Inline::Image { src, alt, .. } = image else { return None };
-    let href = match src {
-        super::url::Url::Resolved(r) => r.href.clone(),
-        super::url::Url::Unresolved(s) => s.clone(),
-    };
+    let href = src.href().to_string();
     let kind = crate::resolve::ext_kind::reference_kind_for_ext(&crate::path_ext::path_extension_lower(&href));
     if !marker.accepts(kind) {
         return None;
@@ -98,7 +95,10 @@ pub fn marked_media_at(blocks: &[Block], i: usize) -> Option<MarkedMedia> {
 }
 
 /// Each pipe segment of an image, in either form, that is a mistyped display
-/// word, as [`crate::media::display_word_warning`] words it. The text stays the caption.
+/// word, as [`crate::media::display_word_warning`] words it (the text stays the
+/// caption), and each width word (`![alt|wide|](x.png)`) dropped because the
+/// image shares its paragraph with other content: only an image alone in its
+/// paragraph becomes a figure that carries the word.
 pub fn image_word_warnings(doc: &Document) -> Vec<String> {
     fn check(inlines: &[Inline], out: &mut Vec<String>) {
         for inline in inlines {
@@ -115,7 +115,20 @@ pub fn image_word_warnings(doc: &Document) -> Vec<String> {
     let mut out = Vec::new();
     super::visit::visit_blocks(doc, |block| {
         match block {
-            Block::Paragraph(inlines) => check(inlines, &mut out),
+            Block::Paragraph(inlines) => {
+                check(inlines, &mut out);
+                let shown = |i: &&Inline| !matches!(i, Inline::LineBreak) && !matches!(i, Inline::Text(t) if t.trim().is_empty());
+                if inlines.iter().filter(shown).count() > 1 {
+                    for inline in inlines {
+                        let Inline::Image { src, alt, is_wikilink, wikilink_pothole, .. } = inline else { continue };
+                        // A wikilink's words are its whole pothole; a standard image's follow its alt.
+                        let words = if *is_wikilink { wikilink_pothole.as_deref() } else { Some(alt.as_str()).filter(|a| a.contains('|')) };
+                        let Some(word) = words.and_then(|w| crate::media::read_image_words(w).placement.width) else { continue };
+                        let href = src.href();
+                        out.push(format!("'{href}' has the width word '{word}', which is ignored because the image shares its paragraph with other content; put the image in its own paragraph"));
+                    }
+                }
+            }
             Block::Figure { image, .. } => check(std::slice::from_ref(image), &mut out),
             _ => {}
         }
@@ -136,10 +149,7 @@ pub fn images_without_text(doc: &Document) -> Vec<String> {
     }
     fn bare(image: &Inline, out: &mut Vec<String>) {
         if let Inline::Image { src, alt, .. } = image {
-            let href = match src {
-                super::url::Url::Resolved(r) => r.href.as_str(),
-                super::url::Url::Unresolved(s) => s.as_str(),
-            };
+            let href = src.href();
             if alt.trim().is_empty() && is_image_file(href) {
                 out.push(href.to_string());
             }
