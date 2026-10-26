@@ -54,16 +54,22 @@ fn a_finished_background_read_asks_the_watcher_for_a_rebuild() {
 }
 
 #[test]
-fn a_background_read_of_a_superseded_render_asks_for_nothing() {
+fn a_background_read_overtaken_by_a_newer_render_still_asks_for_a_rebuild() {
     let f = fixture();
+    // Slow enough that the newer render is admitted while the read runs.
+    script(f.dir.path(), "d.sh", &format!("sleep 1\n{DERIVED}"));
     let watcher = crate::ops::watch::worker::register(&f.folder);
     let render = f.render();
-    // A newer render of the folder was admitted while the read was running.
-    f.render();
+    let root = f.dir.path().to_path_buf();
+    let newer = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        crate::build::lifecycle::show_render(&MossPaths::new(&root), true);
+    });
     f.job(Some(render)).run(None, &never());
+    newer.join().unwrap();
     let asked = watcher.slot_occupied();
     crate::ops::watch::worker::deregister(&f.folder, &watcher);
-    assert!(!asked, "the newer build queues whatever is still missing");
+    assert!(asked, "the newer render may predate the finished text");
 }
 
 #[test]

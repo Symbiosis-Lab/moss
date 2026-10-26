@@ -430,11 +430,16 @@ pub struct BackgroundDerive {
 impl BackgroundDerive {
     /// Read everything, stopping early if a newer render of the folder was
     /// admitted (it queues whatever is still missing) or `cancel` fires. When
-    /// the reads finish and this is still the newest render, enqueue a full
-    /// rebuild: it renders from the cache.
+    /// any read finished (a failure too: the page shows it), enqueue a full rebuild: it renders from the
+    /// cache. A newer render does not suppress it: that render may have been
+    /// built before these results landed, and the worker coalesces requests,
+    /// so a redundant one is cheap while a missed one leaves finished text
+    /// unapplied.
     pub fn run(self, reporter: Option<&dyn BuildReporter>, cancel: &std::sync::atomic::AtomicBool) {
-        let stop = || cancel.load(Ordering::SeqCst) || !crate::build::lifecycle::is_latest_render(&self.lifecycle_paths, self.render);
-        read_all(&self.paths, &self.root, &self.jobs, reporter, &stop, true);
+        let superseded = || !crate::build::lifecycle::is_latest_render(&self.lifecycle_paths, self.render);
+        let stop = || cancel.load(Ordering::SeqCst) || superseded();
+        let results = read_all(&self.paths, &self.root, &self.jobs, reporter, &stop, true);
+        let cancelled = cancel.load(Ordering::SeqCst);
         if stop() {
             // A stopped read sends no last count, and a listener would show it
             // as still reading. The jobs in flight have drained by now.
@@ -448,9 +453,18 @@ impl BackgroundDerive {
                     advisories: vec![],
                 });
             }
+        }
+        if cancelled {
+            log::info!(target: "derive", "not enqueueing a re-render for '{}': the session was cancelled", self.folder);
+            return;
+        }
+        if results.is_empty() {
             return;
         }
         let Some(worker) = crate::ops::watch::worker::get(&self.folder) else { return };
+        if superseded() {
+            log::debug!(target: "derive", "a newer render of '{}' exists; enqueueing the re-render anyway", self.folder);
+        }
         log::info!(target: "derive", "derived text is ready for '{}' — enqueueing a full re-render", self.folder);
         worker.enqueue(crate::ops::watch::worker::RebuildRequest::full());
     }
