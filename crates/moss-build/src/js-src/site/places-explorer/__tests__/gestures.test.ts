@@ -278,6 +278,22 @@ describe("attachGestures — cooperative mode", () => {
     expect(setCamera).toHaveBeenCalled();
   });
 
+  test("a wheel over the works row is left to the row, but ctrl+wheel there still zooms", () => {
+    const { callbacks, setCamera } = buildCallbacks(false);
+    attachGestures(viewport, callbacks);
+    const row = document.createElement("div");
+    row.className = "moss-places-cards";
+    const card = document.createElement("article");
+    row.append(card);
+    viewport.append(row);
+    const plain = new WheelEvent("wheel", { deltaX: 40, deltaY: 3, clientX: 400, clientY: 250, bubbles: true, cancelable: true });
+    card.dispatchEvent(plain);
+    expect(plain.defaultPrevented).toBe(false);
+    expect(setCamera).not.toHaveBeenCalled();
+    card.dispatchEvent(new WheelEvent("wheel", { ctrlKey: true, deltaY: -50, clientX: 400, clientY: 250, bubbles: true, cancelable: true }));
+    expect(setCamera).toHaveBeenCalled();
+  });
+
   test("a wheel burst updates the final camera and settles once after idle", () => {
     vi.useFakeTimers();
     try {

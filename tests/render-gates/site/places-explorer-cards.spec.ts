@@ -380,3 +380,79 @@ test.describe("an open card closes from the map", () => {
     expect(page.url()).not.toContain("article=");
   });
 });
+
+// The map's range decides which cards exist; a card never decides the map's
+// range. Selecting one expands it and highlights its places, and the camera
+// stays exactly where the reader left it.
+test("selecting a card leaves the camera where it was", async ({ page }) => {
+  await gotoReady(page);
+  const box = (await page.locator(".moss-places-viewport").boundingBox())!;
+  await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.3);
+  for (let i = 0; i < 6; i++) await page.mouse.wheel(0, -250);
+  await page.waitForTimeout(600);
+  const cameraOf = () => page.evaluate(() => ["z", "x", "y"].map((k) => new URL(location.href).searchParams.get(k)).join(","));
+  const before = await cameraOf();
+  const cardsBefore = await page.locator(".moss-places-cards .moss-card").count();
+  const first = page.locator(".moss-places-cards .moss-card").first();
+  await first.locator(".moss-places-card-select").click();
+  await page.waitForTimeout(700);
+  await expect(first).toHaveAttribute("aria-current", "true");
+  expect(page.url()).toContain("article=");
+  expect(await cameraOf()).toBe(before);
+  expect(await page.locator(".moss-places-cards .moss-card").count()).toBe(cardsBefore);
+});
+
+// A row wider than the screen scrolls: by wheel on a desktop, by finger on a
+// phone. Neither input reaches the map underneath.
+test("desktop: a wheel over an overflowing works row scrolls it sideways and never moves the map", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("places/", { waitUntil: "domcontentloaded" });
+  await expect(page.locator(".moss-place-map[data-moss-places-explorer]")).toHaveAttribute("data-moss-places-explorer-ready", "ready", { timeout: 10000 });
+  await page.waitForTimeout(400);
+  const row = page.locator(".moss-places-cards");
+  expect(await row.evaluate((el) => el.scrollWidth > el.clientWidth + 1)).toBe(true);
+  const cameraOf = () => page.evaluate(() => ["z", "x", "y"].map((k) => new URL(location.href).searchParams.get(k)).join(","));
+  const before = await cameraOf();
+  const box = (await page.locator(".moss-places-cards .moss-card").first().boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, 300);
+  await expect.poll(() => row.evaluate((el) => el.scrollLeft)).toBeGreaterThan(50);
+  const afterVertical = await row.evaluate((el) => el.scrollLeft);
+  await page.mouse.wheel(300, 0);
+  await expect.poll(() => row.evaluate((el) => el.scrollLeft)).toBeGreaterThan(afterVertical + 50);
+  const afterHorizontal = await row.evaluate((el) => el.scrollLeft);
+  await page.mouse.wheel(300, 4); // a trackpad's sideways swipe carries a little vertical drift
+  await expect.poll(() => row.evaluate((el) => el.scrollLeft)).toBeGreaterThan(afterHorizontal + 50);
+  await page.mouse.wheel(40, 120);
+  await page.waitForTimeout(500);
+  expect(await cameraOf()).toBe(before);
+});
+
+test.describe("touch", () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+
+  test("a one-finger swipe along the works row scrolls it and leaves the map", async ({ page, browserName }) => {
+    test.skip(browserName !== "chromium", "only chromium can synthesise a touch swipe");
+    await page.goto("places/", { waitUntil: "domcontentloaded" });
+    await expect(page.locator(".moss-place-map[data-moss-places-explorer]")).toHaveAttribute("data-moss-places-explorer-ready", "ready", { timeout: 10000 });
+    await page.waitForTimeout(400);
+    const row = page.locator(".moss-places-cards");
+    const cameraOf = () => page.evaluate(() => ["z", "x", "y"].map((k) => new URL(location.href).searchParams.get(k)).join(","));
+    const before = await cameraOf();
+    await page.locator(".moss-places-cards .moss-card").first().scrollIntoViewIfNeeded();
+    const box = (await page.locator(".moss-places-cards .moss-card").first().boundingBox())!;
+    const y = box.y + box.height / 2;
+    const cdp = await page.context().newCDPSession(page);
+    const touch = (type: string, x: number) =>
+      cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x, y, id: 1 }] });
+    await touch("touchStart", 300);
+    for (let x = 300; x >= 100; x -= 20) {
+      await touch("touchMove", x);
+      await page.waitForTimeout(16);
+    }
+    await touch("touchEnd", 100);
+    await expect.poll(() => row.evaluate((el) => el.scrollLeft)).toBeGreaterThan(50);
+    await page.waitForTimeout(500);
+    expect(await cameraOf()).toBe(before);
+  });
+});

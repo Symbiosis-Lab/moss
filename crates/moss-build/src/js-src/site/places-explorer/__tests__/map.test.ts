@@ -525,6 +525,19 @@ describe("mountPlacesMap — embed seams", () => {
     expect(readUrlState().camera!.zoom).toBeLessThanOrEqual(worldCleanMaxZoom(VIEWPORT) + 1e-2);
   });
 
+  test("selecting a card highlights its work and writes the article but leaves the camera where it was", () => {
+    const point = project(10, 10);
+    history.replaceState(null, "", `/places/?p=patterson&z=6&x=${point.x}&y=${point.y}`);
+    const { figure } = mount();
+    Element.prototype.scrollIntoView = vi.fn();
+    vi.stubGlobal("CSS", { escape: (value: string) => value });
+    const before = readUrlState().camera!;
+    figure.querySelector<HTMLElement>('.moss-places-cards [data-work-id="w1"] .moss-places-card-select')!.click();
+    const after = readUrlState();
+    expect(after.articleId).toBe("w1");
+    expect(after.camera).toEqual(before);
+  });
+
   test("refitScopeIfClipped re-fits the camera when the scope's own points fall outside a new, much narrower viewport", () => {
     history.replaceState(null, "", "/places/?place=p1");
     const { controller } = mount();

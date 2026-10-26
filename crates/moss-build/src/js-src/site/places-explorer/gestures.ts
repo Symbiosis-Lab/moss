@@ -43,6 +43,8 @@ export interface GestureCallbacks {
 
 /** What a press is NOT on the bare map when it lands on: anything with a job of its own. */
 const OWN_JOB = "button, a, .moss-card, .moss-places-chip, .moss-places-controls";
+/** The works row scrolls itself (wheel, touch); a wheel over it never zooms the map. */
+const CARD_ROW = ".moss-places-cards";
 /** Movement under this many CSS px is a tap, not a drag. */
 const TAP_SLOP = 5;
 
@@ -201,7 +203,7 @@ export function attachGestures(viewport: HTMLElement, callbacks: GestureCallback
   viewport.addEventListener(
     "wheel",
     (event) => {
-      if (!event.deltaY) return;
+      if (!event.deltaY || (!event.ctrlKey && event.target instanceof Element && event.target.closest(CARD_ROW))) return;
       event.preventDefault();
       callbacks.onGestureStart();
       const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? callbacks.getViewport().height : 1;
