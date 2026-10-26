@@ -18,9 +18,18 @@
   color: var(--moss-footer-ink, var(--moss-color-muted));
 }
 
-.moss-colophon-dot {
-  margin-inline-end: 0.45em;
+/* Flex drops the whitespace between the credit and the mark's link, and
+   between the dot and the icon, so the two gaps are the column gap and the
+   link's gap alone: equal, whatever the template's indentation. The dot is the
+   link's first item, so it wraps together with the mark. */
+.moss-colophon:has(> .moss-colophon-credit) {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: baseline;
+  column-gap: 0.4em;
 }
+
 
 /* Links in the credit, and only those, are underlined at rest at 40% of the
    ink, and brighten to the full ink on hover and focus. The inline padding
@@ -44,7 +53,9 @@
 
 .moss-colophon-credit ~ a {
   white-space: nowrap;
-  display: inline;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4em;
   padding-block: 0.375rem;
   padding-inline: 0;
   font-size: inherit;
