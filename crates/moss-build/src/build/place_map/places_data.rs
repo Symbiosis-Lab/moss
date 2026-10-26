@@ -777,6 +777,23 @@ mod tests {
         assert!(japan.unwrap().get("parent").is_none(), "Japan has no parent of its own: {json}");
     }
 
+    #[test]
+    fn a_slug_names_a_place_and_the_parent_ids_that_point_at_it() {
+        let ctx = context_from_gazetteer_toml(
+            "[\"Kyoto\"]\nlat = 35.0116\nlng = 135.7681\nprecision = \"city\"\nparent = \"Kansai\"\nslug = \"kyoto-city\"\n\n\
+             [\"Kansai\"]\nlat = 34.75\nlng = 135.5\nprecision = \"region\"\nparent = \"Japan\"\nslug = \"kansai-region\"\n\n\
+             [\"Japan\"]\nlat = 36.0\nlng = 138.0\nprecision = \"country\"\nslug = \"nihon\"\n",
+        );
+        let docs = vec![standalone("posts/kyoto-report.md", "posts/kyoto-report/", "Kyoto Report", &["Kyoto"])];
+        let json = emit_places_data(&docs, &ctx, true, &HashMap::new());
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let places = parsed["places"].as_array().unwrap();
+        let by_id = |id: &str| places.iter().find(|p| p["id"] == id).unwrap_or_else(|| panic!("{id} missing: {json}"));
+        assert_eq!(by_id("places/kyoto-city")["parent"], "places/kansai-region", "{json}");
+        assert_eq!(by_id("places/kansai-region")["parent"], "places/nihon", "{json}");
+        assert_eq!(by_id("places/nihon")["name"], "Japan", "{json}");
+    }
+
     /// Same three-level chain, except Kansai's OWN gazetteer row now has no
     /// `lat`/`lng` at all (a region whose boundary was declared but never
     /// given a point) — the second of the two "must not end the walk" cases
