@@ -149,6 +149,9 @@ pub fn ensure_binary(
     if let Ok(path) = resolve_binary(entry) {
         return Ok(path);
     }
+    if let Some(platforms) = crate::plugins::contributions::platform::unserved(&entry.contribution) {
+        return Err(DeriveFailure::new(crate::plugins::contributions::platform::sentence(&entry.plugin_id, &platforms)));
+    }
     let root = home(entry)?;
     let stack = entry.contribution.as_stack(&stack_id(entry), &entry.plugin_version);
     let fail = |e: stack_exec::StackExecError| DeriveFailure::new(format!("{}: {e}", stack_id(entry)));

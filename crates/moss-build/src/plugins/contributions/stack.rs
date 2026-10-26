@@ -98,7 +98,7 @@ pub enum StackSource {
 }
 
 impl StackSource {
-    fn platform(&self) -> Option<&str> {
+    pub(crate) fn platform(&self) -> Option<&str> {
         match self {
             StackSource::Download { platform, .. } => platform.as_deref(),
             StackSource::Path { platform, .. } => platform.as_deref(),

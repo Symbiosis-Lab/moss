@@ -229,6 +229,10 @@ pub enum Refusal {
     /// the plugin waits for the user to allow it — the remedy is a click, not
     /// an update or a removal, which is why it is its own kind.
     Unapproved,
+    /// The plugin's native program is not published for this computer.
+    /// Platform keys rather than a sentence, so the screen words it in the
+    /// locale; [`Refusal::sentence`] is the English one-liner.
+    Unavailable { platforms: Vec<String> },
 }
 
 impl Refusal {
@@ -251,6 +255,9 @@ impl Refusal {
             }
             Refusal::Unapproved => {
                 format!("{name} {version} came with this folder and has not been allowed to run here")
+            }
+            Refusal::Unavailable { platforms } => {
+                crate::plugins::contributions::platform::sentence(&name, platforms)
             }
         }
     }

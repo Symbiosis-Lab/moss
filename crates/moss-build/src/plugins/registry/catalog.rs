@@ -218,7 +218,7 @@ pub(super) fn merge_registry_rows(plugins: &mut Vec<AvailablePlugin>, entries: &
             source: default_plugin_source(),
             requires_stack: entry.requires_stack,
             preview: entry.preview,
-            refusal: None,
+            refusal: crate::plugins::contributions::platform::entry_refusal(entry),
             update_available: None,
             origin: PluginOrigin::Registry,
             // A plugin moss does not ship can have no `channels.name.<id>`
@@ -305,6 +305,36 @@ mod tests {
         );
     }
 
+
+    #[test]
+    fn a_plugin_published_for_other_computers_is_a_refused_row_and_the_rest_are_left_alone() {
+        let here = crate::build::assets::binary_resolver::get_current_platform().unwrap();
+        let listed = |id: &str, platforms: serde_json::Value| -> IndexEntry {
+            let mut e = serde_json::to_value(entry(id, "1.0.0", None)).unwrap();
+            e["platforms"] = platforms;
+            serde_json::from_value(e).unwrap()
+        };
+        let mut rows = Vec::new();
+        merge_registry_rows(
+            &mut rows,
+            &[
+                listed("elsewhere", serde_json::json!(["plan9-riscv"])),
+                listed("here", serde_json::json!([here])),
+                listed("anywhere", serde_json::Value::Null),
+                listed("empty", serde_json::json!([])),
+            ],
+        );
+        let refusal = |id: &str| rows.iter().find(|r| r.id == id).unwrap().refusal.clone();
+        assert_eq!(
+            refusal("elsewhere"),
+            Some(crate::plugins::install::registry_client::enforce::Refusal::Unavailable {
+                platforms: vec!["plan9-riscv".to_string()]
+            })
+        );
+        assert_eq!(refusal("here"), None);
+        assert_eq!(refusal("anywhere"), None);
+        assert_eq!(refusal("empty"), None);
+    }
 
     /// The registry's row, wearing the folder's bytes.
     ///

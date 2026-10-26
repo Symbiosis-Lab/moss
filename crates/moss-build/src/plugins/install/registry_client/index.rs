@@ -86,6 +86,11 @@ pub struct IndexEntry {
     /// first install (OnionPress).
     #[serde(default)]
     pub requires_stack: bool,
+    /// The platform keys (`darwin-arm64`, …) the plugin's native program is
+    /// published for. Absent or empty means every platform: a JavaScript
+    /// plugin, or an index from before the registry listed them.
+    #[serde(default)]
+    pub platforms: Option<Vec<String>>,
     /// Every field this struct does not name. Kept only so
     /// [`RegistryIndex::starters`] can read the fields that belong to a
     /// starter without every entry type's fields living on this one struct.
@@ -458,6 +463,22 @@ mod tests {
              "download_url":"https://example.invalid/x.zip","sha256":"aa","brand_new":42}]}"#;
         let index = accept_index(raw, 0).expect("unknown fields must be ignored");
         assert_eq!(index.plugins().len(), 1);
+    }
+
+    #[test]
+    fn an_entry_lists_its_platforms_or_says_nothing_about_them() {
+        let raw = r#"{"schema_version":1,"serial":1,"entries":[
+            {"type":"plugin","id":"ocr","display_name":"OCR","version":"1.0.0",
+             "download_url":"https://example.invalid/o.zip","sha256":"aa","platforms":["darwin-arm64","future-os"]},
+            {"type":"plugin","id":"js","display_name":"JS","version":"1.0.0",
+             "download_url":"https://example.invalid/j.zip","sha256":"bb"}]}"#;
+        let index = accept_index(raw, 0).expect("both shapes parse");
+        assert_eq!(
+            index.find("ocr").unwrap().platforms.as_deref(),
+            Some(&["darwin-arm64".to_string(), "future-os".to_string()][..]),
+            "an unknown future key is kept as written"
+        );
+        assert_eq!(index.find("js").unwrap().platforms, None, "absent means every platform");
     }
 
     #[test]

@@ -54,3 +54,15 @@ fn the_key_follows_bytes_and_fragments_not_locations() {
     assert_eq!(fingerprint(&a, None), fingerprint(&url, None), "a changed URL alone");
     assert_ne!(fingerprint(&a, None), fingerprint(&sha, None), "a re-pinned archive");
 }
+
+#[test]
+fn a_program_published_for_other_computers_says_so_in_plain_words_at_first_use() {
+    let mut e = download_entry("https://example.test/a.tar.gz", &"a".repeat(64));
+    e.contribution.run.artifact = serde_json::from_value(serde_json::json!([
+        {"kind": "download", "platform": "plan9-riscv", "url": "https://example.test/a.tar.gz",
+         "sha256": "a".repeat(64), "archive_format": "tar.gz"}
+    ]))
+    .unwrap();
+    let err = ensure_binary(&e, None).unwrap_err();
+    assert!(err.message.starts_with("Not available on this computer:") && err.message.contains("plan9-riscv"), "{err}");
+}
