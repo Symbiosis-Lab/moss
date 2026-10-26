@@ -352,7 +352,7 @@ html::-webkit-scrollbar,body::-webkit-scrollbar{display:none;width:0;height:0}\
 ///
 /// We check presence of the key only, not its value, so the marker is robust
 /// to URL fragments that might mangle the value (e.g. `__moss_shell=&foo=bar`).
-fn has_shell_marker(query: Option<&str>) -> bool {
+pub(super) fn has_shell_marker(query: Option<&str>) -> bool {
     let Some(q) = query else { return false };
     q.split('&')
         .any(|pair| pair == SHELL_MARKER || pair.starts_with(&format!("{SHELL_MARKER}=")))

@@ -16,7 +16,7 @@ fn fixture() -> Fixture {
     std::fs::write(dir.path().join("a.xyz"), "content").unwrap();
     let bin = script(dir.path(), "d.sh", DERIVED);
     let folder = dir.path().to_string_lossy().to_string();
-    let demand = Demand { entry: entry(&bin, "1.0.0"), path: "a.xyz".into() };
+    let demand = Demand { entry: entry(&bin, "1.0.0"), path: "a.xyz".into(), pages: vec![] };
     let _lease = Box::new(crate::build::lifecycle::detached_cache_lease(&MossPaths::new(dir.path())));
     Fixture { dir, folder, demand, _lease }
 }
@@ -97,4 +97,44 @@ fn a_cancelled_background_read_says_it_has_stopped() {
         _ => None,
     });
     assert_eq!(last, Some(true), "the last derive tick closes the read");
+}
+
+/// Three files in one folder, read under a plugin version that changed: `a`
+/// and `b` have a result from the old version, `c` is new. `starts` reads are
+/// allowed; the result says which were chosen first.
+fn first_reads(pages: [&str; 3], viewed: Option<&str>, starts: usize) -> Vec<&'static str> {
+    use crate::system::derive::test_support::script;
+    let dir = TempDir::new().unwrap();
+    let bin = script(dir.path(), "d.sh", DERIVED);
+    let old = entry(&bin, "1.0.0");
+    let new = entry(&bin, "2.0.0");
+    let paths = MossPaths::new(dir.path());
+    std::fs::write(dir.path().join("p.md"), "p").unwrap();
+    let names = ["a.xyz", "b.xyz", "c.xyz"];
+    for name in names {
+        std::fs::write(dir.path().join(name), name).unwrap();
+    }
+    for name in &names[..2] {
+        derive::derive_cached(&paths, &old, &dir.path().join(name)).unwrap();
+    }
+    if let Some(url) = viewed {
+        crate::system::derive::priority::note_viewed(dir.path(), url);
+    }
+    let demands: Vec<Demand> =
+        names.iter().zip(pages).map(|(n, p)| Demand { entry: new.clone(), path: n.to_string(), pages: vec![p.to_string()] }).collect();
+    let started = std::sync::atomic::AtomicUsize::new(0);
+    let stop = || started.fetch_add(1, Ordering::SeqCst) >= starts;
+    let results = read_all(&paths, dir.path(), &demands, None, &stop, false);
+    names.into_iter().filter(|n| results.iter().any(|(p, _)| p == n)).collect()
+}
+
+#[test]
+fn a_build_reads_new_files_before_files_re_read_for_a_changed_plugin() {
+    assert_eq!(first_reads(["x.md"; 3], None, 1), vec!["c.xyz"]);
+}
+
+#[test]
+fn the_page_on_screen_is_read_before_new_files() {
+    assert_eq!(first_reads(["x.md", "x.md", "x.md"], Some("/p"), 1), vec!["c.xyz"], "nothing on screen embeds a file");
+    assert_eq!(first_reads(["x.md", "p.md", "x.md"], Some("/p"), 1), vec!["b.xyz"]);
 }

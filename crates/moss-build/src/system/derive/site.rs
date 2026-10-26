@@ -27,6 +27,7 @@ use moss_core::resolve::md_extract::{extract_md_references, RefSyntax};
 use crate::build::ports::reporter::BuildReporter;
 use crate::build::progress::PipelineEvent;
 use crate::moss_paths::MossPaths;
+use crate::system::derive::priority::Schedule;
 use crate::system::derive::registry::{DerivationEntry, DerivationRegistry};
 use crate::system::derive::{self as derive, batch::DeriveJob, DeriveFailure, DeriveOutcome};
 
@@ -45,6 +46,8 @@ pub struct Demand {
     pub entry: DerivationEntry,
     /// Site-relative, `/`-separated.
     pub path: String,
+    /// The pages that embed it, site-relative.
+    pub pages: Vec<String>,
 }
 
 enum Slot {
@@ -229,8 +232,8 @@ impl DerivedSite {
     /// Every file the site's pages ask a derivation to read: `pages` are
     /// site-relative markdown paths.
     pub fn demands(&self, pages: &[String], graph: &ContentGraph) -> Vec<Demand> {
-        let mut seen = HashSet::new();
-        let mut demands = Vec::new();
+        let mut index: HashMap<String, usize> = HashMap::new();
+        let mut demands: Vec<Demand> = Vec::new();
         for page in pages {
             // The build's own non-waiting probe: a page still in the cloud is
             // skipped here and deferred by the render, not downloaded.
@@ -249,11 +252,16 @@ impl DerivedSite {
                 }
                 let (file, Some(fragment)) = moss_core::resolve::embeds::split_embed_target(&reference.text) else { continue };
                 let Some(path) = graph.resolve_path(file, page) else { continue };
-                if !self.table.claims(&extension_of(&path), fragment) || !seen.insert(path.clone()) {
+                if !self.table.claims(&extension_of(&path), fragment) {
                     continue;
                 }
-                if let Some(entry) = self.registry.for_extension(&extension_of(&path)) {
-                    demands.push(Demand { entry: entry.clone(), path });
+                if let Some(&at) = index.get(&path) {
+                    if !demands[at].pages.contains(page) {
+                        demands[at].pages.push(page.clone());
+                    }
+                } else if let Some(entry) = self.registry.for_extension(&extension_of(&path)) {
+                    index.insert(path.clone(), demands.len());
+                    demands.push(Demand { entry: entry.clone(), path, pages: vec![page.clone()] });
                 }
             }
         }
@@ -385,7 +393,11 @@ fn read_all(
     report_progress(reporter, &noun, 0, total);
     let batch: Vec<DeriveJob<'_>> =
         runnable.iter().map(|d| DeriveJob { entry: &d.entry, input: root.join(&d.path) }).collect();
-    let derived = derive::derive_batch(paths, &batch, remember, stop, |done, total| {
+    // New or changed bytes have no earlier result to show; a read repeated
+    // for a changed plugin does.
+    let arrived: Vec<bool> = runnable.iter().map(|d| derive::lookup_previous(paths, &d.entry, &root.join(&d.path)).is_none()).collect();
+    let schedule = Schedule::new(root, runnable.iter().map(|d| d.pages.as_slice()).collect(), arrived);
+    let derived = derive::derive_batch_by(paths, &batch, remember, stop, &|waiting| schedule.pick(waiting), |done, total| {
         report_progress(reporter, &noun, done, total)
     });
     for (demand, result) in runnable.iter().zip(derived) {

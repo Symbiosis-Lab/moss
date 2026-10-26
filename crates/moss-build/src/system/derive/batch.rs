@@ -3,8 +3,6 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use rayon::prelude::*;
-
 use super::cache::{derive_cached, derive_remembering, DeriveResult};
 use crate::moss_paths::MossPaths;
 use crate::system::derive::registry::DerivationEntry;
@@ -41,8 +39,8 @@ static DERIVE_POOL: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock
         .expect("moss-derive pool")
 });
 
-/// Derive the jobs, [`derive_budget`] at a time. Results come back in job
-/// order; a job not started because `stop()` turned true is `None`.
+/// Derive the jobs, [`derive_budget`] at a time, in job order. Results come
+/// back in job order; a job not started because `stop()` turned true is `None`.
 /// `progress(done, total)` is called after each finish, never concurrently
 /// with itself, with `done` rising by one each time. `remember` keeps a result
 /// the cache cannot hold for the rebuild that follows (see `cache::remembered`).
@@ -53,26 +51,49 @@ pub fn derive_batch(
     stop: &(dyn Fn() -> bool + Sync),
     progress: impl Fn(usize, usize) + Sync,
 ) -> Vec<Option<DeriveResult>> {
+    derive_batch_by(site, jobs, remember, stop, &|_| 0, progress)
+}
+
+/// [`derive_batch`] with the start order chosen as it runs: each time a thread
+/// is free, `pick` gets the indices of the jobs not yet started (in job order)
+/// and returns the position within that slice to start next. A job that has
+/// started is never revisited, so a changed answer reorders only what waits.
+pub fn derive_batch_by(
+    site: &MossPaths,
+    jobs: &[DeriveJob<'_>],
+    remember: bool,
+    stop: &(dyn Fn() -> bool + Sync),
+    pick: &(dyn Fn(&[usize]) -> usize + Sync),
+    progress: impl Fn(usize, usize) + Sync,
+) -> Vec<Option<DeriveResult>> {
     let total = jobs.len();
-    let done = Mutex::new(0usize);
-    DERIVE_POOL.install(|| {
-        jobs.par_iter()
-            .map(|job| {
-                if stop() {
-                    return None;
-                }
+    let waiting = Mutex::new((0..total).collect::<Vec<usize>>());
+    let finished = Mutex::new((0usize, (0..total).map(|_| None).collect::<Vec<Option<DeriveResult>>>()));
+    DERIVE_POOL.scope(|scope| {
+        for _ in 0..DERIVE_POOL.current_num_threads().min(total) {
+            scope.spawn(|_| loop {
+                let next = {
+                    let mut waiting = waiting.lock().unwrap_or_else(|e| e.into_inner());
+                    if stop() || waiting.is_empty() {
+                        return;
+                    }
+                    let at = pick(&waiting).min(waiting.len() - 1);
+                    waiting.remove(at)
+                };
+                let job = &jobs[next];
                 let result = if remember {
                     derive_remembering(site, job.entry, &job.input)
                 } else {
                     derive_cached(site, job.entry, &job.input)
                 };
-                let mut finished = done.lock().unwrap_or_else(|e| e.into_inner());
-                *finished += 1;
-                progress(*finished, total);
-                Some(result)
-            })
-            .collect()
-    })
+                let mut finished = finished.lock().unwrap_or_else(|e| e.into_inner());
+                finished.0 += 1;
+                finished.1[next] = Some(result);
+                progress(finished.0, total);
+            });
+        }
+    });
+    finished.into_inner().unwrap_or_else(|e| e.into_inner()).1
 }
 
 #[cfg(test)]

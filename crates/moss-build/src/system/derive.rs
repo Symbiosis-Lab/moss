@@ -13,6 +13,7 @@
 pub mod batch;
 pub mod binary;
 pub mod cache;
+pub mod priority;
 pub mod registry;
 pub mod run;
 pub mod sandbox;
@@ -27,7 +28,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::plugins::contributions::derivation::FragmentType;
 
-pub use batch::{derive_batch, derive_budget, DeriveJob};
+pub use batch::{derive_batch, derive_batch_by, derive_budget, DeriveJob};
 pub use cache::{derive_cached, lookup_cached, lookup_failure, lookup_previous, remember_failure, remembered, DeriveResult};
 pub use moss_core::resolve::embeds::derived::DerivedFacts;
 pub use run::run_deriver;
