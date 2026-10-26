@@ -83,7 +83,7 @@ Set tokens in `:root {}` (light) and `:root[data-theme="dark"] {}` (dark). Do
 not write an `@media (prefers-color-scheme: dark)` block — moss handles that for
 you via `data-theme`.
 
-A theme that sets a colour token on `:root` without the dark counterpart wins over moss's own dark values, silently: dark mode then paints the light background behind light text. The build does not warn, so every colour token declared in `:root {}` needs its pair in `:root[data-theme="dark"] {}`.
+A theme that sets a colour token on `:root` without the dark counterpart wins over moss's own dark values, silently: dark mode then paints the light background behind light text. The build warns once per theme file, naming each such `--moss-color-*` token; every colour token declared in `:root {}` needs its pair in `:root[data-theme="dark"] {}` (an `@media (prefers-color-scheme: dark)` block does not count).
 
 Example — a warm "lamplight" dark palette:
 

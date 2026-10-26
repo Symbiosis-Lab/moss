@@ -1310,6 +1310,13 @@ mod tests {
     }
 
     #[test]
+    fn a_comment_before_a_token_does_not_hide_it() {
+        let ground = PageGround::of_theme(Some(":root { /* note; */ --moss-color-bg: #fff; /* --moss-color-text: #000; */ }"));
+        assert_eq!(ground.light, Some((255, 255, 255)));
+        assert_eq!(ground.text_light, PageGround::default().text_light, "a commented token is not read");
+    }
+
+    #[test]
     fn the_page_colour_is_read_where_a_theme_is_told_to_set_it() {
         let (light, dark) = *BACKGROUNDS;
         assert_eq!(PageGround::of_theme(None), PageGround::default());

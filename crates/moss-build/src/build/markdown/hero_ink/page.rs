@@ -76,21 +76,17 @@ impl PageGround {
 /// theme does not set it, and `None` in both where it sets it somewhere the
 /// build cannot follow or to a value it cannot read.
 fn theme_colours(theme_css: Option<&str>, token: &str, default: (Rgb, Rgb)) -> (Option<Rgb>, Option<Rgb>) {
+    use crate::build::theme_lint::{token_declarations, Scope};
     let (mut root, mut dark) = (None, None);
-    for rule in crate::build::theme_lint::style_rules(theme_css.unwrap_or_default()) {
-        let Some((_, body)) = rule.rule.split_once('{') else { continue };
-        for decl in body.trim_end_matches('}').split(';') {
-            let Some((prop, value)) = decl.split_once(':') else { continue };
-            if prop.trim() != token {
-                continue;
-            }
-            let colour = crate::build::components::color_extract::parse_css_color(value.trim().trim_end_matches("!important").trim());
-            let scope: String = rule.prelude.chars().filter(|c| !c.is_whitespace()).collect::<String>().replace('\'', "\"");
-            match (rule.conditions.is_empty(), scope.as_str()) {
-                (true, ":root") => root = Some(colour),
-                (true, ":root[data-theme=\"dark\"]") => dark = Some(colour),
-                _ => return (None, None),
-            }
+    for (scope, prop, value) in token_declarations(&crate::build::theme_lint::strip_comments(theme_css.unwrap_or_default())) {
+        if prop != token {
+            continue;
+        }
+        let colour = crate::build::components::color_extract::parse_css_color(value.trim_end_matches("!important").trim());
+        match scope {
+            Scope::Light => root = Some(colour),
+            Scope::Dark => dark = Some(colour),
+            Scope::Other => return (None, None),
         }
     }
     let (mut light_theme, mut dark_theme) = (Some(default.0), Some(default.1));
