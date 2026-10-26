@@ -1161,20 +1161,20 @@ pub fn process_markdown_file(
     //    body cover, double-counting against the OG image already captured
     //    from `hero_extraction.image_url`.
     //
-    //    Mirrors the legacy `transform_events` filter (raster extensions
-    //    only, no folder/non-image trailing slash) so the field stays
-    //    byte-equivalent to today's `ParsedDocument.body_cover_path`.
-    let body_cover_path: Option<String> =
-        moss_core::ast::find_first_block_image(&doc).and_then(|url| match url {
-            moss_core::ast::Url::Resolved(r) => {
-                let href = &r.href;
-                if href.ends_with('/') {
-                    return None;
-                }
-                crate::build::page::cover::is_raster_picture(href).then(|| href.clone())
-            }
-            _ => None,
-        });
+    //    Only raster pictures with a file-like href qualify: the share image
+    //    and listing cards cannot use a vector, a video or a folder URL.
+    let body_images = moss_core::ast::block_images(&doc);
+    let raster_href = |url: &moss_core::ast::Url| match url {
+        moss_core::ast::Url::Resolved(r)
+            if !r.href.ends_with('/') && crate::build::page::cover::is_raster_picture(&r.href) =>
+        {
+            Some(r.href.clone())
+        }
+        _ => None,
+    };
+    let body_cover_path: Option<String> = body_images.first().and_then(|u| raster_href(u));
+    let body_cover_candidates: Vec<String> =
+        body_images.iter().filter_map(|u| raster_href(u)).collect();
 
     // 5. Final safety net: any `Url::Unresolved` that escaped phases 1-2
     //    (e.g., a future URL-bearing variant added before its phase wires
@@ -1682,6 +1682,7 @@ pub fn process_markdown_file(
         body_claims_eager,
         hero_image_url,
         body_cover_path,
+        body_cover_candidates,
         hero_overlay_text,
         features: crate::build::types::PageFeatures {
             inline_subscribe: has_inline_subscribe,

@@ -6,9 +6,8 @@
 //   1. Page frontmatter `cover` field (resolved through path_resolver).
 //   2. Filename convention: feature.*/cover.*/thumbnail.* in bundle dir.
 //   3. This page's own hero image (typed via `doc.hero_image_url`).
-//   4. First markdown-origin `![]()` image in the page body (typed via
-//      `doc.body_cover_path` — Step 5 of the structural-html-emission
-//      migration; replaces the prior `first_body_image` regex scrape).
+//   4. A markdown-origin `![]()` image in the page body: the first a
+//      platform can take as-is, else the first (`cover::pick_body_cover`).
 //   5. Auto-generated 1200x630 OG card (when output_dir + an og_outputs
 //      sink are both provided and a title is available). Falls back to no
 //      cover on rasterization error.
@@ -85,8 +84,14 @@ pub fn resolve(
     // `ParsedDocument` shape); other template branches don't have a
     // page-level doc and so contribute None — `resolve_cover_chain`
     // gracefully short-circuits the rung.
-    let body_cover_for_chain: Option<&str> = doc
-        .and_then(|d| d.body_cover_path.as_deref());
+    let body_cover_for_chain: Option<&str> = doc.and_then(|d| {
+        crate::build::page::cover::pick_body_cover(
+            &d.body_cover_candidates,
+            d.body_cover_path.as_deref(),
+            &project.image_files,
+            dir_overrides,
+        )
+    });
 
     // Bundle dir: parent of the page's source file (e.g. posts/my-post/).
     // Used by the filename-convention rung in resolve_cover_chain.

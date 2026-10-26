@@ -8,8 +8,10 @@
 //!    contains "feature", "cover", or "thumbnail" (Hugo-style zero-config).
 //! 3. The page's own hero image — its `:::hero` block's `image=` attribute or
 //!    inline image, typed as `ParsedDocument.hero_image_url`.
-//! 4. First markdown-origin body image (typed `ParsedDocument.body_cover_path`,
-//!    captured at parse time by `transform_events`).
+//! 4. A markdown-origin body image (typed `ParsedDocument.body_cover_candidates`,
+//!    captured at parse time by `process_markdown_file`): the first one a platform
+//!    can take as-is (see [`pick_body_cover`]), else the first body image.
+//!    Rungs 1 to 3 are the author's or the hero's choice and are never second-guessed.
 //!
 //! A page with none of these gets the generated title card (the caller's
 //! fallback in html.rs, which needs output_dir and an og sink) — never the
@@ -27,31 +29,21 @@
 //! when the page WAS the home page, so an article whose one image was its hero
 //! shared as a near-blank generated card — 21 of the 76 pages on one site.
 //!
-//! # Architectural status (post-Step-5, 2026-05-17)
+//! # What the body-image rung does not take
 //!
-//! The body-image rung previously regex-scraped rendered HTML for `<img src>` /
-//! `<video poster>` via `first_body_image`. Step 5 of the
-//! structural-html-emission migration replaced that with a typed
-//! capture during pulldown-cmark event iteration (see
-//! `transform_events` in `build/markdown/pipeline.rs`). The regex is
-//! retired.
-//!
-//! What the body-image rung no longer captures (intentional narrowing — all classes
-//! are the same "non-`Tag::Image` source" exclusion):
+//! All classes are the same "non-`Tag::Image` source" exclusion:
 //!
 //! - Raw HTML `<img>` literally embedded in markdown source — pulldown-
 //!   cmark emits these as `Event::Html` opaque pass-through; documented
 //!   bare-img carve-out (`image_render.rs:56-93`).
 //! - `<video poster="...">` — not a markdown construct in the first place.
-//! - Shortcode-emitted images (`:::hero`, link-preview favicons, gallery
-//!   thumbnails) — never were content covers in spirit; `:::hero` has its
-//!   own rungs; favicons and thumbnails were footguns under
-//!   the old regex (a link-preview favicon happening to come first in the
-//!   body would 16×16-pixel the share card).
+//! - Shortcode-emitted images (`:::hero`, link-preview favicons) — `:::hero`
+//!   has its own rungs; a link-preview favicon coming first would
+//!   16×16-pixel the share card. A gallery is the exception: its first
+//!   picture is a candidate.
 //! - Homepage feed `<img>` thumbnails — homepages splice folder-card /
 //!   article-list HTML into `homepage_content` after `doc.html_content`
-//!   is built. The old regex saw those splices; the new typed capture
-//!   sees only the homepage's own markdown body. A homepage with no
+//!   is built, so the capture sees only the homepage's own markdown body. A homepage with no
 //!   author-written images falls through to the auto-OG-card rather
 //!   than picking up a feed thumbnail.
 //!
@@ -103,10 +95,8 @@ pub struct CoverChainInputs<'a> {
     /// `HeroShortcode.image` (post-resolution). `None` when the page has no
     /// hero or its hero had no image.
     pub page_hero_image_url: Option<&'a str>,
-    /// First markdown-origin body image src, captured at parse time
-    /// (`ParsedDocument.body_cover_path`). Already passed through
+    /// The body image chosen by [`pick_body_cover`], already passed through
     /// `resolve_link` so it's a relative or external URL ready to use.
-    /// Step-5 replacement for the legacy regex scrape of `body_html`.
     pub body_cover_path: Option<&'a str>,
     /// The page's bundle directory (absolute path), for filename-convention rung.
     pub bundle_dir: Option<&'a Path>,
@@ -126,6 +116,26 @@ pub fn resolve_cover_chain(inputs: &CoverChainInputs) -> Option<CoverRef> {
         })
         .or_else(|| cover_from_frontmatter(inputs.page_hero_image_url))
         .or_else(|| cover_from_frontmatter(inputs.body_cover_path))
+}
+
+/// The body image to share: the first candidate a platform can take as-is
+/// (a local raster whose scanned size is known, shaped inside the passthrough
+/// band, long edge at least [`OG_IMAGE_LONG_EDGE_FLOOR`]), else `first`, the
+/// page's first body image. A page whose only picture is a scroll still
+/// reaches the plate card; a row of tall slices or a small icon ahead of a
+/// real photograph no longer decides the share image.
+pub fn pick_body_cover<'a>(
+    candidates: &'a [String],
+    first: Option<&'a str>,
+    images: &[crate::types::content::MediaMetadata],
+    dir_overrides: &HashMap<String, String>,
+) -> Option<&'a str> {
+    let as_is = |raw: &&String| {
+        let Some(CoverRef::Local(sp)) = cover_from_frontmatter(Some(raw)) else { return false };
+        scanned_dims(images, &CoverRef::Local(sp), dir_overrides)
+            .is_some_and(|(w, h)| !needs_plate(w, h) && w.max(h) >= OG_IMAGE_LONG_EDGE_FLOOR)
+    };
+    candidates.iter().find(as_is).map(String::as_str).or(first)
 }
 
 /// Whether a path names a raster picture. The share image and the listing card
@@ -153,14 +163,11 @@ pub fn card_cover_from_page(hero_image_url: Option<&str>, body_cover_path: Optio
 /// Resolve a frontmatter cover string to CoverRef. External http(s) URLs
 /// pass through; local paths route through ServedPath::from_source.
 ///
-/// Used for every rung of `resolve_cover_chain` including the typed
-/// `body_cover_path` (Step 5). The data-URI rejection lives here rather
-/// than in `ServedPath::from_source` because data-URIs are an opaque
-/// inline-payload scheme — they pass `ServedPath`'s structural rules
-/// (no `/`, no `..`, no reserved-prefix) but aren't valid as a served
-/// asset URL. Pre-Step-5 the retired `first_body_image` regex skipped
-/// data-URIs explicitly; this guard preserves that behavior at the
-/// chain layer where it's now relevant for every rung.
+/// Used for every rung of `resolve_cover_chain`, body picture included. The
+/// data-URI rejection lives here rather than in `ServedPath::from_source`
+/// because data-URIs are an opaque inline-payload scheme — they pass
+/// `ServedPath`'s structural rules (no `/`, no `..`, no reserved-prefix) but
+/// aren't valid as a served asset URL.
 fn cover_from_frontmatter(s: Option<&str>) -> Option<CoverRef> {
     let raw = s?;
     if raw.is_empty() {
@@ -281,12 +288,6 @@ impl FilenameCovers {
             .clone()
     }
 }
-
-// `first_body_image` (regex scrape of `<img>` / `<video poster>` from
-// rendered HTML) was retired in Step 5 of the structural-html-emission
-// migration. The body-image rung now reads
-// `ParsedDocument.body_cover_path`, captured at parse time by
-// `transform_events`. See the module doc above.
 
 /// The picture a reader's quote-card puts at the top of the card: the image
 /// THIS page chose for itself, or nothing.
@@ -991,5 +992,54 @@ mod plate_tests {
         // A near-miss is not a hit: this answer decides whether to redraw the
         // page's picture, and another page's picture is the wrong answer.
         assert!(scanned_cover(&images, "/other/\u{96d9}\u{9df9}\u{5716}.jpg", &overrides).is_none());
+    }
+}
+
+#[cfg(test)]
+mod pick_body_cover_tests {
+    use super::*;
+    use crate::types::content::MediaMetadata;
+
+    fn scanned(path: &str, dims: (u32, u32)) -> MediaMetadata {
+        MediaMetadata {
+            path: path.to_string(),
+            file_type: "png".into(),
+            size: 0,
+            modified: None,
+            dimensions: Some(dims),
+            dominant_color: None,
+            lqip_data_uri: None,
+            is_animated: false,
+        }
+    }
+
+    fn pick<'a>(candidates: &'a [String], images: &[MediaMetadata]) -> Option<&'a str> {
+        pick_body_cover(candidates, candidates.first().map(String::as_str), images, &HashMap::new())
+    }
+
+    #[test]
+    fn skips_shapes_a_crop_would_gut_and_pictures_under_the_floor() {
+        let images = [
+            scanned("slice.png", (420, 1048)),
+            scanned("icon.png", (300, 200)),
+            scanned("wide.png", (1600, 900)),
+        ];
+        let c: Vec<String> = ["/slice.png", "/icon.png", "/wide.png"].map(String::from).into();
+        assert_eq!(pick(&c, &images), Some("/wide.png"));
+    }
+
+    #[test]
+    fn falls_back_to_the_first_image_when_none_qualifies() {
+        let images = [scanned("scroll.png", (600, 1800)), scanned("slice.png", (420, 1048))];
+        let c: Vec<String> = ["/scroll.png", "/slice.png"].map(String::from).into();
+        assert_eq!(pick(&c, &images), Some("/scroll.png"));
+        assert_eq!(pick(&[], &images), None);
+    }
+
+    #[test]
+    fn an_unscanned_or_remote_picture_does_not_qualify() {
+        let images = [scanned("wide.png", (1600, 900))];
+        let c: Vec<String> = ["https://example.com/a.png", "/unknown.png", "/wide.png"].map(String::from).into();
+        assert_eq!(pick(&c, &images), Some("/wide.png"));
     }
 }

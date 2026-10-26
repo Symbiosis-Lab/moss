@@ -222,38 +222,41 @@ pub fn has_raw_style_block(doc: &Document) -> bool {
 /// the end of the page. Writing `[^a]: ![diagram](d.png)` directly under the
 /// paragraph that cites it is the ordinary Obsidian habit, and a single-pass
 /// source-order walk hands that diagram the cover over the photo the reader
-/// actually meets in the body. The consumer is `body_cover_path`, i.e. the
-/// page's `og:image`, so the wrong answer ships as the social card.
+/// actually meets in the body. The consumers are `body_cover_path` and
+/// `body_cover_candidates`, i.e. the page's `og:image`, so the wrong answer ships as the social card.
 ///
 /// Hence two passes: body first with definitions skipped; then the endnote
 /// section, walked in INDEX order — the order `render_section` emits the
 /// `<li>`s — not source order, which is not the order the reader meets the
-/// notes. The second pass only ever runs when the body has no image at all,
-/// so it answers the case the definition arm below exists for — an image
-/// that lives *only* in a note is still the only image — without letting an
-/// endnote outrank the body.
+/// notes. Endnote pictures come after every body picture, so an image that
+/// lives *only* in a note is still found, without outranking the body.
 pub fn find_first_block_image(doc: &Document) -> Option<&Url> {
+    block_images(doc).into_iter().next()
+}
+
+/// Every content picture of the page (see [`find_first_block_image`] for what
+/// counts), in the same order: body first, endnotes after. A gallery
+/// contributes its first picture only.
+pub fn block_images(doc: &Document) -> Vec<&Url> {
     // The renderer's identity decision, from the same lookup `is_hoisted`
     // uses — a first-sighting counter here diverged from it whenever a
     // label's first definition was NESTED inside another note (the pass-one
     // skip never descends, so the nested first was never counted and a
     // later top-level repeat passed for it).
     let hoisted = super::footnotes::hoisted_definition_bodies(&doc.blocks);
-    find_first_image_in_blocks(&doc.blocks, Notes::Hoisted, &hoisted).or_else(|| {
-        // No body image: the cover falls to the endnote section, whose
-        // notes render in first-reference index order. Within one note's
-        // body the same identity rule applies — a nested HOISTED
-        // definition's content is skipped here and searched separately at
-        // its OWN entry in this same iteration (which can land before or
-        // after the host's, depending on first-reference order), while a
-        // nested repeat renders in place.
-        let index = super::footnotes::FootnoteIndex::build(&doc.blocks);
-        index.entries().iter().find_map(|(_, label)| {
-            super::footnotes::FootnoteIndex::definition(&doc.blocks, label).and_then(
-                |children| find_first_image_in_blocks(children, Notes::Hoisted, &hoisted),
-            )
-        })
-    })
+    let mut out = Vec::new();
+    collect_images_in_blocks(&doc.blocks, Notes::Hoisted, &hoisted, &mut out);
+    // The endnote section follows the body, its notes in first-reference
+    // index order. Within one note's body the same identity rule applies — a
+    // nested HOISTED definition's content is skipped here and collected at
+    // its OWN entry in this iteration, while a nested repeat renders in place.
+    let index = super::footnotes::FootnoteIndex::build(&doc.blocks);
+    for (_, label) in index.entries() {
+        if let Some(children) = super::footnotes::FootnoteIndex::definition(&doc.blocks, label) {
+            collect_images_in_blocks(children, Notes::Hoisted, &hoisted, &mut out);
+        }
+    }
+    out
 }
 
 /// Whether a footnote definition reached on this walk renders where it sits.
@@ -268,103 +271,79 @@ enum Notes {
     InPlace,
 }
 
-fn find_first_image_in_blocks<'a>(
+fn collect_images_in_blocks<'a>(
     blocks: &'a [Block],
     notes: Notes,
     hoisted: &HashMap<String, usize>,
-) -> Option<&'a Url> {
+    out: &mut Vec<&'a Url>,
+) {
     for block in blocks {
-        if let Some(img) = find_first_image_in_block(block, notes, hoisted) {
-            return Some(img);
-        }
+        collect_images_in_block(block, notes, hoisted, out);
     }
-    None
 }
 
-fn find_first_image_in_block<'a>(
+fn collect_images_in_block<'a>(
     block: &'a Block,
     notes: Notes,
     hoisted: &HashMap<String, usize>,
-) -> Option<&'a Url> {
+    out: &mut Vec<&'a Url>,
+) {
     match block {
-        // Direct hit: PR3's typed Figure variant.
-        Block::Figure { image: Inline::Image { src, .. }, .. } => Some(src),
-        Block::Figure { .. } => None,
+        Block::Figure { image: Inline::Image { src, .. }, .. } => out.push(src),
+        Block::Figure { .. } => {}
 
         // An image-only paragraph is a figure that implicit-figure promotion
         // did not wrap; one with prose around the image is an icon or emoji.
-        Block::Paragraph(inlines) if only_pictures(inlines) => find_first_image_in_inlines(inlines),
-        Block::Paragraph(_) => None,
+        Block::Paragraph(inlines) if only_pictures(inlines) => collect_images_in_inlines(inlines, out),
+        Block::Paragraph(_) => {}
 
-        // List items, blockquotes, callouts, table cells: descend into
-        // their nested block sequences. Same depth-first document-order
-        // walk as the top-level loop.
         Block::List { items, .. } => {
             for item in items {
-                if let Some(img) = find_first_image_in_blocks(item, notes, hoisted) {
-                    return Some(img);
-                }
+                collect_images_in_blocks(item, notes, hoisted, out);
             }
-            None
         }
-        Block::BlockQuote(children) => find_first_image_in_blocks(children, notes, hoisted),
-        Block::DefinitionList(children) | Block::DefinitionDefinition(children) => {
-            find_first_image_in_blocks(children, notes, hoisted)
-        }
-        Block::DefinitionTitle(_) => None,
-        Block::Callout { children, .. } => find_first_image_in_blocks(children, notes, hoisted),
-        Block::Table { .. } => None,
+        Block::BlockQuote(children)
+        | Block::DefinitionList(children)
+        | Block::DefinitionDefinition(children)
+        | Block::Callout { children, .. } => collect_images_in_blocks(children, notes, hoisted, out),
+        Block::DefinitionTitle(_) | Block::Table { .. } => {}
 
-        // Shortcodes: descend by variant. Gallery/Hero/Grid carry images.
         // A definition inside a shortcode body is NOT hoisted — the endnote
         // section does not reach in there — so its images are body matter.
-        Block::Shortcode(sc) => find_first_image_in_shortcode(sc, Notes::InPlace, hoisted),
+        Block::Shortcode(sc) => collect_images_in_shortcode(sc, Notes::InPlace, hoisted, out),
 
         // A card is a link to another page; the picture is that page's.
-        Block::LinkCard { .. } => None,
-
-        Block::Heading { .. } => None,
+        Block::LinkCard { .. } | Block::Heading { .. } => {}
 
         // Only the doc-order-FIRST definition of a label is hoisted; a
-        // REPEAT renders where it sits, so a repeat's images are body matter
-        // and must be eligible on pass one. Decided by the same identity
-        // `render.rs` asks (`hoisted_definition_bodies`) — everything inside
-        // a HOISTED definition's subtree renders in the endnote section
-        // (in place within the host's endnote, or hoisted to its own), so
-        // the walk skips the whole subtree without descending. Pass two
-        // never reaches a top-level definition through this arm (it walks
-        // note bodies directly, in index order — see
-        // `find_first_block_image`); a definition met here mid-body is
-        // either a repeat (descend: it renders right here) or, inside a
-        // note body on pass two, a nested hoisted definition whose content
-        // belongs to its own, later endnote (skip).
+        // REPEAT renders where it sits, so its images are body matter. Decided
+        // by the same identity `render.rs` asks (`hoisted_definition_bodies`);
+        // everything inside a HOISTED definition's subtree renders in the
+        // endnote section, so the walk skips it here and `block_images`
+        // visits the notes in index order afterwards.
         Block::FootnoteDefinition { label, children } => match notes {
             Notes::Hoisted
-                if hoisted.get(label.as_str()) == Some(&(children.as_ptr() as usize)) =>
-            {
-                None
-            }
-            _ => find_first_image_in_blocks(children, notes, hoisted),
+                if hoisted.get(label.as_str()) == Some(&(children.as_ptr() as usize)) => {}
+            _ => collect_images_in_blocks(children, notes, hoisted, out),
         },
 
-        Block::CodeBlock { .. } | Block::ThematicBreak | Block::Other(_) => None,
+        Block::CodeBlock { .. } | Block::ThematicBreak | Block::Other(_) => {}
     }
 }
 
-fn find_first_image_in_inlines(inlines: &[Inline]) -> Option<&Url> {
-    inlines.iter().find_map(|inline| match inline {
-        Inline::Image { src, .. } => Some(src),
-        Inline::Link { url: Url::Resolved(r), .. }
-            if matches!(r.kind, UrlKind::Internal | UrlKind::Wikilink) =>
-        {
-            None
+fn collect_images_in_inlines<'a>(inlines: &'a [Inline], out: &mut Vec<&'a Url>) {
+    for inline in inlines {
+        match inline {
+            Inline::Image { src, .. } => out.push(src),
+            Inline::Link { url: Url::Resolved(r), .. }
+                if matches!(r.kind, UrlKind::Internal | UrlKind::Wikilink) => {}
+            Inline::Link { children, .. }
+            | Inline::Emphasis(children)
+            | Inline::Strong(children)
+            | Inline::Strikethrough(children) => collect_images_in_inlines(children, out),
+            _ => {}
         }
-        Inline::Link { children, .. }
-        | Inline::Emphasis(children)
-        | Inline::Strong(children)
-        | Inline::Strikethrough(children) => find_first_image_in_inlines(children),
-        _ => None,
-    })
+    }
 }
 
 /// Nothing in the paragraph but pictures: no words for them to sit among.
@@ -379,31 +358,22 @@ fn only_pictures(inlines: &[Inline]) -> bool {
     })
 }
 
-fn find_first_image_in_shortcode<'a>(
+fn collect_images_in_shortcode<'a>(
     sc: &'a Shortcode,
     notes: Notes,
     hoisted: &HashMap<String, usize>,
-) -> Option<&'a Url> {
+    out: &mut Vec<&'a Url>,
+) {
     match sc {
-        Shortcode::Subscribe(_) | Shortcode::Buttons(_) | Shortcode::Recent(_) => None,
-        Shortcode::Gallery(args) => args.items.first().map(|item| &item.src),
-        Shortcode::Hero(args) => {
-            // Hero overlay walked first; the hero image itself is not
-            // surfaced as an Inline::Image (it's a `Url` on the
-            // HeroShortcode). The cover chain reads
-            // `hero_image_url` directly from `apply_typed_shortcodes`
-            // / extract_hero — that field is the source of truth for
-            // hero-rung; body_cover_path explicitly excludes it.
-            find_first_image_in_blocks(&args.overlay, notes, hoisted)
-        }
+        Shortcode::Subscribe(_) | Shortcode::Buttons(_) | Shortcode::Recent(_) => {}
+        Shortcode::Gallery(args) => out.extend(args.items.first().map(|item| &item.src)),
+        // The hero image itself is a `Url` on the shortcode, not an
+        // `Inline::Image`: the cover chain reads `hero_image_url` for it.
+        Shortcode::Hero(args) => collect_images_in_blocks(&args.overlay, notes, hoisted, out),
         Shortcode::Grid(args) => {
-            // Walk each grid cell's blocks in document order.
             for cell in &args.cells {
-                if let Some(img) = find_first_image_in_blocks(cell, notes, hoisted) {
-                    return Some(img);
-                }
+                collect_images_in_blocks(cell, notes, hoisted, out);
             }
-            None
         }
     }
 }
@@ -478,8 +448,8 @@ mod tests {
     /// ordinary Obsidian habit (`[^a]: …` written under the citing paragraph)
     /// and the only arrangement where source order and render order disagree.
     ///
-    /// The consumer is `body_cover_path`, i.e. the page `og:image`, so getting
-    /// this wrong ships an endnote diagram as the article's social card.
+    /// The consumers are `body_cover_path` and `body_cover_candidates`, i.e. the
+    /// page `og:image`, so getting this wrong ships an endnote diagram as the article's social card.
     #[test]
     fn a_body_image_outranks_one_hoisted_into_the_endnotes() {
         let doc = super::super::parse(
