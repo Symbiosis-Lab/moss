@@ -761,7 +761,7 @@ pub fn generate_blocking_content_for_build(
                             state,
                             moss_core::resolve::embeds::derived::DerivedFragment::Pending
                                 | moss_core::resolve::embeds::derived::DerivedFragment::Failed { .. }
-                        ) {
+                        ) || derived_site.is_some_and(|d| d.is_previous(path)) {
                             shows_unready.set(true);
                         }
                         state

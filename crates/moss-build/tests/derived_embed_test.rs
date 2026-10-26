@@ -49,6 +49,13 @@ impl Site {
         site
     }
 
+    fn set_version(&self, version: &str) {
+        let path = self.root().join(".moss/plugins/fake-reader/manifest.json");
+        let mut manifest: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        manifest["version"] = version.into();
+        fs::write(path, manifest.to_string()).unwrap();
+    }
+
     fn root(&self) -> &Path {
         // The path the build sees; the tempdir may sit behind a symlink.
         self.dir.path()
@@ -323,6 +330,55 @@ fn adopt_seals_the_placeholder_while_the_read_runs_then_asks_for_a_rebuild() {
     let second = site.page("page");
     assert!(second.contains("Hello") && !second.contains("moss-derived--pending"), "{second}");
     assert_eq!(moss_build::system::build_records::records().pending_derivations(&folder), Some(0));
+    moss_build::ops::watch::worker::deregister(&folder, &watcher);
+}
+
+const NEW_ANSWER: &str = r###"printf '%s' '{"kind":"derived","fragments":{"text":"## Fresh\n\nnewer"},"facts":{}}'"###;
+
+/// A site derived once under version 1.0.0, then re-keyed by a version bump
+/// with a deriver that answers `NEW_ANSWER` after a delay.
+fn rekeyed_site(page_bytes_after: Option<&str>) -> Site {
+    let site = Site::new(&[("a.fake", "bytes"), ("page.md", "![[a.fake#text]]\n")]);
+    site.build(PluginMode::Blocking, DeriveMode::Await);
+    assert!(site.page("page").contains("world"));
+    site.set_deriver(&slow_deriver(4, NEW_ANSWER));
+    site.set_version("1.1.0");
+    if let Some(bytes) = page_bytes_after {
+        fs::write(site.root().join("a.fake"), bytes).unwrap();
+    }
+    site
+}
+
+#[test]
+fn a_re_keyed_source_keeps_its_previous_text_until_the_new_read_lands() {
+    let site = rekeyed_site(None);
+    let folder = site.root().to_string_lossy().to_string();
+    let watcher = moss_build::ops::watch::worker::register(&folder);
+
+    site.build(PluginMode::NonBlocking, DeriveMode::Adopt);
+    let html = site.page("page");
+    assert!(html.contains("world") && !html.contains("moss-derived--pending"), "{html}");
+    // The re-read is still owed: the preview counts it and a publish is held back.
+    assert_eq!(moss_build::system::build_records::records().pending_derivations(&folder), Some(1));
+    assert!(moss_build::deploy::refuse_publish(&folder).is_err(), "an older result must not publish silently");
+
+    wait_for("the re-read to ask for a rebuild", 30, || watcher.slot_occupied());
+    watcher.take();
+    site.build(PluginMode::NonBlocking, DeriveMode::Adopt);
+    let html = site.page("page");
+    assert!(html.contains("newer") && !html.contains("world"), "{html}");
+    assert_eq!(moss_build::system::build_records::records().pending_derivations(&folder), Some(0));
+    moss_build::ops::watch::worker::deregister(&folder, &watcher);
+}
+
+#[test]
+fn a_re_keyed_source_whose_bytes_changed_gets_no_older_text() {
+    let site = rekeyed_site(Some("other bytes"));
+    let folder = site.root().to_string_lossy().to_string();
+    let watcher = moss_build::ops::watch::worker::register(&folder);
+    site.build(PluginMode::NonBlocking, DeriveMode::Adopt);
+    let html = site.page("page");
+    assert!(html.contains("moss-derived--pending") && !html.contains("world"), "{html}");
     moss_build::ops::watch::worker::deregister(&folder, &watcher);
 }
 

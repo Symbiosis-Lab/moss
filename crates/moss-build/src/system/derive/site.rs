@@ -49,6 +49,9 @@ pub struct Demand {
 
 enum Slot {
     Outcome(DeriveOutcome),
+    /// An earlier key's result for these exact bytes, shown while the read
+    /// under the current key runs.
+    Previous(DeriveOutcome),
     Failed(String),
     Pending,
 }
@@ -141,6 +144,7 @@ impl DerivedSite {
         let state = self.state_of(path, fragment);
         let unready = match &state {
             DerivedFragment::Pending => Some(Unready::Pending),
+            _ if self.is_previous(path) => Some(Unready::Pending),
             DerivedFragment::Failed { message } => Some(Unready::Failed(message.clone())),
             DerivedFragment::Ready { .. } | DerivedFragment::Skipped { .. } => None,
         };
@@ -148,6 +152,11 @@ impl DerivedSite {
             map.insert(path.to_string(), unready);
         }
         state
+    }
+
+    /// Whether `path` shows an earlier key's result while its re-read runs.
+    pub fn is_previous(&self, path: &str) -> bool {
+        self.slots.lock().ok().and_then(|s| s.get(path).cloned()).is_some_and(|slot| matches!(*slot, Slot::Previous(_)))
     }
 
     /// What the blocks rendered so far show: how many files render as a
@@ -169,8 +178,9 @@ impl DerivedSite {
         match &*self.slot(path) {
             Slot::Pending => DerivedFragment::Pending,
             Slot::Failed(message) => DerivedFragment::Failed { message: message.clone() },
-            Slot::Outcome(DeriveOutcome::Skip { message, .. }) => DerivedFragment::Skipped { message: message.clone() },
-            Slot::Outcome(DeriveOutcome::Derived { fragments, facts }) => match fragments.get(fragment) {
+            Slot::Outcome(DeriveOutcome::Skip { message, .. }) | Slot::Previous(DeriveOutcome::Skip { message, .. }) => DerivedFragment::Skipped { message: message.clone() },
+            Slot::Outcome(DeriveOutcome::Derived { fragments, facts })
+            | Slot::Previous(DeriveOutcome::Derived { fragments, facts }) => match fragments.get(fragment) {
                 Some(markdown) => DerivedFragment::Ready { markdown: markdown.clone(), facts: facts.clone() },
                 None => DerivedFragment::Failed { message: format!("no `{fragment}` fragment was produced") },
             },
@@ -200,7 +210,7 @@ impl DerivedSite {
             DeriveMode::Adopt => match derive::remembered(entry, &input) {
                 Some(Ok(outcome)) => Slot::Outcome(outcome),
                 Some(Err(failure)) => Slot::Failed(failure.message),
-                None => Slot::Pending,
+                None => derive::lookup_previous(&self.paths, entry, &input).map_or(Slot::Pending, Slot::Previous),
             },
             DeriveMode::Await => {
                 let result = derive::binary::ensure_binary(entry, None)

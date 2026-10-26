@@ -49,6 +49,20 @@ pub fn lookup_cached(site: &MossPaths, entry: &DerivationEntry, input: &Path) ->
     lookup_oid(site, entry, &oid)
 }
 
+/// The outcome stored for this exact file content under any earlier params
+/// (an older plugin version or pin), for showing while the current key is
+/// re-read. A record holds one entry per transform, so this is the latest
+/// result only, and it lives as long as the record, which the cache sweep keeps
+/// for as long as the file's content is in the site.
+pub fn lookup_previous(site: &MossPaths, entry: &DerivationEntry, input: &Path) -> Option<DeriveOutcome> {
+    let oid = binary::content_hash(input).ok()?;
+    let transforms = TransformCache::for_site(site);
+    let record = transforms.get_with(&oid, RecordMode::Request)?;
+    let stored = record.transforms.get(&transform_name(entry))?;
+    let path = transforms.objects().get_path(&stored.oid)?;
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+}
+
 /// Why the last run on this exact file content failed, for a status report.
 /// Written for people to read, never consulted to skip a run: a failure is
 /// usually the environment's, and the next attempt may succeed.

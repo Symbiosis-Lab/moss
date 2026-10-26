@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use crate::plugins::contributions::derivation::FragmentType;
 
 pub use batch::{derive_batch, derive_budget, DeriveJob};
-pub use cache::{derive_cached, lookup_cached, lookup_failure, remember_failure, remembered, DeriveResult};
+pub use cache::{derive_cached, lookup_cached, lookup_failure, lookup_previous, remember_failure, remembered, DeriveResult};
 pub use moss_core::resolve::embeds::derived::DerivedFacts;
 pub use run::run_deriver;
 

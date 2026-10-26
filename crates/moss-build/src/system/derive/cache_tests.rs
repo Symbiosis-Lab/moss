@@ -102,6 +102,19 @@ fn a_new_plugin_version_misses_and_a_changed_file_misses() {
 }
 
 #[test]
+fn the_previous_result_is_found_across_versions_for_the_same_bytes_only() {
+    let f = fixture();
+    let e1 = entry(&f.bin(DERIVED), "1.0.0");
+    let e2 = entry(&f.dir.path().join("d.sh"), "1.1.0");
+    assert_eq!(lookup_previous(&f.site, &e2, &f.input), None, "never derived");
+    derive_cached(&f.site, &e1, &f.input).unwrap();
+    assert_eq!(lookup_cached(&f.site, &e2, &f.input), None);
+    assert!(lookup_previous(&f.site, &e2, &f.input).is_some());
+    std::fs::write(&f.input, "edited").unwrap();
+    assert_eq!(lookup_previous(&f.site, &e2, &f.input), None, "other bytes");
+}
+
+#[test]
 fn another_derivation_does_not_see_this_ones_result() {
     let f = fixture();
     let e = entry(&f.bin(DERIVED), "1.0.0");
