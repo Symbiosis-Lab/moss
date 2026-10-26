@@ -101,7 +101,7 @@ fn importing_a_folder_shows_its_files_as_pages_and_remembers_the_choice() {
     assert!(out.contains("Q1 Summary.md") && out.contains("Q2.md"), "{out}");
 
     let page = std::fs::read_to_string(folder.join("Q1 Summary.md")).unwrap();
-    assert_eq!(page, "---\ninferred: [title, description]\n---\n![[Q1 Summary.fake]]\n\n![[Q1 Summary.fake#body]]\n");
+    assert_eq!(page, "---\ninferred: [title, description, date]\n---\n![[Q1 Summary.fake]]\n\n![[Q1 Summary.fake#body]]\n");
     let config = std::fs::read_to_string(f.site.join(".moss/config.toml")).unwrap();
     assert!(config.contains("# mine") && config.contains("\"reports/\" = [\"fake-pages\"]"), "{config}");
 

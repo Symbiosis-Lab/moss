@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `DerivedFacts` gains `date`, a `YYYY-MM-DD` calendar date a derivation may report. A page that lists `date` under `inferred` takes it when it sets none of its own, as for `title`; `expand_page` writes it the same way. A value in any other form is ignored.
+
 ## [0.20.0] - 2026-10-22
 
 ### Changed

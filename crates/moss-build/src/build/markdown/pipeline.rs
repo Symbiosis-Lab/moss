@@ -448,7 +448,7 @@ pub struct PageContext<'a> {
 
 /// What a page with no derived embeds is given.
 static NO_FACTS: moss_core::resolve::embeds::derived::DerivedFacts =
-    moss_core::resolve::embeds::derived::DerivedFacts { title: None, description: None };
+    moss_core::resolve::embeds::derived::DerivedFacts { title: None, description: None, date: None };
 
 impl Default for PageContext<'_> {
     fn default() -> Self {
@@ -618,7 +618,7 @@ pub fn process_markdown_file(
     // Task 5: defensive conversion for future authors who might write the old form.
     frontmatter.normalize();
     let event = crate::build::types::EventFields::from_frontmatter(&frontmatter);
-    // `inferred: [title, description]` takes those fields from the first
+    // `inferred: [title, description, date]` takes those fields from the first
     // embedded derived file that has them — only when the page sets none of
     // its own.
     let listed = frontmatter.inferred.clone().unwrap_or_default();
@@ -627,6 +627,9 @@ pub fn process_markdown_file(
     }
     if let Some(text) = page.derived_facts.fact_for("description", frontmatter.description.as_deref(), &listed) {
         frontmatter.description = Some(text);
+    }
+    if let Some(date) = page.derived_facts.fact_for("date", frontmatter.date.as_deref(), &listed) {
+        frontmatter.date = Some(date);
     }
 
     // Translate the deprecated `sidebar:` field for both simplified and YAML

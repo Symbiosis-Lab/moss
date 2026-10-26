@@ -4,7 +4,7 @@
 //!
 //! The binary reads `{"path": "<absolute input path>"}` on stdin and prints
 //! exactly one JSON object on stdout, either
-//! `{"kind":"derived","fragments":{"<name>":"<text>"},"facts":{"title":<string|null>,"description":<string|null>}}`
+//! `{"kind":"derived","fragments":{"<name>":"<text>"},"facts":{"title":<string|null>,"description":<string|null>,"date":<"YYYY-MM-DD"|null>}}`
 //! or `{"kind":"skip","reason":"<short>","message":"<sentences>"}`. Core knows
 //! nothing about the file format; the declaration
 //! (`plugins::contributions::derivation`) says which extensions go here and

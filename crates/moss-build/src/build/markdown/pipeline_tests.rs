@@ -4391,6 +4391,7 @@ fn a_blank_title_or_description_takes_the_inferred_fact_and_a_written_one_wins()
     let facts = moss_core::resolve::embeds::derived::DerivedFacts {
         title: Some("Derived title".into()),
         description: Some("Derived words".into()),
+        date: Some("2020-06-09".into()),
     };
     let parse = |source: &str| {
         process_markdown_file(
@@ -4416,6 +4417,11 @@ fn a_blank_title_or_description_takes_the_inferred_fact_and_a_written_one_wins()
     assert_eq!((written.title.as_str(), written.description.as_deref()), ("Mine", Some("Mine too")));
     let unlisted = parse("---\ntitle: \"\"\n---\nBody paragraph.\n");
     assert_ne!(unlisted.title, "Derived title");
+    assert_eq!(unlisted.date, None);
+    let dated = parse("---\ninferred: [date]\n---\nBody paragraph.\n");
+    assert_eq!(dated.date.as_deref(), Some("2020-06-09"));
+    let own_date = parse("---\ndate: 2019-01-01\ninferred: [date]\n---\nBody paragraph.\n");
+    assert_eq!(own_date.date.as_deref(), Some("2019-01-01"));
 }
 
 #[test]

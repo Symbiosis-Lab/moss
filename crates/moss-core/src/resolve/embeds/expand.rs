@@ -7,7 +7,7 @@
 //!
 //! Derived text is inserted with the escaping and the blank lines the build
 //! applies when it splices it, and a page that took its title from the file
-//! (`inferred: [title, description]`) is given them, so the expanded page
+//! (`inferred: [title, description, date]`) is given them, so the expanded page
 //! renders as the embed did.
 
 use crate::content_graph::ContentGraph;
@@ -78,7 +78,7 @@ pub fn expand_page(
         }
     }
     let mut new_head = head.to_string();
-    for key in ["title", "description"] {
+    for key in ["title", "description", "date"] {
         if let Some(written) = with_inferred_field(&new_head, key, &facts) {
             new_head = written;
         }
@@ -124,8 +124,8 @@ fn expansion_for(
     Some(Replacement { text, derived: false, facts: DerivedFacts::default() })
 }
 
-/// `head` (the frontmatter block, kept byte-for-byte) with `key` (`title` or
-/// `description`) written in from `facts` and `key` taken out of `inferred`,
+/// `head` (the frontmatter block, kept byte-for-byte) with `key` (`title`,
+/// `description` or `date`) written in from `facts` and `key` taken out of `inferred`,
 /// when [`DerivedFacts::fact_for`] says the page takes it and `inferred` is a
 /// flow (`[title]`) or block list. A blank `key:` line is filled where it
 /// stands; otherwise the line is added. `None` leaves the head alone.

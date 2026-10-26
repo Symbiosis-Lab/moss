@@ -34,12 +34,19 @@ pub struct DerivedFacts {
     pub title: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+    /// A calendar date as `YYYY-MM-DD`; anything else is ignored.
+    #[serde(default)]
+    pub date: Option<String>,
 }
 
 impl DerivedFacts {
     /// Fill each field that is still unset from `other`, ignoring a blank one.
     pub fn fill_from(&mut self, other: &DerivedFacts) {
-        for (mine, theirs) in [(&mut self.title, &other.title), (&mut self.description, &other.description)] {
+        for (mine, theirs) in [
+            (&mut self.title, &other.title),
+            (&mut self.description, &other.description),
+            (&mut self.date, &other.date),
+        ] {
             if mine.is_none() {
                 *mine = theirs.clone().filter(|t| !t.trim().is_empty());
             }
@@ -48,7 +55,7 @@ impl DerivedFacts {
 }
 
 impl DerivedFacts {
-    /// The fact to use for `field` (`title` or `description`) on a page: the
+    /// The fact to use for `field` (`title`, `description` or `date`) on a page: the
     /// derived one, when the page lists `field` under `inferred` and its own
     /// value (`own`) is missing or blank. The one rule for the build and for
     /// `moss expand`.
@@ -57,10 +64,27 @@ impl DerivedFacts {
         let fact = match field {
             "title" => &self.title,
             "description" => &self.description,
+            "date" => &self.date,
             _ => &None,
         };
-        fact.clone().filter(|_| wanted)
+        fact.clone().filter(|v| wanted && (field != "date" || is_iso_date(v)))
     }
+}
+
+/// `YYYY-MM-DD` with a month 1-12 and a day that month has.
+fn is_iso_date(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('-').collect();
+    let [y, m, d] = parts[..] else { return false };
+    let num = |p: &str, len: usize| (p.len() == len && p.bytes().all(|b| b.is_ascii_digit())).then(|| p.parse::<u32>().ok()).flatten();
+    let (Some(y), Some(m), Some(d)) = (num(y, 4), num(m, 2), num(d, 2)) else { return false };
+    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let days = match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => 28 + u32::from(leap),
+        _ => return false,
+    };
+    (1..=days).contains(&d)
 }
 
 /// What the reader knows about one `(file, fragment)` right now.

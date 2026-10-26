@@ -99,7 +99,7 @@ fn stub_text(entry: &DerivationEntry, file_name: &str) -> String {
         .iter()
         .map(|line| format!("![[{file_name}{line}]]"))
         .collect();
-    format!("---\ninferred: [title, description]\n---\n{}\n", embeds.join("\n\n"))
+    format!("---\ninferred: [title, description, date]\n---\n{}\n", embeds.join("\n\n"))
 }
 
 /// Create `stub` with `text`, unless something is already there. Exclusive on

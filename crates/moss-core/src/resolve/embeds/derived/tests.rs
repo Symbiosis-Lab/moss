@@ -40,7 +40,7 @@ fn resolve(
 fn ready(md: &str) -> DerivedFragment {
     DerivedFragment::Ready {
         markdown: md.to_string(),
-        facts: DerivedFacts { title: Some("T".to_string()), description: Some("D".to_string()) },
+        facts: DerivedFacts { title: Some("T".to_string()), description: Some("D".to_string()), ..Default::default() },
     }
 }
 
@@ -50,7 +50,7 @@ fn claimed_pair_splices_the_markdown_and_records_the_dependency() {
     assert!(r.content_markdown.contains("## Hello\n\nworld"), "{}", r.content_markdown);
     assert!(!r.content_markdown.contains("moss-derived:"));
     assert!(r.embed_deps.contains(&("a.fake".to_string(), "page.md".to_string())));
-    assert_eq!(r.derived_facts, DerivedFacts { title: Some("T".into()), description: Some("D".into()) });
+    assert_eq!(r.derived_facts, DerivedFacts { title: Some("T".into()), description: Some("D".into()), ..Default::default() });
 }
 
 #[test]
@@ -60,6 +60,7 @@ fn facts_come_from_the_first_ready_derivation_that_has_each_and_blank_ones_are_i
         facts: DerivedFacts {
             title: Some(title.into()).filter(|t: &String| !t.is_empty()),
             description: Some(description.into()).filter(|t: &String| !t.is_empty()),
+            ..Default::default()
         },
     };
     let r = resolve("![[a.fake#text]]\n\n![[b.fake#text]]\n", &|path, _| match path {
@@ -68,7 +69,7 @@ fn facts_come_from_the_first_ready_derivation_that_has_each_and_blank_ones_are_i
     });
     assert_eq!(
         r.derived_facts,
-        DerivedFacts { title: Some("Second t".into()), description: Some("First d".into()) }
+        DerivedFacts { title: Some("Second t".into()), description: Some("First d".into()), ..Default::default() }
     );
     let none = resolve("![[a.fake#text]]\n", &|_, _| facts("", "\t\n"));
     assert_eq!(none.derived_facts, DerivedFacts::default());
@@ -329,4 +330,48 @@ fn only_what_the_splice_wrote_is_removed_never_an_authors_own_html() {
     let plain = without_derived_markup(&format!("{mine}{spliced}"));
     assert!(plain.starts_with(&mine) && plain.trim_end().ends_with("words") && !plain.contains("moss-derived:"), "{plain}");
     assert_eq!(plain.matches("moss-derived").count(), 1, "only the author's opener is left: {plain}");
+}
+
+#[test]
+fn a_date_fact_is_taken_only_when_listed_unset_and_a_calendar_date() {
+    let facts = DerivedFacts { date: Some("2020-06-09".into()), ..Default::default() };
+    let listed = vec!["date".to_string()];
+    assert_eq!(facts.fact_for("date", None, &listed).as_deref(), Some("2020-06-09"));
+    assert_eq!(facts.fact_for("date", Some(" "), &listed).as_deref(), Some("2020-06-09"));
+    assert_eq!(facts.fact_for("date", Some("2019-01-01"), &listed), None);
+    assert_eq!(facts.fact_for("date", None, &["title".to_string()]), None);
+    for bad in ["June 9, 2020", "2020-6-9", "2020-13-01", "2021-02-29", "2020-06-31", ""] {
+        let facts = DerivedFacts { date: Some(bad.into()), ..Default::default() };
+        assert_eq!(facts.fact_for("date", None, &listed), None, "{bad}");
+    }
+    let leap = DerivedFacts { date: Some("2020-02-29".into()), ..Default::default() };
+    assert!(leap.fact_for("date", None, &listed).is_some());
+}
+
+#[test]
+fn facts_fill_the_date_from_the_first_derivation_that_has_one() {
+    let facts = |date: Option<&str>| DerivedFragment::Ready {
+        markdown: "x\n".into(),
+        facts: DerivedFacts { date: date.map(str::to_string), ..Default::default() },
+    };
+    let r = resolve("![[a.fake#text]]\n\n![[b.fake#text]]\n", &|path, _| match path {
+        "a.fake" => facts(None),
+        _ => facts(Some("2002-01-17")),
+    });
+    assert_eq!(r.derived_facts.date.as_deref(), Some("2002-01-17"));
+}
+
+#[test]
+fn expand_writes_the_derived_date_where_the_page_inferred_it() {
+    let table = table();
+    let reader = |_: &str, _: &str| DerivedFragment::Ready {
+        markdown: "derived\n".into(),
+        facts: DerivedFacts { date: Some("2020-06-09".into()), ..Default::default() },
+    };
+    let derivations = Derivations { table: &table, reader: &reader };
+    let expand = |raw: &str| expand_page("page.md", raw, &graph(), &|_| None, &derivations).content;
+    let out = expand("---\ninferred: [date]\n---\n![[a.fake#text]]\n");
+    assert!(out.contains("date: ") && out.contains("2020-06-09") && !out.contains("inferred"), "{out}");
+    let own = "---\ndate: 2019-01-01\ninferred: [date]\n---\n![[a.fake#text]]\n";
+    assert!(expand(own).starts_with("---\ndate: 2019-01-01\n"), "{}", expand(own));
 }
