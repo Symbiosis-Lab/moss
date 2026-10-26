@@ -13,6 +13,7 @@
  *   npx playwright test -c playwright/places-explorer-chip.config.ts
  */
 import { test, expect, type Page } from "@playwright/test";
+import { untilRendering } from "./rendering";
 
 async function gotoReady(page: Page, search = ""): Promise<void> {
   await page.goto(`places/${search}`, { waitUntil: "domcontentloaded" });
@@ -21,6 +22,7 @@ async function gotoReady(page: Page, search = ""): Promise<void> {
     "ready",
     { timeout: 10000 },
   );
+  await untilRendering(page);
   await page.waitForTimeout(300); // camera/markers/chip settle
 }
 
@@ -111,11 +113,15 @@ test.describe("desktop, light", () => {
   });
 
   test("Escape with the menu and a card open closes the menu only, with focus on an item or on the crumb", async ({ page }) => {
+    // Two loads and two fly-ins, each a bake WebKit renders no frame through:
+    // about ten seconds apiece at a device scale of 2.
+    test.slow();
     for (const focusTrigger of [false, true]) {
       await gotoReady(page);
       await page.locator(".moss-places-cards .moss-card .moss-places-card-select").first().click();
       const open = page.locator('.moss-places-cards .moss-card[aria-current="true"]');
       await expect(open).toHaveCount(1);
+      await untilRendering(page); // the card's fly-in bakes deeper tiles
       const root = trigger(page);
       await root.click();
       await expect(menuItems(page).first()).toBeFocused();

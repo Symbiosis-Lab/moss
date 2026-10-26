@@ -69,6 +69,7 @@ export function attach(video: HTMLVideoElement, url: string): void {
   const sharpen = shortClipSharpener(hls, video);
   hls.on(Hls.Events.FRAG_BUFFERED, (_event, data) => {
     if (!isMediaFragment(data.frag)) return;
+    stepIntoBuffer(video);
     rememberEstimate(hls);
     sharpen(data.frag);
   });
@@ -97,6 +98,26 @@ export function attach(video: HTMLVideoElement, url: string): void {
   });
   hls.attachMedia(video);
   hls.loadSource(url);
+}
+
+// ── Playback starts where the media does ────────────────────────────
+
+/** The widest start gap the playhead is moved across: a few frames, never a jump a viewer would see. */
+const MAX_START_GAP_S = 1;
+
+/**
+ * Move the playhead to where the buffered media begins when it sits just
+ * before it. A ladder encoded with B-frames starts a frame or two after zero:
+ * the MP4's edit list hides that, but Media Source ignores edit lists.
+ * Chromium steps over such a gap; WebKit waits at zero for data that never
+ * comes, so an autoplaying clip never becomes ready to play and stays on its
+ * poster.
+ */
+export function stepIntoBuffer(video: HTMLVideoElement): void {
+  if (video.seeking || video.buffered.length === 0) return;
+  const start = video.buffered.start(0);
+  const gap = start - video.currentTime;
+  if (gap > 0 && gap <= MAX_START_GAP_S) video.currentTime = start;
 }
 
 // ── A clip that is not playing does not load ────────────────────────

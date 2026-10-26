@@ -56,17 +56,28 @@ fn a_finished_background_read_asks_the_watcher_for_a_rebuild() {
 #[test]
 fn a_background_read_overtaken_by_a_newer_render_still_asks_for_a_rebuild() {
     let f = fixture();
-    // Slow enough that the newer render is admitted while the read runs.
-    script(f.dir.path(), "d.sh", &format!("sleep 1\n{DERIVED}"));
+    // The newer render is admitted once the read's process is running: admitted
+    // before it, the read never starts (that render queues its own), which is
+    // not what this test is about. A fixed delay raced the read's start under
+    // load. The sandboxed binary cannot write a signal, so the process is it.
+    let bin = script(f.dir.path(), "d.sh", &format!("sleep 1\n{DERIVED}"));
     let watcher = crate::ops::watch::worker::register(&f.folder);
     let render = f.render();
     let root = f.dir.path().to_path_buf();
     let newer = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        let running = || std::process::Command::new("pgrep").arg("-f").arg(&bin).output().is_ok_and(|o| o.status.success());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !running() {
+            if std::time::Instant::now() > deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         crate::build::lifecycle::show_render(&MossPaths::new(&root), true);
+        true
     });
     f.job(Some(render)).run(None, &never());
-    newer.join().unwrap();
+    assert!(newer.join().unwrap(), "the read's process was never seen running");
     let asked = watcher.slot_occupied();
     crate::ops::watch::worker::deregister(&f.folder, &watcher);
     assert!(asked, "the newer render may predate the finished text");

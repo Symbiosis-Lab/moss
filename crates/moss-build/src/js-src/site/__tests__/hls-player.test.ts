@@ -89,12 +89,20 @@ function video(attrs: { preload?: string; autoplay?: boolean } = {}, duration = 
   const v = document.createElement("video");
   if (attrs.preload) v.preload = attrs.preload;
   if (attrs.autoplay) v.setAttribute("autoplay", "");
+  let bufferedStart = 0;
   let bufferedEnd = 0;
+  let time = 0;
   Object.defineProperty(v, "duration", { get: () => duration });
+  Object.defineProperty(v, "currentTime", { get: () => time, set: (t: number) => (time = t) });
   Object.defineProperty(v, "buffered", {
-    get: () => ({ length: bufferedEnd ? 1 : 0, end: () => bufferedEnd }),
+    get: () => ({ length: bufferedEnd ? 1 : 0, start: () => bufferedStart, end: () => bufferedEnd }),
   });
-  return Object.assign(v, { setBuffered: (n: number) => (bufferedEnd = n) });
+  return Object.assign(v, {
+    setBuffered: (end: number, start = 0) => {
+      bufferedStart = start;
+      bufferedEnd = end;
+    },
+  });
 }
 
 const media = (level: number, sn = 1) => ({ frag: { type: "main", sn, level } });
@@ -461,5 +469,28 @@ describe("clean-up", () => {
     v.preload = "auto";
     await new Promise((r) => setTimeout(r, 20));
     expect(hls.startLoad.mock.calls.length).toBe(2); // the two network-error recoveries only
+  });
+});
+
+describe("playback starts where the media does", () => {
+  test("the playhead steps over a start gap of a frame or two", () => {
+    const v = video({ preload: "metadata", autoplay: true });
+    player.attach(v, "m.m3u8");
+    v.setBuffered(2.133, 0.133);
+    FakeHls.instances[0].emit("fragBuffered", media(0));
+    expect(v.currentTime).toBe(0.133);
+  });
+
+  test("a playhead inside the media, or far before it, is left alone", () => {
+    const v = video({ preload: "metadata" });
+    player.attach(v, "m.m3u8");
+    v.currentTime = 1;
+    v.setBuffered(2.133, 0.133);
+    FakeHls.instances[0].emit("fragBuffered", media(0));
+    expect(v.currentTime).toBe(1);
+    v.currentTime = 0;
+    v.setBuffered(9, 4);
+    FakeHls.instances[0].emit("fragBuffered", media(0));
+    expect(v.currentTime).toBe(0);
   });
 });

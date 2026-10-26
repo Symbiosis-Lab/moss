@@ -179,6 +179,9 @@ fn a_failed_run_is_remembered_by_background_reads_and_noted_for_status() {
 fn every_question_about_one_file_hashes_it_once() {
     use super::binary::COMPUTED as HASH_READS;
     let f = fixture();
+    // The memory is process-wide and keyed by content, so content shared with
+    // a parallel test that remembers a result would answer before this one asks.
+    std::fs::write(&f.input, "asked about once").unwrap();
     let e = entry(&f.bin(DERIVED), "1.0.0");
     // The binary's own hash is part of the key; take it out of the count.
     let _ = params(&e);
