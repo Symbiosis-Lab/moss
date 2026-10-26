@@ -150,14 +150,14 @@ fn clear_stale_ladder(
     });
 }
 
-/// Store one MP4 and link it into staging. Staging is the page's copy, so a
-/// store or link that failed is a failed conversion, not a warning.
+/// Link one stored MP4 into staging. Staging is the page's copy, so a store or
+/// link that failed is a failed conversion, not a warning.
 fn stage_mp4(
     objects: &crate::build::cache::ObjectStore,
-    file: &Path,
+    stored: Result<String, String>,
     output_mp4: &Path,
 ) -> Result<String, String> {
-    let oid = objects.store_file(file, crate::build::cache::RecordMode::Wait)?;
+    let oid = stored?;
     objects.link_to(&oid, output_mp4)?;
     Ok(oid)
 }
@@ -653,7 +653,7 @@ pub(crate) fn convert_single_video(
         // transform output. The seal/registry flow and future cache hits are
         // then identical to a real encode — rebuilds link the original
         // without re-probing.
-        stage_mp4(objects, source_file, &output_mp4)
+        stage_mp4(objects, objects.store_source_file(source_file, crate::build::cache::RecordMode::Wait), &output_mp4)
     } else {
         // 3c. Validate converted MP4 via ffprobe before storing in CAS
         if !ffmpeg.validate_encoded_video(&temp_mp4).unwrap_or(false) {
@@ -663,7 +663,7 @@ pub(crate) fn convert_single_video(
             return VideoConversionOutcome::failed(format!("Validation failed for {}", filename));
         }
 
-        stage_mp4(objects, &temp_mp4, &output_mp4)
+        stage_mp4(objects, objects.store_file(&temp_mp4, crate::build::cache::RecordMode::Wait), &output_mp4)
     };
     // allow:unlink an encode temp this call wrote under cache/tmp
     let _ = fs::remove_file(&temp_mp4);
@@ -2314,14 +2314,45 @@ pub(crate) mod tests {
         let objects = crate::build::cache::ObjectStore::new(dir.path().join("objects"));
         let encoded = dir.path().join("encoded.mp4");
         std::fs::write(&encoded, b"encoded video bytes").unwrap();
-        let oid = super::stage_mp4(&objects, &encoded, &dir.path().join("first.mp4")).unwrap();
+        let store = || objects.store_file(&encoded, crate::build::cache::RecordMode::Wait);
+        let oid = super::stage_mp4(&objects, store(), &dir.path().join("first.mp4")).unwrap();
         let blob = objects.blob_path(&oid);
         let _cloud = crate::build::icloud::pretend::evicted_until_replaced(&blob);
         crate::build::cloud_readiness::TEST_DEADLINE.with(|d| d.set(Some(std::time::Duration::from_millis(20))));
-        let regenerated = super::stage_mp4(&objects, &encoded, &dir.path().join("second.mp4"));
+        let regenerated = super::stage_mp4(&objects, store(), &dir.path().join("second.mp4"));
         crate::build::cloud_readiness::TEST_DEADLINE.with(|d| d.set(None));
         assert_eq!(regenerated.expect("fresh encoded bytes are sufficient for staging"), oid);
         assert_eq!(std::fs::read(dir.path().join("second.mp4")).unwrap(), b"encoded video bytes");
+    }
+
+    #[test]
+    fn an_original_kept_as_its_web_file_is_stored_on_this_machine_only() {
+        use crate::build::media::ffmpeg::{real_ffmpeg, synthesise, FFmpegManager, VideoCompressionConfig};
+        let Some(bin) = real_ffmpeg() else {
+            eprintln!("skipping: ffmpeg not on PATH");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("clip.mp4");
+        if !synthesise(&bin, &source, "320x240") {
+            eprintln!("skipping: could not synthesise a source");
+            return;
+        }
+        let mp = crate::moss_paths::MossPaths::from_moss_dir(dir.path().join(".moss"));
+        let objects = crate::build::cache::ObjectStore::for_site(&mp);
+        let transforms = crate::build::cache::TransformCache::for_site(&mp);
+        let (staging, temp) = (dir.path().join("stage"), dir.path().join("temp"));
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::create_dir_all(&temp).unwrap();
+        let config = VideoCompressionConfig::default();
+        let outcome = super::convert_single_video(
+            &FFmpegManager::from_bin_path(bin.clone()), &source, "oid-clip", "videos/clip.mp4", "videos/clip.thumb.jpg",
+            &temp, &staging, &objects, &transforms, &config, &config.to_params(), &serde_json::json!({}), None, None, None,
+        );
+        let oid = outcome.mp4_oid.expect("the clip converts");
+        assert_eq!(oid, crate::build::cache::ObjectStore::hash_file(&source).unwrap(), "a web-ready mp4 is kept as its web file");
+        assert!(crate::build::cache::ObjectStore::new(mp.cache_local_objects()).blob_path(&oid).exists());
+        assert!(!objects.blob_path(&oid).exists(), "the original syncs itself; the synced store gets no copy");
     }
     use super::*;
 

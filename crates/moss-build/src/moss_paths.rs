@@ -406,7 +406,7 @@ impl MossPaths {
         self.store_dir().join("objects")
     }
 
-    /// Local CAS fallback for output bytes when the synced cache is offline.
+    /// This machine's CAS: copies of source files, and output bytes the synced cache could not take.
     pub fn cache_local_objects(&self) -> PathBuf {
         self.cache_dir().join("local-objects")
     }

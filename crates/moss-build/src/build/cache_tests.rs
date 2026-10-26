@@ -2396,10 +2396,11 @@ fn test_gc_removes_orphaned_transform() {
     put_transform(&transforms_dir, &orphan_record);
     age_past_ttl(&transforms_dir, &orphan_record.source_oid);
 
-    // Put objects for all OIDs
-    put_object(&objects_dir, &live_oid, b"live source");
+    // Sources are this machine's copies; outputs are shared
+    let local_dir = mp.cache_local_objects();
+    put_object(&local_dir, &live_oid, b"live source");
     put_object(&objects_dir, &live_output, b"live output");
-    put_object(&objects_dir, &orphan_oid, b"orphan source");
+    put_object(&local_dir, &orphan_oid, b"orphan source");
     put_object(&objects_dir, &orphan_output, b"orphan output");
 
     let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("every mark input is readable");
@@ -2419,8 +2420,9 @@ fn test_gc_removes_orphaned_transform() {
 
     // Verify live objects still exist
     let store = ObjectStore::new(objects_dir.clone());
+    let local = ObjectStore::new(local_dir.clone());
     assert!(
-        store.blob_path(&live_oid).exists(),
+        local.blob_path(&live_oid).exists(),
         "live source should still exist"
     );
     assert!(
@@ -2430,7 +2432,7 @@ fn test_gc_removes_orphaned_transform() {
 
     // Verify orphaned objects are gone
     assert!(
-        !store.blob_path(&orphan_oid).exists(),
+        !local.blob_path(&orphan_oid).exists(),
         "orphan source should be removed"
     );
     assert!(
@@ -2562,8 +2564,8 @@ fn test_gc_preserves_objects_referenced_by_transforms() {
     };
     put_transform(&transforms_dir, &record);
 
-    // Put all objects
-    put_object(&objects_dir, &source_oid, b"source image");
+    // Put all objects: the source as this machine's copy
+    put_object(&mp.cache_local_objects(), &source_oid, b"source image");
     put_object(&objects_dir, &output_oid, b"converted webp");
     put_object(&objects_dir, &orphan_oid, b"orphaned blob");
 
@@ -2577,7 +2579,7 @@ fn test_gc_preserves_objects_referenced_by_transforms() {
 
     let store = ObjectStore::new(objects_dir);
     assert!(
-        store.blob_path(&source_oid).exists(),
+        ObjectStore::new(mp.cache_local_objects()).blob_path(&source_oid).exists(),
         "source should survive"
     );
     assert!(
@@ -2624,7 +2626,11 @@ fn gc_keeps_another_machines_record_and_its_blobs_until_the_record_ages_out() {
     put_transform(&transforms_dir, &fresh);
     put_transform(&transforms_dir, &aged);
     age_past_ttl(&transforms_dir, &aged.source_oid);
-    for oid in ["aaaa", "bbbb", "cccc", "dddd"] {
+    // Sources are per-machine copies; outputs are shared.
+    for oid in ["aaaa", "cccc"] {
+        put_object(&mp.cache_local_objects(), &oid.repeat(16), oid.as_bytes());
+    }
+    for oid in ["bbbb", "dddd"] {
         put_object(&objects_dir, &oid.repeat(16), oid.as_bytes());
     }
     // No hash index at all: nothing is live on this machine.
@@ -2634,7 +2640,7 @@ fn gc_keeps_another_machines_record_and_its_blobs_until_the_record_ages_out() {
     let store = ObjectStore::new(objects_dir);
     assert_eq!(result.transforms_removed, 1, "only the aged record is condemned");
     assert!(store.blob_path(&"bbbb".repeat(16)).exists(), "the fresh record's output survives");
-    assert!(store.blob_path(&"aaaa".repeat(16)).exists(), "and so does its source");
+    assert!(ObjectStore::new(mp.cache_local_objects()).blob_path(&"aaaa".repeat(16)).exists(), "and so does its source");
     assert!(!store.blob_path(&"dddd".repeat(16)).exists(), "the aged record's output goes with it");
     assert_eq!(result.objects_removed, 2);
 }
@@ -3101,7 +3107,7 @@ fn a_cloud_record_miss_does_not_request_optional_history() {
 }
 
 #[test]
-fn generation_original_receipts_keep_both_cas_replicas_reachable() {
+fn generation_original_receipts_keep_this_machines_copy_and_sweep_a_shared_one() {
     let (mp, objects, _) = make_gc_test_dir("generation_original_gc");
     let generation = "1234567890abcdef";
     fs::create_dir_all(mp.generation_dir(generation)).unwrap();
@@ -3121,12 +3127,32 @@ fn generation_original_receipts_keep_both_cas_replicas_reachable() {
     receipt.bind(&mp.generations_dir()).unwrap();
     lock.finish();
     let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).unwrap();
-    assert_eq!(result.objects_removed, 2);
+    assert_eq!(result.objects_removed, 3, "both orphans, and the original's copy in the shared store");
+    assert!(ObjectStore::new(mp.cache_local_objects()).blob_path(&oid).exists(), "the receipt keeps this machine's copy");
+    assert!(!ObjectStore::new(objects.clone()).blob_path(&oid).exists(), "an original is a source file, which syncs itself");
     for base in [objects, mp.cache_local_objects()] {
-        let store = ObjectStore::new(base);
-        assert!(store.blob_path(&oid).exists());
-        assert!(!store.blob_path(&orphan).exists());
+        assert!(!ObjectStore::new(base).blob_path(&orphan).exists());
     }
+}
+
+#[test]
+fn gc_sweeps_a_source_copy_from_the_shared_store_and_keeps_this_machines() {
+    let (mp, objects_dir, _) = make_gc_test_dir("gc_source_copy_shared");
+    let source = "abab".repeat(16);
+    let hash_index = HashIndex {
+        entries: [("report.pdf".to_string(), HashIndexEntry {
+            stat: FileStat::whole_second(7, 1000), recorded_at: None, content_hash: source.clone(),
+        })].into_iter().collect(),
+    };
+    hash_index.save(&mp.cache_hash_index()).expect("save hash index");
+    put_object(&objects_dir, &source, b"a copy a build stored before");
+    put_object(&mp.cache_local_objects(), &source, b"a copy a build stored before");
+
+    let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("readable");
+
+    assert_eq!(result.objects_removed, 1);
+    assert!(!ObjectStore::new(objects_dir).blob_path(&source).exists(), "the synced store keeps no copy of a source file");
+    assert!(ObjectStore::new(mp.cache_local_objects()).blob_path(&source).exists(), "this machine's copy is live");
 }
 
 #[test]
@@ -3341,4 +3367,54 @@ fn availability_new_merge_after_owned_full_intent_survives_unreadable_old_record
             }
         }
     });
+}
+
+#[test]
+fn a_source_copy_is_stored_on_this_machine_only() {
+    let (mp, objects_dir, _) = make_gc_test_dir("source_copy_local");
+    let source = mp.cache_dir().join("report.pdf");
+    fs::write(&source, b"%PDF a site's own file").unwrap();
+
+    let oid = ObjectStore::for_site(&mp).store_source_file(&source, RecordMode::Request).unwrap();
+
+    assert!(ObjectStore::new(mp.cache_local_objects()).blob_path(&oid).exists(), "the copy is this machine's");
+    assert!(!ObjectStore::new(objects_dir).blob_path(&oid).exists(), "the synced store gets none");
+}
+
+#[test]
+fn gc_moves_a_source_copy_only_the_synced_store_holds_to_this_machine() {
+    let (mp, objects_dir, _) = make_gc_test_dir("source_copy_moves");
+    let bytes = b"%PDF stored by an older build";
+    let oid = format!("{:x}", Sha256::digest(bytes));
+    HashIndex {
+        entries: [("report.pdf".to_string(), HashIndexEntry {
+            stat: FileStat::whole_second(7, 1000), recorded_at: None, content_hash: oid.clone(),
+        })].into_iter().collect(),
+    }.save(&mp.cache_hash_index()).expect("save hash index");
+    put_object(&objects_dir, &oid, bytes);
+
+    let result = gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("readable");
+
+    assert_eq!(result.objects_removed, 0, "moved, not removed");
+    assert_eq!(fs::read(ObjectStore::new(mp.cache_local_objects()).blob_path(&oid)).unwrap(), bytes);
+    assert!(!ObjectStore::new(objects_dir).blob_path(&oid).exists());
+}
+
+#[test]
+fn gc_drops_a_shared_copy_of_an_original_kept_as_its_own_output() {
+    let (mp, objects_dir, transforms_dir) = make_gc_test_dir("kept_original_moves");
+    let oid = "abcd".repeat(16);
+    put_transform(&transforms_dir, &TransformRecord {
+        source_oid: oid.clone(),
+        source_size: 9,
+        transforms: [("video/mp4".to_string(), TransformEntry { oid: oid.clone(), size: 9, params: serde_json::json!({}) })]
+            .into_iter().collect(),
+    });
+    put_object(&objects_dir, &oid, b"web-ready");
+    put_object(&mp.cache_local_objects(), &oid, b"web-ready");
+
+    gc(&mp, &crate::build::lifecycle::gc_token_for_test()).expect("readable");
+
+    assert!(ObjectStore::new(mp.cache_local_objects()).blob_path(&oid).exists(), "the record keeps it, on this machine");
+    assert!(!ObjectStore::new(objects_dir).blob_path(&oid).exists(), "a source copy, though also an output, is not shared");
 }

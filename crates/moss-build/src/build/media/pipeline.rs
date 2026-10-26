@@ -779,7 +779,7 @@ fn source_blob(
         return Ok(None);
     }
     *cache_misses += 1;
-    object_store.store_file(path, crate::build::cache::RecordMode::Wait)
+    object_store.store_source_file(path, crate::build::cache::RecordMode::Wait)
         .map(|oid| Some((oid, stat)))
 }
 
