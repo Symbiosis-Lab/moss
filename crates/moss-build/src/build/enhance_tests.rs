@@ -417,7 +417,10 @@ fn inject_staged(
 ) -> Result<Vec<SlotInjectionReceipt>, BuildStopped> {
     let paths = crate::moss_paths::MossPaths::from_moss_dir(dir.join(".moss"));
     let mut staged = StagedLinks::load(&paths, "pages", dir);
-    inject_slots_into_directory_cached(dir, dir, slots, objects, transforms, Default::default(), &mut staged)
+    inject_slots_into_directory_cached(
+        dir, dir, slots, &resolved_slots_hash(slots), objects, transforms, Default::default(), &Default::default(), &mut staged,
+    )
+    .map(|pass| pass.receipts)
 }
 
 fn slot_test_cache(
@@ -495,9 +498,10 @@ fn jupyterlite_html_is_left_alone_while_a_rendered_page_under_jupyter_is_filled(
     let slots = head_end_slots("<style>h1{}</style>");
 
     let receipts = inject_slots_into_directory_cached(
-        dir.path(), dir.path(), &slots, &objects, &transforms, rendered, &mut staged,
+        dir.path(), dir.path(), &slots, &resolved_slots_hash(&slots), &objects, &transforms, rendered, &Default::default(), &mut staged,
     )
-    .unwrap();
+    .unwrap()
+    .receipts;
 
     assert_eq!(std::fs::read_to_string(&lab).unwrap(), marked, "JupyterLite's page was rewritten");
     let note = std::fs::read_to_string(dir.path().join("jupyter/note/index.html")).unwrap();

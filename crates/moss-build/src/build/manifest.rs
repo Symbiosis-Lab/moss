@@ -228,6 +228,10 @@ pub struct PendingManifest {
     /// registration of the same path drops its entry, since that writer put its
     /// own bytes in the stage.
     unwritten_pages: std::collections::BTreeMap<String, String>,
+    /// Pages registered with the previous build's entry by a carry proof and not
+    /// registered again since: their bytes in the stage are the previous build's
+    /// final ones. See [`carried_pages`][Self::carried_pages].
+    carried_pages: HashSet<String>,
 }
 
 /// Is this `SiteHashes.sources` key in the page half?
@@ -352,6 +356,7 @@ impl PendingManifest {
             unverified: std::collections::BTreeMap::new(),
             ship_sources: HashMap::new(),
             unwritten_pages: std::collections::BTreeMap::new(),
+            carried_pages: HashSet::new(),
         }
     }
 
@@ -445,6 +450,22 @@ impl PendingManifest {
     pub(crate) fn register_unwritten_page(&mut self, rel_path: &crate::build::served_path::ServedPath, html: String) {
         self.register(rel_path, html.as_bytes(), HashBucket::Files);
         self.unwritten_pages.insert(rel_path.as_str().to_string(), html);
+    }
+
+    /// [`register_hashed`][Self::register_hashed] a page the render left in place,
+    /// remembering that its stage bytes are the previous build's.
+    pub(crate) fn register_carried_page(&mut self, rel_path: &crate::build::served_path::ServedPath, hash: &str) {
+        self.register_hashed(rel_path, hash, HashBucket::Files);
+        self.carried_pages.insert(rel_path.as_str().to_string());
+    }
+
+    /// Carried pages and the manifest entry each holds, for the slot pass to
+    /// vouch for without reading them.
+    pub(crate) fn carried_pages(&self) -> std::collections::BTreeMap<String, String> {
+        self.carried_pages
+            .iter()
+            .filter_map(|path| Some((path.clone(), self.inner.files.get(path)?.clone())))
+            .collect()
     }
 
     pub(crate) fn take_unwritten_pages(&mut self) -> std::collections::BTreeMap<String, String> {
@@ -760,6 +781,7 @@ impl PendingManifest {
         // is dropped. See module docs.
         self.touched.insert(rel_path.clone());
         self.unwritten_pages.remove(&rel_path);
+        self.carried_pages.remove(&rel_path);
 
         // The last registration of a path wins, its CAS object included: an oid
         // is valid only for the (path, hash) pair it was registered with. A
