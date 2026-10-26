@@ -1451,6 +1451,7 @@ fn build_inner(
     // which needs it again after `site_config` is consumed, read the same
     // value.
     let math = site_bool("math").unwrap_or(true);
+    let colophon = site_bool("colophon").unwrap_or(true);
     // The listing styles read every declaration, and `site_config` takes
     // `field_decls` below, so the listing gets its own copy.
     let listing_field_decls = field_decls.clone();
@@ -1500,7 +1501,8 @@ fn build_inner(
         floating_nav: site_bool("floating_nav").unwrap_or(false),
         // Default-on by key absence, like `link_preview`: `[site].colophon = false`
         // is the only way to leave moss's credit out.
-        colophon: site_bool("colophon").unwrap_or(true),
+        colophon,
+        colophon_credit: crate::build::render::credits::ColophonCredit::from_site(site_str("credit").as_deref(), colophon),
         // `[site].header` — "brand" (default), "nav" or "none"; an absent or
         // unrecognized value resolves to "brand" (`HeaderMode::from_config`
         // logs a warning on the latter).

@@ -3593,6 +3593,40 @@ export const FOOTER_END_SPACE_DEFAULT: ScratchSiteSpec = {
   files: { ...footerEndSpaceFiles, ".moss/theme/style.css": null },
 };
 
+// ── The colophon's credit line: it wraps, never overflows, and the mark sits on the text's baseline ──
+// Two sites that differ only in `[site].credit`: a short one that fits the mark's
+// line on a phone, and 40 capital Ws with no break in them. Served by
+// playwright/colophon-credit.config.ts.
+const colophonCreditFiles = {
+  "index.md": `---
+title: Colophon credit
+uid: "ccr00101"
+---
+
+# Colophon credit
+
+Body text.
+`,
+  "footer.md": `Written by [an editor](/editor) for this scratch site.
+`,
+};
+
+export const COLOPHON_CREDIT_SHORT: ScratchSiteSpec = {
+  name: "colophon-credit-short-gate",
+  files: {
+    ...colophonCreditFiles,
+    ".moss/config.toml": `${CONFIG_TOML}credit = "Designed by [Example Studio](https://example.org)"\n`,
+  },
+};
+
+export const COLOPHON_CREDIT_LONG: ScratchSiteSpec = {
+  name: "colophon-credit-long-gate",
+  files: {
+    ...colophonCreditFiles,
+    ".moss/config.toml": `${CONFIG_TOML}credit = "${"W".repeat(40)}"\n`,
+  },
+};
+
 // ── Facts list: hangs in the right margin only where it fits ──
 // Two sites that differ only in the theme rule that widens the content
 // column. Served by playwright/facts-margin.config.ts.

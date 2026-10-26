@@ -1,8 +1,21 @@
 //! What the page around a closing picture is: its colours as the theme sets
 //! them, and its colophon row.
 
-use super::{Theme, TypeTheme, CREDIT_INK, TEXT_INK};
+use super::{Layout, Theme, TypeTheme, CREDIT_INK, TEXT_INK};
 use crate::build::scan::section_text::{Rgb, BACKGROUNDS};
+
+/// The colophon's row along a closing picture's bottom edge (2.25rem).
+pub(crate) const COLOPHON_PX: f32 = 36.0;
+
+/// The line a site's own credit adds above the mark on a phone, where it wraps
+/// (1.5rem). The credit's stylesheet reads it from here too.
+pub(crate) const CREDIT_LINE_PX: f32 = 24.0;
+
+/// How tall the colophon's row is at `layout`: a phone also reserves one line
+/// for a credit that wraps above the mark.
+pub(super) fn colophon_px(layout: Layout, credit: bool) -> f32 {
+    COLOPHON_PX + if credit && layout == Layout::Narrow { CREDIT_LINE_PX } else { 0.0 }
+}
 
 /// What the page around a closing picture is: the page colour behind a faded
 /// picture, `--moss-color-bg` in the light and the dark theme (`None` where the
@@ -21,6 +34,9 @@ pub struct PageGround {
     /// Whether the page sets a colophon row along a closing picture's foot,
     /// which the credit then sits above.
     pub colophon: bool,
+    /// Whether the site has its own credit, which can wrap above the mark and
+    /// make the colophon's row one line taller on a phone.
+    pub credit: bool,
     /// What the theme changes in the type the words are set in.
     pub type_theme: TypeTheme,
 }
@@ -28,7 +44,7 @@ pub struct PageGround {
 impl Default for PageGround {
     fn default() -> Self {
         let (light, dark) = *BACKGROUNDS;
-        Self { light: Some(light), dark: Some(dark), credit_light: Some(CREDIT_INK.0), credit_dark: Some(CREDIT_INK.1), text_light: Some(TEXT_INK.0), text_dark: Some(TEXT_INK.1), colophon: true, type_theme: TypeTheme::default() }
+        Self { light: Some(light), dark: Some(dark), credit_light: Some(CREDIT_INK.0), credit_dark: Some(CREDIT_INK.1), text_light: Some(TEXT_INK.0), text_dark: Some(TEXT_INK.1), colophon: true, credit: false, type_theme: TypeTheme::default() }
     }
 }
 

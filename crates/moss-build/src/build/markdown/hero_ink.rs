@@ -39,6 +39,8 @@ mod page;
 mod words;
 pub use ground::{built as grounds_built, Ground};
 pub use page::PageGround;
+pub(crate) use page::{COLOPHON_PX, CREDIT_LINE_PX};
+use page::colophon_px;
 pub use words::{Column, TypeTheme, Words};
 use words::{Type, CREDIT_FONT_PX};
 
@@ -366,13 +368,10 @@ pub fn words_spot(align: Option<&str>, aspect: f32, layout: Layout, frame: &Fram
     frame.spot(aspect, layout, rows, cols, face)
 }
 
-/// The colophon's row along a closing picture's bottom edge (2.25rem).
-const COLOPHON_PX: f32 = 36.0;
-
 /// A closing picture's colophon row: the bottom edge, across the width, at
-/// every layout.
-pub fn foot_spot(frame: &Frame, aspect: f32) -> Spot {
-    Spot(Layout::ALL.iter().flat_map(|layout| frame.spot(aspect, *layout, |_, height| (1.0 - COLOPHON_PX / height, 1.0), |_, _| (0.0, 1.0), |_| Face::SMALL).0).collect())
+/// every layout. A site's own credit sits in this row, so it is measured with it.
+pub fn foot_spot(frame: &Frame, aspect: f32, credit: bool) -> Spot {
+    Spot(Layout::ALL.iter().flat_map(|layout| frame.spot(aspect, *layout, |_, height| (1.0 - colophon_px(*layout, credit) / height, 1.0), |_, _| (0.0, 1.0), |_| Face::SMALL).0).collect())
 }
 
 /// The text columns a closing picture's words are read in at `layout`, as
@@ -389,8 +388,8 @@ fn type_cases(layout: Layout, page: Page) -> Vec<(Column, bool)> {
 /// Where a closing picture's credit can sit: its text, right-aligned to the end
 /// of the page's text column, in the rows above the colophon's row, in `layout`.
 /// The footer is one for every page, so it is read on every page's column.
-pub fn credit_spot(frame: &Frame, aspect: f32, layout: Layout, colophon: bool) -> Spot {
-    let strip = if colophon { COLOPHON_PX } else { 0.0 };
+pub fn credit_spot(frame: &Frame, aspect: f32, layout: Layout, colophon: bool, site_credit: bool) -> Spot {
+    let strip = if colophon { colophon_px(layout, site_credit) } else { 0.0 };
     let cases = if layout == Layout::Narrow { type_cases(layout, Page::ALL[0]) } else { Page::ALL.iter().flat_map(|page| type_cases(layout, *page)).collect() };
     let areas = cases.into_iter().flat_map(|(column, lane)| {
         let credit = move |width: f32| Type::at(width, &frame.theme, column, lane).credit(width, frame.words.credit);
@@ -744,7 +743,7 @@ fn readings(grid: &Ground, aspect: f32, align: Option<&str>, frame: &Frame, cred
     }
     if frame.closing && credit {
         for layout in Layout::ALL {
-            let spot = credit_spot(frame, aspect, layout, ground.colophon);
+            let spot = credit_spot(frame, aspect, layout, ground.colophon, ground.credit);
             out.push(Reading { part: Part::Credit, token: layout.as_str().to_string(), layout, tones: grid.tones(&spot, None, forced), spot, inks: Inks::words() });
         }
     }
@@ -796,7 +795,7 @@ pub fn ink_attributes(
             let ink = if backing == Backing::Never && contrast < MIN_CONTRAST { credit_ink_by_median(&r.tones, text, page) } else { ink };
             Some(backing.accept((ink, contrast))?.as_str())
         });
-        let foot_tones = closing.then(|| grid.tones(&foot_spot(&frame, aspect), None, false));
+        let foot_tones = closing.then(|| grid.tones(&foot_spot(&frame, aspect, ground.credit), None, false));
         let foot = foot_tones.and_then(|tones| Backing::Auto.accept(better_ink(&tones, Inks::words())));
         let edition = closing.then(|| edition_ink(&grid, aspect, align, &frame, |layout| Fade::resolve(frame.faded, page, layout))).flatten();
         Some((words.join(" "), foot, credit.join(" "), edition))
@@ -1073,7 +1072,7 @@ mod tests {
         for layout in Layout::ALL {
             assert_eq!(readable_ink(&grid, &words_spot(Some("top"), 0.4, layout, &ordinary(), PAGE), None, Inks::words()), Some(Ink::Dark));
         }
-        assert_eq!(readable_ink(&grid, &foot_spot(&closing(Some("top")), 70.0 / 160.0), None, Inks::words()), Some(Ink::Light));
+        assert_eq!(readable_ink(&grid, &foot_spot(&closing(Some("top")), 70.0 / 160.0, false), None, Inks::words()), Some(Ink::Light));
     }
 
     #[test]
@@ -1122,10 +1121,10 @@ mod tests {
         let top = words_spot(Some("top"), 0.8, Layout::Wide, &closing(Some("top")), PAGE);
         assert_eq!(readable_ink(&band(40, 80), &top, None, Inks::words()), Some(Ink::Dark));
         assert_eq!(readable_ink(&band(16, 24), &top, None, Inks::words()), None);
-        assert_eq!(readable_ink(&band(0, 40), &foot_spot(&closing(Some("top")), 0.8), None, Inks::words()), Some(Ink::Dark));
+        assert_eq!(readable_ink(&band(0, 40), &foot_spot(&closing(Some("top")), 0.8, false), None, Inks::words()), Some(Ink::Dark));
         // The foot is the colophon's row, 36px of the 1024: a band above it is not under it.
-        assert_eq!(readable_ink(&band(40, 70), &foot_spot(&closing(Some("top")), 0.8), None, Inks::words()), Some(Ink::Dark));
-        assert_eq!(readable_ink(&band(68, 80), &foot_spot(&closing(Some("top")), 0.8), None, Inks::words()), Some(Ink::Light));
+        assert_eq!(readable_ink(&band(40, 70), &foot_spot(&closing(Some("top")), 0.8, false), None, Inks::words()), Some(Ink::Dark));
+        assert_eq!(readable_ink(&band(68, 80), &foot_spot(&closing(Some("top")), 0.8, false), None, Inks::words()), Some(Ink::Light));
     }
 
     #[test]
@@ -1251,7 +1250,7 @@ mod tests {
             assert_eq!(readable_ink(&grid, &spot, Some(Fade::new(dark, layout)), Inks::words()), None, "{layout:?}: dark page above a pale sky");
         }
         // The foot is below the fade.
-        assert_eq!(readable_ink(&grid, &foot_spot(&closing(Some("top")), 70.0 / 160.0), Some(Fade::new(light, Layout::Wide)), Inks::words()), Some(Ink::Light));
+        assert_eq!(readable_ink(&grid, &foot_spot(&closing(Some("top")), 70.0 / 160.0, false), Some(Fade::new(light, Layout::Wide)), Inks::words()), Some(Ink::Light));
     }
 
     #[test]
@@ -1426,7 +1425,7 @@ mod tests {
         // a top anchor would put the dark band at 50-65% there instead.
         let grid = sky_with_band((39, 50));
         let cap = moss_core::media::MaxHeight::parse("clamp(420px, 50vw, 680px)");
-        let foot = |frame: Frame| readable_ink(&grid, &foot_spot(&frame, 77.0 / 100.0), None, Inks::words());
+        let foot = |frame: Frame| readable_ink(&grid, &foot_spot(&frame, 77.0 / 100.0, false), None, Inks::words());
         assert_eq!(foot(Frame::new(None, cap, Some("top"), false, true, Words::default())), Some(Ink::Dark));
         assert_eq!(foot(Frame::new(Some(moss_core::media::Position::Top), cap, Some("top"), false, true, Words::default())), None);
         // An ordinary hero keeps its top unless it names a position.
@@ -1536,7 +1535,7 @@ mod tests {
         let page = Some(BACKGROUNDS.0);
         let credit = |text: &str, layout| {
             let frame = Frame { words: Words::read("## Words", text), ..closing(Some("top")) };
-            credit_ink(&grid.tones(&credit_spot(&frame, 0.5, layout, true), None, false), Some(CREDIT_INK.0), page)
+            credit_ink(&grid.tones(&credit_spot(&frame, 0.5, layout, true, false), None, false), Some(CREDIT_INK.0), page)
         };
         for layout in [Layout::Narrow, Layout::Wide] {
             let (ink, worst) = credit("A credit.", layout);

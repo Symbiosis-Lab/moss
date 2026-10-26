@@ -983,6 +983,9 @@ pub struct SiteAssets {
     pub places_explorer: bool,
     /// The site declares `[map.layers]`, so its map figures carry a credit line.
     pub map_layers: bool,
+    /// The site shows its own credit before moss's mark in the colophon
+    /// (`[site].credit`). Gates the `colophon-credit` stylesheet partial.
+    pub colophon_credit: bool,
 }
 
 impl SiteAssets {

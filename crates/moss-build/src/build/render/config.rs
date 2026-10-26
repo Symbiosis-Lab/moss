@@ -94,6 +94,9 @@ pub struct SiteConfig {
     /// site. Authors who don't want it write `[site].colophon = false`, and
     /// the build leaves the element out of every page.
     pub colophon: bool,
+    /// `[site].credit` — the site's own line before moss's mark. `None` when
+    /// unset, unreadable, or `colophon = false` (which leaves the whole line out).
+    pub colophon_credit: Option<crate::build::render::credits::ColophonCredit>,
     /// `[site].header` — resolved (`HeaderMode::from_config`, which also
     /// carries the default and the unrecognized-value fallback), so
     /// consumers never re-decide either.
@@ -179,6 +182,7 @@ impl Default for SiteConfig {
             heading_anchors: false,
             floating_nav: false,
             colophon: true,
+            colophon_credit: None,
             header: crate::build::components::nav::HeaderMode::Brand,
             site_url_override: None,
             declared_redirects: Vec::new(),

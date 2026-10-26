@@ -110,6 +110,8 @@ const GATE_PORT_KEYS = [
   'nav-one-row',
   'theme-floor-hooks',
   'hls-short-clip',
+  'colophon-credit:long',
+  'colophon-credit:short',
   'footer-end-space:hidden',
   'footer-end-space:default',
   'facts-margin:widened',

@@ -160,6 +160,7 @@ impl PageChromeContext<'_, '_> {
             navigation: nav.generate_navigation(),
             has_header: self.layout.header != crate::build::components::nav::HeaderMode::None,
             colophon: self.layout.colophon,
+            colophon_credit: self.layout.colophon_credit.clone(),
             nav_island: if self.layout.floating_nav || contents_pictures || self.layout.header == crate::build::components::nav::HeaderMode::None { nav.generate_nav_island() } else { String::new() },
             footer: Some(nav.generate_footer(self.show_rss_in_footer)),
             favicon: Some(paths.favicon_link()),

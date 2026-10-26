@@ -1631,6 +1631,7 @@ fn make_test_vars(has_sidebar_layout: bool) -> ShellVars {
         lightbox: String::new(),
         robots_meta: None,
         colophon: true,
+        colophon_credit: None,
     }
 }
 

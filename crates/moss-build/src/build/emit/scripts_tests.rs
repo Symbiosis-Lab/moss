@@ -17,6 +17,7 @@ fn all_on() -> SiteAssets {
         video_ladder: true,
         places_explorer: true,
         map_layers: true,
+        colophon_credit: false,
         field_places: true,
     }
 }

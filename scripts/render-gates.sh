@@ -101,6 +101,7 @@ GATES_BUILD=(
   places-explorer-vertical
   places-explorer-single
   footer-end-space
+  colophon-credit
   facts-margin
   closing-picture
   content-grid

@@ -1,0 +1,104 @@
+/* moss site stylesheet partial: colophon-credit
+   Shipped only when the site sets `[site].credit`. The site's own line stands
+   before moss's mark on the colophon's line: `<credit> · <mark>`.
+
+   The line is one run of inline text, so the mark sits on the text's baseline
+   like a letter. The mark's box ends where its ink ends, so the box bottom on
+   the baseline is the ink bottom on the baseline; centring the box would put
+   the bottom-heavy drawing about 4px low. The link keeps its accessible name
+   (`aria-label`) while the wording that appears on hover is dropped, since a
+   word beside a credit would read as a second credit. */
+
+@layer shortcodes {
+
+.moss-colophon:has(> .moss-colophon-credit) {
+  font-family: var(--moss-font-body);
+  font-size: var(--moss-size-2xs, 0.75rem);
+  line-height: 1.5;
+  color: var(--moss-footer-ink, var(--moss-color-muted));
+}
+
+.moss-colophon-dot {
+  margin-inline-end: 0.45em;
+}
+
+/* Links in the credit, and only those, are underlined at rest at 40% of the
+   ink, and brighten to the full ink on hover and focus. The inline padding
+   widens the target to 30px without moving the line. */
+.moss-colophon-credit a {
+  display: inline;
+  padding-block: 0.375rem;
+  padding-inline: 0;
+  font-size: inherit;
+  letter-spacing: normal;
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+}
+
+.moss-colophon-credit a:is(:hover, :focus-visible) {
+  text-decoration-color: currentColor;
+}
+
+.moss-colophon-credit ~ a {
+  white-space: nowrap;
+  display: inline;
+  padding-block: 0.375rem;
+  padding-inline: 0;
+  font-size: inherit;
+  letter-spacing: normal;
+  color: inherit;
+}
+
+.moss-colophon-credit ~ a .moss-colophon-label {
+  display: none;
+}
+
+.moss-colophon-credit ~ a .moss-colophon-icon {
+  display: inline;
+}
+
+.moss-colophon-credit ~ a .moss-colophon-icon svg {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  vertical-align: baseline;
+}
+
+/* The credit wraps like any text, centred, and a string with no break in it
+   breaks anywhere rather than push the page sideways. The dot leads the mark's
+   link, and the link does not break, so the two stay together. A closing
+   picture reserves one extra line for the wrap on a phone; the build measures
+   the picture's ink over the same height. */
+.moss-colophon-credit {
+  overflow-wrap: anywhere;
+}
+
+@media (width < 48rem) {
+  body > footer.container:has(> .moss-hero-closing):has(> .moss-colophon > .moss-colophon-credit) {
+    --moss-closing-strip: __CLOSING_STRIP__;
+  }
+}
+
+/* On a closing picture the credit takes the colophon's ink there: white, or the
+   ink measured along the foot (`data-foot`). Its links get the ink from the
+   colophon's own link rules; the text and the dot get it here. */
+body > footer.container:has(> .moss-hero-closing) > .moss-colophon:has(> .moss-colophon-credit) {
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+body > footer.container:has(> .moss-hero-closing) > .moss-colophon > .moss-colophon-credit ~ a,
+body > footer.container:has(> .moss-hero-closing) > .moss-colophon .moss-colophon-credit a {
+  padding-block: 0.375rem;
+}
+:is(:root:not([data-theme="dark"]) .moss-hero-closing[data-foot="dark"], :root[data-theme="dark"] .moss-hero-closing[data-foot-night="dark"]) ~ .moss-colophon:has(> .moss-colophon-credit) {
+  color: var(--moss-hero-tone-color, #2c2825);
+  text-shadow: none;
+}
+:is(:root:not([data-theme="dark"]) .moss-hero-closing[data-foot="light"], :root[data-theme="dark"] .moss-hero-closing[data-foot-night="light"]) ~ .moss-colophon:has(> .moss-colophon-credit) {
+  color: #fff;
+}
+
+}

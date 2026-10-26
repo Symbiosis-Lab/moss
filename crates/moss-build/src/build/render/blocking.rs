@@ -429,7 +429,10 @@ pub fn generate_blocking_content_for_build(
     };
     let markdown = crate::build::markdown::SiteMarkdown { lang: root_language(&site_config.lang, project_structure, &home_file_winners), ..site_config.markdown() };
     // Read before the pages render: a faded closing picture is measured over it.
-    let page_ground = crate::build::markdown::hero_ink::PageGround::of_theme(user_css_content.as_deref()).with_colophon(site_config.colophon);
+    let page_ground = crate::build::markdown::hero_ink::PageGround {
+        credit: site_config.colophon_credit.is_some(),
+        ..crate::build::markdown::hero_ink::PageGround::of_theme(user_css_content.as_deref()).with_colophon(site_config.colophon)
+    };
 
     // Build PageMap: pre-scan all markdown files to compute source_path → url_path mapping.
     // This includes cascading url overrides from folder index files, so child pages
@@ -1417,7 +1420,7 @@ pub fn generate_blocking_content_for_build(
         let layout_config = layout_config.with_heading_anchors(site_config.heading_anchors);
         // [site].floating_nav (default false — opt-in) rides along for
         // the same reason: the emitter reads LayoutConfig, not SiteConfig.
-        let layout_config = layout_config.with_floating_nav(site_config.floating_nav).with_colophon(site_config.colophon);
+        let layout_config = layout_config.with_floating_nav(site_config.floating_nav).with_colophon(site_config.colophon).with_colophon_credit(site_config.colophon_credit.clone());
         // [site].header (default "brand") rides along for the same reason:
         // the nav renderer reads LayoutConfig, not SiteConfig.
         let layout_config = layout_config.with_header_mode(site_config.header).with_term_nav(term_index.nav_entries(&site_config.term_nav));
@@ -1500,6 +1503,7 @@ pub fn generate_blocking_content_for_build(
                 .is_some_and(|r| r.iter_registered_variants().values().any(|k| k.hls)),
             places_explorer: crate::build::features::should_inject_places_explorer(&term_index, &site_config),
             map_layers: site_config.place_maps.as_ref().is_some_and(|maps| maps.has_layers()),
+            colophon_credit: site_config.colophon_credit.is_some(),
             // `search`, `link_preview`, `heading_anchors` and `math` already
             // live here, written by the config phase above. Re-reading them
             // from `site_config` would be a second copy of the same four
