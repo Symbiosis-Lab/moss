@@ -115,6 +115,7 @@ const INTENTIONALLY_SKIP_SCHEMA: &[&str] = &[
     "cover_type",
     "children_source",
     "_from_sidebar_alias",
+    "inferred",
 ];
 
 #[test]

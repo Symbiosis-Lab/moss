@@ -350,10 +350,10 @@ mod tests {
         // (`start`/`end`/`timezone`/`status`/`tickets`/`online` added 2026-10 — the
         // event fields; see moss_core::event.)
         // (`nav_label` added 2026-10 — a shorter nav-bar name than `title`.)
-        // (`inferred` added 2026-10 — fields taken from embedded files' derived facts.)
+        // (`inferred` is internal: skip_schema, so absent from `fields`.)
         // (`color` added 2026-10 — a folder home's section accent.)
         // (`partial` added 2026-10 — a transclusion source that is never built.)
-        assert_eq!(schema.frontmatter.fields.len(), 66);
+        assert_eq!(schema.frontmatter.fields.len(), 65);
     }
 
     #[test]

@@ -819,6 +819,16 @@ mod tests {
         assert!(errors[0].message.contains("title"));
     }
 
+    #[test]
+    fn inferred_is_internal_and_still_validates() {
+        let schema = builtin_schema();
+        assert!(schema.frontmatter.internal_fields.contains(&"inferred".to_string()));
+        assert!(!schema.frontmatter.fields.contains_key("inferred"));
+        let fm = make_fm(&[("title", str_val("Test")), ("inferred", str_val("title"))]);
+        let diags = validate_frontmatter(&fm, &schema);
+        assert!(!diags.iter().any(|d| d.message.contains("'inferred'")));
+    }
+
     // --- Date validation unit tests ---
 
     #[test]
