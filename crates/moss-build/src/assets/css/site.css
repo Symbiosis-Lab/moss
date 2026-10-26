@@ -4017,7 +4017,9 @@ body:has(> .moss-nav-island[data-header="none"] + .nav-icons) main > article:is(
 /* At the top, on the title's first line (nav-island.ts measures its centre) and
    ending where the text column ends: the fixed slot's end less the bar's own
    inset. Both are invalid until the centre is written, so a page without a
-   title keeps the bar's place. */
+   title keeps the bar's place.
+   allow:runtime-token --moss-nav-title-line set on body by nav-island.ts — the
+   custom property is deliberately invalid until then. */
 .moss-nav-island[data-header="none"][data-top] + .nav-icons {
   --_title-top: calc(var(--moss-nav-title-line) - 1.125rem);
   --_title-end: calc(
