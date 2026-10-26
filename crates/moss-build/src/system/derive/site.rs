@@ -396,8 +396,8 @@ fn read_all(
     // New or changed bytes have no earlier result to show; a read repeated
     // for a changed plugin does.
     let arrived: Vec<bool> = runnable.iter().map(|d| derive::lookup_previous(paths, &d.entry, &root.join(&d.path)).is_none()).collect();
-    let schedule = Schedule::new(root, runnable.iter().map(|d| d.pages.as_slice()).collect(), arrived);
-    let derived = derive::derive_batch_by(paths, &batch, remember, stop, &|waiting| schedule.pick(waiting), |done, total| {
+    let schedule = Arc::new(Schedule::new(root, runnable.iter().map(|d| d.pages.clone()).collect(), arrived));
+    let derived = derive::derive_batch_by(paths, &batch, remember, stop, Arc::new(move |job| schedule.tier(job)), |done, total| {
         report_progress(reporter, &noun, done, total)
     });
     for (demand, result) in runnable.iter().zip(derived) {

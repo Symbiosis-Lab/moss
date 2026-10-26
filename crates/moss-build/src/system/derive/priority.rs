@@ -38,56 +38,43 @@ pub fn viewed(folder: &Path) -> Option<String> {
     VIEWED.lock().ok()?.get(&key(folder)).cloned()
 }
 
-/// The start order of one batch: `embedders[i]` are the site-relative pages
+/// The tiers of one batch: `embedders[i]` are the site-relative pages
 /// embedding job `i`, `arrived[i]` whether it is in [`Tier::Arrived`].
-pub struct Schedule<'a> {
-    folder: &'a Path,
-    embedders: Vec<&'a [String]>,
+pub struct Schedule {
+    folder: PathBuf,
+    embedders: Vec<Vec<String>>,
     arrived: Vec<bool>,
     /// The viewed URL and the page it resolved to, kept until the URL changes.
     resolved: Mutex<Option<(String, Option<String>)>>,
 }
 
-impl<'a> Schedule<'a> {
-    pub fn new(folder: &'a Path, embedders: Vec<&'a [String]>, arrived: Vec<bool>) -> Self {
-        Self { folder, embedders, arrived, resolved: Mutex::new(None) }
+impl Schedule {
+    pub fn new(folder: &Path, embedders: Vec<Vec<String>>, arrived: Vec<bool>) -> Self {
+        Self { folder: folder.to_path_buf(), embedders, arrived, resolved: Mutex::new(None) }
     }
 
     fn viewed_page(&self) -> Option<String> {
-        let url = viewed(self.folder)?;
+        let url = viewed(&self.folder)?;
         let mut resolved = self.resolved.lock().ok()?;
         if resolved.as_ref().is_none_or(|(seen, _)| *seen != url) {
-            let page = crate::editor::page_source::resolve_page_source(&url, self.folder)
+            let page = crate::editor::page_source::resolve_page_source(&url, &self.folder)
                 .ok()
                 .and_then(|p| p.source_path)
-                .and_then(|abs| Path::new(&abs).strip_prefix(self.folder).ok().map(|r| r.to_string_lossy().replace('\\', "/")));
+                .and_then(|abs| Path::new(&abs).strip_prefix(&self.folder).ok().map(|r| r.to_string_lossy().replace('\\', "/")));
             *resolved = Some((url, page));
         }
         resolved.as_ref().and_then(|(_, page)| page.clone())
     }
 
     pub fn tier(&self, job: usize) -> Tier {
-        self.tier_given(job, self.viewed_page().as_deref())
-    }
-
-    fn tier_given(&self, job: usize, page: Option<&str>) -> Tier {
-        if page.is_some_and(|p| self.embedders[job].iter().any(|e| e == p)) {
+        let page = self.viewed_page();
+        if page.is_some_and(|p| self.embedders[job].contains(&p)) {
             Tier::Viewed
         } else if self.arrived[job] {
             Tier::Arrived
         } else {
             Tier::Rest
         }
-    }
-
-    /// The position in `waiting` (job indices in job order) to start next.
-    pub fn pick(&self, waiting: &[usize]) -> usize {
-        let page = self.viewed_page();
-        waiting
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, &job)| self.tier_given(job, page.as_deref()))
-            .map_or(0, |(at, _)| at)
     }
 }
 

@@ -1,9 +1,10 @@
 //! Deriving many files at once, within a small budget of concurrent children.
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard};
 
 use super::cache::{derive_cached, derive_remembering, DeriveResult};
+use super::priority::Tier;
 use crate::moss_paths::MossPaths;
 use crate::system::derive::registry::DerivationEntry;
 
@@ -29,17 +30,51 @@ fn budget_from(value: Option<&str>, cores: usize) -> usize {
         .unwrap_or_else(|| (cores / 2).clamp(1, 4))
 }
 
-/// The threads derivers run on: [`derive_budget`] of them, so that many
-/// children at once and no more.
-static DERIVE_POOL: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock::new(|| {
-    rayon::ThreadPoolBuilder::new()
-        .thread_name(|i| format!("moss-derive-{i}"))
-        .num_threads(derive_budget())
-        .build()
-        .expect("moss-derive pool")
-});
+/// Every batch in the process waits in one queue, and at most
+/// [`derive_budget`] reads run at once across all of them. A batch that arrives
+/// while another is reading joins the same ordering instead of waiting behind
+/// it.
+struct Queue {
+    batches: Vec<Waiting>,
+    next_id: u64,
+    running: usize,
+}
 
-/// Derive the jobs, [`derive_budget`] at a time, in job order. Results come
+struct Waiting {
+    id: u64,
+    /// Indices into the batch's jobs, in job order.
+    jobs: Vec<usize>,
+    rank: Arc<dyn Fn(usize) -> Tier + Send + Sync>,
+}
+
+static QUEUE: Mutex<Queue> = Mutex::new(Queue { batches: Vec::new(), next_id: 0, running: 0 });
+static CHANGED: Condvar = Condvar::new();
+static LIMIT: LazyLock<usize> = LazyLock::new(derive_budget);
+
+impl Queue {
+    /// The batch and position of the read to start next: best tier, then the
+    /// earlier batch, then job order.
+    fn best(&self) -> Option<(u64, usize)> {
+        self.batches
+            .iter()
+            .filter_map(|b| {
+                let (at, tier) = b.jobs.iter().enumerate().map(|(at, &job)| (at, (b.rank)(job))).min_by_key(|&(_, tier)| tier)?;
+                Some((tier, b.id, at))
+            })
+            .min_by_key(|&(tier, id, _)| (tier, id))
+            .map(|(_, id, at)| (id, at))
+    }
+
+    fn leave(&mut self, id: u64) {
+        self.batches.retain(|b| b.id != id);
+    }
+}
+
+fn lock() -> MutexGuard<'static, Queue> {
+    QUEUE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Derive the jobs, in job order, within the process-wide budget. Results come
 /// back in job order; a job not started because `stop()` turned true is `None`.
 /// `progress(done, total)` is called after each finish, never concurrently
 /// with itself, with `done` rising by one each time. `remember` keeps a result
@@ -51,34 +86,59 @@ pub fn derive_batch(
     stop: &(dyn Fn() -> bool + Sync),
     progress: impl Fn(usize, usize) + Sync,
 ) -> Vec<Option<DeriveResult>> {
-    derive_batch_by(site, jobs, remember, stop, &|_| 0, progress)
+    derive_batch_by(site, jobs, remember, stop, Arc::new(|_| Tier::Rest), progress)
 }
 
-/// [`derive_batch`] with the start order chosen as it runs: each time a thread
-/// is free, `pick` gets the indices of the jobs not yet started (in job order)
-/// and returns the position within that slice to start next. A job that has
-/// started is never revisited, so a changed answer reorders only what waits.
+/// [`derive_batch`] with the start order chosen as it runs: whenever a read can
+/// start, the best-ranked job not yet started, across this batch and every
+/// other one in the process, goes next (ties: the earlier batch, then job
+/// order). A job that has started is never revisited, so a changed rank
+/// reorders only what waits.
 pub fn derive_batch_by(
     site: &MossPaths,
     jobs: &[DeriveJob<'_>],
     remember: bool,
     stop: &(dyn Fn() -> bool + Sync),
-    pick: &(dyn Fn(&[usize]) -> usize + Sync),
+    rank: Arc<dyn Fn(usize) -> Tier + Send + Sync>,
     progress: impl Fn(usize, usize) + Sync,
 ) -> Vec<Option<DeriveResult>> {
     let total = jobs.len();
-    let waiting = Mutex::new((0..total).collect::<Vec<usize>>());
+    let id = {
+        let mut queue = lock();
+        let id = queue.next_id;
+        queue.next_id += 1;
+        queue.batches.push(Waiting { id, jobs: (0..total).collect(), rank });
+        id
+    };
+    CHANGED.notify_all();
     let finished = Mutex::new((0usize, (0..total).map(|_| None).collect::<Vec<Option<DeriveResult>>>()));
-    DERIVE_POOL.scope(|scope| {
-        for _ in 0..DERIVE_POOL.current_num_threads().min(total) {
-            scope.spawn(|_| loop {
+    std::thread::scope(|scope| {
+        for _ in 0..(*LIMIT).min(total) {
+            scope.spawn(|| loop {
                 let next = {
-                    let mut waiting = waiting.lock().unwrap_or_else(|e| e.into_inner());
-                    if stop() || waiting.is_empty() {
-                        return;
+                    let mut queue = lock();
+                    loop {
+                        if stop() {
+                            queue.leave(id);
+                            break None;
+                        }
+                        if !queue.batches.iter().any(|b| b.id == id && !b.jobs.is_empty()) {
+                            break None;
+                        }
+                        if queue.running < *LIMIT {
+                            if let Some((best, at)) = queue.best().filter(|&(best, _)| best == id) {
+                                let batch = queue.batches.iter_mut().find(|b| b.id == best).expect("best names a batch");
+                                let job = batch.jobs.remove(at);
+                                queue.running += 1;
+                                break Some(job);
+                            }
+                        }
+                        queue = CHANGED.wait_timeout(queue, std::time::Duration::from_millis(250)).unwrap_or_else(|e| e.into_inner()).0;
                     }
-                    let at = pick(&waiting).min(waiting.len() - 1);
-                    waiting.remove(at)
+                };
+                let Some(next) = next else {
+                    CHANGED.notify_all();
+                    return;
                 };
                 let job = &jobs[next];
                 let result = if remember {
@@ -86,6 +146,8 @@ pub fn derive_batch_by(
                 } else {
                     derive_cached(site, job.entry, &job.input)
                 };
+                lock().running -= 1;
+                CHANGED.notify_all();
                 let mut finished = finished.lock().unwrap_or_else(|e| e.into_inner());
                 finished.0 += 1;
                 finished.1[next] = Some(result);
@@ -93,6 +155,8 @@ pub fn derive_batch_by(
             });
         }
     });
+    lock().leave(id);
+    CHANGED.notify_all();
     finished.into_inner().unwrap_or_else(|e| e.into_inner()).1
 }
 

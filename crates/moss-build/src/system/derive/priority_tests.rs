@@ -11,41 +11,33 @@ fn fixture() -> (TempDir, Vec<Vec<String>>, Vec<bool>) {
     (dir, pages, vec![false, true, false])
 }
 
-fn drain(schedule: &Schedule<'_>, mut waiting: Vec<usize>) -> Vec<usize> {
-    let mut order = Vec::new();
-    while !waiting.is_empty() {
-        order.push(waiting.remove(schedule.pick(&waiting)));
-    }
-    order
+fn schedule(dir: &TempDir, pages: Vec<Vec<String>>, arrived: Vec<bool>) -> Schedule {
+    Schedule::new(dir.path(), pages, arrived)
 }
 
 #[test]
-fn the_viewed_page_comes_first_then_what_arrived_then_the_rest_in_order() {
+fn the_viewed_page_comes_first_then_what_arrived_then_the_rest() {
     let (dir, pages, arrived) = fixture();
     note_viewed(dir.path(), "/a");
-    let schedule = Schedule::new(dir.path(), pages.iter().map(Vec::as_slice).collect(), arrived);
-    assert_eq!(drain(&schedule, vec![0, 1, 2]), vec![2, 1, 0]);
+    let s = schedule(&dir, pages, arrived);
+    assert_eq!([s.tier(2), s.tier(1), s.tier(0)], [Tier::Viewed, Tier::Arrived, Tier::Rest]);
 }
 
 #[test]
 fn without_a_viewed_page_arrivals_still_go_first() {
     let (dir, pages, arrived) = fixture();
-    let schedule = Schedule::new(dir.path(), pages.iter().map(Vec::as_slice).collect(), arrived);
-    assert_eq!(drain(&schedule, vec![0, 1, 2]), vec![1, 0, 2]);
+    let s = schedule(&dir, pages, arrived);
+    assert_eq!([s.tier(0), s.tier(1), s.tier(2)], [Tier::Rest, Tier::Arrived, Tier::Rest]);
 }
 
 #[test]
-fn navigating_moves_the_new_pages_files_ahead_of_what_has_not_started() {
+fn navigating_changes_which_files_lead() {
     let (dir, pages, arrived) = fixture();
     note_viewed(dir.path(), "/a");
-    let schedule = Schedule::new(dir.path(), pages.iter().map(Vec::as_slice).collect(), arrived);
-    let mut waiting = vec![0, 1, 2];
-    assert_eq!(waiting.remove(schedule.pick(&waiting)), 2);
+    let s = schedule(&dir, pages, arrived);
+    assert_eq!([s.tier(0), s.tier(2)], [Tier::Rest, Tier::Viewed]);
     note_viewed(dir.path(), "/b");
-    // Both of b's files now lead, in job order; the one that started stays started.
-    assert_eq!(waiting, vec![0, 1]);
-    assert_eq!(schedule.tier(0), Tier::Viewed);
-    assert_eq!(drain(&schedule, waiting), vec![0, 1]);
+    assert_eq!([s.tier(0), s.tier(1), s.tier(2)], [Tier::Viewed, Tier::Viewed, Tier::Rest]);
 }
 
 #[test]
@@ -64,10 +56,11 @@ fn a_navigation_while_reads_run_never_cancels_them() {
         .collect();
     let site = crate::moss_paths::MossPaths::new(&dir.path().join("site"));
     let navigations = std::sync::atomic::AtomicUsize::new(0);
-    let results = derive_batch_by(&site, &jobs, false, &|| false, &|_| {
-        // Every pick is a navigation to something else.
-        note_viewed(dir.path(), &format!("/{}", navigations.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
-        0
-    }, |_, _| {});
+    let nav_dir = dir.path().to_path_buf();
+    let results = derive_batch_by(&site, &jobs, false, &|| false, std::sync::Arc::new(move |_| {
+        // Every ranking is a navigation to something else.
+        note_viewed(&nav_dir, &format!("/{}", navigations.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
+        Tier::Rest
+    }), |_, _| {});
     assert!(results.iter().all(|r| r.as_ref().is_some_and(|r| r.is_ok())), "every started read finished");
 }
