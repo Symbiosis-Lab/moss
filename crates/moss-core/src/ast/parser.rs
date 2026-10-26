@@ -25,6 +25,7 @@ use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use super::document::{BlockMeta, Document};
 use super::footnotes::FootnoteIndex;
 use super::math_text::{math_inline, math_source};
+use super::nesting::{cap_nesting, MAX_BLOCK_NESTING};
 use super::node::{Block, CalloutKind, ColumnAlignment, Fold, Inline};
 use super::shortcode::Shortcode;
 use super::shortcode_extract::{extract_shortcodes_with_config, parse_placeholder, ExtractedShortcode};
@@ -274,6 +275,7 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
     // does the alt-only image rule (it needs the bracket text as written).
     let (events, offsets): (Vec<Event<'_>>, Vec<std::ops::Range<usize>>) =
         Parser::new_ext(&source, options).into_offset_iter().unzip();
+    let (events, offsets, capped_at) = cap_nesting(events, offsets);
 
     // Build the prefix-sum line table once (only when needed).
     //
@@ -373,6 +375,12 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
     }
     doc.advisories = extraction.advisories;
     if heading_ids == HeadingIds::Number {
+        if let Some(offset) = capped_at {
+            let line = config.warning_line_offset + source[..offset].matches('\n').count() + 1;
+            doc.warnings.push(format!(
+                "line {line}: lists and blockquotes are nested more than {MAX_BLOCK_NESTING} levels deep; the levels past {MAX_BLOCK_NESTING} are flattened into level {MAX_BLOCK_NESTING}, so no text is lost"
+            ));
+        }
         let mut count = 0;
         let mut unknown_callouts = Vec::new();
         super::visit_blocks(&doc, |block| {
@@ -870,7 +878,7 @@ fn parse_block_with_tag(
             match detect_and_assemble_callout(events, start + 1, line_ctx) {
                 Some((block, body_end)) => (Some(block), body_end - start + 1),
                 None => {
-                    let (children, end) = collect_blocks_until(events, start + 1, line_ctx, |e| {
+                    let (children, end) = collect_flow_until(events, start + 1, line_ctx, |e| {
                         matches!(e, Event::End(TagEnd::BlockQuote(_)))
                     });
                     (Some(Block::BlockQuote(children)), end - start + 1)
@@ -1053,7 +1061,7 @@ fn parse_block_with_tag(
         // reached from every block collector. Hoisting to the endnote section
         // is the renderer's job.
         Tag::FootnoteDefinition(label) => {
-            let (children, end) = collect_blocks_until(events, start + 1, line_ctx, |e| {
+            let (children, end) = collect_flow_until(events, start + 1, line_ctx, |e| {
                 matches!(e, Event::End(TagEnd::FootnoteDefinition))
             });
             let label = label.to_string();
@@ -1785,38 +1793,12 @@ fn parse_inline(events: &[Event<'_>], start: usize) -> (Option<Inline>, usize) {
     }
 }
 
-/// Collect a contiguous run of block events into `Vec<Block>`. Stops when
-/// `is_end(event)` returns true or events run out.
-fn collect_blocks_until<F>(
-    events: &[Event<'_>],
-    start: usize,
-    line_ctx: &LineCtx<'_>,
-    is_end: F,
-) -> (Vec<Block>, usize)
-where
-    F: Fn(&Event<'_>) -> bool,
-{
-    let mut out: Vec<Block> = Vec::new();
-    let mut i = start;
-    while i < events.len() {
-        if is_end(&events[i]) {
-            return (out, i);
-        }
-        let (block, advance) = parse_block(events, i, line_ctx);
-        if let Some(b) = block {
-            out.push(b);
-        }
-        i += advance.max(1);
-    }
-    (out, i)
-}
-
 /// Collect the children of a `Tag::Item` until the matching `End(Item)`.
 ///
 /// Pulldown-cmark's **tight-list** mode emits item contents as inline
 /// events (Text/Code/SoftBreak/inline-tag Start...) DIRECTLY inside
 /// `Tag::Item` without wrapping in `Tag::Paragraph`. The plain
-/// [`collect_blocks_until`] dispatcher would route those events through
+/// plain block dispatcher would route those events through
 /// [`parse_block`], which drops stray inlines — yielding empty `<li></li>`.
 ///
 /// This helper preserves both modes:
@@ -2013,16 +1995,11 @@ fn detect_and_assemble_callout(
     }
 
     // Continue collecting subsequent blocks until End(BlockQuote).
-    while let Some(event) = events.get(i) {
-        if matches!(event, Event::End(TagEnd::BlockQuote(_))) {
-            break;
-        }
-        let (block, advance) = parse_block(events, i, line_ctx);
-        if let Some(b) = block {
-            body_blocks.push(b);
-        }
-        i += advance.max(1);
-    }
+    let (rest, end) = collect_flow_until(events, i, line_ctx, |e| {
+        matches!(e, Event::End(TagEnd::BlockQuote(_)))
+    });
+    body_blocks.extend(rest);
+    i = end;
 
     // `i` now points at `End(BlockQuote)`. Return total event
     // span: outer caller computes `i - start + 1` (where `start` here

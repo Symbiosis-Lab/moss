@@ -102,7 +102,7 @@
         "crates/moss-build/src/js-src/site": 28,
         "crates/moss-build/src/plugins": 19,
         "crates/moss-core/src": 42,
-        "crates/moss-core/src/ast": 24,
+        "crates/moss-core/src/ast": 25,
         "crates/moss-core/src/resolve": 17,
         "crates/moss-build/src/ops/serve": 20,
         "crates/moss-build/src/js-src/site/places-explorer": 19,

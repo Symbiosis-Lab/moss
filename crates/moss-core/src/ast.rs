@@ -44,6 +44,7 @@ pub mod linked_embed;
 pub mod hooks;
 pub mod math_text;
 pub mod node;
+mod nesting;
 pub mod parser;
 pub mod plain_text;
 pub mod query;

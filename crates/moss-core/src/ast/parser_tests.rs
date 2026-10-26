@@ -2662,3 +2662,62 @@ fn heading_contents_label_is_an_attribute_not_text() {
         other => panic!("expected Heading, got {other:?}"),
     }
 }
+
+// -----------------------------------------------------------------
+// Nesting cap: the tree is never deeper than MAX_BLOCK_NESTING
+// -----------------------------------------------------------------
+
+fn tree_depth(blocks: &[Block]) -> usize {
+    let mut deepest = 0;
+    for block in blocks {
+        let mut below = 0;
+        crate::ast::visit::for_each_child_sequence(block, |seq| {
+            below = below.max(tree_depth(seq));
+            true
+        });
+        let own = usize::from(matches!(
+            block,
+            Block::List { .. } | Block::BlockQuote(_) | Block::Callout { .. } | Block::FootnoteDefinition { .. } | Block::DefinitionList(_)
+        ));
+        deepest = deepest.max(own + below);
+    }
+    deepest
+}
+
+fn nested_markers(marker: &str, n: usize) -> String {
+    format!("{}x\n", marker.repeat(n))
+}
+
+#[test]
+fn nesting_past_the_cap_is_flattened_and_keeps_its_text() {
+    for md in [nested_markers("- ", 300), nested_markers("> ", 300)] {
+        let doc = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                let doc = parse(&md);
+                let html = crate::ast::render_document(&doc, &crate::ast::DefaultHooks::new());
+                assert!(html.contains("x</"), "text lost: {}", &html[html.len().saturating_sub(80)..]);
+                doc
+            })
+            .unwrap()
+            .join()
+            .expect("parse and render must not overflow the stack");
+        assert!(tree_depth(&doc.blocks) <= MAX_BLOCK_NESTING, "depth {}", tree_depth(&doc.blocks));
+        assert!(
+            doc.warnings.iter().any(|w| w.starts_with("line 1:") && w.contains("flattened")),
+            "{:?}",
+            doc.warnings
+        );
+    }
+}
+
+#[test]
+fn nesting_below_the_cap_is_untouched() {
+    let doc = parse("- a\n  - b\n    - c\n      - d\n        - e\n");
+    assert_eq!(tree_depth(&doc.blocks), 5);
+    assert!(doc.warnings.is_empty());
+    let html = crate::ast::render_document(&doc, &crate::ast::DefaultHooks::new());
+    assert_eq!(html.matches("<ul>").count(), 5, "{html}");
+    let quote = parse("> > > a\n");
+    assert_eq!(tree_depth(&quote.blocks), 3);
+}

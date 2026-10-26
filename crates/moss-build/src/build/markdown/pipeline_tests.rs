@@ -2553,6 +2553,22 @@ fn render_with_math(md: &str, math: bool) -> String {
     doc.html_content
 }
 
+/// Nesting past the parser's cap is flattened, so a debug build on a 2 MB
+/// worker stack neither overflows nor loses the text.
+#[test]
+fn deeply_nested_markers_render_on_a_small_stack_and_keep_their_text() {
+    for marker in ["- ", "> "] {
+        let md = format!("{}x\n", marker.repeat(300));
+        let html = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || render_with_math(&md, false))
+            .unwrap()
+            .join()
+            .expect("render must not overflow the stack");
+        assert!(html.contains("x</"), "text lost for {marker:?}");
+    }
+}
+
 /// The `math` argument must reach `ParseConfig`, not just exist.
 ///
 /// This is a WIRING test, and it is the one that matters: the moss-core
