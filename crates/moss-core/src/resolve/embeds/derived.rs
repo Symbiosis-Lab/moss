@@ -172,7 +172,7 @@ pub fn placeholder_html(state: &DerivedFragment) -> Option<String> {
     match state {
         DerivedFragment::Ready { .. } => None,
         DerivedFragment::Pending => Some(
-            "<div class=\"moss-derived moss-derived--pending\" role=\"status\"><span class=\"visually-hidden\">Reading\u{2026}</span></div>"
+            "<div class=\"moss-derived moss-derived--pending\" role=\"status\"><span>Reading the text of this file\u{2026}</span></div>"
                 .to_string(),
         ),
         DerivedFragment::Skipped { message } => Some(skipped_html(message)),

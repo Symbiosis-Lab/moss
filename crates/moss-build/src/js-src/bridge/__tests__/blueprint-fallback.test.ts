@@ -209,7 +209,7 @@ describe("blueprint-fallback: installBlueprintFallback", () => {
       const block = document.createElement("div");
       block.className = cls;
       block.setAttribute("role", "status");
-      block.innerHTML = '<span class="visually-hidden">Reading…</span>';
+      block.innerHTML = '<span>Reading the text of this file…</span>';
       document.body.appendChild(block);
       return block;
     }
@@ -226,7 +226,7 @@ describe("blueprint-fallback: installBlueprintFallback", () => {
       expect(block.style.position).toBe("relative");
       // The status role and its hidden text survive.
       expect(block.getAttribute("role")).toBe("status");
-      expect(block.querySelector(".visually-hidden")?.textContent).toBe("Reading…");
+      expect(block.querySelector("span")?.textContent).toBe("Reading the text of this file…");
 
       stop();
       expect(block.querySelector(".moss-blueprint-fallback")).toBeNull();

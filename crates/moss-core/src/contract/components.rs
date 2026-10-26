@@ -1116,11 +1116,11 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         kind: "instance",
         parent: "moss-derived",
         data_attrs: &[],
-        example_html: r#"<div class="moss-derived moss-derived--pending" role="status"></div>"#,
+        example_html: r#"<div class="moss-derived moss-derived--pending" role="status"><span>Reading the text of this file…</span></div>"#,
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "Modifier: the text is still being read. Shows a faint grid; the build replaces it once the text exists.",
+        description: "Modifier: the text is still being read. In the local preview it shows the blueprint grid and a short line saying so; the build replaces it once the text exists, and a publish waits for that.",
     },
     ComponentEntry {
         class: "moss-derived--skipped",

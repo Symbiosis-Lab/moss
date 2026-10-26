@@ -90,6 +90,7 @@ fn unclaimed_pairs_are_left_for_the_viewer_dispatch() {
 fn pending_skipped_and_failed_become_blocks() {
     let pending = resolve("![[a.fake#text]]\n", &|_, _| DerivedFragment::Pending).content_markdown;
     assert!(pending.contains("class=\"moss-derived moss-derived--pending\""), "{pending}");
+    assert!(pending.contains("<span>Reading the text of this file\u{2026}</span>"), "the words are visible: {pending}");
     assert!(!pending.to_lowercase().contains("pdf"));
 
     let skipped = resolve("![[a.fake#text]]\n", &|_, _| DerivedFragment::Skipped {

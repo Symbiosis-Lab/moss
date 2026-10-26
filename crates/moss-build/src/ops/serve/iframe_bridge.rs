@@ -40,18 +40,22 @@ const ASSET_PLACEHOLDER_SCRIPT: &str = include_str!("js/asset-placeholder.js");
 /// Marker outline for a placeheld image, so it reads as "moss is standing in
 /// for something" rather than as a photo of graph paper, plus the still
 /// blueprint grid of a derived-text block that is still being read
-/// (`.moss-derived--pending`); the bridge swaps the live grid in. Lives here
+/// (`.moss-derived--pending`), with its line of words held above the live grid
+/// the bridge swaps in. Lives here
 /// rather than in `site.css` for the same reason the script does: it is
 /// preview-only.
 const ASSET_PLACEHOLDER_STYLE: &str = "\
 .moss-img-fallback{outline:1px solid rgba(20,60,130,.25);outline-offset:-1px}\
 [data-theme=\"dark\"] .moss-img-fallback{outline-color:rgba(90,155,255,.3)}\
-.moss-derived--pending{min-block-size:12rem;background-color:#f4f1ec;\
+.moss-derived--pending{min-block-size:12rem;display:flex;align-items:center;justify-content:center;background-color:#f4f1ec;\
 background-image:linear-gradient(rgba(20,60,130,.18) 1px,transparent 1px),\
 linear-gradient(90deg,rgba(20,60,130,.18) 1px,transparent 1px);background-size:10px 10px}\
 [data-theme=\"dark\"] .moss-derived--pending{background-color:#252017;\
 background-image:linear-gradient(rgba(90,155,255,.22) 1px,transparent 1px),\
-linear-gradient(90deg,rgba(90,155,255,.22) 1px,transparent 1px)}";
+linear-gradient(90deg,rgba(90,155,255,.22) 1px,transparent 1px)}\
+.moss-derived--pending>span{position:relative;z-index:1;padding:.25em .6em;border-radius:3px;\
+font:500 .8125rem/1.4 system-ui,sans-serif;color:#143c82;background:#f4f1ec}\
+[data-theme=\"dark\"] .moss-derived--pending>span{color:#9cc0ff;background:#252017}";
 
 /// Preview-only shim that reroutes the comment form to the local stub endpoint
 /// (see `preview::comment_stub`). Injected into every HTML response alongside
