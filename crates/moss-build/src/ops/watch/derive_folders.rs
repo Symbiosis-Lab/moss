@@ -1,6 +1,7 @@
 //! What the watcher does for folders the author chose to show as pages: write
-//! the stub for a file that just arrived, and carry a folder's decision along
-//! when the folder is renamed.
+//! the stub for a file that just arrived (and move its read to the front of the
+//! derive queue), and carry a folder's decision along when the folder is
+//! renamed.
 //!
 //! Only watcher events call this. A build scan never does, so a stub the author
 //! deleted stays deleted.
@@ -48,6 +49,7 @@ pub fn react(folder_path: &str, events: &[DebouncedEvent], renames: &[(String, S
         log::warn!(target: "derive", "could not follow a renamed folder in config.toml: {e}");
     }
     let created = arrivals(events, Path::new(folder_path));
+    crate::system::derive::priority::note_arrived(Path::new(folder_path), &created);
     if created.is_empty() || !decisions(&site).values().any(|d| matches!(d, Decision::Show(_))) {
         return;
     }

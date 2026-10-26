@@ -104,7 +104,7 @@ fn a_cancelled_background_read_says_it_has_stopped() {
 /// Reads may start until the first one finishes, so only the first picks (a
 /// few, at most the budget plus any slots freed meanwhile) run. Whether `last`,
 /// queued behind thirty others, was among them.
-fn last_file_read_first(arrived: bool, viewed: Option<&str>) -> bool {
+fn last_file_read_first(arrived: bool, viewed: Option<&str>, page: &str, watcher_saw_it: bool) -> bool {
     use crate::build::ports::reporter::BuildReporter;
     use crate::system::derive::test_support::script;
     #[derive(Default)]
@@ -132,9 +132,12 @@ fn last_file_read_first(arrived: bool, viewed: Option<&str>) -> bool {
     if let Some(url) = viewed {
         crate::system::derive::priority::note_viewed(dir.path(), url);
     }
+    if watcher_saw_it {
+        crate::system::derive::priority::note_arrived(dir.path(), &[dir.path().join("last.xyz")]);
+    }
     let demands: Vec<Demand> = names
         .iter()
-        .map(|n| Demand { entry: new.clone(), path: n.clone(), pages: vec![if n == "last.xyz" { "p.md" } else { "x.md" }.to_string()] })
+        .map(|n| Demand { entry: new.clone(), path: n.clone(), pages: vec![if n == "last.xyz" { page } else { "x.md" }.to_string()] })
         .collect();
     let reporter = Finished::default();
     let stop = || reporter.0.load(Ordering::SeqCst);
@@ -144,11 +147,22 @@ fn last_file_read_first(arrived: bool, viewed: Option<&str>) -> bool {
 
 #[test]
 fn a_build_reads_new_files_before_files_re_read_for_a_changed_plugin() {
-    assert!(last_file_read_first(true, None));
-    assert!(!last_file_read_first(false, None), "control: with no tier it waits its turn");
+    assert!(last_file_read_first(true, None, "p.md", false));
+    assert!(!last_file_read_first(false, None, "p.md", false), "control: with no tier it waits its turn");
 }
 
 #[test]
 fn the_page_on_screen_is_read_before_new_files() {
-    assert!(last_file_read_first(false, Some("/p")));
+    assert!(last_file_read_first(false, Some("/p"), "p.md", false));
+}
+
+#[test]
+fn a_file_the_watcher_saw_arrive_is_read_before_untouched_ones_even_with_an_earlier_result() {
+    assert!(last_file_read_first(false, None, "p.md", true));
+}
+
+#[test]
+fn viewing_a_folder_reads_the_files_of_the_pages_it_lists_first() {
+    assert!(last_file_read_first(false, Some("/docs"), "docs/p.md", false));
+    assert!(!last_file_read_first(false, Some("/other"), "docs/p.md", false), "control: another folder's page does not lead");
 }

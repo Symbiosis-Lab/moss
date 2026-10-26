@@ -133,3 +133,15 @@ async fn the_watch_driver_writes_the_stub_when_a_file_arrives() {
     }
     assert!(folder.join("new.md").is_file());
 }
+
+#[test]
+fn a_file_that_arrives_goes_to_the_front_of_the_derive_queue() {
+    let (dir, _site) = site_with_fake_plugin();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    std::fs::write(root.join("new.fake"), "x").unwrap();
+    std::fs::write(root.join("old.fake"), "x").unwrap();
+    react(&root.to_string_lossy(), &[created(&root.join("new.fake"))], &[]);
+    let arrived = |f: &str| crate::system::derive::priority::arrived_in_session(&root, f, &[]);
+    assert!(arrived("new.fake"));
+    assert!(!arrived("old.fake"));
+}

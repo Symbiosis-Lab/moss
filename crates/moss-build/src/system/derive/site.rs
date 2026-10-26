@@ -27,7 +27,7 @@ use moss_core::resolve::md_extract::{extract_md_references, RefSyntax};
 use crate::build::ports::reporter::BuildReporter;
 use crate::build::progress::PipelineEvent;
 use crate::moss_paths::MossPaths;
-use crate::system::derive::priority::Schedule;
+use crate::system::derive::priority::{self, Schedule};
 use crate::system::derive::registry::{DerivationEntry, DerivationRegistry};
 use crate::system::derive::{self as derive, batch::DeriveJob, DeriveFailure, DeriveOutcome};
 
@@ -394,12 +394,17 @@ fn read_all(
     let batch: Vec<DeriveJob<'_>> =
         runnable.iter().map(|d| DeriveJob { entry: &d.entry, input: root.join(&d.path) }).collect();
     // New or changed bytes have no earlier result to show; a read repeated
-    // for a changed plugin does.
-    let arrived: Vec<bool> = runnable.iter().map(|d| derive::lookup_previous(paths, &d.entry, &root.join(&d.path)).is_none()).collect();
+    // for a changed plugin does, unless the file just arrived again.
+    let arrived: Vec<bool> = runnable
+        .iter()
+        .map(|d| derive::lookup_previous(paths, &d.entry, &root.join(&d.path)).is_none() || priority::arrived_in_session(root, &d.path, &d.pages))
+        .collect();
     let schedule = Arc::new(Schedule::new(root, runnable.iter().map(|d| d.pages.clone()).collect(), arrived));
     let derived = derive::derive_batch_by(paths, &batch, remember, stop, Arc::new(move |job| schedule.tier(job)), |done, total| {
         report_progress(reporter, &noun, done, total)
     });
+    let read: Vec<&str> = runnable.iter().zip(&derived).filter(|(_, r)| r.is_some()).map(|(d, _)| d.path.as_str()).collect();
+    priority::settle(root, &read);
     for (demand, result) in runnable.iter().zip(derived) {
         let Some(result) = result else { continue };
         if let Err(failure) = &result {
