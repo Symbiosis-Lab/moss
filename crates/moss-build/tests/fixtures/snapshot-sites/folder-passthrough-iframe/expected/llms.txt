@@ -13,5 +13,3 @@ classifies as `FolderIndexIframe` and renders as an `<iframe>`.
 
 ## Embedded app
 
-<!--MOSS_MARKER_FOLDER_LIST:path=/app/|from=index.md-->
-

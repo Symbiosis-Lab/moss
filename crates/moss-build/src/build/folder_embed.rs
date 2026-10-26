@@ -1410,6 +1410,41 @@ fn list_pages<'a>(
     Ok(Listed::Pages { folder_slug: folder_id_slug, target_doc, is_flatten, pages })
 }
 
+/// The marker's own style and group win over the ones detected from its pages.
+fn order_listed<'a>(
+    parsed: &ParsedMarker<'_>,
+    pages: &[&'a ParsedDocument],
+    target_doc: Option<&ParsedDocument>,
+    is_flatten: bool,
+    math: bool,
+    now: chrono::NaiveDateTime,
+) -> members::Ordered<'a> {
+    let style = parsed.style.as_ref().filter(|style| style.as_str() != "map").map(|s| moss_core::Resolved::frontmatter(s.clone()));
+    let group = parsed.group.as_ref().map(|g| moss_core::Resolved::frontmatter(g.clone()));
+    members::order(pages, target_doc, is_flatten, parsed.sort, style.as_ref(), group.as_ref(), parsed.limit, parsed.when, math, now)
+}
+
+/// The pages a folder-list marker shows, in the listing's order; `None` when it
+/// draws something other than a page list (a static index, a missing folder).
+pub(crate) fn marker_pages<'a>(
+    body: &str,
+    from_md_path: &str,
+    all_docs: &'a [ParsedDocument],
+    project: &ProjectStructure,
+    dir_overrides: &std::collections::HashMap<String, String>,
+    math: bool,
+    now: chrono::NaiveDateTime,
+) -> Option<Vec<&'a ParsedDocument>> {
+    let parsed = parse_marker_body(body)?;
+    let from = if parsed.from.is_empty() { from_md_path } else { parsed.from };
+    match list_pages(&parsed, from, all_docs, project, dir_overrides, now).ok()? {
+        Listed::Iframe(_) => None,
+        Listed::Pages { target_doc, is_flatten, pages, .. } => {
+            Some(order_listed(&parsed, &pages, target_doc, is_flatten, math, now).limited)
+        }
+    }
+}
+
 /// Render a single resolved marker. `Err` carries the plain-text problem when
 /// the target does not resolve; the caller renders the placeholder and reports it. `is_embed` — see [`resolve_markers_impl`] — passes
 /// straight through to [`generate_children`], which is where it actually
@@ -1470,28 +1505,8 @@ fn render_one(
         }
     }
 
-    // Auto-detect style and group when not specified in embed params.
-    let style_override: Option<moss_core::Resolved<String>> = parsed
-        .style
-        .as_ref()
-        .filter(|style| style.as_str() != "map")
-        .map(|s| moss_core::Resolved::frontmatter(s.clone()));
-    let group_override: Option<moss_core::Resolved<String>> = parsed
-        .group
-        .as_ref()
-        .map(|g| moss_core::Resolved::frontmatter(g.clone()));
-    let members::Ordered { resolved, style: style_resolved, group: effective_group, skip_resort, limited, truncated } = members::order(
-        &folder_docs,
-        target_doc,
-        is_flatten,
-        parsed.sort,
-        style_override.as_ref(),
-        group_override.as_ref(),
-        parsed.limit,
-        parsed.when,
-        math,
-        now,
-    );
+    let members::Ordered { resolved, style: style_resolved, group: effective_group, skip_resort, limited, truncated } =
+        order_listed(parsed, &folder_docs, target_doc, is_flatten, math, now);
     if let Some(shown) = shown {
         shown.borrow_mut().extend(limited.iter().map(|d| d.url_path.clone()));
     }

@@ -40,15 +40,25 @@ A demo of inline folder embeds.
 
 ## Recent journal (limit 3 + more)
 
-<!--MOSS_MARKER_FOLDER_LIST:path=/journal/|from=index.md|limit=3-->
+- [Elder](/journal/2025-05-01-e/)
+- [Berry](/journal/2025-04-01-d/)
+- [Date](/journal/2025-03-01-c/)
+
 
 ## Full journal
 
-<!--MOSS_MARKER_FOLDER_LIST:path=/journal/|from=index.md-->
+- [Elder](/journal/2025-05-01-e/)
+- [Berry](/journal/2025-04-01-d/)
+- [Date](/journal/2025-03-01-c/)
+- [Apple](/journal/2025-02-01-b/)
+- [Cherry](/journal/2025-01-01-a/)
+
 
 ## Override sort to title
 
-<!--MOSS_MARKER_FOLDER_LIST:path=/journal/|from=index.md|limit=3|sort=title-->
+- [Apple](/journal/2025-02-01-b/)
+- [Berry](/journal/2025-04-01-d/)
+- [Cherry](/journal/2025-01-01-a/)
 
 ---
 

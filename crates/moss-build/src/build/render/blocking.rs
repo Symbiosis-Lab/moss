@@ -2549,6 +2549,10 @@ pub fn generate_blocking_content_for_build(
             &documents,
             llms_site_title,
             homepage_desc.as_deref(),
+            |body, host| {
+                let from = host.source_path.as_deref().unwrap_or(&host.url_path);
+                crate::build::folder_embed::marker_pages(body, from, &documents, project_structure, &dir_overrides, site_config.math, now)
+            },
         );
         // Site 14 (Pattern A): emit llms.txt.
         BuildContext::for_render(output_dir, pending)
