@@ -274,6 +274,20 @@ describe("blueprint-fallback: installBlueprintFallback", () => {
       stop();
     });
 
+    it("re-mounts the grid when a morph of the same still-pending block removes the host", async () => {
+      const block = makePending();
+      const stop = installBlueprintFallback();
+      expect(startBlueprintGridMock).toHaveBeenCalledTimes(1);
+
+      // idiomorph keeps the block and prunes the host it does not know.
+      block.querySelector(".moss-blueprint-fallback")!.remove();
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(block.querySelector(".moss-blueprint-fallback canvas")).not.toBeNull();
+      expect(startBlueprintGridMock).toHaveBeenCalledTimes(2);
+      stop();
+    });
+
     it("is skipped under prefers-reduced-motion", () => {
       (window as unknown as { matchMedia: unknown }).matchMedia = vi.fn(
         (q: string) => ({ matches: q.includes("prefers-reduced-motion"), media: q }),

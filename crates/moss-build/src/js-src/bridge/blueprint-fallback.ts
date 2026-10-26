@@ -307,7 +307,10 @@ export function installBlueprintFallback(
     }
     if (removed) {
       for (const [block, inst] of Array.from(pending)) {
-        if (!inst.container.isConnected || !block.isConnected) dropPending(block);
+        if (inst.container.isConnected && block.isConnected) continue;
+        dropPending(block);
+        // A morph keeps a still-pending block and prunes the host inside it.
+        if (block.isConnected && block.matches(PENDING_SELECTOR)) upgradePending(block);
       }
       for (const [img, inst] of Array.from(instances)) {
         if (!inst.container.isConnected || !img.isConnected) {
