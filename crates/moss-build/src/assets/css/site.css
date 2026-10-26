@@ -10845,19 +10845,12 @@ body[data-moss-preview] .moss-service-inactive {
 /* `![[file.ext#fragment]]` stands for text a plugin reads out of the file.
    When the text is ready it sits inside a bare `.moss-derived` wrapper
    (`data-fragment` names the fragment) that a theme may style; only the
-   block margin below applies to it. Until then a pending block holds the place with a faint grid; a skipped
-   block says, in a plain note, why no text will appear. */
+   block margin below applies to it. A skipped block says, in a plain note, why no text will appear.
+   A pending block (text still being read) only exists in the local preview,
+   which styles it; a publish is refused while any text is unread. */
 .moss-derived {
   margin-block: 1.5em;
   border-radius: 4px;
-}
-.moss-derived--pending {
-  min-block-size: 12rem;
-  background-color: var(--moss-color-surface);
-  background-image:
-    linear-gradient(var(--moss-border-light) 1px, transparent 1px),
-    linear-gradient(90deg, var(--moss-border-light) 1px, transparent 1px);
-  background-size: 10px 10px;
 }
 .moss-derived--skipped {
   padding: 0.75em 1em;

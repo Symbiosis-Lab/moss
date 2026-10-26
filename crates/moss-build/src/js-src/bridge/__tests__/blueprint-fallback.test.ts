@@ -203,4 +203,99 @@ describe("blueprint-fallback: installBlueprintFallback", () => {
 
     stop();
   });
+
+  describe("pending derived text", () => {
+    function makePending(cls = "moss-derived moss-derived--pending"): HTMLElement {
+      const block = document.createElement("div");
+      block.className = cls;
+      block.setAttribute("role", "status");
+      block.innerHTML = '<span class="visually-hidden">Reading…</span>';
+      document.body.appendChild(block);
+      return block;
+    }
+
+    it("mounts a canvas host inside a pending block and starts the grid", () => {
+      const block = makePending();
+      const stop = installBlueprintFallback();
+
+      const host = block.querySelector<HTMLElement>(".moss-blueprint-fallback");
+      expect(host).not.toBeNull();
+      expect(host!.getAttribute("aria-hidden")).toBe("true");
+      expect(host!.querySelector("canvas#blueprint-canvas")).not.toBeNull();
+      expect(startBlueprintGridMock).toHaveBeenCalledWith(host);
+      expect(block.style.position).toBe("relative");
+      // The status role and its hidden text survive.
+      expect(block.getAttribute("role")).toBe("status");
+      expect(block.querySelector(".visually-hidden")?.textContent).toBe("Reading…");
+
+      stop();
+      expect(block.querySelector(".moss-blueprint-fallback")).toBeNull();
+      expect(block.style.position).toBe("");
+    });
+
+    it("animates only while the block is on-screen", () => {
+      vi.stubGlobal("IntersectionObserver", MockIntersectionObserver);
+      makePending();
+      const stop = installBlueprintFallback();
+      const io = MockIntersectionObserver.instances[0];
+
+      expect(startBlueprintGridMock).not.toHaveBeenCalled();
+      io.emit(true);
+      expect(startBlueprintGridMock).toHaveBeenCalledTimes(1);
+      io.emit(false);
+      expect(cleanupSpy).toHaveBeenCalledTimes(1);
+
+      stop();
+    });
+
+    it("tears the grid down when the block is removed", async () => {
+      const block = makePending();
+      const stop = installBlueprintFallback();
+      expect(startBlueprintGridMock).toHaveBeenCalledTimes(1);
+
+      block.remove();
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(cleanupSpy).toHaveBeenCalledTimes(1);
+      stop();
+    });
+
+    it("upgrades a block inserted after install, and drops one that stops being pending", async () => {
+      const stop = installBlueprintFallback();
+      const block = makePending();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(startBlueprintGridMock).toHaveBeenCalledTimes(1);
+
+      block.className = "moss-derived";
+      await new Promise((r) => setTimeout(r, 0));
+      expect(cleanupSpy).toHaveBeenCalledTimes(1);
+      expect(block.querySelector(".moss-blueprint-fallback")).toBeNull();
+
+      stop();
+    });
+
+    it("is skipped under prefers-reduced-motion", () => {
+      (window as unknown as { matchMedia: unknown }).matchMedia = vi.fn(
+        (q: string) => ({ matches: q.includes("prefers-reduced-motion"), media: q }),
+      );
+      const block = makePending();
+      const stop = installBlueprintFallback();
+      delete (window as unknown as { matchMedia?: unknown }).matchMedia;
+
+      expect(block.querySelector(".moss-blueprint-fallback")).toBeNull();
+      expect(startBlueprintGridMock).not.toHaveBeenCalled();
+      stop();
+    });
+
+    it("leaves ready and skipped derived blocks alone", () => {
+      const ready = makePending("moss-derived");
+      const skipped = makePending("moss-derived moss-derived--skipped");
+      const stop = installBlueprintFallback();
+
+      expect(ready.querySelector(".moss-blueprint-fallback")).toBeNull();
+      expect(skipped.querySelector(".moss-blueprint-fallback")).toBeNull();
+      expect(startBlueprintGridMock).not.toHaveBeenCalled();
+      stop();
+    });
+  });
 });
