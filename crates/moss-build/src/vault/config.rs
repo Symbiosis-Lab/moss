@@ -112,6 +112,11 @@ pub fn write_managed_toml(path: &Path, original: &str, root: &Table, supported: 
             supported,
         ));
     }
+    use crate::build::site_config::{NeededBy, Unmet};
+    let floor = root.get("min_moss_version").and_then(|v| v.as_str());
+    if let Some(unmet) = floor.and_then(|floor| Unmet::needs(floor, NeededBy::Site)) {
+        return Err(format!("Refusing to write {}. {unmet}", path.display()));
+    }
     let out = crate::infra::toml_rewrite::apply_changes(original, root)?;
     if out == original {
         return Ok(());
@@ -270,5 +275,18 @@ mod tests {
 
         let after = fs::read_to_string(moss.join("config.toml")).unwrap();
         assert_eq!(after, original, "the file must be untouched byte-for-byte");
+    }
+
+    #[test]
+    fn write_managed_toml_refuses_a_site_that_needs_a_newer_moss() {
+        let tmp = tempfile::tempdir().unwrap();
+        let moss = tmp.path().join(".moss");
+        fs::create_dir_all(&moss).unwrap();
+        let original = "min_moss_version = \"99.0.0\"\n\n[site]\ntitle = \"from the future\"\n";
+        fs::write(moss.join("config.toml"), original).unwrap();
+
+        let err = save_site_str(tmp.path().to_str().unwrap(), "lang", "en").unwrap_err();
+        assert!(err.contains("needs moss 99.0.0"), "got: {err}");
+        assert_eq!(fs::read_to_string(moss.join("config.toml")).unwrap(), original);
     }
 }

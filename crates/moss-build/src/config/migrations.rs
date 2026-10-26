@@ -21,7 +21,7 @@
 
 use std::fmt;
 
-pub const CURRENT_VERSION: u32 = 6;
+pub const CURRENT_VERSION: u32 = 7;
 
 /// Current schema version for `.moss/state.toml`'s `[deployment]` block — a
 /// separate version space from [`CURRENT_VERSION`] above, because the two
@@ -60,6 +60,7 @@ const MIGRATIONS: &[Migration] = &[
     v3_to_v4,
     v4_to_v5,
     v5_to_v6,
+    v6_to_v7,
 ];
 
 // Compile-time guard: the migrations array must have exactly CURRENT_VERSION entries
@@ -390,6 +391,16 @@ fn v4_to_v5(_raw: &mut toml::Table) -> Result<(), MigrationError> {
 /// longer emits, so a vault's publish records can reach git and a fresh clone
 /// knows what is live. The stamp records that it has run.
 fn v5_to_v6(_raw: &mut toml::Table) -> Result<(), MigrationError> {
+    Ok(())
+}
+
+/// v6 to v7: nothing changes in `config.toml`.
+///
+/// The stamp is the point. A moss from before `min_moss_version` ignores that
+/// key like any unknown one, but it does refuse to publish a config stamped
+/// above its own schema, so the stamp is what stops an older install from
+/// publishing a site it may render wrong.
+fn v6_to_v7(_raw: &mut toml::Table) -> Result<(), MigrationError> {
     Ok(())
 }
 

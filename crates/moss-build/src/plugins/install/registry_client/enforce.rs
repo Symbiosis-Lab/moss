@@ -23,7 +23,6 @@ use crate::plugins::types::PluginManifest;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use moss_core::untrusted_text::{bounded, MAX_NAME, MAX_SENTENCE};
-use semver::Version;
 
 use super::approval::{self, Approvals};
 use super::cache::{self, CachedRegistry, RevocationVerdict};
@@ -655,9 +654,9 @@ pub fn cached_entries() -> Vec<super::index::IndexEntry> {
 /// that is refused at load, so an unrunnable version is not an update.
 pub fn host_meets_floor(min_moss_version: Option<&str>) -> bool {
     let Some(floor) = min_moss_version else { return true };
-    match (Version::parse(floor), Version::parse(crate::system::app_version())) {
-        (Ok(needs), Ok(host)) => host >= needs,
-        _ => {
+    match crate::system::meets_floor(floor) {
+        Some(met) => met,
+        None => {
             // `debug!`, not `warn!`: the refusal path runs inside
             // `load_plugin`, which the QuickJS engine re-enters on every hook
             // dispatch, so one typo'd manifest would otherwise fill the log.

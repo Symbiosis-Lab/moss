@@ -81,47 +81,108 @@ pub fn read_project_config(project_path: &str) -> Result<ConfigFile, String> {
     }
 }
 
-/// `Some(v)` when `.moss/config.toml` declares a schema newer than this
-/// build supports; `Ok(None)` covers absent, at, or behind current.
-///
-/// One read: [`read_project_config`]'s `ConfigFile::parse` swallows
-/// `VersionAhead` and falls back to the raw, unmigrated table, but the
-/// original `schema_version` survives into that table untouched (the
-/// migration short-circuits before mutating anything), so
-/// [`ConfigFile::schema_version_ahead`] recovers the real answer from the
-/// SAME parse rather than this function re-reading and re-parsing the file.
-/// A caller that already holds a `ConfigFile` should call the method
-/// directly instead of this free function.
-pub fn config_schema_version_ahead(project_path: &str) -> Result<Option<u32>, String> {
-    Ok(read_project_config(project_path)?.schema_version_ahead())
+/// Why this moss is too old for a site. An older engine meeting newer syntax
+/// renders it wrong without an error, so the folder has to say so: preview
+/// still renders (with a notice), while every door that reaches an audience
+/// refuses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unmet {
+    /// `.moss/config.toml` was saved by a moss whose settings schema this one
+    /// predates. No version: which later release reads it is unknowable here.
+    SchemaAhead { found: u32 },
+    /// A `min_moss_version` above this moss, from the site or a plugin.
+    Needs { version: String, by: NeededBy },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NeededBy {
+    Site,
+    Plugin(String),
+}
+
+impl Unmet {
+    /// `Needs` when `floor`, asked for by `by`, is above this moss.
+    pub fn needs(floor: &str, by: NeededBy) -> Option<Unmet> {
+        (crate::system::meets_floor(floor) == Some(false)).then(|| Unmet::Needs { version: floor.to_string(), by })
+    }
+}
+
+impl std::fmt::Display for Unmet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let running = crate::system::app_version();
+        match self {
+            Unmet::SchemaAhead { found } => write!(
+                f,
+                "This site's .moss/config.toml is schema_version {found}, newer than this app \
+                 supports (up to {}). Acting now would use every unrecognized setting at its \
+                 default. Update moss first.",
+                crate::config::migrations::CURRENT_VERSION,
+            ),
+            Unmet::Needs { version, by: NeededBy::Site } => write!(
+                f,
+                "This site needs moss {version} or later (min_moss_version in .moss/config.toml); \
+                 this is moss {running}, which may render it wrong. Update moss first.",
+            ),
+            Unmet::Needs { version, by: NeededBy::Plugin(name) } => write!(
+                f,
+                "The {name} plugin in this site needs moss {version} or later; this is moss \
+                 {running}. Update moss first.",
+            ),
+        }
+    }
+}
+
+/// Whether this moss is new enough for the site: the folder's settings
+/// schema, its `min_moss_version`, and each plugin manifest's, whichever asks
+/// for most. A floor that does not parse asks for nothing, as a plugin's
+/// unparseable floor already does.
+pub fn moss_requirement(cfg: &ConfigFile, plugins_dir: &Path) -> Option<Unmet> {
+    if let Some(found) = cfg.schema_version_ahead() {
+        return Some(Unmet::SchemaAhead { found });
+    }
+    let site = cfg.min_moss_version().map(|v| (v.to_string(), NeededBy::Site));
+    // Site last, so it names the requirement when a plugin asks for the same.
+    plugin_floors(plugins_dir)
+        .into_iter()
+        .chain(site)
+        .filter_map(|(floor, by)| Unmet::needs(&floor, by))
+        .max_by_key(|unmet| match unmet {
+            Unmet::Needs { version, .. } => crate::system::version_core(version),
+            Unmet::SchemaAhead { .. } => None,
+        })
+}
+
+/// Each plugin manifest's `min_moss_version`, read without loading the
+/// plugin: a refused plugin's floor still counts, since the site may not work
+/// without it. A manifest that cannot be read or parsed contributes nothing.
+fn plugin_floors(plugins_dir: &Path) -> Vec<(String, NeededBy)> {
+    let Ok(entries) = std::fs::read_dir(plugins_dir) else { return Vec::new() };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let manifest = crate::plugins::bundled::read_installed_manifest(&entry.path())?;
+            let name = moss_core::untrusted_text::bounded(&manifest.name, moss_core::untrusted_text::MAX_NAME);
+            Some((manifest.min_moss_version?, NeededBy::Plugin(name)))
+        })
+        .collect()
 }
 
 /// The shared refusal every outward door (publish, syndicate, email send)
-/// goes through before acting on a site's config: `get_site_*` /
-/// `get_services_config` read through `ConfigFile::parse`, which silently
-/// defaults every setting it doesn't recognize the shape of on
-/// `VersionAhead` — fine for preview (which says so via the advisory in
-/// `build/progress.rs`), not fine for a door that reaches a real audience
-/// (subscribers, syndication platforms, the live site). One function so
-/// there is one place these doors agree on, rather than three copies of the
-/// same check drifting.
+/// goes through before acting on a site: a moss too old for it would publish
+/// settings at their defaults, or pages its engine renders wrong, to a real
+/// audience. One function so these doors agree.
 ///
 /// A config READ failure (evicted, half-synced, permissions) is deliberately
-/// not a refusal here — only a *confirmed* `VersionAhead` is. These doors are
-/// not the config's authority; something upstream (the build this door
-/// follows, or the config's own readers) already owns surfacing a genuine
-/// read error, and refusing a publish or a send on a transient I/O hiccup
-/// this check merely stumbled over would be a new, unrelated failure mode.
+/// not a refusal — only a confirmed [`Unmet`] is. Something upstream already
+/// owns surfacing a genuine read error, and refusing a publish on a transient
+/// I/O hiccup this check merely stumbled over would be a new failure mode.
 pub fn ensure_config_current(project_path: &str) -> Result<(), String> {
-    if let Ok(Some(found)) = config_schema_version_ahead(project_path) {
-        return Err(format!(
-            "This site's .moss/config.toml is schema_version {found}, newer than this app \
-             supports (up to {}). Acting now would use every unrecognized setting at its \
-             default. Update moss first.",
-            crate::config::migrations::CURRENT_VERSION,
-        ));
+    let Ok(cfg) = read_project_config(project_path) else { return Ok(()) };
+    let plugins_dir = crate::moss_paths::MossPaths::new(Path::new(project_path)).plugins_dir();
+    match moss_requirement(&cfg, &plugins_dir) {
+        Some(unmet) => Err(unmet.to_string()),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// Read `[services.<kind>]` sections from .moss/config.toml. Permissive —
@@ -526,20 +587,38 @@ mod version_ahead_guard_tests {
         dir
     }
 
-    #[test]
-    fn config_schema_version_ahead_reads_through_the_one_parse_read_project_config_already_does() {
-        let dir = project_with_schema_version(crate::config::migrations::CURRENT_VERSION + 3);
-        let path = dir.path().to_str().unwrap();
-        assert_eq!(
-            config_schema_version_ahead(path).unwrap(),
-            Some(crate::config::migrations::CURRENT_VERSION + 3)
-        );
-
-        let dir = project_with_schema_version(crate::config::migrations::CURRENT_VERSION);
-        assert_eq!(config_schema_version_ahead(dir.path().to_str().unwrap()).unwrap(), None);
-
+    fn requirement(config: &str, plugins: &[(&str, &str)]) -> Option<Unmet> {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(config_schema_version_ahead(dir.path().to_str().unwrap()).unwrap(), None);
+        for (folder, manifest) in plugins {
+            let plugin = dir.path().join(folder);
+            std::fs::create_dir_all(&plugin).unwrap();
+            std::fs::write(plugin.join("manifest.json"), manifest).unwrap();
+        }
+        moss_requirement(&ConfigFile::parse(config).unwrap(), dir.path())
+    }
+
+    #[test]
+    fn the_requirement_is_whichever_of_site_and_plugins_asks_for_most() {
+        let needs = |version: &str, by: NeededBy| Some(Unmet::Needs { version: version.into(), by });
+        assert_eq!(requirement("min_moss_version = \"99.0.0\"\n", &[]), needs("99.0.0", NeededBy::Site));
+        assert_eq!(requirement("min_moss_version = \"0.0.1\"\n", &[]), None);
+        assert_eq!(requirement("min_moss_version = \"soon\"\n", &[]), None);
+        assert_eq!(requirement("", &[]), None);
+
+        let plugin = |floor: &str| format!(r#"{{"name":"research","version":"1.0.0","entry":"main.js","min_moss_version":"{floor}"}}"#);
+        assert_eq!(requirement("", &[("research", &plugin("98.0.0"))]), needs("98.0.0", NeededBy::Plugin("research".into())));
+        assert_eq!(
+            requirement("min_moss_version = \"97.0.0\"\n", &[("research", &plugin("98.0.0"))]),
+            needs("98.0.0", NeededBy::Plugin("research".into()))
+        );
+        assert_eq!(requirement("min_moss_version = \"98.0.0\"\n", &[("research", &plugin("98.0.0"))]), needs("98.0.0", NeededBy::Site));
+        assert_eq!(requirement("", &[("broken", "{ not json")]), None);
+    }
+
+    #[test]
+    fn a_settings_schema_ahead_is_its_own_requirement() {
+        let ahead = format!("schema_version = {}\nmin_moss_version = \"99.0.0\"\n", crate::config::migrations::CURRENT_VERSION + 3);
+        assert_eq!(requirement(&ahead, &[]), Some(Unmet::SchemaAhead { found: crate::config::migrations::CURRENT_VERSION + 3 }));
     }
 
     /// The one door guard every outward door (publish, syndicate, email
@@ -558,6 +637,16 @@ mod version_ahead_guard_tests {
         // refuse: absence is not version-ahead.
         let absent = tempfile::tempdir().unwrap();
         assert!(ensure_config_current(absent.path().to_str().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn ensure_config_current_refuses_a_site_that_needs_a_newer_moss() {
+        let dir = tempfile::tempdir().unwrap();
+        let moss = dir.path().join(".moss");
+        std::fs::create_dir_all(moss.join("plugins")).unwrap();
+        std::fs::write(moss.join("config.toml"), "min_moss_version = \"99.0.0\"\n").unwrap();
+        let err = ensure_config_current(dir.path().to_str().unwrap()).unwrap_err();
+        assert!(err.contains("needs moss 99.0.0"), "got: {err}");
     }
 }
 

@@ -118,6 +118,12 @@ impl ConfigFile {
         crate::config::migrations::version_ahead(&self.root, crate::config::migrations::CURRENT_VERSION)
     }
 
+    /// The oldest moss release that renders this site's design correctly, as
+    /// its designer wrote it. moss never writes or raises it.
+    pub fn min_moss_version(&self) -> Option<&str> {
+        self.root.get("min_moss_version").and_then(|v| v.as_str())
+    }
+
     /// A string field under `[site]`, e.g. `lang`, `typesetting`.
     pub fn site_str(&self, field: &str) -> Option<&str> {
         self.root

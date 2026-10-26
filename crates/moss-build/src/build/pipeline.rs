@@ -1331,7 +1331,7 @@ fn build_inner(
             None
         }
     };
-    crate::build::progress::report_config_version_ahead(progress_sender, cfg.as_ref());
+    crate::build::progress::report_moss_requirement(progress_sender, cfg.as_ref(), &paths.plugins_dir());
     let site_str =
         |field: &str| cfg.as_ref().and_then(|c| c.site_str(field)).map(str::to_string);
     let site_bool = |field: &str| cfg.as_ref().and_then(|c| c.site_bool(field));
