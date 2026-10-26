@@ -108,10 +108,19 @@ fn test_cheap_reflow_excludes_scroll_row_cards() {
         out.contains("p:has(> picture):not(.moss-grid[data-scroll] *)"),
         "pictures inside a scroll row must be excluded; got: {out}"
     );
-    assert!(
-        out.contains(".moss-embed:not(.moss-grid[data-scroll] *)"),
-        "embeds inside a scroll row must be excluded; got: {out}"
-    );
+}
+
+#[test]
+fn test_cheap_reflow_never_targets_embeds() {
+    // A PDF <object> as a grid item, skipped and restored by content-visibility,
+    // freezes the preview in a WebKit layout loop.
+    let out = inject_preview_assets("<html><body></body></html>", false);
+    let rule = out
+        .split("<style id=\"moss-preview-cheap-reflow\">")
+        .nth(1)
+        .and_then(|rest| rest.split("</style>").next())
+        .expect("cheap-reflow style injected");
+    assert!(!rule.contains("moss-embed"), "embeds must keep content-visibility: visible; got: {rule}");
 }
 
 #[test]

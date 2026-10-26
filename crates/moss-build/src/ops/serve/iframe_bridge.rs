@@ -178,7 +178,7 @@ box-shadow:0 4px 12px rgba(0,0,0,0.18);pointer-events:none;z-index:50}}\
 /// auto` lets off-screen media skip layout, so a width change only relays out the
 /// on-screen media, not every figure.
 ///
-/// Scoped to MEDIA ONLY (figures, bare images, embeds) — text stays fully laid out
+/// Scoped to IMAGES ONLY (figures, bare images) — text stays fully laid out
 /// so find-in-page (`window.find`) and editor↔preview scroll-sync (which key off
 /// text `[data-source-line]` anchors) are unaffected. `contain-intrinsic-size: auto
 /// <fallback>` reserves a placeholder height (WebKit refines it after first render)
@@ -202,11 +202,15 @@ box-shadow:0 4px 12px rgba(0,0,0,0.18);pointer-events:none;z-index:50}}\
 /// *)`): a scroll row's cards share ONE grid row track (`grid-auto-flow: column`), so
 /// an off-screen card falling back to the 600px placeholder height stretches every
 /// card in the row, not just the one out of view.
+///
+/// Never embeds (`.moss-embed`: a PDF `<object>`, an iframe). Skipping one tears
+/// down its plugin or frame, and inside a grid the placeholder height changes the
+/// row, which changes whether the embed is near the viewport: WebKit then skips and
+/// restores it every frame and the preview freezes.
 const PREVIEW_CHEAP_REFLOW_STYLE: &str = "<style id=\"moss-preview-cheap-reflow\">\
 article figure.moss-image:not(.moss-grid[data-scroll] *),\
 article p:has(> img):not(.moss-grid[data-scroll] *),\
-article p:has(> picture):not(.moss-grid[data-scroll] *),\
-article .moss-embed:not(.moss-grid[data-scroll] *){\
+article p:has(> picture):not(.moss-grid[data-scroll] *){\
 content-visibility:auto;contain-intrinsic-size:auto none auto 600px}\
 </style>\n";
 
