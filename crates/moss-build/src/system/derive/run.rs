@@ -97,14 +97,16 @@ pub fn run_deriver(
     input: &Path,
     timeout: Duration,
 ) -> Result<DeriveOutcome, DeriveFailure> {
-    run_deriver_answer(binary, input, timeout).map(|a| a.outcome)
+    run_deriver_answer(binary, input, timeout, None).map(|a| a.outcome)
 }
 
-/// [`run_deriver`], keeping the printed text beside the parsed answer.
+/// [`run_deriver`], keeping the printed text beside the parsed answer, and
+/// giving the binary `cache` as its `MOSS_CACHE_DIR`.
 pub fn run_deriver_answer(
     binary: &Path,
     input: &Path,
     timeout: Duration,
+    cache: Option<&Path>,
 ) -> Result<Answer, DeriveFailure> {
     let input = std::path::absolute(input)
         .map_err(|e| DeriveFailure::new(format!("bad input path: {e}")))?;
@@ -114,7 +116,7 @@ pub fn run_deriver_answer(
     let request = serde_json::json!({ "path": input_str }).to_string();
 
     let scratch = Scratch::create()?;
-    let mut cmd = sandbox::command(binary, &scratch.0);
+    let mut cmd = sandbox::command(binary, &scratch.0, cache);
     let what = binary.file_name().map_or_else(|| "derivation binary".into(), |n| n.to_string_lossy().into_owned());
     let caps = OutputCaps { stdout: Some(OUTPUT_CAP), stderr: Some(STDERR_CAP) };
     let out = run_bounded_capped(&mut cmd, Some(request.into_bytes()), timeout, &what, caps, || {})

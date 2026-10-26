@@ -9,7 +9,7 @@
 //! rediscover as a result. A failure is stored only as a note for `--status`:
 //! it is usually the environment's doing, so it never stops a retry.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{binary, run, DeriveFailure, DeriveOutcome};
 use crate::build::cache::{RecordMode, TransformCache, TransformEntry};
@@ -140,9 +140,25 @@ pub fn derive_remembering(site: &MossPaths, entry: &DerivationEntry, input: &Pat
     derive_with(site, entry, input, true)
 }
 
+/// The plugin's persistent cache directory, `<stacks>/derive/<plugin>/.cache`,
+/// created and canonical, or `None` when it cannot be made (the deriver then
+/// runs without `MOSS_CACHE_DIR` and does its work every time). Beside the
+/// per-version binary directories, so it outlives plugin updates; the leading
+/// dot keeps it clear of any derivation id.
+fn plugin_cache_dir(entry: &DerivationEntry) -> Option<PathBuf> {
+    let made = crate::system::stack_exec::layout::stacks_root().and_then(|root| {
+        let dir = root.join("derive").join(&entry.plugin_id).join(".cache");
+        std::fs::create_dir_all(&dir)
+            .and_then(|()| dir.canonicalize())
+            .map_err(|e| format!("{}: {e}", dir.display()))
+    });
+    made.map_err(|e| log::warn!(target: "derive", "no cache directory for {}: {e}", entry.plugin_id)).ok()
+}
+
 fn run_pinned(entry: &DerivationEntry, input: &Path) -> Result<run::Answer, DeriveFailure> {
     let binary = binary::resolve_binary(entry)?;
-    let answer = run::run_deriver_answer(&binary, input, run::derive_timeout())?;
+    let cache = plugin_cache_dir(entry);
+    let answer = run::run_deriver_answer(&binary, input, run::derive_timeout(), cache.as_deref())?;
     answer.outcome.check_against(&entry.contribution.fragments)?;
     Ok(answer)
 }

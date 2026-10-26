@@ -15,7 +15,7 @@ fn scratch() -> std::path::PathBuf {
 }
 
 fn run_sh(script: &str, scratch: &Path) -> crate::system::bounded_command::BoundedOutput {
-    let mut cmd = command(Path::new("/bin/sh"), scratch);
+    let mut cmd = command(Path::new("/bin/sh"), scratch, None);
     cmd.arg("-c").arg(script);
     run_bounded(&mut cmd, Duration::from_secs(30), "sandboxed sh").expect("the sandbox must start")
 }
@@ -84,7 +84,7 @@ fn the_sandbox_cannot_signal_other_processes_and_a_control_can() {
 #[test]
 fn a_real_binary_that_loads_system_libraries_still_runs_confined() {
     let scratch = scratch();
-    let mut cmd = command(Path::new("/usr/bin/curl"), &scratch);
+    let mut cmd = command(Path::new("/usr/bin/curl"), &scratch, None);
     cmd.arg("--version");
     let out = run_bounded(&mut cmd, Duration::from_secs(30), "sandboxed curl").unwrap();
     assert!(out.status.success() && out.stdout.starts_with("curl "), "{out:?}");
@@ -99,6 +99,42 @@ fn the_environment_is_cleared_to_an_allowlist() {
     let out = run_sh("echo \"secret=[$MOSS_SANDBOX_TEST_SECRET] tmp=$TMPDIR\"", &scratch);
     assert!(out.stdout.contains("secret=[]"), "{out:?}");
     assert!(out.stdout.contains(&format!("tmp={}", scratch.display())), "{out:?}");
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn the_cache_directory_is_writable_survives_runs_and_is_the_only_extra_one() {
+    let scratch = scratch();
+    let cache = scratch.join("cache-home");
+    std::fs::create_dir_all(&cache).unwrap();
+    let cache = cache.canonicalize().unwrap();
+    let outside = tempfile::TempDir::new().unwrap();
+    let sibling = outside.path().canonicalize().unwrap();
+    let run = |script: &str| {
+        let mut cmd = command(Path::new("/bin/sh"), &scratch, Some(&cache));
+        cmd.arg("-c").arg(script);
+        run_bounded(&mut cmd, Duration::from_secs(30), "sandboxed sh").unwrap()
+    };
+
+    let first = run("echo \"dir=$MOSS_CACHE_DIR\"; echo kept > \"$MOSS_CACHE_DIR/entry\" && echo wrote=ok");
+    assert!(first.stdout.contains(&format!("dir={}", cache.display())), "{first:?}");
+    assert!(first.stdout.contains("wrote=ok"), "{first:?}");
+
+    let second = run(&format!(
+        "echo \"read=$(cat \"$MOSS_CACHE_DIR/entry\")\"; echo no > '{}/probe' 2>/dev/null && echo out=WROTE || echo out=denied",
+        sibling.display()
+    ));
+    assert!(second.stdout.contains("read=kept"), "{second:?}");
+    assert!(second.stdout.contains("out=denied"), "{second:?}");
+    assert!(!sibling.join("probe").exists());
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn without_a_cache_directory_the_variable_is_unset() {
+    let scratch = scratch();
+    let out = run_sh("echo \"cache=[$MOSS_CACHE_DIR]\"", &scratch);
+    assert!(out.stdout.contains("cache=[]"), "{out:?}");
     let _ = std::fs::remove_dir_all(&scratch);
 }
 

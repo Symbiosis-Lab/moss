@@ -224,3 +224,25 @@ fn the_cache_keeps_the_bytes_the_deriver_printed_not_a_re_serialization() {
     let stored = lookup_bytes(&f.site, &transform_name(&e), &e, &oid).expect("stored");
     assert_eq!(String::from_utf8(stored).unwrap(), ANSWER);
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_derivation_keeps_files_in_its_plugins_cache_directory_across_runs() {
+    let f = fixture();
+    let stacks = f.dir.path().join("stacks");
+    std::env::set_var("MOSS_STACKS_ROOT", &stacks);
+    // The second run reads what the first wrote, and says so in its text.
+    let bin = f.bin(
+        r#"if [ -f "$MOSS_CACHE_DIR/seen" ]; then t=cached; else t=fresh; echo x > "$MOSS_CACHE_DIR/seen"; fi
+printf '{"kind":"derived","fragments":{"text":"%s"},"facts":{}}' "$t""#,
+    );
+    let e = entry(&bin, "1.0.0");
+    let text = |o: DeriveOutcome| match o {
+        DeriveOutcome::Derived { fragments, .. } => fragments["text"].clone(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(text(run_pinned(&e, &f.input).unwrap().outcome), "fresh");
+    assert_eq!(text(run_pinned(&e, &f.input).unwrap().outcome), "cached");
+    assert!(stacks.join("derive/docs/.cache/seen").exists());
+    std::env::remove_var("MOSS_STACKS_ROOT");
+}
