@@ -193,3 +193,40 @@ export function resetBodyAttributeMemory(): void {
   serverBodyAttrs = null;
   serverBodyClasses = null;
 }
+
+/**
+ * Ask WKWebView to repaint: it can leave the screen stale after both a reload
+ * and an in-place DOM morph. Toggling translateZ(0) promotes the root to its own
+ * GPU layer for a frame, which forces a compositor repaint.
+ * Ref: https://bugs.webkit.org/show_bug.cgi?id=258375
+ */
+export function forceRepaint(root: HTMLElement = document.documentElement): void {
+  requestAnimationFrame(() => {
+    root.style.transform = "translateZ(0)";
+    requestAnimationFrame(() => {
+      root.style.transform = "";
+    });
+  });
+}
+
+const elementCount = (node: Node): number =>
+  node instanceof Element ? 1 + node.querySelectorAll("*").length : 0;
+
+/** Idiomorph callbacks that tally element nodes a morph added and removed, so a
+ *  morph that changed nothing is visible in the ack. */
+export function morphCounter(): {
+  counts: { added: number; removed: number };
+  callbacks: {
+    afterNodeAdded: (node: Node) => void;
+    afterNodeRemoved: (node: Node) => void;
+  };
+} {
+  const counts = { added: 0, removed: 0 };
+  return {
+    counts,
+    callbacks: {
+      afterNodeAdded: (node) => { counts.added += elementCount(node); },
+      afterNodeRemoved: (node) => { counts.removed += elementCount(node); },
+    },
+  };
+}
