@@ -15,7 +15,7 @@ use futures::FutureExt;
 
 use crate::build::watch::{drift, scope};
 use crate::ops::watch::cadence::{Cadence, CadenceTicker, Tick};
-use crate::ops::watch::{supervision, worker};
+use crate::ops::watch::{derive_folders, supervision, worker};
 use crate::system::folder_session::FolderSession;
 
 use super::{progress, walk};
@@ -421,6 +421,10 @@ pub(crate) async fn run(
                             // this dispatch structural, which would close both
                             // incremental gates over an ordinary edit.
                             let structural = report.any_structural(&fresh);
+                            if structural {
+                                // New files the watcher never announced are arrivals all the same.
+                                derive_folders::react_swept_detached(&folder_str, &report, &fresh);
+                            }
                             let paths: Vec<std::path::PathBuf> =
                                 fresh.iter().map(|r| folder.join(r)).collect();
                             let found = if structural {
