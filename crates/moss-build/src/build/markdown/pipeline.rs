@@ -1205,6 +1205,9 @@ pub fn process_markdown_file(
         crate::build::footer::section_footer_blocks(&mut doc, closes_page);
     }
 
+    // 5c. Which text names each `:::subscribe` input, once the footer's blocks are final.
+    doc.label_subscribe_prompts(is_slot_only.then_some(file_path));
+
     // 6. Render the typed AST to HTML through `PipelineHooks`. This is THE
     //    production HTML emission — `transform_events` no longer runs for
     //    `process_markdown_file`.

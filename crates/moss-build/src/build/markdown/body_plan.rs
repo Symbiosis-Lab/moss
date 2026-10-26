@@ -111,6 +111,8 @@ pub enum BodySegment {
 pub struct SubscribeEmission {
     pub args: SubscribeShortcode,
     pub html: String,
+    /// The id of the text that names the form's email input, when there is one.
+    pub labelled_by: Option<String>,
 }
 
 /// A `:::grid` block as both the HTML that was emitted and the typed cells it
@@ -567,6 +569,7 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
     let mut first_text_segments: Option<usize> = None;
     let mut after_first_text_segments: Option<usize> = None;
     let mut fnotes = moss_core::ast::footnotes::FootnoteCtx::for_document(&doc.blocks);
+    let mut tagged_prompt = false;
 
     for (i, block) in doc.blocks.iter().enumerate() {
         if i == lede_end_block {
@@ -589,11 +592,27 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
                     grid_parts_with_heading_fallback(hooks, args, meta.source_line, &doc.blocks[..i]);
                 segments.push(BodySegment::Grid(emission(args, parts)));
             }
+            Block::Paragraph(_) if doc.subscribe_labels.contains_key(&(i + 1)) => {
+                let mut html = String::new();
+                moss_core::ast::render_block_with_meta(hooks, &mut html, block, &meta, &mut fnotes);
+                match html.strip_prefix("<p").filter(|rest| rest.starts_with(['>', ' '])) {
+                    Some(rest) => {
+                        buf.push_str(&format!("<p id=\"{}\"{rest}", doc.subscribe_labels[&(i + 1)]));
+                        tagged_prompt = true;
+                    }
+                    None => buf.push_str(&html),
+                }
+            }
             Block::Shortcode(Shortcode::Subscribe(args)) => {
                 flush(&mut buf, &mut segments);
                 let mut html = String::new();
                 moss_core::ast::render_block_with_meta(hooks, &mut html, block, &meta, &mut fnotes);
-                segments.push(BodySegment::Subscribe(SubscribeEmission { args: args.clone(), html }));
+                let above_is_paragraph = matches!(i.checked_sub(1).and_then(|p| doc.blocks.get(p)), Some(Block::Paragraph(_)));
+                let labelled_by = doc.subscribe_labels.get(&i).filter(|_| !above_is_paragraph || std::mem::take(&mut tagged_prompt)).cloned();
+                if let Some(id) = &labelled_by {
+                    html = crate::build::features::email::label_subscribe_input(&html, id);
+                }
+                segments.push(BodySegment::Subscribe(SubscribeEmission { args: args.clone(), html, labelled_by }));
             }
             _ => moss_core::ast::render_block_with_meta(hooks, &mut buf, block, &meta, &mut fnotes),
         }

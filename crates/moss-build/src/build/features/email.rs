@@ -195,6 +195,9 @@ pub fn stamp_inline_subscribe_scopes(
                 form.args.button.as_deref(),
                 seta_base,
             );
+            if let Some(id) = &form.labelled_by {
+                form.html = label_subscribe_input(&form.html, id);
+            }
             stamped = true;
         }
         if stamped {
@@ -396,6 +399,19 @@ fn subscribe_form_inner(
         error = c.error,
         envelope_svg = envelope_svg,
         check_svg = CHECK_SVG,
+    )
+}
+
+/// Name a subscribe form's email input from the element `prompt_id` (the words
+/// above the block) and from its own `aria-label`, so a screen reader says both
+/// ("Join the weekly letter. Email address"). Applied to the form's HTML so a
+/// scope re-render can apply it again.
+pub fn label_subscribe_input(form_html: &str, prompt_id: &str) -> String {
+    let id = html_escape(prompt_id);
+    form_html.replacen(
+        r#"<input type="email" name="email""#,
+        &format!(r#"<input type="email" id="{id}-field" aria-labelledby="{id} {id}-field" name="email""#),
+        1,
     )
 }
 

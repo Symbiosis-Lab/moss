@@ -709,3 +709,19 @@ fn plan_lede_segments_split_the_body_without_cutting_an_element() {
     // `html_prefix_is_balanced` byte-walker tried to check by scanning.
     assert_eq!(lead.matches('<').count(), lead.matches('>').count());
 }
+
+#[test]
+fn a_prompt_above_a_subscribe_form_changes_only_the_id_and_aria_labelledby() {
+    let hooks = DefaultHooks::new();
+    let mut doc = parse("Join the weekly letter.\n\n:::subscribe\n:::\n\n## Contact\n\n:::subscribe\n:::\n");
+    // Only the paragraph labels its form; the heading does not.
+    let flat = moss_core::ast::render_document(&doc, &hooks);
+    doc.label_subscribe_prompts(None);
+    let labelled = render_segmented(&doc, &hooks).to_html();
+    assert_ne!(labelled, flat);
+
+    let stripped = labelled
+        .replace(r#" id="moss-subscribe-prompt-0""#, "")
+        .replace(r#" id="moss-subscribe-prompt-0-field" aria-labelledby="moss-subscribe-prompt-0 moss-subscribe-prompt-0-field""#, "");
+    assert_eq!(stripped, flat);
+}
