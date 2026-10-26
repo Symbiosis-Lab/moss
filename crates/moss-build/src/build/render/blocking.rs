@@ -2697,15 +2697,14 @@ pub fn generate_blocking_content_for_build(
     if site_config.link_preview {
         use std::collections::BTreeMap;
         let mut previews: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+        let mut excerpts = crate::build::feeds::previews::PreviewCache::begin(Path::new(source_path));
         for doc in &documents {
             if !doc.is_public_page() {
                 continue;
             }
-            let preview_text = crate::build::page::meta::extract_preview(
-                &doc.content,
-                PREVIEW_MAX_CHARS,
-                site_config.math,
-            );
+            let preview_text = excerpts.excerpt(&doc.url_path, &doc.content, site_config.math, |content| {
+                crate::build::page::meta::extract_preview(content, PREVIEW_MAX_CHARS, site_config.math)
+            });
             // Hover-preview tooltips are chrome; use the plain-text label.
             let Some(entry) = crate::build::page::meta::preview_entry(&doc.label, doc.description.as_deref(), &preview_text)
             else {
@@ -2716,6 +2715,7 @@ pub fn generate_blocking_content_for_build(
             let pretty_url = format!("/{}", pretty.trim_start_matches('/')); // allow:served-path-url-construct (pretty URL key for previews.json index, derived from permalink)
             previews.insert(pretty_url, serde_json::Value::Object(entry));
         }
+        excerpts.finish();
         // Site 14c (Pattern A): emit _moss/previews.json (conditional on serialization success).
         if let Ok(json) = serde_json::to_string(&previews) {
             if let Err(e) = BuildContext::for_render(output_dir, pending)

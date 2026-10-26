@@ -7926,3 +7926,43 @@ async fn a_build_whose_published_page_links_to_a_draft_refuses_the_publish() {
     run_pipeline(config(crate::build::ship::next_promotion_epoch())).await.expect("build completes");
     assert!(crate::deploy::refuse_publish(folder).is_ok(), "a draft nobody links to publishes fine");
 }
+
+fn build_with_preview_cache(dir: &std::path::Path) -> String {
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true };
+    build_test_full_with_gates(dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates)
+        .expect("build");
+    fs::read_to_string(dir.join(".moss/build.nosync/staging/_moss/previews.json")).expect("previews.json")
+}
+
+#[test]
+fn previews_json_recomputes_only_changed_pages_and_drops_removed_ones() {
+    let _cache_store = crate::build::parse_cache::store_lock_for_tests();
+    let (dir, _cleanup) = create_test_dir();
+    let page = |title: &str, body: &str| format!("---\ntitle: {title}\n---\n\n{body}\n");
+    fs::write(dir.join("a.md"), page("Alpha", "Alpha opening paragraph.")).unwrap();
+    fs::write(dir.join("b.md"), page("Beta", "Beta opening paragraph.")).unwrap();
+    fs::write(dir.join("c.md"), page("Gamma", "Gamma opening paragraph.")).unwrap();
+    let computed = crate::build::feeds::previews::last_computed;
+
+    let cold = build_with_preview_cache(&dir);
+    assert!(computed() >= 3, "a cold build computes every public page");
+    for text in ["Alpha opening", "Beta opening", "Gamma opening"] {
+        assert!(cold.contains(text), "{text} missing from {cold}");
+    }
+
+    assert_eq!(build_with_preview_cache(&dir), cold, "an unchanged site yields identical bytes");
+    assert_eq!(computed(), 0, "an unchanged site replays every excerpt");
+
+    fs::write(dir.join("b.md"), page("Beta", "Beta rewritten paragraph.")).unwrap();
+    let edited = build_with_preview_cache(&dir);
+    assert_eq!(computed(), 1, "one edited page recomputes one excerpt");
+    assert!(edited.contains("Beta rewritten") && !edited.contains("Beta opening"));
+    assert!(edited.contains("Alpha opening") && edited.contains("Gamma opening"));
+
+    fs::remove_file(dir.join("c.md")).unwrap();
+    let removed = build_with_preview_cache(&dir);
+    assert_eq!(computed(), 0, "removing a page recomputes nothing");
+    assert!(!removed.contains("Gamma"), "a removed page leaves previews.json: {removed}");
+    assert!(removed.contains("Alpha opening") && removed.contains("Beta rewritten"));
+    crate::build::parse_cache::reset_for_tests();
+}
