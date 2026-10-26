@@ -2181,7 +2181,7 @@ fn place_kind(explorer: Option<bool>) -> TermKind {
         title: "Places".to_string(),
         titles: Vec::new(), counts: Vec::new(), is_place: true,
         parents: Default::default(),
-        explorer, line: None,
+        explorer, line: None, slugs: Default::default(),
     }
 }
 

@@ -572,7 +572,7 @@ fn an_edit_moves_only_the_term_group_of_its_own_edition() {
         titles: Vec::new(), counts: Vec::new(), is_place: false,
         parents: Default::default(),
         explorer: None,
-        line: None,
+        line: None, slugs: Default::default(),
     }];
     crate::build::terms::derive_terms(&mut docs, kinds);
     let (en, de) = (key("authors/ada"), key("de/authors/ada"));

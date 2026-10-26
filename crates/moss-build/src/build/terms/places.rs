@@ -26,9 +26,10 @@ pub fn attach_parents(kinds: &mut [TermKind], gaz: &crate::vault::places::Gazett
         if !kind.is_place {
             continue;
         }
+        kind.slugs = gaz.slug_overrides().clone();
         for (name, entry) in gaz.iter() {
             let Some(parent) = &entry.parent else { continue };
-            let key = term_folder_key(&kind.key, name);
+            let key = kind.key_in("", name);
             kind.parents.insert(key, parent.clone());
         }
     }
@@ -104,7 +105,7 @@ fn break_cycles(kind: &mut TermKind) {
         let mut current = start.clone();
         for _ in 0..MAX_HOPS {
             let Some(parent_display) = kind.parents.get(&current) else { break };
-            let parent_key = term_folder_key(&kind.key, parent_display);
+            let parent_key = kind.key_in("", parent_display);
             if seen.contains(&parent_key) {
                 let name = current.rsplit_once('/').map_or(current.as_str(), |(_, n)| n);
                 crate::build::cli_output::log_warn_problem!(
@@ -125,7 +126,7 @@ mod tests {
     use crate::vault::places::Gazetteer;
 
     fn place_kind(key: &str) -> TermKind {
-        TermKind { cards: false, key: key.to_string(), fields: vec!["location".to_string()], title: "Places".to_string(), titles: Vec::new(), counts: Vec::new(), is_place: true, parents: Default::default(), explorer: None, line: None }
+        TermKind { cards: false, key: key.to_string(), fields: vec!["location".to_string()], title: "Places".to_string(), titles: Vec::new(), counts: Vec::new(), is_place: true, parents: Default::default(), explorer: None, line: None, slugs: Default::default() }
     }
 
     fn gaz(toml_str: &str) -> Gazetteer {
@@ -184,7 +185,7 @@ mod tests {
             fields: vec!["author".to_string()],
             title: "People".to_string(),
             titles: Vec::new(), counts: Vec::new(), is_place: false,
-            parents: Default::default(), explorer: None, line: None,
+            parents: Default::default(), explorer: None, line: None, slugs: Default::default(),
         }];
         let g = gaz("[\"Kyoto\"]\nlat = 35.0\nlng = 135.0\nprecision = \"city\"\nparent = \"Japan\"\n");
         attach_parents(&mut kinds, &g);

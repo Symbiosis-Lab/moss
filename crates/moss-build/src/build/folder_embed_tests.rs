@@ -2806,7 +2806,7 @@ fn pseudo_folder_place_embed_lists_its_derived_members() {
         fields: vec!["location".to_string()],
         title: "Places".to_string(),
         titles: Vec::new(), counts: Vec::new(), is_place: true,
-        parents: Default::default(), explorer: None, line: None,
+        parents: Default::default(), explorer: None, line: None, slugs: Default::default(),
     };
     let mut docs = vec![
         make_doc("travel/kyoto-temple.html", "Kyoto Temple", Some("2025-01-01")),
@@ -2837,7 +2837,7 @@ fn place_map_embed_emits_svg_with_placement_and_caption() {
         fields: vec!["location".to_string()],
         title: "Places".to_string(),
         titles: Vec::new(), counts: Vec::new(), is_place: true,
-        parents: Default::default(), explorer: None, line: None,
+        parents: Default::default(), explorer: None, line: None, slugs: Default::default(),
     };
     let mut docs = vec![make_doc("travel/kyoto.html", "Kyoto", Some("2025-01-01"))];
     docs[0].location = vec!["Kyoto".to_string()];
@@ -2877,7 +2877,7 @@ fn pseudo_folder_rollup_ancestor_embed_lists_its_descendants() {
         title: "Places".to_string(),
         titles: Vec::new(), counts: Vec::new(), is_place: true,
         parents: [("places/kyoto".to_string(), "Japan".to_string())].into_iter().collect(),
-        explorer: None, line: None,
+        explorer: None, line: None, slugs: Default::default(),
     };
     let mut docs = vec![make_doc("travel/kyoto-temple.html", "Kyoto Temple", Some("2025-01-01"))];
     docs[0].location = vec!["Kyoto".to_string()];

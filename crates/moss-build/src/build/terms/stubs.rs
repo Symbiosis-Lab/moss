@@ -125,3 +125,21 @@ pub fn edition_move_stubs(index: &TermIndex) -> Vec<(String, String)> {
     }
     stubs
 }
+
+/// A place given a `slug` in `.moss/places.toml` leaves the address its name
+/// gave it (`/places/上海/`), which is already in links and search results,
+/// so that address forwards to the new one. Recomputed every build, like the
+/// others.
+pub fn place_slug_stubs(index: &TermIndex) -> Vec<(String, String)> {
+    let mut stubs = Vec::new();
+    for (key, site) in &index.sites {
+        let Some(term) = TermKey::parse(key) else { continue };
+        let Some(kind) = index.kinds.iter().find(|k| k.key == term.ns) else { continue };
+        let derived = moss_core::terms::term_slug(&site.display);
+        if derived == term.slug || kind.slugs.get(&derived).map(String::as_str) != Some(term.slug) {
+            continue;
+        }
+        stubs.push((format!("{}/{derived}/", term.ns), index.site_target(key, site))); // allow:served-path-url-construct (the address a place's name gave it, the redirect source)
+    }
+    stubs
+}

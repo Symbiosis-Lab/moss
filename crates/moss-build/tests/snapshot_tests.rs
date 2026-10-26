@@ -799,8 +799,8 @@ fn place_listing_maps_mark_their_member_places() {
             .map(|(index, _)| layer[index + 17..].split('"').next().unwrap().to_string())
             .collect()
     };
-    assert_eq!(markers("places/index.html"), ["places/nara", "places/kyoto"]);
-    assert_eq!(markers("places/japan/index.html"), ["places/kyoto"]);
+    assert_eq!(markers("places/index.html"), ["places/nara", "places/kyoto-city"]);
+    assert_eq!(markers("places/japan/index.html"), ["places/kyoto-city"]);
 }
 
 /// `input/places/index.md` is a real page at the "places" namespace root —

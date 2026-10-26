@@ -70,6 +70,10 @@ pub struct TermKind {
     /// place line; `None` means the default, on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<bool>,
+    /// Explicit slugs from `.moss/places.toml`, keyed by the slug the place's
+    /// name derives. Only a place-typed kind is ever filled, by `attach_parents`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub slugs: std::collections::BTreeMap<String, String>,
     /// `[terms.<key>] cards = true`: every listing card for a page with values
     /// in this kind's fields shows those names in its meta. Read by
     /// `build::terms::roles::set_card_credits`; `false` for a value that is
@@ -129,6 +133,7 @@ impl TermKind {
             parents: Default::default(),
             explorer: None,
             line: None,
+            slugs: Default::default(),
             cards: false,
         }
     }
@@ -299,7 +304,7 @@ pub fn term_kinds(cfg: &crate::config::ConfigFile, site_lang: &str) -> Vec<TermK
                     false
                 }
             };
-            TermKind { key: kind.key, fields, title, titles: kind.titles, counts: kind.counts, is_place, parents: Default::default(), explorer, line, cards }
+            TermKind { key: kind.key, fields, title, titles: kind.titles, counts: kind.counts, is_place, parents: Default::default(), explorer, line, slugs: Default::default(), cards }
         })
         .collect()
 }

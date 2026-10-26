@@ -37,6 +37,11 @@ pub struct PlaceRecord {
     /// `build::terms::places::attach_parents`, never here; this struct is a
     /// plain parse of one table.
     pub parent: Option<String>,
+    /// An explicit URL segment for this place's page, replacing the one its
+    /// name would give (`slug = "shanghai"` for `上海`). Already validated by
+    /// `parse_gazetteer`: never a slug that is malformed or shared with
+    /// another place.
+    pub slug: Option<String>,
 }
 
 /// The parsed, validated `.moss/places.toml`. Missing the whole file is not
@@ -45,12 +50,23 @@ pub struct PlaceRecord {
 /// individual bad entry is dropped or coarsened with a diagnostic, never a
 /// crash.
 #[derive(Debug, Clone, Default)]
-pub struct Gazetteer(std::collections::BTreeMap<String, PlaceRecord>);
+pub struct Gazetteer {
+    places: std::collections::BTreeMap<String, PlaceRecord>,
+    slugs: std::collections::BTreeMap<String, String>,
+}
+
+/// The key of the place `name` in `ns`, honouring an explicit slug from
+/// `slugs` (keyed by the slug the name derives, so case variants of one name
+/// share it).
+pub fn slugged_key(slugs: &std::collections::BTreeMap<String, String>, ns: &str, name: &str) -> String {
+    let derived = moss_core::terms::term_slug(name);
+    format!("{ns}/{}", slugs.get(&derived).unwrap_or(&derived))
+}
 
 impl Gazetteer {
     /// The record for a place's exact display name, if the gazetteer has one.
     pub fn get(&self, name: &str) -> Option<&PlaceRecord> {
-        self.0.get(name)
+        self.places.get(name)
     }
 
     /// The entry for `name` as a page may spell it: compared by
@@ -58,12 +74,25 @@ impl Gazetteer {
     /// Returns the entry's display name beside its record.
     pub fn find(&self, name: &str) -> Option<(&String, &PlaceRecord)> {
         let folded = moss_core::terms::term_fold(name);
-        self.0.iter().find(|(display, _)| moss_core::terms::term_fold(display) == folded)
+        self.places.iter().find(|(display, _)| moss_core::terms::term_fold(display) == folded)
+    }
+
+    /// The pseudo-folder key of the place `name` in `ns`: `places/shanghai`
+    /// for a row with `slug = "shanghai"`, else the key its name gives. The
+    /// one rule every link, roll-up and map id goes through, so they agree.
+    pub fn term_key(&self, ns: &str, name: &str) -> String {
+        slugged_key(&self.slugs, ns, name)
+    }
+
+    /// Explicit slugs by the slug their place's name derives, the form
+    /// `slugged_key` looks them up in.
+    pub fn slug_overrides(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.slugs
     }
 
     /// Every entry, in name order.
     pub fn iter(&self) -> impl Iterator<Item = (&String, &PlaceRecord)> {
-        self.0.iter()
+        self.places.iter()
     }
 }
 
@@ -118,9 +147,73 @@ pub fn parse_gazetteer(table: &toml::value::Table) -> Gazetteer {
             None => Precision::Country,
         };
         let parent = entry.get("parent").and_then(|v| v.as_str()).map(str::to_string);
-        out.insert(name.clone(), PlaceRecord { coords, precision, parent });
+        let slug = entry.get("slug").and_then(|v| v.as_str()).map(str::to_string);
+        out.insert(name.clone(), PlaceRecord { coords, precision, parent, slug });
     }
-    Gazetteer(out)
+    let slugs = check_slugs(&mut out);
+    Gazetteer { places: out, slugs }
+}
+
+/// Whether `slug` is one URL segment of lowercase ASCII letters, digits and
+/// single hyphens, not starting or ending with one.
+fn is_valid_slug(slug: &str) -> bool {
+    !slug.is_empty()
+        && !slug.starts_with('-')
+        && !slug.ends_with('-')
+        && !slug.contains("--")
+        && slug.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// Drop every explicit slug that cannot be served, each with a build problem
+/// that names the row, and return the survivors keyed by the slug their place's
+/// name derives. A malformed slug, and a slug that is another place's address
+/// (an explicit slug, or the one its name derives), would otherwise send two
+/// places to one page. Both rows of a clash lose their slug, so the outcome
+/// does not depend on row order.
+fn check_slugs(rows: &mut std::collections::BTreeMap<String, PlaceRecord>) -> std::collections::BTreeMap<String, String> {
+    for (name, record) in rows.iter_mut() {
+        if let Some(bad) = record.slug.as_deref().filter(|s| !is_valid_slug(s)) {
+            crate::build::cli_output::log_warn_problem!(
+                "'.moss/places.toml': place '{name}' has an invalid slug '{bad}' (use lowercase letters, digits and hyphens, like 'new-york'); using the address its name gives"
+            );
+            record.slug = None;
+        }
+    }
+    // Who answers to each address: every row (by its explicit slug, else its
+    // derived one) and every parent named only by a `parent` link.
+    let mut holders: std::collections::BTreeMap<String, Vec<(String, bool)>> = Default::default();
+    for (name, record) in rows.iter() {
+        let derived = moss_core::terms::term_slug(name);
+        holders.entry(record.slug.clone().unwrap_or(derived)).or_default().push((name.clone(), record.slug.is_some()));
+    }
+    for parent in rows.values().filter_map(|r| r.parent.as_deref()) {
+        if !rows.contains_key(parent) {
+            holders.entry(moss_core::terms::term_slug(parent)).or_default().push((parent.to_string(), false));
+        }
+    }
+    for (address, who) in &holders {
+        // Case variants of one name derive one address on purpose; only a
+        // clash that involves an explicit slug is a mistake.
+        let distinct: std::collections::BTreeSet<_> = who.iter().map(|(n, _)| moss_core::terms::term_slug(n)).collect();
+        if !who.iter().any(|(_, explicit)| *explicit) || distinct.len() < 2 {
+            continue;
+        }
+        let names: Vec<String> = who.iter().map(|(n, _)| format!("'{n}'")).collect();
+        crate::build::cli_output::log_warn_problem!(
+            "'.moss/places.toml': places {} would all be served at the address '{address}'; their slugs are ignored, so each keeps the address its name gives",
+            names.join(" and ")
+        );
+        for (n, explicit) in who {
+            if *explicit {
+                if let Some(r) = rows.get_mut(n) {
+                    r.slug = None;
+                }
+            }
+        }
+    }
+    rows.iter()
+        .filter_map(|(name, r)| Some((moss_core::terms::term_slug(name), r.slug.clone()?)))
+        .collect()
 }
 
 /// TOML stores a whole number written without a decimal point (`lat = 35`) as
@@ -199,6 +292,52 @@ mod tests {
         for allowed in ["exact", "city", "region", "country"] {
             assert!(msg.contains(allowed), "names allowed value '{allowed}': {msg}");
         }
+    }
+
+    fn slugged(toml_str: &str) -> Gazetteer {
+        let _ = crate::build::cli_output::take_cli_problems();
+        parse_gazetteer(&table(toml_str))
+    }
+
+    #[test]
+    fn a_slug_replaces_the_address_the_name_gives_for_that_place_and_its_parent_links() {
+        let gaz = slugged("[\"上海\"]\nslug = \"shanghai\"\n[\"徐汇\"]\nparent = \"上海\"\n");
+        assert_eq!(gaz.get("上海").unwrap().slug.as_deref(), Some("shanghai"));
+        assert_eq!(gaz.term_key("places", "上海"), "places/shanghai");
+        assert_eq!(gaz.term_key("places", "徐汇"), "places/徐汇");
+        assert_eq!(crate::build::cli_output::take_cli_problems(), 0);
+    }
+
+    #[test]
+    fn a_malformed_slug_is_a_problem_and_the_place_keeps_its_own_address() {
+        for bad in ["Shanghai", "上海", "a/b", "a b", "-a", "a--b", ""] {
+            let gaz = slugged(&format!("[\"上海\"]\nslug = \"{bad}\"\n"));
+            assert_eq!(crate::build::cli_output::take_cli_problems(), 1, "{bad:?}");
+            assert_eq!(gaz.term_key("places", "上海"), "places/上海", "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn two_places_with_one_slug_are_a_problem_naming_both_and_neither_gets_it() {
+        let gaz = slugged("[\"上海\"]\nslug = \"sh\"\n[\"Shenhu\"]\nslug = \"sh\"\n");
+        assert_eq!(crate::build::cli_output::take_cli_problems(), 1);
+        assert_eq!(gaz.term_key("places", "上海"), "places/上海");
+        assert_eq!(gaz.term_key("places", "Shenhu"), "places/shenhu");
+    }
+
+    #[test]
+    fn a_slug_equal_to_another_places_derived_address_is_a_problem() {
+        let gaz = slugged("[\"上海\"]\nslug = \"kyoto\"\n[\"Kyoto\"]\nlat = 1\nlng = 2\n");
+        assert_eq!(crate::build::cli_output::take_cli_problems(), 1);
+        assert_eq!(gaz.term_key("places", "上海"), "places/上海");
+        assert_eq!(gaz.term_key("places", "Kyoto"), "places/kyoto");
+    }
+
+    #[test]
+    fn a_slug_equal_to_a_parent_named_only_by_a_link_is_a_problem() {
+        let gaz = slugged("[\"上海\"]\nslug = \"china\"\n[\"徐汇\"]\nparent = \"China\"\n");
+        assert_eq!(crate::build::cli_output::take_cli_problems(), 1);
+        assert_eq!(gaz.term_key("places", "上海"), "places/上海");
     }
 
     #[test]
