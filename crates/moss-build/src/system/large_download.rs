@@ -188,9 +188,15 @@ fn promote_if_complete(
     label: &str,
 ) -> Result<bool, String> {
     if !cached_file_is_valid(part, expected_sha256) {
-        return Ok(false);
+        // A peer fetching the same artifact may have promoted it already.
+        return Ok(cached_file_is_valid(dest, expected_sha256));
     }
-    std::fs::rename(part, dest).map_err(|e| format!("finalize {}: {e}", dest.display()))?;
+    if let Err(e) = std::fs::rename(part, dest) {
+        // Losing the rename to a peer is success: the artifact is in place.
+        if !cached_file_is_valid(dest, expected_sha256) {
+            return Err(format!("finalize {}: {e}", dest.display()));
+        }
+    }
     log::info!("{label} download complete + sha256 verified");
     Ok(true)
 }
@@ -636,5 +642,16 @@ mod tests {
             .expect("cache hit must succeed offline");
 
         assert_eq!(seen.get(), (3, Some(3)), "cache hit reports 100% progress");
+    }
+
+    #[test]
+    fn an_artifact_a_peer_already_promoted_counts_as_done() {
+        let dir = TempDir::new().unwrap();
+        let dest = dir.path().join("a.tar.gz");
+        std::fs::write(&dest, b"abc").unwrap();
+        let sha = file_sha256(&dest).unwrap();
+        let part = part_path(&dest);
+        assert!(promote_if_complete(&part, &dest, &sha, "[t]").unwrap());
+        assert!(!promote_if_complete(&part, &dest, &"0".repeat(64), "[t]").unwrap());
     }
 }

@@ -106,6 +106,38 @@ impl fmt::Display for StackExecError {
 
 impl std::error::Error for StackExecError {}
 
+/// Exclusive hold on one stack's install directory, taken around `obtain` and
+/// `stage` so two installers of the same stack, in threads or in processes,
+/// run one after the other: concurrent ones share one `.part` and one staging
+/// path. The caller re-checks whether the stack is installed once it holds
+/// this, so the waiter uses what the winner made. Released on drop, and by the
+/// OS if the holder dies.
+#[derive(Debug)]
+pub struct InstallLock(std::fs::File);
+
+impl Drop for InstallLock {
+    fn drop(&mut self) {
+        let _ = fs2::FileExt::unlock(&self.0);
+    }
+}
+
+/// Wait for and take the install lock for the stack rooted at `root`.
+pub fn lock_install(root: &Path) -> Result<InstallLock, StackExecError> {
+    std::fs::create_dir_all(root)
+        .map_err(|e| StackExecError::Obtain(format!("create {}: {e}", root.display())))?;
+    let path = root.join(".install.lock");
+    // allow:raw_write the lock file is machine state under the stacks root, not build output
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|e| StackExecError::Obtain(format!("open {}: {e}", path.display())))?;
+    fs2::FileExt::lock_exclusive(&file)
+        .map_err(|e| StackExecError::Obtain(format!("lock {}: {e}", path.display())))?;
+    Ok(InstallLock(file))
+}
+
 /// Best-effort removal of whatever is at `path` — a directory (the ordinary
 /// archive-format case) or a plain file (the `raw`-format case, where the
 /// scratch path is the binary itself).
