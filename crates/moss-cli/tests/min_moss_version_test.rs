@@ -69,3 +69,14 @@ fn a_floor_equal_to_this_builds_release_number_is_met() {
     assert!(strict.status.success(), "stderr:\n{}", stderr(&strict));
     assert!(!stderr(&strict).contains("needs moss"), "stderr:\n{}", stderr(&strict));
 }
+
+/// A site an earlier development build already stamped 7 keeps building and
+/// publishing here.
+#[test]
+fn a_site_stamped_seven_still_builds_and_deploys() {
+    let site = site("schema_version = 7\n", None);
+    let strict = moss(site.path(), &["build", "--no-plugins", "--strict"]);
+    assert!(strict.status.success(), "stderr:\n{}", stderr(&strict));
+    let deploy = moss(site.path(), &["deploy", "--dry-run"]);
+    assert!(!stderr(&deploy).contains("newer than"), "stderr:\n{}", stderr(&deploy));
+}

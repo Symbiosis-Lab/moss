@@ -10,6 +10,7 @@ Each proposal is a folder here: a `README.md` with the design, and its screens b
 | [Facts, cascades and groups: design without template code](fields-pointers-views/README.md) | In progress |
 | [Leave specific subscribers out of one newsletter send](subscriber-exclusion/README.md) | In progress |
 | [Offer missing tools with a Download button](tool-download-offer/README.md) | In progress |
+| [A site's config version is written on purpose](config-written-on-purpose/README.md) | In progress |
 | [Detail layers: a historical map or today's streets under a site's places](map-detail-layers/README.md) | In progress |
 
 ## Status

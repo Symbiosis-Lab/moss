@@ -66,10 +66,9 @@ fn default_deployer() -> &'static str {
 /// file does not exist.
 ///
 /// Since the M6a move this reader never writes: the on-disk migration (backup,
-/// save, gitignore rewrite) is the app's job, run once per build/session via
-/// `HostStore::run_vault_migrations` (readers cross, writers stay).
-/// Migrating the parsed value here keeps every read correct in the window
-/// before that runner has persisted.
+/// save, gitignore rewrite) is the app's `persist_migration`, run only when an
+/// author edits the file (readers cross, writers stay). Migrating the parsed
+/// value here keeps every read correct without it.
 fn read_and_migrate_raw(project_path: &str) -> Result<Option<toml::Table>, String> {
     let config_path = std::path::Path::new(project_path).join(".moss").join("config.toml");
     let Some(original) = crate::build::site_config::read_managed_toml(&config_path)? else {

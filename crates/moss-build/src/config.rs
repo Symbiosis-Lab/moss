@@ -81,7 +81,8 @@ impl ConfigFile {
     /// funnel closes that class for every host, current and future. The
     /// transform is idempotent, so the app's persisted-at-entry file passes
     /// through unchanged; persistence itself stays a host concern (the app's
-    /// `HostStore::run_vault_migrations`) and no writer ships in this crate.
+    /// `persist_migration`, run only when an author edits the file) and no
+    /// writer of a migrated config ships in this crate.
     /// A transform error falls back to the raw value: a config moss cannot
     /// migrate still renders with the keys it can read, matching the app's
     /// "corrupt config renders with absent-key defaults" stance.

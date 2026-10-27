@@ -452,9 +452,8 @@ fn collect_native_slots_for_documents(
     site_lang: &str,
     site_comments: Option<bool>, // see generate_native_slots's own param doc
 ) -> crate::build::enhance::ResolvedSlots {
-    // The frontmatter-analytics migration runs at build entry
-    // (`HostStore::run_vault_migrations`), so this read already sees
-    // the migrated value.
+    // `get_services_config` falls back to the home page's `analytics:` front
+    // matter in memory.
     let services_config = crate::build::site_config::get_services_config(folder_path)
         .unwrap_or_default();
 

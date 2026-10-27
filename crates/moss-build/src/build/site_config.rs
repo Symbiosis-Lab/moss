@@ -195,13 +195,39 @@ pub fn ensure_config_current(project_path: &str) -> Result<(), String> {
 /// convert into a render-time panic.
 pub fn get_services_config(project_path: &str) -> Result<ServicesConfig, String> {
     let config = read_project_config(project_path)?;
-    match config.section(&["services"]) {
+    let mut services: ServicesConfig = match config.section(&["services"]) {
         Some(v) => v
             .clone()
             .try_into()
-            .map_err(|e| format!("Failed to parse [services]: {}", e)),
-        None => Ok(ServicesConfig::default()),
+            .map_err(|e| format!("Failed to parse [services]: {}", e))?,
+        None => ServicesConfig::default(),
+    };
+    // A script set only in the home page's front matter still counts, read in
+    // memory: reading a site never writes its config, and the next explicit
+    // edit of the analytics setting saves it.
+    if services.analytics.as_ref().and_then(|a| a.script.as_ref()).is_none() {
+        if let Some(script) = frontmatter_analytics(project_path) {
+            let analytics = services.analytics.get_or_insert_with(Default::default);
+            analytics.script = Some(script);
+            analytics.common.provider.get_or_insert_with(|| "goatcounter".to_string());
+        }
     }
+    Ok(services)
+}
+
+/// The `analytics:` script URL in the home page's front matter, if any. A
+/// cloud-evicted home page reads as none for this call only.
+fn frontmatter_analytics(project_path: &str) -> Option<String> {
+    let root = crate::vault::paths::VaultRoot::resolve(project_path);
+    let home = crate::build::quick_detect_homepage(&root)?;
+    let content = crate::build::cloud_readiness::read_input_if_present(&root.path().join(home))
+        .ok()
+        .flatten()?;
+    let value = moss_core::frontmatter::frontmatter_map(&content)
+        .get("analytics")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())?;
+    (!value.is_empty()).then_some(value)
 }
 
 /// Read `[site].rss_footer`. None = not set (caller uses its own default).
@@ -776,5 +802,41 @@ mod no_wait_read_tests {
             err.contains("schema_version") && err.contains("newer"),
             "got: {err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod frontmatter_analytics_tests {
+    use super::*;
+
+    fn site(config: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".moss")).unwrap();
+        std::fs::write(dir.path().join(".moss/config.toml"), config).unwrap();
+        std::fs::write(
+            dir.path().join("index.md"),
+            "---\ntitle: Home\nanalytics: \"https://example.goatcounter.com/count\"\n---\n\nHi\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    /// Ablated by deleting the fallback in `get_services_config`.
+    #[test]
+    fn a_script_only_in_the_home_page_front_matter_is_read_without_writing() {
+        let config = "schema_version = 6\n";
+        let dir = site(config);
+        let services = get_services_config(dir.path().to_str().unwrap()).unwrap();
+        let analytics = services.analytics.expect("front matter counts");
+        assert_eq!(analytics.script.as_deref(), Some("https://example.goatcounter.com/count"));
+        assert_eq!(analytics.common.provider.as_deref(), Some("goatcounter"));
+        assert_eq!(std::fs::read_to_string(dir.path().join(".moss/config.toml")).unwrap(), config);
+    }
+
+    #[test]
+    fn a_configured_script_wins_over_the_front_matter() {
+        let dir = site("[services.analytics]\nprovider = \"goatcounter\"\nscript = \"https://own.example/count\"\n");
+        let services = get_services_config(dir.path().to_str().unwrap()).unwrap();
+        assert_eq!(services.analytics.unwrap().script.as_deref(), Some("https://own.example/count"));
     }
 }

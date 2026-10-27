@@ -117,6 +117,23 @@ pub fn write_managed_toml(path: &Path, original: &str, root: &Table, supported: 
     if let Some(unmet) = floor.and_then(|floor| Unmet::needs(floor, NeededBy::Site)) {
         return Err(format!("Refusing to write {}. {unmet}", path.display()));
     }
+    // Naming a floor is the intentional act that locks out installs from before
+    // the key existed, so the save that carries it records version 7. A file
+    // still in an older shape is left to the migrate-and-save step, so shape
+    // and number move together.
+    let declared = crate::config::migrations::declared_version(root);
+    let stamp = crate::config::migrations::stamp_for_save(declared, root);
+    let mut stamped;
+    let root = if supported == crate::config::migrations::CURRENT_VERSION
+        && declared >= crate::config::migrations::BASE_VERSION
+        && stamp > declared
+    {
+        stamped = root.clone();
+        stamped.insert("schema_version".to_string(), Value::Integer(stamp as i64));
+        &stamped
+    } else {
+        root
+    };
     let out = crate::infra::toml_rewrite::apply_changes(original, root)?;
     if out == original {
         return Ok(());
@@ -288,5 +305,31 @@ mod tests {
         let err = save_site_str(tmp.path().to_str().unwrap(), "lang", "en").unwrap_err();
         assert!(err.contains("needs moss 99.0.0"), "got: {err}");
         assert_eq!(fs::read_to_string(moss.join("config.toml")).unwrap(), original);
+    }
+
+    fn saved_config(original: &str) -> String {
+        let tmp = tempfile::tempdir().unwrap();
+        let moss = tmp.path().join(".moss");
+        fs::create_dir_all(&moss).unwrap();
+        fs::write(moss.join("config.toml"), original).unwrap();
+        save_site_str(tmp.path().to_str().unwrap(), "lang", "en").unwrap();
+        fs::read_to_string(moss.join("config.toml")).unwrap()
+    }
+
+    /// Naming a floor is the act that locks out installs from before the key;
+    /// the save that carries it records version 7. Ablated by deleting the
+    /// raise in `write_managed_toml`.
+    #[test]
+    fn a_save_of_a_config_that_names_a_floor_records_version_seven() {
+        let after = saved_config("schema_version = 6\nmin_moss_version = \"0.1.0\"\n");
+        assert!(after.contains("schema_version = 7"), "got: {after}");
+    }
+
+    #[test]
+    fn a_save_of_a_config_with_no_floor_leaves_the_version_alone() {
+        let after = saved_config("schema_version = 6\n");
+        assert!(after.contains("schema_version = 6"), "got: {after}");
+        let sevens = saved_config("schema_version = 7\n");
+        assert!(sevens.contains("schema_version = 7"), "a stamped site is not lowered: {sevens}");
     }
 }

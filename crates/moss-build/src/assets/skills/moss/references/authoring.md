@@ -961,12 +961,13 @@ A `[[reference]]` written from a page inside a language tree prefers that reader
 A design that uses something a recent moss added (an image display word, a hero option) renders wrong in an older moss, and without an error: the older engine reads the new syntax as plain text. Say which moss the design needs with `min_moss_version` at the top of `.moss/config.toml`:
 
 ```toml
+schema_version = 7
 min_moss_version = "0.15.15"
 ```
 
-A moss older than that still builds and previews the site, with a notice that pages may look wrong, and refuses to publish it or change its settings until it is updated; `moss build --strict` fails on it. The moss app downloads the update and offers to restart into it. A plugin's own `min_moss_version` in its manifest counts the same way, and the notice names the plugin.
+The `schema_version = 7` line is what stops a moss from before this key (it would ignore the key) from publishing the site; a settings save in the app raises the line to 7 when it finds the key, and moss writes neither line on its own. A moss older than that still builds and previews the site, with a notice that pages may look wrong, and refuses to publish it or change its settings until it is updated; `moss build --strict` fails on it. The moss app downloads the update and offers to restart into it. A plugin's own `min_moss_version` in its manifest counts the same way, and the notice names the plugin.
 
-Set it when you hand a design over, to the release whose features the design uses, and check the number by building the site with that release and comparing its pages with yours. A development build such as `0.15.16-dev` meets a floor of its own release number, `0.15.16`. moss never writes or raises this key; `schema_version` beside it is moss's own and is not for editing.
+Set it when you hand a design over, to the release whose features the design uses, and check the number by building the site with that release and comparing its pages with yours. A development build such as `0.15.16-dev` meets a floor of its own release number, `0.15.16`. moss never writes or raises this key. `schema_version` beside it is otherwise moss's own and not for editing; the one time you type it is the `7` above.
 
 ## Live vocabulary: moss describe
 

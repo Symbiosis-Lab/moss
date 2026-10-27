@@ -23,6 +23,21 @@ use std::fmt;
 
 pub const CURRENT_VERSION: u32 = 7;
 
+/// The last version that changed what a config looks like. A save stamps this
+/// and no higher unless the file names a `min_moss_version`: version 7 means
+/// "a moss from before that key must refuse this site", and nothing else, so it
+/// is written by the act of naming a floor and never as a side effect of a
+/// moss opening the site.
+pub const BASE_VERSION: u32 = 6;
+
+/// The version a save of `raw` records, given the version it `declared` on
+/// disk. Never lowers a number, and never goes past [`BASE_VERSION`] for a file
+/// with no `min_moss_version`.
+pub fn stamp_for_save(declared: u32, raw: &toml::Table) -> u32 {
+    let wanted = if raw.contains_key("min_moss_version") { CURRENT_VERSION } else { BASE_VERSION };
+    declared.max(wanted)
+}
+
 /// Current schema version for `.moss/state.toml`'s `[deployment]` block — a
 /// separate version space from [`CURRENT_VERSION`] above, because the two
 /// files are owned and versioned independently (`config.toml` is
@@ -71,8 +86,10 @@ const _: () = {
     assert!(MIGRATIONS.len() == CURRENT_VERSION as usize);
 };
 
-/// Run all pending migrations on `raw`. Returns `Ok(true)` if any migration
-/// ran (caller should write a backup + save), `Ok(false)` if already current.
+/// Run all pending migrations on `raw`, in memory. Returns `Ok(true)` if any
+/// migration ran, `Ok(false)` if already current. A caller that saves the
+/// result chooses the number to record with [`stamp_for_save`]; the table
+/// itself reads as [`CURRENT_VERSION`].
 pub fn migrate_to_current(raw: &mut toml::Table) -> Result<bool, MigrationError> {
     let current = declared_version(raw);
     if current > CURRENT_VERSION {
@@ -376,8 +393,8 @@ fn v3_to_v4(raw: &mut toml::Table) -> Result<(), MigrationError> {
 ///
 /// The actual v4→v5 work is on `.moss/.gitignore`, which is not TOML, so it
 /// cannot be expressed as one of these `toml::Value` transforms. It is run
-/// from [`ensure_config_migrated`] instead; this stamp is what records that it
-/// has run. Keeping the array one-entry-per-version is what makes the
+/// from the app's `persist_migration` instead, which saves a config at the
+/// request of its author; the version it records is what says it has run. Keeping the array one-entry-per-version is what makes the
 /// compile-time `MIGRATIONS.len() == CURRENT_VERSION` guard mean something.
 /// `v2_to_v3` is the same shape for a different reason.
 fn v4_to_v5(_raw: &mut toml::Table) -> Result<(), MigrationError> {
@@ -389,17 +406,20 @@ fn v4_to_v5(_raw: &mut toml::Table) -> Result<(), MigrationError> {
 /// Same shape as [`v4_to_v5`], for the same reason: the work is on
 /// `.moss/.gitignore` — pruning the `state.toml` and `deploy/` lines moss no
 /// longer emits, so a vault's publish records can reach git and a fresh clone
-/// knows what is live. The stamp records that it has run.
+/// knows what is live. Run from `persist_migration` like [`v4_to_v5`]; the
+/// version it records says it has run.
 fn v5_to_v6(_raw: &mut toml::Table) -> Result<(), MigrationError> {
     Ok(())
 }
 
 /// v6 to v7: nothing changes in `config.toml`.
 ///
-/// The stamp is the point. A moss from before `min_moss_version` ignores that
-/// key like any unknown one, but it does refuse to publish a config stamped
-/// above its own schema, so the stamp is what stops an older install from
-/// publishing a site it may render wrong.
+/// Version 7 is what a file says when it names a `min_moss_version`. A moss
+/// from before that key ignores it like any unknown one, but it does refuse to
+/// publish a config stamped above its own schema, so the stamp stops an older
+/// install from publishing a site it may render wrong. Only a save of a file
+/// that names a floor records it ([`stamp_for_save`]); reading migrates in
+/// memory and records nothing.
 fn v6_to_v7(_raw: &mut toml::Table) -> Result<(), MigrationError> {
     Ok(())
 }
