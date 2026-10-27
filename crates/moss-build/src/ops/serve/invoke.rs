@@ -715,8 +715,7 @@ async fn arm_save_version(ctx: &Session, args: Value) -> ArmResult {
 /// contained, and the S1 re-spelling of the remaining `commands::*` arms
 /// cannot lose it. A caught panic becomes a 500 (`ArmError::Command`), the
 /// same envelope as a command's own `Err(String)`, instead of unwinding
-/// through hyper. Dev-profile containment only: release builds set
-/// `panic = "abort"` (workspace `Cargo.toml`), where no unwind exists.
+/// through hyper.
 async fn contain_panics(
     label: &'static str,
     arm: impl std::future::Future<Output = ArmResult>,

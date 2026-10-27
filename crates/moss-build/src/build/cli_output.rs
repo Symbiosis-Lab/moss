@@ -20,11 +20,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// This is for the CLI's *own* human-readable output (`start_cli_build`
 /// messages, the `crate::build::stdout_sink()` progress stream) — the direct
 /// `eprintln!` calls, distinct from the `tauri-plugin-log` sink that
-/// [`crate::diagnostics::stdout_target`] wraps. Same hazard, same fix: with
-/// `panic = "abort"`, an `eprintln!` that hits a closed stderr pipe
-/// (`moss build | head`, a disconnected harness) panics and aborts the whole
-/// app. Routing through `writeln!` and discarding the `Result` makes a closed
-/// pipe a no-op.
+/// [`crate::diagnostics::stdout_target`] wraps. Same hazard, same fix: an
+/// `eprintln!` that hits a closed stderr pipe (`moss build | head`, a
+/// disconnected harness) panics, which ends the build or, on a thread nothing
+/// catches on, the whole process. Routing through `writeln!` and discarding
+/// the `Result` makes a closed pipe a no-op.
 ///
 /// Split from [`eprint_status_line`] so the swallow is unit-testable against
 /// a writer that always fails.

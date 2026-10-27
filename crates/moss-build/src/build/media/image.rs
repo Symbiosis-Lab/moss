@@ -1587,10 +1587,8 @@ impl ImageRunContext {
 /// decoding at once OOM-SIGKILLs the process. Bounding by *megapixels in flight*
 /// instead means many small images pack in (full parallelism) while huge images
 /// self-throttle (a 34 MP image against a 64 MP budget runs ~alone). A permit is
-/// released on drop, so it's returned on a normal return or an early bail. (A
-/// *panic* mid-encode aborts the whole process under the release profile's
-/// `panic = "abort"` — there is no surviving budget to leak; the RAII drop only
-/// matters as an unwind safety net in dev/test builds.)
+/// released on drop, so it's returned on a normal return, an early bail, or a
+/// panic mid-encode that unwinds.
 struct MegapixelBudget {
     available: std::sync::Mutex<u64>,
     cv: std::sync::Condvar,
@@ -2069,9 +2067,8 @@ pub(crate) fn run_image_conversion(services: &BuildServices, ctx: &ImageRunConte
             // ONLY the actual converter reserves budget. A waiting duplicate
             // holds no budget while parked, so it can't starve its own converter
             // (which would deadlock the budget). do_work wraps the closure in
-            // catch_unwind (which only catches in dev/test — the release profile
-            // is panic=abort, so a panicking encode takes the process down rather
-            // than leaking a permit; either way the budget can't wedge).
+            // catch_unwind, and the permit drops as the panic unwinds, so a
+            // panicking encode cannot wedge the budget.
             let acquire_mp = item
                 .dimensions
                 .map(|(w, h)| {

@@ -197,13 +197,9 @@ static RENDER_POOL: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock
 /// `catch_unwind` replaces the old spawn-per-call `thread::Builder::join`'s
 /// implicit panic capture — same net, applied explicitly here since
 /// `ThreadPool::install` propagates a panic instead of returning it. Either
-/// way, this net only exists where a panic *unwinds*: moss release builds set
-/// `panic = "abort"`, under which a panic — like a stack overflow — takes the
-/// whole process down before any `catch_unwind` runs. `catch_unwind` and this
-/// function's `Ok(Err(RenderFailed))` fallback are therefore load-bearing
-/// only in debug and CI (`panic = "unwind"` there); in release, everything
-/// upstream of here (layer A's guard, in particular) is what actually keeps a
-/// panicking input from ever reaching the pool.
+/// way, this net catches panics only: a stack overflow aborts the process
+/// before any `catch_unwind` runs, so layer A's guard upstream is what keeps
+/// an overflowing input from ever reaching the pool.
 pub(super) fn render_on_big_stack(tex: &str) -> Result<RawRender, MathRefusal> {
     let owned = tex.to_string();
     RENDER_POOL.install(|| {

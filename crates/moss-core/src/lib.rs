@@ -57,8 +57,8 @@
 //! a panic. No `unsafe` (`#![forbid(unsafe_code)]`). Schema problems are reported
 //! out-of-band as [`validation`] diagnostics, not return values.
 //!
-//! moss ships this crate in a host built with `panic = "abort"` (release
-//! profile), so a panic on user input crashes the whole desktop app. The lint
+//! A panic on user input fails the user's action at best, and on the desktop
+//! app's main thread it aborts the app. The lint
 //! attributes below enforce the panic-free contract — `string_slice` plus
 //! `unwrap_used`/`expect_used`, all denied outside tests — each with a
 //! per-site escape-hatch rule.
