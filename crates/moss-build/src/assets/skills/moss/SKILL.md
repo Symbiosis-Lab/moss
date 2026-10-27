@@ -298,7 +298,9 @@ model (dark mode, quiet chrome, `@layer` rules), see
 - **Custom domain:** `moss domain link <folder> example.com` (`www.example.com`
   works too) links the bare domain and `www`, and for a domain registered elsewhere
   prints the DNS records to type at the registrar: leave MX and other TXT records
-  alone. `moss domain status <folder> example.com` reads live DNS and the
+  alone. Where the domain's DNS provider supports one-step setup it also prints a
+  link (`connect` in `--json`, else null): give it to the human, since only they can
+  sign in at their DNS provider to approve it. `moss domain status <folder> example.com` reads live DNS and the
   certificate and says what is left; it exits 0 when live, 3 while waiting, 4 if it
   failed. All three take `--json`. Only a registered domain of two labels is
   supported, not `blog.example.com`. `moss domain list <folder>` shows what is linked.

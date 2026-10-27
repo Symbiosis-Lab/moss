@@ -145,34 +145,48 @@ impl From<CdnWire> for DomainCdn {
     }
 }
 
+/// A one-step setup link at the owner's DNS provider.
+#[derive(Debug)]
+pub struct ConnectLink {
+    /// The provider's name for people, e.g. "Cloudflare".
+    pub provider: String,
+    pub url: String,
+}
+
+/// `{supported: true, provider, url}` or `{supported: false, reason}`.
+#[derive(Deserialize)]
+struct ConnectWire {
+    supported: bool,
+    provider: Option<String>,
+    url: Option<String>,
+}
+
 impl MossSetaClient {
     /// Read the CDN state of a domain the authenticated user owns.
     ///
     /// Calls `GET /api/domains/:host/cdn`. Purely an observation: it never
     /// creates a hostname, so it is safe to poll behind the status row.
     pub async fn get_domain_cdn(&self, host: &str) -> Result<DomainCdn, SetaError> {
-        let path = format!("/api/domains/{}/cdn", host);
-        let (url, auth_header) = self.sign_and_build(&path)?;
+        self.get_json::<CdnWire>(&format!("/api/domains/{}/cdn", host)).await.map(DomainCdn::from)
+    }
 
-        log::debug!(target: "seta", "GET {} host={}", url, host);
-
-        let response = self.client
-            .get(&url)
-            .header("Authorization", auth_header)
-            .send()
-            .await?;
-
-        log::debug!(target: "seta", "Response status: {}", response.status());
-
-        if !response.status().is_success() {
-            return Err(SetaError::from_failed_response(response).await);
-        }
-
-        response
-            .json::<CdnWire>()
-            .await
-            .map(DomainCdn::from)
-            .map_err(|e| SetaError::Parse(e.to_string()))
+    /// A link that sets the domain's records up at the owner's DNS provider in
+    /// one step (Domain Connect), or `None` where there is none.
+    ///
+    /// Calls `GET /api/domains/:host/connect`. The server builds and signs the
+    /// whole link from records it reads itself, because the provider checks the
+    /// signature and two of the values are minted per hostname; a client never
+    /// assembles one. Only an https link with no control characters is
+    /// accepted, since it is printed to a terminal.
+    pub async fn get_domain_connect(&self, host: &str) -> Result<Option<ConnectLink>, SetaError> {
+        let wire: ConnectWire = self.get_json(&format!("/api/domains/{}/connect", host)).await?;
+        let printable = |s: &str| !s.chars().any(char::is_control);
+        Ok(match (wire.supported, wire.provider, wire.url) {
+            (true, Some(provider), Some(url)) if url.starts_with("https://") && printable(&url) && printable(&provider) => {
+                Some(ConnectLink { provider, url })
+            }
+            _ => None,
+        })
     }
 
     /// Start — or restart — CDN activation for a domain the user brought from

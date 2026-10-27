@@ -86,6 +86,8 @@ const LINK: &str = "POST /api/sites/s1/domains";
 const OWNED: &str = "GET /api/domains/owned";
 const CDN_GET: &str = "GET /api/domains/example.com/cdn";
 const CDN_POST: &str = "POST /api/domains/example.com/cdn";
+const CONNECT: &str = "GET /api/domains/example.com/connect";
+const CONNECT_OK: &str = r#"{"supported":true,"provider":"Example DNS","url":"https://dns.example.net/v2/domainTemplates/providers/mosspub.com/services/website/apply?domain=example.com&key=_dck1&sig=abc"}"#;
 const LINKED: &str = r#"{"domain":"example.com","siteId":"s1"}"#;
 const OWNED_EXTERNAL: &str = r#"{"domains":[{"host":"example.com","source":"external","assigned_to":{"id":"s1"}}]}"#;
 const OWNED_MOSS: &str = r#"{"domains":[{"host":"example.com","source":"moss","assigned_to":{"id":"s1"}}]}"#;
@@ -203,6 +205,57 @@ async fn link_json_is_one_stable_object() {
     assert_eq!(v["records"][0], serde_json::json!({"type":"A","name":"@","value":IP}));
     assert_eq!(v["records"].as_array().unwrap().len(), 4);
     assert_eq!(v["next"], "moss domain status ~/Sites/blog example.com");
+}
+
+#[tokio::test]
+async fn a_supported_provider_gets_a_one_step_link_above_the_records() {
+    let mut routes = external_routes();
+    routes.push((CONNECT, 200, CONNECT_OK));
+    let (o, seen) = link(routes.clone(), "example.com", false).await;
+    assert_eq!(o.code, 0, "{}", o.err);
+    let link_at = o.out.find("https://dns.example.net/").expect(&o.out);
+    assert!(o.out.contains("Example DNS can add these records for you"), "{}", o.out);
+    assert!(link_at < o.out.find("_acme-challenge.www").unwrap(), "the link comes before the table:\n{}", o.out);
+    assert!(o.out.contains("owner-token-123"), "the table stays as the fallback:\n{}", o.out);
+    let order = seen.lock().unwrap().clone();
+    assert!(
+        order.iter().position(|k| k == CONNECT) > order.iter().position(|k| k == CDN_POST),
+        "the link is asked for once the hostname exists: {:?}", order
+    );
+
+    let (o, _) = link(routes, "example.com", true).await;
+    let v: serde_json::Value = serde_json::from_str(&o.out).unwrap();
+    assert_eq!(v["connect"]["provider"], "Example DNS");
+    assert!(v["connect"]["url"].as_str().unwrap().ends_with("&sig=abc"));
+}
+
+#[tokio::test]
+async fn without_a_usable_link_the_records_table_is_the_answer() {
+    for (code, body) in [
+        (200, r#"{"supported":false,"reason":"provider"}"#),
+        (200, r#"{"supported":true,"provider":"Example DNS","url":"http://dns.example.net/apply"}"#),
+        (200, r#"{"supported":true,"provider":"Example DNS","url":"https://dns.example.net/\u001b[2Japply"}"#),
+        (500, r#"{"error":"boom"}"#),
+    ] {
+        let mut routes = external_routes();
+        routes.push((CONNECT, code, body));
+        let (o, seen) = link(routes.clone(), "example.com", false).await;
+        assert_eq!(o.code, 0, "{}: {}", body, o.err);
+        assert!(o.out.contains("At the registrar where example.com is managed"), "{}:\n{}", body, o.out);
+        assert!(!o.out.contains("dns.example.net"), "{}:\n{}", body, o.out);
+        assert_eq!(count(&seen, CONNECT), 1);
+        let (o, _) = link(routes, "example.com", true).await;
+        let v: serde_json::Value = serde_json::from_str(&o.out).unwrap();
+        assert!(v["connect"].is_null(), "{}: {}", body, v);
+    }
+}
+
+#[tokio::test]
+async fn a_moss_bought_domain_never_asks_for_a_link() {
+    let routes = vec![(LINK, 201, LINKED), (OWNED, 200, OWNED_MOSS), (CDN_GET, 200, ACTIVE), (CONNECT, 200, CONNECT_OK)];
+    let (o, seen) = link(routes, "example.com", false).await;
+    assert_eq!(o.code, 0, "{}", o.err);
+    assert_eq!(count(&seen, CONNECT), 0);
 }
 
 #[tokio::test]
