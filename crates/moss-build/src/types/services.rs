@@ -306,6 +306,9 @@ pub struct BuildServices {
     /// site that fills `CacheKeyInputs`, and for the same reason: two callers
     /// that disagree would encode the same video two different ways.
     pub deploy_video_max_size_mb: Option<u32>,
+    /// `--no-plugins`: no plugin ran or was read for this build, so a text
+    /// embed having no text is not the author's missing plugin.
+    pub plugins_skipped: bool,
 }
 
 impl BuildServices {
@@ -363,6 +366,7 @@ impl BuildServices {
             page_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             // Filled by `run_pipeline`, which is the one place that knows.
             deploy_video_max_size_mb: None,
+            plugins_skipped: false,
         }
     }
 

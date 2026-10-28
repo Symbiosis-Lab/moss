@@ -659,6 +659,7 @@ pub fn generate_blocking_content_for_build(
         // on — is identical to the old serial loop. Debug sub-phase timers are
         // atomic sums of per-file CPU (they overlap in wall-clock now).
         let md_read_ns = AtomicU64::new(0);
+        let plugins_off_noted = std::sync::atomic::AtomicBool::new(false);
         let md_resolve_ns = AtomicU64::new(0);
         let md_process_ns = AtomicU64::new(0);
         let processed = AtomicUsize::new(0);
@@ -795,17 +796,32 @@ pub fn generate_blocking_content_for_build(
                     }
 
                     let t_process = std::time::Instant::now();
-                    // This phase only ever raises advisory diagnostics —
-                    // unresolved frontmatter wikilinks, broken transclusions.
+                    // Only a text embed no plugin derives counts as a problem; unresolved
+                    // frontmatter wikilinks and broken transclusions stay advisory.
                     // Physical-source evidence is derived below from the
                     // final raw bytes, not from this expanded representation.
                     for diag in &resolve_result.diagnostics {
-                        log::warn!(
-                            "Resolve: {} — ref '{}' in '{}'",
-                            diag.message,
-                            diag.reference,
-                            diag.source_path
-                        );
+                        if diag.kind == moss_core::resolve::DiagnosticKind::UnderivedEmbed {
+                            if site_config.plugins_skipped {
+                                if !plugins_off_noted.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                    log::warn!("Resolve: text embeds show no text because plugins are off for this build (--no-plugins)");
+                                }
+                            } else {
+                                log_warn_problem!(
+                                    "Resolve: {} — ref '{}' in '{}'",
+                                    diag.message,
+                                    diag.reference,
+                                    diag.source_path
+                                );
+                            }
+                        } else {
+                            log::warn!(
+                                "Resolve: {} — ref '{}' in '{}'",
+                                diag.message,
+                                diag.reference,
+                                diag.source_path
+                            );
+                        }
                     }
 
                     let resolved_content = &resolve_result.content_markdown;

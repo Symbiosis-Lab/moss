@@ -3051,6 +3051,7 @@ pub(crate) fn dispatch_image_conversions_at(
                 build_parent: svc.build_parent.clone(),
                 page_count: svc.page_count.clone(),
                 deploy_video_max_size_mb: svc.deploy_video_max_size_mb,
+                plugins_skipped: svc.plugins_skipped,
             });
             log::info!("Spawning background image conversion for {} images", total);
             let clock = clock.clone();

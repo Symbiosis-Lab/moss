@@ -376,3 +376,36 @@ fn expand_writes_the_derived_date_where_the_page_inferred_it() {
     let own = "---\ndate: 2019-01-01\ninferred: [date]\n---\n![[a.fake#text]]\n";
     assert!(expand(own).starts_with("---\ndate: 2019-01-01\n"), "{}", expand(own));
 }
+
+fn reports_no_text(r: &crate::resolve::ResolveResult) -> bool {
+    r.diagnostics.iter().any(|d| d.message.contains("[derive]"))
+}
+
+#[test]
+fn text_embed_of_a_file_type_no_plugin_derives_is_reported_naming_the_embed() {
+    let r = resolve("intro\n\n![[doc.pdf#text]]\n", &|_, _| panic!("reader must not be asked"));
+    let d = r.diagnostics.iter().find(|d| d.reference == "![[doc.pdf#text]]").expect("a problem for the embed");
+    assert_eq!(d.source_path, "page.md");
+    assert!(d.message.contains(".pdf files") && d.message.contains("[derive]"), "{}", d.message);
+    assert_eq!(r.content_markdown.matches("![[doc.pdf#text]]").count(), 1, "the embed is left as written");
+}
+
+#[test]
+fn text_embed_is_reported_when_no_plugin_is_installed_at_all() {
+    let r = resolve_content_with_derivations(
+        "page.md",
+        "![[doc.pdf#text]]\n",
+        &graph(),
+        &|_| None,
+        &MarkerHandlers::new(),
+        &AssetSnapshot::new(),
+        None,
+    );
+    assert!(reports_no_text(&r), "{:?}", r.diagnostics);
+}
+
+#[test]
+fn text_of_a_note_or_of_a_claimed_file_is_not_reported() {
+    assert!(!reports_no_text(&resolve("![[note#text]]\n", &|_, _| panic!("reader must not be asked"))));
+    assert!(!reports_no_text(&resolve("![[a.fake#text]]\n", &|_, _| DerivedFragment::Pending)));
+}

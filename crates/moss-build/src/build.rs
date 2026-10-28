@@ -1142,6 +1142,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // Guarded on `skip_plugins`: the read reaches `load_installed_plugin`, and
     // a `--no-plugins` build asks the plugin layer nothing at all.
     services.deploy_video_max_size_mb = video_cap_for_build(skip_plugins, &folder_path);
+    services.plugins_skipped = skip_plugins;
     // Each pipeline attempt below moves its own clone of `services`
     // into `spawn_blocking`, so both `advertise_sealed` call sites (seal task,
     // exits-after-build tail) take the registry handle from here instead.

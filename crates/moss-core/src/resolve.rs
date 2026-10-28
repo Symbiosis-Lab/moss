@@ -61,6 +61,9 @@ pub enum DiagnosticKind {
     /// published site cannot contain one, so a build that produces any of these
     /// cannot be deployed.
     MissingAsset,
+    /// A `#text` embed of a file type no installed plugin derives text from.
+    /// The embed shows no text, so the build counts it as a problem.
+    UnderivedEmbed,
     /// Anything else — an unresolved wikilink, a broken embed, a bad heading
     /// anchor. Logged, never blocking.
     #[default]
@@ -196,7 +199,8 @@ pub fn resolve_content_with_derivations(
     // `resolve_embeds` would never see them (it scans markdown lines,
     // not rendered HTML). Pre-converting both shapes here mirrors the
     // earlier layering.
-    let body = lower_transclusion_and_folder_wikilinks(body, graph, source_path, derivations);
+    let mut lowering_diagnostics = Vec::new();
+    let body = lower_transclusion_and_folder_wikilinks(body, graph, source_path, derivations, &mut lowering_diagnostics);
 
     // Step 3: Resolve markdown transclusion embeds. The inlined body of
     // each embedded `.md` file is appended verbatim — its wikilinks (if
@@ -205,6 +209,7 @@ pub fn resolve_content_with_derivations(
     // host page's own wikilinks.
     let embed_result = embeds::resolve_embeds(&body, source_path, file_reader);
     let mut diagnostics = diagnostics;
+    diagnostics.extend(lowering_diagnostics);
     diagnostics.extend(embed_result.diagnostics);
     let mut embed_deps = embed_result.embed_deps;
 
@@ -298,6 +303,7 @@ fn lower_transclusion_and_folder_wikilinks(
     graph: &ContentGraph,
     source_path: &str,
     derivations: Option<&embeds::derived::Derivations<'_>>,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> String {
     let mut output_lines: Vec<String> = Vec::with_capacity(body.lines().count() + 1);
     // The mask is byte-length- and line-preserving, so an offset in a masked
@@ -377,7 +383,7 @@ fn lower_transclusion_and_folder_wikilinks(
                 };
                 (format!("{dest}|{alt}"), token, remainder)
             };
-            match lower_embed(&inner, graph, source_path, derivations) {
+            match lower_embed(&inner, graph, source_path, derivations, diagnostics) {
                 // Derived text is spliced in place of a whole line, so an
                 // embed sharing its line with anything else stays as written.
                 Some(replacement) if embeds::derived::parse_marker(&replacement).is_some() && line.trim() != token => {
@@ -434,6 +440,7 @@ pub(in crate::resolve) fn lower_embed(
     graph: &ContentGraph,
     source_path: &str,
     derivations: Option<&embeds::derived::Derivations<'_>>,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<String> {
     let (file_part, anchor) = embeds::split_embed_target(inner);
 
@@ -485,6 +492,18 @@ pub(in crate::resolve) fn lower_embed(
     // plugin derived, not a viewer. Other fragments (`#page=3`) fall through.
     if let Some(marker) = embeds::derived::claim_marker(&target_path, anchor, derivations) {
         return Some(marker);
+    }
+    // Nothing claims `#text` for this file type, so the embed stays as
+    // written and the viewer shows no text. Say so rather than fail silently.
+    if anchor == Some("text") && !matches!(ext.as_str(), "md" | "markdown") {
+        diagnostics.push(Diagnostic {
+            message: format!(
+                "embed shows no text: no installed plugin derives text from .{ext} files; add the folder under [derive] in .moss/config.toml, or install the plugin that derives text from .{ext} files"
+            ),
+            source_path: source_path.to_string(),
+            reference: format!("![[{inner}]]"),
+            kind: DiagnosticKind::UnderivedEmbed,
+        });
     }
     // Markdown transclusion: `![[note.md]]` →
     // `<!-- moss-embed:note.md[#anchor] -->`.
@@ -745,7 +764,7 @@ mod tests {
     #[test]
     fn article_map_projection_respects_inert_regions() {
         let input = "`![[#|style:map]]`\n\n```md\n![[note|style:map]]\n```\n\n![[#|style:map]]";
-        let output = lower_transclusion_and_folder_wikilinks(input, &test_graph(), "note.md", None);
+        let output = lower_transclusion_and_folder_wikilinks(input, &test_graph(), "note.md", None, &mut Vec::new());
         assert_eq!(output.matches("MOSS_MARKER_FOLDER_LIST").count(), 1);
         assert!(output.contains("`![[#|style:map]]`"));
         assert!(output.contains("![[note|style:map]]"));
@@ -768,7 +787,7 @@ mod tests {
     // ----- lower_transclusion_and_folder_wikilinks: inert regions -----
 
     fn lower(body: &str) -> String {
-        lower_transclusion_and_folder_wikilinks(body, &test_graph(), "index.md", None)
+        lower_transclusion_and_folder_wikilinks(body, &test_graph(), "index.md", None, &mut Vec::new())
     }
 
     #[test]

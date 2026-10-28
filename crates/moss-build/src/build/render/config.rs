@@ -141,6 +141,8 @@ pub struct SiteConfig {
     /// The plugins' derivations (`![[file.ext#fragment]]`), `None` when plugins
     /// are off or none declares one.
     pub derivations: Option<std::sync::Arc<crate::system::derive::site::DerivedSite>>,
+    /// `--no-plugins`: `derivations` is `None` because plugins were skipped.
+    pub plugins_skipped: bool,
 }
 
 impl SiteConfig {
@@ -194,6 +196,7 @@ impl Default for SiteConfig {
             place_maps: None,
             incremental: IncrementalGates::default(),
             derivations: None,
+            plugins_skipped: false,
         }
     }
 }

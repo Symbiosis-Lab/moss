@@ -109,7 +109,7 @@ fn expansion_for(
     derivations: &Derivations<'_>,
 ) -> Option<Replacement> {
     // The same lowering the build applies decides what the embed stands for.
-    let marker = crate::resolve::lower_embed(inner, graph, source_path, Some(derivations))?;
+    let marker = crate::resolve::lower_embed(inner, graph, source_path, Some(derivations), &mut Vec::new())?;
     if let Some((path, fragment)) = parse_marker(&marker) {
         return match (derivations.reader)(path, fragment) {
             DerivedFragment::Ready { markdown, facts } => {

@@ -1531,6 +1531,7 @@ fn build_inner(
         place_maps,
         incremental,
         derivations: derived.clone(),
+        plugins_skipped: services.is_some_and(|s| s.plugins_skipped),
     };
     log::debug!(target: "timing", "[build] staging: config_reads (1 parse) took {:?}", t_config.elapsed());
     // Construct PendingManifest seeded with previous_hashes (carry-forward).
