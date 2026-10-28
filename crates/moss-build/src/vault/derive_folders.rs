@@ -80,10 +80,26 @@ pub fn decisions(site: &MossPaths) -> BTreeMap<String, Decision> {
     load_managed_toml(&site.config()).map(|m| decisions_in(&m.root)).unwrap_or_default()
 }
 
-/// The author's choice for one folder.
+/// The decision that governs a folder key (as [`folder_key`] spells it): the
+/// folder's own entry, else the nearest ancestor's, up to the site root (`/`).
+/// A value that is not a decision (`true`, a table) does not shadow an ancestor.
+pub fn nearest_decision<'a>(decided: &'a BTreeMap<String, Decision>, key: &str) -> Option<&'a Decision> {
+    let mut path = key.trim_end_matches('/');
+    loop {
+        if let Some(d) = decided.get(&format!("{path}/")).filter(|d| **d != Decision::Undecided) {
+            return Some(d);
+        }
+        if path.is_empty() {
+            return None;
+        }
+        path = path.rsplit_once('/').map_or("", |(parent, _)| parent);
+    }
+}
+
+/// The author's choice for one folder, inherited from its nearest entry.
 pub fn folder_decision(site: &MossPaths, folder: &Path) -> Decision {
     folder_key(site, folder)
-        .and_then(|key| decisions(site).remove(&key))
+        .and_then(|key| nearest_decision(&decisions(site), &key).cloned())
         .unwrap_or(Decision::Undecided)
 }
 

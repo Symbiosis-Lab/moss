@@ -71,6 +71,35 @@ fn a_folder_outside_the_site_is_refused() {
     assert!(set_folder_decision(&site, Path::new("/elsewhere/else"), Decision::Keep).is_err());
 }
 
+#[test]
+fn a_subfolder_inherits_its_parents_entry() {
+    let (_d, site) = site_with(Some("[derive]\n\"audits/\" = [\"pdf-pages\"]\n"));
+    assert_eq!(folder_decision(&site, Path::new("audits/agency-a")), Decision::Show(vec!["pdf-pages".into()]));
+    assert_eq!(folder_decision(&site, Path::new("audits/agency-a/2024")), Decision::Show(vec!["pdf-pages".into()]));
+}
+
+#[test]
+fn a_nearer_entry_overrides_the_inherited_one() {
+    let (_d, site) = site_with(Some("[derive]\n\"audits/\" = [\"pdf-pages\"]\n\"audits/agency-a/\" = false\n"));
+    assert_eq!(folder_decision(&site, Path::new("audits/agency-a")), Decision::Keep);
+    assert_eq!(folder_decision(&site, Path::new("audits/agency-a/2024")), Decision::Keep);
+    assert_eq!(folder_decision(&site, Path::new("audits/agency-b")), Decision::Show(vec!["pdf-pages".into()]));
+}
+
+#[test]
+fn a_sibling_outside_the_entry_stays_undecided() {
+    let (_d, site) = site_with(Some("[derive]\n\"audits/\" = [\"pdf-pages\"]\n"));
+    assert_eq!(folder_decision(&site, Path::new("audits-old/agency-a")), Decision::Undecided);
+    assert_eq!(folder_decision(&site, Path::new("reports/agency-a")), Decision::Undecided);
+}
+
+#[test]
+fn a_root_entry_covers_the_site_and_a_value_that_is_not_a_decision_does_not_shadow_it() {
+    let (_d, site) = site_with(Some("[derive]\n\"/\" = false\n\"audits/\" = true\n"));
+    assert_eq!(folder_decision(&site, &site.project_root().to_path_buf()), Decision::Keep);
+    assert_eq!(folder_decision(&site, Path::new("audits/agency-a")), Decision::Keep);
+}
+
 fn heal(config: &str, pairs: &[(&str, &str)]) -> (bool, BTreeMap<String, Decision>) {
     let mut root: Table = toml::from_str(config).unwrap();
     let pairs: Vec<_> = pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();

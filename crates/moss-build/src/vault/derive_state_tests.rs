@@ -45,6 +45,22 @@ fn folders_with_accepted_files_are_listed_at_any_depth_with_their_own_counts() {
 }
 
 #[test]
+fn a_subfolder_reports_the_decision_it_inherits_in_its_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("site");
+    let site = MossPaths::new(&root);
+    let reg = registry(dir.path(), DERIVED);
+    fs::create_dir_all(root.join("reports/deep")).unwrap();
+    fs::write(root.join("reports/deep/c.fake"), "x").unwrap();
+    decide(&site, "reports", Decision::Show(vec!["pages".into()]));
+    let rows = derivation_state(&site, &reg);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].folder, "reports/deep/");
+    assert_eq!(rows[0].decision, Decision::Show(vec!["pages".into()]));
+    assert_eq!(rows[0].stubs_missing, 1);
+}
+
+#[test]
 fn a_decision_and_missing_stubs_show_up_in_the_row() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("site");
