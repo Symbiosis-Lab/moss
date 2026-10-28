@@ -409,11 +409,7 @@ pub fn report(result: Result<DeployReport, String>, folder_display: &str) -> i32
             // longer the app's: the folder has no environment set, and moss
             // does not mint a site — an irreversible thing to own — for a
             // folder that never named where it should live.
-            eprintln!(
-                "error: this folder has no site yet. Run `moss env <staging|production|local> {}` \
-                 first, then deploy again.",
-                folder_display
-            );
+            eprintln!("error: {}", crate::deploy::dry_run::no_site_message(folder_display));
             1
         }
         Err(e) => {
@@ -755,13 +751,15 @@ mod dry_run_tests {
         fx
     }
 
-    /// Where a deploy would fail before building, for a reason that needs
-    /// nothing from the server, the dry run fails too, with the same words.
+    /// A folder with no site yet still gets its plan from a dry run; the missing
+    /// environment is what a real deploy needs first, named as its refusal.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_folder_with_no_site_and_no_environment_fails_the_dry_run_as_a_deploy_would() {
+    async fn a_folder_with_no_site_and_no_environment_dry_run_builds_and_names_the_missing_environment() {
         let fx = unpublished(false);
-        let err = fx.run(true).await.expect_err("a deploy would say this folder has no site yet");
-        assert!(err.contains("has no site yet") && err.contains("moss env"), "{err}");
+        let report = fx.run(true).await.expect("a dry run reports the plan");
+        let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
+        let refusal = dry.refusal.as_deref().expect("a real deploy would stop here");
+        assert!(refusal.contains("has no site yet") && refusal.contains("moss env"), "{refusal}");
         assert!(!fx.contacted_the_server());
     }
 

@@ -164,11 +164,20 @@ fn files(n: u32) -> String {
     if n == 1 { "1 file".to_string() } else { format!("{n} files") }
 }
 
+/// The refusal for a folder with no site and no environment. A real deploy
+/// and a dry run both give exactly this, so they cannot drift apart.
+pub fn no_site_message(folder: &str) -> String {
+    format!("this folder has no site yet. Run `moss env <staging|production|local> {folder}` first, then deploy again.")
+}
+
 /// What the local checks found.
 struct Local {
     would_register: Option<String>,
     would_create_key: bool,
     needs_verification: bool,
+    /// Set when the folder has no site and no environment: the refusal a real
+    /// deploy gives, which a dry run reports rather than stops at.
+    no_environment: Option<String>,
 }
 
 /// The checks a deploy makes before it sends anything that need nothing from
@@ -188,18 +197,17 @@ async fn check_locally(
     }
     crate::build::site_config::ensure_config_current(&folder_str)?;
     if matches!(route, DeployRoute::Plugin { .. }) {
-        return Ok(Local { would_register: None, would_create_key: false, needs_verification: false });
+        return Ok(Local { would_register: None, would_create_key: false, needs_verification: false, no_environment: None });
     }
     let config = crate::build::site_config::get_domain_config(&folder_str)?;
+    let mut no_environment = None;
     let would_register = match config.site_id {
         Some(_) => None,
+        None if !crate::deploy::first_publish_is_permitted(&folder_str)? => {
+            no_environment = Some(no_site_message(&folder.display().to_string()));
+            None
+        }
         None => {
-            if !crate::deploy::first_publish_is_permitted(&folder_str)? {
-                return Err(format!(
-                    "this folder has no site yet. Run `moss env <staging|production|local> {}` first, then deploy again.",
-                    folder.display()
-                ));
-            }
             let chosen = requested_site_id.map(str::to_string).unwrap_or_else(|| {
                 crate::deploy::derive_site_id_from_root(&crate::vault::paths::VaultRoot::resolve(folder))
             });
@@ -215,7 +223,7 @@ async fn check_locally(
         || !crate::identity::Identity::has_usable_signing_key(folder);
     let needs_verification =
         would_register.is_some() && crate::identity::Identity::read_email(folder).is_none();
-    Ok(Local { would_register, would_create_key, needs_verification })
+    Ok(Local { would_register, would_create_key, needs_verification, no_environment })
 }
 
 /// Build the folder as a deploy would and describe the publish that would
@@ -256,9 +264,12 @@ pub async fn run_dry_run(
             None => Transfer::NoRecord,
         }
     };
-    let refusal = crate::deploy::refuse_publish(&folder_str)
-        .and_then(|_| crate::deploy::refuse_foreign_inputs(&sealed, folder))
-        .and_then(|_| crate::deploy::refuse_unresolved_inputs(&sealed)).err();
+    let refusal = match &local.no_environment {
+        Some(text) => Some(text.clone()),
+        None => crate::deploy::refuse_publish(&folder_str)
+            .and_then(|_| crate::deploy::refuse_foreign_inputs(&sealed, folder))
+            .and_then(|_| crate::deploy::refuse_unresolved_inputs(&sealed)).err(),
+    };
     Ok(DryRun {
         change_set,
         transfer,
@@ -281,6 +292,9 @@ pub async fn run_prebuilt_dry_run(
 ) -> Result<DryRun, String> {
     let route = DeployRoute::Prebuilt { dir: dir.to_path_buf() };
     let local = check_locally(folder, &route, requested_site_id).await?;
+    if let Some(text) = local.no_environment {
+        return Err(text);
+    }
     let folder_str = folder.to_string_lossy().to_string();
     let site_id = match &local.would_register {
         Some(id) => id.clone(),
