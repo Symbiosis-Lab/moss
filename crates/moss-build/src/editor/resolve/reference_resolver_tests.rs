@@ -33,7 +33,7 @@ fn batch_routes_each_kind_through_classifier() {
             is_embed: false,
         },
     ];
-    let out = resolve_references_batch(&targets, "index.md", root);
+    let out = resolve_references_batch(&targets, "index.md", root, EditorScope::Site);
     assert_eq!(out.len(), 3);
 
     // /app/ → FolderIndexIframe (static index.html present).
@@ -107,7 +107,7 @@ fn folder_listing_carries_folder_detail() {
         RefTarget { text: "/notes/".into(), is_embed: true },
         RefTarget { text: "photo.png".into(), is_embed: true },
     ];
-    let out = resolve_references_batch(&targets, "index.md", root);
+    let out = resolve_references_batch(&targets, "index.md", root, EditorScope::Site);
 
     assert_eq!(out[0].kind, ReferenceKind::FolderListing, "got {:?}", out[0].kind);
     let folder = out[0].folder.as_ref().expect("folder listing carries facts");
@@ -152,7 +152,7 @@ fn folder_embed_follows_a_slug_override_to_its_real_source() {
     map.save(&moss_dir).expect("save article map");
 
     let targets = vec![RefTarget { text: "/awards/".into(), is_embed: true }];
-    let out = resolve_references_batch(&targets, "index.md", root);
+    let out = resolve_references_batch(&targets, "index.md", root, EditorScope::Site);
 
     assert_eq!(out[0].kind, ReferenceKind::FolderListing, "got {:?}", out[0].kind);
     let followed = out[0]
@@ -203,7 +203,7 @@ fn folder_embed_whose_index_source_is_gone_has_nothing_to_follow() {
     map.save(&moss_dir).expect("save article map");
 
     let targets = vec![RefTarget { text: "/notes/".into(), is_embed: true }];
-    let out = resolve_references_batch(&targets, "index.md", root);
+    let out = resolve_references_batch(&targets, "index.md", root, EditorScope::Site);
 
     assert_eq!(out[0].kind, ReferenceKind::FolderListing, "got {:?}", out[0].kind);
     assert_eq!(
@@ -214,7 +214,7 @@ fn folder_embed_whose_index_source_is_gone_has_nothing_to_follow() {
     // …and a rename, rather than a deletion, hands over to the new home file
     // instead of vetoing it: the stale record must not outrank what is there.
     std::fs::write(root.join("notes/index.md"), "---\ntitle: Notes\n---\n").expect("write");
-    let out = resolve_references_batch(&targets, "index.md", root);
+    let out = resolve_references_batch(&targets, "index.md", root, EditorScope::Site);
     let canonical = root.canonicalize().expect("canonical root");
     assert_eq!(
         out[0].resolved_path.as_deref(),
@@ -233,7 +233,7 @@ fn a_markdown_transclusion_can_be_followed_to_its_source() {
     std::fs::write(root.join("notes/a.md"), "# a").expect("write");
 
     let targets = vec![RefTarget { text: "notes/a.md".into(), is_embed: true }];
-    let out = resolve_references_batch(&targets, "index.md", root);
+    let out = resolve_references_batch(&targets, "index.md", root, EditorScope::Site);
 
     assert_eq!(out[0].kind, ReferenceKind::Transclusion, "got {:?}", out[0].kind);
     let canonical = root.canonicalize().expect("canonical root");
@@ -257,7 +257,7 @@ fn folder_embed_follows_its_home_file_when_no_build_has_run() {
     // No .moss/ at all: ArticleMap::load falls back to default().
 
     let targets = vec![RefTarget { text: "/notes/".into(), is_embed: true }];
-    let out = resolve_references_batch(&targets, "index.md", root);
+    let out = resolve_references_batch(&targets, "index.md", root, EditorScope::Site);
 
     assert_eq!(out[0].kind, ReferenceKind::FolderListing, "got {:?}", out[0].kind);
     let canonical = root.canonicalize().expect("canonical root");
@@ -278,7 +278,7 @@ fn an_unbuilt_folder_finds_its_self_named_note() {
     std::fs::write(root.join("評選/評選.md"), "---\ntitle: 評選\n---\n").expect("write");
 
     let targets = vec![RefTarget { text: "/評選/".into(), is_embed: true }];
-    let out = resolve_references_batch(&targets, "index.md", root);
+    let out = resolve_references_batch(&targets, "index.md", root, EditorScope::Site);
 
     let canonical = root.canonicalize().expect("canonical root");
     assert_eq!(
@@ -297,7 +297,7 @@ fn a_static_index_folder_follows_to_its_index_html() {
     std::fs::write(root.join("app/index.html"), b"<h1>x</h1>").expect("write");
 
     let targets = vec![RefTarget { text: "/app/".into(), is_embed: true }];
-    let out = resolve_references_batch(&targets, "index.md", root);
+    let out = resolve_references_batch(&targets, "index.md", root, EditorScope::Site);
 
     assert_eq!(out[0].kind, ReferenceKind::FolderIndexIframe, "got {:?}", out[0].kind);
     let canonical = root.canonicalize().expect("canonical root");
@@ -319,7 +319,7 @@ fn an_unbuilt_folder_prefers_index_over_readme() {
     std::fs::write(root.join("notes/index.md"), "---\ntitle: Notes\n---\n").expect("write");
 
     let targets = vec![RefTarget { text: "/notes/".into(), is_embed: true }];
-    let out = resolve_references_batch(&targets, "index.md", root);
+    let out = resolve_references_batch(&targets, "index.md", root, EditorScope::Site);
 
     let canonical = root.canonicalize().expect("canonical root");
     assert_eq!(
@@ -338,7 +338,7 @@ fn a_static_index_folder_follows_a_dot_htm_index() {
     std::fs::write(root.join("app/index.htm"), b"<h1>x</h1>").expect("write");
 
     let targets = vec![RefTarget { text: "/app/".into(), is_embed: true }];
-    let out = resolve_references_batch(&targets, "index.md", root);
+    let out = resolve_references_batch(&targets, "index.md", root, EditorScope::Site);
 
     assert_eq!(out[0].kind, ReferenceKind::FolderIndexIframe, "got {:?}", out[0].kind);
     let canonical = root.canonicalize().expect("canonical root");
@@ -359,7 +359,7 @@ fn a_static_index_folder_follows_the_real_dirent_case() {
     std::fs::write(root.join("app/Index.HTML"), b"<h1>x</h1>").expect("write");
 
     let targets = vec![RefTarget { text: "/app/".into(), is_embed: true }];
-    let out = resolve_references_batch(&targets, "index.md", root);
+    let out = resolve_references_batch(&targets, "index.md", root, EditorScope::Site);
 
     assert_eq!(out[0].kind, ReferenceKind::FolderIndexIframe, "got {:?}", out[0].kind);
     let canonical = root.canonicalize().expect("canonical root");
@@ -400,7 +400,7 @@ fn folder_embed_with_a_synthesized_index_has_nothing_to_follow() {
     map.save(&moss_dir).expect("save article map");
 
     let targets = vec![RefTarget { text: "/notes/".into(), is_embed: true }];
-    let out = resolve_references_batch(&targets, "index.md", root);
+    let out = resolve_references_batch(&targets, "index.md", root, EditorScope::Site);
 
     assert_eq!(out[0].kind, ReferenceKind::FolderListing, "got {:?}", out[0].kind);
     assert!(
@@ -435,7 +435,7 @@ fn a_folder_as_embed_and_as_link_stay_separate() {
         RefTarget { text: "/notes/".into(), is_embed: true },
         RefTarget { text: "/notes/".into(), is_embed: false },
     ];
-    let out = resolve_references_batch(&targets, "index.md", root);
+    let out = resolve_references_batch(&targets, "index.md", root, EditorScope::Site);
 
     assert_eq!(out[0].kind, ReferenceKind::FolderListing);
     assert!(out[0].folder.is_some(), "the embed carries folder facts");
@@ -446,4 +446,33 @@ fn a_folder_as_embed_and_as_link_stay_separate() {
         out[1].kind
     );
     assert!(out[1].folder.is_none(), "a link carries no folder facts");
+}
+
+#[test]
+fn a_loose_folder_resolves_what_the_document_spells_out_and_links_open_the_file() {
+    let dir = scratch_root();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    std::fs::create_dir_all(root.join("img/deep")).unwrap();
+    std::fs::write(root.join("img/deep/shot.png"), b"\x89PNGfakebytes").unwrap();
+    std::fs::write(root.join("other.md"), b"# Other").unwrap();
+    std::fs::create_dir_all(root.join("journal")).unwrap();
+    std::fs::write(root.join("journal/index.md"), b"# Journal").unwrap();
+    let target = |text: &str, is_embed| RefTarget { text: text.into(), is_embed };
+    let targets = [
+        target("img/deep/shot.png", true),
+        target("shot.png", true),
+        target("other", false),
+        target("gone", false),
+        target("journal/", true),
+    ];
+    let out = resolve_references_batch(&targets, "note.md", &root, EditorScope::Folder);
+
+    assert_eq!(out[0].kind, ReferenceKind::Image);
+    assert!(out[0].resolved.is_some(), "a spelled-out path renders inline");
+    assert_eq!(out[1].kind, ReferenceKind::NotFound, "a bare name is looked for beside the document only");
+    assert!(matches!(out[2].kind, ReferenceKind::Link { .. }), "got {:?}", out[2].kind);
+    assert_eq!(out[2].url, None, "a loose folder has no URLs");
+    assert_eq!(out[2].resolved_path.as_deref(), Some(root.join("other.md").to_string_lossy().as_ref()));
+    assert_eq!(out[3].kind, ReferenceKind::NotFound);
+    assert_eq!(out[4].kind, ReferenceKind::NotFound, "a folder listing is built by a site");
 }

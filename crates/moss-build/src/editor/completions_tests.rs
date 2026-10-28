@@ -16,7 +16,7 @@ fn root_str(root: &Path) -> String {
 }
 
 fn complete(root: &Path, syntax: LinkSyntax, prefix: &str, from: &str) -> Vec<WikilinkCompletion> {
-    link_completions(&root_str(root), from, syntax, prefix, None)
+    link_completions(&root_str(root), from, syntax, prefix, None, EditorScope::Site)
 }
 
 fn inserts(rows: &[WikilinkCompletion]) -> Vec<&str> {
@@ -146,14 +146,14 @@ fn allowed_kinds_keeps_only_those_assets_and_empty_matches_nothing() {
     fs::write(root.join("clip.mp4"), b"x").unwrap();
     let r = root_str(root);
 
-    let all = link_completions(&r, "index.md", LinkSyntax::Wikilink, "", None);
+    let all = link_completions(&r, "index.md", LinkSyntax::Wikilink, "", None, EditorScope::Site);
     let got = inserts(&all);
     assert!(got.contains(&"about") && got.contains(&"photo.png") && got.contains(&"clip.mp4"), "{got:?}");
 
-    let images = link_completions(&r, "index.md", LinkSyntax::Wikilink, "", Some(&[ExtKind::Image]));
+    let images = link_completions(&r, "index.md", LinkSyntax::Wikilink, "", Some(&[ExtKind::Image]), EditorScope::Site);
     assert_eq!(inserts(&images), vec!["photo.png"]);
 
-    let none = link_completions(&r, "index.md", LinkSyntax::Wikilink, "", Some(&[]));
+    let none = link_completions(&r, "index.md", LinkSyntax::Wikilink, "", Some(&[]), EditorScope::Site);
     assert!(none.is_empty(), "got: {none:?}");
 }
 
@@ -313,4 +313,19 @@ fn a_picked_folder_is_its_page_relative_path_with_a_trailing_slash() {
     let r = picked(root, "journal", "index.md").unwrap();
     assert_eq!((r.insert.as_str(), r.label.as_str(), r.kind), ("journal/", "journal/", TargetKind::Folder));
     assert_eq!(picked(root, "journal/2025", "notes/x.md").unwrap().insert, "../journal/2025/");
+}
+
+#[test]
+fn a_loose_folder_offers_the_files_beside_the_document_only() {
+    let project = repo_temp();
+    let root = project.path();
+    fs::create_dir_all(root.join("deep/er")).unwrap();
+    fs::write(root.join("note.md"), b"x").unwrap();
+    fs::write(root.join("other.md"), b"x").unwrap();
+    fs::write(root.join("shot.png"), b"x").unwrap();
+    fs::write(root.join("deep/er/far.png"), b"x").unwrap();
+    let rows = link_completions(&root_str(root), "note.md", LinkSyntax::Wikilink, "", None, EditorScope::Folder);
+    let mut got = inserts(&rows);
+    got.sort();
+    assert_eq!(got, vec!["note", "other", "shot.png"]);
 }

@@ -207,7 +207,7 @@ async fn arm_editor_resolve_asset(ctx: &Session, args: Value) -> ArmResult {
     let root = project_root(ctx);
     let from_file = confine(ctx, &a.from_file)?;
     let resolved =
-        crate::editor::resolve::asset_resolver::resolve_asset(&a.target, &from_file, &root);
+        crate::editor::resolve::asset_resolver::resolve_asset(&a.target, &from_file, &root, crate::editor::resolve::asset_resolver::EditorScope::Site);
     to_value(resolved)
 }
 
@@ -227,6 +227,7 @@ async fn arm_editor_resolve_references(ctx: &Session, args: Value) -> ArmResult 
         &a.targets,
         &from_file.to_string_lossy(),
         &root,
+        crate::editor::resolve::asset_resolver::EditorScope::Site,
     );
     to_value(resolved)
 }
