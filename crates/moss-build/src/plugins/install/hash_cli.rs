@@ -6,9 +6,13 @@
 
 use std::path::Path;
 
-const USAGE: &str = "Usage: moss plugin hash <plugin-dir> [--json]";
+const USAGE: &str = "Usage: moss plugin hash <plugin-dir> [--json]\n       moss plugin install <id> [<folder>]";
 
+/// The `moss plugin` verbs: `hash` here, `install` in [`super::install_cli`].
 pub fn run(args: &[String]) -> i32 {
+    if args.first().map(String::as_str) == Some("install") {
+        return super::install_cli::run(args);
+    }
     let mut dir = None;
     let mut json = false;
     let mut words = args.iter();

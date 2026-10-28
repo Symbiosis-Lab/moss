@@ -82,8 +82,8 @@ pub fn cli_commands() -> Vec<CliCommandInfo> {
         },
         CliCommandInfo {
             name: "plugin",
-            args: "hash <plugin-dir> [--json]",
-            description: "Print the code hash of a plugin directory: the value moss records when a plugin is allowed and the registry pins per version. Needs no site. Prints the hex digest, or with --json {\"id\", \"version\", \"code_sha256\"}. Exits 1 when the directory has no readable manifest.json or entry file.",
+            args: "hash <plugin-dir> [--json]  |  install <id> [<folder>]",
+            description: "`install` puts a plugin into the site containing <folder> (default: the current directory) and allows it: from the plugin registry, or copied out of moss when moss ships it. Typing the command is the consent, so it prints one line saying the plugin is approved for this user on this machine; the approval is kept in moss's per-user app data (the same store the moss app reads), never in the site folder. The registry catalog is fetched on every install so a withdrawn version is not installed; when it cannot be reached the last cached catalog is used and its age is printed, and with none cached the install fails naming the network error. Exits 1 on failure, 2 on bad arguments. `hash` prints the code hash of a plugin directory: the value moss records when a plugin is allowed and the registry pins per version. Needs no site. Prints the hex digest, or with --json {\"id\", \"version\", \"code_sha256\"}. Exits 1 when the directory has no readable manifest.json or entry file.",
         },
         CliCommandInfo {
             name: "import",
