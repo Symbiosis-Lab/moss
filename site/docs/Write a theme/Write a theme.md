@@ -99,6 +99,17 @@ Do not write `@media (prefers-color-scheme: dark)`. Write this instead, which ap
 }
 ```
 
+## Link colour
+
+Links in a page's text rest in the text colour, underlined, and turn to the accent when the pointer is over them or they have focus. `--moss-color-accent` colours the hover and focus, not the resting link. To accent the resting links, set `--moss-link-color`; set `--moss-link-hover-color` too, or the hover and focus colour stays `--moss-color-accent` and a link already in that colour shows no change:
+
+```css
+:root {
+  --moss-link-color: var(--moss-color-accent);
+  --moss-link-hover-color: var(--moss-color-accent-hover);
+}
+```
+
 ## Scrollbars
 
 moss leaves scrollbar visibility and appearance to the browser and the reader’s operating system, including on vertical pages and nested scroll rows. Scrollbars work independently of link previews and other optional scripts.

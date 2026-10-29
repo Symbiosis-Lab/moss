@@ -16,6 +16,7 @@
 pub mod abilities;
 pub mod derivation;
 pub mod listing_style;
+pub mod platform;
 pub mod settings;
 pub mod stack;
 

@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 mod max_height;
 mod placement;
-pub use max_height::MaxHeight;
+pub use max_height::{Length, MaxHeight};
 pub use placement::{extract_placement_from_alias, Placement};
 // `parse_placement_segment` has exactly one caller outside its own module:
 // `segment_without_size` below, the editor's drag-resize write path — hence

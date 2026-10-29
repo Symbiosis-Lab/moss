@@ -16,8 +16,8 @@
 //!   the key is unrecoverable. `IdentityService::ensure_signing_key()` handles regeneration.
 
 use fs2::FileExt;
+use k256::elliptic_curve::Generate;
 use k256::schnorr::SigningKey;
-use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Seek, Write};
@@ -213,7 +213,7 @@ impl Identity {
     /// Creates a v3 identity with the private key held in memory.
     /// The key is written to `.moss/identity/secret-key` when [`save()`] is called.
     pub fn generate() -> Result<Self, IdentityError> {
-        let signing_key = SigningKey::random(&mut OsRng);
+        let signing_key = SigningKey::generate();
         let verifying_key = signing_key.verifying_key();
         let pubkey_hex = hex::encode(verifying_key.to_bytes());
 
@@ -287,7 +287,7 @@ impl Identity {
                 .try_into()
                 .map_err(|_| IdentityError::InvalidPrivateKey)?;
             let signing_key =
-                SigningKey::from_bytes(&key_array).map_err(|_| IdentityError::InvalidPrivateKey)?;
+                SigningKey::from_bytes(&key_array.into()).map_err(|_| IdentityError::InvalidPrivateKey)?;
 
             // Write key to identity-key file
             let kf_path = key_file_path(project_path);
@@ -508,7 +508,7 @@ impl Identity {
                 .try_into()
                 .map_err(|_| IdentityError::InvalidPrivateKey)?;
             let signing_key =
-                SigningKey::from_bytes(&key_array).map_err(|_| IdentityError::InvalidPrivateKey)?;
+                SigningKey::from_bytes(&key_array.into()).map_err(|_| IdentityError::InvalidPrivateKey)?;
             self.signing_key = Some(signing_key);
         }
         Ok(self.signing_key.as_ref().unwrap())
@@ -549,7 +549,7 @@ impl Identity {
             .try_into()
             .map_err(|_| IdentityError::InvalidPrivateKey)?;
         let signing_key =
-            SigningKey::from_bytes(&bytes_array).map_err(|_| IdentityError::InvalidPrivateKey)?;
+            SigningKey::from_bytes(&bytes_array.into()).map_err(|_| IdentityError::InvalidPrivateKey)?;
 
         let verifying_key = signing_key.verifying_key();
         let pubkey_hex = hex::encode(verifying_key.to_bytes());
@@ -644,7 +644,7 @@ mod tests {
         let project_path = dir.path();
 
         // Create a v1 identity (privkey in JSON)
-        let v1_key = SigningKey::random(&mut OsRng);
+        let v1_key = SigningKey::generate();
         let v1_pubkey = hex::encode(v1_key.verifying_key().to_bytes());
         let v1_privkey = hex::encode(v1_key.to_bytes());
 
@@ -685,7 +685,7 @@ mod tests {
         let project_path = dir.path();
 
         // Create a v2 identity JSON (no privkey, key was in keychain)
-        let key = SigningKey::random(&mut OsRng);
+        let key = SigningKey::generate();
         let pubkey = hex::encode(key.verifying_key().to_bytes());
 
         let v2_json = format!(
@@ -905,7 +905,7 @@ mod tests {
 
     #[test]
     fn test_import_and_export() {
-        let original_key = SigningKey::random(&mut OsRng);
+        let original_key = SigningKey::generate();
         let nsec = format!("nsec:{}", hex::encode(original_key.to_bytes()));
 
         let mut imported = Identity::import(&nsec).unwrap();
@@ -918,7 +918,7 @@ mod tests {
 
     #[test]
     fn test_import_without_nsec_prefix() {
-        let original_key = SigningKey::random(&mut OsRng);
+        let original_key = SigningKey::generate();
         let hex_key = hex::encode(original_key.to_bytes());
 
         let mut imported = Identity::import(&hex_key).unwrap();

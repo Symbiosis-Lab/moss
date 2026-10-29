@@ -57,6 +57,10 @@ impl Site {
     /// One real build, awaited to its seal, persisted so the next `build` sees
     /// this one as its predecessor.
     fn build(&self, gates: IncrementalGates) -> SealedManifest {
+        self.build_with_slots(gates, ResolvedSlots::empty())
+    }
+
+    fn build_with_slots(&self, gates: IncrementalGates, slots: ResolvedSlots) -> SealedManifest {
         let folder = self.dir.path().to_str().unwrap();
         let ps = scan_folder(folder).expect("scan");
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -74,7 +78,7 @@ impl Site {
                 None,
                 &port,
                 None,
-                Some(Box::new(|_, _, _| Ok(ResolvedSlots::empty()))),
+                Some(Box::new(move |_, _, _| Ok(slots))),
                 &ps,
                 None,
                 gates,
@@ -424,4 +428,94 @@ fn materialize_and_promote_ships_the_sealed_bytes_of_a_page_the_stage_no_longer_
         Some(&entry_for(key, &shipped)),
         "and what shipped must hash to what the manifest says, or deploy refuses the generation"
     );
+}
+
+fn slot(name: &str, html: &str) -> ResolvedSlots {
+    let mut slots = ResolvedSlots::empty();
+    let result = crate::build::enhance::EnhanceResult {
+        success: true,
+        slots: std::collections::HashMap::from([(
+            name.to_string(),
+            crate::build::enhance::EnhanceContent::Static { html: html.to_string() },
+        )]),
+    };
+    slots.merge(&result, 10, "test");
+    slots
+}
+
+fn head_end(html: &str) -> ResolvedSlots {
+    slot("head-end", html)
+}
+
+fn scanned_by_last_pass() -> usize {
+    LAST_SCANNED.with(|n| n.get())
+}
+
+/// A one-page edit reads one page: the other pages' slot output is the previous
+/// build's, vouched by their staged links. The bytes shipped are those a full
+/// scan would produce.
+#[test]
+fn a_one_page_edit_scans_only_that_page() {
+    let site = Site::new();
+    site.write("index.md", "# Home");
+    for name in ["a", "b", "c", "d"] {
+        site.write(&format!("{name}.md"), &format!("# {name}\n\nbody of {name}"));
+    }
+    let slots = || head_end("<style>h1{}</style>");
+    site.build_with_slots(CARRY, slots());
+    site.build_with_slots(CARRY, slots());
+    assert_eq!(scanned_by_last_pass(), 0, "nothing changed: nothing is read");
+
+    site.write("c.md", "# c\n\nedited body of c");
+    let sealed = site.build_with_slots(CARRY, slots());
+
+    // The edited page and one page the render always redoes.
+    assert_eq!(scanned_by_last_pass(), 2);
+    let stage_before: Vec<_> = ["index.html", "a/index.html", "b/index.html", "c/index.html", "d/index.html"]
+        .map(|key| std::fs::read(site.stage(key)).unwrap())
+        .into();
+    for key in ["index.html", "a/index.html", "b/index.html", "c/index.html", "d/index.html"] {
+        assert_ships_by_oid(&site, &sealed, key);
+        let html = std::fs::read_to_string(site.stage(key)).unwrap();
+        assert!(html.contains("<style>h1{}</style>") && !html.contains("<!-- slot:head-end -->"), "{key}: slots not filled");
+    }
+    assert!(std::fs::read_to_string(site.stage("c/index.html")).unwrap().contains("edited body of c"));
+
+    // Forgetting what the last pass was makes the next one read every page; the
+    // bytes and the manifest it ends with are the ones the skipping pass left.
+    std::fs::remove_file(site.paths().cache_dir().join("slot-pass.json")).unwrap();
+    let full = site.build_with_slots(CARRY, slots());
+    let html_files = walkdir::WalkDir::new(site.paths().staging_dir()).into_iter().flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "html")).count();
+    assert_eq!(scanned_by_last_pass(), html_files, "{html_files} pages in the stage");
+    let stage_after: Vec<_> = ["index.html", "a/index.html", "b/index.html", "c/index.html", "d/index.html"]
+        .map(|key| std::fs::read(site.stage(key)).unwrap())
+        .into();
+    assert_eq!(stage_before, stage_after);
+    assert_eq!(sealed.files(), full.files());
+}
+
+/// A changed slot input (the footer) reaches every page, carried or not.
+#[test]
+fn a_changed_footer_rewrites_every_page() {
+    let site = Site::new();
+    site.write("index.md", "# Home");
+    site.write("footer.md", "first footer words");
+    for name in ["a", "b", "c"] {
+        site.write(&format!("{name}.md"), &format!("# {name}"));
+    }
+    let keys = ["index.html", "a/index.html", "b/index.html", "c/index.html"];
+    site.build_with_slots(CARRY, slot("footer-left", "first footer words"));
+    for key in keys {
+        assert!(std::fs::read_to_string(site.stage(key)).unwrap().contains("first footer words"), "fixture: {key}");
+    }
+    site.write("footer.md", "second footer words");
+    let sealed = site.build_with_slots(CARRY, slot("footer-left", "second footer words"));
+
+    assert_eq!(scanned_by_last_pass(), keys.len());
+    for key in keys {
+        assert_ships_by_oid(&site, &sealed, key);
+        let html = std::fs::read_to_string(site.stage(key)).unwrap();
+        assert!(html.contains("second footer words") && !html.contains("first footer words"), "{key}: stale footer");
+    }
 }

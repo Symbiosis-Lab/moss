@@ -274,6 +274,13 @@ impl StagedLinks {
         held
     }
 
+    /// The blob the file at `key` (staging-relative) was linked from, when the
+    /// file there is still that link; carries its record into this run's.
+    pub(crate) fn vouched_oid(&mut self, key: &str) -> Option<String> {
+        let oid = self.previous.entries.get(key)?.content_hash.clone();
+        self.holds(key, &self.staging.join(key), &oid).then_some(oid)
+    }
+
     /// Persist what this run linked or found held. Writes nothing when that
     /// is exactly what was loaded — the steady state of a warm rebuild.
     pub(crate) fn save(&self) {

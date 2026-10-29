@@ -177,6 +177,18 @@ fn grid_blocks_become_their_own_segment_with_typed_cells() {
 }
 
 #[test]
+fn an_equal_rows_card_moss_cannot_count_is_one_problem_per_grid() {
+    let problems = |md: &str| {
+        let _ = crate::build::cli_output::take_cli_problems();
+        warn_uncountable_cards(&parse(md), "page.md");
+        crate::build::cli_output::take_cli_problems()
+    };
+    assert_eq!(problems(":::grid 2 {rows=equal}\n<div>\n<p>open</p>\n\nText.\n+++\n<div>\n<p>again</p>\n:::\n"), 1, "two bad cards, one grid");
+    assert_eq!(problems(":::grid 2 {rows=equal}\n<div>\n\n<p>closed</p>\n\n</div>\n+++\n### Two\n:::\n"), 0);
+    assert_eq!(problems(":::grid 2\n<div>\n<p>open</p>\n+++\n### Two\n:::\n"), 0, "only rows=equal counts parts");
+}
+
+#[test]
 fn no_cards_is_read_from_typed_classes_not_the_serialized_tag() {
     let hooks = DefaultHooks::new();
     let doc = parse(":::grid 2 {.no-cards}\n[A](a/)\n:::\n");
@@ -696,4 +708,20 @@ fn plan_lede_segments_split_the_body_without_cutting_an_element() {
     // Each side closes every tag it opens — the property the deleted
     // `html_prefix_is_balanced` byte-walker tried to check by scanning.
     assert_eq!(lead.matches('<').count(), lead.matches('>').count());
+}
+
+#[test]
+fn a_prompt_above_a_subscribe_form_changes_only_the_id_and_aria_labelledby() {
+    let hooks = DefaultHooks::new();
+    let mut doc = parse("Join the weekly letter.\n\n:::subscribe\n:::\n\n## Contact\n\n:::subscribe\n:::\n");
+    // Only the paragraph labels its form; the heading does not.
+    let flat = moss_core::ast::render_document(&doc, &hooks);
+    doc.label_subscribe_prompts(None);
+    let labelled = render_segmented(&doc, &hooks).to_html();
+    assert_ne!(labelled, flat);
+
+    let stripped = labelled
+        .replace(r#" id="moss-subscribe-prompt-0""#, "")
+        .replace(r#" id="moss-subscribe-prompt-0-field" aria-labelledby="moss-subscribe-prompt-0 moss-subscribe-prompt-0-field""#, "");
+    assert_eq!(stripped, flat);
 }

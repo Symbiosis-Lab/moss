@@ -10,6 +10,7 @@
  */
 import { test, expect, type Page } from "@playwright/test";
 import { inflateSync } from "node:zlib";
+import { untilRendering } from "./rendering";
 
 async function gotoReady(page: Page): Promise<void> {
   await page.goto("places/", { waitUntil: "domcontentloaded" });
@@ -161,6 +162,12 @@ function expectCssClipSize(image: { width: number; height: number }, clip: { wid
 }
 
 /** WebKit returns an empty PNG for the first capture of a page it has not painted a frame of since the camera was set; two animation frames guarantee one. */
+/** Until every tile in view is baked and drawn. A fixed sleep raced the bake, which takes four times as long at a Retina density. */
+async function tilesIdle(page: Page): Promise<void> {
+  await expect(page.locator('.moss-places-tiles[data-moss-places-tiles-state="idle"]')).toHaveCount(1, { timeout: 20000 });
+  await untilRendering(page);
+}
+
 async function paintedFrame(page: import("@playwright/test").Page): Promise<void> {
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 }
@@ -651,7 +658,7 @@ test("past the world ceiling, an open-sea tile boundary is pixel-continuous in b
     "ready",
     { timeout: 10000 },
   );
-  await page.waitForTimeout(500); // tile fetch + position settle
+  await tilesIdle(page);
 
   const rectByCell = async (cell: string) => {
     const rect = await page
@@ -987,7 +994,12 @@ test("past the world ceiling, a tile row boundary is pixel-continuous over open 
  * captured and decoded in Node because an in-page decode hangs in WebKit at
  * this state.
  */
-test("at the close zoom, a tile edge stays continuous across lit land", async ({ page }) => {
+test("at the close zoom, a tile edge stays continuous across lit land", async ({ page, browserName }) => {
+  // WebKit cannot be measured here (develop, 0.15.13 and 0.15.12 alike, 2026-10-26): at a device
+  // scale of 2 its screenshot of this deep-zoom state holds no world canvas, the state the coast
+  // test above skips WebKit for, and at 1 its relief leaves 2 smooth land columns, short of the 10
+  // this test needs to tell a seam from relief.
+  test.skip(browserName === "webkit", "no measurable land columns at this camera in WebKit; see comment");
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("places/?p=patterson&z=18&x=399.6415&y=144.8651", { waitUntil: "domcontentloaded" });
   await expect(page.locator(".moss-place-map[data-moss-places-explorer]")).toHaveAttribute(
@@ -995,7 +1007,7 @@ test("at the close zoom, a tile edge stays continuous across lit land", async ({
     "ready",
     { timeout: 10000 },
   );
-  await page.waitForTimeout(800); // tile fetch + raster settle
+  await tilesIdle(page);
 
   const rectByCell = async (cell: string) => {
     const rect = await page.locator(`.moss-places-tiles > .moss-places-tile[data-moss-places-tile="${cell}"]`).boundingBox();

@@ -4,7 +4,7 @@
 //!
 //! The binary reads `{"path": "<absolute input path>"}` on stdin and prints
 //! exactly one JSON object on stdout, either
-//! `{"kind":"derived","fragments":{"<name>":"<text>"},"facts":{"title":<string|null>,"description":<string|null>}}`
+//! `{"kind":"derived","fragments":{"<name>":"<text>"},"facts":{"title":<string|null>,"description":<string|null>,"date":<"YYYY-MM-DD"|null>}}`
 //! or `{"kind":"skip","reason":"<short>","message":"<sentences>"}`. Core knows
 //! nothing about the file format; the declaration
 //! (`plugins::contributions::derivation`) says which extensions go here and
@@ -13,6 +13,7 @@
 pub mod batch;
 pub mod binary;
 pub mod cache;
+pub mod priority;
 pub mod registry;
 pub mod run;
 pub mod sandbox;
@@ -27,8 +28,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::plugins::contributions::derivation::FragmentType;
 
-pub use batch::{derive_batch, derive_budget, DeriveJob};
-pub use cache::{derive_cached, lookup_cached, lookup_failure, remember_failure, remembered, DeriveResult};
+pub use batch::{derive_batch, derive_batch_by, derive_budget, DeriveJob};
+pub use cache::{derive_cached, lookup_cached, lookup_failure, lookup_previous, remember_failure, remembered, DeriveResult};
 pub use moss_core::resolve::embeds::derived::DerivedFacts;
 pub use run::run_deriver;
 

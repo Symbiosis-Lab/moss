@@ -185,7 +185,7 @@ test.describe("collage rows grow only for words", () => {
 });
 
 test.describe("nothing is cut off", () => {
-  for (const [path, full] of [["/mixed/", false], ["/full/", true]] as const)
+  for (const path of ["/mixed/", "/full/"])
   for (const width of [1360, 1100, 900, 768, 390]) {
     test(`at ${width}px on ${path} no label or quote overflows its tile`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
@@ -197,9 +197,6 @@ test.describe("nothing is cut off", () => {
           const words = quote?.querySelector("blockquote");
           // The widest word, measured as laid out: one range per word.
           let wordRight = 0;
-          // The widest word set whole, on one line: quote text may hyphenate by
-          // choice, so a broken word alone says nothing about whether it fits.
-          let widest = 0;
           if (words) {
             const walker = document.createTreeWalker(words, NodeFilter.SHOW_TEXT);
             for (let n = walker.nextNode(); n; n = walker.nextNode()) {
@@ -209,12 +206,6 @@ test.describe("nothing is cut off", () => {
                 range.setEnd(n, m.index! + m[0].length);
                 const rects = [...range.getClientRects()].filter((r) => r.width > 0);
                 for (const r of rects) wordRight = Math.max(wordRight, r.right);
-                const probe = document.createElement("span");
-                probe.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap;hyphens:none";
-                probe.textContent = m[0];
-                n.parentElement!.append(probe);
-                widest = Math.max(widest, probe.getBoundingClientRect().width);
-                probe.remove();
               }
             }
           }
@@ -266,7 +257,6 @@ test.describe("nothing is cut off", () => {
             labelW: label?.clientWidth ?? 0,
             quote: !!quote,
             wordOver: words ? wordRight - contentRight : 0,
-            wordRoom: words ? widest - words.clientWidth : 0,
           };
         }),
       );
@@ -291,10 +281,6 @@ test.describe("nothing is cut off", () => {
         }
         if (r.quote) expect(r.tileScrollH, `tile ${r.i}: quote is not cut off`).toBeLessThanOrEqual(r.tileH + 1);
         if (r.quote) expect(r.wordOver, `tile ${r.i}: no quote word runs into the padding`).toBeLessThanOrEqual(0.5);
-        // A span-2 tile on a full-width page at 900px is about 140px wide: the
-        // type scales down so every word fits a line whole. Narrower than that,
-        // a word too long for the smallest size breaks rather than overrun.
-        if (full && width >= 900) expect(r.wordRoom, `tile ${r.i}: the widest quote word fits on a line`).toBeLessThanOrEqual(0.5);
       }
     });
   }
@@ -504,6 +490,29 @@ test.describe("collage credits", () => {
   });
 });
 
+test.describe("an ordinary grid card", () => {
+  test("ends with no trailing margin when its last part is a div wrapping a paragraph", async ({ page }) => {
+    await page.setViewportSize({ width: 1360, height: 900 });
+    await page.goto("/parts/");
+    for (const card of await page.locator(".moss-grid-card").all()) {
+      const m = await card.evaluate((el) => {
+        const p = el.querySelector(".note p")!;
+        const part = el.querySelector(".note")!;
+        const cs = getComputedStyle(el);
+        const foot = el.getBoundingClientRect().bottom - parseFloat(cs.paddingBottom) - parseFloat(cs.borderBottomWidth);
+        return {
+          part: getComputedStyle(part).marginBottom,
+          p: getComputedStyle(p).marginBottom,
+          slack: foot - p.getBoundingClientRect().bottom,
+        };
+      });
+      expect(m.part).toBe("0px");
+      expect(m.p).toBe("0px");
+      expect(m.slack, "the paragraph ends at the card's content edge").toBeCloseTo(0, 1);
+    }
+  });
+});
+
 test.describe("a picture shown whole", () => {
   test("is not zoomed on hover, after its placeholder is cleared, while a cropped one is", async ({ page }) => {
     await page.setViewportSize({ width: 1360, height: 900 });
@@ -528,11 +537,11 @@ test.describe("keyboard focus", () => {
     await page.setViewportSize({ width: 1360, height: 900 });
     await page.goto("/mixed/");
     const tile = page.locator(`${MIXED} > :nth-child(1)`);
-    await expect(tile).toHaveCSS("outline-style", "none");
+    const ring = () => tile.evaluate((t) => { const c = getComputedStyle(t, "::after"); return [c.content, c.outlineStyle, c.outlineWidth]; });
+    expect((await ring())[0]).toBe("none");
     await page.keyboard.press("Tab");
     await tile.locator("a").focus();
-    await expect(tile).toHaveCSS("outline-style", "solid");
-    await expect(tile).toHaveCSS("outline-width", "2px");
+    expect((await ring()).slice(1)).toEqual(["solid", "2px"]);
     // The link fills the tile, so its own box is the tile's.
     const [a, t] = await Promise.all([tile.locator("a").boundingBox(), tile.boundingBox()]);
     expect(a!.width).toBeCloseTo(t!.width, 0);
@@ -582,7 +591,7 @@ test.describe("a collage quote reads as type on paper", () => {
     [1360, [15, 17.5], [13.5, 15]],
     [390, [15, 16], [13, 15]],
   ] as const)
-  test(`at ${width}px it sits at the tile's top, small, unhyphenated, its source pinned to the foot`, async ({ page }) => {
+  test(`at ${width}px it sits at the tile's top, small, hyphenated, its source pinned to the foot`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.goto("/full/");
     for (const [n, [lo, hi]] of [[3, short], [8, long]] as const) {
@@ -617,16 +626,62 @@ test.describe("a collage quote reads as type on paper", () => {
       });
       expect(m.size, `quote ${n}`).toBeGreaterThanOrEqual(lo - 0.01);
       expect(m.size, `quote ${n}`).toBeLessThanOrEqual(hi + 0.01);
-      expect(m.hyphens, `quote ${n}: no automatic hyphenation`).not.toBe("auto");
+      expect(m.hyphens, `quote ${n}: hyphenated by the page's language`).toBe("auto");
       expect(m.gapTop, `quote ${n}: set at the top`).toBeLessThanOrEqual(24);
       expect(m.gapFoot, `quote ${n}: source at the foot`).toBeLessThanOrEqual(20);
-      expect(m.capSize).toBe("11px");
+      expect(m.capSize, `quote ${n}: the source is 11px, 10px on a phone`).toBe(width === 390 ? "10px" : "11px");
       expect(m.capFamily).toMatch(/mono/i);
       expect(m.decoration).toBe("none");
       expect(m.rule).toBe("1px");
       expect(m.capW, `quote ${n}: the hairline is as wide as the source`).toBeCloseTo(m.linkW, -1);
       if (m.linked) expect(m.wholeTileLinks, `quote ${n}: the whole tile follows the source's link`).toBe(true);
     }
+  });
+
+  test("at 1360px a quote tile's own padding applies: the words sit 22px from the top and 20px from the side", async ({ page }) => {
+    await page.setViewportSize({ width: 1360, height: 900 });
+    await page.goto("/full/");
+    const m = await page.locator(quote(3)).evaluate((el) => {
+      const t = el.getBoundingClientRect();
+      const p = el.querySelector("blockquote p")!.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      return {
+        padding: cs.padding,
+        side: p.left - t.left - parseFloat(cs.borderLeftWidth),
+        top: p.top - t.top - parseFloat(cs.borderTopWidth),
+      };
+    });
+    expect(m.padding).toBe("22px 20px 18px");
+    expect(m.side, "the words' inset from the tile edge").toBeCloseTo(20, 1);
+    expect(m.top, "the words' inset from the tile top").toBeCloseTo(22, 1);
+
+    // The same padding holds when the generic tile rule comes after the quote's.
+    await page.addStyleTag({ content: `.moss-grid[data-collage] .moss-grid-card:not([data-tile="picture"]) { padding: var(--_tile-pad, var(--moss-space-sm)); }` });
+    await expect(page.locator(quote(3))).toHaveCSS("padding", "22px 20px 18px");
+  });
+
+  test("a quote's paragraphs add no margin at the blockquote's edges and keep the gap between them", async ({ page }) => {
+    await page.setViewportSize({ width: 1360, height: 900 });
+    await page.goto("/paras/");
+    const m = await page.locator(`${MIXED} > :nth-child(2)`).evaluate((el) => {
+      const bq = el.querySelector("blockquote")!.getBoundingClientRect();
+      const [a, b] = [...el.querySelectorAll("blockquote p")].map((p) => p.getBoundingClientRect());
+      const t = el.getBoundingClientRect();
+      return { top: a.top - t.top - 1, startGap: a.top - bq.top, endGap: bq.bottom - b.bottom, between: b.top - a.bottom };
+    });
+    expect(m.top, "the words' top is the tile's padding").toBeCloseTo(22, 1);
+    expect(m.startGap, "no margin above the first paragraph").toBeCloseTo(0, 1);
+    expect(m.endGap, "no margin below the last paragraph").toBeCloseTo(0, 1);
+    expect(m.between, "the gap between paragraphs stays").toBeGreaterThan(4);
+
+    await page.goto("/mixed/");
+    const plain = await page.locator(".moss-grid:not([data-collage]) .moss-quote").evaluate((el) => {
+      const bq = el.querySelector("blockquote")!.getBoundingClientRect();
+      const p = el.querySelector("blockquote p:last-child")!.getBoundingClientRect();
+      return { inside: bq.bottom - p.bottom, toSource: el.querySelector("figcaption")!.getBoundingClientRect().top - bq.bottom };
+    });
+    expect(plain.inside, "a quote in a plain grid: no margin under its last paragraph").toBeCloseTo(0, 1);
+    expect(plain.toSource, "the gap before the source is the source's own").toBeCloseTo(16, 1);
   });
 
   test("a long quote in the narrowest tile steps down, breaks no word and is not cut off", async ({ page }) => {
@@ -746,5 +801,69 @@ test.describe("the contents lane's column is measured against main, not the wind
     });
     expect(r.main, "main gave up the padding").toBeLessThan(1300);
     expect(r.column, "the column is main's width less two lanes (92px each), not the window's").toBeCloseTo(Math.min(1200, r.main - 184), 0);
+  });
+});
+
+test.describe("a collage quote keeps its reading size at tablet widths", () => {
+  for (const width of [768, 1024, 1100])
+    test(`at ${width}px a quote is not set smaller than its floor`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/pair/");
+      const sizes = await page.locator(`${MIXED} blockquote`).evaluateAll((all) =>
+        all.map((b) => parseFloat(getComputedStyle(b).fontSize)));
+      expect(sizes[0], "a short quote").toBeGreaterThanOrEqual(15 - 0.01);
+      expect(sizes[1], "a long quote").toBeGreaterThanOrEqual(13.5 - 0.01);
+    });
+});
+
+test.describe("a quote's long word is hyphenated, not cut", () => {
+  test("a word that wraps inside a narrow tile breaks at a syllable, as the page's language says", async ({ page }) => {
+    await page.setViewportSize({ width: 900, height: 900 });
+    await page.goto("/full/");
+    const widths = (hyphens: string) =>
+      page.locator(`${MIXED} [data-tile="quote"] blockquote`).first().evaluate((bq, mode) => {
+        bq.style.hyphens = mode;
+        const out: Record<string, number> = {};
+        const walker = document.createTreeWalker(bq, NodeFilter.SHOW_TEXT);
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+          for (const m of n.textContent!.matchAll(/\S+/g)) {
+            const range = document.createRange();
+            range.setStart(n, m.index!);
+            range.setEnd(n, m.index! + m[0].length);
+            const rects = range.getClientRects();
+            if (rects.length > 1) out[m[0]] = Math.round(rects[0].width);
+          }
+        }
+        return out;
+      }, hyphens);
+    const auto = await widths("auto");
+    const raw = await widths("manual");
+    const words = Object.keys(raw);
+    expect(words.length, "the tile is narrow enough to wrap a word").toBeGreaterThan(0);
+    // A capitalised word may be cut unhyphenated by some engines (the accepted last resort); a lowercase one must break at a syllable.
+    const lower = words.filter((w) => /^[a-z]/.test(w));
+    expect(lower.length, "a lowercase word wraps too").toBeGreaterThan(0);
+    for (const w of lower) expect(auto[w], `${w} breaks at a syllable`).not.toBe(raw[w]);
+  });
+});
+
+test.describe("a collage tile's keyboard focus ring", () => {
+  test("shows over the picture, and the picture is untouched when focus leaves", async ({ page }) => {
+    await page.setViewportSize({ width: 1360, height: 900 });
+    await page.goto("/mixed/");
+    const tile = page.locator(`${MIXED} > :nth-child(1)`);
+    await tile.scrollIntoViewIfNeeded();
+    const box = (await tile.boundingBox())!;
+    // The left edge, clear of the caption at the foot.
+    const strip = { x: box.x, y: box.y + box.height * 0.2, width: 6, height: box.height * 0.4 };
+    const before = await page.screenshot({ clip: strip });
+    await page.keyboard.press("Tab");
+    await tile.locator("a").focus();
+    expect(await tile.evaluate((t) => t.matches(":has(:focus-visible)")), "Tab reached the tile").toBe(true);
+    const ring = await page.screenshot({ clip: strip });
+    expect(ring.equals(before), "the ring is painted on the picture's edge").toBe(false);
+    await page.evaluate(() => (document.activeElement as HTMLElement).blur());
+    await page.mouse.move(0, 0);
+    expect((await page.screenshot({ clip: strip })).equals(before), "nothing stays over the picture").toBe(true);
   });
 });

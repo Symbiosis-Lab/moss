@@ -2553,6 +2553,22 @@ fn render_with_math(md: &str, math: bool) -> String {
     doc.html_content
 }
 
+/// Nesting past the parser's cap is flattened, so a debug build on a 2 MB
+/// worker stack neither overflows nor loses the text.
+#[test]
+fn deeply_nested_markers_render_on_a_small_stack_and_keep_their_text() {
+    for marker in ["- ", "> "] {
+        let md = format!("{}x\n", marker.repeat(300));
+        let html = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || render_with_math(&md, false))
+            .unwrap()
+            .join()
+            .expect("render must not overflow the stack");
+        assert!(html.contains("x</"), "text lost for {marker:?}");
+    }
+}
+
 /// The `math` argument must reach `ParseConfig`, not just exist.
 ///
 /// This is a WIRING test, and it is the one that matters: the moss-core
@@ -3627,6 +3643,35 @@ fn per_page_language_subscribe_in_zh_hans_subdir() {
     );
 }
 
+/// A `:::subscribe` inside a `:::grid` cell is the real hosted form (a
+/// `<form>` with a named, labelled email input), the same one it is at the top
+/// level, not the moss-core skeleton.
+#[test]
+fn subscribe_in_grid_cell_renders_the_real_labelled_form() {
+    let md = "---\ntitle: Example Lab\n---\n\n:::grid 2\nAbout us\n+++\n:::subscribe\n:::\n:::\n";
+    let empty_map = HashMap::new();
+    let doc = process_markdown_file(
+        "index.md",
+        md,
+        "test-site",
+        &empty_map,
+        false,
+        Language::En,
+        Some("test-site"),
+        crate::build::markdown::SiteMarkdown::default(),
+        None,
+        None,
+        None,
+        PageContext { has_content_folders: false, seta_url: Some("https://api.mosspub.com"), folder_lang: None, derived_facts: &Default::default(), authored_source: None },
+    )
+    .expect("should parse");
+    let html = &doc.html_content;
+    assert!(html.contains("<form class=\"moss-subscribe-form\""), "cell form must be a real <form>, got:\n{html}");
+    assert!(html.contains("name=\"email\""), "email input must be named, got:\n{html}");
+    assert!(html.contains("aria-label=\"Email address\""), "email input needs an accessible name, got:\n{html}");
+    assert!(!html.contains("<input type=\"email\" placeholder"), "moss-core skeleton leaked, got:\n{html}");
+}
+
 /// A frontmatter field moss doesn't recognize is normally silent by design.
 /// `slug:` was silent too — and it is the custom-URL field in Hugo, Jekyll,
 /// Zola and Astro, so a writer arriving from any of them pinned a URL, got
@@ -4346,6 +4391,7 @@ fn a_blank_title_or_description_takes_the_inferred_fact_and_a_written_one_wins()
     let facts = moss_core::resolve::embeds::derived::DerivedFacts {
         title: Some("Derived title".into()),
         description: Some("Derived words".into()),
+        date: Some("2020-06-09".into()),
     };
     let parse = |source: &str| {
         process_markdown_file(
@@ -4371,6 +4417,11 @@ fn a_blank_title_or_description_takes_the_inferred_fact_and_a_written_one_wins()
     assert_eq!((written.title.as_str(), written.description.as_deref()), ("Mine", Some("Mine too")));
     let unlisted = parse("---\ntitle: \"\"\n---\nBody paragraph.\n");
     assert_ne!(unlisted.title, "Derived title");
+    assert_eq!(unlisted.date, None);
+    let dated = parse("---\ninferred: [date]\n---\nBody paragraph.\n");
+    assert_eq!(dated.date.as_deref(), Some("2020-06-09"));
+    let own_date = parse("---\ndate: 2019-01-01\ninferred: [date]\n---\nBody paragraph.\n");
+    assert_eq!(own_date.date.as_deref(), Some("2019-01-01"));
 }
 
 #[test]

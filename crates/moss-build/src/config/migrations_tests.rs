@@ -640,3 +640,12 @@ fn v3_to_v4_drops_uppercase_moss_operated_server_url() {
         "uppercase moss-operated URL must be stripped"
     );
 }
+
+#[test]
+fn a_save_records_version_seven_only_for_a_config_that_names_a_floor() {
+    let none: toml::Table = toml::from_str("schema_version = 3").unwrap();
+    let floor: toml::Table = toml::from_str("min_moss_version = \"0.15.15\"").unwrap();
+    assert_eq!(stamp_for_save(3, &none), BASE_VERSION);
+    assert_eq!(stamp_for_save(3, &floor), CURRENT_VERSION);
+    assert_eq!(stamp_for_save(CURRENT_VERSION, &none), CURRENT_VERSION, "a stamp is never lowered");
+}

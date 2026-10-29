@@ -12,9 +12,9 @@
 //! `tests/fixtures/math-fuzz-corpus/README.md`) found two *uncatchable* stack
 //! overflows in RaTeX 0.1.13 — combining-mark recursion in `layout_accent`
 //! ([#143]) and a stack-blind depth guard ([#144]) that aborts on the 2 MiB
-//! stacks rayon build workers run with. moss builds under `panic = "abort"`,
-//! so a stack overflow does not unwind — it **aborts the whole app**
-//! (`catch_unwind` is proven useless here, exit 134). The defense is layered
+//! stacks rayon build workers run with. A stack overflow never unwinds, in any
+//! profile — it **aborts the whole app** (`catch_unwind` is proven useless
+//! here, exit 134). The defense is layered
 //! and every layer is load-bearing:
 //!
 //! - **A — input envelope** ([`guard`]): length ≤ [`MAX_TEX_BYTES`], nesting ≤

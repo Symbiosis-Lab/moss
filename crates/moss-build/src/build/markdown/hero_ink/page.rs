@@ -1,0 +1,100 @@
+//! What the page around a closing picture is: its colours as the theme sets
+//! them, and its colophon row.
+
+use super::{Layout, Theme, TypeTheme, CREDIT_INK, TEXT_INK};
+use crate::build::scan::section_text::{Rgb, BACKGROUNDS};
+
+/// The colophon's row along a closing picture's bottom edge (2.25rem).
+pub(crate) const COLOPHON_PX: f32 = 36.0;
+
+/// The line a site's own credit adds above the mark on a phone, where it wraps
+/// (1.5rem). The credit's stylesheet reads it from here too.
+pub(crate) const CREDIT_LINE_PX: f32 = 24.0;
+
+/// How tall the colophon's row is at `layout`: a phone also reserves one line
+/// for a credit that wraps above the mark.
+pub(super) fn colophon_px(layout: Layout, credit: bool) -> f32 {
+    COLOPHON_PX + if credit && layout == Layout::Narrow { CREDIT_LINE_PX } else { 0.0 }
+}
+
+/// What the page around a closing picture is: the page colour behind a faded
+/// picture, `--moss-color-bg` in the light and the dark theme (`None` where the
+/// theme sets it to a value the build can't read), the secondary text colour the
+/// credit can take, and its colophon row.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PageGround {
+    pub light: Option<Rgb>,
+    pub dark: Option<Rgb>,
+    /// The theme's secondary text colour in each, which the credit can take (`None` where it cannot be read).
+    pub credit_light: Option<Rgb>,
+    pub credit_dark: Option<Rgb>,
+    /// The theme's page text colour in each, which a faded closing picture's words can take.
+    pub text_light: Option<Rgb>,
+    pub text_dark: Option<Rgb>,
+    /// Whether the page sets a colophon row along a closing picture's foot,
+    /// which the credit then sits above.
+    pub colophon: bool,
+    /// Whether the site has its own credit, which can wrap above the mark and
+    /// make the colophon's row one line taller on a phone.
+    pub credit: bool,
+    /// What the theme changes in the type the words are set in.
+    pub type_theme: TypeTheme,
+}
+
+impl Default for PageGround {
+    fn default() -> Self {
+        let (light, dark) = *BACKGROUNDS;
+        Self { light: Some(light), dark: Some(dark), credit_light: Some(CREDIT_INK.0), credit_dark: Some(CREDIT_INK.1), text_light: Some(TEXT_INK.0), text_dark: Some(TEXT_INK.1), colophon: true, credit: false, type_theme: TypeTheme::default() }
+    }
+}
+
+impl PageGround {
+    /// The light or the dark theme's colours.
+    pub(super) fn theme(&self, night: bool) -> Theme {
+        if night { Theme { page: self.dark, text: self.text_dark, night } } else { Theme { page: self.light, text: self.text_light, night } }
+    }
+
+    /// The same page with its colophon row set.
+    pub fn with_colophon(self, colophon: bool) -> Self {
+        Self { colophon, ..self }
+    }
+
+    /// moss's colours as the theme's stylesheet overrides them. Read only
+    /// where the authoring guide tells a theme to set a token: `:root {}`,
+    /// which wins in both themes, and `:root[data-theme="dark"] {}`. A
+    /// declaration anywhere else, or a value that is not a plain colour
+    /// (`var()`, `color-mix()`), leaves both themes unresolved.
+    pub fn of_theme(theme_css: Option<&str>) -> Self {
+        let (light, dark) = theme_colours(theme_css, "--moss-color-bg", *BACKGROUNDS);
+        let (credit_light, credit_dark) = theme_colours(theme_css, "--moss-color-text-secondary", *CREDIT_INK);
+        let (text_light, text_dark) = theme_colours(theme_css, "--moss-color-text", *TEXT_INK);
+        Self { light, dark, credit_light, credit_dark, text_light, text_dark, type_theme: TypeTheme::of_theme(theme_css), ..Self::default() }
+    }
+}
+
+/// A colour token's value in the light and the dark theme: moss's own where the
+/// theme does not set it, and `None` in both where it sets it somewhere the
+/// build cannot follow or to a value it cannot read.
+fn theme_colours(theme_css: Option<&str>, token: &str, default: (Rgb, Rgb)) -> (Option<Rgb>, Option<Rgb>) {
+    use crate::build::theme_lint::{token_declarations, Scope};
+    let (mut root, mut dark) = (None, None);
+    for (scope, prop, value) in token_declarations(&crate::build::theme_lint::strip_comments(theme_css.unwrap_or_default())) {
+        if prop != token {
+            continue;
+        }
+        let colour = crate::build::components::color_extract::parse_css_color(value.trim_end_matches("!important").trim());
+        match scope {
+            Scope::Light => root = Some(colour),
+            Scope::Dark => dark = Some(colour),
+            Scope::Other => return (None, None),
+        }
+    }
+    let (mut light_theme, mut dark_theme) = (Some(default.0), Some(default.1));
+    if let Some(colour) = root {
+        (light_theme, dark_theme) = (colour, colour);
+    }
+    if let Some(colour) = dark {
+        dark_theme = colour;
+    }
+    (light_theme, dark_theme)
+}

@@ -6542,6 +6542,31 @@ fn slot_only_sources_appear_in_sealed_sources() {
     }
 }
 
+/// A Finder alias whose target will not resolve is skipped from the output,
+/// but the walk still judges it, so it needs a `sources` entry for the same
+/// reason as the slot files above.
+#[cfg(target_os = "macos")]
+#[test]
+fn an_unresolvable_alias_appears_in_sealed_sources() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "# Home\nwelcome").unwrap();
+    let mut bookmark = b"book\0\0\0\0".to_vec();
+    bookmark.extend_from_slice(&[0xFFu8; 200]);
+    fs::write(test_dir.join("old-app"), &bookmark).unwrap();
+
+    build_test(folder_path, None, None, None, None, &ResolvedSlots::empty()).unwrap();
+
+    let hashes = load_previous_hashes(folder_path);
+    assert!(
+        hashes.sources.contains_key("old-app"),
+        "an unresolvable alias is absent from sealed `sources`, so the sweep reads it as \
+         a new file every pass; got {:?}",
+        hashes.sources.keys().collect::<Vec<_>>()
+    );
+    assert!(!hashes.files.keys().any(|k| k.contains("old-app")), "it is still not published");
+}
+
 /// The publish gate's evidence must survive a real build.
 ///
 /// `deploy::refuse_publish` is the only thing between an author and a
@@ -7094,11 +7119,9 @@ fn the_sitemap_leaves_out_html_pages_that_declare_noindex() {
     for (name, html) in pages {
         fs::write(test_dir.join(name), html).unwrap();
     }
-    // Only the first 8 KiB is read: a meta past it is not seen, one inside it is.
     let noindex = "<meta name=\"robots\" content=\"noindex\">";
     let padded = |pad: usize| format!("<html><head>{}{noindex}</head></html>", " ".repeat(pad));
-    fs::write(test_dir.join("too-late.html"), padded(9000)).unwrap();
-    fs::write(test_dir.join("just-inside.html"), padded(8000)).unwrap();
+    fs::write(test_dir.join("late.html"), padded(9000)).unwrap();
     fs::create_dir_all(test_dir.join("share/abc123")).unwrap();
     fs::write(
         test_dir.join("share/abc123/index.html"),
@@ -7108,10 +7131,42 @@ fn the_sitemap_leaves_out_html_pages_that_declare_noindex() {
 
     build_test_at_site_url(folder_path).expect("build");
     let sitemap = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/sitemap.xml")).unwrap();
-    for kept in ["music.html", "about.html", "commented.html", "too-late.html"] {
+    for kept in ["music.html", "about.html", "commented.html"] {
         assert!(sitemap.contains(&format!("/{kept}</loc>")), "the sitemap must list {kept}\n{sitemap}");
     }
-    for out in ["scales.html", "closed.html", "just-inside.html", "share/abc123/", "hidden/"] {
+    for out in ["scales.html", "closed.html", "late.html", "share/abc123/", "hidden/"] {
+        assert!(!sitemap.contains(&format!("/{out}</loc>")), "the sitemap must not list {out}\n{sitemap}");
+    }
+}
+
+/// Hand-written pages put the robots meta wherever their head has room: after
+/// a long inline stylesheet, or addressed to one crawler by name. Each is as
+/// much a hidden page as the plain tag, and none may be listed.
+#[test]
+fn the_sitemap_leaves_out_html_pages_whose_noindex_sits_deep_or_names_a_crawler() {
+    let (test_dir, _cleanup) = create_test_dir();
+    let folder_path = test_dir.to_str().unwrap();
+    fs::write(test_dir.join("index.md"), "---\ntitle: Home\n---\n\nHome.\n").unwrap();
+    let style = "a{color:red}\n".repeat(2000);
+    fs::create_dir_all(test_dir.join("drafts/abc123")).unwrap();
+    // A head that never ends within the 4 MiB read ceiling cannot be vouched for.
+    fs::write(test_dir.join("endless.html"), format!("<html><head><style>{}", "a{}\n".repeat(1_100_000))).unwrap();
+    let pages = [
+        ("drafts/abc123/index.html", format!("<html><head><style>{style}</style><meta name=\"robots\" content=\"noindex, nofollow\"></head><body>x</body></html>")),
+        ("drafts/abc123/other.html", "<html><head><meta content=\"NoIndex\" name=\"googlebot\"></head><body>x</body></html>".to_string()),
+        ("open.html", format!("<html><head><style>{style}</style></head><body><meta name=\"robots\" content=\"noindex\"></body></html>")),
+        ("allowed.html", "<html><head><meta name=\"googlebot\" content=\"nosnippet\"></head><body>x</body></html>".to_string()),
+    ];
+    for (name, html) in pages {
+        fs::write(test_dir.join(name), html).unwrap();
+    }
+
+    build_test_at_site_url(folder_path).expect("build");
+    let sitemap = fs::read_to_string(test_dir.join(".moss/build.nosync/staging/sitemap.xml")).unwrap();
+    for kept in ["open.html", "allowed.html"] {
+        assert!(sitemap.contains(&format!("/{kept}</loc>")), "the sitemap must list {kept}\n{sitemap}");
+    }
+    for out in ["drafts/abc123/", "drafts/abc123/other.html", "endless.html"] {
         assert!(!sitemap.contains(&format!("/{out}</loc>")), "the sitemap must not list {out}\n{sitemap}");
     }
 }
@@ -7895,4 +7950,44 @@ async fn a_build_whose_published_page_links_to_a_draft_refuses_the_publish() {
     fs::write(dir.join("index.md"), "---\ntitle: Home\n---\n\nNothing linked.\n").unwrap();
     run_pipeline(config(crate::build::ship::next_promotion_epoch())).await.expect("build completes");
     assert!(crate::deploy::refuse_publish(folder).is_ok(), "a draft nobody links to publishes fine");
+}
+
+fn build_with_preview_cache(dir: &std::path::Path) -> String {
+    let gates = crate::build::render::IncrementalGates { render_skip: false, parse_cache: true };
+    build_test_full_with_gates(dir.to_str().unwrap(), None, None, None, None, &ResolvedSlots::empty(), gates)
+        .expect("build");
+    fs::read_to_string(dir.join(".moss/build.nosync/staging/_moss/previews.json")).expect("previews.json")
+}
+
+#[test]
+fn previews_json_recomputes_only_changed_pages_and_drops_removed_ones() {
+    let _cache_store = crate::build::parse_cache::store_lock_for_tests();
+    let (dir, _cleanup) = create_test_dir();
+    let page = |title: &str, body: &str| format!("---\ntitle: {title}\n---\n\n{body}\n");
+    fs::write(dir.join("a.md"), page("Alpha", "Alpha opening paragraph.")).unwrap();
+    fs::write(dir.join("b.md"), page("Beta", "Beta opening paragraph.")).unwrap();
+    fs::write(dir.join("c.md"), page("Gamma", "Gamma opening paragraph.")).unwrap();
+    let computed = crate::build::feeds::previews::last_computed;
+
+    let cold = build_with_preview_cache(&dir);
+    assert!(computed() >= 3, "a cold build computes every public page");
+    for text in ["Alpha opening", "Beta opening", "Gamma opening"] {
+        assert!(cold.contains(text), "{text} missing from {cold}");
+    }
+
+    assert_eq!(build_with_preview_cache(&dir), cold, "an unchanged site yields identical bytes");
+    assert_eq!(computed(), 0, "an unchanged site replays every excerpt");
+
+    fs::write(dir.join("b.md"), page("Beta", "Beta rewritten paragraph.")).unwrap();
+    let edited = build_with_preview_cache(&dir);
+    assert_eq!(computed(), 1, "one edited page recomputes one excerpt");
+    assert!(edited.contains("Beta rewritten") && !edited.contains("Beta opening"));
+    assert!(edited.contains("Alpha opening") && edited.contains("Gamma opening"));
+
+    fs::remove_file(dir.join("c.md")).unwrap();
+    let removed = build_with_preview_cache(&dir);
+    assert_eq!(computed(), 0, "removing a page recomputes nothing");
+    assert!(!removed.contains("Gamma"), "a removed page leaves previews.json: {removed}");
+    assert!(removed.contains("Alpha opening") && removed.contains("Beta rewritten"));
+    crate::build::parse_cache::reset_for_tests();
 }

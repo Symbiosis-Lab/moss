@@ -23,6 +23,12 @@ use crate::types::content::SiteResult;
 use crate::moss_paths::MossPaths;
 use std::path::Path;
 
+#[cfg(test)]
+thread_local! {
+    /// Pages the latest slot pass on this thread read and hashed.
+    pub(crate) static LAST_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn apply_to_stage_and_manifest(
     paths: &MossPaths,
@@ -49,19 +55,35 @@ pub fn apply_to_stage_and_manifest(
     // The record of which blob each staged page was linked from, so a page
     // whose stage file already holds its final bytes is not written again.
     let mut staged = crate::build::lifecycle::cas_heal::StagedLinks::load(paths, "pages", stage_dir);
-    let receipts = crate::build::enhance::inject_slots_into_directory_cached(
+    // A carried page holds the previous pass's output only if that pass ran with
+    // these same slots and shipping transform; otherwise every page is re-read.
+    let slots_hash = crate::build::enhance::resolved_slots_hash(slots);
+    let pass_key = format!("{slots_hash}:{}", crate::build::ship::SHIP_TRANSFORM_REV);
+    let pass_record = paths.cache_dir().join("slot-pass.json");
+    let same_pass = std::fs::read_to_string(&pass_record).is_ok_and(|previous| previous == pass_key);
+    let carried = if same_pass { pending.carried_pages() } else { Default::default() };
+    let pass = crate::build::enhance::inject_slots_into_directory_cached(
         paths.project_root(),
         stage_dir,
         slots,
+        &slots_hash,
         &object_store,
         &transform_cache,
         pending.take_unwritten_pages(),
+        &carried,
         &mut staged,
     )
     // `with_context`, not `format!`: re-stringifying would discard the deferred
     // verdict. `BuildStopped` has no `Display`, so that mistake cannot compile.
     .map_err(|e| e.with_context("Slot injection failed on site-stage"))?;
+    // Before `staged.save()`: a crash between the two must leave links that no
+    // longer vouch, never a record claiming slots the staged pages were not filled with.
+    if !same_pass {
+        let _ = std::fs::write(&pass_record, &pass_key); // allow:raw_write per-machine cache record, never staging
+    }
     staged.save();
+    #[cfg(test)]
+    LAST_SCANNED.with(|n| n.set(pass.scanned));
 
     // Takes what the injection pass REPORTS, never what a read of the stage says
     // is there. The hash and the CAS object arrive in the receipt because the
@@ -74,7 +96,7 @@ pub fn apply_to_stage_and_manifest(
     // would otherwise do. Nothing that used to be registered here is lost: a page
     // keeps its markers only until the first pass that fills them, so the pages
     // the pass rewrites are the ones this build just rendered.
-    for receipt in receipts {
+    for receipt in pass.receipts {
         // A stage path no page of this build could have (`_moss/...` bundles the
         // search lane laid down last time) is simply not one.
         let Ok(sp) = crate::build::served_path::ServedPath::from_source(&receipt.page_path) else {

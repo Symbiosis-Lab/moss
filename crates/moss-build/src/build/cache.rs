@@ -25,8 +25,10 @@
 //!     └── ab/cd/<source_hash>.json
 //! ```
 //!
-//! The shared cache is an optional replica. Site stores keep regenerated blobs
-//! in `.moss/build.nosync/cache/local-objects/` when shared writes are unavailable.
+//! Site stores keep this machine's copies of source files in
+//! `.moss/build.nosync/cache/local-objects/`, never in the synced store (the
+//! source file syncs itself), and regenerated blobs there too when shared writes
+//! are unavailable.
 //! Build both stores via `for_site`, not a hand join.
 
 use crate::build::stat::{recording_clock, FileStat};
@@ -236,6 +238,15 @@ impl ObjectStore {
                 ObjectStore::new(site.cache_local_objects()).store_file_in_base(source, RecordMode::Request)
                     .map_err(|local_error| format!("Shared CAS: {shared_error}; local CAS: {local_error}"))
             }
+        }
+    }
+
+    /// Store a verbatim copy of a site's own source file, in this machine's
+    /// store only: the file itself already travels with the folder.
+    pub fn store_source_file(&self, source: &Path, mode: RecordMode) -> Result<String, String> {
+        match &self.site {
+            Some(site) => ObjectStore::new(site.cache_local_objects()).store_file_in_base(source, mode),
+            None => self.store_file_in_base(source, mode),
         }
     }
 
@@ -1467,6 +1478,20 @@ pub struct GcResult {
 static LAST_GC: std::sync::LazyLock<std::sync::Mutex<HashMap<PathBuf, (std::time::Instant, usize)>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
+/// Move a source copy out of the synced store into this machine's. False when
+/// the synced copy should be dropped instead: this machine already holds one,
+/// or the synced copy is still in the cloud. A failed rename keeps it in place.
+fn move_into(blob: &Path, local_objects_dir: &Path, oid: &str) -> bool {
+    let local = ObjectStore::blob_path_in(local_objects_dir, oid);
+    if local.is_file() || crate::build::icloud::is_still_in_the_cloud(blob) {
+        return false;
+    }
+    // allow:unlink renames a blob between the site's two CAS stores, never under staging
+    let _ = local.parent().is_some_and(|dir| crate::build::io_utils::create_output_dir_all(dir).is_ok())
+        && fs::rename(blob, &local).is_ok(); // allow:raw_write moves a CAS blob between this site's two stores
+    true
+}
+
 fn record_gc(objects_dir: &Path, objects_removed: usize) {
     if let Ok(mut map) = LAST_GC.lock() {
         map.insert(objects_dir.to_path_buf(), (std::time::Instant::now(), objects_removed));
@@ -1527,16 +1552,19 @@ pub(crate) fn gc(mp: &crate::moss_paths::MossPaths, _token: &crate::build::lifec
         .map(|e| e.content_hash.as_str())
         .collect();
 
-    // Phase 1: mark transform records. Source OIDs are live themselves (they
-    // may be stored in objects/); a live record's outputs are live.
-    let mut referenced_oids: std::collections::HashSet<String> =
+    // Phase 1: mark transform records. A live record's outputs are live in
+    // both stores. A source oid is live only in `local-objects/`, even when it
+    // is also an output (a video kept as its web file): a copy in the synced
+    // store is moved to this machine's store, or dropped if one is there.
+    let mut source_oids: std::collections::HashSet<String> =
         live_source_oids.iter().map(|oid| (*oid).to_string()).collect();
+    let mut referenced_oids: std::collections::HashSet<String> = std::collections::HashSet::new();
     for generation in read_dir_strict(&mp.generations_dir()).map_err(|error| unreadable(&mp.generations_dir(), error))? {
         let path = mp.generation_dir(&generation);
         if !fs::metadata(&path).map_err(|error| unreadable(&path, error))?.is_dir() { continue; }
         if let Some(receipt) = crate::build::manifest::preview_originals::Originals::read(&mp.generations_dir(), &generation)
             .map_err(|error| format!("original identities unreadable: {error}"))? {
-            referenced_oids.extend(receipt.images.into_values().map(|original| original.oid));
+            source_oids.extend(receipt.images.into_values().map(|original| original.oid));
         }
     }
     let mut condemned_records: Vec<PathBuf> = Vec::new();
@@ -1568,10 +1596,8 @@ pub(crate) fn gc(mp: &crate::moss_paths::MossPaths, _token: &crate::build::lifec
                 let record = serde_json::from_str::<TransformRecord>(&data).map_err(|e| {
                     unreadable(&file_path, std::io::Error::new(std::io::ErrorKind::InvalidData, e))
                 })?;
-                // A surviving record keeps everything it names, its source
-                // included: the machine that stored it may hold that source
-                // only here.
-                referenced_oids.insert(record.source_oid);
+                // A surviving record keeps everything it names.
+                source_oids.insert(record.source_oid);
                 referenced_oids.extend(record.transforms.into_values().map(|entry| entry.oid));
             }
             shard_dirs.push(p2);
@@ -1610,7 +1636,9 @@ pub(crate) fn gc(mp: &crate::moss_paths::MossPaths, _token: &crate::build::lifec
     let mut objects_removed: usize = 0;
     let mut bytes_freed: u64 = 0;
 
-    for objects_dir in [&objects_dir, &local_objects_dir] {
+    // The synced store is swept first, so a source copy moved out of it is
+    // live when the local store is swept.
+    for (objects_dir, is_local) in [(&objects_dir, false), (&local_objects_dir, true)] {
         if !objects_dir.is_dir() {
             continue;
         }
@@ -1635,7 +1663,13 @@ pub(crate) fn gc(mp: &crate::moss_paths::MossPaths, _token: &crate::build::lifec
                         continue;
                     }
                     // The filename IS the OID (no extension)
-                    if !referenced_oids.contains(filename.as_str()) {
+                    let is_source = source_oids.contains(filename.as_str());
+                    if is_source && !is_local && move_into(&file_path, &local_objects_dir, &filename) {
+                        continue;
+                    }
+                    let live = if is_local { is_source || referenced_oids.contains(filename.as_str()) }
+                        else { !is_source && referenced_oids.contains(filename.as_str()) };
+                    if !live {
                         // Unreferenced blob — delete it
                         let file_size = fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
                         // allow:unlink cache/objects and cache/transforms, not staging

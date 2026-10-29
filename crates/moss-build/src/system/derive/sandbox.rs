@@ -1,9 +1,10 @@
 //! The confinement a derivation binary runs in.
 //!
 //! On macOS the binary runs under `sandbox-exec` with the network denied and
-//! file writes allowed only inside a per-run scratch directory (plus the
-//! handful of device nodes every program touches). Reads stay open: the binary
-//! has to read its input and its own libraries.
+//! file writes allowed only inside a per-run scratch directory and, when the
+//! caller gives one, the plugin's persistent cache directory (plus the handful
+//! of device nodes every program touches). Reads stay open: the binary has to
+//! read its input and its own libraries.
 //!
 //! The profile is a denylist over `(allow default)`, so it also closes the
 //! ways out of it that do not touch files or the network: Apple events, signals
@@ -29,20 +30,26 @@ const PROFILE: &str = r#"(version 1)
 (deny file-write*)
 (allow file-write*
   (subpath (param "SCRATCH"))
+  (subpath (param "CACHE"))
   (literal "/dev/null")
   (literal "/dev/dtracehelper")
   (regex #"^/dev/tty"))
 "#;
 
-/// A command that runs `binary` confined, with `scratch` as its only writable
-/// directory. `scratch` must already exist and be canonical (symlink-free),
-/// because the sandbox matches resolved paths.
-pub fn command(binary: &Path, scratch: &Path) -> Command {
+/// A command that runs `binary` confined, with `scratch` and `cache` as its
+/// only writable directories. Both must already exist and be canonical
+/// (symlink-free), because the sandbox matches resolved paths. `cache` is
+/// handed over as `MOSS_CACHE_DIR`: the plugin's private store, kept across
+/// runs and sites, never synced, and cleared by moss at any time, so every
+/// entry in it must be disposable. With no `cache` the variable is unset.
+pub fn command(binary: &Path, scratch: &Path, cache: Option<&Path>) -> Command {
     #[cfg(target_os = "macos")]
     let mut cmd = {
         let mut cmd = Command::new("/usr/bin/sandbox-exec");
         cmd.arg("-D")
             .arg(format!("SCRATCH={}", scratch.display()))
+            .arg("-D")
+            .arg(format!("CACHE={}", cache.unwrap_or(scratch).display()))
             .arg("-p")
             .arg(PROFILE)
             .arg(binary);
@@ -62,6 +69,9 @@ pub fn command(binary: &Path, scratch: &Path) -> Command {
         }
     }
     cmd.env("TMPDIR", scratch).env("HOME", scratch);
+    if let Some(cache) = cache {
+        cmd.env("MOSS_CACHE_DIR", cache);
+    }
     cmd
 }
 

@@ -342,9 +342,9 @@ fn handle_symlink_unix(
 
     // Step 5: containment check.
     if !canonical_target.starts_with(canonical_root) {
-        log::warn!(
-            "[copy] Skipping symlink that escapes site root: {} -> {} (resolved: {})",
-            rel_path, target.display(), canonical_target.display()
+        crate::build::cli_output::log_note!(
+            "[copy] Skipping symlink {} -> {}: it points outside the site folder, so it is not published. Remove it, or replace it with a copy of the file inside the folder.",
+            rel_path, target.display()
         );
         return SymlinkOutcome::SkippedEscape { rel_path: rel_path.to_string() };
     }
@@ -402,6 +402,13 @@ fn handle_symlink_unix(
     }
 }
 
+/// Aliases already warned about this process: every rebuild walks them again.
+fn warned_aliases() -> &'static std::sync::Mutex<std::collections::HashSet<PathBuf>> {
+    static WARNED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
+        std::sync::OnceLock::new();
+    WARNED.get_or_init(Default::default)
+}
+
 /// macOS-only: handle a regular file that is a Finder Bookmark Alias.
 /// Resolves it, runs the same containment + processable checks as
 /// `handle_symlink_entry`, and writes a real POSIX symlink in the output.
@@ -432,13 +439,15 @@ pub fn handle_alias_entry(
                 .strip_prefix(source_root)
                 .map(|r| r.to_string_lossy().to_string())
                 .unwrap_or_else(|_| entry_path.display().to_string());
-            log::warn!(
-                "[copy] macOS Finder Alias could not be resolved — is the target \
-                 downloaded from iCloud? (turn off 'Optimize Mac Storage' for the \
-                 folder, or right-click → Download Now, then re-publish). Skipping \
-                 rather than publishing a broken blob: {}",
-                rel_path
-            );
+            if crate::infra::warn_once::should_warn_once(entry_path.to_path_buf(), warned_aliases()) {
+                log::warn!(
+                    "[copy] macOS Finder Alias could not be resolved, so it is not published: {}. \
+                     Its target may not be downloaded from iCloud (right-click it → Download Now), \
+                     or may no longer be where the alias points, as with an alias made on another \
+                     Mac; replacing the alias with a symlink or a copy avoids both.",
+                    rel_path
+                );
+            }
             return Some(SymlinkOutcome::SkippedUnresolvable { rel_path });
         }
     };
@@ -459,8 +468,8 @@ pub fn handle_alias_entry(
         }
     };
     if !canonical_target.starts_with(canonical_root) {
-        log::warn!(
-            "[copy] Skipping alias that escapes site root: {} -> {}",
+        crate::build::cli_output::log_note!(
+            "[copy] Skipping alias {} -> {}: it points outside the site folder, so it is not published. Remove it, or replace it with a copy of the file inside the folder.",
             rel_path, canonical_target.display()
         );
         return Some(SymlinkOutcome::SkippedEscape { rel_path });
@@ -553,11 +562,13 @@ pub fn handle_alias_entry(
         .strip_prefix(source_root)
         .map(|r| r.to_string_lossy().to_string())
         .unwrap_or_else(|_| entry_path.display().to_string());
-    log::warn!(
-        "[copy] Found macOS Finder Alias '{}' on a non-macOS build; skipping. \
-         Resolve and re-publish from a Mac, or replace with a POSIX symlink.",
-        rel_path
-    );
+    if crate::infra::warn_once::should_warn_once(entry_path.to_path_buf(), warned_aliases()) {
+        log::warn!(
+            "[copy] Found macOS Finder Alias '{}' on a non-macOS build; skipping. \
+             Resolve and re-publish from a Mac, or replace with a POSIX symlink.",
+            rel_path
+        );
+    }
     Some(SymlinkOutcome::SkippedUnsupportedPlatform { rel_path })
 }
 
@@ -881,6 +892,24 @@ mod tests {
         assert!(
             fs::symlink_metadata(output.join("city-heat-map")).is_err(),
             "no output entry should exist for an unresolvable alias"
+        );
+    }
+
+    /// Every rebuild walks the alias again; the warning is for the first.
+    #[test]
+    fn an_unresolvable_alias_warns_once_per_process() {
+        let (_tmp, source, output) = make_fixture(&[]);
+        let mut bytes = b"book\0\0\0\0".to_vec();
+        bytes.extend_from_slice(&[0xFFu8; 200]);
+        let alias = source.join("old-app");
+        std::fs::write(&alias, &bytes).unwrap();
+        let canonical_root = source.canonicalize().unwrap();
+
+        handle_alias_entry(&alias, &source, &canonical_root, &output);
+
+        assert!(
+            !crate::infra::warn_once::should_warn_once(alias.clone(), warned_aliases()),
+            "the first skip must have claimed the warning for this alias"
         );
     }
 

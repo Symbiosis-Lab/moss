@@ -317,7 +317,6 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
   cardsEl.addEventListener("wheel", (e) => {
     if (e.ctrlKey || Math.abs(e.deltaX) >= Math.abs(e.deltaY) || cardsEl.scrollWidth <= cardsEl.clientWidth + 1) return;
     e.preventDefault();
-    e.stopPropagation();
     const pixels = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * cardsEl.clientWidth : e.deltaY;
     cardsEl.scrollLeft += getComputedStyle(cardsEl).direction === "rtl" ? -pixels : pixels;
   }, { passive: false });
@@ -433,7 +432,8 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     options.lang,
   );
 
-  const cardRow = new CardRow(cardsEl, { selectWork }, strings);
+  // A card only selects: the map's range decides which cards exist, so choosing one never moves the camera.
+  const cardRow = new CardRow(cardsEl, { selectWork: (id) => selectWork(id, false) }, strings);
   const labelLayer = new LabelLayer(labelsEl, options.labels, options.lang);
 
   /** Boxes a label must never cover beyond the markers themselves, in viewport-relative CSS px — the zoom controls, the breadcrumb scope chip, the card row, and the chip's own dig-down menu while it is open. `:empty` card rows collapse to zero size on their own (`places-explorer.css`), so an empty one reserves nothing without a separate check here; a closed menu is simply absent from the DOM, the same "not there, so nothing to measure" shape. The menu is `chip.ts`'s own `<div class="moss-places-chip-menu">`, an absolutely-positioned CHILD of `chipEl` appended outside its own trail (see chip.ts's `openMenu`) — `chipEl`'s own `getBoundingClientRect()` covers only the trail's box, never a child positioned outside it, so the menu needs its own entry here rather than being already included in `relative(chipEl)`. */
@@ -571,7 +571,8 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     })();
   }
 
-  function selectWork(id: string | null): void {
+  /** `refit`: frame the work's places (a marker click); a card passes false and leaves the camera alone. */
+  function selectWork(id: string | null, refit = true): void {
     // On an article locator the article's own work is the page's subject: a
     // click on its dot re-fits to it (the same fit it opened on) instead of
     // toggling the selection off with the camera left wherever it was.
@@ -579,7 +580,7 @@ export function mountPlacesMap(figure: HTMLElement, options: MountOptions): Plac
     const next = selectedId === id && !keepSelected ? null : id;
     selectedId = next;
     if (next) {
-      const points = workPoints(next);
+      const points = refit ? workPoints(next) : [];
       if (points.length) {
         const viewport = getViewport();
         camera = fitWorkCamera(points, viewport, workFrame(viewport));

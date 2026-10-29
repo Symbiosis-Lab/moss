@@ -15,7 +15,7 @@ use futures::FutureExt;
 
 use crate::build::watch::{drift, scope};
 use crate::ops::watch::cadence::{Cadence, CadenceTicker, Tick};
-use crate::ops::watch::{supervision, worker};
+use crate::ops::watch::{derive_folders, supervision, worker};
 use crate::system::folder_session::FolderSession;
 
 use super::{progress, walk};
@@ -421,6 +421,10 @@ pub(crate) async fn run(
                             // this dispatch structural, which would close both
                             // incremental gates over an ordinary edit.
                             let structural = report.any_structural(&fresh);
+                            if structural {
+                                // New files the watcher never announced are arrivals all the same.
+                                derive_folders::react_swept_detached(&folder_str, &report, &fresh);
+                            }
                             let paths: Vec<std::path::PathBuf> =
                                 fresh.iter().map(|r| folder.join(r)).collect();
                             let found = if structural {
@@ -439,7 +443,7 @@ pub(crate) async fn run(
                             // the watcher stays totally silent through the
                             // next pass too, the change cannot have been in
                             // flight, and the silence is the aged strike.
-                            strike.arm(&folder_str, top_level_dirty);
+                            strike.arm(&folder_str, top_level_dirty, newest_landing(&report.drifted, &fresh));
                         }
                     }
                     None if drift_allowed => {
@@ -742,6 +746,21 @@ pub(crate) fn undispatched_paths(
         .filter(|(rel, d)| dispatched.get(*rel) != Some(&d.stamp))
         .map(|(rel, _)| rel.clone())
         .collect()
+}
+
+/// When the newest of `fresh` landed on this disk, or `None` when any one's
+/// time is unknown. ctime, not mtime: a synced file keeps the mtime another
+/// machine gave it. Whole seconds only, so a change counts from the end of
+/// its second.
+pub(crate) fn newest_landing(
+    drifted: &std::collections::BTreeMap<String, drift::Drift>,
+    fresh: &[String],
+) -> Option<std::time::SystemTime> {
+    fresh
+        .iter()
+        .map(|r| drifted.get(r).and_then(|d| d.stamp.3))
+        .try_fold(0i64, |newest, c| c.filter(|c| *c > 0).map(|c| newest.max(c)))
+        .map(|secs| std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs as u64 + 1))
 }
 
 /// One more failed pass (root unreadable, or deadline blown); at the

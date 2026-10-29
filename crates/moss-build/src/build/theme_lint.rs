@@ -50,7 +50,7 @@
 //!   vocabulary; ties resolve to whichever candidate sorts first.
 
 use crate::infra::edit_distance::levenshtein;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::sync::LazyLock;
 
 use moss_core::contract::components::{retired_class_names, COMPONENTS};
@@ -81,8 +81,65 @@ pub fn lint_theme_css(css: &str) -> Vec<String> {
     lint_retired_classes(&stripped, &mut warnings);
     lint_custom_properties(&stripped, &mut warnings);
     lint_classes(&stripped, &mut warnings);
+    lint_light_only_colours(&stripped, &mut warnings);
 
     warnings
+}
+
+/// Where a declaration applies: `:root {}` wins in both themes, so it is the
+/// light value; `:root[data-theme="dark"] {}` (also `html[...]` or a bare
+/// `[data-theme=dark]`, quoted either way) is the dark one. Anything else
+/// (another selector, or any at-rule such as `@media`) is `Other`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Scope {
+    Light,
+    Dark,
+    Other,
+}
+
+/// Every `--moss-*` declaration in the sheet as (scope, property, value).
+/// The sheet must already be stripped of comments.
+pub(crate) fn token_declarations(stripped: &str) -> Vec<(Scope, String, String)> {
+    let mut out = Vec::new();
+    for rule in style_rules(stripped) {
+        let Some((_, body)) = rule.rule.split_once('{') else { continue };
+        let selector: String = rule.prelude.chars().filter(|c| !c.is_whitespace()).filter(|c| !matches!(c, '"' | '\'')).collect::<String>();
+        let scope = match (rule.conditions.is_empty(), selector.as_str()) {
+            (true, ":root") => Scope::Light,
+            (true, ":root[data-theme=dark]" | "html[data-theme=dark]" | "[data-theme=dark]") => Scope::Dark,
+            _ => Scope::Other,
+        };
+        for decl in body.trim_end_matches('}').split(';') {
+            let Some((prop, value)) = decl.split_once(':') else { continue };
+            let prop = prop.trim();
+            if prop.starts_with("--moss-") {
+                out.push((scope, prop.to_string(), value.trim().to_string()));
+            }
+        }
+    }
+    out
+}
+
+/// A colour token set on `:root` with no dark value stays at its light value
+/// in dark mode, so the page ships unreadable.
+fn lint_light_only_colours(stripped: &str, warnings: &mut Vec<String>) {
+    let declared = token_declarations(stripped);
+    let colours = |scope: Scope| declared.iter().filter(move |(s, p, _)| *s == scope && p.starts_with("--moss-color-"));
+    let dark: BTreeSet<&str> = colours(Scope::Dark).map(|(_, p, _)| p.as_str()).collect();
+    // A `var()` value resolves on the element, so it follows into dark mode.
+    let missing: BTreeSet<&str> = colours(Scope::Light)
+        .filter(|(_, _, v)| !v.contains("var("))
+        .map(|(_, p, _)| p.as_str())
+        .filter(|p| !dark.contains(p))
+        .collect();
+    if missing.is_empty() {
+        return;
+    }
+    let (noun, pronoun) = if missing.len() == 1 { ("token", "it") } else { ("tokens", "them") };
+    warnings.push(format!(
+        ".moss/theme/style.css sets the colour {noun} {} on :root but not for dark mode, so dark mode keeps the light value. Declare {pronoun} again under :root[data-theme=\"dark\"] {{}}.",
+        missing.into_iter().collect::<Vec<_>>().join(", ")
+    ));
 }
 
 fn lint_retired_classes(stripped: &str, warnings: &mut Vec<String>) {
@@ -212,7 +269,7 @@ fn find_complete_class(css: &str, pattern: &str) -> bool {
 }
 
 /// Strip `/* ... */` block comments from CSS. CSS has no `//` line comments.
-fn strip_comments(css: &str) -> String {
+pub(crate) fn strip_comments(css: &str) -> String {
     let mut out = String::with_capacity(css.len());
     let mut chars = css.chars().peekable();
     while let Some(c) = chars.next() {
@@ -221,6 +278,17 @@ fn strip_comments(css: &str) -> String {
             while let Some(c) = chars.next() {
                 if c == '*' && chars.peek() == Some(&'/') {
                     chars.next();
+                    break;
+                }
+            }
+        } else if c == '"' || c == '\'' {
+            // A quoted string (`url("a/*b")`) is copied whole; a `/*` in it opens no comment.
+            out.push(c);
+            while let Some(d) = chars.next() {
+                out.push(d);
+                if d == '\\' {
+                    out.extend(chars.next());
+                } else if d == c {
                     break;
                 }
             }
@@ -346,6 +414,64 @@ pub(crate) fn style_rules<'a>(css: &'a str) -> Vec<StyleRule<'a>> {
 mod tests {
     use super::*;
 
+    fn dark_gap(css: &str) -> Vec<String> {
+        lint_theme_css(css).into_iter().filter(|w| w.contains("dark mode keeps")).collect()
+    }
+
+    #[test]
+    fn light_token_without_dark_value_warns_once_naming_every_token() {
+        let found = dark_gap(":root { --moss-color-bg: #fafafa; --moss-color-accent: #225; }");
+        assert_eq!(found.len(), 1);
+        assert!(found[0].contains("--moss-color-accent, --moss-color-bg"), "{found:?}");
+        assert!(found[0].contains(":root[data-theme=\"dark\"]"), "{found:?}");
+    }
+
+    #[test]
+    fn only_the_token_missing_a_dark_value_is_named() {
+        let css = ":root { --moss-color-bg: #fafafa; --moss-color-accent: #225; } :root[data-theme=\"dark\"] { --moss-color-bg: #111; }";
+        let found = dark_gap(css);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].contains("--moss-color-accent") && !found[0].contains("--moss-color-bg"), "{found:?}");
+    }
+
+    #[test]
+    fn tokens_declared_for_both_schemes_are_silent() {
+        let css = ":root { --moss-color-bg: #fafafa; } :root[data-theme='dark'] { --moss-color-bg: #111; }";
+        assert!(dark_gap(css).is_empty());
+    }
+
+    #[test]
+    fn a_var_reference_follows_into_dark_mode() {
+        let css = ":root { --moss-color-text-secondary: var(--moss-color-muted); } :root[data-theme=\"dark\"] { --moss-color-muted: #aaa; }";
+        assert!(dark_gap(css).is_empty());
+    }
+
+    #[test]
+    fn other_dark_selector_forms_count_as_dark() {
+        for dark in ["html[data-theme=\"dark\"]", "[data-theme=\"dark\"]", ":root[data-theme=dark]", ":root[data-theme='dark']"] {
+            let css = format!(":root {{ --moss-color-bg: #fafafa; }} {dark} {{ --moss-color-bg: #111; }}");
+            assert!(dark_gap(&css).is_empty(), "{dark}");
+        }
+    }
+
+    #[test]
+    fn a_comment_marker_inside_a_string_does_not_hide_later_tokens() {
+        let css = ".a { background: url(\"a/*b\"); } :root { --moss-color-bg: #fafafa; }";
+        assert_eq!(dark_gap(css).len(), 1);
+    }
+
+    #[test]
+    fn a_media_dark_block_is_not_a_dark_value() {
+        let css = ":root { --moss-color-bg: #fafafa; } @media (prefers-color-scheme: dark) { :root { --moss-color-bg: #111; } }";
+        assert_eq!(dark_gap(css).len(), 1);
+    }
+
+    #[test]
+    fn commented_out_and_non_colour_tokens_are_silent() {
+        let css = ":root {\n  /* --moss-color-accent: #2d5a2d; */\n  --moss-font-body: serif;\n}";
+        assert!(dark_gap(css).is_empty());
+    }
+
     /// The critical false-positive guard: a theme that only sets escape-hatch
     /// custom properties (never declared in `:root`, only read via `var()`
     /// with a fallback) and overrides a real token must produce zero warnings.
@@ -354,6 +480,9 @@ mod tests {
         let css = r#"
             :root {
                 --moss-color-accent: #c00;
+            }
+            :root[data-theme="dark"] {
+                --moss-color-accent: #f66;
             }
             .moss-hero {
                 --moss-hero-max-height: none;

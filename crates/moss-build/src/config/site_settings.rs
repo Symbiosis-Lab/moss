@@ -48,6 +48,12 @@ pub(crate) fn site_settings() -> Vec<SiteSettingInfo> {
             description: "Width preset of the reading column, \"wide\" or \"full\". A page's own `content_width:` overrides it.",
         },
         SiteSettingInfo {
+            name: "credit",
+            r#type: "string",
+            default: None,
+            description: "The site's own one-line credit, inline Markdown, shown before moss's mark in the colophon: `Designed by [Example Studio](https://example.org) · (mark)`. Not shown when `colophon` is false.",
+        },
+        SiteSettingInfo {
             name: "domain",
             r#type: "string",
             default: None,

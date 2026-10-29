@@ -12,9 +12,8 @@ use crate::system::derive::registry::DerivationEntry;
 use crate::system::large_download::ProgressFn;
 use crate::system::stack_exec::{self, layout, StackHome};
 
-/// Hash of what the declaration pins: the binary's sources (with their hashes)
-/// and the fragments it may produce. Changing either changes what a result
-/// means, whether or not the plugin's version moved with it.
+/// Hash of the whole declaration, locations included: names the install
+/// directory, so a changed URL or archive installs afresh.
 fn declaration_hash(entry: &DerivationEntry) -> String {
     use sha2::{Digest, Sha256};
     let pinned = serde_json::json!({
@@ -61,15 +60,29 @@ fn local_binary_hash(entry: &DerivationEntry) -> Option<String> {
     resolve_binary(entry).ok().filter(|_| local).and_then(|path| content_hash(&path).ok())
 }
 
-/// What a cached result depends on besides the input file: the declaration's
-/// pin, and for a `path` source (a binary under local development) the
-/// binary's own content, since nothing else says it was rebuilt.
+/// What a cached result depends on besides the input file: the declared
+/// fragments and the executable's identity, never where it came from. An
+/// installed executable (downloaded or `path`) is identified by its content,
+/// so moving the same binary between the two keeps every result. Before a
+/// download is installed its declared archive sha256 stands in, which keys
+/// differently from the installed executable.
 pub fn pin_fingerprint(entry: &DerivationEntry) -> String {
-    let declaration = declaration_hash(entry);
-    match local_binary_hash(entry) {
-        Some(binary) => format!("{declaration}:{binary}"),
-        None => declaration,
-    }
+    fingerprint(entry, resolve_binary(entry).ok().as_deref())
+}
+
+fn fingerprint(entry: &DerivationEntry, installed: Option<&std::path::Path>) -> String {
+    use crate::plugins::contributions::stack::StackSource;
+    use sha2::{Digest, Sha256};
+    let stack = entry.contribution.as_stack(&stack_id(entry), &entry.plugin_version);
+    let identity = match installed.and_then(|path| content_hash(path).ok()) {
+        Some(hash) => format!("exe:{hash}"),
+        None => match layout::winning_source(&stack) {
+            Some(StackSource::Download { sha256, .. }) => format!("archive:{}", sha256.clone().unwrap_or_default()),
+            _ => "absent".to_string(),
+        },
+    };
+    let pinned = serde_json::json!({ "fragments": entry.contribution.fragments, "binary": identity });
+    format!("{:x}", Sha256::digest(pinned.to_string().as_bytes()))
 }
 
 /// The content hashes of the `path`-sourced binaries a plugin's derivations
@@ -112,8 +125,12 @@ fn stack_id(entry: &DerivationEntry) -> String {
 
 /// The installed binary, or the sentence saying why there is none.
 pub fn resolve_binary(entry: &DerivationEntry) -> Result<PathBuf, DeriveFailure> {
+    binary_in(entry, &home(entry)?)
+}
+
+fn binary_in(entry: &DerivationEntry, root: &std::path::Path) -> Result<PathBuf, DeriveFailure> {
     let stack = entry.contribution.as_stack(&stack_id(entry), &entry.plugin_version);
-    let path = layout::binary_path(&home(entry)?, &stack)
+    let path = layout::binary_path(root, &stack)
         .map_err(|e| DeriveFailure::new(format!("{}: {e}", stack_id(entry))))?;
     if path.is_file() {
         Ok(path)
@@ -136,14 +153,30 @@ pub fn ensure_binary(
     if let Ok(path) = resolve_binary(entry) {
         return Ok(path);
     }
-    let root = home(entry)?;
+    if let Some(platforms) = crate::plugins::contributions::platform::unserved(&entry.contribution) {
+        return Err(DeriveFailure::new(crate::plugins::contributions::platform::sentence(&entry.plugin_id, &platforms)));
+    }
+    install_into(entry, &home(entry)?, on_bytes)
+}
+
+/// The download-and-unpack half of [`ensure_binary`], into an explicit `root`.
+fn install_into(
+    entry: &DerivationEntry,
+    root: &std::path::Path,
+    on_bytes: Option<&ProgressFn<'_>>,
+) -> Result<PathBuf, DeriveFailure> {
     let stack = entry.contribution.as_stack(&stack_id(entry), &entry.plugin_version);
     let fail = |e: stack_exec::StackExecError| DeriveFailure::new(format!("{}: {e}", stack_id(entry)));
     let cache_dir = root.join(".downloads");
-    let stack_home = StackHome { root: &root, stack: &stack };
+    let _installing = stack_exec::lock_install(root).map_err(fail)?;
+    // A peer holding the lock may have installed it while this one waited.
+    if let Ok(path) = binary_in(entry, root) {
+        return Ok(path);
+    }
+    let stack_home = StackHome { root, stack: &stack };
     let artifact = stack_exec::obtain(&stack_home, &cache_dir, on_bytes).map_err(fail)?;
     stack_exec::stage(&stack_home, &artifact, &mut || Ok(()), &mut || {}).map_err(fail)?;
-    resolve_binary(entry)
+    binary_in(entry, root)
 }
 
 #[cfg(test)]

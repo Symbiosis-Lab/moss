@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use super::derive_folders::{decisions, folder_key, Decision};
+use super::derive_folders::{decisions, folder_key, nearest_decision, Decision};
 use super::derive_stubs::stubs_missing;
 use crate::moss_paths::MossPaths;
 use crate::system::derive::registry::{DerivationEntry, DerivationRegistry};
@@ -125,7 +125,7 @@ pub fn derivation_state(site: &MossPaths, registry: &DerivationRegistry) -> Vec<
             let Some(files) = by_derivation.get(&(entry.plugin_id.clone(), entry.derivation_id.clone())) else {
                 continue;
             };
-            let decision = decision_for(decided.get(&key), entry);
+            let decision = decision_for(nearest_decision(&decided, &key), entry);
             let (mut skipped, mut failed) = (Vec::new(), Vec::new());
             for f in files {
                 let Some(file) = f.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };

@@ -902,7 +902,7 @@ fn render_inline<H: RenderHooks + ?Sized>(
             hooks.render_link(out, resolved, *is_wikilink, &content);
         }
         Inline::Image {
-            src, alt, title, ..
+            src, alt, title, is_wikilink, ..
         } => {
             let resolved = match src {
                 Url::Resolved(r) => r,
@@ -919,7 +919,15 @@ fn render_inline<H: RenderHooks + ?Sized>(
                     return;
                 }
             };
-            hooks.render_image(out, resolved, alt, title.as_deref(), None, None);
+            // An image inside a link or running text is not promoted to a
+            // figure, so its `|display words|` are read here, as they are for a
+            // bare image.
+            let words = (!*is_wikilink && alt.contains('|')).then(|| crate::media::read_image_words(alt));
+            let (alt, img_style) = match &words {
+                Some(w) => (w.caption.trim_end_matches('|'), w.img_style()),
+                None => (alt.as_str(), None),
+            };
+            hooks.render_image(out, resolved, alt, title.as_deref(), img_style.as_deref(), None);
         }
         Inline::Emphasis(children) => {
             out.push_str("<em>");

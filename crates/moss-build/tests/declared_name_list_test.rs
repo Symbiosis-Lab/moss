@@ -181,5 +181,5 @@ fn a_kind_without_cards_puts_no_names_on_cards() {
         assert!(!page.contains("moss-credit"), "{folder} carries no credits:\n{page}");
     }
     let dated = fs::read_to_string(out.join("dated/index.html")).unwrap();
-    assert!(dated.contains("moss-card-meta\">2026 · 10</div>"), "the card keeps its plain date:\n{dated}");
+    assert!(dated.contains("moss-card-meta\"><time datetime=\"2026-10-01\">October 2026</time></div>"), "the card keeps its plain date:\n{dated}");
 }

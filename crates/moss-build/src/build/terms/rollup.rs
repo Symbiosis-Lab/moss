@@ -8,7 +8,6 @@
 
 use std::collections::BTreeMap;
 
-use moss_core::terms::term_folder_key;
 
 use super::{TermIndex, TermKind, TermSite};
 use crate::build::types::ParsedDocument;
@@ -42,7 +41,7 @@ pub fn resolve_hierarchy(index: &mut TermIndex, kinds: &[TermKind]) {
         seen.insert(start.clone());
         let mut current = start;
         while let Some(parent_display) = kind.parents.get(&current) {
-            let anc_key = term_folder_key(&kind.key, parent_display);
+            let anc_key = kind.key_in("", parent_display);
             index.sites.entry(anc_key.clone()).or_insert_with(|| TermSite {
                 display: parent_display.clone(),
                 claimed_by: None,

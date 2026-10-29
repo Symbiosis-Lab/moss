@@ -226,7 +226,7 @@ impl StoredKey {
                 // Generate through the schnorr key so the stored scalar is
                 // already BIP-340 even-Y canonical — the invariant the keyring
                 // relies on (see identity/keyring.rs).
-                let sk = k256::schnorr::SigningKey::random(&mut rand::rngs::OsRng);
+                let sk = <k256::schnorr::SigningKey as k256::elliptic_curve::Generate>::generate();
                 secret.copy_from_slice(&sk.to_bytes());
             }
         }
@@ -272,7 +272,7 @@ impl StoredKey {
             Algorithm::Secp256k1Schnorr => {
                 // secret is already canonical (generate) or was written by the
                 // identity migration, which stores the canonical scalar.
-                let sk = k256::schnorr::SigningKey::from_bytes(&self.secret)
+                let sk = k256::schnorr::SigningKey::from_bytes(&self.secret.into())
                     .expect("stored secp256k1 scalar is valid");
                 sk.verifying_key().to_bytes().to_vec()
             }
@@ -288,7 +288,7 @@ impl StoredKey {
             }
             Algorithm::Secp256k1Schnorr => {
                 use k256::schnorr::signature::Signer;
-                let sk = k256::schnorr::SigningKey::from_bytes(&self.secret)
+                let sk = k256::schnorr::SigningKey::from_bytes(&self.secret.into())
                     .map_err(|_| KeystoreError::Corrupt)?;
                 let sig: k256::schnorr::Signature =
                     sk.try_sign(payload).map_err(|_| KeystoreError::Corrupt)?;
@@ -389,7 +389,8 @@ mod tests {
         let key = ks.get_or_create(&SYSTEM, "identity", Algorithm::Secp256k1Schnorr).unwrap();
         let msg = b"nostr event id";
         let sig = ks.sign(&SYSTEM, "identity", msg).unwrap();
-        let vk = VerifyingKey::from_bytes(&key.public_key).unwrap();
+        let pk: [u8; 32] = key.public_key.as_slice().try_into().unwrap();
+        let vk = VerifyingKey::from_bytes(&pk.into()).unwrap();
         let sig = Signature::try_from(sig.as_slice()).unwrap();
         assert!(vk.verify(msg, &sig).is_ok(), "schnorr signature must verify");
     }

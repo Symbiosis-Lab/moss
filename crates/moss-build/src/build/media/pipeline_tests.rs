@@ -2006,7 +2006,7 @@ async fn copy_deferred_assets_reuses_the_persisted_manifest_hash_memo_across_bui
     // idempotent skip (it only checks for 0-byte corruption) leaves this
     // untouched by build 2's own store_file call.
     let oid = ObjectStore::hash_file(&asset_file).unwrap();
-    let object_store2 = ObjectStore::new(moss_paths.cache_objects());
+    let object_store2 = ObjectStore::new(moss_paths.cache_local_objects());
     let blob_path = object_store2.blob_path(&oid);
     fs::write(&blob_path, b"CORRUPTED BLOB BYTES, NOT THE REAL ASSET").unwrap();
     let corrupted_hash = crate::build::assets::paths::compute_binary_hash_file(&blob_path).unwrap();
@@ -2167,7 +2167,7 @@ async fn copy_deferred_assets_always_records_a_staged_oid_for_its_own_entries() 
         .staged_oid("assets/data.bin")
         .expect("every entry copy_deferred_assets's Ok(oid) arm registers must carry a staged_oid");
 
-    let object_store = ObjectStore::new(crate::moss_paths::MossPaths::from_moss_dir(moss_dir.clone()).cache_objects());
+    let object_store = ObjectStore::for_site(&crate::moss_paths::MossPaths::from_moss_dir(moss_dir.clone()));
     let cas_bytes = fs::read(object_store.get_path(oid).expect("the oid must name a live CAS blob")).unwrap();
     assert_eq!(cas_bytes, asset_bytes.as_slice(), "the staged_oid must back exactly these bytes");
 }
@@ -2232,7 +2232,7 @@ async fn ship_phase_reflects_a_post_seal_repair_not_a_stale_cas_entry() {
         .to_string();
 
     let mp = crate::moss_paths::MossPaths::from_moss_dir(moss_dir.clone());
-    let object_store = ObjectStore::new(mp.cache_objects());
+    let object_store = ObjectStore::for_site(&mp);
     let cas_bytes_before =
         fs::read(object_store.get_path(&oid_before_repair).expect("the pre-repair CAS blob must be live")).unwrap();
     assert!(
@@ -2268,11 +2268,12 @@ async fn ship_phase_reflects_a_post_seal_repair_not_a_stale_cas_entry() {
     );
 }
 
-/// A second machine finds an original's cached copy in the cloud, not yet
-/// downloaded. The site's own file holds the same bytes, so the output is
-/// placed from it rather than missing until the download lands.
+/// A second machine finds a copy of a source file that an older build left in
+/// the synced store, still in the cloud. The site's own file holds the same
+/// bytes, so the output is placed from it, the copy kept is this machine's
+/// own, and the synced placeholder is neither waited for nor rewritten.
 #[test]
-fn copy_deferred_assets_republishes_an_original_when_the_cached_copy_is_in_the_cloud() {
+fn copy_deferred_assets_places_from_the_site_file_when_a_synced_copy_is_in_the_cloud() {
     use crate::types::assets::{AssetRegistry, AssetState};
     use sha2::{Digest, Sha256};
     use std::sync::Arc;
@@ -2300,9 +2301,18 @@ fn copy_deferred_assets_republishes_an_original_when_the_cached_copy_is_in_the_c
     copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, None);
     assert_eq!(std::fs::read(staging.join("paper.pdf")).unwrap(), bytes, "the first build places it");
 
-    // The cache is now what a second machine sees: the blob is a placeholder.
+    let oid = format!("{:x}", Sha256::digest(bytes));
+    let mp = crate::moss_paths::MossPaths::from_moss_dir(moss_dir.clone());
+    let local = crate::build::cache::ObjectStore::new(mp.cache_local_objects()).blob_path(&oid);
+    assert_eq!(std::fs::read(&local).unwrap(), bytes, "the first build keeps its copy on this machine");
     let objects = crate::build::cache::ObjectStore::new(moss_dir.join("cache/objects"));
-    let blob = objects.blob_path(&format!("{:x}", Sha256::digest(bytes)));
+    let blob = objects.blob_path(&oid);
+    assert!(!blob.exists(), "and none in the synced store");
+
+    // What a second machine sees: no copy of its own, and a placeholder an
+    // older build left in the synced store.
+    std::fs::remove_dir_all(mp.cache_local_objects()).unwrap();
+    std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
     std::fs::write(&blob, b"placeholder").unwrap();
     let _cloud = crate::build::icloud::pretend::evicted(&blob);
     std::fs::remove_file(staging.join("paper.pdf")).unwrap();
@@ -2312,7 +2322,8 @@ fn copy_deferred_assets_republishes_an_original_when_the_cached_copy_is_in_the_c
     copy_deferred_assets(&ctx, crate::build::ports::reporter::discarding(), tx, Some(registry.clone()));
 
     assert_eq!(std::fs::read(staging.join("paper.pdf")).unwrap(), bytes, "placed from the site's own file");
-    assert_eq!(std::fs::read(&blob).unwrap(), bytes, "the shared content hash now holds its same bytes locally");
+    assert_eq!(std::fs::read(&local).unwrap(), bytes, "its copy is this machine's own again");
+    assert_eq!(std::fs::read(&blob).unwrap(), b"placeholder", "the synced placeholder is left alone");
     assert!(matches!(registry.get("paper.pdf"), Some(AssetState::Ready)), "and registered");
 }
 

@@ -85,6 +85,8 @@ fn inline_subscribe_scope_matches_the_page_language_section() {
         Some("订阅"),
         "https://api.mosspub.com",
     );
+    // The paragraph above the form names its input; the scope re-render keeps that.
+    let expected = moss_build::build::features::email::label_subscribe_input(&expected, "moss-subscribe-prompt-0");
     assert!(
         read_page(&out, "zh-hans/join/index.html").contains(&expected),
         "stamped form diverged from the footer renderer's output:\n{expected}"

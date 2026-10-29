@@ -598,6 +598,10 @@ pub fn gc_old_generations(
 #[derive(serde::Serialize, serde::Deserialize, Debug, Default)]
 struct GcWatermark {
     objects_after_gc: usize,
+    /// Set by a sweep that moves source copies out of the synced store. A
+    /// watermark without it reads as "never swept", so that sweep runs once.
+    #[serde(default)]
+    sources_local: bool,
 }
 
 fn watermark_path(build_dir: &Path) -> PathBuf {
@@ -608,11 +612,12 @@ fn load_watermark(build_dir: &Path) -> Option<usize> {
     let raw = std::fs::read_to_string(watermark_path(build_dir)).ok()?;
     serde_json::from_str::<GcWatermark>(&raw)
         .ok()
+        .filter(|w| w.sources_local)
         .map(|w| w.objects_after_gc)
 }
 
 fn save_watermark(build_dir: &Path, objects_after_gc: usize) {
-    let Ok(json) = serde_json::to_string(&GcWatermark { objects_after_gc }) else {
+    let Ok(json) = serde_json::to_string(&GcWatermark { objects_after_gc, sources_local: true }) else {
         return;
     };
     // `.moss/build.nosync/**` is regenerable output, so this goes through io_utils:

@@ -815,7 +815,7 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         enum_values: Some(&["wide", "full"]),
         // Frequency=2, Importance=3 → score=76
         score: 77,
-        description: "Page width: default (67ch) for prose, wide (80ch) for grids/tables, full (site max) for dashboards",
+        description: "Page width: default (42 reading sizes, 756px at 18px) for prose, wide (50 reading sizes, 900px at 18px) for grids/tables, full (the site max width) for dashboards",
         label: Some("Width"),
         label_key: "chip.content_width.label",
         group: "This Page",
@@ -912,11 +912,8 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         field_type: FieldType::Array,
         widget: Widget::TagInput,
         items_type: Some(FieldType::String),
-        score: 99,
         description: "Fields this page takes from the files it embeds when it does not set them itself. `title` and `description` take the first embedded file's derived title and description; one written in the page always wins.",
-        label: Some("Inferred"),
-        label_key: "chip.inferred.label",
-        group: "This Page",
+        skip_schema: true, // build bookkeeping: never offered for hand editing
         ..FIELD_DEFAULTS
     },
     BuiltinField {

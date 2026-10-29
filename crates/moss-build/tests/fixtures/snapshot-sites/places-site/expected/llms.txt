@@ -84,11 +84,18 @@ One namespace, geography.
 
 A city, reached only through its generated term page:
 
-<!--MOSS_MARKER_FOLDER_LIST:path=/places/osaka/|from=index.md-->
+- [evening](/works/kyoto-walk/evening/)
+- [osaka notes](/posts/osaka-notes/)
+
 
 A roll-up-only ancestor, reached only through the gazetteer's parent chain:
 
-<!--MOSS_MARKER_FOLDER_LIST:path=/places/japan/|from=index.md-->
+- [evening](/works/kyoto-walk/evening/)
+- [morning](/works/kyoto-walk/morning/)
+- [nara diary](/posts/nara-diary/)
+- [osaka notes](/posts/osaka-notes/)
+- [kyoto report](/posts/kyoto-report/)
+- [Kyoto Walk](/works/kyoto-walk/)
 
 ---
 

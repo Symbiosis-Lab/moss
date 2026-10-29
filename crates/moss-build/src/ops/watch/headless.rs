@@ -236,11 +236,6 @@ async fn attempt_admitted_rebuild(
     // The probe is advisory; see the app arm's comment for the full rationale.
     if let Some(session) = crate::system::folder_session::registry().get(folder_path) {
         if session.try_lock_stage_write().is_none() {
-            log::info!(
-                target: "moss::build::watch",
-                "Stage-write lock held for '{}' — re-parking the rebuild request",
-                folder_path
-            );
             handle.restore(req);
             return worker::AttemptOutcome::LockBusy;
         }

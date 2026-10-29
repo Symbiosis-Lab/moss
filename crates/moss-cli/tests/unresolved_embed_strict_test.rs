@@ -111,3 +111,52 @@ fn unknown_callout_type_fails_strict_naming_page_and_type_and_still_renders() {
     let html = find_home_html(&site_dir).expect("built index.html");
     assert!(html.contains("data-type=\"note\"") && html.contains("Example Hall"), "renders as a note");
 }
+
+#[test]
+fn an_unknown_callout_in_a_shared_partial_is_reported_once_as_the_partial() {
+    let moss_home = tempfile::tempdir().unwrap();
+    let site = tempfile::tempdir().unwrap();
+    let write = |name: &str, body: &str| std::fs::write(site.path().join(name), body).unwrap();
+    write("index.md", "---\ntitle: Home\n---\n\nWelcome.\n");
+    write("shared.md", "---\ntitle: Shared\n---\n\n> [!bio] Bio\n> Example Hall.\n");
+    write("a.md", "---\ntitle: A\n---\n\n![[shared]]\n");
+    write("b.md", "---\ntitle: B\n---\n\n![[shared]]\n");
+    let site_dir = std::fs::canonicalize(site.path()).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_moss-cli"))
+        .arg("build")
+        .arg(&site_dir)
+        .arg("--no-plugins")
+        .env("MOSS_HOME", moss_home.path())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let lines: Vec<&str> = stderr.lines().filter(|l| l.contains("callout type")).collect();
+    assert_eq!(lines.len(), 1, "stderr:\n{stderr}");
+    assert!(lines[0].contains("shared.md"), "{}", lines[0]);
+}
+
+#[test]
+fn findings_inside_a_percent_comment_do_not_surface_on_a_page_with_an_embed() {
+    let moss_home = tempfile::tempdir().unwrap();
+    let site = tempfile::tempdir().unwrap();
+    let write = |name: &str, body: &str| std::fs::write(site.path().join(name), body).unwrap();
+    write("clean.md", "---\ntitle: Clean\n---\n\nFine.\n");
+    write(
+        "index.md",
+        "---\ntitle: Home\n---\n\n![[clean]]\n\n%%\n> [!bogus] Note\n> Body.\n\n:::nosuchthing\nx\n:::\n\n+++\n%%\n",
+    );
+    let site_dir = std::fs::canonicalize(site.path()).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_moss-cli"))
+        .arg("build")
+        .arg(&site_dir)
+        .arg("--no-plugins")
+        .arg("--strict")
+        .env("MOSS_HOME", moss_home.path())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "stderr:\n{stderr}");
+    assert!(!stderr.contains("bogus") && !stderr.contains("nosuchthing") && !stderr.contains("+++"), "stderr:\n{stderr}");
+}

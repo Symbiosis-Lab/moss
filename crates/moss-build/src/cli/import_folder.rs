@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::moss_paths::MossPaths;
 use crate::system::derive::registry::{DerivationEntry, DerivationRegistry};
-use crate::vault::derive_folders::{decisions, folder_key, set_folder_decision, Decision};
+use crate::vault::derive_folders::{decisions, folder_key, nearest_decision, set_folder_decision, Decision};
 use crate::vault::derive_state::{derivation_state, site_registry, FolderDerivationState};
 use crate::vault::derive_stubs::{accepted_files, write_stubs};
 use crate::vault_root::VaultRoot;
@@ -30,7 +30,8 @@ folder carries, or allow it in the moss app first.
 With -r (--recursive) the command covers <folder> and every folder beneath it
 (hidden folders and .moss are skipped): each folder holding files the chosen
 derivation accepts and with no decision yet is shown as pages. A folder that
-already has a decision, shown or kept, is left exactly as it is. It prints one
+already has a decision, by its own entry or an ancestor's, keeps it; a shown
+one still gets the pages it lacks. It prints one
 line per folder (folder, what was done, pages written) and a total. A folder
 where several plugins accept the files is reported and skipped unless --with
 picks one.
@@ -195,7 +196,8 @@ fn nothing_message(folder: &Path, with: Option<&str>) -> String {
 }
 
 /// `moss import <folder> --recursive`: [`show_one`] for `root` and every folder
-/// beneath it that the build looks at, except one the author already decided.
+/// beneath it that the build looks at. A folder the author already decided (by its
+/// own entry or an ancestor's) keeps its decision, and a shown one gets the stubs it lacks.
 fn show_tree(root: &Path, with: Option<&str>) -> Result<(), String> {
     let root = crate::vault::paths::resolve_input(root);
     let (site, registry) = open_site(&root)?;
@@ -209,8 +211,9 @@ fn show_tree(root: &Path, with: Option<&str>) -> Result<(), String> {
     let (mut seen, mut total) = (0usize, 0usize);
     for dir in folders {
         let dir = dir.path();
-        let key = folder_key(&site, dir).unwrap_or_else(|| dir.display().to_string());
-        let decision = decided.get(&key).filter(|d| **d != Decision::Undecided);
+        let own_key = folder_key(&site, dir);
+        let decision = own_key.as_deref().and_then(|k| nearest_decision(&decided, k));
+        let key = own_key.unwrap_or_else(|| dir.display().to_string());
         let entry = match (pick_entry(&registry, dir, with), decision) {
             (Err(Pick::Nothing), _) => continue,
             (Ok(entry), _) => Some(entry),
@@ -224,9 +227,16 @@ fn show_tree(root: &Path, with: Option<&str>) -> Result<(), String> {
         seen += 1;
         let (what, written) = match (decision, entry) {
             (Some(Decision::Keep), _) => ("kept as files, left as it was", 0),
-            (Some(_), _) => ("shown as pages, left as it was", 0),
-            (None, Some(entry)) => ("shown as pages", show_one(&site, entry, dir)?.len()),
-            (None, None) => continue,
+            (Some(Decision::Show(ids)), _) => {
+                let written = ids
+                    .iter()
+                    .filter_map(|id| pick_entry(&registry, dir, Some(id)).ok())
+                    .map(|entry| write_stubs(dir, entry).len())
+                    .sum();
+                (if written == 0 { "shown as pages, left as it was" } else { "shown as pages" }, written)
+            }
+            (Some(Decision::Undecided) | None, Some(entry)) => ("shown as pages", show_one(&site, entry, dir)?.len()),
+            (_, None) => continue,
         };
         total += written;
         println!("{key}  {what}  {}", pages(written));

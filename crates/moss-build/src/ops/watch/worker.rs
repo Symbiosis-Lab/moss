@@ -441,6 +441,28 @@ pub enum AttemptOutcome {
     Failed,
 }
 
+/// One wait on the stage-write lock, from the first `LockBusy` to the attempt
+/// that gets past it. A seal tail can hold the lock for seconds at a
+/// 500 ms retry tick, so the wait is logged at its two ends only.
+#[derive(Default)]
+struct LockWait(Option<std::time::Instant>);
+
+impl LockWait {
+    fn note(&mut self, outcome: AttemptOutcome, now: std::time::Instant) -> Option<String> {
+        match (outcome, self.0) {
+            (AttemptOutcome::LockBusy, None) => {
+                self.0 = Some(now);
+                Some("Stage-write lock held — the rebuild waits for it".to_string())
+            }
+            (AttemptOutcome::LockBusy, Some(_)) | (_, None) => None,
+            (_, Some(since)) => {
+                self.0 = None;
+                Some(format!("Stage-write lock wait ended after {:.1}s", (now - since).as_secs_f64()))
+            }
+        }
+    }
+}
+
 /// The worker loop. Generic over the admission attempt so it is testable
 /// without an `AppHandle` or a real build.
 ///
@@ -456,6 +478,7 @@ pub async fn run_worker_loop<Fut>(
     Fut: std::future::Future<Output = AttemptOutcome>,
 {
     let mut consecutive_failures: u32 = 0;
+    let mut lock_wait = LockWait::default();
     loop {
         if handle.shutdown_requested() {
             break;
@@ -492,6 +515,9 @@ pub async fn run_worker_loop<Fut>(
                     }
                 };
                 handle.building.store(false, Ordering::SeqCst);
+                if let Some(line) = lock_wait.note(outcome, std::time::Instant::now()) {
+                    log::info!(target: "moss::build::watch", "{line}");
+                }
                 match outcome {
                     AttemptOutcome::Completed => {
                         consecutive_failures = 0;

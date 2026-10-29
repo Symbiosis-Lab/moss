@@ -101,7 +101,7 @@ fn importing_a_folder_shows_its_files_as_pages_and_remembers_the_choice() {
     assert!(out.contains("Q1 Summary.md") && out.contains("Q2.md"), "{out}");
 
     let page = std::fs::read_to_string(folder.join("Q1 Summary.md")).unwrap();
-    assert_eq!(page, "---\ninferred: [title, description]\n---\n![[Q1 Summary.fake]]\n\n![[Q1 Summary.fake#body]]\n");
+    assert_eq!(page, "---\ninferred: [title, description, date]\n---\n![[Q1 Summary.fake]]\n\n![[Q1 Summary.fake#body]]\n");
     let config = std::fs::read_to_string(f.site.join(".moss/config.toml")).unwrap();
     assert!(config.contains("# mine") && config.contains("\"reports/\" = [\"fake-pages\"]"), "{config}");
 
@@ -324,4 +324,25 @@ fn recursive_import_reports_a_decided_folder_as_decided_even_when_two_plugins_cl
     assert!(!out.contains("several plugins"), "{out}");
     assert_eq!(std::fs::read_to_string(f.site.join(".moss/config.toml")).unwrap(), config);
     assert!(!reports.join("Q2.md").exists() && !reports.join("x.md").exists());
+}
+
+#[test]
+fn recursive_import_gives_an_inherited_show_the_stubs_an_own_entry_would_get() {
+    let f = fixture();
+    for (dir, file) in [("audits/a", "One.fake"), ("audits/a/b", "Two.fake")] {
+        std::fs::create_dir_all(f.site.join(dir)).unwrap();
+        std::fs::write(f.site.join(dir).join(file), "x").unwrap();
+    }
+    let config = "# mine\n[derive]\n\"audits/\" = [\"fake-pages\"]\n";
+    std::fs::write(f.site.join(".moss/config.toml"), config).unwrap();
+    plugin(&f.site, "fakes", "fake-pages");
+    let audits = f.site.join("audits");
+
+    let o = moss(&f.home, &["import", audits.to_str().unwrap(), "--recursive", "--allow-plugins"]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert!(audits.join("a/One.md").exists() && audits.join("a/b/Two.md").exists(), "{}", stdout(&o));
+    assert_eq!(std::fs::read_to_string(f.site.join(".moss/config.toml")).unwrap(), config);
+
+    let again = moss(&f.home, &["import", audits.to_str().unwrap(), "-r", "--allow-plugins"]);
+    assert!(stdout(&again).ends_with("0 pages written\n"), "{}", stdout(&again));
 }

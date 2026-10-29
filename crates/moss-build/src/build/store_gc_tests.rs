@@ -339,6 +339,15 @@ fn corrupt_watermark_reads_as_never_swept() {
     );
 }
 
+#[test]
+fn a_watermark_from_before_source_copies_moved_reads_as_never_swept() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = watermark_path(tmp.path());
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, br#"{"objects_after_gc":6811}"#).unwrap();
+    assert_eq!(load_watermark(tmp.path()), None, "the first sweep that moves source copies must not wait for growth");
+}
+
 /// A writer stores blobs and transform records before the hash index that
 /// marks them live is saved, so a cache sweep beside it deletes what it just
 /// wrote. While any build of the folder holds its cache lease the sweep does

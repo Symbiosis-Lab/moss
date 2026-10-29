@@ -1,15 +1,20 @@
 //! What the watcher does for folders the author chose to show as pages: write
-//! the stub for a file that just arrived, and carry a folder's decision along
-//! when the folder is renamed.
+//! the stub for a file that just arrived (and move its read to the front of the
+//! derive queue), and carry a folder's decision along when the folder is
+//! renamed.
 //!
-//! Only watcher events call this. A build scan never does, so a stub the author
-//! deleted stays deleted.
+//! Only arrivals call this: watcher events, and files the sweep finds that no
+//! watcher event announced (new since the last build's baseline). A build scan
+//! never does, so a stub the author deleted stays deleted.
 
 use std::path::{Path, PathBuf};
 
+use notify::event::{ModifyKind, RenameMode};
+use notify::EventKind;
 use notify_debouncer_full::DebouncedEvent;
 
-use crate::build::watch::collect_raw_create_keys;
+use crate::build::watch::drift::{DriftKind, DriftReport};
+use crate::build::watch::{collect_raw_create_keys, raw_create_key};
 use crate::moss_paths::MossPaths;
 use crate::vault::derive_folders::{decisions, heal_renamed_folders, Decision};
 use crate::vault::derive_state::site_registry;
@@ -23,6 +28,21 @@ pub fn react_detached(folder_path: &str, events: &[DebouncedEvent]) {
     let renames = crate::build::watch::extract_rename_pairs(&every, folder_path);
     let (events, folder) = (events.to_vec(), folder_path.to_string());
     tokio::task::spawn_blocking(move || react(&folder, &events, &renames));
+}
+
+/// Stub the new files among `fresh`, the drifted paths the sweep is
+/// dispatching: those absent from the build baseline that a watcher event never
+/// announced. Off the async runtime, like [`react_detached`].
+pub fn react_swept_detached(folder_path: &str, report: &DriftReport, fresh: &[String]) {
+    let root = Path::new(folder_path);
+    let arrived: Vec<PathBuf> = fresh
+        .iter()
+        .filter(|rel| report.drifted.get(*rel).is_some_and(|d| d.kind == DriftKind::Structural))
+        .map(|rel| root.join(rel))
+        .filter(|p| p.is_file())
+        .collect();
+    let folder = folder_path.to_string();
+    tokio::task::spawn_blocking(move || stub_arrived(&folder, &arrived));
 }
 
 /// React to one batch of watcher events. Costs one read of `config.toml` when
@@ -45,20 +65,37 @@ pub fn react(folder_path: &str, events: &[DebouncedEvent], renames: &[(String, S
     if let Err(e) = heal_renamed_folders(&site, &on_disk) {
         log::warn!(target: "derive", "could not follow a renamed folder in config.toml: {e}");
     }
-    let root = Path::new(folder_path);
-    let created: Vec<PathBuf> = collect_raw_create_keys(events, root, |p| p.is_dir())
-        .into_iter()
-        .map(|key| root.join(key))
-        .collect();
+    stub_arrived(folder_path, &arrivals(events, Path::new(folder_path)));
+}
+
+fn stub_arrived(folder_path: &str, created: &[PathBuf]) {
+    let site = MossPaths::new(Path::new(folder_path));
+    crate::system::derive::priority::note_arrived(Path::new(folder_path), created);
     if created.is_empty() || !decisions(&site).values().any(|d| matches!(d, Decision::Show(_))) {
         return;
     }
     match site_registry(&site) {
         Ok(registry) => {
-            stub_arrivals(&site, &registry, &created);
+            stub_arrivals(&site, &registry, created);
         }
         Err(e) => log::warn!(target: "derive", "could not list the site's plugins: {e}"),
     }
+}
+
+/// Files that just appeared: created, or moved in. A file dragged in from
+/// elsewhere on the same disk is a rename the debouncer cannot pair, reported
+/// as `Name(Any)` or `Name(To)` with only the destination. A rename inside the
+/// site is a paired `Name(Both)` and is not an arrival.
+fn arrivals(events: &[DebouncedEvent], root: &Path) -> Vec<PathBuf> {
+    let mut keys = collect_raw_create_keys(events, root, |p| p.is_dir());
+    for ev in events {
+        if matches!(ev.kind, EventKind::Modify(ModifyKind::Name(mode)) if mode != RenameMode::Both) {
+            keys.extend(ev.paths.iter().filter(|p| p.is_file()).filter_map(|p| raw_create_key(root, p)));
+        }
+    }
+    keys.sort();
+    keys.dedup();
+    keys.into_iter().map(|key| root.join(key)).collect()
 }
 
 #[cfg(test)]

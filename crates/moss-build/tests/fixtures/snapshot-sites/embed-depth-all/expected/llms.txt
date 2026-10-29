@@ -20,7 +20,8 @@ Body A.
 
 ## Depth All Test
 
-<!--MOSS_MARKER_FOLDER_LIST:path=posts/|from=index.md|depth=all-->
+- [Article B](/posts/2024/article-b/)
+- [Article A](/posts/2024/article-a/)
 
 ---
 

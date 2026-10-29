@@ -297,6 +297,7 @@ pub async fn start_server(
                         is_evicted: EvictedProbe,
                         host_routes: Option<Router>,
                         extra_hosts: Arc<Vec<String>>| {
+        let state_for_viewed = state.clone();
         let registry_for_layer = registry.clone();
         // The `/__moss_health/` route is registered BEFORE `.fallback()` so it
         // always wins over `ServeDir`. The endpoint emits a moss-specific JSON
@@ -693,12 +694,10 @@ pub async fn start_server(
             // A navigation — a page, not one of its assets — means someone is
             // looking (`super::events::viewer_activity`). Inside the trust
             // boundary, so a refused request is not a viewer.
-            .layer(middleware::from_fn(|request: Request<Body>, next: middleware::Next| async move {
-                if content_wrapper::is_navigation_request(request.headers()) {
-                    super::events::note_activity();
-                }
-                next.run(request).await
-            }))
+            .layer({
+                let site_dir = state_for_viewed.clone();
+                middleware::from_fn(move |request, next| super::events::track_viewer(site_dir.clone(), request, next))
+            })
             // Outermost layer: added last, so it runs FIRST — ahead of routing,
             // ServeDir and bridge injection — and covers every route including
             // the health check. Refuses a Host that is neither loopback nor

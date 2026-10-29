@@ -129,6 +129,16 @@ fn normalize_html(content: &str) -> String {
     let path_re = regex::Regex::new(r#"(?:/Users|/home)/[^"'\s<>]+"#).unwrap();
     normalized = path_re.replace_all(&normalized, "[PATH]").to_string();
 
+    // A folder-name title keeps its digit-dash-digit runs in no-break spans,
+    // which cut the random directory name in pieces; join it first.
+    let split_dir_re =
+        regex::Regex::new(r#"moss_snapshot_test_(?:[a-f0-9-]|<span class="moss-nobreak">|</span>)+"#).unwrap();
+    normalized = split_dir_re
+        .replace_all(&normalized, |m: &regex::Captures| {
+            m[0].replace(r#"<span class="moss-nobreak">"#, "").replace("</span>", "")
+        })
+        .to_string();
+
     // Normalize temp directory names (moss_snapshot_test_UUID pattern)
     // These appear in titles and site names
     let temp_dir_re = regex::Regex::new(r"moss_snapshot_test_[a-f0-9-]{36}").unwrap();
@@ -789,8 +799,8 @@ fn place_listing_maps_mark_their_member_places() {
             .map(|(index, _)| layer[index + 17..].split('"').next().unwrap().to_string())
             .collect()
     };
-    assert_eq!(markers("places/index.html"), ["places/nara", "places/kyoto"]);
-    assert_eq!(markers("places/japan/index.html"), ["places/kyoto"]);
+    assert_eq!(markers("places/index.html"), ["places/nara", "places/kyoto-city"]);
+    assert_eq!(markers("places/japan/index.html"), ["places/kyoto-city"]);
 }
 
 /// `input/places/index.md` is a real page at the "places" namespace root —

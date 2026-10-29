@@ -429,7 +429,10 @@ pub fn generate_blocking_content_for_build(
     };
     let markdown = crate::build::markdown::SiteMarkdown { lang: root_language(&site_config.lang, project_structure, &home_file_winners), ..site_config.markdown() };
     // Read before the pages render: a faded closing picture is measured over it.
-    let page_ground = crate::build::markdown::hero_ink::PageGround::of_theme(user_css_content.as_deref()).with_colophon(site_config.colophon);
+    let page_ground = crate::build::markdown::hero_ink::PageGround {
+        credit: site_config.colophon_credit.is_some(),
+        ..crate::build::markdown::hero_ink::PageGround::of_theme(user_css_content.as_deref()).with_colophon(site_config.colophon)
+    };
 
     // Build PageMap: pre-scan all markdown files to compute source_path → url_path mapping.
     // This includes cascading url overrides from folder index files, so child pages
@@ -656,6 +659,7 @@ pub fn generate_blocking_content_for_build(
         // on — is identical to the old serial loop. Debug sub-phase timers are
         // atomic sums of per-file CPU (they overlap in wall-clock now).
         let md_read_ns = AtomicU64::new(0);
+        let plugins_off_noted = std::sync::atomic::AtomicBool::new(false);
         let md_resolve_ns = AtomicU64::new(0);
         let md_process_ns = AtomicU64::new(0);
         let processed = AtomicUsize::new(0);
@@ -761,7 +765,7 @@ pub fn generate_blocking_content_for_build(
                             state,
                             moss_core::resolve::embeds::derived::DerivedFragment::Pending
                                 | moss_core::resolve::embeds::derived::DerivedFragment::Failed { .. }
-                        ) {
+                        ) || derived_site.is_some_and(|d| d.is_previous(path)) {
                             shows_unready.set(true);
                         }
                         state
@@ -792,17 +796,32 @@ pub fn generate_blocking_content_for_build(
                     }
 
                     let t_process = std::time::Instant::now();
-                    // This phase only ever raises advisory diagnostics —
-                    // unresolved frontmatter wikilinks, broken transclusions.
+                    // Only a text embed no plugin derives counts as a problem; unresolved
+                    // frontmatter wikilinks and broken transclusions stay advisory.
                     // Physical-source evidence is derived below from the
                     // final raw bytes, not from this expanded representation.
                     for diag in &resolve_result.diagnostics {
-                        log::warn!(
-                            "Resolve: {} — ref '{}' in '{}'",
-                            diag.message,
-                            diag.reference,
-                            diag.source_path
-                        );
+                        if diag.kind == moss_core::resolve::DiagnosticKind::UnderivedEmbed {
+                            if site_config.plugins_skipped {
+                                if !plugins_off_noted.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                    log::warn!("Resolve: text embeds show no text because plugins are off for this build (--no-plugins)");
+                                }
+                            } else {
+                                log_warn_problem!(
+                                    "Resolve: {} — ref '{}' in '{}'",
+                                    diag.message,
+                                    diag.reference,
+                                    diag.source_path
+                                );
+                            }
+                        } else {
+                            log::warn!(
+                                "Resolve: {} — ref '{}' in '{}'",
+                                diag.message,
+                                diag.reference,
+                                diag.source_path
+                            );
+                        }
                     }
 
                     let resolved_content = &resolve_result.content_markdown;
@@ -1192,6 +1211,10 @@ pub fn generate_blocking_content_for_build(
         }
         log::debug!(target: "timing", "[reduce] slug_dedup ({} docs): {:?}", documents.len(), reduce_start.elapsed());
 
+        if documents.iter().any(|d| d.slot_only && d.html_content.contains("moss-hero-closing")) {
+            crate::build::markdown::hero_ink::TypeTheme::note_unread(user_css_content.as_deref());
+        }
+
         // Slot files (reserved-name `footer.md`) STAY in
         // `documents` so the per-page emission loop can see them — they're
         // structurally flagged via `ParsedDocument.slot_only` and the HTML
@@ -1413,7 +1436,7 @@ pub fn generate_blocking_content_for_build(
         let layout_config = layout_config.with_heading_anchors(site_config.heading_anchors);
         // [site].floating_nav (default false — opt-in) rides along for
         // the same reason: the emitter reads LayoutConfig, not SiteConfig.
-        let layout_config = layout_config.with_floating_nav(site_config.floating_nav).with_colophon(site_config.colophon);
+        let layout_config = layout_config.with_floating_nav(site_config.floating_nav).with_colophon(site_config.colophon).with_colophon_credit(site_config.colophon_credit.clone());
         // [site].header (default "brand") rides along for the same reason:
         // the nav renderer reads LayoutConfig, not SiteConfig.
         let layout_config = layout_config.with_header_mode(site_config.header).with_term_nav(term_index.nav_entries(&site_config.term_nav));
@@ -1496,6 +1519,7 @@ pub fn generate_blocking_content_for_build(
                 .is_some_and(|r| r.iter_registered_variants().values().any(|k| k.hls)),
             places_explorer: crate::build::features::should_inject_places_explorer(&term_index, &site_config),
             map_layers: site_config.place_maps.as_ref().is_some_and(|maps| maps.has_layers()),
+            colophon_credit: site_config.colophon_credit.is_some(),
             // `search`, `link_preview`, `heading_anchors` and `math` already
             // live here, written by the config phase above. Re-reading them
             // from `site_config` would be a second copy of the same four
@@ -2541,6 +2565,10 @@ pub fn generate_blocking_content_for_build(
             &documents,
             llms_site_title,
             homepage_desc.as_deref(),
+            |body, host| {
+                let from = host.source_path.as_deref().unwrap_or(&host.url_path);
+                crate::build::folder_embed::marker_pages(body, from, &documents, project_structure, &dir_overrides, site_config.math, now)
+            },
         );
         // Site 14 (Pattern A): emit llms.txt.
         BuildContext::for_render(output_dir, pending)
@@ -2693,15 +2721,14 @@ pub fn generate_blocking_content_for_build(
     if site_config.link_preview {
         use std::collections::BTreeMap;
         let mut previews: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+        let mut excerpts = crate::build::feeds::previews::PreviewCache::begin(Path::new(source_path));
         for doc in &documents {
             if !doc.is_public_page() {
                 continue;
             }
-            let preview_text = crate::build::page::meta::extract_preview(
-                &doc.content,
-                PREVIEW_MAX_CHARS,
-                site_config.math,
-            );
+            let preview_text = excerpts.excerpt(&doc.url_path, &doc.content, site_config.math, |content| {
+                crate::build::page::meta::extract_preview(content, PREVIEW_MAX_CHARS, site_config.math)
+            });
             // Hover-preview tooltips are chrome; use the plain-text label.
             let Some(entry) = crate::build::page::meta::preview_entry(&doc.label, doc.description.as_deref(), &preview_text)
             else {
@@ -2712,6 +2739,7 @@ pub fn generate_blocking_content_for_build(
             let pretty_url = format!("/{}", pretty.trim_start_matches('/')); // allow:served-path-url-construct (pretty URL key for previews.json index, derived from permalink)
             previews.insert(pretty_url, serde_json::Value::Object(entry));
         }
+        excerpts.finish();
         // Site 14c (Pattern A): emit _moss/previews.json (conditional on serialization success).
         if let Ok(json) = serde_json::to_string(&previews) {
             if let Err(e) = BuildContext::for_render(output_dir, pending)
@@ -3057,6 +3085,7 @@ pub fn generate_blocking_content_for_build(
         crate::build::terms::kind_move_stubs(&term_index),
         crate::build::terms::claim_stubs(&term_index),
         crate::build::terms::edition_move_stubs(&term_index),
+        crate::build::terms::place_slug_stubs(&term_index),
         super::build_shared::shadowed_edition_home_stubs(&verbatim_dirs, &home_file_winners),
         folder_plan.passthrough_stubs.clone(),
     ]
@@ -3348,7 +3377,7 @@ pub fn generate_blocking_content_for_build(
             Some(&input_evidence),
         );
         if !items.is_empty() {
-            log::info!(
+            log::debug!(
                 "🖼  Found {} image(s) for background WebP conversion",
                 items.len()
             );

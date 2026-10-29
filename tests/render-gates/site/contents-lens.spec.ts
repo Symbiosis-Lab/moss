@@ -11,14 +11,17 @@
  * Run via: bash scripts/render-gates.sh contents-lens
  */
 import { test, expect, type Page } from '@playwright/test';
+import { gatePort } from '../../../playwright/gate-ports';
 import { contrastRatio, relativeLuminance } from '../../e2e/helpers/wcag-contrast';
-import { BROKEN_SECTIONS, FOCAL_ROW, FOCUS_POINT, FULL_SECTIONS, LENS_SECTIONS, LENS_WITH_IMAGE, MANY, SHORT_NAME } from '../../e2e/helpers/contents-lens-site';
+import { BAND_DARK, BAND_LIGHT, BAND_OKLCH_DARK, BAND_OKLCH_LIGHT, BROKEN_SECTIONS, FOCAL_ROW, FOCUS_POINT, FULL_SECTIONS, LENS_SECTIONS, LENS_WITH_IMAGE, MANY, SHORT_NAME } from '../../e2e/helpers/contents-lens-site';
 
 const LENS = '/essays/lens/';
 const PLAIN = '/essays/plain/';
 const MANY_PAGE = '/essays/many/';
 const FULL_PAGE = '/essays/full/';
 const BROKEN_PAGE = '/essays/broken/';
+const BAND_PAGE = '/essays/band/';
+const BAND_OKLCH_PAGE = '/essays/bandoklch/';
 /** contents-lens.ts: rest, open and focused row heights, and the pointer travel per row. */
 const REST = 20;
 const OPEN_ROW = 26;
@@ -133,6 +136,47 @@ async function leave(page: Page): Promise<void> {
   await expect.poll(() => isOpen(page)).toBe(false);
 }
 
+/** The least contrast of the far names (rows 0, 5 and 6) against the pixels actually behind them, read with the names hidden. */
+async function farNameContrast(page: Page): Promise<number> {
+  const labels = await page.evaluate(() => {
+    const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true })!;
+    return [...document.querySelectorAll('.moss-contents-ruler-label')].map((l) => {
+      const b = l.getBoundingClientRect();
+      ctx.clearRect(0, 0, 1, 1);
+      ctx.fillStyle = getComputedStyle(l).color;
+      ctx.fillRect(0, 0, 1, 1);
+      return { ink: [...ctx.getImageData(0, 0, 1, 1).data.slice(0, 3)], left: b.left, right: b.right, y: (b.top + b.bottom) / 2 };
+    });
+  });
+  await page.addStyleTag({ content: '.moss-contents-ruler-label { visibility: hidden !important; }' });
+  const shot = (await page.screenshot({ clip: { x: 0, y: 0, width: 560, height: 800 } })).toString('base64');
+  return page.evaluate(
+    async ([png, boxes]) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${png}`;
+      await img.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+      ctx.drawImage(img, 0, 0);
+      const scale = img.width / 560;
+      const lum = ([r, g, b]: number[]) => [r, g, b].map((v) => v / 255).map((c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)).reduce((s, c, i) => s + c * [0.2126, 0.7152, 0.0722][i], 0);
+      const ratio = (a: number[], b: number[]) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
+      const found: number[] = [];
+      for (const i of [0, 5, 6]) {
+        const l = boxes[i];
+        for (let x = Math.ceil(l.left); x <= l.right; x += 6) {
+          const [r, g, b] = ctx.getImageData(Math.round(x * scale), Math.round(l.y * scale), 1, 1).data;
+          found.push(ratio(l.ink, [r, g, b]));
+        }
+      }
+      return Math.min(...found);
+    },
+    [shot, labels] as const,
+  );
+}
+
 test.describe('contents: pictures', () => {
   test.beforeEach(async ({ page }) => {
     await open(page, LENS);
@@ -208,6 +252,112 @@ test.describe('contents: pictures', () => {
     expect(rest.weight).toBeLessThan(500);
     expect(type[2].size, 'a neighbour grows part of the way').toBeGreaterThan(rest.size);
     expect(type[2].size).toBeLessThan(type[3].size);
+  });
+
+  for (const scheme of ['light', 'dark'] as const) {
+    for (const picture of ['#000000', '#ffffff']) {
+      test(`far names keep 4.5:1 on the pixels behind them over a ${picture === '#000000' ? 'black' : 'white'} picture, and the pointed one is the text colour, in ${scheme}`, async ({ page }) => {
+        await page.emulateMedia({ colorScheme: scheme });
+        await open(page, LENS);
+        await intoPage(page);
+        // A picture under the list (an image, not a background colour, so the fade does not take its colour): above the page, below the ruler.
+        await page.evaluate((colour) => {
+          const probe = document.createElement('div');
+          probe.style.cssText = `position:fixed;left:0;top:0;width:560px;height:100vh;z-index:1;pointer-events:none;background-image:linear-gradient(${colour},${colour})`;
+          document.body.append(probe);
+        }, picture);
+        await enter(page, 3);
+        const names = await page.evaluate(() => {
+          const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true })!;
+          const paint = (css: string) => {
+            ctx.clearRect(0, 0, 1, 1);
+            ctx.fillStyle = css;
+            ctx.fillRect(0, 0, 1, 1);
+            return [...ctx.getImageData(0, 0, 1, 1).data.slice(0, 3)];
+          };
+          const veil = document.querySelector('.moss-contents-ruler-veil')!.getBoundingClientRect();
+          const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+          return {
+            solidEnd: veil.left + veil.width - 9 * rem,
+            labels: [...document.querySelectorAll('.moss-contents-ruler-label')].map((l) => {
+              const b = l.getBoundingClientRect();
+              const cs = getComputedStyle(l);
+              return { ink: paint(cs.color), opacity: cs.opacity, left: b.left, right: b.right, y: (b.top + b.bottom) / 2 };
+            }),
+            text: (() => {
+              const el = document.createElement('span');
+              el.style.color = 'var(--moss-color-text)';
+              document.body.append(el);
+              const c = paint(getComputedStyle(el).color);
+              el.remove();
+              return c;
+            })(),
+          };
+        });
+        expect(names.labels.every((l) => l.opacity === '1'), 'names are not made translucent').toBe(true);
+        expect(names.labels[3].ink, 'the pointed row is the text colour').toEqual(names.text);
+        for (const [i, l] of names.labels.entries()) expect(l.right, `name ${i} ends on the solid part of the fade`).toBeLessThanOrEqual(names.solidEnd);
+
+        const worst = await farNameContrast(page);
+        expect(worst, 'the faintest far name against the pixels behind it').toBeGreaterThanOrEqual(4.5);
+      });
+    }
+  }
+
+  for (const [syntax, path, band, tint] of [
+    ['rgb', BAND_PAGE, '.tinted', { light: BAND_LIGHT, dark: BAND_DARK }],
+    ['oklch', BAND_OKLCH_PAGE, '.tinted-oklch', { light: BAND_OKLCH_LIGHT, dark: BAND_OKLCH_DARK }],
+  ] as const) for (const scheme of ['light', 'dark'] as const) {
+    test(`over a ${syntax} band the far names keep 4.5:1 on the band's fade, in ${scheme}`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      await open(page, path);
+      await page.evaluate((sel) => document.querySelector(sel)!.scrollIntoView({ block: 'start' }), band);
+      await frames(page);
+      await expect.poll(() => page.locator('.moss-contents-ruler').evaluate((el) => el.hasAttribute('data-away'))).toBe(false);
+      await enter(page, 3);
+      const veil = await page.locator('.moss-contents-ruler-veil').evaluate((el) => getComputedStyle(el).backgroundImage);
+      expect(veil, 'the fade takes the band colour').toContain(tint[scheme]);
+      expect(await farNameContrast(page)).toBeGreaterThanOrEqual(4.5);
+    });
+  }
+
+  test('where the text colour itself falls short on the page the names keep the secondary colour; the other theme gets its own floor', async ({ page }) => {
+    const url = `http://localhost:${gatePort('contents-lens:fallback')}${LENS}`;
+    const far = async (scheme: 'light' | 'dark') => {
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.setViewportSize({ width: 1360, height: 800 });
+      await page.goto(url);
+      await page.waitForSelector('.moss-contents-ruler', { state: 'attached' });
+      await page.evaluate(() => document.fonts.ready);
+      await frames(page);
+      await intoPage(page);
+      await enter(page, 3);
+      return page.evaluate(() => {
+        const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true })!;
+        const rgb = (css: string) => {
+          ctx.clearRect(0, 0, 1, 1);
+          ctx.fillStyle = css;
+          ctx.fillRect(0, 0, 1, 1);
+          return [...ctx.getImageData(0, 0, 1, 1).data.slice(0, 3)];
+        };
+        const secondary = document.createElement('span');
+        secondary.style.color = 'var(--moss-color-text-secondary)';
+        document.body.append(secondary);
+        const secondaryInk = rgb(getComputedStyle(secondary).color);
+        secondary.remove();
+        return {
+          set: document.querySelector<HTMLElement>('.moss-contents-ruler')!.style.getPropertyValue('--moss-contents-faint'),
+          name: rgb(getComputedStyle(document.querySelectorAll('.moss-contents-ruler-label')[0]).color),
+          secondaryInk,
+        };
+      });
+    };
+    const dark = await far('dark');
+    expect(dark.set, 'no floor is set for dark').toBe('');
+    expect(dark.name).toEqual(dark.secondaryInk);
+    const light = await far('light');
+    expect(light.set).toMatch(/^rgb\(/);
+    expect(light.name).not.toEqual(light.secondaryInk);
   });
 
   test('the focused row stays under the pointer while it moves, one row per pitch of travel', async ({ page }) => {

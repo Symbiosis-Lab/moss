@@ -735,6 +735,17 @@ pub fn removed_addresses(
             RemovedAddress { path: out.to_string(), reason, moved_to, source }
         })
         .collect();
+    // A page's QR code has no source of its own; it goes when the page does.
+    let page_qr: HashMap<String, (RemovalReason, Option<String>)> = removed
+        .iter()
+        .filter(|r| r.reason != RemovalReason::Unexplained && page_sources.contains_key(r.path.as_str()))
+        .map(|r| (crate::build::media::qr::qr_key_for_url_path(&r.path), (r.reason, r.source.clone())))
+        .collect();
+    for r in removed.iter_mut().filter(|r| r.reason == RemovalReason::Unexplained && r.source.is_none()) {
+        if let Some((reason, source)) = page_qr.get(&r.path) {
+            (r.reason, r.source) = (*reason, source.clone());
+        }
+    }
     removed.sort_by(|a, b| a.path.cmp(&b.path));
     removed
 }

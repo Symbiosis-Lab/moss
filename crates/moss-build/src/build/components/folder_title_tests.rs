@@ -43,3 +43,11 @@ fn visually_hidden_adds_the_utility_class_without_suppressing_the_heading() {
         r#"<h1 class="moss-folder-title visually-hidden">Places</h1>"#,
     );
 }
+
+#[test]
+fn keeps_a_year_range_together() {
+    assert_eq!(
+        render("Landings, 1861-62", false, false),
+        r#"<h1 class="moss-folder-title">Landings, <span class="moss-nobreak">1861-62</span></h1>"#,
+    );
+}

@@ -3,6 +3,7 @@
 
 pub mod calendar;
 pub mod llms_txt;
+pub mod previews;
 pub mod redirect_table;
 pub mod redirects;
 pub mod rss;

@@ -195,6 +195,9 @@ pub fn stamp_inline_subscribe_scopes(
                 form.args.button.as_deref(),
                 seta_base,
             );
+            if let Some(id) = &form.labelled_by {
+                form.html = label_subscribe_input(&form.html, id);
+            }
             stamped = true;
         }
         if stamped {
@@ -307,6 +310,7 @@ pub fn fetch_buttondown_username(api_key: &str) -> Option<String> {
 /// plumbing the strings as data- attributes through the DOM.
 struct MossSubscribeCopy {
     placeholder: &'static str,
+    input_label: &'static str,
     label: &'static str,
     check_email: &'static str,
     already_subscribed: &'static str,
@@ -317,6 +321,7 @@ fn moss_subscribe_copy(lang: Language) -> MossSubscribeCopy {
     match lang {
         Language::En => MossSubscribeCopy {
             placeholder: "your@email.com",
+            input_label: "Email address",
             label: "Subscribe",
             check_email: "Check your email to confirm.",
             already_subscribed: "You're already subscribed.",
@@ -324,6 +329,7 @@ fn moss_subscribe_copy(lang: Language) -> MossSubscribeCopy {
         },
         Language::ZhHans => MossSubscribeCopy {
             placeholder: "邮箱",
+            input_label: "邮箱地址",
             label: "订阅",
             check_email: "请在邮箱中确认订阅",
             already_subscribed: "你已订阅。",
@@ -331,6 +337,7 @@ fn moss_subscribe_copy(lang: Language) -> MossSubscribeCopy {
         },
         Language::ZhHant => MossSubscribeCopy {
             placeholder: "電子郵件",
+            input_label: "電子郵件地址",
             label: "訂閱",
             check_email: "請在電子郵件中確認訂閱",
             already_subscribed: "你已訂閱。",
@@ -338,6 +345,7 @@ fn moss_subscribe_copy(lang: Language) -> MossSubscribeCopy {
         },
         Language::De => MossSubscribeCopy {
             placeholder: "ihre@email.de",
+            input_label: "E-Mail-Adresse",
             label: "Abonnieren",
             check_email: "Bitte bestätigen Sie das Abonnement in Ihrer E-Mail.",
             already_subscribed: "Sie haben bereits abonniert.",
@@ -369,7 +377,7 @@ fn subscribe_form_inner(
     };
     let envelope_svg = r##"<svg class="moss-subscribe-status__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l8 6 8-6M4 7v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V7M4 7l1-1h14l1 1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>"##;
     format!(
-        r#"<input type="email" name="email" class="moss-input" placeholder="{placeholder}" required>
+        r#"<input type="email" name="email" class="moss-input" placeholder="{placeholder}" aria-label="{input_label}" required>
   <span class="moss-btn-slot">
     <button type="submit" class="moss-btn">
       <span class="moss-btn__label">{label}</span>
@@ -384,12 +392,26 @@ fn subscribe_form_inner(
     <span data-copy="error" hidden>{error}</span>
   </div>"#,
         placeholder = placeholder,
+        input_label = c.input_label,
         label = label,
         check_email = c.check_email,
         already = c.already_subscribed,
         error = c.error,
         envelope_svg = envelope_svg,
         check_svg = CHECK_SVG,
+    )
+}
+
+/// Name a subscribe form's email input from the element `prompt_id` (the words
+/// above the block) and from its own `aria-label`, so a screen reader says both
+/// ("Join the weekly letter. Email address"). Applied to the form's HTML so a
+/// scope re-render can apply it again.
+pub fn label_subscribe_input(form_html: &str, prompt_id: &str) -> String {
+    let id = html_escape(prompt_id);
+    form_html.replacen(
+        r#"<input type="email" name="email""#,
+        &format!(r#"<input type="email" id="{id}-field" aria-labelledby="{id} {id}-field" name="email""#),
+        1,
     )
 }
 

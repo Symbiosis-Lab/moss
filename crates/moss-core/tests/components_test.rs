@@ -177,3 +177,13 @@ fn shortcode_kind_all_enumerates_every_variant() {
         );
     }
 }
+
+#[test]
+fn the_wrapper_site_script_adds_around_an_iframe_is_in_the_contract() {
+    let wrapper = COMPONENTS
+        .iter()
+        .find(|e| e.class == "immersive-iframe-wrapper")
+        .expect("immersive-iframe-wrapper must be described");
+    assert!(!wrapper.description.is_empty());
+    assert!(is_unprefixed_legacy("immersive-iframe-wrapper"));
+}

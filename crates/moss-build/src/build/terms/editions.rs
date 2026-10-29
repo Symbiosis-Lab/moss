@@ -1,8 +1,6 @@
 //! Terms per language edition: the edition-scoped term key and the lookups
 //! that read it.
 
-use moss_core::terms::term_folder_key;
-
 use super::{TermIndex, TermKind, TermSite};
 
 /// A term key as the article map records it, split: `partners/ada-example` is
@@ -86,6 +84,6 @@ impl TermKind {
     /// (`de/partners/ada`). A place-typed kind is site-wide, since its map and
     /// gazetteer are keyed by the plain key, so it ignores the edition.
     pub fn key_in(&self, edition: &str, name: &str) -> String {
-        scope(if self.is_place { "" } else { edition }, &term_folder_key(&self.key, name))
+        scope(if self.is_place { "" } else { edition }, &crate::vault::places::slugged_key(&self.slugs, &self.key, name))
     }
 }

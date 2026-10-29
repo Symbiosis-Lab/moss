@@ -1,5 +1,5 @@
 //! A hero's height cap (`:::hero {max-height=…}`): a px, rem or vw length, or
-//! `clamp()` of px and vw lengths, and nothing else, so the build can evaluate
+//! `clamp()` of px, rem and vw lengths, and nothing else, so the build can evaluate
 //! it at any window width and measure the crop it makes. A window's height is
 //! unknown to the build, so `vh` and `svh` are not taken.
 
@@ -30,7 +30,8 @@ impl Unit {
 pub struct Length(pub f32, pub Unit);
 
 impl Length {
-    fn parse(s: &str) -> Option<Self> {
+    /// A positive, finite length in px, rem or vw.
+    pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim();
         let (number, unit) = Unit::ALL.iter().find_map(|unit| Some((s.strip_suffix(unit.as_str())?, *unit)))?;
         if number.is_empty() || !number.chars().all(|c| c.is_ascii_digit() || c == '.') {
@@ -58,7 +59,7 @@ impl fmt::Display for Length {
 }
 
 /// The cap: one length, or `clamp(min, preferred, max)` whose three parts are
-/// each a px or a vw length. Carried in the AST as the CSS it writes.
+/// each a px, rem or vw length. Carried in the AST as the CSS it writes.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub enum MaxHeight {
@@ -68,7 +69,7 @@ pub enum MaxHeight {
 
 impl MaxHeight {
     /// `None` for anything outside the grammar: `%`, `em`, `vh`, `calc()`,
-    /// `min()`, a bare number, a rem inside `clamp()`.
+    /// `min()`, a bare number.
     pub fn parse(raw: &str) -> Option<Self> {
         let raw = raw.trim();
         let Some(inner) = raw.strip_prefix("clamp(").and_then(|r| r.strip_suffix(')')) else {
@@ -76,7 +77,7 @@ impl MaxHeight {
         };
         let parts: Vec<Length> = inner.split(',').map(Length::parse).collect::<Option<_>>()?;
         let parts: [Length; 3] = parts.try_into().ok()?;
-        parts.iter().all(|l| matches!(l.1, Unit::Px | Unit::Vw)).then_some(MaxHeight::Clamp(parts))
+        Some(MaxHeight::Clamp(parts))
     }
 
     /// The cap in px, for a window `width` px wide.
@@ -128,6 +129,7 @@ mod tests {
             ("clamp(420px, 50vw, 680px)", 640.0),
             ("clamp(420px,30vw,680px)", 420.0),
             ("clamp(10vw, 900px, 60vw)", 768.0),
+            ("clamp(1.875rem, 3.9vw, 3.125rem)", 49.92),
         ] {
             let cap = MaxHeight::parse(raw).unwrap_or_else(|| panic!("{raw} is in the grammar"));
             assert!((cap.px(1280.0) - at_1280).abs() < 0.01, "{raw}: {}", cap.px(1280.0));
@@ -141,7 +143,7 @@ mod tests {
     fn anything_else_is_rejected() {
         for raw in [
             "", "none", "auto", "500", "50%", "3em", "60vh", "75svh", "-10px", "0px", "px", "1e3px", "500PX", "calc(100vh - 2rem)", "min(500px, 60vh)",
-            "clamp(420px, 50vh, 680px)", "clamp(20rem, 50vw, 680px)", "clamp(420px, 680px)", "clamp(1px, 2px, 3px, 4px)", "clamp(420px, 50vw, 680px",
+            "clamp(420px, 50vh, 680px)", "clamp(2em, 50vw, 680px)", "clamp(1rem, calc(1vw + 1rem), 3rem)", "clamp(420px, 680px)", "clamp(1px, 2px, 3px, 4px)", "clamp(420px, 50vw, 680px",
             "500px; background: red", "var(--x)",
         ] {
             assert_eq!(MaxHeight::parse(raw), None, "{raw:?} is outside the grammar");

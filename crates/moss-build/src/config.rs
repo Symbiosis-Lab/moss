@@ -81,7 +81,8 @@ impl ConfigFile {
     /// funnel closes that class for every host, current and future. The
     /// transform is idempotent, so the app's persisted-at-entry file passes
     /// through unchanged; persistence itself stays a host concern (the app's
-    /// `HostStore::run_vault_migrations`) and no writer ships in this crate.
+    /// `persist_migration`, run only when an author edits the file) and no
+    /// writer of a migrated config ships in this crate.
     /// A transform error falls back to the raw value: a config moss cannot
     /// migrate still renders with the keys it can read, matching the app's
     /// "corrupt config renders with absent-key defaults" stance.
@@ -116,6 +117,12 @@ impl ConfigFile {
     /// call this instead of re-reading and re-parsing the file.
     pub fn schema_version_ahead(&self) -> Option<u32> {
         crate::config::migrations::version_ahead(&self.root, crate::config::migrations::CURRENT_VERSION)
+    }
+
+    /// The oldest moss release that renders this site's design correctly, as
+    /// its designer wrote it. moss never writes or raises it.
+    pub fn min_moss_version(&self) -> Option<&str> {
+        self.root.get("min_moss_version").and_then(|v| v.as_str())
     }
 
     /// A string field under `[site]`, e.g. `lang`, `typesetting`.

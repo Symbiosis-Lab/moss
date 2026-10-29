@@ -95,6 +95,8 @@ pub enum StrikeVerdict {
 pub struct WatcherHealth {
     /// Batches the debouncer delivered, pre-filter.
     batches: AtomicU64,
+    /// When the last batch arrived, as Unix nanoseconds (0: never).
+    last_batch_nanos: AtomicU64,
     /// Rescan-flag confessions (`watcher_lost_events`).
     confessions: AtomicU64,
     /// Wakes the watcher task to tear down and re-create its debouncer.
@@ -112,6 +114,7 @@ impl WatcherHealth {
     fn new() -> Self {
         WatcherHealth {
             batches: AtomicU64::new(0),
+            last_batch_nanos: AtomicU64::new(0),
             confessions: AtomicU64::new(0),
             recreate: tokio::sync::Notify::new(),
             recreations: AtomicU32::new(0),
@@ -130,6 +133,7 @@ impl WatcherHealth {
     /// the lock here would put a mutex on the watcher's hot path.
     pub fn note_batch(&self) {
         self.batches.fetch_add(1, Ordering::SeqCst);
+        self.last_batch_nanos.store(unix_nanos(std::time::SystemTime::now()), Ordering::SeqCst);
         self.recreations.store(0, Ordering::SeqCst);
         self.degraded_logged.store(false, Ordering::SeqCst);
     }
@@ -145,6 +149,11 @@ impl WatcherHealth {
             batches: self.batches.load(Ordering::SeqCst),
             confessions: self.confessions.load(Ordering::SeqCst),
         }
+    }
+
+    /// Whether a batch arrived after `t`: the watcher was alive after it.
+    fn spoke_after(&self, t: std::time::SystemTime) -> bool {
+        self.last_batch_nanos.load(Ordering::SeqCst) > unix_nanos(t)
     }
 
     /// Judge a matured candidate against the counters as they stand now.
@@ -229,6 +238,10 @@ impl WatcherHealth {
     }
 }
 
+fn unix_nanos(t: std::time::SystemTime) -> u64 {
+    t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64)
+}
+
 /// The sweep's half of the strike rule: the one armed candidate, and the two
 /// moments that move it — a fresh drift dispatch arms it, the next walk pass
 /// matures it. Extracted from the sweep loop so the arming → maturity →
@@ -251,11 +264,16 @@ impl StrikeArm {
     /// watcher never could have delivered; striking on it would tear down a
     /// healthy watcher every time a file lands at the vault root — on a cloud
     /// root (walk every tick), nearly every time (adversarial review F3).
-    pub fn arm(&mut self, folder: &str, top_level_dirty: bool) {
+    ///
+    /// `changed_at` is when the newest drifted change landed on this disk,
+    /// when every one is known. A watcher that delivered a batch after it is alive; the sweep
+    /// caught a change its own baseline had not absorbed yet, and arming
+    /// would recreate a healthy watcher once the next pass stays quiet.
+    pub fn arm(&mut self, folder: &str, top_level_dirty: bool, changed_at: Option<std::time::SystemTime>) {
         self.candidate = if top_level_dirty {
             None
         } else {
-            get(folder).map(|h| h.mark())
+            get(folder).filter(|h| !changed_at.is_some_and(|t| h.spoke_after(t))).map(|h| h.mark())
         };
     }
 

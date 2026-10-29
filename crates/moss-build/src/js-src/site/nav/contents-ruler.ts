@@ -23,7 +23,8 @@
  *   `body`, and this module reads only whether that is set, so the media
  *   condition has one owner and nothing here measures the margin. Where the
  *   lane is reserved the island's `data-ruler` is `lane` while the list is
- *   away, and its bar never shows.
+ *   away, and its bar never shows. The controls stand in the lane at the foot
+ *   of the window while the list is up and are hidden with it (site.css).
  * - A site can switch it off with CSS (`display: none`, `visibility: hidden`);
  *   whether it is actually rendered is read on every pass, so the island
  *   comes back however it was hidden.
@@ -202,7 +203,7 @@ export function mountContentsRuler(opts: RulerOptions): () => void {
         : getComputedStyle(nav).display !== "none");
     away = !(inBody && notPast && !covered) && !nav.matches(":focus-within");
     nav.toggleAttribute("data-away", away);
-    island.dataset.ruler = rendered && !away ? "on" : lane ? "lane" : "off";
+    island.dataset.ruler = rendered && !away ? "on" : lane && rendered ? "lane" : "off";
   }
 
   function layout(): void {

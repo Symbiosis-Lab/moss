@@ -20,6 +20,17 @@ async function boxes(page: Page) {
   };
 }
 
+/**
+ * Layout gates measure boxes, not playback. Decoding a hero clip on a headless
+ * WebKit with no GPU (a hosted macOS runner) wedges the page, so these tests
+ * load the page without the clips' media; the tests that need a clip to play
+ * use page.goto directly.
+ */
+async function goLayoutOnly(page: Page, path: string): Promise<void> {
+  await page.route(/\.(m4s|mp4)(\?|$)/, (route) => route.abort());
+  await page.goto(path);
+}
+
 function overlap(a: Box, b: Box) {
   return a.x < b.x + b.width - 0.5 && b.x < a.x + a.width - 0.5 && a.y < b.y + b.height - 0.5 && b.y < a.y + a.height - 0.5;
 }
@@ -33,7 +44,7 @@ for (const path of ["/end/", "/start/", "/stacked/"]) {
   for (const size of SIZES) {
     test(`caption, content and pause do not overlap (${path}, ${size.name})`, async ({ page }) => {
       await page.setViewportSize({ width: size.width, height: size.height });
-      await page.goto(path);
+      await goLayoutOnly(page, path);
       const b = await boxes(page);
       expect(b.caption.width).toBeGreaterThan(0);
       expect(overlap(b.caption, b.content), "caption vs content").toBe(false);
@@ -46,7 +57,7 @@ for (const path of ["/end/", "/start/", "/stacked/"]) {
 
 test("stacked phone: the caption is a credit between the picture and the text block", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/stacked/");
+  await goLayoutOnly(page, "/stacked/");
   const b = await boxes(page);
   const media = (await page.locator(".moss-hero video").first().boundingBox())!;
   expect(b.caption.y).toBeGreaterThanOrEqual(media.y + media.height - 1);
@@ -57,7 +68,7 @@ test("stacked phone: the caption is a credit between the picture and the text bl
 
 test("phone overlay: the caption sits directly above the content, over the picture", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/start/");
+  await goLayoutOnly(page, "/start/");
   const b = await boxes(page);
   expect(b.caption.y + b.caption.height).toBeLessThanOrEqual(b.content.y + 1);
   expect(b.caption.y).toBeGreaterThanOrEqual(b.hero.y);
@@ -65,7 +76,7 @@ test("phone overlay: the caption sits directly above the content, over the pictu
 
 test("phone overlay honours --moss-hero-max-height as its floor", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/start/");
+  await goLayoutOnly(page, "/start/");
   await page.addStyleTag({ content: ":root{--moss-hero-max-height:100svh}" });
   const hero = (await page.locator(".moss-hero").boundingBox())!;
   expect(hero.height).toBeGreaterThanOrEqual(844 - 1);
@@ -77,7 +88,7 @@ for (const path of ["/end/", "/start/", "/images/"]) {
   for (const size of [{ width: 1280, height: 800 }, { width: 1440, height: 900 }, { width: 390, height: 844 }]) {
     test(`slides fill a 100svh hero (${path}, ${size.width})`, async ({ page }) => {
       await page.setViewportSize(size);
-      await page.goto(path);
+      await goLayoutOnly(page, path);
       await page.addStyleTag({ content: ":root{--moss-hero-max-height:100svh}" });
       const hero = (await page.locator(".moss-hero").boundingBox())!;
       for (const sel of [".moss-hero-slide", ".moss-hero-slide :is(video, img)"]) {
@@ -93,7 +104,7 @@ for (const path of ["/end/", "/start/", "/images/"]) {
 test("in-flow captions paint no scrim of their own; the hero's scrim and a text shadow carry them", async ({ page }) => {
   for (const [path, size] of [["/start/", { width: 390, height: 844 }], ["/start/", { width: 1280, height: 800 }], ["/end/", { width: 1280, height: 800 }], ["/end/", { width: 390, height: 844 }]] as const) {
     await page.setViewportSize(size);
-    await page.goto(path);
+    await goLayoutOnly(page, path);
     const cs = await page.locator(".moss-hero-captions").evaluate((el) => getComputedStyle(el).backgroundImage);
     expect(cs, `${path} ${size.width}`).toBe("none");
     const shadow = await page.locator('.moss-hero-caption[data-slide="0"]').evaluate((el) => getComputedStyle(el).textShadow);
@@ -106,7 +117,7 @@ test("in-flow captions paint no scrim of their own; the hero's scrim and a text 
 test("phone, header=over: the pause control is never under the header's buttons", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   for (const path of ["/end/", "/start/", "/stacked/"]) {
-    await page.goto(path);
+    await goLayoutOnly(page, path);
     const pause = (await page.locator(".moss-hero-pause").boundingBox())!;
     const buttons = page.locator("header button, header a");
     for (let i = 0; i < (await buttons.count()); i++) {
@@ -134,7 +145,7 @@ test("a sequence moves to the next clip and caption when a video ends", async ({
 
 test("reduced motion: the first clip and caption stay, nothing plays, no pause control", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.goto("/start/");
+  await goLayoutOnly(page, "/start/");
   await page.waitForLoadState("load");
   await expect(page.locator('.moss-hero-caption[data-slide="0"]')).toBeVisible();
   await expect(page.locator('.moss-hero-caption[data-slide="1"]')).toBeHidden();
@@ -147,7 +158,7 @@ test("reduced motion: the first clip and caption stay, nothing plays, no pause c
 test("a pale cover has no hero scrim, so the captions keep their own gradient", async ({ page }) => {
   for (const size of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(size);
-    await page.goto("/start/");
+    await goLayoutOnly(page, "/start/");
     await page.locator(".moss-hero").evaluate((el) => (el.dataset.heroTone = "light"));
     const bg = await page.locator(".moss-hero-captions").evaluate((el) => getComputedStyle(el).backgroundImage);
     expect(bg, `${size.width}`).toContain("linear-gradient");
@@ -163,7 +174,7 @@ for (const path of ["/end/", "/start/", "/stacked/", "/three/"]) {
   for (const size of SIZES) {
     test(`the clip indicator overlaps nothing (${path}, ${size.name})`, async ({ page }) => {
       await page.setViewportSize({ width: size.width, height: size.height });
-      await page.goto(path);
+      await goLayoutOnly(page, path);
       await page.locator(SEGMENT).first().waitFor({ state: "attached", timeout: 5000 });
       const n = await page.locator(SEGMENT).count();
       expect(n).toBe(path === "/three/" ? 3 : 2);
@@ -185,7 +196,7 @@ for (const path of ["/end/", "/start/", "/stacked/", "/three/"]) {
 }
 
 test("the segments are labelled and the playing one is aria-current", async ({ page }) => {
-  await page.goto("/three/");
+  await goLayoutOnly(page, "/three/");
   const segs = page.locator(SEGMENT);
   await expect(segs).toHaveCount(3);
   await expect(segs.nth(1)).toHaveAttribute("aria-label", /^Clip 2 of 3: Title two/);
@@ -231,7 +242,7 @@ test("the playing segment's bar fills from the video's time", async ({ page }) =
 
 test("reduced motion: no indicator (nothing plays, so nothing to jump between)", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.goto("/three/");
+  await goLayoutOnly(page, "/three/");
   await page.waitForLoadState("load");
   await expect(page.locator(SEGMENT)).toHaveCount(0);
 });

@@ -779,7 +779,7 @@ fn source_blob(
         return Ok(None);
     }
     *cache_misses += 1;
-    object_store.store_file(path, crate::build::cache::RecordMode::Wait)
+    object_store.store_source_file(path, crate::build::cache::RecordMode::Wait)
         .map(|oid| Some((oid, stat)))
 }
 
@@ -867,6 +867,24 @@ fn preserve_link(
         }
     }
     true
+}
+
+/// The alias file itself is a source the sweep walks, published or not:
+/// without a `sources` entry it reads as a new file on every pass.
+#[cfg(target_os = "macos")]
+fn register_alias_source(
+    path: &Path,
+    source_root: &Path,
+    site_hashes: &mut SiteHashes,
+    live_source_keys: &mut std::collections::HashSet<String>,
+    mut blob: impl FnMut(&Path, &str) -> Result<Option<(String, crate::build::stat::FileStat)>, String>,
+) {
+    let Ok(rel) = path.strip_prefix(source_root) else { return };
+    let rel = moss_core::slug::normalize_separators(&rel.to_string_lossy());
+    if let Ok(Some((oid, stat))) = blob(path, &rel) {
+        site_hashes.sources.insert(rel.clone(), crate::build::types::SourceMetadata::from_stat(oid, stat));
+        live_source_keys.insert(rel);
+    }
 }
 
 /// `place_blob`'s inputs, grouped so both call sites below name each field
@@ -1079,8 +1097,10 @@ pub(crate) fn copy_deferred_assets(
     // letting `ship_phase` mirror), `remove_stale_symlinks` may prune a live
     // symlink on the side that wasn't populated. Keep the dual-write.
     //
-    // Symlinks are NOT entered into `live_asset_keys` / `live_source_keys`
-    // — they have no content hash and aren't in the object-store cache.
+    // Real symlinks are NOT entered into `live_asset_keys` / `live_source_keys`
+    // — they have no content hash and aren't in the object-store cache. A
+    // Finder alias is a regular file, so its own bytes are a source
+    // (`register_alias_source`).
     let mut live_symlinks = std::collections::HashSet::<String>::new();
 
     // Canonical source root, computed once for the containment check
@@ -1150,6 +1170,9 @@ pub(crate) fn copy_deferred_assets(
                 } else {
                     skipped_symlinks += 1;
                 }
+                let blob = |path: &Path, rel: &str| source_blob(path, prev_sources.get(rel),
+                    prev_hashes_mtime_secs, &object_store, &mut cache_hits, &mut cache_misses);
+                register_alias_source(entry.path(), source_root, &mut site_hashes, &mut live_source_keys, blob);
                 continue;
             }
             // handle_alias_entry returns None ONLY for a genuine non-alias

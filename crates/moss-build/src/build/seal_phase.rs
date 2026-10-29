@@ -268,13 +268,9 @@ async fn run_materialize_phase(req: PendingSeal) {
     // third outcome: a NEWER build already promoted, so this phase's swap was
     // refused — not an error, but not `mat_ok` either, since advertising this
     // older manifest to deploy would roll the published site back exactly as
-    // the symlink swap would have. Under the debounce this lane runs behind,
-    // `Superseded` should be rare in the single-writer case (the lane always
-    // materializes the LATEST sealed manifest, never a stale one it lost a
-    // race against) — it stays possible only against a genuine second writer
-    // (a forced `settle` racing the background pass, or two moss processes on
-    // the same folder), both pre-existing possibilities this phase inherits
-    // rather than introduces.
+    // the symlink swap would have. The lane only ever holds the newest sealed
+    // render, so only a second writer reaches it: a forced `settle` racing
+    // the background pass, a one-shot build, or another moss process.
     //
     // `spawn_blocking`, not inline: `materialize_and_promote` is synchronous
     // (a copy loop with no `.await`), and a synchronous call inside this

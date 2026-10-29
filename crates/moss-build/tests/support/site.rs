@@ -13,11 +13,21 @@ impl log::Log for Capture {
     }
     fn log(&self, record: &log::Record) {
         self.0.lock().unwrap().push(record.args().to_string());
+        // What the CLI counts as a build problem: every warning that is not a note.
+        if record.level() == log::Level::Warn && !record.target().ends_with("#note") {
+            PROBLEMS.lock().unwrap().push(record.args().to_string());
+        }
     }
     fn flush(&self) {}
 }
 
 static CAPTURE: Capture = Capture(Mutex::new(Vec::new()));
+static PROBLEMS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// The lines the last `build_sync` logged that count as build problems.
+pub fn problems() -> Vec<String> {
+    PROBLEMS.lock().unwrap().clone()
+}
 
 /// The logger is global to the test binary, so builds take turns: each one
 /// owns the capture from its first log line to its last.
@@ -33,6 +43,7 @@ pub fn build_sync(folder_path: &str, trigger: moss_build::build::BuildTrigger) -
     let _ = log::set_logger(&CAPTURE);
     log::set_max_level(log::LevelFilter::Warn);
     CAPTURE.0.lock().unwrap().clear();
+    PROBLEMS.lock().unwrap().clear();
     let source = PathBuf::from(folder_path);
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(run_pipeline(PipelineConfig {

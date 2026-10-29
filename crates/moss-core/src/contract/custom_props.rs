@@ -65,6 +65,12 @@ pub struct CustomProp {
 /// a hook nothing declares is a hook no agent can find.
 pub const CUSTOM_PROPS: &[CustomProp] = &[
     CustomProp {
+        name: "--moss-title-size",
+        owner: "moss-article-title",
+        default: "an article's title: --moss-read-title (40px); a folder's title: 2rem, and no more than that on a phone",
+        description: "Font size of a page's title and a folder's title, at every width: set it once (a length, or `clamp()`) and the defaults no longer apply. Without it a folder's title is 2rem from 48rem up and follows the reading size below that, capped at 2rem so a phone's title is never larger than a desktop's.",
+    },
+    CustomProp {
         name: "--moss-hero-max-height",
         owner: "moss-hero",
         default: "70vb",
@@ -74,7 +80,7 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         name: "--moss-hero-content-width",
         owner: "moss-hero-content",
         default: "auto",
-        description: "Width of the words block over a hero's picture, from tablet width up (a phone stacks or full-widths it). Unset, the block is as wide as its text, so a title over a wide poster can shrink to its longest word; give it a length or a percentage of the hero (e.g. `29%`, `24rem`) to use the poster's clear area. It also replaces the block's default cap of `max(600px, 35%)`, so a wider value is not clamped.",
+        description: "Width of the words block over a hero's picture, measured as its border box (the block's padding is inside it), from tablet width up (a phone stacks or full-widths it). Unset, the block is as wide as its text, so a title over a wide poster can shrink to its longest word; give it a length or a percentage of the hero (e.g. `29%`, `24rem`) to use the poster's clear area. It also replaces the block's default cap of `max(600px, 35%)`, so a wider value is not clamped. On a closing picture this sets the block's width; a title's own measure belongs on the heading, as `max-inline-size` in `ch` on the closing heading, which moss reads.",
     },
     CustomProp {
         name: "--moss-hero-progress",
@@ -95,10 +101,58 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "Text colour over a pale ('light'-toned) hero image, in both overlaid layouts (desktop, and mobile in `data-mobile=\"overlay\"`). Deliberately not `var(--moss-color-text)`: that token is `#2c2825` in light mode but `#d4cbba` in dark, while the photograph underneath does not repaint with the colour scheme, so the token's dark-mode value would put pale text back on the same pale image. Set this to tune the exact shade; it stays fixed across both colour schemes.",
     },
     CustomProp {
+        name: "--moss-hero-title-size",
+        owner: "moss-hero-content",
+        default: "2.5rem (1.75rem under 64rem, 1.4rem on a phone overlay)",
+        description: "Font size of a hero's lead heading, at every width: set it once (a length, or `clamp()` of px, rem and vw) and the stepped defaults no longer apply. A closing picture's ink measurement reads it when it is declared in `:root`, so the words can stay in ink with no panel.",
+    },
+    CustomProp {
+        name: "--moss-hero-link-size",
+        owner: "moss-hero-content",
+        default: "1em",
+        description: "Font size of the link button in a hero's words (the closing picture's call to action). Read by the ink measurement when declared in `:root`.",
+    },
+    CustomProp {
+        name: "--moss-hero-link-padding",
+        owner: "moss-hero-content",
+        default: "0.5em 1.2em",
+        description: "Padding of the link button in a hero's words, block then inline, in `em` of the link's own size. Read by the ink measurement when declared in `:root` as one or two `em` values; any other form leaves the words their panel.",
+    },
+    CustomProp {
+        name: "--moss-hero-words-gap",
+        owner: "moss-hero-content",
+        default: "var(--moss-space-sm)",
+        description: "The space between a hero's heading and its text, and between its text and its row of links. One value sets both. A heading followed straight by the links is two gaps from them: the heading's and the link's. Read by the ink measurement when it is a positive px, rem or vw length in `:root`.",
+    },
+    CustomProp {
+        name: "--moss-hero-credit-size",
+        owner: "moss-hero-credit",
+        default: "0.75rem",
+        description: "Font size of a closing picture's credit (`caption=`), on a 1.45 line. Read by the ink measurement when it is a positive px, rem or vw length in `:root`, so the credit's area and the contrast it needs follow the size.",
+    },
+    CustomProp {
         name: "--moss-hero-panel-bg",
         owner: "moss-hero-content",
         default: "rgba(20, 16, 12, 0.82)",
         description: "Backing panel behind overlay text in both overlaid hero layouts (desktop, and mobile under `mobile=overlay`), so the text stays legible wherever a drawn line, lettering or a face in the photo falls under it. moss does not set this itself: it publishes a per-render panel colour as `--item-hero-panel-bg`, tinted from the image's own scan-cached dominant colour (`color_extract::panel_background`) and engineered so the panel's WCAG contrast against the overlay text holds even in the worst case of its own translucency — composited over pure black or pure white, which bounds every actual pixel underneath. This token, when a theme sets it (on `:root` or `.moss-hero`), takes precedence over that computed colour. The flat default here only applies when neither exists (no media manifest). A pale ('light'-toned) hero reads this against a different literal fallback, `rgba(250, 248, 244, 0.82)` — same property, the other side of the dark/light text split `--moss-hero-tone-color` makes.",
+    },
+    CustomProp {
+        name: "--moss-hero-credit-font",
+        owner: "moss-hero-credit",
+        default: "var(--moss-font-body)",
+        description: "The face of a closing picture's credit (`caption=`). It defaults to moss's UI face, `--moss-font-body`; set it to `var(--moss-font-mono)`, or any font stack, to give the credit a face of its own. The build does not see the face: it takes a letter as 0.6 em wide, a monospace face's width, when it works out how many lines the credit sets and so where its ink is measured, which can only make that area larger.",
+    },
+    CustomProp {
+        name: "--moss-credit-end",
+        owner: "moss-hero-closing",
+        default: "0px",
+        description: "Where a closing picture's credit box ends, measured from the picture's inline end: the end of the page's text column less the credit's 0.5rem of padding, so the credit's text is right-aligned to the column's end. Set by moss on the closing picture from `--moss-words-inset`; read-only for a theme (`--moss-hero-credit-font` restyles the credit).",
+    },
+    CustomProp {
+        name: "--moss-contents-faint",
+        owner: "moss-contents-ruler",
+        default: "var(--moss-color-text-secondary)",
+        description: "The colour the open contents list's names fade to, far from the pointer. The list's script sets it on the list when it opens, as the mix of the text colour toward the colour under the list (the page, or a band) that just reaches 4.6:1 against the fade behind the names over a black picture and over a white one, so a name never falls below AA. Until then, and where the text colour itself does not reach 4.6:1 there, the names fade to `--moss-color-text-secondary`. Written by the script, not a theme hook: set `--moss-color-text` and the background instead.",
     },
     CustomProp {
         name: "--moss-hero-mobile-band",
@@ -203,10 +257,46 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         description: "How many of the six columns right of the lead a collage tile takes on a wide screen, written by the build into the tile's `style`. Read-only for a theme: a row's spans sum to six.",
     },
     CustomProp {
+        name: "--moss-grid-parts",
+        owner: "moss-grid-card",
+        default: "1",
+        description: "How many tracks each card of a `:::grid {rows=equal}` spans: the most children (picture, title, text, list, a fenced `{.class}` block, …) any card in the grid has once it is rendered, written by the build into the grid's `style`. A raw-HTML or fenced wrapper around a whole card counts as one. Read-only for a theme.",
+    },
+    CustomProp {
+        name: "--moss-grid-part-gap",
+        owner: "moss-grid-card",
+        default: "10px",
+        description: "The space between the parts of one card in a `:::grid {rows=equal}`. It is also the grid's row gap there, so a theme's own `gap` on such a grid does not set it (the part gap wins, `!important`): set `--moss-grid-card-gap` for the space between cards.",
+    },
+    CustomProp {
+        name: "--moss-grid-card-gap",
+        owner: "moss-grid-card",
+        default: "the grid's usual row gap",
+        description: "The space between the rows of cards in a `:::grid {rows=equal}`, written as a top margin on every card below the first row. Needed because the grid's own row gap is the gap between a card's parts there (`--moss-grid-part-gap`). A value below the part gap is raised to the part gap.",
+    },
+    CustomProp {
         name: "--moss-collage-span-sm",
         owner: "moss-grid-card",
         default: "set by the build",
         description: "How many of six columns a collage tile takes on a phone, written by the build into the tile's `style`: 6 for a quote or other text, which takes a full row at its own height; 2 for a picture (square), and 3 (4:3) or 6 (3:2) for the pictures of a short last row. Read-only for a theme.",
+    },
+    CustomProp {
+        name: "--moss-link-color",
+        owner: "article",
+        default: "var(--moss-color-text)",
+        description: "Colour of a link in a page's text (`article a`, not a button). Links rest in the text colour and are underlined; set this to accent them, for example `--moss-link-color: var(--moss-color-accent)`.",
+    },
+    CustomProp {
+        name: "--moss-link-hover-color",
+        owner: "article",
+        default: "var(--moss-color-accent)",
+        description: "Colour of a link in a page's text under the pointer or with focus. In the dark theme the default is `--moss-color-accent-hover`. A theme that accents its resting links sets this to a different colour, for example `var(--moss-color-accent-hover)`, so a hover or focus still shows.",
+    },
+    CustomProp {
+        name: "--moss-font-cjk",
+        owner: "moss-quote",
+        default: "var(--moss-font-heading)",
+        description: "Face of a collage quote tile whose words are Chinese or Japanese (`data-script=\"cjk\"`, written by the build), set at 17px to 21px with wide tracking. The default is the heading face, whose Han serifs follow the page's Traditional or Simplified setting. `--moss-font-quote`, when set, wins.",
     },
     CustomProp {
         name: "--moss-font-quote",
@@ -483,6 +573,12 @@ pub const CUSTOM_PROPS: &[CustomProp] = &[
         owner: "body",
         default: "2.25rem",
         description: "How wide the headerless island's controls (`.nav-icons`) are in a row: the slot the bar keeps free at its end for them, and the room the page title's first line keeps for them at the top. Measured and written by the site runtime (nav-island.ts) on layout. Not a theme hook.",
+    },
+    CustomProp {
+        name: "--moss-nav-title-line",
+        owner: "body",
+        default: "unset",
+        description: "Where the centre of the page title's first line is, in px from the top of the headerless island's controls' containing block: at the top of the page the controls (`.nav-icons`) stand centred on it. Measured and written by the site runtime (nav-island.ts); unset on a page with no title, which keeps the bar's place. Not a theme hook.",
     },
     CustomProp {
         name: "--moss-nav-island-controls-guess",

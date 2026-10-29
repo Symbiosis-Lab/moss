@@ -102,6 +102,19 @@ fn a_new_plugin_version_misses_and_a_changed_file_misses() {
 }
 
 #[test]
+fn the_previous_result_is_found_across_versions_for_the_same_bytes_only() {
+    let f = fixture();
+    let e1 = entry(&f.bin(DERIVED), "1.0.0");
+    let e2 = entry(&f.dir.path().join("d.sh"), "1.1.0");
+    assert_eq!(lookup_previous(&f.site, &e2, &f.input), None, "never derived");
+    derive_cached(&f.site, &e1, &f.input).unwrap();
+    assert_eq!(lookup_cached(&f.site, &e2, &f.input), None);
+    assert!(lookup_previous(&f.site, &e2, &f.input).is_some());
+    std::fs::write(&f.input, "edited").unwrap();
+    assert_eq!(lookup_previous(&f.site, &e2, &f.input), None, "other bytes");
+}
+
+#[test]
 fn another_derivation_does_not_see_this_ones_result() {
     let f = fixture();
     let e = entry(&f.bin(DERIVED), "1.0.0");
@@ -112,7 +125,7 @@ fn another_derivation_does_not_see_this_ones_result() {
 }
 
 #[test]
-fn rebuilding_a_local_binary_or_changing_the_pin_misses_without_a_version_bump() {
+fn rebuilding_a_local_binary_or_changing_the_fragments_misses_without_a_version_bump() {
     let f = fixture();
     let e = entry(&f.bin(DERIVED), "1.0.0");
     let first = derive_cached(&f.site, &e, &f.input).unwrap();
@@ -122,11 +135,8 @@ fn rebuilding_a_local_binary_or_changing_the_pin_misses_without_a_version_bump()
     let rebuilt = derive_cached(&f.site, &e, &f.input).unwrap();
     assert_ne!(rebuilt, first);
 
-    // Same content, same version, a changed declaration.
+    // Same content, same version, changed fragments.
     f.disable();
-    let mut repinned = e.clone();
-    repinned.contribution.run.binary = "other".into();
-    assert!(derive_cached(&f.site, &repinned, &f.input).is_err(), "a changed `run` must re-run");
     let mut refragmented = e.clone();
     refragmented.contribution.fragments.clear();
     assert_eq!(lookup_cached(&f.site, &refragmented, &f.input), None);
@@ -169,6 +179,9 @@ fn a_failed_run_is_remembered_by_background_reads_and_noted_for_status() {
 fn every_question_about_one_file_hashes_it_once() {
     use super::binary::COMPUTED as HASH_READS;
     let f = fixture();
+    // The memory is process-wide and keyed by content, so content shared with
+    // a parallel test that remembers a result would answer before this one asks.
+    std::fs::write(&f.input, "asked about once").unwrap();
     let e = entry(&f.bin(DERIVED), "1.0.0");
     // The binary's own hash is part of the key; take it out of the count.
     let _ = params(&e);
@@ -210,4 +223,26 @@ fn the_cache_keeps_the_bytes_the_deriver_printed_not_a_re_serialization() {
     let oid = binary::content_hash(&f.input).unwrap();
     let stored = lookup_bytes(&f.site, &transform_name(&e), &e, &oid).expect("stored");
     assert_eq!(String::from_utf8(stored).unwrap(), ANSWER);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_derivation_keeps_files_in_its_plugins_cache_directory_across_runs() {
+    let f = fixture();
+    let stacks = f.dir.path().join("stacks");
+    std::env::set_var("MOSS_STACKS_ROOT", &stacks);
+    // The second run reads what the first wrote, and says so in its text.
+    let bin = f.bin(
+        r#"if [ -f "$MOSS_CACHE_DIR/seen" ]; then t=cached; else t=fresh; echo x > "$MOSS_CACHE_DIR/seen"; fi
+printf '{"kind":"derived","fragments":{"text":"%s"},"facts":{}}' "$t""#,
+    );
+    let e = entry(&bin, "1.0.0");
+    let text = |o: DeriveOutcome| match o {
+        DeriveOutcome::Derived { fragments, .. } => fragments["text"].clone(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(text(run_pinned(&e, &f.input).unwrap().outcome), "fresh");
+    assert_eq!(text(run_pinned(&e, &f.input).unwrap().outcome), "cached");
+    assert!(stacks.join("derive/docs/.cache/seen").exists());
+    std::env::remove_var("MOSS_STACKS_ROOT");
 }

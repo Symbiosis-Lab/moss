@@ -107,7 +107,10 @@ pub trait SortableDoc {
     }
 }
 
-const DATE_FRACTION_THRESHOLD: f32 = 0.8;
+/// Half, not most: a page just added to a dated folder has no date yet, and one
+/// such page must not turn a small dated folder into a title list. Undated
+/// pages sort after the dated ones.
+const DATE_FRACTION_THRESHOLD: f32 = 0.5;
 
 pub fn resolve_folder_sort<D: SortableDoc>(
     folder: &D,
@@ -326,8 +329,19 @@ mod inference_tests {
         let d = art("d", Some("2025-04-01"), None);
         let e = art("e", None, None);
         let r = resolve_folder_sort(&f, &[&a, &b, &c, &d, &e]);
-        assert_eq!(r.axis, SortAxis::Date);  // 4/5 = 0.8 == threshold
+        assert_eq!(r.axis, SortAxis::Date);  // 4/5 dated
         assert!(!r.series_default);
+    }
+
+    #[test]
+    fn one_undated_page_in_a_small_dated_folder_keeps_date_order() {
+        let f = folder("audits/index.html", None);
+        let a = art("a", Some("2007-01-25"), None);
+        let b = art("b", Some("2016-06-16"), None);
+        let c = art("c", Some("2012-05-24"), None);
+        let new = art("new", None, None);
+        let r = resolve_folder_sort(&f, &[&a, &b, &c, &new]);
+        assert_eq!(r.axis, SortAxis::Date);
     }
 
     #[test]
@@ -339,7 +353,7 @@ mod inference_tests {
         let d = art("d", None, None);
         let e = art("e", None, None);
         let r = resolve_folder_sort(&f, &[&a, &b, &c, &d, &e]);
-        assert_eq!(r.axis, SortAxis::Title);  // 1/5 = 0.2 < 0.8
+        assert_eq!(r.axis, SortAxis::Title);  // 1/5 dated, under half
     }
 
     #[test]

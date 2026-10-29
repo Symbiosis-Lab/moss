@@ -6,6 +6,7 @@
 //! `discovery`/`bundled`/`registry` migrate under this module later.
 
 pub mod hash_cli;
+pub mod install_cli;
 pub mod registry_client;
 pub mod zip_extract;
 

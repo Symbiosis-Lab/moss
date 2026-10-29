@@ -19,7 +19,8 @@ use moss_core::link_completions::{insert_for, rank_completions, InsertCtx, LinkS
 use moss_core::resolve::ext_kind::{reference_kind_for_ext, ExtKind};
 
 use crate::build::scan::article_map::ArticleMap;
-use crate::editor::filesystem::walk_source_files;
+use crate::editor::filesystem::{list_directory_inner, walk_source_files};
+use crate::editor::resolve::asset_resolver::EditorScope;
 
 /// Max ranked results returned to the editor. Large CJK sites have hundreds
 /// of notes; the dropdown only needs the top slice.
@@ -53,9 +54,13 @@ pub fn link_completions(
     syntax: LinkSyntax,
     prefix: &str,
     allowed_kinds: Option<&[ExtKind]>,
+    scope: EditorScope,
 ) -> Vec<WikilinkCompletion> {
-    let map = ArticleMap::load(&Path::new(project_path).join(".moss")).unwrap_or_default();
-    let mut targets = collect_targets(project_path, &map);
+    let map = match scope {
+        EditorScope::Site => ArticleMap::load(&Path::new(project_path).join(".moss")).unwrap_or_default(),
+        EditorScope::Folder => ArticleMap::default(),
+    };
+    let mut targets = collect_targets(project_path, &map, scope);
     if let Some(kinds) = allowed_kinds {
         targets.retain(|t| match t {
             Target::Asset { source } => kinds.contains(&reference_kind_for_ext(&ext_of(source))),
@@ -91,8 +96,9 @@ pub fn heading_completions(
 
 /// Every target the project offers: pages and assets from the source walk
 /// (pages joined to the map's URL and title), the folders those paths pass
-/// through, and the map's synthesized pages.
-fn collect_targets(project_path: &str, map: &ArticleMap) -> Vec<Target> {
+/// through, and the map's synthesized pages. A loose folder offers the files
+/// beside the document only.
+fn collect_targets(project_path: &str, map: &ArticleMap, scope: EditorScope) -> Vec<Target> {
     let by_source: std::collections::HashMap<&str, (String, &str)> = map
         .sourced_pages()
         .map(|(key, source, title)| (source, (ArticleMap::canonical_url(key), title)))
@@ -100,7 +106,7 @@ fn collect_targets(project_path: &str, map: &ArticleMap) -> Vec<Target> {
 
     let mut targets = Vec::new();
     let mut folders = BTreeSet::new();
-    walk_source_files(project_path, project_path, &mut |_, rel| {
+    let mut visit = |rel: &str| {
         let source = rel.replace('\\', "/");
         for (i, _) in source.match_indices('/') {
             folders.insert(source[..i].to_string());
@@ -114,7 +120,15 @@ fn collect_targets(project_path: &str, map: &ArticleMap) -> Vec<Target> {
         } else {
             targets.push(Target::Asset { source });
         }
-    });
+    };
+    match scope {
+        EditorScope::Site => walk_source_files(project_path, project_path, &mut |_, rel| visit(rel)),
+        EditorScope::Folder => list_directory_inner(project_path, project_path, false)
+            .unwrap_or_default()
+            .iter()
+            .filter(|entry| !entry.is_dir)
+            .for_each(|entry| visit(&entry.name)),
+    }
     targets.extend(folders.into_iter().map(|source| Target::Folder { source }));
 
     // A claimed term lives at its claiming page, which the walk already

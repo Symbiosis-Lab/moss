@@ -277,6 +277,36 @@ fn strip_empty_footer_keeps_a_footer_with_footer_md_content() {
 }
 
 #[test]
+fn footer_md_replaces_the_footer_true_page_links_but_keeps_the_feed_link() {
+    let mut slots = ResolvedSlots::empty();
+    slots.merge(
+        &EnhanceResult {
+            success: true,
+            slots: HashMap::from([(
+                "footer-left".to_string(),
+                EnhanceContent::Static { html: "<p>Example Lab</p>".to_string() },
+            )]),
+        },
+        0,
+        "native",
+    );
+    let with_feed = "<!-- moss:footer --><!-- footer:has-content --><footer class=\"container\">\n        <!-- slot:footer-left --><p class=\"footer-default\"><!-- footer:pages --><a href=\"/about/\" class=\"footer-link\">About</a> · <!-- /footer:pages --><a href=\"/rss.xml\" class=\"footer-link\" data-external>RSS</a></p>\n        <!-- slot:footer-end -->\n</footer><!-- /moss:footer -->";
+    let out = inject_slots(with_feed, &slots, "index.html");
+    assert!(!out.contains("/about/"), "footer.md replaces the footer: true links: {out}");
+    assert!(out.contains("<p class=\"footer-default\"><a href=\"/rss.xml\""), "the feed link stays, with no stray separator: {out}");
+    assert!(!out.contains("footer:pages"), "sentinels never ship: {out}");
+
+    let pages_only = "<!-- moss:footer --><!-- footer:has-content --><footer class=\"container\">\n        <!-- slot:footer-left --><p class=\"footer-default\"><!-- footer:pages --><a href=\"/about/\" class=\"footer-link\">About</a><!-- /footer:pages --></p>\n        <!-- slot:footer-end -->\n</footer><!-- /moss:footer -->";
+    let out = inject_slots(pages_only, &slots, "index.html");
+    assert!(!out.contains("footer-default") && !out.contains("/about/"), "no empty link row is left behind: {out}");
+    assert!(out.contains("Example Lab"), "{out}");
+
+    let out = inject_slots(pages_only, &ResolvedSlots::empty(), "index.html");
+    assert!(out.contains("<p class=\"footer-default\"><a href=\"/about/\" class=\"footer-link\">About</a></p>"), "without footer.md the links ship as before: {out}");
+    assert!(!out.contains("footer:pages"), "sentinels never ship: {out}");
+}
+
+#[test]
 fn an_authored_footer_tag_in_the_body_is_never_mistaken_for_the_chrome_footer() {
     // moss passes raw HTML through markdown verbatim, so a page can
     // legitimately contain its own `<footer>` — a byline, a credits block —
@@ -387,7 +417,10 @@ fn inject_staged(
 ) -> Result<Vec<SlotInjectionReceipt>, BuildStopped> {
     let paths = crate::moss_paths::MossPaths::from_moss_dir(dir.join(".moss"));
     let mut staged = StagedLinks::load(&paths, "pages", dir);
-    inject_slots_into_directory_cached(dir, dir, slots, objects, transforms, Default::default(), &mut staged)
+    inject_slots_into_directory_cached(
+        dir, dir, slots, &resolved_slots_hash(slots), objects, transforms, Default::default(), &Default::default(), &mut staged,
+    )
+    .map(|pass| pass.receipts)
 }
 
 fn slot_test_cache(
@@ -465,9 +498,10 @@ fn jupyterlite_html_is_left_alone_while_a_rendered_page_under_jupyter_is_filled(
     let slots = head_end_slots("<style>h1{}</style>");
 
     let receipts = inject_slots_into_directory_cached(
-        dir.path(), dir.path(), &slots, &objects, &transforms, rendered, &mut staged,
+        dir.path(), dir.path(), &slots, &resolved_slots_hash(&slots), &objects, &transforms, rendered, &Default::default(), &mut staged,
     )
-    .unwrap();
+    .unwrap()
+    .receipts;
 
     assert_eq!(std::fs::read_to_string(&lab).unwrap(), marked, "JupyterLite's page was rewritten");
     let note = std::fs::read_to_string(dir.path().join("jupyter/note/index.html")).unwrap();

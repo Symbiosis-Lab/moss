@@ -96,11 +96,25 @@ pub const CSS_PARTIALS: &[CssPartial] = &[
         gate: |a| a.places_explorer,
     },
     CssPartial {
+        name: "colophon-credit",
+        source: include_str!("../../assets/css/site/colophon-credit.css"),
+        gate: |a| a.colophon_credit,
+    },
+    CssPartial {
         name: "map-layers",
         source: include_str!("../../assets/css/site/map-layers.css"),
         gate: |a| a.map_layers,
     },
 ];
+
+/// A closing picture's colophon row on a phone when the site has a credit, in
+/// rem: the row's own height plus the line the credit's wrapping reserves. It
+/// is written into the credit's partial so the stylesheet and the build's ink
+/// measurement share the two lengths.
+fn closing_strip_with_credit() -> String {
+    use crate::build::markdown::hero_ink::{COLOPHON_PX, CREDIT_LINE_PX};
+    format!("{}rem", (COLOPHON_PX + CREDIT_LINE_PX) / 16.0)
+}
 
 /// The core stylesheet — everything not behind a gate.
 ///
@@ -218,7 +232,7 @@ pub fn assemble(assets: &SiteAssets) -> String {
     full.push_str("}\n");
     for partial in CSS_PARTIALS.iter().filter(|p| (p.gate)(assets)) {
         full.push('\n');
-        full.push_str(partial.source);
+        full.push_str(&partial.source.replace("__CLOSING_STRIP__", &closing_strip_with_credit()));
     }
     crate::build::page::shell::minify_css(&full)
 }

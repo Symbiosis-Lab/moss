@@ -577,3 +577,23 @@ fn push_range(ranges: &mut Vec<Range<usize>>, range: Range<usize>) {
 #[cfg(test)]
 #[path = "inert_regions_tests.rs"]
 mod tests;
+
+/// HTML5 void elements: the only tags that can self-close.
+pub const VOID_ELEMENTS: &[&str] = &[
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr",
+];
+
+/// Where the tag at the start of `s` ends (just past its `>`): the first `>`
+/// outside a quoted attribute value.
+pub fn tag_end(s: &str) -> Option<usize> {
+    let mut quote = None;
+    for (i, c) in s.char_indices() {
+        match (quote, c) {
+            (None, '"' | '\'') => quote = Some(c),
+            (Some(q), c) if c == q => quote = None,
+            (None, '>') => return Some(i + 1),
+            _ => {}
+        }
+    }
+    None
+}

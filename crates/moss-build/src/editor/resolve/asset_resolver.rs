@@ -27,6 +27,32 @@ pub struct ResolvedAsset {
     pub provenance: AssetProvenance,
 }
 
+/// The files an editor reference may name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorScope {
+    /// Every file the build scans.
+    Site,
+    /// A markdown file opened on its own: its folder can be any folder on the
+    /// machine (`~/Downloads`, a home directory), so it is never walked. Only
+    /// the files directly in it, and in the folders the document spells out,
+    /// are read. It has no build, so no URLs and no folder listings.
+    Folder,
+}
+
+/// The files of `scope` that `target`, written in `from_source`, can name.
+pub fn scope_graph(root: &Path, scope: EditorScope, from_source: &str, target: &str) -> ContentGraph {
+    if scope == EditorScope::Site {
+        return project_graph(root);
+    }
+    let mut folders = std::collections::BTreeSet::from([String::new()]);
+    folders.extend(named_folders(&target.replace('\\', "/"), from_source));
+    let mut builder = ContentGraphBuilder::new();
+    for file in folders.iter().filter_map(|folder| site_files_in(root, folder)).flatten() {
+        builder.add_file(&file, "");
+    }
+    builder.build()
+}
+
 /// Every file of the site as a [`ContentGraph`], read from disk now.
 ///
 /// This is the editor's file set for [`resolve_file_target`]: the same
@@ -153,7 +179,7 @@ pub fn enrich_root_rel(
 /// to a known asset.
 ///
 /// Path resolution is delegated to the one resolver (`resolve_file_target` in
-/// moss-core, over [`project_graph`]), so `CaseMismatch` provenance is
+/// moss-core, over [`scope_graph`]), so `CaseMismatch` provenance is
 /// produced when the authored path differs only in case from the real file,
 /// and the file picked is the one the build links.
 ///
@@ -165,6 +191,7 @@ pub fn resolve_asset(
     target: &str,
     from_file: &Path,
     project_root: &Path,
+    scope: EditorScope,
 ) -> Option<ResolvedAsset> {
     // Canonicalize project_root so strip_prefix works correctly after the engine
     // returns a root-relative path (both paths must share the same real-path prefix,
@@ -175,7 +202,10 @@ pub fn resolve_asset(
     let from_source = compute_from_source(from_file, &canonical_root);
     let target_norm = target.replace('\\', "/");
     let picked = spelled_out_file(&target_norm, &from_source, &canonical_root)
-        .unwrap_or_else(|| resolve_file_target(&target_norm, &from_source, &project_graph(&canonical_root)));
+        .unwrap_or_else(|| {
+            let graph = scope_graph(&canonical_root, scope, &from_source, &target_norm);
+            resolve_file_target(&target_norm, &from_source, &graph)
+        });
 
     let (root_rel, provenance) = match picked {
         AssetResolution::Resolved { root_rel, provenance } => (root_rel, provenance),
@@ -206,14 +236,8 @@ fn spelled_out_file(target: &str, from_source: &str, root: &Path) -> Option<Asse
     if target.contains('%') {
         return None;
     }
-    let folder_of = |path: &str| path.rsplit_once('/').map_or(String::new(), |(dir, _)| dir.to_string());
-    let rel = target.trim_start_matches('/');
-    let mut folders = vec![folder_of(rel)];
-    if !target.starts_with('/') {
-        folders.push(format!("{}/{}", folder_of(from_source), folder_of(rel)));
-    }
     let mut files = std::collections::BTreeSet::new();
-    for folder in &folders {
+    for folder in &named_folders(target, from_source) {
         files.extend(site_files_in(root, folder)?);
     }
     let keys: std::collections::HashSet<String> = files.iter().map(|f| normalize_path(f)).collect();
@@ -227,6 +251,18 @@ fn spelled_out_file(target: &str, from_source: &str, root: &Path) -> Option<Asse
     let graph = builder.build();
     let found = graph.resolve_path_with_ties(target, from_source)?;
     (found.matched != PathMatch::Searched).then(|| resolve_file_target(target, from_source, &graph))
+}
+
+/// The folders a spelled-out `target` can sit in: from the site root, and,
+/// unless it starts with `/`, from the page's folder.
+fn named_folders(target: &str, from_source: &str) -> Vec<String> {
+    let folder_of = |path: &str| path.rsplit_once('/').map_or(String::new(), |(dir, _)| dir.to_string());
+    let rel = target.trim_start_matches('/');
+    let mut folders = vec![folder_of(rel)];
+    if !target.starts_with('/') {
+        folders.push(format!("{}/{}", folder_of(from_source), folder_of(rel)));
+    }
+    folders
 }
 
 /// The site files directly in `folder` (written relative to the site root,
@@ -338,7 +374,7 @@ mod tests {
         std::fs::write(root.join(".moss/build.nosync/current/assets/forest.jpg"), b"shadow").unwrap();
 
         let from_file = root.join("main.md");
-        let result = resolve_asset("forest.jpg", &from_file, root).expect("resolves");
+        let result = resolve_asset("forest.jpg", &from_file, root, EditorScope::Site).expect("resolves");
         assert!(result.request_url.ends_with("/assets/forest.jpg"),
             "expected /assets/forest.jpg, got {}", result.request_url);
         assert!(!result.request_url.contains(".moss"),
@@ -354,7 +390,7 @@ mod tests {
         let from_file = tmp.path().join("posts").join("post.md");
         std::fs::create_dir_all(from_file.parent().unwrap()).unwrap();
 
-        let resolved = resolve_asset("../img/hero.jpg", &from_file, tmp.path())
+        let resolved = resolve_asset("../img/hero.jpg", &from_file, tmp.path(), EditorScope::Site)
             .expect("should resolve");
         assert_eq!(resolved.request_url, "/img/hero.jpg");
         assert_eq!(resolved.mime_type, "image/jpeg");
@@ -374,7 +410,7 @@ mod tests {
         std::fs::write(&from_file, "").unwrap();
 
         // Wikilink-style reference: just the basename, no path
-        let resolved = resolve_asset("fred-adams.jpg", &from_file, tmp.path());
+        let resolved = resolve_asset("fred-adams.jpg", &from_file, tmp.path(), EditorScope::Site);
         assert!(resolved.is_some(), "should resolve wikilink-style basename");
         let a = resolved.unwrap();
         assert_eq!(a.mime_type, "image/jpeg");
@@ -391,7 +427,7 @@ mod tests {
         std::fs::write(&img, b"fake jpeg").unwrap();
 
         let from_file = root.join("index.md");
-        let result = resolve_asset("assets/hero.jpg", &from_file, root);
+        let result = resolve_asset("assets/hero.jpg", &from_file, root, EditorScope::Site);
         assert!(result.is_some(), "should resolve via filesystem");
         let asset = result.unwrap();
         assert!(asset.request_url.ends_with("/assets/hero.jpg"));
@@ -401,7 +437,7 @@ mod tests {
     fn returns_none_for_nonexistent_file() {
         let dir = scratch_root();
         let from_file = dir.path().join("index.md");
-        let result = resolve_asset("assets/missing.jpg", &from_file, dir.path());
+        let result = resolve_asset("assets/missing.jpg", &from_file, dir.path(), EditorScope::Site);
         assert!(result.is_none());
     }
 
@@ -417,7 +453,7 @@ mod tests {
         std::fs::create_dir_all(root.join("assets")).unwrap();
         std::fs::write(root.join("assets/Summit2099.jpg"), b"x").unwrap();
         std::fs::create_dir_all(root.join("News")).unwrap();
-        let r = resolve_asset("./assets/Summit2099.jpg", &root.join("News/post.md"), root).unwrap();
+        let r = resolve_asset("./assets/Summit2099.jpg", &root.join("News/post.md"), root, EditorScope::Site).unwrap();
         assert!(r.request_url.ends_with("/assets/Summit2099.jpg"),
             "expected /assets/Summit2099.jpg, got {}", r.request_url);
         assert_eq!(r.provenance, AssetProvenance::SeparatorFallback,
@@ -441,7 +477,7 @@ mod tests {
         std::fs::write(root.join("assets/Fern.JPG"), b"x").unwrap();
         std::fs::create_dir_all(root.join("team")).unwrap();
         // Authored with lowercase extension: Fern.jpg
-        let r = resolve_asset("./assets/Fern.jpg", &root.join("team/Team.md"), root).unwrap();
+        let r = resolve_asset("./assets/Fern.jpg", &root.join("team/Team.md"), root, EditorScope::Site).unwrap();
         // request_url must use the REAL on-disk case (Fern.JPG)
         assert!(r.request_url.ends_with("/assets/Fern.JPG"),
             "expected /assets/Fern.JPG (real case), got {}", r.request_url);
@@ -463,7 +499,7 @@ mod tests {
         std::fs::write(root.join("assets/Fern.JPG"), b"x").unwrap();
         std::fs::create_dir_all(root.join("team")).unwrap();
         // bare lowercase ref, not adjacent; only assets/Fern.JPG exists on disk
-        let r = resolve_asset("fern.jpg", &root.join("team/Team.md"), root)
+        let r = resolve_asset("fern.jpg", &root.join("team/Team.md"), root, EditorScope::Site)
             .expect("bare case-mismatched ref must resolve (not NotFound)");
         assert!(r.request_url.ends_with("/assets/Fern.JPG"),
             "expected /assets/Fern.JPG (real case), got {}", r.request_url);
@@ -578,10 +614,26 @@ mod tests {
         std::fs::write(root.join("assets/x.png"), b"x").unwrap();
         let walks = || SITE_WALKS.with(|n| n.get());
         let before = walks();
-        assert!(resolve_asset("assets/x.png", &root.join("News/post.md"), &root).is_some());
+        assert!(resolve_asset("assets/x.png", &root.join("News/post.md"), &root, EditorScope::Site).is_some());
         assert_eq!(walks(), before, "a path from the root must not walk the site");
-        assert!(resolve_asset("x.png", &root.join("News/post.md"), &root).is_some());
+        assert!(resolve_asset("x.png", &root.join("News/post.md"), &root, EditorScope::Site).is_some());
         assert_eq!(walks(), before + 1, "a bare name is found by searching the whole site");
+    }
+
+    #[test]
+    fn a_loose_folder_is_read_by_name_and_never_walked() {
+        let dir = scratch_root();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join("img/deep")).unwrap();
+        std::fs::write(root.join("beside.png"), b"x").unwrap();
+        std::fs::write(root.join("img/shot.png"), b"x").unwrap();
+        std::fs::write(root.join("img/deep/far.png"), b"x").unwrap();
+        let walks = || SITE_WALKS.with(|n| n.get());
+        let before = walks();
+        let found = |target: &str| resolve_asset(target, Path::new("note.md"), &root, EditorScope::Folder).is_some();
+        assert!(found("beside.png") && found("img/shot.png") && found("./img/deep/far.png"));
+        assert!(!found("far.png"), "a bare name is looked for beside the document only");
+        assert_eq!(walks(), before, "a loose folder can be a home directory: it is never walked");
     }
 
     #[test]
@@ -718,6 +770,7 @@ mod tests {
             "./assets/Summit2099.jpg",
             std::path::Path::new("News/post.md"),
             root,
+            EditorScope::Site,
         )
         .expect("relative fromFile must still resolve via separator fallback");
         assert_eq!(

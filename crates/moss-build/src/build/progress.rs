@@ -1222,28 +1222,51 @@ pub fn make_symlink_skip_advisory(count: u32) -> Option<PipelineEvent> {
     )
 }
 
-/// Emit [`make_config_version_ahead_advisory`] for an already-parsed config,
-/// if it applies. Takes the parsed `ConfigFile` directly — never a path —
-/// so `build_inner`'s one read+parse of config.toml ("H-config") can feed
-/// this without a second read; `config::ConfigFile::schema_version_ahead`
-/// is free against a table already in hand. `run_vault_migrations` (run
-/// once at the entry point, before H-config) already logged the same
-/// condition once per vault per session; this is the author-facing twin,
-/// re-derived every build (not deduped) so it clears the moment the config
-/// is fixed or moss is updated, same as every other advisory. `cfg: None`
-/// (a config that could not be read) is silently not this advisory's story
-/// to tell — something downstream already owns surfacing a real read error —
-/// and is NOT the same as "checked, schema not ahead": we don't know which,
-/// so this emits neither the advisory nor a [`clear_tick`] in that case.
-pub fn report_config_version_ahead(
+/// Emit the notice for a site this moss is too old for, if it is. Takes the
+/// build's one parse of config.toml rather than a path, so it costs no second
+/// read. Re-derived every build (not deduped) so it clears the moment moss
+/// is updated, same as every other advisory. Also counted as a build problem,
+/// so `moss build --strict` fails on it. `cfg: None` (a config that could not
+/// be read) is NOT "checked, nothing unmet": we don't know which, so this
+/// emits neither the advisory nor a [`clear_tick`] in that case.
+pub fn report_moss_requirement(
     reporter: Option<&dyn super::ports::reporter::BuildReporter>,
     cfg: Option<&crate::config::ConfigFile>,
+    plugins_dir: &std::path::Path,
 ) {
+    use crate::build::site_config::{moss_requirement, NeededBy, Unmet};
     let Some(cfg) = cfg else {
         return;
     };
-    let event = match cfg.schema_version_ahead() {
-        Some(found) => make_config_version_ahead_advisory(found),
+    let unmet = moss_requirement(cfg, plugins_dir);
+    if let Some(unmet) = &unmet {
+        crate::build::cli_output::log_warn_problem!(target: "config", "{unmet}");
+    }
+    let event = match unmet {
+        Some(Unmet::SchemaAhead { found }) => make_config_version_ahead_advisory(found),
+        Some(Unmet::Needs { version, by }) => {
+            let running = crate::system::app_version();
+            let what = match by {
+                NeededBy::Site => crate::infra::app_advisory::fmt(
+                    "site_needs_newer_moss",
+                    &[("needed", &version), ("running", running)],
+                ),
+                NeededBy::Plugin(plugin) => crate::infra::app_advisory::fmt(
+                    "plugin_needs_newer_moss",
+                    &[("plugin", &plugin), ("needed", &version), ("running", running)],
+                ),
+            };
+            advisory_event(
+                "config",
+                vec![Advisory {
+                    scope: Scope::Config,
+                    severity: Severity::NeedsAction,
+                    item: None,
+                    what,
+                    action: Action::None,
+                }],
+            )
+        }
         // The check ran (config was readable) and found nothing this build:
         // an explicit clear, so the app's per-task sweep can retire a
         // fixed-and-rebuilt advisory instead of waiting for the folder to
@@ -1258,12 +1281,11 @@ pub fn report_config_version_ahead(
 
 /// Build a `BackgroundProgress` advisory event for a config.toml a newer
 /// moss already stamped. `NeedsAction`, not `Blocking`: the build itself
-/// still renders (with the raw, unmigrated table — see
-/// `site_config::config_schema_version_ahead`'s doc), so this is a preview-
-/// time notice, not a build failure. Publish is the one path that refuses
-/// outright (`deploy/push.rs`), because shipping the defaulted config to a
-/// live site is the one consequence preview's "still shows something" excuse
-/// doesn't cover.
+/// still renders (with the raw, unmigrated table, so unrecognized settings
+/// read as their defaults), so this is a preview-time notice, not a build
+/// failure. Publish refuses outright (`site_config::ensure_config_current`),
+/// because shipping the defaulted config to a live site is the one
+/// consequence preview's "still shows something" excuse doesn't cover.
 pub fn make_config_version_ahead_advisory(found: u32) -> Option<PipelineEvent> {
     advisory_event(
         "config",
@@ -1625,13 +1647,13 @@ mod route_tests {
     }
 
     #[test]
-    fn report_config_version_ahead_emits_a_clear_when_the_config_is_readable_and_not_ahead() {
+    fn report_moss_requirement_emits_a_clear_when_the_config_is_readable_and_not_ahead() {
         // The check ran (config parsed fine) and found the schema current —
         // it must still speak for the "config" task, or a fixed-and-rebuilt
         // config_schema_version_ahead advisory sits until the folder reopens.
         let rec = RecordingReporter(std::sync::Mutex::new(Vec::new()));
         let cfg = crate::config::ConfigFile::empty();
-        report_config_version_ahead(Some(&rec), Some(&cfg));
+        report_moss_requirement(Some(&rec), Some(&cfg), std::path::Path::new("/nonexistent"));
         let events = rec.0.lock().unwrap();
         assert_eq!(events.len(), 1, "a readable, not-ahead config must emit exactly one clear tick");
         match &events[0] {
@@ -1645,11 +1667,11 @@ mod route_tests {
     }
 
     #[test]
-    fn report_config_version_ahead_emits_nothing_when_the_config_could_not_be_read() {
+    fn report_moss_requirement_emits_nothing_when_the_config_could_not_be_read() {
         // `cfg: None` is an UNKNOWN, not a "checked, clean" — the check did
         // not run, so it must not claim it did by emitting a clear.
         let rec = RecordingReporter(std::sync::Mutex::new(Vec::new()));
-        report_config_version_ahead(Some(&rec), None);
+        report_moss_requirement(Some(&rec), None, std::path::Path::new("/nonexistent"));
         assert!(
             rec.0.lock().unwrap().is_empty(),
             "an unreadable config is not evidence either way — neither the advisory nor a clear"

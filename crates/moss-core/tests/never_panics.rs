@@ -1,8 +1,8 @@
 //! Property tests that pin moss-core's panic-free contract.
 //!
-//! moss-core is invoked from Tauri command handlers in a host process
-//! configured `panic = "abort"` for release. A panic on user input is a
-//! production crash. The bug fixed in `date.rs` (commit 98dfe7419) was
+//! moss-core is invoked from Tauri command handlers. A panic on user input
+//! fails the user's action at best and crashes the desktop app at worst. The
+//! bug fixed in `date.rs` (commit 98dfe7419) was
 //! exactly this shape: 1 line of byte-indexed `&str` slicing aborted the
 //! whole desktop app on a Chinese filename.
 //!

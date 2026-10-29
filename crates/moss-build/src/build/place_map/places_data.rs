@@ -40,7 +40,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
-use moss_core::terms::term_folder_key;
 
 use super::{PlaceMapContext, PlaceMapRenderContext, ResolvedPlace};
 use crate::build::assets::paths::compute_content_hash;
@@ -203,8 +202,8 @@ fn round_to_precision(value: f64, precision: Precision) -> f64 {
 /// [`PlaceEntry::parent`]'s own shape — never a full walk to the namespace
 /// root, so there is no cycle to guard against the way
 /// `PlaceMapRenderContext::lies_under` must for an unbounded one.
-fn parent_id(parents: &BTreeMap<String, String>, namespace: &str, key: &str) -> Option<String> {
-    parents.get(key).map(|display| term_folder_key(namespace, display))
+fn parent_id(parents: &BTreeMap<String, String>, gazetteer: &Gazetteer, namespace: &str, key: &str) -> Option<String> {
+    parents.get(key).map(|display| gazetteer.term_key(namespace, display))
 }
 
 /// Walk every place already in `places` up its parent chain, inserting an
@@ -251,7 +250,7 @@ fn fold_ancestors(
     let mut queue: Vec<String> = places.keys().cloned().collect();
     while let Some(key) = queue.pop() {
         let Some(parent_display) = parents.get(&key) else { continue };
-        let parent_key = term_folder_key(namespace, parent_display);
+        let parent_key = gazetteer.term_key(namespace, parent_display);
         if places.contains_key(&parent_key) {
             continue;
         }
@@ -271,7 +270,7 @@ fn fold_ancestors(
             PlaceEntry {
                 id: parent_key.clone(),
                 name: parent_display.clone(),
-                parent: parent_id(parents, namespace, &parent_key),
+                parent: parent_id(parents, gazetteer, namespace, &parent_key),
                 precision,
                 lat,
                 lng,
@@ -407,7 +406,7 @@ pub fn emit_places_data(
                 PlaceEntry {
                     id: place.key.clone(),
                     name: place.display.clone(),
-                    parent: parent_id(parents, namespace, &place.key),
+                    parent: parent_id(parents, gazetteer, namespace, &place.key),
                     precision: Some(place.precision),
                     lat: Some(lat),
                     lng: Some(lng),
@@ -579,7 +578,7 @@ mod tests {
             title: "Places".to_string(),
             titles: Vec::new(), counts: Vec::new(), is_place: true,
             parents: Default::default(),
-            explorer: None, line: None,
+            explorer: None, line: None, slugs: Default::default(),
         }];
         crate::build::terms::places::attach_parents(&mut kinds, &gaz);
         let parents = kinds.into_iter().next().unwrap().parents;
@@ -597,7 +596,7 @@ mod tests {
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
             titles: Vec::new(), counts: Vec::new(), is_place: true,
-            parents: Default::default(), explorer: None, line: None,
+            parents: Default::default(), explorer: None, line: None, slugs: Default::default(),
         }];
         crate::build::terms::places::attach_parents(&mut kinds, &gazetteer());
         kinds.into_iter().next().unwrap().parents
@@ -776,6 +775,23 @@ mod tests {
         let japan = places.iter().find(|p| p["id"] == "places/japan");
         assert!(japan.is_some(), "the root ancestor must also be emitted: {json}");
         assert!(japan.unwrap().get("parent").is_none(), "Japan has no parent of its own: {json}");
+    }
+
+    #[test]
+    fn a_slug_names_a_place_and_the_parent_ids_that_point_at_it() {
+        let ctx = context_from_gazetteer_toml(
+            "[\"Kyoto\"]\nlat = 35.0116\nlng = 135.7681\nprecision = \"city\"\nparent = \"Kansai\"\nslug = \"kyoto-city\"\n\n\
+             [\"Kansai\"]\nlat = 34.75\nlng = 135.5\nprecision = \"region\"\nparent = \"Japan\"\nslug = \"kansai-region\"\n\n\
+             [\"Japan\"]\nlat = 36.0\nlng = 138.0\nprecision = \"country\"\nslug = \"nihon\"\n",
+        );
+        let docs = vec![standalone("posts/kyoto-report.md", "posts/kyoto-report/", "Kyoto Report", &["Kyoto"])];
+        let json = emit_places_data(&docs, &ctx, true, &HashMap::new());
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let places = parsed["places"].as_array().unwrap();
+        let by_id = |id: &str| places.iter().find(|p| p["id"] == id).unwrap_or_else(|| panic!("{id} missing: {json}"));
+        assert_eq!(by_id("places/kyoto-city")["parent"], "places/kansai-region", "{json}");
+        assert_eq!(by_id("places/kansai-region")["parent"], "places/nihon", "{json}");
+        assert_eq!(by_id("places/nihon")["name"], "Japan", "{json}");
     }
 
     /// Same three-level chain, except Kansai's OWN gazetteer row now has no

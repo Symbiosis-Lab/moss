@@ -22,7 +22,9 @@ Gamma body.
 
 ## Grid Embed Test
 
-<!--MOSS_MARKER_FOLDER_LIST:path=projects/|from=index.md|style=grid-->
+- [Alpha](/projects/alpha/)
+- [Beta](/projects/beta/)
+- [Gamma](/projects/gamma/)
 
 ---
 

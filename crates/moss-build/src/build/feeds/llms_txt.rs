@@ -122,11 +122,33 @@ fn strip_html_blocks(body: &str) -> String {
     out.trim().to_string()
 }
 
-/// Generate llms.txt content from all published documents.
-pub fn generate_llms_txt(
-    documents: &[ParsedDocument],
+/// Each folder-list marker in `content` replaced by the pages `pages_of` says it
+/// lists, as markdown links; one that lists none leaves nothing.
+fn with_folder_lists<'a>(content: &str, pages_of: impl Fn(&str) -> Option<Vec<&'a ParsedDocument>>) -> String {
+    use moss_core::resolve::embed_renderer::{MARKER_END, MARKER_FOLDER_LIST};
+    let mut out = String::with_capacity(content.len());
+    let mut rest = content;
+    while let Some((before, after)) = rest.split_once(MARKER_FOLDER_LIST) {
+        let Some((body, tail)) = after.split_once(MARKER_END) else { break };
+        out.push_str(before);
+        for page in pages_of(body).unwrap_or_default() {
+            let text = page.label.replace('\\', "\\\\").replace('[', "\\[").replace(']', "\\]");
+            let url = crate::build::scan::article_map::to_pretty_url(&page.url_path);
+            out.push_str(&format!("- [{text}](/{url})\n"));
+        }
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Generate llms.txt content from all published documents. `pages_of` gives
+/// the pages a folder-list marker (its body, and the page it sits on) lists.
+pub fn generate_llms_txt<'a>(
+    documents: &'a [ParsedDocument],
     site_title: &str,
     site_description: Option<&str>,
+    pages_of: impl Fn(&str, &ParsedDocument) -> Option<Vec<&'a ParsedDocument>>,
 ) -> String {
     let mut out = String::new();
 
@@ -164,7 +186,8 @@ pub fn generate_llms_txt(
         out.push_str(&format!("## {}\n\n", doc.label));
         // Strip raw HTML <style>/<script> blocks (tags + contents) before
         // trimming so leftover blank lines at the edges are removed too.
-        let stripped = strip_html_blocks(&moss_core::resolve::embeds::derived::without_derived_markup(&doc.content));
+        let content = with_folder_lists(&doc.content, |body| pages_of(body, doc));
+        let stripped = strip_html_blocks(&moss_core::resolve::embeds::derived::without_derived_markup(&content));
         let body = stripped.trim();
         if !body.is_empty() {
             out.push_str(body);
@@ -208,7 +231,7 @@ mod tests {
         let docs = vec![
             create_test_document("Getting Started", "Welcome to moss.", None, None, None),
         ];
-        let result = generate_llms_txt(&docs, "My Site", Some("A great site"));
+        let result = generate_llms_txt(&docs, "My Site", Some("A great site"), |_, _| None);
         assert!(result.starts_with("# My Site\n\n> A great site\n\n"));
         assert!(result.contains("## Getting Started\n\nWelcome to moss."));
     }
@@ -217,7 +240,7 @@ mod tests {
     fn test_derived_status_blocks_are_left_out() {
         let content = "Intro.\n\n<div class=\"moss-derived moss-derived--pending\" role=\"status\"><span class=\"visually-hidden\">Reading…</span></div>\n\nOutro.";
         let docs = vec![create_test_document("Doc", content, None, None, None)];
-        let result = generate_llms_txt(&docs, "Site", None);
+        let result = generate_llms_txt(&docs, "Site", None, |_, _| None);
         assert!(result.contains("Intro.") && result.contains("Outro."));
         assert!(!result.contains("moss-derived"), "{result}");
     }
@@ -228,7 +251,7 @@ mod tests {
             create_test_document("Published", "Visible content.", None, None, None),
             create_test_document("Draft Page", "Hidden content.", None, None, Some(true)),
         ];
-        let result = generate_llms_txt(&docs, "Site", None);
+        let result = generate_llms_txt(&docs, "Site", None, |_, _| None);
         assert!(result.contains("Published"));
         assert!(!result.contains("Draft Page"));
         assert!(!result.contains("Hidden content"));
@@ -241,7 +264,7 @@ mod tests {
             create_test_document("First", "A", Some(1), None, None),
             create_test_document("Second", "B", Some(2), None, None),
         ];
-        let result = generate_llms_txt(&docs, "Site", None);
+        let result = generate_llms_txt(&docs, "Site", None, |_, _| None);
         let first_pos = result.find("## First").unwrap();
         let second_pos = result.find("## Second").unwrap();
         let third_pos = result.find("## Third").unwrap();
@@ -255,7 +278,7 @@ mod tests {
             create_test_document("Older", "Old.", None, Some("2024-01-01"), None),
             create_test_document("Newer", "New.", None, Some("2024-06-15"), None),
         ];
-        let result = generate_llms_txt(&docs, "Site", None);
+        let result = generate_llms_txt(&docs, "Site", None, |_, _| None);
         let newer_pos = result.find("## Newer").unwrap();
         let older_pos = result.find("## Older").unwrap();
         assert!(newer_pos < older_pos, "Newer dates should come first");
@@ -263,7 +286,7 @@ mod tests {
 
     #[test]
     fn test_empty_site() {
-        let result = generate_llms_txt(&[], "Empty Site", Some("Nothing here"));
+        let result = generate_llms_txt(&[], "Empty Site", Some("Nothing here"), |_, _| None);
         assert_eq!(result, "# Empty Site\n\n> Nothing here\n\n");
     }
 
@@ -272,7 +295,7 @@ mod tests {
         let docs = vec![
             create_test_document("Test", "**bold** and [link](url)", None, None, None),
         ];
-        let result = generate_llms_txt(&docs, "Site", None);
+        let result = generate_llms_txt(&docs, "Site", None, |_, _| None);
         assert!(result.contains("**bold** and [link](url)"));
         assert!(!result.contains("<strong>"));
     }
@@ -417,7 +440,7 @@ Closing paragraph with *emphasis*.";
             None,
             None,
         )];
-        let result = generate_llms_txt(&docs, "Site", None);
+        let result = generate_llms_txt(&docs, "Site", None, |_, _| None);
 
         // Tags must be gone.
         assert!(!result.contains("<style"), "left a <style tag: {result}");

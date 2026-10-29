@@ -207,7 +207,7 @@ async fn arm_editor_resolve_asset(ctx: &Session, args: Value) -> ArmResult {
     let root = project_root(ctx);
     let from_file = confine(ctx, &a.from_file)?;
     let resolved =
-        crate::editor::resolve::asset_resolver::resolve_asset(&a.target, &from_file, &root);
+        crate::editor::resolve::asset_resolver::resolve_asset(&a.target, &from_file, &root, crate::editor::resolve::asset_resolver::EditorScope::Site);
     to_value(resolved)
 }
 
@@ -227,6 +227,7 @@ async fn arm_editor_resolve_references(ctx: &Session, args: Value) -> ArmResult 
         &a.targets,
         &from_file.to_string_lossy(),
         &root,
+        crate::editor::resolve::asset_resolver::EditorScope::Site,
     );
     to_value(resolved)
 }
@@ -715,8 +716,7 @@ async fn arm_save_version(ctx: &Session, args: Value) -> ArmResult {
 /// contained, and the S1 re-spelling of the remaining `commands::*` arms
 /// cannot lose it. A caught panic becomes a 500 (`ArmError::Command`), the
 /// same envelope as a command's own `Err(String)`, instead of unwinding
-/// through hyper. Dev-profile containment only: release builds set
-/// `panic = "abort"` (workspace `Cargo.toml`), where no unwind exists.
+/// through hyper.
 async fn contain_panics(
     label: &'static str,
     arm: impl std::future::Future<Output = ArmResult>,
@@ -1151,7 +1151,7 @@ mod tests {
             fields: vec!["author".to_string()],
             title: "People".to_string(),
             titles: Vec::new(), counts: Vec::new(), is_place: false,
-            parents: Default::default(), explorer: None, line: None,
+            parents: Default::default(), explorer: None, line: None, slugs: Default::default(),
         }];
         map.terms.insert(
             "people/scarly".to_string(),

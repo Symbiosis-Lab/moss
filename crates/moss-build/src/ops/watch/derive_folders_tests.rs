@@ -1,11 +1,18 @@
 use super::*;
 use crate::vault::derive_folders::{folder_decision, set_folder_decision};
-use notify::event::CreateKind;
+use notify::event::{CreateKind, ModifyKind, RenameMode};
 use notify::EventKind;
 use std::time::Instant;
 
 fn created(path: &Path) -> DebouncedEvent {
     DebouncedEvent::new(notify::Event::new(EventKind::Create(CreateKind::File)).add_path(path.to_path_buf()), Instant::now())
+}
+
+fn moved_in(path: &Path) -> DebouncedEvent {
+    DebouncedEvent::new(
+        notify::Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Any))).add_path(path.to_path_buf()),
+        Instant::now(),
+    )
 }
 
 fn site_with_fake_plugin() -> (tempfile::TempDir, MossPaths) {
@@ -33,6 +40,34 @@ fn a_new_file_in_a_shown_folder_gets_its_stub() {
     std::fs::write(folder.join("new.fake"), "x").unwrap();
     react(dir.path().to_str().unwrap(), &[created(&folder.join("new.fake"))], &[]);
     assert!(folder.join("new.md").is_file());
+}
+
+#[test]
+fn a_file_moved_into_a_shown_folder_gets_its_stub() {
+    let (dir, site) = site_with_fake_plugin();
+    let folder = dir.path().join("reports");
+    std::fs::create_dir_all(&folder).unwrap();
+    set_folder_decision(&site, &folder, Decision::Show(vec!["pages".into()])).unwrap();
+    std::fs::write(folder.join("new.fake"), "x").unwrap();
+    react(dir.path().to_str().unwrap(), &[moved_in(&folder.join("new.fake"))], &[]);
+    assert!(folder.join("new.md").is_file());
+}
+
+#[test]
+fn a_file_renamed_inside_the_site_gets_no_stub() {
+    let (dir, site) = site_with_fake_plugin();
+    let folder = dir.path().join("reports");
+    std::fs::create_dir_all(&folder).unwrap();
+    set_folder_decision(&site, &folder, Decision::Show(vec!["pages".into()])).unwrap();
+    std::fs::write(folder.join("new.fake"), "x").unwrap();
+    let renamed = DebouncedEvent::new(
+        notify::Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
+            .add_path(folder.join("old.fake"))
+            .add_path(folder.join("new.fake")),
+        Instant::now(),
+    );
+    react(dir.path().to_str().unwrap(), &[renamed], &[]);
+    assert!(!folder.join("new.md").exists());
 }
 
 #[test]
@@ -97,4 +132,16 @@ async fn the_watch_driver_writes_the_stub_when_a_file_arrives() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     assert!(folder.join("new.md").is_file());
+}
+
+#[test]
+fn a_file_that_arrives_goes_to_the_front_of_the_derive_queue() {
+    let (dir, _site) = site_with_fake_plugin();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    std::fs::write(root.join("new.fake"), "x").unwrap();
+    std::fs::write(root.join("old.fake"), "x").unwrap();
+    react(&root.to_string_lossy(), &[created(&root.join("new.fake"))], &[]);
+    let arrived = |f: &str| crate::system::derive::priority::arrived_in_session(&root, f, &[]);
+    assert!(arrived("new.fake"));
+    assert!(!arrived("old.fake"));
 }

@@ -43,3 +43,15 @@ fn fails_on_a_directory_that_is_not_a_plugin() {
     assert_eq!(no_entry.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&no_entry.stderr).contains("entry"));
 }
+
+#[test]
+fn install_without_an_id_or_outside_a_site_fails_before_any_network() {
+    let none = moss(&["install"]);
+    assert_eq!(none.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&none.stderr).contains("moss plugin install <id> [<folder>]"));
+
+    let tmp = tempfile::tempdir().unwrap();
+    let outside = moss(&["install", "lantern", tmp.path().to_str().unwrap()]);
+    assert_eq!(outside.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&outside.stderr).contains("not inside a moss site"));
+}

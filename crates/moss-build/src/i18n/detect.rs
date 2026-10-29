@@ -89,9 +89,11 @@ static WIKILINK_RE: LazyLock<Regex> =
 // balanced `)` (a Wikipedia disambiguation URL,
 // `.../Rust_(programming_language)`), and greedy `\S*` backtracks to the
 // LAST `)` before whitespace, so it still closes on the real one rather
-// than stopping at the URL's own embedded paren.
+// than stopping at the URL's own embedded paren. Spaces around the
+// destination are valid CommonMark (`[text]( /path/ )`) and must still match,
+// or the path's words count as prose.
 static MD_LINK_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[([^\]]*)\]\(\S*\)").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"\[([^\]]*)\]\([ \t]*\S*[ \t]*\)").expect("valid regex"));
 static BARE_URL_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"https?://\S+").expect("valid regex"));
 static HEADING_LIST_MARKER_RE: LazyLock<Regex> =
@@ -578,6 +580,15 @@ mod tests {
         let markup = "![](a.jpg)\n[link](/some/very/long/path/to/somewhere.html)\n![](b.jpg)";
         assert!(markup.len() > 60, "the fixture must be long in BYTES, or it proves nothing");
         assert_eq!(site_language_vote(&[markup]), None);
+    }
+
+    #[test]
+    fn a_list_of_chinese_links_with_spaced_destinations_votes_chinese() {
+        let page = "## 相關文章\n\n\
+                    [山城的雨季：寫給離開的人](/community/blog/mountain-town-rain/ )\n\
+                    [回不去的港口]( /awards/writing/s2/harbour-we-left/ )\n\
+                    [祖母的廚房 | 從家常菜看一個家族的遷徙](/community/events/grandmothers-kitchen-launch/ )\n";
+        assert_eq!(site_language_vote(&[page]), Some(Language::ZhHant));
     }
 
     #[test]

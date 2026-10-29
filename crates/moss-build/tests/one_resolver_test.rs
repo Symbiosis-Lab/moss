@@ -10,6 +10,7 @@ use std::path::Path;
 use moss_build::build::scan::scan::{build_content_graph, scan_folder};
 use moss_build::editor::ref_scan::{clean_references_to_paths, scan_project_references_to};
 use moss_build::editor::rename_plan::plan_moves;
+use moss_build::editor::resolve::asset_resolver::EditorScope;
 use moss_build::editor::resolve::reference_resolver::{resolve_references_batch, RefTarget};
 use moss_core::content_graph::ContentGraph;
 use moss_core::resolve::reference::ReferenceKind;
@@ -52,7 +53,7 @@ fn build_pick(md: &str, page: &str, g: &ContentGraph) -> Option<String> {
 /// What the editor's classifier makes of `text` as an embed on `page`: its
 /// kind, the file it shows, and the candidates it lists when it is ambiguous.
 fn editor_full(text: &str, page: &str, root: &Path) -> (ReferenceKind, Option<String>, Vec<String>) {
-    let out = resolve_references_batch(&[RefTarget { text: text.to_string(), is_embed: true }], page, root);
+    let out = resolve_references_batch(&[RefTarget { text: text.to_string(), is_embed: true }], page, root, EditorScope::Site);
     let e = &out[0];
     let rr = root.canonicalize().unwrap();
     let path = e.resolved.as_ref().map(|a| {

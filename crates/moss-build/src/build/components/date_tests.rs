@@ -330,3 +330,18 @@ fn test_format_vertical_cjk_date_compact_invalid() {
 fn test_format_vertical_cjk_date_compact_year_only() {
     assert_eq!(format_vertical_cjk_date_compact("2025"), Some("二〇二五年".to_string()));
 }
+
+#[test]
+fn compact_date_names_the_month_at_day_precision_as_at_month_precision() {
+    assert_eq!(format_compact_date("2026-04", Language::En, None), "April 2026");
+    assert_eq!(format_compact_date("2026-03-04", Language::En, None), "March 2026");
+    assert_eq!(format_compact_date("2026-03-04", Language::ZhHant, None), "2026年3月");
+    assert_eq!(format_compact_date("2026", Language::En, None), "2026");
+}
+
+#[test]
+fn time_html_wraps_the_text_with_the_full_date_and_escapes_it() {
+    assert_eq!(time_html("March 2026", "2026-03-04"), r#"<time datetime="2026-03-04">March 2026</time>"#);
+    assert_eq!(time_html("<b>x</b>", "2026"), r#"<time datetime="2026">&lt;b&gt;x&lt;/b&gt;</time>"#);
+    assert_eq!(time_html("<b>", "not a date"), "&lt;b&gt;");
+}

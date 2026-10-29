@@ -321,17 +321,100 @@ fn render_rows(
 /// one plain paragraph, its literal text is escaped instead.
 ///
 fn render_row(row: &str) -> String {
+    inline_row(row).unwrap_or_else(|| crate::build::features::html_escape(row))
+}
+
+/// The row as inline HTML, or `None` when it renders as anything but one
+/// paragraph (a stray `#`, a list dash).
+fn inline_row(row: &str) -> Option<String> {
     let html = crate::build::markdown::render_markdown_to_html(row);
-    let trimmed = html.trim();
-    match trimmed
-        .strip_prefix("<p>")
-        .and_then(|rest| rest.strip_suffix("</p>"))
-    {
-        // One paragraph and nothing else — `</p>` may only appear at the end,
-        // or the row produced more than one block and the unwrap would splice
-        // unbalanced markup into the page.
-        Some(inner) if !inner.contains("</p>") => inner.to_string(),
-        _ => crate::build::features::html_escape(row),
+    let inner = html.trim().strip_prefix("<p>")?.strip_suffix("</p>")?;
+    // `</p>` may only appear at the end, or the row produced more than one
+    // block and the unwrap would splice unbalanced markup into the page.
+    (!inner.contains("</p>")).then(|| inner.to_string())
+}
+
+/// `[site].credit`, rendered once: a studio's one-line signature that sits
+/// before moss's mark in the colophon.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColophonCredit {
+    /// The credit as inline HTML.
+    pub html: String,
+}
+
+impl ColophonCredit {
+    /// The credit the build shows: `[site].credit` rendered, or `None` when it
+    /// is unset, is not one inline paragraph (a build problem), or the colophon
+    /// is off (a note: `colophon = false` leaves the whole line out).
+    pub fn from_site(raw: Option<&str>, colophon: bool) -> Option<Self> {
+        let raw = raw?;
+        if !colophon {
+            crate::build::cli_output::log_note!("[site].credit is not shown because [site].colophon = false leaves out the whole line");
+            return None;
+        }
+        match Self::parse(raw) {
+            Ok(Some((credit, dropped))) => {
+                for target in dropped {
+                    crate::build::cli_output::log_warn_problem!("[site].credit links to \"{target}\"; only http, https, mailto and site-relative links are allowed, so the link is dropped");
+                }
+                Some(credit)
+            }
+            Ok(None) => None,
+            Err(problem) => {
+                crate::build::cli_output::log_warn_problem!("{problem}");
+                None
+            }
+        }
+    }
+
+    /// Render `raw` as inline markdown, with raw HTML shown as text and links
+    /// restricted to http, https, mailto and site-relative targets; the
+    /// targets of the links it dropped come back with it. `Err` carries the
+    /// build problem for a value that is not a single inline paragraph; an
+    /// empty value is `Ok(None)`.
+    fn parse(raw: &str) -> Result<Option<(Self, Vec<String>)>, String> {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return Ok(None);
+        }
+        let refused = || "[site].credit must be one line of inline Markdown (text, emphasis, links); the credit is left out".to_string();
+        if raw.contains('\n') {
+            return Err(refused());
+        }
+        // `&lt;` is how a `<` stays text through the markdown renderer.
+        let html = inline_row(&raw.replace('<', "&lt;")).filter(|h| !h.contains("<img")).ok_or_else(refused)?;
+        let (html, dropped) = drop_unsafe_links(&html);
+        Ok(Some((Self { html }, dropped)))
+    }
+}
+
+/// `html` with every `<a>` whose target is not http, https, mailto or
+/// site-relative replaced by its text, and the dropped targets.
+fn drop_unsafe_links(html: &str) -> (String, Vec<String>) {
+    let (mut out, mut dropped, mut rest) = (String::new(), Vec::new(), html);
+    while let Some(open) = rest.find("<a ") {
+        let Some(tag_end) = rest[open..].find('>').map(|i| open + i) else { break };
+        let Some(close) = rest[tag_end..].find("</a>").map(|i| tag_end + i) else { break };
+        let tag = &rest[open..tag_end];
+        let target = tag.split("href=\"").nth(1).and_then(|r| r.split('"').next()).unwrap_or("").replace("&amp;", "&");
+        out.push_str(&rest[..open]);
+        if link_target_allowed(&target) {
+            out.push_str(&rest[open..close + 4]);
+        } else {
+            out.push_str(&rest[tag_end + 1..close]);
+            dropped.push(target);
+        }
+        rest = &rest[close + 4..];
+    }
+    out.push_str(rest);
+    (out, dropped)
+}
+
+fn link_target_allowed(target: &str) -> bool {
+    let target: String = target.chars().filter(|c| !c.is_ascii_control() && !c.is_whitespace()).collect::<String>().to_ascii_lowercase();
+    match target.split(['/', '?', '#']).next().and_then(|head| head.split_once(':')) {
+        Some((scheme, _)) => matches!(scheme, "http" | "https" | "mailto"),
+        None => !target.starts_with("//"),
     }
 }
 

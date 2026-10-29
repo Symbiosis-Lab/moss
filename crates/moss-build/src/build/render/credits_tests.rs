@@ -108,3 +108,55 @@ fn place_line_and_byline_both_render_independently() {
     assert!(html.contains("moss-byline"), "got: {html}");
     assert!(html.contains("moss-place-line"), "got: {html}");
 }
+
+mod site_credit {
+    use super::super::ColophonCredit;
+
+    fn parse(raw: &str) -> Result<Option<(ColophonCredit, Vec<String>)>, String> {
+        ColophonCredit::parse(raw)
+    }
+
+    #[test]
+    fn a_link_stays_a_link_and_text_is_escaped() {
+        let (credit, dropped) = parse("Designed by [Example Studio](https://example.org) & friends").unwrap().unwrap();
+        assert!(credit.html.contains(r#"href="https://example.org">Example Studio</a>"#), "{}", credit.html);
+        assert!(credit.html.contains("&amp; friends"), "{}", credit.html);
+        assert!(!credit.html.contains("<p>"), "{}", credit.html);
+        assert!(dropped.is_empty());
+    }
+
+    #[test]
+    fn block_markdown_and_extra_lines_are_refused_naming_the_key() {
+        for raw in ["# Title", "- one\n- two", "first\n\nsecond", "one\ntwo", "> quoted", "![x](a.png)"] {
+            let problem = parse(raw).expect_err(raw);
+            assert!(problem.contains("[site].credit"), "{problem}");
+        }
+    }
+
+    #[test]
+    fn an_empty_setting_is_no_credit() {
+        assert_eq!(parse("  ").unwrap(), None);
+    }
+
+    #[test]
+    fn raw_html_is_shown_as_text() {
+        let (credit, _) = parse("Hi <script>alert(1)</script> <b>x</b>").unwrap().unwrap();
+        assert!(!credit.html.contains("<script") && !credit.html.contains("<b>"), "{}", credit.html);
+        assert!(credit.html.contains("&lt;script&gt;"), "{}", credit.html);
+    }
+
+    #[test]
+    fn only_http_https_mailto_and_relative_links_survive() {
+        for ok in ["https://example.org", "http://example.org/a?b=c&d=e", "mailto:a@example.org", "/about", "about.html", "#top", "../x"] {
+            let (credit, dropped) = parse(&format!("[x]({ok})")).unwrap().unwrap();
+            assert!(credit.html.contains("<a "), "{ok}: {}", credit.html);
+            assert!(dropped.is_empty(), "{ok}");
+        }
+        for bad in ["javascript:alert(1)", "JaVaScRiPt:alert(1)", "data:text/html,x", "vbscript:x", "//evil.example", "jav&#x61;script:alert(1)"] {
+            let (credit, dropped) = parse(&format!("see [x]({bad}) now")).unwrap().unwrap();
+            assert!(!credit.html.contains("<a ") && !credit.html.to_lowercase().contains("javascript"), "{bad}: {}", credit.html);
+            assert!(credit.html.contains("see x now"), "the text stays: {}", credit.html);
+            assert_eq!(dropped.len(), 1, "{bad}");
+        }
+    }
+}

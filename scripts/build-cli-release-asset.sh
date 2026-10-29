@@ -29,7 +29,7 @@
 # workflow does — would otherwise have `cargo build` walk up from `pwd` and
 # pick up an ancestor `.cargo/config.toml`'s `build.target-dir` if one is
 # ever added there, silently moving where the binary lands and breaking the
-# hardcoded `target/<triple>/release/moss-cli` paths below. An explicit
+# hardcoded `target/<triple>/release-optimized/moss-cli` paths below. An explicit
 # `--target-dir` cannot be overridden by an ancestor config.
 
 set -euo pipefail
@@ -48,17 +48,17 @@ case "$PLATFORM" in
   darwin-universal)
     OUT="moss-darwin-universal"
     for TARGET in x86_64-apple-darwin aarch64-apple-darwin; do
-      cargo build --locked --release -p moss-cli --target "$TARGET" --target-dir "$TARGET_DIR"
+      cargo build --locked --profile release-optimized -p moss-cli --target "$TARGET" --target-dir "$TARGET_DIR"
     done
     lipo -create -output "$OUT" \
-      "$TARGET_DIR/x86_64-apple-darwin/release/moss-cli" \
-      "$TARGET_DIR/aarch64-apple-darwin/release/moss-cli"
+      "$TARGET_DIR/x86_64-apple-darwin/release-optimized/moss-cli" \
+      "$TARGET_DIR/aarch64-apple-darwin/release-optimized/moss-cli"
     lipo -info "$OUT"
     ;;
   linux-x86_64)
     OUT="moss-linux-x86_64"
-    cargo build --locked --release -p moss-cli --target-dir "$TARGET_DIR"
-    cp "$TARGET_DIR/release/moss-cli" "$OUT"
+    cargo build --locked --profile release-optimized -p moss-cli --target-dir "$TARGET_DIR"
+    cp "$TARGET_DIR/release-optimized/moss-cli" "$OUT"
     ;;
   *)
     echo "unknown platform: $PLATFORM (want darwin-universal or linux-x86_64)" >&2

@@ -51,6 +51,24 @@ pub fn app_version() -> &'static str {
         .expect("seed_app_version runs at startup, before the first plugin check or request")
 }
 
+/// Whether the running moss meets a `min_moss_version` floor (a site's or a
+/// plugin's). `None` when either side is not a version.
+pub fn meets_floor(floor: &str) -> Option<bool> {
+    floor_met(floor, app_version())
+}
+
+/// Compared on `major.minor.patch` only: develop carries the number of the
+/// release it will become with a `-dev` suffix, so a `0.15.15-dev` build has
+/// what a `0.15.15` floor asks for, though semver orders it below `0.15.15`.
+pub fn floor_met(floor: &str, host: &str) -> Option<bool> {
+    Some(version_core(host)? >= version_core(floor)?)
+}
+
+/// `major.minor.patch` of a semver string, the part floors compare.
+pub fn version_core(v: &str) -> Option<(u64, u64, u64)> {
+    semver::Version::parse(v.trim()).ok().map(|v| (v.major, v.minor, v.patch))
+}
+
 /// The `User-Agent` on every request moss makes to its own backend and to the
 /// plugin registry: `moss/<version> (+https://mosspub.com)`. One string for
 /// the seta client, the reachability probe, the registry client and the
@@ -70,5 +88,15 @@ mod tests {
         let now = super::now_iso();
         let re = regex::Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$").unwrap();
         assert!(re.is_match(&now), "now_iso() produced {now}");
+    }
+
+    #[test]
+    fn a_dev_build_meets_the_floor_of_the_release_it_becomes() {
+        use super::floor_met;
+        assert_eq!(floor_met("0.15.15", "0.15.15-dev"), Some(true));
+        assert_eq!(floor_met("0.15.15", "0.15.14"), Some(false));
+        assert_eq!(floor_met("0.15.15", "0.16.0"), Some(true));
+        assert_eq!(floor_met("0.15.16", "0.15.15-dev"), Some(false));
+        assert_eq!(floor_met("soon", "0.15.15"), None);
     }
 }

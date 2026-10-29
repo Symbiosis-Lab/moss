@@ -43,7 +43,7 @@ pub fn render(label: &str, emit_source_fm: bool, visually_hidden: bool) -> Strin
         r#"<h1 class="{}"{}>{}</h1>"#,
         class,
         fm_attr,
-        html_escape(label)
+        moss_core::heading::range::keep_ranges_together(&html_escape(label))
     )
 }
 

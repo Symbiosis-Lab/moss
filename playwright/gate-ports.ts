@@ -110,6 +110,8 @@ const GATE_PORT_KEYS = [
   'nav-one-row',
   'theme-floor-hooks',
   'hls-short-clip',
+  'colophon-credit:long',
+  'colophon-credit:short',
   'footer-end-space:hidden',
   'footer-end-space:default',
   'facts-margin:widened',
@@ -121,6 +123,7 @@ const GATE_PORT_KEYS = [
   'header-none',
   'header-none:band',
   'contents-lens',
+  'contents-lens:fallback',
   'content-grid:default',
   'content-grid:full',
   'closing-picture:sky',
@@ -135,6 +138,7 @@ const GATE_PORT_KEYS = [
   'closing-picture:landscape',
   'wcag-output',
   'archival-footer',
+  'type-defaults',
 ] as const;
 
 type GatePortKey = (typeof GATE_PORT_KEYS)[number];

@@ -220,6 +220,15 @@
   background: rgba(106, 154, 90, 0.25);
 }
 
+/* Light text on a dark ground renders heavier under macOS subpixel
+   smoothing; greyscale smoothing evens it out. Dark only, so light pages keep
+   subpixel rendering. The pre-paint script stamps data-theme from the system
+   setting as well as from the toggle, so this one rule covers both. */
+[data-theme="dark"] {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
 /* A section's readable text colour. The build writes both variants beside
    --moss-section-color (on <body> and on a listing card); this picks the one
    for the current theme. The variants are computed against this stylesheet's
@@ -590,15 +599,35 @@ article h6 {
   font-family: var(--moss-font-section, var(--moss-font-body));
 }
 
+/* A number range in a heading ("1626–1705") never breaks across lines; the
+   build wraps each such run in this span. */
+.moss-nobreak {
+  white-space: nowrap;
+}
+
 /* Section permalink anchors (moss-heading-anchor). Emitted inside body
-   headings by render_heading(). Hover/focus reveal only — hidden on touch
-   (no hover = no clutter in headings; focus-visible covers keyboard nav).
+   headings by render_heading(). Hover/focus reveal only (a tap reveals it on
+   touch, where hover sticks; focus-visible covers keyboard nav).
    Quiet at rest, confident on hover: subordinate size (smaller than the
    heading, which it would otherwise inherit at 1em) and a faint tone mixed
    most of the way to the background, so even when revealed it stays a soft
    affordance. Firms up to the accent on direct hover/focus (rule below). */
+:is(h1, h2, h3, h4, h5, h6):has(> .moss-heading-anchor) {
+  position: relative;
+}
 .moss-heading-anchor {
-  margin-inline-start: 0.4em;
+  /* Hung in the heading's inline-start gutter, out of the line: it takes no
+     room hidden or shown, so no line wraps or moves, a no-break range keeps
+     its line, and overflow on the start side never scrolls. It stays
+     focusable. The gap is padding so the pointer can cross it. */
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-end: 100%;
+  /* The gutter's own width, glyph against the heading, so the mark and its
+     inset ring stay inside the window at the page's edge. */
+  box-sizing: border-box;
+  inline-size: var(--moss-container-padding);
+  text-align: end;
   /* `content: none` on ::after would remove it; the glyph lives there and
      nowhere else. Generated content is not part of the document text, so it
      cannot be selected and cannot be copied — in any engine. This used to be
@@ -609,7 +638,7 @@ article h6 {
      The one-line `user-select` fix shipped 2026-05-31 unverified in a
      browser; it stays as a second line of defence against double-click
      selection, but the `::after` is what makes the promise true. */
-  font-size: 0.8em;
+  font-size: min(0.8em, var(--moss-container-padding));
   font-weight: 400;
   color: color-mix(in oklch, var(--moss-color-text-secondary) 45%, var(--moss-color-bg));
   text-decoration: none;
@@ -621,8 +650,12 @@ article h6 {
   content: "#";
 }
 :is(h1, h2, h3, h4, h5, h6):hover .moss-heading-anchor,
+.moss-heading-anchor:hover,
 .moss-heading-anchor:focus-visible {
   opacity: 1;
+}
+.moss-heading-anchor:focus-visible {
+  outline-offset: -2px;
 }
 .moss-heading-anchor:hover,
 .moss-heading-anchor:focus-visible {
@@ -1207,6 +1240,28 @@ body > footer.container > .moss-hero-closing[data-mobile="overlay"][data-overlay
 body > footer.container > .moss-hero-closing[data-align="top"] :is(img, video) {
   object-position: var(--moss-hero-object-position, bottom);
 }
+/* With the words at the top of the picture they start `clamp(8px, 2vw, 24px)` below its
+   edge, close to the page it rises from, and the display heading sets tight (1.08);
+   `hero_ink` models both. */
+body > footer.container > .moss-hero-closing[data-mobile="overlay"][data-overlay][data-align="top"] > .moss-hero-content {
+  padding-block-start: clamp(8px, 2vw, 24px);
+}
+body > footer.container > .moss-hero-closing[data-align="top"] .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(:is(h1, h2, h3, h4, h5, h6) ~ *) {
+  line-height: 1.08;
+}
+/* The call to action is a button with a ground of its own, the page colour at 80%, in the text
+   colour with its border, so it reads on any picture whatever the words' ink; hovered it inverts.
+   The ink measurement leaves the link row out of what the words' ink is read over. */
+body > footer.container > .moss-hero-closing .moss-hero-content a {
+  font-weight: 500;
+  color: var(--moss-color-text);
+  border-color: var(--moss-color-text);
+  background: color-mix(in srgb, var(--moss-color-bg) 80%, transparent);
+}
+body > footer.container > .moss-hero-closing .moss-hero-content a:hover {
+  color: var(--moss-color-bg);
+  background: var(--moss-color-text);
+}
 /* The words start where the article's text starts and stay within its width.
    `--moss-words-inset` is that start measured from the picture's edge: half
    the room beside the content column plus its padding, less the sidenote
@@ -1214,6 +1269,8 @@ body > footer.container > .moss-hero-closing[data-align="top"] :is(img, video) {
 body > footer.container > .moss-hero-closing[data-mobile="overlay"][data-overlay] {
   --moss-words-pad: 5%;
   --moss-words-inset: calc(max(0px, (100% - var(--moss-sidenote-inset, 0px) - var(--moss-content-width)) / 2) + var(--moss-container-padding));
+  /* Where the credit's box ends, so its text (which has 0.5rem of padding) ends where the column does. */
+  --moss-credit-end: calc(var(--moss-words-inset) - 0.5rem);
 }
 @media (48rem <= width < 64rem) {
   body > footer.container > .moss-hero-closing[data-mobile="overlay"][data-overlay] {
@@ -1271,17 +1328,20 @@ body > footer.container:has(> .moss-hero-closing) > .moss-colophon a {
 .moss-hero.moss-hero-closing[data-overlay]::before {
   content: none;
 }
-/* The credit (`caption=`), last on the foot before the colophon. Panel and tone match the hero's words unless the foot measured quiet (`data-credit`). */
+/* The credit (`caption=`), last on the foot before the colophon: right-aligned to the end of the
+   page's text column, on one line where it fits, in the UI face unless a theme sets
+   `--moss-hero-credit-font`. Panel and tone match the hero's words unless the foot measured quiet (`data-credit`). */
 .moss-hero-closing > .moss-hero-credit {
   position: absolute;
   inset-block-end: var(--moss-closing-strip);
-  inset-inline-end: 0;
+  inset-inline-end: var(--moss-credit-end, 0px);
   z-index: 3;
   box-sizing: border-box;
-  max-inline-size: min(36rem, 100%);
+  max-inline-size: calc(100% - 2 * var(--moss-credit-end, 0px));
   margin: 0;
-  padding: 0.3rem 5%;
-  font-size: 0.75rem;
+  padding: 0.3rem 0.5rem;
+  font-family: var(--moss-hero-credit-font, var(--moss-font-body));
+  font-size: var(--moss-hero-credit-size, 0.75rem);
   line-height: 1.45;
   text-align: end;
   color: #fff;
@@ -3896,31 +3956,38 @@ body {
      the end of the bar's place and scroll away with the page's first block;
    - where the contents ruler is on screen, or its lane is reserved
      (`data-ruler` `on` or `lane`; the bar never shows), they stand in a column at the
-     foot of the window, starting where the ruler's dashes start;
+     foot of the window, starting where the ruler's dashes start, and are
+     hidden whenever the list is away (`lane`): over the opening, a wide block
+     and the closing picture, the top-of-page controls covering the opening;
    - anywhere else they are fixed in the slot the bar keeps free at its end.
    Both places are worked out from the bar's and the ruler's own geometry
    tokens (on `body`), never retyped. */
 .moss-nav-island[data-header="none"] + .nav-icons {
   position: absolute;
   z-index: 100;
-  inset-block-start: calc(
+  --_top: calc(
     var(--moss-space-sm) + var(--moss-nav-island-edge) + var(--moss-nav-island-pad-block)
     + (var(--moss-size-lg) + var(--moss-nav-island-control-pad) - 2.25rem) / 2
   );
-  inset-inline-end: calc(
+  --_end: calc(
     max(
       var(--moss-container-padding),
       (100% - min(var(--moss-nav-width, var(--moss-content-width)), var(--moss-site-max-width))) / 2 + var(--moss-container-padding)
     )
     + var(--moss-nav-island-edge) + var(--moss-nav-island-pad-end)
   );
+  inset-block-start: var(--_top);
+  inset-inline-end: var(--_end);
   margin: 0;
 }
 
-/* Their place at the top is the end of the page title's line: its first line
-   keeps that room free with a float as wide as nav-island.ts measures the
-   controls, so a long title wraps before them rather than running under them,
-   and its later lines take the whole column. Before (or without) scripting
+/* Their place at the top is the end of the page's first line: the article keeps
+   that room free with a float as wide as nav-island.ts measures the controls,
+   so a long title, or a title with a subtitle beside it, wraps before them
+   rather than running under them, and the later lines take the whole column.
+   A hidden title (a hero page's) opens no such line, so it keeps nothing.
+   The float belongs to the article, not to the title, so a title set inline or
+   inline-block with its subtitle is not widened by it. Before (or without) scripting
    the room is guessed from how many controls there are, at 3rem each, which
    is more than any of them takes. Once the controls have moved to the bar or
    the list's foot the room is off screen. A vertical page takes it back in
@@ -3937,7 +4004,7 @@ body:has(> .moss-nav-island[data-header="none"] + .nav-icons > :nth-child(3)) {
   --moss-nav-island-controls-guess: 9rem;
 }
 
-body:has(> .moss-nav-island[data-header="none"] + .nav-icons) main > article > h1:first-of-type::before {
+body:has(> .moss-nav-island[data-header="none"] + .nav-icons) main > article:is(:has(> h1:not(.visually-hidden):first-child), :has(> :is(p, a):first-child + h1:not(.visually-hidden)))::before {
   content: "";
   float: inline-end;
   inline-size: calc(
@@ -3945,6 +4012,24 @@ body:has(> .moss-nav-island[data-header="none"] + .nav-icons) main > article > h
     + var(--moss-nav-island-pad-end) + var(--moss-space-sm)
   );
   block-size: 1lh;
+}
+
+/* At the top, on the title's first line (nav-island.ts measures its centre) and
+   ending where the text column ends: the fixed slot's end less the bar's own
+   inset. Both are invalid until the centre is written, so a page without a
+   title keeps the bar's place.
+   allow:runtime-token --moss-nav-title-line set on body by nav-island.ts — the
+   custom property is deliberately invalid until then. */
+.moss-nav-island[data-header="none"][data-top] + .nav-icons {
+  --_title-top: calc(var(--moss-nav-title-line) - 1.125rem);
+  --_title-end: calc(
+    0 * var(--moss-nav-title-line) + max(
+      var(--moss-container-padding),
+      (100% - min(var(--moss-nav-width, var(--moss-content-width)), var(--moss-site-max-width))) / 2 + var(--moss-container-padding)
+    )
+  );
+  inset-block-start: var(--_title-top, var(--_top));
+  inset-inline-end: var(--_title-end, var(--_end));
 }
 
 .moss-nav-island[data-header="none"][data-shown]:not([data-top]) + .nav-icons {
@@ -3957,6 +4042,12 @@ body:has(> .moss-nav-island[data-header="none"] + .nav-icons) main > article > h
   inset-block: auto max(var(--moss-space-md), env(safe-area-inset-bottom, 0px));
   inset-inline-end: auto;
   left: calc(var(--moss-contents-inset) + var(--moss-contents-pad));
+  transition: opacity 250ms ease, visibility 250ms;
+}
+
+.moss-nav-island[data-header="none"][data-ruler="lane"]:not([data-top]) + .nav-icons:not(:focus-within) {
+  opacity: 0;
+  visibility: hidden;
 }
 
 .moss-nav-island[data-header="none"] .moss-nav-island-sections {
@@ -4341,9 +4432,12 @@ main > * {
 }
 
 /* One line, cut with an ellipsis at about `--moss-contents-measure`; the link
-   carries the whole title as its name and tooltip. Ink runs from the secondary
-   text colour far from the focus (which keeps 4.5:1 on the page colour) to
-   the text colour at it. */
+   carries the whole title as its name and tooltip. Ink runs from the faintest
+   colour that still reaches 4.6:1 on the veil behind the names (over a black or
+   a white picture) far from the focus, to the text colour at it.
+   `--moss-contents-faint` is worked out by contents-lens.ts when the list
+   opens; until then, and where the text colour itself falls short, the names
+   fade to the secondary text colour, which keeps 4.5:1 too. */
 .moss-contents-ruler[data-contents="pictures"] .moss-contents-ruler-label {
   position: static;
   flex: none;
@@ -4353,7 +4447,7 @@ main > * {
   text-overflow: ellipsis;
   /* Grows by 2px toward the focus, on the same curve as the ink. */
   font-size: calc(0.8125rem + 0.125rem * var(--moss-contents-ink, 0));
-  color: color-mix(in srgb, var(--moss-color-text) calc(var(--moss-contents-ink, 0) * 100%), var(--moss-color-text-secondary));
+  color: color-mix(in srgb, var(--moss-color-text) calc(var(--moss-contents-ink, 0) * 100%), var(--moss-contents-faint, var(--moss-color-text-secondary)));
 }
 
 .moss-contents-ruler[data-contents="pictures"]:not([data-lens]):not([data-open]) .moss-contents-ruler-label {
@@ -4370,6 +4464,10 @@ main > * {
 .moss-contents-ruler[data-lens] a[data-focus] .moss-contents-ruler-label {
   color: var(--moss-color-text);
   font-weight: 500;
+}
+
+.moss-contents-ruler[data-lens] a[data-focus] .moss-contents-ruler-dash {
+  opacity: 1;
 }
 
 /* Shown on the focused row only, unfolding from a thin line across its
@@ -4412,9 +4510,9 @@ main > * {
   position: absolute;
   inset-block-start: 0;
   left: calc(-1 * var(--moss-contents-inset));
-  inline-size: calc(var(--moss-contents-measure) + 12rem);
+  inline-size: calc(var(--moss-contents-measure) + 14rem);
   /* Solid under the names (they start 40px in and are at most the measure
-     long), fading out across the picture beside them. */
+     long, with room to spare), fading out across the picture beside them. */
   background: linear-gradient(to right, var(--moss-contents-veil, var(--moss-color-bg)) calc(100% - 9rem), transparent);
   mask-image: linear-gradient(transparent, #000 40px, #000 calc(100% - 40px), transparent);
   transition: transform 180ms ease-out, block-size 180ms ease-out;
@@ -5851,7 +5949,7 @@ hr::before {
 .moss-article-title,
 .article-title {
   font-family: var(--moss-font-heading);
-  font-size: var(--moss-read-title);
+  font-size: var(--moss-title-size, var(--moss-read-title));
   font-weight: var(--moss-font-heading-weight);
   line-height: 1.5;
   margin-block-start: 0;
@@ -5872,7 +5970,7 @@ hr::before {
    folder pages independently of articles. */
 .moss-folder-title {
   font-family: var(--moss-font-heading);
-  font-size: var(--moss-read-title);
+  font-size: var(--moss-title-size, min(var(--moss-read-title), 2rem));
   font-weight: var(--moss-font-heading-weight);
   line-height: 1.5;
   /* Mirror .moss-article-title's below-gap (--moss-space-md). The former
@@ -5891,7 +5989,6 @@ hr::before {
 
 @media (width >= 48rem) {
   .moss-folder-title {
-    font-size: 2rem;
     line-height: 1.6875;
   }
 }
@@ -5915,7 +6012,7 @@ hr::before {
    editorial references — done natively so the underline still skips descenders
    (text-decoration-skip-ink: auto is the default), unlike a border-bottom hack. */
 article a:where(:not(.moss-btn)) {
-  color: var(--moss-color-text);
+  color: var(--moss-link-color, var(--moss-color-text));
   text-decoration: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
@@ -5934,7 +6031,7 @@ article ins > a:where(:not(.moss-btn)) {
 
 article a:where(:not(.moss-btn)):hover,
 article a:where(:not(.moss-btn)):focus {
-  color: var(--moss-color-accent);
+  color: var(--moss-link-hover-color, var(--moss-color-accent));
 }
 
 /* Dark mode: hover to the lighter accent (--moss-color-accent-hover, the same green
@@ -5945,7 +6042,7 @@ article a:where(:not(.moss-btn)):focus {
    holds its lightened dark value. */
 :root[data-theme="dark"] article a:where(:not(.moss-btn)):hover,
 :root[data-theme="dark"] article a:where(:not(.moss-btn)):focus {
-  color: var(--moss-color-accent-hover);
+  color: var(--moss-link-hover-color, var(--moss-color-accent-hover));
 }
 
 /* ==========================================================================
@@ -7585,7 +7682,7 @@ body > footer.container:has(> .moss-hero-closing) {
 .moss-hero-content :is(h1, h2, h3, h4, h5, h6) {
   font-size: 1.75rem;
   line-height: 1.2;
-  margin: 0 0 var(--moss-space-sm);
+  margin: 0 0 var(--moss-hero-words-gap, var(--moss-space-sm));
   text-shadow: 0 2px 4px rgba(0,0,0,0.3);
 }
 
@@ -7596,7 +7693,7 @@ body > footer.container:has(> .moss-hero-closing) {
    means a hierarchy, so the second one keeps the smaller size above; the sizes
    step down, they are not flattened. */
 .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(:is(h1, h2, h3, h4, h5, h6) ~ *) {
-  font-size: 2.5rem;
+  font-size: var(--moss-hero-title-size, 2.5rem);
 }
 
 .moss-hero-content a {
@@ -7605,10 +7702,11 @@ body > footer.container:has(> .moss-hero-closing) {
      white over the image, body text in the mobile stacked block. */
   color: inherit;
   border: 1px solid currentColor;
-  padding: 0.5em 1.2em;
+  font-size: var(--moss-hero-link-size, 1em);
+  padding: var(--moss-hero-link-padding, 0.5em 1.2em);
   border-radius: 4px;
   text-decoration: none;
-  margin-block-start: var(--moss-space-sm);
+  margin-block-start: var(--moss-hero-words-gap, var(--moss-space-sm));
   transition: background 0.2s;
 }
 
@@ -7882,7 +7980,7 @@ body > footer.container:has(> .moss-hero-closing) {
   }
 
   .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(:is(h1, h2, h3, h4, h5, h6) ~ *) {
-    font-size: 1.75rem;
+    font-size: var(--moss-hero-title-size, 1.75rem);
   }
 }
 
@@ -8077,7 +8175,7 @@ body > footer.container:has(> .moss-hero-closing) {
   }
 
   .moss-hero[data-mobile="overlay"] .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(:is(h1, h2, h3, h4, h5, h6) ~ *):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
-    font-size: 1.4rem;
+    font-size: var(--moss-hero-title-size, 1.4rem);
   }
 
   .moss-hero[data-mobile="overlay"] .moss-hero-content p {
@@ -8124,7 +8222,7 @@ body > footer.container:has(> .moss-hero-closing) {
    rules above, which it ties with. */
 @media (width < 48rem) {
   :is(:root:not([data-theme="dark"]) .moss-hero[data-words~="narrow:dark"][data-mobile="overlay"], :root[data-theme="dark"] .moss-hero[data-words-night~="narrow:dark"][data-mobile="overlay"]) .moss-hero-content {
-    color: var(--moss-hero-tone-color, #2c2825);
+    color: var(--_words-dark, var(--moss-hero-tone-color, #2c2825));
     text-shadow: none;
     background: none;
   }
@@ -8132,7 +8230,7 @@ body > footer.container:has(> .moss-hero-closing) {
     text-shadow: none;
   }
   :is(:root:not([data-theme="dark"]) .moss-hero[data-words~="narrow:light"][data-mobile="overlay"], :root[data-theme="dark"] .moss-hero[data-words-night~="narrow:light"][data-mobile="overlay"]) .moss-hero-content {
-    color: #fff;
+    color: var(--_words-light, #fff);
     background: none;
   }
 }
@@ -8156,7 +8254,7 @@ body > footer.container:has(> .moss-hero-closing) {
     :root:not([data-theme="dark"]) body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words~="mid-full-lane:dark"],
     :root[data-theme="dark"] body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words-night~="mid-full-lane:dark"]
   ) .moss-hero-content {
-    color: var(--moss-hero-tone-color, #2c2825);
+    color: var(--_words-dark, var(--moss-hero-tone-color, #2c2825));
     text-shadow: none;
     background: none;
   }
@@ -8194,7 +8292,7 @@ body > footer.container:has(> .moss-hero-closing) {
     :root:not([data-theme="dark"]) body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words~="mid-full-lane:light"],
     :root[data-theme="dark"] body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words-night~="mid-full-lane:light"]
   ) .moss-hero-content {
-    color: #fff;
+    color: var(--_words-light, #fff);
     background: none;
   }
 }
@@ -8215,7 +8313,7 @@ body > footer.container:has(> .moss-hero-closing) {
     :root:not([data-theme="dark"]) body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words~="wide-full-lane:dark"],
     :root[data-theme="dark"] body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words-night~="wide-full-lane:dark"]
   ) .moss-hero-content {
-    color: var(--moss-hero-tone-color, #2c2825);
+    color: var(--_words-dark, var(--moss-hero-tone-color, #2c2825));
     text-shadow: none;
     background: none;
   }
@@ -8253,9 +8351,25 @@ body > footer.container:has(> .moss-hero-closing) {
     :root:not([data-theme="dark"]) body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words~="wide-full-lane:light"],
     :root[data-theme="dark"] body[data-content-width="full"][data-contents="pictures"] .moss-hero-closing[data-words-night~="wide-full-lane:light"]
   ) .moss-hero-content {
-    color: #fff;
+    color: var(--_words-light, #fff);
     background: none;
   }
+}
+/* A faded closing picture's words sit on the page colour, so their inks are
+   the theme's own: the page text and the page colour, the darker of the two
+   being the dark ink (`hero_ink` measures with the same pair). */
+:root:not([data-theme="dark"]) .moss-hero-closing[data-fade="top"] {
+  --_words-dark: var(--moss-color-text);
+  --_words-light: var(--moss-color-bg);
+}
+:root[data-theme="dark"] .moss-hero-closing[data-fade="top"] {
+  --_words-dark: var(--moss-color-bg);
+  --_words-light: var(--moss-color-text);
+}
+/* `panel=none` asks for nothing behind the words, shadow included. */
+.moss-hero[data-panel="none"] .moss-hero-content,
+.moss-hero[data-panel="none"] .moss-hero-content :is(h1, h2, h3, h4, h5, h6):not(.moss-card-title):not(.moss-folder-title):not(.moss-article-title) {
+  text-shadow: none;
 }
 /* The colophon on a closing picture's foot. */
 :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-foot="dark"], :root[data-theme="dark"] .moss-hero-closing[data-foot-night="dark"]) ~ .moss-colophon a {
@@ -8271,11 +8385,8 @@ body > footer.container:has(> .moss-hero-closing) {
    theme and layout, as `data-words` is): the theme's secondary text colour, as
    the build measured it, or its page colour. A layout not listed keeps its panel. */
 @media (width < 48rem) {
-  :root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="narrow:text"] > .moss-hero-credit {
-    color: #5d5853;
-  }
-  :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="narrow:text"] > .moss-hero-credit {
-    color: #b0a696;
+  :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="narrow:text"], :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="narrow:text"]) > .moss-hero-credit {
+    color: var(--moss-color-text-secondary);
   }
   :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="narrow:page"], :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="narrow:page"]) > .moss-hero-credit {
     color: var(--moss-color-bg);
@@ -8288,14 +8399,12 @@ body > footer.container:has(> .moss-hero-closing) {
   ) > .moss-hero-credit {
     text-shadow: none;
     background: none;
+    padding-block: 0 0.875rem;
   }
 }
 @media (48rem <= width < 80rem) {
-  :root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="mid:text"] > .moss-hero-credit {
-    color: #5d5853;
-  }
-  :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="mid:text"] > .moss-hero-credit {
-    color: #b0a696;
+  :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="mid:text"], :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="mid:text"]) > .moss-hero-credit {
+    color: var(--moss-color-text-secondary);
   }
   :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="mid:page"], :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="mid:page"]) > .moss-hero-credit {
     color: var(--moss-color-bg);
@@ -8308,14 +8417,12 @@ body > footer.container:has(> .moss-hero-closing) {
   ) > .moss-hero-credit {
     text-shadow: none;
     background: none;
+    padding-block: 0 0.875rem;
   }
 }
 @media (width >= 80rem) {
-  :root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="wide:text"] > .moss-hero-credit {
-    color: #5d5853;
-  }
-  :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="wide:text"] > .moss-hero-credit {
-    color: #b0a696;
+  :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="wide:text"], :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="wide:text"]) > .moss-hero-credit {
+    color: var(--moss-color-text-secondary);
   }
   :is(:root:not([data-theme="dark"]) .moss-hero-closing[data-credit~="wide:page"], :root[data-theme="dark"] .moss-hero-closing[data-credit-night~="wide:page"]) > .moss-hero-credit {
     color: var(--moss-color-bg);
@@ -8328,6 +8435,7 @@ body > footer.container:has(> .moss-hero-closing) {
   ) > .moss-hero-credit {
     text-shadow: none;
     background: none;
+    padding-block: 0 0.875rem;
   }
 }
 
@@ -8347,9 +8455,8 @@ body > footer.container:has(> .moss-hero-closing) {
      gap shorthand is <row> <col>: row=clamp(16px,1.25lh,32px) col=24px.
      Three levels: internal p+p (8px) < col (24px) ≤ row (24–32px).
      Fallback for browsers without 1lh (Safari < 16.4 / macOS 12). */
-  gap: var(--moss-space-lg) var(--moss-space-md);
-  gap: clamp(var(--moss-space-sm), 1.25lh, var(--moss-space-lg))
-       var(--moss-space-md);
+  --_grid-row-gap: var(--moss-space-lg);
+  gap: var(--_grid-row-gap) var(--moss-space-md);
   align-items: flex-start;
   /* Asymmetric: top stays --moss-space-md (24px, NOT lg — see "Block rhythm"
      below .moss-gallery, which stays symmetric md/md), bottom is
@@ -8371,6 +8478,12 @@ body > footer.container:has(> .moss-hero-closing) {
   --_grid-overflow-x: auto;
   --_grid-overflow-y: visible;
   grid-template-columns: var(--_grid-wrap);
+}
+
+@supports (block-size: 1lh) {
+  .moss-grid {
+    --_grid-row-gap: clamp(var(--moss-space-sm), 1.25lh, var(--moss-space-lg));
+  }
 }
 
 /* Ma 間: a heading BINDS to the grid it owns at `sm` (16px) — tighter than the
@@ -8397,6 +8510,17 @@ body > footer.container:has(> .moss-hero-closing) {
 .moss-grid[data-columns="4"] { --_grid-count: 4; }
 .moss-grid[data-columns="5"] { --_grid-count: 5; }
 .moss-grid[data-columns="6"] { --_grid-count: 6; }
+
+/* `mid=N` on a grid: N columns from 48rem up to 64rem, where `data-columns`
+   applies again. It replaces an author ratio in that range. */
+@media (48rem <= width < 64rem) {
+  .moss-grid[data-columns-mid="1"]:not([data-scroll], [data-collage]) { --_grid-template: repeat(1, minmax(0, 1fr)); }
+  .moss-grid[data-columns-mid="2"]:not([data-scroll], [data-collage]) { --_grid-template: repeat(2, minmax(0, 1fr)); }
+  .moss-grid[data-columns-mid="3"]:not([data-scroll], [data-collage]) { --_grid-template: repeat(3, minmax(0, 1fr)); }
+  .moss-grid[data-columns-mid="4"]:not([data-scroll], [data-collage]) { --_grid-template: repeat(4, minmax(0, 1fr)); }
+  .moss-grid[data-columns-mid="5"]:not([data-scroll], [data-collage]) { --_grid-template: repeat(5, minmax(0, 1fr)); }
+  .moss-grid[data-columns-mid="6"]:not([data-scroll], [data-collage]) { --_grid-template: repeat(6, minmax(0, 1fr)); }
+}
 
 /* Grid card styling */
 .moss-grid-card {
@@ -8462,21 +8586,27 @@ body > footer.container:has(> .moss-hero-closing) {
   margin-top: 0;
 }
 
-.moss-grid-card > p:last-of-type {
-  margin-bottom: 0;
+/* A card ends flush: its last paragraph (even when a list or picture follows
+   it) and its last child, and that child's last child when a part is a fenced
+   div around a paragraph. The reset reaches two levels, so a list nested
+   deeper keeps its margin. It sits in the shortcodes layer, so a theme rule
+   overrides it. */
+.moss-grid-card > p:last-of-type,
+.moss-grid-card > :last-child,
+.moss-grid-card > :last-child > :last-child {
+  margin-block-end: 0;
 }
 
 /* Ma 間 within a card: internal vertical gaps must be tighter than the
    inter-card row gap, so elements inside a card feel grouped together.
-   Image margin-bottom already set to xs (8px) by the img rule above.
    Title and description paragraphs: collapse the default p+p gap.
-   The > p:last-of-type rule above (specificity 0,2,1) overrides the
+   The last-child reset above (0,2,0 and up) overrides the
    p { margin-bottom } rule below (0,1,1), keeping the last p flush. */
 .moss-grid-card p + p {
   margin-top: var(--moss-space-xs); /* 8px — vs 24px default p+p */
 }
 .moss-grid-card p {
-  margin-bottom: var(--moss-space-xs); /* 8px — overridden to 0 for last-of-type */
+  margin-bottom: var(--moss-space-xs); /* 8px — zeroed by the card-foot reset above */
 }
 
 /* LINK-card inner text — cards are navigational, not inline text links, so
@@ -8515,6 +8645,93 @@ body > footer.container:has(> .moss-hero-closing) {
 a.moss-grid-card:hover {
   color: var(--moss-color-accent);
   text-decoration: underline;
+}
+
+/* Registered so the card gap resolves where the grid sets it, at the grid's
+   line height, and not again on a card with its own type size. */
+@property --_card-top-up {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+/* Equal rows (`:::grid {rows=equal}`): the parts of the cards in a row line up
+   across it, as in a listing's grid (see `.moss-cards[data-layout="grid"]`).
+   Each card spans one track per part (`--moss-grid-parts`, the most children any
+   card has once rendered) and adopts them, so the row's first part is as tall as the tallest
+   first part, and so on. A card with fewer parts leaves its last tracks empty;
+   an empty track has no height.
+   A subgrid's tracks are the grid's, gutter included, so the grid's row gap is
+   the gap between parts (`--moss-grid-part-gap`), and it still falls between
+   one card's last track and the next card's first. The space between rows of
+   cards is that gap plus the first-row-excluded cards' `margin-block-start`,
+   which tops it up to `--moss-grid-card-gap`. The row gap is `!important`: in
+   an earlier layer it still beats a theme's `gap`, which would otherwise set
+   the parts apart. */
+@supports (grid-template-rows: subgrid) {
+  .moss-grid[data-rows="equal"] {
+    align-items: stretch;
+    --_part-gap: var(--moss-grid-part-gap, 10px);
+    --_card-top-up: max(0px, calc(var(--moss-grid-card-gap, var(--_grid-row-gap)) - var(--_part-gap)));
+    row-gap: var(--_part-gap) !important;
+  }
+  .moss-grid[data-rows="equal"] > :is(.moss-grid-card, .moss-card) {
+    display: grid;
+    /* An implicit column is `auto`, which a word with no break point would widen. */
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: subgrid;
+    grid-row: span var(--moss-grid-parts, 1);
+  }
+  /* A hidden card takes no place in the grid and is not counted. */
+  .moss-grid[data-rows="equal"] > [hidden] { display: none; }
+  /* Every card below the first row, by the column count in force: one column
+     on a phone, `data-columns` from 48rem, `data-columns-mid` from 48rem to
+     64rem when the grid has one. The count is the one the build wrote, so a
+     card that spans columns or a theme that changes the columns is not
+     followed. */
+  @media (width < 48rem) {
+    .moss-grid[data-rows="equal"][data-columns] > :is(.moss-grid-card, .moss-card):nth-child(n + 2 of :not([hidden])) {
+      margin-block-start: var(--_card-top-up);
+    }
+  }
+  @media (width >= 48rem) {
+    .moss-grid[data-rows="equal"][data-columns="1"] > :is(.moss-grid-card, .moss-card):nth-child(n + 2 of :not([hidden])),
+    .moss-grid[data-rows="equal"][data-columns="2"] > :is(.moss-grid-card, .moss-card):nth-child(n + 3 of :not([hidden])),
+    .moss-grid[data-rows="equal"][data-columns="3"] > :is(.moss-grid-card, .moss-card):nth-child(n + 4 of :not([hidden])),
+    .moss-grid[data-rows="equal"][data-columns="4"] > :is(.moss-grid-card, .moss-card):nth-child(n + 5 of :not([hidden])),
+    .moss-grid[data-rows="equal"][data-columns="5"] > :is(.moss-grid-card, .moss-card):nth-child(n + 6 of :not([hidden])),
+    .moss-grid[data-rows="equal"][data-columns="6"] > :is(.moss-grid-card, .moss-card):nth-child(n + 7 of :not([hidden])) {
+      margin-block-start: var(--_card-top-up);
+    }
+  }
+  @media (48rem <= width < 64rem) {
+    .moss-grid[data-rows="equal"][data-columns-mid] > :is(.moss-grid-card, .moss-card):nth-child(n) {
+      margin-block-start: 0;
+    }
+    .moss-grid[data-rows="equal"][data-columns-mid="1"] > :is(.moss-grid-card, .moss-card):nth-child(n + 2 of :not([hidden])),
+    .moss-grid[data-rows="equal"][data-columns-mid="2"] > :is(.moss-grid-card, .moss-card):nth-child(n + 3 of :not([hidden])),
+    .moss-grid[data-rows="equal"][data-columns-mid="3"] > :is(.moss-grid-card, .moss-card):nth-child(n + 4 of :not([hidden])),
+    .moss-grid[data-rows="equal"][data-columns-mid="4"] > :is(.moss-grid-card, .moss-card):nth-child(n + 5 of :not([hidden])),
+    .moss-grid[data-rows="equal"][data-columns-mid="5"] > :is(.moss-grid-card, .moss-card):nth-child(n + 6 of :not([hidden])),
+    .moss-grid[data-rows="equal"][data-columns-mid="6"] > :is(.moss-grid-card, .moss-card):nth-child(n + 7 of :not([hidden])) {
+      margin-block-start: var(--_card-top-up);
+    }
+  }
+  /* A part's own block margins (a paragraph after a paragraph, the last
+     paragraph, a list) would sit on top of the part gap and differ from one
+     card to the next, so the same part would sit at different offsets in
+     different rows. The part gap does the spacing. */
+  .moss-grid[data-rows="equal"] > .moss-grid-card > * {
+    margin-block: 0;
+  }
+  /* A part that is a fenced div holds its paragraph, so the reset reaches the
+     part's first and last child too. */
+  .moss-grid[data-rows="equal"] > .moss-grid-card > * > :first-child { margin-block-start: 0; }
+  .moss-grid[data-rows="equal"] > .moss-grid-card > * > :last-child { margin-block-end: 0; }
+  /* A collection card has two parts, its cover and its content, as in a
+     listing's grid. */
+  .moss-grid[data-rows="equal"] > .moss-card .moss-card-cover { grid-row: 1; }
+  .moss-grid[data-rows="equal"] > .moss-card .moss-card-content { grid-row: 2; }
+  .moss-grid[data-rows="equal"] > .moss-card .moss-card-no-cover { display: none; }
 }
 
 /* Collage (`:::grid {collage}`, 3 to 9 cells). The first cell is the lead: one
@@ -8559,10 +8776,15 @@ a.moss-grid-card:hover {
   grid-column: 1;
   grid-row: 1 / -1;
 }
-/* Keyboard focus rings the tile, inside its edge, so the clip does not cut it. */
-.moss-grid[data-collage] > :has(:focus-visible) {
+/* Keyboard focus rings the tile, inside its edge so the clip does not cut it. The ring is
+   drawn by an overlay above the tile's positioned picture, which would hide the tile's own outline. */
+.moss-grid[data-collage] > :has(:focus-visible)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
   outline: 2px solid var(--moss-color-accent);
   outline-offset: -3px;
+  pointer-events: none;
 }
 
 /* A tile is a picture, or any other cell. */
@@ -8571,7 +8793,7 @@ a.moss-grid-card:hover {
   block-size: 100%;
   max-inline-size: none;
 }
-/* The article figure spacing rule skips collage tiles (`:where(:not(.moss-grid[data-collage] *))`, at no added specificity),
+/* The article figure spacing rule skips every grid card (`:where(:not(.moss-grid-card *))`, at no added specificity),
    so this margin reset needs no more specificity than the tile selector. */
 .moss-grid[data-collage] [data-tile="picture"] .moss-image {
   position: absolute;
@@ -8676,7 +8898,7 @@ a.moss-grid-card:hover {
    fit it, so its words are never cut off. */
 .moss-grid[data-collage] .moss-grid-card:not([data-tile="picture"]) {
   box-sizing: border-box;
-  padding: var(--moss-space-sm);
+  padding: var(--_tile-pad, var(--moss-space-sm));
   font-size: 0.875rem;
   line-height: 1.4;
   background: var(--moss-color-bg);
@@ -8684,14 +8906,16 @@ a.moss-grid-card:hover {
 .moss-grid[data-collage] .moss-grid-card:not([data-tile="picture"]) > :first-child { margin-block-start: 0; }
 /* A quote is set at the tile's top and its source is pinned to the foot, so
    quotes of different lengths share a baseline for their sources. The size is
-   a step down for a long quote and follows the tile's width (`cqi`) where the
-   tile is narrow, so every word fits whole; no hyphenation. The row grows to
-   fit the words, so nothing is cut off. The source's link covers the tile. */
+   a step down for a long quote and never below that floor, however narrow the
+   tile. A long word is hyphenated by the page's language (one of seven letters or
+   more); only a word with no break point, an address, breaks anywhere. The row
+   grows to fit the words, so nothing is cut off. The source's link covers the tile.
+   The padding goes through `--_tile-pad`, which the rule above reads, so it
+   holds whichever of the two rules comes later. */
 .moss-grid[data-collage] [data-tile="quote"] {
   display: flex;
-  padding: 1.375rem 1.25rem 1.125rem;
+  --_tile-pad: 1.375rem 1.25rem 1.125rem;
   border: 1px solid var(--moss-border-light);
-  container-type: inline-size;
 }
 .moss-grid[data-collage] [data-tile="quote"]:hover { border-color: var(--moss-color-text-secondary); }
 .moss-grid[data-collage] [data-tile="quote"] .moss-quote {
@@ -8701,14 +8925,15 @@ a.moss-grid-card:hover {
   gap: 0.75rem;
 }
 .moss-grid[data-collage] [data-tile="quote"] blockquote {
-  font-size: max(0.75rem, min(clamp(0.9375rem, 1.25vw, 1.09375rem), 13cqi));
+  font-size: clamp(0.9375rem, 1.25vw, 1.09375rem);
   line-height: 1.45;
   overflow-wrap: break-word;
-  hyphens: manual;
+  hyphens: auto;
+  hyphenate-limit-chars: 7 3 3;
   text-wrap: pretty;
 }
 .moss-grid[data-collage] [data-tile="quote"] .moss-quote[data-length="long"] blockquote {
-  font-size: max(0.75rem, min(clamp(0.84375rem, 1.08vw, 0.9375rem), 11cqi));
+  font-size: clamp(0.84375rem, 1.08vw, 0.9375rem);
   line-height: 1.4;
 }
 .moss-grid[data-collage] [data-tile="quote"] .moss-quote figcaption {
@@ -8752,7 +8977,8 @@ a.moss-grid-card:hover {
   text-wrap: pretty;
 }
 .moss-quote[data-length="long"] blockquote { font-size: 1rem; line-height: 1.45; }
-.moss-quote blockquote p { margin: 0 0 0.5em; }
+.moss-quote blockquote p { margin: 0; }
+.moss-quote blockquote p + p { margin-block-start: 0.5em; }
 .moss-quote figcaption {
   margin-block-start: var(--moss-space-sm);
   color: var(--moss-color-text-secondary);
@@ -8764,6 +8990,30 @@ a.moss-grid-card:hover {
   inline-size: 2rem;
   margin-block-end: var(--moss-space-xs);
   border-block-start: 1px solid var(--moss-border-medium);
+}
+
+/* A collage quote the build marked `data-script="cjk"` (its letters are mostly
+   Han or kana) is set in the CJK face, a step larger and tracked out, as such
+   text is. The heading stack leads with Han faces and switches to Traditional
+   ones on a Traditional page. A long quote keeps its smaller size and scales
+   with its tile like any other; a short one has no word to fit whole, so it
+   takes the design's size without the tile cap. `--moss-font-quote` still wins when set. */
+.moss-grid[data-collage] [data-tile="quote"] .moss-quote[data-script="cjk"] blockquote {
+  font-family: var(--moss-font-quote, var(--moss-font-cjk, var(--moss-font-heading)));
+  line-height: 1.6;
+  letter-spacing: 0.08em;
+}
+.moss-grid[data-collage] [data-tile="quote"] .moss-quote[data-script="cjk"]:not([data-length="long"]) blockquote {
+  font-size: clamp(17px, 1.5vw, 21px);
+}
+@media (width < 48rem) {
+  .moss-grid[data-collage] [data-tile="quote"] .moss-quote[data-script="cjk"]:not([data-length="long"]) blockquote {
+    font-size: 16px;
+  }
+}
+/* Japanese goes in Mincho faces first, so its kanji do not fall back to the Chinese forms. */
+.moss-grid[data-collage] [data-tile="quote"] .moss-quote[data-script="cjk"] blockquote:lang(ja) {
+  font-family: var(--moss-font-quote, var(--moss-font-cjk, 'Hiragino Mincho ProN', 'Yu Mincho', 'Source Han Serif JP', 'Noto Serif JP', var(--moss-font-heading)));
 }
 
 /* Horizontal inline space narrows on phones. Vertical typesetting keeps
@@ -8810,9 +9060,10 @@ a.moss-grid-card:hover {
     white-space: nowrap;
   }
   .moss-grid[data-collage] .moss-grid-card .moss-image figcaption:focus-within { opacity: 1; transform: none; }
-  .moss-grid[data-collage] [data-tile="quote"] { padding: 1rem 1rem 0.875rem; }
+  .moss-grid[data-collage] [data-tile="quote"] { --_tile-pad: 1rem 1rem 0.875rem; }
   .moss-grid[data-collage] [data-tile="quote"] .moss-quote { gap: 0.625rem; }
-  .moss-grid[data-collage] [data-tile="quote"] .moss-quote:not([data-length="long"]) blockquote { font-size: max(0.75rem, min(1rem, 13cqi)); }
+  .moss-grid[data-collage] [data-tile="quote"] .moss-quote figcaption { font-size: 0.625rem; }
+  .moss-grid[data-collage] [data-tile="quote"] .moss-quote:not([data-length="long"]) blockquote { font-size: 1rem; }
 }
 
 /* Scrolling row (`:::grid N {scroll}`): the row stays on ONE line and the
@@ -9683,7 +9934,7 @@ img[data-viewer]:focus-visible {
    top AND bottom regardless — inside a locator that meant the actual
    `<figure>` sat 1.25L below the float's own (correctly aligned) top
    edge, no matter what margin the locator itself carried. */
-article figure:not(.video-figure):not(.moss-align-left):not(.moss-align-right):not(.moss-place-map):not(:has(.moss-align-left, .moss-align-right)):where(:not(.moss-grid[data-collage] *)) {
+article figure:not(.video-figure):not(.moss-align-left):not(.moss-align-right):not(.moss-place-map):not(:has(.moss-align-left, .moss-align-right)):where(:not(.moss-grid-card *)) {
   /* Figures are full-bandwidth objects and get the largest gap in the reading
      rhythm — 1.25 lines of body text (--moss-read-line) vs the paragraph
      break's 0.75 — so an image reads as a deliberate pause, not another line
@@ -10596,19 +10847,12 @@ body[data-moss-preview] .moss-service-inactive {
 /* `![[file.ext#fragment]]` stands for text a plugin reads out of the file.
    When the text is ready it sits inside a bare `.moss-derived` wrapper
    (`data-fragment` names the fragment) that a theme may style; only the
-   block margin below applies to it. Until then a pending block holds the place with a faint grid; a skipped
-   block says, in a plain note, why no text will appear. */
+   block margin below applies to it. A skipped block says, in a plain note, why no text will appear.
+   A pending block (text still being read) only exists in the local preview,
+   which styles it; a publish is refused while any text is unread. */
 .moss-derived {
   margin-block: 1.5em;
   border-radius: 4px;
-}
-.moss-derived--pending {
-  min-block-size: 12rem;
-  background-color: var(--moss-color-surface);
-  background-image:
-    linear-gradient(var(--moss-border-light) 1px, transparent 1px),
-    linear-gradient(90deg, var(--moss-border-light) 1px, transparent 1px);
-  background-size: 10px 10px;
 }
 .moss-derived--skipped {
   padding: 0.75em 1em;

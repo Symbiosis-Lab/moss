@@ -101,11 +101,13 @@ GATES_BUILD=(
   places-explorer-vertical
   places-explorer-single
   footer-end-space
+  colophon-credit
   facts-margin
   closing-picture
   content-grid
   wcag-output
   archival-footer
+  type-defaults
 )
 
 # The rest: no config, spec, or harness in this gate's chain ever reads

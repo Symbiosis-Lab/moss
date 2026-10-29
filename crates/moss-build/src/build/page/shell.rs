@@ -149,6 +149,9 @@ pub struct ShellVars {
     pub has_header: bool,
     /// Whether moss's colophon is emitted (`[site].colophon`, default true).
     pub colophon: bool,
+    /// The site's own line before the mark (`[site].credit`); `None` leaves
+    /// the colophon as moss writes it.
+    pub colophon_credit: Option<crate::build::render::credits::ColophonCredit>,
     /// Floating nav island markup, or empty when the page has no
     /// breadcrumb trail to continue. Emitted as a sibling *before* `<header>`
     /// so it is `position: fixed` against the viewport rather than against any
@@ -393,6 +396,9 @@ impl ShellProcessor {
                     ("colophon_text", crate::i18n::t(vars.ui_lang, "published_with_moss").to_string()),
                     ("colophon_name", crate::i18n::t(vars.ui_lang, "colophon_name").to_string()),
                     ("colophon_lang", vars.ui_lang.as_bcp47_attr().to_string()),
+                    // Right after the opening tag, so no credit leaves the bytes as they were.
+                    ("colophon_credit", vars.colophon_credit.as_ref().map(credit_markup).unwrap_or_default()),
+                    ("colophon_dot", vars.colophon_credit.as_ref().map(|_| CREDIT_DOT.to_string()).unwrap_or_default()),
                     ("moss_mark", MOSS_MARK_SVG.to_string()),
                 ]),
             )
@@ -572,7 +578,7 @@ impl Default for ShellProcessor {
 ///
 /// Typography-first design system with:
 /// - 18px base font size for comfortable long-form reading
-/// - 67ch optimal line length for sustained reading
+/// - a 42-reading-size column (about 67 characters) for sustained reading
 /// - 1.7 line-height for enhanced readability
 /// - Warm, paper-inspired color palette reducing eye strain
 /// - CSS custom properties for maintainability
@@ -692,6 +698,15 @@ pub const SHELL_TEMPLATE: &str = include_str!("../../assets/templates/shell.html
 /// moss's colophon, substituted for the shell's `{colophon}` (empty under
 /// `[site].colophon = false`). Its bounds comment lets the footer take it in.
 pub const COLOPHON_TEMPLATE: &str = include_str!("../../assets/templates/colophon.html");
+
+/// The credit, inside the colophon's `<div>` before the mark's link.
+fn credit_markup(credit: &crate::build::render::credits::ColophonCredit) -> String {
+    format!("<span class=\"moss-colophon-credit\">{}</span>", credit.html)
+}
+
+/// The dot that joins the credit to the mark. It sits at the start of the mark's
+/// link, so when the line wraps the dot travels with the mark.
+const CREDIT_DOT: &str = "<span class=\"moss-colophon-dot\" aria-hidden=\"true\">\u{b7}</span>";
 
 /// The small moss mark, for `shell.html`'s `{moss_mark}`.
 ///

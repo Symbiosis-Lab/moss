@@ -550,6 +550,7 @@ async fn a_panicking_build_leaves_the_worker_alive_and_retrying() {
 /// be poke-driven.
 #[tokio::test(start_paused = true)]
 async fn a_lock_busy_deferral_retries_on_the_tick_without_a_poke() {
+    crate::build::cache::tests::logged_count(log::Level::Info, "");
     let handle = std::sync::Arc::new(WorkerHandle::new());
     let times = std::sync::Arc::new(Mutex::new(Vec::new()));
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
@@ -564,9 +565,29 @@ async fn a_lock_busy_deferral_retries_on_the_tick_without_a_poke() {
     assert_eq!(t.len(), 3);
     assert_eq!(t[1] - t[0], LOCK_RETRY_TICK, "retry after one tick, unpoked");
     assert_eq!(t[2] - t[1], LOCK_RETRY_TICK, "lock-busy retries do not back off");
+    assert!(
+        crate::build::cache::tests::logged_count(log::Level::Info, "Stage-write lock wait ended after") >= 1,
+        "the loop logs the end of the wait"
+    );
 
     handle.request_shutdown();
     worker.await.unwrap();
+}
+
+/// A wait on the stage lock logs where it starts and where it ends, not on
+/// every retry tick.
+#[test]
+fn a_lock_wait_logs_its_start_and_its_length_once() {
+    use AttemptOutcome::*;
+    let t0 = std::time::Instant::now();
+    let mut wait = LockWait::default();
+    let lines: Vec<String> = [LockBusy, LockBusy, LockBusy, Completed, Completed, LockBusy]
+        .iter()
+        .enumerate()
+        .filter_map(|(i, o)| wait.note(*o, t0 + LOCK_RETRY_TICK * i as u32))
+        .collect();
+    assert_eq!(lines.len(), 3, "start, end, and the next wait's start: {lines:?}");
+    assert!(lines[1].contains("1.5s"), "the end names the wait's length: {}", lines[1]);
 }
 
 // ── Overdue watchdog: diagnostics only (phase 1b) ───────────────────────────

@@ -543,6 +543,12 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub body_cover_path: Option<String>,
+    /// Every markdown-origin body image that is a raster, in document order
+    /// (same source and filters as `body_cover_path`). The share image takes
+    /// the first of these a platform can use as-is.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub body_cover_candidates: Vec<String>,
     /// Hero overlay text — the opening prose of `HeroShortcode.overlay_markdown`
     /// after running through `meta::extract_description`: its first paragraph,
     /// or that paragraph plus the next where the first is only a fragment (an
@@ -983,6 +989,9 @@ pub struct SiteAssets {
     pub places_explorer: bool,
     /// The site declares `[map.layers]`, so its map figures carry a credit line.
     pub map_layers: bool,
+    /// The site shows its own credit before moss's mark in the colophon
+    /// (`[site].credit`). Gates the `colophon-credit` stylesheet partial.
+    pub colophon_credit: bool,
 }
 
 impl SiteAssets {

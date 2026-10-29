@@ -26,6 +26,12 @@ export const LENS_WITH_IMAGE = [true, true, true, true, true, true, false];
 export const FOCAL_ROW = 2;
 export const FOCUS_POINT = "20% 70%";
 export const MANY = 40;
+/** A band under the open list, light in the light theme and dark in the dark one. */
+export const BAND_LIGHT = "rgb(214, 226, 240)";
+export const BAND_DARK = "rgb(30, 50, 80)";
+/** The same bands in a colour syntax a pattern match would miss. */
+export const BAND_OKLCH_LIGHT = "oklch(0.9 0.04 250)";
+export const BAND_OKLCH_DARK = "oklch(0.3 0.05 250)";
 /** A page that fills the window (`content_width: full`), so its left margin is
  *  as narrow as a page's gets, with titles that do not fit it on one line. */
 export const FULL_SECTIONS = [
@@ -61,6 +67,8 @@ const many = Array.from({ length: MANY }, (_, i) => {
 const full = FULL_SECTIONS.map(
   (title, i) => `## ${title}\n\n${i < 5 ? `![${title}](${images[i % 3]})\n\n` : ""}${paragraphs(5)}`,
 ).join("\n\n");
+
+const TINTED_CSS = `.tinted { background: ${BAND_LIGHT}; padding-block: 60vh; }\n:root[data-theme="dark"] .tinted { background: ${BAND_DARK}; }\n.tinted-oklch { background: ${BAND_OKLCH_LIGHT}; padding-block: 60vh; }\n:root[data-theme="dark"] .tinted-oklch { background: ${BAND_OKLCH_DARK}; }\n`;
 
 export const CONTENTS_LENS_GATE: ScratchSiteSpec = {
   name: "contents-lens-gate",
@@ -99,6 +107,29 @@ uid: "ctl00104"
 
 ${body(false)}
 `,
+    "Essays/Band.md": `---
+title: Band
+uid: "ctl00108"
+contents: pictures
+---
+
+${LENS_SECTIONS.map(
+  (title, i) =>
+    `## ${title}\n\n${paragraphs(4)}${i === 1 ? "\n\n::: {.tinted screen}\nA band as wide as the window, its words on the text column.\n:::" : ""}`,
+).join("\n\n")}
+`,
+    "Essays/BandOklch.md": `---
+title: Band in oklch
+uid: "ctl00109"
+contents: pictures
+---
+
+${LENS_SECTIONS.map(
+  (title, i) =>
+    `## ${title}\n\n${paragraphs(4)}${i === 1 ? "\n\n::: {.tinted-oklch screen}\nA band as wide as the window, its words on the text column.\n:::" : ""}`,
+).join("\n\n")}
+`,
+    ".moss/theme/style.css": TINTED_CSS,
     "Essays/Many.md": `---
 title: Many
 uid: "ctl00105"
@@ -144,5 +175,16 @@ ${paragraphs(4)}
 lang = "en"
 floating_nav = true
 `,
+  },
+};
+
+/** The same site under a theme whose dark text colour is too faint on the dark
+ *  page to hold 4.6:1, so the dark theme's names keep the secondary text colour
+ *  while the light theme gets a floor of its own. */
+export const CONTENTS_LENS_FALLBACK_GATE: ScratchSiteSpec = {
+  name: "contents-lens-fallback-gate",
+  files: {
+    ...CONTENTS_LENS_GATE.files,
+    ".moss/theme/style.css": `:root[data-theme="dark"] { --moss-color-text: #5a5650; }\n${TINTED_CSS}`,
   },
 };

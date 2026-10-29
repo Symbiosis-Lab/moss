@@ -429,7 +429,7 @@ fn zh_hant_vertical_listing_shows_card_meta_in_chinese_numerals() {
         true,
     );
     assert!(
-        out.contains(r#"<div class="moss-card-meta">一六九七年·九月</div>"#),
+        out.contains(r#"<div class="moss-card-meta"><time datetime="1697-09">一六九七年·九月</time></div>"#),
         "zh-hant vertical folder card meta should use Chinese numerals: {}",
         out
     );
@@ -2226,7 +2226,7 @@ fn a_dated_subfolder_sorts_by_its_own_date_and_shows_it_in_its_meta() {
     );
 
     assert!(
-        out.contains(r#"<span class="moss-prefix-link-prefix">1928 · 10 · Cambridge · 2 articles</span>"#),
+        out.contains(r#"<span class="moss-prefix-link-prefix"><time datetime="1928-10-20">October 1928</time> · Cambridge · 2 articles</span>"#),
         "the subfolder's meta must read date · place · count, the same form \
          a page's date and place take; got: {out}"
     );
@@ -2333,18 +2333,18 @@ fn no_group_skip_resort_stays_flat() {
     // date — never a bare month that leaves the year unstated anywhere on
     // the page.
     assert!(
-        out.contains(r#"<span class="moss-prefix-link-prefix date">2024 · 05</span>"#),
+        out.contains(r#"<span class="moss-prefix-link-prefix date"><time datetime="2024-05-01">May 2024</time></span>"#),
         "flat row must show year and month, not month alone; got: {}",
         out
     );
     assert!(
-        out.contains(r#"<span class="moss-prefix-link-prefix date">2025 · 03</span>"#),
+        out.contains(r#"<span class="moss-prefix-link-prefix date"><time datetime="2025-03-01">March 2025</time></span>"#),
         "flat row must show year and month, not month alone; got: {}",
         out
     );
     // Year-only date: no month to omit, renders the bare year.
     assert!(
-        out.contains(r#"<span class="moss-prefix-link-prefix date">1793</span>"#),
+        out.contains(r#"<span class="moss-prefix-link-prefix date"><time datetime="1793">1793</time></span>"#),
         "year-only date must render as the bare year in a flat listing; got: {}",
         out
     );
@@ -2806,7 +2806,7 @@ fn pseudo_folder_place_embed_lists_its_derived_members() {
         fields: vec!["location".to_string()],
         title: "Places".to_string(),
         titles: Vec::new(), counts: Vec::new(), is_place: true,
-        parents: Default::default(), explorer: None, line: None,
+        parents: Default::default(), explorer: None, line: None, slugs: Default::default(),
     };
     let mut docs = vec![
         make_doc("travel/kyoto-temple.html", "Kyoto Temple", Some("2025-01-01")),
@@ -2837,7 +2837,7 @@ fn place_map_embed_emits_svg_with_placement_and_caption() {
         fields: vec!["location".to_string()],
         title: "Places".to_string(),
         titles: Vec::new(), counts: Vec::new(), is_place: true,
-        parents: Default::default(), explorer: None, line: None,
+        parents: Default::default(), explorer: None, line: None, slugs: Default::default(),
     };
     let mut docs = vec![make_doc("travel/kyoto.html", "Kyoto", Some("2025-01-01"))];
     docs[0].location = vec!["Kyoto".to_string()];
@@ -2877,7 +2877,7 @@ fn pseudo_folder_rollup_ancestor_embed_lists_its_descendants() {
         title: "Places".to_string(),
         titles: Vec::new(), counts: Vec::new(), is_place: true,
         parents: [("places/kyoto".to_string(), "Japan".to_string())].into_iter().collect(),
-        explorer: None, line: None,
+        explorer: None, line: None, slugs: Default::default(),
     };
     let mut docs = vec![make_doc("travel/kyoto-temple.html", "Kyoto Temple", Some("2025-01-01"))];
     docs[0].location = vec!["Kyoto".to_string()];

@@ -177,14 +177,17 @@ export const CLOSING_PICTURE_FADE_GATE: ScratchSiteSpec = {
   },
 };
 
-/** The busy pair with `fade=top`: hatched under the words too, so the words keep their panel and the credit its own at the foot. */
+/**
+ * The busy pair with `fade=top`: hatched under the words too, so the words keep their panel and the credit its own
+ * at the foot. The words run down below the fade with a few lines of text, which has no ground of its own (the link does).
+ */
 export const CLOSING_PICTURE_BUSY_FADE_GATE: ScratchSiteSpec = {
   name: "closing-picture-busy-fade-gate",
   files: {
     ...CLOSING_PICTURE_BUSY_GATE.files,
     "closing.png": landscapePng(1600, 700, SKY, FOOT_LIGHT, 0.7, { hatch: [10, 14, 24], foot: [10, 14, 24] }),
     "closing-dark.png": landscapePng(1600, 700, SKY_NIGHT, FOOT_NIGHT, 0.7, { hatch: [230, 235, 240], foot: [230, 235, 240] }),
-    "footer.md": `:::hero {image=closing.png dark=closing-dark.png align=top fade=top caption="${CREDIT}"}\n## ${HEADING}\n\n[${LINK_TEXT}](https://example.org/new)\n:::\n`,
+    "footer.md": `:::hero {image=closing.png dark=closing-dark.png align=top fade=top caption="${CREDIT}"}\n## ${HEADING}\n\nA few lines of running text that carry on down the picture, past where its top has faded into the page, over the hatching.\n\n[${LINK_TEXT}](https://example.org/new)\n:::\n`,
   },
 };
 

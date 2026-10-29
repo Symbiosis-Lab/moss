@@ -76,7 +76,8 @@ pub fn verify_schnorr(pubkey_hex: &str, message: &[u8], sig_hex: &str) -> bool {
     use k256::schnorr::{signature::Verifier, Signature, VerifyingKey};
 
     let Ok(pk_bytes) = hex::decode(pubkey_hex) else { return false };
-    let Ok(vk) = VerifyingKey::from_bytes(&pk_bytes) else { return false };
+    let Ok(pk_arr) = <[u8; 32]>::try_from(pk_bytes) else { return false };
+    let Ok(vk) = VerifyingKey::from_bytes(&pk_arr.into()) else { return false };
     let Ok(sig_bytes) = hex::decode(sig_hex) else { return false };
     let Ok(sig) = Signature::try_from(sig_bytes.as_slice()) else { return false };
     vk.verify(message, &sig).is_ok()
@@ -246,12 +247,13 @@ fn next_seq(project_path: &str) -> std::io::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use k256::elliptic_curve::Generate;
     use k256::schnorr::SigningKey;
 
     /// A throwaway owner key from k256's own generator, for the tests that
     /// only exercise signing and verification and need no key file on disk.
     fn owner_key() -> (SigningKey, String) {
-        let sk = SigningKey::random(&mut rand::rngs::OsRng);
+        let sk = SigningKey::generate();
         let pubkey = hex::encode(sk.verifying_key().to_bytes());
         (sk, pubkey)
     }

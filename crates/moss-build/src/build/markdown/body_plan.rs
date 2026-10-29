@@ -111,6 +111,8 @@ pub enum BodySegment {
 pub struct SubscribeEmission {
     pub args: SubscribeShortcode,
     pub html: String,
+    /// The id of the text that names the form's email input, when there is one.
+    pub labelled_by: Option<String>,
 }
 
 /// A `:::grid` block as both the HTML that was emitted and the typed cells it
@@ -127,6 +129,8 @@ pub struct GridEmission {
     pub classes: String,
     /// `:::grid {collage}` with a count the collage takes.
     pub collage: bool,
+    /// `{rows=equal}`, which [`GridParts::assemble`] counts the cards' parts for.
+    pub equal_rows: bool,
     pub cells: Vec<GridCellEmission>,
 }
 
@@ -172,7 +176,7 @@ impl GridEmission {
     /// newline `render_block`'s `Shortcode` arm appends.
     pub fn to_html(&self) -> String {
         let cells: Vec<String> = self.cells.iter().map(|c| c.parts.to_html()).collect();
-        format!("{}\n", GridParts::assemble(&self.open_tag, &cells))
+        format!("{}\n", GridParts::assemble(&self.open_tag, &cells, self.equal_rows))
     }
 
     /// True when the author opted this grid out of collection-card conversion
@@ -565,6 +569,7 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
     let mut first_text_segments: Option<usize> = None;
     let mut after_first_text_segments: Option<usize> = None;
     let mut fnotes = moss_core::ast::footnotes::FootnoteCtx::for_document(&doc.blocks);
+    let mut tagged_prompt = false;
 
     for (i, block) in doc.blocks.iter().enumerate() {
         if i == lede_end_block {
@@ -587,11 +592,27 @@ pub fn render_segmented<H: RenderHooks + ?Sized>(doc: &Document, hooks: &H) -> B
                     grid_parts_with_heading_fallback(hooks, args, meta.source_line, &doc.blocks[..i]);
                 segments.push(BodySegment::Grid(emission(args, parts)));
             }
+            Block::Paragraph(_) if doc.subscribe_labels.contains_key(&(i + 1)) => {
+                let mut html = String::new();
+                moss_core::ast::render_block_with_meta(hooks, &mut html, block, &meta, &mut fnotes);
+                match html.strip_prefix("<p").filter(|rest| rest.starts_with(['>', ' '])) {
+                    Some(rest) => {
+                        buf.push_str(&format!("<p id=\"{}\"{rest}", doc.subscribe_labels[&(i + 1)]));
+                        tagged_prompt = true;
+                    }
+                    None => buf.push_str(&html),
+                }
+            }
             Block::Shortcode(Shortcode::Subscribe(args)) => {
                 flush(&mut buf, &mut segments);
                 let mut html = String::new();
                 moss_core::ast::render_block_with_meta(hooks, &mut html, block, &meta, &mut fnotes);
-                segments.push(BodySegment::Subscribe(SubscribeEmission { args: args.clone(), html }));
+                let above_is_paragraph = matches!(i.checked_sub(1).and_then(|p| doc.blocks.get(p)), Some(Block::Paragraph(_)));
+                let labelled_by = doc.subscribe_labels.get(&i).filter(|_| !above_is_paragraph || std::mem::take(&mut tagged_prompt)).cloned();
+                if let Some(id) = &labelled_by {
+                    html = crate::build::features::email::label_subscribe_input(&html, id);
+                }
+                segments.push(BodySegment::Subscribe(SubscribeEmission { args: args.clone(), html, labelled_by }));
             }
             _ => moss_core::ast::render_block_with_meta(hooks, &mut buf, block, &meta, &mut fnotes),
         }
@@ -653,6 +674,7 @@ fn emission(args: &GridShortcode, parts: GridParts) -> GridEmission {
         open_tag: parts.open_tag,
         classes: args.classes.clone(),
         collage: args.is_collage(),
+        equal_rows: parts.equal_rows,
         cells: args
             .cells
             .iter()
@@ -668,3 +690,18 @@ fn emission(args: &GridShortcode, parts: GridParts) -> GridEmission {
 #[cfg(test)]
 #[path = "body_plan_tests.rs"]
 mod tests;
+
+/// Report a `{rows=equal}` grid with a card whose parts moss cannot count: raw
+/// HTML with an unclosed or stray tag. Once per grid, read off the typed cells
+/// (the raw blocks of a card must close their own tags), with the page's path.
+pub(crate) fn warn_uncountable_cards(doc: &Document, file_path: &str) {
+    for block in &doc.blocks {
+        let Block::Shortcode(Shortcode::Grid(args)) = block else { continue };
+        let raw = |cell: &Vec<Block>| -> String { cell.iter().filter_map(|b| if let Block::Other(html) = b { Some(html.as_str()) } else { None }).collect() };
+        if args.has_equal_rows() && args.cells.iter().any(|c| moss_core::ast::card_parts(&format!("<div>{}</div>", raw(c))).is_none()) {
+            crate::build::cli_output::log_warn_problem!(
+                "[{file_path}] a `{{rows=equal}}` grid has a card with raw HTML moss cannot count (an unclosed or stray tag), so its rows may not line up; close every tag inside the card."
+            );
+        }
+    }
+}

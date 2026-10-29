@@ -429,7 +429,7 @@ pub struct SlotInjectionReceipt {
 /// in the build graph enables it), and every nested map goes through the same
 /// conversion. If a dependency ever turns that feature on,
 /// `slots_hash_does_not_depend_on_map_iteration_order` fails.
-fn resolved_slots_hash(slots: &ResolvedSlots) -> String {
+pub(crate) fn resolved_slots_hash(slots: &ResolvedSlots) -> String {
     let bytes = serde_json::to_value(slots)
         .and_then(|canonical| serde_json::to_vec(&canonical))
         .unwrap_or_default();
@@ -561,14 +561,18 @@ pub(crate) fn inject_slots_into_directory_cached(
     root: &std::path::Path,
     dir: &std::path::Path,
     slots: &ResolvedSlots,
+    // [`resolved_slots_hash`] of `slots`, which the caller needs first.
+    slots_hash: &str,
     object_store: &crate::build::cache::ObjectStore,
     transform_cache: &crate::build::cache::TransformCache,
     rendered: std::collections::BTreeMap<String, String>,
+    // Stage pages proved unchanged since the pass that last filled them, by path,
+    // with their manifest entry. Each is reported from its staged link, unread.
+    carried: &std::collections::BTreeMap<String, String>,
     staged: &mut StagedLinks,
     // `BuildStopped`: this reads the stage back, so a cloud eviction here must
     // stay distinguishable from a plugin returning garbage. See `build::outcome`.
-) -> Result<Vec<SlotInjectionReceipt>, BuildStopped> {
-    let slots_hash = resolved_slots_hash(slots);
+) -> Result<SlotPass, BuildStopped> {
     let mut receipts = Vec::new();
     let mut scanned = 0usize;
     let mut rewritten = 0usize;
@@ -584,6 +588,12 @@ pub(crate) fn inject_slots_into_directory_cached(
     let staged_only: Vec<String> = walk_html_files(dir)
         .map(|entry| page_path_for(dir, entry.path()))
         .filter(|page_path| !rendered.contains_key(page_path))
+        .filter(|page_path| {
+            let proven = carried.get(page_path).zip(staged.vouched_oid(page_path).filter(|oid| object_store.holds(oid)));
+            let Some((manifest_hash, oid)) = proven else { return true };
+            receipts.push(SlotInjectionReceipt { page_path: page_path.clone(), manifest_hash: manifest_hash.clone(), content_oid: Some(oid) });
+            false
+        })
         .collect();
     walk_ms += t_walk.elapsed();
     let pages = rendered.into_iter().map(|(page_path, html)| (page_path, Some(html)));
@@ -676,8 +686,9 @@ pub(crate) fn inject_slots_into_directory_cached(
     let total = t_pass.elapsed();
     log::info!(
         target: "slots",
-        "slot injection: {} html scanned, {} rewritten, {} written, {} with unresolved markers",
+        "slot injection: {} html scanned, {} carried unread, {} rewritten, {} written, {} with unresolved markers",
         scanned,
+        receipts.len() - scanned,
         rewritten,
         written,
         residual_files,
@@ -691,8 +702,11 @@ pub(crate) fn inject_slots_into_directory_cached(
         total.saturating_sub(walk_ms),
         rewritten,
     );
-    Ok(receipts)
+    Ok(SlotPass { receipts, scanned })
 }
+
+/// A receipt per page the pass covered, `scanned` of which it read and hashed.
+pub(crate) struct SlotPass { pub receipts: Vec<SlotInjectionReceipt>, pub scanned: usize }
 
 /// Wrap any `<style>…</style>` blocks in the `head-end` slot of the given
 /// `ResolvedSlots` in `@layer plugins { … }`, so third-party plugin CSS

@@ -249,7 +249,7 @@ impl Drop for ParseCacheTestGuard {
 }
 
 #[cfg(test)]
-fn cache_test_is_active() -> bool {
+pub(crate) fn cache_test_is_active() -> bool {
     CACHE_TEST_ACTIVE.with(Cell::get)
 }
 

@@ -86,7 +86,8 @@ DESCRIPTION:
     link     Links <domain> (and www.<domain>) to the site. For a domain bought
              elsewhere it prints the DNS records to set at your registrar; the
              bare domain redirects to www. For a domain bought through moss,
-             moss manages DNS and there is nothing to set.
+             moss manages DNS and there is nothing to set. Where the DNS
+             provider supports it, a one-step setup link is printed too.
     status   Looks up the records live, reports the certificate, and says
              whether the domain is live or what it is waiting for.
     --json   Print one stable JSON object instead of text; an error is
@@ -312,6 +313,7 @@ pub(crate) async fn link_flow(t: &LinkTarget<'_>, input: &str, json: bool) -> Ou
 
     let mut linked = vec![apex.clone()];
     let mut cdn: Option<DomainCdn> = None;
+    let mut connect = None;
     if host.managed {
         crate::vault::deployment_state::observe_and_record_cdn(client, &apex, folder).await;
     } else {
@@ -337,6 +339,12 @@ pub(crate) async fn link_flow(t: &LinkTarget<'_>, input: &str, json: bool) -> Ou
             let _ = crate::vault::deployment_state::record_cdn_status(folder, word);
         }
         cdn = Some(started);
+        // Optional: a service without the route, or a provider without the
+        // flow, leaves the records table as the whole answer.
+        connect = client.get_domain_connect(&apex).await.unwrap_or_else(|e| {
+            log::debug!(target: "seta", "no one-step setup link for {}: {}", apex, e);
+            None
+        });
     }
     let rows = cdn.as_ref().map(|c| records::required_records(&c.records)).unwrap_or_default();
     let (apex, site_id, www, canonical) = (&host.apex, t.site_id, host.www(), host.canonical());
@@ -353,6 +361,7 @@ pub(crate) async fn link_flow(t: &LinkTarget<'_>, input: &str, json: bool) -> Ou
             "records": rows.iter().map(|r| serde_json::json!({
                 "type": r.record_type, "name": r.name, "value": r.value,
             })).collect::<Vec<_>>(),
+            "connect": connect.as_ref().map(|c| serde_json::json!({ "provider": c.provider, "url": c.url })),
             "next": next,
         });
         format!("{}\n", v)
@@ -361,8 +370,15 @@ pub(crate) async fn link_flow(t: &LinkTarget<'_>, input: &str, json: bool) -> Ou
             "Linked {apex} to site {site_id}.\n\nThis domain was bought through moss, so moss manages its DNS. There is nothing to add.\n"
         )
     } else {
+        let intro = match &connect {
+            Some(c) => format!(
+                "{} can add these records for you. Open this link, sign in and approve:\n\n  {}\n\nOr add them yourself where {apex} is managed:",
+                c.provider, c.url
+            ),
+            None => format!("At the registrar where {apex} is managed, add these records:"),
+        };
         format!(
-            "Linked {apex} and {www} to site {site_id}.\n\nAt the registrar where {apex} is managed, add these records:\n\n{table}\n\
+            "Linked {apex} and {www} to site {site_id}.\n\n{intro}\n\n{table}\n\
              Visitors see {www}; {apex} redirects to it.\n\
              Leave the MX records and any other TXT records alone: email keeps working.\n\
              Records can take up to an hour to show. Run `{next}` to see what is left.\n",

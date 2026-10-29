@@ -13,13 +13,25 @@ const base = `http://localhost:${gatePort('wcag-output')}`;
 const PAGES = ['/', '/zh-hans/', '/notes/', '/notes/first/'];
 const AXE = createRequire(import.meta.url).resolve('axe-core/axe.min.js');
 
+// Stands in for the comment server the site is configured with: the list is
+// empty, and a post succeeds as a reply to comment 7.
+const stubComments = (page: Page) =>
+  page.route('https://comments.example.test/**', (route) =>
+    route.request().method() === 'POST'
+      ? route.fulfill({ json: { id: 99, content: '<p>A reply.</p>', nick: 'Cy', date: '2026-01-06T10:00:00Z', rid: 7 } })
+      : route.fulfill({ json: { comments: [], count: 0 } }),
+  );
+
 for (const scheme of ['light', 'dark'] as const) {
   for (const width of [1280, 320]) {
     test(`axe finds no WCAG 2.1 AA violation — ${scheme}, ${width}px`, async ({ page }) => {
       await page.emulateMedia({ colorScheme: scheme });
       await page.setViewportSize({ width, height: 800 });
+      await stubComments(page);
       for (const path of PAGES) {
         await page.goto(base + path);
+        // axe skips what is collapsed; the comment form lives in a <details>.
+        await page.evaluate(() => document.querySelectorAll('details').forEach((d) => (d.open = true)));
         await page.addScriptTag({ path: AXE });
         const violations = await page.evaluate(async () => {
           const { axe } = window as unknown as { axe: { run: (ctx: Document, opts: object) => Promise<AxeResults> } };
@@ -152,4 +164,72 @@ test('a link inside a footer sentence is underlined, not told apart by colour al
   await page.goto(base + '/');
   const link = page.locator('footer.container p a', { hasText: 'an editor' });
   expect(await link.evaluate((el) => getComputedStyle(el).textDecorationLine)).toContain('underline');
+});
+
+test('the actions on a keyboard selection can be reached and left from the keyboard', async ({ page }) => {
+  await page.goto(base + '/notes/first/');
+  await page.evaluate(() => {
+    const text = document.querySelector('article p')!.firstChild!;
+    const range = document.createRange();
+    range.setStart(text, 2);
+    range.setEnd(text, 10);
+    getSelection()!.removeAllRanges();
+    getSelection()!.addRange(range);
+  });
+  await page.keyboard.press('Shift+ArrowRight');
+  const bar = page.locator('.sel-popover');
+  await expect(bar).toBeVisible();
+  await expect(bar).toHaveAttribute('role', 'group');
+
+  await page.keyboard.press('Tab');
+  await expect(page.locator('.sel-popover .sel-share')).toBeFocused();
+  const count = await bar.locator('button').count();
+  for (let i = 1; i < count; i++) await page.keyboard.press('Tab');
+  await expect(bar.locator('button').last()).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(bar).toBeHidden();
+  expect(await page.evaluate(() => getSelection()!.toString().length)).toBeGreaterThan(0);
+
+  await page.keyboard.press('Shift+ArrowRight');
+  await expect(bar).toBeVisible();
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Escape');
+  await expect(bar).toBeHidden();
+});
+
+test('the underline of a comment field is its boundary, at 3:1', async ({ page }) => {
+  await page.goto(base + '/notes/first/');
+  await page.evaluate(() => document.querySelectorAll('details').forEach((d) => (d.open = true)));
+  await installPaint(page);
+  const pairs = await page.evaluate(() => {
+    const { paint } = window as unknown as Painted;
+    const bg = paint(getComputedStyle(document.body).backgroundColor);
+    return [...document.querySelectorAll('#moss-comment-text, .comment-field')].map((el) => ({
+      name: el.getAttribute('name'),
+      line: paint(getComputedStyle(el).borderBottomColor),
+      bg,
+    }));
+  });
+  expect(pairs.length).toBe(4);
+  for (const { name, line, bg } of pairs) {
+    const ratio = contrastRatio(relativeLuminance(...(line as [number, number, number])), relativeLuminance(...(bg as [number, number, number])));
+    expect(ratio, name!).toBeGreaterThanOrEqual(3);
+  }
+});
+
+test('posting a reply keeps the keyboard focus and says it was sent', async ({ page }) => {
+  await stubComments(page);
+  await page.goto(base + '/notes/first/');
+  await page.locator('summary.comments-toggle').click();
+  await page.locator('.comment-reply-btn[data-reply-id="7"]').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#moss-comment-text')).toBeFocused();
+  await page.keyboard.type('A reply.');
+  await page.fill('#moss-comment-form [name="name"]', 'Cy');
+  await page.fill('#moss-comment-form [name="email"]', 'cy@example.test');
+  await page.locator('.comment-form-submit').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#comment-artalk-99')).toHaveCount(1);
+  await expect(page.locator('.comment-form-submit')).toBeFocused();
+  await expect(page.locator('#moss-comment-status')).toHaveText('Sent');
 });

@@ -13,7 +13,7 @@ release heading.
 
 ## [Unreleased]
 
-## [0.15.0] - 2026-10-22
+## [0.15.0] - 2026-10-29
 
 ### Added
 
@@ -21,6 +21,8 @@ release heading.
 - `writeFileBinary(path, bytes)`: writes a `Uint8Array` into the project with `writeFile`'s sandbox (inside the project, never `.moss/`). Bytes cross to moss as base64.
 - `downloadAsset(url, dir, { filename, headers })`: `filename` (one path segment) names the saved file instead of the URL's last segment, which made every `…/default.jpg` download overwrite the last; `headers` are sent with the request. Both are optional and omitting them behaves as before.
 - Testing: the mock answers `http_get`; `download_asset` and the binary write record the file in the mock filesystem, where `MockFile.bytes` holds the exact bytes (`MockFilesystem.setFileBytes`).
+- A derivation may now report a `date` for the page, which a page that lists `date` under `inferred` takes when it sets none of its own.
+- A derivation plugin gets a persistent cache directory it can write to inside the sandbox, so it can keep what is expensive to compute (such as the text read from a scanned document) between runs instead of losing it with the per-run scratch directory.
 
 ### Changed
 

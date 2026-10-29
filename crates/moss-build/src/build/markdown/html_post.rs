@@ -235,13 +235,7 @@ fn mask_code_regions(text: &str) -> String {
     moss_core::inert_regions::mask_inert(text)
 }
 
-/// HTML5 void elements — these are the ONLY tags that can self-close.
-/// Everything else (iframe, video, script, textarea, div, span, etc.)
-/// requires an explicit closing tag.
-const VOID_ELEMENTS: &[&str] = &[
-    "area", "base", "br", "col", "embed", "hr", "img", "input",
-    "link", "meta", "param", "source", "track", "wbr",
-];
+use moss_core::inert_regions::VOID_ELEMENTS;
 
 /// Fix self-closing non-void HTML tags.
 ///
@@ -331,6 +325,7 @@ pub fn strip_html_tags(html: &str) -> String {
 /// contract.
 pub(crate) fn inject_article_title_h1(html_body: &str, title: &str, emit_source_lines: bool, visually_hidden: bool) -> String {
     let escaped = html_escape(title);
+    let escaped = moss_core::heading::range::keep_ranges_together(&escaped);
     let fm_attr = if emit_source_lines { r#" data-source-fm="title""# } else { "" };
     let class = if visually_hidden { "moss-article-title visually-hidden" } else { "moss-article-title" };
     if html_body.is_empty() {
@@ -1798,6 +1793,15 @@ mod tests {
             result.starts_with("<h1 class=\"moss-article-title\">A &amp; B &lt;script&gt;alert(1)&lt;/script&gt;</h1>"),
             "title not properly HTML-escaped: {}",
             result
+        );
+    }
+
+    #[test]
+    fn inject_article_title_h1_keeps_a_year_range_together() {
+        let result = inject_article_title_h1("", "Maren Oduya, 1626\u{2013}1705", false, false);
+        assert_eq!(
+            result,
+            "<h1 class=\"moss-article-title\">Maren Oduya, <span class=\"moss-nobreak\">1626\u{2013}1705</span></h1>\n"
         );
     }
 

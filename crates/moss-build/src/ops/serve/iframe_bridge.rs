@@ -38,11 +38,24 @@ const IFRAME_BRIDGE_SCRIPT: &str = include_str!("js/iframe-bridge.js");
 const ASSET_PLACEHOLDER_SCRIPT: &str = include_str!("js/asset-placeholder.js");
 
 /// Marker outline for a placeheld image, so it reads as "moss is standing in
-/// for something" rather than as a photo of graph paper. Lives here rather than
-/// in `site.css` for the same reason the script does: it is preview-only.
+/// for something" rather than as a photo of graph paper, plus the still
+/// blueprint grid of a derived-text block that is still being read
+/// (`.moss-derived--pending`), with its line of words held above the live grid
+/// the bridge swaps in. Lives here
+/// rather than in `site.css` for the same reason the script does: it is
+/// preview-only.
 const ASSET_PLACEHOLDER_STYLE: &str = "\
 .moss-img-fallback{outline:1px solid rgba(20,60,130,.25);outline-offset:-1px}\
-[data-theme=\"dark\"] .moss-img-fallback{outline-color:rgba(90,155,255,.3)}";
+[data-theme=\"dark\"] .moss-img-fallback{outline-color:rgba(90,155,255,.3)}\
+.moss-derived--pending{min-block-size:12rem;display:flex;align-items:center;justify-content:center;background-color:#f4f1ec;\
+background-image:linear-gradient(rgba(20,60,130,.18) 1px,transparent 1px),\
+linear-gradient(90deg,rgba(20,60,130,.18) 1px,transparent 1px);background-size:10px 10px}\
+[data-theme=\"dark\"] .moss-derived--pending{background-color:#252017;\
+background-image:linear-gradient(rgba(90,155,255,.22) 1px,transparent 1px),\
+linear-gradient(90deg,rgba(90,155,255,.22) 1px,transparent 1px)}\
+.moss-derived--pending>span{position:relative;z-index:1;padding:.25em .6em;border-radius:3px;\
+font:500 .8125rem/1.4 system-ui,sans-serif;color:#143c82;background:#f4f1ec}\
+[data-theme=\"dark\"] .moss-derived--pending>span{color:#9cc0ff;background:#252017}";
 
 /// Preview-only shim that reroutes the comment form to the local stub endpoint
 /// (see `preview::comment_stub`). Injected into every HTML response alongside
@@ -170,45 +183,6 @@ box-shadow:0 4px 12px rgba(0,0,0,0.18);pointer-events:none;z-index:50}}\
 </style>\n"
     )
 }
-
-/// Preview-only `<style>` that makes divider-drag / window-resize reflow cheap on
-/// image-heavy pages. The preview iframe resizes on every `--preview-width-inset`
-/// write during a divider drag; without this an image-heavy page's FULL relayout
-/// stalled the shell main thread 600ms+ per frame (measured). `content-visibility:
-/// auto` lets off-screen media skip layout, so a width change only relays out the
-/// on-screen media, not every figure.
-///
-/// Scoped to MEDIA ONLY (figures, bare images, embeds) — text stays fully laid out
-/// so find-in-page (`window.find`) and editor↔preview scroll-sync (which key off
-/// text `[data-source-line]` anchors) are unaffected. `contain-intrinsic-size: auto
-/// <fallback>` reserves a placeholder height (WebKit refines it after first render)
-/// so off-screen media don't collapse the fake scrollbar's reported height.
-///
-/// The size is written in the TWO-VALUE form `auto none auto 600px` = `<width>
-/// <height>`: height keeps the 600px placeholder, width claims NO intrinsic size.
-/// The one-value form (`auto 600px`) applies to BOTH axes, which made every
-/// off-screen figure report a 600px intrinsic WIDTH. Inside a `.moss-grid`, whose
-/// tracks are `repeat(N, 1fr)` = `minmax(auto, 1fr)`, that width became each
-/// track's automatic minimum — a 3-column grid laid out at 600px per column and
-/// overflowed the content column until the figure scrolled into view and snapped
-/// back. Height reservation is what this rule needs; width never was.
-///
-/// Preview-only: injected by the preview server, NEVER in published output. Pure
-/// CSS → survives idiomorph morphs (re-injected on every served response).
-/// `content-visibility` is recent WebKit (Safari 18+); older engines ignore the
-/// declaration → graceful no-op, no regression.
-///
-/// Excludes media inside a `.moss-grid[data-scroll]` row (`:not(.moss-grid[data-scroll]
-/// *)`): a scroll row's cards share ONE grid row track (`grid-auto-flow: column`), so
-/// an off-screen card falling back to the 600px placeholder height stretches every
-/// card in the row, not just the one out of view.
-const PREVIEW_CHEAP_REFLOW_STYLE: &str = "<style id=\"moss-preview-cheap-reflow\">\
-article figure.moss-image:not(.moss-grid[data-scroll] *),\
-article p:has(> img):not(.moss-grid[data-scroll] *),\
-article p:has(> picture):not(.moss-grid[data-scroll] *),\
-article .moss-embed:not(.moss-grid[data-scroll] *){\
-content-visibility:auto;contain-intrinsic-size:auto none auto 600px}\
-</style>\n";
 
 /// Preview-only `<style>` defining the one-shot wash that answers "where did my
 /// footer go?" when the user opens a slot file (`footer.md`) in the editor.
@@ -348,7 +322,7 @@ html::-webkit-scrollbar,body::-webkit-scrollbar{display:none;width:0;height:0}\
 ///
 /// We check presence of the key only, not its value, so the marker is robust
 /// to URL fragments that might mangle the value (e.g. `__moss_shell=&foo=bar`).
-fn has_shell_marker(query: Option<&str>) -> bool {
+pub(super) fn has_shell_marker(query: Option<&str>) -> bool {
     let Some(q) = query else { return false };
     q.split('&')
         .any(|pair| pair == SHELL_MARKER || pair.starts_with(&format!("{SHELL_MARKER}=")))
@@ -630,7 +604,7 @@ fn inject_preview_assets(html: &str, shell_mounted: bool) -> String {
         String::new()
     };
     format!(
-        "{before}{style_tag}{tooltip_style}{PREVIEW_CHEAP_REFLOW_STYLE}{PREVIEW_SLOT_REVEAL_STYLE}\
+        "{before}{style_tag}{tooltip_style}{PREVIEW_SLOT_REVEAL_STYLE}\
          {script_tag}{shim_tag}{owner_controls}</body>{after}"
     )
 }

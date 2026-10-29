@@ -34,6 +34,14 @@
  * never mean N live rAF loops, only the visible few. Reusing `startBlueprintGrid`
  * keeps ONE source of truth for the animation.
  *
+ * Pending derived text
+ * ---------------------
+ * A `![[file#text]]` embed whose text is still being read renders a
+ * `.moss-derived--pending` block. It is a <div>, so it needs no overlay
+ * tracking: the canvas host fills the block itself. It shares the visibility
+ * gate and teardown with the image placeholders; a block that stops being
+ * pending (the text arrived in a morph) drops its grid.
+ *
  * prefers-reduced-motion
  * ----------------------
  * We skip the upgrade entirely; the static SVG blueprint placeholder (itself a
@@ -52,16 +60,72 @@ import { startBlueprintGrid } from "./blueprint-grid";
 /** Only <img> the shell already tagged as a missing-image fallback. */
 const FALLBACK_SELECTOR = "img.moss-img-fallback";
 
-interface Instance {
+/** A derived-text block still being read; the grid fills it. */
+const PENDING_SELECTOR = ".moss-derived--pending";
+
+/** Visibility-gated grid on a canvas host: animates only while on-screen. */
+interface Gated {
+  container: HTMLDivElement;
+  io: IntersectionObserver | null;
+  /** Non-null while the grid rAF is running; null while paused/off-screen. */
+  stopGrid: (() => void) | null;
+}
+
+interface PendingInstance extends Gated {
+  block: HTMLElement;
+  prevPosition: string;
+}
+
+interface Instance extends Gated {
   img: HTMLImageElement;
   container: HTMLDivElement;
   prevOpacity: string;
-  io: IntersectionObserver | null;
   ro: ResizeObserver | null;
   onResize: (() => void) | null;
   onLoad: (() => void) | null;
-  /** Non-null while the grid rAF is running; null while paused/off-screen. */
-  stopGrid: (() => void) | null;
+}
+
+function createHost(doc: Document): HTMLDivElement {
+  const container = doc.createElement("div");
+  container.className = "moss-blueprint-fallback";
+  container.setAttribute("aria-hidden", "true");
+  container.style.position = "absolute";
+  container.style.overflow = "hidden";
+  const canvas = doc.createElement("canvas");
+  canvas.id = "blueprint-canvas";
+  canvas.setAttribute("aria-hidden", "true");
+  canvas.style.display = "block";
+  canvas.style.width = "100%";
+  canvas.style.height = "100%";
+  // pointer-events: none on the canvas so the container still receives the
+  // mousemove startBlueprintGrid tracks, and clicks bubble to the card link.
+  canvas.style.pointerEvents = "none";
+  container.appendChild(canvas);
+  return container;
+}
+
+/** Run the grid only while `g.container` is on-screen, so N hosts never mean N live rAF loops. */
+function gate(g: Gated, isLive: () => boolean, beforeStart?: () => void): void {
+  const start = (): void => {
+    if (g.stopGrid || !isLive()) return;
+    beforeStart?.();
+    g.stopGrid = startBlueprintGrid(g.container);
+  };
+  const stop = (): void => {
+    g.stopGrid?.();
+    g.stopGrid = null;
+  };
+  if (typeof IntersectionObserver !== "undefined") {
+    g.io = new IntersectionObserver((entries) => {
+      const last = entries[entries.length - 1];
+      if (last && last.isIntersecting) start();
+      else stop();
+    });
+    g.io.observe(g.container);
+  } else {
+    // No IntersectionObserver (old environment) → run unconditionally.
+    start();
+  }
 }
 
 function prefersReducedMotion(win: Window): boolean {
@@ -88,6 +152,42 @@ export function installBlueprintFallback(
   if (prefersReducedMotion(win)) return () => {};
 
   const instances = new Map<HTMLImageElement, Instance>();
+  const pending = new Map<HTMLElement, PendingInstance>();
+
+  function dropPending(block: HTMLElement): void {
+    const inst = pending.get(block);
+    if (!inst) return;
+    pending.delete(block);
+    inst.stopGrid?.();
+    inst.io?.disconnect();
+    inst.container.remove();
+    block.style.position = inst.prevPosition;
+  }
+
+  function upgradePending(block: HTMLElement): void {
+    if (pending.has(block) || !block.isConnected) return;
+    const container = createHost(doc);
+    container.style.inset = "0";
+    const prevPosition = block.style.position;
+    // The host is absolute, so the block must be its containing block.
+    let position = "";
+    try {
+      position = win.getComputedStyle(block).position;
+    } catch {
+      /* getComputedStyle may be unavailable in a test stub */
+    }
+    if (position === "" || position === "static") block.style.position = "relative";
+    block.appendChild(container);
+    const inst: PendingInstance = {
+      block,
+      container,
+      prevPosition,
+      io: null,
+      stopGrid: null,
+    };
+    gate(inst, () => block.isConnected);
+    pending.set(block, inst);
+  }
 
   function teardown(img: HTMLImageElement, restore: boolean): void {
     const inst = instances.get(img);
@@ -108,11 +208,7 @@ export function installBlueprintFallback(
     if (!parent) return;
 
     // Canvas host, overlaid on the <img>'s box (not a wrapper — see header).
-    const container = doc.createElement("div");
-    container.className = "moss-blueprint-fallback";
-    container.setAttribute("aria-hidden", "true");
-    container.style.position = "absolute";
-    container.style.overflow = "hidden";
+    const container = createHost(doc);
     // Follow any rounding the cover applies to the image.
     try {
       const radius = win.getComputedStyle(img).borderRadius;
@@ -120,17 +216,6 @@ export function installBlueprintFallback(
     } catch {
       /* getComputedStyle may be unavailable in a test stub */
     }
-
-    const canvas = doc.createElement("canvas");
-    canvas.id = "blueprint-canvas";
-    canvas.setAttribute("aria-hidden", "true");
-    canvas.style.display = "block";
-    canvas.style.width = "100%";
-    canvas.style.height = "100%";
-    // pointer-events: none on the canvas so the container still receives the
-    // mousemove startBlueprintGrid tracks, and clicks bubble to the card link.
-    canvas.style.pointerEvents = "none";
-    container.appendChild(canvas);
 
     // Keep the <img> as the box-definer + heal-anchor; just hide the static SVG.
     const prevOpacity = img.style.opacity;
@@ -158,28 +243,7 @@ export function installBlueprintFallback(
     };
     sync();
 
-    const start = (): void => {
-      if (inst.stopGrid || !img.isConnected) return;
-      sync();
-      inst.stopGrid = startBlueprintGrid(container);
-    };
-    const stop = (): void => {
-      inst.stopGrid?.();
-      inst.stopGrid = null;
-    };
-
-    // Multi-instance gate: animate only while on-screen.
-    if (typeof IntersectionObserver !== "undefined") {
-      inst.io = new IntersectionObserver((entries) => {
-        const last = entries[entries.length - 1];
-        if (last && last.isIntersecting) start();
-        else stop();
-      });
-      inst.io.observe(container);
-    } else {
-      // No IntersectionObserver (old environment) → run unconditionally.
-      start();
-    }
+    gate(inst, () => img.isConnected, sync);
 
     // Track the <img>'s box as layout changes (responsive resize, reflow).
     if (typeof ResizeObserver !== "undefined") {
@@ -206,6 +270,9 @@ export function installBlueprintFallback(
     root
       .querySelectorAll<HTMLImageElement>(FALLBACK_SELECTOR)
       .forEach((img) => upgrade(img));
+    root
+      .querySelectorAll<HTMLElement>(PENDING_SELECTOR)
+      .forEach((block) => upgradePending(block));
   }
 
   // Initial pass — images may have failed before this ran.
@@ -224,16 +291,27 @@ export function installBlueprintFallback(
       ) {
         upgrade(r.target);
       }
+      if (r.type === "attributes" && r.target instanceof HTMLElement) {
+        if (r.target.matches(PENDING_SELECTOR)) upgradePending(r.target);
+        else dropPending(r.target);
+      }
       for (const node of Array.from(r.addedNodes)) {
         if (node instanceof HTMLImageElement) {
           if (node.classList.contains("moss-img-fallback")) upgrade(node);
         } else if (node instanceof Element) {
+          if (node.matches(PENDING_SELECTOR)) upgradePending(node as HTMLElement);
           scan(node);
         }
       }
       if (r.removedNodes.length > 0) removed = true;
     }
     if (removed) {
+      for (const [block, inst] of Array.from(pending)) {
+        if (inst.container.isConnected && block.isConnected) continue;
+        dropPending(block);
+        // A morph keeps a still-pending block and prunes the host inside it.
+        if (block.isConnected && block.matches(PENDING_SELECTOR)) upgradePending(block);
+      }
       for (const [img, inst] of Array.from(instances)) {
         if (!inst.container.isConnected || !img.isConnected) {
           teardown(img, false);
@@ -251,5 +329,6 @@ export function installBlueprintFallback(
   return () => {
     mo.disconnect();
     for (const img of Array.from(instances.keys())) teardown(img, false);
+    for (const block of Array.from(pending.keys())) dropPending(block);
   };
 }

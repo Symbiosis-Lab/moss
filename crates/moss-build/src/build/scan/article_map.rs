@@ -233,7 +233,7 @@ impl ArticleMap {
     pub fn save(&self, moss_dir: &Path) -> Result<(), String> {
         let paths = MossPaths::from_moss_dir(moss_dir.to_path_buf());
         let map_path = paths.article_map();
-        let json = serde_json::to_string_pretty(self)
+        let json = serde_json::to_string(self)
             .map_err(|e| format!("Failed to serialize article map: {}", e))?;
         // Atomic write: the map is rewritten on every build, and concurrent
         // readers (editor `resolve_page_source`, syndication) must never catch a

@@ -23,7 +23,6 @@ use crate::plugins::types::PluginManifest;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use moss_core::untrusted_text::{bounded, MAX_NAME, MAX_SENTENCE};
-use semver::Version;
 
 use super::approval::{self, Approvals};
 use super::cache::{self, CachedRegistry, RevocationVerdict};
@@ -230,6 +229,10 @@ pub enum Refusal {
     /// the plugin waits for the user to allow it — the remedy is a click, not
     /// an update or a removal, which is why it is its own kind.
     Unapproved,
+    /// The plugin's native program is not published for this computer.
+    /// Platform keys rather than a sentence, so the screen words it in the
+    /// locale; [`Refusal::sentence`] is the English one-liner.
+    Unavailable { platforms: Vec<String> },
 }
 
 impl Refusal {
@@ -252,6 +255,9 @@ impl Refusal {
             }
             Refusal::Unapproved => {
                 format!("{name} {version} came with this folder and has not been allowed to run here")
+            }
+            Refusal::Unavailable { platforms } => {
+                crate::plugins::contributions::platform::sentence(&name, platforms)
             }
         }
     }
@@ -655,9 +661,9 @@ pub fn cached_entries() -> Vec<super::index::IndexEntry> {
 /// that is refused at load, so an unrunnable version is not an update.
 pub fn host_meets_floor(min_moss_version: Option<&str>) -> bool {
     let Some(floor) = min_moss_version else { return true };
-    match (Version::parse(floor), Version::parse(crate::system::app_version())) {
-        (Ok(needs), Ok(host)) => host >= needs,
-        _ => {
+    match crate::system::meets_floor(floor) {
+        Some(met) => met,
+        None => {
             // `debug!`, not `warn!`: the refusal path runs inside
             // `load_plugin`, which the QuickJS engine re-enters on every hook
             // dispatch, so one typo'd manifest would otherwise fill the log.

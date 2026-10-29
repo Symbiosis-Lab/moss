@@ -3,11 +3,13 @@ lat = 35.0116
 lng = 135.7681
 precision = "city"
 parent = "Japan"
+slug = "kyoto-city"
 
 ["Osaka"]
 lat = 34.6937
 precision = "city"
 parent = "Japan"
+slug = "osaka-city"
 
 ["Nara"]
 lat = 34.6851

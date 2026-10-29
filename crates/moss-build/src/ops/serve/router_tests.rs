@@ -3128,6 +3128,42 @@ async fn a_page_navigation_is_viewer_activity_and_its_assets_are_not() {
     let _ = shutdown_tx.send(());
 }
 
+/// The derive scheduler learns the page on screen from the shell's own page
+/// requests: not from a plain browser visit, a nested frame (no marker), or
+/// an asset.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_shell_page_request_tells_the_derive_scheduler_what_is_on_screen() {
+    use crate::system::derive::priority::viewed;
+    let site = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir(site.path().join(".moss")).unwrap();
+    std::fs::write(site.path().join("index.html"), "<html><body>home</body></html>").unwrap();
+    std::fs::write(site.path().join("essay.html"), "<html><body>essay</body></html>").unwrap();
+    std::fs::write(site.path().join("photo.png"), b"PNG").unwrap();
+    let (port, shutdown_tx) = start_server(ServeConfig::new(
+        Arc::new(std::sync::RwLock::new(site.path().to_path_buf())),
+        63460,
+    ))
+    .await
+    .expect("Server should start");
+    let get = |path: &str, dest: &'static str| {
+        let url = format!("http://localhost:{port}{path}");
+        tokio::task::spawn_blocking(move || {
+            ureq::get(&url).set("Sec-Fetch-Dest", dest).timeout(std::time::Duration::from_secs(5)).call().expect("request succeeds")
+        })
+    };
+
+    get("/essay.html", "iframe").await.unwrap();
+    assert_eq!(viewed(site.path()), None, "a page without the shell marker is not the shell's");
+    get("/photo.png?__moss_shell=1", "image").await.unwrap();
+    assert_eq!(viewed(site.path()), None, "an asset is not a page");
+    get("/essay.html?__moss_shell=1", "iframe").await.unwrap();
+    assert_eq!(viewed(site.path()).as_deref(), Some("/essay.html"));
+    get("/index.html?__moss_shell=1", "iframe").await.unwrap();
+    assert_eq!(viewed(site.path()).as_deref(), Some("/index.html"), "a later request replaces it");
+
+    let _ = shutdown_tx.send(());
+}
+
 // ===== Host-owned routes (ServeConfig::host_routes) =====
 
 /// A tiny stand-in for what an embedding host binary would mount: one route

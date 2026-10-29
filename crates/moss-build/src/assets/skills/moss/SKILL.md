@@ -69,6 +69,8 @@ the `.css` files under its `_moss/` are minified build output — use
 
 **Before a restructure, save a version.** Moving pages, rewriting the theme, or deleting sections is safer with a named snapshot first: `moss history --save "before restructuring the nav"`. Both `--save` and `--restore` build the whole site first — the same build `moss deploy` runs, minus the publish — so a build that fails refuses to save or restore, and a slow build makes either one just as slow. `moss history [--json]` lists what's saved, newest first — every landed publish gets one automatically, `--save` adds one on demand. `moss history <path> --restore --at <id> [--copy]` brings back one page (`--copy` writes it alongside the current file instead of overwriting it); `moss history --restore --at <id> --yes` brings back the whole site (`--yes` is required, since it can move files to the Trash). A restore saves its own version of the current state first, so a restore is itself undoable the same way. `<id>` is a version's id from the timeline (or an unambiguous prefix), and `--json` includes it. This history lives in `.moss/history/` inside the site folder itself, gitignored and not part of the published output — being inside the folder, it travels along with whatever sync the site already uses, the same as `.moss/config.toml`.
 
+**Version control.** Commit `.moss/config.toml`, `.moss/theme/` and `.moss/redirects.json`, and any assets or plugins folder there, with the site; moss's own `.moss/.gitignore` keeps identity, data, caches, history and build output out. A root `.gitignore` rule `.moss/*` (an older GitHub Pages deploy wrote it with `!.moss/site/`) hides those too, and `.moss/` cannot be undone by `!` lines at all: use `.moss/*` followed by a `!` line for each of those (the build prints the exact lines), and never delete the rule outright.
+
 ## First, get the live vocabulary
 
 Class names, tokens, shortcodes, and frontmatter fields change between moss
@@ -172,8 +174,9 @@ When a design call needs a visual treatment, stop at the first rung that reaches
 
 1. **Token override.** Set `--moss-*` tokens in `:root {}`. Run
    `moss describe --json` for every current token name, its light value, and its
-   `dark_value`. To keep nav/buttons neutral while content links stay accented,
-   set `--moss-color-ui-accent: var(--moss-color-text)`.
+   `dark_value`. To keep nav/buttons neutral, set
+   `--moss-color-ui-accent: var(--moss-color-text)`; to accent links in prose
+   at rest, set `--moss-link-color` (and `--moss-link-hover-color`).
 2. **Selector on semantic HTML.** Target the existing semantic structure (a
    heading, a blockquote, a list) with a plain CSS rule. No new markup.
 3. **A declared field with a `place`, or a named-class fenced div.** First ask
@@ -295,7 +298,9 @@ model (dark mode, quiet chrome, `@layer` rules), see
 - **Custom domain:** `moss domain link <folder> example.com` (`www.example.com`
   works too) links the bare domain and `www`, and for a domain registered elsewhere
   prints the DNS records to type at the registrar: leave MX and other TXT records
-  alone. `moss domain status <folder> example.com` reads live DNS and the
+  alone. Where the domain's DNS provider supports one-step setup it also prints a
+  link (`connect` in `--json`, else null): give it to the human, since only they can
+  sign in at their DNS provider to approve it. `moss domain status <folder> example.com` reads live DNS and the
   certificate and says what is left; it exits 0 when live, 3 while waiting, 4 if it
   failed. All three take `--json`. Only a registered domain of two labels is
   supported, not `blog.example.com`. `moss domain list <folder>` shows what is linked.

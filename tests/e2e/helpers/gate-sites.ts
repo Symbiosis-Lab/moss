@@ -1220,6 +1220,43 @@ uid: "hag00102"
 
 Body text under the section heading.
 `,
+    "edge/index.md": `---
+title: Headings that fill their lines
+uid: "hag00103"
+---
+
+## Moorings and tolls, 1626–1705
+
+Text.
+
+## The harbour committee met, 1558–1603
+
+Text.
+
+## Small boats and long arguments, 1757–1827
+
+Text.
+
+## Notes on the lighthouse keepers, 1801–1869
+
+Text.
+
+## Ledgers kept by the pilots of the, 1710–1790
+
+Text.
+
+## Almanacs of the northern channel pilots, 1844–1921
+
+Text.
+
+## A winter of boats and bitter arguments, 1900–1950
+
+Text.
+
+## Lamps, tides and the evening committee, 1688–1750
+
+Text.
+`,
     ".moss/config.toml": CONFIG_TOML,
     ".moss/theme/style.css": null,
   },
@@ -2040,7 +2077,7 @@ location: "Lisbon"
 
 Prose that should flow beside the locator, once the photograph above it has cleared out of the way entirely.
 `,
-    "photo.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="48"><rect width="64" height="48" fill="#6a7a9a"/></svg>
+    "photo.svg": `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600"><rect width="800" height="600" fill="#6a7a9a"/></svg>
 `,
     "no-text.md": `---
 title: No Text
@@ -2166,8 +2203,9 @@ precision = "city"
 };
 
 // ── Preview server ↔ static build layout parity ──────────────────────────────
-// One page combining every shape the preview server's own injected CSS
-// (`PREVIEW_CHEAP_REFLOW_STYLE` in iframe_bridge.rs) can touch: a scroll row
+// One page combining the shapes that have made the preview server's own
+// injections (`inject_preview_assets` in iframe_bridge.rs) measure differently
+// from the static build: a scroll row
 // with enough cards that most start outside the row's own visible area, a
 // wrapping (non-scroll) grid of images, standalone figures well below the
 // fold, a tabular embed, a hero, and enough filler prose between them that
@@ -2188,9 +2226,8 @@ const PARITY_HERO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="1600" he
 `;
 
 // Placeholder CJK prose (invented for this fixture, no real source) padding
-// the page so later media start below the fold — this gate's whole point is
-// content-visibility behaviour on off-screen media, which a short page could
-// never exercise.
+// the page so later media start below the fold: lazy loading and scripts act
+// on off-screen media, which a short page would never exercise.
 const PARITY_FILLER_LINE =
   "第一段。這是為了撐開版面高度而寫的占位文字，讓下面的圖片在頁面剛載入時還在畫面之外。";
 
@@ -2216,9 +2253,8 @@ export const PREVIEW_PARITY_GATE: ScratchSiteSpec = {
     "figure.svg": PARITY_FIGURE_SVG,
     "hero.svg": PARITY_HERO_SVG,
     // A tabular embed (`![[data.csv]]` → `.moss-embed.moss-embed-table`,
-    // resolved by moss-core's csv_table renderer) — the fourth shape
-    // PREVIEW_CHEAP_REFLOW_STYLE's selector names alongside figures, bare
-    // images, and generic embeds.
+    // resolved by moss-core's csv_table renderer) — a block embed
+    // beside the figures and images.
     "data.csv": `label,value\nAlpha,12\nBeta,7\nGamma,19\nDelta,3\nEpsilon,25\n`,
     "index.md": `---
 title: Preview Parity Gate
@@ -3557,6 +3593,40 @@ export const FOOTER_END_SPACE_DEFAULT: ScratchSiteSpec = {
   files: { ...footerEndSpaceFiles, ".moss/theme/style.css": null },
 };
 
+// ── The colophon's credit line: it wraps, never overflows, and the mark sits on the text's baseline ──
+// Two sites that differ only in `[site].credit`: a short one that fits the mark's
+// line on a phone, and 40 capital Ws with no break in them. Served by
+// playwright/colophon-credit.config.ts.
+const colophonCreditFiles = {
+  "index.md": `---
+title: Colophon credit
+uid: "ccr00101"
+---
+
+# Colophon credit
+
+Body text.
+`,
+  "footer.md": `Written by [an editor](/editor) for this scratch site.
+`,
+};
+
+export const COLOPHON_CREDIT_SHORT: ScratchSiteSpec = {
+  name: "colophon-credit-short-gate",
+  files: {
+    ...colophonCreditFiles,
+    ".moss/config.toml": `${CONFIG_TOML}credit = "Designed by [Example Studio](https://example.org)"\n`,
+  },
+};
+
+export const COLOPHON_CREDIT_LONG: ScratchSiteSpec = {
+  name: "colophon-credit-long-gate",
+  files: {
+    ...colophonCreditFiles,
+    ".moss/config.toml": `${CONFIG_TOML}credit = "${"W".repeat(40)}"\n`,
+  },
+};
+
 // ── Facts list: hangs in the right margin only where it fits ──
 // Two sites that differ only in the theme rule that widens the content
 // column. Served by playwright/facts-margin.config.ts.
@@ -3667,7 +3737,7 @@ const COLLAGE_PASSAGE = `A passage set as type fills its tile. It carries on pas
 
 const COLLAGE_LONG_CREDIT = `A long credit line that names the photographer, the archive, the year and the licence, so it runs to three lines in a narrow tile.`;
 
-const COLLAGE_SHORT_QUOTE = "Communication is health; communication is truth; communication is happiness.";
+const COLLAGE_SHORT_QUOTE = "Communication is health; communication is truth; communication is happiness, the uncharacteristically humane kind.";
 const COLLAGE_LONG_QUOTE =
   "There is no desire more natural than the desire for knowledge. We try every means that can bring us to it; when reason fails us, we make use of experience, which is a weaker and less worthy means, but truth is so great a thing that we ought not to disdain any channel that leads us to it.";
 
@@ -3790,6 +3860,39 @@ content_width: full
 # Full width
 
 ${COLLAGE_MIXED}`,
+    // Two quotes among pictures, on a default-width page: the tablet widths where a tile is narrow.
+    "pair/index.md": `---
+title: Two Quotes
+uid: "clg00180"
+---
+
+# Two quotes
+
+:::grid {collage}
+![Picture 1](../t1.svg)
+*Credit for picture 1.*
++++
+![Picture 2](../t2.svg)
+*Credit for picture 2.*
++++
+> ${COLLAGE_SHORT_QUOTE}
+
+*Montaigne, 1924*
++++
+![Picture 4](../t4.svg)
+*Credit for picture 4.*
++++
+![Picture 5](../t5.svg)
+*Credit for picture 5.*
++++
+> ${COLLAGE_LONG_QUOTE}
+
+*Essays, book three*
++++
+![Picture 7](../t7.svg)
+*Credit for picture 7.*
+:::
+`,
     // Cards holding a word with no break point, and a link in a list: nothing may widen the page.
     "cards/index.md": `---
 title: Cards
@@ -3858,6 +3961,51 @@ contents: pictures
 `,
     // A raster poster: the build reads a picture's pixel size from raster files only.
     "poster.png": Buffer.from("iVBORw0KGgoAAAANSUhEUgAAACgAAAA8CAIAAACb22+3AAAAOElEQVR42u3NQQkAAAgEsEtnEtOZ0hgiDPZfpvpExGKxWCwWi8VisVgsFovFYrFYLBaLxWLxp3gBxqJ0NeApenkAAAAASUVORK5CYII=", "base64"),
+    // A quote of two paragraphs, to measure the blockquote's outer margins and the gap between its paragraphs.
+    "paras/index.md": `---
+title: Two-paragraph Quote
+uid: "clg00150"
+content_width: full
+---
+
+# Paragraphs
+
+:::grid {collage}
+![Picture 1](../t1.svg)
+*Credit 1.*
++++
+> The first paragraph of a quote that runs on for a little while.
+>
+> The second paragraph, which closes it.
+
+*Essays, book one*
++++
+![Picture 3](../t3.svg)
+*Credit 3.*
+:::
+`,
+    // An ordinary grid whose last part is a fenced div wrapping one paragraph.
+    "parts/index.md": `---
+title: Card Parts
+uid: "clg00160"
+---
+
+# Parts
+
+:::grid 2
+### First
+
+::: {.note}
+A wrapped paragraph.
+:::
++++
+### Second
+
+::: {.note}
+Another wrapped paragraph.
+:::
+:::
+`,
     "upright/index.md": `---
 title: Upright Collage
 uid: "clg00130"
@@ -3885,13 +4033,31 @@ uid: "clg00130"
 // ── WCAG 2.1 AA over built output ──
 // One page of every surface whose accessibility only shows in a real engine:
 // each callout type's tinted band, a code block wider than a phone, a framed
-// page, a 3D model, a language switch, a latest-items sidebar, covered cards
-// and a link inside a footer sentence. Served by playwright/wcag-output.config.ts.
+// page, a 3D model, a language switch, a latest-items sidebar, covered cards,
+// a link inside a footer sentence, and a note with comments and text to
+// select. Served by playwright/wcag-output.config.ts.
 const CALLOUT_TYPES = ["note", "info", "tip", "warning", "caution", "important", "danger", "success", "question", "failure", "bug", "abstract", "todo", "example", "quote", "pending"];
 export const WCAG_OUTPUT: ScratchSiteSpec = {
   name: "wcag-output-gate",
   files: {
-    ".moss/config.toml": CONFIG_TOML,
+    // Comments with a server address, so the form renders live; the spec
+    // stands in for the server.
+    ".moss/config.toml": `${CONFIG_TOML}
+[services.comments]
+enabled = true
+server_url = "https://comments.example.test"
+`,
+    ".moss/data/social/comment.json": JSON.stringify({
+      schemaVersion: "1",
+      articles: {
+        wcag0004: {
+          comments: [
+            { id: "7", source: "artalk", content: "<p>A first comment.</p>", createdAt: "2026-01-04T10:00:00Z", author: { displayName: "Ana" } },
+            { id: "8", source: "artalk", content: "<p>A reply to it.</p>", createdAt: "2026-01-05T10:00:00Z", author: { displayName: "Ben" }, replyToId: "7" },
+          ],
+        },
+      },
+    }),
     "index.md": `---
 title: Field Notes
 uid: "wcag0001"
@@ -3946,7 +4112,7 @@ description: What the first note is about.
 
 # The first note
 
-Body.
+A sentence long enough to select a phrase from with the keyboard.
 `,
     "Notes/second.md": `---
 title: The second note

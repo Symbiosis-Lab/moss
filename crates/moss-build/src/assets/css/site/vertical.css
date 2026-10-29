@@ -545,7 +545,7 @@ body[data-typesetting="vertical"] .moss-subscribe-status {
   /* Nor does its title keep room for the headerless controls (site.css): its
      first line runs down the page, not toward them. The core selector,
      repeated with the vertical mark, so this one is the more specific. */
-  body[data-typesetting="vertical"]:has(> .moss-nav-island[data-header="none"] + .nav-icons) main > article > h1:first-of-type::before {
+  body[data-typesetting="vertical"]:has(> .moss-nav-island[data-header="none"] + .nav-icons) main > article:is(:has(> h1:not(.visually-hidden):first-child), :has(> :is(p, a):first-child + h1:not(.visually-hidden)))::before {
     content: none;
   }
 } /* @layer shortcodes */

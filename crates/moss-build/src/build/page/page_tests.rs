@@ -1121,10 +1121,9 @@ fn test_generate_children_grid_leaf_description_renders_below_title() {
 }
 
 #[test]
-fn test_generate_children_grid_folder_shows_count_and_description() {
+fn test_generate_children_grid_folder_shows_count_not_description() {
     // Folder with children AND a description: the card keeps its article
-    // COUNT in the meta slot and carries the folder note's description below
-    // the title, as a page card does.
+    // COUNT in the meta slot and leaves the description to the folder's page.
     let mut folder = make_test_doc("Tutorials", "tutorials/index.html");
     folder.kind = PageKind::Folder;
     folder.cover = Some("cover.jpg".to_string());
@@ -1159,8 +1158,8 @@ fn test_generate_children_grid_folder_shows_count_and_description() {
         result
     );
     assert!(
-        result.contains(r#"<p class="moss-card-description">Learn to build websites</p>"#),
-        "folder card must render its folder note's description. Got: {}",
+        !result.contains("Learn to build websites"),
+        "a folder card must not render its folder note's description. Got: {}",
         result
     );
 }

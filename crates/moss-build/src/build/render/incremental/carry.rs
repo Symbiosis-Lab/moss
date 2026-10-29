@@ -55,11 +55,7 @@ impl CarryProof {
     }
 
     pub fn register_all(&self, pending: &mut PendingManifest) {
-        pending.register_hashed(
-            &self.html.path,
-            &self.html.manifest_value,
-            HashBucket::Files,
-        );
+        pending.register_carried_page(&self.html.path, &self.html.manifest_value);
         if let Some(qr) = &self.qr {
             pending.register_hashed(&qr.path, &qr.manifest_value, HashBucket::Files);
         }

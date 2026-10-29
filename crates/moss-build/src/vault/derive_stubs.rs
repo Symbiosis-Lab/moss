@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use moss_core::resolve::md_extract::{extract_md_references, RefSyntax};
 
 use crate::build::cloud_readiness::{read_to_string_with_materialize_wait, INTERACTIVE_DEADLINE};
-use super::derive_folders::{decisions, folder_key, Decision};
+use super::derive_folders::{decisions, folder_key, nearest_decision, Decision};
 use crate::moss_paths::MossPaths;
 use crate::system::derive::registry::{DerivationEntry, DerivationRegistry};
 
@@ -99,7 +99,7 @@ fn stub_text(entry: &DerivationEntry, file_name: &str) -> String {
         .iter()
         .map(|line| format!("![[{file_name}{line}]]"))
         .collect();
-    format!("---\ninferred: [title, description]\n---\n{}\n", embeds.join("\n\n"))
+    format!("---\ninferred: [title, description, date]\n---\n{}\n", embeds.join("\n\n"))
 }
 
 /// Create `stub` with `text`, unless something is already there. Exclusive on
@@ -149,7 +149,7 @@ pub fn stub_arrivals(site: &MossPaths, registry: &DerivationRegistry, created: &
         };
         let Some(entry) = registry.for_extension(ext) else { continue };
         let shown = folder_key(site, folder)
-            .and_then(|key| decided.get(&key))
+            .and_then(|key| nearest_decision(&decided, &key))
             .is_some_and(|d| matches!(d, Decision::Show(ids) if ids.contains(&entry.derivation_id)));
         if shown && file.is_file() {
             let names = embedded.entry(folder).or_insert_with(|| embedded_names(folder));

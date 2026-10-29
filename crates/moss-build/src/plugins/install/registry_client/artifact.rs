@@ -167,6 +167,11 @@ fn unpack_and_admit(bytes: &[u8], staging: &Path, entry: &IndexEntry) -> Result<
     if let Some(refusal) = super::enforce::withheld(&manifest, false) {
         return Err(format!("{} cannot be installed: {}", entry.id, refusal.sentence(&manifest)));
     }
+    // No program for this computer: the install would succeed and the failure
+    // would show only at first use.
+    if let Some(refusal) = crate::plugins::contributions::platform::manifest_refusal(&manifest) {
+        return Err(refusal.sentence(&manifest));
+    }
     Ok(())
 }
 
@@ -516,6 +521,38 @@ mod tests {
             "and the plugin's own files never left the installed directory"
         );
         assert!(target.join("manifest.json").exists(), "nor did its code");
+    }
+
+    fn derivation_zip(id: &str, platform: Option<&str>) -> Vec<u8> {
+        let mut artifact = serde_json::json!({"kind": "download", "url": "https://example.invalid/u.tgz",
+            "sha256": "ab", "archive_format": "tar.gz"});
+        if let Some(p) = platform {
+            artifact["platform"] = p.into();
+        }
+        let manifest = serde_json::json!({"name": id, "version": "1.0.0", "contributes": {"derivations": {"pdf-pages": {
+            "accepts": ["pdf"], "noun": {"one": "doc", "other": "docs"}, "fragments": {"text": "markdown"},
+            "stub": ["#text"], "run": {"binary": "ocr", "artifact": [artifact]}}}}});
+        zip_with_files(&[("manifest.json", manifest.to_string().as_bytes())])
+    }
+
+    #[test]
+    fn a_plugin_with_no_program_for_this_computer_is_refused_before_it_is_installed() {
+        let stage = |zip: &[u8], id: &str| {
+            let root = tempfile::tempdir().unwrap();
+            let staging = root.path().join(id);
+            super::unpack_and_admit(zip, &staging, &entry(id, "1.0.0"))
+        };
+        let refused = stage(&derivation_zip("ocr", Some("plan9-riscv")), "ocr").expect_err("no artifact fits");
+        assert!(
+            refused.starts_with("Not available on this computer: ocr runs on plan9-riscv only"),
+            "{refused}"
+        );
+
+        let here = crate::build::assets::binary_resolver::get_current_platform().unwrap();
+        stage(&derivation_zip("ocr", Some(&here)), "ocr").expect("an artifact for this computer installs");
+        stage(&derivation_zip("ocr", None), "ocr").expect("an any-platform artifact installs");
+        let js = zip_with_files(&[("manifest.json", br#"{"name":"js","version":"1.0.0","entry":"index.js"}"#)]);
+        stage(&js, "js").expect("a JavaScript plugin installs");
     }
 
     /// What an update killed mid-swap leaves behind, and what the next one

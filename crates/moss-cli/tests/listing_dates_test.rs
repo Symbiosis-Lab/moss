@@ -62,7 +62,7 @@ fn a_month_precision_date_prints_as_a_month_in_the_page_language() {
     let html = en.listing();
     assert!(html.contains("February 2026"), "{html}");
     assert!(!html.contains("2026 · 02"), "{html}");
-    assert!(html.contains("2026 · 03"), "a full date keeps the compact form:\n{html}");
+    assert!(html.contains("March 2026") && !html.contains("2026 · 03"), "a full date names its month too:\n{html}");
 
     let zh = site("lang: zh-hans\n", &[("a.md", "title: A\ndate: 2026-02\nlang: zh-hans\n")]);
     assert!(zh.build(&[]).status.success());

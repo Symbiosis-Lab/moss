@@ -37,6 +37,8 @@ pub struct LayoutConfig {
     pub floating_nav: bool,
     /// `[site].colophon` — whether moss's credit line is emitted (default ON).
     pub colophon: bool,
+    /// `[site].credit` — the site's own line before the colophon's mark.
+    pub colophon_credit: Option<crate::build::render::credits::ColophonCredit>,
     /// `[site].header` — resolved. See `crate::build::components::nav::HeaderMode`.
     pub header: crate::build::components::nav::HeaderMode,
     /// The SITE's declared language as a BCP-47 tag — what `<html lang>` says
@@ -80,6 +82,7 @@ impl LayoutConfig {
             },
             floating_nav: false,
             colophon: true,
+            colophon_credit: None,
             header: crate::build::components::nav::HeaderMode::Brand,
             lang_tag: "en".to_string(),
             place_maps: None,
@@ -160,6 +163,12 @@ impl LayoutConfig {
     /// Set the site-wide colophon preference (`[site].colophon`, default true)
     pub fn with_colophon(mut self, colophon: bool) -> Self {
         self.colophon = colophon;
+        self
+    }
+
+    /// Set the site's own credit line (`[site].credit`).
+    pub fn with_colophon_credit(mut self, credit: Option<crate::build::render::credits::ColophonCredit>) -> Self {
+        self.colophon_credit = credit;
         self
     }
 

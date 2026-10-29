@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
-use moss_core::terms::{term_fold, term_folder_key};
+use moss_core::terms::term_fold;
 
 use super::{precision_rank, route_blocked_diagnostic, route_precision_gate, Frame, FrameTier, Pack, ProjectedPoint, Projection};
 use crate::vault::places::Precision;
@@ -390,7 +390,7 @@ impl PlaceMapRenderContext {
         if !self.is_place_key(key) { return None; }
         let members = members.into_iter();
         let own_name = self.gazetteer.iter().find_map(|(display, _)| {
-            (term_folder_key(&self.namespace, display) == key).then(|| display.clone())
+            (self.gazetteer.term_key(&self.namespace, display) == key).then(|| display.clone())
         });
         let mut target = if let Some(name) = own_name.as_ref() {
             let direct = self.maps.resolve_locations(&self.namespace, &self.gazetteer, std::slice::from_ref(name), route);
@@ -563,7 +563,7 @@ impl PlaceMapRenderContext {
         let Some((display, _)) = self.gazetteer.find(name) else {
             return false;
         };
-        let mut current = term_folder_key(&self.namespace, display);
+        let mut current = self.gazetteer.term_key(&self.namespace, display);
         let mut seen = HashSet::new();
         seen.insert(current.clone());
         loop {
@@ -573,7 +573,7 @@ impl PlaceMapRenderContext {
             let Some(parent_display) = self.parents.get(&current) else {
                 return false;
             };
-            current = term_folder_key(&self.namespace, parent_display);
+            current = self.gazetteer.term_key(&self.namespace, parent_display);
             // `parents` is already a fixed point (break_cycles cut every
             // cycle when it was built); `seen` is a defensive backstop
             // against a hand-built map reaching this some other way, the
@@ -667,7 +667,7 @@ impl PlaceMapContext {
             let Some((display, record)) = gazetteer.find(name) else {
                 continue;
             };
-            let key = term_folder_key(namespace, display);
+            let key = gazetteer.term_key(namespace, display);
             if !seen.insert(key.clone()) {
                 continue;
             }
@@ -781,6 +781,15 @@ impl PlaceMapTarget {
 
     pub fn marker_places(&self) -> impl Iterator<Item = &ResolvedPlace> {
         self.places.iter().filter(|place| place.point().is_some())
+    }
+
+    /// Coarse places first, then by key. Of several places on one pixel the
+    /// first drawn keeps the dot, so this order, not the input's (which
+    /// differs between platforms), decides which.
+    pub fn markers_in_draw_order(&self) -> Vec<&ResolvedPlace> {
+        let mut places: Vec<&ResolvedPlace> = self.marker_places().collect();
+        places.sort_by_cached_key(|place| (matches!(place.precision, Precision::Exact | Precision::City), place.precision as u8, place.key.clone()));
+        places
     }
 }
 
@@ -1069,7 +1078,7 @@ mod tests {
             fields: vec!["location".to_string()],
             title: "Places".to_string(),
             titles: Vec::new(), counts: Vec::new(), is_place: true,
-            parents: Default::default(), explorer: None, line: None,
+            parents: Default::default(), explorer: None, line: None, slugs: Default::default(),
         }];
         crate::build::terms::places::attach_parents(&mut kinds, &gaz);
         let maps = PlaceMapContext::new(super::super::embedded().unwrap());

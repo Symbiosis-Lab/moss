@@ -20,11 +20,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// This is for the CLI's *own* human-readable output (`start_cli_build`
 /// messages, the `crate::build::stdout_sink()` progress stream) — the direct
 /// `eprintln!` calls, distinct from the `tauri-plugin-log` sink that
-/// [`crate::diagnostics::stdout_target`] wraps. Same hazard, same fix: with
-/// `panic = "abort"`, an `eprintln!` that hits a closed stderr pipe
-/// (`moss build | head`, a disconnected harness) panics and aborts the whole
-/// app. Routing through `writeln!` and discarding the `Result` makes a closed
-/// pipe a no-op.
+/// [`crate::diagnostics::stdout_target`] wraps. Same hazard, same fix: an
+/// `eprintln!` that hits a closed stderr pipe (`moss build | head`, a
+/// disconnected harness) panics, which ends the build or, on a thread nothing
+/// catches on, the whole process. Routing through `writeln!` and discarding
+/// the `Result` makes a closed pipe a no-op.
 ///
 /// Split from [`eprint_status_line`] so the swallow is unit-testable against
 /// a writer that always fails.
@@ -211,19 +211,6 @@ fn take_built() -> Option<(usize, usize, usize)> {
         let notes = b[2].swap(0, Ordering::Relaxed);
         pages.checked_sub(1).map(|p| (p, partials, notes))
     })
-}
-
-/// Warn once per callout whose type moss does not know; it renders as a note.
-pub(crate) fn warn_unknown_callouts(doc: &moss_core::ast::Document, file_path: &str) {
-    moss_core::ast::visit_blocks(doc, |block| {
-        if let moss_core::ast::Block::Callout { unknown_kind: Some(name), .. } = block {
-            log_warn_problem!(
-                "[{file_path}] callout type '{name}' is not one moss knows, so it renders as a note; known types: {}",
-                moss_core::ast::node::CALLOUT_TYPES.join(", ")
-            );
-        }
-        true
-    });
 }
 
 /// Record that one CLI-visible problem line was printed. Called by

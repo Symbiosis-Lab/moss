@@ -468,6 +468,26 @@ fn a_page_whose_source_was_deleted_is_author_removed() {
     assert_eq!(removed_of(&prev, &cur), [("b/index.html".to_string(), RemovalReason::AuthorRemoved)]);
 }
 
+/// A page's QR code goes with the page, so deleting the page explains it; a QR
+/// code that vanishes while its page stays is still unexplained.
+#[test]
+fn a_deleted_pages_qr_code_is_author_removed_with_it() {
+    let prev = snapshot(&sealed(
+        &[("a.md", "a/index.html", "h", b"A"), ("b.md", "b/index.html", "h", b"B")],
+        &[("qr/a.svg", &b"QA"[..]), ("qr/b.svg", &b"QB"[..])],
+    ));
+    let cur = sealed(&[("a.md", "a/index.html", "h", b"A")], &[]);
+
+    assert_eq!(
+        removed_of(&prev, &cur),
+        [
+            ("b/index.html".to_string(), RemovalReason::AuthorRemoved),
+            ("qr/a.svg".to_string(), RemovalReason::Unexplained),
+            ("qr/b.svg".to_string(), RemovalReason::AuthorRemoved),
+        ]
+    );
+}
+
 /// The source is still there but its address moved and nothing answers at the
 /// old one: the author did not ask for that 404.
 #[test]

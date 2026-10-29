@@ -97,6 +97,7 @@ mod tests {
     use super::super::moderation::sign_mod_event;
     use super::super::CommentAuthor;
     use super::*;
+    use k256::elliptic_curve::Generate;
     use k256::schnorr::SigningKey;
 
     /// A throwaway owner keypair from k256's own generator; the reducer only
@@ -107,7 +108,7 @@ mod tests {
     }
 
     fn owner() -> Owner {
-        let sk = SigningKey::random(&mut rand::rngs::OsRng);
+        let sk = SigningKey::generate();
         let pubkey = hex::encode(sk.verifying_key().to_bytes());
         Owner { sk, pubkey }
     }

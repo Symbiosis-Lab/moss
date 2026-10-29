@@ -13,6 +13,13 @@ const MODEL: Record<string, Record<'heading' | 'link', { left: number; right: nu
 );
 
 const lum = ([r, g, b]: readonly number[]) => relativeLuminance(r, g, b);
+
+/** A computed colour as 0-255 channels and alpha, whether the engine writes `rgb()` or `color(srgb …)`. */
+const channels = (css: string) => {
+  const nums = (css.match(/[\d.]+/g) ?? []).map(Number);
+  const scale = css.startsWith('color(') ? 255 : 1;
+  return { rgb: nums.slice(0, 3).map((n) => n * scale), a: nums[3] ?? 1 };
+};
 const contrastWith = (ink: string, ground: readonly number[]) => contrastRatio(luminanceOfCss(ink), lum(ground));
 
 const PAGES = [
@@ -54,7 +61,12 @@ const measure = (page: Page) =>
           bottom: Math.max(...rects.map((r) => r.bottom)),
         };
       })(),
+      headingLeading: parseFloat(getComputedStyle(content.querySelector('h2')!).lineHeight) / parseFloat(getComputedStyle(content.querySelector('h2')!).fontSize),
       link: box(content.querySelector('a')!),
+      linkStyle: (() => {
+        const cs = getComputedStyle(content.querySelector('a')!);
+        return { weight: cs.fontWeight, fill: cs.backgroundColor, border: cs.borderTopColor, ink: cs.color, text: getComputedStyle(document.body).color, page: getComputedStyle(document.body).backgroundColor };
+      })(),
       colophon: box(document.querySelector('footer .moss-colophon')!),
       colophonInk: getComputedStyle(document.querySelector('footer .moss-colophon a')!).color,
       credit: box(hero.querySelector('.moss-hero-credit')!),
@@ -104,6 +116,20 @@ for (const scheme of SCHEMES) {
           }
           // `align=start`: the words are at the top, the colophon at the foot.
           expect(m.heading.top - m.hero.top).toBeLessThan(m.hero.bottom - m.heading.bottom);
+          // They start clamp(8px, 2vw, 24px) below the picture's top edge, and the display heading sets at 1.08.
+          expect(m.heading.top - m.hero.top, 'the words start close to the top').toBeCloseTo(Math.min(24, Math.max(8, 0.02 * m.viewport)), 0);
+          expect(m.headingLeading, 'the heading line height').toBeCloseTo(1.08, 2);
+
+          // The call to action: weight 500, in the text colour with its border, on the page colour at 80%; it reads
+          // at 4.5:1 over pure white and pure black whatever the picture behind it is.
+          expect(m.linkStyle.weight).toBe('500');
+          expect(m.linkStyle.ink, 'the text colour').toBe(m.linkStyle.text);
+          expect(m.linkStyle.border, 'the border is the text colour').toBe(m.linkStyle.text);
+          const fill = channels(m.linkStyle.fill);
+          expect(fill.a, 'the link fill is 80% of the page colour').toBeCloseTo(0.8, 2);
+          channels(m.linkStyle.page).rgb.forEach((c, i) => expect(fill.rgb[i]).toBeCloseTo(c, 0));
+          const { overBlack, overWhite } = worstCaseContrast(`rgba(${fill.rgb.join(',')},${fill.a})`, m.linkStyle.ink);
+          expect(Math.min(overBlack, overWhite), 'the link text on its fill').toBeGreaterThanOrEqual(4.5);
 
           expect(m.visibleSrc.length, 'one picture of the pair is shown').toBe(1);
           expect(m.visibleSrc[0].includes('dark'), `the ${scheme} picture is the one shown`).toBe(scheme === 'dark');
@@ -406,6 +432,20 @@ const openFaded = async (page: Page, theme: string | null = null, url = FADE) =>
   );
 };
 
+/** The theme's page text colour and page colour, as the engine computes them now. */
+const themeInks = (page: Page) =>
+  page.evaluate(() => {
+    const read = (token: string) => {
+      const probe = document.createElement('i');
+      probe.style.color = `var(${token})`;
+      document.body.append(probe);
+      const colour = getComputedStyle(probe).color;
+      probe.remove();
+      return colour;
+    };
+    return { text: read('--moss-color-text'), page: read('--moss-color-bg') };
+  });
+
 const fadedBoxes = (page: Page) =>
   page.evaluate(() => {
     const box = (el: Element) => {
@@ -421,6 +461,13 @@ const fadedBoxes = (page: Page) =>
       hero: box(hero),
       content: box(content),
       heading: box(content.querySelector('h2')!),
+      // The credit's glyphs: where its text ends and how many lines it sets.
+      creditText: (() => {
+        const range = document.createRange();
+        range.selectNodeContents(credit);
+        const rects = [...range.getClientRects()];
+        return { left: Math.min(...rects.map((r) => r.left)), right: Math.max(...rects.map((r) => r.right)), lines: new Set(rects.map((r) => Math.round(r.top))).size };
+      })(),
       // The glyph line boxes of the heading (a Range's client rects), not its element box, which is the whole measure.
       headingText: (() => {
         const range = document.createRange();
@@ -488,8 +535,8 @@ for (const theme of THEMES) {
       for (const [part, real] of [['heading', rel(m.headingText)], ['link', rel(m.link)]] as const) {
         const want = MODEL[String(width)][part];
         const where = `${part} at ${width}px: real ${JSON.stringify(real)}, modelled ${JSON.stringify(want)}`;
-        // A line's client rect is its font's content area, a few px above its line box.
-        expect(real.top, where).toBeGreaterThanOrEqual(want.top - 6);
+        // A line's client rect is its font's content area, which at the heading's 1.08 leading runs several px above its line box, by an amount that depends on the face's metrics and so cannot be modelled.
+        expect(real.top, where).toBeGreaterThanOrEqual(want.top - 10);
         expect(real.bottom, where).toBeLessThanOrEqual(want.bottom + 2);
         expect(real.left, where).toBeGreaterThanOrEqual(want.left - 2);
         expect(real.right, where).toBeLessThanOrEqual(want.right + 2);
@@ -505,7 +552,10 @@ for (const theme of THEMES) {
       // The credit stays at the foot, on the inline end, last before the colophon.
       expect(m.credit.top, 'below the words').toBeGreaterThan(m.content.bottom);
       expect(Math.abs(m.credit.bottom - m.colophon.top), 'on the colophon row').toBeLessThanOrEqual(2);
-      expect(Math.abs(m.credit.right - m.hero.right), 'at the inline end').toBeLessThanOrEqual(1);
+      // Its text ends where the page's text column ends (the words start at the other end of it), on one line where it fits.
+      const column = MODEL[String(width)].heading.left;
+      expect(Math.abs(m.creditText.right - (m.hero.right - column)), 'right-aligned to the end of the column').toBeLessThanOrEqual(1);
+      if (width >= 1360) expect(m.creditText.lines, 'on one line').toBe(1);
       expect(m.creditStyle.size).toBeLessThan(16);
 
       // In ink, no panel, and AA against every pixel behind them.
@@ -530,9 +580,19 @@ test('a faded closing picture in a right-to-left page: the credit sits at the fo
   await openFaded(page);
   await page.evaluate(() => { document.documentElement.dir = 'rtl'; });
   const m = await fadedBoxes(page);
-  expect(Math.abs(m.credit.left - m.hero.left), 'at the inline end').toBeLessThanOrEqual(1);
+  expect(Math.abs(m.creditText.left - (m.hero.left + MODEL['1360'].heading.left)), 'at the end of the column, which is the inline end').toBeLessThanOrEqual(1);
   expect(m.credit.top, 'below the words').toBeGreaterThan(m.content.bottom);
   expect(Math.abs(m.credit.bottom - m.colophon.top), 'on the colophon row').toBeLessThanOrEqual(2);
+});
+
+test('the credit is in the UI face, and --moss-hero-credit-font gives it another', async ({ page }) => {
+  await page.setViewportSize({ width: 1360, height: 800 });
+  await openFaded(page);
+  const family = () => page.evaluate(() => [getComputedStyle(document.querySelector('footer .moss-hero-credit')!).fontFamily, getComputedStyle(document.body).fontFamily]);
+  const [credit, body] = await family();
+  expect(credit, 'the UI face by default').toBe(body);
+  await page.evaluate(() => document.documentElement.style.setProperty('--moss-hero-credit-font', 'monospace'));
+  expect((await family())[0]).toBe('monospace');
 });
 
 test('a faded closing picture is still capped by --moss-hero-max-height, and the crop keeps the foot', async ({ page }) => {
@@ -592,6 +652,34 @@ for (const scheme of SCHEMES) {
   }
 }
 
+for (const width of [1360, 390]) {
+  test(`the closing heading and link take their size and padding from tokens, ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await openFaded(page);
+    await page.addStyleTag({ content: ':root { --moss-hero-title-size: 33px; --moss-hero-link-size: 19px; --moss-hero-link-padding: 1em 2em; }' });
+    const m = await page.evaluate(() => {
+      const content = document.querySelector('footer .moss-hero-closing .moss-hero-content')!;
+      const link = getComputedStyle(content.querySelector('a')!);
+      return { title: getComputedStyle(content.querySelector('h2')!).fontSize, link: link.fontSize, pad: [link.paddingTop, link.paddingLeft] };
+    });
+    expect(m).toEqual({ title: '33px', link: '19px', pad: ['19px', '38px'] });
+  });
+}
+
+// A faded top shows the page, so the words in ink take the theme's own colours,
+// not moss's fixed near-black and white.
+for (const theme of THEMES) {
+  test(`a faded closing picture's words are the page's text colour, ${theme.name}`, async ({ browser }) => {
+    const context = await browser.newContext({ colorScheme: theme.system, viewport: { width: 1360, height: 800 } });
+    const page = await context.newPage();
+    await openFaded(page, theme.toggle);
+    const m = await fadedBoxes(page);
+    expect(parseColor(m.words.panel).a, 'in ink, no panel').toBe(0);
+    expect(m.words.ink).toBe((await themeInks(page)).text);
+    await context.close();
+  });
+}
+
 // `panel=none` is the author's call: plain ink over the same hatching, with nothing
 // behind the words or the credit, the better ink of the two in each theme.
 const PLAIN = `http://localhost:${gatePort('closing-picture:plain')}/`;
@@ -609,13 +697,15 @@ for (const scheme of SCHEMES) {
           panels: [getComputedStyle(content).backgroundColor, getComputedStyle(credit).backgroundColor],
           ink: [getComputedStyle(content.querySelector('h2')!).color, getComputedStyle(credit).color],
           tail: getComputedStyle(content, '::after').content,
+          shadows: [content, content.querySelector('h2')!, content.querySelector('a')!].map((e) => getComputedStyle(e).textShadow),
         };
       });
+      expect(m.shadows, 'panel=none draws no shadow').toEqual(['none', 'none', 'none']);
       expect(parseColor(m.panels[0]).a, 'no panel behind the words').toBe(0);
       expect(parseColor(m.panels[1]).a, 'no panel behind the credit').toBe(0);
-      // One of the two inks, whichever reads better over the hatching at this layout.
-      const words = luminanceOfCss(m.ink[0]);
-      expect(words < 0.05 || words > 0.8, `words ${m.ink[0]} are the dark or the light ink`).toBe(true);
+      // One of the theme's two inks, its text or its page colour, whichever reads better over the hatching at this layout.
+      const inks = await themeInks(page);
+      expect([inks.text, inks.page], `words ${m.ink[0]}`).toContain(m.ink[0]);
       await context.close();
     });
   }
@@ -693,15 +783,11 @@ for (const theme of THEMES) {
       expect(parseColor(m.creditStyle.panel).a, 'no panel behind the credit').toBe(0);
       // Dark ink on the pale sky in light, light ink on the dark sky in dark; the
       // credit is the page colour over the dark foot in light and the pale foot in dark.
-      const wordsLum = luminanceOfCss(m.words.ink);
+      // The words take the theme's page text colour (a faded top shows the page), whichever theme.
+      expect(m.words.ink, 'words in the theme\'s text colour').toBe((await themeInks(page)).text);
       const creditLum = luminanceOfCss(m.creditStyle.ink);
-      if (theme.dark) {
-        expect(wordsLum, `words ${m.words.ink}`).toBeGreaterThan(0.8);
-        expect(creditLum, `credit ${m.creditStyle.ink}`).toBeLessThan(0.05);
-      } else {
-        expect(wordsLum, `words ${m.words.ink}`).toBeLessThan(0.05);
-        expect(creditLum, `credit ${m.creditStyle.ink}`).toBeGreaterThan(0.8);
-      }
+      if (theme.dark) expect(creditLum, `credit ${m.creditStyle.ink}`).toBeLessThan(0.05);
+      else expect(creditLum, `credit ${m.creditStyle.ink}`).toBeGreaterThan(0.8);
       expect(m.creditStyle.size).toBeLessThan(16);
       expect(worstContrast(m.words.ink, await backdrop(page, m.heading)), 'heading').toBeGreaterThanOrEqual(4.5);
       expect(worstContrast(m.words.ink, await backdrop(page, m.link)), 'link').toBeGreaterThanOrEqual(4.5);
@@ -832,3 +918,39 @@ for (const site of ARCHIVAL_SITES) {
     }
   }
 }
+
+// Heading, text and links keep a gap each, and a heading straight before the links two, whatever the words hold.
+const gapsOf = (page: import('@playwright/test').Page) =>
+  page.evaluate(() => {
+    const box = (sel: string) => document.querySelector(`footer .moss-hero-closing .moss-hero-content ${sel}`)!.getBoundingClientRect();
+    const heading = box('h2');
+    const text = document.querySelectorAll('footer .moss-hero-closing .moss-hero-content p').length > 1 ? box('p') : null;
+    const link = box('a');
+    return text ? { heading: text.top - heading.bottom, text: link.top - text.bottom } : { heading: link.top - heading.bottom, text: null };
+  });
+
+for (const width of [1360, 390]) {
+  test(`the closing words keep their gaps, set by --moss-hero-words-gap, ${width}px`, async ({ browser }) => {
+    for (const [url, text] of [[BUSY_FADE, true], [`http://localhost:${gatePort('closing-picture')}/`, false]] as const) {
+      const page = await browser.newPage({ viewport: { width, height: 800 } });
+      await page.goto(url, { waitUntil: 'load' });
+      const rest = await gapsOf(page);
+      const gaps = text ? 1 : 2; // a heading straight before the links is the heading's gap and the link's
+      expect(rest.heading, 'heading to the next block, by default').toBeCloseTo(16 * gaps, 0);
+      if (text) expect(rest.text, 'text to the links, by default').toBeCloseTo(16, 0);
+      await page.addStyleTag({ content: ':root { --moss-hero-words-gap: 28px; }' });
+      const set = await gapsOf(page);
+      expect(set.heading, 'heading to the next block, with the token').toBeCloseTo(28 * gaps, 0);
+      if (text) expect(set.text, 'text to the links, with the token').toBeCloseTo(28, 0);
+      await page.close();
+    }
+  });
+}
+
+test('--moss-hero-credit-size sets the credit size', async ({ page }) => {
+  await page.goto(`http://localhost:${gatePort('closing-picture')}/`, { waitUntil: 'load' });
+  const size = () => page.locator('footer .moss-hero-credit').evaluate((e) => getComputedStyle(e).fontSize);
+  expect(await size()).toBe('12px');
+  await page.addStyleTag({ content: ':root { --moss-hero-credit-size: 15px; }' });
+  expect(await size()).toBe('15px');
+});

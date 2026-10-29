@@ -87,6 +87,11 @@ pub struct Document {
     /// as build problems.
     #[serde(default)]
     pub advisories: Vec<String>,
+    /// For each top-level `:::subscribe` block (by index) whose email input is
+    /// named by the text just above it: the id of that text. Set by
+    /// [`Document::label_subscribe_prompts`].
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub subscribe_labels: std::collections::BTreeMap<usize, String>,
 }
 
 impl Document {
@@ -106,6 +111,7 @@ impl Document {
             slot_only: false,
             warnings: Vec::new(),
             advisories: Vec::new(),
+            subscribe_labels: Default::default(),
         }
     }
 
@@ -123,7 +129,29 @@ impl Document {
             slot_only: false,
             warnings: Vec::new(),
             advisories: Vec::new(),
+            subscribe_labels: Default::default(),
         }
+    }
+
+    /// Decide which text names each `:::subscribe` input: a paragraph of at most
+    /// 120 characters directly above it, which the renderer gives the id
+    /// assigned here. A heading is left out because its permalink link would
+    /// be read as part of the name. `scope` keeps those ids
+    /// distinct between documents that share a page (a footer, a transcluded
+    /// partial): `None` for the page itself, the file's path for the others.
+    pub fn label_subscribe_prompts(&mut self, shared_file: Option<&str>) {
+        let scope: String = shared_file
+            .map(|f| f.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).chain(['-']).collect())
+            .unwrap_or_default();
+        self.subscribe_labels = (1..self.blocks.len())
+            .filter(|&i| matches!(self.blocks[i], Block::Shortcode(super::shortcode::Shortcode::Subscribe(_))))
+            .filter_map(|i| match &self.blocks[i - 1] {
+                Block::Paragraph(text) if super::plain_text::inlines_to_plain_text(text).chars().count() <= 120 => {
+                    Some((i, format!("moss-subscribe-prompt-{scope}{}", i - 1)))
+                }
+                _ => None,
+            })
+            .collect();
     }
 
     /// True if any top-level block is a shortcode of the given kind.

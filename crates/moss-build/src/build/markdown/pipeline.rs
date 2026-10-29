@@ -34,6 +34,19 @@ use super::html_post::{
     prepare_markdown_source, resolve_to_root_relative, strip_percent_comments,
 };
 
+/// The text the parser reads for a whole file: its body with CriticMarkup
+/// accepted and `%%` comments stripped, in either frontmatter dialect. Emits
+/// nothing, so a second read of the same file (the page as authored) cannot
+/// repeat the build's warnings.
+fn parse_ready_body(content: &str) -> String {
+    let body = if is_simplified_frontmatter(content) {
+        parse_simplified_frontmatter(content).1
+    } else {
+        normalize_body_like_gray_matter(moss_core::frontmatter::parse(content).render_body())
+    };
+    super::html_post::strip_percent_comments(&super::html_post::accept_criticmarkup(&body)).into_owned()
+}
+
 /// Reproduce gray_matter's body normalization byte-for-byte.
 ///
 /// The traditional-YAML branch historically took the markdown body from
@@ -435,7 +448,7 @@ pub struct PageContext<'a> {
 
 /// What a page with no derived embeds is given.
 static NO_FACTS: moss_core::resolve::embeds::derived::DerivedFacts =
-    moss_core::resolve::embeds::derived::DerivedFacts { title: None, description: None };
+    moss_core::resolve::embeds::derived::DerivedFacts { title: None, description: None, date: None };
 
 impl Default for PageContext<'_> {
     fn default() -> Self {
@@ -605,7 +618,7 @@ pub fn process_markdown_file(
     // Task 5: defensive conversion for future authors who might write the old form.
     frontmatter.normalize();
     let event = crate::build::types::EventFields::from_frontmatter(&frontmatter);
-    // `inferred: [title, description]` takes those fields from the first
+    // `inferred: [title, description, date]` takes those fields from the first
     // embedded derived file that has them — only when the page sets none of
     // its own.
     let listed = frontmatter.inferred.clone().unwrap_or_default();
@@ -614,6 +627,9 @@ pub fn process_markdown_file(
     }
     if let Some(text) = page.derived_facts.fact_for("description", frontmatter.description.as_deref(), &listed) {
         frontmatter.description = Some(text);
+    }
+    if let Some(date) = page.derived_facts.fact_for("date", frontmatter.date.as_deref(), &listed) {
+        frontmatter.date = Some(date);
     }
 
     // Translate the deprecated `sidebar:` field for both simplified and YAML
@@ -1012,12 +1028,19 @@ pub fn process_markdown_file(
     let mut doc = moss_core::ast::parse_with_config(&markdown_content, &parse_config);
     // Mirrors the `frontmatter:` warning line above: a misspelled shortcode
     // used to leave no trace but a `moss-unknown-shortcode` div in the output.
-    for w in &doc.warnings {
+    // A page whose embeds were expanded into `content` would repeat each
+    // embedded file's findings under its own name, so read them from the
+    // page as authored; the embedded file reports its own.
+    let authored_doc = page.authored_source.filter(|a| *a != content).map(|a| {
+        moss_core::ast::parse_with_config(&parse_ready_body(a), &parse_config)
+    });
+    let findings = authored_doc.as_ref().unwrap_or(&doc);
+    for w in &findings.warnings {
         crate::build::cli_output::cli_warn!("[{}] {}", file_path, w);
     }
     // Advisories are plain log lines, not problems: the page builds the same
     // either way, so `--strict` does not count them.
-    for a in &doc.advisories {
+    for a in &findings.advisories {
         crate::build::cli_output::log_note!("[{}] {}", file_path, a);
     }
 
@@ -1101,7 +1124,8 @@ pub fn process_markdown_file(
     // A footer that ends in a hero closes the page with it.
     let closes_page = injects_into_every_page && crate::build::footer::ends_in_hero(&doc);
     super::hero_ink::note_forced_ink(&doc, media_lookup, file_path, closes_page);
-    super::hero_ink::warn_closing_options(&doc, closes_page, file_path);
+    super::hero_ink::warn_closing_options(&doc, closes_page, file_path, &media_lookup.map(|l| l.page_ground().type_theme).unwrap_or_default());
+    super::body_plan::warn_uncountable_cards(&doc, file_path);
 
     // 3. Extract the Hero shortcode for hoisting.
     //    LOCKED ORDER: must run AFTER `resolve_urls` (constraint 2) and
@@ -1137,20 +1161,20 @@ pub fn process_markdown_file(
     //    body cover, double-counting against the OG image already captured
     //    from `hero_extraction.image_url`.
     //
-    //    Mirrors the legacy `transform_events` filter (raster extensions
-    //    only, no folder/non-image trailing slash) so the field stays
-    //    byte-equivalent to today's `ParsedDocument.body_cover_path`.
-    let body_cover_path: Option<String> =
-        moss_core::ast::find_first_block_image(&doc).and_then(|url| match url {
-            moss_core::ast::Url::Resolved(r) => {
-                let href = &r.href;
-                if href.ends_with('/') {
-                    return None;
-                }
-                crate::build::page::cover::is_raster_picture(href).then(|| href.clone())
-            }
-            _ => None,
-        });
+    //    Only raster pictures with a file-like href qualify: the share image
+    //    and listing cards cannot use a vector, a video or a folder URL.
+    let body_images = moss_core::ast::block_images(&doc);
+    let raster_href = |url: &moss_core::ast::Url| match url {
+        moss_core::ast::Url::Resolved(r)
+            if !r.href.ends_with('/') && crate::build::page::cover::is_raster_picture(&r.href) =>
+        {
+            Some(r.href.clone())
+        }
+        _ => None,
+    };
+    let body_cover_path: Option<String> = body_images.first().and_then(|u| raster_href(u));
+    let body_cover_candidates: Vec<String> =
+        body_images.iter().filter_map(|u| raster_href(u)).collect();
 
     // 5. Final safety net: any `Url::Unresolved` that escaped phases 1-2
     //    (e.g., a future URL-bearing variant added before its phase wires
@@ -1165,6 +1189,9 @@ pub fn process_markdown_file(
     for href in moss_core::ast::images_without_text(&doc) {
         crate::build::cli_output::log_note!("Accessibility: image '{href}' on '{file_path}' has no alt text — write it in the brackets: ![describe the image]({href})");
     }
+    if moss_core::ast::has_raw_style_block(&doc) {
+        crate::build::cli_output::log_note!("Style: '{file_path}' has a <style> block, which overrides the theme (its rules sit outside the theme's cascade layers); move the rules into .moss/theme/style.css");
+    }
     for warning in moss_core::ast::image_word_warnings(&doc) {
         crate::build::cli_output::log_note!("Image: {warning} — on '{file_path}'");
     }
@@ -1177,6 +1204,9 @@ pub fn process_markdown_file(
         moss_core::ast::clear_heading_ids(&mut doc);
         crate::build::footer::section_footer_blocks(&mut doc, closes_page);
     }
+
+    // 5c. Which text names each `:::subscribe` input, once the footer's blocks are final.
+    doc.label_subscribe_prompts(is_slot_only.then_some(file_path));
 
     // 6. Render the typed AST to HTML through `PipelineHooks`. This is THE
     //    production HTML emission — `transform_events` no longer runs for
@@ -1233,7 +1263,6 @@ pub fn process_markdown_file(
     // Callout presence: same mechanism, gating the `callouts` stylesheet
     // partial (`build/emit/stylesheet.rs`) rather than an injected asset.
     let has_callout = moss_core::ast::has_callout_recursive(&doc);
-    crate::build::cli_output::warn_unknown_callouts(&doc, file_path);
     // Footnote presence: same mechanism again, but this one gates a runtime
     // SCRIPT (the sidenotes bundle) rather than a stylesheet partial.
     let has_footnotes = !moss_core::ast::footnotes::FootnoteIndex::build(&doc.blocks).is_empty();
@@ -1354,6 +1383,9 @@ pub fn process_markdown_file(
     // (render/html.rs, render/blocking.rs) from `doc.title`; the body is
     // passed through untouched here. `article_title_outcome` makes the title
     // decision, including an opening hero that stands in for the title.
+    if let Some(body_heading) = moss_core::heading::body_heading_replacing_title(heading_inputs, is_nav_page) {
+        crate::build::cli_output::log_note!("Heading: in '{file_path}' the body's `# {body_heading}` replaces the page title '{}'; to keep the title as the page heading, open the body with `# {}` and make the other heading `##`", heading.text, heading.text);
+    }
     match moss_core::heading::article_title_outcome(heading_inputs, is_nav_page) {
         TitleOutcome::None => {}
         outcome => body_plan.prepend_html(inject_article_title_h1(
@@ -1650,6 +1682,7 @@ pub fn process_markdown_file(
         body_claims_eager,
         hero_image_url,
         body_cover_path,
+        body_cover_candidates,
         hero_overlay_text,
         features: crate::build::types::PageFeatures {
             inline_subscribe: has_inline_subscribe,
@@ -2212,6 +2245,23 @@ struct PipelineHooks<'a> {
 }
 
 impl<'a> PipelineHooks<'a> {
+    /// Scope is "" here: the site's language sections are not known until
+    /// every page has parsed. `render_segmented` keeps a top-level form as its
+    /// own segment and the Reduce phase re-renders it with the page's scope
+    /// (`email::stamp_inline_subscribe_scopes`); a form inside a grid cell
+    /// keeps the root audience. Unpublished sites (empty site_id) render the
+    /// pending form, consistent with the auto-injected footer form.
+    fn render_subscribe_form(&self, args: &moss_core::ast::SubscribeShortcode) -> String {
+        crate::build::features::email::render_hosted_subscribe_form(
+            Some(self.site_id).filter(|s| !s.is_empty()),
+            self.lang,
+            "",
+            args.placeholder.as_deref(),
+            args.button.as_deref(),
+            self.seta_base,
+        )
+    }
+
     /// `DefaultHooks` bound to this render's asset snapshot, for the shortcode
     /// arms that delegate their whole byte shape to moss-core.
     fn asset_bound_hooks(&self) -> moss_core::ast::DefaultHooks<'a> {
@@ -2254,7 +2304,9 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
         args: &moss_core::ast::GridShortcode,
         source_line: Option<usize>,
     ) -> moss_core::ast::GridParts {
-        let hooks = moss_core::ast::DefaultHooks::grid_cells(self.assets);
+        let subscribe = |a: &moss_core::ast::SubscribeShortcode| self.render_subscribe_form(a);
+        let hooks = moss_core::ast::DefaultHooks::grid_cells(self.assets)
+            .with_subscribe_form(moss_core::ast::SubscribeFormFn(&subscribe));
         moss_core::ast::render_grid_parts(&hooks, args, source_line)
     }
 
@@ -2354,21 +2406,7 @@ impl<'a> moss_core::ast::RenderHooks for PipelineHooks<'a> {
     ) {
         match sc {
             moss_core::ast::Shortcode::Subscribe(args) => {
-                // Scope is "" here: the site's language sections are not known
-                // until every page has parsed. `render_segmented` keeps this
-                // form as its own segment and the Reduce phase re-renders it
-                // with the page's scope (`email::stamp_inline_subscribe_scopes`).
-                // Unpublished sites (empty site_id) render the pending form,
-                // consistent with the auto-injected footer form.
-                let html = crate::build::features::email::render_hosted_subscribe_form(
-                    Some(self.site_id).filter(|s| !s.is_empty()),
-                    self.lang,
-                    "",
-                    args.placeholder.as_deref(),
-                    args.button.as_deref(),
-                    self.seta_base,
-                );
-                out.push_str(&html);
+                out.push_str(&self.render_subscribe_form(args));
             }
             moss_core::ast::Shortcode::Grid(args) => {
                 // moss-core's own Grid arm, verbatim: the asset binding lives

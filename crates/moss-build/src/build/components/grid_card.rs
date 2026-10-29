@@ -163,9 +163,10 @@ fn render_item(
     // Pre-fix this emitted `{kicker}{title}{meta}` — placing the meta
     // BELOW the title (where it visually read as a subtitle, not a kicker).
     //
-    // Description slot — a paragraph BELOW the title, for file/article and
-    // folder cards alike. A folder card keeps its "N articles" meta and adds
-    // its folder note's `description:` here, the same as a page card. The
+    // Description slot — a paragraph BELOW the title, file/article cards
+    // only (`child_count.is_none()`). A folder card is a tile: its "N
+    // articles" meta says what is behind it, and a description clamped to a
+    // third of the column only cut the folder note's sentence short. The
     // text is frontmatter-only (the callers leave `props_for_document`'s
     // reading alone, never the auto-extracted excerpt), so the slot stays
     // author-intentional. Mirrors child_summary's below-title
@@ -177,6 +178,7 @@ fn render_item(
     let description_html = props.description.as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
+        .filter(|_| props.child_count.is_none())
         .filter(|_| !used_in_quote_slot)
         .map(|d| format!(r#"<p class="moss-card-description">{}</p>"#, render_description_html_in_link(d)))
         .unwrap_or_default();

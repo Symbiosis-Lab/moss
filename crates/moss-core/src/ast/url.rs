@@ -118,6 +118,14 @@ impl Url {
     pub fn is_resolved(&self) -> bool {
         matches!(self, Url::Resolved(_))
     }
+
+    /// The address as written (unresolved) or as classified (resolved).
+    pub fn href(&self) -> &str {
+        match self {
+            Url::Resolved(r) => &r.href,
+            Url::Unresolved(s) => s,
+        }
+    }
 }
 
 impl ResolvedUrl {

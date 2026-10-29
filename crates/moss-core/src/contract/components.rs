@@ -195,6 +195,8 @@ pub const UNPREFIXED_LEGACY_CLASSES: &[&str] = &[
     "wikilink",
     // The expand/exit-fullscreen control of an embedded iframe (immersive mode).
     "immersive-fullscreen-btn",
+    // The box site script puts around an embedded local iframe.
+    "immersive-iframe-wrapper",
     // Written by authors, like `no-cards`; moss only reads it.
     "no-viewer",
 ];
@@ -1114,11 +1116,11 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         kind: "instance",
         parent: "moss-derived",
         data_attrs: &[],
-        example_html: r#"<div class="moss-derived moss-derived--pending" role="status"></div>"#,
+        example_html: r#"<div class="moss-derived moss-derived--pending" role="status"><span>Reading the text of this file…</span></div>"#,
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "Modifier: the text is still being read. Shows a faint grid; the build replaces it once the text exists.",
+        description: "Modifier: the text is still being read. In the local preview it shows the blueprint grid and a short line saying so; the build replaces it once the text exists, and a publish waits for that.",
     },
     ComponentEntry {
         class: "moss-derived--skipped",
@@ -1357,6 +1359,12 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 description: "Closing picture only, from `fade=top`: the picture's top fades into the page colour, over 38% of the box (half of it on a phone, where the box keeps at least 38rem so the words sit on the faded top), through a mask on the picture itself, so the words above it stay solid. The credit stays at the foot.",
             },
             DataAttr {
+                name: "data-panel",
+                values: &["none"],
+                default: "",
+                description: "From `panel=none`: the author asked for nothing behind the words, so they get no panel and no text shadow, whatever ink they take.",
+            },
+            DataAttr {
                 name: "data-credit",
                 values: &["text", "page"],
                 default: "",
@@ -1381,7 +1389,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: ":::hero {image=cover.jpg}\n:::\n\n:::hero {image=cover.jpg full mobile=overlay}\n# Title over the image\n:::\n\n:::hero {from=\"work/|when:upcoming\" image=cover.jpg}\n# Between seasons\n:::\n",
         status: Status::Confirmed,
         since: "0",
-        description: "Hero banner section at the top of a page (cover image + title). v1 adds `data-width` for author-controlled sizing. `from=\"<folder>/|<embed options>\"` draws the hero from the first page of that listing (its picture, title, event line, description and a link); the hero's own `image=` and words show only when the listing is empty.",
+        description: "Hero banner section at the top of a page (cover image + title). `alt=\"…\"` on the fence describes the picture; without it (and without an alt on a `![…](…)` or `![[…]]` embed) the picture is decorative. v1 adds `data-width` for author-controlled sizing. `from=\"<folder>/|<embed options>\"` draws the hero from the first page of that listing (its picture, title, event line, description and a link); the hero's own `image=` and words show only when the listing is empty.",
     },
     ComponentEntry {
         class: "moss-hero-content",
@@ -1436,7 +1444,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: ":::hero {image=closing.jpg dark=closing-night.jpg align=top}\n## The shelf is open.\n:::\n",
         status: Status::Confirmed,
         since: "0",
-        description: "The hero that is the last block of `footer.md`: the page's closing picture. The footer drops its column, padding, divider and fill, and the picture runs the viewport's full width as the last painted thing on the page, with its words on it at every width (the build adds `data-mobile=\"overlay\"`), starting where the article's text starts, and the colophon on its bottom edge. From 48rem its box takes the picture's own shape at the window's width, so the whole picture shows, even when taller than the window; the hero's `max-height=` caps it (emitted as `--moss-hero-max-height`), and the crop keeps the side away from the words (`align=top` keeps the foot) unless `image=` names a position, both of which the ink measurement follows. On a phone a kept panel ends in a fade into the picture instead of a hard edge. It is never darkened, and where its picture is quiet under the words the words sit in ink with no panel (`data-words`); its `caption=` is the picture's credit (`.moss-hero-credit`). A `dark=` picture replaces the light one in dark mode through `data-hero-variant=\"light\"|\"dark\"` on each picture. `fade=top` fades its top into the page (`data-fade`).",
+        description: "The hero that is the last block of `footer.md`: the page's closing picture. The footer drops its column, padding, divider and fill, and the picture runs the viewport's full width as the last painted thing on the page, with its words on it at every width (the build adds `data-mobile=\"overlay\"`), starting where the article's text starts, and the colophon on its bottom edge. From 48rem its box takes the picture's own shape at the window's width, so the whole picture shows, even when taller than the window; the hero's `max-height=` caps it (emitted as `--moss-hero-max-height`), and the crop keeps the side away from the words (`align=top` keeps the foot) unless `image=` names a position, both of which the ink measurement follows. On a phone a kept panel ends in a fade into the picture instead of a hard edge. It is never darkened, and where its picture is quiet under the words the words sit in ink with no panel (`data-words`); its `caption=` is the picture's credit (`.moss-hero-credit`). With `align=top` the words start `clamp(8px, 2vw, 24px)` below its top edge and its display heading sets at a line height of 1.08, and a link in the words is a button of weight 500 in the text colour, with its border, on the page colour at 80% (inverted on hover), so it reads on any picture whatever ink the words take. A `dark=` picture replaces the light one in dark mode through `data-hero-variant=\"light\"|\"dark\"` on each picture. `fade=top` fades its top into the page (`data-fade`); the words that sit in ink on that faded top take the theme's own page text colour and page colour (the darker of the two as the dark ink), not fixed inks.",
     },
     ComponentEntry {
         class: "moss-hero-credit",
@@ -1447,7 +1455,7 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         example_markdown: ":::hero {image=closing.jpg align=top caption=\"Etching of the harbour, 1643.\"}\n## The shelf is open.\n:::\n",
         status: Status::Confirmed,
         since: "0",
-        description: "The closing picture's `caption=`, set small inside the picture at its foot on the inline-end side, above the colophon's row, instead of below the picture as an ordinary hero's caption is. It stays at the foot at every width, the last thing on the foot before the colophon. Its ink is measured there per theme (`data-credit`): the theme's secondary text colour or its page colour, whichever clears 4.5:1, or a small panel of its own where neither does.",
+        description: "The closing picture's `caption=`, set small inside the picture at its foot, right-aligned to the end of the page's text column (not the window's edge) and on one line where it fits, above the colophon's row, instead of below the picture as an ordinary hero's caption is. It is in moss's UI face unless the theme sets `--moss-hero-credit-font`. It stays at the foot at every width, the last thing on the foot before the colophon. Its ink is measured there per theme (`data-credit`): the theme's secondary text colour or its page colour, whichever clears 4.5:1, or a small panel of its own where neither does.",
     },
     ComponentEntry {
         class: "moss-hero-slides",
@@ -1542,6 +1550,12 @@ pub const COMPONENTS: &[ComponentEntry] = &[
             values: &["long"],
             default: "",
             description: "`long` when the quote runs past about 140 characters; it is set smaller.",
+        },
+        DataAttr {
+            name: "data-script",
+            values: &["cjk"],
+            default: "",
+            description: "`cjk` when most of the quote's letters are Chinese or Japanese. A collage tile then sets it in `--moss-font-cjk`, larger and tracked out. A quote in which a tenth of the letters are kana also marks its `<blockquote>` `lang=\"ja\"`.",
         }],
         example_html: r#"<figure class="moss-quote"><blockquote><p>Communication is health.</p></blockquote><figcaption><a href="...">Source</a></figcaption></figure>"#,
         example_markdown: ":::grid {collage}\n![A picture](a.jpg)\n+++\n> Communication is health.\n\n*[Source](https://example.org/)*\n+++\n![Another](b.jpg)\n:::\n",
@@ -1693,6 +1707,17 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         since: "1",
         description: "Clickable permalink appended inside an author-written body heading that carries a slug id; links to the heading's `#`-fragment. The element is EMPTY — the `#` a reader sees is drawn by `site.css` as `::after` content, so selecting a heading never copies it. Never emitted for a level-1 heading (a page's own title, not a section of it — the `id` is still there, so an existing `#title` link still resolves) or for any heading on the home page (levels 2-6 included: a reader lands there by visiting the site, not by a deep link into one of its sections). Also never emitted for a display title: the auto-injected `moss-article-title` H1, a `:::hero` overlay heading, and a `:::grid` cell heading all get none.",
     },
+    ComponentEntry {
+        class: "moss-nobreak",
+        kind: "instance",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<h2>Maren Oduya, <span class="moss-nobreak">1626–1705</span></h2>"#,
+        example_markdown: "## Maren Oduya, 1626–1705",
+        status: Status::Confirmed,
+        since: "0.20",
+        description: "Wraps a run of digits joined by hyphens or dashes (a year range such as 1626–1705) in a heading, so the run is never split across two lines; the build adds it to the page title, a folder title and every body heading, and nowhere else. Styled `white-space: nowrap`.",
+    },
     // -------------------------------------------------------------------
     // Grid + gallery + buttons containers (free-form layouts).
     // -------------------------------------------------------------------
@@ -1730,6 +1755,18 @@ pub const COMPONENTS: &[ComponentEntry] = &[
                 values: &[],
                 default: "",
                 description: "Presence flag: emitted from the bare `collage` keyword (`:::grid {collage}`) when the grid has 3 to 9 cells; with any other count the build warns and the grid stays plain. The first cell is the lead; on a wide screen it takes one column (`--moss-collage-lead`, half the collage, narrower when it is `data-upright`) at the height of every row, and the others pack six columns right of it. The rows follow the count (one for 3 or 4 tiles, two for 5 to 7, three for 8 or 9); the build computes each tile's spans (`--moss-collage-span`, `--moss-collage-span-sm`) and kind (`data-tile`) from what the cells hold. A row is at least `--moss-collage-row` tall and grows only to fit a quote or other text, never for a picture. On a phone the lead runs full width at 4:3, a quote or text tile takes a full row at its own height, and pictures fill rows of three squares, a short last row widened. Pictures crop with `object-fit: cover`, or as the display words after their pipe set (`focus:X%,Y%` for the point kept in view, `contain` to show the whole picture, `top`, `bottom left` and the other position words), and zoom slightly on hover unless shown whole. Keyboard focus rings the tile. A picture's caption is a credit on a band of the page colour at the tile's foot, shown on hover or keyboard focus and in the viewer on a touch screen; a bold run at its start is set as a title line of at most two lines (one in a short tile), ending in an ellipsis when it is longer, and a tile too small for both keeps only the title (the rest stays in the accessibility tree). A linked picture's title has a drawn ↗ beside it, with empty alternative text. The credit takes at most 40% of the tile and stops at a whole line, so a long credit's last lines are left to the viewer. A cell that is not a picture is set on the page's paper and never cut off; a quote's size follows its tile's width (`clamp()` over container units), so its longest word fits a narrow tile, and a word too long for the smallest size breaks or hyphenates. The collage's tracks are always horizontal; on a vertically typeset page a text tile still reads in the page's vertical direction.",
+            },
+            DataAttr {
+                name: "data-rows",
+                values: &["equal"],
+                default: "",
+                description: "Emitted from `rows=equal` (`:::grid 3 {rows=equal}`): the parts of the cards in a row (picture, title, text, whatever each holds) line up across it, each card spanning `--moss-grid-parts` tracks of the grid. Not honoured for a collage or a scroll row.",
+            },
+            DataAttr {
+                name: "data-columns-mid",
+                values: &["1", "2", "3", "4", "5", "6"],
+                default: "",
+                description: "Emitted from `mid=N` (`:::grid 3 {mid=2}`): the column count from 48rem up to 64rem, where the grid has `data-columns` columns again. Overrides an author ratio in that range. Not honoured for a collage or a scroll row.",
             },
             DataAttr {
                 name: "data-count",
@@ -2686,6 +2723,28 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         status: Status::Confirmed,
         since: "0",
         description: "Localized attribution wording inside `.moss-colophon`. Transparent at rest and faded in on hover/focus, positioned out of flow beneath the mark so the reveal shifts nothing — it stays in the DOM because it is the link's accessible name. Carries `.moss-wordmark` for the face.",
+    },
+    ComponentEntry {
+        class: "moss-colophon-credit",
+        kind: "instance",
+        parent: "moss-colophon",
+        data_attrs: &[],
+        example_html: r#"<span class="moss-colophon-credit">Designed by <a href="https://example.org">Example Studio</a></span>"#,
+        example_markdown: "",
+        status: Status::Confirmed,
+        since: "0",
+        description: "The site's own line (`[site] credit`, inline Markdown) before moss's mark, inside `.moss-colophon`, in the footer's smallest size and muted ink (`--moss-footer-ink`). It wraps like text, centred. Only its links are underlined, at 40% of the ink at rest and the full ink on hover and focus. Its stylesheet ships only when the key is set. Not the page `colophon:` rows (`.moss-article-colophon`) and not a hero's `caption=` (`.moss-hero-credit`).",
+    },
+    ComponentEntry {
+        class: "moss-colophon-dot",
+        kind: "instance",
+        parent: "moss-colophon",
+        data_attrs: &[],
+        example_html: r#"<span class="moss-colophon-dot" aria-hidden="true">·</span>"#,
+        example_markdown: "",
+        status: Status::Confirmed,
+        since: "0",
+        description: "The middle dot that joins `.moss-colophon-credit` to the mark. It leads the mark's link, so on a narrow line the two wrap together. Decorative, so it is hidden from assistive technology.",
     },
     ComponentEntry {
         class: "moss-mark",
@@ -5169,6 +5228,17 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         status: Status::Emerging,
         since: "1",
         description: "The expand control moss adds over an embedded iframe (a places map or any embed that goes fullscreen); inside fullscreen it is the exit control, a solid 36px circle with the same shadow as the map's own zoom controls so it reads over any map colour.",
+    },
+    ComponentEntry {
+        class: "immersive-iframe-wrapper",
+        kind: "container",
+        parent: "",
+        data_attrs: &[],
+        example_html: r#"<div class="immersive-iframe-wrapper"><iframe src="/map/"></iframe><button type="button" class="immersive-fullscreen-btn" aria-label="Enter fullscreen">…</button></div>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "1",
+        description: "Added by site script, not in the built HTML: the box around a local iframe that is a direct child of the article (a places map or any embed of a page on the same site), holding the iframe and its fullscreen and open-in-new-window controls. It copies the iframe's `moss-align-left` or `moss-align-right` class and `data-width`, so a floated or wide embed keeps its placement. An iframe from another site is not wrapped.",
     },
     ComponentEntry {
         class: "moss-places-card-read",

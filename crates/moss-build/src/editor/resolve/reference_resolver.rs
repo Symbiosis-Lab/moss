@@ -14,7 +14,12 @@
 
 use crate::build::scan::article_map::ArticleMap;
 use crate::editor::resolve::url_index::{ArticleMapIndex, FolderFacts};
-use moss_core::resolve::asset_class::AssetProvenance;
+use crate::build::folder_index::NoFolderIndex;
+use crate::editor::resolve::asset_resolver::{project_graph, scope_graph, EditorScope};
+use moss_core::content_graph::ContentGraph;
+use moss_core::resolve::asset_class::{resolve_file_target, AssetProvenance, AssetResolution};
+use moss_core::resolve::folder_class::FolderIndex;
+use moss_core::resolve::link_class::UrlIndex;
 use moss_core::resolve::reference::{
     classify_reference, ReferenceContext, ReferenceKind, ResolvedReference,
 };
@@ -131,45 +136,78 @@ pub fn resolve_references_batch(
     targets: &[RefTarget],
     from_file: &str,
     project_root: &Path,
+    scope: EditorScope,
 ) -> Vec<EditorReferenceResolution> {
     // Canonicalize once so the FS-backed indexes strip_prefix correctly.
     let canonical_root =
         std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
 
-    // Build the three indexes ONCE (outside the per-target loop). The map is
+    // Build a site's three indexes ONCE (outside the per-target loop). The map is
     // loaded FIRST: the folder index reconstructs the build's folder-index URL
     // set from it (slug overrides live there, not on disk).
-    let moss_dir = canonical_root.join(".moss");
-    let map = ArticleMap::load(&moss_dir).unwrap_or_default();
-    let fs_assets = crate::editor::resolve::asset_resolver::project_graph(&canonical_root);
+    let site = scope == EditorScope::Site;
+    let map = if site { ArticleMap::load(&canonical_root.join(".moss")).unwrap_or_default() } else { ArticleMap::default() };
+    let from_source = compute_from_source(from_file, &canonical_root);
+    let site_assets = site.then(|| project_graph(&canonical_root));
     let fs_folders =
         crate::editor::resolve::folder_index::EditorFolderIndex::new(&canonical_root, &map);
+    let folders: &dyn FolderIndex = if site { &fs_folders } else { &NoFolderIndex };
     let article_idx = ArticleMapIndex::from_map(&map);
     // A fourth index, same discipline: ONE O(map) pass for every folder in the
     // document instead of a rescan (plus a file read) per folder embed. Every
     // `FileChanged` sets `revalidateAll`, so this runs on every rebuild.
     let folder_facts = FolderFacts::from_map(&map);
 
-    let from_source = compute_from_source(from_file, &canonical_root);
-
     targets
         .iter()
         .map(|t| {
             let target_norm = t.text.replace('\\', "/");
+            // A loose folder's file set depends on the folders this one target names.
+            let loose_assets;
+            let assets = match &site_assets {
+                Some(graph) => graph,
+                None => {
+                    loose_assets = scope_graph(&canonical_root, scope, &from_source, &target_norm);
+                    &loose_assets
+                }
+            };
+            let folder_pages = FolderPages(assets);
+            let urls: &dyn UrlIndex = if site { &article_idx } else { &folder_pages };
             let resolved: ResolvedReference = classify_reference(
                 &target_norm,
                 &from_source,
                 t.is_embed,
-                &ReferenceContext {
-                    assets: &fs_assets,
-                    folders: &fs_folders,
-                    urls: &article_idx,
-                },
+                &ReferenceContext { assets, folders, urls },
             );
-
-            enrich_resolution(t, resolved, &canonical_root, &map, &folder_facts, &fs_folders)
+            let mut out = enrich_resolution(t, resolved, &canonical_root, &map, &folder_facts, folders);
+            if !site && matches!(out.kind, ReferenceKind::Link { .. }) {
+                out.resolved_path = out.url.take().map(|source| canonical_root.join(source).to_string_lossy().to_string());
+            }
+            out
         })
         .collect()
+}
+
+/// A loose folder's links: a reference names a markdown file in the folder's
+/// graph, written with or without `.md`. It answers with the file's source
+/// path, which the caller turns into the file to open: there is no URL.
+struct FolderPages<'a>(&'a ContentGraph);
+
+impl UrlIndex for FolderPages<'_> {
+    fn lookup_exact(&self, _url_path: &str) -> bool {
+        false
+    }
+    fn lookup_normalized(&self, _url_path: &str) -> Option<String> {
+        None
+    }
+    fn resolve_reference_to_url(&self, reference: &str, from_source: &str) -> Option<String> {
+        [reference.to_string(), format!("{reference}.md")].iter().find_map(|written| {
+            match resolve_file_target(written, from_source, self.0) {
+                AssetResolution::Resolved { root_rel, .. } if root_rel.ends_with(".md") => Some(root_rel),
+                _ => None,
+            }
+        })
+    }
 }
 
 /// The file that acts as a folder's home page, read from the folder itself.

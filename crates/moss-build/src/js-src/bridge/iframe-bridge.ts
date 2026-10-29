@@ -14,7 +14,7 @@
 
 import { Idiomorph } from "idiomorph";
 import { pickThemeFromMessage, startPageColor } from "./iframe-bridge-theme";
-import { describeScriptChange, syncBodyAttributes, captureServerBody } from "./morph-guard";
+import { describeScriptChange, syncBodyAttributes, captureServerBody, forceRepaint, morphCounter } from "./morph-guard";
 import { createAssetSwapBuffer } from "./asset-swap-buffer";
 import { bustSrcset, normPath, srcsetMatches, stripBust } from "./asset-urls";
 import { FOCUS_FRACTION, getSourceLine, interpolatedScrollTop, isAlreadyShowing, readScrollPosition } from "./scroll-interpolate";
@@ -474,23 +474,6 @@ import { installCaptureResponder } from "./capture/responder";
       },
       "*"
     );
-  }
-
-  // ============================================================
-  // WKWebView Repaint Workaround
-  // ============================================================
-  // WKWebView on macOS sometimes fails to repaint after location.reload()
-  // inside an iframe, leaving the viewport blank until a user scroll.
-  // Toggling translateZ(0) forces GPU layer promotion → compositor repaint.
-  // Ref: https://bugs.webkit.org/show_bug.cgi?id=258375
-
-  function forceRepaint(): void {
-    requestAnimationFrame(() => {
-      document.documentElement.style.transform = 'translateZ(0)';
-      requestAnimationFrame(() => {
-        document.documentElement.style.transform = '';
-      });
-    });
   }
 
   // Initial notification — the only one that carries the document's real
@@ -1131,16 +1114,18 @@ import { installCaptureResponder } from "./capture/responder";
           }
           return holder.content;
         };
+        const tally = morphCounter();
+        const callbacks = { beforeNodeMorphed, beforeNodeRemoved, beforeAttributeUpdated, ...tally.callbacks };
         Idiomorph.morph(document.head, fragmentOf(doc.head), {
           morphStyle: "innerHTML",
           ignoreActiveValue: true,
-          callbacks: { beforeNodeMorphed, beforeNodeRemoved, beforeAttributeUpdated },
+          callbacks,
         });
         Idiomorph.morph(document.body, fragmentOf(doc.body), {
           morphStyle: "innerHTML",
           ignoreActiveValue: true,
           restoreFocus: true,
-          callbacks: { beforeNodeMorphed, beforeNodeRemoved, beforeAttributeUpdated },
+          callbacks,
         });
         // Sync <body>'s OWN attributes: `morphStyle: "innerHTML"` reconciles a
         // target's children and never its attributes, so the body attribute set
@@ -1199,6 +1184,7 @@ import { installCaptureResponder } from "./capture/responder";
         // one path that must ask for a re-read explicitly.
         pageColor?.fire();
         chromeAmbient?.fire();
+        forceRepaint();
         void gen; // reserved for Fix D gen-unification; ack-echoed below
         window.parent.postMessage(
           {
@@ -1217,6 +1203,8 @@ import { installCaptureResponder } from "./capture/responder";
             // only; navigation-manager receives and drops it.
             initCount: (window as unknown as { __bridgeInitCount?: number })
               .__bridgeInitCount,
+            added: tally.counts.added,
+            removed: tally.counts.removed,
           },
           "*"
         );

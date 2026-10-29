@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.20.0] - 2026-10-22
+## [0.20.0] - 2026-10-29
 
 ### Changed
 
@@ -29,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `render::iframe::synthesize_iframe_html` always writes a `title`: the author's or provider's, else the name of the page it shows (`app/index.html` is `app`).
 - `ast::images_without_text` no longer lists a picture inside a link that has text of its own.
 - A heading's `{#id}` is kept when a linked embed is restored, and `![[page#hours]]` finds the heading `## Opening hours {#hours}` by its id or by its words.
+- The AST parser caps list, blockquote, footnote and definition nesting at 32 levels; deeper content stays flat in the container at the limit, with one warning naming the line, so a page of hundreds of `- ` markers can no longer overflow the stack.
+- A folder now lists by date when half its pages are dated (it was four in five), so one undated page no longer turns a small dated folder into a title list.
+- `inferred` is an internal frontmatter field: the editor no longer offers it as a tag chip.
 
 ### Added
 
@@ -59,6 +62,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Component contract entries: `moss-hero-closing`, `moss-hero-credit`, `moss-quote`, `moss-field-group`, `moss-align-end`, `moss-facts-column`, `moss-edition`, `moss-edition-line`, `moss-cite`, `moss-cite-label`, `moss-cite-text`, `moss-edition-rights`, `moss-contents-ruler-veil` and `moss-place-map-credit`; the data attributes `data-words`, `data-words-night`, `data-foot`, `data-foot-night`, `data-fade`, `data-credit` and `data-credit-night` on a hero, `data-length` on `moss-quote`, `data-collage` and `data-count` on a collage grid, `data-tile` and `data-upright` on its tiles, `data-header` and `data-top` on the nav island, `data-lens` on the contents ruler, and `data-contents-end` and `data-contents-label` on a heading or fenced div.
 - Custom properties in the contract: `--moss-container-padding-narrow`, `--moss-font-section`, `--moss-font-quote`, `--moss-field-group-separator`, `--moss-collage-gap`, `--moss-collage-lead`, `--moss-collage-row`, `--moss-collage-span`, `--moss-collage-span-sm`, `--moss-place-world-detail`, `--moss-place-land`, `--moss-nav-island-edge`, `--moss-nav-island-pad-block`, `--moss-nav-island-pad-end`, `--moss-nav-island-control-pad`, `--moss-nav-island-controls`, `--moss-nav-island-controls-guess`, and the contents ruler's `--moss-contents-pad`, `--moss-contents-dash`, `--moss-contents-lane`, `--moss-contents-column`, `--moss-contents-veil`, `--moss-contents-gutter`, `--moss-contents-row`, `--moss-contents-measure` and `--moss-contents-ink`.
 - Places explorer contract entries: `moss-places-world-flat` and `moss-places-tile-flat` (the flat land and water drawn under the world map and each regional tile where the detail runs out) and the `data-moss-places-cards` attribute on an explorer figure. The custom property `--moss-page-inline` is `main`'s width, read by blocks inside nested size containers.
+- `DerivedFacts` gains `date`, a `YYYY-MM-DD` calendar date a derivation may report. A page that lists `date` under `inferred` takes it when it sets none of its own, as for `title`; `expand_page` writes it the same way. A value in any other form is ignored.
+- A `![[file.pdf#text]]` embed for a file type no installed plugin derives text from now records a diagnostic naming the embed and the two fixes (a `[derive]` entry, or a plugin for that file type), and the build counts it as a problem so `--strict` sees it. The embed is still left as written.
+- Grid and site components gain `rows=equal` (lines up the parts of a grid's cards), `mid=` (sets a grid's columns between 48rem and 64rem) and a `[site] credit` line shown before the moss mark; the component and custom-property contracts list them.
+
+### Fixed
+
+- A trailing `|` in a wiki image embed (`![[figure.png|Description|]]`) now makes the description alt-only, as `![Description|](figure.png)` already did, instead of showing `Description|` as the caption.
 
 ## [0.19.0] - 2026-10-18
 

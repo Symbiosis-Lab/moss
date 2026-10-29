@@ -34,6 +34,8 @@ struct FolderLifecycle {
     served: Option<ServedCell>,
     /// Last render number minted by [`show_render`].
     next_render: u64,
+    /// The newest render whose background work has sealed ([`note_sealed`]).
+    newest_sealed: Option<u64>,
     /// The render on the cell while it names staging; `None` when this record
     /// did not put it there.
     shown_render: Option<u64>,
@@ -349,6 +351,25 @@ pub(crate) fn is_latest_render(mp: &MossPaths, render: Option<u64>) -> bool {
         Some(render) => lock_for(mp).state().next_render == render,
         None => true,
     }
+}
+
+/// Record that `render`'s background work has sealed, so its tail is about to
+/// run. `None` (no render was minted) records nothing.
+pub(crate) fn note_sealed(mp: &MossPaths, render: Option<u64>) {
+    if let Some(render) = render {
+        let record = lock_for(mp);
+        let mut state = record.state();
+        state.newest_sealed = state.newest_sealed.max(Some(render));
+    }
+}
+
+/// Whether a render newer than `render` has already sealed. Its tail is then
+/// running, and writes everything this one's would unless it withholds or the
+/// process ends first; this one's writes would only be replaced by it, or land
+/// after it and roll it back.
+pub(crate) fn newer_render_sealed(mp: &MossPaths, render: Option<u64>) -> bool {
+    let Some(render) = render else { return false };
+    lock_for(mp).state().newest_sealed.is_some_and(|newest| newest > render)
 }
 
 /// Reveal a render whose required outputs became ready after its initial

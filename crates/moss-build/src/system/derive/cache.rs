@@ -2,14 +2,14 @@
 //!
 //! Keyed by the input file's content hash, the transform name
 //! `derive:<plugin>/<derivation>`, the plugin's manifest version and a
-//! fingerprint of its pin (the declared binary sources and fragments, plus a
-//! local binary's content), so editing a file, shipping a new plugin version,
-//! re-pinning without a version bump or rebuilding a local binary re-derives
-//! and nothing else does. Both outcomes are stored — a skip is as expensive to
+//! fingerprint of its pin (the declared fragments and the executable's content,
+//! not where it came from), so editing a file, shipping a new plugin version,
+//! re-pinning to different bytes or rebuilding a local binary re-derives and
+//! nothing else does. Both outcomes are stored — a skip is as expensive to
 //! rediscover as a result. A failure is stored only as a note for `--status`:
 //! it is usually the environment's doing, so it never stops a retry.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{binary, run, DeriveFailure, DeriveOutcome};
 use crate::build::cache::{RecordMode, TransformCache, TransformEntry};
@@ -47,6 +47,20 @@ fn lookup_oid(site: &MossPaths, entry: &DerivationEntry, source_oid: &str) -> Op
 pub fn lookup_cached(site: &MossPaths, entry: &DerivationEntry, input: &Path) -> Option<DeriveOutcome> {
     let oid = binary::content_hash(input).ok()?;
     lookup_oid(site, entry, &oid)
+}
+
+/// The outcome stored for this exact file content under any earlier params
+/// (an older plugin version or pin), for showing while the current key is
+/// re-read. A record holds one entry per transform, so this is the latest
+/// result only, and it lives as long as the record, which the cache sweep keeps
+/// for as long as the file's content is in the site.
+pub fn lookup_previous(site: &MossPaths, entry: &DerivationEntry, input: &Path) -> Option<DeriveOutcome> {
+    let oid = binary::content_hash(input).ok()?;
+    let transforms = TransformCache::for_site(site);
+    let record = transforms.get_with(&oid, RecordMode::Request)?;
+    let stored = record.transforms.get(&transform_name(entry))?;
+    let path = transforms.objects().get_path(&stored.oid)?;
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
 /// Why the last run on this exact file content failed, for a status report.
@@ -126,9 +140,25 @@ pub fn derive_remembering(site: &MossPaths, entry: &DerivationEntry, input: &Pat
     derive_with(site, entry, input, true)
 }
 
+/// The plugin's persistent cache directory, `<stacks>/derive/<plugin>/.cache`,
+/// created and canonical, or `None` when it cannot be made (the deriver then
+/// runs without `MOSS_CACHE_DIR` and does its work every time). Beside the
+/// per-version binary directories, so it outlives plugin updates; the leading
+/// dot keeps it clear of any derivation id.
+fn plugin_cache_dir(entry: &DerivationEntry) -> Option<PathBuf> {
+    let made = crate::system::stack_exec::layout::stacks_root().and_then(|root| {
+        let dir = root.join("derive").join(&entry.plugin_id).join(".cache");
+        std::fs::create_dir_all(&dir)
+            .and_then(|()| dir.canonicalize())
+            .map_err(|e| format!("{}: {e}", dir.display()))
+    });
+    made.map_err(|e| log::warn!(target: "derive", "no cache directory for {}: {e}", entry.plugin_id)).ok()
+}
+
 fn run_pinned(entry: &DerivationEntry, input: &Path) -> Result<run::Answer, DeriveFailure> {
     let binary = binary::resolve_binary(entry)?;
-    let answer = run::run_deriver_answer(&binary, input, run::derive_timeout())?;
+    let cache = plugin_cache_dir(entry);
+    let answer = run::run_deriver_answer(&binary, input, run::derive_timeout(), cache.as_deref())?;
     answer.outcome.check_against(&entry.contribution.fragments)?;
     Ok(answer)
 }

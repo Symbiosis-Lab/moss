@@ -18,9 +18,7 @@ use super::filesystem::EditorFileInfo;
 /// they hand it). The HTTP carrier does NOT rely on it per-arm: its
 /// containment is one `catch_unwind` at the dispatch point
 /// (`preview::server::invoke`), so it holds whether or not an arm's core
-/// happens to route through here. Both catches are dev-profile containment
-/// only — release builds set `panic = "abort"`, where no unwind exists to
-/// catch.
+/// happens to route through here.
 pub fn run_safely<T>(
     label: &'static str,
     f: impl FnOnce() -> Result<T, String>,

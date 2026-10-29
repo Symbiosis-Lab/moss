@@ -950,6 +950,21 @@ fn a_neighbour_joining_the_drift_set_does_not_re_dispatch_the_rest() {
     );
 }
 
+/// A strike is judged against when the newest change landed here, and only
+/// when every drifted file says when.
+#[test]
+fn newest_landing_is_the_end_of_the_newest_ctime_second() {
+    let at = |ctime: Option<i64>| drift::Drift { kind: drift::DriftKind::Edited, stamp: (1, 50, 0, ctime, None) };
+    let mut now = std::collections::BTreeMap::new();
+    now.insert("a.md".to_string(), at(Some(100)));
+    now.insert("b.md".to_string(), at(Some(200)));
+    let fresh = vec!["a.md".to_string(), "b.md".to_string()];
+    assert_eq!(newest_landing(&now, &fresh), Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(201)));
+    now.insert("gone.md".to_string(), at(None));
+    let with_unknown = vec!["a.md".to_string(), "gone.md".to_string()];
+    assert_eq!(newest_landing(&now, &with_unknown), None, "an unknown time leaves the strike rule as it was");
+}
+
 /// The suppression must not become permanent: a path that changes again is
 /// a new incident, and the whole point of the sweep is to catch it.
 #[test]
@@ -1019,6 +1034,14 @@ async fn a_sweep_straight_after_a_build_finds_no_drift() {
     std::fs::write(test_dir.join("posts/one.md"), "# One\n").unwrap();
     // Deliberately ignored: canonical location is .moss/theme/style.css.
     std::fs::write(test_dir.join("style.css"), "body { margin: 0 }\n").unwrap();
+    // A Finder alias whose target will not resolve: skipped from the output,
+    // still judged by the walk.
+    #[cfg(target_os = "macos")]
+    {
+        let mut bookmark = b"book\0\0\0\0".to_vec();
+        bookmark.extend_from_slice(&[0xFFu8; 200]);
+        std::fs::write(test_dir.join("old-app"), &bookmark).unwrap();
+    }
 
     build_once(folder_path).await;
 
@@ -1340,4 +1363,59 @@ fn availability_resumed_suffix_eof_is_not_complete_structure() {
     crate::system::folder_session::registry().remove(&folder);
     assert!(event.is_err(), "suffix EOF must not emit Ready for the whole source tree");
     assert_eq!(wakes, 0, "suffix completion cannot certify a rebuild arrival");
+}
+
+// ── Arrivals the watcher never announced ───────────────────────────────────
+
+/// A file that lands in a shown folder while the watcher is silent still gets
+/// its stub from the sweep; a file already there (stub deleted) and a file in
+/// an undecided folder get none.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_sweep_stubs_a_file_the_watcher_never_announced() {
+    use crate::vault::derive_folders::{set_folder_decision, Decision};
+    let tmp = tempfile::Builder::new().prefix("moss-sweep-arrive-").tempdir().unwrap();
+    let dir = std::fs::canonicalize(tmp.path()).unwrap();
+    let plugin = dir.join(".moss/plugins/scans");
+    std::fs::create_dir_all(&plugin).unwrap();
+    std::fs::write(
+        plugin.join("manifest.json"),
+        r##"{"name":"scans","version":"1.0.0","contributes":{"derivations":{"pages":{
+            "accepts":["pdf"],"noun":{"one":"doc","other":"docs"},
+            "fragments":{"text":"markdown"},"stub":["#text"],
+            "run":{"binary":"unpack","artifact":[{"kind":"path","binary":"/bin/true"}]}}}}}"##,
+    )
+    .unwrap();
+    std::fs::write(dir.join("index.md"), "# Home\n").unwrap();
+    for folder in ["reports", "misc"] {
+        std::fs::create_dir_all(dir.join(folder)).unwrap();
+        std::fs::write(dir.join(folder).join("index.md"), "# Folder\n").unwrap();
+    }
+    std::fs::write(dir.join("reports/kept.pdf"), "x").unwrap();
+    let site = crate::moss_paths::MossPaths::new(&dir);
+    set_folder_decision(&site, &dir.join("reports"), Decision::Show(vec!["pages".into()])).unwrap();
+
+    let folder_path = dir.to_str().unwrap().to_string();
+    let worker = crate::ops::watch::worker::register(&folder_path);
+    build_once(&folder_path).await;
+
+    std::fs::write(dir.join("reports/new.pdf"), "x").unwrap();
+    std::fs::write(dir.join("misc/other.pdf"), "x").unwrap();
+
+    std::env::set_var("MOSS_TEST_SWEEP_TICK_MS", "100");
+    let session = FolderSession::new(dir.clone());
+    let dispatch: crate::ops::watch::RebuildDispatch = std::sync::Arc::new(|_| Box::pin(async {}));
+    start(session.clone(), host(dispatch)).await;
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !dir.join("reports/new.md").is_file() {
+        assert!(Instant::now() < deadline, "the sweep never stubbed the file it caught");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    session.cancel.cancel();
+    std::env::remove_var("MOSS_TEST_SWEEP_TICK_MS");
+    crate::ops::watch::worker::deregister(&folder_path, &worker);
+
+    assert!(!dir.join("reports/kept.md").exists(), "a file already there is not an arrival");
+    assert!(!dir.join("misc/other.md").exists(), "an undecided folder gets no stubs");
 }

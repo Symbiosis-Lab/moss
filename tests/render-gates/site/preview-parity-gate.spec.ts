@@ -4,24 +4,14 @@
  *
  * The preview server (`moss-cli build <folder> --serve`,
  * `inject_preview_assets` in crates/moss-build/src/ops/serve/iframe_bridge.rs)
- * adds CSS and script the static build never ships — the divider-drag
- * cheap-reflow style, the comment-form preview shim, the asset-placeholder
- * script, and more. All of it is meant to be invisible: a page should look
- * and measure the same in the preview iframe as it does published. Three
- * known ways it hasn't been:
+ * adds CSS and script the static build never ships — the comment-form
+ * preview shim, the asset-placeholder script, and more. All of it is meant to
+ * be invisible: a page should look and measure the same in the preview iframe
+ * as it does published. It hasn't always been: preview-only padding and
+ * geometry have shown up as dead space that only ever existed in the preview,
+ * and a reflow rule once skipped rendering of off-screen media.
  *
- *  - `PREVIEW_CHEAP_REFLOW_STYLE`'s `content-visibility: auto` fallback
- *    sizes an off-screen element from a shared `contain-intrinsic-size`
- *    placeholder; inside a `:::grid N {scroll}` row, whose cards share one
- *    grid-row track, one off-screen card's placeholder height became every
- *    card's height.
- *  - The same fallback's one-value form applied to BOTH axes, so an
- *    off-screen figure's placeholder WIDTH became a `.moss-grid`'s automatic
- *    track minimum too, blowing out the whole grid.
- *  - Other preview-only padding/geometry regressions of the same shape have
- *    shown up before as dead space that only ever existed in the preview.
- *
- * All three are one class of bug: something scoped "preview-only" leaks into
+ * These are one class of bug: something scoped "preview-only" leaks into
  * layout math the static build never runs. Rather than pin each incident by
  * name, this gate compares EVERY element's box, on a page deliberately built
  * from the shapes that class of bug has hit — a big scroll row, a wrapping
@@ -30,10 +20,8 @@
  * engines, at desktop and mobile widths, AFTER a full scroll pass.
  *
  * Measuring after a full pass, not before, matters: a page's FIRST paint
- * diverges from the static build on every off-screen figure, grid cell, and
- * embed, because `content-visibility: auto`'s placeholder is still showing —
- * the feature working as designed (it's what makes a divider-drag cheap),
- * not a bug. Only once everything has been laid out at least once is "the
+ * can diverge from the static build on an off-screen figure, grid cell, or
+ * embed while lazy loading or a script has yet to settle. Only once everything has been laid out at least once is "the
  * same as static" an honest claim to check.
  *
  * Both servers build the SAME source fixture
@@ -75,7 +63,6 @@ const PREVIEW_ONLY_SELECTOR = [
   "#moss-img-fallback-style",
   "#moss-img-fallback",
   "style#moss-preview-tooltip",
-  "style#moss-preview-cheap-reflow",
   "style#moss-preview-slot-reveal",
   ".moss-shell-frame",
   ".moss-fm-flash",
@@ -157,9 +144,8 @@ async function measureBoxes(page: Page): Promise<BoxSnapshot> {
 /**
  * Top-to-bottom the whole page, then left-to-right-to-left every horizontal
  * scroller under `<main>` (`.moss-grid[data-scroll]`), one frame per step —
- * exactly the interaction that flips `content-visibility: auto` elements
- * between skipped and rendered, which is the state this gate is checking
- * for. Ends back at rest (scrollTop 0, every scroller's scrollLeft 0) so the
+ * exactly the interaction that makes lazy media and scroll-driven scripts
+ * settle, which is the state this gate is checking. Ends back at rest (scrollTop 0, every scroller's scrollLeft 0) so the
  * "settled" measurement reads like a page nobody has touched yet, the same
  * state a first-time visitor's browser would report.
  */
@@ -236,9 +222,8 @@ const NEUTRALIZE_SCROLLBAR_CSS =
  * images (already near the initial viewport) decoded in 0ms, everything
  * past them timed out at 3s. Flipping `loading` to `"eager"` first is what
  * actually starts the fetch; `decode()` then resolves immediately once the
- * bytes are in. This is a page-load concern, unrelated to the
- * content-visibility skip/render state the scroll dance below exercises —
- * every image is fully decoded before either measurement. */
+ * bytes are in. This is a page-load concern, separate from the scroll
+ * dance below — every image is fully decoded before either measurement. */
 async function gotoReady(page: Page, base: string, path: string): Promise<void> {
   await page.goto(`${base}${path}`, { waitUntil: "networkidle" });
   await page.addStyleTag({ content: NEUTRALIZE_SCROLLBAR_CSS });

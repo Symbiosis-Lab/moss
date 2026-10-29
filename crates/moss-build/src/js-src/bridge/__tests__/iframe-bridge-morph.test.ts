@@ -20,7 +20,7 @@
  * browser, not re-executed). The actual no-re-exec is verified on WebKit by the
  * e2e keystone driver + `__bridgeInitCount`.
  */
-import { describe, it, test, expect, beforeEach } from "vitest";
+import { describe, it, test, expect, beforeEach, vi, afterEach } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Idiomorph } from "idiomorph";
@@ -32,12 +32,14 @@ import {
   syncBodyAttributes,
   captureServerBody,
   resetBodyAttributeMemory,
+  forceRepaint,
+  morphCounter,
 } from "../morph-guard";
 
 /** Mirrors the iframe-bridge.ts moss-morph handler exactly.
  *  Keep in sync with the beforeNodeMorphed + beforeNodeRemoved +
  *  beforeAttributeUpdated vetoes there. */
-function applyMorph(html: string): void {
+function applyMorph(html: string): { added: number; removed: number } {
   const doc = new DOMParser().parseFromString(html, "text/html");
   const beforeNodeMorphed = (oldNode: Node) =>
     !(oldNode instanceof Element && oldNode.closest("[data-moss-permanent]"));
@@ -73,20 +75,24 @@ function applyMorph(html: string): void {
     }
     return holder.content;
   };
+  const tally = morphCounter();
+  const callbacks = { beforeNodeMorphed, beforeNodeRemoved, beforeAttributeUpdated, ...tally.callbacks };
   Idiomorph.morph(document.head, fragmentOf(doc.head), {
     morphStyle: "innerHTML",
     ignoreActiveValue: true,
-    callbacks: { beforeNodeMorphed, beforeNodeRemoved, beforeAttributeUpdated },
+    callbacks,
   });
   Idiomorph.morph(document.body, fragmentOf(doc.body), {
     morphStyle: "innerHTML",
     ignoreActiveValue: true,
     restoreFocus: true,
-    callbacks: { beforeNodeMorphed, beforeNodeRemoved, beforeAttributeUpdated },
+    callbacks,
   });
   // NOT mirrored — the bridge and this harness call the SAME function, so the
   // <body> attribute sync cannot drift from what ships.
   syncBodyAttributes(doc.body);
+  forceRepaint();
+  return tally.counts;
 }
 
 /** The shipped bridge bundle — the exact bytes Rust injects into every preview
@@ -363,6 +369,44 @@ describe("iframe-bridge morph handler (local harness)", () => {
       expect((after as unknown as { __alive?: boolean }).__alive).toBe(true);
     },
   );
+});
+
+describe("post-morph repaint and counts", () => {
+  let frames: FrameRequestCallback[];
+  beforeEach(() => {
+    document.head.innerHTML = "";
+    document.body.innerHTML = "";
+    frames = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => frames.push(cb));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    document.documentElement.style.transform = "";
+  });
+
+  test("a morph schedules the WKWebView repaint toggle across two frames", () => {
+    document.body.innerHTML = `<p id="a">old</p>`;
+    applyMorph(`<html><head></head><body><h1 id="a">new</h1></body></html>`);
+
+    expect(frames).toHaveLength(1);
+    frames.shift()!(0);
+    expect(document.documentElement.style.transform).toBe("translateZ(0)");
+    frames.shift()!(0);
+    expect(document.documentElement.style.transform).toBe("");
+  });
+
+  test("reports element nodes added and removed", () => {
+    document.body.innerHTML = `<p id="gone">x</p><div id="keep"><span>k</span></div>`;
+    const counts = applyMorph(
+      `<html><head></head><body><div id="keep"><span>k</span></div><ul id="new"><li>1</li><li>2</li></ul></body></html>`,
+    );
+    expect(counts).toEqual({ added: 3, removed: 1 });
+  });
+
+  test("a no-op morph reports zero", () => {
+    document.body.innerHTML = `<p id="a">x</p>`;
+    expect(applyMorph(`<html><head></head><body><p id="a">x</p></body></html>`)).toEqual({ added: 0, removed: 0 });
+  });
 });
 
 describe("script-change diagnostics", () => {

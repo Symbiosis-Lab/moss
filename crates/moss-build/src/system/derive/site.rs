@@ -27,6 +27,7 @@ use moss_core::resolve::md_extract::{extract_md_references, RefSyntax};
 use crate::build::ports::reporter::BuildReporter;
 use crate::build::progress::PipelineEvent;
 use crate::moss_paths::MossPaths;
+use crate::system::derive::priority::{self, Schedule};
 use crate::system::derive::registry::{DerivationEntry, DerivationRegistry};
 use crate::system::derive::{self as derive, batch::DeriveJob, DeriveFailure, DeriveOutcome};
 
@@ -45,10 +46,15 @@ pub struct Demand {
     pub entry: DerivationEntry,
     /// Site-relative, `/`-separated.
     pub path: String,
+    /// The pages that embed it, site-relative.
+    pub pages: Vec<String>,
 }
 
 enum Slot {
     Outcome(DeriveOutcome),
+    /// An earlier key's result for these exact bytes, shown while the read
+    /// under the current key runs.
+    Previous(DeriveOutcome),
     Failed(String),
     Pending,
 }
@@ -141,6 +147,7 @@ impl DerivedSite {
         let state = self.state_of(path, fragment);
         let unready = match &state {
             DerivedFragment::Pending => Some(Unready::Pending),
+            _ if self.is_previous(path) => Some(Unready::Pending),
             DerivedFragment::Failed { message } => Some(Unready::Failed(message.clone())),
             DerivedFragment::Ready { .. } | DerivedFragment::Skipped { .. } => None,
         };
@@ -148,6 +155,11 @@ impl DerivedSite {
             map.insert(path.to_string(), unready);
         }
         state
+    }
+
+    /// Whether `path` shows an earlier key's result while its re-read runs.
+    pub fn is_previous(&self, path: &str) -> bool {
+        self.slots.lock().ok().and_then(|s| s.get(path).cloned()).is_some_and(|slot| matches!(*slot, Slot::Previous(_)))
     }
 
     /// What the blocks rendered so far show: how many files render as a
@@ -169,8 +181,9 @@ impl DerivedSite {
         match &*self.slot(path) {
             Slot::Pending => DerivedFragment::Pending,
             Slot::Failed(message) => DerivedFragment::Failed { message: message.clone() },
-            Slot::Outcome(DeriveOutcome::Skip { message, .. }) => DerivedFragment::Skipped { message: message.clone() },
-            Slot::Outcome(DeriveOutcome::Derived { fragments, facts }) => match fragments.get(fragment) {
+            Slot::Outcome(DeriveOutcome::Skip { message, .. }) | Slot::Previous(DeriveOutcome::Skip { message, .. }) => DerivedFragment::Skipped { message: message.clone() },
+            Slot::Outcome(DeriveOutcome::Derived { fragments, facts })
+            | Slot::Previous(DeriveOutcome::Derived { fragments, facts }) => match fragments.get(fragment) {
                 Some(markdown) => DerivedFragment::Ready { markdown: markdown.clone(), facts: facts.clone() },
                 None => DerivedFragment::Failed { message: format!("no `{fragment}` fragment was produced") },
             },
@@ -200,7 +213,7 @@ impl DerivedSite {
             DeriveMode::Adopt => match derive::remembered(entry, &input) {
                 Some(Ok(outcome)) => Slot::Outcome(outcome),
                 Some(Err(failure)) => Slot::Failed(failure.message),
-                None => Slot::Pending,
+                None => derive::lookup_previous(&self.paths, entry, &input).map_or(Slot::Pending, Slot::Previous),
             },
             DeriveMode::Await => {
                 let result = derive::binary::ensure_binary(entry, None)
@@ -219,8 +232,8 @@ impl DerivedSite {
     /// Every file the site's pages ask a derivation to read: `pages` are
     /// site-relative markdown paths.
     pub fn demands(&self, pages: &[String], graph: &ContentGraph) -> Vec<Demand> {
-        let mut seen = HashSet::new();
-        let mut demands = Vec::new();
+        let mut index: HashMap<String, usize> = HashMap::new();
+        let mut demands: Vec<Demand> = Vec::new();
         for page in pages {
             // The build's own non-waiting probe: a page still in the cloud is
             // skipped here and deferred by the render, not downloaded.
@@ -239,11 +252,16 @@ impl DerivedSite {
                 }
                 let (file, Some(fragment)) = moss_core::resolve::embeds::split_embed_target(&reference.text) else { continue };
                 let Some(path) = graph.resolve_path(file, page) else { continue };
-                if !self.table.claims(&extension_of(&path), fragment) || !seen.insert(path.clone()) {
+                if !self.table.claims(&extension_of(&path), fragment) {
                     continue;
                 }
-                if let Some(entry) = self.registry.for_extension(&extension_of(&path)) {
-                    demands.push(Demand { entry: entry.clone(), path });
+                if let Some(&at) = index.get(&path) {
+                    if !demands[at].pages.contains(page) {
+                        demands[at].pages.push(page.clone());
+                    }
+                } else if let Some(entry) = self.registry.for_extension(&extension_of(&path)) {
+                    index.insert(path.clone(), demands.len());
+                    demands.push(Demand { entry: entry.clone(), path, pages: vec![page.clone()] });
                 }
             }
         }
@@ -375,9 +393,18 @@ fn read_all(
     report_progress(reporter, &noun, 0, total);
     let batch: Vec<DeriveJob<'_>> =
         runnable.iter().map(|d| DeriveJob { entry: &d.entry, input: root.join(&d.path) }).collect();
-    let derived = derive::derive_batch(paths, &batch, remember, stop, |done, total| {
+    // New or changed bytes have no earlier result to show; a read repeated
+    // for a changed plugin does, unless the file just arrived again.
+    let arrived: Vec<bool> = runnable
+        .iter()
+        .map(|d| derive::lookup_previous(paths, &d.entry, &root.join(&d.path)).is_none() || priority::arrived_in_session(root, &d.path, &d.pages))
+        .collect();
+    let schedule = Arc::new(Schedule::new(root, runnable.iter().map(|d| d.pages.clone()).collect(), arrived));
+    let derived = derive::derive_batch_by(paths, &batch, remember, stop, Arc::new(move |job| schedule.tier(job)), |done, total| {
         report_progress(reporter, &noun, done, total)
     });
+    let read: Vec<&str> = runnable.iter().zip(&derived).filter(|(_, r)| r.is_some()).map(|(d, _)| d.path.as_str()).collect();
+    priority::settle(root, &read);
     for (demand, result) in runnable.iter().zip(derived) {
         let Some(result) = result else { continue };
         if let Err(failure) = &result {
@@ -403,15 +430,41 @@ pub struct BackgroundDerive {
 impl BackgroundDerive {
     /// Read everything, stopping early if a newer render of the folder was
     /// admitted (it queues whatever is still missing) or `cancel` fires. When
-    /// the reads finish and this is still the newest render, enqueue a full
-    /// rebuild: it renders from the cache.
+    /// any read finished (a failure too: the page shows it), enqueue a full rebuild: it renders from the
+    /// cache. A newer render does not suppress it: that render may have been
+    /// built before these results landed, and the worker coalesces requests,
+    /// so a redundant one is cheap while a missed one leaves finished text
+    /// unapplied.
     pub fn run(self, reporter: Option<&dyn BuildReporter>, cancel: &std::sync::atomic::AtomicBool) {
-        let stop = || cancel.load(Ordering::SeqCst) || !crate::build::lifecycle::is_latest_render(&self.lifecycle_paths, self.render);
-        read_all(&self.paths, &self.root, &self.jobs, reporter, &stop, true);
+        let superseded = || !crate::build::lifecycle::is_latest_render(&self.lifecycle_paths, self.render);
+        let stop = || cancel.load(Ordering::SeqCst) || superseded();
+        let results = read_all(&self.paths, &self.root, &self.jobs, reporter, &stop, true);
+        let cancelled = cancel.load(Ordering::SeqCst);
         if stop() {
+            // A stopped read sends no last count, and a listener would show it
+            // as still reading. The jobs in flight have drained by now.
+            if let Some(reporter) = reporter {
+                reporter.report(&PipelineEvent::BackgroundProgress {
+                    task: "derive".to_string(),
+                    current: 0,
+                    total: 0,
+                    message: String::new(),
+                    completed: true,
+                    advisories: vec![],
+                });
+            }
+        }
+        if cancelled {
+            log::info!(target: "derive", "not enqueueing a re-render for '{}': the session was cancelled", self.folder);
+            return;
+        }
+        if results.is_empty() {
             return;
         }
         let Some(worker) = crate::ops::watch::worker::get(&self.folder) else { return };
+        if superseded() {
+            log::debug!(target: "derive", "a newer render of '{}' exists; enqueueing the re-render anyway", self.folder);
+        }
         log::info!(target: "derive", "derived text is ready for '{}' — enqueueing a full re-render", self.folder);
         worker.enqueue(crate::ops::watch::worker::RebuildRequest::full());
     }

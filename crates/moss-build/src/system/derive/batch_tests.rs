@@ -1,6 +1,7 @@
 use super::*;
 use crate::system::derive::test_support::{entry, script, DERIVED};
 use crate::system::derive::lookup_cached;
+use crate::system::derive::priority::Tier;
 use tempfile::TempDir;
 
 #[test]
@@ -66,4 +67,35 @@ fn derive_jobs_overrides_the_default_within_one_to_sixty_four_and_anything_else_
     for ignored in ["0", "65", "-3", "many", "", "2.5"] {
         assert_eq!(budget_from(Some(ignored), 16), 4, "{ignored:?}");
     }
+}
+
+#[test]
+fn a_batch_that_arrives_mid_read_is_ordered_against_what_has_not_started() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = TempDir::new().unwrap();
+    let site = MossPaths::new(&dir.path().join("site"));
+    let slow = script(dir.path(), "d.sh", &format!("sleep 0.3\n{DERIVED}"));
+    let e = entry(&slow, "1.0.0");
+    let make = |prefix: &str, n: usize| -> Vec<DeriveJob<'_>> {
+        (0..n)
+            .map(|i| {
+                let input = dir.path().join(format!("{prefix}{i}.xyz"));
+                std::fs::write(&input, format!("{prefix}{i}")).unwrap();
+                DeriveJob { entry: &e, input }
+            })
+            .collect()
+    };
+    let (a_jobs, b_jobs) = (make("a", 24), make("b", 1));
+    let a_done = AtomicUsize::new(0);
+    let a_done_when_b_returned = std::thread::scope(|s| {
+        s.spawn(|| {
+            derive_batch_by(&site, &a_jobs, false, &|| false, Arc::new(|_| Tier::Rest), |done, _| a_done.store(done, Ordering::SeqCst))
+        });
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let b = derive_batch_by(&site, &b_jobs, false, &|| false, Arc::new(|_| Tier::Viewed), |_, _| {});
+        assert!(b[0].as_ref().is_some_and(|r| r.is_ok()));
+        a_done.load(Ordering::SeqCst)
+    });
+    assert!(a_done_when_b_returned < 24, "the late batch's file did not wait for the whole first batch");
+    assert_eq!(a_done.load(Ordering::SeqCst), 24, "the first batch still finished every read");
 }

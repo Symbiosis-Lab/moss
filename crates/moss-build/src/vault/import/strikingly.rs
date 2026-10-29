@@ -145,7 +145,7 @@ fn iso_date_prefix(s: &str) -> Option<String> {
 }
 
 /// Unknown component types are skipped but never silently: aggregate counts
-/// into one warning line (raw eprintln is forbidden under panic=abort).
+/// into one warning line (raw eprintln panics on a closed stderr pipe).
 fn log_skipped(skipped: &[String]) {
     if skipped.is_empty() {
         return;

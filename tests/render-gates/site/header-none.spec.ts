@@ -246,9 +246,38 @@ const toggleState = (page: Page) =>
     };
   });
 
+test.describe('the controls at the top of a page with no header', () => {
+  for (const width of [1360, 390]) {
+    test(`at ${width}px their centre is the title's first line and their end is the column's end`, async ({ page }) => {
+      await open(page, CLOSING_PATH, width, 800);
+      const m = await page.evaluate(() => {
+        const icons = document.querySelector('.moss-nav-island + .nav-icons')!.getBoundingClientRect();
+        const theme = document.querySelector('.moss-nav-island + .nav-icons .nav-theme-btn')!.getBoundingClientRect();
+        const article = document.querySelector('main article')!;
+        const title = document.querySelector('main article > h1')!;
+        const range = document.createRange();
+        range.selectNodeContents(title);
+        const line = range.getClientRects()[0];
+        const box = article.getBoundingClientRect();
+        const style = getComputedStyle(article);
+        return {
+          scrollY,
+          themeCentre: (theme.top + theme.bottom) / 2 + scrollY,
+          lineCentre: (line.top + line.bottom) / 2 + scrollY,
+          end: Math.max(icons.right, theme.right),
+          columnEnd: box.right - parseFloat(style.paddingRight) - parseFloat(style.borderRightWidth),
+        };
+      });
+      expect(m.scrollY).toBe(0);
+      expect(Math.abs(m.themeCentre - m.lineCentre), JSON.stringify(m)).toBeLessThanOrEqual(1);
+      expect(Math.abs(m.end - m.columnEnd), JSON.stringify(m)).toBeLessThanOrEqual(1);
+    });
+  }
+});
+
 test.describe('one theme toggle', () => {
   for (const [width, path] of [[WIDE, '/'], [NARROW, '/'], [WIDE, CLOSING_PATH], [390, '/'], [1360, PICTURES_PATH]] as const) {
-    test(`at ${width}px on ${path}, exactly one is visible at every scroll position`, async ({ page }) => {
+    test(`at ${width}px on ${path}, one theme toggle is in the page, and it shows wherever the list is up or at the top`, async ({ page }) => {
       await open(page, path, width, 800);
       const height = await page.evaluate(() => document.documentElement.scrollHeight - innerHeight);
       const stops = [0, 10, 20, 21, 22, 24, 40, 48, 60, 120, 300];
@@ -258,18 +287,21 @@ test.describe('one theme toggle', () => {
       for (const y of stops) {
         await scrollTo(page, y);
         await frames(page);
-        const s = await toggleState(page);
-        expect(s.visible, `at ${y}px: ${JSON.stringify(s)}`).toBe(1);
-        expect([s.search, s.lang], `search and language at ${y}px`).toEqual([true, true]);
+        let s = await toggleState(page);
+        // Where the list is away from its lane (over the opening past the top, a wide block, the closing picture) the controls are away with it.
+        const away = s.lane && !s.top;
+        if (away) await expect.poll(async () => (s = await toggleState(page)).visible, `at ${y}px they have faded`).toBe(0);
+        expect(s.visible, `at ${y}px: ${JSON.stringify(s)}`).toBe(away ? 0 : 1);
+        if (!away) expect([s.search, s.lang], `search and language at ${y}px`).toEqual([true, true]);
         for (const c of s.stack) {
           expect(c.left, `a control starts inside the window at ${y}px`).toBeGreaterThanOrEqual(0);
           expect(c.right, `and ends inside it`).toBeLessThanOrEqual(width);
         }
-        places.add(s.top ? 'top' : s.ruler === 'on' || s.lane ? 'list' : 'bar');
+        places.add(s.top ? 'top' : away ? 'away' : s.ruler === 'on' ? 'list' : 'bar');
       }
-      const want = path === PICTURES_PATH ? ['list', 'top'] : width === WIDE ? ['bar', 'list', 'top'] : ['bar', 'top'];
+      const want = path === PICTURES_PATH ? ['away', 'list', 'top'] : width === WIDE ? ['bar', 'list', 'top'] : ['bar', 'top'];
       expect([...places].sort(), 'it has been in each of its places').toEqual(want);
-      await expect(page.getByRole('button', { name: 'Toggle theme' })).toHaveCount(1);
+      await expect(page.getByRole('button', { name: 'Toggle theme', includeHidden: true }), 'one in the page, shown or not').toHaveCount(1);
     });
   }
 
@@ -385,7 +417,92 @@ test.describe('a contents: pictures page reserves a lane for its list', () => {
       await expect.poll(async () => (await state(page)).list).toBe(false);
       expect((await state(page)).bar).toBe(false);
     });
+
+    test(`at ${width}px the controls leave with the list at the closing picture and return with it`, async ({ page }) => {
+      await open(page, PICTURES_PATH, width, 800);
+      /** Each control's paint state, and whether the visible ones overlap the closing picture. */
+      const controls = () =>
+        page.evaluate(() => {
+          const picture = document.querySelector('footer .moss-hero-closing')!.getBoundingClientRect();
+          const box = document.querySelector('.nav-icons')!;
+          const painted = (el: Element) => {
+            const cs = getComputedStyle(el);
+            return cs.visibility === 'visible' && Number(cs.opacity) > 0.01;
+          };
+          const items = [...box.children].filter((el) => painted(box) && painted(el));
+          return {
+            visible: items.length,
+            overlapping: items.filter((el) => {
+              const b = el.getBoundingClientRect();
+              return b.top < picture.bottom && b.bottom > picture.top;
+            }).length,
+          };
+        });
+      await jumpTo(page, 2);
+      await expect.poll(async () => (await state(page)).list).toBe(true);
+      await expect.poll(async () => (await controls()).visible, 'with the list up the controls are in the lane').toBeGreaterThan(0);
+      for (const at of [0.9, 0.6, 0.3]) {
+        await placeTop(page, 'footer .moss-hero-closing', at);
+        await expect.poll(async () => (await state(page)).list, `the picture's top is at ${at} of the window`).toBe(false);
+        await expect.poll(controls, `no control shows over the picture at ${at}`).toEqual({ visible: 0, overlapping: 0 });
+      }
+      await jumpTo(page, 2);
+      await expect.poll(async () => (await controls()).visible, 'back in a main section the controls return').toBeGreaterThan(0);
+      await page.evaluate(() => scrollTo(0, 0));
+      await frames(page);
+      await expect.poll(async () => (await controls()).visible, 'at the top they stand in the page').toBeGreaterThan(0);
+    });
   }
+
+  test('at 390px there is no lane: the bar and its controls stay, at the closing picture too', async ({ page }) => {
+    await open(page, PICTURES_PATH, 390, 800);
+    const bar = () =>
+      page.evaluate(() => {
+        const island = document.querySelector<HTMLElement>('.moss-nav-island')!;
+        const box = document.querySelector('.nav-icons')!;
+        const cs = getComputedStyle(box);
+        const b = box.getBoundingClientRect();
+        return { ruler: island.dataset.ruler, shown: island.dataset.shown, painted: cs.visibility === 'visible' && Number(cs.opacity) > 0.01, top: Math.round(b.top), position: cs.position };
+      });
+    await jumpTo(page, 2);
+    await expect.poll(async () => (await bar()).shown).toBe('true');
+    const inSection = await bar();
+    expect(inSection).toMatchObject({ ruler: 'off', painted: true, position: 'fixed' });
+    await placeTop(page, 'footer .moss-hero-closing', 0.3);
+    await expect.poll(async () => (await bar()).shown).toBe('true');
+    expect(await bar(), 'the same place and the same paint at the closing picture').toEqual(inSection);
+  });
+
+  test('a focused control stays shown, and focused, when the list goes away under it', async ({ page }) => {
+    await open(page, PICTURES_PATH, 1360, 800);
+    await jumpTo(page, 2);
+    await expect.poll(async () => (await state(page)).list).toBe(true);
+    await page.locator('.nav-theme-btn').focus();
+    await placeTop(page, 'footer .moss-hero-closing', 0.3);
+    await expect.poll(async () => (await state(page)).list).toBe(false);
+    await frames(page, 30);
+    const toggle = await page.evaluate(() => {
+      const el = document.querySelector('.nav-theme-btn')!;
+      const cs = getComputedStyle(el.closest('.nav-icons')!);
+      return { focused: document.activeElement === el, shown: cs.visibility === 'visible' && Number(cs.opacity) > 0.99 };
+    });
+    expect(toggle).toEqual({ focused: true, shown: true });
+  });
+
+  test('a site that hides the list with CSS keeps the bar and its controls where the lane is reserved', async ({ page }) => {
+    await open(page, PICTURES_PATH, 1360, 800);
+    await page.addStyleTag({ content: '.moss-contents-ruler { display: none; }' });
+    await jumpTo(page, 2);
+    await page.evaluate(() => scrollBy(0, 40));
+    await frames(page);
+    await expect.poll(() => page.evaluate(() => document.querySelector<HTMLElement>('.moss-nav-island')!.dataset.ruler)).toBe('off');
+    await expect.poll(() => page.evaluate(() => document.querySelector<HTMLElement>('.moss-nav-island')!.dataset.shown), 'the bar is the contents').toBe('true');
+    const cs = await page.evaluate(() => {
+      const c = getComputedStyle(document.querySelector('.nav-icons')!);
+      return { shown: c.visibility === 'visible' && Number(c.opacity) > 0.99, position: c.position };
+    });
+    expect(cs).toEqual({ shown: true, position: 'fixed' });
+  });
 
   test('the fade behind the open names takes the colour of the band under the list', async ({ page }) => {
     await open(page, PICTURES_PATH, 1360, 800);

@@ -111,14 +111,14 @@ pub fn format_display_date(date_str: &str, lang: Language, typesetting: Option<&
 }
 
 /// [`format_vertical_cjk_date_compact`] under [`use_cjk_numerals`], else
-/// [`format_date_string`]. A month-precision date (`2026-02`) is written as the
-/// month in `lang` ("February 2026", "2026年2月"): "2026 · 02" reads as a
-/// version number, and a day-precision date still has its compact form.
+/// [`format_date_string`]. A date with a month (`2026-02`, `2026-02-14`) is
+/// written as the month in `lang` ("February 2026", "2026年2月"): "2026 · 02"
+/// reads as a version number.
 pub fn format_compact_date(date_str: &str, lang: Language, typesetting: Option<&str>) -> String {
     if use_cjk_numerals(typesetting, lang) {
         format_vertical_cjk_date_compact(date_str).unwrap_or_else(|| format_date_string(date_str))
-    } else if matches!(parse_partial_date(date_str), Some(PartialDate { month: Some(_), day: None, .. })) {
-        format_article_date(date_str, lang)
+    } else if let Some(PartialDate { year, month: Some(month), .. }) = parse_partial_date(date_str) {
+        format_article_date(&format!("{year}-{month:02}"), lang)
     } else {
         format_date_string(date_str)
     }
@@ -327,6 +327,27 @@ pub fn extract_date_from_doc(doc: &ParsedDocument, _root_path: &str) -> (String,
     ("Unknown".to_string(), None, false)
 }
 
+/// The `datetime` attribute value for a raw date: the date at the precision it
+/// was written (`2026`, `2026-03`, `2026-03-04`), or `None` when it does not parse.
+pub fn datetime_attr(raw: &str) -> Option<String> {
+    let pd = parse_partial_date(raw)?;
+    Some(match (pd.month, pd.day) {
+        (Some(m), Some(d)) => format!("{:04}-{:02}-{:02}", pd.year, m, d),
+        (Some(m), None) => format!("{:04}-{:02}", pd.year, m),
+        _ => format!("{:04}", pd.year),
+    })
+}
+
+/// A date's display text as `<time datetime>` carrying the full date, when the
+/// raw date parses; otherwise the escaped text alone.
+pub fn time_html(display: &str, raw: &str) -> String {
+    match datetime_attr(raw).filter(|_| !display.is_empty()) {
+        Some(iso) => format!(r#"<time datetime="{iso}">{}</time>"#, crate::build::features::html_escape(display)),
+        None => crate::build::features::html_escape(display),
+    }
+}
+
 #[cfg(test)]
 #[path = "date_tests.rs"]
 mod tests;
+
