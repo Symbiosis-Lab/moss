@@ -13,6 +13,11 @@ release heading.
 
 ## [Unreleased]
 
+### Added
+
+- A derivation may now report a `date` for the page, which a page that lists `date` under `inferred` takes when it sets none of its own.
+- A derivation plugin gets a persistent cache directory it can write to inside the sandbox, so it can keep what is expensive to compute (such as the text read from a scanned document) between runs instead of losing it with the per-run scratch directory.
+
 ## [0.15.0] - 2026-10-22
 
 ### Added

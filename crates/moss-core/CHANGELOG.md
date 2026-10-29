@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `DerivedFacts` gains `date`, a `YYYY-MM-DD` calendar date a derivation may report. A page that lists `date` under `inferred` takes it when it sets none of its own, as for `title`; `expand_page` writes it the same way. A value in any other form is ignored.
+- A `![[file.pdf#text]]` embed for a file type no installed plugin derives text from now records a diagnostic naming the embed and the two fixes (a `[derive]` entry, or a plugin for that file type), and the build counts it as a problem so `--strict` sees it. The embed is still left as written.
+- Grid and site components gain `rows=equal` (lines up the parts of a grid's cards), `mid=` (sets a grid's columns between 48rem and 64rem) and a `[site] credit` line shown before the moss mark; the component and custom-property contracts list them.
+
+### Changed
+
+- The AST parser caps list, blockquote, footnote and definition nesting at 32 levels; deeper content stays flat in the container at the limit, with one warning naming the line, so a page of hundreds of `- ` markers can no longer overflow the stack.
+- A folder now lists by date when half its pages are dated (it was four in five), so one undated page no longer turns a small dated folder into a title list.
+- `inferred` is an internal frontmatter field: the editor no longer offers it as a tag chip.
+
+### Fixed
+
+- A trailing `|` in a wiki image embed (`![[figure.png|Description|]]`) now makes the description alt-only, as `![Description|](figure.png)` already did, instead of showing `Description|` as the caption.
 
 ## [0.20.0] - 2026-10-22
 
