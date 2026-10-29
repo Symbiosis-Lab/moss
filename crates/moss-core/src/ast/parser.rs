@@ -376,7 +376,7 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
     doc.advisories = extraction.advisories;
     if heading_ids == HeadingIds::Number {
         if let Some(offset) = capped_at {
-            let line = config.warning_line_offset + source[..offset].matches('\n').count() + 1;
+            let line = config.warning_line_offset + source.get(..offset).unwrap_or_default().matches('\n').count() + 1;
             doc.warnings.push(format!(
                 "line {line}: lists and blockquotes are nested more than {MAX_BLOCK_NESTING} levels deep; the levels past {MAX_BLOCK_NESTING} are flattened into level {MAX_BLOCK_NESTING}, so no text is lost"
             ));

@@ -339,17 +339,19 @@ pub fn card_parts(html: &str) -> Option<usize> {
             // Trailing text: a child of the card, or stray text after it.
             return text_run(rest, depth, &mut parts).then_some(parts);
         };
-        if lt > 0 && !text_run(&rest[..lt], depth, &mut parts) {
+        let (text, tail) = rest.split_at_checked(lt)?;
+        if lt > 0 && !text_run(text, depth, &mut parts) {
             return None;
         }
-        rest = &rest[lt..];
+        rest = tail;
         if let Some(after) = rest.strip_prefix("<!--") {
-            rest = &after[after.find("-->")? + 3..];
+            rest = after.split_once("-->")?.1;
             continue;
         }
         let end = tag_end(rest)?;
-        let tag = &rest[1..end - 1];
-        rest = &rest[end..];
+        let (head, tail) = rest.split_at_checked(end)?;
+        let tag = head.get(1..end - 1)?;
+        rest = tail;
         if tag.starts_with('!') || tag.starts_with('?') {
             continue;
         }
@@ -371,7 +373,7 @@ pub fn card_parts(html: &str) -> Option<usize> {
             if RAW_TEXT.contains(&name.as_str()) {
                 let close = format!("</{name}");
                 let at = rest.to_ascii_lowercase().find(&close)?;
-                rest = &rest[at..];
+                rest = rest.get(at..)?;
             }
         } else if depth == 0 {
             return None;
@@ -437,7 +439,7 @@ fn render_quote<H: RenderHooks + ?Sized>(hooks: &H, out: &mut String, quote: &Bl
     super::render::render_blocks_with_meta(hooks, out, std::slice::from_ref(quote), &[]);
     if matches!(script, Some(Cjk::Japanese)) {
         // On the quote alone, so the source line after it is not read as Japanese.
-        if let Some(at) = out[from..].find("<blockquote") {
+        if let Some(at) = out.get(from..).and_then(|quote| quote.find("<blockquote")) {
             out.insert_str(from + at + "<blockquote".len(), r#" lang="ja""#);
         }
     }

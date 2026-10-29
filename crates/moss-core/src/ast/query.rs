@@ -196,7 +196,7 @@ pub fn has_raw_style_block(doc: &Document) -> bool {
         if let Block::Other(html) = block {
             let lower = html.to_ascii_lowercase();
             found |= lower.match_indices("<style").any(|(at, tag)| {
-                lower[at + tag.len()..].starts_with(|c: char| c == '>' || c == '/' || c.is_whitespace())
+                lower.get(at + tag.len()..).is_some_and(|rest| rest.starts_with(|c: char| c == '>' || c == '/' || c.is_whitespace()))
             });
         }
         true

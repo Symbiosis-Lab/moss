@@ -50,19 +50,21 @@ pub fn keep_ranges_together(inline_html: &str) -> Cow<'_, str> {
     let mut out = String::new();
     let mut rest = inline_html;
     while !rest.is_empty() {
-        let (text, tag, after) = match rest.find('<').and_then(|open| tag_end(&rest[open..]).map(|end| (open, end))) {
-            Some((open, end)) => (&rest[..open], &rest[open..open + end], &rest[open + end..]),
-            None => (rest, "", ""),
-        };
+        let split = rest.find('<').and_then(|open| {
+            let (text, from_tag) = rest.split_at_checked(open)?;
+            let (tag, after) = from_tag.split_at_checked(tag_end(from_tag)?)?;
+            Some((text, tag, after))
+        });
+        let (text, tag, after) = split.unwrap_or((rest, "", ""));
         let mut last = 0;
         for (from, to) in ranges(text) {
-            out.push_str(&text[last..from]);
+            out.push_str(text.get(last..from).unwrap_or_default());
             out.push_str(r#"<span class="moss-nobreak">"#);
-            out.push_str(&text[from..to]);
+            out.push_str(text.get(from..to).unwrap_or_default());
             out.push_str("</span>");
             last = to;
         }
-        out.push_str(&text[last..]);
+        out.push_str(text.get(last..).unwrap_or_default());
         out.push_str(tag);
         rest = after;
     }
