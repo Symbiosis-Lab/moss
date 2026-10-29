@@ -7,10 +7,7 @@
  * that ends in a `currentColor` on an SVG path, and the inked one is a rule
  * keyed on the literal the mark is painted with — a shape nothing else in
  * site.css uses, and one no Rust test can check: those see the stylesheet as
- * text, and text cannot say whether a rule beat a presentation attribute. Both
- * arms of the dark rule are exercised, the media-query one and the
- * `[data-theme]` one, because they are written out twice and a typo in either
- * is invisible from the other.
+ * text, and text cannot say whether a rule beat a presentation attribute.
  *
  * Fact one: dark tokens are beaten by layer order, not specificity.
  *
@@ -93,12 +90,13 @@ test("themes-layer author override beats the tokens-layer dark block", async ({
   ).toBe(EXPECTED_BG);
 });
 
-test("the colophon mark is grey at rest and inks when reached for, on both dark arms", async ({
+test("the colophon mark is grey at rest and inks when reached for, on a dark ground", async ({
   page,
 }) => {
   // The pre-paint script stamps data-theme from the system preference as well
   // as from the toggle, so a dark context arrives with the attribute already
-  // set: this first reading is the [data-theme="dark"] arm.
+  // set. The stylesheet has no @media (prefers-color-scheme) arm of its own:
+  // [data-theme="dark"] is the only dark selector.
   await page.goto("./", { waitUntil: "domcontentloaded" });
   expect(
     await page.evaluate(() =>
@@ -132,25 +130,13 @@ test("the colophon mark is grey at rest and inks when reached for, on both dark 
   await page.hover(LINK);
   await expect(
     page.locator(DROP),
-    `the [data-theme] arm must ink the drop to ${DROP_DARK}; a fill of ` +
+    `the dark ground must ink the drop to ${DROP_DARK}; a fill of ` +
       `${DROP_LIGHT} means the rule did not beat the path's own fill attribute`,
   ).toHaveCSS("fill", DROP_DARK);
   await expect(
     page.locator(ICON),
     "and the black half takes the dark ground's ink with it",
   ).toHaveCSS("color", INK_DARK);
-
-  // Same rule, written a second time under @media. Stripping the attribute is
-  // the only way to reach it on a page that stamps one — and the two are
-  // written out separately, so a typo in either is invisible from the other.
-  await page.evaluate(() =>
-    document.documentElement.removeAttribute("data-theme"),
-  );
-  await expect(
-    page.locator(DROP),
-    "with data-theme removed only the media-query arm can match, and it must " +
-      "ink the drop the same way",
-  ).toHaveCSS("fill", DROP_DARK);
 
   // The control. Without it this test passes just as well with the drop painted
   // #a3d483 everywhere, which would lose the two-tone reading on paper.
