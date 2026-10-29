@@ -890,7 +890,7 @@ impl Writer<'_> {
             // draw the same shape on the same pixel as one already drawn is
             // left out, so several places in one city make one dot.
             let mut places: Vec<&ResolvedPlace> = target.marker_places().collect();
-            places.sort_by_key(|place| matches!(place.precision, Precision::Exact | Precision::City));
+            places.sort_by_cached_key(|place| (matches!(place.precision, Precision::Exact | Precision::City), place.precision as u8, place.key.clone()));
             let mut drawn = std::collections::HashSet::new();
             for place in places {
                 let Some(point) = place.point().and_then(|point| projection.project(point)) else {
@@ -1740,6 +1740,25 @@ mod tests {
             .collect();
         assert_eq!(marked, ["places/kansai", "places/old-town", "places/nara"], "{markers}");
         assert!(svg.contains("aria-label=\"Map of places\""));
+    }
+
+    #[test]
+    fn coincident_markers_keep_the_same_place_whatever_the_input_order() {
+        let place = |key: &str| ResolvedPlace {
+            key: key.to_string(),
+            display: key.to_string(),
+            latitude: Some(35.01),
+            longitude: Some(135.77),
+            precision: Precision::City,
+        };
+        let marked = |keys: &[&str]| {
+            let places: Vec<ResolvedPlace> = keys.iter().map(|key| place(key)).collect();
+            let points: Vec<ProjectedPoint> = places.iter().filter_map(ResolvedPlace::point).collect();
+            let frame = Frame::from_points(&points, places.iter().map(|place| place.precision)).unwrap();
+            let target = PlaceMapTarget { places, frame: Some(frame), aggregate_name: None, route: false };
+            layer_body(&emit_svg(&PlaceMapContext::embedded().unwrap(), &target, "p", 0), "marker").to_string()
+        };
+        assert_eq!(marked(&["places/nara", "places/kyoto-city"]), marked(&["places/kyoto-city", "places/nara"]));
     }
 
     /// The globe's coast is its land rings stroked: every land feature it
