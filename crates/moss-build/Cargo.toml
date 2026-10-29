@@ -74,7 +74,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 include-flate = "0.3.4"
 include_dir = "0.7"
 jieba-rs = "0.10"
-k256 = { version = "0.13", features = ["schnorr", "ecdsa"] }
+k256 = { version = "0.14", features = ["schnorr", "ecdsa"] }
 kamadak-exif = "0.5"
 lol_html = "1.2"
 notify = "6.1"

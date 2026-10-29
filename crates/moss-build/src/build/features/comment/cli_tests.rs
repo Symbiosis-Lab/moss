@@ -126,7 +126,7 @@ fn listing_never_rewrites_an_old_format_identity() {
     let d = site();
     let id_dir = d.path().join(".moss/identity");
     std::fs::create_dir_all(&id_dir).unwrap();
-    let key = k256::schnorr::SigningKey::random(&mut rand::rngs::OsRng);
+    let key = <k256::schnorr::SigningKey as k256::elliptic_curve::Generate>::generate();
     let legacy = serde_json::json!({
         "version": 1,
         "pubkey": hex::encode(key.verifying_key().to_bytes()),
