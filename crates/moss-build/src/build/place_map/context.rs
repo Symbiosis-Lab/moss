@@ -782,6 +782,15 @@ impl PlaceMapTarget {
     pub fn marker_places(&self) -> impl Iterator<Item = &ResolvedPlace> {
         self.places.iter().filter(|place| place.point().is_some())
     }
+
+    /// Coarse places first, then by key. Of several places on one pixel the
+    /// first drawn keeps the dot, so this order, not the input's (which
+    /// differs between platforms), decides which.
+    pub fn markers_in_draw_order(&self) -> Vec<&ResolvedPlace> {
+        let mut places: Vec<&ResolvedPlace> = self.marker_places().collect();
+        places.sort_by_cached_key(|place| (matches!(place.precision, Precision::Exact | Precision::City), place.precision as u8, place.key.clone()));
+        places
+    }
 }
 
 /// Escape a plain display name for use inside a double-quoted HTML

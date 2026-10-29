@@ -889,10 +889,8 @@ impl Writer<'_> {
             // Soft fades first, so none covers a dot. A marker that would
             // draw the same shape on the same pixel as one already drawn is
             // left out, so several places in one city make one dot.
-            let mut places: Vec<&ResolvedPlace> = target.marker_places().collect();
-            places.sort_by_cached_key(|place| (matches!(place.precision, Precision::Exact | Precision::City), place.precision as u8, place.key.clone()));
             let mut drawn = std::collections::HashSet::new();
-            for place in places {
+            for place in target.markers_in_draw_order() {
                 let Some(point) = place.point().and_then(|point| projection.project(point)) else {
                     continue;
                 };
@@ -976,7 +974,7 @@ impl Writer<'_> {
         }
         draw_globe_line(self, target, center, quantisation);
         let mut drawn = std::collections::HashSet::new();
-        for place in target.marker_places() {
+        for place in target.markers_in_draw_order() {
             let Some(point) = place.point() else {
                 continue;
             };
@@ -1756,7 +1754,10 @@ mod tests {
             let points: Vec<ProjectedPoint> = places.iter().filter_map(ResolvedPlace::point).collect();
             let frame = Frame::from_points(&points, places.iter().map(|place| place.precision)).unwrap();
             let target = PlaceMapTarget { places, frame: Some(frame), aggregate_name: None, route: false };
-            layer_body(&emit_svg(&PlaceMapContext::embedded().unwrap(), &target, "p", 0), "marker").to_string()
+            let svg = emit_svg(&PlaceMapContext::embedded().unwrap(), &target, "p", 0);
+            let globe: Vec<&str> = svg.split("data-map-globe-marker=\"true\" ").skip(1).map(|dot| &dot[..dot.find("/>").unwrap()]).collect();
+            assert!(!globe.is_empty());
+            (layer_body(&svg, "marker").to_string(), globe.join(" "))
         };
         assert_eq!(marked(&["places/nara", "places/kyoto-city"]), marked(&["places/kyoto-city", "places/nara"]));
     }
