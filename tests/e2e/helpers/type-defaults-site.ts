@@ -15,6 +15,8 @@ const svg = (w: number, h: number, fill: string): string =>
 export const RANGE_TITLE = "Maren Oduya of the Lantern Coast, 1626–1705";
 export const LONG_NAME = "Bartholomew Wickersham-Okonkwo";
 export const SUBTITLE = "A painter of invented birds";
+/** Short enough to share a 390px line with "Cove" in any fallback font; the full SUBTITLE fits only in system-ui on macOS. */
+const SHORT_SUBTITLE = "Painter of birds";
 export const LONG_TITLE =
   "The Complete Correspondence of the Harbour Board with the Lighthouse Keepers of the Northern Coast, Their Wives, Their Sons and the Ferrymen";
 export const CJK_QUOTE = "海天一色，燈塔獨明。";
@@ -84,7 +86,7 @@ Text.
 `,
     "short.md": `---
 title: Cove
-subtitle: ${SUBTITLE}
+subtitle: ${SHORT_SUBTITLE}
 uid: "tdg00005"
 ---
 
