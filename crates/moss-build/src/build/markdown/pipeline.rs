@@ -703,7 +703,15 @@ pub fn process_markdown_file(
     // the folder upstream in scan/reduce (`folder_lang`, computed once per
     // folder, never from this file's own content). `resolve_document_language`
     // treats both the same and no longer reads `content` at all.
-    let ancestor_lang = crate::i18n::folder_language(file_path, page.folder_lang);
+    // `partial: true` joins the reserved name here: a transclusion source is
+    // parsed like any page but never emitted, listed, or given a folder index,
+    // and every one of those gates already keys off this flag.
+    let is_slot_only = crate::build::footer::is_slot_only(
+        file_path,
+        crate::build::footer::ShipFacts { partial: frontmatter.partial == Some(true) },
+    );
+
+    let ancestor_lang = crate::i18n::folder_language(file_path, page.folder_lang, is_slot_only);
     let (doc_lang, clean_stem) = crate::i18n::resolve_document_language(
         frontmatter.lang.as_deref(),
         filename_stem,
@@ -798,14 +806,6 @@ pub fn process_markdown_file(
     // root-absolute. Asset links already do (`pinned_url`), hence only one branch.
     let injects_into_every_page =
         crate::build::footer::targets_a_slot(file_path, frontmatter.slot.as_deref());
-
-    // `partial: true` joins the reserved name here: a transclusion source is
-    // parsed like any page but never emitted, listed, or given a folder index,
-    // and every one of those gates already keys off this flag.
-    let is_slot_only = crate::build::footer::is_slot_only(
-        file_path,
-        crate::build::footer::ShipFacts { partial: frontmatter.partial == Some(true) },
-    );
 
     let resolve_link = |href: &str| -> String {
         // By the time hrefs reach this closure, `moss-core`'s resolve pipeline

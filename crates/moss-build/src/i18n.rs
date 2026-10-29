@@ -239,9 +239,11 @@ pub fn clean_stem_only(filename_stem: &str) -> String {
 /// The folder rung of a page's language: the language a folder above the page
 /// is named after, else `inferred`, the language the page's own folder
 /// declares in its index or is inferred to be written in
-/// (`build::scan::page_map::resolve_folder_languages`).
-pub fn folder_language(file_path: &str, inferred: Option<Language>) -> Option<Language> {
-    path::ancestor_lang_from_path(file_path).or(inferred)
+/// (`build::scan::page_map::resolve_folder_languages`). A slot-only file is
+/// never a page, so it takes no inferred language: outside a language tree its
+/// chrome is the site's.
+pub fn folder_language(file_path: &str, inferred: Option<Language>, slot_only: bool) -> Option<Language> {
+    path::ancestor_lang_from_path(file_path).or(if slot_only { None } else { inferred })
 }
 
 /// Resolve the language for a document using the priority chain:

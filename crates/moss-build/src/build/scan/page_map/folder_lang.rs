@@ -132,6 +132,14 @@ pub(super) fn resolve_folder_languages_with(
         if parse_filename_stem(stem).lang.is_some() {
             continue;
         }
+        // A slot-only file is never a page, so its language only scopes where
+        // it shows; it neither votes nor needs the folder verdict.
+        if crate::build::footer::is_slot_only(
+            &file_info.path,
+            crate::build::footer::ShipFacts { partial: declarations.is_partial(&file_info.path) },
+        ) {
+            continue;
+        }
         by_folder.entry(folder_of(&file_info.path)).or_default().push(file_info);
     }
 
@@ -522,6 +530,27 @@ mod tests {
             Some(&Language::En),
             "the suffixed translation's body must not move the folder's language"
         );
+    }
+
+    /// A slot-only file (a `partial: true` source, `footer.md`) is never a
+    /// page, so prose in it must not tip the folder its pages are judged in.
+    #[test]
+    fn slot_only_files_do_not_vote_in_folder_inference() {
+        let english = "This is an English passage about software engineering and web development practices, long enough to outweigh the Chinese page by a wide margin.";
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("page.md"),
+            "这是一篇关于软件工程和网页开发的中文文章。我们探讨了构建现代应用程序的各种技术。",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("snippet.md"), format!("---\npartial: true\n---\n{english}\n")).unwrap();
+        std::fs::write(dir.path().join("footer.md"), format!("{english}\n")).unwrap();
+
+        let files = vec![file("page.md"), file("snippet.md"), file("footer.md")];
+        let mut cache = FolderLangCache::default();
+        let langs = resolve(&files, dir.path(), &mut cache);
+
+        assert_eq!(langs.get(""), Some(&Language::ZhHans));
     }
 
     /// A folder with no confident detection at all contributes nothing —
