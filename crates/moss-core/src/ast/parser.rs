@@ -333,6 +333,11 @@ fn parse_document(markdown: &str, config: &ParseConfig, heading_ids: HeadingIds)
     // After the restore, so `[![[x.jpg]]](url)` and `[![x](x.jpg)](url)` reach
     // it as the same `Link(Image)` shape.
     promote_linked_figures(&mut blocks, &line_ctx);
+    // Grid cells run the same rule from `parse_cell_to_blocks`; link cards and
+    // hero overlays do not (a gallery link inside a card link nests anchors).
+    if heading_ids == HeadingIds::Number {
+        super::picture_row::promote(&mut blocks);
+    }
 
     // Implicit-figure gating: the per-paragraph `try_promote_to_figure`
     // inside `parse_block_with_tag` always runs (so the figure promotion
@@ -1396,7 +1401,7 @@ fn try_promote_image_only(
 
 /// A standard image's bracket text, sorted. Display words count only after a
 /// `|`, so an alt that happens to be one (`![Cover](c.jpg)`) stays the alt.
-fn standard_image_words(alt: &str) -> crate::media::ImageWords {
+pub(super) fn standard_image_words(alt: &str) -> crate::media::ImageWords {
     if alt.contains('|') {
         return crate::media::read_image_words(alt);
     }

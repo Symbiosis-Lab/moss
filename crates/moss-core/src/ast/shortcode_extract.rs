@@ -527,7 +527,9 @@ fn parse_cell_to_blocks(raw: &str, config: &ParseConfig) -> (Vec<Block>, Vec<Blo
         let linkified = format!("[]({})", url);
         return fragment_parts(parse_fragment_with_config(&linkified, config));
     }
-    fragment_parts(parse_fragment_with_config(raw, config))
+    let (mut blocks, metas, diag) = fragment_parts(parse_fragment_with_config(raw, config));
+    super::picture_row::promote(&mut blocks);
+    (blocks, metas, diag)
 }
 
 /// Detect a "bare URL cell": the entire cell content (after trim) is a
@@ -1167,7 +1169,13 @@ fn gallery_lines<'a>(lines: impl Iterator<Item = &'a str>, config: &ParseConfig)
                     return Some(GalleryLine::Caption(caption));
                 }
             }
-            let item = gallery_item_span(line);
+            let mut item = gallery_item_span(line);
+            // A wiki embed's pipe text is sorted as a picture's words are
+            // everywhere: its caption words are the alt, display words stay display.
+            if let (Some(it), true) = (item.as_mut(), line.trim_start().starts_with("![[")) {
+                let words = crate::media::read_image_words(&it.attrs);
+                (it.alt, it.attrs) = (words.caption, words.display);
+            }
             after_item = item.is_some();
             item.map(|it| GalleryLine::Item(it, markdown_image_title(line.trim())))
         })

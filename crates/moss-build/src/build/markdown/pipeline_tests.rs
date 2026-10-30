@@ -3197,6 +3197,29 @@ fn implicit_figure_html_shape_satisfies_gallery_regex() {
     );
 }
 
+/// A paragraph of pictures builds byte-for-byte what `:::gallery rows` does.
+#[test]
+fn picture_paragraph_renders_as_a_gallery_row() {
+    for (plain, body) in [
+        ("![The door](door.jpg)\n![The room](room.jpg)", "![The door](door.jpg)\n![The room](room.jpg)"),
+        ("![[a.jpg]]\n![[b.png]]", "![[a.jpg]]\n![[b.png]]"),
+        ("![[a.jpg|Dusk]]\n![[b.jpg|Dawn]]", "![[a.jpg|Dusk]]\n![[b.jpg|Dawn]]"),
+        ("![A](a.jpg)\n*Dusk*\n![B](b.jpg)", "![A](a.jpg)\n*Dusk*\n![B](b.jpg)"),
+    ] {
+        let fenced = render(&format!(":::gallery rows\n{body}\n:::\n"), true);
+        assert!(fenced.contains(r#"data-layout="rows""#), "{fenced}");
+        assert_eq!(render(&format!("{plain}\n"), true), fenced, "{plain:?}");
+    }
+    let cell = |inner: &str| render(&format!(":::grid 2\n{inner}\n+++\nWords beside.\n:::\n"), true);
+    assert_eq!(
+        cell("![A](a.jpg)\n![B](b.jpg)"),
+        cell(":::gallery rows\n![A](a.jpg)\n![B](b.jpg)\n:::")
+    );
+    assert!(!cell("![A](a.jpg)").contains("moss-gallery"));
+    let named = render(":::gallery rows\n![[a.jpg|Dusk]]\n![[b.jpg|Dawn]]\n:::\n", true);
+    assert!(named.contains(r#"alt="Dusk""#), "{named}");
+}
+
 // ===== Phase 3 PR4 (2026-05-27) — `moss:` title channel retired =====
 //
 // The Phase 1 C1 Stage 2 dispatcher used to read `moss:K=V` titles

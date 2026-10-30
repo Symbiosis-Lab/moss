@@ -1275,10 +1275,9 @@ fn italic_line_under_an_image_in_a_list_item_stays_a_paragraph() {
 
 #[test]
 fn two_images_in_one_paragraph_do_not_promote() {
-    // Detection rule requires EXACTLY one image. Two images stay as
-    // a paragraph (no figure wrap chosen — production would also
-    // not wrap this in a figure).
-    match first_block("![a](a.jpg) ![b](b.jpg)\n") {
+    // Detection rule requires EXACTLY one image. Two images with prose
+    // between them stay a paragraph (pictures alone in one become a gallery).
+    match first_block("![a](a.jpg) and ![b](b.jpg)\n") {
         Block::Paragraph(children) => {
             let img_count = children
                 .iter()

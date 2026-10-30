@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A paragraph of two or more pictures and nothing else, at a document's top level or in a grid cell, parses as `Shortcode::Gallery` with `rows: true`. The fenced `:::gallery` reads a wikilink picture's `|` text with `media::read_image_words`, so it becomes the alt.
+
 ### Added
 
 - `content_width` accepts `screen`.

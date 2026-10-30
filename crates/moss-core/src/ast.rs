@@ -46,6 +46,7 @@ pub mod math_text;
 pub mod node;
 mod nesting;
 pub mod parser;
+mod picture_row;
 pub mod plain_text;
 pub mod query;
 pub mod render;
