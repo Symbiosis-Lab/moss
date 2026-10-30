@@ -37,6 +37,21 @@ Reach for the cheapest rung that works; earn each step:
    a setext heading (underlined with `===` or `---`), are not checked.
 4. **Structural override.** Re-lay-out a page against moss's defaults.
 
+### Style by what the content is, before adding a class
+
+Rung 2 reaches further than it looks. CSS `:has()` and the sibling combinators select an element by what it holds or where it sits, so a layout that seems to need `::: {.class}` fences usually needs none, and the page stays plain Markdown its owner can edit without a fence to break. Each selector below was checked on a built site against the same design written with classes:
+
+- The band that holds the page's title, and every other band: `article.container > .moss-grid:has(> .moss-grid-card > h1)` and `article.container > .moss-grid:not(:has(> .moss-grid-card > h1))`.
+- A column by what it holds: `.moss-grid-card:has(> h1)` for the column with the title, `.moss-grid-card:has(> .moss-cards-container)` for the column with a listing embed.
+- A card in a grid: a cell that opens with a bold line, `.moss-grid-card:has(> p:first-child > strong:only-child)`.
+- A statement set between two bands: `article.container > .moss-grid ~ p:has(~ .moss-grid)`. Bound it on both sides; `article.container > p` alone also matches the opening paragraph of every page that has no bands.
+- A band's anchor: a lone `{#id}` on its heading (`## The room {#room}`). A `:::grid` keeps a class and `screen` in its braces but drops `#id`.
+- A `screen` band whose content keeps the text measure: `padding-inline: max(var(--moss-container-padding), calc((100cqi - 1240px) / 2))`. A percentage there resolves against the text column, not the band; `cqi` measures the page.
+
+Two current behaviours to allow for. Below 48rem a `screen` grid narrows to the text column, while a fenced-div band stays edge to edge; keep the grid edge to edge with `@media (width < 48rem) { article.container > .moss-grid[data-width="screen"] { inline-size: auto; margin-inline: calc(-1 * var(--moss-container-padding)); } }`. A listing embedded in a grid cell takes the grid's card corners and clipping; `.moss-grid-card .moss-cards .moss-card { border-radius: 0; overflow: visible; }` removes them.
+
+To tell whether a change held, build the site before and after and compare the positions of the main blocks at a desktop, a laptop (1024 to 1280), a tablet and a phone width. Then check every built page, not only the one you changed: a selector chosen by content matches wherever that content occurs. `moss doctor --surface` lists rules that match nothing.
+
 A text field shows focus on its own border, never as a ring inside or outside it. A theme's site-wide focus ring should exclude fields, for example `:focus-visible:not(input, textarea, select)`, and style a field's focus on its own border. moss's search field already does: its input and result rows draw no outline whatever the theme says, so restyle the panel's border or the `.is-selected` row instead.
 
 ### Rung 4 in detail

@@ -181,7 +181,10 @@ When a design call needs a visual treatment, stop at the first rung that reaches
    `--moss-color-ui-accent: var(--moss-color-text)`; to accent links in prose
    at rest, set `--moss-link-color` (and `--moss-link-hover-color`).
 2. **Selector on semantic HTML.** Target the existing semantic structure (a
-   heading, a blockquote, a list) with a plain CSS rule. No new markup.
+   heading, a blockquote, a list) with a plain CSS rule. No new markup. Select
+   by what an element holds or where it sits (`:has()`, `~`) before adding a
+   class: `moss guide authoring`, "Style by what the content is", has checked
+   selectors for bands, columns, cards and anchors.
 3. **A declared field with a `place`, or a named-class fenced div.** First ask
    whether the content is a fact about the page (a year, a count, a role, a
    place). If it is, declare it as a field and give it a `place` (see `moss guide authoring`, Declared fields),
