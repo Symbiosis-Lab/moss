@@ -267,7 +267,7 @@ fn apply_cascade_values(
             "content_width" => {
                 if doc.content_width.is_none() {
                     if let Ok(v) = serde_yaml::from_value::<String>(value.clone()) {
-                        if matches!(v.as_str(), "wide" | "full") {
+                        if matches!(v.as_str(), "wide" | "full" | "screen") {
                             doc.content_width = Some(v);
                         }
                     }

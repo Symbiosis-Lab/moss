@@ -1855,6 +1855,35 @@ Text in the second cell.
 
 After the bands.
 `,
+    "screen-page.md": `---
+title: Screen page
+content_width: screen
+---
+
+Before the bands.
+
+:::grid 2 5:7
+Text in the first cell of a default grid.
+
+---
+
+Text in the second cell.
+:::
+
+:::{.band}
+Text in a band with no width word.
+:::
+
+:::grid 2 {body}
+Text in a grid kept at the text width.
+
+---
+
+Text in the second cell.
+:::
+
+After the bands.
+`,
     "sized.md": `---
 title: Sized
 ---

@@ -812,10 +812,10 @@ pub const BUILTIN_FIELDS: &[BuiltinField] = &[
         name: "content_width",
         field_type: FieldType::String,
         widget: Widget::Select,
-        enum_values: Some(&["wide", "full"]),
+        enum_values: Some(&["wide", "full", "screen"]),
         // Frequency=2, Importance=3 → score=76
         score: 77,
-        description: "Page width: default (42 reading sizes, 756px at 18px) for prose, wide (50 reading sizes, 900px at 18px) for grids/tables, full (the site max width) for dashboards",
+        description: "Page width: default (42 reading sizes, 756px at 18px) for prose, wide (50 reading sizes, 900px at 18px) for grids/tables, full (the site max width) for dashboards, screen (the full column, with top-level grids and bands as wide as the window)",
         label: Some("Width"),
         label_key: "chip.content_width.label",
         group: "This Page",

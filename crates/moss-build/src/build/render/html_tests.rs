@@ -6352,6 +6352,39 @@ mod typesetting_tests {
         );
     }
 
+    /// `content_width: screen` (on the page or as the site default) puts the
+    /// `screen` width on a page's un-worded top-level grid and band, keeps the
+    /// `full` column on `<body>`, and leaves a block with its own width word alone.
+    #[test]
+    fn screen_content_width_sets_the_default_block_width() {
+        let render = |page_width: Option<&str>, site_width: Option<&str>| {
+            let mut page = make_doc("Landing", "landing/index.html");
+            page.html_content = r#"<div class="moss-grid" data-columns="2">a</div><div class="band">b</div><div class="moss-grid" data-width="body">c</div>"#.to_string();
+            page.content_width = page_width.map(String::from);
+            let homepage = make_doc("Test Site", "index.html");
+            let all_docs = vec![homepage, page.clone()];
+            let mut layout = make_layout();
+            if let Some(w) = site_width {
+                layout = layout.with_content_width(w.to_string());
+            }
+            generate_html(
+                Some(&page), &all_docs, &make_project(), &layout, false, None, None,
+                Language::En, None, false, false, None, false, None, None,
+                &std::collections::HashMap::new(), &localhost_url(), false, false, "favicon.svg",
+                None, std::path::Path::new(""),
+            )
+            .expect("generate_html should succeed")
+        };
+        for html in [render(Some("screen"), None), render(None, Some("screen"))] {
+            assert!(html.contains(r#"data-content-width="full""#), "{html}");
+            assert!(html.contains(r#"data-columns="2" data-width="screen""#), "grid: {html}");
+            assert!(html.contains(r#"<div class="band" data-width="screen">"#), "band: {html}");
+            assert!(html.contains(r#"<div class="moss-grid" data-width="body">"#), "{{body}} opts out: {html}");
+        }
+        let full = render(Some("full"), None);
+        assert!(!full.contains(r#"data-width="screen""#), "`full` keeps its column and adds no width: {full}");
+    }
+
     #[test]
     fn test_site_default_comments_false() {
         let mut page = make_doc("Article", "article/index.html");

@@ -1380,6 +1380,7 @@ pub(super) fn render_page<'d>(
     } else if doc.is_some_and(crate::build::components::field_places::title_block_beside_picture) {
         homepage_content = crate::build::components::field_places::beside_leading_picture(&homepage_content);
     }
+    homepage_content = crate::build::page::default_width::apply(homepage_content, doc.and_then(|d| d.content_width.as_deref()).or(layout_config.content_width.as_deref()));
     // Calendar links that close the body: a folder's download and subscribe
     // links, and an event's "Add to calendar" when no meta line carries it.
     // A page with its listing off shows no events here; its embedded listings
