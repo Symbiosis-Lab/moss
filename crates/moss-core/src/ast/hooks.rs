@@ -698,7 +698,7 @@ pub trait RenderHooks {
         source_line: Option<usize>,
         content: &str,
     ) {
-        let HeadingMarks { id, contents_end, contents_label } = marks;
+        let HeadingMarks { id, legacy_id, contents_end, contents_label } = marks;
         out.push('<');
         out.push('h');
         out.push((b'0' + level) as char);
@@ -720,6 +720,11 @@ pub trait RenderHooks {
             let _ = write!(out, r#" data-source-line="{}""#, n);
         }
         out.push('>');
+        if let Some(old) = legacy_id {
+            out.push_str(r#"<span id=""#);
+            out.push_str(&escape_attr(old));
+            out.push_str("\"></span>");
+        }
         out.push_str(&crate::heading::range::keep_ranges_together(content));
         // Permalink anchor — only when the heading has a slug id AND
         // `emit_heading_anchors(level)` says yes (never for level 1 by
@@ -757,6 +762,12 @@ pub trait RenderHooks {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HeadingMarks<'a> {
     pub id: Option<&'a str>,
+    /// The id the heading had before punctuation was dropped from ids: an
+    /// empty element carrying it opens the heading, so a stored `#old-id`
+    /// link lands here. Inside the heading, so sibling selectors
+    /// (`:first-child`, `+ h2`) see the same tree; empty, so nothing reads
+    /// or announces it and the contents list never meets it.
+    pub legacy_id: Option<&'a str>,
     pub contents_end: bool,
     pub contents_label: Option<&'a str>,
 }

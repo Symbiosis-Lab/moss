@@ -161,40 +161,22 @@ mod tests {
         assert_eq!(extracted[0].text, off[0].text);
     }
 
-    /// Pins the exception, so nobody re-asserts the false universal.
-    ///
-    /// `*` inside TeX is emphasis to a math-OFF parser. Turning `[site].math`
-    /// on therefore MOVES these anchors — a real, user-visible upgrade cost
-    /// recorded in the moss-core CHANGELOG. What must still hold
-    /// is graph agreement: math-ON slug == the raw-line slug the wikilink
-    /// scanner computes, so links and anchors never disagree on a live site.
+    /// `*` inside TeX is emphasis to a math-OFF parser, so the heading text
+    /// differs between the two modes. Punctuation is not part of an anchor, so
+    /// the anchors agree with each other and with the raw-line slug the
+    /// wikilink scanner computes.
     #[test]
-    fn markdown_active_chars_in_tex_move_the_anchor_but_keep_graph_agreement() {
+    fn markdown_active_chars_in_tex_leave_the_anchor_unmoved() {
         let math_on = ParseConfig { math: true, ..Default::default() };
-        for (md, raw, expect_off) in [
-            (
-                "# Convolution $f*g$ and $h*k$ end\n",
-                "Convolution $f*g$ and $h*k$ end",
-                "convolution-$fg$-and-$hk$-end",
-            ),
-            ("# Dual $V^*$ and $W^*$ end\n", "Dual $V^*$ and $W^*$ end", "dual-$v$-and-$w$-end"),
+        for (md, raw, expect) in [
+            ("# Convolution $f*g$ and $h*k$ end\n", "Convolution $f*g$ and $h*k$ end", "convolution-fg-and-hk-end"),
+            ("# Dual $V^*$ and $W^*$ end\n", "Dual $V^*$ and $W^*$ end", "dual-v-and-w-end"),
         ] {
             let on = extract_headings_with_config(md, &math_on);
             let off = extract_headings_with_config(md, &ParseConfig::default());
-
-            // Graph agreement — unconditional.
-            assert_eq!(
-                on[0].slug,
-                crate::heading::anchor::obsidian_heading_anchor(raw),
-                "math-ON slug diverged from the raw-line slug the wikilink graph computes"
-            );
-
-            // The documented divergence: emphasis ate the `*` with math off.
-            assert_eq!(off[0].slug, expect_off, "math-OFF slug drifted from the documented behavior");
-            assert_ne!(
-                on[0].slug, off[0].slug,
-                "expected this heading's anchor to MOVE when math is enabled"
-            );
+            assert_eq!(on[0].slug, crate::heading::anchor::obsidian_heading_anchor(raw));
+            assert_eq!(off[0].slug, expect);
+            assert_eq!(on[0].slug, off[0].slug);
         }
     }
 

@@ -203,6 +203,13 @@ pub enum Block {
         /// Heading anchor id (slug). Computed by the parser via
         /// [`crate::heading::anchor::obsidian_heading_anchor`].
         id: Option<String>,
+        /// A second id this heading answers, when it differs from `id`: the
+        /// renderer emits an empty element carrying it inside the heading. For
+        /// a derived id it is the id before punctuation was dropped, so a
+        /// stored `#old-id` link still lands here; for an id named with
+        /// `{#id}` it is that id's slugged spelling, which `[[Page#id]]` emits.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        legacy_id: Option<String>,
         /// The heading was written `## Title {contents=end}`: it opens the part
         /// of the page after the main sections.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -521,6 +528,7 @@ mod tests {
             level: 1,
             children: vec![text("Hello")],
             id: Some("hello".to_string()),
+            legacy_id: None,
             contents_end: false,
             contents_label: None,
         };
@@ -770,6 +778,7 @@ mod tests {
             level: 2,
             children: vec![Inline::Text("Setup".to_string())],
             id: Some("setup".to_string()),
+            legacy_id: None,
             contents_end: false,
             contents_label: None,
         };

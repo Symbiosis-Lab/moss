@@ -374,8 +374,8 @@ fn heading_code_span_keeps_its_braces_and_a_derived_id() {
 #[test]
 fn a_block_with_a_class_or_key_value_stays_text_and_warns() {
     for (src, text, id) in [
-        ("## Opening {.wide}\n", "Opening {.wide}", "opening-{.wide}"),
-        ("## Note {data-x=1}\n", "Note {data-x=1}", "note-{data-x=1}"),
+        ("## Opening {.wide}\n", "Opening {.wide}", "opening-wide"),
+        ("## Note {data-x=1}\n", "Note {data-x=1}", "note-data-x1"),
     ] {
         let doc = parse(src);
         match &doc.blocks[0] {
@@ -423,7 +423,7 @@ fn heading_explicit_id_is_the_anchor_and_leaves_the_text() {
     // A block with a class or key=value is text, with its id left derived from it.
     match first_block("## Opening hours {#hours .wide}\n") {
         Block::Heading { children, id, .. } => {
-            assert_eq!(id.as_deref(), Some("opening-hours-{hours-.wide}"));
+            assert_eq!(id.as_deref(), Some("opening-hours-hours-wide"));
             assert!(matches!(&children[..], [Inline::Text(t)] if t == "Opening hours {#hours .wide}"), "{children:?}");
         }
         other => panic!("expected Heading, got {other:?}"),
@@ -946,7 +946,7 @@ fn heading_id_with_inline_code_includes_code_payload() {
     // Production captures Event::Code, so `` `fn(x)` `` enters the slug.
     assert_eq!(
         heading_id("# call `fn(x)`\n"),
-        Some("call-fn(x)".to_string())
+        Some("call-fnx".to_string())
     );
 }
 
@@ -956,9 +956,9 @@ fn heading_id_with_inline_html_strips_html() {
     // and must NOT appear in the slug. Production's slug for this is
     // derived from "HELLO,AND GOODBYE".
     let id = heading_id("# HELLO,<br>AND GOODBYE\n").expect("heading id");
-    // No `<br>` or `br` injected; punctuation preserved (`,`), spaces → `-`.
+    // No `<br>` or `br` injected; the comma is dropped.
     assert!(!id.contains("br"), "got: {id}");
-    assert_eq!(id, "hello,and-goodbye");
+    assert_eq!(id, "helloand-goodbye");
 }
 
 #[test]

@@ -32,6 +32,7 @@ fn renders_heading_with_id() {
         level: 2,
         children: vec![Inline::Text("Setup".into())],
         id: Some("setup".into()),
+        legacy_id: None,
         contents_end: false,
         contents_label: None,
     }]);
@@ -48,6 +49,7 @@ fn renders_level_one_heading_without_permalink_anchor() {
         level: 1,
         children: vec![Inline::Text("Title".into())],
         id: Some("title".into()),
+        legacy_id: None,
         contents_end: false,
         contents_label: None,
     }]);
@@ -1016,6 +1018,7 @@ fn heading_emits_data_source_line_through_hook() {
             level: 2,
             children: vec![Inline::Text("Setup".into())],
             id: Some("setup".into()),
+            legacy_id: None,
             contents_end: false,
             contents_label: None,
         }],
@@ -1580,4 +1583,53 @@ fn a_raw_style_block_is_found_only_at_a_tag_boundary() {
     assert!(has("<STYLE media=\"print\">p { color: red; }</STYLE>\n"));
     assert!(!has("<styled-box>text</styled-box>\n"));
     assert!(!has("Plain text.\n"));
+}
+
+fn render_md(md: &str) -> String {
+    render_document(&crate::ast::parser::parse(md), &DefaultHooks::new())
+}
+
+fn ids_in(html: &str) -> Vec<String> {
+    html.split("id=\"").skip(1).map(|r| r.split('"').next().unwrap().to_string()).collect()
+}
+
+#[test]
+fn a_heading_answers_the_id_it_had_before_punctuation_was_dropped() {
+    let html = render_md("## Klein, hell, unter Backsteingewölbe.\n");
+    assert!(html.starts_with("<h2 id=\"klein-hell-unter-backsteingewölbe\">"), "{html}");
+    assert!(html.contains("><span id=\"klein,-hell,-unter-backsteingewölbe.\"></span>Klein, hell,"), "{html}");
+}
+
+#[test]
+fn no_alias_when_the_old_and_new_ids_are_equal_or_the_author_named_the_id() {
+    assert!(!render_md("## Opening hours\n").contains("<span"));
+    assert!(!render_md("## Klein, hell. {#raum}\n").contains("<span"));
+    assert!(!render_md("## Release {#v1}\n").contains("<span"));
+    assert!(render_md("## Klein, hell. {#raum}\n").contains("<h2 id=\"raum\""));
+}
+
+#[test]
+fn aliases_keep_the_old_duplicate_numbering_and_never_repeat_an_id() {
+    // Before: `a,`, `a`, `a-1`. Now: `a`, `a-1`, `a-2`; the old `a` and `a-1`
+    // are other headings' ids now, so only `a,` is kept as an alias.
+    let html = render_md("## A,\n\n## A\n\n## A\n");
+    let ids = ids_in(&html);
+    let mut sorted = ids.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(ids.len(), sorted.len(), "duplicate ids in {ids:?}");
+    assert!(ids.contains(&"a,".to_string()), "{ids:?}");
+}
+
+#[test]
+fn the_alias_is_empty_and_leaves_the_heading_the_first_child_of_its_parent() {
+    let html = render_md("## Wait, what?\n");
+    assert!(html.starts_with("<h2 id=\"wait-what\"><span id=\"wait,-what?\"></span>Wait, what?"), "{html}");
+}
+
+#[test]
+fn a_named_id_also_answers_the_spelling_a_wikilink_gives_it() {
+    let html = render_md("## Release {#v1.2}\n");
+    assert!(html.contains("<h2 id=\"v1.2\"><span id=\"v12\"></span>Release"), "{html}");
+    assert_eq!(crate::ast::resolve_urls::slug_wikilink_suffix("#v1.2"), "#v12");
 }

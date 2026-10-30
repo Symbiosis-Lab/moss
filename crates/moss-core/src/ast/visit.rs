@@ -612,6 +612,7 @@ mod tests {
                 has_pothole: false,
             }],
             id: None,
+            legacy_id: None,
             contents_end: false,
             contents_label: None,
         }]);

@@ -645,7 +645,7 @@ fn strict_contract_section_number_h1_keeps_injected_title() {
     // The body section H1 must still be present.
     assert!(
             doc.html_content.contains(
-                "<h1 id=\"1.\">1.</h1>"
+                "<h1 id=\"1\"><span id=\"1.\"></span>1.</h1>"
             ),
             "body section H1 must be preserved, got: {}",
             doc.html_content

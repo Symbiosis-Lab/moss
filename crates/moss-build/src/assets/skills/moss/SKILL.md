@@ -167,7 +167,7 @@ A fact is a field, and moss places it. Before writing CSS, a classed div or HTML
 2. Every page in a folder shares the value: write it once in `cascade:` on the folder's home page; a page's own value wins.
 3. Several facts read as one line: a group field, `type = "group"` with `of = [...]`, draws the parts that have a value, in order.
 4. A picture needs its crop or framing: display words on the embed, `![[photo.jpg|focus:30%,20%]]` keeps that point in view, `|contain` shows it whole (`moss guide authoring`, images).
-5. A section a link must reach: `## Opening hours {#hours}`, linked as `[[Page#hours]]`.
+5. A section a link must reach: a heading's own words already give a clean id (`## Opening hours` is `#opening-hours`, punctuation dropped); add `{#hours}` only to give it a different name, linked as `[[Page#hours]]`.
 
 Only then style it, with the rungs below. Never write `{.class}` on an image, link or inline span: other markdown tools print it as text.
 

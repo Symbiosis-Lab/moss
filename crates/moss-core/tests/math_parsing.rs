@@ -346,7 +346,7 @@ mod plain_text_collectors_keep_math {
         };
         // Byte-identical to the math=OFF slug — enabling [site].math must
         // not silently rewrite a published anchor.
-        assert_eq!(id.as_deref(), Some("euler-$e{ipi}=-1$-identity"));
+        assert_eq!(id.as_deref(), Some("euler-eipi-1-identity"));
         let off = parse_with_config("# Euler $e^{i\\pi}=-1$ identity\n", &ParseConfig::default());
         let Block::Heading { id: off_id, .. } = &off.blocks[0] else { panic!() };
         assert_eq!(id, off_id);

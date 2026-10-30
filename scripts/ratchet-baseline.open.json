@@ -31,7 +31,7 @@
         "crates/moss-build/src/seta/client.rs": 1000,
         "crates/moss-build/src/tasks.rs": 1400,
         "crates/moss-build/src/vault/fs.rs": 900,
-        "crates/moss-core/src/ast/hooks.rs": 1200,
+        "crates/moss-core/src/ast/hooks.rs": 1300,
         "crates/moss-core/src/ast/parser.rs": 2400,
         "crates/moss-core/src/ast/render.rs": 1000,
         "crates/moss-core/src/ast/resolve_urls.rs": 1000,

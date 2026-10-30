@@ -290,13 +290,14 @@ impl Restore<'_> {
     /// irrelevant field to `_` and the answer is recorded in the source.
     fn in_block(&self, block: &mut Block) {
         match block {
-            Block::Heading { children, id, .. } => {
+            Block::Heading { children, id, legacy_id, .. } => {
                 // The id was slugged from the sentinel text. Recompute it only
                 // when it is that slug: an id the author named stays.
                 let derived = crate::heading::anchor::obsidian_heading_anchor(&crate::ast::plain_text::inlines_to_plain_text(children));
                 if self.in_inlines(children) && id.as_deref() == Some(derived.as_str()) {
                     let text = crate::ast::plain_text::inlines_to_plain_text(children);
                     *id = Some(crate::heading::anchor::obsidian_heading_anchor(&text));
+                    *legacy_id = Some(crate::heading::anchor::legacy_heading_anchor(&text)).filter(|l| Some(l) != id.as_ref());
                 }
             }
             Block::Paragraph(children) | Block::DefinitionTitle(children) => {
