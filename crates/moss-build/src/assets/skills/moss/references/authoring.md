@@ -808,7 +808,7 @@ external_url: "mailto:hello@example.com"
 ---
 ```
 
-A header link needs no page behind it. A file with `partial: true` is never a page; if it also has `nav: true` and `external_url`, it appears in the header nav as a link to that URL. It sorts with the other nav entries by `weight` like pages do, is labelled by `nav_label` or `title`, and is absent everywhere else (sitemap, feeds, search, `llms.txt`, listings), as every partial is. Use it for a link to a section of the home page or to a mail address:
+A header link needs no page behind it. A file with `partial: true` is never a page; if it also has `nav: true` and `external_url`, it appears in the header nav as a link to that URL. It sorts with the other nav entries by `weight` like pages do, is labelled by `nav_label` or `title`, and is absent everywhere else (sitemap, feeds, search, `llms.txt`, listings), as every partial is. It has no text to detect a language from, so it belongs to the site's language (`[site] lang`), or to the language tree it sits in, and shows in that language's header only. Use it for a link to a section of the home page or to a mail address:
 
 ```yaml
 ---
@@ -931,16 +931,7 @@ to be surprised by the result.
 
 `[site] lang` in `.moss/config.toml` names the **default edition**: the one that publishes at `/`, while every other edition publishes under `/<code>/`.
 
-Read that as naming the edition, not as choosing which files land at the root.
-Directory structure decides that — anything outside a language-code directory
-publishes at `/`, whatever language it is written in. And a page's own language
-comes from its frontmatter `lang:`, its filename suffix, its ancestor
-directory, or detection from its text, in that order; `[site] lang` is only the
-last resort when all four are silent. So a config saying `lang = "en"` over a
-tree of Chinese pages does not make them English — it decides which interface
-strings the pages that *did* fall through to it are dressed in. If the two ever
-disagree, believe the page: `moss list` reports each page's own language, and
-that is the one that ships in `<html lang>`.
+Read that as naming the edition, not as choosing which files land at the root. Directory structure decides that — anything outside a language-code directory publishes at `/`, whatever language it is written in. And a page's own language comes from its frontmatter `lang:`, its filename suffix, its ancestor directory, or detection from its text, in that order; `[site] lang` is only the last resort when all four are silent. Detection from text recognises English, Simplified Chinese and Traditional Chinese only: every other language, French and Japanese as much as German, is not detected, so a page in one of them without `lang:` is built in the site language. A German site must therefore set `[site] lang = "de"` (a site with no `lang` falls back to English). Detection is made for a whole folder at once, from the pages in it that carry prose, so one English page among German ones makes the folder's other pages English, and a nav entry that is English stops showing in the German header. To settle it, set `lang:` in the folder's `index.md` (a self-named note works in a subfolder, not in the site's root folder). So a config saying `lang = "en"` over a tree of Chinese pages does not make them English — it decides which interface strings the pages that *did* fall through to it are dressed in. If the two ever disagree, believe the page: `moss list` reports each page's own language, and that is the one that ships in `<html lang>`.
 
 **moss has interface strings for exactly four languages: English, German, Simplified Chinese, and Traditional Chinese.** This is a hard ceiling, not a special case for a particular tree shape: moss's UI-language type has exactly four variants and resolves only `en`, `de` (also `de-de`, `de-at`, `de-ch`), `zh`/`zh-hans`/`zh-cn`, and `zh-hant`/`zh-tw`. A `de/` tree gets German interface strings (navigation, search, dates such as "15. Oktober 2026", comment and subscribe forms) and `<html lang="de">`, with `DE` as its switcher label (as English is `EN`). `en-us/` and `en-gb/` are accepted as directory names but have no interface strings of their own either.
 

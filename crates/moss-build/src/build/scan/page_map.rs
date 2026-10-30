@@ -572,13 +572,14 @@ pub(crate) fn pages_before_dedup(
     let mut pages = Vec::new();
     for (path, url_path, is_index) in entries {
         let stem = Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("untitled");
-        let folder = crate::i18n::folder_language(&path, folder_langs.get(&folder_of(&path)).copied());
+        let slot_only = crate::build::footer::is_slot_only(&path, crate::build::footer::ShipFacts { partial: scan.is_partial(&path) });
+        let folder = crate::i18n::folder_language(&path, folder_langs.get(&folder_of(&path)).copied(), slot_only);
         let (lang, _) = crate::i18n::resolve_document_language(scan.declared_lang(&path), stem, site_lang, folder);
         let page = crate::build::types::ParsedDocument {
             url_path,
             kind: if is_index { moss_core::PageKind::Folder } else { moss_core::PageKind::Article },
             lang,
-            slot_only: crate::build::footer::is_slot_only(&path, crate::build::footer::ShipFacts { partial: scan.is_partial(&path) }),
+            slot_only,
             source_path: Some(path),
             ..Default::default()
         };

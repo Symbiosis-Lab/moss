@@ -55,6 +55,8 @@ For a folder of items with a metadata file (pictures plus a CSV, as an archive o
    No wizard.
 4. `moss preview <folder>` — opens the live preview in moss desktop for you to watch. An agent has no display: use `moss build --serve` below instead.
 
+**Set the site's language.** Write `[site]` / `lang = "de"` in `.moss/config.toml` (or whichever of `en`, `de`, `zh-hans`, `zh-hant` the site is written in) before anything else on a site that is not English. moss detects a page's language from its text only for English and Chinese (Simplified and Traditional); every other language, German included, is never detected, so without `lang` a German site is built as English: `<html lang="en">`, English dates ("Thursday") and English interface strings. Detection also works against you: one English page in a German site's folder makes the whole folder English. `moss list` shows the language each page was built as. Details: `moss guide authoring`, "Multilingual sites".
+
 **Headless / agent self-check:** `moss build <folder> --serve` builds and
 serves, printing the URL it bound — read that, do not assume a port. (8080 is
 only the first one tried; a foreign dev server holding it means moss lands
