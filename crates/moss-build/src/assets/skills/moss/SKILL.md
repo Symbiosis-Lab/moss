@@ -54,6 +54,7 @@ For a folder of items with a metadata file (pictures plus a CSV, as an archive o
 3. `moss build <folder>` — auto-creates `.moss/` on first run. No init step.
    No wizard.
 4. `moss preview <folder>` — opens the live preview in moss desktop for you to watch. An agent has no display: use `moss build --serve` below instead.
+5. For every kind of page the owner will keep adding (an event, a news item, a work), add a template in `.moss/templates/` that names its folder, so a new page lands in the right place and shows in every listing without another file being edited: `moss guide authoring`, Templates.
 
 **Set the site's language.** Write `[site]` / `lang = "de"` in `.moss/config.toml` (or whichever of `en`, `de`, `zh-hans`, `zh-hant` the site is written in) before anything else on a site that is not English. moss detects a page's language from its text only for English and Chinese (Simplified and Traditional); every other language, German included, is never detected, so without `lang` a German site is built as English: `<html lang="en">`, English dates ("Thursday") and English interface strings. Detection also works against you: one English page in a German site's folder makes the whole folder English. `moss list` shows the language each page was built as. Details: `moss guide authoring`, "Multilingual sites".
 
