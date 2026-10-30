@@ -59,6 +59,7 @@ GATES_BUILD=(
   header-hit-areas
   lightbox-github-shapes
   grid-card-no-cover
+  grid-tile-scope
   nav-mobile
   grid-mobile-collapse
   collage
