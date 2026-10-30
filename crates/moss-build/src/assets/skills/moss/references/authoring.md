@@ -45,7 +45,7 @@ Rung 2 reaches further than it looks. CSS `:has()` and the sibling combinators s
 - A column by what it holds: `.moss-grid-card:has(> h1)` for the column with the title, `.moss-grid-card:has(> .moss-cards-container)` for the column with a listing embed.
 - A card in a grid: a cell that opens with a bold line, `.moss-grid-card:has(> p:first-child > strong:only-child)`.
 - A statement set between two bands: `article.container > .moss-grid ~ p:has(~ .moss-grid)`. Bound it on both sides; `article.container > p` alone also matches the opening paragraph of every page that has no bands.
-- A band's anchor: a lone `{#id}` on its heading (`## The room {#room}`). A `:::grid` keeps a class and `screen` in its braces but drops `#id`.
+- A band's anchor: a lone `{#id}` on its heading (`## The room {#room}`), or on a `:::grid` in its braces (`:::grid 2 {#rooms}`), which puts the id on the grid's element. The other typed blocks (`:::gallery`, `:::buttons`, `:::hero`) do not carry an id and the build warns if one is written.
 - A `screen` band whose content keeps the text measure: `padding-inline: max(var(--moss-container-padding), calc((100cqi - 1240px) / 2))`. A percentage there resolves against the text column, not the band; `cqi` measures the page.
 
 Two current behaviours to allow for. Below 48rem a `screen` grid narrows to the text column, while a fenced-div band stays edge to edge; keep the grid edge to edge with `@media (width < 48rem) { article.container > .moss-grid[data-width="screen"] { inline-size: auto; margin-inline: calc(-1 * var(--moss-container-padding)); } }`. A listing embedded in a grid cell takes the grid's card corners and clipping; `.moss-grid-card .moss-cards .moss-card { border-radius: 0; overflow: visible; }` removes them.

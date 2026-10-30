@@ -221,6 +221,10 @@ pub fn render_grid_parts<H: RenderHooks + ?Sized>(
         }
         open_tag.push_str(r#"<div class=""#);
         open_tag.push_str(&escape_attr(&class_attr));
+        if let Some(id) = &args.id {
+            open_tag.push_str(r#"" id=""#);
+            open_tag.push_str(&escape_attr(id));
+        }
         open_tag.push_str(r#"" data-columns=""#);
         open_tag.push_str(&args.columns.to_string());
         open_tag.push('"');

@@ -150,6 +150,32 @@ fn parse_shortcode_block(
     body: &str,
     config: &ParseConfig,
 ) -> (Option<Shortcode>, Diagnostics) {
+    let (shortcode, mut diagnostics) = parse_shortcode_by_name(name, args, body, config);
+    // Only `:::grid` carries an `{#id}` to its element; say so for the rest
+    // instead of dropping it silently.
+    if shortcode.is_some() && name != "grid" {
+        if let Some(id) = brace_id(args) {
+            diagnostics.warnings.push(format!(
+                "shortcode `:::{name}` has `#{id}`, which it does not put on its element. The id is ignored; put it on a heading or a `::: {{#{id}}}` div instead."
+            ));
+        }
+    }
+    (shortcode, diagnostics)
+}
+
+/// The `#id` written in an opener's braces, if any.
+fn brace_id(args: &str) -> Option<String> {
+    let open = args.find('{')?;
+    #[allow(clippy::string_slice)]
+    super::attrs::parse_attrs(&args[open..]).ok()?.id
+}
+
+fn parse_shortcode_by_name(
+    name: &str,
+    args: &str,
+    body: &str,
+    config: &ParseConfig,
+) -> (Option<Shortcode>, Diagnostics) {
     match name {
         "subscribe" => (Some(Shortcode::Subscribe(parse_subscribe_args(args))), Diagnostics::default()),
         "buttons" => {
@@ -322,6 +348,7 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, O
         super::attrs::parse_attrs(attr_block).unwrap_or_default()
     };
     let classes = parsed.class_string();
+    let id = parsed.id.clone();
     let width = parsed.width.map(str::to_string);
     let scroll = parsed.scroll;
     let collage = parsed.collage;
@@ -410,6 +437,7 @@ fn parse_grid(args: &str, body: &str, config: &ParseConfig) -> (GridShortcode, O
             columns,
             ratio,
             classes,
+            id,
             cells,
             source: ShortcodeSource { extra_lines: 0, fragments },
             width,
