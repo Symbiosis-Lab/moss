@@ -5515,9 +5515,10 @@ article.container > [data-width="screen"] {
 }
 
 @media (width < 48rem) {
-  article.container > [data-width]:not(div[data-width="screen"]:not([class^="moss-"]):not([class*=" moss-"])) {
-    /* collapse to the column; a fenced-div `screen` band alone is exempt
-       (rule below), so a `screen` figure collapses like the other tokens.
+  article.container > [data-width]:not(:is(div[data-width="screen"]:not([class^="moss-"]):not([class*=" moss-"]), .moss-grid[data-width="screen"])) {
+    /* collapse to the column; a fenced-div `screen` band and a screen grid
+       are exempt (rules below), so a `screen` figure collapses like the
+       other tokens.
        `auto` rather than 0: a hand-written band that also carries an inline
        width is centred here, below 48rem only — above it the escape's
        margins assume the token's width. The renderer never emits a token
@@ -5543,6 +5544,16 @@ article.container > div[data-width="screen"]:not([class^="moss-"]):not([class*="
   box-sizing: border-box;
   padding-inline: var(--moss-container-padding);
   padding-right: calc(var(--moss-container-padding) + var(--moss-sidenote-inset, 0px));
+}
+
+/* A screen grid is edge to edge at every width too. Its cells fill the band
+ * above 48rem; below it they sit in one column and take the same gutter. */
+@media (width < 48rem) {
+  article.container > .moss-grid[data-width="screen"] {
+    box-sizing: border-box;
+    padding-inline: var(--moss-container-padding);
+    padding-right: calc(var(--moss-container-padding) + var(--moss-sidenote-inset, 0px));
+  }
 }
 
 /* Direct-child article-body headings + horizontal rules clear floats so

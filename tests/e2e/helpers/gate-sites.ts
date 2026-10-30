@@ -1835,6 +1835,26 @@ A paragraph inside the band that is long enough to run past the reading width wh
 
 After the band.
 `,
+    "bands.md": `---
+title: Bands
+---
+
+Before the bands.
+
+::: {screen}
+Text in a fenced screen band.
+:::
+
+:::grid 2 {screen}
+Text in the first cell of a screen grid.
+
+---
+
+Text in the second cell.
+:::
+
+After the bands.
+`,
     "sized.md": `---
 title: Sized
 ---

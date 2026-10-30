@@ -48,8 +48,6 @@ Rung 2 reaches further than it looks. CSS `:has()` and the sibling combinators s
 - A band's anchor: a lone `{#id}` on its heading (`## The room {#room}`), or on a `:::grid` in its braces (`:::grid 2 {#rooms}`), which puts the id on the grid's element. The other typed blocks (`:::gallery`, `:::buttons`, `:::hero`) do not carry an id and the build warns if one is written.
 - A `screen` band whose content keeps the text measure: `padding-inline: max(var(--moss-container-padding), calc((100cqi - 1240px) / 2))`. A percentage there resolves against the text column, not the band; `cqi` measures the page.
 
-Two current behaviours to allow for. Below 48rem a `screen` grid narrows to the text column, while a fenced-div band stays edge to edge; keep the grid edge to edge with `@media (width < 48rem) { article.container > .moss-grid[data-width="screen"] { inline-size: auto; margin-inline: calc(-1 * var(--moss-container-padding)); } }`.
-
 To tell whether a change held, build the site before and after and compare the positions of the main blocks at a desktop, a laptop (1024 to 1280), a tablet and a phone width. Then check every built page, not only the one you changed: a selector chosen by content matches wherever that content occurs. `moss doctor --surface` lists rules that match nothing.
 
 A text field shows focus on its own border, never as a ring inside or outside it. A theme's site-wide focus ring should exclude fields, for example `:focus-visible:not(input, textarea, select)`, and style a field's focus on its own border. moss's search field already does: its input and result rows draw no outline whatever the theme says, so restyle the panel's border or the `.is-selected` row instead.
