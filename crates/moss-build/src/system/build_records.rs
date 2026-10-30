@@ -124,6 +124,9 @@ pub struct BuildRecords {
     /// acceptance could straddle a seal and accept an address the seal had
     /// just stopped reporting.
     removals: FolderSlot<FolderRemovals>,
+    /// `(derivative, picture)` output paths the last seal kept answering as
+    /// redirects — see `feeds::derivative_redirects`.
+    kept_derivatives: FolderSlot<Vec<(String, String)>>,
 }
 
 /// See [`BuildRecords::removals`].
@@ -226,6 +229,16 @@ impl BuildRecords {
             let current: BTreeSet<String> = r.unexplained().map(str::to_string).collect();
             r.accepted.retain(|path| current.contains(path));
         });
+    }
+
+    /// Always called by a seal, empty included, so a rebuild that embeds the
+    /// picture again clears the report.
+    pub fn record_kept_derivatives(&self, folder_path: &str, kept: Vec<(String, String)>) {
+        self.kept_derivatives.record(Self::key(folder_path), kept);
+    }
+
+    pub fn kept_derivatives(&self, folder_path: &str) -> Vec<(String, String)> {
+        self.kept_derivatives.get(&Self::key(folder_path)).unwrap_or_default()
     }
 
     /// What the last seal of `folder_path` found going offline. `None` means
