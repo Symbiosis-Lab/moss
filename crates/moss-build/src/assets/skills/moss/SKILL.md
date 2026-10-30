@@ -173,6 +173,8 @@ Only then style it, with the rungs below. Never write `{.class}` on an image, li
 
 ## The four styling rungs
 
+The pages are what the site's owner keeps editing, so keep them plain. Of two routes to the same design, take the one that leaves less markup in the pages: a convention or a selector over a fence, a fence over a class, any of them over HTML. Every `:::` fence, `{.class}`, `{#id}` or HTML block in a page is something the owner must keep intact on every edit and that other markdown tools show as clutter. When a design is done, list what the pages still carry (`grep -rn --include='*.md' --exclude-dir='.*' '^:::\|{[.#]' .`) and keep each one only if no field, convention or selector could replace it.
+
 When a design call needs a visual treatment, stop at the first rung that reaches it:
 
 1. **Token override.** Set `--moss-*` tokens in `:root {}`. Run
