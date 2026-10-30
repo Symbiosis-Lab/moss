@@ -864,6 +864,8 @@ A page you removed, or merged into a section of another, leaves nothing for moss
 
 For an address that is not a page moss tracks — a hand-made `.html` file you moved, or a link out to another site — declare it in `.moss/config.toml` instead: `[redirects]` maps the old address to the new one, both site-absolute (`"/scale-compare.html" = "/assets/scale-compare.html"`, `"/old-post/" = "/writings/new-post/"`, `"/shop/" = "https://example.com/shop"`). The new address is one the site serves or an `https://` URL. A page address or a `.html` file gets a forwarding page; any other file gets a byte copy of its target, so its target must be a file on the site (an external or page target for a non-HTML file has no static form and is reported, working only on a host that reads `_moss/redirects.json`, which lists every redirect). An old address with capitals or spaces in a folder name cannot be a file path, so it gets no forwarding page and works only on a host that reads the table. An old address the site really serves is left alone and reported. The table is optional and needs no `schema_version` change.
 
+A folder emptied by a move is not published: the build warns that it "holds nothing yet, so it is not on the site", and the folder appears once a page or file is in it. Git does not carry an empty folder into a copy either, so a warning can come and go between a working folder and a fresh checkout.
+
 `.moss/redirects.json` is the site's whole redirect history, automatic renames and hand-added entries together, and git tracks it, so a fresh clone or another machine keeps every old address working. Commit it with the site. A site that still has the history at `.moss/data/redirects.json` is moved over by its next build; no edit is needed.
 
 ## Search
