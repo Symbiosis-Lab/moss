@@ -644,6 +644,7 @@ mod tests {
                 columns: 1,
                 ratio: None,
                 classes: String::new(),
+                id: None,
                 cells: vec![cell],
                 width: None,
                 scroll: false,

@@ -1165,6 +1165,25 @@ fn extracts_grid_with_classes() {
 }
 
 #[test]
+fn grid_keeps_the_id_written_in_its_braces() {
+    let result = extract_shortcodes(":::grid 2 {#rooms .x}\nA\n+++\nB\n:::\n");
+    match &result.extracted[0].shortcode {
+        Shortcode::Grid(grid) => {
+            assert_eq!(grid.id.as_deref(), Some("rooms"));
+            assert_eq!(grid.classes, "x");
+        }
+        _ => panic!("expected Grid"),
+    }
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+}
+
+#[test]
+fn typed_blocks_that_cannot_carry_an_id_warn_instead_of_dropping_it() {
+    let result = extract_shortcodes(":::buttons {#nav}\n[Go](/go/)\n:::\n");
+    assert!(result.warnings.iter().any(|w| w.contains("`:::buttons`") && w.contains("#nav")), "{:?}", result.warnings);
+}
+
+#[test]
 fn extracts_grid_single_cell_no_separator() {
     let md = ":::grid 1\nonly cell\n:::\n";
     let result = extract_shortcodes(md);

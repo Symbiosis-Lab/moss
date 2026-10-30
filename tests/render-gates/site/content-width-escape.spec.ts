@@ -132,6 +132,28 @@ test.describe('horizontal', () => {
     expect(Math.abs((p.left + p.right) / 2 - (band.left + band.right) / 2)).toBeLessThanOrEqual(1);
   });
 
+  for (const width of [390, 1024]) {
+    test(`a screen grid and a screen fenced div both span the ${width}px viewport; cell text keeps the page inset (phone) / fills the band (desktop)`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/bands/');
+      await page.addStyleTag({ content: 'article.container > [data-width="screen"] { background: #cde; }' });
+      const fenced = await box(page, 'article.container > div[data-width="screen"]:not(.moss-grid)');
+      const grid = await box(page, 'article.container > .moss-grid[data-width="screen"]');
+      for (const b of [fenced, grid]) {
+        expect(Math.abs(b.left)).toBeLessThanOrEqual(1);
+        expect(Math.abs(b.width - width)).toBeLessThanOrEqual(1);
+      }
+      const inset = await lengthInMain(page, 'var(--moss-container-padding)');
+      const cell = await page.locator('.moss-grid[data-width="screen"] > *').first().evaluate((el) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        return range.getBoundingClientRect().left;
+      });
+      if (width < 768) expect(Math.abs(cell - inset)).toBeLessThanOrEqual(1);
+      else expect(Math.abs(cell - grid.left)).toBeLessThanOrEqual(1); // unchanged above 48rem: cells fill the band
+    });
+  }
+
   test('|wide under dir="rtl" is centred on the column too, with no sideways scroll', async ({ page }) => {
     await page.goto('/h-wide/');
     await page.evaluate(() => { document.documentElement.dir = 'rtl'; });

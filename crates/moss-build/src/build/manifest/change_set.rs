@@ -735,14 +735,18 @@ pub fn removed_addresses(
             RemovedAddress { path: out.to_string(), reason, moved_to, source }
         })
         .collect();
-    // A page's QR code has no source of its own; it goes when the page does.
+    // A page's QR code and an image derivative have no source of their own: they go with the page or picture.
     let page_qr: HashMap<String, (RemovalReason, Option<String>)> = removed
         .iter()
         .filter(|r| r.reason != RemovalReason::Unexplained && page_sources.contains_key(r.path.as_str()))
         .map(|r| (crate::build::media::qr::qr_key_for_url_path(&r.path), (r.reason, r.source.clone())))
         .collect();
+    let picture: HashMap<String, (RemovalReason, Option<String>)> = removed.iter()
+        .filter(|r| r.reason == RemovalReason::AuthorRemoved && !page_sources.contains_key(r.path.as_str()))
+        .map(|r| (r.path.clone(), (r.reason, r.source.clone()))).collect();
     for r in removed.iter_mut().filter(|r| r.reason == RemovalReason::Unexplained && r.source.is_none()) {
-        if let Some((reason, source)) = page_qr.get(&r.path) {
+        let of_picture = || crate::build::feeds::derivative_redirects::webp_sources(&r.path).iter().find_map(|c| picture.get(c));
+        if let Some((reason, source)) = page_qr.get(&r.path).or_else(of_picture) {
             (r.reason, r.source) = (*reason, source.clone());
         }
     }

@@ -216,6 +216,8 @@ pub struct GridShortcode {
     pub ratio: Option<String>,
     /// Extra CSS classes for the wrapping `<div>` (from `{.foo .bar}`).
     pub classes: String,
+    /// The `id` for the wrapping `<div>` (from `{#rooms}`).
+    pub id: Option<String>,
     /// Each cell's parsed block content. Phase 4 PR4.5 (2026-05-28)
     /// promoted this from `Vec<String>` (raw markdown source) to
     /// `Vec<Vec<Block>>` (fully-typed AST). Nested shortcodes inside a

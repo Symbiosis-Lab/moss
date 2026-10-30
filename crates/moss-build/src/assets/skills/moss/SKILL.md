@@ -54,6 +54,7 @@ For a folder of items with a metadata file (pictures plus a CSV, as an archive o
 3. `moss build <folder>` — auto-creates `.moss/` on first run. No init step.
    No wizard.
 4. `moss preview <folder>` — opens the live preview in moss desktop for you to watch. An agent has no display: use `moss build --serve` below instead.
+5. For every kind of page the owner will keep adding (an event, a news item, a work), add a template in `.moss/templates/` that names its folder, so a new page lands in the right place and shows in every listing without another file being edited: `moss guide authoring`, Templates.
 
 **Set the site's language.** Write `[site]` / `lang = "de"` in `.moss/config.toml` (or whichever of `en`, `de`, `zh-hans`, `zh-hant` the site is written in) before anything else on a site that is not English. moss detects a page's language from its text only for English and Chinese (Simplified and Traditional); every other language, German included, is never detected, so without `lang` a German site is built as English: `<html lang="en">`, English dates ("Thursday") and English interface strings. Detection also works against you: one English page in a German site's folder makes the whole folder English. `moss list` shows the language each page was built as. Details: `moss guide authoring`, "Multilingual sites".
 
@@ -69,7 +70,7 @@ the `.css` files under its `_moss/` are minified build output — use
 
 **A site in cloud storage.** A folder in Google Drive, iCloud Drive, Dropbox or OneDrive can hold files that are only in the cloud. `moss build` waits for them while they keep arriving, and exits 1 when the provider has stopped delivering, naming it and saying what to open. `moss fetch <folder>` downloads every cloud-only file in the folder and writes nothing there, so a tool that copies the folder (rsync, a backup) does not block on each file; it exits 1 the same way.
 
-**Before a restructure, save a version.** Moving pages, rewriting the theme, or deleting sections is safer with a named snapshot first: `moss history --save "before restructuring the nav"`. Both `--save` and `--restore` build the whole site first — the same build `moss deploy` runs, minus the publish — so a build that fails refuses to save or restore, and a slow build makes either one just as slow. `moss history [--json]` lists what's saved, newest first — every landed publish gets one automatically, `--save` adds one on demand. `moss history <path> --restore --at <id> [--copy]` brings back one page (`--copy` writes it alongside the current file instead of overwriting it); `moss history --restore --at <id> --yes` brings back the whole site (`--yes` is required, since it can move files to the Trash). A restore saves its own version of the current state first, so a restore is itself undoable the same way. `<id>` is a version's id from the timeline (or an unambiguous prefix), and `--json` includes it. This history lives in `.moss/history/` inside the site folder itself, gitignored and not part of the published output — being inside the folder, it travels along with whatever sync the site already uses, the same as `.moss/config.toml`.
+**Before a restructure, save a version.** Moving pages, rewriting the theme, or deleting sections is safer with a named snapshot first: `moss history --save "before restructuring the nav"`. Both `--save` and `--restore` build the whole site first — the same build `moss deploy` runs, minus the publish — so a build that fails refuses to save or restore, and a slow build makes either one just as slow. `moss history [--json]` lists what's saved, newest first — every landed publish gets one automatically, `--save` adds one on demand. `moss history <path> --restore --at <id> [--copy]` brings back one page (`--copy` writes it alongside the current file instead of overwriting it); `moss history --restore --at <id> --yes` brings back the whole site (`--yes` is required, since it can move files to the Trash). A restore saves its own version of the current state first, so a restore is itself undoable the same way. `<id>` is a version's id from the timeline (or an unambiguous prefix), and `--json` includes it. This history lives in `.moss/history/` inside the site folder itself, gitignored and not part of the published output — being inside the folder, it travels along with whatever sync the site already uses, the same as `.moss/config.toml`. To try a restructure on a copy instead, copy the folder without `.moss/identity/`, `.moss/data/`, `.moss/state.toml` and `.moss/build.nosync/`: the site's identity and publish record stay with the original, and `moss deploy <copy> --dry-run` on the copy reports that it has no site and that a real deploy would create a new signing key and be refused until `moss env` names an environment.
 
 **Version control.** Commit `.moss/config.toml`, `.moss/theme/` and `.moss/redirects.json`, and any assets or plugins folder there, with the site; moss's own `.moss/.gitignore` keeps identity, data, caches, history and build output out. A root `.gitignore` rule `.moss/*` (an older GitHub Pages deploy wrote it with `!.moss/site/`) hides those too, and `.moss/` cannot be undone by `!` lines at all: use `.moss/*` followed by a `!` line for each of those (the build prints the exact lines), and never delete the rule outright.
 
@@ -172,6 +173,8 @@ Only then style it, with the rungs below. Never write `{.class}` on an image, li
 
 ## The four styling rungs
 
+The pages are what the site's owner keeps editing, so keep them plain. Of two routes to the same design, take the one that leaves less markup in the pages: a convention or a selector over a fence, a fence over a class, any of them over HTML. Every `:::` fence, `{.class}`, `{#id}`, definition list (`: ` lines) or HTML block in a page is something the owner must keep intact on every edit and that other markdown tools show as clutter. When a design is done, list what the pages still carry (`grep -rn --include='*.md' --exclude-dir='.*' '^:::\|^: \|{[.#]' .`) and keep each one only if no field, convention or selector could replace it; `moss guide authoring`, "Style by what the content is", shows the selectors that replace buttons, fact tables and section anchors.
+
 When a design call needs a visual treatment, stop at the first rung that reaches it:
 
 1. **Token override.** Set `--moss-*` tokens in `:root {}`. Run
@@ -180,7 +183,10 @@ When a design call needs a visual treatment, stop at the first rung that reaches
    `--moss-color-ui-accent: var(--moss-color-text)`; to accent links in prose
    at rest, set `--moss-link-color` (and `--moss-link-hover-color`).
 2. **Selector on semantic HTML.** Target the existing semantic structure (a
-   heading, a blockquote, a list) with a plain CSS rule. No new markup.
+   heading, a blockquote, a list) with a plain CSS rule. No new markup. Select
+   by what an element holds or where it sits (`:has()`, `~`) before adding a
+   class: `moss guide authoring`, "Style by what the content is", has checked
+   selectors for bands, columns, cards and anchors.
 3. **A declared field with a `place`, or a named-class fenced div.** First ask
    whether the content is a fact about the page (a year, a count, a role, a
    place). If it is, declare it as a field and give it a `place` (see `moss guide authoring`, Declared fields),
@@ -296,7 +302,11 @@ model (dark mode, quiet chrome, `@layer` rules), see
   list each address with its cause and refuse. Keep the address working
   (for a moved page, add the printed `"/old/" = "/new/"` line under
   `[redirects]` in `.moss/config.toml`), or pass `--accept-removals` — only when
-  the human has said to lose those addresses.
+  the human has said to lose those addresses. A `.webp` derivative of a picture
+  that is still in the folder needs none of this: when no page embeds the picture
+  any more, moss keeps the derivative's address as a redirect to the picture by
+  itself and the dry run lists it as kept. An entry of your own for that address
+  in `[redirects]` wins.
 - **Custom domain:** `moss domain link <folder> example.com` (`www.example.com`
   works too) links the bare domain and `www`, and for a domain registered elsewhere
   prints the DNS records to type at the registrar: leave MX and other TXT records
