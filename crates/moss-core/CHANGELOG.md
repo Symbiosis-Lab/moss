@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-30
+
+### Changed
+
+- **BREAKING:** `GridShortcode` gains `id: Option<String>`, the `{#id}` written on a `:::grid` opener, and the grid's opening tag prints it; a struct literal must name it.
+
+### Added
+
+- `extract_shortcodes` warns when a typed shortcode other than `:::grid` carries `{#id}`, since it does not put the id on its element, instead of dropping it silently.
+
 ## [0.20.0] - 2026-10-29
 
 ### Changed
