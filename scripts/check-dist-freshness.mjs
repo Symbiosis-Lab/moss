@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // check-dist-freshness.mjs — refuses a commit that stages a change under
 // one of PACKAGES' own src/ (or its build config) without also rebuilding
-// the committed dist/ that ships from it.
+// the committed output that ships from it: a package's dist/, or the bundles
+// moss-build embeds.
 //
 // The only other gate that catches a stale dist is pr.yml's "Package
 // artifacts are up to date" step, which runs solely on a pull request to
@@ -51,6 +52,29 @@ const PACKAGES = [
       'packages/moss-watercolor/package.json',
     ],
   },
+  {
+    label: 'moss-blueprint-grid',
+    filterName: '@symbiosis-lab/moss-blueprint-grid',
+    distPath: 'packages/moss-blueprint-grid/dist',
+    triggers: [
+      'packages/moss-blueprint-grid/src/',
+      'packages/moss-blueprint-grid/tsdown.config.ts',
+      'packages/moss-blueprint-grid/tsconfig.json',
+      'packages/moss-blueprint-grid/package.json',
+    ],
+  },
+  // The bundles moss-build embeds. After the packages above, because the bridge
+  // bundles a package's dist/: a package change rebuilds its dist, then this.
+  {
+    label: 'backend scripts',
+    build: ['node', ['scripts/build-backend-scripts.mjs']],
+    distPath: ['crates/moss-build/src/assets/js', 'crates/moss-build/src/ops/serve/js'],
+    triggers: [
+      'crates/moss-build/src/js-src/',
+      'scripts/build-backend-scripts.mjs',
+      'packages/moss-blueprint-grid/',
+    ],
+  },
 ];
 
 function run(cmd, args) {
@@ -82,16 +106,18 @@ function main() {
 
   let sawFailure = false;
   for (const pkg of relevant) {
-    const build = run('pnpm', ['--filter', pkg.filterName, 'run', 'build']);
+    const [cmd, args] = pkg.build ?? ['pnpm', ['--filter', pkg.filterName, 'run', 'build']];
+    const build = run(cmd, args);
     if (build.status !== 0) {
       console.error(`check-dist-freshness: ${pkg.label} build failed — fix the build before committing.`);
       sawFailure = true;
       continue;
     }
-    const diff = run('git', ['diff', '--exit-code', '--', pkg.distPath]);
+    const paths = [].concat(pkg.distPath);
+    const diff = run('git', ['diff', '--exit-code', '--', ...paths]);
     if (diff.status !== 0) {
       console.error(
-        `${pkg.distPath} is stale — run \`pnpm --filter ${pkg.filterName} run build\`, then \`git add ${pkg.distPath}\` and commit again.`
+        `${paths.join(' and ')} is stale — run \`${[cmd, ...args].join(' ')}\`, then \`git add ${paths.join(' ')}\` and commit again.`
       );
       sawFailure = true;
     }

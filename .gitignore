@@ -6,6 +6,8 @@ dist/
 !packages/moss-syntax/dist/**
 !packages/moss-watercolor/dist/
 !packages/moss-watercolor/dist/**
+!packages/moss-blueprint-grid/dist/
+!packages/moss-blueprint-grid/dist/**
 .superpowers/
 site/.moss/build/
 site/.moss/build.nosync/

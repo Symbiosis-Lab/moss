@@ -403,13 +403,17 @@ jobs:
       - name: Typecheck moss-watercolor (source + tests)
         run: cd packages/moss-watercolor && pnpm run typecheck
 
+      - name: Typecheck moss-blueprint-grid (source + tests)
+        run: cd packages/moss-blueprint-grid && pnpm run typecheck
+
       - name: Package artifacts are up to date
         run: |
           pnpm --filter @symbiosis-lab/moss-api run build
           pnpm --filter @symbiosis-lab/moss-syntax run build
           pnpm --filter @symbiosis-lab/moss-watercolor run build
-          if ! git diff --exit-code -- packages/moss-api/dist packages/moss-syntax/dist packages/moss-watercolor/dist; then
-            echo "::error::Package artifacts are stale. Run the moss-api, moss-syntax and moss-watercolor builds and commit dist/."
+          pnpm --filter @symbiosis-lab/moss-blueprint-grid run build
+          if ! git diff --exit-code -- packages/moss-api/dist packages/moss-syntax/dist packages/moss-watercolor/dist packages/moss-blueprint-grid/dist; then
+            echo "::error::Package artifacts are stale. Run the moss-api, moss-syntax, moss-watercolor and moss-blueprint-grid builds and commit dist/."
             exit 1
           fi
 
@@ -426,6 +430,9 @@ jobs:
 
       - name: Test moss-watercolor
         run: cd packages/moss-watercolor && npx vitest run
+
+      - name: Test moss-blueprint-grid
+        run: cd packages/moss-blueprint-grid && npx vitest run
 
       - name: Test moss npm wrapper
         run: cd packages/moss && npm test

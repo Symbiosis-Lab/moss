@@ -27,7 +27,6 @@ export interface BlueprintGridConfig {
   gridSpacing: number;    // pixels — cell size for square grid cells
   sigmaPerp: number;      // Gaussian σ for perpendicular distance (line activation)
   sigmaParallel: number;  // Gaussian σ for parallel distance (glow spread along line)
-  maxAlpha: number;       // peak alpha at crossing point
   segmentLength: number;  // pixels, e.g. 8
   minLineWidth: number;   // line width far from particles
   maxLineWidth: number;   // line width at particle center
@@ -39,10 +38,9 @@ const MIN_ALPHA = 0.01;
 /**
  * Pixel pitch of the grid — horizontal lines are stroked at y = k × this.
  *
- * Exported because the cloud waiting screen aligns its progress meter to a
- * real grid line (see `alignWaitingScreenToGrid`). Two constants would drift,
- * and the failure would be silent: a meter floating one pixel off a line still
- * looks deliberate.
+ * Exported so a page can align its own marks to a real grid line. Two
+ * constants would drift, and the failure would be silent: a mark floating one
+ * pixel off a line still looks deliberate.
  */
 export const GRID_SPACING = 40;
 
@@ -136,33 +134,6 @@ export function updatePhysics(
   }
 }
 
-/**
- * Line-crossing alpha: product of perpendicular and parallel Gaussians,
- * summed across all particles so brightness accumulates naturally.
- * Two particles on the same line make it brighter than one.
- * Clamped to [0, 1].
- */
-export function computeLineAlpha(
-  linePos: number,
-  segCenter: number,
-  particles: Particle[],
-  sigmaPerp: number,
-  sigmaParallel: number,
-  isHorizontal: boolean,
-): number {
-  const twoSigmaPerpSq = 2 * sigmaPerp * sigmaPerp;
-  const twoSigmaParallelSq = 2 * sigmaParallel * sigmaParallel;
-  let sum = 0;
-  for (const p of particles) {
-    const dPerp = isHorizontal ? (p.y - linePos) : (p.x - linePos);
-    const perpAlpha = Math.exp(-(dPerp * dPerp) / twoSigmaPerpSq);
-    if (perpAlpha < MIN_ALPHA) continue;
-    const dParallel = isHorizontal ? (segCenter - p.x) : (segCenter - p.y);
-    sum += perpAlpha * Math.exp(-(dParallel * dParallel) / twoSigmaParallelSq);
-  }
-  return Math.min(sum, 1);
-}
-
 // --- Canvas integration ---
 
 const DEFAULT_CONFIG: BlueprintGridConfig = {
@@ -174,25 +145,47 @@ const DEFAULT_CONFIG: BlueprintGridConfig = {
   gridSpacing: GRID_SPACING,
   sigmaPerp: 0.018,
   sigmaParallel: 0.18,
-  maxAlpha: 0.25,
   segmentLength: 8,
   minLineWidth: 0.1,
   maxLineWidth: 0.4,
 };
 
-// `onFrame` is an optional per-frame callback. It exists so the SHELL/editor
-// call sites can count frames for diagnostics WITHOUT this shared module
-// importing the diag → @tauri-apps/plugin-log chain — this file is also bundled
-// into the preview-only iframe-bridge, which must stay free of Tauri/log
-// machinery (the preview is sacred). See preview-manager.ts for the counter.
-export function startBlueprintGrid(container: HTMLElement, onFrame?: () => void): () => void {
-  const canvas = container.querySelector<HTMLCanvasElement>('#blueprint-canvas');
+export interface BlueprintGridOptions {
+  /** The canvas to draw on; by default the container's `#blueprint-canvas`. */
+  canvas?: HTMLCanvasElement;
+  /** Where pointer and touch movement is read; by default the container. */
+  pointerTarget?: EventTarget;
+  /** The line colour, any CSS colour, read at every paint. Empty or absent:
+   *  blueprint blue, lighter when the root element has `data-theme="dark"`. */
+  color?: () => string | null | undefined;
+  /** Peak opacity at a crossing; 0.25 by default. */
+  maxAlpha?: number;
+  /** Called once per painted frame, for a caller that counts frames. */
+  onFrame?: () => void;
+}
+
+/**
+ * The events that move the point the particles swing around. Pointer events
+ * stop once a touch turns into a scroll, so touches are read as well: a finger
+ * leads the particles as a cursor does.
+ */
+const POINTER_EVENTS = ['pointermove', 'touchstart', 'touchmove'] as const;
+
+/** The viewport position an event from `POINTER_EVENTS` reports, if any. */
+export function pointerPoint(e: Event): { clientX: number; clientY: number } | null {
+  const touches = (e as TouchEvent).touches;
+  if (touches) return touches[0] ?? null;
+  const m = e as MouseEvent;
+  return typeof m.clientX === 'number' ? m : null;
+}
+
+export function startBlueprintGrid(container: HTMLElement, options: BlueprintGridOptions = {}): () => void {
+  const canvas = options.canvas ?? container.querySelector<HTMLCanvasElement>('#blueprint-canvas');
   if (!canvas) return () => {};
 
   // jsdom (used by vitest) ships HTMLCanvasElement.prototype.getContext as a
   // "Not implemented" stub that throws. Real browsers always return either a
-  // context or null. Wrap so unit tests that mount any consumer of this module
-  // (folder-mode, preview empty state, launcher) don't blow up.
+  // context or null.
   let rawCtx: CanvasRenderingContext2D | null;
   try {
     rawCtx = canvas.getContext('2d');
@@ -200,33 +193,35 @@ export function startBlueprintGrid(container: HTMLElement, onFrame?: () => void)
     return () => {};
   }
   if (!rawCtx) return () => {};
-  // TS doesn't carry the null narrowing into the inner `frame()` closure;
-  // re-bind to a definitely non-null local that the closure can capture.
+  // TS doesn't carry the null narrowing into the inner closures.
   const ctx: CanvasRenderingContext2D = rawCtx;
 
   const config = DEFAULT_CONFIG;
+  const maxAlpha = options.maxAlpha ?? 0.25;
   const particles = createParticles(config.particleCount, config.speed);
   let mouseX = 0.5;
   let mouseY = 0.5;
   let rafId = 0;
   let width = 0;
   let height = 0;
+  const twoSigmaPerpSq = 2 * config.sigmaPerp * config.sigmaPerp;
+  const twoSigmaParallelSq = 2 * config.sigmaParallel * config.sigmaParallel;
+  const crossings: Array<{ at: number; perpAlpha: number }> = [];
 
-  // Detect dark mode from data-theme attribute (maintained by followTheme)
   let isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-  const themeObserver = new MutationObserver((mutations) => {
-    for (const mutation of mutations) {
-      if (mutation.type === 'attributes' && mutation.attributeName === 'data-theme') {
-        isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-      }
-    }
+  // People who ask for reduced motion get the grid at rest: one still frame
+  // per size or theme, no loop.
+  const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches === true;
+
+  const themeObserver = new MutationObserver(() => {
+    isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    if (reduceMotion) paint();
   });
   themeObserver.observe(document.documentElement, {
     attributes: true,
     attributeFilter: ['data-theme'],
   });
 
-  // Resize canvas to match container
   const observer = new ResizeObserver((entries) => {
     for (const entry of entries) {
       width = entry.contentRect.width;
@@ -235,112 +230,81 @@ export function startBlueprintGrid(container: HTMLElement, onFrame?: () => void)
       canvas.height = height * devicePixelRatio;
       ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
     }
+    if (reduceMotion) paint();
   });
   observer.observe(container);
 
-  // Mouse tracking on container (canvas has pointer-events: none)
-  const onMouseMove = (e: MouseEvent) => {
+  const pointerTarget = options.pointerTarget ?? container;
+  const onPointer = (e: Event) => {
+    const p = pointerPoint(e);
+    if (!p) return;
     const rect = container.getBoundingClientRect();
-    mouseX = (e.clientX - rect.left) / rect.width;
-    mouseY = (e.clientY - rect.top) / rect.height;
+    mouseX = (p.clientX - rect.left) / rect.width;
+    mouseY = (p.clientY - rect.top) / rect.height;
   };
-  container.addEventListener('mousemove', onMouseMove);
+  // Passive, so a touch still scrolls the page.
+  for (const type of POINTER_EVENTS) pointerTarget.addEventListener(type, onPointer, { passive: true });
+
+  function paint() {
+    options.onFrame?.();
+    ctx.clearRect(0, 0, width, height);
+    if (width === 0 || height === 0) return;
+    ctx.strokeStyle = options.color?.() || (isDark ? 'rgb(90,155,255)' : 'rgb(20,60,130)');
+    paintLines(true);
+    paintLines(false);
+  }
+
+  // One family of lines: horizontal ones step down the height and run along
+  // the width; vertical ones the other way round. A line lights where particles
+  // cross it, brightest at each crossing and fading along it.
+  function paintLines(horizontal: boolean) {
+    const along = horizontal ? width : height;
+    const across = horizontal ? height : width;
+    const step = config.gridSpacing / across;
+    const segLen = config.segmentLength / along;
+    for (let line = step; line < 1; line += step) {
+      crossings.length = 0;
+      for (const p of particles) {
+        const dPerp = (horizontal ? p.y : p.x) - line;
+        const perpAlpha = Math.exp(-(dPerp * dPerp) / twoSigmaPerpSq);
+        if (perpAlpha >= MIN_ALPHA) crossings.push({ at: horizontal ? p.x : p.y, perpAlpha });
+      }
+      if (crossings.length === 0) continue;
+
+      const c = line * across;
+      for (let s = 0; s < 1; s += segLen) {
+        const mid = s + segLen / 2;
+        let sum = 0;
+        for (const x of crossings) {
+          const d = mid - x.at;
+          sum += x.perpAlpha * Math.exp(-(d * d) / twoSigmaParallelSq);
+        }
+        const k = Math.min(sum, 1);
+        if (k < MIN_ALPHA) continue;
+        const a0 = s * along;
+        const a1 = Math.min((s + segLen) * along, along);
+        ctx.globalAlpha = k * maxAlpha;
+        ctx.lineWidth = config.minLineWidth + k * (config.maxLineWidth - config.minLineWidth);
+        ctx.beginPath();
+        if (horizontal) { ctx.moveTo(a0, c); ctx.lineTo(a1, c); }
+        else { ctx.moveTo(c, a0); ctx.lineTo(c, a1); }
+        ctx.stroke();
+      }
+    }
+  }
 
   function frame() {
-    onFrame?.();
     updatePhysics(particles, mouseX, mouseY, config);
-    ctx.clearRect(0, 0, width, height);
-
-    if (width === 0) {
-      rafId = requestAnimationFrame(frame);
-      return;
-    }
-
-    const segLen = config.segmentLength / width; // normalize segment length
-    const twoSigmaPerpSq = 2 * config.sigmaPerp * config.sigmaPerp;
-    const twoSigmaParallelSq = 2 * config.sigmaParallel * config.sigmaParallel;
-
-    // Square grid: convert pixel spacing to normalized spacing per axis
-    const hSpacing = config.gridSpacing / height; // horizontal lines step in y
-    const vSpacing = config.gridSpacing / width;  // vertical lines step in x
-
-    // Reusable array for per-line pre-filtered crossings
-    const crossings: Array<{ crossPos: number; perpAlpha: number }> = [];
-
-    // Draw horizontal grid lines
-    for (let gy = hSpacing; gy < 1; gy += hSpacing) {
-      crossings.length = 0;
-      for (const p of particles) {
-        const dPerp = p.y - gy;
-        const perpAlpha = Math.exp(-(dPerp * dPerp) / twoSigmaPerpSq);
-        if (perpAlpha >= MIN_ALPHA) crossings.push({ crossPos: p.x, perpAlpha });
-      }
-      if (crossings.length === 0) continue;
-
-      for (let x = 0; x < 1; x += segLen) {
-        const segCenter = x + segLen / 2;
-        let sum = 0;
-        for (const c of crossings) {
-          const dP = segCenter - c.crossPos;
-          sum += c.perpAlpha * Math.exp(-(dP * dP) / twoSigmaParallelSq);
-        }
-        const clamped = Math.min(sum, 1);
-        if (clamped < MIN_ALPHA) continue;
-        const a = clamped * config.maxAlpha;
-        const lw = config.minLineWidth + clamped * (config.maxLineWidth - config.minLineWidth);
-        ctx.beginPath();
-        ctx.moveTo(x * width, gy * height);
-        ctx.lineTo(Math.min((x + segLen) * width, width), gy * height);
-        ctx.strokeStyle = isDark
-          ? `rgba(90,155,255,${a})`
-          : `rgba(20,60,130,${a})`;
-        ctx.lineWidth = lw;
-        ctx.stroke();
-      }
-    }
-
-    // Draw vertical grid lines
-    for (let gx = vSpacing; gx < 1; gx += vSpacing) {
-      crossings.length = 0;
-      for (const p of particles) {
-        const dPerp = p.x - gx;
-        const perpAlpha = Math.exp(-(dPerp * dPerp) / twoSigmaPerpSq);
-        if (perpAlpha >= MIN_ALPHA) crossings.push({ crossPos: p.y, perpAlpha });
-      }
-      if (crossings.length === 0) continue;
-
-      for (let y = 0; y < 1; y += segLen) {
-        const segCenter = y + segLen / 2;
-        let sum = 0;
-        for (const c of crossings) {
-          const dP = segCenter - c.crossPos;
-          sum += c.perpAlpha * Math.exp(-(dP * dP) / twoSigmaParallelSq);
-        }
-        const clamped = Math.min(sum, 1);
-        if (clamped < MIN_ALPHA) continue;
-        const a = clamped * config.maxAlpha;
-        const lw = config.minLineWidth + clamped * (config.maxLineWidth - config.minLineWidth);
-        ctx.beginPath();
-        ctx.moveTo(gx * width, y * height);
-        ctx.lineTo(gx * width, Math.min((y + segLen) * height, height));
-        ctx.strokeStyle = isDark
-          ? `rgba(90,155,255,${a})`
-          : `rgba(20,60,130,${a})`;
-        ctx.lineWidth = lw;
-        ctx.stroke();
-      }
-    }
-
+    paint();
     rafId = requestAnimationFrame(frame);
   }
 
-  rafId = requestAnimationFrame(frame);
+  if (!reduceMotion) rafId = requestAnimationFrame(frame);
 
-  // Return cleanup function
   return () => {
     cancelAnimationFrame(rafId);
-    container.removeEventListener('mousemove', onMouseMove);
     observer.disconnect();
     themeObserver.disconnect();
+    for (const type of POINTER_EVENTS) pointerTarget.removeEventListener(type, onPointer);
   };
 }

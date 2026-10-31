@@ -37,6 +37,10 @@ importers:
         version: 6.4.3(@types/node@22.20.3)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.1)
 
   crates/moss-build:
+    dependencies:
+      '@symbiosis-lab/moss-blueprint-grid':
+        specifier: workspace:*
+        version: link:../../packages/moss-blueprint-grid
     devDependencies:
       idiomorph:
         specifier: ^0.7.4
@@ -67,6 +71,21 @@ importers:
       typedoc-plugin-markdown:
         specifier: 4.12.0
         version: 4.12.0(typedoc@0.28.20(typescript@5.9.3))
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@22.20.3)(jiti@2.7.0)(jsdom@26.1.0)(tsx@4.23.13)(yaml@2.9.1)
+
+  packages/moss-blueprint-grid:
+    devDependencies:
+      jsdom:
+        specifier: ^26.1.0
+        version: 26.1.0
+      tsdown:
+        specifier: ^0.18.4
+        version: 0.18.4(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(typescript@5.9.3)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

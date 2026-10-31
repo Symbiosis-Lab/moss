@@ -1,0 +1,47 @@
+{
+  "name": "@symbiosis-lab/moss-blueprint-grid",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A fixed square grid revealed only where drifting particles cross its lines; the particles swing around the pointer or a finger. A canvas function and a standalone <blueprint-grid> element",
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.mts"
+    },
+    "./element": {
+      "import": "./dist/element.mjs",
+      "types": "./dist/element.d.mts"
+    },
+    "./blueprint-grid.iife.js": "./dist/blueprint-grid.iife.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "keywords": [
+    "moss",
+    "grid",
+    "canvas",
+    "custom-element"
+  ],
+  "author": "Guo Liu",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0",
+    "tsdown": "^0.18.4",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}
