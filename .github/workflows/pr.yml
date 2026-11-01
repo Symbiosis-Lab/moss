@@ -381,6 +381,15 @@ jobs:
       - name: Ratchet tool tests (accept/tighten --path)
         run: node --test scripts/__tests__/ratchet.test.mjs
 
+      # cargo metadata only reads the manifests: no build, no network.
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Architecture diagrams name only what the code has
+        run: node scripts/gen-architecture-diagrams.mjs --check
+
+      - name: Diagram check tests
+        run: node --test scripts/__tests__/gen-architecture-diagrams.test.mjs
+
       # `check` goes green precisely BECAUSE a ceiling rose, so a raise with
       # no reason is otherwise invisible in review — this audits every
       # commit the PR actually adds (not just its final diff) for a

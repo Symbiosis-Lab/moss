@@ -32,6 +32,9 @@ importers:
       esbuild:
         specifier: ^0.25.12
         version: 0.25.12
+      pele:
+        specifier: 1.13.0
+        version: 1.13.0
       vite:
         specifier: ^6.4.3
         version: 6.4.3(@types/node@22.20.3)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.1)
@@ -2839,6 +2842,10 @@ packages:
   pathval@2.0.1:
     resolution: {integrity: sha512-//nshmD55c46FuFw26xV/xFAaB5HF9Xdap7HJBBnrKdAd6/GxDBaNA1870O79+9ueg61cZLSVc+OaFlfmObYVQ==}
     engines: {node: '>= 14.16'}
+
+  pele@1.13.0:
+    resolution: {integrity: sha512-Ie8UKY9x00MsuR3jO6AzUwzK2Z6MIV3Tf4EDdITiuk8Uaz8K7g0R082WqsqNaSU8DdgkrRvZThzhit83mi/uiw==}
+    engines: {node: '>=20'}
 
   pend@1.2.0:
     resolution: {integrity: sha512-F3asv42UuXchdzt+xXqfW1OGlVBe+mxa2mqI0pg5yAHZPvFmY3Y6drSf/GQ1A86WgWEN9Kzh/WrgKa6iGcHXLg==}
@@ -6404,6 +6411,8 @@ snapshots:
   pathe@2.0.3: {}
 
   pathval@2.0.1: {}
+
+  pele@1.13.0: {}
 
   pend@1.2.0: {}
 
