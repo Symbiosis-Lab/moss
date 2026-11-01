@@ -594,9 +594,6 @@ fn a_binary_that_is_gone_falls_back_to_the_bare_name() {
     assert_eq!(super::usable_cli_path(Some(real)), bare, "a since-removed path falls back");
 }
 
-/// A GUI-subsystem `moss.exe` is neither waited for nor heard from by cmd or
-/// PowerShell; the console `moss.com` beside it is. Agents get the one that
-/// answers.
 #[test]
 fn a_console_front_door_beside_the_binary_is_preferred() {
     let tmp = tempfile::tempdir().unwrap();
@@ -675,6 +672,21 @@ fn a_path_that_no_longer_exists_is_replaced() {
     sync_with_home(&project, Some(home.path()), &dev).expect("dev sync");
 
     assert_all_name(&project, &dev);
+}
+
+/// Projects synced before `moss.com` shipped name `moss.exe`, which is still
+/// on disk; keeping it would leave every existing project on the silent binary.
+#[test]
+fn a_kept_path_moves_to_the_console_front_door_beside_it() {
+    let bins = tempfile::tempdir().unwrap();
+    let exe = fake_binary(bins.path(), "moss.exe");
+    let (_tmp, project, home) = project_synced_by(&exe);
+    assert_all_name(&project, &exe);
+
+    let com = fake_binary(bins.path(), "moss.com");
+    sync_with_home(&project, Some(home.path()), &exe).expect("second sync");
+
+    assert_all_name(&project, &com);
 }
 
 /// The installed app is the binary every machine is meant to use, so it takes

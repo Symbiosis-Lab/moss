@@ -207,6 +207,7 @@ fn cli_binding_for(file: &Path, running: &Path) -> String {
     let existing = std::fs::read_to_string(file)
         .ok()
         .and_then(|text| named_cli_path(&text))
+        .map(|p| console_front_door(&p).unwrap_or(p))
         .filter(|p| p.is_absolute() && p.is_file());
     let kept = match existing {
         Some(p) if is_installed_app(running) && !is_installed_app(&p) => None,
