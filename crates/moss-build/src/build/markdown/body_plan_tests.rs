@@ -144,6 +144,14 @@ fn plan_reassembles_with_source_lines_on() {
 }
 
 #[test]
+fn grid_id_lands_on_the_grid_element() {
+    let hooks = DefaultHooks::new();
+    let doc = parse(":::grid 2 5:7 {#rooms .x screen}\n## Left\n+++\nRight\n:::\n");
+    let html = render_segmented(&doc, &hooks).to_html();
+    assert!(html.contains(r#"<div class="moss-grid x" id="rooms" data-columns="2""#), "{html}");
+}
+
+#[test]
 fn grid_blocks_become_their_own_segment_with_typed_cells() {
     let hooks = DefaultHooks::new();
     let doc = parse("Intro.\n\n:::grid 2\n[A](a/)\n+++\nPlain cell.\n:::\n\nAfter.\n");

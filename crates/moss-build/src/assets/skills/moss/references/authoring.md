@@ -37,6 +37,25 @@ Reach for the cheapest rung that works; earn each step:
    a setext heading (underlined with `===` or `---`), are not checked.
 4. **Structural override.** Re-lay-out a page against moss's defaults.
 
+### Style by what the content is, before adding a class
+
+Rung 2 reaches further than it looks. CSS `:has()` and the sibling combinators select an element by what it holds or where it sits, so a layout that seems to need `::: {.class}` fences usually needs none, and the page stays plain Markdown its owner can edit without a fence to break. Each selector below was checked on a built site against the same design written with classes:
+
+- The band that holds the page's title, and every other band: `article.container > .moss-grid:has(> .moss-grid-card > h1)` and `article.container > .moss-grid:not(:has(> .moss-grid-card > h1))`.
+- A column by what it holds: `.moss-grid-card:has(> h1)` for the column with the title, `.moss-grid-card:has(> .moss-cards-container)` for the column with a listing embed.
+- A card in a grid: a cell that opens with a bold line, `.moss-grid-card:has(> p:first-child > strong:only-child)`.
+- A statement set between two bands: `article.container > .moss-grid ~ p:has(~ .moss-grid)`. Bound it on both sides; `article.container > p` alone also matches the opening paragraph of every page that has no bands.
+- A band's label and its anchor: write the short label as the band's heading and the line under it one level down (`## The room`, then `### Small, bright, under a brick vault.`). moss names the heading from its text, so the nav links to `/#the-room` with no `{#id}`, and rewriting the headline never breaks that link. The label rule is `.moss-grid-card > h2:has(+ h3)`. A lone `{#id}` on a heading, or on a `:::grid` in its braces (`:::grid 2 {#rooms}`), is for an anchor that must differ from the heading's text; the other typed blocks (`:::gallery`, `:::buttons`, `:::hero`) do not carry an id and the build warns if one is written.
+- A `screen` band whose content keeps the text measure: `padding-inline: max(var(--moss-container-padding), calc((100cqi - 1240px) / 2))`. A percentage there resolves against the text column, not the band; `cqi` measures the page.
+- A row of buttons: a paragraph made only of links, one per line, styled by `p:has(> a ~ a) > a`, with `a ~ a` for the second and later ones. moss turns the line break between them into a `<br>`, so `a + a` never matches; hide it with `p:has(> a ~ a) > br { display: none }`. One call to action alone in its paragraph is found by its address, `p:has(> a[href^="mailto:"]:only-child)`. `:only-child` ignores text, so a sentence holding one such link matches too: bound the selector to the band or column it belongs to. This replaces `:::buttons`.
+- A table of facts: a list whose items open with the label in bold, the value on the next line (`- **Capacity**` then `  about ten people`), styled by `ul:has(> li > strong:first-child)`. The label can sit in its own column with `position: absolute` on `li > strong:first-child` and a matching `padding-inline-start` on the item; the line break after the label is a `<br>`, hidden as above. Definition lists (`Term` then `: value`) are not CommonMark: GitHub and most editors show the colon lines as written.
+
+A selector list inside `:is()` takes the specificity of its strongest member. When a group of roles shares one `:is()` list (the main button and the secondary one, say), write each role's rule with the same list, or a weaker rule written later loses to it.
+
+The result is a page in standard Markdown, which reads the same in any editor and on GitHub, with the design in the theme. Before adding a fence or a brace, check whether the content already has a shape a selector can find.
+
+To tell whether a change held, build the site before and after and compare the positions of the main blocks at a desktop, a laptop (1024 to 1280), a tablet and a phone width. Then check every built page, not only the one you changed: a selector chosen by content matches wherever that content occurs. `moss doctor --surface` lists rules that match nothing.
+
 A text field shows focus on its own border, never as a ring inside or outside it. A theme's site-wide focus ring should exclude fields, for example `:focus-visible:not(input, textarea, select)`, and style a field's focus on its own border. moss's search field already does: its input and result rows draw no outline whatever the theme says, so restyle the panel's border or the `.is-selected` row instead.
 
 ### Rung 4 in detail
@@ -848,6 +867,8 @@ Every page carries a `uid:`, and each build compares that uid's current address 
 A page you removed, or merged into a section of another, leaves nothing for moss to compare uids against, so add the forwarding link yourself: edit `.moss/redirects.json`, a flat JSON object mapping the old address to the new one, neither with a leading slash — `{"old-page/": "new-page/#section"}` (a fragment on the target works). This takes effect on an ordinary local `moss build`; no deploy is required for a hand-written entry to start forwarding. If a real page now exists at the old address, moss leaves it alone — the redirect is dropped rather than overwriting it.
 
 For an address that is not a page moss tracks — a hand-made `.html` file you moved, or a link out to another site — declare it in `.moss/config.toml` instead: `[redirects]` maps the old address to the new one, both site-absolute (`"/scale-compare.html" = "/assets/scale-compare.html"`, `"/old-post/" = "/writings/new-post/"`, `"/shop/" = "https://example.com/shop"`). The new address is one the site serves or an `https://` URL. A page address or a `.html` file gets a forwarding page; any other file gets a byte copy of its target, so its target must be a file on the site (an external or page target for a non-HTML file has no static form and is reported, working only on a host that reads `_moss/redirects.json`, which lists every redirect). An old address with capitals or spaces in a folder name cannot be a file path, so it gets no forwarding page and works only on a host that reads the table. An old address the site really serves is left alone and reported. The table is optional and needs no `schema_version` change.
+
+A folder emptied by a move is not published: the build warns that it "holds nothing yet, so it is not on the site", and the folder appears once a page or file is in it. Git does not carry an empty folder into a copy either, so a warning can come and go between a working folder and a fresh checkout.
 
 `.moss/redirects.json` is the site's whole redirect history, automatic renames and hand-added entries together, and git tracks it, so a fresh clone or another machine keeps every old address working. Commit it with the site. A site that still has the history at `.moss/data/redirects.json` is moved over by its next build; no edit is needed.
 

@@ -5515,9 +5515,10 @@ article.container > [data-width="screen"] {
 }
 
 @media (width < 48rem) {
-  article.container > [data-width]:not(div[data-width="screen"]:not([class^="moss-"]):not([class*=" moss-"])) {
-    /* collapse to the column; a fenced-div `screen` band alone is exempt
-       (rule below), so a `screen` figure collapses like the other tokens.
+  article.container > [data-width]:not(:is(div[data-width="screen"]:not([class^="moss-"]):not([class*=" moss-"]), .moss-grid[data-width="screen"])) {
+    /* collapse to the column; a fenced-div `screen` band and a screen grid
+       are exempt (rules below), so a `screen` figure collapses like the
+       other tokens.
        `auto` rather than 0: a hand-written band that also carries an inline
        width is centred here, below 48rem only — above it the escape's
        margins assume the token's width. The renderer never emits a token
@@ -5543,6 +5544,16 @@ article.container > div[data-width="screen"]:not([class^="moss-"]):not([class*="
   box-sizing: border-box;
   padding-inline: var(--moss-container-padding);
   padding-right: calc(var(--moss-container-padding) + var(--moss-sidenote-inset, 0px));
+}
+
+/* A screen grid is edge to edge at every width too. Its cells fill the band
+ * above 48rem; below it they sit in one column and take the same gutter. */
+@media (width < 48rem) {
+  article.container > .moss-grid[data-width="screen"] {
+    box-sizing: border-box;
+    padding-inline: var(--moss-container-padding);
+    padding-right: calc(var(--moss-container-padding) + var(--moss-sidenote-inset, 0px));
+  }
 }
 
 /* Direct-child article-body headings + horizontal rules clear floats so
@@ -6602,7 +6613,7 @@ article a:where(:not(.moss-btn)):focus {
  * `.moss-card`) because minimal-layout cards must NOT inherit them — see
  * the long comment on the bare rule above. */
 .moss-cards[data-layout="grid"] .moss-card,
-.moss-grid .moss-card {
+.moss-grid > .moss-card {
   display: flex;
   flex-direction: column;
   /* Re-stretch each grid cell to its row-track height. `.moss-grid` sets
@@ -6619,7 +6630,7 @@ article a:where(:not(.moss-btn)):focus {
 }
 
 .moss-cards[data-layout="grid"] .moss-card:hover,
-.moss-grid .moss-card:hover {
+.moss-grid > .moss-card:hover {
   transform: translateY(-2px);
   box-shadow: var(--moss-elevation-1);
 }
@@ -6755,7 +6766,7 @@ article a:where(:not(.moss-btn)):focus {
  * carry their own anchor to the canonical URL. Hover lift mirrors
  * ordinary cards. */
 .moss-cards[data-layout="grid"] .moss-card[data-linkblog]:hover,
-.moss-grid .moss-card[data-linkblog]:hover {
+.moss-grid > .moss-card[data-linkblog]:hover {
   transform: translateY(-2px);
   box-shadow: var(--moss-elevation-1);
 }
@@ -8545,7 +8556,7 @@ body > footer.container:has(> .moss-hero-closing) {
    Note `.link-preview img.link-preview-favicon` (0,2,1) already overrides this
    rule for favicons and resets aspect-ratio to auto — unaffected by the hooks.
    The image's inline size is set by the `:is()` rule below, not here. */
-.moss-grid-card img {
+.moss-grid-card img:where(:not(.moss-cards *)) {
   aspect-ratio: var(--moss-grid-image-ratio, 1 / 1);
   border-radius: var(--moss-grid-image-radius, 8px);
   object-fit: var(--moss-grid-image-fit, cover);
@@ -8564,7 +8575,7 @@ body > footer.container:has(> .moss-hero-closing) {
    (0,1,2: margin: var(--moss-space-xl) 0) — a rule `.moss-grid-card img`
    never touches. `.moss-grid-card .moss-image` (0,2,0 — two classes beats
    any one-class-plus-type-selectors competitor) resets it. */
-.moss-grid-card .moss-image {
+.moss-grid-card .moss-image:where(:not(.moss-cards *)) {
   margin: 0;
 }
 
@@ -8575,7 +8586,7 @@ body > footer.container:has(> .moss-hero-closing) {
    its caption's width and the image followed. One `:is()` rule (0,2,0) so it
    outranks `article figure:not(.video-figure) img` (0,1,3), which only caps
    the inline size and never stretches it. */
-.moss-grid-card :is(.moss-image, picture, img) {
+.moss-grid-card :is(.moss-image, picture, img):where(:not(.moss-cards *)) {
   inline-size: 100%;
 }
 

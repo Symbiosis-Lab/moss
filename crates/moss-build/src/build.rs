@@ -2067,6 +2067,12 @@ async fn advertise_sealed(
         &mut sealed,
         assets.as_ref().map(|r| r.failed_keys()).unwrap_or_default(),
     );
+    let kept = if presence_verdict.repairs_staging() {
+        crate::build::feeds::derivative_redirects::keep(mp, stage_dir, &mut sealed)
+    } else {
+        Vec::new()
+    };
+    crate::system::build_records::records().record_kept_derivatives(folder_path, kept);
     // Background assets have drained. Validate only the selected page's
     // direct local CSS/script outputs before writing hashes.json or scheduling
     // promotion; media and unrelated pages do not affect preview readiness.

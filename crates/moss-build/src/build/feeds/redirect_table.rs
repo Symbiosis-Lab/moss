@@ -320,17 +320,17 @@ pub(crate) fn plan(candidates: Vec<Candidate>, probe: &Probe) -> Vec<Planned> {
     table.into_values().collect()
 }
 
-#[derive(Serialize)]
-struct TableFile {
+#[derive(Serialize, serde::Deserialize)]
+pub(crate) struct TableFile {
     version: u32,
-    redirects: Vec<Row>,
+    pub(crate) redirects: Vec<Row>,
 }
 
-#[derive(Serialize)]
-struct Row {
-    from: String,
-    to: String,
-    status: u16,
+#[derive(Serialize, serde::Deserialize)]
+pub(crate) struct Row {
+    pub(crate) from: String,
+    pub(crate) to: String,
+    pub(crate) status: u16,
 }
 
 /// The shipped `_moss/redirects.json`: every entry, sorted by old address.

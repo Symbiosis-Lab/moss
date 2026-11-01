@@ -1835,6 +1835,26 @@ A paragraph inside the band that is long enough to run past the reading width wh
 
 After the band.
 `,
+    "bands.md": `---
+title: Bands
+---
+
+Before the bands.
+
+::: {screen}
+Text in a fenced screen band.
+:::
+
+:::grid 2 {screen}
+Text in the first cell of a screen grid.
+
+---
+
+Text in the second cell.
+:::
+
+After the bands.
+`,
     "sized.md": `---
 title: Sized
 ---
@@ -2414,6 +2434,79 @@ cover: cover.svg
 ---
 
 Body three.
+`,
+    ".moss/config.toml": CONFIG_TOML,
+    ".moss/theme/style.css": null,
+  },
+};
+
+// ── A listing embedded in a :::grid cell keeps its own look ─────────────────
+// Grid tile chrome (rounded clip, surface fill) belongs to the grid's own
+// cells. A folder listing embedded INSIDE a cell is not a tile, so its rows
+// must compute the same corners and overflow as the same listing on a page
+// outside any grid. `/` holds the listing in a grid cell beside a real tile
+// (a wikilink cell); `/plain/` holds the same listing outside a grid.
+// Served by playwright/grid-tile-scope.config.ts.
+const EMBED_TILE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300"><rect width="400" height="300" fill="#5577aa"/></svg>
+`;
+
+export const GRID_TILE_SCOPE_GATE: ScratchSiteSpec = {
+  name: "grid-tile-scope-gate",
+  files: {
+    "cover.svg": EMBED_TILE_SVG,
+    "index.md": `---
+title: Grid Tile Scope
+uid: "gts00101"
+---
+
+:::grid 2
+## Our room
++++
+## Next
+![[Events/|limit:4,style:summary]]
+
+![[Events/|limit:4,style:cards]]
+:::
+
+:::grid 2
+[[Tile Page]]
++++
+Plain words.
+:::
+`,
+    "plain.md": `---
+title: Plain Listing
+uid: "gts00102"
+---
+
+![[Events/|limit:4,style:summary]]
+
+![[Events/|limit:4,style:cards]]
+`,
+    "Tile Page.md": `---
+title: Tile Page
+uid: "gts00103"
+cover: cover.svg
+---
+
+Tile body.
+`,
+    "Events/Opening Night.md": `---
+title: Opening Night
+uid: "gts00104"
+date: 2030-01-10
+---
+
+First event.
+`,
+    "Events/Second Show.md": `---
+title: Second Show
+uid: "gts00105"
+date: 2030-02-10
+cover: ../cover.svg
+---
+
+Second event.
 `,
     ".moss/config.toml": CONFIG_TOML,
     ".moss/theme/style.css": null,

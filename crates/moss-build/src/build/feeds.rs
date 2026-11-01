@@ -2,6 +2,7 @@
 //! the full-text search index.
 
 pub mod calendar;
+pub(crate) mod derivative_redirects;
 pub mod llms_txt;
 pub mod previews;
 pub mod redirect_table;

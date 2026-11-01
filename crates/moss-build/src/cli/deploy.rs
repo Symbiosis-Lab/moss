@@ -727,6 +727,35 @@ mod dry_run_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_derivative_the_build_stops_producing_is_kept_as_a_redirect_and_the_check_passes() {
+        let fx = Fixture::new(false);
+        std::fs::write(fx.dir.path().join("photo-2.jpg"), b"JPEG").unwrap();
+        crate::build::manifest::published_record::save(
+            &MossPaths::new(fx.dir.path()),
+            &PublishedSnapshot {
+                generation_id: "ours".into(),
+                target: "moss:dry-test".into(),
+                published_at: "2026-09-20T09:12:30+00:00".into(),
+                files: [
+                    ("photo-2.jpg".to_string(), "100644:abc".to_string()),
+                    ("photo-2.webp".to_string(), "100644:def".to_string()),
+                ]
+                .into(),
+                asset_source_to_output: Some([("photo-2.jpg".to_string(), "photo-2.jpg".to_string())].into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let report = fx.run(true).await.expect("a dry run reports");
+        let DeployReport::DryRun(dry) = &report else { panic!("expected a dry run, got {report:?}") };
+
+        assert!(dry.refusal.is_none(), "{dry:?}");
+        assert_eq!(dry.kept_as_redirect, [("/photo-2.webp".to_string(), "/photo-2.jpg".to_string())]);
+        assert!(dry.render().contains("/photo-2.webp -> /photo-2.jpg"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_dry_run_a_real_deploy_would_not_refuse_exits_zero_and_sends_nothing() {
         let fx = Fixture::new(false);
 

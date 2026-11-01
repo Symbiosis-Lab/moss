@@ -47,6 +47,9 @@ pub struct DryRun {
     pub needs_verification: bool,
     /// The folder was read as it is, with no build.
     pub prebuilt: bool,
+    /// Image derivatives the build stopped producing, now answering as a
+    /// redirect to their picture: `(address, picture address)`.
+    pub kept_as_redirect: Vec<(String, String)>,
 }
 
 impl DryRun {
@@ -74,6 +77,10 @@ impl DryRun {
         if !set.removed.is_empty() {
             out.push_str(&format!("Addresses going offline: {}\n", set.removed.len()));
             out.push_str(&capped_lines(&set.removed, cause_line));
+        }
+        if !self.kept_as_redirect.is_empty() {
+            out.push_str("Kept as a redirect, because the picture is still served:\n");
+            out.push_str(&capped_lines(&self.kept_as_redirect, |(from, to)| format!("{from} -> {to}")));
         }
         match &self.transfer {
             Transfer::SinceLastPublish { upload, removed } => {
@@ -278,7 +285,17 @@ pub async fn run_dry_run(
         would_create_key: local.would_create_key && !matches!(route, DeployRoute::Plugin { .. }),
         needs_verification: local.needs_verification,
         prebuilt: false,
+        kept_as_redirect: kept_as_redirect(&folder_str),
     })
+}
+
+fn kept_as_redirect(folder: &str) -> Vec<(String, String)> {
+    use crate::build::served_path::served_address;
+    crate::system::build_records::records()
+        .kept_derivatives(folder)
+        .into_iter()
+        .map(|(from, to)| (served_address(&from), served_address(&to)))
+        .collect()
 }
 
 /// Describe the publish of a prebuilt folder: the folder is read as it is,
@@ -321,6 +338,7 @@ pub async fn run_prebuilt_dry_run(
         would_create_key: local.would_create_key,
         needs_verification: local.needs_verification,
         prebuilt: true,
+        kept_as_redirect: Vec::new(),
     })
 }
 
@@ -349,6 +367,7 @@ mod tests {
             would_create_key: false,
             needs_verification: false,
             prebuilt: false,
+            kept_as_redirect: Vec::new(),
         }
     }
 
@@ -370,6 +389,7 @@ mod tests {
             would_create_key: false,
             needs_verification: false,
             prebuilt: false,
+            kept_as_redirect: Vec::new(),
         };
 
         let text = dry.render();
@@ -424,6 +444,21 @@ mod tests {
     }
 
     #[test]
+    fn a_derivative_kept_as_a_redirect_is_named_and_the_check_still_passes() {
+        let dry = DryRun {
+            kept_as_redirect: vec![("/photo-2.webp".into(), "/photo-2.jpg".into())],
+            refusal: None,
+            ..small()
+        };
+        let text = dry.render();
+        assert!(
+            text.contains("Kept as a redirect, because the picture is still served:\n  /photo-2.webp -> /photo-2.jpg\n"),
+            "{text}"
+        );
+        assert!(text.contains("Publish check: passes.\n"), "{text}");
+    }
+
+    #[test]
     fn removed_files_not_already_offline_addresses_are_listed_and_capped() {
         let removed: Vec<String> = (0..23).map(|i| format!("old-{i:02}.css")).collect();
         let dry = DryRun { transfer: Transfer::SinceLastPublish { upload: 0, removed }, ..small() };
@@ -462,6 +497,7 @@ mod tests {
             would_create_key: true,
             needs_verification: false,
             prebuilt: false,
+            kept_as_redirect: Vec::new(),
         };
         let text = dry.render();
         assert!(text.contains("Pages: not classified"), "{text}");

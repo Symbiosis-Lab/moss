@@ -86,6 +86,7 @@ const GATE_PORT_KEYS = [
   'header-hit-areas',
   'lightbox-github-shapes',
   'grid-card-no-cover',
+  'grid-tile-scope',
   'touch-targets:footer-md',
   'touch-targets:footer-fallback',
   'place-map-route',
