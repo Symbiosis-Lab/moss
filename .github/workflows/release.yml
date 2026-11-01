@@ -48,12 +48,12 @@ jobs:
       # detached with no upstream — release-plz's `release` command needs to
       # resolve the current branch (`git rev-parse @{upstream}`) to push tags,
       # so pin a real branch checkout instead.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
-      - uses: release-plz/action@v0.5.129
+      - uses: release-plz/action@v0.5.147
         with:
           command: release
         env:
@@ -78,9 +78,9 @@ jobs:
       # is updated to match.
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v3
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
