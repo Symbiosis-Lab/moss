@@ -443,6 +443,20 @@ fn extract_frontmatter_title(content: &str) -> Option<String> {
     None
 }
 
+/// Whether `fingerprint` differs from the last one logged for the site at
+/// `folder`, and remember it. One line per change per site keeps the context a
+/// support reader needs without repeating it on every rebuild.
+fn fingerprint_changed(folder: &str, fingerprint: &str) -> bool {
+    static LAST: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
+        std::sync::LazyLock::new(Default::default);
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    if last.get(folder).map(String::as_str) == Some(fingerprint) {
+        return false;
+    }
+    last.insert(folder.to_string(), fingerprint.to_string());
+    true
+}
+
 fn collect_native_slots_for_documents(
     folder_path: &str,
     cached_domain_config: crate::config::deployment::DomainDeploymentConfig,
@@ -476,14 +490,10 @@ fn collect_native_slots_for_documents(
     let has_footer_file = pages.iter().any(|p| p.slot_only);
 
     // Site fingerprint: a PII-free, one-line summary of the build-shaping state
-    // that decides footer chrome + slot resolution. Emitted here — BEFORE the
-    // no-services early-return below — so it fires on every STANDARD build,
-    // including the services-free case (email not installed, no footer.md) that
-    // surfaced the footer stray-">" report. Rides
-    // "Send logs"; names/counts only, no user content. This is the context that
-    // was missing when diagnosing that report.
-    log::info!(
-        target: "moss::build",
+    // that decides footer chrome + slot resolution. Emitted BEFORE the
+    // no-services early-return below, so the services-free case is covered
+    // too; names and counts only. Logged when it changes, not on every build.
+    let fingerprint = format!(
         "site fingerprint: pages={}, email_installed={}, comments={}, moss_hosted={}, footer_md={}, inline_subscribe={}, analytics={}",
         pages.len(),
         email_channel_installed,
@@ -493,6 +503,9 @@ fn collect_native_slots_for_documents(
         has_inline_subscribe,
         services_config.analytics.is_some(),
     );
+    if fingerprint_changed(folder_path, &fingerprint) {
+        log::info!(target: "moss::build", "{fingerprint}");
+    }
 
     // Record the site's audiences ({scope, lang}) so every reader — the email
     // settings command, the syndicate hook — gets EXACTLY what the build
@@ -671,6 +684,7 @@ pub async fn run_pipeline(config: PipelineConfig) -> Result<String, String> {
         &collector,
         pipeline_start.elapsed(),
         if result.is_ok() { "ok" } else { "error" },
+        &config.trigger,
     );
     result
 }
@@ -2288,3 +2302,7 @@ mod cache_lease_ship_tests;
 #[cfg(test)]
 #[path = "build/overlap_tests.rs"]
 mod overlap_tests;
+
+#[cfg(test)]
+#[path = "build/log_line_tests.rs"]
+mod log_line_tests;

@@ -1652,7 +1652,7 @@ pub(crate) fn copy_deferred_assets(
             log::info!("[background-assets] Failed to send {} to coordinator: {}", rel_path, e);
         }
     }
-    log::info!(
+    log::debug!(
         "[background-assets] Sent {} file entries to coordinator",
         site_hashes.files.len()
     );

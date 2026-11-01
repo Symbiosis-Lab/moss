@@ -339,7 +339,16 @@ pub fn format_build_summary(
     counts: &[(&'static str, usize)],
     total: Duration,
     outcome: &str,
+    trigger: &crate::build::BuildTrigger,
 ) -> String {
+    use crate::build::BuildTrigger;
+    // `changed` counts the watcher's paths for this build, after its filter; a
+    // path the OS reported twice counts twice, so it is a size hint.
+    let trigger = match trigger {
+        BuildTrigger::Full => "trigger=full".to_string(),
+        BuildTrigger::Structural(paths) => format!("trigger=structural changed={}", paths.len()),
+        BuildTrigger::ContentOnly(paths) => format!("trigger=content changed={}", paths.len()),
+    };
     let phases_str = phases
         .iter()
         .map(|(name, d)| format!("{name}={}ms", d.as_millis()))
@@ -350,7 +359,7 @@ pub fn format_build_summary(
         .map(|(name, v)| format!("{name}={v}"))
         .collect::<Vec<_>>()
         .join(" ");
-    let mut line = format!("build.summary outcome={outcome} total={}ms", total.as_millis());
+    let mut line = format!("build.summary outcome={outcome} {trigger} total={}ms", total.as_millis());
     if !counts_str.is_empty() {
         line.push(' ');
         line.push_str(&counts_str);
@@ -366,10 +375,15 @@ pub fn format_build_summary(
 /// every phase and count the collector saw, plus the caller-supplied total
 /// wall time and outcome. Replaces the old per-phase started/completed INFO
 /// pairs — see the module doc.
-pub fn log_build_summary(collector: &PhaseCollector, total: Duration, outcome: &str) {
+pub fn log_build_summary(
+    collector: &PhaseCollector,
+    total: Duration,
+    outcome: &str,
+    trigger: &crate::build::BuildTrigger,
+) {
     let telemetry = collector.lock().map(|t| (t.phases.clone(), t.counts.clone()));
     let (phases, counts) = telemetry.unwrap_or_default();
-    log::info!(target: "build", "{}", format_build_summary(&phases, &counts, total, outcome));
+    log::info!(target: "build", "{}", format_build_summary(&phases, &counts, total, outcome, trigger));
 }
 
 /// RAII phase guard. Logs on creation and on drop.
@@ -646,7 +660,9 @@ mod tests {
     fn format_build_summary_includes_every_phase_and_count() {
         let phases = vec![("scan", Duration::from_millis(12)), ("build", Duration::from_millis(340))];
         let counts = vec![("pages", 7usize)];
-        let line = format_build_summary(&phases, &counts, Duration::from_millis(400), "ok");
+        let edits = crate::build::BuildTrigger::ContentOnly(vec!["a.md".into(), "b.md".into()]);
+        let line = format_build_summary(&phases, &counts, Duration::from_millis(400), "ok", &edits);
+        assert!(line.contains("outcome=ok trigger=content changed=2 total=400ms"), "{line}");
         assert!(line.contains("outcome=ok"));
         assert!(line.contains("total=400ms"));
         assert!(line.contains("pages=7"));
@@ -656,7 +672,7 @@ mod tests {
 
     #[test]
     fn format_build_summary_with_nothing_recorded_still_reports_outcome_and_total() {
-        let line = format_build_summary(&[], &[], Duration::from_millis(5), "error");
-        assert_eq!(line, "build.summary outcome=error total=5ms");
+        let line = format_build_summary(&[], &[], Duration::from_millis(5), "error", &crate::build::BuildTrigger::Full);
+        assert_eq!(line, "build.summary outcome=error trigger=full total=5ms");
     }
 }
