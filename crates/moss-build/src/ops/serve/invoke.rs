@@ -298,6 +298,7 @@ async fn arm_save_editor_content(ctx: &Session, args: Value) -> ArmResult {
         file_path: String,
         frontmatter: Value,
         body: String,
+        expected_hash: String,
     }
     let a: A = parse_args(args)?;
     // The carrier's one arbitrary-write primitive: confine before the write, not
@@ -308,6 +309,7 @@ async fn arm_save_editor_content(ctx: &Session, args: Value) -> ArmResult {
         &path.to_string_lossy(),
         &a.frontmatter,
         &a.body,
+        &a.expected_hash,
     )
     .map_err(ArmError::Command)?;
     to_value(r)

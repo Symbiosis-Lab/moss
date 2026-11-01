@@ -2125,6 +2125,7 @@ async fn mutate_carrier_with_valid_token_persists_editor_bytes() {
         "filePath": target.to_string_lossy(),
         "frontmatter": { "title": "Hello" },
         "body": "New **body** text.",
+        "expectedHash": crate::editor::content::content_hash(b"---\nx: 1\n---\nold"),
     })
     .to_string();
     let url = format!("http://localhost:{}/__moss/mutate/save_editor_content", port);
@@ -2809,6 +2810,8 @@ async fn mutate_carrier_refuses_to_write_outside_the_vault_even_with_a_valid_tok
                     "filePath": file.to_string_lossy(),
                     "frontmatter": { "title": "T" },
                     "body": body,
+                    // The file's real base, so a refusal can only come from confinement.
+                    "expectedHash": std::fs::read(&file).map(|b| crate::editor::content::content_hash(&b)).unwrap_or_default(),
                 })
                 .to_string(),
             )

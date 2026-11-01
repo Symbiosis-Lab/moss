@@ -2,10 +2,8 @@
 //!
 //! Every function here is a plain data-in/data-out (or filesystem-only) core
 //! that a `#[tauri::command]` wrapper in `commands.rs` calls, and that the HTTP
-//! command carrier (`preview::server::invoke`) reaches without a Tauri shell.
-//! Nothing in this file may name a `tauri::` type: this is the split line the
-//! editor-backend relocation (preview-server relocation plan, slice E2) crosses,
-//! and rust-analyzer + the workspace suite check it here first, in place.
+//! command carrier (`ops::serve::invoke`) reaches without a Tauri shell.
+//! Nothing in this file may name a `tauri::` type.
 
 use super::filesystem::EditorFileInfo;
 
@@ -52,18 +50,33 @@ pub fn panic_message_from_payload(p: &(dyn std::any::Any + Send)) -> String {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, specta::Type)]
 #[serde(tag = "status", rename_all = "kebab-case")]
 pub enum SaveResult {
-    /// Written. The new mtime lets the editor recognise the file watcher's
-    /// echo of its own write.
-    Saved { mtime_ms: u64 },
+    /// Written. `hash` is the [`content_hash`] of the bytes now on disk, the
+    /// base the editor's next save must name.
+    Saved { hash: String },
     /// Nothing written: the file is no longer at this path, renamed or deleted
     /// outside moss since it was opened. Not a failure — the file event that
     /// follows says which, and the text stays unsaved in the editor until then.
     Gone,
+    /// Nothing written: another writer changed the file since the editor last
+    /// read it. `disk` is what is there now, so the editor can merge it into
+    /// the unsaved text and save again with `disk.hash` as the base.
+    Conflict { disk: ParsedFrontmatter },
+}
+
+/// The identity of a file's exact bytes, as the editor's save names its base:
+/// lowercase hex SHA-256. mtimes are not used, because a sync client can
+/// restore an older one and two writes can share a millisecond.
+pub fn content_hash(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 /// Frontmatter parsing result exposed to the frontend.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct ParsedFrontmatter {
+    /// [`content_hash`] of the file's bytes as read, before any newline
+    /// normalisation. Empty while [`still_arriving`](Self::still_arriving).
+    pub hash: String,
     /// Parsed frontmatter as a JSON value (object).
     pub frontmatter: serde_json::Value,
     /// The markdown body (everything after the closing `---`).
@@ -93,6 +106,7 @@ impl ParsedFrontmatter {
     /// The document for a source whose bytes are still in the cloud.
     pub fn still_arriving() -> Self {
         Self {
+            hash: String::new(),
             frontmatter: serde_json::Value::Object(serde_json::Map::new()),
             body: String::new(),
             has_frontmatter: false,
@@ -266,6 +280,7 @@ fn parse_frontmatter_at(file_path: &str) -> Result<ParsedFrontmatter, String> {
 /// The pure half: everything `parse_frontmatter` does once the bytes are in
 /// hand. Split out so the blocking read can happen off the async runtime.
 pub fn parse_frontmatter_of(content: String) -> Result<ParsedFrontmatter, String> {
+    let hash = content_hash(content.as_bytes());
     let doc = moss_core::frontmatter::parse(&content);
 
     // Convert the HashMap<String, serde_yaml::Value> to serde_json::Value
@@ -273,6 +288,7 @@ pub fn parse_frontmatter_of(content: String) -> Result<ParsedFrontmatter, String
     let fm_json = super::frontmatter::yaml_map_to_json(&doc.frontmatter)?;
 
     Ok(ParsedFrontmatter {
+        hash,
         frontmatter: fm_json,
         body: doc.body,
         has_frontmatter: doc.frontmatter_range.is_some(),
@@ -538,59 +554,67 @@ pub fn describe_source_role_inner(
 
 // ── Saving ─────────────────────────────────────────────────────────────────
 
-/// Pure byte-writing core of `save_editor_content`: serialize `frontmatter` +
-/// `body` and persist to `file_path`, returning the file's new mtime. Owns NO
-/// Tauri types, NO `TaskRegistry`, NO window model — just the
-/// frontmatter-serialize → write → read-mtime sequence the Save command
-/// performs. It writes only over a file that exists.
+/// Pure byte-writing core of `save_editor_content`: write `frontmatter` +
+/// `body` over `file_path` if the file is still the one the editor read, the
+/// bytes whose [`content_hash`] is `expected_hash`. Otherwise nothing is
+/// written and the answer is [`SaveResult::Conflict`] with what is on disk: an
+/// agent, another editor or a sync client wrote the file, and their text must
+/// not be replaced by a buffer that never saw it. Owns no Tauri types and no
+/// task or window model.
 ///
-/// Split out of `save_editor_content_with_task`'s `run_safely` closure so the
-/// bytes-to-disk logic has exactly ONE definition, reached by two carriers: the
-/// Tauri command (wrapped in `run_safely` + the PanelTask lifecycle) and the
-/// HTTP mutation carrier (`preview::server::invoke`). Neither carrier
-/// reimplements the write, so they cannot drift — the same reason the read-only
-/// arms call `resolve_asset` rather than copy it. The dual-path parity test in
-/// `router_tests.rs` pins that both routes leave byte-identical files.
+/// One definition reached by two carriers, the Tauri command and the HTTP
+/// mutation carrier (`ops::serve::invoke`), so they cannot drift; a parity test
+/// in `router_tests.rs` pins that both routes leave byte-identical files.
+///
+/// The file is read, checked and rewritten through one handle, in place: the
+/// page keeps its inode, mode, extended attributes and links, and the watcher
+/// sees a content change, which keeps the incremental rebuild. A write by
+/// another program in the moment between the read and the truncate is still
+/// replaced, and nothing notices it afterwards; closing that needs a lock every
+/// writer honours, and agents and sync clients do not take ours.
 pub fn persist_editor_content(
     file_path: &str,
     frontmatter: &serde_json::Value,
     body: &str,
+    expected_hash: &str,
 ) -> Result<SaveResult, String> {
+    use std::io::Read;
+    let fail = |e: std::io::Error| format!("Failed to write file '{}': {}", file_path, e);
+    // Opened without `create`: renamed or deleted outside moss a moment ago
+    // (or its folder was), a save would put the old file back beside the
+    // renamed one.
+    // allow:raw_write vault user state, not .moss/build.nosync output
+    let mut file = match std::fs::OpenOptions::new().read(true).write(true).open(file_path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(SaveResult::Gone),
+        Err(e) => return Err(fail(e)),
+    };
+    let mut on_disk = String::new();
+    file.read_to_string(&mut on_disk)
+        .map_err(|e| format!("Failed to read file '{}': {}", file_path, e))?;
+    if content_hash(on_disk.as_bytes()) != expected_hash {
+        return Ok(SaveResult::Conflict { disk: parse_frontmatter_of(on_disk)? });
+    }
     let mut fm_map = super::frontmatter::json_to_yaml_map(frontmatter)?;
     coerce_union_fields(&mut fm_map);
-    let content = match std::fs::read_to_string(file_path).ok().and_then(|on_disk| edit_in_place(&on_disk, &fm_map, body)) {
+    let content = match edit_in_place(&on_disk, &fm_map, body) {
         Some(content) => content,
         None => moss_core::frontmatter::serialize(&fm_map, body)?,
     };
-    // The destination is the author's SOURCE file (the one open in the
-    // editor), not regenerable output under `.moss/build.nosync/` — its bytes were
-    // just read to populate the buffer, so it is materialized.
-    //
-    // Opened without `create`: a save writes over the document that is open. If
-    // it was renamed or deleted outside moss a moment ago (or its folder was),
-    // writing would put the old file back beside the renamed one.
-    // allow:raw_write vault user state, not .moss/build.nosync output
-    let mut file = match std::fs::OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .open(file_path)
-    {
-        Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(SaveResult::Gone),
-        Err(e) => return Err(format!("Failed to write file '{}': {}", file_path, e)),
-    };
-    std::io::Write::write_all(&mut file, content.as_bytes())
-        .map_err(|e| format!("Failed to write file '{}': {}", file_path, e))?;
-    drop(file);
-    let meta = std::fs::metadata(file_path)
-        .map_err(|e| format!("Failed to read mtime for '{}': {}", file_path, e))?;
-    let mtime_ms = meta
-        .modified()
-        .map_err(|e| format!("Failed to read mtime: {}", e))?
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| format!("Bad mtime: {}", e))?
-        .as_millis() as u64;
-    Ok(SaveResult::Saved { mtime_ms })
+    if let Err(e) = rewrite(&mut file, content.as_bytes()) {
+        // A full disk can fail the write after the truncate: put back what was
+        // there, so the next read is not a torn file taken for an outside edit.
+        let _ = rewrite(&mut file, on_disk.as_bytes());
+        return Err(fail(e));
+    }
+    Ok(SaveResult::Saved { hash: content_hash(content.as_bytes()) })
+}
+
+fn rewrite(file: &mut std::fs::File, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::{Seek, Write};
+    file.set_len(0)?;
+    file.rewind()?;
+    file.write_all(bytes)
 }
 
 /// The saved file as the one on disk with only the changed fields' lines
@@ -684,7 +708,7 @@ mod tests {
         std::fs::write(&file, "old").unwrap();
         std::fs::rename(&file, dir.path().join("field-notes.md")).unwrap();
 
-        let outcome = persist_editor_content(&file.to_string_lossy(), &serde_json::json!({}), "typed")
+        let outcome = persist_editor_content(&file.to_string_lossy(), &serde_json::json!({}), "typed", &content_hash(b"old"))
             .expect("a vanished file is an outcome, not a write failure");
         assert_eq!(outcome, SaveResult::Gone);
         assert!(!file.exists(), "the old name must not come back");
@@ -698,7 +722,7 @@ mod tests {
         let before = "---\n# shown on the card\ntitle: \"Harbour\"\nweight: 22\nratio: 1.0\ndate: 2024-01-15\nuid: \"a1b2c3d4\"\n---\nold body\n";
         std::fs::write(&file, before).unwrap();
         let fm = serde_json::json!({ "title": "Harbour", "weight": 23, "ratio": 1, "date": "2024-01-15", "uid": "a1b2c3d4", "stage": "Pier 4" });
-        persist_editor_content(&file.to_string_lossy(), &fm, "new body\n").unwrap();
+        persist_editor_content(&file.to_string_lossy(), &fm, "new body\n", &base(&file)).unwrap();
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
             "---\n# shown on the card\ntitle: \"Harbour\"\nweight: 23\nratio: 1.0\ndate: 2024-01-15\nuid: \"a1b2c3d4\"\nstage: Pier 4\n---\nnew body\n"
@@ -710,7 +734,7 @@ mod tests {
         let dir = make_test_tmpdir();
         let file = dir.path().join("note.md");
         std::fs::write(&file, "---\ntitle: [unclosed\n---\nbody\n").unwrap();
-        persist_editor_content(&file.to_string_lossy(), &serde_json::json!({ "title": "Fixed" }), "body\n").unwrap();
+        persist_editor_content(&file.to_string_lossy(), &serde_json::json!({ "title": "Fixed" }), "body\n", &base(&file)).unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "---\ntitle: Fixed\n---\nbody\n");
     }
 
@@ -719,8 +743,68 @@ mod tests {
         let dir = make_test_tmpdir();
         let file = dir.path().join("note.md");
         std::fs::write(&file, "a much longer body than the one that replaces it").unwrap();
-        persist_editor_content(&file.to_string_lossy(), &serde_json::json!({}), "short").unwrap();
+        let outcome = persist_editor_content(&file.to_string_lossy(), &serde_json::json!({}), "short", &base(&file)).unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "short");
+        assert_eq!(outcome, SaveResult::Saved { hash: content_hash(b"short") });
+    }
+
+    /// The editor read the file, an agent then rewrote it, and the editor's
+    /// autosave arrives with text that never saw the agent's change.
+    #[test]
+    fn a_save_over_a_file_changed_since_it_was_read_writes_nothing_and_returns_the_disk() {
+        let dir = make_test_tmpdir();
+        let file = dir.path().join("note.md");
+        std::fs::write(&file, "---\ntitle: Harbour\n---\nFirst.\n\nSecond.\n").unwrap();
+        let read = base(&file);
+        let agent = "---\ntitle: Harbour\n---\nFirst.\n\nSecond, revised by an agent.\n";
+        std::fs::write(&file, agent).unwrap();
+
+        let outcome = persist_editor_content(&file.to_string_lossy(), &serde_json::json!({ "title": "Harbour" }), "First. Typed.\n\nSecond.\n", &read).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), agent, "the agent's edit must survive");
+        let SaveResult::Conflict { disk } = outcome else { panic!("expected a conflict, got {outcome:?}") };
+        assert_eq!(disk.body, "First.\n\nSecond, revised by an agent.\n");
+        assert_eq!(disk.hash, content_hash(agent.as_bytes()), "the disk's hash is the base of the retry");
+    }
+
+    /// A save rewrites the page where it is: the same file, so the watcher
+    /// reports a content change (which keeps the incremental rebuild), and a
+    /// symlinked page stays a symlink with the mode it had.
+    #[cfg(unix)]
+    #[test]
+    fn a_save_rewrites_the_same_file_and_keeps_its_link_and_mode() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let dir = make_test_tmpdir();
+        let real = dir.path().join("real.md");
+        std::fs::write(&real, "before").unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let link = dir.path().join("note.md");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let inode = std::fs::metadata(&real).unwrap().ino();
+
+        persist_editor_content(&link.to_string_lossy(), &serde_json::json!({}), "after", &content_hash(b"before")).unwrap();
+
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "after");
+        assert_eq!(std::fs::metadata(&real).unwrap().ino(), inode, "the page is rewritten, not replaced");
+        assert_eq!(std::fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o640);
+    }
+
+    /// The bytes on disk and the parse the editor builds its base from agree
+    /// on the hash, CRLF included, so a save after opening never conflicts
+    /// with itself.
+    #[test]
+    fn the_parse_names_the_same_base_a_save_checks() {
+        let dir = make_test_tmpdir();
+        let file = dir.path().join("note.md");
+        std::fs::write(&file, "---\r\ntitle: Harbour\r\n---\r\nbody\r\n").unwrap();
+        let parsed = parse_frontmatter_at(&file.to_string_lossy()).unwrap();
+        let outcome = persist_editor_content(&file.to_string_lossy(), &parsed.frontmatter, &parsed.body, &parsed.hash).unwrap();
+        assert!(matches!(outcome, SaveResult::Saved { .. }), "got {outcome:?}");
+    }
+
+    fn base(file: &std::path::Path) -> String {
+        content_hash(&std::fs::read(file).unwrap())
     }
 
     /// BUG 3 editor surface: parsing a file with a malformed `---...---` block
