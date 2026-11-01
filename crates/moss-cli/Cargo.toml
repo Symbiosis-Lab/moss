@@ -29,13 +29,13 @@ tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "signal", "t
 # `desktop::verified_artifact` checks the release tarball's signature before
 # `moss desktop install` writes anything. Already in the lock at 0.2.4 via
 # `tauri-plugin-updater`; this adds no new crate and no version bump.
-minisign-verify = "0.2"
+minisign-verify = "0.3"
 # `UpdaterManifest` (`latest.json`) parsing, and the outer base64 layer both
 # `pubkey` and a manifest signature are wrapped in. Same version strings as
 # moss-build's, already in the lock via it — no new crate, no version bump.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-base64 = "0.21"
+base64 = "0.23"
 
 [dev-dependencies]
 tempfile = "3.0"

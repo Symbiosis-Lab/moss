@@ -22,7 +22,7 @@ test-fixtures = []
 moss-core = { workspace = true, features = ["specta", "cjk-friendly-emphasis"] }
 # `VaultRoot::find_containing_in` bounds its `.moss/` ancestor walk at the user's
 # home directory — same dep the app crate uses for the same guard.
-dirs = "5.0"
+dirs = "7.0"
 # `moss_paths` logs best-effort cloud-exclusion failures; the app crate initialises
 # the logger, this crate only emits.
 log = "0.4"
@@ -32,8 +32,8 @@ log = "0.4"
 # app-side; `toml_edit` is here for `infra::toml_rewrite`, the surgical editor
 # the plugin uninstaller uses to drop a plugin's keys without touching the
 # user's comments.
-toml = "0.8"
-toml_edit = { version = "0.20", default-features = false }
+toml = "1.1"
+toml_edit = { version = "0.25", default-features = false }
 # `plugins::install` compares manifest versions against the running moss.
 semver = "1"
 # `store_gc::GenerationWriteLock` checks that a locked file is still the one at
@@ -44,7 +44,7 @@ same-file = "1.0.6"
 # serde-mapped from the toml text; specta rides the crossed vocabulary for the
 # Tauri bindings (required since M6a — the moved types derive it outright).
 serde = { version = "1", features = ["derive"] }
-specta = { version = "=2.0.0-rc.20", features = ["derive", "serde_json", "chrono"] }
+specta = { version = "=2.0.0-rc.27", features = ["derive", "serde_json", "chrono"] }
 # `advisory::Action::InApp` carries op-specific arguments as free-form JSON.
 # Already in the workspace tree via the desktop app, so this duplicates nothing.
 serde_json = "1"
@@ -53,7 +53,7 @@ serde_json = "1"
 # Copied verbatim from the desktop app's Cargo.toml so each crate is compiled
 # once for the workspace. Versions and feature sets must stay aligned with the app's;
 # `cargo tree -d` is the check.
-base64 = "0.21"
+base64 = "0.23"
 bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 # IANA zones and their transitions, for the VTIMEZONE blocks in calendar (.ics)
@@ -64,8 +64,8 @@ jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bun
 # this crate's public `Tree<Node>` — the extractor mutates anchors directly
 # on it, so it needs the type name. Version must keep matching what
 # Cargo.lock resolves via scraper (`cargo tree -d` is the check).
-ego-tree = "0.6"
-fast_qr = { version = "0.12", default-features = false, features = ["svg"] }
+ego-tree = "0.11"
+fast_qr = { version = "0.14", default-features = false, features = ["svg"] }
 flate2 = "1"
 fs2 = "0.4.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "tiff"] }
@@ -73,27 +73,27 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 # what Cargo.lock resolves there (`cargo tree -d` is the check).
 include-flate = "0.3.4"
 include_dir = "0.7"
-jieba-rs = "0.10"
+jieba-rs = "0.11"
 k256 = { version = "0.14", features = ["schnorr", "ecdsa"] }
-kamadak-exif = "0.5"
-lol_html = "1.2"
-notify = "6.1"
-notify-debouncer-full = "0.3"
+kamadak-exif = "0.6"
+lol_html = "2.9"
+notify = "8.2"
+notify-debouncer-full = "0.7"
 percent-encoding = "2"
 pulldown-cmark = "0.13"
-rand = "0.8"
-ratex-parser = "=0.1.13"
-ratex-layout = "=0.1.13"
-ratex-svg = { version = "=0.1.13", features = ["standalone", "embed-fonts"] }
+rand = "0.10"
+ratex-parser = "=0.1.14"
+ratex-layout = "=0.1.14"
+ratex-svg = { version = "=0.1.14", features = ["standalone", "embed-fonts"] }
 rayon = "1.11"
 regex = "1.12.2"
-resvg = { version = "0.42", default-features = false, features = ["text", "system-fonts"] }
-roxmltree = "0.20"
-scraper = "0.20"
-sha2 = "0.10"
+resvg = { version = "0.49", default-features = false, features = ["text", "system-fonts"] }
+roxmltree = "0.21"
+scraper = "0.29"
+sha2 = "0.11"
 tar = "0.4"
-thiserror = "1.0"
-tiny-skia = "0.11"
+thiserror = "2.0"
+tiny-skia = "0.12"
 tokio = { version = "1.0", features = ["rt-multi-thread", "net", "process", "io-util", "sync", "time", "signal", "macros"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 # `vault::fs::delete_entry_inner` — recoverable OS-trash delete shared by the
@@ -106,7 +106,7 @@ ureq = { version = "2", features = ["json", "tls", "socks-proxy"] }
 reqwest = { version = "0.13", features = ["json", "query", "socks"] }
 url = "2.4"
 urlencoding = "2.1"
-usvg = { version = "0.42", default-features = false, features = ["text", "system-fonts"] }
+usvg = { version = "0.49", default-features = false, features = ["text", "system-fonts"] }
 uuid = { version = "1.11", features = ["v4"] }
 walkdir = "2.4"
 whatlang = "0.18.0"
@@ -115,20 +115,20 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 tempfile = "3.0"
 ammonia = "4"
 async-trait = "0.1"
-color_quant = "1.1"
+color_quant = "2.0"
 hex = "0.4"
 libc = "0.2"
 pagefind = { version = "1.5.2", default-features = false }
 png = "0.18"
 serde_yaml = "0.9"
-ttf-parser = "0.21"
+ttf-parser = "0.25"
 webp = "0.3"
 
 # ── The QuickJS plugin engine (open-CLI slice 2) ──────────────────────────────
 # futures⇄ES Promises + drive(); `macro` → #[rquickjs::function] host fns.
-rquickjs = { version = "=0.12.0", features = ["futures", "macro"] }
+rquickjs = { version = "=0.14.0", features = ["futures", "macro"] }
 # `plugins::runtime::portable::html_to_markdown` — the engine's markdown arm.
-htmd = "=0.5.4"
+htmd = "=0.5.6"
 # The engine's Promise plumbing (`FutureExt::catch_unwind` around hook dispatch).
 futures = "0.3"
 # `identity::keystore` — the file-based vault keypair store.
@@ -139,15 +139,15 @@ ed25519-dalek = { version = "2", default-features = false, features = ["std", "r
 # once for the workspace (`cargo tree -d` is the check). hyper-1.x stack only.
 # "multipart" is for the `/__moss/upload` route's `multipart/form-data` body —
 # a feature flag on the same axum version, not a new crate.
-axum = { version = "0.7", features = ["multipart"] }
-tower = { version = "0.4", features = ["util"] }
-tower-http = { version = "0.5", features = ["fs"] }
+axum = { version = "0.8", features = ["multipart"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["fs"] }
 http-body-util = "0.1"
 
 # The checked-in place-map pack is embedded brotli-compressed and
 # decompressed once at runtime (`place_map::embedded`); same version already
 # used by moss-build's own brotli-budget tests below.
-brotli = "8"
+brotli = "9"
 
 # `exclude_from_cloud_sync` sets the File Provider ignore xattr — an Apple subsystem,
 # so the dep is target-gated and the function is a no-op elsewhere. Last on
@@ -156,7 +156,7 @@ brotli = "8"
 [target.'cfg(target_os = "macos")'.dependencies]
 # `platform/{iopolicy,file_coordination}` (M6a move): Foundation file
 # coordination + the file-provider I/O policy. Feature sets mirror the desktop app's.
-core-foundation = "0.9"
+core-foundation = "0.10"
 core-foundation-sys = "0.8"
 objc2 = { version = "0.6", features = ["relax-sign-encoding"] }
 objc2-foundation = { version = "0.3", features = ["NSFileManager", "NSFileCoordinator", "NSURL", "NSString", "NSError", "NSNotification", "NSOperation", "NSArray", "NSSet", "NSData", "NSDate", "NSRunLoop", "block2"] }
@@ -170,7 +170,7 @@ block2 = "0.6"
 pathdiff = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [dev-dependencies]
 # vault_root_tests.rs mints unique temp dirs per test.
