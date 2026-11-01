@@ -301,15 +301,15 @@ pub struct PipelineConfig {
     /// after `run_pipeline` returns (CLI subcommands, snapshot tests). Such
     /// callers cannot rely on `spawn_native_process_sync`'s background task
     /// to populate the link-meta cache — it gets killed before completion.
-    /// When set, `run_pipeline` synchronously prewarms link-meta before
-    /// render. Defaults to `false`; only `start_cli_build` and `build_sync`
-    /// flip it.
+    /// When set, the render fetches link metadata for this build's external
+    /// links before it renders them (`build::render::blocking`). Defaults to
+    /// `false`; only `start_cli_build` and `build_sync` flip it.
     ///
     /// Note: this is NOT derivable from `progress` or the host ports. The
     /// moss binary is a Tauri app even in CLI mode, so a shell can be
     /// attached. And `progress: Null` is used by GUI-initiated rebuilds
     /// (deploy, plugin install, watch) where the runtime IS alive — those
-    /// must NOT prewarm synchronously.
+    /// must NOT fetch synchronously.
     pub exits_after_build: bool,
     /// CLI `--site-url` override. When `Some`, the value is passed through to
     /// `generate_blocking_content` via `SiteConfig` and ultimately consumed by
@@ -757,7 +757,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     let moss_dir_str = moss_dir_path.to_string_lossy().to_string();
 
     // Ensure .moss/ exists and mark the regenerable tree out of cloud sync
-    // BEFORE anything below writes into it: the CLI's link-meta prewarm writes
+    // BEFORE anything below writes into it: the CLI's link-meta fetch writes
     // `.moss/build.nosync/cache/link-meta/`, and a marker cannot un-sync bytes a
     // provider already took.
     // allow:raw_write `.moss` itself; the regenerable tree starts below it
@@ -779,53 +779,6 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     crate::build::page::link_meta::start_build_session(
         &Path::new(&folder_path).join(".moss"),
     );
-
-    // Synchronous link-meta prewarm. The Tauri-app build path defers metadata
-    // fetches to `spawn_native_process_sync`, but CLI builds and snapshot
-    // tests exit moments after render — that background task gets killed
-    // before it can populate the cache. So when `config.exits_after_build`
-    // is set, we synchronously fetch (in parallel) any URLs recorded by the
-    // previous build BEFORE render. Render then reads a warm cache.
-    //
-    // First-ever build for a folder is still cold (no `.urls.json` yet);
-    // second+ build serves populated cards. The one-build lag for newly-
-    // added URLs is intentional: `.urls.json` is written AFTER render in
-    // the current build, so prewarm reads the *previous* build's URL set.
-    // Don't try to "fix" this by scanning markdown pre-render — that would
-    // duplicate the parser work that render already does.
-    //
-    // Wrapped in `block_in_place` so the blocking I/O doesn't tie up a
-    // tokio worker: `std::thread::scope` joins synchronously, and on a
-    // multi-thread runtime that worker is unavailable for other tasks for
-    // the duration. Today CLI mode has nothing else on the runtime, but
-    // future watch/serve paths might.
-    if config.exits_after_build && !pass.repeat {
-        let _trace = PhaseTrace::start("link_meta_prewarm");
-        let moss_dir = Path::new(&folder_path).join(".moss");
-        let (seen, fetched) = tokio::task::block_in_place(|| {
-            // `block_in_place` lets the blocking std::thread::scope inside
-            // `prewarm_link_meta_for_build` not hold a tokio worker hostage.
-            crate::build::page::link_meta::prewarm_link_meta_for_build_with_progress(
-                &moss_dir,
-                |cold_count| {
-                    // Stderr progress so a slow network doesn't look like a
-                    // hang. Only fires when we're about to hit the network.
-                    if cold_count > 0 && config.progress.is_terminal() {
-                        eprintln!("Prewarming {cold_count} link previews…");
-                    }
-                },
-            )
-        });
-        if seen > 0 {
-            log::info!(
-                target: "link-meta",
-                "link-meta prewarm: {} URLs seen, {} fetched (rest from fresh cache)",
-                seen,
-                fetched
-            );
-        }
-    }
-
 
     crate::infra::moss_paths::ensure_moss_gitignore(&moss_dir_path)?;
     crate::infra::moss_paths::note_hidden_moss_files(config.source());
@@ -1111,7 +1064,7 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
     // to .moss/data/social/*.json) is read by the NEXT build's enhance phase.
     //
     // Architectural invariant: `run_pipeline` does no network fetches itself
-    // **except for the link-meta prewarm above**, which is gated on
+    // **except for the link-meta fetch before render (`build::render::blocking`)**, which is gated on
     // `config.exits_after_build` (CLI / snapshot tests) where there's no
     // long-lived runtime to host `spawn_native_process_sync`. GUI builds
     // never fetch inline — the background task handles them async.

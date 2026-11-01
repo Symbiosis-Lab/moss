@@ -1932,28 +1932,27 @@ pub fn generate_blocking_content_for_build(
             std::collections::HashSet::new()
         };
 
-        // Fetch metadata for external grid-cell links THIS build's own pages
-        // introduce, before ANY page below reads the cache — so a card is
-        // complete on its first build rather than waiting for the next
-        // build's prewarm (moss's usual one-build lag). Gated on
-        // `exits_after_build`: an interactive rebuild must not block on the
-        // network (see the parameter's doc comment on
-        // `generate_blocking_content_for_build`). Reads all of `documents`,
-        // not just `to_render`: the homepage and the folder/term
-        // auto-generated indexes are rendered by their own dedicated code
-        // further down this function, outside the `to_render`/`to_carry`
-        // partition, and their grid cells are candidates too. A page this
-        // build carries unchanged costs nothing extra here — its URLs are
-        // already fresh-cached, so `fetch_new_link_meta_for_build`'s own
-        // freshness filter skips them for free. Candidate URLs come from
-        // the ALREADY-PARSED `body_plan`, no extra markdown parse.
+        // Fetch metadata for the external grid-cell links this build shows,
+        // before any page below reads the cache, so a card is complete on
+        // this build. Only a build that exits when done fetches here: it has
+        // no next build to finish a card for it, so it gets the full fetch
+        // budget; an interactive rebuild never blocks on the network (the
+        // app fetches in the background). All of `documents`, not just
+        // `to_render`, because the homepage and the generated indexes render
+        // further down, outside that partition. URLs already fresh in the
+        // cache cost nothing.
         let external_urls_this_build = crate::build::render::grid_cells::external_urls_across_build(
             documents.iter(),
         );
         if exits_after_build && !external_urls_this_build.is_empty() {
             let url_refs: Vec<&str> = external_urls_this_build.iter().map(String::as_str).collect();
             let _trace = PhaseTrace::start("link_meta_build_fetch");
-            crate::build::page::link_meta::fetch_new_link_meta_for_build(&url_refs, &moss_dir);
+            crate::build::page::link_meta::fetch_all_link_meta_parallel(&url_refs, &moss_dir, |cold| {
+                // A slow site can hold this up to the full budget; say why.
+                if reporter.is_terminal() {
+                    eprintln!("Fetching {cold} link previews…");
+                }
+            });
         }
 
         // Materialize any downloaded cover into THIS build's output — every

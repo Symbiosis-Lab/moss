@@ -593,9 +593,8 @@ pub(crate) fn external_urls_needing_fetch(plan: &BodyPlan) -> Vec<String> {
 }
 
 /// Every external grid-cell URL across a whole build's already-parsed
-/// documents, deduplicated — the candidate set for
-/// `link_meta::fetch_new_link_meta_for_build`'s once-per-build,
-/// short-budget fetch (`build::render::blocking`'s pre-render step).
+/// documents, deduplicated — the candidate set for the once-per-build
+/// fetch in `build::render::blocking`'s pre-render step.
 ///
 /// Safe to read a document's RAW `body_plan`, before any per-page pass has
 /// run on it: [`apply_collection_cards`] and [`apply_summary_grids`] only
