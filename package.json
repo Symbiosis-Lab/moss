@@ -11,14 +11,14 @@
     "docs:after-harvest": "node scripts/capture-editor-guide-assets.mjs && npm run -s test:demo-player"
   },
   "devDependencies": {
-    "@changesets/cli": "^2.31.1",
-    "@playwright/test": "1.61.1",
-    "axe-core": "4.10.3",
-    "esbuild": "^0.25.12",
-    "vite": "^6.4.3"
+    "@changesets/cli": "^3.0.3",
+    "@playwright/test": "1.64.1",
+    "axe-core": "4.14.0",
+    "esbuild": "^0.28.2",
+    "vite": "^8.3.5"
   },
   "dependencies": {
-    "hls.js": "1.7.1",
+    "hls.js": "1.7.4",
     "idiomorph": "^0.7.4"
   },
   "pnpm": {
