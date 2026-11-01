@@ -594,6 +594,25 @@ fn a_binary_that_is_gone_falls_back_to_the_bare_name() {
     assert_eq!(super::usable_cli_path(Some(real)), bare, "a since-removed path falls back");
 }
 
+/// A GUI-subsystem `moss.exe` is neither waited for nor heard from by cmd or
+/// PowerShell; the console `moss.com` beside it is. Agents get the one that
+/// answers.
+#[test]
+fn a_console_front_door_beside_the_binary_is_preferred() {
+    let tmp = tempfile::tempdir().unwrap();
+    let exe = tmp.path().join("moss.exe");
+    std::fs::write(&exe, b"MZ").unwrap();
+    assert_eq!(super::usable_cli_path(Some(exe.clone())), exe, "no front door: the binary itself");
+
+    let com = tmp.path().join("moss.com");
+    std::fs::write(&com, b"MZ").unwrap();
+    assert_eq!(super::usable_cli_path(Some(exe)), com);
+
+    let plain = tmp.path().join("moss");
+    std::fs::write(&plain, b"#!/bin/sh\n").unwrap();
+    assert_eq!(super::usable_cli_path(Some(plain.clone())), plain, "only an .exe has a front door");
+}
+
 // ── whose binary a cloud-synced folder names ────────────────────────────────
 
 const POINTER_FILES: [&str; 3] = [
