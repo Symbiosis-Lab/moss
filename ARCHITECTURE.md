@@ -89,7 +89,8 @@ One line each, matching `crates/moss-build/src/lib.rs` as it stands today:
 - `nested_roots` — detects and classifies nested moss roots, so a build never treats a cloud mount, a home directory, or a folder that is itself a site as safe to descend into.
 - `vault_root` — the compiler's root identity: which folder is the site being built.
 - `build` — the compiler itself: scan → render → emit, the staging/generations build-directory model, file watching. How it records the inputs it read and decides when the preview may show a render: [build inputs and preview readiness](docs/reference/build-inputs-and-preview-readiness.md).
-- `editor` — the editor backend: path resolution, file tree, content parse/persist, source-asset bytes; shared by the desktop app's commands and the preview server's HTTP carrier.
+- `commands` — the engine's command table: every command a moss UI sends, one typed function each, and the `CommandHost` a transport supplies (the HTTP carrier's `Session`, or a host's in-process one).
+- `editor` — the editor backend: path resolution, file tree, content parse/persist, source-asset bytes; the cores `commands` calls.
 - `engine` — the QuickJS plugin execution engine.
 - `i18n` — language detection, UI string translation, and translation linking for multilingual sites.
 - `ops` — long-running processes over a built site: the preview server (`ops/serve`) and the file-watch debouncer (`ops/watch`).

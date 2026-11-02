@@ -414,24 +414,15 @@ pub fn assemble_bootstrap(
     }
 }
 
-/// The HTTP carrier's boot core: given a project root and the editor URL's
-/// optional `source` param, produce the SAME `EditorBootstrap` the Tauri command
-/// produces in standalone (no-plugins) mode.
-///
-/// A carrier always has a project (seeded from the live serve dir), so
-/// `editor_root` — the no-project document-mode root — is always `None` here.
-/// The schema is `builtin_schema()`, which is exactly `get_schema`'s fallback
-/// when no plugin managers are loaded; plugins are a desktop-shell concern the
-/// headless carrier does not carry. The initial file is read synchronously: the
-/// carrier's axum handler is already off the UI thread, so the bounded
-/// cloud-wait inside `read_vault_text` is fine here (unlike the async command,
-/// which must push it to `spawn_blocking`).
-pub fn bootstrap_for_carrier(
+/// The boot payload for a folder that is open as a site (so no document-mode
+/// `editor_root`). The initial file is read synchronously, so call it off the
+/// UI thread: `read_vault_text` may wait briefly for a cloud file.
+pub fn bootstrap_for_site(
     project_root: &std::path::Path,
     source_path: Option<&str>,
+    schema: moss_core::schema::ContentSchema,
 ) -> EditorBootstrap {
     let project_path = Some(project_root.to_string_lossy().to_string());
-    let schema = moss_core::schema::builtin_schema();
     let initial_content = bootstrap_source_path(project_path.as_deref(), source_path)
         .and_then(|abs| read_vault_text(&abs).ok().flatten());
     assemble_bootstrap(project_path, None, schema, initial_content)
