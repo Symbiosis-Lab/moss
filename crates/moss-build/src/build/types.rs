@@ -341,16 +341,14 @@ pub struct ParsedDocument {
     #[serde(skip)]
     #[specta(skip)]
     pub place_names: Option<String>,
-    /// The names this page shows on listing cards, pre-rendered as one
-    /// `moss-card-credits` span: every term kind with `cards = true`, its
-    /// fields in order, each name with its role. `None` when no such kind
-    /// names this page. Then the page's declared `card = true` fields, one
-    /// `moss-card-field` span each (`field_places::set_card_fields`), so a
-    /// page with fields only has no credits span. Set once per build;
-    /// `props_for_document` copies it into the card props.
+    /// What this page adds to a listing card's meta line, pre-rendered: a
+    /// `moss-card-credits` span for the term kinds with `cards = true` that
+    /// name it (`terms::roles::set_card_credits`), then one `moss-card-field`
+    /// span per declared `card = true` field it has a value for
+    /// (`field_places::set_card_fields`). `None` when there is nothing.
     #[serde(skip)]
     #[specta(skip)]
-    pub card_credits: Option<String>,
+    pub card_extras: Option<String>,
     /// True for a folder-index page sitting exactly at a place-typed term
     /// namespace root — an authored `places/index.md` with no `place_page:`
     /// claim, or a synthetic one when no such file exists. An authored page

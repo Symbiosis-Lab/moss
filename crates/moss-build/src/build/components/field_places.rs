@@ -271,8 +271,8 @@ pub fn set_card_fields(documents: &mut [ParsedDocument], decls: &[FieldDecl], ty
             continue;
         }
         // After the credits span the page may already carry, one separator between every part.
-        let parts: Vec<String> = doc.card_credits.take().into_iter().chain(fields).collect();
-        doc.card_credits = Some(parts.join(r#"<span class="moss-event-sep"> · </span>"#));
+        let parts: Vec<String> = doc.card_extras.take().into_iter().chain(fields).collect();
+        doc.card_extras = Some(parts.join(child_list::EVENT_SEP));
     }
 }
 

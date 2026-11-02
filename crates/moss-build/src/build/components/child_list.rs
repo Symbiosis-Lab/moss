@@ -378,6 +378,9 @@ fn with_place_html(date_html: &str, place: Option<&str>) -> String {
     }
 }
 
+/// The dot between the parts of a card's meta line.
+pub(crate) const EVENT_SEP: &str = r#"<span class="moss-event-sep"> · </span>"#;
+
 /// A leaf's date-and-place text: the event's `<time>` when it has one, else
 /// the date markup (`date_html`, already escaped and `<time>`-wrapped by
 /// whoever produced it), then the page's listed names when a term kind shows
@@ -390,7 +393,7 @@ pub(crate) fn leaf_meta(date_html: &str, when_html: Option<&str>, place: Option<
     match credits {
         None => base,
         Some(c) if base.is_empty() => c.to_string(),
-        Some(c) => format!(r#"{}<span class="moss-event-sep"> · </span>{}"#, base, c),
+        Some(c) => format!("{base}{EVENT_SEP}{c}"),
     }
 }
 
@@ -401,8 +404,7 @@ fn with_event_place(time_html: &str, place: Option<&str>) -> String {
     match place.map(str::trim).filter(|p| !p.is_empty()) {
         None => time_html.to_string(),
         Some(p) => format!(
-            r#"{}<span class="moss-event-sep"> · </span><span class="moss-event-place">{}</span>"#,
-            time_html,
+            r#"{time_html}{EVENT_SEP}<span class="moss-event-place">{}</span>"#,
             html_escape(p),
         ),
     }
@@ -584,13 +586,13 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
             let mut html = crate::build::components::event_meta::render_when(e.start, e.end, doc.lang);
             let mark = crate::build::components::event_meta::upcoming_mark(e, doc.lang, now);
             if !mark.is_empty() {
-                html.push_str(r#"<span class="moss-event-sep"> · </span>"#);
+                html.push_str(EVENT_SEP);
                 html.push_str(&mark);
             }
             html
         }),
         when,
-        credits: doc.card_credits.clone(),
+        credits: doc.card_extras.clone(),
         tickets: doc.event.as_ref().and_then(|e| e.tickets.clone()),
         online: doc.event.as_ref().and_then(|e| e.online.clone()),
         section_color: doc.section.clone(),
@@ -739,11 +741,13 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
             props.root_attrs(), open, date, title, close
         )
     } else {
-        // Article without any date
+        // Article without any date: its meta (event time, place, credits and card fields), when it has any.
+        let meta = leaf_meta("", props.when_html.as_deref(), props.place.as_deref(), props.credits.as_deref());
         let (open, title, close) = row_parts(props, event, "moss-prefix-link", "moss-prefix-link-title");
+        let prefix = if meta.is_empty() { String::new() } else { format!(r#"<span class="moss-prefix-link-prefix date">{meta}</span>"#) };
         format!(
-            r#"<div class="moss-card"{}>{}{}{}</div>"#,
-            props.root_attrs(), open, title, close
+            r#"<div class="moss-card"{}>{}{}{}{}</div>"#,
+            props.root_attrs(), open, prefix, title, close
         )
     }
 }

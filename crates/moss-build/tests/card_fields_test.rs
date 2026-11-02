@@ -181,3 +181,108 @@ fn card_takes_a_boolean() {
     );
     assert!(!decls.iter().find(|d| d.name == "stage").unwrap().card);
 }
+
+fn span(field: &str, value: &str) -> String {
+    format!(
+        r#"<span class="moss-card-field" data-field="{field}" data-value="{value}">{value}</span>"#
+    )
+}
+
+#[test]
+fn list_rows_draw_card_fields_for_dated_dateless_and_event_pages() {
+    let (_guard, out) = build_site(
+        "rows",
+        &[
+            (".moss/config.toml", CONFIG),
+            ("index.md", "---\ntitle: Home\n---\n\nHi.\n"),
+            (
+                "rows/index.md",
+                "---\ntitle: Rows\nchildren_style: list\nchildren_group: none\n---\n\nRows.\n",
+            ),
+            (
+                "rows/dated.md",
+                "---\ntitle: Dated Row\ndate: 2026-10-01\nholder: HDated\n---\n\nA.\n",
+            ),
+            (
+                "rows/dateless.md",
+                "---\ntitle: Dateless Row\nholder: HDateless\n---\n\nB.\n",
+            ),
+            (
+                "rows/event.md",
+                "---\ntitle: Event Row\nstart: 2099-03-01 19:30\nholder: HEvent\n---\n\nC.\n",
+            ),
+            ("rows/empty.md", "---\ntitle: Empty Row\n---\n\nD.\n"),
+        ],
+    );
+    let page = fs::read_to_string(out.join("rows/index.html")).unwrap();
+    for holder in ["HDated", "HDateless", "HEvent"] {
+        assert!(
+            page.contains(&span("holder", holder)),
+            "{holder} row draws its field:\n{page}"
+        );
+    }
+    assert_eq!(
+        page.matches("moss-card-field").count(),
+        3,
+        "a row without a value draws none:\n{page}"
+    );
+}
+
+#[test]
+fn a_card_field_follows_the_term_credits_with_one_separator() {
+    let config = format!("{CONFIG}\n[terms.performers]\nfields = [\"conductor\"]\ntitle = \"Performers\"\ncards = true\n");
+    let (_guard, out) = build_site(
+        "joined",
+        &[
+            (".moss/config.toml", &config),
+            ("index.md", "---\ntitle: Home\n---\n\nHi.\n"),
+            ("bare/index.md", "---\ntitle: Bare\n---\n\nBare.\n"),
+            (
+                "bare/gala.md",
+                "---\ntitle: Gala\nconductor: Ada Example\nholder: HGala\n---\n",
+            ),
+        ],
+    );
+    let page = fs::read_to_string(out.join("bare/index.html")).unwrap();
+    let joined = format!(
+        r#"</span></span><span class="moss-event-sep"> · </span>{}"#,
+        span("holder", "HGala")
+    );
+    assert!(
+        page.contains(&joined),
+        "credits, one separator, then the field:\n{page}"
+    );
+    assert_eq!(page.matches("moss-event-sep").count(), 1, "{page}");
+}
+
+#[test]
+fn card_on_a_group_warns_and_draws_nothing() {
+    let config = format!("{CONFIG}\n[fields.line]\ntype = \"group\"\nof = [\"holder\"]\nplace = \"eyebrow\"\ncard = true\n");
+    let (decls, problems) = moss_build::config::ConfigFile::parse(&config)
+        .unwrap()
+        .field_decls();
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("[fields.line]") && p.contains("group")),
+        "{problems:?}"
+    );
+    assert!(!decls.iter().find(|d| d.name == "line").unwrap().card);
+    let (_guard, out) = build_site(
+        "group",
+        &[
+            (
+                ".moss/config.toml",
+                &config.replace(
+                    "[fields.holder]\ntype = \"text\"\ncard = true",
+                    "[fields.holder]\ntype = \"text\"",
+                ),
+            ),
+            ("index.md", "---\ntitle: Home\n---\n\nHi.\n"),
+            ("bare/index.md", "---\ntitle: Bare\n---\n\nBare.\n"),
+            ("bare/a.md", "---\ntitle: A\nholder: HA\n---\n"),
+        ],
+    );
+    let page = fs::read_to_string(out.join("bare/index.html")).unwrap();
+    assert!(!page.contains("moss-card-field"), "{page}");
+}

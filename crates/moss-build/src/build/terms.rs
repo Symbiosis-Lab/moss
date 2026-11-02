@@ -2120,7 +2120,7 @@ mod tests {
         let mut docs = vec![doc("works/a/index.html", "A")];
         docs[0].raw_frontmatter.insert("mark".into(), serde_json::json!("Held, not online"));
         set_card_credits(&mut docs, &kinds);
-        let credits = docs[0].card_credits.as_deref().expect("a credit");
+        let credits = docs[0].card_extras.as_deref().expect("a credit");
         assert!(credits.contains(r#"<span class="moss-credit" data-term="marks" data-value="held-not-online">Held, not online"#), "{credits}");
     }
 }

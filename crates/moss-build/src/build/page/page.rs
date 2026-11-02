@@ -105,7 +105,7 @@ pub fn generate_year_grouped_article_list(
                 place: doc.place_names.clone(),
                 when_html: None,
                 when: None,
-                credits: doc.card_credits.clone(),
+                credits: doc.card_extras.clone(),
                 subtitle: components::child_list::card_subtitle(doc),
                 source_file: doc.source_path.clone(),
                 lang: None,

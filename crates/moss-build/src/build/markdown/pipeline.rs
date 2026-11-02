@@ -1593,7 +1593,7 @@ pub fn process_markdown_file(
         placed_fields,
         title_block: frontmatter.title_block,
         reader_controls: frontmatter.reader_controls,
-        card_credits: None,
+        card_extras: None,
         label,
         nav_label,
         title,
