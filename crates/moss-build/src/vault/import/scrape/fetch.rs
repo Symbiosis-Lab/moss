@@ -91,7 +91,7 @@ pub fn refuse_unsafe_scrape_url(url_str: &str) -> Result<(), String> {
         "http" | "https" => {}
         other => {
             return Err(format!(
-                "URL scheme '{other}' is not allowed — only http/https"
+                "URL scheme '{other}' is not allowed - only http/https"
             ))
         }
     }
@@ -215,11 +215,18 @@ fn fetch_following_redirects(
     // (it never reads the body), so the detail goes in `status_text`
     // itself rather than being silently dropped.
     const REFUSED_STATUS: u16 = 400;
+    // ureq parses the status text back out of a status line, which must be
+    // ASCII with no control characters; a refusal reason is free text, so it
+    // is folded to that first.
     let refused = |status_text: &str| {
+        let status_text: String = status_text
+            .chars()
+            .map(|c| if c.is_ascii() && !c.is_ascii_control() { c } else { '-' })
+            .collect();
         ureq::Error::Status(
             REFUSED_STATUS,
-            ureq::Response::new(REFUSED_STATUS, status_text, "")
-                .expect("status line without newlines always builds"),
+            ureq::Response::new(REFUSED_STATUS, &status_text, "")
+                .expect("a printable ASCII status line always builds"),
         )
     };
 
