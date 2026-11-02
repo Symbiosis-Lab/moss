@@ -12,9 +12,8 @@
 //! 1. Compare previous and current `ArticleMap` to detect renames via stable UIDs
 //! 2. Merge new renames into the persistent redirect map (with chain resolution)
 //! 3. Merge in the other two sources, plan each entry's static form, and write
-//!    the stubs and copies plus `_moss/redirects.json` — skipping the stub
-//!    writes when the stub set is identical to what the last build of this
-//!    folder in this process already wrote
+//!    the stubs and copies — skipping the stub writes when the stub set is
+//!    identical to what the last build of this folder in this process wrote
 
 use crate::build::assets::paths::compute_binary_hash;
 use crate::build::manifest::live_baseline::{self, Baseline, LiveBaseline, Unreadable};
@@ -184,7 +183,7 @@ pub struct TableInputs {
     /// Term redirects, `(old, new)`: namespace moves and claimed terms' generated addresses; recomputed every build, stored nowhere.
     pub term_stubs: Vec<(String, String)>,
     /// The site resolved a real (non-loopback) URL: only then does the build
-    /// serve the generator's former paths and ship `_moss/redirects.json`.
+    /// serve the generator's former paths.
     pub has_deployed_url: bool,
     /// The `[redirects]` entries of the config the build already parsed.
     pub declared: Vec<(String, String)>,
@@ -284,7 +283,8 @@ pub fn emit_redirect_table(
     }
 
     // The three sources, weakest first: a later entry for the same old address
-    // replaces an earlier one, so a hand-declared line beats the build's own.
+    // replaces an earlier one, so a hand-declared line beats the build's own
+    // (unless it has no static form, see `plan`).
     let trusted = |from: &str, to: &str| Candidate { from: from.into(), to: to.into(), declared: false };
     let mut candidates: Vec<Candidate> = Vec::new();
     if inputs.has_deployed_url {
@@ -372,16 +372,9 @@ pub fn emit_redirect_table(
                     p.from.served()
                 ),
             },
-            Form::TableOnly => {}
         }
     }
     records.record_redirect_signature(&folder_key, stubs);
-
-    if inputs.has_deployed_url {
-        BuildContext::for_render(output_dir, pending)
-            .emit_held(&crate::build::served_path::ServedPath::for_redirects_manifest(), table::to_json(&planned), HashBucket::Files)
-            .map_err(|e| format!("Failed to emit _moss/redirects.json: {}", e))?;
-    }
 
     if !planned.is_empty() {
         if unchanged {
@@ -579,16 +572,12 @@ mod tests {
         published_record::save(&paths, &record).unwrap();
         emit_redirect_table(&paths, &current_map, &TableInputs { has_deployed_url: true, ..Default::default() }, &output, &mut pending).unwrap();
         let sealed = pending.seal();
-        let table: serde_json::Value = serde_json::from_slice(&std::fs::read(output.join("_moss/redirects.json")).unwrap()).unwrap();
         for (_, old, new, _) in cases {
             assert!(sealed.files().contains_key(old), "old page missing from seal: {old}");
             assert!(std::fs::read_to_string(output.join(old)).unwrap().contains(&format!("url=/{}", to_pretty_url(new))));
             let old_qr = qr_key_for_url_path(old);
             assert!(sealed.files().contains_key(&old_qr), "old QR missing from seal: {old_qr}");
             assert_eq!(std::fs::read(output.join(&old_qr)).unwrap(), std::fs::read(output.join(qr_key_for_url_path(new))).unwrap());
-            for from in [format!("/{}", to_pretty_url(old)), format!("/{old_qr}")] {
-                assert!(table["redirects"].as_array().unwrap().iter().any(|r| r["from"] == from), "missing redirect: {from}");
-            }
         }
     }
 

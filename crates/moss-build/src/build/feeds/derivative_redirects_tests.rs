@@ -7,8 +7,6 @@ use crate::moss_paths::MossPaths;
 use crate::types::content::SiteHashes;
 use std::path::Path;
 
-const TABLE: &str = r#"{"version":1,"redirects":[{"from":"/old/","to":"/new/","status":301}]}"#;
-
 fn register(pending: &mut PendingManifest, stage: &Path, path: &str, bytes: &[u8]) {
     let full = stage.join(path);
     std::fs::create_dir_all(full.parent().unwrap()).unwrap();
@@ -35,7 +33,6 @@ fn build(stage: &Path, extra: &[(&str, &[u8])], keep_picture: bool) -> SealedMan
     if keep_picture {
         register(&mut pending, stage, "photo-2.jpg", b"JPEG");
     }
-    register(&mut pending, stage, "_moss/redirects.json", TABLE.as_bytes());
     for (path, bytes) in extra {
         register(&mut pending, stage, path, bytes);
     }
@@ -62,9 +59,6 @@ fn a_dropped_derivative_of_a_served_picture_keeps_answering_and_the_removal_chec
     assert_eq!(std::fs::read(stage.join("photo-2.webp")).unwrap(), b"JPEG");
     assert!(sealed.files().contains_key("photo-2.webp"));
     assert!(backfill::removed_for_seal(&mp, &sealed).is_empty());
-    let table = std::fs::read_to_string(stage.join("_moss/redirects.json")).unwrap();
-    assert!(table.contains(r#""from":"/photo-2.webp","to":"/photo-2.jpg","status":301"#), "{table}");
-    assert!(table.contains(r#""from":"/old/""#), "the earlier rows stay: {table}");
 }
 
 #[test]

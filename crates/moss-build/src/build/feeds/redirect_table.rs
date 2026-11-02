@@ -5,18 +5,18 @@
 //! uid (or a term kind that moved namespace), an address the author redirects
 //! by hand in `[redirects]`, and a path the generator itself used to write
 //! (the feed's former `feed.xml`). Each is a source of entries here; this
-//! module merges them, decides what static form each entry can take, and
-//! renders the one file (`_moss/redirects.json`) a host that can answer a real
-//! HTTP 301 reads. Writing the stubs and copies is `redirects`' job.
+//! module merges them and decides what static form each entry can take.
+//! Writing the stubs and copies is `redirects`' job. No table of the entries is published: no host reads
+//! one, and it would list every old address next to its new one, including an
+//! unlisted page's secret address.
 //!
 //! The static form depends on the old address:
 //!
 //! - a page address (`/old/`, `/old`) or a `.html` file gets the HTML stub;
 //! - any other file gets a byte copy of its target, when the target is a file
 //!   this build serves;
-//! - a file whose target is a page or an external URL has no static form. It
-//!   is still listed, and the build says it works only on a host that reads
-//!   the table.
+//! - a file whose target is a page or an external URL has no static form, so
+//!   it is reported and left out.
 //!
 //! A hand-declared entry is checked and reported on; the other two sources are
 //! the build's own record and are trusted, so they skip quietly when they
@@ -30,7 +30,6 @@
 use crate::build::cli_output::log_warn_problem;
 use crate::build::manifest::PendingManifest;
 use crate::build::served_path::ServedPath;
-use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -53,9 +52,9 @@ pub(crate) enum Kind {
 /// An address this site serves (or is asked to), parsed from any slash spelling.
 ///
 /// The address is kept exactly as written, because it is whatever links
-/// outside the site already say and a host reading the table matches that
-/// string. Only the static form's path on disk is derived from it
-/// (percent-decoded once, then named the way every output is named).
+/// outside the site already say, and an internal stub's link carries it.
+/// Only the static form's path on disk is derived from it (percent-decoded
+/// once, then named the way every output is named).
 #[derive(Debug, Clone)]
 pub(crate) struct Addr {
     sp: ServedPath,
@@ -141,7 +140,7 @@ impl Target {
         Addr::parse(path).map(|a| Self::Internal(a, suffix.to_string()))
     }
 
-    /// What the table and a stub's link carry.
+    /// What a stub's link carries.
     pub(crate) fn href(&self) -> String {
         match self {
             Self::Internal(a, suffix) => format!("{}{suffix}", a.served()),
@@ -233,8 +232,6 @@ pub(crate) struct Candidate {
 pub(crate) enum Form {
     Stub,
     Copy,
-    /// Listed in the table only.
-    TableOnly,
 }
 
 #[derive(Debug, Clone)]
@@ -244,8 +241,9 @@ pub(crate) struct Planned {
     pub form: Form,
 }
 
-/// Merge the candidates (later sources override earlier ones for the same old
-/// address) into the entries this build serves, sorted by old address.
+/// Merge the candidates into the entries this build serves. A later candidate
+/// for the same output replaces an earlier one only when it can take a static
+/// form; one that cannot is reported and leaves the earlier entry standing.
 pub(crate) fn plan(candidates: Vec<Candidate>, probe: &Probe) -> Vec<Planned> {
     let mut table: BTreeMap<String, Planned> = BTreeMap::new();
     for c in candidates {
@@ -296,50 +294,28 @@ pub(crate) fn plan(candidates: Vec<Candidate>, probe: &Probe) -> Vec<Planned> {
             // while looking as if the redirect worked.
             _ if !from.carried => {
                 log_warn_problem!(
-                    "redirect '{}' to '{}' works only on a host that reads _moss/redirects.json: the address \
-                     has characters (capitals or spaces in a folder name) that a published file path cannot carry",
+                    "redirect '{}' to '{}' skipped: the address has characters (capitals or spaces in a \
+                     folder name) that a published file path cannot carry",
                     from.served(),
                     to.href()
                 );
-                Form::TableOnly
+                continue;
             }
             (Kind::File, Target::Internal(t, _)) if t.kind == Kind::File => Form::Copy,
             (Kind::File, _) => {
                 log_warn_problem!(
-                    "redirect '{}' to '{}' has no file to copy, so it works only on a host that reads \
-                     _moss/redirects.json",
+                    "redirect '{}' to '{}' skipped: a file can only be redirected to another file of this \
+                     site, which it is copied from (an earlier redirect of the address, if any, still stands)",
                     from.served(),
                     to.href()
                 );
-                Form::TableOnly
+                continue;
             }
             _ => Form::Stub,
         };
-        table.insert(from.served(), Planned { from, to, form });
+        table.insert(from.key().to_string(), Planned { from, to, form });
     }
     table.into_values().collect()
-}
-
-#[derive(Serialize, serde::Deserialize)]
-pub(crate) struct TableFile {
-    version: u32,
-    pub(crate) redirects: Vec<Row>,
-}
-
-#[derive(Serialize, serde::Deserialize)]
-pub(crate) struct Row {
-    pub(crate) from: String,
-    pub(crate) to: String,
-    pub(crate) status: u16,
-}
-
-/// The shipped `_moss/redirects.json`: every entry, sorted by old address.
-pub(crate) fn to_json(planned: &[Planned]) -> Vec<u8> {
-    let redirects = planned
-        .iter()
-        .map(|p| Row { from: p.from.served(), to: p.to.href(), status: 301 })
-        .collect();
-    serde_json::to_vec(&TableFile { version: 1, redirects }).expect("a table of strings serializes")
 }
 
 #[cfg(test)]

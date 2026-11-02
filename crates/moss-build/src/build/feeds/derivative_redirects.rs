@@ -4,17 +4,16 @@
 //! A picture a page embeds gets `.webp` derivatives, and a publish serves them.
 //! When no page embeds the picture any more the build drops them, though the
 //! picture itself is still served. Links to the derivative are stored outside
-//! the site, so its address becomes a copy of the picture and a row of
-//! `_moss/redirects.json`, written the way `redirects` writes a file redirect.
+//! the site, so its address becomes a copy of the picture, the way `redirects`
+//! writes a file redirect.
 //!
 //! This runs after the seal's orphan prune, the only point that knows which
 //! derivatives the final build drops: the redirect table is planned before the
 //! image pipeline has said what it produces.
 
-use crate::build::assets::paths::{compute_binary_hash, compute_binary_hash_file};
+use crate::build::assets::paths::compute_binary_hash_file;
 use crate::build::manifest::{backfill, change_set, published_record, SealedManifest};
-use crate::build::feeds::redirect_table::{Row, TableFile};
-use crate::build::served_path::{is_public_address, served_address, ServedPath};
+use crate::build::served_path::is_public_address;
 use crate::moss_paths::MossPaths;
 use std::collections::HashMap;
 use std::path::Path;
@@ -86,29 +85,10 @@ pub(crate) fn keep(mp: &MossPaths, stage_dir: &Path, sealed: &mut SealedManifest
     if written.is_empty() {
         return written;
     }
-    let table = ServedPath::for_redirects_manifest();
-    if let Some(bytes) = with_rows(&stage_dir.join(table.as_str()), &written) {
-        if crate::build::io_utils::write_output(&stage_dir.join(table.as_str()), &bytes).is_ok() {
-            rewrites.insert(table.as_str().to_string(), compute_binary_hash(&bytes));
-        }
-    }
     let keys: Vec<String> = rewrites.keys().cloned().collect();
     sealed.apply_post_seal_rewrites(rewrites);
     sealed.stamp_ship_fingerprints(stage_dir, keys.iter().map(String::as_str));
     written
-}
-
-/// The staged table with a 301 row added per kept derivative, or `None` when
-/// the site ships no table (no deployed address) or it cannot be read.
-fn with_rows(path: &Path, kept: &[(String, String)]) -> Option<Vec<u8>> {
-    let mut table: TableFile = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-    for (from, picture) in kept {
-        let from = served_address(from);
-        table.redirects.retain(|r| r.from != from);
-        table.redirects.push(Row { from, to: served_address(picture), status: 301 });
-    }
-    table.redirects.sort_by(|a, b| a.from.cmp(&b.from));
-    serde_json::to_vec(&table).ok()
 }
 
 #[cfg(test)]

@@ -413,11 +413,6 @@ impl ServedPath {
         Ok(ServedPath(format!("{}/{}", SOURCE_COPY_MOUNT, rel)))
     }
 
-    /// The redirect table a host that can answer a real 301 reads.
-    pub fn for_redirects_manifest() -> Self {
-        ServedPath("_moss/redirects.json".to_string())
-    }
-
     /// LLMs.txt. Path is fixed.
     pub fn for_llms_txt() -> Self {
         ServedPath("llms.txt".to_string())
