@@ -446,6 +446,15 @@ When a page has no `description:`, the description moss derives for cards and me
 
 A card's title always shows in full, wrapping onto as many lines as it needs, so a long title is never cut off with an ellipsis on a phone. A card's description shows up to three lines and ends in an ellipsis after that; a longer one is a sign to shorten the `description:` rather than to restyle the card. A page's `subtitle:` shows under its title on the page itself, in `.moss-subtitle`, wherever its title block sits, and on every card and list row (grid, summary and list alike), muted and smaller by default; style it with `.moss-card-subtitle`, for example to set it in another script's font. A page without one draws nothing extra.
 
+A listing row or card reads only the page's own `subtitle:` frontmatter key, never a declared field, so text that must show on every row is written as `subtitle:` (a declared field with `place = "subtitle"` draws on the page itself only, see Declared fields):
+
+```yaml
+---
+title: Spring Concert
+subtitle: Saturday, 7pm
+---
+```
+
 A fence with a name or `{attributes}` opens a block, and a bare line of three or more colons closes the innermost open block; the number of colons does not matter, so use more only if you like the look. `::: {.intro}` around `::: {.figure}` nests, every closer can be `:::`, and `::::grid 2` around `::: {.note}` reads the same way. An opener nothing closes, or a closer with nothing left to close, is a build warning that names the line.
 
 A fenced div's `key=value` pairs are written onto the `<div>` by the rule pandoc's HTML5 output uses. A key that is a standard HTML attribute (`title`, `lang`, `dir`, `style`, `width`, `hidden`, `tabindex`, the `on…` event handlers and the rest of pandoc's list), starts with `aria-` or `data-`, or contains a `:`, is written as it is; any other key gets a `data-` prefix. So `::: {.figure fig=teapot title="A teapot" aria-label="Legend"}` emits `<div class="figure" data-fig="teapot" title="A teapot" aria-label="Legend">`. `id=` and `class=` written as pairs are not the fence's id and class (use `#id` and `.class`): they become `data-id` and `data-class`. The `data-` ones are hooks for your own CSS and script (`[data-fig="teapot"]`). Pairs come out in source order, with the value escaped.
@@ -560,6 +569,25 @@ Copyright
 [Privacy](/privacy)
 ```
 
+A footer that opens with a band, then two link columns and a copyright row. The first block has no heading, so it is a full-width section of its own (here a signup band); each `##` after it is a column; the line after `---` is the bottom row.
+
+```markdown
+Get the newsletter. [Sign up](/subscribe)
+
+## Site
+
+- [[Home]]
+- [[About]]
+
+## Contact
+
+[hello@example.com](mailto:hello@example.com)
+
+---
+
+© 2026 Example Studio
+```
+
 Footer headings written in markdown carry no `id` and no permalink link, whatever `heading_anchors` says, so a footer `## Contact` cannot collide with a page's own `## Contact`. Do not link to a footer heading by `#fragment`. A heading you write as raw HTML, `<h2 id="mine">`, keeps the id you gave it.
 
 ### Term kinds
@@ -622,6 +650,16 @@ To stop a dimension generating pages, either switch the built-in off — `[terms
 The built-in `date:` takes a calendar date (`1938-05-18`). A catalogue's date that is not one, such as `1935 - 1938 (Approximate)`, belongs in a declared text field that keeps it as written, never rewritten into a date moss can parse. Use that one field for every row of a collection, shown with `place = "facts"`: mixing `date:` on most pages with a text field on a few leaves the few without a visible date.
 
 A site can declare its own frontmatter fields in `.moss/config.toml`, each with a type. moss checks every page's value against that type and warns, naming the file and the field, when the value does not fit; listing plugins receive the parsed value. A declaration cannot redefine one of moss's own fields, except that `description` and `publisher` can take a `place` (see below).
+
+A field's `place` draws it on the page itself, never on a listing row (a row reads only `subtitle:` and `description:`, see the listing-row paragraph above):
+
+```toml
+[fields.venue]
+type  = "text"
+place = "facts"   # shown on the page, not on its row in a listing
+```
+
+Another type takes its own keys; a `choice` lists its values in `of`:
 
 ```toml
 [fields.kind]

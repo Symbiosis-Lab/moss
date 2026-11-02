@@ -29,8 +29,9 @@ pub fn apply_planned_moves(project_root: &Path, plan: &RenamePlan) -> Result<Ren
     // in a synced folder must keep its identity, mode and extended attributes.
     // allow:raw_write the vault's own .md source, rewritten in place after a rename -- not build output
     let mut applied = apply_planned_moves_with(project_root, plan, &|path, text| std::fs::write(path, text))?;
-        carry_folder_decisions(project_root, applied.moves.iter().map(|m| (m, false)));
+    carry_folder_decisions(project_root, applied.moves.iter().map(|m| (m, false)));
     applied.passthrough = carry_passthrough(project_root, applied.moves.iter().map(|m| (m, false)));
+    applied.left_as_written = plan.left_as_written.clone();
     Ok(applied)
 }
 

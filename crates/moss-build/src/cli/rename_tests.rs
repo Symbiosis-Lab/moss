@@ -196,3 +196,42 @@ fn a_folder_rename_carries_the_passthrough_entries_inside_it() {
     assert_eq!(after, expected);
     assert!(line.contains("2 passthrough entries updated"), "{line}");
 }
+
+#[test]
+fn a_link_only_name_search_resolves_is_reported_not_silently_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    fs::create_dir_all(p.join("x")).unwrap();
+    fs::create_dir_all(p.join("blog")).unwrap();
+    fs::write(p.join("index.md"), "# Home\n").unwrap();
+    fs::write(p.join("x/index.md"), "# X\n").unwrap();
+    fs::write(p.join("blog/post.md"), "[x](./x/index.md)\n").unwrap();
+    fs::write(p.join("blog/more.md"), "[x](./x/index.md) and [again](./x/index.md)\n").unwrap();
+
+    let line = rename_in(&args("x/index.md", "x.md"), p, None).unwrap();
+
+    let post = fs::read_to_string(p.join("blog/post.md")).unwrap();
+    assert_eq!(post, "[x](./x/index.md)\n", "the link stays as written");
+    assert!(
+        line.contains("3 links name no file exactly")
+            && line.contains("blog/post.md")
+            && line.contains("blog/more.md"),
+        "{line}"
+    );
+}
+
+#[test]
+fn a_name_search_link_to_a_file_that_did_not_move_is_not_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    fs::create_dir_all(p.join("x")).unwrap();
+    fs::create_dir_all(p.join("blog")).unwrap();
+    fs::write(p.join("index.md"), "# Home\n").unwrap();
+    fs::write(p.join("x/index.md"), "# X\n").unwrap();
+    fs::write(p.join("other.md"), "# Other\n").unwrap();
+    fs::write(p.join("blog/post.md"), "[x](./x/index.md)\n").unwrap();
+
+    let line = rename_in(&args("other.md", "other2.md"), p, None).unwrap();
+
+    assert!(!line.contains("name no file exactly"), "{line}");
+}
