@@ -3209,11 +3209,11 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         kind: "instance",
         parent: "nav-left",
         data_attrs: &[],
-        example_html: r#"<span class="breadcrumb-separator">/</span>"#,
+        example_html: r#"<span class="breadcrumb-separator" aria-hidden="true">/</span>"#,
         example_markdown: "",
         status: Status::Confirmed,
         since: "0",
-        description: "The `/` between breadcrumb segments. Restyle or hide this rather than trying to remove it from the markup.",
+        description: "The `/` between breadcrumb segments, hidden from assistive technology and drawn in `--moss-border-strong` (3:1 non-text contrast). Restyle or hide this rather than trying to remove it from the markup.",
     },
     ComponentEntry {
         class: "mobile-menu-button",
