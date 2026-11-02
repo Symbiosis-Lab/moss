@@ -139,6 +139,10 @@ declarations that fight each other.
 - **A folder's home page is a markdown file** whose stem is `index`, `readme`,
   `_index`, or `main`, **or** that is named after its folder (`recipes/recipes.md`
   is the home of `recipes/`). Every other `.md` file is an article.
+  The site's own folder counts: copy a site whose home is `Harbour/Harbour.md`
+  into a folder named `copy/` and the build, without a warning, makes
+  `Harbour.md` an article and names the site "copy". Keep the folder's name
+  in a copy, or set `home: true` on the home page so it survives any rename.
 - moss classifies every page as **Article** or **Folder**.
 
 ## Styling: the one-sentence model
