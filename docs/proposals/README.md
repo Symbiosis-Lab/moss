@@ -12,6 +12,7 @@ Each proposal is a folder here: a `README.md` with the design, and its screens b
 | [Offer missing tools with a Download button](tool-download-offer/README.md) | In progress |
 | [A site's config version is written on purpose](config-written-on-purpose/README.md) | In progress |
 | [Detail layers: a historical map or today's streets under a site's places](map-detail-layers/README.md) | In progress |
+| [Moving an unlisted folder without publishing its address](unlisted-folder-redirects/README.md) | In progress |
 
 ## Status
 
