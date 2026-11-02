@@ -2108,7 +2108,7 @@ fn year_groups_under_non_date_axis_skip_resort() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     // Year sections must appear.
@@ -2191,7 +2191,7 @@ fn date_asc_year_groups_lead_with_the_oldest_year() {
         Some(moss_core::sort::SortAxis::DateAsc),
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     let pos_1924 = out.find("<h2>1924</h2>").expect("1924 heading present");
@@ -2289,7 +2289,7 @@ fn a_dated_subfolder_sorts_by_its_own_date_and_shows_it_in_its_meta() {
         Some(moss_core::sort::SortAxis::DateAsc),
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     let pos_1924 = out.find(r#"href="/lectures/cambridge-1924""#).expect("1924 lecture present");
@@ -2339,7 +2339,7 @@ fn year_groups_skip_resort_keeps_folders_flat_above() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     // Sections exist for the articles.
@@ -2392,7 +2392,7 @@ fn no_group_skip_resort_stays_flat() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     assert!(
@@ -2471,7 +2471,7 @@ fn skip_resort_summary_still_separates_folders_from_articles() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     // Both folders must precede both articles.
@@ -2540,7 +2540,7 @@ fn skip_resort_summary_year_still_groups_by_year() {
         Some(moss_core::sort::SortAxis::Weight),
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     assert!(
@@ -2595,7 +2595,7 @@ fn undated_grid_puts_folders_first_then_folds_case() {
         Some(moss_core::sort::SortAxis::Title),
         true,
         false,
-        &Default::default(), false, None, crate::build::folder_embed::upcoming::now(),
+        &Default::default(), false, None, None, crate::build::folder_embed::upcoming::now(),
     );
 
     let order: Vec<&str> = ["Zebra", "Alpha", "mao", "Scarly"]

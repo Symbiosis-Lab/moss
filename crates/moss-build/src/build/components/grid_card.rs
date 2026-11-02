@@ -180,7 +180,7 @@ fn render_item(
         .filter(|s| !s.is_empty())
         .filter(|_| props.child_count.is_none())
         .filter(|_| !used_in_quote_slot)
-        .map(|d| format!(r#"<p class="moss-card-description">{}</p>"#, render_description_html_in_link(d)))
+        .map(|d| format!(r#"<p class="moss-card-description"{}>{}</p>"#, child_list::lang_attr(props.lang.as_ref()), render_description_html_in_link(d)))
         .unwrap_or_default();
 
     // An event with `tickets:` or `online:` is a `<div>` whose title is the
@@ -193,19 +193,21 @@ fn render_item(
         Some(links) => (
             format!(r#"<div class="moss-card"{}{}>"#, props.root_attrs(), cover_color_attrs),
             "</div>",
-            format!(r#"<span class="moss-card-title">{}</span>"#, links.title),
+            format!(r#"<span class="moss-card-title"{}>{}{}</span>"#, child_list::lang_attr(props.lang.as_ref()), links.title, child_list::lang_mark(props.lang.as_ref())),
             links.actions.as_str(),
         ),
         None => {
             let label_attr = if props.title.trim().is_empty() {
                 String::new()
             } else {
-                format!(r#" aria-label="{}""#, html_escape(&props.title))
+                // An aria-label replaces the content's name, mark included.
+                let named = props.lang.as_ref().filter(|l| !l.name.is_empty()).map(|l| format!("{} ({})", props.title, l.name));
+                format!(r#" aria-label="{}""#, html_escape(named.as_deref().unwrap_or(&props.title)))
             };
             (
                 format!(r#"<a href="{}" class="moss-card"{}{}{}>"#, html_escape(&props.url), label_attr, props.root_attrs(), cover_color_attrs),
                 "</a>",
-                format!(r#"<span class="moss-card-title">{}</span>"#, html_escape(&props.title)),
+                format!(r#"<span class="moss-card-title"{}>{}{}</span>"#, child_list::lang_attr(props.lang.as_ref()), html_escape(&props.title), child_list::lang_mark(props.lang.as_ref())),
                 "",
             )
         }

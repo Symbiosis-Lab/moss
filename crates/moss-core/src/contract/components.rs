@@ -623,6 +623,17 @@ pub const COMPONENTS: &[ComponentEntry] = &[
         description: "The page's `subtitle:` under its title, on grid and summary cards and on list rows. Absent when the page has no subtitle. Muted and smaller than the title by default.",
     },
     ComponentEntry {
+        class: "moss-lang-mark",
+        kind: "instance",
+        parent: "moss-card",
+        data_attrs: &[],
+        example_html: r#"<span class="moss-card-title" lang="de">Aufsatz<span class="moss-lang-mark" lang="en">German</span></span>"#,
+        example_markdown: "",
+        status: Status::Emerging,
+        since: "1",
+        description: "The language of a listed page, after its title, when that page is in another language than the page listing it. The text is the language's name in the listing page's language and the mark carries that page's `lang`; the title and description of such a row carry the listed page's own `lang`. Absent on a row in the listing's language. Small, muted and outlined by default.",
+    },
+    ComponentEntry {
         class: "moss-embed-more",
         kind: "instance",
         parent: "moss-cards-container",

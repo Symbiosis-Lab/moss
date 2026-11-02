@@ -423,6 +423,7 @@ pub(crate) fn generate_children(
     placement: &moss_core::media::Placement,
     lazy_cards: bool,
     count: Option<&ChildrenCount>,
+    listing_tag: Option<&str>,
     now: chrono::NaiveDateTime,
 ) -> String {
     if folder_docs.is_empty() {
@@ -449,6 +450,7 @@ pub(crate) fn generate_children(
             // never from the body excerpt, like the `:::grid` card it shares a
             // renderer with.
             props.count_setting = props.count_setting.take().or_else(|| count.cloned());
+            props.lang = listing_tag.and_then(|tag| components::child_list::RowLang::between(doc, tag, lang));
             if style != "grid" {
                 props.description = crate::build::page::meta::resolve_page_description(
                     crate::build::components::child_list::explicit_card_text(doc).as_deref(),
@@ -640,6 +642,7 @@ pub(crate) fn generate_children(
                     credits: item.credits.clone(),
                     subtitle: item.subtitle.clone(),
                     source_file: item.source_file.clone(),
+                    lang: item.lang.clone(),
                 })
                 .collect();
             let ascending = matches!(parent_axis, moss_core::sort::SortAxis::DateAsc);
@@ -736,6 +739,7 @@ fn render_minimal_year_section(
                 credits: a.credits.clone(),
                 subtitle: a.subtitle.clone(),
                 source_file: a.source_file.clone(),
+                lang: a.lang.clone(),
             };
             components::child_list::render(&props, true, false, lang, typesetting)
         })
@@ -1513,6 +1517,10 @@ fn render_one(
     let children_style = style_resolved.value.clone();
 
     let all_docs_refs: Vec<&ParsedDocument> = all_docs.iter().collect();
+    let host_tag = all_docs
+        .iter()
+        .find(|d| d.source_path.as_deref() == Some(from))
+        .map(|h| h.lang_tag.clone().unwrap_or_else(|| h.lang.as_bcp47_attr().to_string()));
 
     // With a caption, the whole placement — width, float AND size — moves
     // out to the figure wrapping the listing (the width escape is a
@@ -1542,6 +1550,7 @@ fn render_one(
             &container_placement,
             parsed.lazy_cards,
             parsed.count.as_ref(),
+            host_tag.as_deref(),
             now,
         )
     };

@@ -1174,6 +1174,7 @@ pub(super) fn render_page<'d>(
                         when_html: None,
                         when: None,
                         source_file: d.source_path.clone(),
+                        lang: None,
                     }
                 })
                 .collect();

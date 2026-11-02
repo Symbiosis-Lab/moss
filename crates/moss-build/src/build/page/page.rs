@@ -108,6 +108,7 @@ pub fn generate_year_grouped_article_list(
                 credits: doc.card_credits.clone(),
                 subtitle: components::child_list::card_subtitle(doc),
                 source_file: doc.source_path.clone(),
+                lang: None,
             }
         })
         .collect();

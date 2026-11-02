@@ -627,6 +627,33 @@ pub fn t(lang: Language, key: &str) -> &'static str {
             Language::ZhHans => "最新",
             Language::ZhHant => "最新",
         },
+        // A language's name in the reader's interface language, for the mark a listing
+        // row carries when its page is in another language than the listing. Chinese names
+        // the written language (英文), not the spoken one (英语), since the mark labels text.
+        "lang_name_en" => match lang {
+            Language::En => "English",
+            Language::De => "Englisch",
+            Language::ZhHans => "英文",
+            Language::ZhHant => "英文",
+        },
+        "lang_name_de" => match lang {
+            Language::En => "German",
+            Language::De => "Deutsch",
+            Language::ZhHans => "德文",
+            Language::ZhHant => "德文",
+        },
+        "lang_name_zh_hans" => match lang {
+            Language::En => "Simplified Chinese",
+            Language::De => "Vereinfachtes Chinesisch",
+            Language::ZhHans => "简体中文",
+            Language::ZhHant => "簡體中文",
+        },
+        "lang_name_zh_hant" => match lang {
+            Language::En => "Traditional Chinese",
+            Language::De => "Traditionelles Chinesisch",
+            Language::ZhHans => "繁体中文",
+            Language::ZhHant => "繁體中文",
+        },
         "more_link" => match lang {
             Language::En => "More →",
             Language::De => "Mehr →",

@@ -17,6 +17,49 @@ use crate::build::assets::paths::PathResolver;
 use crate::build::media::cover::{detect_cover_type, html_escape, CoverType};
 use crate::build::types::ParsedDocument;
 
+/// The language of a listed page that differs from the listing page's: the page's
+/// BCP 47 tag for `lang=` on its title and description, and the mark naming it in
+/// the listing page's interface language.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RowLang {
+    pub tag: String,
+    /// Language name in the listing page's interface language; empty for an unknown tag.
+    pub name: &'static str,
+    /// The listing page's tag, which the mark's text is in.
+    pub listing_tag: String,
+}
+
+impl RowLang {
+    /// Set when `doc` is written in another language than the page listing it.
+    pub(crate) fn between(
+        doc: &ParsedDocument,
+        listing_tag: &str,
+        ui: crate::i18n::Language,
+    ) -> Option<RowLang> {
+        let tag = doc.lang_tag.as_deref().unwrap_or_else(|| doc.lang.as_bcp47_attr());
+        (!tag.eq_ignore_ascii_case(listing_tag)).then(|| RowLang {
+            tag: tag.to_string(),
+            name: crate::i18n::language_name(ui, tag),
+            listing_tag: listing_tag.to_string(),
+        })
+    }
+}
+
+/// ` lang="de"` for an element holding a page's words in another language, or nothing.
+pub(crate) fn lang_attr(lang: Option<&RowLang>) -> String {
+    lang.map(|l| format!(r#" lang="{}""#, html_escape(&l.tag))).unwrap_or_default()
+}
+
+/// The small mark naming a row's language, or nothing for a row in the listing's own.
+pub(crate) fn lang_mark(lang: Option<&RowLang>) -> String {
+    match lang {
+        Some(l) if !l.name.is_empty() => {
+            format!(r#"<span class="moss-lang-mark" lang="{}">{}</span>"#, html_escape(&l.listing_tag), l.name)
+        }
+        _ => String::new(),
+    }
+}
+
 /// Properties for rendering an article list item
 #[derive(Debug, Clone, Default)]
 pub struct ArticleListItemProps {
@@ -47,6 +90,8 @@ pub struct ArticleListItemProps {
     pub subtitle: Option<String>,
     /// Source path of the page this row stands for (`ParsedDocument::source_path`).
     pub source_file: Option<String>,
+    /// Set when the page is in another language than the listing.
+    pub lang: Option<RowLang>,
 }
 
 impl ArticleListItemProps {
@@ -143,7 +188,7 @@ pub fn render(
             root_attrs(props.source_file.as_deref(), props.when),
             html_escape(&props.url),
             title_with_subtitle(
-                format!(r#"<span class="moss-prefix-link-title title">{}</span>"#, html_escape(&props.title)),
+                format!(r#"<span class="moss-prefix-link-title title"{}>{}{}</span>"#, lang_attr(props.lang.as_ref()), html_escape(&props.title), lang_mark(props.lang.as_ref())),
                 props.subtitle.as_deref(),
             )
         );
@@ -187,7 +232,7 @@ pub fn render(
         html_escape(&props.url),
         prefix,
         title_with_subtitle(
-            format!(r#"<span class="moss-prefix-link-title title">{}</span>"#, html_escape(&props.title)),
+            format!(r#"<span class="moss-prefix-link-title title"{}>{}{}</span>"#, lang_attr(props.lang.as_ref()), html_escape(&props.title), lang_mark(props.lang.as_ref())),
             props.subtitle.as_deref(),
         )
     )
@@ -268,6 +313,8 @@ pub struct ChildItemProps {
     pub count_setting: Option<moss_core::frontmatter_union::ChildrenCount>,
     /// The page's `subtitle:` ([`card_subtitle`]), drawn under the title.
     pub subtitle: Option<String>,
+    /// Set when the page is in another language than the listing.
+    pub lang: Option<RowLang>,
 }
 
 impl ChildItemProps {
@@ -549,6 +596,7 @@ pub(crate) fn props_for_document<D: std::borrow::Borrow<ParsedDocument>>(
         section_color: doc.section.clone(),
         source_file: doc.source_path.clone(),
         subtitle: card_subtitle(doc),
+        lang: None,
     }
 }
 
@@ -617,14 +665,14 @@ fn row_parts(props: &ChildItemProps, event: Option<&EventCardLinks>, row_class: 
             format!(r#"<div class="{row_class}">"#),
             format!(
                 "{}{}",
-                title_with_subtitle(format!(r#"<span class="{title_class}">{}</span>"#, links.title), props.subtitle.as_deref()),
+                title_with_subtitle(format!(r#"<span class="{title_class}"{}>{}{}</span>"#, lang_attr(props.lang.as_ref()), links.title, lang_mark(props.lang.as_ref())), props.subtitle.as_deref()),
                 links.actions
             ),
             "</div>",
         ),
         None => (
             format!(r#"<a href="{}" class="{row_class}">"#, html_escape(&props.url)),
-            title_with_subtitle(format!(r#"<span class="{title_class}">{}</span>"#, html_escape(&props.title)), props.subtitle.as_deref()),
+            title_with_subtitle(format!(r#"<span class="{title_class}"{}>{}{}</span>"#, lang_attr(props.lang.as_ref()), html_escape(&props.title), lang_mark(props.lang.as_ref())), props.subtitle.as_deref()),
             "</a>",
         ),
     }
@@ -655,8 +703,8 @@ pub fn render_child(props: &ChildItemProps, lang: crate::i18n::Language, typeset
             // Folder WITH description: title + count suffix, description below
             let (open, title, close) = row_parts(props, event, "moss-prefix-link moss-folder-link", "moss-prefix-link-title");
             format!(
-                r#"<div class="moss-card moss-folder-item"{}>{}{}{}{}<p class="moss-folder-description">{}</p></div>"#,
-                props.root_attrs(), open, title, meta_span("moss-prefix-link-suffix"), close,
+                r#"<div class="moss-card moss-folder-item"{}>{}{}{}{}<p class="moss-folder-description"{}>{}</p></div>"#,
+                props.root_attrs(), open, title, meta_span("moss-prefix-link-suffix"), close, lang_attr(props.lang.as_ref()),
                 crate::build::page::meta::render_description_html(desc)
             )
         } else {

@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `content_width` accepts `screen`.
+- Component contract entry `moss-lang-mark`, the language name a listing row carries when its page is in another language than the listing.
 
 ## [0.21.0] - 2026-10-30
 

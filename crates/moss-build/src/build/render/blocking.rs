@@ -1307,6 +1307,9 @@ pub fn generate_blocking_content_for_build(
         )?;
         let calendar = crate::build::feeds::calendar::CalendarPlan::build(&documents, project_structure, &site_url);
 
+        // A listing row names its page's language, so every page has its tag before any listing is drawn.
+        super::lang_roots::fill_missing_lang_tags(&mut documents, &site_config.lang);
+
         // Resolve folder-list embed markers (`![[/folder/|limit:N,more]]`) and settle `from=` heroes.
         // moss-core emits a `<!--MOSS_MARKER_FOLDER_LIST:…-->` marker during
         // wikilink resolution; we expand it here, AFTER
@@ -1340,8 +1343,6 @@ pub fn generate_blocking_content_for_build(
             site_id.as_deref(),
             &seta_url_for_build,
         );
-
-        super::lang_roots::fill_missing_lang_tags(&mut documents, &site_config.lang);
 
         // Build translation links between documents sharing the same stem or translationKey
         {
@@ -2338,7 +2339,9 @@ pub fn generate_blocking_content_for_build(
                 None,
                 site_config.math, false,
                 &Default::default(),
-                false, None, now,
+                false, None,
+                Some(folder_doc.lang_tag.as_deref().unwrap_or_else(|| folder_lang.as_bcp47_attr())),
+                now,
             );
             // The generated half of the same split the claimed term page gets
             // in `folder_embed`, through the same function: a term no page

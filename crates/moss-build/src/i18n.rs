@@ -332,6 +332,21 @@ pub fn switcher_label(tag: &str) -> &'static str {
     }
 }
 
+/// A declared tag's language named in `ui`, the reader's interface language
+/// (`German` on an English page, `德文` on a Simplified Chinese one). A language
+/// moss has no interface for is named by its endonym; empty when the tag is unknown.
+pub fn language_name(ui: Language, tag: &str) -> &'static str {
+    match Language::from_code(tag) {
+        Some(Language::En) => t(ui, "lang_name_en"),
+        Some(Language::De) => t(ui, "lang_name_de"),
+        Some(Language::ZhHans) => t(ui, "lang_name_zh_hans"),
+        Some(Language::ZhHant) => t(ui, "lang_name_zh_hant"),
+        None => moss_core::home::endonym(tag)
+            .or_else(|| moss_core::home::endonym(tag.split('-').next().unwrap_or("")))
+            .unwrap_or(""),
+    }
+}
+
 /// Do two declared tags name the same EDITION of a site — the thing an
 /// `hreflang="x-default"` points at?
 ///
