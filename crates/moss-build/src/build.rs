@@ -1556,8 +1556,9 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
 
     let folder_name = config.root.name_opt().unwrap_or("unnamed-site");
 
-    let current_output = crate::moss_paths::MossPaths::new(config.source()).current_ptr();
-    let base_message = format!("📁 '{}': Site generated at {}", folder_name, current_output.display());
+    let site_paths = crate::moss_paths::MossPaths::new(config.source());
+    let current_output = site_paths.current_ptr();
+    let base_message = crate::ops::serve::ownership::generated_line(folder_name, &current_output, &site_paths.staging_dir(), port_now().is_some());
 
     if let Some(p) = port_now() {
         let preview_url = format!("http://localhost:{}", p);
@@ -1571,7 +1572,6 @@ async fn run_pipeline_body(config: &PipelineConfig, pass: Pass) -> Result<PassOu
         Ok(PassOutcome { message: base_message, owed: media_rerender_owed, is_empty: _is_empty, port: None })
     }
 }
-
 
 
 /// Load article-map.json and convert to the ArticleInfo map needed by native features.
