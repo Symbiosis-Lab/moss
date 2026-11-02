@@ -370,19 +370,16 @@ jobs:
       - name: Backend JS bundles are up to date
         run: pnpm run check:backend-scripts
 
-      # This tree's own copy of the desktop repo's architecture ratchet (rows
-      # a/b/e — prod-lines-per-file, children-per-dir, mirror-comment
-      # markers).
-      # Once the desktop side can no longer scan `open/crates`/`open/packages`,
-      # this repo has to ratchet its own tree.
-      - name: Ratchet (architecture size/marker budget)
+      # cargo metadata only reads the manifests: no build, no network. The
+      # ratchet's dependency row and the diagram check below both use it.
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Size, marker and dependency budgets; see the header of scripts/ratchet.mjs.
+      - name: Ratchet (architecture size/marker/dependency budget)
         run: node scripts/ratchet.mjs check
 
       - name: Ratchet tool tests (accept/tighten --path)
         run: node --test scripts/__tests__/ratchet.test.mjs
-
-      # cargo metadata only reads the manifests: no build, no network.
-      - uses: dtolnay/rust-toolchain@stable
 
       - name: Architecture diagrams name only what the code has
         run: node scripts/gen-architecture-diagrams.mjs --check

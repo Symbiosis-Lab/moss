@@ -124,6 +124,16 @@
       "disposition": "permanent",
       "armed": true,
       "value": 41
+    },
+    "direct_deps_per_crate": {
+      "letter": "f",
+      "disposition": "permanent",
+      "armed": true,
+      "value": {
+        "crates/moss-build/Cargo.toml": 83,
+        "crates/moss-cli/Cargo.toml": 7,
+        "crates/moss-core/Cargo.toml": 6
+      }
     }
   }
 }

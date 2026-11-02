@@ -109,6 +109,8 @@ One line each, matching `crates/moss-build/src/lib.rs` as it stands today:
 
 A Rust or TypeScript source file (tests excluded) whose production line count exceeds 800 needs a baseline entry in `scripts/ratchet-baseline.open.json`: a ceiling that is a multiple of 100. The ceiling can only shrink, except through an explicit, reasoned `accept`. A file whose production line count exceeds 1000 needs a further, written disposition: a one-line reason (and what would retire it) in the baseline's `prod_lines_per_file.oversized{}` map, the same shape a directory with 30 or more direct children already needs. A file over that line with no disposition is red; a disposition whose file has dropped back to 1000 lines or under is reported stale until it's removed. `scripts/ratchet.mjs check` enforces all of this; see that script's own header for the exact rules and commands. The Known-debt list below is generated from `oversized{}` by `node scripts/ratchet.mjs docs`, and `check` fails if it has drifted — edit the baseline to change it, not this file directly.
 
+Each crate's production dependencies (`[dependencies]` and `[target.*.dependencies]`) are counted the same way: the count can only shrink, and a new dependency needs an `accept` whose reason says what needs it, since one direct entry can bring in hundreds of transitive crates.
+
 ## Where new code goes
 
 New code lands in the module that already owns the concern it touches. A relocation — moving existing code to a different module — is never scheduled for its own sake; it happens only alongside a change that already has a reason to touch that code.
