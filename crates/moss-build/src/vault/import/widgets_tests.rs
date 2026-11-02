@@ -433,3 +433,37 @@ fn a_repeated_dropped_widget_is_logged_once_with_its_count() {
     assert_eq!(count.dropped(), 4);
     assert_eq!(grouped_kinds(&count.dropped_kinds), ["script widget demo-row (×3)", "script widget donate-widget"]);
 }
+
+#[test]
+fn a_ghost_signup_card_is_dropped_whole_and_content_cards_stay() {
+    let card = r#"<div class="kg-card kg-signup-card kg-width-wide"><div class="kg-signup-card-content"><h2 class="kg-signup-card-heading">Learn something every week.</h2><form data-members-form="signup" class="kg-signup-card-form"><input type="email" name="email" placeholder="you@example.test"><button type="submit">Subscribe</button></form><p class="kg-signup-card-disclaimer">No spam.</p></div></div>"#;
+    let callout = r#"<div class="kg-card kg-callout-card kg-callout-card-grey"><div class="kg-callout-text">Keep this callout.</div></div>"#;
+    let html = page("", &format!("{card}{callout}"));
+    let (md, _) = run(&html);
+    assert!(md.contains("Keep this callout."), "{md}");
+    assert!(md.contains("Closing paragraph"), "{md}");
+    assert!(!md.contains("Learn something"), "{md}");
+    assert!(!md.contains("No spam"), "{md}");
+}
+
+const THEME_SIGNUP: &str = r#"<div class="single-cta"><div class="h3 single-cta-title">Learn something every week.</div><form class="inline-form" data-members-form><input type="email" data-members-email placeholder="Enter your email"><button type="submit"><span>Subscribe</span><span class="loader"><svg viewBox="0 0 40 40"><path d="M20 5a15 15 0 1 0 0 30"/></svg></span></button></form><p class="sub-heading single-cta-desc">No spam.</p></div>"#;
+
+#[test]
+fn a_theme_signup_block_around_a_members_form_is_dropped_whole() {
+    let html = page("", &format!(r#"<div class="gh-content"><p>The post's own paragraph, long enough to be prose and clearly more than a title or a line of small print could be, which is what sets it apart.</p>{THEME_SIGNUP}</div>"#));
+    let (md, count) = run(&html);
+    assert!(md.contains("The post's own paragraph"), "{md}");
+    assert!(!md.contains("Learn something"), "{md}");
+    assert!(!md.contains("No spam"), "{md}");
+    assert_eq!(count, WidgetCount::default());
+}
+
+#[test]
+fn a_members_form_in_a_long_container_does_not_take_the_article_with_it() {
+    let prose = "A paragraph of the post's own prose that runs on for a good while so the container holding it is far past a signup block. ".repeat(4);
+    let html = page("", &format!(r#"<div class="gh-content"><p>{prose}</p>{THEME_SIGNUP}<p>Text after the block.</p></div>"#));
+    let (md, _) = run(&html);
+    assert!(md.contains("A paragraph of the post's own prose"), "{md}");
+    assert!(md.contains("Text after the block."), "{md}");
+    assert!(!md.contains("No spam"), "{md}");
+}

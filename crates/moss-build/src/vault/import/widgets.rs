@@ -693,6 +693,27 @@ fn form_outcome(node: NodeRef<Node>, el: &Element, base: &Url, doc: &Html, scan:
     }
 }
 
+/// Ghost's own attribute on every signup form, whatever the theme.
+const SIGNUP_FORM_ATTR: &str = "data-members-form";
+
+/// Longest single run of text in a signup block: a title or small print is short, a post's paragraph is not.
+const SIGNUP_BLOCK_TEXT_MAX: usize = 120;
+
+/// The outermost ancestor of a signup form holding only it and short text (no
+/// picture, link or other form outside the form itself; a button's spinner icon
+/// is the form's own), so its title and small print go with it.
+fn signup_block(form: NodeRef<Node>) -> Option<NodeId> {
+    let busy = Selector::parse("img, picture, video, audio, svg, iframe, a, textarea").expect("static selector");
+    let forms = Selector::parse("form").expect("static selector");
+    let fits = |el: ElementRef| {
+        !matches!(el.value().name(), "body" | "html" | "main" | "article")
+            && !el.text().any(|t| t.trim().chars().count() > SIGNUP_BLOCK_TEXT_MAX)
+            && el.select(&busy).all(|b| b.ancestors().any(|a| a.id() == form.id()))
+            && el.select(&forms).count() == 1
+    };
+    form.ancestors().map_while(ElementRef::wrap).take_while(|e| fits(*e)).last().map(|e| e.id())
+}
+
 fn token_outcome(el: &Element, row: &Row, base: &Url) -> Outcome {
     let Href::Attr(name) = row.href else { return Outcome::Leave };
     match http_url(base, attr(el, name)) {
@@ -760,6 +781,15 @@ pub fn carry_widgets(html: &str, base_url: &Url) -> (String, WidgetCount) {
             }
             Outcome::DroppedInPlace(kinds) => record_dropped(&mut count, base_url, kinds),
             Outcome::Leave => {}
+        }
+    }
+    for (id, kind) in &found.widgets {
+        let node = doc.tree.get(*id).expect("scanned node");
+        let signup = matches!(kind, Kind::Form) && node.value().as_element().is_some_and(|e| e.attr(SIGNUP_FORM_ATTR).is_some());
+        if let Some(block) = signup.then(|| signup_block(node)).flatten() {
+            if !replacements.iter().any(|(r, _)| *r == block) {
+                replacements.push((block, String::new()));
+            }
         }
     }
     if replacements.is_empty() {
