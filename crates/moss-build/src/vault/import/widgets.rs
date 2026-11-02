@@ -620,9 +620,21 @@ fn gallery_outcome(node: NodeRef<Node>) -> Outcome {
     }
 }
 
+/// Whether an empty custom element belongs to a page builder's layout: an
+/// ancestor, or a sibling with another name, shares its prefix (`demo-` in
+/// `demo-row` beside `demo-column`). A lone empty element has no such family.
+fn in_layout_family(node: NodeRef<Node>, name: &str) -> bool {
+    let Some((prefix, _)) = name.split_once('-') else { return false };
+    let related = |n: NodeRef<Node>| {
+        n.value().as_element().is_some_and(|e| e.name() != name && e.name().split_once('-').is_some_and(|(p, _)| p == prefix))
+    };
+    node.ancestors().any(related) || node.prev_siblings().chain(node.next_siblings()).any(related)
+}
+
 /// A custom element with nothing in it is a widget a third-party script
 /// fills in, which the importer cannot run. Chat and tracking elements are
-/// chrome, and an element with text or pictures is content.
+/// chrome, an element with text or pictures is content, and an empty one
+/// inside a layout family is a spacer, left uncounted.
 fn custom_outcome(node: NodeRef<Node>, el: &Element) -> Outcome {
     let name = el.name();
     // A chat or tracking element is chrome, not a lost widget. Its tag name is
@@ -637,7 +649,7 @@ fn custom_outcome(node: NodeRef<Node>, el: &Element) -> Outcome {
             .select(&Selector::parse("img, picture, video, iframe, form").expect("static selector"))
             .next()
             .is_some();
-    if filled {
+    if filled || in_layout_family(node, name) {
         Outcome::Leave
     } else {
         Outcome::Dropped(vec![format!("script widget {name}")])

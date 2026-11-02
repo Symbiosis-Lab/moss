@@ -435,6 +435,21 @@ fn a_repeated_dropped_widget_is_logged_once_with_its_count() {
 }
 
 #[test]
+fn empty_elements_of_a_page_builders_layout_family_are_not_lost_widgets() {
+    let main = r#"<demo-section><demo-row><demo-column><demo-content><p>Real text.</p></demo-content></demo-column><demo-column></demo-column></demo-row><demo-content></demo-content></demo-section><donate-widget></donate-widget>"#;
+    let (md, count) = run(&page("", main));
+    assert_eq!(count.dropped_kinds, ["script widget donate-widget"]);
+    assert!(md.contains("Real text."), "{md}");
+}
+
+#[test]
+fn a_lone_empty_custom_element_beside_another_family_stays_listed() {
+    let main = r#"<demo-section><p>Text.</p></demo-section><donate-widget></donate-widget><donate-widget></donate-widget>"#;
+    let (_, count) = run(&page("", main));
+    assert_eq!(count.dropped_kinds, ["script widget donate-widget", "script widget donate-widget"]);
+}
+
+#[test]
 fn a_ghost_signup_card_is_dropped_whole_and_content_cards_stay() {
     let card = r#"<div class="kg-card kg-signup-card kg-width-wide"><div class="kg-signup-card-content"><h2 class="kg-signup-card-heading">Learn something every week.</h2><form data-members-form="signup" class="kg-signup-card-form"><input type="email" name="email" placeholder="you@example.test"><button type="submit">Subscribe</button></form><p class="kg-signup-card-disclaimer">No spam.</p></div></div>"#;
     let callout = r#"<div class="kg-card kg-callout-card kg-callout-card-grey"><div class="kg-callout-text">Keep this callout.</div></div>"#;

@@ -255,6 +255,7 @@ All notable changes to moss will be documented here.
 ### Fixed
 
 - `moss import --recursive` no longer turns a link's title into part of its address: a link such as `<a href="/b/" title="Second page">` arrives as `[text](./b/index.md "Second page")` instead of pointing at a file that does not exist. Titles in single quotes or parentheses are kept the same way.
+- `moss import` no longer reports a page builder's empty layout elements (spacers, empty columns, such as `<x-row>` and `<x-column>`) as lost script widgets, so the import summary stops showing hundreds of widgets that never held content. An empty custom element is counted only when no ancestor or differently named sibling shares its name prefix.
 - `moss import --recursive` no longer crashes on a page whose link redirects to an email address, a phone number or another non-web address. The page is now counted as failed with the reason, "redirected to a disallowed URL", and the rest of the import carries on; before, the worker fetching it panicked.
 - `moss import --recursive` no longer imports another site's page when a link redirects off the site; the link stays as written and the summary counts it.
 - `moss import` now drops a Ghost post's signup block whole, whether it is the editor's signup card or a theme's own block around a members form, so its title and "No spam" line no longer end every imported post. Only the form's own block goes, never the article around it; callout, image and bookmark cards stay.
