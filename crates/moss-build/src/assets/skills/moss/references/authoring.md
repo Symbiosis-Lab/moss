@@ -770,6 +770,20 @@ A place page — claimed with `place_page:`, or generated like any other unclaim
 
 Place pages draw an offline map automatically when at least one relevant gazetteer entry has coordinates. A real page of your own at a place term's root (`places/index.md`, say, with no `place_page:` claim) keeps its own title and content — the map still draws below them, not instead of them. Set `map: false` in that page's frontmatter to turn the map off; this `map:` is the geographic map on the page, unrelated to `cascade:`'s own key-value map. `map:` is the one per-page switch for a page's own map, on a place page and on a located article alike (see the locator below).
 
+
+The world map alone stops at regional scale: it zooms in to about 20 screen pixels per degree of longitude (web zoom 5), so places within one city merge into a single badge. For places that close, add a detail layer: a map drawn at street scale at build time into tiles inside the site, so it stays offline. Declare it in `.moss/config.toml`:
+
+```toml
+[map.layers.atlas-1956]
+kind = "historical"          # "streets" is read and checked but not drawn yet
+source = "maps/atlas-1956"   # a folder inside the site, read by the build and not published
+bbox = [-74.03, 40.68, -73.90, 40.88]   # west, south, east, north; optional, else taken from the places
+max_zoom = 17                # 10 to 19, default 16
+credit = "USGS, 1956"        # optional, else the plates' own credit
+```
+
+`moss map bbox` prints the frame your places need and a suggested `max_zoom`. The `source` folder holds each georeferenced scan (a plate) as three files named by one id: `<id>.annotation.json`, the Allmaps georeference annotation (IIIF Georeference Annotation) with `body.features`, at least three control points pairing image pixels with longitude and latitude, and a `target.selector` polygon masking the plate's printed area; `<id>.jpg`, the image, whole or cropped; and `<id>.region.json`, saying which part of the full image the jpg shows (`region` as `[x, y, w, h]` and `scale`) and the holder's `credit` and `rights`, which the build copies into `NOTICE.txt`. A plate that cannot be read is a build warning and the others still draw. `moss map --help` gives the rest.
+
 Set `route: true` on a page whose `location:` list is already in the order you travelled it, to draw that order as a route: a dashed line through the stops with numbered badges (1..N), on that page's own map and its locator alike. There is no second ordered-list field — `location:` already keeps its declared order, and `route:` just says "connect these". Precision is still the privacy control: every stop must resolve to at least region precision, since a country-precision stop is too coarse a point to draw a line through — such a stop blocks the whole route and prints a build diagnostic naming the page and the stop, rather than drawing a line that jumps past it. A region-precision stop still joins the route, at the centre of the same soft area marker it's already shown with, and its badge is drawn as an outline instead of filled, so it reads as an area rather than a point. A listing map — the `/places/` root, a folder's `style: map` card — never draws a route, regardless of `route:`, since there is no single page-ordered list behind it to draw one from. Known limitation: a route with two stops on opposite sides of the 180° meridian draws a straight line across the whole map rather than the short way around it.
 
 To add the smaller locator map after each authored page's place line, opt in site-wide:
