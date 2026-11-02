@@ -123,8 +123,9 @@ pub struct FieldDefinition {
     pub applies_when: Option<Vec<AppliesWhen>>,
 }
 
-/// Where a page sits in its site: an ordinary page, a folder's index, or the
-/// site root's index. A language tree's index counts as a folder.
+/// Where a page sits in its site: an ordinary page, a folder's index, or a
+/// home (the site root's index, or the root index of a language tree such as
+/// `en/`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "lowercase")]
