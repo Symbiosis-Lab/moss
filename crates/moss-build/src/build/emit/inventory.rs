@@ -59,27 +59,15 @@ pub struct InventoryEntry {
     /// vocabulary the author would have to change to fix it. Empty when it
     /// is listed. See [`hidden_reasons`].
     pub hidden: Vec<String>,
-    /// The BCP-47 tag this page will carry in `<html lang>`.
+    /// The BCP-47 tag this page will carry in `<html lang>`: the document's
+    /// own language, not the interface language (a `ja/` tree reads `ja` here
+    /// while its chrome stays the site default's). It answers "did moss
+    /// register my new edition?": a language folder moss does not recognize is
+    /// built as ordinary content, and only this column shows the difference.
     ///
-    /// The question this answers is "did moss register my new edition?", and
-    /// before this column there was no way to ask it: a language folder moss
-    /// does not recognize is silently treated as ordinary content, so the
-    /// build succeeds either way and the difference shows up only in emitted
-    /// HTML. Hugo answers it with a per-language page-count table in its build
-    /// summary; a 2026-08-05 side-by-side trial had the agent use exactly that
-    /// to confirm its change had landed.
-    ///
-    /// This is the document's own language, not the interface language — a
-    /// `ja/` tree reads `ja` here while its chrome stays the site default's.
-    ///
-    /// `#[serde(default)]` because this file is written by one build and read
-    /// by a later `moss list`, and the two can be different moss versions —
-    /// upgrading mid-project must not turn a readable inventory into a parse
-    /// error. It did, for the hour between this column landing and the trial
-    /// that caught it: every inventory written before it failed with
-    /// `missing field 'lang'`, and the advice printed alongside ("run `moss
-    /// build`") was the one thing that would not have explained it. Every
-    /// field added here from now on needs the same treatment.
+    /// `#[serde(default)]`, as on every field added here: one build writes
+    /// this file and a later `moss list`, possibly a newer moss, reads it, so
+    /// a new field must not make an older inventory fail to parse.
     #[serde(default)]
     pub lang: String,
     /// What the build picked for each field below, keyed by frontmatter name:
@@ -93,6 +81,14 @@ pub struct InventoryEntry {
     /// `children`, and on a listing page `sort` and `children_depth`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub resolved: BTreeMap<String, serde_json::Value>,
+    /// Where the other-language versions of this page publish: the
+    /// translations the build linked by `translationKey`, filename suffix or
+    /// mirrored path. Without it an agent has to re-derive all three rules
+    /// from the source files to tell which rows are one piece. Empty for a
+    /// page in one language. `#[serde(default)]` for the same cross-version
+    /// reason as `lang`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub translations: Vec<String>,
 }
 
 /// The values for [`InventoryEntry::resolved`]. A slot is not a page, so it
@@ -211,6 +207,7 @@ pub fn build_inventory(
                 slot_only: doc.slot_only,
                 hidden: hidden_reasons(doc, has_content_folders),
                 resolved: resolved_values(doc, has_content_folders, &lang, site_typesetting),
+                translations: doc.translations.iter().map(|t| t.url_path.clone()).collect(),
                 lang,
             }
         })
