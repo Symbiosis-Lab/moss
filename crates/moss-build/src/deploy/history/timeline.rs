@@ -47,7 +47,8 @@ pub struct SiteVersionPages {
 /// differs from the previous record's (appearing or disappearing counts as
 /// differing), plus every manual and every restore record regardless —
 /// those are always worth a stop on any page's timeline, not just the one
-/// the author was looking at when they made the save.
+/// the author was looking at when they made the save — plus every kept
+/// outside edit of this page.
 pub(crate) fn page_timeline(root: &Path, path: &str) -> Vec<Row> {
     let records = store::list_records(root);
     let mut rows = Vec::new();
@@ -57,6 +58,15 @@ pub(crate) fn page_timeline(root: &Path, path: &str) -> Vec<Row> {
         let qualifies = match record.trigger {
             Trigger::Manual | Trigger::Restore => true,
             Trigger::Publish => cur_hash != prev_hash,
+            // Another writer's version kept beside the page's own line: a stop
+            // on its own page only, and never the hash the next record is
+            // compared with.
+            Trigger::Displaced => {
+                if cur_hash.is_some() {
+                    rows.push(row_for(id, record, 0, 0, 0));
+                }
+                continue;
+            }
         };
         if qualifies {
             rows.push(row_for(id, record, 0, 0, 0));
@@ -66,14 +76,16 @@ pub(crate) fn page_timeline(root: &Path, path: &str) -> Vec<Row> {
     rows
 }
 
-/// Every record, newest-first-agnostic (oldest first, matching
+/// Every site version, newest-first-agnostic (oldest first, matching
 /// [`super::store::list_records`]), each with its own changed/added/removed
-/// count against the record before it.
+/// count against the version before it. A kept outside edit holds one page,
+/// so it is no site version: counted against, it would read as every other
+/// page removed and then added back.
 pub(crate) fn site_timeline(root: &Path) -> Vec<Row> {
     let records = store::list_records(root);
     let mut rows = Vec::with_capacity(records.len());
     let mut prev: Option<&PublishRecord> = None;
-    for (id, record) in &records {
+    for (id, record) in records.iter().filter(|(_, r)| r.trigger != Trigger::Displaced) {
         let (changed, added, removed) = diff_counts(prev, record);
         rows.push(row_for(id, record, changed, added, removed));
         prev = Some(record);
@@ -125,6 +137,9 @@ fn diff_counts(prev: Option<&PublishRecord>, cur: &PublishRecord) -> (usize, usi
 /// pass and its own deletion loop).
 pub(crate) fn site_version_pages(root: &Path, id: &str, current: &SealedManifest) -> Result<SiteVersionPages, String> {
     let record = store::load_record(root, id).ok_or_else(|| format!("no such version: {id}"))?;
+    if record.trigger == Trigger::Displaced {
+        return Err(format!("{id} is one page's kept outside edit, not a site version"));
+    }
     let record_hashes = record::flat_hashes(&record);
     let current_hashes = record::current_entry_hashes(current);
 

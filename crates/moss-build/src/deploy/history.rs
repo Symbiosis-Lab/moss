@@ -66,24 +66,45 @@ impl HistoryStore {
         store::list_records(&self.root)
     }
 
+    /// One record by id; see [`store::load_record`].
+    pub fn load_record(&self, id: &str) -> Option<PublishRecord> {
+        store::load_record(&self.root, id)
+    }
+
+    /// See [`restore::site_version`].
+    pub fn site_version(&self, id: &str) -> Result<PublishRecord, String> {
+        restore::site_version(&self.root, id)
+    }
+
     /// See [`store::read_version`].
     pub fn read_version(&self, id: &str, path: &str) -> Result<Vec<u8>, String> {
         store::read_version(&self.root, id, path)
     }
 
     /// See [`record::snapshot`].
-    pub fn snapshot(&self, vault_root: &Path, sealed: &SealedManifest, target: &str, published_at: &str) -> Result<(), String> {
+    pub fn snapshot(&self, vault_root: &Path, sealed: &SealedManifest, target: &str, published_at: &str) -> Result<Option<String>, String> {
         record::snapshot(&self.root, vault_root, sealed, target, published_at)
     }
 
     /// See [`record::snapshot_manual`].
-    pub fn snapshot_manual(&self, vault_root: &Path, sealed: &SealedManifest, target: &str, label: Option<String>) -> Result<(), String> {
+    pub fn snapshot_manual(&self, vault_root: &Path, sealed: &SealedManifest, target: &str, label: Option<String>) -> Result<Option<String>, String> {
         record::snapshot_manual(&self.root, vault_root, sealed, target, label)
     }
 
     /// See [`record::save_before_restore`].
-    pub fn save_before_restore(&self, vault_root: &Path, current: &SealedManifest, target: &str, restoring_id: &str) -> Result<(), String> {
+    pub fn save_before_restore(&self, vault_root: &Path, current: &SealedManifest, target: &str, restoring_id: &str) -> Result<Option<String>, String> {
         record::save_before_restore(&self.root, vault_root, current, target, restoring_id)
+    }
+
+    /// Keep another writer's version of `path` (vault-relative) before the
+    /// editor saves over it; see [`record::snapshot_displaced`]. `Ok(None)`
+    /// when history is turned off for `vault_root`: nothing was kept, so the
+    /// caller must not write.
+    pub fn keep_displaced(&self, vault_root: &Path, path: &str, bytes: &[u8]) -> Result<Option<String>, String> {
+        if !store::history_enabled(vault_root) {
+            return Ok(None);
+        }
+        record::snapshot_displaced(&self.root, path, bytes).map(Some)
     }
 
     /// See [`restore::restore_page`].

@@ -370,13 +370,11 @@ fn run_save(root: &VaultRoot, name: Option<String>, json: bool) -> i32 {
 /// Build `root` and save a version now, as `--save` does; its id and record.
 pub(crate) fn save_version(root: &VaultRoot, label: Option<String>) -> Result<(String, PublishRecord), String> {
     let store = open_store(root);
-    let earlier: HashSet<String> = store.list_records().into_iter().map(|(id, _)| id).collect();
     let sealed = headless_build_sealed(root)?;
-    store.snapshot_manual(root.path(), &sealed, &current_target(root), label).map_err(|e| format!("could not save a version: {e}"))?;
-    // Newest last; with history off, the snapshot writes nothing and the last record is older.
-    match store.list_records().pop() {
-        Some((id, record)) if !earlier.contains(&id) => Ok((id, record)),
-        _ => Err("no version was saved; is history turned off with [history] enabled = false?".to_string()),
+    let id = store.snapshot_manual(root.path(), &sealed, &current_target(root), label).map_err(|e| format!("could not save a version: {e}"))?;
+    match id.and_then(|id| store.load_record(&id).map(|record| (id, record))) {
+        Some(saved) => Ok(saved),
+        None => Err("no version was saved; is history turned off with [history] enabled = false?".to_string()),
     }
 }
 
@@ -446,16 +444,17 @@ struct RestorePrep {
 /// their own final call — the guard used to be missing from both (finding 1
 /// of the 2026-09-11 handoff), which is why it opens this shared prefix
 /// rather than living at either call site.
-fn prepare_restore(root: &VaultRoot, at: &str) -> Result<RestorePrep, String> {
+fn prepare_restore(root: &VaultRoot, at: &str, whole_site: bool) -> Result<RestorePrep, String> {
     crate::cli::site_guard::guard_cli_open(root.as_str(), "history")?;
     let store = open_store(root);
     let records = store.list_records();
     let id = resolve_id(&records, at)?.to_string();
-    let target = records
-        .iter()
-        .find(|(rid, _)| rid == &id)
-        .map(|(_, r)| r.target.clone())
-        .unwrap_or_else(|| current_target(root));
+    if whole_site {
+        store.site_version(&id)?;
+    }
+    // A kept outside edit was published nowhere: its backup takes the site's current target.
+    let restored = records.iter().find(|(rid, _)| rid == &id).and_then(|(_, r)| r.published_target());
+    let target = restored.map_or_else(|| current_target(root), str::to_string);
     let sealed = headless_build_sealed(root)?;
     if let Err(e) = store.save_before_restore(root.path(), &sealed, &target, &id) {
         eprintln!("warning: could not save a version before restoring: {e}");
@@ -472,7 +471,7 @@ fn run_restore_page(root: &VaultRoot, path_arg: &str, at: &str, copy: bool) -> i
             return 1;
         }
     };
-    let prep = match prepare_restore(root, at) {
+    let prep = match prepare_restore(root, at, false) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("error: {e}");
@@ -501,7 +500,7 @@ fn run_restore_site(root: &VaultRoot, at: &str, yes: bool) -> i32 {
         eprintln!("error: restoring the whole site needs --yes to confirm\n{}", usage());
         return 1;
     }
-    let prep = match prepare_restore(root, at) {
+    let prep = match prepare_restore(root, at, true) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("error: {e}");
@@ -662,7 +661,7 @@ fn run_site_timeline(root: &VaultRoot, json: bool) -> i32 {
         return 0;
     }
 
-    let show_target = by_id.values().map(|r| &r.target).collect::<HashSet<_>>().len() > 1;
+    let show_target = by_id.values().filter_map(|r| r.published_target()).collect::<HashSet<_>>().len() > 1;
     render_human(&rows, show_target, true);
     println!();
     println!("Versions are kept at {}.", store.store_dir().display());
@@ -696,7 +695,7 @@ fn run_page_timeline(root: &VaultRoot, path_arg: &str, json: bool) -> i32 {
         println!("No versions of {rel} yet.");
         return 0;
     }
-    let show_target = by_id.values().map(|r| &r.target).collect::<HashSet<_>>().len() > 1;
+    let show_target = by_id.values().filter_map(|r| r.published_target()).collect::<HashSet<_>>().len() > 1;
     render_human(&rows, show_target, false);
     0
 }
@@ -762,6 +761,7 @@ fn render_human(rows: &[DisplayRow], show_target: bool, show_counts: bool) {
 
         let what = match row.trigger {
             Trigger::Publish => "Published".to_string(),
+            Trigger::Displaced => "Outside edit, kept when yours was saved".to_string(),
             _ => row.label.clone().unwrap_or_else(|| "Saved by you".to_string()),
         };
         let mut line = format!("  {}  {}", parsed.format("%H:%M"), what);

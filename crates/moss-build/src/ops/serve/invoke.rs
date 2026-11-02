@@ -299,6 +299,8 @@ async fn arm_save_editor_content(ctx: &Session, args: Value) -> ArmResult {
         frontmatter: Value,
         body: String,
         expected_hash: String,
+        #[serde(default)]
+        keep_displaced: bool,
     }
     let a: A = parse_args(args)?;
     // The carrier's one arbitrary-write primitive: confine before the write, not
@@ -310,8 +312,12 @@ async fn arm_save_editor_content(ctx: &Session, args: Value) -> ArmResult {
         &a.frontmatter,
         &a.body,
         &a.expected_hash,
+        a.keep_displaced,
     )
     .map_err(ArmError::Command)?;
+    if let Some(event) = crate::editor::content::displaced_event(&path.to_string_lossy(), &r) {
+        super::events::publish(&event);
+    }
     to_value(r)
 }
 

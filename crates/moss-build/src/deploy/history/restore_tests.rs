@@ -255,3 +255,37 @@ fn restore_site_reports_a_failure_without_stopping_the_rest() {
     assert!(report.failed[0].1.contains("not kept"), "{}", report.failed[0].1);
     assert_eq!(fs::read(vault.join("edit.md")).unwrap(), b"original body");
 }
+
+#[test]
+fn restore_site_refuses_a_kept_outside_edit_and_trashes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    std::fs::create_dir_all(&vault).unwrap();
+    let root = dir.path().join("history");
+    let mut pending = PendingManifest::new(SiteHashes::default());
+    seed_page(&vault, &mut pending, "a.md", "a/index.html", b"mine");
+    seed_page(&vault, &mut pending, "b.md", "b/index.html", b"other page");
+    let id = super::super::record::snapshot_displaced(&root, "a.md", b"theirs").unwrap();
+
+    let trashed = std::cell::RefCell::new(Vec::new());
+    let trash = |_: &Path, p: &str| -> Result<(), String> { trashed.borrow_mut().push(p.to_string()); Ok(()) };
+    let report = restore_site(&root, &vault, &id, &pending.seal(), &trash);
+
+    assert!(trashed.borrow().is_empty(), "a one-page record must not trash the rest of the site");
+    assert!(report.restored.is_empty());
+    assert_eq!(report.failed.len(), 1);
+    assert_eq!(std::fs::read(vault.join("a.md")).unwrap(), b"mine");
+}
+
+#[test]
+fn restore_page_brings_back_a_kept_outside_edit() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    std::fs::create_dir_all(&vault).unwrap();
+    std::fs::write(vault.join("a.md"), b"mine").unwrap();
+    let root = dir.path().join("history");
+    let id = super::super::record::snapshot_displaced(&root, "a.md", b"theirs").unwrap();
+
+    restore_page(&root, &vault, &id, "a.md", RestoreMode::InPlace).unwrap();
+    assert_eq!(std::fs::read(vault.join("a.md")).unwrap(), b"theirs");
+}

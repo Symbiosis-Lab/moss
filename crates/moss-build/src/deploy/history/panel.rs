@@ -26,7 +26,6 @@
 //! timeline never awaits the provider and a headless carrier therefore never
 //! builds to answer it.
 
-use std::collections::HashSet;
 use std::future::Future;
 use std::path::Path;
 
@@ -47,10 +46,11 @@ use crate::moss_paths::MossPaths;
 // here are the command boundary's own contract, independent of the store's
 // internal shapes.
 
-/// One row in the Versions list — a publish, a manual save, or a pre-restore
-/// save. `trigger` is `"publish" | "manual" | "restore"`, the same flattened-
+/// One row in the Versions list — a publish, a manual save, a pre-restore
+/// save, or a kept outside edit of one page. `trigger` is
+/// `"publish" | "manual" | "restore" | "displaced"`, the same flattened-
 /// string convention [`restore_version`]'s `mode` argument uses, so the
-/// frontend never imports a second enum shape for the same three words.
+/// frontend never imports a second enum shape for the same words.
 #[derive(Debug, Clone, Serialize, Type)]
 pub struct VersionRow {
     pub id: String,
@@ -137,6 +137,7 @@ pub fn trigger_str(t: Trigger) -> &'static str {
         Trigger::Publish => "publish",
         Trigger::Manual => "manual",
         Trigger::Restore => "restore",
+        Trigger::Displaced => "displaced",
     }
 }
 
@@ -330,21 +331,16 @@ pub async fn restore_version(
     sealed: impl Future<Output = Result<SealedManifest, String>>,
 ) -> Result<RestoreReport, String> {
     let store = HistoryStore::in_vault(vault_root);
-    let records = store.list_records();
-    known_id(&records, id)?;
+    known_id(&store.list_records(), id)?;
+    if path.is_none() {
+        store.site_version(id)?;
+    }
     let sealed = sealed.await?;
     let target = current_target(vault_root);
 
-    // The backup save is best-effort and dedups against the newest record for
-    // this target (design rule 3) — so "did it actually write one?" can only
-    // be answered by diffing the id set before and after, not by its `Ok(())`.
-    let before_ids: HashSet<String> = records.into_iter().map(|(id, _)| id).collect();
-    store.save_before_restore(vault_root, &sealed, &target, id)?;
-    let undo_id = store
-        .list_records()
-        .into_iter()
-        .map(|(id, _)| id)
-        .find(|id| !before_ids.contains(id));
+    // The backup dedups against the newest record for this target (design
+    // rule 3), so it answers whether it wrote one.
+    let undo_id = store.save_before_restore(vault_root, &sealed, &target, id)?;
 
     match path {
         Some(page_path) => {
@@ -414,15 +410,12 @@ pub async fn save_version(
     let sealed = sealed.await?;
     let target = current_target(vault_root);
 
-    let before_ids: HashSet<String> =
-        store.list_records().into_iter().map(|(id, _)| id).collect();
-    store.snapshot_manual(vault_root, &sealed, &target, label)?;
-    let (new_id, new_record) = store
-        .list_records()
-        .into_iter()
-        .find(|(id, _)| !before_ids.contains(id))
-        .ok_or_else(|| "The version was saved but could not be read back".to_string())?;
-    Ok(version_row_from_record(new_id, &new_record))
+    let new_id = store.snapshot_manual(vault_root, &sealed, &target, label)?;
+    let new_record = new_id.as_deref().and_then(|id| store.load_record(id));
+    match (new_id, new_record) {
+        (Some(id), Some(record)) => Ok(version_row_from_record(id, &record)),
+        _ => Err("The version was saved but could not be read back".to_string()),
+    }
 }
 
 /// "Show in Finder" on the history store's directory. `store_dir()` is a fixed

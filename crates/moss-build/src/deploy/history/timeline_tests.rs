@@ -169,3 +169,56 @@ fn site_version_pages_errors_for_an_unknown_id() {
     let err = site_version_pages(&history_root, "no-such-id", &current).unwrap_err();
     assert!(err.contains("no such version"), "{err}");
 }
+
+// ── kept outside edits ─────────────────────────────────────────────────────
+
+/// R1 publishes a.md and b.md, the editor then keeps another writer's a.md
+/// (written now), and R2 publishes both unchanged, dated after it.
+fn publish_displace_publish(history_root: &Path, vault: &Path) -> String {
+    let pages: &[(&str, &str, &[u8])] = &[("a.md", "a/index.html", b"v1"), ("b.md", "b/index.html", b"v1")];
+    publish(history_root, vault, pages, "2026-01-01T00:00:00Z");
+    let id = record::snapshot_displaced(history_root, "a.md", b"the agent's a.md").unwrap();
+    publish(history_root, vault, pages, "2999-01-01T00:00:00Z");
+    id
+}
+
+#[test]
+fn a_kept_outside_edit_is_a_stop_on_its_own_page_and_moves_no_other_page_s_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    fs::create_dir_all(&vault).unwrap();
+    let history_root = dir.path().join("history");
+    let id = publish_displace_publish(&history_root, &vault);
+
+    let a = page_timeline(&history_root, "a.md");
+    assert_eq!(a.iter().map(|r| r.trigger).collect::<Vec<_>>(), vec![Trigger::Publish, Trigger::Displaced]);
+    assert_eq!(a[1].id, id);
+    // R2's a.md equals R1's: the kept edit must not have become the hash it is compared with.
+    let b = page_timeline(&history_root, "b.md");
+    assert_eq!(b.len(), 1, "b.md changed only at R1; the one-page record must not make R2 a stop: {b:?}");
+}
+
+#[test]
+fn the_site_timeline_leaves_out_a_kept_outside_edit_and_counts_past_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    fs::create_dir_all(&vault).unwrap();
+    let history_root = dir.path().join("history");
+    publish_displace_publish(&history_root, &vault);
+
+    let rows = site_timeline(&history_root);
+    assert_eq!(rows.iter().map(|r| r.trigger).collect::<Vec<_>>(), vec![Trigger::Publish, Trigger::Publish]);
+    assert_eq!((rows[1].changed, rows[1].added, rows[1].removed), (0, 0, 0), "R2 changed nothing since R1");
+}
+
+#[test]
+fn a_kept_outside_edit_has_no_site_version_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    fs::create_dir_all(&vault).unwrap();
+    let history_root = dir.path().join("history");
+    let id = record::snapshot_displaced(&history_root, "a.md", b"x").unwrap();
+
+    let err = site_version_pages(&history_root, &id, &PendingManifest::new(SiteHashes::default()).seal()).unwrap_err();
+    assert!(err.contains("not a site version"), "{err}");
+}

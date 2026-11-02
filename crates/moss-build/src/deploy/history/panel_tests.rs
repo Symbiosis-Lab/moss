@@ -79,6 +79,7 @@ fn trigger_str_covers_every_variant_with_the_designs_own_words() {
     assert_eq!(trigger_str(Trigger::Publish), "publish");
     assert_eq!(trigger_str(Trigger::Manual), "manual");
     assert_eq!(trigger_str(Trigger::Restore), "restore");
+    assert_eq!(trigger_str(Trigger::Displaced), "displaced");
 }
 
 #[test]
@@ -207,6 +208,46 @@ async fn a_site_restore_trashes_pages_added_since_the_version() {
 
     assert_eq!(report.trashed, vec!["since.md".to_string()], "failed: {:?}", report.failed);
     assert!(report.failed.is_empty(), "{:?}", report.failed);
+}
+
+/// A whole-site restore to a kept outside edit is refused before anything is
+/// saved: no backup record, no Undo for a restore that did nothing.
+#[tokio::test]
+async fn a_site_restore_to_a_kept_outside_edit_is_refused_before_any_backup() {
+    let (_dir, vault) = tmp_vault();
+    std::fs::write(vault.join("a.md"), b"mine").unwrap();
+    let store = HistoryStore::in_vault(&vault);
+    let id = store.keep_displaced(&vault, "a.md", b"theirs").unwrap().unwrap();
+
+    let err = restore_version(&vault, &id, None, "in_place", never()).await.unwrap_err();
+
+    assert!(err.contains("kept outside edit"), "{err}");
+    assert_eq!(store.list_records().len(), 1, "nothing but the kept edit itself");
+}
+
+/// A page restore answers the backup it wrote as `undo_id`, read from the
+/// writer itself: a record another writer lands meanwhile is never mistaken
+/// for it.
+#[tokio::test]
+async fn a_page_restore_names_its_own_backup_even_when_another_record_lands_meanwhile() {
+    let (_dir, vault) = tmp_vault();
+    std::fs::write(vault.join("a.md"), b"v2").unwrap();
+    let store = HistoryStore::in_vault(&vault);
+    store.snapshot(&vault, &manifest_of(&[("a.md", b"v1")]), "moss", "2026-01-01T00:00:00Z").unwrap();
+    let (id, _) = store.list_records().pop().unwrap();
+
+    let sealed = {
+        let (vault, store) = (vault.clone(), store.clone());
+        async move {
+            // An editor save keeps an outside edit while the restore waits on its manifest.
+            store.keep_displaced(&vault, "b.md", b"an agent's page").unwrap();
+            Ok(manifest_of(&[("a.md", b"v2")]))
+        }
+    };
+    let report = restore_version(&vault, &id, Some("a.md".to_string()), "in_place", sealed).await.unwrap();
+
+    let undo = store.load_record(report.undo_id.as_deref().expect("a backup was written")).unwrap();
+    assert_eq!(undo.trigger, Trigger::Restore);
 }
 
 /// `reveal_history_store` resolves the vault's own store directory, with no

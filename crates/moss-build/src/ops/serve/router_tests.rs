@@ -3575,3 +3575,53 @@ async fn mutate_carrier_undo_rename_reverses_and_refuses_outside_the_vault() {
 
     let _ = shutdown_tx.send(());
 }
+
+/// An agent listening on the event stream learns, with the version id, when a
+/// save through the carrier kept its text and wrote the person's over it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_save_that_keeps_an_outside_edit_announces_it_on_the_event_stream() {
+    let _streams = event_stream_lock();
+    let (vault, site_dir) = served_vault();
+    let theirs = "Agent's line.\n";
+    let target = vault.path().join("index.md");
+    std::fs::write(&target, theirs).unwrap();
+    let (port, shutdown_tx, token) = serve_bound(site_dir.clone(), 63450).await;
+
+    let reader = tokio::task::spawn_blocking({
+        let (url, token) = (format!("http://localhost:{port}/__moss/events"), token.clone());
+        move || ureq::get(&url).set("X-Moss-Token", &token).timeout(std::time::Duration::from_secs(10)).call().expect("the stream must open").into_reader()
+    })
+    .await
+    .unwrap();
+
+    let payload = serde_json::json!({
+        "filePath": target.to_string_lossy(),
+        "frontmatter": {},
+        "body": "The person's line.\n",
+        "expectedHash": crate::editor::content::content_hash(theirs.as_bytes()),
+        "keepDisplaced": true,
+    })
+    .to_string();
+    let saved: serde_json::Value = tokio::task::spawn_blocking(move || {
+        ureq::post(&format!("http://localhost:{port}/__moss/mutate/save_editor_content"))
+            .set("Content-Type", "application/json")
+            .set("X-Moss-Token", &token)
+            .timeout(std::time::Duration::from_secs(5))
+            .send_string(&payload)
+            .expect("the save must answer 200")
+            .into_json()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    let version = saved["displaced"].as_str().unwrap_or_else(|| panic!("the save must name the kept version: {saved}")).to_string();
+
+    let record = tokio::task::spawn_blocking(move || read_one_sse_record(reader)).await.unwrap().expect("one SSE record");
+    let json: serde_json::Value = serde_json::from_str(record.trim_start_matches("data:").trim()).unwrap();
+    assert_eq!(json["payload"]["kind"], "OutsideEditKept");
+    assert_eq!(json["payload"]["payload"]["version_id"], version.as_str());
+    assert_eq!(json["payload"]["payload"]["path"], "index.md");
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "The person's line.\n");
+
+    let _ = shutdown_tx.send(());
+}

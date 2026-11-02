@@ -51,8 +51,14 @@ pub fn panic_message_from_payload(p: &(dyn std::any::Any + Send)) -> String {
 #[serde(tag = "status", rename_all = "kebab-case")]
 pub enum SaveResult {
     /// Written. `hash` is the [`content_hash`] of the bytes now on disk, the
-    /// base the editor's next save must name.
-    Saved { hash: String },
+    /// base the editor's next save must name. `displaced` is the history
+    /// version that keeps the bytes this save replaced, when the save was
+    /// asked to keep them.
+    Saved {
+        hash: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        displaced: Option<String>,
+    },
     /// Nothing written: the file is no longer at this path, renamed or deleted
     /// outside moss since it was opened. Not a failure — the file event that
     /// follows says which, and the text stays unsaved in the editor until then.
@@ -61,6 +67,18 @@ pub enum SaveResult {
     /// read it. `disk` is what is there now, so the editor can merge it into
     /// the unsaved text and save again with `disk.hash` as the base.
     Conflict { disk: ParsedFrontmatter },
+    /// Nothing written: the save was to replace another writer's text and
+    /// moss could not keep that text first, because history is turned off for
+    /// the site or the file is in no site.
+    NotKept,
+}
+
+/// The event that tells an agent its text was replaced, for a save that kept
+/// it: the page's site-relative path, and the history version holding it.
+pub fn displaced_event(file_path: &str, result: &SaveResult) -> Option<crate::types::events::MossEvent> {
+    let SaveResult::Saved { displaced: Some(version_id), .. } = result else { return None };
+    let (_, path) = site_page(file_path)?;
+    Some(crate::types::events::MossEvent::OutsideEditKept { path, version_id: version_id.clone() })
 }
 
 /// The identity of a file's exact bytes, as the editor's save names its base:
@@ -566,6 +584,12 @@ pub fn describe_source_role_inner(
 /// mutation carrier (`ops::serve::invoke`), so they cannot drift; a parity test
 /// in `router_tests.rs` pins that both routes leave byte-identical files.
 ///
+/// With `keep_displaced`, the bytes about to be replaced are another writer's
+/// that the person's text wins over: they are kept as a version in the site's
+/// history before the write, in this call, so what is kept is exactly what is
+/// overwritten. When they cannot be kept nothing is written
+/// ([`SaveResult::NotKept`]).
+///
 /// The file is read, checked and rewritten through one handle, in place: the
 /// page keeps its inode, mode, extended attributes and links, and the watcher
 /// sees a content change, which keeps the incremental rebuild. A write by
@@ -577,6 +601,7 @@ pub fn persist_editor_content(
     frontmatter: &serde_json::Value,
     body: &str,
     expected_hash: &str,
+    keep_displaced: bool,
 ) -> Result<SaveResult, String> {
     use std::io::Read;
     let fail = |e: std::io::Error| format!("Failed to write file '{}': {}", file_path, e);
@@ -601,13 +626,37 @@ pub fn persist_editor_content(
         Some(content) => content,
         None => moss_core::frontmatter::serialize(&fm_map, body)?,
     };
+    let displaced = match keep_displaced && content != on_disk {
+        true => match keep_version(file_path, on_disk.as_bytes())? {
+            Some(id) => Some(id),
+            None => return Ok(SaveResult::NotKept),
+        },
+        false => None,
+    };
     if let Err(e) = rewrite(&mut file, content.as_bytes()) {
         // A full disk can fail the write after the truncate: put back what was
         // there, so the next read is not a torn file taken for an outside edit.
         let _ = rewrite(&mut file, on_disk.as_bytes());
         return Err(fail(e));
     }
-    Ok(SaveResult::Saved { hash: content_hash(content.as_bytes()) })
+    Ok(SaveResult::Saved { hash: content_hash(content.as_bytes()), displaced })
+}
+
+/// `bytes`, the page at `file_path` as another writer left it, kept in its
+/// site's history; `None` when there is no site or its history is off.
+fn keep_version(file_path: &str, bytes: &[u8]) -> Result<Option<String>, String> {
+    let Some((site, rel)) = site_page(file_path) else { return Ok(None) };
+    crate::deploy::history::HistoryStore::in_vault(site.path())
+        .keep_displaced(site.path(), &rel, bytes)
+        .map_err(|e| format!("Could not keep the outside edit to '{}' before saving: {}", file_path, e))
+}
+
+/// The site holding `file_path`, and the page's path inside it.
+fn site_page(file_path: &str) -> Option<(crate::vault_root::VaultRoot, String)> {
+    let path = std::path::Path::new(file_path);
+    let site = crate::vault_root::VaultRoot::find_containing(path)?;
+    let rel = moss_core::slug::normalize_separators(&path.strip_prefix(site.path()).ok()?.to_string_lossy());
+    Some((site, rel))
 }
 
 fn rewrite(file: &mut std::fs::File, bytes: &[u8]) -> std::io::Result<()> {
@@ -708,7 +757,7 @@ mod tests {
         std::fs::write(&file, "old").unwrap();
         std::fs::rename(&file, dir.path().join("field-notes.md")).unwrap();
 
-        let outcome = persist_editor_content(&file.to_string_lossy(), &serde_json::json!({}), "typed", &content_hash(b"old"))
+        let outcome = persist_editor_content(&file.to_string_lossy(), &serde_json::json!({}), "typed", &content_hash(b"old"), false)
             .expect("a vanished file is an outcome, not a write failure");
         assert_eq!(outcome, SaveResult::Gone);
         assert!(!file.exists(), "the old name must not come back");
@@ -722,7 +771,7 @@ mod tests {
         let before = "---\n# shown on the card\ntitle: \"Harbour\"\nweight: 22\nratio: 1.0\ndate: 2024-01-15\nuid: \"a1b2c3d4\"\n---\nold body\n";
         std::fs::write(&file, before).unwrap();
         let fm = serde_json::json!({ "title": "Harbour", "weight": 23, "ratio": 1, "date": "2024-01-15", "uid": "a1b2c3d4", "stage": "Pier 4" });
-        persist_editor_content(&file.to_string_lossy(), &fm, "new body\n", &base(&file)).unwrap();
+        persist_editor_content(&file.to_string_lossy(), &fm, "new body\n", &base(&file), false).unwrap();
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
             "---\n# shown on the card\ntitle: \"Harbour\"\nweight: 23\nratio: 1.0\ndate: 2024-01-15\nuid: \"a1b2c3d4\"\nstage: Pier 4\n---\nnew body\n"
@@ -734,7 +783,7 @@ mod tests {
         let dir = make_test_tmpdir();
         let file = dir.path().join("note.md");
         std::fs::write(&file, "---\ntitle: [unclosed\n---\nbody\n").unwrap();
-        persist_editor_content(&file.to_string_lossy(), &serde_json::json!({ "title": "Fixed" }), "body\n", &base(&file)).unwrap();
+        persist_editor_content(&file.to_string_lossy(), &serde_json::json!({ "title": "Fixed" }), "body\n", &base(&file), false).unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "---\ntitle: Fixed\n---\nbody\n");
     }
 
@@ -743,9 +792,9 @@ mod tests {
         let dir = make_test_tmpdir();
         let file = dir.path().join("note.md");
         std::fs::write(&file, "a much longer body than the one that replaces it").unwrap();
-        let outcome = persist_editor_content(&file.to_string_lossy(), &serde_json::json!({}), "short", &base(&file)).unwrap();
+        let outcome = persist_editor_content(&file.to_string_lossy(), &serde_json::json!({}), "short", &base(&file), false).unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "short");
-        assert_eq!(outcome, SaveResult::Saved { hash: content_hash(b"short") });
+        assert_eq!(outcome, SaveResult::Saved { hash: content_hash(b"short"), displaced: None });
     }
 
     /// The editor read the file, an agent then rewrote it, and the editor's
@@ -759,7 +808,7 @@ mod tests {
         let agent = "---\ntitle: Harbour\n---\nFirst.\n\nSecond, revised by an agent.\n";
         std::fs::write(&file, agent).unwrap();
 
-        let outcome = persist_editor_content(&file.to_string_lossy(), &serde_json::json!({ "title": "Harbour" }), "First. Typed.\n\nSecond.\n", &read).unwrap();
+        let outcome = persist_editor_content(&file.to_string_lossy(), &serde_json::json!({ "title": "Harbour" }), "First. Typed.\n\nSecond.\n", &read, false).unwrap();
 
         assert_eq!(std::fs::read_to_string(&file).unwrap(), agent, "the agent's edit must survive");
         let SaveResult::Conflict { disk } = outcome else { panic!("expected a conflict, got {outcome:?}") };
@@ -782,7 +831,7 @@ mod tests {
         std::os::unix::fs::symlink(&real, &link).unwrap();
         let inode = std::fs::metadata(&real).unwrap().ino();
 
-        persist_editor_content(&link.to_string_lossy(), &serde_json::json!({}), "after", &content_hash(b"before")).unwrap();
+        persist_editor_content(&link.to_string_lossy(), &serde_json::json!({}), "after", &content_hash(b"before"), false).unwrap();
 
         assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
         assert_eq!(std::fs::read_to_string(&real).unwrap(), "after");
@@ -799,7 +848,7 @@ mod tests {
         let file = dir.path().join("note.md");
         std::fs::write(&file, "---\r\ntitle: Harbour\r\n---\r\nbody\r\n").unwrap();
         let parsed = parse_frontmatter_at(&file.to_string_lossy()).unwrap();
-        let outcome = persist_editor_content(&file.to_string_lossy(), &parsed.frontmatter, &parsed.body, &parsed.hash).unwrap();
+        let outcome = persist_editor_content(&file.to_string_lossy(), &parsed.frontmatter, &parsed.body, &parsed.hash, false).unwrap();
         assert!(matches!(outcome, SaveResult::Saved { .. }), "got {outcome:?}");
     }
 
@@ -1171,5 +1220,72 @@ mod tests {
             None,
             "the filesystem root has no name — the frontend falls back to `index`"
         );
+    }
+
+    /// A site folder with one page holding `theirs`, as another writer left it.
+    fn site_with_page(theirs: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = make_test_tmpdir();
+        std::fs::create_dir_all(dir.path().join(".moss")).unwrap();
+        let file = dir.path().join("notes").join("harbour.md");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, theirs).unwrap();
+        (dir, file)
+    }
+
+    #[test]
+    fn a_save_asked_to_keep_what_it_replaces_keeps_those_exact_bytes_in_history_first() {
+        let theirs = "First, as the agent wrote it.\n\nSecond.\n";
+        let (dir, file) = site_with_page(theirs);
+
+        let outcome = persist_editor_content(&file.to_string_lossy(), &serde_json::json!({}), "First, mine.\n\nSecond.\n", &content_hash(theirs.as_bytes()), true).unwrap();
+
+        let SaveResult::Saved { displaced: Some(id), .. } = &outcome else { panic!("expected a kept version, got {outcome:?}") };
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "First, mine.\n\nSecond.\n");
+        let history = crate::deploy::history::HistoryStore::in_vault(dir.path());
+        assert_eq!(history.read_version(id, "notes/harbour.md").unwrap(), theirs.as_bytes());
+        let rows = history.page_timeline("notes/harbour.md");
+        assert_eq!(rows.iter().map(|r| r.trigger).collect::<Vec<_>>(), vec![crate::deploy::history::Trigger::Displaced]);
+        assert!(matches!(
+            displaced_event(&file.to_string_lossy(), &outcome),
+            Some(crate::types::events::MossEvent::OutsideEditKept { path, version_id }) if &version_id == id && path == "notes/harbour.md"
+        ));
+    }
+
+    #[test]
+    fn the_writer_whose_text_was_kept_has_its_next_save_refused_with_the_person_s_text() {
+        let theirs = "Agent line.\n";
+        let (_dir, file) = site_with_page(theirs);
+        persist_editor_content(&file.to_string_lossy(), &serde_json::json!({}), "Person line.\n", &content_hash(theirs.as_bytes()), true).unwrap();
+
+        let agent = persist_editor_content(&file.to_string_lossy(), &serde_json::json!({}), "Agent line, again.\n", &content_hash(theirs.as_bytes()), false).unwrap();
+
+        let SaveResult::Conflict { disk } = agent else { panic!("the agent's save must be refused, got {agent:?}") };
+        assert_eq!(disk.body, "Person line.\n");
+    }
+
+    #[test]
+    fn a_save_that_cannot_keep_what_it_replaces_writes_nothing() {
+        let theirs = "Theirs.\n";
+        let (dir, file) = site_with_page(theirs);
+        std::fs::write(dir.path().join(".moss/config.toml"), "[history]\nenabled = false\n").unwrap();
+        let off = persist_editor_content(&file.to_string_lossy(), &serde_json::json!({}), "Mine.\n", &content_hash(theirs.as_bytes()), true).unwrap();
+        assert_eq!(off, SaveResult::NotKept, "history off");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), theirs);
+
+        let loose = make_test_tmpdir();
+        let file = loose.path().join("loose.md");
+        std::fs::write(&file, theirs).unwrap();
+        let no_site = persist_editor_content(&file.to_string_lossy(), &serde_json::json!({}), "Mine.\n", &content_hash(theirs.as_bytes()), true).unwrap();
+        assert_eq!(no_site, SaveResult::NotKept, "a file in no site");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), theirs);
+    }
+
+    #[test]
+    fn an_ordinary_save_keeps_nothing() {
+        let (dir, file) = site_with_page("Before.\n");
+        let outcome = persist_editor_content(&file.to_string_lossy(), &serde_json::json!({}), "After.\n", &content_hash(b"Before.\n"), false).unwrap();
+        assert_eq!(outcome, SaveResult::Saved { hash: content_hash(b"After.\n"), displaced: None });
+        assert!(displaced_event(&file.to_string_lossy(), &outcome).is_none());
+        assert!(crate::deploy::history::HistoryStore::in_vault(dir.path()).list_records().is_empty());
     }
 }
