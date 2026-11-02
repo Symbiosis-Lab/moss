@@ -1608,7 +1608,7 @@ fn render_one(
     let more_link: Option<(String, String)> = if !truncated {
         None
     } else if let Some(more_ref) = parsed.more.as_deref() {
-        match resolve_more_link_target(more_ref, all_docs) {
+        match resolve_more_link_target(more_ref, from, all_docs) {
             Some(doc) => {
                 let stem = doc.url_path.trim_end_matches("index.html").trim_end_matches('/');
                 let href = if stem.is_empty() {
@@ -1670,31 +1670,55 @@ fn not_found(folder_id: &str) -> String {
     format!("Folder not found: /{folder_id}/")
 }
 
-/// Resolve a `children_more:` reference to the page it names. Mirrors
-/// `children_source`'s stem matching (`frontmatter_ref_to_stem` + slug
-/// comparison against `ParsedDocument::url_path`), generalized from folders to
-/// any listable page — `children_more` sends the reader to an ordinary page,
-/// not a folder. `more_ref` is already a resolved path by the time it reaches
-/// here in a real build (the frontmatter-wikilink pass runs first); the raw
+/// Resolve a `children_more:` reference to the page it names, as a
+/// `[[reference]]` written on `from` would: the file it names (the
+/// frontmatter-wikilink pass has already turned a bracket form into that
+/// file's path), else a file of that stem, else a page whose address ends in
+/// that name. Among several matches the page in `from`'s own edition wins, so
+/// a home links to its own language's archive; another edition's page is
+/// reached only when no page of the same edition matches. The raw
 /// `[[bracket]]` form is handled too, for callers that construct a marker
 /// directly.
 fn resolve_more_link_target<'a>(
     more_ref: &str,
+    from: &str,
     all_docs: &'a [ParsedDocument],
 ) -> Option<&'a ParsedDocument> {
+    let source_of = |d: &ParsedDocument| d.source_path.as_deref().map(|p| p.replace('\\', "/"));
+    let edition = all_docs
+        .iter()
+        .find(|d| source_of(d).as_deref() == Some(from))
+        .map(|d| d.edition.as_str())
+        .unwrap_or("");
+    let path = more_ref
+        .trim()
+        .trim_matches(|c| c == '"' || c == '\'')
+        .trim_start_matches("[[")
+        .trim_end_matches("]]")
+        .trim_start_matches('/');
+    if let Some(named) = all_docs.iter().find(|d| source_of(d).as_deref() == Some(path)) {
+        return Some(named);
+    }
     let stem = crate::build::markdown::frontmatter_ref_to_stem(more_ref);
     // Page URLs are built by `slug::generate_slug` (`&` becomes `and`, dots
     // are kept), so the target is slugged by the same function.
     let target_slug = moss_core::slug::generate_slug(&stem);
-    all_docs.iter().find(|d| {
-        let d_stem = d
-            .url_path
-            .trim_end_matches("/index.html")
-            .trim_end_matches("index.html")
-            .trim_end_matches('/');
-        let d_leaf = d_stem.rsplit('/').next().unwrap_or(d_stem);
-        d_leaf == target_slug
-    })
+    all_docs
+        .iter()
+        .filter_map(|d| {
+            let file_stem = source_of(d)
+                .and_then(|p| p.rsplit('/').next().map(|f| f.rsplit_once('.').map_or(f, |(s, _)| s).to_string()))
+                .is_some_and(|s| moss_core::slug::generate_slug(&s) == target_slug);
+            let d_stem = d
+                .url_path
+                .trim_end_matches("/index.html")
+                .trim_end_matches("index.html")
+                .trim_end_matches('/');
+            let url_leaf = d_stem.rsplit('/').next().unwrap_or(d_stem) == target_slug;
+            (file_stem || url_leaf).then_some((d, file_stem))
+        })
+        .min_by_key(|(d, file_stem)| (d.edition != edition, !file_stem))
+        .map(|(d, _)| d)
 }
 
 /// Synthesize a folder-list marker from a page's `children_*` frontmatter fields.
