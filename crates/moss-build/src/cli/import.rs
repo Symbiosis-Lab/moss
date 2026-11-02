@@ -112,6 +112,12 @@ pub fn run(args: &[String]) -> i32 {
                         res.unreachable_files
                     );
                 }
+                if res.left_by_redirect > 0 {
+                    eprintln!(
+                        "  ↳ {} link(s) left the site by redirect and were not imported",
+                        res.left_by_redirect
+                    );
+                }
                 if res.linked_files_downloaded > 0 {
                     eprintln!(
                         "  ↳ {} linked file(s) downloaded into assets/imported",
@@ -199,7 +205,7 @@ pub fn run(args: &[String]) -> i32 {
     }
 
     eprintln!(
-        "Done: {} page(s) imported into {} ({} failed, {} skipped as non-HTML, {} duplicate(s) skipped{}{}{}{}{}{})",
+        "Done: {} page(s) imported into {} ({} failed, {} skipped as non-HTML, {} duplicate(s) skipped{}{}{}{}{}{}{})",
         totals.pages,
         folder.display(),
         totals.failed_pages,
@@ -212,6 +218,11 @@ pub fn run(args: &[String]) -> i32 {
         },
         if totals.unreachable_files > 0 {
             format!(", {} linked file(s) unreachable", totals.unreachable_files)
+        } else {
+            String::new()
+        },
+        if totals.left_by_redirect > 0 {
+            format!(", {} link(s) left the site by redirect", totals.left_by_redirect)
         } else {
             String::new()
         },
@@ -272,6 +283,7 @@ struct ImportTotals {
     duplicate_pages: usize,
     unreachable_variants: usize,
     unreachable_files: usize,
+    left_by_redirect: usize,
     linked_files_downloaded: usize,
     oversized_files: usize,
     widgets_carried: usize,
@@ -289,6 +301,7 @@ impl ImportTotals {
         self.duplicate_pages += res.duplicate_pages;
         self.unreachable_variants += res.unreachable_variants;
         self.unreachable_files += res.unreachable_files;
+        self.left_by_redirect += res.left_by_redirect;
         self.linked_files_downloaded += res.linked_files_downloaded;
         self.oversized_files += res.oversized_files;
         self.widgets_carried += res.widgets_carried;

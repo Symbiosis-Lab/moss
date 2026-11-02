@@ -337,6 +337,7 @@ async fn a_legitimate_redirect_is_still_followed() {
     let response = fetch_following_redirects(&agent, &start, "test-agent", None, None, |_| Ok(()))
         .expect("a legitimate redirect must still be followed");
     assert_eq!(response.status(), 200);
+    assert_eq!(response.get_url(), format!("{}/new-path", server.url()), "fetch_page reports this");
 }
 
 #[tokio::test]

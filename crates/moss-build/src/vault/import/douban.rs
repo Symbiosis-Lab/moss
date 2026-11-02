@@ -243,6 +243,7 @@ pub(crate) async fn import_tofu_backup(
             duplicate_pages: 0,
             unreachable_variants: 0,
             unreachable_files: 0,
+            left_by_redirect: 0,
             linked_files_downloaded: 0,
             oversized_files: 0,
             widgets_carried: 0,

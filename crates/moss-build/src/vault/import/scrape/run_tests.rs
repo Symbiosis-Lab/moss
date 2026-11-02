@@ -2144,3 +2144,25 @@ fn a_composed_note_takes_the_heading_when_the_title_is_never_shown() {
     assert!(!note.contains("## The Winter's Tale"), "{note}");
     assert!(!note.contains("T_Winter_Tale_S"), "{note}");
 }
+
+/// A link aimed at a note that was never written goes back to the address it
+/// was written with; links to other notes are untouched.
+#[test]
+fn a_link_to_a_page_that_left_the_site_is_restored() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("index.md"),
+        "[Survey](./r/abc.md) and [About](./about.md) and [again](./r/abc.md)\n",
+    )
+    .unwrap();
+    let left = vec![(
+        "](./r/abc.md)".to_string(),
+        "](https://example.test/r/abc)".to_string(),
+    )];
+    restore_left_links(tmp.path(), &["index.md".to_string()], &left).unwrap();
+    let note = std::fs::read_to_string(tmp.path().join("index.md")).unwrap();
+    assert_eq!(
+        note,
+        "[Survey](https://example.test/r/abc) and [About](./about.md) and [again](https://example.test/r/abc)\n"
+    );
+}

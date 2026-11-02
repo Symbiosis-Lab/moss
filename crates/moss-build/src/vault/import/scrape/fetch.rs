@@ -401,17 +401,21 @@ pub(crate) fn observe_pace<T>(pacer: &mut HostPacer, host: &str, result: &Result
 ///
 /// `accept: None` — a page fetch is never asked to localize a transcoded
 /// variant, so it keeps ureq's own `Accept: */*` default unchanged.
-pub(crate) async fn fetch_page(url: &str, user_agent: &str) -> Result<(String, String), FetchError> {
+pub(crate) async fn fetch_page(
+    url: &str,
+    user_agent: &str,
+) -> Result<(String, String, String), FetchError> {
     let url = url.to_string();
     let user_agent = user_agent.to_string();
     tokio::task::spawn_blocking(move || {
         let response =
             call_with_retry(&url, &user_agent, std::time::Duration::from_secs(30), None, None)?;
         let content_type = response.content_type().to_string();
+        let final_url = response.get_url().to_string();
 
         response
             .into_string()
-            .map(|body| (body, content_type))
+            .map(|body| (body, content_type, final_url))
             .map_err(|e| FetchError::message(format!("Failed to read response: {}", e)))
     })
     .await

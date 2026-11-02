@@ -2,6 +2,7 @@
 //!
 //! Determines whether a URL is within the crawl scope based on the starting URL.
 
+use super::design::norm_url;
 use url::Url;
 
 /// Represents the scope of URLs to crawl
@@ -84,6 +85,26 @@ pub fn is_same_origin(scope: &UrlScope, url_str: &str) -> bool {
     url.scheme() == scope.base_url.scheme()
         && url.host() == scope.base_url.host()
         && url.port() == scope.base_url.port()
+}
+
+/// Whether a crawl-discovered page's fetch ended on another host than the
+/// scope's: the start URL is the user's own choice and never counts, and an
+/// http/https switch or a leading `www.` added or dropped is the same site.
+/// Only the host is compared, so a page that moved within the site stays in.
+pub fn left_site_by_redirect(
+    scope: &UrlScope,
+    start_url: &str,
+    url: &str,
+    final_url: &str,
+) -> bool {
+    if norm_url(url) == norm_url(start_url) {
+        return false;
+    }
+    let Ok(landed) = Url::parse(final_url) else {
+        return true;
+    };
+    let bare = |u: &Url| u.host_str().map(|h| h.strip_prefix("www.").unwrap_or(h).to_string());
+    bare(&landed) != bare(&scope.base_url) || landed.port() != scope.base_url.port()
 }
 
 /// Check if a URL is within the given scope
@@ -192,5 +213,29 @@ mod tests {
         let scope = UrlScope::new("https://example.com/blog/").unwrap();
         // URLs with fragments within scope should be included
         assert!(is_within_scope(&scope, "https://example.com/blog/post#section"));
+    }
+
+    #[test]
+    fn only_a_change_of_host_leaves_the_site() {
+        let scope = UrlScope::new("https://example.test/blog/").unwrap();
+        let start = "https://example.test/blog/";
+        let left = |url: &str, landed: &str| left_site_by_redirect(&scope, start, url, landed);
+        let page = "https://example.test/blog/old";
+        assert!(!left(page, "https://example.test/blog/new"));
+        assert!(!left(page, "https://example.test/news/new"), "a move within the site stays in");
+        assert!(!left(page, "http://example.test/blog/new"));
+        assert!(!left(page, "https://www.example.test/blog/new"));
+        assert!(left(page, "https://survey.example.test/form"));
+        assert!(left(page, "https://example.test:8443/blog/new"));
+        assert!(!left(start, "https://survey.example.test/form"), "the start URL is exempt");
+    }
+
+    #[test]
+    fn a_redirect_keeps_an_explicit_port_comparison() {
+        let scope = UrlScope::new("http://example.test:8080/").unwrap();
+        let start = "http://example.test:8080/";
+        let page = "http://example.test:8080/a";
+        assert!(!left_site_by_redirect(&scope, start, page, "http://example.test:8080/b"));
+        assert!(left_site_by_redirect(&scope, start, page, "http://example.test:9090/b"));
     }
 }
