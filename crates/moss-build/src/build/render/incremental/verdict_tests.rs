@@ -546,6 +546,7 @@ fn the_group_set_is_keyed_by_shape_not_by_host() {
             depth: Depth::Direct,
             scope_default_tree: false,
             exclude_nav: false,
+            edition: String::new(),
         })
         .is_some());
     assert_eq!(groups.len(), 2, "the root home's group and writings/'s group");

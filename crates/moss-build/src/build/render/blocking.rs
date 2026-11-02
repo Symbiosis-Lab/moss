@@ -1310,6 +1310,40 @@ pub fn generate_blocking_content_for_build(
         // A listing row names its page's language, so every page has its tag before any listing is drawn.
         super::lang_roots::fill_missing_lang_tags(&mut documents, &site_config.lang);
 
+        // Translation links between documents sharing the same stem or translationKey, before any listing is drawn so a listing can show a translated piece once
+        {
+            use crate::i18n::link::{build_translation_links, DocumentInfo};
+            let doc_infos: Vec<DocumentInfo> = documents
+                .iter()
+                .enumerate()
+                .map(|(i, doc)| {
+                    // Source path minus a leading language folder, so `a/x.md` and
+                    // `zh-hans/a/x.md` share a directory (url_path keeps the folder).
+                    let directory = doc.source_path.as_deref()
+                        .map(|sp| &sp[moss_core::home::lang_tree_prefix(sp).map_or(0, |p| p.len() + 1)..])
+                        .and_then(|sp| std::path::Path::new(sp).parent())
+                        .and_then(|p| p.to_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_default();
+                    DocumentInfo {
+                        index: i,
+                        clean_stem: doc.clean_stem.clone(),
+                        directory,
+                        // The tag the doc's OWN page emits, so siblings advertise the
+                        // same string back. Filled above; the fallback is only so a
+                        // missed fill degrades to the site tag, not `hreflang=""`.
+                        lang_tag: doc.lang_tag.clone().unwrap_or_else(|| crate::i18n::lang_tag(&site_config.lang)),
+                        url_path: doc.url_path.clone(),
+                        translation_key: doc.translation_key.clone(),
+                    }
+                })
+                .collect();
+            let all_links = build_translation_links(&doc_infos);
+            for (i, links) in all_links.into_iter().enumerate() {
+                documents[i].translations = links;
+            }
+        }
+
         // Resolve folder-list embed markers (`![[/folder/|limit:N,more]]`) and settle `from=` heroes.
         // moss-core emits a `<!--MOSS_MARKER_FOLDER_LIST:…-->` marker during
         // wikilink resolution; we expand it here, AFTER
@@ -1344,39 +1378,6 @@ pub fn generate_blocking_content_for_build(
             &seta_url_for_build,
         );
 
-        // Build translation links between documents sharing the same stem or translationKey
-        {
-            use crate::i18n::link::{build_translation_links, DocumentInfo};
-            let doc_infos: Vec<DocumentInfo> = documents
-                .iter()
-                .enumerate()
-                .map(|(i, doc)| {
-                    // Source path minus a leading language folder, so `a/x.md` and
-                    // `zh-hans/a/x.md` share a directory (url_path keeps the folder).
-                    let directory = doc.source_path.as_deref()
-                        .map(|sp| &sp[moss_core::home::lang_tree_prefix(sp).map_or(0, |p| p.len() + 1)..])
-                        .and_then(|sp| std::path::Path::new(sp).parent())
-                        .and_then(|p| p.to_str())
-                        .map(|s| s.to_string())
-                        .unwrap_or_default();
-                    DocumentInfo {
-                        index: i,
-                        clean_stem: doc.clean_stem.clone(),
-                        directory,
-                        // The tag the doc's OWN page emits, so siblings advertise the
-                        // same string back. Filled above; the fallback is only so a
-                        // missed fill degrades to the site tag, not `hreflang=""`.
-                        lang_tag: doc.lang_tag.clone().unwrap_or_else(|| crate::i18n::lang_tag(&site_config.lang)),
-                        url_path: doc.url_path.clone(),
-                        translation_key: doc.translation_key.clone(),
-                    }
-                })
-                .collect();
-            let all_links = build_translation_links(&doc_infos);
-            for (i, links) in all_links.into_iter().enumerate() {
-                documents[i].translations = links;
-            }
-        }
         log::debug!(target: "timing", "[reduce] translation_links: {:?}", reduce_start.elapsed());
         log::debug!(target: "timing", "[reduce] total (uid_dedup..translation_links): {:?}", reduce_pre_start.elapsed());
 
@@ -2269,6 +2270,7 @@ pub fn generate_blocking_content_for_build(
                     home.depth_all,
                     home.scoped,
                     home.scoped,
+                    &documents[entry.document_index].edition,
                     &documents,
                     project_structure,
                 );

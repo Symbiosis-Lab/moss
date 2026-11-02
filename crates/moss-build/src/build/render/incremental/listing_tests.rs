@@ -82,7 +82,7 @@ const ALPHA: usize = 2;
 const DRAFT: usize = 4;
 
 fn members(docs: &[ParsedDocument], slug: &str, flatten: bool) -> Vec<String> {
-    crate::build::folder_embed::select_children_by_slug(slug, flatten, false, false, docs, &project())
+    crate::build::folder_embed::select_children_by_slug(slug, flatten, false, false, "", docs, &project())
         .iter()
         .map(|d| d.url_path.clone())
         .collect()
@@ -128,19 +128,45 @@ fn the_selector_is_the_single_source_of_truth_for_membership() {
     // The language-tree filter fires only when the homepage asks for it.
     let multilingual = ProjectStructure { has_language_trees: true, ..project() };
     let scoped = crate::build::folder_embed::select_children_by_slug(
-        "", true, true, false, &docs, &multilingual,
+        "", true, true, false, "", &docs, &multilingual,
     );
     assert!(
         !scoped.iter().any(|d| d.url_path.starts_with("en/")),
         "scope_default_tree drops language subtrees on a multilingual site"
     );
     let unscoped = crate::build::folder_embed::select_children_by_slug(
-        "", true, false, false, &docs, &multilingual,
+        "", true, false, false, "", &docs, &multilingual,
     );
     assert!(
         unscoped.iter().any(|d| d.url_path.starts_with("en/")),
         "...and only then"
     );
+}
+
+/// A listing across editions shows a translated piece once, in the host's own
+/// edition, so the same folder yields different members for hosts in different
+/// editions: the reason `GroupKey` carries the host's edition.
+#[test]
+fn a_cross_edition_selection_keeps_the_hosts_own_twin() {
+    let link = |to: &str| crate::i18n::link::TranslationLink {
+        lang_tag: "en".into(),
+        url_path: to.into(),
+        display_name: "EN",
+    };
+    let mut root_song = article("song/index.html", "Song");
+    let mut en_song = article("en/lied/index.html", "Lied");
+    root_song.translations = vec![link("en/lied/index.html")];
+    en_song.translations = vec![link("song/index.html")];
+    let docs = vec![root_song, en_song, article("en/aufsatz/index.html", "Aufsatz")];
+    let multilingual = ProjectStructure { has_language_trees: true, ..project() };
+    let urls = |edition: &str| -> Vec<String> {
+        crate::build::folder_embed::select_children_by_slug("", true, false, false, edition, &docs, &multilingual)
+            .iter()
+            .map(|d| d.url_path.clone())
+            .collect()
+    };
+    assert_eq!(urls(""), vec!["song/index.html", "en/aufsatz/index.html"]);
+    assert_eq!(urls("en"), vec!["en/lied/index.html", "en/aufsatz/index.html"]);
 }
 
 // ---- digest helpers ------------------------------------------------------
@@ -151,6 +177,7 @@ fn key(slug: &str) -> GroupKey {
         depth: Depth::Direct,
         scope_default_tree: false,
         exclude_nav: false,
+        edition: String::new(),
     }
 }
 
@@ -162,6 +189,7 @@ fn root_key() -> GroupKey {
         depth: Depth::All,
         scope_default_tree: true,
         exclude_nav: true,
+        edition: String::new(),
     }
 }
 
@@ -390,12 +418,12 @@ fn a_language_home_reads_its_own_folder_not_the_root_tree() {
     let keys = groups_read_by(en_home, &docs).expect("a language home is a modelled shape");
     assert_eq!(
         keys,
-        vec![GroupKey { folder_slug: "en".into(), depth: Depth::All, scope_default_tree: true, exclude_nav: true }]
+        vec![GroupKey { folder_slug: "en".into(), depth: Depth::All, scope_default_tree: true, exclude_nav: true, edition: "en".into() }]
     );
 
     let mut direct = en_home.clone();
     direct.children_depth = Some("direct".into());
-    assert_eq!(groups_read_by(&direct, &docs).unwrap(), vec![key("en")]);
+    assert_eq!(groups_read_by(&direct, &docs).unwrap(), vec![GroupKey { edition: "en".into(), ..key("en") }]);
 
     let home = docs.iter().find(|d| d.url_path == "index.html").unwrap();
     assert_eq!(groups_read_by(home, &docs).unwrap(), vec![root_key()]);
@@ -575,7 +603,7 @@ fn an_edit_moves_only_the_term_group_of_its_own_edition() {
         line: None, slugs: Default::default(),
     }];
     crate::build::terms::derive_terms(&mut docs, kinds);
-    let (en, de) = (key("authors/ada"), key("de/authors/ada"));
+    let (en, de) = (key("authors/ada"), GroupKey { edition: "de".into(), ..key("de/authors/ada") });
     let (en_before, de_before) = (digest(&docs, &en), digest(&docs, &de));
 
     let mut german_edited = docs.clone();

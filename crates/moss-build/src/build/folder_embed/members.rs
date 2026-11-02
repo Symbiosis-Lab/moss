@@ -41,7 +41,8 @@ pub(super) fn select<'a>(
     all_docs: &'a [ParsedDocument],
     project: &ProjectStructure,
 ) -> Vec<&'a ParsedDocument> {
-    let picked = select_children_by_slug(folder_slug, is_flatten, scope_default_tree, exclude_nav, all_docs, project);
+    let edition = host.map_or("", |h| h.edition.as_str());
+    let picked = select_children_by_slug(folder_slug, is_flatten, scope_default_tree, exclude_nav, edition, all_docs, project);
     // A page that hosts a listing of a folder it also sits inside (a
     // `children:`/`children_more` whole-site listing at the root, where every
     // page's prefix is "") must not list itself. The folder's own index
@@ -142,6 +143,7 @@ pub(crate) fn listed_unfiltered<'a>(
             key.depth == Depth::All,
             key.scope_default_tree,
             key.exclude_nav,
+            &key.edition,
             documents,
             project,
         ) {

@@ -1163,6 +1163,7 @@ pub(crate) fn select_children_by_slug<'a>(
     is_flatten: bool,
     scope_default_tree: bool,
     exclude_nav: bool,
+    edition: &str,
     all_docs: &'a [ParsedDocument],
     project: &ProjectStructure,
 ) -> Vec<&'a ParsedDocument> {
@@ -1184,7 +1185,7 @@ pub(crate) fn select_children_by_slug<'a>(
     } else {
         format!("{}/", folder_id_slug)
     };
-    all_docs
+    let picked: Vec<&ParsedDocument> = all_docs
         .iter()
         .filter(|d| {
             if d.url_path == target_url {
@@ -1238,7 +1239,31 @@ pub(crate) fn select_children_by_slug<'a>(
                     })
             }
         })
-        .collect()
+        .collect();
+    one_per_translation(picked, edition)
+}
+
+/// A listing that reaches more than one edition shows a translated piece once:
+/// the page in the listing page's own edition, else the default edition's, else
+/// the first picked. Pages of one edition never displace each other, so a
+/// listing within an edition is returned as it came.
+fn one_per_translation<'a>(picked: Vec<&'a ParsedDocument>, edition: &str) -> Vec<&'a ParsedDocument> {
+    if picked.iter().all(|d| d.edition == picked[0].edition) {
+        return picked;
+    }
+    let rank = |d: &ParsedDocument| {
+        if d.edition.eq_ignore_ascii_case(edition) { 0 } else if d.edition.is_empty() { 1 } else { 2 }
+    };
+    let at: std::collections::HashMap<&str, usize> =
+        picked.iter().enumerate().map(|(i, d)| (d.url_path.as_str(), i)).collect();
+    let better_twin = |i: usize, d: &ParsedDocument| {
+        d.translations.iter().filter_map(|t| at.get(t.url_path.as_str())).any(|&j| {
+            let twin = picked[j];
+            twin.edition != d.edition && (rank(twin), j) < (rank(d), i)
+        })
+    };
+    let dropped: Vec<bool> = picked.iter().enumerate().map(|(i, d)| better_twin(i, d)).collect();
+    picked.into_iter().zip(dropped).filter(|(_, gone)| !gone).map(|(d, _)| d).collect()
 }
 
 /// What a home page lists when its frontmatter says nothing: shared by the
