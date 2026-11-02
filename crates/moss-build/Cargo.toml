@@ -176,6 +176,9 @@ pathdiff = "0.2"
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [dev-dependencies]
+# Renders the engine's command contract for the moss UI (commands/tests.rs).
+# Pinned to the release that matches the `specta` pin above.
+specta-typescript = "=0.0.7"
 # vault_root_tests.rs mints unique temp dirs per test.
 uuid = { version = "1.11", features = ["v4"] }
 # The moved build tree's inline tests (M6a).

@@ -9,11 +9,11 @@
 //!
 //! ## One tier per route
 //!
-//! * `/__moss/invoke/<cmd>`: [`commands::PUBLIC_READS`], token-free like
+//! * `/__moss/invoke/<cmd>`: [`commands::public_read::COMMANDS`], token-free like
 //!   `/__moss/source/*`.
-//! * `/__moss/read/<cmd>`: [`commands::SESSION_READS`], behind the session
+//! * `/__moss/read/<cmd>`: [`commands::session_read::COMMANDS`], behind the session
 //!   token (`X-Moss-Token`), because they expose the whole folder.
-//! * `/__moss/mutate/<cmd>`: [`commands::WRITES`], behind the same token.
+//! * `/__moss/mutate/<cmd>`: [`commands::write::COMMANDS`], behind the same token.
 //!
 //! The tiers are disjoint, so the URL path alone fixes the trust class, and a
 //! command outside a route's tier is absent (404), not refused.
@@ -75,8 +75,8 @@ fn outcome_to_response(cmd: &str, outcome: Option<CommandResult>) -> Response {
 /// [`NO_PROJECT_OPEN`]: crate::vault::paths::NO_PROJECT_OPEN
 pub async fn handle_invoke(ctx: InvokeCtx, site_dir: Arc<RwLock<PathBuf>>, cmd: String, args: Value) -> Response {
     let outcome = match ctx.bind(&site_dir) {
-        Some(session) => contain_panics(&cmd, commands::dispatch_public_read(&*session, &cmd, args)).await,
-        None if commands::PUBLIC_READS.contains(&cmd.as_str()) => {
+        Some(session) => contain_panics(&cmd, commands::public_read::dispatch(&*session, &cmd, args)).await,
+        None if commands::public_read::COMMANDS.contains(&cmd.as_str()) => {
             Some(Err(CommandError::Failed(crate::vault::paths::NO_PROJECT_OPEN.to_string())))
         }
         None => None,
@@ -87,7 +87,7 @@ pub async fn handle_invoke(ctx: InvokeCtx, site_dir: Arc<RwLock<PathBuf>>, cmd: 
 /// `POST /__moss/mutate/*cmd`. The token gate (a `route_layer`, see `router.rs`)
 /// has already admitted the request and handed down the session it admitted.
 pub async fn handle_mutate(axum::Extension(session): axum::Extension<Arc<Session>>, cmd: String, args: Value) -> Response {
-    let outcome = contain_panics(&cmd, commands::dispatch_write(&*session, &cmd, args)).await;
+    let outcome = contain_panics(&cmd, commands::write::dispatch(&*session, &cmd, args)).await;
     outcome_to_response(&cmd, outcome)
 }
 
@@ -97,7 +97,7 @@ pub async fn handle_authed_read(
     cmd: String,
     args: Value,
 ) -> Response {
-    let outcome = contain_panics(&cmd, commands::dispatch_session_read(&*session, &cmd, args)).await;
+    let outcome = contain_panics(&cmd, commands::session_read::dispatch(&*session, &cmd, args)).await;
     outcome_to_response(&cmd, outcome)
 }
 
@@ -161,7 +161,7 @@ mod tests {
         let (dir, ctx) = scratch();
 
         let refused = |v: Value| async {
-            match commands::dispatch_write(&*ctx, "delete_entry", v).await {
+            match commands::write::dispatch(&*ctx, "delete_entry", v).await {
                 Some(Err(_)) => {}
                 other => panic!("expected a refused dispatch, got {other:?}"),
             }
@@ -176,7 +176,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn resolve_attachment_dir_reads_config_and_confines() {
         let (dir, ctx) = scratch();
-        let ask = |p: &str| commands::dispatch_session_read(&*ctx, "resolve_attachment_dir", json!({ "pageRelativePath": p }));
+        let ask = |p: &str| commands::session_read::dispatch(&*ctx, "resolve_attachment_dir", json!({ "pageRelativePath": p }));
 
         match ask("posts/a.md").await {
             Some(Ok(v)) => assert_eq!(v, json!("posts"), "default is beside the page"),
@@ -204,7 +204,7 @@ mod tests {
     async fn resolve_page_source_resolves_home_and_confines() {
         let (dir, ctx) = scratch();
         std::fs::write(dir.path().join("index.md"), "---\ntitle: Home\n---\nhi").unwrap();
-        let ask = |u: &str| commands::dispatch_session_read(&*ctx, "resolve_page_source", json!({ "urlPath": u }));
+        let ask = |u: &str| commands::session_read::dispatch(&*ctx, "resolve_page_source", json!({ "urlPath": u }));
 
         for url in ["", "/"] {
             match ask(url).await {
@@ -228,18 +228,18 @@ mod tests {
     async fn unlisted_command_dispatches_to_none() {
         let (_dir, ctx) = scratch();
         assert!(
-            commands::dispatch_public_read(&*ctx, "reveal_entry", json!({})).await.is_none(),
+            commands::public_read::dispatch(&*ctx, "reveal_entry", json!({})).await.is_none(),
             "a command outside every tier is absent from this carrier"
         );
         assert!(
-            commands::dispatch_public_read(&*ctx, "no_such_command_xyz", json!({})).await.is_none(),
+            commands::public_read::dispatch(&*ctx, "no_such_command_xyz", json!({})).await.is_none(),
         );
     }
 
     #[tokio::test]
     async fn cloud_unavailable_details_are_an_authenticated_session_read() {
         let (_dir, ctx) = scratch();
-        let result = commands::dispatch_session_read(&*ctx, "get_cloud_unavailable_files", Value::Null)
+        let result = commands::session_read::dispatch(&*ctx, "get_cloud_unavailable_files", Value::Null)
             .await
             .expect("the command is on the authed-read carrier");
         let error = result.expect_err("a scratch vault has no active sweep");
@@ -250,7 +250,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn scan_shortcodes_dispatches_and_returns_a_result() {
         let (_dir, ctx) = scratch();
-        let out = commands::dispatch_public_read(&*ctx, "scan_shortcodes", json!({ "text": "# hi\n\nplain" }))
+        let out = commands::public_read::dispatch(&*ctx, "scan_shortcodes", json!({ "text": "# hi\n\nplain" }))
             .await
             .expect("listed command must dispatch")
             .expect("scan_shortcodes is infallible on valid text");
@@ -269,7 +269,7 @@ mod tests {
             crate::build::types::PublishPreflightProjection { build_generation: 7, missing_references: vec![], unresolved_inputs: vec![], drafts_linked: vec![] },
         );
 
-        let out = commands::dispatch_session_read(&*ctx, "get_publish_preflight", json!({ "folder": "/somewhere/else" }))
+        let out = commands::session_read::dispatch(&*ctx, "get_publish_preflight", json!({ "folder": "/somewhere/else" }))
             .await
             .expect("listed command must dispatch")
             .expect("a recorded projection is Ok");
@@ -280,7 +280,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn get_publish_preflight_answers_null_for_an_unbuilt_vault() {
         let (_dir, ctx) = scratch();
-        let out = commands::dispatch_session_read(&*ctx, "get_publish_preflight", json!({}))
+        let out = commands::session_read::dispatch(&*ctx, "get_publish_preflight", json!({}))
             .await
             .expect("listed command must dispatch")
             .expect("no build recorded is still Ok(None)");
@@ -308,7 +308,7 @@ mod tests {
         );
         map.save(&dir.path().join(".moss")).expect("save fixture");
 
-        let out = commands::dispatch_session_read(&*ctx, "list_vault_terms", json!({}))
+        let out = commands::session_read::dispatch(&*ctx, "list_vault_terms", json!({}))
             .await
             .expect("listed command must dispatch")
             .expect("a valid article map is Ok");
@@ -319,7 +319,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn missing_required_arg_is_bad_args() {
         let (_dir, ctx) = scratch();
-        let r = commands::dispatch_public_read(&*ctx, "scan_shortcodes", json!({}))
+        let r = commands::public_read::dispatch(&*ctx, "scan_shortcodes", json!({}))
             .await
             .expect("listed")
             .expect_err("missing 'text' must be an error");

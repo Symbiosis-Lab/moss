@@ -111,27 +111,55 @@ where
 }
 
 macro_rules! tier {
-    ($(#[$m:meta])* $list:ident, $dispatch:ident, $parse:ident { $($cmd:ident => $f:path),+ $(,)? }) => {
+    ($(#[$m:meta])* $tier:ident { $($cmd:ident => $f:path),+ $(,)? }) => {
         $(#[$m])*
-        pub const $list: &[&str] = &[$(stringify!($cmd)),+];
+        pub mod $tier {
+            use super::*;
 
-        /// `None` when `cmd` is not in this tier.
-        pub async fn $dispatch(host: &dyn CommandHost, cmd: &str, args: Value) -> Option<CommandResult> {
-            match cmd {
-                $(stringify!($cmd) => Some(run(host, args, $f).await),)+
-                _ => None,
+            pub const COMMANDS: &[&str] = &[$(stringify!($cmd)),+];
+
+            /// `None` when `cmd` is not in this tier.
+            pub async fn dispatch(host: &dyn CommandHost, cmd: &str, args: Value) -> Option<CommandResult> {
+                match cmd {
+                    $(stringify!($cmd) => Some(run(host, args, $f).await),)+
+                    _ => None,
+                }
             }
-        }
 
-        /// Parse `args` with `cmd`'s own argument type, running nothing.
-        #[cfg(test)]
-        pub(crate) fn $parse(cmd: &str, args: Value) -> Option<Result<(), String>> {
-            match cmd {
-                $(stringify!($cmd) => Some(parses_for(&$f, args)),)+
-                _ => None,
+            /// Parse `args` with `cmd`'s own argument type, running nothing.
+            #[cfg(test)]
+            pub(crate) fn parse(cmd: &str, args: Value) -> Option<Result<(), String>> {
+                match cmd {
+                    $(stringify!($cmd) => Some(parses_for(&$f, args)),)+
+                    _ => None,
+                }
+            }
+
+            /// This tier's name and each command with its argument and answer types.
+            #[cfg(test)]
+            pub(crate) fn signatures(types: &mut specta::TypeMap) -> (&'static str, Vec<Signature>) {
+                let commands = vec![$({
+                    let (args, out) = signature_of(&$f, types);
+                    (stringify!($cmd), args, out)
+                }),+];
+                (stringify!($tier), commands)
             }
         }
     };
+}
+
+#[cfg(test)]
+type Signature = (&'static str, specta::DataType, specta::DataType);
+
+#[cfg(test)]
+fn signature_of<'h, A: specta::Type, T: specta::Type, Fut>(
+    _command: &impl FnOnce(&'h dyn CommandHost, A) -> Fut,
+    types: &mut specta::TypeMap,
+) -> (specta::DataType, specta::DataType)
+where
+    Fut: Future<Output = Result<T, String>> + 'h,
+{
+    (A::reference(types, &[]).inner, T::reference(types, &[]).inner)
 }
 
 #[cfg(test)]
@@ -144,7 +172,7 @@ fn parses_for<'h, A: DeserializeOwned, Fut>(
 
 tier! {
     /// Reads that expose nothing beyond what the published site shows.
-    PUBLIC_READS, dispatch_public_read, parse_public_read {
+    public_read {
         scan_shortcodes => reads::scan_shortcodes,
         parse_frontmatter => reads::parse_frontmatter,
         editor_resolve_asset => reads::editor_resolve_asset,
@@ -155,7 +183,7 @@ tier! {
 tier! {
     /// Reads that expose the whole folder (its tree, every source's role, its
     /// history), so they need the session credential.
-    SESSION_READS, dispatch_session_read, parse_session_read {
+    session_read {
         editor_bootstrap => reads::editor_bootstrap,
         list_directory => reads::list_directory,
         list_tree => reads::list_tree,
@@ -177,7 +205,7 @@ tier! {
 
 tier! {
     /// Commands that write into the folder.
-    WRITES, dispatch_write, parse_write {
+    write {
         create_files => files::create_files,
         create_folder => files::create_folder,
         delete_entry => files::delete_entry,

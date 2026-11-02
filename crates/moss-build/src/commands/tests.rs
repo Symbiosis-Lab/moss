@@ -71,14 +71,14 @@ fn samples() -> Vec<(&'static str, Value)> {
 fn every_command_parses_the_json_its_callers_send() {
     let samples = samples();
     for (cmd, body) in &samples {
-        let parsed = parse_public_read(cmd, body.clone())
-            .or_else(|| parse_session_read(cmd, body.clone()))
-            .or_else(|| parse_write(cmd, body.clone()))
+        let parsed = public_read::parse(cmd, body.clone())
+            .or_else(|| session_read::parse(cmd, body.clone()))
+            .or_else(|| write::parse(cmd, body.clone()))
             .unwrap_or_else(|| panic!("{cmd} is in no tier"));
         parsed.unwrap_or_else(|e| panic!("{cmd} refused {body}: {e}"));
     }
     let sampled: Vec<&str> = samples.iter().map(|(cmd, _)| *cmd).collect();
-    for cmd in PUBLIC_READS.iter().chain(SESSION_READS).chain(WRITES) {
+    for cmd in public_read::COMMANDS.iter().chain(session_read::COMMANDS).chain(write::COMMANDS) {
         assert!(sampled.contains(cmd), "{cmd} has no wire sample here");
     }
 }
@@ -87,7 +87,7 @@ fn every_command_parses_the_json_its_callers_send() {
 /// classes cannot expose a write as a read.
 #[test]
 fn the_tiers_are_disjoint() {
-    let all: Vec<&str> = PUBLIC_READS.iter().chain(SESSION_READS).chain(WRITES).copied().collect();
+    let all: Vec<&str> = public_read::COMMANDS.iter().chain(session_read::COMMANDS).chain(write::COMMANDS).copied().collect();
     for (i, cmd) in all.iter().enumerate() {
         assert!(!all[i + 1..].contains(cmd), "{cmd} is in two tiers");
     }
@@ -132,8 +132,63 @@ fn the_undo_store_keeps_only_the_newest_renames() {
 async fn undo_refuses_a_rename_from_another_folder() {
     let host = TestHost { root: PathBuf::from("/now/open"), undo: RenameUndoStore::default() };
     let id = host.undo.summarize_and_store(Path::new("/was/open"), RenameApplyResult::default()).undo_id;
-    match dispatch_write(&host, "undo_rename", json!({ "undoId": id })).await {
+    match write::dispatch(&host, "undo_rename", json!({ "undoId": id })).await {
         Some(Err(CommandError::Failed(msg))) => assert!(msg.contains("folder has changed"), "{msg}"),
         other => panic!("expected the folder check to refuse, got {other:?}"),
     }
+}
+
+const CONTRACT: &str = "../../packages/moss-ui/src/engine.generated.ts";
+
+/// The engine's command contract in TypeScript: every argument and answer
+/// type, one entry per command, and each command's tier.
+fn render_contract() -> String {
+    use specta::datatype::FunctionResultVariant;
+    use specta_typescript::{BigIntExportBehavior, Typescript};
+
+    let mut types = specta::TypeMap::default();
+    let tiers = [
+        public_read::signatures(&mut types),
+        session_read::signatures(&mut types),
+        write::signatures(&mut types),
+    ];
+    let ts = Typescript::default().bigint(BigIntExportBehavior::Number).remove_default_header();
+    let render = |dt: &specta::DataType| {
+        specta_typescript::datatype(&ts, &FunctionResultVariant::Value(dt.clone()), &types).expect("renders")
+    };
+
+    let mut commands = String::from("export type EngineCommands = {\n");
+    let mut tier_of = String::from("export const ENGINE_TIER = {\n");
+    for (tier, signatures) in &tiers {
+        for (name, args, out) in signatures {
+            commands += &format!("\t{name}: {{ args: {}; out: {} }};\n", render(args), render(out));
+            tier_of += &format!("\t{name}: \"{tier}\",\n");
+        }
+    }
+    commands += "};\n";
+    tier_of += "} as const;\n";
+
+    let named = specta::Language::export(&ts, types.clone()).expect("exports");
+    format!(
+        "// @generated from moss-build's command table. Do not edit.\n\
+         // Regenerate: UPDATE_ENGINE_CONTRACT=1 cargo test -p moss-build --lib commands::tests::the_contract\n\n\
+         {named}{commands}\nexport type EngineCommand = keyof EngineCommands;\n\n{tier_of}"
+    )
+}
+
+#[test]
+fn the_contract_matches_the_command_table() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(CONTRACT);
+    let rendered = render_contract();
+    if std::env::var_os("UPDATE_ENGINE_CONTRACT").is_some() {
+        // allow:raw_write a checked-in source file in this repository, not build output
+        std::fs::write(&path, &rendered).expect("write the contract");
+        return;
+    }
+    let on_disk = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(
+        on_disk == rendered,
+        "{} is stale; regenerate it with UPDATE_ENGINE_CONTRACT=1 cargo test -p moss-build --lib commands::tests::the_contract",
+        path.display()
+    );
 }
