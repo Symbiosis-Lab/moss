@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use super::registry_client::{enforce, fetch};
+use super::registry_client::{enforce, fetch, signature};
 use crate::vault_root::VaultRoot;
 
 pub const USAGE: &str = "Usage: moss plugin install <id> [<folder>]";
@@ -70,7 +70,7 @@ pub fn install(id: &str, folder: &Path, origin: &str) -> Result<Installed, Strin
         .ok_or("no app-data directory to keep the approval in")?;
 
     enforce::install(Some(&app_data));
-    let refreshed = fetch::refresh_from(&app_data, origin);
+    let refreshed = fetch::refresh_from(&app_data, origin, signature::REGISTRY_KEYS);
     let unreached = match &refreshed.index {
         fetch::RefreshOutcome::Updated => None,
         fetch::RefreshOutcome::Offline(why) | fetch::RefreshOutcome::NotCached(why) => Some(why.clone()),

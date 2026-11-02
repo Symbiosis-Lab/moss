@@ -26,8 +26,8 @@ pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
 const ENTRY_TYPE_PLUGIN: &str = "plugin";
 
 /// A ready-made site the desktop app offers as a place to start. It rides in
-/// the same signed index as plugins, so it is covered by the same signature,
-/// serial and revocation rules.
+/// the same index as plugins, so it is covered by the same signature, serial
+/// and revocation rules.
 const ENTRY_TYPE_STARTER: &str = "starter";
 
 /// One installable plugin, exactly as the index publishes it.
@@ -194,6 +194,9 @@ pub struct RegistryIndex {
     /// past it. Requiring each document's own discriminating key is what
     /// makes the wrong one land as `Unparseable`, which fails closed.
     pub entries: Vec<IndexEntry>,
+    /// When this document stops being current. See [`is_expired`].
+    #[serde(default)]
+    pub expires: Option<String>,
 }
 
 impl RegistryIndex {
@@ -269,6 +272,9 @@ pub struct RevokedList {
     /// Required, not defaulted — see [`RegistryIndex::entries`] for why the
     /// two documents must not be parseable as one another.
     pub revocations: Vec<Revocation>,
+    /// When this document stops being current. See [`is_expired`].
+    #[serde(default)]
+    pub expires: Option<String>,
 }
 
 impl RevokedList {
@@ -297,6 +303,11 @@ pub enum RejectReason {
     /// legitimate only as a deliberate, serial-bumped edit; without the bump
     /// it is indistinguishable from a rollback, so it is refused.
     RevocationSetShrank { seen: usize, offered: usize },
+    /// This build pins registry keys and no signature could be fetched beside
+    /// the document.
+    Unsigned,
+    /// The document's signature was refused.
+    Signature(super::signature::SignatureError),
 }
 
 impl std::fmt::Display for RejectReason {
@@ -313,6 +324,8 @@ impl std::fmt::Display for RejectReason {
                 f,
                 "revocation set shrank from {seen} to {offered} without a serial increase"
             ),
+            RejectReason::Unsigned => write!(f, "came without a signature that could be fetched"),
+            RejectReason::Signature(e) => write!(f, "was refused: {e}"),
         }
     }
 }
@@ -332,6 +345,8 @@ pub fn accept_index(raw: &str, highest_seen_serial: u64) -> Result<RegistryIndex
         schema_version: u32,
         serial: u64,
         entries: Vec<serde_json::Value>,
+        #[serde(default)]
+        expires: Option<String>,
     }
     let raw_index: RawIndex =
         serde_json::from_str(raw).map_err(|e| RejectReason::Unparseable(e.to_string()))?;
@@ -365,6 +380,7 @@ pub fn accept_index(raw: &str, highest_seen_serial: u64) -> Result<RegistryIndex
         schema_version: raw_index.schema_version,
         serial: raw_index.serial,
         entries,
+        expires: raw_index.expires,
     })
 }
 
@@ -406,9 +422,43 @@ pub fn accept_revoked(
     Ok(list)
 }
 
+/// Whether a document's `expires` has passed at `now`.
+///
+/// Expiry never refuses a document: a newer kill list must replace an older
+/// one whatever its date. It stops installs and updates, because a document
+/// past its date may be one an origin is replaying to hide what came after.
+/// A date the client cannot read counts as passed, so it stops installs
+/// rather than allowing them forever.
+pub fn is_expired(expires: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
+    chrono::DateTime::parse_from_rfc3339(expires).map_or(true, |t| t <= now)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expiry_is_read_from_the_document_and_compared_with_now() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-02T00:00:00Z").unwrap().to_utc();
+        let index = accept_index(
+            r#"{"schema_version":1,"serial":3,"expires":"2026-11-01T00:00:00Z","entries":[]}"#,
+            0,
+        )
+        .unwrap();
+        assert!(is_expired(index.expires.as_deref().unwrap(), now));
+        assert!(!is_expired("2026-11-03T00:00:00Z", now));
+        assert!(is_expired("next tuesday", now), "an unreadable date stops installs");
+    }
+
+    #[test]
+    fn a_kill_list_past_its_date_is_still_accepted() {
+        let list = accept_revoked(
+            r#"{"schema_version":1,"serial":2,"expires":"2020-01-01T00:00:00Z","revocations":[]}"#,
+            1,
+            0,
+        );
+        assert_eq!(list.unwrap().expires.as_deref(), Some("2020-01-01T00:00:00Z"));
+    }
 
     /// A minimal valid index. Tests mutate the pieces they are about.
     fn index_json(serial: u64, entries: &str) -> String {

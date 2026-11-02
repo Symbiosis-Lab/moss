@@ -667,10 +667,7 @@ pub fn install_plugin(plugin_id: &str, project_path: &str) -> Result<(), String>
 /// a caller is exactly how a withdrawn version gets installed after the
 /// refresh that withdrew it. Both the install and the update ask here.
 fn published_entry(plugin_id: &str) -> Result<IndexEntry, String> {
-    enforce::cached_entries()
-        .into_iter()
-        .find(|e| e.id == plugin_id)
-        .ok_or_else(|| format!("Plugin '{plugin_id}' is not in this build or the catalog"))
+    enforce::installable_entry(plugin_id)
 }
 
 /// Take the version the catalog offers for an already-installed plugin.

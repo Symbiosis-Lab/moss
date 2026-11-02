@@ -8,6 +8,7 @@
 //! | layer | owns | I/O |
 //! |---|---|---|
 //! | [`index`] | the wire schema, serial monotonicity, the fail-closed revocation rules | none |
+//! | [`signature`] | minisign verification against the pinned keys | none |
 //! | [`cache`] | app-data persistence and the monotonic serial floors | disk |
 //! | [`fetch`] | the pinned origin, and the refresh that composes the three | network |
 //! | [`artifact`] | turning one index entry into an installed plugin directory | both |
@@ -31,3 +32,4 @@ pub mod fetch;
 pub mod icon;
 pub mod index;
 pub mod receipt;
+pub mod signature;

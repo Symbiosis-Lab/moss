@@ -1,11 +1,14 @@
 //! Fetching `index.json` and `revoked.json` from the pinned registry origin,
 //! and the refresh that composes fetch → accept → cache.
 //!
-//! **The origin is a trust anchor, not a configuration detail.** The
-//! documents are unsigned in v1, so whoever serves the bytes is trusted, and
-//! exactly one GitHub-controlled origin serves them: no CDN mirrors, no
-//! fallback origins, no user override. What authenticates them is TLS to that
-//! origin plus the monotonic serials `super::index` enforces.
+//! **The origin is a trust anchor, not a configuration detail.** A build that
+//! pins registry keys ([`super::signature::REGISTRY_KEYS`]) accepts a document
+//! only with a valid `.minisig` beside it, and then the origin only carries
+//! bytes it cannot change. Until keys are pinned the documents are unsigned,
+//! so whoever serves the bytes is trusted, and exactly one GitHub-controlled
+//! origin serves them: no CDN mirrors, no fallback origins, no user override.
+//! What authenticates them then is TLS to that origin plus the monotonic
+//! serials `super::index` enforces.
 //!
 //! The origin is a parameter only so unit tests can point at a local static
 //! server. Production callers use [`refresh`], which hard-codes
@@ -22,6 +25,7 @@ use std::time::Duration;
 
 use super::cache::{self, CachedRegistry};
 use super::index::{accept_index, accept_revoked, RejectReason};
+use super::signature;
 use crate::system::large_download::{plan_transport, Transport};
 
 /// The one origin. See the module header before changing it.
@@ -49,6 +53,13 @@ const _: () = assert!(
         || has_prefix(REGISTRY_ORIGIN, "http://127.0.0.1:")
         || has_prefix(REGISTRY_ORIGIN, "http://localhost:"),
     "MOSS_REGISTRY_ORIGIN must be https, or loopback for the e2e fixture"
+);
+
+// The registry's own hostname is served by infrastructure that does not
+// publish the registry, so a build that reads it must verify every document.
+const _: () = assert!(
+    !has_prefix(PRODUCTION_ORIGIN, "https://registry.mosspub.com") || !signature::REGISTRY_KEYS.is_empty(),
+    "a build that reads registry.mosspub.com must pin the registry's signing keys"
 );
 
 const fn has_prefix(s: &str, prefix: &str) -> bool {
@@ -190,12 +201,14 @@ fn get_once(url: &str, transport: Transport, cap: usize) -> Result<String, Strin
 /// caching them. The caller reads [`Refreshed::cache`] for what is now in
 /// force and the two outcomes for what to log or show.
 pub fn refresh(app_data_dir: &std::path::Path) -> Refreshed {
-    refresh_from(app_data_dir, REGISTRY_ORIGIN)
+    refresh_from(app_data_dir, REGISTRY_ORIGIN, signature::REGISTRY_KEYS)
 }
 
-/// [`refresh`] against an explicit origin. Tests and the e2e fixture only —
-/// production has exactly one origin and it is not configurable.
-pub fn refresh_from(app_data_dir: &std::path::Path, origin: &str) -> Refreshed {
+/// [`refresh`] against an explicit origin and keys. Tests and the e2e fixture
+/// only — production has exactly one origin and it is not configurable. An
+/// empty `keys` accepts unsigned documents, as every build did before keys
+/// were pinned.
+pub fn refresh_from(app_data_dir: &std::path::Path, origin: &str, keys: &[&str]) -> Refreshed {
     // Poisoning is not meaningful here: the lock guards no invariant held in
     // memory, only the ordering of file writes.
     let _guard = REFRESH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -203,8 +216,8 @@ pub fn refresh_from(app_data_dir: &std::path::Path, origin: &str) -> Refreshed {
 
     // The kill list is refreshed FIRST. If the process dies mid-refresh, the
     // half that landed is the one that can only ever remove capability.
-    let revoked = refresh_revoked(app_data_dir, origin, &cache);
-    let index = refresh_index(app_data_dir, origin, &cache);
+    let revoked = refresh_revoked(app_data_dir, origin, keys, &cache);
+    let index = refresh_index(app_data_dir, origin, keys, &cache);
 
     Refreshed {
         index,
@@ -217,16 +230,37 @@ pub fn refresh_from(app_data_dir: &std::path::Path, origin: &str) -> Refreshed {
     }
 }
 
+/// A `.minisig` file is about 300 bytes.
+const MAX_SIGNATURE_BYTES: usize = 4 * 1024;
+
+/// GET a registry document and, when `keys` is not empty, the `.minisig`
+/// beside it. The bytes come back only if one of `keys` signed them, so
+/// nothing downstream ever parses or caches bytes that did not verify.
+fn get_signed_document(url: &str, keys: &[&str]) -> Result<String, RefreshOutcome> {
+    let raw = get_document_capped(url, MAX_DOCUMENT_BYTES).map_err(RefreshOutcome::Offline)?;
+    if keys.is_empty() {
+        return Ok(raw);
+    }
+    // A signature that cannot be fetched is refused, not treated as offline:
+    // withholding the signature must not be a way to get unsigned bytes in.
+    let sig = get_document_capped(&format!("{url}.minisig"), MAX_SIGNATURE_BYTES)
+        .map_err(|_| RefreshOutcome::Refused(RejectReason::Unsigned))?;
+    signature::verify(raw.as_bytes(), &sig, keys)
+        .map_err(|e| RefreshOutcome::Refused(RejectReason::Signature(e)))?;
+    Ok(raw)
+}
+
 fn refresh_index(
     app_data_dir: &std::path::Path,
     origin: &str,
+    keys: &[&str],
     cache: &CachedRegistry,
 ) -> RefreshOutcome {
-    let raw = match get_document_capped(&format!("{origin}/index.json"), MAX_DOCUMENT_BYTES) {
+    let raw = match get_signed_document(&format!("{origin}/index.json"), keys) {
         Ok(raw) => raw,
-        Err(e) => {
-            log::info!("registry index not refreshed, serving cache: {e}");
-            return RefreshOutcome::Offline(e);
+        Err(outcome) => {
+            log::info!("registry index not refreshed, serving cache: {outcome:?}");
+            return outcome;
         }
     };
     match accept_index(&raw, cache.anchor.highest_index_serial) {
@@ -247,15 +281,16 @@ fn refresh_index(
 fn refresh_revoked(
     app_data_dir: &std::path::Path,
     origin: &str,
+    keys: &[&str],
     cache: &CachedRegistry,
 ) -> RefreshOutcome {
-    let raw = match get_document_capped(&format!("{origin}/revoked.json"), MAX_DOCUMENT_BYTES) {
+    let raw = match get_signed_document(&format!("{origin}/revoked.json"), keys) {
         Ok(raw) => raw,
-        Err(e) => {
+        Err(outcome) => {
             // Deliberately not an error: revocation enforcement is designed to
-            // survive offline periods from the cached list.
-            log::info!("kill list not refreshed, enforcing cached revocations: {e}");
-            return RefreshOutcome::Offline(e);
+            // survive offline periods, and refused bytes, from the cached list.
+            log::info!("kill list not refreshed, enforcing cached revocations: {outcome:?}");
+            return outcome;
         }
     };
     match accept_revoked(
@@ -312,6 +347,14 @@ mod tests {
 
     impl FixtureOrigin {
         fn serving(index: Option<String>, revoked: Option<String>) -> Self {
+            let mut files = Vec::new();
+            files.extend(index.map(|b| ("/index.json".to_string(), b)));
+            files.extend(revoked.map(|b| ("/revoked.json".to_string(), b)));
+            Self::serving_files(files)
+        }
+
+        /// Serves each `(path, body)` at exactly that path, and 404 elsewhere.
+        fn serving_files(files: Vec<(String, String)>) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let port = listener.local_addr().unwrap().port();
             let (tx, rx) = mpsc::channel::<()>();
@@ -328,13 +371,8 @@ mod tests {
                     if BufReader::new(&stream).read_line(&mut request).is_err() {
                         continue;
                     }
-                    let body = if request.contains("/index.json") {
-                        index.clone()
-                    } else if request.contains("/revoked.json") {
-                        revoked.clone()
-                    } else {
-                        None
-                    };
+                    let path = request.split_whitespace().nth(1).unwrap_or("");
+                    let body = files.iter().find(|(p, _)| p == path).map(|(_, b)| b.clone());
                     let response = match body {
                         Some(b) => format!(
                             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{b}",
@@ -385,7 +423,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let origin = FixtureOrigin::serving(Some(index_body(28)), Some(revoked_body(1, "")));
 
-        let result = refresh_from(dir.path(), &origin.origin);
+        let result = refresh_from(dir.path(), &origin.origin, &[]);
 
         assert_eq!(result.index, RefreshOutcome::Updated);
         assert_eq!(result.revoked, RefreshOutcome::Updated);
@@ -399,9 +437,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         {
             let origin = FixtureOrigin::serving(Some(index_body(28)), Some(revoked_body(1, "")));
-            refresh_from(dir.path(), &origin.origin);
+            refresh_from(dir.path(), &origin.origin, &[]);
         }
-        let result = refresh_from(dir.path(), &refused_origin());
+        let result = refresh_from(dir.path(), &refused_origin(), &[]);
 
         assert!(matches!(result.index, RefreshOutcome::Offline(_)));
         assert!(matches!(result.revoked, RefreshOutcome::Offline(_)));
@@ -415,7 +453,7 @@ mod tests {
     fn offline_on_a_cold_cache_is_not_an_error_and_reports_nothing_known() {
         let dir = tempfile::tempdir().unwrap();
 
-        let result = refresh_from(dir.path(), &refused_origin());
+        let result = refresh_from(dir.path(), &refused_origin(), &[]);
 
         assert!(matches!(result.index, RefreshOutcome::Offline(_)));
         assert!(result.cache.index.is_none());
@@ -431,11 +469,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         {
             let good = FixtureOrigin::serving(Some(index_body(28)), Some(revoked_body(1, "")));
-            refresh_from(dir.path(), &good.origin);
+            refresh_from(dir.path(), &good.origin, &[]);
         }
         let stale = FixtureOrigin::serving(Some(index_body(27)), Some(revoked_body(1, "")));
 
-        let result = refresh_from(dir.path(), &stale.origin);
+        let result = refresh_from(dir.path(), &stale.origin, &[]);
 
         assert!(matches!(result.index, RefreshOutcome::Refused(_)));
         assert_eq!(result.cache.index.unwrap().serial, 28);
@@ -451,11 +489,11 @@ mod tests {
                 Some(index_body(28)),
                 Some(revoked_body(7, ONE_REVOCATION)),
             );
-            refresh_from(dir.path(), &good.origin);
+            refresh_from(dir.path(), &good.origin, &[]);
         }
         let emptied = FixtureOrigin::serving(Some(index_body(28)), Some(revoked_body(7, "")));
 
-        let result = refresh_from(dir.path(), &emptied.origin);
+        let result = refresh_from(dir.path(), &emptied.origin, &[]);
 
         assert!(matches!(result.revoked, RefreshOutcome::Refused(_)));
         assert!(
@@ -475,12 +513,12 @@ mod tests {
                 Some(index_body(28)),
                 Some(revoked_body(7, ONE_REVOCATION)),
             );
-            refresh_from(dir.path(), &good.origin);
+            refresh_from(dir.path(), &good.origin, &[]);
         }
         let garbage =
             FixtureOrigin::serving(Some(index_body(28)), Some("<!doctype html>".to_string()));
 
-        let result = refresh_from(dir.path(), &garbage.origin);
+        let result = refresh_from(dir.path(), &garbage.origin, &[]);
 
         assert!(matches!(result.revoked, RefreshOutcome::Refused(_)));
         assert!(matches!(
@@ -496,10 +534,94 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let origin = FixtureOrigin::serving(Some(index_body(28)), None);
 
-        let result = refresh_from(dir.path(), &origin.origin);
+        let result = refresh_from(dir.path(), &origin.origin, &[]);
 
         assert_eq!(result.index, RefreshOutcome::Updated);
         assert!(matches!(result.revoked, RefreshOutcome::Offline(_)));
         assert!(result.cache.index.is_some());
+    }
+
+    /// Fixtures signed by Ubuntu's `minisign` with a test key (see
+    /// `tests/fixtures/registry-signing`); key A signed every document.
+    macro_rules! fixture {
+        ($name:literal) => {
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/registry-signing/", $name)).to_string()
+        };
+    }
+    const KEY_A: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/registry-signing/a.pub"));
+
+    fn signed_origin(index: String, index_sig: String, revoked: String, revoked_sig: String) -> FixtureOrigin {
+        FixtureOrigin::serving_files(vec![
+            ("/index.json".to_string(), index),
+            ("/index.json.minisig".to_string(), index_sig),
+            ("/revoked.json".to_string(), revoked),
+            ("/revoked.json.minisig".to_string(), revoked_sig),
+        ])
+    }
+
+    fn good_signed_origin() -> FixtureOrigin {
+        signed_origin(
+            fixture!("index-28.json"),
+            fixture!("index-28.json.minisig"),
+            fixture!("revoked-7.json"),
+            fixture!("revoked-7.json.minisig"),
+        )
+    }
+
+    #[test]
+    fn documents_signed_by_a_pinned_key_are_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let origin = good_signed_origin();
+
+        let result = refresh_from(dir.path(), &origin.origin, &[KEY_A]);
+
+        assert_eq!(result.index, RefreshOutcome::Updated);
+        assert_eq!(result.revoked, RefreshOutcome::Updated);
+        assert_eq!(result.cache.index.unwrap().serial, 28);
+    }
+
+    #[test]
+    fn unsigned_documents_are_refused_once_a_key_is_pinned() {
+        let dir = tempfile::tempdir().unwrap();
+        let origin = FixtureOrigin::serving(Some(fixture!("index-28.json")), Some(fixture!("revoked-7.json")));
+
+        let result = refresh_from(dir.path(), &origin.origin, &[KEY_A]);
+
+        assert_eq!(result.index, RefreshOutcome::Refused(RejectReason::Unsigned));
+        assert_eq!(result.revoked, RefreshOutcome::Refused(RejectReason::Unsigned));
+        assert!(result.cache.index.is_none(), "nothing unsigned reaches the cache");
+    }
+
+    #[test]
+    fn a_document_changed_after_signing_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let origin = signed_origin(
+            fixture!("index-28.json").replace("\"serial\":28", "\"serial\":999"),
+            fixture!("index-28.json.minisig"),
+            fixture!("revoked-7.json"),
+            fixture!("revoked-7.json.minisig"),
+        );
+
+        let result = refresh_from(dir.path(), &origin.origin, &[KEY_A]);
+
+        assert_eq!(result.index, RefreshOutcome::Refused(RejectReason::Signature(signature::SignatureError::Invalid)));
+        assert!(result.cache.index.is_none());
+    }
+
+    #[test]
+    fn an_unsigned_emptier_kill_list_at_a_higher_serial_cannot_un_revoke() {
+        // Without a signature this is the one un-revocation the serial rules
+        // allow: a higher serial with fewer entries is an ordinary edit.
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let good = good_signed_origin();
+            refresh_from(dir.path(), &good.origin, &[KEY_A]);
+        }
+        let forged = FixtureOrigin::serving(Some(fixture!("index-28.json")), Some(revoked_body(8, "")));
+
+        let result = refresh_from(dir.path(), &forged.origin, &[KEY_A]);
+
+        assert_eq!(result.revoked, RefreshOutcome::Refused(RejectReason::Unsigned));
+        assert!(matches!(result.cache.revocation_for("bad", "1.0.0"), RevocationVerdict::Revoked(_)));
     }
 }

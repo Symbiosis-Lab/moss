@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::index::{accept_index, accept_revoked, RegistryIndex, Revocation, RevokedList};
+use super::index::{accept_index, accept_revoked, is_expired, RegistryIndex, Revocation, RevokedList};
 use crate::infra::atomic_write::{write_atomic, write_json_atomic};
 
 const CACHE_DIR: &str = "registry";
@@ -120,6 +120,36 @@ impl CachedRegistry {
     /// path — `Unknown` is a fact about the list, not about a plugin.
     pub fn revoked_is_unreadable(&self) -> bool {
         matches!(self.revocation_for("", ""), RevocationVerdict::Unknown)
+    }
+
+    /// The index to install or update from, `None` before any was fetched, or
+    /// why the cached one may not be used. Every install asks here, so no
+    /// surface can offer what an out-of-date catalog lists; what is installed
+    /// keeps running and the kill list keeps being enforced either way.
+    ///
+    /// Out of date means either document is past its `expires`. When `dated`
+    /// (the build pins registry keys, so every current document carries a
+    /// date), a document without one is out of date too: an index cached
+    /// before signing must not stay in force forever.
+    pub fn index_to_install_from(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        dated: bool,
+    ) -> Result<Option<&RegistryIndex>, String> {
+        let Some(index) = self.index.as_ref() else { return Ok(None) };
+        let revoked = self.revoked.as_ref().map(|r| r.expires.as_deref());
+        for expires in std::iter::once(index.expires.as_deref()).chain(revoked) {
+            match expires {
+                Some(e) if is_expired(e, now) => {
+                    return Err(format!("moss's plugin catalog has been out of date since {e}, so it cannot install or update plugins until it gets a current one"))
+                }
+                None if dated => {
+                    return Err("moss's plugin catalog carries no date, so it cannot install or update plugins until it gets a current one".to_string())
+                }
+                _ => {}
+            }
+        }
+        Ok(Some(index))
     }
 }
 
@@ -242,6 +272,29 @@ fn update_anchor(dir: &Path, mutate: impl FnOnce(&mut Anchor)) -> Result<(), Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nothing_installs_from_a_catalog_once_either_document_is_past_its_date() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-02T00:00:00Z").unwrap().to_utc();
+        let index = r#"{"schema_version":1,"serial":3,"expires":"2026-12-01T00:00:00Z","entries":[]}"#;
+        let revoked = r#"{"schema_version":1,"serial":1,"expires":"2026-11-01T00:00:00Z","revocations":[]}"#;
+        store_index(dir.path(), index, &accept_index(index, 0).unwrap(), "t").unwrap();
+        assert_eq!(load(dir.path()).index_to_install_from(now, true).unwrap().unwrap().serial, 3);
+
+        store_revoked(dir.path(), revoked, &accept_revoked(revoked, 0, 0).unwrap(), "t").unwrap();
+        let refused = load(dir.path()).index_to_install_from(now, true).unwrap_err();
+        assert!(refused.contains("out of date since 2026-11-01T00:00:00Z"), "{refused}");
+    }
+
+    #[test]
+    fn an_undated_catalog_installs_only_while_no_key_is_pinned() {
+        let dir = tempfile::tempdir().unwrap();
+        put_index(dir.path(), 28);
+        let cache = load(dir.path());
+        assert!(cache.index_to_install_from(chrono::Utc::now(), false).unwrap().is_some());
+        assert!(cache.index_to_install_from(chrono::Utc::now(), true).is_err());
+    }
 
     fn index_raw(serial: u64) -> String {
         format!(r#"{{"schema_version":1,"serial":{serial},"entries":[]}}"#)

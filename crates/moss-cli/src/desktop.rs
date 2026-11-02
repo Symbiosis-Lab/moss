@@ -12,7 +12,7 @@ use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use minisign_verify::{PublicKey, Signature};
+use moss_build::plugins::install::registry_client::signature;
 use moss_build::system::tar_safe::{extract_tar_gz, SymlinkPolicy, TarSafeError};
 
 /// Same ceilings the stack executor's tar.gz arm uses
@@ -378,12 +378,8 @@ pub fn verified_artifact<'a>(
         .ok_or(InstallError::NoPlatformEntry)?;
 
     let pubkey_text = decode_minisign_b64(pubkey)?;
-    let public_key = PublicKey::decode(&pubkey_text).map_err(|_| InstallError::BadSignature)?;
     let signature_text = decode_minisign_b64(&entry.signature)?;
-    let signature = Signature::decode(&signature_text).map_err(|_| InstallError::BadSignature)?;
-
-    public_key
-        .verify(artifact, &signature, false)
+    signature::verify(artifact, &signature_text, &[&pubkey_text])
         .map_err(|_| InstallError::BadSignature)?;
 
     Ok(&entry.url)
