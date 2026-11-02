@@ -103,15 +103,21 @@ fn a_title_edit_rebuilds_once_and_matches_a_clean_build() {
     }
     settle(&watched, Duration::from_secs(3));
 
-    // Every rebuild after the edit must answer a file event. Not a bare `== 1`:
-    // FSEvents keeps reporting a file created seconds ago as `Create`, and this
-    // fixture's files are that young, so one save can arrive as two
-    // unconditional events. The settle trigger's rebuild answers no event.
+    // Every rebuild after the edit must answer the edit: a watcher event, or a
+    // sweep tick that found the file drifted. The sweep runs every 20s and,
+    // when the machine is loaded enough to delay the watcher's event past a
+    // tick, rebuilds first (logging "Sweep caught", not "Rebuild triggered
+    // by") and the late event then arrives as a gated no-op or a second
+    // rebuild. Not a bare `== 1`: FSEvents keeps reporting a file created
+    // seconds ago as `Create`, and this fixture's files are that young, so one
+    // save can arrive as two unconditional events. The settle trigger's
+    // rebuild answers neither, and that is what this test forbids.
     let rebuilds = count(&watched, "build.summary", from);
-    let asked = count(&watched, "Rebuild triggered by", from) - count(&watched, "Gated at admission", from);
+    let asked = count(&watched, "Rebuild triggered by", from) + count(&watched, "Sweep caught", from)
+        - count(&watched, "Gated at admission", from);
     assert!(
         rebuilds >= 1 && rebuilds <= asked && count(&watched, "media settle", from) == 0,
-        "a title edit must not enqueue a rebuild of its own ({rebuilds} rebuilds for {asked} file events); stderr:\n{}",
+        "a title edit must not enqueue a rebuild of its own ({rebuilds} rebuilds for {asked} file events or sweep catches); stderr:\n{}",
         joined(&watched.stderr)
     );
 
