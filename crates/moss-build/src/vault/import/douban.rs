@@ -24,7 +24,7 @@ use serde_json::Value;
 use super::scrape::converter::extract_image_urls_in_markdown;
 use super::scrape::fetch::{download_asset, strip_query};
 use super::scrape::run::{write_note, ScrapeResult};
-use super::scrape::service::{default_user_agent, escape_yaml_string};
+use super::scrape::service::{default_user_agent, escape_yaml_string, push_string_list};
 use super::scrape::writer::{rename_for_collision, sanitize_filename};
 
 /// Query parameters Douban appends to links to track where a click came from.
@@ -638,13 +638,7 @@ fn render(fields: &[(&str, Field)], body: &str) -> String {
                 out.push_str(&format!("{key}: \"{}\"\n", escape_yaml_string(s.trim())))
             }
             Field::Int(n) => out.push_str(&format!("{key}: {n}\n")),
-            Field::List(items) => {
-                let items: Vec<String> = items
-                    .iter()
-                    .map(|i| format!("\"{}\"", escape_yaml_string(i)))
-                    .collect();
-                out.push_str(&format!("{key}: [{}]\n", items.join(", ")));
-            }
+            Field::List(items) => push_string_list(&mut out, key, items),
         }
     }
     out.push_str("---\n\n");

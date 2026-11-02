@@ -6,6 +6,7 @@ All notable changes to moss will be documented here.
 
 ### New
 
+- `moss import` now carries a page's Open Graph `article:tag` metadata into the imported page's `tags:`, so posts from blogs that declare their tags this way arrive already tagged.
 - `content_width: screen` (in a page's frontmatter, a folder's `cascade:`, or under `[site]`) makes every top-level `:::grid` and fenced-div band as wide as the window, so a page of full-width bands no longer needs `{screen}` on each one. The column is the same as `full`; a block with a width word of its own, such as `{body}`, keeps it.
 - A paragraph of two or more pictures, with nothing between them but spaces and line breaks, lays out as a gallery row, the same as `:::gallery rows`, at the top of a page and in a grid cell; an italic line under a picture is its caption. Prose, a linked picture or a non-image embed keeps the paragraph as it is. The fenced `:::gallery` now takes a wikilink picture's `|` text as its alt, as a single picture does.
 - `moss build` now reports a problem when the theme's `style.css` sets a `--moss-color-*` token on `:root` and gives it no value under `:root[data-theme="dark"]`. Dark mode keeps the light value in that case, which can leave light text on a light page. The problem comes once per file, names every such token and says to declare it under `:root[data-theme="dark"]`; commented-out declarations are ignored.

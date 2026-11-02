@@ -52,6 +52,9 @@ pub struct ArticleMetadata {
     /// from the full document, since the extractor has already stripped the
     /// chrome by the time the cover is chosen. Never written to YAML.
     pub chrome_images: Vec<String>,
+    /// Every `<meta property="article:tag">` value, in source order, trimmed,
+    /// without empties or exact duplicates.
+    pub tags: Vec<String>,
     /// Fields read from a schema.org `Event` block; never touches `date`.
     pub event: EventMetadata,
 }
@@ -98,6 +101,7 @@ pub fn derive(html: &str) -> ArticleMetadata {
         cover: None,
         og_image: og.get("og:image").cloned(),
         chrome_images: chrome_images(&doc),
+        tags: article_tags(&doc),
         event: derive_event(&entries),
     }
 }
@@ -209,6 +213,18 @@ pub(crate) fn read_meta_map(doc: &Html) -> std::collections::HashMap<String, Str
         }
     }
     out
+}
+
+fn article_tags(doc: &Html) -> Vec<String> {
+    let sel = Selector::parse(r#"meta[property="article:tag" i]"#).unwrap();
+    let mut tags: Vec<String> = Vec::new();
+    for el in doc.select(&sel) {
+        let tag = el.value().attr("content").unwrap_or("").trim();
+        if !tag.is_empty() && !tags.iter().any(|t| t == tag) {
+            tags.push(tag.to_string());
+        }
+    }
+    tags
 }
 
 fn pick_title(
