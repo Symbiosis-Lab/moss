@@ -15,9 +15,13 @@ use super::crawler::is_non_page_file_url;
 use super::metadata::ArticleMetadata;
 use super::scope::{is_within_scope, UrlScope};
 
-// `[text](url)` markdown link, captured once and reused across pages.
-static LINK_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").expect("link regex"));
+// `[text](url)` or `[text](url "title")` markdown link, captured once and reused
+// across pages. Group 3 is the title with its leading space, in any of the
+// three CommonMark forms: `"t"`, `'t'` or `(t)`.
+static LINK_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\[([^\]]*)\]\(([^)\s]+)(\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)"#)
+        .expect("link regex")
+});
 
 /// User-Agent used by all outbound requests from the scrape pipeline.
 ///
@@ -168,7 +172,8 @@ pub fn rewrite_links(markdown: &str, scope: &UrlScope) -> String {
             // downloader's to rewrite, and stays as written when that failed.
             if is_within_scope(scope, url) && !is_non_page_file_url(url) {
                 if let Some(rel) = url_to_relative_md_path(url, scope) {
-                    return format!("[{}]({})", text, rel);
+                    let title = caps.get(3).map_or("", |m| m.as_str());
+                    return format!("[{}]({}{})", text, rel, title);
                 }
             }
             caps[0].to_string()
@@ -247,6 +252,20 @@ mod tests {
         assert!(
             rewritten.contains("[external](https://other.com/page)"),
             "an out-of-scope link must survive untouched: {rewritten}"
+        );
+    }
+
+    #[test]
+    fn rewrite_links_keeps_a_links_title_out_of_its_path() {
+        let scope = UrlScope::new("https://example.test/").unwrap();
+        for title in [r#" "Example Notes""#, " 'Example Notes'", " (Example Notes)"] {
+            let markdown = format!("[second](https://example.test/b/{title})");
+            let rewritten = rewrite_links(&markdown, &scope);
+            assert_eq!(rewritten, format!("[second](./b/index.md{title})"));
+        }
+        assert_eq!(
+            rewrite_links("[second](https://example.test/b/)", &scope),
+            "[second](./b/index.md)"
         );
     }
 

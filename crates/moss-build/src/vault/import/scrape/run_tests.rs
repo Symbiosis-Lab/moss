@@ -2321,3 +2321,47 @@ fn links_in_code_and_to_pages_the_import_did_not_write_are_left_alone() {
         "only the real link to an imported page changes"
     );
 }
+
+/// A link's title (`[text](url "title")` once converted) stays a title after
+/// the in-scope rewrite instead of becoming part of the destination path.
+#[tokio::test]
+async fn a_titled_in_scope_link_keeps_its_title_out_of_the_rewritten_path() {
+    let mut server = mockito::Server::new_async().await;
+    let base = server.url();
+    let page = |links: &str| {
+        format!(
+            "<html><head><title>Example Notes</title></head><body><article><h1>Example Notes</h1>\
+             <p>{links} Some body text long enough for the content extraction scorer to keep.</p>\
+             </article></body></html>"
+        )
+    };
+    let _root = server
+        .mock("GET", "/")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(page(&format!("<a href=\"{base}/b/\" title=\"link-to-b\">the second page</a>")))
+        .create_async()
+        .await;
+    let _b = server
+        .mock("GET", "/b/")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(page("Second page."))
+        .create_async()
+        .await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = ScrapeConfig::new(format!("{base}/"), tmp.path());
+    config.recursive = true;
+    scrape_to_folder(config, |_| {}).await.expect("the crawl succeeds");
+
+    let all: String = walkdir::WalkDir::new(tmp.path())
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
+        .map(|e| std::fs::read_to_string(e.path()).unwrap())
+        .collect();
+    assert!(all.contains("the second page]("), "{all}");
+    assert!(all.contains(" \"link-to-b\")"), "the title survives: {all}");
+    assert!(!all.contains("%20"), "the title must not be folded into the path: {all}");
+}
