@@ -9,6 +9,7 @@
 use std::fs;
 use std::io::Read;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use super::crawl_state::HostPacer;
 
@@ -637,6 +638,62 @@ pub(crate) fn content_type_to_extension(content_type: &str) -> &str {
         "audio/wav" => "wav",
         "application/pdf" => "pdf",
         _ => "bin",
+    }
+}
+
+// ── Progress line for a slow page ────────────────────────────────────
+
+/// Quiet period between two lines, and the time a page's downloads may take
+/// before the first one.
+const INTERVAL: Duration = Duration::from_secs(30);
+
+/// The line to print now, or `None` when `since_last_line` is under 30 s or
+/// nothing is left to download. `delay` is the host's current spacing between
+/// requests; zero leaves the spacing and the estimate out.
+pub(crate) fn progress_line(done: usize, total: usize, delay: Duration, since_last_line: Duration) -> Option<String> {
+    if since_last_line < INTERVAL || done >= total {
+        return None;
+    }
+    let mut line = format!("    ↳ {done} of {total} files for this page");
+    if !delay.is_zero() {
+        let left = delay.saturating_mul((total - done) as u32);
+        line.push_str(&format!(
+            "; requests are {} apart, about {} left",
+            human(delay),
+            human(left)
+        ));
+    }
+    Some(line)
+}
+
+fn human(d: Duration) -> String {
+    let secs = d.as_secs_f64().round() as u64;
+    match secs {
+        0..=89 => format!("{secs} s"),
+        90..=5399 => format!("{} min", (secs + 30) / 60),
+        _ => format!("{:.1} h", secs as f64 / 3600.0),
+    }
+}
+
+/// Counts one page's file downloads as they finish and prints the line.
+pub(crate) struct FileProgress {
+    total: usize,
+    done: usize,
+    last_line: Instant,
+}
+
+impl FileProgress {
+    pub(crate) fn new(total: usize) -> Self {
+        Self { total, done: 0, last_line: Instant::now() }
+    }
+
+    /// Call after each download, successful or not.
+    pub(crate) fn finished_one(&mut self, delay: Duration) {
+        self.done += 1;
+        if let Some(line) = progress_line(self.done, self.total, delay, self.last_line.elapsed()) {
+            eprintln!("{line}");
+            self.last_line = Instant::now();
+        }
     }
 }
 

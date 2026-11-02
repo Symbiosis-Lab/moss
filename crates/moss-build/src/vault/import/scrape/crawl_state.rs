@@ -527,9 +527,7 @@ impl HostPacer {
     }
 
     /// `host`'s current pacing interval — zero for a host never seen or
-    /// never rate-limited. Exposed for tests; the crawl loop itself only
-    /// ever needs `wait_duration`.
-    #[cfg(test)]
+    /// never rate-limited.
     pub(crate) fn current_interval(&self, host: &str) -> Duration {
         self.hosts.get(host).map(|pace| pace.interval).unwrap_or(Duration::ZERO)
     }

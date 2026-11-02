@@ -25,7 +25,7 @@ use super::crawler::{
     looks_like_html_page,
 };
 use super::fetch::{
-    download_asset, download_linked_file, fetch_page, linked_filename, observe_pace, Downloaded,
+    download_asset, download_linked_file, fetch_page, linked_filename, observe_pace, Downloaded, FileProgress,
 };
 use super::scope::{is_within_scope, left_site_by_redirect, UrlScope};
 use super::service::{generate_frontmatter, render_error_markdown, rewrite_links, ScrapeConfig};
@@ -533,6 +533,12 @@ where
                 super::metadata::fallback_cover(&article.markdown, &article.metadata.chrome_images, &url)
             });
 
+        let linked_files = linked_file_urls(&article.markdown, &url, &scope);
+        // A picture is often linked as well as shown, so count each address once.
+        let pending: std::collections::HashSet<&String> =
+            article.media_urls.iter().chain(&linked_files).filter(|u| !state.assets.is_settled(u)).collect();
+        let mut progress = FileProgress::new(pending.len());
+
         for media_url in &article.media_urls {
             if state.assets.is_settled(media_url) {
                 continue;
@@ -545,6 +551,7 @@ where
             state.pacer.wait(&asset_host).await;
             let download_result = download_asset(media_url, &assets_dir, &config.user_agent, Some(&url)).await;
             observe_pace(&mut state.pacer, &asset_host, &download_result);
+            progress.finished_one(state.pacer.current_interval(&asset_host));
             match download_result {
                 Ok(filename) => {
                     let local_rel = format!("./{}/{}", ASSETS_SUBDIR, filename);
@@ -563,7 +570,7 @@ where
         // Files the page links to (a score, a document) get the same
         // treatment as its images: downloaded once into the assets folder,
         // the link pointed at the copy by `compose_note`.
-        for file_url in linked_file_urls(&article.markdown, &url, &scope) {
+        for file_url in linked_files {
             if !state.assets.is_settled(&file_url) {
                 let asset_host = host_of(&file_url);
                 state.pacer.wait(&asset_host).await;
@@ -578,6 +585,7 @@ where
                 )
                 .await;
                 observe_pace(&mut state.pacer, &asset_host, &result);
+                progress.finished_one(state.pacer.current_interval(&asset_host));
                 match result {
                     Ok(Downloaded::Saved(filename)) => {
                         state.assets.insert(file_url.clone(), format!("./{ASSETS_SUBDIR}/{filename}"));

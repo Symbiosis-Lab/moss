@@ -555,3 +555,37 @@ async fn a_page_fetch_redirect_is_never_rewritten_even_on_a_ruled_host() {
          never canonicalized onto the media table's query"
     );
 }
+
+const S: fn(u64) -> Duration = Duration::from_secs;
+
+#[test]
+fn says_nothing_before_thirty_seconds() {
+    assert_eq!(progress_line(3, 20, S(10), S(29)), None);
+}
+
+#[test]
+fn says_nothing_when_the_last_file_just_finished() {
+    assert_eq!(progress_line(20, 20, S(10), S(300)), None);
+}
+
+#[test]
+fn counts_and_estimates_from_the_delay() {
+    assert_eq!(
+        progress_line(40, 280, S(10), S(30)).unwrap(),
+        "    ↳ 40 of 280 files for this page; requests are 10 s apart, about 40 min left"
+    );
+}
+
+#[test]
+fn leaves_the_estimate_out_without_a_delay() {
+    assert_eq!(
+        progress_line(40, 280, Duration::ZERO, S(45)).unwrap(),
+        "    ↳ 40 of 280 files for this page"
+    );
+}
+
+#[test]
+fn short_and_long_estimates_read_naturally() {
+    assert!(progress_line(1, 4, S(10), S(30)).unwrap().ends_with("about 30 s left"));
+    assert!(progress_line(1, 400, S(30), S(30)).unwrap().ends_with("about 3.3 h left"));
+}
