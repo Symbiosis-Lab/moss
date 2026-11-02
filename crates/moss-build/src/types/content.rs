@@ -589,21 +589,6 @@ impl SiteHashes {
         self.files.insert(path.as_str().to_string(), hash_entry);
     }
 
-    /// Insert an image-output marker (typed). Accepts `&ServedPath`.
-    pub fn insert_image_output(&mut self, path: &crate::build::served_path::ServedPath) {
-        self.image_outputs.insert(path.as_str().to_string());
-    }
-
-    /// Insert a video-output marker (typed).
-    pub fn insert_video_output(&mut self, path: &crate::build::served_path::ServedPath) {
-        self.video_outputs.insert(path.as_str().to_string());
-    }
-
-    /// Insert a notebook-output marker (typed).
-    pub fn insert_notebook_output(&mut self, path: &crate::build::served_path::ServedPath) {
-        self.notebook_outputs.insert(path.as_str().to_string());
-    }
-
     /// Get changed files by comparing with previous hashes
     pub fn get_changed_files(&self, previous: &SiteHashes) -> Vec<String> {
         self.files

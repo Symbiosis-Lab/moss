@@ -155,26 +155,6 @@ impl ResolvedSlots {
         self.entries.is_empty() && self.listings.is_empty()
     }
 
-    /// Merge all entries from another `ResolvedSlots` into self.
-    /// Entries are re-sorted by priority after merge.
-    pub fn merge_all(&mut self, other: ResolvedSlots) {
-        self.listings.extend(other.listings);
-        for name in other.feature_styles {
-            if !self.feature_styles.contains(&name) {
-                self.feature_styles.push(name);
-            }
-        }
-        for (slot_name, mut entries) in other.entries {
-            let target = self.entries.entry(slot_name).or_default();
-            target.append(&mut entries);
-            target.sort_by(|a, b| {
-                a.priority
-                    .cmp(&b.priority)
-                    .then_with(|| a.plugin_name.cmp(&b.plugin_name))
-            });
-        }
-    }
-
     /// Merge a plugin's slot result into the resolved slots.
     /// `priority` controls ordering: lower values are inserted first.
     /// `plugin_name` is used for deterministic tie-breaking (alphabetical).
@@ -707,95 +687,6 @@ pub(crate) fn inject_slots_into_directory_cached(
 
 /// A receipt per page the pass covered, `scanned` of which it read and hashed.
 pub(crate) struct SlotPass { pub receipts: Vec<SlotInjectionReceipt>, pub scanned: usize }
-
-/// Wrap any `<style>…</style>` blocks in the `head-end` slot of the given
-/// `ResolvedSlots` in `@layer plugins { … }`, so third-party plugin CSS
-/// participates in the cascade contract at the correct priority.
-///
-/// Only the `head-end` slot is touched — other slots (body-end, after-title,
-/// etc.) carry HTML elements that are not stylesheet declarations.  The wrapping
-/// applies to every `EnhanceContent::Static` entry whose HTML contains at least
-/// one `<style>` tag; per-page entries are also processed.
-///
-/// Use this on the plugin `ResolvedSlots` **before** merging them into the
-/// native-slot set so that native CSS (review, comments) is not mistakenly
-/// wrapped.
-pub fn wrap_plugin_head_end_css_in_layer(mut slots: ResolvedSlots) -> ResolvedSlots {
-    let entries = match slots.entries.get_mut("head-end") {
-        Some(e) => e,
-        None => return slots,
-    };
-
-    for entry in entries.iter_mut() {
-        match &mut entry.content {
-            EnhanceContent::Static { html } => {
-                *html = wrap_style_blocks_in_layer(html);
-            }
-            EnhanceContent::PerPage { pages } => {
-                for html in pages.values_mut() {
-                    *html = wrap_style_blocks_in_layer(html);
-                }
-            }
-            EnhanceContent::PerLanguage { default, by_lang } => {
-                if let Some(html) = default {
-                    *html = wrap_style_blocks_in_layer(html);
-                }
-                for html in by_lang.values_mut() {
-                    *html = wrap_style_blocks_in_layer(html);
-                }
-            }
-        }
-    }
-    slots
-}
-
-/// Wraps every `<style>…</style>` block in the input HTML with
-/// `<style>@layer plugins{…}</style>`, leaving non-`<style>` content
-/// (script tags, meta tags, etc.) untouched.
-///
-/// # Edge case — `@import` inside a plugin `<style>`
-///
-/// A plugin `<style>` that contains a top-level `@import` rule becomes invalid
-/// once nested inside `@layer plugins{…}` (the CSS spec forbids `@import` after
-/// any non-import/charset rule in a stylesheet, and the layer wrapper counts as
-/// one). No current bundled plugin uses `@import` inside a `<style>` tag, so
-/// this is not triggered in practice. If a future plugin needs it, the solution
-/// is to emit a `<link rel="stylesheet">` instead of a `<style>`.
-pub(crate) fn wrap_style_blocks_in_layer(html: &str) -> String {
-    // Fast path: nothing to do if no <style> tag present.
-    if !html.contains("<style") {
-        return html.to_string();
-    }
-    let mut result = String::with_capacity(html.len() + 64);
-    let mut remainder = html;
-    while let Some((before, after_open_kw)) = remainder.split_once("<style") {
-        // Push everything before the opening <style tag verbatim.
-        result.push_str(before);
-        // Split off the rest of the opening tag (up to the first `>`) and the
-        // element's inner CSS (up to the matching `</style>`). Either one
-        // missing means malformed markup — bail and keep the rest as-is.
-        let Some((open_attrs, after_open_tag)) = after_open_kw.split_once('>') else {
-            result.push_str("<style");
-            result.push_str(after_open_kw);
-            return result;
-        };
-        let Some((inner, after_close)) = after_open_tag.split_once("</style>") else {
-            result.push_str("<style");
-            result.push_str(after_open_kw);
-            return result;
-        };
-        // Emit: `<style …>@layer plugins{…}</style>`
-        result.push_str("<style");
-        result.push_str(open_attrs);
-        result.push_str(">@layer plugins{");
-        result.push_str(inner);
-        result.push_str("}</style>");
-        remainder = after_close;
-    }
-    // Append any trailing content after the last </style>.
-    result.push_str(remainder);
-    result
-}
 
 #[cfg(test)]
 #[path = "enhance_tests.rs"]

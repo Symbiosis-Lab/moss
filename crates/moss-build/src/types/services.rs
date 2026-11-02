@@ -415,11 +415,9 @@ impl BuildServices {
         Some(id)
     }
 
-    /// Read the parent Build Job's id without spawning one (Step 3 Phase 4, review
-    /// fix). Returns `Some` only when a real media child already minted the parent
-    /// via [`ensure_build_parent`](Self::ensure_build_parent). The post-join barrier
-    /// uses this to decide whether a parent needs terminalizing.
-    pub fn current_build_parent(&self) -> Option<crate::tasks::TaskId> {
+    /// The parent Build Job's id, read without spawning one.
+    #[cfg(test)]
+    pub(crate) fn current_build_parent(&self) -> Option<crate::tasks::TaskId> {
         *self
             .build_parent
             .lock()

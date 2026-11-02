@@ -3132,9 +3132,7 @@ async fn test_webp_survives_stale_cleanup_after_dispatch() {
     // remove_stale_files reads `image_outputs` to keep .webp alive.
     let mut hashes = SiteHashes::new();
     for k in sealed.image_outputs() {
-        // Already-normalized strings from the sealed manifest. Wrap to satisfy the typed accessor.
-        // .unwrap(): keys from sealed manifest are already-normalized, known valid.
-        hashes.insert_image_output(&crate::build::served_path::ServedPath::from_source(k).unwrap());
+        hashes.image_outputs.insert(k.clone());
     }
     remove_stale_files(&staging, &hashes, "test", &crate::build::lifecycle::permit_for_test());
 

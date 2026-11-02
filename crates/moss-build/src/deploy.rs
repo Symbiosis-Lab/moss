@@ -301,8 +301,8 @@ mod view_site_url_tests {
 pub async fn preflight_publish_inputs(folder_path: &std::path::Path) -> Result<(), String> {
     use crate::build::cloud_readiness::{materialize_input, INTERACTIVE_DEADLINE};
 
-    let identity_dir = folder_path.join(".moss").join("identity");
-    let inputs = [identity_dir.join("secret-key"), identity_dir.join("public.json")];
+    let site = crate::moss_paths::MossPaths::new(folder_path);
+    let inputs = [site.identity_secret(), site.identity_public()];
     let stalled: Option<std::path::PathBuf> = tokio::task::spawn_blocking(move || {
         // `materialize_input` blocks for up to the deadline, so it runs off the
         // async runtime — a publish must not park a runtime worker for 15s.

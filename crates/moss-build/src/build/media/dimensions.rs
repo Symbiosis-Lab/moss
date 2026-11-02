@@ -285,15 +285,6 @@ impl MediaDimensionLookup {
         crate::build::components::color_extract::prepare_cover_color_muted(&raw)
     }
 
-    /// Gets LQIP data URI for a given path.
-    pub fn get_lqip(&self, path: &str) -> Option<String> {
-        if let Some(lqip) = resolve_entry(&self.maps.lqips, path) {
-            return Some(lqip.clone());
-        }
-
-        None
-    }
-
     /// Gets dimensions for a given path, returning fallback if not found.
     ///
     /// # Arguments

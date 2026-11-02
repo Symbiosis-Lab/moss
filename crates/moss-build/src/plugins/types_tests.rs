@@ -919,11 +919,11 @@ fn declaring_both_vocabularies_does_not_duplicate() {
 fn a_verdict_rides_on_hook_result_in_either_wire_shape() {
     let result: HookResult = serde_json::from_str(r#"{"success":true,"setup":{"ready":true}}"#)
         .expect("a check_setup result must parse");
-    assert!(result.setup.expect("the verdict rides on HookResult").is_ready());
+    assert!(matches!(result.setup.expect("the verdict rides on HookResult"), SetupVerdict::Ready));
 
     let result: HookResult =
         serde_json::from_str(r#"{"success":true,"setup":{"status":"ready"}}"#).expect("must parse");
-    assert!(result.setup.expect("the contract shape rides the same").is_ready());
+    assert!(matches!(result.setup.expect("the contract shape rides the same"), SetupVerdict::Ready));
 }
 
 /// A deploy result from a plugin that has never heard of `check_setup` still

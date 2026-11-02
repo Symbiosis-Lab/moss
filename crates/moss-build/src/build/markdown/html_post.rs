@@ -235,27 +235,6 @@ fn mask_code_regions(text: &str) -> String {
     moss_core::inert_regions::mask_inert(text)
 }
 
-use moss_core::inert_regions::VOID_ELEMENTS;
-
-/// Fix self-closing non-void HTML tags.
-///
-/// Converts `<tag .../>` to `<tag ...></tag>` for any tag NOT in the
-/// HTML5 void elements list. Browsers treat self-closing non-void tags
-/// as unclosed, swallowing subsequent content into the element.
-pub fn fix_self_closing_non_void_tags(html: &str) -> String {
-    use regex::Regex;
-    let re = Regex::new(r"(?i)<([a-zA-Z][a-zA-Z0-9]*)\b([^>]*?)\s*/\s*>").unwrap();
-    re.replace_all(html, |caps: &regex::Captures| {
-        let tag = caps[1].to_lowercase();
-        if VOID_ELEMENTS.contains(&tag.as_str()) {
-            caps[0].to_string()
-        } else {
-            format!("<{}{}></{}>", &caps[1], &caps[2], &caps[1])
-        }
-    })
-    .to_string()
-}
-
 /// Decodes the common HTML entities (`&lt;`, `&gt;`, `&quot;`, `&#39;`,
 /// `&nbsp;` as U+00A0, `&amp;`) in one pass. `&amp;` goes last: decoding it
 /// first would turn `&amp;lt;` into `<` rather than the text `&lt;`. The one
@@ -1411,55 +1390,6 @@ mod tests {
     #[test]
     fn test_strip_html_tags_trims_whitespace() {
         assert_eq!(strip_html_tags("  <p>  Hello  </p>  "), "Hello");
-    }
-
-    // ── fix_self_closing_non_void_tags tests ─────────────────────────
-
-    #[test]
-    fn test_fix_self_closing_non_void_iframe() {
-        assert_eq!(
-            fix_self_closing_non_void_tags(r#"<iframe src="./app/"/>"#),
-            r#"<iframe src="./app/"></iframe>"#
-        );
-    }
-
-    #[test]
-    fn test_fix_self_closing_non_void_video() {
-        assert_eq!(
-            fix_self_closing_non_void_tags(r#"<video src="./video.mp4"/>"#),
-            r#"<video src="./video.mp4"></video>"#
-        );
-    }
-
-    #[test]
-    fn test_fix_self_closing_void_elements_unchanged() {
-        assert_eq!(
-            fix_self_closing_non_void_tags(r#"<img src="./img.jpg"/>"#),
-            r#"<img src="./img.jpg"/>"#
-        );
-    }
-
-    #[test]
-    fn test_fix_self_closing_already_closed_unchanged() {
-        assert_eq!(
-            fix_self_closing_non_void_tags(r#"<iframe src="./app/"></iframe>"#),
-            r#"<iframe src="./app/"></iframe>"#
-        );
-    }
-
-    #[test]
-    fn test_fix_self_closing_with_spaces() {
-        assert_eq!(
-            fix_self_closing_non_void_tags(r#"<iframe src="./app/" />"#),
-            r#"<iframe src="./app/"></iframe>"#
-        );
-    }
-
-    #[test]
-    fn test_fix_self_closing_mixed_content() {
-        let input = r#"<img src="./img.jpg"/><iframe src="./app/"/>"#;
-        let expected = r#"<img src="./img.jpg"/><iframe src="./app/"></iframe>"#;
-        assert_eq!(fix_self_closing_non_void_tags(input), expected);
     }
 
     // ── adjust_relative_paths tests ───────────────────────────────────

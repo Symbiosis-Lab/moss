@@ -317,23 +317,6 @@ pub fn parse_frontmatter_of(content: String) -> Result<ParsedFrontmatter, String
 
 // ── editor_bootstrap cores ─────────────────────────────────────────────────
 
-/// The editor's path-domain root when there is no project (document
-/// mode): the loose file's parent directory.
-///
-/// A project always wins — the two are the arms of one choice, never both.
-/// Pure so the choice is testable without a Tauri `State`.
-pub fn bootstrap_editor_root(
-    project_path: Option<&str>,
-    document_file: Option<&std::path::Path>,
-) -> Option<String> {
-    if project_path.is_some() {
-        return None;
-    }
-    document_file?
-        .parent()
-        .map(|p| p.to_string_lossy().to_string())
-}
-
 /// THE root name for the editor bootstrap: resolved once, by the owner.
 fn bootstrap_root_name(project_path: Option<&str>) -> Option<String> {
     crate::vault_root::VaultRoot::resolve(project_path?)
@@ -1019,44 +1002,6 @@ mod tests {
             ":::hero {image=assets/cover.jpg}\n:::\n\nBody.",
         );
         assert!(s.visible);
-    }
-
-    // ── editor_bootstrap helpers ───────────────────────────────────────────
-
-    /// The editor's identity registry is project-root-relative and THROWS on an
-    /// absolute path, so a document-mode editor still needs a root even though
-    /// there is no site. Emitting none is what left document mode inert: the
-    /// panel opened, `EntryRegistry.upsert` threw on the absolute path, and the
-    /// document never rendered. Found by running it, not by review.
-    #[test]
-    fn a_loose_document_roots_the_editor_at_its_parent_directory() {
-        assert_eq!(
-            bootstrap_editor_root(
-                None,
-                Some(std::path::Path::new("/home/u/Downloads/notes.md"))
-            ),
-            Some("/home/u/Downloads".to_string()),
-        );
-    }
-
-    /// A project always wins — the two fields are the arms of one choice, and
-    /// both being set would let the frontend root itself somewhere the site is
-    /// not.
-    #[test]
-    fn a_project_suppresses_the_editor_root() {
-        assert_eq!(
-            bootstrap_editor_root(
-                Some("/home/u/site"),
-                Some(std::path::Path::new("/home/u/Downloads/notes.md")),
-            ),
-            None,
-        );
-    }
-
-    /// Neither open: the editor still boots, just with no tree (plan D1).
-    #[test]
-    fn no_project_and_no_document_yields_no_root() {
-        assert_eq!(bootstrap_editor_root(None, None), None);
     }
 
     /// Repo-local temp dir (moss convention: test artifacts live under the

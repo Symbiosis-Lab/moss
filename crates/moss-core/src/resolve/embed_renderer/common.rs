@@ -1,30 +1,10 @@
 //! Shared helpers for typed embed renderers.
 //!
-//! These live here (not in each renderer) because Phase C/D renderers (pdf,
-//! audio, video, 3d, etc.) all need to build `src` URLs, parse `|WxH` sizing
-//! into HTML attrs, and escape attribute values. One copy, many callers.
+//! These live here (not in each renderer) because the pdf, audio, video and
+//! 3d renderers all parse `|WxH` sizing into HTML attrs and escape attribute
+//! values. One copy, many callers.
 
 use super::Sizing;
-
-/// Build a `src` URL for embed elements: `path?query#fragment` (URL order,
-/// independent of authoring order).
-///
-/// Retained for Phase 1's Stage 2 dispatcher, which may reconstruct embed
-/// URLs from title-attribute params (`query=…`, `fragment=…`). Tests in this
-/// module keep it exercised.
-#[allow(dead_code)]
-pub(super) fn build_src(path: &str, query: Option<&str>, fragment: Option<&str>) -> String {
-    let mut out = String::from(path);
-    if let Some(q) = query {
-        out.push('?');
-        out.push_str(q);
-    }
-    if let Some(f) = fragment {
-        out.push('#');
-        out.push_str(f);
-    }
-    out
-}
 
 /// Parse `|WxH` into HTML `width="..."` and `height="..."` attribute strings
 /// (each with a leading space). Empty strings if alias is missing or not a
@@ -82,27 +62,6 @@ pub fn file_stem(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_build_src_plain() {
-        assert_eq!(build_src("file.html", None, None), "file.html");
-    }
-
-    #[test]
-    fn test_build_src_with_query() {
-        assert_eq!(
-            build_src("file.html", Some("x=1&y=2"), None),
-            "file.html?x=1&y=2"
-        );
-    }
-
-    #[test]
-    fn test_build_src_with_query_and_fragment() {
-        assert_eq!(
-            build_src("doc.html", Some("x=1"), Some("sec")),
-            "doc.html?x=1#sec"
-        );
-    }
 
     #[test]
     fn test_html_escape_attr() {

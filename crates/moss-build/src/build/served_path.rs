@@ -351,11 +351,6 @@ impl ServedPath {
         Ok(ServedPath(format!("assets/favicon.{}", ext)))
     }
 
-    /// Apple touch icon. Path is fixed.
-    pub fn for_apple_touch_icon() -> Self {
-        ServedPath("assets/apple-touch-icon.png".to_string())
-    }
-
     /// Sitemap. Path is fixed.
     pub fn for_sitemap() -> Self {
         ServedPath("sitemap.xml".to_string())
@@ -437,13 +432,6 @@ impl ServedPath {
     /// robots.txt. Path is fixed.
     pub fn for_robots_txt() -> Self {
         ServedPath("robots.txt".to_string())
-    }
-
-    /// moss default icon — the fallback site icon when the site provides
-    /// none. Embedded in the binary; emitted to disk once per build that
-    /// needs it.
-    pub fn for_moss_default_icon() -> Self {
-        ServedPath("_moss/default-icon.png".to_string())
     }
 
     /// Default theme CSS, emitted from the binary-embedded default stylesheet
@@ -1095,11 +1083,6 @@ mod tests {
     }
 
     #[test]
-    fn for_apple_touch_icon_fixed_path() {
-        assert_eq!(ServedPath::for_apple_touch_icon().as_str(), "assets/apple-touch-icon.png");
-    }
-
-    #[test]
     fn for_sitemap_fixed_path() {
         assert_eq!(ServedPath::for_sitemap().as_str(), "sitemap.xml");
     }
@@ -1127,11 +1110,6 @@ mod tests {
     #[test]
     fn for_robots_txt_fixed_path() {
         assert_eq!(ServedPath::for_robots_txt().as_str(), "robots.txt");
-    }
-
-    #[test]
-    fn for_moss_default_icon_lives_under_underscore_moss() {
-        assert_eq!(ServedPath::for_moss_default_icon().as_str(), "_moss/default-icon.png");
     }
 
     #[test]

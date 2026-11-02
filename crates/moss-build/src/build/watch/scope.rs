@@ -217,22 +217,6 @@ pub fn any_path_watchable(root: &Path, paths: &[PathBuf]) -> bool {
     false
 }
 
-/// True when `path` lies inside a NESTED moss root below `root` — a subtree
-/// that is a different site's territory, which the scan walks around. Probes each directory strictly between `root` and `path`
-/// for a `.moss/` of its own: one lstat per level, so it is safe per-event.
-pub fn path_in_nested_vault(root: &Path, path: &Path) -> bool {
-    let Ok(rel) = path.strip_prefix(root) else { return false };
-    let comps: Vec<_> = rel.components().collect();
-    let mut probe = root.to_path_buf();
-    for comp in comps.iter().take(comps.len().saturating_sub(1)) {
-        probe.push(comp);
-        if probe.join(".moss").is_dir() {
-            return true;
-        }
-    }
-    false
-}
-
 /// Returns `true` if every path in an event names something moss writes or
 /// otherwise excludes from watch-triggered rebuilds, judged **relative to the
 /// project root**.

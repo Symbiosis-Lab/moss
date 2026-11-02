@@ -205,7 +205,7 @@ fn folder_lock_is_free(folder: &std::path::Path) -> bool {
     let lock = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open(crate::infra::folder_lock::lock_path_for(folder).unwrap())
+        .open(crate::infra::folder_lock::lock_path_named(folder, "build").unwrap())
         .unwrap();
     let free = lock.try_lock_exclusive().is_ok();
     if free {
