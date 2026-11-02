@@ -334,6 +334,7 @@ mod tests {
             lang: "zh-Hant".to_string(),
             resolved: Default::default(),
             translations: Vec::new(),
+            position: None,
         }
     }
 

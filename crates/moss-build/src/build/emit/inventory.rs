@@ -89,24 +89,43 @@ pub struct InventoryEntry {
     /// reason as `lang`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub translations: Vec<String>,
+    /// Where the page sits, which decides the fields that apply to it. `None`
+    /// for a slot, which is not a page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<moss_core::schema::PagePosition>,
+}
+
+/// The build's own home election: the root of the site or of a language tree
+/// is a home, another folder index is a folder, the rest are pages.
+fn position(doc: &crate::build::types::ParsedDocument) -> Option<moss_core::schema::PagePosition> {
+    use moss_core::schema::PagePosition;
+    if doc.slot_only {
+        None
+    } else if crate::build::render::lang_roots::is_language_root(&doc.url_path) {
+        Some(PagePosition::Home)
+    } else if doc.kind == moss_core::PageKind::Folder {
+        Some(PagePosition::Folder)
+    } else {
+        Some(PagePosition::Page)
+    }
 }
 
 /// The values for [`InventoryEntry::resolved`]. A slot is not a page, so it
 /// has none.
 fn resolved_values(
     doc: &crate::build::types::ParsedDocument,
+    position: Option<moss_core::schema::PagePosition>,
     has_content_folders: bool,
     lang: &str,
     site_typesetting: Option<&str>,
 ) -> BTreeMap<String, serde_json::Value> {
     use crate::build::page::shell::{ShellRegistry, ShellType};
     use serde_json::json;
+    use moss_core::schema::PagePosition;
     let mut values = BTreeMap::new();
-    if doc.slot_only {
-        return values;
-    }
-    let is_home = crate::build::render::lang_roots::is_language_root(&doc.url_path);
-    let lists = is_home || doc.kind == moss_core::PageKind::Folder;
+    let Some(position) = position else { return values };
+    let is_home = position == PagePosition::Home;
+    let lists = position != PagePosition::Page;
     let layout = match ShellRegistry::select_shell_type(Some(doc), is_home, has_content_folders) {
         ShellType::Page => "page",
         ShellType::Article => "article",
@@ -206,8 +225,9 @@ pub fn build_inventory(
                 nav: doc.nav,
                 slot_only: doc.slot_only,
                 hidden: hidden_reasons(doc, has_content_folders),
-                resolved: resolved_values(doc, has_content_folders, &lang, site_typesetting),
+                resolved: resolved_values(doc, position(doc), has_content_folders, &lang, site_typesetting),
                 translations: doc.translations.iter().map(|t| t.url_path.clone()).collect(),
+                position: position(doc),
                 lang,
             }
         })
@@ -240,18 +260,27 @@ pub fn write_inventory(
         .map_err(|e| format!("Failed to write inventory: {}", e))
 }
 
-/// The resolved values the last build recorded for one source file, for an
-/// editor to show beside the fields that file leaves out. A file no build has
-/// reached yet, or a missing or unreadable inventory, gives none: the values
-/// are hints, and the next build supplies them.
-pub fn resolved_for_source(project_root: &Path, file_path: &str) -> Result<BTreeMap<String, serde_json::Value>, String> {
+/// What the last build knows about one source file, for an editor's add list:
+/// where the page sits, which decides the fields that apply, and the value the
+/// build gave each field the file leaves out.
+#[derive(Debug, Default, Serialize, specta::Type)]
+pub struct PageFacts {
+    /// `None` for a slot, which is not a page.
+    pub position: Option<moss_core::schema::PagePosition>,
+    pub auto: BTreeMap<String, serde_json::Value>,
+}
+
+/// The [`PageFacts`] of one source file. A file no build has reached yet, or
+/// a missing or unreadable inventory, gives none: they are hints, and the next
+/// build supplies them.
+pub fn page_facts_for_source(project_root: &Path, file_path: &str) -> Result<PageFacts, String> {
     let key = moss_core::content_graph::normalize_path(&crate::editor::content::project_relative(project_root, file_path)?);
-    let Ok(bytes) = std::fs::read(inventory_path(&project_root.join(".moss"))) else { return Ok(BTreeMap::new()) };
+    let Ok(bytes) = std::fs::read(inventory_path(&project_root.join(".moss"))) else { return Ok(PageFacts::default()) };
     let rows: Vec<InventoryEntry> = serde_json::from_slice(&bytes).unwrap_or_default();
     Ok(rows
         .into_iter()
         .find(|r| r.source_path.as_deref().is_some_and(|p| moss_core::content_graph::normalize_path(p) == key))
-        .map(|r| r.resolved)
+        .map(|r| PageFacts { position: r.position, auto: r.resolved })
         .unwrap_or_default())
 }
 
@@ -260,6 +289,7 @@ mod tests {
     use super::*;
     use crate::build::types::{EventFields, ParsedDocument};
     use moss_core::frontmatter_typed::FrontMatter;
+    use moss_core::schema::PagePosition;
 
     fn event_doc(start: &str, date: Option<&str>) -> ParsedDocument {
         let fm = FrontMatter { start: Some(start.to_string()), ..Default::default() };
@@ -352,14 +382,45 @@ mod tests {
         };
         write_inventory(&[doc], &tmp.path().join(".moss"), true, "en", None).unwrap();
         let open = tmp.path().join("works/The Tyger.md");
-        let values = resolved_for_source(tmp.path(), &open.to_string_lossy()).unwrap();
-        assert_eq!(values["url"], "the-tyger");
-        assert!(resolved_for_source(tmp.path(), &tmp.path().join("new.md").to_string_lossy()).unwrap().is_empty());
+        let facts = page_facts_for_source(tmp.path(), &open.to_string_lossy()).unwrap();
+        assert_eq!(facts.auto["url"], "the-tyger");
+        assert_eq!(facts.position, Some(PagePosition::Page));
+        let unbuilt = page_facts_for_source(tmp.path(), &tmp.path().join("new.md").to_string_lossy()).unwrap();
+        assert!(unbuilt.auto.is_empty() && unbuilt.position.is_none());
+    }
+
+    /// A language tree's root index is a home like the site's own, and a slot
+    /// has no position.
+    #[test]
+    fn an_editor_reads_where_the_build_placed_the_page() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = |source: &str, url: &str| ParsedDocument {
+            source_path: Some(source.into()),
+            url_path: url.into(),
+            kind: moss_core::PageKind::Folder,
+            ..Default::default()
+        };
+        let footer = ParsedDocument { source_path: Some("footer.md".into()), slot_only: true, ..Default::default() };
+        let docs = [
+            folder("index.md", "index.html"),
+            folder("en/index.md", "en/index.html"),
+            folder("works/index.md", "works/index.html"),
+            folder("en/works/index.md", "en/works/index.html"),
+            footer,
+        ];
+        write_inventory(&docs, &tmp.path().join(".moss"), true, "zh-hans", None).unwrap();
+        let position = |rel: &str| page_facts_for_source(tmp.path(), &tmp.path().join(rel).to_string_lossy()).unwrap().position;
+        assert_eq!(position("index.md"), Some(PagePosition::Home));
+        assert_eq!(position("en/index.md"), Some(PagePosition::Home));
+        assert_eq!(position("works/index.md"), Some(PagePosition::Folder));
+        assert_eq!(position("en/works/index.md"), Some(PagePosition::Folder));
+        assert_eq!(position("footer.md"), None);
     }
 
     #[test]
     fn no_build_yet_means_no_values() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(resolved_for_source(tmp.path(), &tmp.path().join("a.md").to_string_lossy()).unwrap().is_empty());
+        let facts = page_facts_for_source(tmp.path(), &tmp.path().join("a.md").to_string_lossy()).unwrap();
+        assert!(facts.auto.is_empty() && facts.position.is_none());
     }
 }
