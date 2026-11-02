@@ -1772,15 +1772,29 @@ fn resolve_more_link_target<'a>(
 /// A home lists its whole edition (depth "all"), dropping other editions'
 /// pages and top-level nav pages (the nav bar already shows those), unless
 /// `children_source` names another folder on purpose; see [`home_defaults`].
+/// `names_scoped_home` is set when `children_source` names an edition home whose
+/// own listing is scoped: the listing then takes that home's filters too.
 /// Any other host lists its own `folder_path` at depth "direct", unfiltered.
 pub fn synthesize_children_marker(
     doc: &crate::build::types::ParsedDocument,
     folder_path: &str,
     from_md_path: &str,
 ) -> String {
+    synthesize_children_marker_for(doc, folder_path, from_md_path, false)
+}
+
+/// [`synthesize_children_marker`] for a host whose `children_source` may name an
+/// edition home (`names_scoped_home`).
+pub(crate) fn synthesize_children_marker_for(
+    doc: &crate::build::types::ParsedDocument,
+    folder_path: &str,
+    from_md_path: &str,
+    names_scoped_home: bool,
+) -> String {
     use moss_core::resolve::embed_renderer::folder_list::{FolderEmbedParams, emit_marker};
 
     let home = home_defaults(doc);
+    let scoped = home.scoped || names_scoped_home;
     let depth = doc.children_depth.clone().or_else(|| home.depth_all.then(|| "all".to_string()));
     let params = FolderEmbedParams {
         limit: doc.children_limit.map(|n| n as usize),
@@ -1797,8 +1811,8 @@ pub fn synthesize_children_marker(
         // key, which never carries an empty value either.
         more: doc.children_more.clone().filter(|s| !s.is_empty()),
         count: doc.children_count.clone(),
-        scope_default_tree: home.scoped,
-        exclude_nav: home.scoped,
+        scope_default_tree: scoped,
+        exclude_nav: scoped,
         // A frontmatter listing has no pothole to read placement or a
         // caption out of; both are body-embed vocabulary.
         placement: Default::default(),

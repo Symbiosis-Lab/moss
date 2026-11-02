@@ -248,16 +248,23 @@ fn annotate_children_listing(listing: String, emit_source_lines: bool) -> String
 /// Resolves `children_source:`'s wikilink target to a folder's site path (no
 /// leading/trailing slash; `""` for the root) — the NAMED folder, never the
 /// hosting page's own `url_path`. Shared by both `children:` branches below.
-fn resolve_children_source_folder_path(children_source: &str, all_docs: &[ParsedDocument]) -> String {
+/// The flag is true when the target is an edition home listing its own edition
+/// only; the listing then carries the same filters as that home's.
+fn resolve_children_source_folder_path(children_source: &str, all_docs: &[ParsedDocument]) -> (String, bool) {
+    if let Some(home) = crate::build::render::lang_roots::named_edition_home(children_source, all_docs) {
+        let defaults = crate::build::folder_embed::home_defaults(home);
+        return (defaults.tree.to_string(), defaults.scoped);
+    }
     let stem = crate::build::markdown::frontmatter_ref_to_stem(children_source);
-    all_docs
+    let path = all_docs
         .iter()
         .find(|d| {
             let d_stem = d.url_path.trim_end_matches("/index.html").trim_end_matches('/');
             d_stem.eq_ignore_ascii_case(&stem) && d.kind == PageKind::Folder
         })
         .map(|d| d.url_path.trim_end_matches("index.html").trim_end_matches('/').to_string())
-        .unwrap_or_else(|| stem.to_lowercase())
+        .unwrap_or_else(|| stem.to_lowercase());
+    (path, false)
 }
 
 /// Insert the place-map locator into `body` at `placement` (a no-op for
@@ -537,17 +544,18 @@ pub(super) fn render_page<'d>(
             // A home lists its own tree: "" for the root home, `en` for
             // `en/index.html`. `children_source` redirects it elsewhere.
             let own_tree = crate::build::folder_embed::home_defaults(doc).tree;
-            let target_folder_path = doc.children_source.as_deref()
+            let (target_folder_path, names_scoped_home) = doc.children_source.as_deref()
                 .map(|r| resolve_children_source_folder_path(r, all_docs))
-                .unwrap_or_else(|| own_tree.to_string());
+                .unwrap_or_else(|| (own_tree.to_string(), false));
             let from_md_path = if own_tree.is_empty() { "index.md".to_string() } else { format!("{own_tree}/index.md") };
 
             let show_children = !has_sidebar && doc.children.unwrap_or(true);
             if show_children {
-                let marker = crate::build::folder_embed::synthesize_children_marker(
+                let marker = crate::build::folder_embed::synthesize_children_marker_for(
                     doc,
                     &target_folder_path,
                     &from_md_path,
+                    names_scoped_home,
                 );
                 let listed = crate::build::folder_embed::ListedUrls::default();
                 let resolved_html = crate::build::folder_embed::resolve_markers_with_place_maps(
@@ -841,12 +849,13 @@ pub(super) fn render_page<'d>(
             // §4, 2026-09-11) — a folder index or term listing keeps its own.
             let children_source_target = doc.children_source.as_deref()
                 .map(|r| resolve_children_source_folder_path(r, all_docs));
+            let names_scoped_home = children_source_target.as_ref().is_some_and(|t| t.1);
             if is_folder_index || term_listing.is_some() || children_source_target.is_some() {
                 let folder_path = term_listing.map(str::to_string).unwrap_or_else(|| {
                     if is_folder_index {
                         doc.url_path.trim_end_matches("/index.html").trim_end_matches("index.html").trim_end_matches('/').to_string()
                     } else {
-                        children_source_target.unwrap_or_default()
+                        children_source_target.map(|t| t.0).unwrap_or_default()
                     }
                 });
                 // children_source's host needs its REAL source path here
@@ -908,10 +917,11 @@ pub(super) fn render_page<'d>(
                     }
                 }
                 if show_folder_children {
-                    let marker = crate::build::folder_embed::synthesize_children_marker(
+                    let marker = crate::build::folder_embed::synthesize_children_marker_for(
                         doc,
                         &folder_path,
                         &from_md_path,
+                        names_scoped_home,
                     );
                     let listed = crate::build::folder_embed::ListedUrls::default();
                     let resolved_html = crate::build::folder_embed::resolve_markers_with_place_maps(
