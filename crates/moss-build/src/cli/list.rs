@@ -332,6 +332,7 @@ mod tests {
             slot_only: hidden.contains(&"slot"),
             hidden: hidden.iter().map(|s| s.to_string()).collect(),
             lang: "zh-Hant".to_string(),
+            resolved: Default::default(),
         }
     }
 

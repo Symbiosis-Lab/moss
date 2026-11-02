@@ -2711,6 +2711,7 @@ pub fn generate_blocking_content_for_build(
         &moss_dir,
         project_structure.has_content_folders,
         &layout_config.lang_tag,
+        layout_config.typesetting.as_deref(),
     ) {
         log::info!("⚠️ Failed to save inventory: {}", e);
     }

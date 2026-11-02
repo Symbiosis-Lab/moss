@@ -23,6 +23,7 @@
 //! [`ParsedDocument`]: crate::build::types::ParsedDocument
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// One row of the inventory: a document the build parsed, whether or not it
@@ -81,6 +82,57 @@ pub struct InventoryEntry {
     /// field added here from now on needs the same treatment.
     #[serde(default)]
     pub lang: String,
+    /// What the build picked for each field below, keyed by frontmatter name:
+    /// the page's own value where it sets one, else the automatic one. An
+    /// editor shows it beside a field the file leaves out, so the author sees
+    /// what adding the field would change. `#[serde(default)]` for the same
+    /// cross-version reason as `lang`.
+    ///
+    /// Covers fields whose value is a pure function of the page and site:
+    /// `title`, `url`, `layout`, `lang`, `nav`, `typesetting`, `listed`,
+    /// `children`, and on a listing page `sort` and `children_depth`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub resolved: BTreeMap<String, serde_json::Value>,
+}
+
+/// The values for [`InventoryEntry::resolved`]. A slot is not a page, so it
+/// has none.
+fn resolved_values(
+    doc: &crate::build::types::ParsedDocument,
+    has_content_folders: bool,
+    lang: &str,
+    site_typesetting: Option<&str>,
+) -> BTreeMap<String, serde_json::Value> {
+    use crate::build::page::shell::{ShellRegistry, ShellType};
+    use serde_json::json;
+    let mut values = BTreeMap::new();
+    if doc.slot_only {
+        return values;
+    }
+    let is_home = crate::build::render::lang_roots::is_language_root(&doc.url_path);
+    let lists = is_home || doc.kind == moss_core::PageKind::Folder;
+    let layout = match ShellRegistry::select_shell_type(Some(doc), is_home, has_content_folders) {
+        ShellType::Page => "page",
+        ShellType::Article => "article",
+    };
+    let typesetting = crate::build::render::config::effective_typesetting(doc.typesetting.as_deref(), site_typesetting);
+    values.insert("title".into(), json!(doc.label));
+    if !is_home {
+        if let Some(slug) = doc.url_path.strip_suffix("/index.html").and_then(|dir| dir.rsplit('/').next()) {
+            values.insert("url".into(), json!(slug));
+        }
+    }
+    values.insert("layout".into(), json!(layout));
+    values.insert("lang".into(), json!(lang));
+    values.insert("nav".into(), json!(crate::build::components::nav::is_nav_bar_item_doc(doc, has_content_folders)));
+    values.insert("typesetting".into(), json!(typesetting.unwrap_or("horizontal")));
+    values.insert("listed".into(), json!(doc.listed != Some(false)));
+    values.insert("children".into(), json!(lists));
+    if lists {
+        values.insert("sort".into(), json!(doc.resolve_for_direct_children().axis));
+        values.insert("children_depth".into(), json!(if is_home { "all" } else { "direct" }));
+    }
+    values
 }
 
 /// `.moss/build.nosync/inventory.json` — written by the build, read by `moss list`.
@@ -133,29 +185,34 @@ pub fn build_inventory(
     documents: &[crate::build::types::ParsedDocument],
     has_content_folders: bool,
     site_lang_tag: &str,
+    site_typesetting: Option<&str>,
 ) -> Vec<InventoryEntry> {
     let mut rows: Vec<InventoryEntry> = documents
         .iter()
-        .map(|doc| InventoryEntry {
-            source_path: doc.source_path.clone(),
-            url_path: if doc.slot_only { String::new() } else { doc.url_path.clone() },
-            title: doc.label.clone(),
-            date: doc.date.clone().or_else(|| doc.event.as_ref().map(|e| e.start.day_key())),
-            kind: match doc.kind {
-                moss_core::PageKind::Folder => "folder".to_string(),
-                moss_core::PageKind::Article => "article".to_string(),
-            },
-            draft: doc.draft == Some(true),
-            listed: doc.listed != Some(false),
-            nav: doc.nav,
-            slot_only: doc.slot_only,
-            hidden: hidden_reasons(doc, has_content_folders),
+        .map(|doc| {
             // Same precedence the renderer uses (`html.rs`), so this column
             // reports what the page will actually say rather than a second
             // guess at it — including the fallback, which is the SITE's tag
             // and not the page's UI language (a `fr` site serving
             // English chrome still says `lang="fr"`).
-            lang: doc.lang_tag.clone().unwrap_or_else(|| site_lang_tag.to_string()),
+            let lang = doc.lang_tag.clone().unwrap_or_else(|| site_lang_tag.to_string());
+            InventoryEntry {
+                source_path: doc.source_path.clone(),
+                url_path: if doc.slot_only { String::new() } else { doc.url_path.clone() },
+                title: doc.label.clone(),
+                date: doc.date.clone().or_else(|| doc.event.as_ref().map(|e| e.start.day_key())),
+                kind: match doc.kind {
+                    moss_core::PageKind::Folder => "folder".to_string(),
+                    moss_core::PageKind::Article => "article".to_string(),
+                },
+                draft: doc.draft == Some(true),
+                listed: doc.listed != Some(false),
+                nav: doc.nav,
+                slot_only: doc.slot_only,
+                hidden: hidden_reasons(doc, has_content_folders),
+                resolved: resolved_values(doc, has_content_folders, &lang, site_typesetting),
+                lang,
+            }
         })
         .collect();
     // Sorted by URL so two builds of the same site produce the same file and
@@ -177,12 +234,28 @@ pub fn write_inventory(
     moss_dir: &Path,
     has_content_folders: bool,
     site_lang_tag: &str,
+    site_typesetting: Option<&str>,
 ) -> Result<(), String> {
-    let rows = build_inventory(documents, has_content_folders, site_lang_tag);
+    let rows = build_inventory(documents, has_content_folders, site_lang_tag, site_typesetting);
     let json = serde_json::to_string_pretty(&rows)
         .map_err(|e| format!("Failed to serialize inventory: {}", e))?;
     crate::build::io_utils::write_output(&inventory_path(moss_dir), json.as_bytes())
         .map_err(|e| format!("Failed to write inventory: {}", e))
+}
+
+/// The resolved values the last build recorded for one source file, for an
+/// editor to show beside the fields that file leaves out. A file no build has
+/// reached yet, or a missing or unreadable inventory, gives none: the values
+/// are hints, and the next build supplies them.
+pub fn resolved_for_source(project_root: &Path, file_path: &str) -> Result<BTreeMap<String, serde_json::Value>, String> {
+    let key = moss_core::content_graph::normalize_path(&crate::editor::content::project_relative(project_root, file_path)?);
+    let Ok(bytes) = std::fs::read(inventory_path(&project_root.join(".moss"))) else { return Ok(BTreeMap::new()) };
+    let rows: Vec<InventoryEntry> = serde_json::from_slice(&bytes).unwrap_or_default();
+    Ok(rows
+        .into_iter()
+        .find(|r| r.source_path.as_deref().is_some_and(|p| moss_core::content_graph::normalize_path(p) == key))
+        .map(|r| r.resolved)
+        .unwrap_or_default())
 }
 
 #[cfg(test)]
@@ -203,13 +276,93 @@ mod tests {
 
     #[test]
     fn an_event_page_without_a_date_reports_its_start_day() {
-        let rows = build_inventory(&[event_doc("2026-11-03 19:30", None)], false, "en");
+        let rows = build_inventory(&[event_doc("2026-11-03 19:30", None)], false, "en", None);
         assert_eq!(rows[0].date.as_deref(), Some("2026-11-03"));
     }
 
     #[test]
     fn a_page_date_wins_over_the_event_start() {
-        let rows = build_inventory(&[event_doc("2026-11-03", Some("2026-10-01"))], false, "en");
+        let rows = build_inventory(&[event_doc("2026-11-03", Some("2026-10-01"))], false, "en", None);
         assert_eq!(rows[0].date.as_deref(), Some("2026-10-01"));
+    }
+
+    fn resolved_for(url_path: &str, kind: moss_core::PageKind, site_typesetting: Option<&str>) -> BTreeMap<String, serde_json::Value> {
+        let doc = ParsedDocument {
+            url_path: url_path.to_string(),
+            kind,
+            label: "Label".to_string(),
+            is_root_level: url_path.matches('/').count() == 1,
+            ..Default::default()
+        };
+        build_inventory(&[doc], true, "en", site_typesetting).remove(0).resolved
+    }
+
+    #[test]
+    fn an_ordinary_page_resolves_to_an_article_under_its_slug() {
+        let r = resolved_for("works/the-tyger/index.html", moss_core::PageKind::Article, None);
+        assert_eq!(r["layout"], "article");
+        assert_eq!(r["url"], "the-tyger");
+        assert_eq!(r["title"], "Label");
+        assert_eq!(r["lang"], "en");
+        assert_eq!(r["nav"], false);
+        assert_eq!(r["children"], false);
+        assert_eq!(r["typesetting"], "horizontal");
+        assert!(!r.contains_key("sort") && !r.contains_key("children_depth"));
+    }
+
+    #[test]
+    fn a_top_level_page_of_an_organized_site_is_in_the_nav_and_still_an_article() {
+        let r = resolved_for("about/index.html", moss_core::PageKind::Article, None);
+        assert_eq!(r["nav"], true);
+        assert_eq!(r["layout"], "article");
+    }
+
+    #[test]
+    fn a_folder_index_lists_its_direct_children_by_date() {
+        let r = resolved_for("works/index.html", moss_core::PageKind::Folder, None);
+        assert_eq!(r["layout"], "page");
+        assert_eq!(r["children"], true);
+        assert_eq!(r["sort"], "date");
+        assert_eq!(r["children_depth"], "direct");
+    }
+
+    #[test]
+    fn the_home_lists_everything_and_has_no_slug() {
+        let r = resolved_for("index.html", moss_core::PageKind::Folder, None);
+        assert_eq!(r["layout"], "page");
+        assert_eq!(r["children_depth"], "all");
+        assert!(!r.contains_key("url"));
+    }
+
+    #[test]
+    fn typesetting_follows_the_site_setting() {
+        assert_eq!(resolved_for("a/b/index.html", moss_core::PageKind::Article, Some("vertical"))["typesetting"], "vertical");
+    }
+
+    #[test]
+    fn a_slot_resolves_nothing() {
+        let doc = ParsedDocument { slot_only: true, url_path: "footer/index.html".into(), ..Default::default() };
+        assert!(build_inventory(&[doc], true, "en", None)[0].resolved.is_empty());
+    }
+
+    #[test]
+    fn an_editor_reads_the_row_of_the_file_it_has_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        let doc = ParsedDocument {
+            source_path: Some("works/The Tyger.md".into()),
+            url_path: "works/the-tyger/index.html".into(),
+            ..Default::default()
+        };
+        write_inventory(&[doc], &tmp.path().join(".moss"), true, "en", None).unwrap();
+        let open = tmp.path().join("works/The Tyger.md");
+        let values = resolved_for_source(tmp.path(), &open.to_string_lossy()).unwrap();
+        assert_eq!(values["url"], "the-tyger");
+        assert!(resolved_for_source(tmp.path(), &tmp.path().join("new.md").to_string_lossy()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn no_build_yet_means_no_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(resolved_for_source(tmp.path(), &tmp.path().join("a.md").to_string_lossy()).unwrap().is_empty());
     }
 }
