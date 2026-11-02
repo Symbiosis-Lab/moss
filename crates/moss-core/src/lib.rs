@@ -107,7 +107,6 @@ pub mod heading;
 pub mod html_entities;
 pub use heading::{extract_headings, HeadingInfo};
 pub mod inert_regions;
-pub mod link_candidates;
 pub mod link_completions;
 pub mod media;
 pub mod page_kind;

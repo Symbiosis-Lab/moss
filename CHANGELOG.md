@@ -580,6 +580,7 @@ All notable changes to moss will be documented here.
 - The `footer_align` frontmatter field is gone. It stopped changing where a footer link renders a while ago and had nothing left to do; a site that still sets it keeps building exactly as before — moss ignores frontmatter keys it doesn't recognize. **BREAKING (`moss-build` API):** `ParsedDocument.footer_align` is removed.
 - **BREAKING (`moss-build` API):** `SetaError::NotAllowlisted`, `deploy::not_allowlisted_message`, `PageFeatures.inline_apply` and `features::email::render_inline_apply_form` are removed. The `:::apply` application form is gone, with its styles and its script. A leftover `:::apply` block now builds like any unknown block: a warning, and an empty `moss-unknown-shortcode` div.
 - Publishing no longer has a message for an email that is not on an invite list; mosspub.com hosting is open to everyone, so the server never sends that refusal.
+- **BREAKING (`moss-core` API):** the `link_candidates` module is removed; nothing in moss called it. Its candidate-path generator is gone with it.
 
 ## [0.7.14] - 2026-06-27
 
