@@ -425,3 +425,11 @@ fn a_clutter_named_custom_element_is_not_listed() {
     let (_, count) = carry_widgets("<p>Text.</p><cookie-banner></cookie-banner>", &base);
     assert!(count.dropped_kinds.is_empty(), "got: {:?}", count.dropped_kinds);
 }
+
+#[test]
+fn a_repeated_dropped_widget_is_logged_once_with_its_count() {
+    let main = r#"<demo-row></demo-row><demo-row></demo-row><demo-row></demo-row><donate-widget></donate-widget>"#;
+    let (_, count) = run(&page("", main));
+    assert_eq!(count.dropped(), 4);
+    assert_eq!(grouped_kinds(&count.dropped_kinds), ["script widget demo-row (×3)", "script widget donate-widget"]);
+}

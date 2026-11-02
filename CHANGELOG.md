@@ -542,6 +542,7 @@ All notable changes to moss will be documented here.
 - A page that stands for a person or other term and has a cover now has one heading in its markup, not an empty one before its title.
 - A shortcode name may use letters and digits from any script, not only ASCII, matching the Rust parser.
 - A page's facts list no longer pushes the page sideways when a theme widens the content column: the list hangs in the right margin only when that margin is wide enough, and otherwise stays in the column under the title. Its label column now fits the longest label, and long labels wrap.
+- An import that drops many widgets from one page now prints each kind once with a count, such as `script widget demo-row (×3)`, instead of one warning line per widget. The count of widgets not carried is unchanged.
 
 ### Changed
 

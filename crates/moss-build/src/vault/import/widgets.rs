@@ -701,8 +701,21 @@ fn token_outcome(el: &Element, row: &Row, base: &Url) -> Outcome {
     }
 }
 
+/// Repeated kinds folded into one label each, in first-seen order:
+/// `script widget demo-row (×3)`. A kind seen once keeps its plain label.
+pub(crate) fn grouped_kinds(kinds: &[String]) -> Vec<String> {
+    let mut groups: Vec<(&str, usize)> = Vec::new();
+    for kind in kinds {
+        match groups.iter_mut().find(|(k, _)| k == kind) {
+            Some((_, n)) => *n += 1,
+            None => groups.push((kind, 1)),
+        }
+    }
+    groups.into_iter().map(|(k, n)| if n == 1 { k.to_string() } else { format!("{k} (×{n})") }).collect()
+}
+
 fn record_dropped(count: &mut WidgetCount, base_url: &Url, kinds: Vec<String>) {
-    for kind in &kinds {
+    for kind in grouped_kinds(&kinds) {
         log::warn!("import: {base_url}: widget with no static form dropped: {kind}");
     }
     count.dropped_kinds.extend(kinds);

@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use crate::vault::import::scrape::import_local::import_local_file;
 use crate::vault::import::scrape::run::{dropped_widgets, scrape_to_folder, PageGap, ScrapeProgress, ScrapeResult};
 use crate::vault::import::scrape::service::{ScrapeConfig, DEFAULT_MAX_PAGES};
+use crate::vault::import::widgets::grouped_kinds;
 
 /// Top-level dispatcher for `moss import …`. Returns a process exit code.
 pub fn run(args: &[String]) -> i32 {
@@ -262,7 +263,7 @@ fn widget_gap_lines(gaps: &[PageGap]) -> Vec<String> {
     let mut lines: Vec<String> = gaps
         .iter()
         .take(CAP)
-        .map(|g| format!("  ↳ {}: not carried: {}", g.page, g.kinds.join(", ")))
+        .map(|g| format!("  ↳ {}: not carried: {}", g.page, grouped_kinds(&g.kinds).join(", ")))
         .collect();
     if gaps.len() > CAP {
         lines.push(format!("  ↳ and {} more page(s) with widgets not carried", gaps.len() - CAP));
@@ -656,5 +657,12 @@ mod tests {
         assert_eq!(lines[0], "  ↳ /p0/: not carried: contact form");
         assert_eq!(lines[19], "  ↳ /p19/: not carried: contact form");
         assert_eq!(lines[20], "  ↳ and 5 more page(s) with widgets not carried");
+    }
+
+    #[test]
+    fn widget_gap_lines_fold_a_repeated_kind_with_its_count() {
+        let kinds = vec!["script widget demo-row".into(), "script widget demo-row".into(), "script widget demo-row".into(), "script widget donate-widget".into()];
+        let gaps = vec![PageGap { page: "/".into(), kinds }];
+        assert_eq!(widget_gap_lines(&gaps), ["  ↳ /: not carried: script widget demo-row (×3), script widget donate-widget"]);
     }
 }
