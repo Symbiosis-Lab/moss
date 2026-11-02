@@ -2107,4 +2107,20 @@ mod tests {
         link_terms_in_bylines(&mut docs, &index);
         assert_eq!(docs[0].byline[0], format!("文｜[Alex Rivera]({expected_url})"));
     }
+
+    #[test]
+    fn a_card_credit_names_its_term_kind_and_the_slug_of_its_term_page() {
+        let kinds = vec![TermKind {
+            cards: true,
+            key: "marks".to_string(),
+            fields: vec!["mark".to_string()],
+            title: "Marks".to_string(),
+            titles: Vec::new(), counts: Vec::new(), is_place: false, parents: Default::default(), explorer: None, line: None, slugs: Default::default(),
+        }];
+        let mut docs = vec![doc("works/a/index.html", "A")];
+        docs[0].raw_frontmatter.insert("mark".into(), serde_json::json!("Held, not online"));
+        set_card_credits(&mut docs, &kinds);
+        let credits = docs[0].card_credits.as_deref().expect("a credit");
+        assert!(credits.contains(r#"<span class="moss-credit" data-term="marks" data-value="held-not-online">Held, not online"#), "{credits}");
+    }
 }

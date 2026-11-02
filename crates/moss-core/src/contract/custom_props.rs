@@ -748,4 +748,22 @@ pub const SCOPE_ATTRS: &[ScopeAttr] = &[
         values: &[],
         description: "The declared field's name, on each element a placed field draws: each eyebrow span, the subtitle, each key figure and each facts row, and each part of a declared group. Scope one field with `[data-field=\"ja\"]` rather than a selector on the page's address.",
     },
+    ScopeAttr {
+        selector: ".moss-eyebrow > span, .moss-subtitle, .moss-key-figure, .moss-facts > div, .moss-field-group > [data-field]",
+        name: "data-value",
+        values: &[],
+        description: "On an element a placed `choice` field draws (beside its `data-field`): the slug of the choice's key as written in config, whatever language its label is shown in. Select a page by it with `article:has([data-field=\"mark\"][data-value=\"wanted\"])`. Other field types carry none.",
+    },
+    ScopeAttr {
+        selector: ".moss-credit",
+        name: "data-term",
+        values: &[],
+        description: "The key of the term kind a listing-card credit belongs to (`marks` for `[terms.marks]`), on each credit of a kind with `cards = true`. Pair it with `data-value`.",
+    },
+    ScopeAttr {
+        selector: ".moss-credit",
+        name: "data-value",
+        values: &[],
+        description: "The slug of the credited term, the same one its term page has in its address. `.moss-card:has(.moss-credit[data-term=\"marks\"][data-value=\"wanted\"])` selects every card that credits the term `Wanted`.",
+    },
 ];

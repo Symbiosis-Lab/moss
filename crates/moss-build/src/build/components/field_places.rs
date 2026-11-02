@@ -62,10 +62,9 @@ pub fn draw(placed: &[Placed], lang: Language, typesetting: Option<&str>, page_h
         .collect();
     let rows: String = drawn(Place::Facts)
         .map(|(p, html)| {
-            let d = p.decl();
-            let label = html_escape(&d.label_for(lang.as_bcp47_attr()));
+            let label = html_escape(&p.decl().label_for(lang.as_bcp47_attr()));
             let dd = open("dd", "", matches!(p, Placed::Group(..)), None);
-            format!("{}<dt>{label}</dt>{dd}{html}</dd></div>\n", open("div", "", false, Some(d)))
+            format!("{}<dt>{label}</dt>{dd}{html}</dd></div>\n", open("div", "", false, Some(p)))
         })
         .collect();
     Placements {
@@ -90,11 +89,12 @@ impl Placements {
 
 /// One drawn entry: `body` inside `tag`, with `classes` plus `moss-field-group` for a group.
 fn element(p: &Placed, tag: &str, classes: &str, body: &str) -> String {
-    format!("{}{body}</{tag}>", open(tag, classes, matches!(p, Placed::Group(..)), Some(p.decl())))
+    format!("{}{body}</{tag}>", open(tag, classes, matches!(p, Placed::Group(..)), Some(p)))
 }
 
-/// The opening tag of an entry; `field` puts its `data-field` on it.
-fn open(tag: &str, classes: &str, group: bool, field: Option<&FieldDecl>) -> String {
+/// The opening tag of an entry; `field` puts its `data-field` on it, and a
+/// choice's `data-value` beside it.
+fn open(tag: &str, classes: &str, group: bool, field: Option<&Placed>) -> String {
     let mut class = classes.to_string();
     if group {
         if !class.is_empty() {
@@ -103,8 +103,20 @@ fn open(tag: &str, classes: &str, group: bool, field: Option<&FieldDecl>) -> Str
         class.push_str("moss-field-group");
     }
     let class = if class.is_empty() { String::new() } else { format!(" class=\"{class}\"") };
-    let field = field.map_or(String::new(), |d| format!(" data-field=\"{}\"", html_escape(&d.name)));
+    let field = field.map_or(String::new(), |p| match p {
+        Placed::Value(d, v) => format!(" data-field=\"{}\"{}", html_escape(&d.name), choice_attr(v)),
+        Placed::Group(d, _) => format!(" data-field=\"{}\"", html_escape(&d.name)),
+    });
     format!("<{tag}{class}{field}>")
+}
+
+/// ` data-value="<slug>"` for a choice, the slug of the key as written in
+/// config, so a theme selects by value without knowing the label's language.
+fn choice_attr(v: &TypedValue) -> String {
+    match v {
+        TypedValue::Choice { value, .. } => format!(" data-value=\"{}\"", html_escape(&moss_core::terms::term_slug(value))),
+        _ => String::new(),
+    }
 }
 
 /// [`draw`] for a rendered page: a page link resolves through the content
@@ -222,7 +234,7 @@ fn parts_html(parts: &[(FieldDecl, TypedValue)], lang: Language, typesetting: Op
         .iter()
         .filter_map(|(d, v)| {
             let html = inline(d, v, lang, typesetting, page_href);
-            (!html.is_empty()).then(|| format!("<span data-field=\"{}\">{html}</span>", html_escape(&d.name)))
+            (!html.is_empty()).then(|| format!("<span data-field=\"{}\"{}>{html}</span>", html_escape(&d.name), choice_attr(v)))
         })
         .collect::<Vec<_>>()
         .join(" ")

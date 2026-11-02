@@ -34,7 +34,7 @@ fn an_eyebrow_holds_its_fields_in_declaration_order_separated_by_a_space() {
     let out = draw(&values(placed.clone()), Language::En, None, &no_pages);
     assert_eq!(
         out.eyebrow,
-        "<p class=\"moss-eyebrow\"><span data-field=\"kind\">Built</span> <span data-field=\"years\"><time datetime=\"1927/1933\">1927–1933</time></span></p>\n"
+        "<p class=\"moss-eyebrow\"><span data-field=\"kind\" data-value=\"building\">Built</span> <span data-field=\"years\"><time datetime=\"1927/1933\">1927–1933</time></span></p>\n"
     );
     assert_eq!((out.subtitle.as_str(), out.after_masthead().as_str()), ("", ""));
 }
@@ -229,4 +229,18 @@ fn beside_picture_follows_the_same_page_rules_as_after_picture() {
     assert!(!title_block_beside_picture(&ParsedDocument { slot_only: true, ..page.clone() }));
     assert!(!title_block_beside_picture(&ParsedDocument { kind: moss_core::page_kind::PageKind::Folder, ..page.clone() }));
     assert!(!title_block_beside_picture(&ParsedDocument { title_block: Some("after-picture".into()), ..page }));
+}
+
+#[test]
+fn a_choice_carries_the_slug_of_its_key_on_every_element_it_draws_and_other_kinds_do_not() {
+    let mark = |place| decl("mark", FieldKind::Choice, place);
+    let held = TypedValue::Choice { value: "Held, not online".into(), label: "Held offline".into() };
+    let out = draw(&values([(mark(Place::Facts), held.clone())]), Language::En, None, &no_pages);
+    assert!(out.facts.contains("<div data-field=\"mark\" data-value=\"held-not-online\"><dt>Mark</dt><dd>Held offline</dd></div>"), "{}", out.facts);
+    let out = draw(&values([(mark(Place::Eyebrow), held.clone())]), Language::En, None, &no_pages);
+    assert!(out.eyebrow.contains("<span data-field=\"mark\" data-value=\"held-not-online\">"), "{}", out.eyebrow);
+    let out = draw(&values([(mark(Place::Subtitle), held)]), Language::En, None, &no_pages);
+    assert!(out.subtitle.contains("data-field=\"mark\" data-value=\"held-not-online\""), "{}", out.subtitle);
+    let out = draw(&values([(decl("note", FieldKind::Text, Place::Facts), text("Wanted"))]), Language::En, None, &no_pages);
+    assert!(!out.facts.contains("data-value"), "{}", out.facts);
 }

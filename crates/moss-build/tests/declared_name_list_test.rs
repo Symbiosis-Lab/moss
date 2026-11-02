@@ -123,7 +123,7 @@ fn an_undeclared_site_gets_no_performer_pages_and_keeps_author_pages() {
 
 const CARDS_CONFIG: &str = "schema_version = 6\n\n[site]\nlang = \"en\"\n\n[terms.performers]\nfields = [\"conductor\", \"soloist\"]\ntitle = \"Performers\"\ncards = true\n";
 
-const CREDITS_MARKUP: &str = r#"<span class="moss-card-credits"><span class="moss-credit">Ada Example<span class="moss-credit-role">, conductor</span></span><span class="moss-event-sep"> · </span><span class="moss-credit">Ben Sample<span class="moss-credit-role">, soloist</span></span></span>"#;
+const CREDITS_MARKUP: &str = r#"<span class="moss-card-credits"><span class="moss-credit" data-term="performers" data-value="ada-example">Ada Example<span class="moss-credit-role">, conductor</span></span><span class="moss-event-sep"> · </span><span class="moss-credit" data-term="performers" data-value="ben-sample">Ben Sample<span class="moss-credit-role">, soloist</span></span></span>"#;
 
 /// Three listing folders, one per card form: a folder of described, dated
 /// pages lists summary cards, a dated folder lists the same card at its
